@@ -1,0 +1,34 @@
+/* ─── SIDEBAR ────────────────────────── */
+.sidebar {
+  width: 220px;
+  min-width: 0;
+  max-width: 400px;
+  height: 100%;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  z-index: 2;
+}
+
+.sidebarDocs {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 10px 3px 4px;
+  scrollbar-width: none;
+}
+.sidebarDocs::-webkit-scrollbar { display: none; }
+
+/* TOC panel */
+.sidebarToc {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* WHY: horizontal padding (3px) matches .sidebarDocs so the first-level chevron sits at
+     the same left offset in both tabs — rows don't jump horizontally when switching. */
+  padding: 8px 3px 4px;
+  scrollbar-width: none;
+}
+.sidebarToc::-webkit-scrollbar { display: none; }

@@ -1,0 +1,168 @@
+services:
+  surreal:
+    image: surrealdb/surrealdb:v3.3.0
+    container_name: lore_surreal
+    command: start --user ${SURREAL_USER} --pass ${SURREAL_PASS} --bind 0.0.0.0:8000 surrealkv:///data/lore.db
+    user: root
+    restart: always
+    env_file: .env
+    volumes:
+      - surreal_data:/data
+    healthcheck:
+      test: ["CMD", "/surreal", "isready", "--endpoint", "http://localhost:8000"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    container_name: lore_redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
+    restart: always
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # There is deliberately NO `sandbox` service here — that is not an omission. In prod
+  # the agent's console is a separate SSH host (an LXC in our deployment); only
+  # the dev docker-compose.yml runs a sandbox container. The backend needs nothing but
+  # SANDBOX_SSH_HOST + SANDBOX_SSH_KEY_B64 in .env (already loaded below) to point at
+  # it, which is exactly why the dev/prod split costs no code. Since prod deploys with
+  # `-f docker-compose.prod.yml`, the dev service simply never ships. Provisioning and
+  # the egress policy: docs/sandbox-access.md.
+  backend:
+    # ARCH: this stack builds nothing on the host — every lore-* service pulls a
+    # published image (${LORE_REGISTRY}/lore-<name>:${LORE_IMAGE_TAG}), so an
+    # instance stands up from docker-compose.prod.yml + .env alone.
+    # LORE_REGISTRY carries the owner namespace (Gitea
+    # names images by owner); both vars are ${VAR:?} required — unset must fail
+    # the command loud, not resolve to a broken "/lore-backend" image ref.
+    image: ${LORE_REGISTRY:?set LORE_REGISTRY}/lore-backend:${LORE_IMAGE_TAG:?set LORE_IMAGE_TAG}
+    container_name: lore_backend
+    restart: always
+    depends_on:
+      surreal:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    volumes:
+      - storage_data:/storage
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  worker:
+    image: ${LORE_REGISTRY:?set LORE_REGISTRY}/lore-backend:${LORE_IMAGE_TAG:?set LORE_IMAGE_TAG}
+    container_name: lore_worker
+    restart: always
+    command: arq jobs.worker.WorkerSettings
+    depends_on:
+      surreal:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    volumes:
+      - storage_data:/storage
+
+  worker-transcription:
+    image: ${LORE_REGISTRY:?set LORE_REGISTRY}/lore-backend:${LORE_IMAGE_TAG:?set LORE_IMAGE_TAG}
+    container_name: lore_worker_transcription
+    restart: always
+    command: arq jobs.worker.TranscriptionWorkerSettings
+    deploy:
+      replicas: 1
+    depends_on:
+      surreal:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    volumes:
+      - storage_data:/storage
+
+  # SYSTEM: harness-driver — the RENTED loop (DeepSeek Harness, pinned sha in
+  # harness-driver/Dockerfile) behind the driver contract. THE line.
+  harness:
+    image: ${LORE_REGISTRY:?set LORE_REGISTRY}/lore-harness:${LORE_IMAGE_TAG:?set LORE_IMAGE_TAG}
+    container_name: lore_harness
+    restart: always
+    depends_on:
+      backend:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      - PORT=8090
+      # The shared driver secret (X-Driver-Secret), its own value.
+      - LORE_DRIVER_SECRET=${HARNESS_DRIVER_SECRET:-}
+      # The gateway + model this line serves. PINNED: deepseek/flash —
+      # thinking mode + tool calling, the model the flip was earned with
+      # (measurement in docker-compose.yml's harness service). The real
+      # context window reaches the plugin via the turn payload; the env below
+      # is only the fallback.
+      - LORE_AI_API_URL=${AI_API_URL:-}
+      - LORE_HARNESS_MODEL=${HARNESS_MODEL:-}
+      - LORE_HARNESS_CONTEXT_WINDOW=${HARNESS_CONTEXT_WINDOW:-128000}
+      # The Tool-API hop for the Lore proxies (the driver's internal URL —
+      # no new network path).
+      - LORE_TOOL_API_URL=${TOOL_API_INTERNAL_URL:-http://backend:8001}
+    # INVARIANT(data-loss): the dsh session log is DRIVER-OWNED — a bind
+    # volume over the sessions root only, or every deploy destroys every
+    # harness session it ever wrote.
+    volumes:
+      - harness_sessions_data:/app/home/sessions
+
+  converter:
+    image: ${LORE_REGISTRY:?set LORE_REGISTRY}/lore-converter:${LORE_IMAGE_TAG:?set LORE_IMAGE_TAG}
+    container_name: lore_converter
+    restart: always
+    # No port exposure — only the backend worker reaches it over the Docker network.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  frontend:
+    image: ${LORE_REGISTRY:?set LORE_REGISTRY}/lore-frontend:${LORE_IMAGE_TAG:?set LORE_IMAGE_TAG}
+    container_name: lore_frontend
+    restart: always
+    ports:
+      - "${LORE_HTTP_PORT:-5173}:80"
+    depends_on:
+      - backend
+
+volumes:
+  surreal_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${LORE_DATA_ROOT:-/opt/lore/data}/surreal
+  redis_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${LORE_DATA_ROOT:-/opt/lore/data}/redis
+  storage_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${LORE_DATA_ROOT:-/opt/lore/data}/storage
+  harness_sessions_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${LORE_DATA_ROOT:-/opt/lore/data}/harness-sessions

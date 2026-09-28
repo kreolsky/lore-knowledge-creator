@@ -1,0 +1,1688 @@
+@import "tailwindcss";
+
+/* WHY: plain @theme, never `@theme inline` — utilities must keep emitting
+ * var(--text-ui-*) so a media query can redefine the sizes at runtime
+ * (mobile epic: `@media (pointer: coarse) { :root { --text-ui-base: 14px } }`);
+ * `inline` bakes the pixel into the class and the override silently does
+ * nothing. Size names are role-based (ui-base, not 13) for the same reason. */
+@theme {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface2: var(--surface2);
+  --color-surface3: var(--surface3);
+  --color-border: var(--border);
+  --color-border-soft: var(--border-soft);
+  --color-header-bg: var(--header-bg);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-text-dim: var(--text-dim);
+  --color-accent: var(--accent);
+  --color-accent-glow: var(--accent-glow);
+  --color-accent-soft: var(--accent-soft);
+  --color-green: var(--green);
+  --color-amber: var(--amber);
+  --color-red: var(--red);
+  --color-handle-bg: var(--handle-bg);
+  --color-handle-bg-hover: var(--handle-bg-hover);
+  --color-sticky-ink: var(--sticky-yellow-ink);
+
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+
+  /* UI font-size scale — replaces every text-[NNpx] in TSX (plan
+     frontend-styling-standardization); each token maps 1:1 to the pixel
+     value it replaced, so the swap is pixel-for-pixel neutral. */
+  --text-ui-2xs: 10px;
+  --text-ui-xs: 11px;
+  --text-ui-sm: 12px;
+  --text-ui-base: 13px;
+  --text-ui-md: 15px;
+  --text-ui-xl: 22px;
+  --text-hero: 40px;
+
+  /* No rounded corners — project rule (the bare `--radius` also closes
+     Tailwind's default `rounded` utility, which the -sm…-full zeroes above
+     do not cover) */
+  --radius: 0px;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-2xl: 0px;
+  --radius-full: 0px;
+}
+
+/* ─── JetBrains Mono (self-hosted, OFL license) ─────────────────── */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./assets/fonts/JetBrainsMono-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('./assets/fonts/JetBrainsMono-SemiBold.woff2') format('woff2');
+}
+
+/* ─── THEME VARIABLES ─────────────────── */
+:root {
+  --bg: #ecebe7;
+  --surface: #e4e2dd;
+  /* Midpoint between --bg and --surface (transclusion band background). */
+  --surface-transclusion: #e8e5e0;
+  --surface2: #dbd8d2;
+  --surface3: #cccac4;
+  /* SYSTEM: ui-primitives — composer selector trigger bg. Must be DARKER than
+     the composer field (--surface) in BOTH themes so the model/mode/prompt
+     triggers read as controls sitting on the field. Light: surface2 < surface;
+     Dark: bg < surface. */
+  --composer-control-bg: var(--surface2);
+  --border: #cccac4;
+  --border-soft: #e4e2dd;
+  --header-bg: #d6d3cd;
+  --text: #1a1918;
+  --text-muted: #5a5855;
+  --text-dim: #a09e9a;
+  --accent: #6255e0;
+  --accent-glow: rgba(98, 85, 224, 0.20);
+  --accent-soft: rgba(98, 85, 224, 0.07);
+  --green: #1aab4f;
+  --amber: #d97706;
+  --red: #ef4444;
+  /* Info/widget accent. Also the .toast--info border (its var(--blue, #3b82f6)
+     fallback was silently active before this was defined). */
+  --blue: #3b82f6;
+  /* Public-share accent (orange doc-tree icon, plan "orange-tree-icon"). */
+  --orange: #f97316;
+  /* Diff "removed" fill — matches anchorless note default (ListPill.module.css). */
+  --diff-removed-bg: rgba(255, 70, 70, 0.14);
+  --handle-bg: #bcbab4;
+  --handle-bg-hover: #6255e0;
+  --sticky-yellow-light: #F0E7C2;
+  --sticky-yellow-dark: #F2DE9D;
+  --sticky-yellow-mid: #F1E2AD;
+  --sticky-yellow-sep: #D7CEAD;
+  /* Sticky-yellow "ink": header/toolbar text on the yellow family
+     (text-sticky-ink, ChatHeader). */
+  --sticky-yellow-ink: #6b5e10;
+  --sticky-blue-light: #C7DBEF;
+  --sticky-blue-dark: #A9CDF4;
+  --sticky-blue-darkest: #5A8ECC;
+  --sticky-green-light: #C7FFC7;
+  --sticky-green-dark: #91D89C;
+  --sticky-green-darkest: #53A166;
+  --sticky-purple-light: #DAD6F2;
+
+  --code-key: #001080;
+  --code-string: #8a4a1a;
+  --code-plain-scalar: #a31515;
+  --code-number: #098658;
+  --code-keyword: #0000ff;
+  --code-comment: #008000;
+  --code-type: #2b91af;
+
+  --color-highlight-1: #ec883c;
+  --color-highlight-agent: #ec883c;
+  --color-highlight-2: #8ab4ff;
+  --color-highlight-3: #8ab440;
+  --color-highlight-4: #a978d6;
+  --color-highlight-5: #fdd663;
+
+  /* SYSTEM: panel-fade — right-panel reveal. SINGLE SOURCE OF TRUTH for the
+   * simultaneous opacity fade shared by ListPill (chat / references / notes /
+   * search) and ImageGallery thumbnails. All items reveal at once; no per-item
+   * stagger. Any NEW right-panel list renderer applies this duration to an
+   * opacity-only keyframe — never re-declare it per component. */
+  --panel-fade-duration: 0.5s;
+
+  /* SYSTEM: pill-list — SINGLE SOURCE OF TRUTH for inter-pill gap in the
+   * right-panel lists (chat / references / notes / search). Referenced by
+   * .pill-list and by the NotesPanel note-group wrapper. Change it here only. */
+  --pill-gap: 0px;
+}
+
+html.dark {
+  --bg: #1e1e1e;
+  --surface: #262626;
+  /* Midpoint between --bg and --surface (transclusion band background). */
+  --surface-transclusion: #222222;
+  --surface2: #2e2e2e;
+  --surface3: #434343;
+  /* Dark theme: --bg (#1e1e1e) is darker than --surface (#262626). */
+  --composer-control-bg: var(--bg);
+  --border: #363636;
+  --border-soft: #2a2a2a;
+  --header-bg: #363636;
+  --text: #dadada;
+  --text-muted: #b3b3b3;
+  --text-dim: #555555;
+  --accent: #8b7cf8;
+  --accent-glow: rgba(139, 124, 248, 0.30);
+  --accent-soft: rgba(139, 124, 248, 0.07);
+  --green: #4ade80;
+  --amber: #f59e0b;
+  --red: #f87171;
+  /* Info/widget accent (see the light-theme note). */
+  --blue: #60a5fa;
+  /* Public-share accent (orange doc-tree icon, plan "orange-tree-icon"). */
+  --orange: #fb923c;
+  /* Diff "removed" fill — matches anchorless note default (ListPill.module.css). */
+  --diff-removed-bg: rgba(200, 50, 50, 0.16);
+  --handle-bg: #363636;
+  --handle-bg-hover: #8b7cf8;
+  --sticky-yellow-light: #26241C;
+  --sticky-yellow-dark: #383322;
+  --sticky-yellow-mid: #302C22;
+  --sticky-yellow-sep: #3E3A28;
+  /* Dark sticky ink — confirmed by the 2026-09-16 human browser smoke
+     (plan frontend-styling-standardization, Validation); readable warm
+     light on the dark-olive sticky family. */
+  --sticky-yellow-ink: #d8ce9e;
+  --sticky-blue-light: rgba(80, 160, 255, 0.18);
+  /* WHY: the -dark/-darkest fills are OPAQUE (the rgba tints composited over
+     --surface). They double as the hover-reveal action plate drawn OVER a pill
+     that already carries the same fill (RowActions, .doc-item-actions); a
+     translucent value stacks with itself there and the plate shows as a darker
+     strip under the buttons. Light theme's fills are opaque for the same reason. */
+  --sticky-blue-dark: #334d6b;
+  --sticky-blue-darkest: #3d699d;
+  --sticky-green-light: rgba(60, 179, 113, 0.18);
+  --sticky-green-dark: #2d533e;
+  --sticky-green-darkest: #32744f;
+  --sticky-purple-light: #2A2740;
+
+  --code-key: #9cdcfe;
+  --code-string: #ce9178;
+  --code-plain-scalar: #ec883c;
+  --code-number: #b5cea8;
+  --code-keyword: #569cd6;
+  --code-comment: #6a9955;
+  --code-type: #4ec9b0;
+}
+
+/* ─── dsh MARKDOWN TOKENS — frontend/src/dsh/lore-markdown.js ──────────── */
+/* Token sheet for the sealed dsh renderer consumed by the chat MarkdownContent
+   wrapper (plan chat-markdown-on-dsh). The sealed CSS resolves every
+   color/font/motion value through the --dsw-, --ds-, --dsl- and --dsh-
+   custom property families, and shiki's css-variables theme emits token
+   colors as inline var(--shiki-…) with NO defaults — without this sheet
+   highlighted code renders in the plain foreground. Colors alias Lore
+   tokens so the light/dark flip flows through them; only the shiki hue
+   palette is dsh's own (Lore has no equivalent tokens). Font families
+   mirror @theme --font-sans and --font-mono by value — Tailwind tree-shakes
+   unused @theme variables, so they cannot be referenced via var() here. */
+
+:root {
+  --dsw-font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --ds-font-family-code: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+
+  --dsw-alias-bg-base: var(--bg);
+  --dsw-alias-border-l2: var(--border);
+  --dsw-alias-border-l3: var(--surface3);
+  --dsw-alias-label-primary: var(--text);
+  --dsw-alias-label-secondary: var(--text-muted);
+  --dsw-alias-label-tertiary: var(--text-dim);
+  --dsw-alias-label-caption: var(--text-dim);
+  --dsw-alias-state-business-primary: var(--accent);
+  --dsw-alias-markdown-code-block: var(--surface2);
+  --dsw-alias-markdown-code-block-banner: var(--surface2);
+  --dsw-alias-markdown-inline-code: var(--surface3);
+
+  --dsw-font-markdown-base: 400 16px/28px var(--dsw-font-family);
+  --dsw-font-markdown-base-strong: 600 16px/28px var(--dsw-font-family);
+  --dsw-font-markdown-h1: 700 24px/34px var(--dsw-font-family);
+  --dsw-font-markdown-h2: 700 22px/32px var(--dsw-font-family);
+  --dsw-font-markdown-h3: 700 20px/30px var(--dsw-font-family);
+  --dsw-font-markdown-h4: 600 16px/28px var(--dsw-font-family);
+  --dsw-font-markdown-table: 400 15px/25px var(--dsw-font-family);
+  --dsw-font-markdown-table-head: 500 15px/25px var(--dsw-font-family);
+  --dsw-font-markdown-code: 400 14px/22px var(--ds-font-family-code);
+  --dsw-font-markdown-code-block: 400 13px/22px var(--ds-font-family-code);
+  --dsw-font-xs-13: 400 13px/20px var(--dsw-font-family);
+
+  --ds-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ds-transition-duration: 0.2s;
+  --dsh-scrollbar-width: 8px;
+
+  --dsl-code-block-border-radius: 0px;
+  --dsl-code-block-banner-background-color: var(--dsw-alias-markdown-code-block-banner);
+  --dsl-code-block-banner-font: var(--dsw-font-xs-13);
+  --dsl-code-block-content-font: var(--dsw-font-markdown-code-block);
+
+  --shiki-foreground: var(--dsw-alias-label-primary);
+  --shiki-background: var(--dsw-alias-markdown-code-block);
+  --shiki-token-constant: #1c7ed6;
+  --shiki-token-string: #2f9e44;
+  --shiki-token-comment: #868e96;
+  --shiki-token-keyword: #d6336c;
+  --shiki-token-parameter: #e8590c;
+  --shiki-token-function: #6741d9;
+  --shiki-token-string-expression: #2b8a3e;
+  --shiki-token-punctuation: #495057;
+  --shiki-token-link: #1971c2;
+}
+
+/* Dark overrides: dsh's dark banner sits one step LIGHTER than the block
+   (light themes use the same value for both). */
+html.dark {
+  --dsw-alias-markdown-code-block-banner: var(--surface3);
+
+  --shiki-token-constant: #4dabf7;
+  --shiki-token-string: #69db7c;
+  --shiki-token-comment: #adb5bd;
+  --shiki-token-keyword: #faa2c1;
+  --shiki-token-parameter: #ffa94d;
+  --shiki-token-function: #b197fc;
+  --shiki-token-string-expression: #8ce99a;
+  --shiki-token-punctuation: #ced4da;
+  --shiki-token-link: #74c0fc;
+}
+
+/* No rounded corners — project rule. Beats the sealed sheet's literal
+   6px/8px/12px radii AND the --dsl-code-block-border-radius it re-declares
+   directly on its own block class (a :root alias cannot override that);
+   !important because css load order between index.css and the lazily
+   imported bundle is not guaranteed. KaTeX ships no border-radius, so
+   nothing else inside chat markdown is affected. */
+.chat-markdown :where(*) { border-radius: 0 !important; }
+
+html, body { height: 100%; overflow: hidden; }
+/* INVARIANT: the height chain reaches #root, so a full-height canvas exists on the
+   FIRST paint — before any route chunk mounts a shell.
+   Why: the top-level <Suspense fallback={<RouteLoading/>}> in App.tsx centers via
+   h-full; with #root at height:auto it resolved to 0 and the spinner painted pinned
+   to the top of the viewport, then jumped to center once the h-screen shell mounted.
+   Canvas first, spinner second. No overflow here — html/body already clip. */
+#root { height: 100%; }
+* { scrollbar-width: thin; scrollbar-color: var(--text-dim) transparent; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+}
+
+/* ─── RECORDING BUTTON (shared by header + CM6 voice widget) ──── */
+.header-recording-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 48px;
+  padding: 0 10px;
+  background: var(--red);
+  color: white;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+}
+.header-recording-btn:focus-visible {
+  outline: none;
+}
+.header-recording-btn:hover {
+  background: var(--red);
+  color: white;
+}
+.header-recording-btn--idle {
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+}
+.header-recording-btn--idle:hover {
+  background: var(--accent-green, #22c55e);
+  color: white;
+}
+.recording-icon-slot { position: relative; display: inline-flex; }
+.recording-icon--play { position: absolute; left: 0; visibility: hidden; }
+.header-recording-btn--idle:hover .recording-icon--play { visibility: visible; }
+.header-recording-btn--idle:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: transparent;
+}
+.header-recording-btn--recognizing {
+  color: var(--amber);
+  border: none;
+  background:
+    repeating-linear-gradient(
+      -60deg,
+      rgba(251,191,36,0.2),
+      rgba(251,191,36,0.2) 5px,
+      rgba(217,119,6,0.45) 5px,
+      rgba(217,119,6,0.45) 10px
+    );
+  background-size: 200% 100%;
+  animation: rec-barber 1.2s linear infinite;
+}
+@keyframes rec-barber {
+  to { background-position: -28px 0; }
+}
+/* Recognizing state is non-interactive — no hover effects.
+   The widget shows a spinner and awaits transcription response.
+   pointer-events: none prevents the red hover background from
+   .header-recording-btn:hover (which applies to all states). */
+.header-recording-btn--recognizing:hover {
+  pointer-events: none;
+}
+.recording-label {
+  display: inline-block;
+  min-width: 28px;
+  text-align: center;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  font-weight: 400;
+}
+/* Toast notification */
+.toast {
+  position: fixed;
+  top: 38px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 300;
+  padding: 6px 16px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  cursor: pointer;
+  animation: toast-in 0.15s ease-out;
+}
+.toast--error { border-left: 3px solid var(--red); }
+.toast--warning { border-left: 3px solid var(--amber, #f59e0b); }
+.toast--info { border-left: 3px solid var(--blue, #3b82f6); }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* ─── CM6 VOICE WIDGET (inline overrides — see editor/voice-widget.ts) ── */
+.cm-voice-widget {
+  vertical-align: middle;
+  margin: 0 2px;
+  min-width: 88px;
+  user-select: none;
+  height: 22px;
+}
+
+.icon-sun { display: none; }
+.icon-moon { display: block; }
+html.dark .icon-sun { display: block; }
+html.dark .icon-moon { display: none; }
+
+/* Disable ALL transitions during panel drag for instant response */
+body.is-resizing * { transition: none !important; }
+
+.toc-item {
+  display: flex;
+  align-items: center;
+  /* WHY: gap 0 (not 4px) so the title abuts the 12px chevron/placeholder and lands in
+     the same column as DocumentTree's file icon — keeps both tabs' indents identical so
+     rows don't jump horizontally when switching tabs. */
+  gap: 0;
+  padding: 5px 4px;
+  border-radius: 0;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.3;
+  transition: all 0.1s;
+  user-select: none;
+}
+.toc-item:hover { background: var(--surface3); color: var(--text); border-radius: 0; box-shadow: -6px 0 0 0 var(--surface3); }
+.toc-item.toc-root { font-weight: 600; color: var(--text); }
+
+.doc-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 4px;
+  border-radius: 0;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 13px;
+  transition: all 0.1s;
+  user-select: none;
+  position: relative;
+}
+.doc-item:hover,
+.doc-item.active { background: var(--surface3); color: var(--text); border-radius: 0; box-shadow: -6px 0 0 0 var(--surface3); }
+.doc-item.active .doc-icon { color: var(--text); }
+.doc-item.ref-parent {
+  background: var(--sticky-blue-dark);
+  color: var(--text);
+  border-radius: 0;
+  box-shadow: -6px 0 0 0 var(--sticky-blue-dark);
+}
+.doc-item.ref-parent .doc-icon { color: var(--text); }
+.doc-item.ref-parent .doc-item-actions {
+  opacity: 1;
+  background: linear-gradient(to right, transparent 0px, var(--sticky-blue-dark) 16px);
+}
+.doc-item--right-panel:hover,
+.doc-item--right-panel.active { box-shadow: 6px 0 0 0 var(--surface3); }
+.doc-item-context { margin-bottom: 4px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+.doc-icon { flex-shrink: 0; }
+.doc-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.doc-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  padding-left: 16px;
+  padding-right: 2px;
+  opacity: 0;
+  transition: opacity 0.1s;
+  background: linear-gradient(to right, transparent 0px, var(--surface) 16px);
+}
+.doc-item:hover .doc-item-actions,
+.doc-item.active .doc-item-actions {
+  opacity: 1;
+  background: linear-gradient(to right, transparent 0px, var(--surface3) 16px);
+}
+.doc-item.ref-parent:hover .doc-item-actions {
+  background: linear-gradient(to right, transparent 0px, var(--sticky-blue-dark) 16px);
+}
+
+.doc-action-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
+  transition: color 0.1s, background 0.1s;
+}
+.doc-action-btn:hover { background: var(--surface3); color: var(--text); }
+/* Same idle ink as the open reference's RowActions (--text-muted): --text-dim
+   is unreadable on the blue fill in the dark theme. */
+.doc-item.ref-parent .doc-action-btn,
+.doc-item.ref-parent .doc-gear-icon { color: var(--text-muted); }
+.doc-item.ref-parent .doc-action-btn:hover { background: var(--sticky-blue-darkest); color: #fff; }
+.doc-item.snapshot-parent {
+  background: var(--sticky-green-dark);
+  color: var(--text);
+  border-radius: 0;
+  box-shadow: -6px 0 0 0 var(--sticky-green-dark);
+}
+.doc-item.snapshot-parent .doc-icon { color: var(--text); }
+.doc-item.snapshot-parent .doc-item-actions {
+  opacity: 1;
+  background: linear-gradient(to right, transparent 0px, var(--sticky-green-dark) 16px);
+}
+.doc-item.snapshot-parent:hover .doc-item-actions {
+  background: linear-gradient(to right, transparent 0px, var(--sticky-green-dark) 16px);
+}
+.doc-item.snapshot-parent .doc-action-btn:hover { background: var(--sticky-green-darkest); color: #fff; }
+
+.doc-item.selected-snap,
+.doc-item.selected-snap:hover { background: var(--sticky-green-dark) !important; box-shadow: 6px 0 0 0 var(--sticky-green-dark); }
+.doc-item.selected-snap .note-time,
+.doc-item.selected-snap .doc-icon { color: var(--sticky-green-darkest); }
+/* Doc-tree key indicator (plan "glimmering-knitting-pebble" + "orange-tree-icon"):
+   blue = widget capability, red = agent capability, orange = covered by a live
+   anonymous public link. One color per row — the adapter (utils/key-icon.ts)
+   applies exactly one class with precedence agent > public > widget. Specificity
+   0,3,0 + placed AFTER the .active/.ref-parent/.snapshot-parent/
+   .selected-snap .doc-icon overrides so the key color survives on those rows. */
+.doc-item .doc-icon.key-widget { color: var(--blue); }
+.doc-item .doc-icon.key-public { color: var(--orange); }
+.doc-item .doc-icon.key-agent { color: var(--red); }
+.doc-action-btn.delete:hover { color: var(--red); background: transparent; }
+.doc-action-btn.add-child { align-self: stretch; width: 22px; height: auto; }
+.doc-action-btn.add-child svg { stroke-width: 3; }
+.doc-action-btn.add-child:hover { background: var(--accent-soft); color: var(--accent); }
+
+/* ─── GEAR ZONE: expand-on-hover ────────── */
+.doc-gear-zone {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  position: relative;
+}
+.doc-gear-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.doc-gear-actions {
+  display: none;
+  align-items: center;
+  align-self: stretch;
+  gap: 0;
+}
+.doc-gear-open .doc-gear-icon { display: none; }
+.doc-gear-open .doc-gear-actions { display: flex; }
+/* Expanded hit zones: full row height, 20% wider per button */
+.doc-gear-actions .doc-action-btn {
+  width: 22px;
+  height: 100%;
+  padding: 0 2px;
+  align-self: stretch;
+}
+
+.doc-rename-input {
+  flex: 1;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--accent);
+  outline: none;
+  padding: 0;
+  min-width: 40px;
+}
+
+/* Reference-pill inline rename: 80% width + typography identical to the
+ * normal (non-editing) ListRow title (text-sm = 14px, weight 400). Scoped to
+ * references — the shared .doc-rename-input (doc/chat/apikey rename) is
+ * intentionally NOT touched. */
+.ref-rename-input {
+  display: block;
+  width: 80%;
+  /* WHY: FieldInput pins every <input> to h-[37px] for the cabinet forms; the
+   * rename box must stay the title's own line box or the plaque grows on
+   * edit. Unlayered class beats the @layer utilities pin. */
+  height: auto;
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 400;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--accent);
+  outline: none;
+  padding: 0;
+}
+
+/* Chat-header rename input: box-identical to the STATIC title span so entering
+ * edit mode moves NOTHING. Two parts:
+ *  1. Horizontal: the static span carries NO horizontal padding (ref-plaque
+ *     rename contract, see .ref-rename-input) — so the input pads 0 on both
+ *     edges; engine input-text insets then have nothing to offset against.
+ *  2. Vertical: the base .doc-rename-input's `border-bottom: 1px` is IN the
+ *     layout box — a 21px input next to a 20px span sits 0.5px higher in the
+ *     items-center header (and more in WebKit), visibly lifting the text. Here
+ *     the underline is REPAINTED via an outset box-shadow 1px BELOW the box:
+ *     same accent bar in the same place, zero layout footprint — the input box
+ *     is exactly the span's 20px (text-sm 14px / 1.25rem line-height, weight
+ *     500). display:block removes inline-block/strut line-box games.
+ * Scoped to the chat header rename and the admin project card (same 14px /
+ * weight-500 / 20px title box) — the shared .doc-rename-input (13px;
+ * doc-tree / api-key rename) is intentionally NOT touched. Layered alongside
+ * the base class (defined later in the file → wins at equal specificity). */
+.chat-rename-input,
+.admin-rename-input {
+  display: block;
+  height: auto; /* same override as .ref-rename-input — FieldInput's h-[37px] pin */
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  padding: 0;
+  border-bottom: none;
+  box-shadow: 0 1px 0 0 var(--accent);
+}
+
+/* Ghost-header chat-list search input: the rename box (zero layout footprint,
+ * outset underline) recoloured to the plaque's ink so the underline reads as
+ * part of the yellow plaque, not as the accent rename bar. Placeholder is
+ * light-weight — a hint, not content. */
+.chat-search-input {
+  color: #6b5e10;
+  font-weight: 500;
+  box-shadow: 0 1px 0 0 #6b5e10;
+}
+.chat-search-input::placeholder {
+  color: #6b5e10;
+  opacity: 0.6;
+  font-weight: 300;
+}
+
+/* Dashboard project-card rename input: typography identical to the static
+ * card title (text-base = 16px, weight 600, 24px line-height) so entering
+ * edit mode moves NOTHING; the underline is an outset box-shadow, not a
+ * border, so the input box is exactly the title's line box. Scoped to the
+ * Dashboard card title — the shared .doc-rename-input (13px; doc-tree /
+ * api-key rename) is intentionally NOT touched. Layered
+ * alongside the base class (defined later in the file → wins at equal
+ * specificity), same precedent as .chat-rename-input above. */
+.project-rename-input {
+  display: block;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.5rem;
+  border-bottom: none;
+  box-shadow: 0 1px 0 0 var(--accent);
+}
+
+
+/* Scroll wrapper — both edit and preview modes */
+.editor-scroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.editor-scroll::-webkit-scrollbar { width: 10px; }
+.editor-scroll::-webkit-scrollbar-track { background: transparent; }
+.editor-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.editor-scroll::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+.editor-scroll:has(.cm-focused) { cursor: text; }
+
+.collab-status-dot {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  z-index: 5;
+  opacity: 0.8;
+}
+.collab-status-dot--connected { background: #4ade80; opacity: 0; pointer-events: none; }
+.collab-status-dot--connecting { background: #facc15; }
+.collab-status-dot--reconnecting { background: #facc15; animation: pulse-dot 1.5s ease-in-out infinite; }
+.collab-status-dot--offline { background: #f87171; }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+.snapshot-preview-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 16px;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  gap: 12px;
+  position: relative;
+  z-index: 13;
+}
+
+.reference-viewer-banner {
+  background: var(--sticky-blue-dark);
+  border-bottom-color: var(--sticky-blue-dark);
+}
+.reference-viewer-banner button { background: transparent; }
+.reference-viewer-banner button:hover {
+  background: var(--sticky-blue-darkest);
+  color: #fff;
+}
+
+.snapshot-viewer-banner {
+  background: var(--sticky-green-dark);
+  border-bottom-color: var(--sticky-green-dark);
+}
+.snapshot-viewer-banner button { background: transparent; }
+.snapshot-viewer-banner button:hover {
+  background: var(--sticky-green-darkest);
+  color: #fff;
+}
+
+/* DownloadMenu theming — green when a snapshot is open (mirrors the green
+   SnapshotPreviewBanner for through-indication), blue panel for references.
+   Default theme keeps the standard gray trigger + surface panel. */
+.download-menu[data-theme="green"] > button {
+  background: var(--sticky-green-dark);
+  color: var(--text-muted);
+}
+.download-menu[data-theme="green"] > button:hover {
+  background: var(--sticky-green-darkest);
+  color: #fff;
+}
+.download-menu[data-theme="green"] .download-menu__panel {
+  background: var(--sticky-green-dark);
+}
+.download-menu[data-theme="green"] .download-menu__item:hover {
+  background: var(--sticky-green-darkest);
+  color: #fff;
+}
+.download-menu[data-theme="blue"] .download-menu__panel {
+  background: var(--sticky-blue-dark);
+}
+.download-menu[data-theme="blue"] .download-menu__item:hover {
+  background: var(--sticky-blue-darkest);
+  color: #fff;
+}
+
+.editor-content {
+  width: clamp(720px, 100%, 864px);
+  min-height: 100%;
+  margin: 0 auto;
+  padding: 0 10px 0;
+  box-sizing: border-box;
+}
+
+/* Restore cursor for interactive children */
+.editor-content a,
+.editor-content button { cursor: pointer; }
+
+/* CodeMirror inside .editor-content: transparent bg, fills container, no focus ring.
+   height: 100% fills .editor-content when CM is the active editor (CodeMirror only
+   renders when viewMode='edit' & no snapshotPreview, so 100% is always correct here). */
+/* ─── EDITOR LAYOUT (ancestor selectors required — cannot use EditorView.theme) ── */
+/* → see editor/theme.ts for CM6-scoped styles */
+/* → see editor/CSS-MAP.md for full navigation */
+
+.editor-cm { height: 100%; }
+.editor-cm .cm-editor { height: 100%; }
+.editor-cm .cm-scroller { height: 100%; }
+/* Hidden until the editor reports ready and the saved scroll is restored (Editor.tsx). */
+.editor-cm--pending { visibility: hidden; }
+.editor-content .cm-editor {
+  background: transparent;
+}
+.editor-content:has(.cm-focused),
+.editor-content .cm-editor.cm-focused {
+  cursor: text;
+}
+.editor-content .cm-editor.cm-focused {
+  outline: none;
+  box-shadow: none;
+}
+.editor-content .cm-editor .cm-scroller {
+  font-family: inherit;
+}
+.editor-content .cm-editor .cm-content {
+  padding: 0;
+  max-width: 844px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* ─── LEFT TAB BAR ───────────────────── */
+.left-tab-bar {
+  width: 36px;
+  height: 100%;
+  background: var(--surface2);
+  border-right: 1px solid var(--border-soft);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+  z-index: 2;
+  /* UserControls sits at the bottom of this bar — keep it above the home indicator. */
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.left-bar-tab {
+  width: 36px;
+  height: 36px;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+.left-bar-tab:hover {
+  background: var(--surface3);
+  color: var(--text-muted);
+}
+.left-bar-tab.active {
+  color: var(--accent);
+  background: var(--surface);
+}
+
+/* Bottom UserControls IconButtons must fill the bar like the tabs above.
+   The bar grew 30→36px; IconButton's shared md size (w-[30px]) did not —
+   override here, not in IconButton (md is 30px everywhere else). */
+.left-tab-bar button {
+  width: 36px;
+  height: 36px;
+}
+
+/* ─── RIGHT PANEL HEADER (horizontal tabs) ─── */
+.right-panel-header {
+  height: 48px;
+  position: relative;
+  z-index: 13;
+  background: var(--header-bg);
+  border-bottom: 1px solid var(--border-soft);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 0;
+  flex-shrink: 0;
+}
+html.dark .right-panel-header,
+html.dark .panel-header {
+  border-bottom-color: var(--surface);
+}
+html.dark .left-tab-bar {
+  border-right-color: var(--surface);
+}
+html.dark .resizer:not(:hover):not(.dragging)::before {
+  background: var(--surface);
+}
+
+.right-tab {
+  width: 38px;
+  height: 100%;
+  cursor: pointer;
+  border: none;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.right-tab.inactive {
+  background: transparent;
+  color: var(--text-dim);
+}
+.right-tab.inactive:hover {
+  background: var(--surface3);
+  color: var(--text-muted);
+}
+.right-tab.active {
+  background: var(--surface);
+  color: var(--accent);
+}
+
+/* An active (or tinted) right tab bleeds over .right-panel-header's bottom
+ * border so it merges with the panel below instead of showing a grey seam.
+ * INVARIANT: the +1px MUST equal .right-panel-header's border-bottom width.
+ * Why: the previous idiom (border-bottom: 2px <own colour> + margin-bottom:-1px)
+ * did NOT extend the box — under the header's align-items:center the negative
+ * margin only re-centered it, leaving half the border visible as a line. */
+.right-tab.active,
+.right-tab.notes-tab-thread.inactive,
+.right-tab.access-tab--red.inactive,
+.right-tab.access-tab--yellow.inactive,
+.right-tab.access-tab--blue.inactive {
+  height: calc(100% + 1px);
+  align-self: flex-start;
+}
+
+/* Yellow tab tint — shared by the notes tab with an open thread and the chat tab
+ * in the new-chat/ghost state (plan: chat-list-ux-and-sort-fixes, F1). The chat
+ * tab deliberately has NO .inactive variant: a collapsed/background chat tab
+ * stays neutral so it does not mimic the "a note thread is open" signal. */
+.right-tab.notes-tab-thread.active,
+.right-tab.chat-tab-new.active {
+  background: var(--sticky-yellow-light);
+  color: #6b5e10;
+}
+html.dark .right-tab.notes-tab-thread.active,
+html.dark .right-tab.chat-tab-new.active {
+  background: var(--sticky-yellow-light);
+  color: #c8b840;
+}
+.right-tab.notes-tab-thread.inactive {
+  background: var(--sticky-yellow-dark);
+  color: #6b5e10;
+}
+.right-tab.notes-tab-thread.inactive:hover {
+  background: var(--sticky-yellow-light);
+  color: #504810;
+}
+html.dark .right-tab.notes-tab-thread.inactive {
+  background: var(--sticky-yellow-dark);
+  color: #c8b840;
+}
+html.dark .right-tab.notes-tab-thread.inactive:hover {
+  background: var(--sticky-yellow-light);
+  color: #d4c84a;
+}
+
+/* ─── Access tab tint — strongest active external access (plan item 8) ─────── */
+/* Mirrors the notes-tab-thread pattern: a class on .right-tab that tints the
+ * collapsed tab. red = agent read-write, yellow = active share / public,
+ * blue = widget-only. Human members do NOT tint (decided). Tint is cosmetic. */
+.right-tab.access-tab--red.inactive {
+  background: var(--red);
+  color: #fff;
+}
+.right-tab.access-tab--red.active {
+  background: var(--red);
+  color: #fff;
+}
+.right-tab.access-tab--yellow.inactive {
+  background: var(--sticky-yellow-dark);
+  color: #6b5e10;
+}
+.right-tab.access-tab--yellow.active {
+  background: var(--sticky-yellow-mid);
+  color: #504810;
+}
+.right-tab.access-tab--blue.inactive {
+  background: var(--blue);
+  color: #fff;
+}
+.right-tab.access-tab--blue.active {
+  background: var(--blue);
+  color: #fff;
+}
+html.dark .right-tab.access-tab--yellow.inactive {
+  background: var(--sticky-yellow-dark);
+  color: #c8b840;
+}
+html.dark .right-tab.access-tab--yellow.active {
+  background: var(--sticky-yellow-light);
+  color: #c8b840;
+}
+
+/* ─── RIGHT PANEL ─────────────────────── */
+.right-panel {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  z-index: 2;
+  transition: background 0.2s;
+}
+
+/* Notes panel with active thread — opaque warm yellow background */
+.right-panel--notes-thread {
+  background: var(--sticky-yellow-light);
+}
+html.dark .right-panel--notes-thread {
+  background: var(--sticky-yellow-light);
+}
+
+/* Note chat input: yellow-dark bg + yellow-sep border */
+.right-panel--notes-thread textarea {
+  background: var(--sticky-yellow-mid);
+  border-color: var(--sticky-yellow-sep);
+}
+html.dark .right-panel--notes-thread textarea {
+  background: var(--sticky-yellow-mid);
+  border-color: var(--sticky-yellow-sep);
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-soft);
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Shared scroll-container boilerplate for the right-panel list containers.
+   Both .panel-body (non-pill panels) and .pill-list (pill lists) compose this
+   so the flex+scroll+scrollbar rules can't drift between them; each class below
+   declares only its own padding/gap. */
+.panel-body,
+.pill-list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  scrollbar-width: none;
+}
+.panel-body::-webkit-scrollbar,
+.pill-list::-webkit-scrollbar { display: none; }
+
+/* Non-pill panels (e.g. HistoryPanel). */
+.panel-body {
+  padding: 10px 12px 12px;
+  gap: 8px;
+}
+
+/* ─── PILL LIST (chat / notes / references / search container) ── */
+/* SYSTEM: pill-list — single source of list-container spacing for chat/notes/refs/search.
+   Parallel to .panel-body (which non-pill panels still use); do NOT reuse .panel-body
+   for pill lists. Outer padding 8/8/12, inter-pill gap via the `--pill-gap` variable
+   (:root) so the note-group wrapper and this rule share one knob — user-confirmed values. */
+.pill-list {
+  padding: 8px 8px 12px;
+  gap: var(--pill-gap);
+}
+
+/* ─── NOTE INNER ELEMENTS (used in NotesPanel) ── */
+.note-time {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+}
+
+/* ─── RESIZER ────────────────────────── */
+.resizer {
+  position: relative;
+  width: 0;
+  flex-shrink: 0;
+  cursor: col-resize;
+  z-index: 14;
+  overflow: visible;
+  will-change: transform;
+  /* Claim the drag gesture so the browser doesn't scroll/select while resizing by touch. */
+  touch-action: none;
+}
+.resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  width: 8px;
+  z-index: 6;
+}
+.resizer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  background: var(--border-soft);
+  transition: width 0.15s, left 0.15s;
+  pointer-events: none;
+  z-index: 5;
+}
+.resizer:hover::before,
+.resizer.dragging::before {
+  width: 4px;
+  left: -2px;
+  background: var(--accent);
+}
+/* Right resizer: visible line starts below header so header and right panel tabs merge visually */
+.resizer--right::before,
+.resizer--right::after {
+  top: 48px;
+}
+
+/* ─── VERTICAL RESIZER ───────────────── */
+.resizer-v {
+  position: relative;
+  height: 0;
+  flex-shrink: 0;
+  cursor: row-resize;
+  z-index: 14;
+  overflow: visible;
+  will-change: transform;
+  touch-action: none;
+}
+.resizer-v::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -4px;
+  height: 8px;
+  z-index: 6;
+}
+.resizer-v::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: var(--border);
+  transition: height 0.15s, top 0.15s;
+  pointer-events: none;
+  z-index: 5;
+}
+.resizer-v:hover::before,
+.resizer-v.dragging::before {
+  height: 4px;
+  top: -2px;
+  background: var(--accent);
+}
+
+/* Touch devices: widen the invisible grab zones (~8px → 24px) so a finger can
+   catch the resizer edge. Targets coarse pointers only — desktop mouse keeps 8px. */
+@media (pointer: coarse) {
+  .resizer::after {
+    left: -12px;
+    width: 24px;
+  }
+  .resizer-v::after {
+    top: -12px;
+    height: 24px;
+  }
+}
+
+/* Lift bottom-edge controls above the device's home indicator / system bar. */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.field-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+/* ─── INLINE LINKS (preview) ─────────── */
+/* Persistent (non-overlay) scrollbar for list popups — visible only when the
+   list overflows, hidden when it fits. Mirrors .editor-scroll / .cm-scroller. */
+.list-scroll::-webkit-scrollbar { width: 10px; }
+.list-scroll::-webkit-scrollbar-track { background: transparent; }
+.list-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 0; }
+.list-scroll::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+/* Opt-in override for a PillList that scrolls (chat list): .pill-list hides its
+   scrollbar by default, so both properties must be re-enabled explicitly. */
+.pill-list.list-scroll { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.pill-list.list-scroll::-webkit-scrollbar { display: block; width: 10px; }
+/* ─── LINK SUGGEST POPUP ────────────── */
+.link-suggest-popup {
+  position: fixed;
+  z-index: 50;
+  background: var(--surface);
+  border-radius: 0;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+  border: none;
+  padding: 8px;
+  width: 340px;
+  max-height: 280px;
+  display: flex;
+  flex-direction: column;
+}
+.link-suggest-item {
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+}
+.link-suggest-item:hover,
+.link-suggest-item.selected {
+  background: var(--surface2);
+  color: var(--text);
+}
+.link-suggest-popup .nav-keyboard .link-suggest-item:hover:not(.selected) {
+  background: transparent;
+  color: var(--text-muted);
+}
+.link-suggest-empty {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: center;
+  padding: 8px;
+}
+/* ─── ANIMATIONS ─────────────────────── */
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.spin { animation: spin 1s linear infinite; }
+
+/* ─── SELECTION TOOLBAR ──────────────── */
+.selection-toolbar {
+  position: fixed;
+  z-index: 45;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+  border-radius: 0;
+  display: flex;
+  align-items: center;
+  padding: 2px 4px;
+  gap: 1px;
+}
+.selection-toolbar .separator {
+  width: 1px;
+  align-self: stretch;
+  margin: 4px 3px;
+  background: var(--border);
+}
+.sel-toolbar-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 5px 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-muted);
+  border-radius: 0;
+  transition: background 0.1s, color 0.1s;
+}
+.sel-toolbar-btn:hover {
+  background: var(--surface2);
+  color: var(--text);
+}
+.sel-toolbar-btn.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.sel-toolbar-btn.active:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.sel-toolbar-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+  border-radius: 0;
+  min-width: 180px;
+  z-index: 50;
+  padding: 4px 0;
+}
+.sel-toolbar-color-picker {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+  border-radius: 0;
+  z-index: 50;
+  padding: 4px;
+  display: flex;
+  gap: 4px;
+}
+.sel-toolbar-color-swatch {
+  width: 22px;
+  height: 22px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  border-radius: 0;
+  transition: border-color 0.1s;
+}
+.sel-toolbar-color-swatch:hover {
+  border-color: var(--text-muted);
+}
+.sel-toolbar-color-swatch.active {
+  border-color: var(--text);
+}
+
+/* ─── CODEMIRROR (widgets only — theme styles in editor/theme.ts) ── */
+/* → scrollbar: ::-webkit-scrollbar not supported in EditorView.theme() */
+/* → copy button: see live-preview/widgets.ts → CopyButtonWidget */
+/* → task checkbox: see live-preview/widgets.ts → CheckboxWidget */
+/* → table widget: see live-preview/table-widget.ts → TableWidget */
+/* → math rendering: see live-preview/widgets.ts + math-render.ts */
+/* → CSS-MAP.md for full navigation */
+
+/* Scrollbar (progressive enhancement, not in EditorView.theme) */
+/* container-type enables the transclusion band's full-bleed background (100cqw in
+   theme.ts) — lets the band know the scroller's content-box width to break out of the
+   centered .cm-content. The band clips its own content (overflow: hidden) so wide body
+   markdown never expands the scroller's scroll width (no horizontal scrollbar). */
+.cm-scroller { container-type: inline-size; }
+.cm-scroller::-webkit-scrollbar { width: 10px; }
+.cm-scroller::-webkit-scrollbar-track { background: transparent; }
+.cm-scroller::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.cm-scroller::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+/* Copy button — widget inside fenced code block fence line */
+.cm-code-copy-btn {
+  position: absolute;
+  right: 8px;
+  top: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  z-index: 2;
+  opacity: 0.35;
+  transition: opacity 0.15s;
+}
+.cm-code-copy-btn:hover {
+  opacity: 1;
+  color: var(--text);
+}
+.cm-code-copy-btn--label {
+  width: auto;
+  height: auto;
+  padding: 2px 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75em;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+
+/* Task list checkbox widget — → see live-preview/widgets.ts → CheckboxWidget */
+/* WHY: margin-right is 0 because the trailing space after `- [ ]` is now
+   rendered as ordinary text (no longer hidden by Decoration.replace). The
+   space character itself provides the visible gap; an additional margin
+   would double it. */
+.cm-task-checkbox {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  margin-right: 0;
+  vertical-align: middle;
+  cursor: pointer;
+  accent-color: var(--accent);
+  border-radius: 0;
+  position: relative;
+  top: -2px;
+}
+
+/* Rendered markdown table — → see live-preview/table-widget.ts → TableWidget */
+.cm-table-widget-wrap {
+  /* WHY padding (not margin): CM6 measures block widgets via getBoundingClientRect,
+     which excludes margin. Margin on the table dropped 8px from the model and made
+     posAtCoords misroute clicks on the line right after the table. */
+  padding: 4px 0;
+}
+.cm-table-widget {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875em;
+  line-height: inherit;
+}
+.cm-table-widget th,
+.cm-table-widget td {
+  padding: 4px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.cm-table-widget th {
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--text);
+}
+.cm-table-widget td {
+  color: var(--text);
+}
+.cm-table-widget tbody tr:hover {
+  background: var(--surface2);
+}
+.cm-table-widget tbody tr:last-child td {
+  border-bottom: none;
+}
+.cm-table-widget .cm-inline-code {
+  font-size: inherit;
+}
+
+/* ── Table block object — editable persisted table (live-preview/table-block-widget.ts) ── */
+.cm-table-block-wrap {
+  /* Same padding-not-margin rationale as .cm-table-widget-wrap (CM6 block measurement). */
+  padding: 4px 0;
+  position: relative; /* anchor for the absolutely-positioned custom caret */
+}
+.cm-table-block {
+  border-collapse: collapse;
+  font-size: 0.875em;
+  line-height: inherit;
+  table-layout: fixed;
+}
+.cm-table-block th,
+.cm-table-block td {
+  /* padding:0 + height:100% (table trick) so the nested editor fills the WHOLE cell —
+     a click anywhere in the cell lands in its editor, not the outer document. The text
+     padding lives on the editor's .cm-content (cellThemeOverride). */
+  padding: 0;
+  height: 100%;
+  text-align: left;
+  border: 1px solid var(--border);
+  color: var(--text);
+  vertical-align: top;
+  min-width: 60px;
+}
+/* Host for the nested per-cell editor. Content-sized on purpose: a cell CANNOT fill a row
+   made tall by a multi-line SIBLING cell — percentage height does not resolve through a
+   table cell whose row height is content-determined (the classic table-percentage-height
+   limit), so height:100% / min-height:100% on this chain are no-ops. The dead <th>/<td>
+   space below a short cell's text in a tall row is covered by the cell's mousedown router in
+   table-block-widget (it routes a dead-space click into the editor via posAtCoords).
+   min-height keeps an empty cell one line tall. */
+.cm-table-block-cell-editor {
+  min-height: 1.5em;
+}
+/* Static (read-only snapshot-preview) cell: no nested editor, so it carries the cell
+   content padding the live cell's .cm-content normally provides. pre-wrap preserves
+   intra-cell line breaks captured in tables_json. */
+.cm-table-block-cell-static {
+  padding: 4px 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.cm-table-block th {
+  font-weight: 600;
+  background: var(--surface2);
+  position: relative; /* anchor for the column-resize handle */
+}
+/* Column-resize handle on the right border of each header cell. */
+.cm-table-block-col-resize {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 7px;
+  height: 100%;
+  cursor: col-resize;
+  user-select: none;
+}
+.cm-table-block-col-resize:hover {
+  background: var(--accent);
+  opacity: 0.4;
+}
+/* Compact icon toolbar just below the table, aligned to its right edge (outside the table).
+   Button visuals are Tailwind utilities on the element itself (see buildToolbar). */
+.cm-table-block-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+  margin-top: 3px;
+}
+.cm-table-block-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text-muted);
+  font-size: 0.875em;
+}
+.cm-table-block-remove {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.cm-table-block-remove:hover {
+  background: var(--surface2);
+}
+
+/* ── Math rendering — → see live-preview/widgets.ts + math-render.ts ── */
+.cm-math-inline {
+  display: inline-block;
+  vertical-align: middle;
+  padding: 0 2px;
+  text-indent: 0; /* WHY: neutralize inherited text-indent from cm-list-line hanging indent */
+}
+.cm-math-block {
+  display: block;
+  text-align: center;
+  overflow: hidden;
+  padding: 10px 0;
+  text-indent: 0; /* WHY: same as cm-math-inline — prevent inherited hanging indent shift */
+}
+.cm-math-block .katex-display {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.cm-math-error {
+  color: var(--text-muted);
+  font-family: monospace;
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
+.cm-mermaid-block {
+  background: var(--surface2);
+  padding: 12px 16px;
+  text-align: center;
+  overflow-x: auto;
+  text-indent: 0;
+  border-radius: 0;
+}
+.cm-mermaid-block svg {
+  max-width: 100%;
+  height: auto;
+}
+.cm-mermaid-error {
+  color: #e55;
+  font-family: monospace;
+  font-size: 0.85em;
+  white-space: pre-wrap;
+  text-align: left;
+  padding: 8px 0;
+}
+
+
+/* ─── Chat markdown rendering ──────────────────────────────────────────────── */
+
+.chat-markdown h1, .chat-markdown h2, .chat-markdown h3, .chat-markdown h4 {
+  margin: 0;
+}
+/* Compressed parity with the editor's heading scale (theme.ts: 1.875/1.5/1.25/1.1 of a
+   16px base). Chat's base is 14px in a narrow column, so the ratios are compressed —
+   the hierarchy reads without h1 dominating the message. h4 is the exception and sits at
+   the editor's own 1.1 — the bottom of a compressed scale stops reading as a heading at
+   all. Weight is a FLAT 600 across all four (the editor steps 700/700/600/600): at these
+   sizes the size steps already separate the levels, and a lighter h3/h4 read as body text
+   in a narrow column. Kept as two rules so a level can diverge again without a re-split. */
+.chat-markdown h1, .chat-markdown h2 { font-weight: 600; }
+.chat-markdown h3, .chat-markdown h4 { font-weight: 600; }
+/* Vertical rhythm mirrors the editor's heading padding scale (components/editor/theme.ts:
+   1.35 / 1.05 / 0.825 / 0.64rem above), expressed in rem so it does NOT scale with the
+   heading's own font-size. Bottom is small but non-zero: unlike the editor, chat has no
+   source line under the heading to separate it from the body text. */
+.chat-markdown h1 { font-size: 1.35em;  margin-top: 1.35rem; margin-bottom: 0.35rem; }
+.chat-markdown h2 { font-size: 1.25em;  margin-top: 1.05rem; margin-bottom: 0.3rem; }
+.chat-markdown h3 { font-size: 1.15em; margin-top: 0.825rem; margin-bottom: 0.25rem; }
+.chat-markdown h4 { font-size: 1.1em; margin-top: 0.64rem; margin-bottom: 0.2rem; }
+/* No top gap when a heading opens the message (mirrors editor's first-line rule). */
+.chat-markdown > h1:first-child,
+.chat-markdown > h2:first-child,
+.chat-markdown > h3:first-child,
+.chat-markdown > h4:first-child { margin-top: 0; }
+.chat-markdown strong { font-weight: 600; }
+.chat-markdown a { color: var(--accent); text-decoration: underline; }
+/* WHY: dsh leads external links with an inline svg globe (LinkIcon in
+   lore-markdown.js) sized/aligned as an inline glyph; Tailwind preflight makes
+   every svg display:block, which broke the link onto three lines. */
+.chat-markdown a > svg { display: inline; vertical-align: -0.25em; }
+.chat-markdown ul,
+.chat-markdown ol { padding-left: 1.4em; margin: 0.6rem 0; }
+/* Nested lists sit tight against their parent item */
+.chat-markdown li ul,
+.chat-markdown li ol { margin: 0; }
+.chat-markdown ul > li { list-style: disc; }
+.chat-markdown ol > li { list-style: decimal; }
+/* The sealed sheet's list rhythm (fixed 28px rows + 6px inter-li gap) is tuned
+   for dsh's own 16px+ web UI; in the chat's narrow column it reads as huge
+   gaps between bullets. Tighten the rows and the gap. !important because css
+   load order vs the lazy bundle is not guaranteed (same precedent as the
+   border-radius blanket on .chat-markdown). */
+.chat-markdown :where(ul, ol) li { line-height: 1.5 !important; }
+.chat-markdown :where(ul, ol) li:not(:first-child) { margin-top: 2px !important; }
+.chat-markdown blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 0.6em;
+  color: var(--text-muted);
+  margin: 0.6rem 0;
+}
+.chat-mermaid {
+  background: var(--surface2);
+  padding: 12px 16px;
+  margin: 0.7rem 0;
+  text-align: center;
+  overflow-x: auto;
+  border-radius: 0;
+}
+.chat-mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+.chat-markdown del {
+  text-decoration: line-through;
+}
+/* Voice mic button — consistent with header recording button */
+.mic-btn-wrap > button:hover:not(:disabled):not(.mic-recording):not(.mic-transcribing) {
+  background: var(--accent-green, #22c55e);
+  color: white;
+}
+.mic-btn-wrap > button.mic-recording,
+.mic-btn-wrap > button.mic-recording:hover {
+  background: var(--red) !important;
+  color: white !important;
+}
+.mic-btn-wrap > button.mic-transcribing,
+.mic-btn-wrap > button.mic-transcribing:hover {
+  background:
+    repeating-linear-gradient(
+      -60deg,
+      rgba(251,191,36,0.2),
+      rgba(251,191,36,0.2) 5px,
+      rgba(217,119,6,0.45) 5px,
+      rgba(217,119,6,0.45) 10px
+    ) !important;
+  background-size: 200% 100% !important;
+  animation: rec-barber 1.2s linear infinite;
+  color: #78350f !important;
+}
+html.dark .mic-btn-wrap > button.mic-transcribing,
+html.dark .mic-btn-wrap > button.mic-transcribing:hover {
+  color: #451a03 !important;
+}
+
+/* SYSTEM: audio-player — seek + volume sliders.
+ * accent-color keeps the native thumb (themeable via --accent in BOTH themes) and
+ * honors the no-rounded-corners rule without a fragile custom track/thumb. */
+.audio-player-range {
+  accent-color: var(--accent);
+  border-radius: 0;
+}

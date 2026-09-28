@@ -1,0 +1,2 @@
+# Put the PUBLIC half of your agent sandbox key here (one line, ssh-ed25519 ...).
+# The private half goes base64-encoded into SANDBOX_SSH_KEY_B64 in .env.

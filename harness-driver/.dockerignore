@@ -1,0 +1,8 @@
+# Runtime state from the DSH_HOME volume mount must never enter the build
+# context: the container (root) writes home/attachments and home/sessions into
+# the mounted host dir, and a root-owned directory under the context root
+# kills `docker compose build harness` with "error from sender: permission
+# denied". The image ships the PRESET only — runtime state arrives by mount.
+home/attachments
+home/sessions
+home/storages

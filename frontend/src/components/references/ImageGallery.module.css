@@ -1,0 +1,92 @@
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: 2px;
+  padding: 0;
+}
+
+.thumb {
+  aspect-ratio: 1;
+  position: relative;
+  overflow: hidden;
+  background: var(--surface2);
+  border: 1px solid var(--border-soft);
+  border-radius: 0;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  /* ARCH: panel-fade reveal — SAME single simultaneous fade as ListPill, sourced
+   * from the shared --panel-fade-duration constant in index.css (SYSTEM:
+   * panel-fade). Opacity-only, like the pills. */
+  animation: thumbIn var(--panel-fade-duration) ease both;
+}
+
+@keyframes thumbIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.thumb:hover {
+  border-color: var(--border);
+}
+
+.thumbActive {
+  border-color: var(--accent);
+}
+
+.thumbUploading {
+  opacity: 0.96;
+  cursor: default;
+}
+
+.thumbImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.spinnerWrap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(100, 100, 100, 0.85);
+  color: #fff;
+}
+
+.label {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 2px 4px;
+  font-size: 10px;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  display: flex;
+  justify-content: center;
+  gap: 1px;
+  padding: 3px 4px;
+  background: var(--surface3);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.thumb:hover .overlay {
+  opacity: 1;
+}
+
+.thumbUploading .overlay {
+  display: none;
+}

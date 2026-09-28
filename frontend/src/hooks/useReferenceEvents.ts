@@ -1,0 +1,164 @@
+/** Reference CRUD event listeners — always active regardless of panel state. */
+// ARCH: Lives here (not in ReferencesPanel) because ReferencesPanel is conditionally rendered.
+// If the panel is closed, listeners don't exist, and collab-driven store updates are missed.
+
+import { useCallback } from 'react';
+import { useAppStore } from '../store/app-store';
+import { useChatStore } from '../store/chat-store';
+import { apiClient } from '../api/client';
+import { useEvent } from './useEvent';
+import { useTranslation } from '../i18n';
+import { invalidateRefPreview } from './useReferencePreview';
+import type { Reference } from '../types';
+
+function _cleanupReferenceDeletion(referenceId: string): void {
+  useAppStore.getState().removeReference(referenceId);
+  // INVARIANT: evict the preview cache on delete.
+  // Why: it is the shared content source for hover previews + transclusions, so a
+  // surviving entry would re-serve a stale body for a deleted reference.
+  invalidateRefPreview(referenceId);
+  // Backend confirmed deletion — safe to drop from deletedRefIds. Any subsequent
+  // fetch of /references will not include this ID (deleted_at IS NOT NONE).
+  useAppStore.getState().removeRefFromDeleting(referenceId);
+  if (useAppStore.getState().currentReference?.reference_id === referenceId) {
+    useChatStore.getState().reset();
+  }
+}
+
+export function useReferenceEvents() {
+  const addReference = useAppStore(s => s.addReference);
+  const updateReference = useAppStore(s => s.updateReference);
+  const setCurrentReference = useAppStore(s => s.setCurrentReference);
+  const { t } = useTranslation();
+
+  const fetchRef = useCallback(async (referenceId: string) => {
+    try {
+      const ref = await apiClient.get(`/references/${referenceId}`) as Reference;
+      return ref;
+    } catch (err) {
+      console.error(`Failed to fetch reference ${referenceId}:`, err);
+      useAppStore.getState().showToast(t('failedToFetchReference'), 'error');
+      return null;
+    }
+  }, [t]);
+
+  // WHY: a newly-created reference (voice note, worker job, external system) is added
+  // to the panel even when its parent is a different/unrelated document — shown with that
+  // parent's label. Why: same stale-until-reload feature; lets the user see and open a
+  // just-created reference in context. Do NOT gate addReference on current-doc scope.
+  useEvent('project-reference-created', useCallback(async ({ referenceId }: { referenceId: string }) => {
+    const state = useAppStore.getState();
+    if (state.references.some(r => r.reference_id === referenceId)) return;
+    if (state.pendingUploadRefIds.has(referenceId)) return;
+    if (state.deletedRefIds.has(referenceId)) return;
+    const ref = await fetchRef(referenceId);
+    if (ref) addReference(ref);
+  }, [addReference, fetchRef]));
+
+  useEvent('project-reference-renamed', useCallback(({ referenceId, title }: { referenceId: string; title: string }) => {
+    updateReference(referenceId, { title });
+  }, [updateReference]));
+
+  // WHY: a moved reference stays in the References panel under its NEW parent's
+  // label; we only patch document_id, never remove it from the current view.
+  // Why: deliberate "stale-until-reload" UX — the user can keep working with a just-moved
+  // reference in place. The panel re-scopes to the current doc only on the next full load
+  // (ReferencesPanel scoped fetch). Do NOT add scope-revalidation/removal here.
+  useEvent('project-reference-moved', useCallback(({ referenceId, documentId }: { referenceId: string; documentId: string | null }) => {
+    updateReference(referenceId, { document_id: documentId });
+  }, [updateReference]));
+
+  // A reference re-parented via move_document
+  // arrives as a `project-document-moved` bus event (the tree move), NOT a
+  // project-reference-moved event. The reference panel loads per-host, so a client
+  // showing EITHER the new or the previous host must re-fetch its list — otherwise an
+  // open panel keeps listing a file that left, or misses one that arrived (stale-as-
+  // current). Each client shows one doc, so it only reloads when ITS current doc is a
+  // host of the move. (Harmless for tree-document moves: the per-host reference list
+  // is unaffected, so the re-fetch returns the same data.)
+  useEvent('project-document-moved', useCallback(({ parentId, previousParentId }: {
+    documentId: string; parentId: string | null; sortKey: string | null; previousParentId: string | null;
+  }) => {
+    const cur = useAppStore.getState().currentDocument?.document_id ?? null;
+    if (cur && (cur === parentId || cur === previousParentId)) {
+      useAppStore.getState().bumpReferencesReload();
+    }
+  }, []));
+
+  useEvent('project-reference-deleted', useCallback(({ referenceId }: { referenceId: string }) => {
+    _cleanupReferenceDeletion(referenceId);
+  }, []));
+
+  useEvent('project-documents-deleted-batch', useCallback(({ referenceIds }: { documentIds: string[]; referenceIds: string[] }) => {
+    // ARCH: reference cleanup for batch-delete lives here (always mounted), NOT in Sidebar
+    // (conditionally rendered). Without this, batch-deleted references leave ghost entries
+    // when the user is on a non-docs tab.
+    for (const refId of referenceIds) {
+      _cleanupReferenceDeletion(refId);
+    }
+  }, []));
+
+  // Cross-project subtree move, SOURCE side: the references that traveled with
+  // the subtree (leaves under moved docs) are unreachable from THIS project's
+  // panels — the same cleanup as batch-delete (drop + preview evict + chat
+  // reset when the moved ref was open). The ref is not deleted, it lives in
+  // the target project now; this client's project-A context cannot serve it.
+  useEvent('project-documents-moved-out', useCallback(({ referenceIds }: {
+    documentIds: string[]; referenceIds: string[]; targetProjectId: string; targetProjectName: string;
+  }) => {
+    for (const refId of referenceIds) {
+      _cleanupReferenceDeletion(refId);
+    }
+  }, []));
+
+  useEvent('project-reference-updated', useCallback(async ({ referenceId }: { referenceId: string }) => {
+    // WHY: on a content change, evict the cached body.
+    // Why: the next hover preview / transclusion must re-fetch fresh content —
+    // a surviving entry serves the pre-edit body.
+    invalidateRefPreview(referenceId);
+    const ref = await fetchRef(referenceId);
+    if (!ref) return;
+    // ARCH: the PATCH-archived route reuses this event.
+    // Archive direction: the ref is already in this client's list → updateReference
+    // re-affirms `archived` IN PLACE (dim-in-place, no reorder). The handler MUST NOT
+    // auto-remove archived refs — that would kill dim-in-place on the acting client
+    // (the WS echo flows through this same handler). Filtering happens at the next
+    // server refetch (toggle OFF hides it, toggle ON sinks it).
+    //
+    // RESTORE direction (asymmetry fix): a client that already refetched-and-filtered
+    // the ref OUT (toggle OFF, or a doc switch) hits an updateReference `.map` no-op
+    // (id absent → nothing to update) → the restored ref would stay missing until that
+    // client's next manual refetch. Patch that ONE gap: if the id is absent AND the ref
+    // is no longer archived, re-LIST so the restored ref re-enters scope. Archive needs
+    // no such fallback (the ref is still present to dim).
+    const present = useAppStore.getState().references.some(r => r.reference_id === referenceId);
+    if (!present && !ref.archived) {
+      useAppStore.getState().bumpReferencesReload();
+      return;
+    }
+    updateReference(referenceId, ref);
+    if (useAppStore.getState().currentReference?.reference_id === referenceId) {
+      setCurrentReference(ref);
+    }
+  }, [updateReference, setCurrentReference, fetchRef]));
+
+  useEvent('project-reference-status-changed', useCallback(async ({ referenceId, status }: { referenceId: string; status: string }) => {
+    updateReference(referenceId, { processing_status: status } as Partial<Reference>);
+    if (status === 'ready') {
+      // WHY: when transcription/content lands, evict the cached body.
+      // Why: the new content must be fetched on the next hover/transclusion —
+      // a surviving entry serves the empty pre-transcription body.
+      invalidateRefPreview(referenceId);
+      const ref = await fetchRef(referenceId);
+      if (!ref) return;
+      updateReference(referenceId, ref);
+      if (useAppStore.getState().currentReference?.reference_id === referenceId) {
+        setCurrentReference(ref);
+      }
+    }
+  }, [updateReference, setCurrentReference, fetchRef]));
+
+  useEvent('project-agent-extraction-started', useCallback((_: { referenceId: string }) => {
+    useAppStore.getState().showToast(t('agentAutoStarted'), 'info');
+  }, [t]));
+}

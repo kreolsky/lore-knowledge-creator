@@ -1,0 +1,149 @@
+/**
+ * ListPill — single source of right-panel pill chrome (chat / references / notes).
+ *
+ * INVARIANT: pills carry NO border. Why: a 1px border forced NoteCard/RefCard to
+ * fudge padding (7px/11px) to fake-align with chat's borderless inset, and the
+ * insets still drifted. Borderless means every pill insets at exactly the base
+ * 8px, so chat / ref / note glyph left-edges line up by construction.
+ *
+ * Variant colors migrated verbatim from the former NoteCard.module.css:
+ * anchored/highlight = yellow (INVARIANT: yellow = anchored, neutral = anchorless,
+ * no red in notes), anchorless = flat surface, backlink = green tint (border dropped,
+ * background only, so alignment stays uniform).
+ */
+
+.pill {
+  position: relative;
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px; /* equal horizontal/vertical inset, shared by chat / ref / note */
+  font-size: 0.875rem;
+  border-radius: 0;
+  transition: background 0.15s, color 0.15s;
+  color: var(--text-muted);
+  /* ARCH: panel-fade reveal. SINGLE simultaneous opacity fade for every pill;
+   * duration is the shared --panel-fade-duration constant from index.css
+   * (SYSTEM: panel-fade) — change it there, never here. Opacity-only (no
+   * translateY): a delayed/late-mounted pill must never be held visibly
+   * displaced, only invisible until it lands. */
+  animation: pillIn var(--panel-fade-duration) ease both;
+}
+
+@keyframes pillIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ── plain (chat / references / search): transparent, hover surface2 ── */
+.plain {
+  background: transparent;
+}
+.plain:hover {
+  background: var(--surface2);
+}
+
+/* plain active — chat purple accent */
+.plain.activeAccent {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.plain.activeAccent:hover {
+  background: var(--accent-soft);
+}
+
+/* plain active — reference blue (functional: marks the OPEN reference) */
+.plain.activeBlue {
+  background: var(--sticky-blue-dark);
+  color: var(--text);
+}
+.plain.activeBlue:hover {
+  background: var(--sticky-blue-dark);
+}
+
+/* ── Anchored steady — yellow. Borderless fill in every state. ── */
+.anchored {
+  background: var(--sticky-yellow-light);
+}
+.anchored:hover {
+  background: var(--sticky-yellow-dark);
+}
+:global(html.dark) .anchored {
+  background: var(--sticky-yellow-light);
+}
+:global(html.dark) .anchored:hover {
+  background: var(--sticky-yellow-dark);
+}
+
+/* Highlight — transient scroll/blink state layered on the yellow base. */
+.highlight {
+  background: var(--sticky-yellow-dark);
+}
+.highlight:hover {
+  background: var(--sticky-yellow-dark);
+}
+:global(html.dark) .highlight {
+  background: var(--sticky-yellow-dark);
+}
+:global(html.dark) .highlight:hover {
+  background: var(--sticky-yellow-dark);
+}
+
+/* Anchorless — flat neutral, blends with the panel background. NOT red. */
+.anchorless {
+  background: var(--surface);
+}
+.anchorless:hover {
+  background: var(--surface2);
+}
+:global(html.dark) .anchorless {
+  background: var(--surface);
+}
+:global(html.dark) .anchorless:hover {
+  background: var(--surface2);
+}
+
+/* Backlink — green tint, background only (border dropped for uniform alignment). */
+.backlink {
+  background: rgba(40, 180, 100, 0.08);
+}
+.backlink:hover {
+  background: rgba(40, 180, 100, 0.14);
+}
+:global(html.dark) .backlink {
+  background: rgba(40, 180, 100, 0.10);
+}
+:global(html.dark) .backlink:hover {
+  background: rgba(40, 180, 100, 0.16);
+}
+
+/* ── Highlight variant overrides for inner note-time element ── */
+.highlight :global(.note-time) {
+  color: rgba(160, 120, 10, 0.75);
+}
+:global(html.dark) .highlight :global(.note-time) {
+  color: rgba(220, 180, 60, 0.55);
+}
+
+/* ── Delete-button backdrop on pill hover ── */
+/* ARCH: the floating note delete IconButton (group-hover:opacity-100) overlaps
+ * list text; give it a solid backdrop matching the variant hover fill so text
+ * never bleeds through. Specificity (.var:hover .class = 0,3,0) beats IconButton's
+ * own hover:bg-surface3 (0,2,0).
+ * INVARIANT: gated on :not(.note-delete-armed) — an armed (red) button's own
+ * bg-red must win over the 0,3,0 backdrop. Why: the confirmation state must read
+ * as red, not the variant fill. */
+.anchored:hover :global(.note-delete-btn:not(.note-delete-armed)),
+.highlight:hover :global(.note-delete-btn:not(.note-delete-armed)) {
+  background: var(--sticky-yellow-dark);
+}
+:global(html.dark) .anchored:hover :global(.note-delete-btn:not(.note-delete-armed)),
+:global(html.dark) .highlight:hover :global(.note-delete-btn:not(.note-delete-armed)) {
+  background: var(--sticky-yellow-dark);
+}
+.anchorless:hover :global(.note-delete-btn:not(.note-delete-armed)) {
+  background: var(--surface2);
+}
+:global(html.dark) .anchorless:hover :global(.note-delete-btn:not(.note-delete-armed)) {
+  background: var(--surface2);
+}

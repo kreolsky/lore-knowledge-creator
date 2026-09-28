@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lore Recorder Settings</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 13px;
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 16px;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    h3 { font-size: 14px; margin-bottom: 12px; color: #fff; }
+    label { display: block; font-size: 12px; color: #888; margin-bottom: 4px; }
+    input[type="text"], input[type="password"], input[type="number"] {
+      width: 100%;
+      padding: 8px;
+      background: #2d2d2d;
+      border: 1px solid #444;
+      border-radius: 0;
+      color: #d4d4d4;
+      font-family: monospace;
+      font-size: 12px;
+      outline: none;
+    }
+    input:focus { border-color: #0078d4; }
+    .btn {
+      display: inline-block;
+      padding: 6px 14px;
+      background: #0078d4;
+      color: #fff;
+      border: none;
+      border-radius: 0;
+      cursor: pointer;
+      font-size: 12px;
+      margin-top: 12px;
+    }
+    .btn:hover { background: #106ebe; }
+    .status {
+      margin-top: 8px;
+      font-size: 11px;
+      color: #6a9955;
+      min-height: 16px;
+    }
+    .field { margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <h3>Lore Recorder Settings</h3>
+  <div class="field">
+    <label for="api-key">API Key (all-in-one)</label>
+    <input type="password" id="api-key" placeholder="Paste your API key here" />
+  </div>
+  <div class="field">
+    <label for="retention">Keep local recordings (days)</label>
+    <input type="number" id="retention" min="1" max="30" value="2" style="width: 80px" />
+  </div>
+  <button class="btn" id="save-btn">Save</button>
+  <div class="status" id="status"></div>
+  <script>
+    var invoke = window.__TAURI__.core.invoke;
+
+    var apiKeyInput = document.getElementById("api-key");
+    var retentionInput = document.getElementById("retention");
+    var saveBtn = document.getElementById("save-btn");
+    var statusEl = document.getElementById("status");
+
+    invoke("get_api_key").then(function(key) {
+      if (key) apiKeyInput.value = key;
+    }).catch(function(e) {
+      console.error("Failed to load key", e);
+    });
+
+    invoke("get_retention_days").then(function(days) {
+      retentionInput.value = days;
+    }).catch(function() {});
+
+    saveBtn.addEventListener("click", function() {
+      var key = apiKeyInput.value.trim();
+      var days = parseInt(retentionInput.value) || 2;
+
+      if (!key) {
+        statusEl.textContent = "Key cannot be empty";
+        statusEl.style.color = "#f44747";
+        return;
+      }
+
+      Promise.all([
+        invoke("set_api_key", { key: key }),
+        invoke("set_retention_days", { days: days })
+      ]).then(function() {
+        statusEl.textContent = "Saved!";
+        statusEl.style.color = "#6a9955";
+      }).catch(function(e) {
+        statusEl.textContent = "Error: " + e;
+        statusEl.style.color = "#f44747";
+      });
+    });
+  </script>
+</body>
+</html>

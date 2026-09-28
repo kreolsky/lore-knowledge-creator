@@ -1,0 +1,27 @@
+FROM python:3.12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libjpeg62-turbo zlib1g libwebp7 && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY backend/requirements.txt .
+# WHY: the CI runner intermittently times out reaching pypi.org with
+# pip's default 15s timeout / 5 retries, failing the build with a misleading
+# "No matching distribution" error. Longer timeout + more retries ride out the blips.
+RUN pip install --no-cache-dir --retries 10 --timeout 60 -r requirements.txt
+COPY backend/ .
+COPY surreal/ /surreal/
+# WHY: the release version is baked into the image, not declared in .env. With a
+# moving tag (`stable`) a .env-declared version can disagree with the digest
+# actually pulled; a self-reported version is what makes the moving tag safe to
+# run. Unset (a local build) reads as empty, which config.py folds to "dev".
+ARG APP_VERSION
+ENV APP_VERSION=${APP_VERSION}
+# INVARIANT: single web worker only. Collab session state (routes/collab/registry._sessions)
+# lives in-process — multiple web workers would split WS clients across processes,
+# breaking OT sync, broadcasts, and presence. Background jobs run in separate
+# worker/worker-transcription containers via arq + Redis.
+# INVARIANT: ws-ping-timeout (75s) < app HEARTBEAT_TIMEOUT_SEC (90s, session.py).
+# Why: the websockets protocol ping defaults to a 20s pong deadline — far stricter
+# than our 90s app heartbeat — so a transient client-network blip became a hard
+# server-side 1011 "keepalive ping timeout" close instead of a soft client reconnect
+# (top-2 disconnect cause in telemetry). Widen the deadline but keep it below the app
+# reap so a genuinely dead client is still cleaned up by the heartbeat path.
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1", "--log-level", "warning", "--timeout-graceful-shutdown", "8", "--ws-ping-interval", "20", "--ws-ping-timeout", "75"]

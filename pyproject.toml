@@ -1,0 +1,29 @@
+# Ruff config for the backend Python surface (`backend/` + `tests/`).
+# SYSTEM: lint-ruff — backend lint gate (pyflakes F + isort I).
+# v1 scope is deliberately high-signal / low-noise: pyflakes (F — real bugs:
+# unused imports, undefined names, redefinitions, unused locals, f-strings) and
+# import sorting (I). Style rules (E/W) are deferred to avoid a large initial
+# violation sweep; promote them once the baseline is clean. Enforced by the
+# `Backend Lint (ruff)` CI job (.gitea/workflows/ci.yml).
+[tool.ruff]
+target-version = "py312"
+extend-exclude = ["frontend"]
+
+[tool.ruff.lint]
+select = ["F", "I"]
+
+[tool.ruff.lint.isort]
+# backend uses absolute first-party imports (db, routes, mentions, …) with no src
+# layout; tell isort so it does not group them with third-party packages.
+known-first-party = [
+    "access", "ai_router", "annotations", "audio", "auth", "backlinks",
+    "checkpoint_store", "checkpoints", "config", "context", "db", "deps",
+    "embeddings", "event_bus", "evals", "extractor", "files", "graphql", "jobs",
+    "logger", "main", "mentions", "migrations", "models", "notes",
+    "notifications", "openapi_meta", "presence",
+    "proposals", "proposal_lifecycle", "proposals_store", "apply_executors",
+    "retrieval", "roles", "scope", "scripts", "search", "seed_dev",
+    "selection", "serializers", "session_manager", "sse", "table_serialize",
+    "tasks", "telemetry_store", "tool_api", "transclusion_grammar",
+    "transcribe", "users", "validation", "ydoc_store",
+]

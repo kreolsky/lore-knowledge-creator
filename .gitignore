@@ -1,0 +1,129 @@
+# Python
+__pycache__/
+.pytest_cache/
+.playwright-mcp
+.coverage
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment variables
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Docker
+qdrant_data/
+
+# File storage (user uploads)
+storage/
+
+# CIR pipeline experiment
+cir/
+# NOTE: cir/gold/ (hand-verified gold truth, 37 files) is unversioned BY DESIGN —
+# it rides the broad cir/ ignore above. It is NOT reconstructable from the repo:
+# build_gold*.py regenerate structure, but the hand-verification is human work.
+# Cloning loses it; back it up outside git.
+
+# Node.js
+node_modules/
+frontend/node_modules/
+frontend/package-lock.json
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+
+# Plans are TRACKED — they are part of how work is designed here, and a plan that
+# exists only on one machine takes its reasoning with it. Redact credentials before
+# writing them into one: these files are pushed.
+.zcode/plans/
+
+
+.db-snapshots/
+backups/
+
+# Local DB / cache data (bind-mounts; never commit)
+data/
+
+# Claude transient scheduler lock
+.claude/scheduled_tasks.lock
+
+# Playwright E2E artifacts (traces, video, screenshots, storageState)
+frontend/e2e/.out/
+
+# Playwright HTML report — kept OUT of frontend/ (the Vite-served root) so it can't
+# poison the dev-server module graph. Bind-mounted at ./e2e-html-report (see
+# docker-compose.yml e2e service + playwright.config.ts, plan: vite-e2e-report-isolation D1).
+e2e-html-report/
+
+# Generated OpenAPI artifact — TRANSIENT, not tracked. The backend container only mounts
+# ./backend, so export_openapi.py writes /app/openapi.json (= backend/openapi.json host-side)
+# and scripts/regen-openapi.sh `mv`s it to the canonical repo-root openapi.json (the only
+# one CI verifies). The backend/ copy is a by-product that goes stale and shadows the root
+# file — never commit it.
+backend/openapi.json
+
+# SurrealDB logical dumps (rebuild/rollback artifacts, hundreds of MB) — never
+# commit; they live next to surreal/schema.surql only as ops artifacts
+# (see dev-backup / pre-rebuild dumps).
+surreal/dump-*
+
+# Forensic snapshots of superseded plans (plan-snapshot.py, pruned at 30d) — local only:
+# committing dead drafts would recreate the plan residue the shape gate removes.
+.kilo/plans/superseded/
+
+# dsh composes the profile's cordis.yml AT RUNTIME (bundles + cordis.patch.yml)
+# inside the tracked home dir that compose bind-mounts into the harness container
+# (harness-driver/home). The composed file is a build artifact — never commit it;
+# the SOURCES are the tracked package.json (bundles) + cordis.patch.yml beside it.
+harness-driver/home/profiles/*/cordis.yml
+
+# The harness writes two more runtime artifacts into the same tracked home:
+# settings.yaml (the llm-deepseek section the image-capability upsert persists
+# per-turn model declarations into) and attachments/ (durable content-addressed
+# image bytes, unbounded — measured in the plan's Validation as a residual).
+harness-driver/home/settings.yaml
+harness-driver/home/attachments/
+harness-driver/home/storages/
+harness-driver/home/.anonymous-user-id
+
+# One-shot Phase-4 drive specs (workflow.md Phase 4: the spec asserting one bug may be
+# thrown away, the machinery under it never is — that machinery lives in e2e/helpers/
+# and IS tracked). Written here so a drive's residue can't be mistaken for the suite.
+frontend/e2e/drive/
+
+# Personal Claude Code harness settings
+.claude/settings.local.json

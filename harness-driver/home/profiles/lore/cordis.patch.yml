@@ -1,0 +1,4 @@
+# The profile's own patch layer stays EMPTY — the whole composition
+# (plugin insert, provider, disables) lives in the DSH_HOME cordis.patch.yml
+# one level up, applied over every profile.
+[]

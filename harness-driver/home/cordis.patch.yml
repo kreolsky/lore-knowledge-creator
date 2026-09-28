@@ -1,0 +1,319 @@
+# Lore harness driver — the dsh composition for the agent line.
+#
+# Applied as the DSH_HOME patch layer over the `lore` profile (bundles:
+# @deepseek-ai/dsh-base only — no web/headless/tui app). The Lore plugin is
+# inserted BY PATH (it lives at /dsh/lore-driver inside the image, so its
+# imports resolve against the harness workspace — same shape as the spike's
+# spike-plugin).
+#
+# ── The AGENT PRESET ──────────────────────────────────────────────────────────
+# What the agent is FOR lives HERE, as configuration — never as prompt text in
+# the plugin. The per-turn system prompt is built by Lore's prep layer and
+# handed over as the agent's COMPLETE prompt section (see the plugin's setup);
+# the preset below narrows everything ELSE: no harness identity, no runtime
+# contexts, no persona row (the coding-agent character's suppressor — spike-
+# verified with the sandbox left writable), sandbox read-only (document tools
+# go through the Tool-API proxies, never the local FS), and every dsh-base
+# pack/tool row disabled (skills, subagents, scheduling, MCP are the step-5
+# card's to earn or kill).
+
+- insert:
+    - id: lore-driver
+      name: '/dsh/lore-driver/src/index.ts'
+    # Brave / Tavily / SearXNG search providers for the `web` seam.
+    - id: lore-web-search
+      name: '/dsh/lore-driver/src/web-search/index.ts'
+
+# The LLM route: llm-pi-ai, one hand-declared provider route (`lore`) pointing
+# at the same Lore gateway as ever; the key resolves per request from
+# AI_API_KEY, never inlined here. WHY llm-pi-ai and not the old native
+# adapter: the effort picker offers the gateway's per-model levels, and
+# llm-pi-ai's per-model `reasoningEfforts` dict is the only dsh mechanism
+# where the offered levels are configuration (the old route's set was
+# hard-coded to off/low/high/max and died with UNSUPPORTED_REASONING_EFFORT
+# on anything else); the plugin upserts each model's advertised levels into
+# its catalog entry (ensureModelEntry), so what the UI offers is what the
+# wire takes, spelled as the gateway spells it.
+# compat mirrors what the old route sent and the gateway accepts: system
+# messages keep `role: system`, the output cap is `max_tokens`, the effort is
+# a bare `reasoning_effort` (openai thinking format).
+# `models` carries ONE bootstrap id (the gate-checked harness model) because a
+# hand-declared route refuses to resolve with none — the plugin's boot upsert
+# replaces the list wholesale with the accumulated per-model entries (the
+# settings-layer array replaces this one), so the static list never serves a
+# turn the plugin did not already declare. NO route-level `reasoning`: a route
+# default would ride every Default turn — Default must send nothing.
+# defaultContextWindow is kept from the old row: pi-ai's own fallback
+# (262144) would silently change the context_usage denominator for an id the
+# gateway does not list. No env fallbacks: an unset LORE_AI_API_URL fails at
+# the first request instead of pretending to have a route. No `maxTokens`
+# here: the per-turn output cap is the router's per-model
+# `max_completion_tokens`, upserted into the catalog entry by the plugin
+# (ensureModelEntry) — a profile-wide number would re-hardcode the deleted
+# 8192 cap that cut every model below its real ceiling.
+- id: llm-pi-ai
+  config:
+    providers:
+      lore:
+        apiKeyEnv: AI_API_KEY
+        api: openai-completions
+        baseURL: !!js process.env.LORE_AI_API_URL
+        compat:
+          supportsDeveloperRole: false
+          maxTokensField: max_tokens
+          thinkingFormat: openai
+        defaultContextWindow: !!js Number(process.env.LORE_HARNESS_CONTEXT_WINDOW)
+        models:
+          - id: !!js process.env.LORE_HARNESS_MODEL
+
+# The old native adapter, disabled (same mechanism as the tool rows below):
+# dsh-base mounts it unconditionally with the PUBLIC DeepSeek endpoint as its
+# default, and DEEPSEEK_API_KEY is in the harness env — a missed provider
+# rename would fail SOFT onto the real DeepSeek API instead of loud.
+- id: llm-deepseek
+  disabled: true
+
+- id: agent-default-model
+  config:
+    provider: lore
+    model: !!js process.env.LORE_HARNESS_MODEL
+
+# Lore's prep layer owns the whole prompt; the harness contributes nothing
+# (no identity opener, no runtime contexts, no persona row).
+- id: system-prompt
+  config:
+    persona: ''
+    includeHarnessIdentity: false
+    includeRuntimeContext: false
+
+# Read-only sandbox: nothing to write (zero tools), and confinement stays
+# narrow even if a future row re-enables a tool by mistake.
+- id: sandbox-policy
+  config:
+    mode: read-only
+    workspaceRoot: !!js process.cwd()
+
+# The approval ask service (plan collapse-agent-stack-onto-dsh-vocabulary
+# step 7): the plugin's mutating confirm calls ASK through ctx.approval — the
+# audit pair (approval/asked + approval/decided) lands on the dsh session log
+# and Lore's verdict surface answers the request (approvals.ts bridge). The
+# permission preset registry stays disabled: it exists for the shell/sandbox
+# tools this composition serves none of.
+- id: approval
+  config:
+    policy: ask
+- id: permission
+  disabled: true
+
+# Session titles come from the harness titler: dsh-base composes
+# session-title-first-prompt-llm under THIS id (overriding a config here
+# REPLACES the base row's, so the five required fields are restated). It runs
+# once per fresh non-fork session on the first prompt and never retries on its
+# own — acceptable because the session-title service's deterministic
+# first-words fallback always lands before any model call. The model is
+# CHAT_TITLE_MODEL, read straight off the process env (the service loads the
+# whole .env) — the backend makes no title call and does not read the variable,
+# so the harness is its only consumer. WHY: a separate model for cheap
+# auto-title generation; falls back to CHAT_MODEL if not set. WHY `lore`: it
+# is the single provider route this composition declares (the llm-pi-ai
+# `lore` route above, pointing at OUR gateway — the same route
+# agent-default-model rides). WHY the model must be non-reasoning on the
+# gateway: the title call names no effort, and on this openai-format route a
+# request with no `reasoning_effort` gets the PROVIDER's default — there is no
+# per-purpose way to say "don't think", so a reasoner would think on every
+# title. The plugin's boot gate enforces it (crash-on-config naming the model
+# and its levels) and upserts the model's id-only catalog entry at boot.
+# The title's byte budget: dsh-base caps a title at 80 UTF-8 bytes (40 Cyrillic
+# characters) and cuts it mid-word, which is what the chat list showed. The UI
+# ellipsizes a long title itself (ChatRow `truncate`), so the generated title
+# rides whole; the budget stays a positive integer because the service requires
+# one, and fallbackMaxBytes may not exceed it. The deterministic first-words
+# fallback keeps its 5-word cap and loses only the mid-word byte cut.
+- id: session-title
+  config:
+    fallbackMaxWords: 5
+    fallbackMaxBytes: 4096
+    maxTitleBytes: 4096
+
+- id: session-title-llm
+  config:
+    targetWords: 5
+    targetCjkCharacters: 10
+    maxInputBytes: 4096
+    maxOutputTokens: 64
+    timeoutMs: 60000
+    provider: lore
+    model: !!js process.env.CHAT_TITLE_MODEL || process.env.CHAT_MODEL
+
+# Raw JSONL (not zstd frames): the Lore-side tooling (and any post-mortem of a
+# drive) can line-read the session logs without the backend codec.
+- id: session-persistence-jsonl
+  config:
+    root: !!js (process.env.DSH_HOME || process.cwd()) + '/sessions'
+    compression: 'none'
+
+# ── zero-tools: disable every tool/command/goal/subagent row of dsh-base ──────
+- id: tool-bash
+  disabled: true
+- id: tool-pwsh
+  disabled: true
+- id: bash-sandbox
+  disabled: true
+- id: pwsh-sandbox
+  disabled: true
+- id: tool-jobs
+  disabled: true
+- id: tool-fs
+  disabled: true
+- id: tool-fs-search
+  disabled: true
+- id: fs-observation-policy
+  disabled: true
+# ── skills (step 8: dsh's skill/* is the vocabulary) ──────────────────────────
+# The registry + the model-facing `skill` loader tool. Lore's skills arrive
+# per turn as payload metadata; the plugin's lore-skills provider (skills.ts)
+# serves them to this registry, dsh publishes the durable catalog, and a
+# successful load through the `skill` tool lifts the pack restriction.
+- id: skill
+  disabled: false
+- id: tool-skill
+  disabled: false
+- id: skill-filesystem
+  disabled: true
+
+- id: agent-instructions
+  disabled: true
+- id: tool-todo
+  disabled: true
+- id: tool-goal
+  disabled: true
+- id: goal
+  disabled: true
+- id: goal-round-driver
+  disabled: true
+- id: command-goal
+  disabled: true
+- id: tool-ralph
+  disabled: true
+- id: tool-str-replace-editor
+  disabled: true
+- id: repeat-tool-reminder
+  disabled: false
+  config:
+    # The advisory repeat guard (plan collapse-agent-stack-onto-dsh-vocabulary
+    # step 9 — it replaces the deleted turn_budget's per-target repeat bound).
+    # Tracked: the mutating surface (an identical repeated edit/create is a
+    # stuck loop). Exempt, with the WHYs the old bound encoded:
+    #   sandbox_bash / generate_image — identical repeats are legitimate
+    #     (re-run after a fix; regenerate with a fresh seed);
+    #   read_* / search_* / get_* — repeated reads are ordinary work, and the
+    #     old bound never touched read-only tools;
+    #   skill — reloads are cheap and idempotent;
+    #   next_reference — idempotent re-serve is the RETRY shape;
+    #   subagent — one blocking dispatch per child by construction.
+    exclude:
+      - sandbox_bash
+      - generate_image
+      - skill
+      - next_reference
+      - subagent
+      - 'read_*'
+      - 'search_*'
+      - 'get_*'
+      - list_*
+# timeout-policy (step 9): arms the per-call deadline every READ-ONLY proxy
+# declares (tools.ts — mutating proxies declare none: an approval ask parks up
+# to LORE_APPROVAL_MAX_S and a budget would kill exactly that ask).
+- id: timeout-policy
+  disabled: false
+# web: the ONE web_search. The provider is chosen in Lore's admin settings
+# ("Web search"); boot-env.ts fetches the choice from the backend at harness
+# start and sets DSH_WEB_SEARCH_PROVIDER (the pinned id dsh-web selects by)
+# plus that provider's key/URL in the env. Providers: dsh's own
+# web-search-deepseek (Anthropic-compatible Messages API with DEEPSEEK_API_KEY,
+# a different plane from the AI_API_* chat route) and lore-web-search above.
+# INVARIANT: `searchProvider` is set here from the pin. Why: the base bundle's
+# row pins `searchProvider: deepseek-official`, and dsh-web reads the env pin
+# only when the config leaves it unset — without this row every provider choice
+# ran DeepSeek. `fetchProvider: http` restates the base value this `config`
+# replaces.
+- id: web
+  disabled: false
+  config:
+    searchProvider: !!js process.env.DSH_WEB_SEARCH_PROVIDER
+    fetchProvider: http
+- id: web-search-deepseek
+  disabled: false
+  config:
+    apiKeyEnv: DEEPSEEK_API_KEY
+# A `config` here REPLACES the base bundle's, so the two values it set are
+# restated. `fetch: false` is upstream's deliberate choice and stays: the
+# `web-fetch-http` provider defers SSRF protection to the caller while the MODEL
+# picks the request target, and no fetch provider is mounted here — turning the
+# tool on without one served a `web_fetch` that failed every call.
+# `search` follows the pin: provider `off` serves no pin, so web_search is not
+# offered to the model at all (and the skills filter stops advertising the
+# skills that need it).
+- id: tool-web
+  disabled: false
+  config:
+    search: !!js process.env.DSH_WEB_SEARCH_PROVIDER !== undefined
+    fetch: false
+    searchTimeoutMs: 60000
+    searchMaxResults: 8
+    searchMaxQueries: 4
+- id: commands
+  disabled: true
+- id: command-feedback
+  disabled: true
+- id: command-compact
+  disabled: true
+- id: plan-mode
+  disabled: true
+# ── subagents ─────────────────────────────────────────────────────────────────
+# The ctx.subagents registry + the stock DISPATCH tool (foreground one-shot =
+# BLOCKING: the call waits for the child's result — async stays out per
+# subagents-v2's Open). The provider is the stock spawn-in-process: a fresh
+# child with its own session (log header `origin: subagent`) and zero parent
+# history, whose shared driver owns depth checking, persona, tool-filter,
+# one-shot execution, result reading and quiescent disposal. Return path:
+# the child's final assistant message settles as the dispatching call's OWN
+# tool/result — `send_message`/`subagent-settled` belong to CONTINUABLE
+# (background) children only, so tool-subagent-control stays disabled below.
+- id: subagent
+  disabled: false
+- id: tool-subagent
+  config:
+    provider: spawn
+    toolName: subagent
+    enableRunInBackground: false
+- id: subagent-spawn-in-process
+  disabled: false
+- id: subagent-fork-in-process
+  disabled: true
+- id: tool-subagent-control
+  disabled: true
+- id: tool-subagent-list-agents
+  disabled: true
+- id: tool-subagent-fork
+  disabled: true
+- id: workflow-worker-thread
+  disabled: true
+- id: tool-workflow
+  disabled: true
+# Spill's whole value is the locator it hands the model ("stored at: … use
+# read with offset/limit, or grep this path"), and this composition serves NO
+# filesystem tool (tool-fs / tool-fs-search disabled above) — a spill would
+# truncate a result and point at a path nothing can open. The size bound sits
+# at acquisition instead (AGENT_READ_MAX_CHARS with offset/limit paging in
+# read_document).
+- id: spill-local
+  disabled: true
+- id: spill-policy
+  disabled: true
+- id: tool-result-pruner
+  disabled: true
+- id: hmr
+  disabled: true
+- id: session-telemetry-otel
+  disabled: true

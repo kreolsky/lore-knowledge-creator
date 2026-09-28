@@ -1,0 +1,9 @@
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+python-multipart==0.0.32
+# PDF→markdown engine (pulls PyMuPDF, AGPL-3.0) — the reason converter/ is
+# licensed AGPL-3.0 on its own (converter/LICENSE), apart from the BSL Licensed Work.
+pymupdf4llm==1.28.2
+# test-only: build a fixture .docx in test_convert.py
+python-docx==1.2.0
+pytest==9.1.1

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicedoc/awesome-actionable-analytics/main/tauri.conf.json",
+  "productName": "Lore Recorder",
+  "version": "0.1.0",
+  "identifier": "com.lore.recorder",
+  "build": {
+    "frontendDist": "../src",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": []
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "14.0",
+      "entitlements": "Entitlements.plist",
+      "signingIdentity": "-"
+    },
+    "resources": {
+      "swift-audio/.build/release/lore-audio-capture": "lore-audio-capture"
+    }
+  }
+}

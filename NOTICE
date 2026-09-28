@@ -1,0 +1,70 @@
+Lore
+Copyright (c) 2026 Serge Zaigraeff
+
+Lore is licensed under the Business Source License 1.1 (see LICENSE).
+
+The components below are NOT part of the Licensed Work. Each remains under
+its own license, reproduced in its source distribution or package.
+
+Separately licensed part of this repository
+-------------------------------------------
+
+converter/
+    Document converter service (DOCX/PDF to Markdown), run as its own
+    container. GNU Affero General Public License v3.0, because it links
+    PyMuPDF. Full text: converter/LICENSE
+
+Vendored source
+---------------
+
+vendor/dsh/
+    Agent harness. MIT License, Copyright (c) 2026 DeepSeek.
+    Full text: vendor/dsh/LICENSE
+    Building the harness image installs dsh's own dependencies, among them
+    libvips (LGPL-3.0-or-later, dynamically linked through sharp) and
+    @anthropic-ai/claude-agent-sdk (Anthropic's commercial terms, no SPDX
+    license). Neither is included in this repository.
+
+Services run as separate processes (unmodified, in their own containers)
+------------------------------------------------------------------------
+
+SurrealDB (surrealdb/surrealdb image)      Business Source License 1.1
+    Its Additional Use Grant forbids offering SurrealDB itself as a
+    commercial Database-as-a-Service. Running it as Lore's database is
+    permitted.
+Redis 8 (redis image)                      RSALv2 / SSPLv1 / AGPLv3 (choice)
+Pandoc (converter image)                   GPL-2.0-or-later
+PyMuPDF, pymupdf4llm (converter image)     AGPL-3.0 (or Artifex commercial)
+
+Libraries (principal runtime dependencies)
+------------------------------------------
+
+Backend (Python)
+    FastAPI                 MIT
+    Uvicorn                 BSD-3-Clause
+    surrealdb (Python SDK)  Apache-2.0
+    pycrdt                  MIT
+    redis-py                MIT
+    arq                     MIT
+    mcp (Python SDK)        MIT
+    asyncssh                EPL-2.0 OR GPL-2.0-or-later
+    Pillow                  MIT-CMU
+    httpx                   BSD-3-Clause
+    PyJWT                   MIT
+    bcrypt                  Apache-2.0
+    jsonschema              MIT
+    zstandard               BSD-3-Clause
+    PyYAML                  MIT
+
+Frontend (JavaScript)
+    React, React DOM        MIT
+    React Router            MIT
+    Zustand                 MIT
+    CodeMirror 6, Lezer     MIT
+    Yjs, y-codemirror.next, y-indexeddb, y-protocols   MIT
+    KaTeX                   MIT
+    Mermaid                 MIT
+    Shiki                   MIT
+    DOMPurify               MPL-2.0 OR Apache-2.0
+    Turndown                MIT
+    Lucide                  ISC

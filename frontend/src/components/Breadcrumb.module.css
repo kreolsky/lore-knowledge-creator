@@ -1,0 +1,86 @@
+/* ─── BREADCRUMB ─────────────────────── */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  font-size: 15.6px;
+  color: var(--text-muted);
+  /* Same clipping scheme as the document list's .doc-label and the TOC rows:
+     the bar shrinks with the header, every crumb clips to an ellipsis instead
+     of wrapping. Separators never shrink. */
+  flex: 1;
+  min-width: 0;
+}
+.breadcrumb .sep, .breadcrumb .crumbProjectWrap, .breadcrumb .crumbTitleWrap { min-width: 0; }
+.breadcrumb .sep { flex-shrink: 0; }
+.breadcrumb .crumbProjectName, .breadcrumb .crumbAncestor, .breadcrumb .crumbActive {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* FRAGILE: unscoped descendant — affects ALL <span> inside .breadcrumb.
+   Do NOT wrap breadcrumb children in extra <div>/<span> elements. */
+.breadcrumb span { cursor: pointer; transition: color 0.15s; }
+.breadcrumb span:hover { color: var(--text); }
+.breadcrumb .crumbActive { color: var(--text); }
+.breadcrumb .crumbAncestor { padding: 2px 4px; border: 1px solid transparent; }
+.breadcrumb .sep { color: var(--text); cursor: default; }
+
+/* ─── BREADCRUMB EDITABLE ELEMENTS ──── */
+.crumbProjectWrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: 0;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  user-select: none;
+}
+.crumbProjectWrap:hover {
+  border-color: var(--border);
+  background: var(--surface3);
+}
+.crumbProjectName {
+  color: var(--text-muted);
+  font-size: 15.6px;
+  transition: color 0.15s;
+}
+.crumbProjectWrap:hover .crumbProjectName {
+  color: var(--text);
+}
+.crumbTitleWrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: 0;
+  border: 1px solid transparent;
+  font-weight: 500;
+  cursor: default;
+  transition: border-color 0.15s;
+}
+.crumbTitleWrap:hover {
+  border-color: var(--border);
+  background: var(--surface3);
+}
+.crumbRenameInput {
+  appearance: none;
+  font: inherit;
+  letter-spacing: inherit;
+  word-spacing: inherit;
+  -webkit-font-smoothing: inherit;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--accent);
+  outline: none;
+  padding: 0;
+  margin: 0;
+  flex: 1;
+  min-width: 60px;
+}

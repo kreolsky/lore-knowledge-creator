@@ -1,0 +1,298 @@
+services:
+  surreal:
+    image: surrealdb/surrealdb:v3.3.0
+    command: start --user ${SURREAL_USER} --pass ${SURREAL_PASS} --bind 0.0.0.0:8000 surrealkv:///data/lore.db
+    user: root
+    # Parity with the worker services: a surreal crash (OOM, surrealkv panic) is
+    # the #3 outage — it must self-recover, not stay down. Without `restart:` the
+    # default policy is `no`, so every backend DB query 500s until a human
+    # re-ups it. See plan "post-public-document-ids-fixes" T4.
+    restart: unless-stopped
+    # No port exposure — backend reaches surreal via Docker network.
+    # For ad-hoc access: docker compose exec surreal /surreal sql
+    env_file: .env
+    volumes:
+      # BIND-MOUNT, not a named volume: `docker compose down -v` and
+      # `docker volume prune` destroy named volumes (that's how the dev DB was
+      # wiped on 2026-06-30). A host directory is never removed by those commands,
+      # so the data survives accidental nukes. Why on the host: browsable, easy
+      # to back up, and immune to docker's volume lifecycle.
+      - ./data/surreal:/data
+    healthcheck:
+      test: ["CMD", "/surreal", "isready", "--endpoint", "http://localhost:8000"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  redis:
+    image: redis:8-alpine
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
+    volumes:
+      # BIND-MOUNT for the same reason as surreal: survive `down -v`/volume prune.
+      # Redis holds only transient state (presence/pubsub/cache); a fresh dir on
+      # first switch is harmless — it repopulates on reconnect.
+      - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 10
+
+  backend:
+    build: ./backend
+    ports:
+      # INVARIANT(corruption): the host side of every published port must stay
+      # overridable, defaulting to the historical fixed port.
+      # Why: CI runs several compose stacks concurrently on ONE docker daemon (see the
+      # env block of backend-tests in .gitea/workflows/ci.yml); a hardcoded host port
+      # makes the second stack fail to start on "address already in use". CI sets these
+      # to 0 (ephemeral); dev keeps 8001/5173/5174 untouched.
+      - "${LORE_PORT_BACKEND:-8001}:8001"
+    depends_on:
+      surreal:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    # INVARIANT(security): the backend is the ONLY service on sandbox-net. Why: it
+    # must reach the sandbox over SSH, but nothing else may — see the `sandbox`
+    # service for the other half of this rule.
+    networks:
+      - default
+      - sandbox-net
+    volumes:
+      - ./backend:/app
+      - ./surreal:/surreal
+      - ./storage:/storage
+      - ./tests:/tests
+      - ./logs:/logs
+      # The eval harness (SYSTEM: tool-ergonomics-eval) is NOT product code — it is
+      # mounted only so its suite runs under the repo's pytest.ini like every other
+      # suite, and so the Pi-arm surface can be dumped from inside the container
+      # (agent_toolset() has no HTTP tools/list twin). Nothing under /app imports it.
+      - ./evals:/app/evals
+      # Read-only: lets the credential-delivery test (test_sandbox_tool.py) cross-check
+      # sshd's AcceptEnv against the variable name the backend actually sends. Without
+      # it a rename drops the credential SILENTLY — sshd discards an unlisted variable.
+      - ./sandbox:/sandbox:ro
+      # Read-only: lets the event-wiring contract test (test_event_wiring.py) cross-check
+      # backend-emitted events against the frontend's event-types.ts. Without it the test
+      # silently skipped, hiding fan-out-to-nobody on the frontend side.
+      - ./frontend/src/events:/frontend/src/events:ro
+      # Read-only: lets the MCP prod-routing guard (test_mcp_prod_routing.py) cross-check
+      # frontend/nginx.conf so a deleted /mcp block (SPA leak regression) is caught in CI
+      # without booting the nginx image.
+      - ./frontend/nginx.conf:/frontend/nginx.conf:ro
+      # Read-only: lets the chat wire-contract test
+      # (test_types_ts_contract_chat.py) cross-check the live response keys against
+      # the hand-written ChatMessage/ChatSession interfaces in types.ts.
+      - ./frontend/src/types.ts:/frontend/src/types.ts:ro
+      # The AgentStep chip is BUILT in the plugin (map.ts `agentStep`) since
+      # plan collapse-the-editor-harness-layer step 1, so the types.ts
+      # cross-check derives its key set from that function's source.
+      - ./harness-driver/plugin/src/map.ts:/harness-driver/plugin/src/map.ts:ro
+      # Read-only: lets the editor-markup prompt test
+      # (test_agent_editor_markup_prompt.py) cross-check the hex-highlight forms named
+      # in the agent's bootstrap against the live renderer regex, so the pin fails if
+      # the editor's highlight grammar narrows under the prompt.
+      - ./frontend/src/components/editor/live-preview/build-structural.ts:/frontend/src/components/editor/live-preview/build-structural.ts:ro
+      # Read-only: lets the editor-markup prompt test cross-check the five highlight
+      # palette colors named in the bootstrap against index.css, so a palette change
+      # forces a prompt update.
+      - ./frontend/src/index.css:/frontend/src/index.css:ro
+  worker:
+    build: ./backend
+    # ARCH: watchfiles (dev only) hot-reloads the mounted source, exactly as uvicorn
+    # --reload does for backend and converter. The prod compose is a separate file and
+    # keeps the plain `arq` command; CI never starts a worker at all.
+    # Why: arq imports its modules once at startup and never re-reads them, so a
+    # mounted-source edit leaves backend running NEW code and the worker OLD code. The
+    # symptom is not a crash but a PLAUSIBLE WRONG ANSWER from an existing task — two
+    # invocation paths of the same code disagreeing — which reads as a product bug and
+    # has repeatedly poisoned live measurements before anyone suspected the container.
+    # A passive signal does not close this: the session hook already prints the
+    # worker's uptime, and it was on screen and unread the last time this cost an hour.
+    command: watchfiles --filter python "arq jobs.worker.WorkerSettings" /app
+    # arq exits when Redis is unreachable; restart so a transient Redis blip
+    # doesn't permanently drop background processing (see §11 manual test).
+    restart: unless-stopped
+    depends_on:
+      surreal:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    volumes:
+      - ./backend:/app
+      - ./storage:/storage
+
+  worker-transcription:
+    build: ./backend
+    # Hot-reloaded for the same reason as `worker` above — see its ARCH note. The
+    # trade is worse here (a save mid-STT can cut a minutes-long transcription short)
+    # and taken deliberately: a class closed on one worker only is the same class,
+    # just rarer and therefore harder to spot.
+    command: watchfiles --filter python "arq jobs.worker.TranscriptionWorkerSettings" /app
+    # arq exits when Redis is unreachable; restart so a transient Redis blip
+    # doesn't permanently drop transcription processing (see §11 manual test).
+    restart: unless-stopped
+    deploy:
+      replicas: 1
+    depends_on:
+      surreal:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    volumes:
+      - ./backend:/app
+      - ./storage:/storage
+
+  converter:
+    build: ./converter
+    # --reload (dev only) hot-reloads the mounted source; the prod image keeps the
+    # plain Dockerfile CMD. No port exposure — only the worker reaches it internally.
+    command: uvicorn app:app --host 0.0.0.0 --port 8002 --reload
+    restart: unless-stopped
+    volumes:
+      - ./converter:/app
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # SYSTEM: harness-driver — the RENTED loop (DeepSeek Harness, pinned sha in
+  # harness-driver/Dockerfile) behind the driver contract: POST /followup +
+  # POST /stop (the driver-owned turn), POST /session-leaf, POST
+  # /session-entries, GET/POST /approvals (+ resolve), GET /capability, GET
+  # /health, plus the standing event channel /ws/events — all under
+  # X-Driver-Secret. Tools
+  # arrive as payload proxies (skills split per the
+  # served-toolset filter); the per-turn system prompt is handed over by
+  # Lore's prep layer. THE line: every chat renders from the one
+  # backend-local messages projection.
+  harness:
+    build: ./harness-driver
+    restart: unless-stopped
+    depends_on:
+      - backend
+    env_file: .env
+    environment:
+      - PORT=8090
+      # The shared driver secret (X-Driver-Secret), its own value.
+      - LORE_DRIVER_SECRET=${HARNESS_DRIVER_SECRET:-}
+      # The gateway + model this line serves (the roster entry the harness
+      # resolves provider/model against; contextWindow small → quick forced
+      # compaction drives).
+      # PINNED: deepseek/flash — thinking mode + tool calling. Measured on
+      # the gray same-task drive (3 corpus tasks,
+      # agent_steps): flash 1/3/4 tool reads, task-3 answer corpus-grounded;
+      # local/orange/chat (the roster's only non-reasoning model) read 1/3/0
+      # and drifted off-corpus on the structure task — twice (Aug 26 + Aug 31).
+      # Turn times 4-19 s. The driver resolves each model's real ctx window
+      # itself off the gateway /v1/models (plugin caps.ts — plan
+      # collapse-the-editor-harness-layer step 4); the env below is only the
+      # composition default for models the gateway leaves bare.
+      - LORE_AI_API_URL=${AI_API_URL:-}
+      - LORE_HARNESS_MODEL=${HARNESS_MODEL:-}
+      - LORE_HARNESS_CONTEXT_WINDOW=${HARNESS_CONTEXT_WINDOW:-128000}
+      # The Tool-API hop for the Lore proxies (the drivers' internal URL —
+      # no new network path, the proxies ride the existing one).
+      - LORE_TOOL_API_URL=${TOOL_API_INTERNAL_URL:-http://backend:8001}
+      # The bound (s) on ONE mid-turn approval ask before it self-resolves
+      # rejected. Must stay at or below the backend's aggregate hold pause, or
+      # the turn deadline fires while a live card is still on screen.
+      - LORE_APPROVAL_MAX_S=${HARNESS_APPROVAL_MAX_S:-600}
+    volumes:
+      # Dev hot-edit of the composition + plugin source (a restart reloads
+      # them; the image carries baked copies for standalone use).
+      - ./harness-driver/home:/app/home
+      # ARCH: the dsh session log is DRIVER-OWNED: a HOST bind mount (not a
+      # named volume — survive down -v / volume prune) over the sessions root
+      # only.
+      - ./data/harness-home:/app/home/sessions
+      - ./harness-driver/plugin:/dsh/lore-driver
+
+  frontend:
+    build: ./frontend
+    ports:
+      # Overridable host ports — see the INVARIANT at the backend service above.
+      # 5174 is the Claude Preview port (same container port, second host binding).
+      - "${LORE_PORT_FRONTEND:-5173}:5173"
+      - "${LORE_PORT_FRONTEND_PREVIEW:-5174}:5173"
+    depends_on:
+      - backend
+    env_file: .env
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+  # SYSTEM: e2e — Playwright end-to-end harness (runtime/network observability).
+  # ARCH: runs inside Docker on the shared compose network, NOT on the host — zero
+  # host footprint (no ~/.cache/ms-playwright, no host node_modules). Browsers are
+  # pre-baked in the official Playwright image (tag MUST match @playwright/test in
+  # frontend/package.json — bump both together). Not started by `up`; behind the
+  # "e2e" profile. Run with: docker compose run --rm e2e
+  # WHY: deps install into the `e2e_node_modules` named volume (not host ./frontend),
+  # guarded so repeat runs skip reinstall. `npm install --legacy-peer-deps` mirrors
+  # the frontend Dockerfile exactly — package-lock.json is gitignored project-wide,
+  # so `npm ci` (which requires a committed lock) is not an option.
+  e2e:
+    image: mcr.microsoft.com/playwright:v1.63.0-noble
+    profiles: ["e2e"]
+    depends_on:
+      - frontend
+    working_dir: /app
+    environment:
+      E2E_BASE_URL: http://frontend:5173
+      CI: "true"
+    volumes:
+      - ./frontend:/app
+      - e2e_node_modules:/app/node_modules
+      # WHY (D1, report isolation): the Playwright HTML report is written to
+      # /e2e-html-report (absolute, see playwright.config.ts) so it lands OUTSIDE the
+      # Vite-served root (/app) and can no longer poison the dev-server module graph
+      # (playwright-logo.svg ENOENT bug). Bind it to host ./e2e-html-report (gitignored)
+      # so the report stays off the root yet remains browsable on the host.
+      - ./e2e-html-report:/e2e-html-report
+    command: >
+      sh -c "[ -x node_modules/.bin/playwright ] || npm install --legacy-peer-deps;
+             npx playwright test"
+
+  # Dev half of the agent's console host (prod = CT 703 on black).
+  # See SYSTEM: agent-sandbox (backend/routes/tool_api/sandbox/).
+  # The backend reaches it by SSH and knows nothing else about it; prod swaps this
+  # container for the LXC by pointing SANDBOX_SSH_HOST elsewhere. No ports are
+  # published: the host has no business reaching it either.
+  sandbox:
+    build: ./sandbox
+    restart: unless-stopped
+    # NET_ADMIN lets the entrypoint apply its own egress ruleset (sandbox/nftables.conf)
+    # inside this container's netns — the same mechanism prod uses inside CT 703, so the
+    # two environments enforce the boundary identically. It grants nothing outside this
+    # container's own network namespace, and the `agent` user (non-root) cannot use it.
+    cap_add:
+      - NET_ADMIN
+    # INVARIANT(security): the sandbox sits on sandbox-net ONLY — never the default
+    # app network. Why: the Tool-API is the agent's permission boundary; on the
+    # default network arbitrary bash would open a direct socket to surreal/redis and
+    # route around every access check. Do NOT add `default` here to "make something
+    # work" — that silently deletes the boundary this whole system is built on.
+    # The prod counterpart of this rule is the nftables RFC1918 egress DROP inside
+    # CT 703 (docs/sandbox-access.md), because Proxmox's per-guest firewall is
+    # unavailable: the datacenter firewall master switch on black is off and cannot
+    # be turned on without cutting off guests that carry firewall=1 and no rules.
+    networks:
+      - sandbox-net
+    volumes:
+      - sandbox-workspace:/workspace
+
+networks:
+  # Not `internal: true` — the sandbox is meant to reach the internet (pip, research).
+  # What it must not reach is the app network above and, on prod, the home LAN.
+  sandbox-net:
+
+volumes:
+  e2e_node_modules:
+  sandbox-workspace:

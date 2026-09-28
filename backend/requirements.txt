@@ -1,0 +1,48 @@
+fastapi==0.136.3
+email-validator>=2.0
+uvicorn[standard]==0.53.0
+surrealdb==2.0.0
+python-multipart==0.0.32
+bcrypt>=4.1
+pyjwt>=2.9
+httpx==0.28.1
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0
+pytest-timeout==2.4.0
+pytest-xdist==3.8.0
+# Lint (SYSTEM: lint-ruff) — backend F+I gate, enforced in CI + locally via
+# `ruff check backend/ tests/` from the repo root (config: pyproject.toml).
+ruff==0.16.8
+pyyaml==6.0.3
+Pillow>=10.0
+pycrdt>=0.13.0
+redis>=5.0
+arq>=0.26
+fractional-indexing==0.1.3
+# MCP Universal Agent Gateway — streamable-HTTP server hosted in-process.
+# Exact pin: the lowlevel Server (constructor on_list_tools/on_call_tool
+# handlers, ctx.request carries the HTTP request) and StreamableHTTPSessionManager
+# (stateless + json_response kwargs) are verified against this version. At this
+# version tools/call does NOT refresh through the list_tools handler, so the
+# listing has no unauthenticated path. Bump ⇒ re-audit that tools/call still
+# never invokes on_list_tools. mcp brings its own starlette/anyio/pydantic deps.
+mcp==2.2.0
+# gateway tools/call input validation (mcp_gateway/server.py _validate_input)
+jsonschema>=4.20
+zstandard>=0.22
+# Floor pins for surrealdb's (now loosely-constrained on 2.x) transitive deps —
+# close known CVEs flagged by the Dependency Audit CI gate. surrealdb 1.0.4 hard-pinned
+# these to vulnerable versions; 2.0.0 relaxes them so we set explicit secure floors.
+aiohttp>=3.14.0
+requests>=2.33.0
+idna>=3.15
+
+# SSH client for the agent sandbox (SYSTEM: agent-sandbox). asyncssh, not paramiko: the
+# dispatcher runs inside the async request path, and paramiko is blocking — it would
+# need a thread pool to avoid stalling the event loop during a long command.
+asyncssh>=2.14.0
+# The backend→driver standing event channel (driver/channel.py). Shipped by
+# uvicorn[standard] already; pinned here because it is now a DIRECT import
+# (the 14+ asyncio client — additional_headers on connect).
+websockets>=14

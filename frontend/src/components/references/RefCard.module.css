@@ -1,0 +1,8 @@
+/* Ref-pill specific styling. Pill chrome lives in the shared ListPill module;
+ * title + meta rows live in the shared ListRow (chat / notes / refs share one
+ * typography source). Only the fading transition remains pill-specific here. */
+
+.fading {
+  opacity: 0.4;
+  pointer-events: none;
+}

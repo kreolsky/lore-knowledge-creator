@@ -1,0 +1,161 @@
+{
+  "1": {
+    "inputs": {
+      "width": [
+        "13",
+        1
+      ],
+      "height": [
+        "13",
+        2
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Empty Latent Image [lore:size] [lore:batch]"
+    }
+  },
+  "2": {
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "3": {
+    "inputs": {
+      "clip_name": "qwen3-vl-4b-heretic_mxfp8.safetensors",
+      "type": "krea2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "4": {
+    "inputs": {
+      "filename_prefix": "Krea2",
+      "images": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "5": {
+    "inputs": {
+      "lut_file": "Presetpro - Vintage Vibe LUT.cube",
+      "gamma_correction": true,
+      "clip_values": true,
+      "strength": 1,
+      "image": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "ImageApplyLUT+",
+    "_meta": {
+      "title": "🔧 Image Apply LUT"
+    }
+  },
+  "6": {
+    "inputs": {
+      "samples": [
+        "7",
+        0
+      ],
+      "vae": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "7": {
+    "inputs": {
+      "seed": 481398359418548,
+      "steps": 6,
+      "cfg": 1,
+      "sampler_name": "er_sde",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "9",
+        0
+      ],
+      "positive": [
+        "12",
+        0
+      ],
+      "negative": [
+        "8",
+        0
+      ],
+      "latent_image": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler [lore:seed]"
+    }
+  },
+  "8": {
+    "inputs": {
+      "text": "plastic skin",
+      "clip": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Negative Prompt"
+    }
+  },
+  "9": {
+    "inputs": {
+      "unet_name": "krea2/finepornV4TURBOFP8INT8_v4.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "12": {
+    "inputs": {
+      "text": "This is a casual, low-quality smartphone photo,\n\na front selfie of a beautiful 22yo European egirl with pale skin, thick hair in high pigtails and thick fluffy volume, the hair color is splited in white on left and redhead on right, dark eyeliner, black lipstick and a studded choker, standing against a railing of a shopping mall, topless, arms crossed loosely under her chest pushing her breasts up, wearing only a black leather mini skirt that clings tight to her thighs, black fishnet stockings and platform boots.\n\nHer body frame features a narrow waist, wide hips and prominent cleavage. her breasts are full and round with pale pink nipples and small areolas, nipple piercings with silver barbells. a small black heart tattoo is visible near her left hip above the skirt waistband.\n\nthe setting is a crowded mall with people around and a plastic fence behind her.",
+      "clip": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Positive Prompt [lore:prompt]"
+    }
+  },
+  "13": {
+    "inputs": {
+      "dimensions": " 832 x 1216  (portrait)",
+      "clip_scale": 1,
+      "batch_size": 1
+    },
+    "class_type": "SDXL Empty Latent Image (rgthree)",
+    "_meta": {
+      "title": "Flux Empty Latent Image (rgthree)"
+    }
+  }
+}

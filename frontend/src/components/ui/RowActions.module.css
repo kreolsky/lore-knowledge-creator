@@ -1,0 +1,69 @@
+/**
+ * RowActions — shared hover-reveal action cluster for list pills (extracted verbatim
+ * from the former RefCard .actions / .gearZone). Primary buttons stay inline; a gear
+ * expands (400ms hover) to reveal the menu buttons. A gradient backdrop plate keeps
+ * revealed buttons readable over pill text.
+ */
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  padding-left: 16px;
+  padding-right: 2px;
+  opacity: 0;
+  transition: opacity 0.1s;
+  /* Match the pill's plain-hover fill (--surface2) so the plate reads as seamless
+   * with the pill, not a darker strip. Active/blue overrides below. */
+  background: linear-gradient(to right, transparent 0px, var(--surface2) 16px);
+}
+/* Revealed on parent pill hover (group) or when active. */
+:global(.group):hover .actions,
+.active {
+  opacity: 1;
+}
+/* Blue backdrop for the open/active reference (functional: marks which ref is open). */
+.activeBlue {
+  background: linear-gradient(to right, transparent 0px, var(--sticky-blue-dark) 16px);
+}
+.activeBlue button:hover {
+  background: var(--sticky-blue-darkest);
+  color: #fff;
+}
+.activeBlue button:global(.bg-red):hover {
+  background: var(--red);
+  color: #fff;
+}
+
+/* ─── GEAR ZONE: expand-on-hover (mirrors .doc-gear-zone from index.css) ─── */
+.gearZone {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  position: relative;
+}
+.gearIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.gearActions {
+  display: none;
+  align-items: center;
+  align-self: stretch;
+  gap: 0;
+}
+.gearOpen .gearIcon { display: none; }
+.gearOpen .gearActions { display: flex; }
+.gearActions button {
+  align-self: stretch;
+  height: auto;
+}

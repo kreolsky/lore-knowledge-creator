@@ -1,0 +1,16 @@
+{
+  "name": "lore-widget",
+  "license": "SEE LICENSE IN ../LICENSE",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "tauri": "tauri"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "vite": "^6"
+  }
+}
