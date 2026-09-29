@@ -10,6 +10,7 @@ import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 
 # Load-bearing import (SYSTEM: instance-settings): importing settings registers
 # this process's instance_settings_changed cache-drop, so the backplane
@@ -442,9 +443,22 @@ async def csrf_origin_check(request: Request, call_next):
         if path.startswith("/mcp"):
             return await call_next(request)
         origin = request.headers.get("origin")
-        if origin and origin not in _CORS_ORIGINS:
+        if origin and origin not in _CORS_ORIGINS and not _same_host(origin, request):
             return JSONResponse(status_code=403, content={"detail": "Origin not allowed"})
     return await call_next(request)
+
+
+def _same_host(origin: str, request: Request) -> bool:
+    """Whether the Origin names the host the request was sent to.
+
+    INVARIANT(security): a page served by this instance may write to it from any
+    address it is reached at; any other site is refused. Why: a self-hosted install
+    is opened at an address nobody listed in CORS_ORIGINS (an IP, a LAN name), and
+    every browser write there was 403'd. Hostnames are compared without the port:
+    nginx forwards `Host $host` (no port), and cookies are not port-scoped anyway.
+    """
+    host = request.headers.get("host", "").rsplit(":", 1)[0].strip("[]").lower()
+    return bool(host) and urlsplit(origin).hostname == host
 
 
 _JSON_MAX_BYTES = 1 * 1024 * 1024  # 1MB limit for non-upload JSON endpoints

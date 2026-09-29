@@ -152,7 +152,7 @@ The first run builds the agent service from this repository and takes several mi
 
 | Symptom | Check | Fix |
 |---|---|---|
-| `docker compose up` fails with `port is already allocated` | another service uses 8080 | put `LORE_PORT=8090` (any free port) in `.env`, run `docker compose up -d`, use that port |
+| `docker compose up` fails with `address already in use` or `port is already allocated` | another service uses 8080 | put `LORE_PORT=8090` (any free port) in `.env`, run `docker compose up -d`, use that port |
 | `env_file` / `required` error on `up` | `docker compose version` | upgrade Docker Compose to v2.24 or newer |
 | health never returns `"status":"ok"` | `docker compose logs backend` | the log names the failing setting or service |
 | `"harness":"unreachable"` after enabling AI | `docker compose --profile ai logs harness` | if the log says the title model *advertises reasoning effort levels*, add `CHAT_TITLE_MODEL=` with a non-reasoning model your endpoint serves, then `docker compose --profile ai up -d` |
