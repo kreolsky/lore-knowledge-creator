@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 
+import instance_secret
 from comfy_markers import validate_size, validate_workflow
 from settings_registry import (
     ConfigError as ConfigError,  # re-export: `from config import ConfigError` callers stay valid
@@ -71,12 +72,13 @@ SCHEMA_FINGERPRINT_FATAL = setting(
 # SECRET_KEY / COOKIE_SECURE register under the infra tab's Auth section: they
 # are bootstrap plumbing, ALL restart.
 _section("infra", "Auth")
-SECRET_KEY = setting(
-    "SECRET_KEY", "secret", env="LORE_SECRET_KEY", required=True, effect="restart",
+_SECRET_KEY_ENV = setting(
+    "SECRET_KEY", "secret", env="LORE_SECRET_KEY", default="", effect="restart",
     label="JWT signing key",
-    help="Signs session JWTs and scoped run keys. Rotating it invalidates "
-         "every session — a deploy act, set in .env.",
-)  # JWT signing key
+    help="Signs session JWTs and scoped run keys. Empty = a random key generated "
+         "on first boot under the storage root. Rotating it invalidates every "
+         "session — a deploy act, set in .env.",
+)
 ALGORITHM = "HS256"  # JWT algorithm
 COOKIE_MAX_AGE = 60 * 60 * 24 * 14  # Session cookie lifetime (14 days)
 COOKIE_SECURE = setting(
@@ -97,6 +99,7 @@ STORAGE_PATH = Path(setting(
     label="Uploaded-files root",
     help="Root directory for uploaded files.",
 ))  # Root dir for uploaded files
+SECRET_KEY = instance_secret.resolve(_SECRET_KEY_ENV, STORAGE_PATH)  # JWT signing key
 
 _section("storage", "Storage")
 MAX_AUDIO_SIZE_MB = setting(
