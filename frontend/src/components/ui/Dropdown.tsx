@@ -23,7 +23,7 @@ export interface DropdownOption {
   note?: string;
   // ARCH: optional trailing badge rendered inside the option row AND on the
   // trigger (options[selectedIndex]?.badge). Strictly additive: callers that don't
-  // pass it are unaffected. Used for the vision-model Eye mark (see SYSTEM:
+  // pass it are unaffected. Used for the no-vision EyeOff mark (see SYSTEM:
   // ui-primitives above).
   badge?: React.ReactNode;
 }

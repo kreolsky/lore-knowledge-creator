@@ -372,7 +372,7 @@ export const en = {
   agentConfigSaveFailed: 'Failed to save agent config',
   agentConfigDeleteFailed: 'Failed to delete agent config',
   failedToLoadModels: 'Failed to load models',
-  chatModelVision: 'Vision-capable model',
+  chatModelNoVision: 'Model cannot see images',
   failedToLoadChatSessions: 'Failed to load chat sessions',
   failedToDeleteChatSession: 'Failed to delete session',
   failedToLoadMessages: 'Failed to load messages',

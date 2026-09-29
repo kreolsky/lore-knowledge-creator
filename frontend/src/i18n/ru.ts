@@ -373,7 +373,7 @@ export const ru: Record<TranslationKey, string> = {
   agentConfigSaveFailed: 'Не удалось сохранить конфигурацию агента',
   agentConfigDeleteFailed: 'Не удалось удалить конфигурацию агента',
   failedToLoadModels: 'Не удалось загрузить модели',
-  chatModelVision: 'Модель с поддержкой изображений',
+  chatModelNoVision: 'Модель не видит изображения',
   failedToLoadChatSessions: 'Не удалось загрузить чаты',
   failedToDeleteChatSession: 'Не удалось удалить чат',
   failedToLoadMessages: 'Не удалось загрузить сообщения',

@@ -1,7 +1,7 @@
 /** Chat input area — textarea with send, stop, mic buttons + model selector + apply-mode dropdown (confirm/auto, derived from PROJECT system-prompts folder) + multi-doc context picker. Chat-store slices: isStreaming, activeSessionId, pendingInputFocus, pendingImages, addPendingImage, removePendingImage, clearPendingImages, draft, setDraft, models, defaultModel, sessions, updateSession, createSession, sendMessage, stopGeneration, setSessionMode. App-store slices: currentProject, currentDocument, currentReference, documents, accessLevel. Context: useChatContext (reactive read), pruneContext. Picker writes directly via addItemToContext / removeItemFromContext. */
 
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { BookPlus, Eye, ScrollText } from 'lucide-react';
+import { BookPlus, EyeOff, ScrollText } from 'lucide-react';
 import { Button, Dropdown, FieldCheckbox } from '../ui';
 import { ChatComposer } from './ChatComposer';
 import { SelectionPill } from './SelectionPill';
@@ -96,7 +96,7 @@ export function ChatInput() {
     return () => off('chat-clarify-insert', handler);
   }, [t]);
   const models = useChatStore(s => s.models);
-  // WHY: vision-capable model ids (backend-derived) drive the Eye badge.
+  // WHY: vision-capable model ids (backend-derived) drive the EyeOff badge (shown on models NOT in this set).
   const visionModels = useChatStore(s => s.visionModels);
   const contextWindows = useChatStore(s => s.contextWindows);
   // WHY: per-model reasoning capability (backend-projected from the gateway's
@@ -582,12 +582,13 @@ export function ChatInput() {
           options={models.map(m => ({
             value: m,
             label: m,
-            // WHY: Eye badge marks vision-capable models — the exact set the
-            // backend's image-stripping gate keeps. Same badge reaches the
+            // WHY: EyeOff badge marks models WITHOUT vision — the ones the
+            // backend's image-stripping gate strips images for. Vision is the
+            // common case, so it carries no mark. Same badge reaches the
             // collapsed trigger via options[selectedIndex]?.badge.
             badge: visionModels.includes(m)
-              ? <Eye size={11} className="opacity-50 shrink-0" aria-label={t('chatModelVision')} />
-              : undefined,
+              ? undefined
+              : <EyeOff size={11} className="opacity-50 shrink-0" aria-label={t('chatModelNoVision')} />,
           }))}
           onSelect={handleModelSelect}
           disabled={isStreaming}
