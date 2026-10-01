@@ -104,8 +104,8 @@ const I18N: Record<string, string> = {
   settingsModels: 'Models & APIs',
   settingsAgent: 'Agent',
   settingsTools: 'Tools',
+  settingsSearch: 'Search',
   settingsStorage: 'Storage & Jobs',
-  settingsInfra: 'Infrastructure',
   skills: 'Skills',
 };
 const tFn = (k: string) => I18N[k] ?? k;
@@ -329,7 +329,7 @@ describe('AdminPage — sections (initial = Users)', () => {
     const rows = Array.from(aside()!.querySelectorAll('button.doc-item'));
     expect(rows.map(r => r.textContent)).toEqual([
       'Users', 'Projects', 'Embeddings',
-      'Models & APIs', 'Agent', 'Tools', 'Storage & Jobs', 'Infrastructure', 'Skills',
+      'Models & APIs', 'Search', 'Tools', 'Agent', 'Storage & Jobs', 'Skills',
     ]);
     expect(rows[0].classList.contains('active')).toBe(true);
     expect(container.querySelector('.left-bar-tab')).toBeNull();

@@ -46,6 +46,16 @@ vi.mock('../store/ui-store', () => {
   return { useUIStore: fn };
 });
 
+// use-ghost-context reads the ghost gate via useChatStore.getState() in its
+// editor-doc-changed handler; this suite never emits that event, but the module
+// import must resolve — mock the store (the real chat-store's module init needs
+// useAppStore.subscribe, which the app-store mock above does not provide).
+vi.mock('../store/chat-store', () => {
+  const fn = (sel: (s: unknown) => unknown) => sel({ activeSessionId: null });
+  fn.getState = () => ({ activeSessionId: null });
+  return { useChatStore: fn };
+});
+
 // REAL links.ts (so a fetch bumps the shared version) over a mocked apiClient whose
 // resolution we control to reproduce the cancelled-run race.
 let resolveGet: (v: unknown) => void = () => {};

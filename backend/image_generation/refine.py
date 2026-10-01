@@ -46,7 +46,7 @@ async def _refine_prompt(seed: str, template: str) -> _RefineResult:
     # model always wins. Measured on the same real payload, a reasoning model
     # took 164s (~3900 hidden reasoning tokens for a 170-token answer) where the
     # chat model took 4.4s; `reasoning_effort` is ignored by the router, so it
-    # cannot be told to stop. That blew the turn budget (TURN_TIMEOUT_S=300
+    # cannot be told to stop. That blew the turn budget (TURN_PROGRESS_GRACE_S=300
     # minus the COMFYUI_TIMEOUT_S=120 generation deadline), so every refinement
     # timed out and every image rendered from the raw seed. Rewriting a
     # description into SD phrasing has nothing to reason about; it wants a fast

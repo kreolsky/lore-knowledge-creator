@@ -270,6 +270,51 @@ async def test_health_driver_reachable_is_ok(client, test_db):
 
 
 @pytest.mark.asyncio
+async def test_health_secret_mismatch_is_degraded_named(client, test_db):
+    """A 401 probe answer is its own name, "secret_mismatch" — not
+    "unreachable" — and it counts the report down like any down line: the
+    service is up and refusing (plan component-wiring-not-settings)."""
+    with patch("routes.health._probe_agent_lines",
+               new=AsyncMock(return_value={"harness": "secret_mismatch"})):
+        resp = await client.get("/api/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "degraded"
+    assert data["agent_lines"] == {"harness": "secret_mismatch"}
+
+
+@pytest.mark.asyncio
+async def test_probe_agent_line_401_is_secret_mismatch(monkeypatch):
+    """The probe maps HTTP 401 to the named state, distinguishing a secret
+    mismatch from a dead service."""
+    import routes.health as health_mod
+    from driver.client import DriverLine
+
+    class _Resp:
+        status_code = 401
+
+        def json(self):
+            return {}
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, *args, **kwargs):
+            return _Resp()
+
+    monkeypatch.setattr(health_mod.httpx, "AsyncClient", _Client)
+    line = DriverLine(name="harness", url="http://drv", secret="s")
+    assert await health_mod._probe_agent_line(line) == "secret_mismatch"
+
+
+@pytest.mark.asyncio
 async def test_probe_agent_lines_unconfigured_without_probing(monkeypatch):
     """The probe is gated on the resolved line — an unconfigured line means no
     probe (the health report reads the same resolver as the routing branch)."""

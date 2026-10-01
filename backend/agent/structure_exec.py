@@ -69,11 +69,19 @@ def _sk_norm(v) -> tuple:
 
 
 def _sibling_order(topo: dict, ids: list[str]) -> list[str]:
-    """(is_index DESC, sort_key ASC, id ASC) — the pre-plan SELECT's ORDER BY,
-    now applied in memory."""
+    """(is_index DESC, is_reference, sort_key ASC, id ASC) — the pre-plan
+    SELECT's ORDER BY, now applied in memory. `is_reference` keeps refs in the
+    band they occupied while keyless (NONE → trailing via _sk_norm): with keys,
+    refs would interleave with docs by sort_key; the band pins the order the
+    agent was shown."""
     def key(i: str):
         r = topo[i]
-        return (not bool(r.get("is_index")), _sk_norm(r.get("sort_key")), i)
+        return (
+            not bool(r.get("is_index")),
+            bool(r.get("is_reference")),
+            _sk_norm(r.get("sort_key")),
+            i,
+        )
     return sorted(ids, key=key)
 
 

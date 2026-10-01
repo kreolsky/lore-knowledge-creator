@@ -14,6 +14,7 @@ import { setupChatContextBridge, hydrateFromSessions } from '../chat/context';
 import type { ChatState } from './chat-store/types';
 import { createSessionsSlice } from './chat-store/sessions-slice';
 import { createMessagesSlice } from './chat-store/messages-slice';
+import { createQueueSlice } from './chat-store/queue-slice';
 import { createAgentSlice } from './chat-store/agent-slice';
 import { createMiscSlice } from './chat-store/misc-slice';
 import { registerLogoutHandler } from './logout-handlers';
@@ -62,10 +63,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   conversation: [],
   turnRanges: {},
   turnStartSeq: null,
-  // Detached generate_image
-  // phases, keyed by runId (outlive the turn; independent concurrent runs). See
-  // ChatState.imageGen.
-  imageGen: {},
 
   models: [],
   visionModels: [],
@@ -89,6 +86,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   draft: '',
   listFilter: null,
 
+  // per-session follow-up chips (not persisted). See queue-slice.
+  queued: {},
+
   // Ghost overrides: defaults match createSession's no-opts path.
   // There is no ghost mode: every AI chat is an agent chat.
   ghostAgentAuto: false,
@@ -100,6 +100,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   // — slices —
   ...createSessionsSlice(set, get),
   ...createMessagesSlice(set, get),
+  ...createQueueSlice(set, get),
   ...createAgentSlice(set, get),
   ...createMiscSlice(set, get),
 }));

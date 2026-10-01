@@ -94,7 +94,7 @@ function rollbackOptimisticUser(set: Set, tempId: string): void {
 
 import { buildChildrenMap, resolveActivePath, resolveAncestorChain, ROOT_KEY } from './tree';
 import { streamCompletion, flushStreaming, emptyStreaming, adoptOpenTurn, hasOpenHarnessTurn } from './streaming';
-import { replaceWindowFromRows, mintImageGen, rewindToLineage } from './conversation-feed';
+import { replaceWindowFromRows, rewindToLineage } from './conversation-feed';
 import { loadMessagesFor, patchMessageContent, deleteMessageById } from '../chat-message-crud';
 import { uuid } from '../../utils/uuid';
 
@@ -131,13 +131,11 @@ export async function runCompletion(set: Set, get: Get, opts: RunCompletionOpts)
   const systemPromptId = activeSession?.system_prompt_id ?? undefined;
   const uiMode = deriveUIMode(activeSession);
   const autoApply = uiMode === 'agent_auto';
-  // ARCH: a mid-turn send POSTs unconditionally (the backend's turn lock
-  // answers 409; there is no client-side queue). That bystander send owns NO
-  // streaming slot — the open turn's slot is foreign, and flushing at THIS
-  // turn's catch/finally would kill the live turn's state machine. The
-  // registered turn's own finally is driven by the WS terminal frame, not
-  // the POST's return.
-  const foreignHarnessTurn = get().streaming !== null;
+  // ARCH: runCompletion only ever starts on an idle slot — sendMessage routes a
+  // mid-turn send to the per-session queue (SYSTEM: chat-message-queue), and
+  // forkAndResend/regenerate refuse while streaming. The turn's end is driven by
+  // the WS terminal frame, not the POST's return; the backend's turn lock (409)
+  // stays as the cross-tab serializer.
   // see SYSTEM: selection-region-agent — resolve the pinned region (frontend-owned) into
   // the wire shape for the prompt hint. has_region forces confirm server-side; the
   // region text is injected as a "# Pinned fragment" block. When the region can't be
@@ -172,24 +170,18 @@ export async function runCompletion(set: Set, get: Get, opts: RunCompletionOpts)
 
   const abortController = new AbortController();
   // The streaming state machine is one object; idle ⟺ streaming === null.
-  if (!foreignHarnessTurn) {
-    set({ streaming: { ...emptyStreaming(), controller: abortController } });
-  }
+  set({ streaming: { ...emptyStreaming(), controller: abortController } });
 
   // Rewind the assembler to the lineage THIS turn extends, before the
   // boundary is seated in streamCompletion: a fork sends on an ancestor
   // chain while the engine still holds the previous lineage's window, and
   // the fresh dsh session's frames would collide with its seqs (append
   // drops already-held seqs — the fork turn would not stream live). A
-  // linear chain is a no-op inside. Skipped for the bystander mid-turn
-  // send: the open turn's frames are in no range yet, and rewinding would
-  // blank the live streaming row.
-  if (!foreignHarnessTurn) {
-    const lineage = opts.parentId
-      ? resolveAncestorChain(get().messages, opts.parentId).map(m => m.message_id)
-      : [];
-    rewindToLineage(lineage, activeSessionId, set);
-  }
+  // linear chain is a no-op inside.
+  const lineage = opts.parentId
+    ? resolveAncestorChain(get().messages, opts.parentId).map(m => m.message_id)
+    : [];
+  rewindToLineage(lineage, activeSessionId, set);
 
   try {
     await streamCompletion(get, set, {
@@ -211,17 +203,10 @@ export async function runCompletion(set: Set, get: Get, opts: RunCompletionOpts)
     });
   } catch (e) {
     const failed = handleSendError(e, opts.errorLabel);
-    if (!foreignHarnessTurn) {
-      // WHY the guard: a bystander 409 must not mark (or flush) the OPEN
-      // turn's streaming slot — the refusal belongs to a turn that never
-      // started. Its toast still fired (handleSendError above).
-      if (failed) markStreamingFailed(set, get);
-    }
+    if (failed) markStreamingFailed(set, get);
     rollbackOptimisticUser(set, opts.optimisticUserId);
   } finally {
-    if (!foreignHarnessTurn) {
-      set(flushStreaming);
-    }
+    set(flushStreaming);
   }
 }
 
@@ -280,9 +265,6 @@ type MessagesSlice = Pick<
   | 'forkAndResend'
   | 'regenerate'
   | 'stopGeneration'
-  | 'setImageGenPhase'
-  | 'completeImageGen'
-  | 'failImageGen'
   | 'selectSibling'
   | 'getSiblings'
 >;
@@ -347,11 +329,17 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
       // sets the `streaming` object via `set()`. All downstream consumers (frame
       // handlers, UI components) assume the write is immediately visible. If
       // Zustand ever makes `set()` async, the streaming state machine breaks.
-      const { activeSessionId } = get();
+      const { activeSessionId, streaming } = get();
       if (!activeSessionId) return;
-      // ARCH: a mid-turn send POSTs unconditionally — the backend's turn lock
-      // is the serializer (a real 409, surfaced by handleSendError as a
-      // toast); there is no client-side queue-and-coalesce.
+      if (streaming) {
+        // A turn is in flight — route to the per-session
+        // queue instead of POSTing into the turn lock. The guard lives in the store
+        // (not the UI) so MicButton transcription + hotkeys can't bypass it; one
+        // ordinary sendMessage fires later on flush. Images stay in the composer
+        // (attachment-budget merge is a separate problem).
+        get().enqueueMessage(activeSessionId, content);
+        return;
+      }
       const { messages, selectedSiblings } = get();
       // WHY: Need clean snapshot without streaming substitution — selectActivePath
       // would inject partial streamingContent if called mid-stream.
@@ -497,60 +485,6 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
         }
         controller.abort();
       }
-    },
-
-    setImageGenPhase(runId, messageId, phase) {
-      // The generate_image phase is TOP-LEVEL
-      // (not on streaming) because the detached generation outlives the agent turn,
-      // and KEYED BY runId because two calls in one turn are now possible (the tool
-      // returns instantly + enqueues) — per-session correlation let the 2nd run
-      // overwrite/clear the 1st. No-op when no messageId or runId.
-      if (!messageId || !runId) return;
-      set(s => {
-        if (!phase) {
-          // Delete only this run (null phase ⇒ settled). Mutate a copy.
-          if (!(runId in (s.imageGen ?? {}))) return s;
-          const { [runId]: _drop, ...rest } = s.imageGen ?? {};
-          return { imageGen: rest };
-        }
-        return { imageGen: { ...(s.imageGen ?? {}), [runId]: { messageId, phase } } };
-      });
-    },
-
-    completeImageGen(runId, messageId, steps) {
-      // The detached
-      // background generation finished. The server built + persisted the refiner +
-      // image chips and shipped them in the done event — stamp them verbatim (single
-      // source, no reconstruction drift). DELETE the runId entry FIRST
-      // (unconditional), THEN append chips if any: a done carrying no steps must
-      // not return early before clearing, or the spinner runs forever.
-      set(s => {
-        const { [runId]: _drop, ...rest } = s.imageGen ?? {};
-        // The settled run mints its `lore/image-gen` card INTO THE TIMELINE
-        // (SYSTEM: dsh-conversation) — the same payload the reload re-derives
-        // from the row's gen_steps, anchored at the dispatching call.
-        // A miss is LOUD (defect D): without this toast the running chip just
-        // vanished and nothing landed — the persisted result was invisible
-        // until a reload.
-        const minted = mintImageGen(runId, steps, get().activeSessionId, set);
-        if (!minted) {
-          useAppStore.getState().showToast(t('imageGenCardMissed'), 'error');
-        }
-        return { imageGen: rest };
-      });
-    },
-
-    failImageGen(runId, error) {
-      // no-silent-
-      // degradation — a failed background generation surfaces its cause. Delete only
-      // THAT run's entry (independent concurrent runs survive) and toast the error.
-      // The failure chip is persisted server-side; here we only stop the spinner.
-      set(s => {
-        if (!(runId in (s.imageGen ?? {}))) return s;
-        const { [runId]: _drop, ...rest } = s.imageGen ?? {};
-        return { imageGen: rest };
-      });
-      useAppStore.getState().showToast(t('imageGenerationFailed', { error }), 'error');
     },
 
     selectSibling(parentId: string, messageId: string) {

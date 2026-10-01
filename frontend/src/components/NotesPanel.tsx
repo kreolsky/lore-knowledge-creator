@@ -289,21 +289,23 @@ export function NotesPanel() {
     return ref && ref.media_type !== 'image' && ref.media_type !== 'file' && ref.content === undefined ? hoverRefId : null;
   })();
   const { preview: hoverRefFetched, error: hoverRefError, loading: hoverRefLoading } = useReferencePreview(hoverRefFetchId);
-  const { hoverContent, hoverImageUrl } = useMemo(() => {
+  const { hoverTitle, hoverContent, hoverImageUrl } = useMemo(() => {
     if (hoverRefId) {
       const ref = references.find(r => r.reference_id === hoverRefId);
-      if (!ref) return { hoverContent: '', hoverImageUrl: undefined };
+      if (!ref) return { hoverTitle: undefined, hoverContent: '', hoverImageUrl: undefined };
       if (ref.media_type === 'image' && ref.file_path)
-        return { hoverContent: '', hoverImageUrl: referenceFileUrl(ref.reference_id, ref.file_path) };
-      if (ref.content !== undefined) return { hoverContent: ref.content, hoverImageUrl: undefined };
-      return { hoverContent: hoverRefFetched?.content ?? '', hoverImageUrl: undefined };
+        return { hoverTitle: ref.title, hoverContent: '', hoverImageUrl: referenceFileUrl(ref.reference_id, ref.file_path) };
+      if (ref.content !== undefined) return { hoverTitle: ref.title, hoverContent: ref.content, hoverImageUrl: undefined };
+      return { hoverTitle: ref.title, hoverContent: hoverRefFetched?.content ?? '', hoverImageUrl: undefined };
     }
     if (hoverNoteId) {
       const s = crud.noteItems.find(n => n.session_id === hoverNoteId);
-      return { hoverContent: s?.last_message_preview?.trim() ?? '', hoverImageUrl: undefined };
+      // The note's title is its first message — the same text its pill shows.
+      const title = s?.first_message_preview?.trim() || t('untitledNote');
+      return { hoverTitle: title, hoverContent: s?.last_message_preview?.trim() ?? '', hoverImageUrl: undefined };
     }
-    return { hoverContent: '', hoverImageUrl: undefined };
-  }, [hoverRefId, hoverNoteId, references, crud.noteItems, hoverRefFetched]);
+    return { hoverTitle: undefined, hoverContent: '', hoverImageUrl: undefined };
+  }, [hoverRefId, hoverNoteId, references, crud.noteItems, hoverRefFetched, t]);
   const handleNoteHover = useCallback((sessionId: string, el: HTMLElement) => {
     setHoverRefId(null);
     setHoverNoteId(sessionId);
@@ -502,6 +504,7 @@ export function NotesPanel() {
       <HoverPreviewPopup
         hover={hover}
         visible={hoverVisible}
+        title={hoverTitle}
         content={hoverContent}
         imageUrl={hoverImageUrl}
         error={hoverRefError}

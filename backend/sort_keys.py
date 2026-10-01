@@ -30,26 +30,36 @@ def n_keys_between(a: str | None, b: str | None, n: int) -> list[str]:
     return generate_n_keys_between(a, b, n)
 
 
-async def assign_sort_keys_to_none_rows(db) -> int:
-    """Assign fractional sort_keys to non-reference documents with sort_key NONE.
+async def assign_sort_keys_to_none_rows(db, *, is_reference: bool = False) -> int:
+    """Assign fractional sort_keys to rows of one kind with sort_key NONE.
 
-    Keys are assigned per (project_id, parent_id) sibling group, ordered by title
-    ASC — preserving the alphabetical view at migration time. Returns the number
-    of rows updated. Used by the sort_keys_backfill migration and the startup
-    safety-net sweep.
+    Keys are assigned per (project_id, parent_id, is_reference) sibling group.
+    Order per group is deterministic: docs by title ASC, refs by updated_at DESC
+    (freezing the panel order users saw before refs got keys, so a deploy moves
+    nothing), each tie-broken by id with a missing timestamp read as "".
+    Returns the number of rows updated. Used by the reference_sort_keys_backfill
+    migration (refs) and as the sweep primitive for doc rows.
     """
     from collections import defaultdict
 
     rows = await db.query(
-        "SELECT meta::id(id) AS id, project_id, parent_id, title FROM documents "
-        "WHERE deleted_at IS NONE AND is_reference = false AND sort_key IS NONE"
+        "SELECT meta::id(id) AS id, project_id, parent_id, title, updated_at "
+        "FROM documents "
+        "WHERE deleted_at IS NONE AND is_reference = $kind AND sort_key IS NONE",
+        {"kind": is_reference},
     )
     groups: dict[tuple[str, str | None], list[dict]] = defaultdict(list)
     for row in (rows or []):
         groups[(row.get("project_id"), row.get("parent_id"))].append(row)
     updated = 0
     for members in groups.values():
-        members.sort(key=lambda r: (r.get("title") or "").lower())
+        # id ASC first, then the kind's order as a stable pass → deterministic
+        # ties (title / updated_at equal).
+        members.sort(key=lambda r: r["id"])
+        if is_reference:
+            members.sort(key=lambda r: r.get("updated_at") or "", reverse=True)
+        else:
+            members.sort(key=lambda r: (r.get("title") or "").lower())
         keys = n_keys_between(None, None, len(members))
         for row, key in zip(members, keys):
             await db.query(

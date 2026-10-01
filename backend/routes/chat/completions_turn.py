@@ -59,10 +59,11 @@ def _flatten_system_prefix_to_text(system_prefix: list[dict]) -> str | None:
 def _section_fingerprint(name: str, text: str) -> str:
     """`name:len:sha8` for one system-prompt section — the prompt-cache instrument.
 
-    # WHY: the driver's `system_prompt_head` digests only the first 4000 chars, so a
-    # turn-varying byte in ANY appended section is invisible to it while it silently
-    # voids the provider's prefix cache (the whole tail + tool schemas + history get
-    # re-tokenized). Per-section fingerprints name the moving section directly.
+    # WHY: a turn-varying byte in ANY appended section silently voids the
+    # provider's prefix cache (the whole tail + tool schemas + history get
+    # re-tokenized) and nothing else reports it. Per-section fingerprints
+    # name the moving section directly — the `agent turn prompt sections` log
+    # line is the only instrument.
     """
     return f"{name}:{len(text)}:{hashlib.sha256(text.encode()).hexdigest()[:8]}"
 
@@ -465,9 +466,11 @@ def _pinned_fragment_section(region) -> str | None:
 # the prompt-cache closure: the driver registers Lore's prompt as its
 # COMPLETE section and contributes nothing of its own (the comment above
 # `agentCtx.systemPrompt.section` in harness-driver/plugin/src/index.ts), and
-# a prepend here would undo that work from the other side. A regression shows up in this module's own `agent turn prompt sections`
-# log — per-section len+digest — NOT in the driver's system_prompt_head, which
-# digests only the first 4000 chars and is blind to every appended section.
+# a prepend here would undo that work from the other side. A regression shows
+# up in this module's own `agent turn prompt sections` log — per-section
+# len+digest — the only instrument: a turn-varying byte in any appended
+# section silently voids the provider's prefix cache, and nothing else
+# reports it.
 # Measured against the gateway: the served layout is [tools][system][history],
 # so a moved byte here re-tokenizes the rest of the system prompt AND the whole
 # history behind it — the tool schemas ahead of it survive.

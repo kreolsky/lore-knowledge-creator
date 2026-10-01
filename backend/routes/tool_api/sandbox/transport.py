@@ -18,7 +18,7 @@ from fastapi import HTTPException
 WORKSPACE_ROOT = "/workspace"
 DEFAULT_COMMAND_TIMEOUT_S = 60.0
 # Ceiling on a caller-supplied timeout. Why: the agent picks this value, and an
-# unbounded one lets it pin a turn open indefinitely — TURN_TIMEOUT_S would be the
+# unbounded one lets it pin a turn open indefinitely — TURN_PROGRESS_GRACE_S would be the
 # only backstop, killing the whole turn instead of the one bad command.
 MAX_COMMAND_TIMEOUT_S = 300.0
 # Floor on the effective timeout. NOT cosmetic: the value is rendered into the remote

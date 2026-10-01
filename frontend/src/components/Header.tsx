@@ -21,6 +21,7 @@ import { isEditorShell } from '../utils/routing';
 import { Breadcrumb } from './Breadcrumb';
 import { useTranslation } from '../i18n';
 import { useElapsedTime } from '../hooks/useElapsedTime';
+import { AdminVersion } from './AdminVersion';
 import { emit } from '../events';
 import { formatDuration } from './references/ref-utils';
 
@@ -151,6 +152,7 @@ export function Header() {
           <div className="w-px h-5 bg-border mx-1" />
           <span className="text-[15.6px] text-text-muted px-1 py-0.5 select-none">
             {isProjectList ? t('projects') : isCabinet ? t('profile') : t('adminPanel')}
+            {isAdmin && <AdminVersion />}
           </span>
           {/* The admin page's active section, as a non-interactive leaf crumb —
               the same `Project : Document` shape as the editor breadcrumb. */}

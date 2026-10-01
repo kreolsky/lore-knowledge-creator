@@ -14,7 +14,7 @@ step 3) so the prompt build and the payload share one config-tree walk.
 """
 from __future__ import annotations
 
-from agent_config_seed import _REQUIRED_ROLES
+from agent_config_seed import _REQUIRED_ROLES, help_doc_id
 
 from db import get_db
 
@@ -97,10 +97,14 @@ async def _bfs_config_subtree(
     frontier = [fid for fid in ([sp_folder_id] + folder_ids) if fid]
     visited: set[str] = set(frontier)
     while frontier:
+        # `is_reference DESC` keeps refs in the band they occupied before refs
+        # got sort_keys (MEASURED: SurrealDB ORDER BY sort_key ASC places NONE
+        # BEFORE strings, so a keyless ref led docs) — with keys, refs would
+        # interleave with docs by sort_key; the band pins what the agent is told.
         rows = await db.query(
-            "SELECT meta::id(id) AS id, system_role, title, sort_key, parent_id "
-            "FROM documents WHERE project_id = $pid AND parent_id IN $ids "
-            "AND deleted_at IS NONE ORDER BY sort_key ASC",
+            "SELECT meta::id(id) AS id, system_role, title, sort_key, parent_id, "
+            "is_reference FROM documents WHERE project_id = $pid AND parent_id IN $ids "
+            "AND deleted_at IS NONE ORDER BY is_reference DESC, sort_key ASC",
             {"pid": project_id, "ids": frontier},
         )
         next_frontier: list[str] = []
@@ -319,3 +323,14 @@ async def load_skills_subtree(project_id: str) -> list[dict]:
         await _fetch_content(db, [d["id"] for d in descendants]),
     )
     return nodes
+
+
+async def live_help_root(project_id: str) -> dict | None:
+    """`{id, title}` of this project's Lore guide root, or None if deleted or moved out."""
+    db = await get_db()
+    rows = await db.query(
+        "SELECT meta::id(id) AS id, title FROM type::record('documents', $id) "
+        "WHERE project_id = $pid AND deleted_at IS NONE",
+        {"id": help_doc_id(project_id, "index"), "pid": project_id},
+    )
+    return rows[0] if rows else None

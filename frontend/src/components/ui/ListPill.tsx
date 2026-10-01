@@ -32,6 +32,9 @@ interface ListPillProps {
   onMouseEnter?: (e: React.MouseEvent) => void;
   onMouseLeave?: (e: React.MouseEvent) => void;
   children: React.ReactNode;
+  /** Drag-reorder row attributes (see useSiblingDragReorder): rendered verbatim
+   * on the root so the drag hook can find rows by id/group. */
+  [key: `data-${string}`]: string | undefined;
 }
 
 // WHY memo: right-panel lists re-render on any list mutation; pill props are stable by row identity.
@@ -48,6 +51,7 @@ export const ListPill = memo(function ListPill({
   onMouseEnter,
   onMouseLeave,
   children,
+  ...dataAttrs
 }: ListPillProps) {
   const activeCls = active
     ? variant === 'plain'
@@ -82,6 +86,7 @@ export const ListPill = memo(function ListPill({
       }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
+      {...dataAttrs}
     >
       {children}
     </div>

@@ -211,7 +211,7 @@ export function DocumentPage() {
   const currentProject = useAppStore(s => s.currentProject);
   const currentDocument = useAppStore(s => s.currentDocument);
 
-  useEvent('project-extraction-error', useCallback(({ noteId, documentId }: { noteId: string; documentId: string }) => {
+  useEvent('ws:extraction_error', useCallback(({ note_id: noteId, document_id: documentId }) => {
     if (!currentProject || !currentDocument) return;
     if (documentId !== currentDocument.document_id) return;
     useNoteChatStore.getState().loadSessions(
@@ -227,7 +227,7 @@ export function DocumentPage() {
   // ARCH: an agent proposal apply failed and the backend pinned a system note to
   // this document. Refresh the notes panel + open the new error note thread so the
   // user sees the explanation (mirrors the extraction-error handler above).
-  useEvent('project-agent-error-note', useCallback(({ noteId, documentId }: { noteId: string; documentId: string }) => {
+  useEvent('ws:agent_error_note', useCallback(({ note_id: noteId, document_id: documentId }) => {
     if (!currentProject || !currentDocument) return;
     if (documentId !== currentDocument.document_id) return;
     useNoteChatStore.getState().loadSessions(

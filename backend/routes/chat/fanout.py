@@ -31,6 +31,14 @@ consume live and reload frames unchanged (parity is architectural).
 # path is POST /verdicts (unchanged REST), and the card's dismissal is the
 # settled tool/result frame. No verdict-specific push exists or is needed.
 
+# ARCH: WORKER-side chat facts — the detached
+# image run's lore/image-gen frames — enter through the SAME envelope via the
+# bus event `chat_frame_push` (project_id, session_id, frame): a worker has no
+# driver-channel listener to pump, so it emits on the bus and the web-process
+# subscriber below resolves the owner exactly the way the pump registration
+# does (the session row's user_id) and sends through the same user-filtered
+# send. Owner-filtered by the same construction as the pump.
+
 Callers own the access gate: ensure_fanout runs on the turn path AFTER
 `_require_session_access`; this module
 is transport wiring, not an authorization surface.
@@ -45,6 +53,7 @@ from typing import Callable
 from driver.channel import get_driver_channel
 
 from db import fetch_one
+from event_bus import on as _bus_on
 from routes.project_ws import send_to_project_user
 
 logger = logging.getLogger(__name__)
@@ -142,6 +151,44 @@ async def stop_fanout(
         # pump that outlives it (parked on a stuck send) is cancelled rather
         # than leaked.
         entry.task.cancel()
+
+
+async def _on_chat_frame_push(
+    project_id: str, session_id: str, frame, **_kwargs,
+) -> None:
+    """The worker's chat-frame hop: resolve the owner from the session row
+    (the same recipient the pump registration reads) and deliver the SAME
+    `{type:'chat_frame', session_id, frame}` envelope the turn frames use —
+    never broadcast. A missing session row resolves no owner and sends
+    nothing (the push was best-effort; a reload may still show the persisted
+    card)."""
+    try:
+        session = await fetch_one("chat_sessions", session_id)
+    except Exception:
+        logger.warning(
+            "chat_frame_push: session read failed session=%s", session_id,
+            exc_info=True,
+        )
+        return
+    if not isinstance(session, dict):
+        return
+    owner_id = str(session.get("user_id") or "")
+    if not owner_id:
+        return
+    try:
+        await send_to_project_user(project_id, owner_id, {
+            "type": "chat_frame",
+            "session_id": session_id,
+            "frame": frame,
+        })
+    except Exception:
+        # send_to_user already guards per-socket failures; anything raising
+        # past it must not take the bus dispatch down (the pump's twin rule).
+        logger.exception(
+            "chat_frame_push: send failed session=%s", session_id)
+
+
+_bus_on("chat_frame_push", _on_chat_frame_push)
 
 
 async def _pump(

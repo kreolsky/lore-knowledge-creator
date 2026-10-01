@@ -112,13 +112,19 @@ surreal/dump-*
 harness-driver/home/profiles/*/cordis.yml
 
 # The harness writes two more runtime artifacts into the same tracked home:
-# settings.yaml (the llm-deepseek section the image-capability upsert persists
-# per-turn model declarations into) and attachments/ (durable content-addressed
-# image bytes, unbounded — measured in the plan's Validation as a residual).
-harness-driver/home/settings.yaml
+# settings.yaml (the llm section the image-capability upsert persists per-turn
+# model declarations into; boot-env retires a 0.1.5 one to
+# settings.yaml.retired-0.1.5, and dsh's legacy import renames it
+# settings.yaml.imported — every spelling is runtime state) and attachments/
+# (durable content-addressed image bytes, unbounded — measured in the plan's
+# Validation as a residual).
+harness-driver/home/settings.yaml*
 harness-driver/home/attachments/
 harness-driver/home/storages/
 harness-driver/home/.anonymous-user-id
+# The agent's API key the driver stores per turn through dsh's credentials
+# service (0600) — a secret, never committed.
+harness-driver/home/.credentials.yaml
 
 # One-shot Phase-4 drive specs (workflow.md Phase 4: the spec asserting one bug may be
 # thrown away, the machinery under it never is — that machinery lives in e2e/helpers/

@@ -95,6 +95,9 @@ DEFINE INDEX IF NOT EXISTS idx_telemetry_user ON telemetry_event FIELDS user_id;
 
 DEFINE TABLE IF NOT EXISTS projects SCHEMAFULL;
 DEFINE FIELD IF NOT EXISTS name                 ON projects TYPE string;
+-- User-facing description for the dashboard card. NOT project_context — that one
+-- mirrors the index doc for the agent and is deliberately not a description.
+DEFINE FIELD IF NOT EXISTS description          ON projects TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS status               ON projects TYPE string DEFAULT 'active' ASSERT $value IN ['active', 'paused', 'done'];
 DEFINE FIELD IF NOT EXISTS project_context      ON projects TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS index_doc_id         ON projects TYPE option<string>;
@@ -980,9 +983,9 @@ DEFINE FIELD IF NOT EXISTS halt.limit  ON messages TYPE option<int>;
 -- chip) ride their own column, for the same reason `halt` above does: the driver's
 -- log cannot produce them. The generation finishes in an arq task long after the
 -- tool call returned {status:"generating"}, so the log holds the call and nothing
--- else, and the refined SD prompt exists ONLY here and in the done event (it is
--- never returned to the agent). Written by the background task
--- (image_gen/persist.py) before the generate_image_done emit; the client appends
+-- else, and the refined SD prompt exists ONLY here and in the run's settled
+-- lore/image-gen chat frame (it is never returned to the agent). Written by the background task
+-- (image_gen/persist.py) before the settled chat-frame push; the client appends
 -- them to the replayed turn product.
 DEFINE FIELD IF NOT EXISTS gen_steps ON messages TYPE option<array<object>> FLEXIBLE;
 -- INVARIANT(data-loss): the array's ELEMENTS carry their own FLEXIBLE, not just the

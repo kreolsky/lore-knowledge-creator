@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Plan lore-renders-dsh-conversation step 1: the verbatim dsh_event + lore/*
+// The verbatim dsh_event + lore/*
 // frames are the BROWSER assembler's input. The harness dispatch feeds them to
 // conversation-feed (append for the tail, splice for the mints) and the store
 // carries the PUBLISHED node list — no neutral-chip fold.
@@ -58,7 +58,8 @@ const USER_MSG = (seq: number, id: string) => ({
   data: { id, content: [{ type: 'text', text: 'hi' }], source: { kind: 'user' } },
   surfaceOp: 'append',
 });
-/** A settled assistant step (v3 log: `assistant/message` carries the whole
+/** A settled assistant step (the v4 log holds only settled events:
+ * `assistant/message` carries the whole
  * text; deltas never enter the log — the live tail rides `dsh_stream`). */
 const ASSISTANT = (seq: number, text: string) => ({
   type: 'dsh_event', kind: 'assistant/message', seq, time: 1000 + seq,
@@ -103,7 +104,7 @@ describe('dsh_event frames feed the assembler', () => {
   it('splices a lore mint into the published conversation', async () => {
     const get = await drive([
       { type: 'dsh_event', kind: 'turn/start', seq: 2, time: 1002, data: { turn: 0 } },
-      { type: 'dsh_event', kind: 'turn/end', seq: 3, time: 1003, data: { turn: 0, reason: { kind: 'aborted' } } },
+      { type: 'dsh_event', kind: 'turn/end', seq: 3, time: 1003, data: { turn: 0, reason: { kind: 'aborted', reason: { kind: 'user' } } } },
       { type: 'lore/halt', seq: 3.7, time: 1004, data: { turn: 0, reason: 'aborted' }, ignorable: true },
     ]);
     const halt = get().conversation.find(n => n.kind === 'halt');
@@ -129,7 +130,7 @@ describe('dsh_event frames feed the assembler', () => {
   });
 });
 
-// The live tail rides `dsh_stream` (v3 killed assistant/chunk in the log):
+// The live tail rides `dsh_stream` (the v4 log holds only settled events):
 // the plugin taps dsh's own `agent/assistant-stream` and relays its frames
 // verbatim; the feed maps each CHUNK to the assembler's transient
 // `assistant/live-chunk` entry, fractionally ordered above the durable tail

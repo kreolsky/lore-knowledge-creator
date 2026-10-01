@@ -133,53 +133,10 @@ class TestWsMessageSizeLimit:
         assert 100_000 <= MAX_WS_MESSAGE_SIZE <= 10_000_000
 
 
-# ── S-4: migrations svc_user validation ──────────────────────────────────────
-
-
-class TestMigrationsServiceUserValidation:
-    """ensure_service_user must validate svc_user against safe-character regex."""
-
-    def test_safe_identifier_regex_exists(self):
-        """migrations module must have a validation pattern for service user names."""
-        # The module should validate svc_user before embedding in query
-        # We check that the function source code contains validation
-        import inspect
-
-        import migrations
-        source = inspect.getsource(migrations.ensure_service_user)
-        # Must contain some form of validation (regex, validate call, or character check)
-        has_validation = (
-            "validate" in source.lower()
-            or "re.match" in source
-            or "re.fullmatch" in source
-            or "_SAFE" in source
-        )
-        assert has_validation, "ensure_service_user must validate svc_user before embedding in query"
-
-@pytest.mark.asyncio
-async def test_rejects_dangerous_service_user(test_db, monkeypatch):
-    """Service user name with injection characters must be rejected."""
-    import migrations
-    monkeypatch.setenv("SURREAL_SERVICE_USER", "admin; DROP TABLE users--")
-    monkeypatch.setenv("SURREAL_SERVICE_PASS", "secret")
-    with pytest.raises(ValueError):
-        await migrations.ensure_service_user()
-
-
-@pytest.mark.asyncio
-async def test_accepts_safe_service_user(test_db, monkeypatch):
-    """Normal alphanumeric service user name must work."""
-    import migrations
-    monkeypatch.setenv("SURREAL_SERVICE_USER", "lore_svc")
-    monkeypatch.setenv("SURREAL_SERVICE_PASS", "secret")
-    # Should not raise — may fail at DB level but not at validation
-    try:
-        await migrations.ensure_service_user()
-    except ValueError:
-        pytest.fail("Valid service user name should not raise ValueError")
-    except Exception:
-        pass  # DB errors are fine — we only test the validation gate
-
+# ── S-4 (migrations svc_user validation) — DELETED with ensure_service_user:
+# the service-user bootstrap went with the SURREAL_* env wiring (plan
+# component-wiring-not-settings step 4); the identifier guard it carried lives
+# on in scripts/init_secrets.py, whose user is now the constant `root`.
 
 # ── C-5: SSRF — image URL validation ──────────────────────────────────────────
 

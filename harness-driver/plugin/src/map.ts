@@ -1,8 +1,9 @@
 /**
- * Pure relay: dsh session events → Lore SSE frames, keyed by the dsh `kind`.
+ * Pure relay: dsh session events → the frames the standing channel serves,
+ * keyed by the dsh `kind`.
  *
  * # SYSTEM: harness-driver (relay half) — the RENTED loop speaking the dsh
- *   vocabulary end to end. The relay NO LONGER TRANSLATES: every dsh event
+ *   vocabulary end to end. The relay does not translate: every dsh event
  *   emits VERBATIM as a
  *   neutral `{type:'dsh_event', kind, seq, time, data, surfaceOp?,
  *   sourceEventSeqs?}` frame — the whole event, no truncation, no hide list,
@@ -19,33 +20,36 @@
  *
  *   BESIDE the log events, the standing channel carries ONE non-mapEvent
  *   frame (ws-events.ts relayAssistantStream): `{type:'dsh_stream', frame}` —
- *   dsh's own `agent/assistant-stream` publication relayed verbatim (0.1.5:
- *   the v3 log holds only SETTLED events, so the live tail is a transient
+ *   dsh's own `agent/assistant-stream` publication relayed verbatim (0.2.0:
+ *   the v4 log holds only SETTLED events, so the live tail is a transient
  *   publication, never a session event). It never enters mapEvent (no seq, no
  *   mint, no state) and is never replayed — a resync reads the settled log.
  *
  * The ONE exception is the lore mint arm: dsh's log cannot state every fact a
  *   Lore chat shows. What Lore keeps because dsh cannot state it enters as OUR
  *   `lore/*` events in the SAME registry (harness-driver/conversation/src/
- *   lore-events.ts). The relay mints exactly ONE of them, because exactly one
- *   has its anchor inside a dsh session event: `lore/verdict-ask`, on
- *   `approval/asked` (anchor = the ask's own seq). The other three are minted
- *   where their facts live: `lore/image-gen` by the detached-generation
- *   pipeline (outside the dsh log; the browser mints it live off the project
- *   WS, the backend mints it on reload from the row's gen_steps), `lore/halt`
- *   by the backend (a Lore-side fact: disconnect / deadline / driver failure —
- *   plus, on reload, the row's `halt` column), `lore/compaction-mint` by the
- *   backend (the continuation-chat mint outcome is a backend product).
+ *   lore-events.ts). The relay mints exactly TWO of them — the two whose
+ *   anchors sit inside dsh session events: `lore/verdict-ask`, on
+ *   `approval/asked` (anchor = the ask's own seq), and `lore/halt`, on a
+ *   `turn/end` whose reason dsh renders no node for (aborted / blocked /
+ *   interrupted / unknown — live and in replay, the same mapEvent).
+ *   `lore/halt` has two further producers, both backend: live, when a turn
+ *   ended with NO dsh terminal event (backend/driver/frames.py — disconnect /
+ *   deadline / driver failure), and on reload, from the row's `halt` column.
+ *   `lore/image-gen` is minted by the backend from the generation pipeline —
+ *   live as the run's frames ride the owner's chat channel AND on reload
+ *   from the row's gen_steps (the generation runs outside the dsh log) — and
+ *   `lore/compaction-mint` by the backend (the continuation-chat mint
+ *   outcome is a backend product).
  *
  * The offsets (LORE_SEQ_OFFSETS) and the mint shape come from
  *   lore-events.ts — imported, never copied, so a reload minted from the same
  *   anchor lands at the identical position (the placement INVARIANT there).
  *
  * # ARCH (child sessions): a child (subagent) session's events emit NOTHING.
- *   The nested child chips the old translator built were its own vocabulary,
- *   live-only (the child log is not replayed — entries.ts ARCH note), and a
- *   child seq would collide with the driving session's seq space in the
- *   assembler. Subagent replay stays the named gap (the plan's Not-doing).
+ *   The child log is not replayed (entries.ts ARCH note), and a child seq
+ *   would collide with the driving session's seq space in the
+ *   assembler. Subagent replay stays a named gap.
  *
  * This module is PURE (no ctx, no http) so it is unit-testable without booting
  *   the harness (test/map.test.ts).
@@ -63,10 +67,12 @@ import { loreEvent } from '../../lore-conversation/src/lore-events.ts'
  * One dsh SessionEvent as it arrives off the session feed / a decoded log
  * (shape used read-only). The ONE shared declaration for the relay.
  *
- * # ARCH (shapes verified against a real 0.1.5-rc.2 log): `surfaceOp` is the
- * STRING 'append' or the object {op:'replace', start, end} and rides ONLY on
- * the three surface kinds (user/message, assistant/message, tool/result);
- * `sourceEventSeqs` likewise. A `user/message` carries the message payload as
+ * # ARCH (shapes verified against a real 0.2.0-rc.2 log): `surfaceOp` is the
+ * STRING 'append' or the object {op:'replace', startSeq, endSeq} and rides
+ * ONLY on the surface kinds (user/message, system/message,
+ * assistant/message, tool/result — 0.2.0 added developer/message to the
+ * set); `sourceEventSeqs` likewise. Both relay verbatim (the relay reads
+ * neither). A `user/message` carries the message payload as
  * `data` ITSELF (role/content at the top level), while `assistant/message`
  * nests it under `data.message` with the producing model at
  * `data.message.source.model`. `time` is epoch ms — present on every log
@@ -77,7 +83,7 @@ export interface DshEvent {
   type: string
   data?: any
   time?: number
-  surfaceOp?: string | { op: 'replace'; start: number; end: number } | undefined
+  surfaceOp?: string | { op: 'replace'; startSeq: number; endSeq: number } | undefined
   sourceEventSeqs?: number[]
 }
 
@@ -89,7 +95,7 @@ export interface TurnMapState {
   turn: number | null
 }
 
-export function newTurnMapState(_faults = ''): TurnMapState {
+export function newTurnMapState(): TurnMapState {
   return { finished: false, turn: null }
 }
 

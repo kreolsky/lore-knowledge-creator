@@ -439,32 +439,6 @@ describe('unified MessageBubble — user attachment image lightbox (plan user-at
   });
 });
 
-describe('unified MessageBubble — generate_image live progress (plan gen-progress-display)', () => {
-  function renderProgress(phase: string | null) {
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'ai',
-        isOwn: false,
-        isStreaming: true,
-        // imageGen is now an array of active runs (one chip per run).
-        imageGen: phase ? [{ phase }] : [],
-        message: makeMsg({ role: 'assistant', content: '' }),
-      }));
-    });
-  }
-
-  it('renders the "Generating image — <phase>" chip while a phase is active', () => {
-    renderProgress('generating');
-    expect(container.textContent).toContain('generatingImage');
-    expect(container.textContent).toContain('genPhaseGenerating');
-  });
-
-  it('renders no progress chip when imageGen is empty', () => {
-    renderProgress(null);
-    expect(container.textContent).not.toContain('generatingImage');
-  });
-});
-
 describe('unified MessageBubble — verdict card on a frameless row (render gate)', () => {
   // A row the driver's log has no turn for carries no nodes, so the held call
   // renders from the row's `pending_verdicts` (restored by GET /chat/verdicts).

@@ -1,83 +1,69 @@
-"""Image generation events — phase progress + result/failure broadcasts.
+"""Image generation events — the run's chat-frame pushes + the chip persist.
 
 Subsystem overview: image_generation/__init__.py (see SYSTEM: comfy-image-gen).
-The project-WS broadcast helpers, the BOLA ownership guard
+The chat-frame push helpers, the BOLA ownership guard
 (_message_belongs_to_caller) and the chip-persist UPDATE live here. The emit +
 fetch_one seams RESOLVE in this module (image_generation.events.*): the
-phase/done/failed broadcasters call them here.
+phase/settled pushers and the chip write call them here.
+
+# ARCH: the detached run's three facts —
+# progress, done, failed — are CHAT facts, so they ride the OWNER-FILTERED
+# chat channel as backend-minted `lore/image-gen` frames (bus event
+# `chat_frame_push` → routes.chat.fanout's subscriber → the same
+# {type:'chat_frame', session_id, frame} envelope the turn frames use), never
+# a project-wide broadcast (a chat fact reaches the session owner only).
+# Every frame is minted from the run's ANCHOR — {seq, turn} of the
+# dispatching tool/call, resolved ONCE in the launcher and frozen into the job
+# payload — so the worker reads no driver timeline at all.
 """
 
 import logging
 
+from driver.frames import image_gen_running_frame, image_gen_settled_frame
+
 from db import fetch_one
 from event_bus import emit
-from image_generation.image_refine import _RefineResult
 
 logger = logging.getLogger(__name__)
 
-# ─── Live generation phase broadcast ────
-# The synchronous tool emits coarse phase events (refining/queued/generating/
-# downloading) via the project-WS event bus so the chat can show progress during
-# the ~10–20s ComfyUI wait (the agent turn carries no mid-tool-call events). Purely
-# best-effort: progress is non-critical UI feedback and MUST never break a
-# generation. Correlated on session_id (one active generation per chat session).
 
-_GEN_PHASES = ("refining", "queued", "generating", "downloading")
-
-async def _emit_gen_progress(ctx: dict, run_id: str, phase: str) -> None:
+async def _push_frame(ctx: dict, frame: dict | None) -> None:
+    """Best-effort push of ONE minted lore/image-gen frame onto the owner's
+    chat channel. Purely best-effort: progress
+    and the live card are non-critical UI feedback (a reload still shows the
+    settled card from the row's gen_steps) and MUST never break a
+    generation. Correlated on session_id."""
+    if frame is None:
+        return
     try:
         await emit(
-            "generate_image_progress",
+            "chat_frame_push",
             project_id=ctx["project_id"],
             session_id=ctx.get("session_id") or "",
-            run_id=run_id,
-            message_id=ctx.get("message_id") or "",
-            phase=phase,
+            frame=frame,
         )
     except Exception:
-        logger.debug("comfy: progress emit failed (phase=%s)", phase, exc_info=True)
+        logger.debug(
+            "comfy: chat frame push failed", exc_info=True,
+        )
 
-async def _emit_gen_done(
-    ctx: dict, run_id: str, message_id: str | None,
-    reference_ids: list[str], title: str, refine: _RefineResult,
-    steps: list[dict],
-) -> None:
-    """Best-effort delivery of the generation result to the chat over the
-    project-WS. The refiner outcome AND the
-    already-built step dicts travel HERE — single source of truth (the Redis stash
-    is gone) — so the chat stamps the SAME chips the server persisted to
-    `messages.gen_steps` (no backend↔frontend reconstruction drift)."""
-    try:
-        await emit(
-            "generate_image_done",
-            project_id=ctx["project_id"],
-            session_id=ctx.get("session_id") or "",
-            run_id=run_id,
-            message_id=message_id or "",
-            reference_ids=reference_ids,
-            title=title,
-            refine={"prompt": refine.prompt, "ok": refine.ok, "error": refine.error},
-            steps=steps,
-        )
-    except Exception:
-        logger.debug("comfy: done emit failed (run_id=%s)", run_id, exc_info=True)
 
-async def _emit_gen_failed(
-    ctx: dict, run_id: str, message_id: str | None, error: str,
-) -> None:
-    """Best-effort failure delivery (no-silent-degradation): a background
-    generation that raised must reach the chat, never die silently."""
-    try:
-        await emit(
-            "generate_image_failed",
-            project_id=ctx["project_id"],
-            session_id=ctx.get("session_id") or "",
-            run_id=run_id,
-            message_id=message_id or "",
-            error=error,
-        )
-    except Exception:
-        logger.debug("comfy: failed emit failed (run_id=%s)", run_id, exc_info=True)
+async def _push_gen_progress(ctx: dict, run_id: str, phase: str) -> None:
+    """Push the run's RUNNING frame for one coarse phase (refining/queued/
+    generating/downloading), minted from the payload anchor's phase ladder —
+    no replay read per phase."""
+    await _push_frame(
+        ctx, image_gen_running_frame(ctx.get("anchor") or {}, run_id, phase))
+
+
+async def _push_gen_settled(ctx: dict, run_id: str, steps: list[dict]) -> None:
+    """Push the run's SETTLED frame (done or failed — the step dicts decide),
+    built from the SAME gen_steps the persist wrote, through the SAME builder
+    the reload attach uses, so the live card equals the reload card by
+    construction (the one-mint-site INVARIANT)."""
+    await _push_frame(
+        ctx, image_gen_settled_frame(ctx.get("anchor") or {}, steps, run_id))
+
 
 async def _message_belongs_to_caller(
     message_id: str, project_id: str, user_id: str,
@@ -108,14 +94,15 @@ async def _message_belongs_to_caller(
         )
         return False
 
+
 async def _persist_gen_steps(ctx: dict, message_id: str | None, steps: list[dict]) -> None:
     """Append the detached generation's chips to the assistant message's
     `gen_steps` column via a targeted Surreal UPDATE.
 
-    # INVARIANT(data-loss): the detached run's chips are persisted BEFORE the done/failed
-    # emit. Why: the generation outlives the turn and the driver's log never sees
-    # the background task, so this column is the ONLY thing a reload can render
-    # them from — emit-first would lose them for anyone who reloads in between.
+    # INVARIANT(data-loss): the detached run's chips are persisted BEFORE the settled
+    # frame is pushed. Why: the generation outlives the turn and the driver's log never
+    # sees the background task, so this column is the ONLY thing a reload can render
+    # them from — push-first would lose them for anyone who reloads in between.
     Appends (array::concat) rather than replaces: two runs in one turn each write
     their own chips. Best-effort — a miss leaves the chips absent on reload but the
     image reference itself is always persisted on the document via save_upload

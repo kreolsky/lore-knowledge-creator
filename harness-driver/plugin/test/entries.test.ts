@@ -193,6 +193,79 @@ test('events before the first turn/start buffer into it, never dropped', () => {
   assert.ok(kinds.includes('todo/write'), JSON.stringify(kinds))
 })
 
+test('the open turn carries the live-stream baseline — closed turns never do', () => {
+  // A reload mid-step keeps the streamed text. The plugin folds every
+  // relayed stream frame into dsh's
+  // SessionAssistantStreamAccumulator (stream-baselines.ts); the projection
+  // carries that fold's snapshot on the OPEN turn so the browser re-seats the
+  // transient tail. A fold with NO active attempt (nothing streaming, or a
+  // missed frame reset the fold) seats nothing and rides nothing — the reload
+  // degrades to today's behaviour, never a wrong baseline.
+  const baseline = {
+    revision: 3,
+    activeAttempt: {
+      attemptId: 'a1', startedAfterSeq: 4, turn: 2, step: 0, nextIndex: 2,
+      stream: [{ type: 'text-chunks', time0: 5, index: 0, dt: [1], texts: ['Hel', 'lo'] }],
+    },
+  }
+  const log = [
+    ev(1, 'turn/start', { turn: 1 }), assistantMessage(2, 'hi'), ev(3, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
+    ev(4, 'turn/start', { turn: 2 }), assistantMessage(5, 'cut off'),
+  ]
+  const replay = projectSessionEntries(log, undefined, baseline as any)
+  assert.equal(replay.turns[1].assistant_stream, baseline)
+  assert.equal('assistant_stream' in replay.turns[0], false)
+  // No fold passed (a session that never streamed): no field.
+  assert.equal('assistant_stream' in projectSessionEntries(log).turns[1], false)
+  // A revision-only fold (no active attempt): no field.
+  assert.equal('assistant_stream' in projectSessionEntries(log, undefined, { revision: 4 }).turns[1], false)
+})
+
+test('a since_seq resync keeps the baseline on the open turn', () => {
+  // The browser-WS-gap twin reads the same projection with since_seq — the
+  // re-adopted turn still needs its streamed text.
+  const baseline = {
+    revision: 1,
+    activeAttempt: {
+      attemptId: 'a1', startedAfterSeq: 1, turn: 1, step: 0, nextIndex: 0, stream: [],
+    },
+  }
+  const log = [ev(1, 'turn/start', { turn: 1 }), assistantMessage(2, 'mid')]
+  const resync = projectSessionEntries(log, 2, baseline as any)
+  assert.equal(resync.turns[0].assistant_stream, baseline)
+})
+
+test("a dead attempt's baseline never seats on a LATER open turn", () => {
+  // A turn that died without a stream `end` (a driver crash) leaves its
+  // attempt ACTIVE in the fold; a reload in the NEXT turn's start window
+  // would serve the dead attempt's baseline onto the new open turn. The fold
+  // attaches only when the attempt began inside the open turn:
+  // startedAfterSeq at or above the open turn's own turn/start seq, recorded
+  // in the same projection pass (one id space, one log — never a boundary
+  // seq from outside it).
+  const log = [
+    ev(1, 'turn/start', { turn: 1 }), assistantMessage(2, 'hi'), ev(3, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
+    ev(4, 'turn/start', { turn: 2 }), assistantMessage(5, 'cut off'),
+  ]
+  const dead = {
+    revision: 3,
+    activeAttempt: {
+      attemptId: 'dead', startedAfterSeq: 1, turn: 1, step: 0, nextIndex: 1,
+      stream: [{ type: 'text-chunks', time0: 2, index: 0, dt: [1], texts: ['old'] }],
+    },
+  }
+  assert.equal('assistant_stream' in projectSessionEntries(log, undefined, dead as any).turns[1], false,
+    'the attempt predates the open turn — its baseline is not served')
+  const live = {
+    revision: 4,
+    activeAttempt: {
+      attemptId: 'live', startedAfterSeq: 4, turn: 2, step: 0, nextIndex: 0, stream: [],
+    },
+  }
+  assert.equal(projectSessionEntries(log, undefined, live as any).turns[1].assistant_stream, live,
+    'an attempt that began at the open turn\'s start (or after) seats')
+})
+
 test('an empty log projects no turns and no tail', () => {
   assert.deepEqual(projectSessionEntries([]), { turns: [], tail_seq: null })
 })

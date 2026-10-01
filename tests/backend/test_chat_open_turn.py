@@ -114,3 +114,44 @@ async def test_no_open_turn_no_mark(monkeypatch):
         "tail_seq": 5,
     }, monkeypatch)
     assert "open_turn" not in out[0]
+
+
+@pytest.mark.asyncio
+async def test_open_turn_carries_assistant_stream_verbatim(monkeypatch):
+    """The open row keeps the streamed text.
+
+    The plugin folds the open turn's live stream and serves the fold on the
+    OPEN turn as `assistant_stream`; the read path passes it through VERBATIM
+    beside `open_turn` (the browser re-seats the transient tail from it). A
+    closed turn's row never carries one — the field belongs to the still-open
+    attempt, and the pass-through reads the trailing open turn only."""
+    baseline = {
+        "revision": 3,
+        "activeAttempt": {
+            "attemptId": "a1", "startedAfterSeq": 6, "turn": 1, "step": 0,
+            "nextIndex": 2,
+            "stream": [
+                {"type": "text-chunks", "time0": 7, "index": 0,
+                 "dt": [1], "texts": ["Hel", "lo"]},
+            ],
+        },
+    }
+    out = [row("a1", seq=5, created="1"), row("a_open", created="2")]
+    replay = _replay([_dsh(7, "assistant/message")])
+    replay["turns"][1]["assistant_stream"] = baseline
+    # Garbage on a CLOSED turn must never ride its row: the pass-through reads
+    # the trailing open turn only.
+    replay["turns"][0]["assistant_stream"] = {"revision": 999}
+    await _attach(out, replay, monkeypatch)
+    assert out[1]["assistant_stream"] == baseline
+    assert "assistant_stream" not in out[0]
+
+
+@pytest.mark.asyncio
+async def test_open_row_without_baseline_carries_no_assistant_stream(monkeypatch):
+    """A plugin reply without a fold (nothing streaming mid-turn) adds no key —
+    the older wire shape stays valid."""
+    out = [row("a1", seq=5, created="1"), row("a_open", created="2")]
+    await _attach(out, _replay([_dsh(7, "assistant/message")]), monkeypatch)
+    assert out[1]["open_turn"] is True
+    assert "assistant_stream" not in out[1]

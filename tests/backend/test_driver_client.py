@@ -27,6 +27,7 @@ from agent.apply_policy import resolve_apply_mode
 from driver.client import (
     _build_turn_payload,
 )
+from helpers import pin_chat_api
 
 import config
 
@@ -63,9 +64,8 @@ def _applied_edit_result(call_id, doc="doc-x", seq=1):
                 {"document_id": doc, "old_string": "a", "new_string": "b"})}),
         _dsh(seq + 1, "tool/result", {
             "turn": 1, "step": 1, "message": {
-                "source": {"kind": "tool", "callId": call_id},
-                "content": [{"type": "tool-result", "toolCallId": call_id,
-                             "content": [{"type": "text", "text": "ok"}]}]}}),
+                "role": "tool", "source": {"kind": "tool", "callId": call_id},
+                "toolCallId": call_id, "content": [{"type": "text", "text": "ok"}]}}),
     ]
 
 
@@ -272,8 +272,9 @@ def test_build_turn_payload_shape():
     )
     assert payload["model"] == "m"
     assert payload["system_prompt"] == "s"
-    # Gateway + Tool-API base URLs are env-bound on the driver side — they must NOT
-    # travel in the request (review: SSRF / secret-through-unauth-RPC).
+    # The Tool-API base URL is env-bound on the driver side and never travels in
+    # the request; the AI gateway rides as ai_api_url / ai_api_key only on this
+    # driver-secret-gated call.
     assert "gateway" not in payload
     assert "tool_api" not in payload
     assert payload["agent_key"] == "lore_x"
@@ -368,6 +369,8 @@ async def test_agent_capability_available_when_configured(monkeypatch):
 
 
 class _FakeCapabilityResponse:
+    status_code = 200
+
     def __init__(self, payload):
         self._payload = payload
 
@@ -408,12 +411,18 @@ async def test_agent_capability_model_reads_the_driver_reply(monkeypatch, http_p
     _FakeCapabilityClient.calls = []
     monkeypatch.setattr(config, "HARNESS_DRIVER_SECRET", "x")
     monkeypatch.setattr(config, "HARNESS_DRIVER_URL", "http://drv")
+    pin_chat_api(monkeypatch, url="http://gw.example/v1", key="sk-cap")
     http_pool("driver", _FakeCapabilityClient())
 
     out = await driver.client.agent_capability("m1")
     assert out == {"available": True, "vision": True}
-    assert _FakeCapabilityClient.calls[0]["url"] == "http://drv/capability"
-    assert _FakeCapabilityClient.calls[0]["params"] == {"model": "m1"}
+    call = _FakeCapabilityClient.calls[0]
+    assert call["url"] == "http://drv/capability"
+    assert call["params"] == {"model": "m1"}
+    # The gateway the admin set (the turn payload's source) rides as headers,
+    # never in the URL.
+    assert call["headers"]["X-AI-API-URL"] == "http://gw.example/v1"
+    assert call["headers"]["X-AI-API-Key"] == "sk-cap"
 
 
 @pytest.mark.asyncio
@@ -456,6 +465,73 @@ async def test_agent_capability_model_bad_reply_raises_unreachable(monkeypatch, 
     from driver.client import DriverLineUnreachable
 
     with pytest.raises(DriverLineUnreachable):
+        await driver.client.agent_capability("m1")
+
+
+# ─── The line is wiring, not configuration (plan component-wiring-not-settings) ──
+
+
+@pytest.mark.asyncio
+async def test_instance_row_cannot_shadow_the_generated_secret(test_db, monkeypatch):
+    """Gray defect, observed on a v0.20.3 upgrade: a secret typed in the
+    admin panel kept beating the generated file after the upgrade — every
+    probe 401, the person saw "harness service is not reachable". The line
+    reads the config constant (the secrets volume); an instance_settings row
+    is unread."""
+    import settings
+    from driver.client import resolve_driver_line
+
+    await test_db.query(
+        "UPSERT type::record('instance_settings', $k) "
+        "SET key = $k, value = $v, updated_by = 'test', updated_at = time::now()",
+        {"k": "HARNESS_DRIVER_SECRET", "v": '"typed-in-admin"'},
+    )
+    settings.drop_cache()
+    try:
+        # The generated file's value, as a fresh process binds it at import.
+        monkeypatch.setattr(config, "HARNESS_DRIVER_SECRET", "gen-file-value")
+        monkeypatch.setattr(config, "HARNESS_DRIVER_URL", "http://harness:8090")
+        line = await resolve_driver_line()
+        assert line is not None
+        assert line.secret == "gen-file-value", (
+            "an instance_settings row must not shadow the generated secret"
+        )
+    finally:
+        settings.drop_cache()
+        await test_db.query(
+            "DELETE type::record('instance_settings', $k)",
+            {"k": "HARNESS_DRIVER_SECRET"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_capability_401_names_the_secret_mismatch(monkeypatch, http_pool):
+    """A 401 from the driver is not generic unreachability: the backend and
+    the harness hold different driver secrets, and the exception names the
+    recreate-them-together cause (the partner-upgrade defect)."""
+    import driver.client
+    from driver.client import DriverSecretMismatch
+
+    class _Resp:
+        status_code = 401
+        text = "unauthorized"
+
+        def json(self):
+            return {}
+
+        def raise_for_status(self):
+            return None
+
+    class _Client:
+        async def get(self, *args, **kwargs):
+            return _Resp()
+
+    monkeypatch.setattr(config, "HARNESS_DRIVER_SECRET", "x")
+    monkeypatch.setattr(config, "HARNESS_DRIVER_URL", "http://drv")
+    pin_chat_api(monkeypatch, url="http://gw.example/v1", key="sk-cap")
+    http_pool("driver", _Client())
+
+    with pytest.raises(DriverSecretMismatch):
         await driver.client.agent_capability("m1")
 
 

@@ -64,6 +64,23 @@ export function text(value: unknown): string | undefined {
 }
 
 /**
+ * The loud no-credential refusal every Lore provider shares: it names the
+ * provider id and the one fix the operator can act on. Web search has no off
+ * state — the empty credential IS the off switch, and its failure must say so
+ * instead of dsh silently falling back to another usable provider.
+ * @param providerId - the pinned provider that failed to resolve a credential.
+ * @param credentialIsUrl - SearXNG's credential is a base URL, not an API key.
+ * @returns the error to throw from `search()`.
+ */
+export function missingCredential(providerId: string, credentialIsUrl: boolean): WebError {
+  return new WebError(
+    `${providerId}: no API key${credentialIsUrl ? ' (URL for SearXNG)' : ''} `
+    + '— set it in Admin panel → Search → Web search',
+    'WEB_PROVIDER_CREDENTIAL_MISSING',
+  )
+}
+
+/**
  * One provider row → a normalized source; a row without a url is dropped
  * (undefined) — it carries nothing the agent can cite or open.
  */

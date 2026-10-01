@@ -367,8 +367,11 @@ async def test_tick_limit_50_carries_over_to_the_next_tick(
 
     pid, _idx, uid = project_with_doc
     await _seed_extract_param_docs(test_db, pid)
+    # WHY interval_s=3600: the three ticks cost ~110 claim/status queries, and on a
+    # loaded runner (600ms+ per query) they outlast a 60s interval — the first rows
+    # claimed turn due again before the third tick and it re-fires them (58 == 55).
     for i in range(55):
-        await _seed_schedule(test_db, f"ps-carry-{i:02d}", pid, uid)
+        await _seed_schedule(test_db, f"ps-carry-{i:02d}", pid, uid, interval_s=3600)
 
     spy = _EnqueueSpy()
     monkeypatch.setattr("jobs.pool.enqueue", spy)

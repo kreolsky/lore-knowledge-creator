@@ -23,7 +23,7 @@ from comfy_markers import fill_workflow
 
 from models import ToolGenerateImage
 
-from .events import _emit_gen_progress
+from .events import _push_gen_progress
 from .image_comfy import _PER_REQUEST_TIMEOUT, _GenError
 from .persist import _announce_failure, _persist_and_announce
 from .refine import _refine_prompt
@@ -48,7 +48,7 @@ async def run_generation(
     Lives on the arq worker — ONE implementation shared by web (inline tests)
     and worker. The body is split into resolve/enqueue/download/persist helpers;
     this driver keeps only the try/except skeleton. NEVER raises out except
-    CancelledError: every failure path emits generate_image_failed + logs (no-silent-
+    CancelledError: every failure path pushes the failed chat frame + logs (no-silent-
     degradation). D3: a worker shutdown cancels the task — report it (never a hung
     spinner) then RE-RAISE so cancellation propagates (never swallow it).
     """
@@ -62,7 +62,7 @@ async def run_generation(
             # its graph carries no markers, so filling it would render the graph's
             # own baked-in prompt. Fail it visibly instead.
             raise _GenError(409, "Image generation was queued before an upgrade; retry it")
-        await _emit_gen_progress(ctx, run_id, "refining")
+        await _push_gen_progress(ctx, run_id, "refining")
         refine = await _refine_prompt(body.prompt.strip(), prompt_template)
         # WHY the seed is drawn here: ComfyUI does NOT randomize a seed passed in
         # an API graph, so a fresh one per call is what varies the image.
@@ -102,8 +102,8 @@ async def _enqueue_and_poll(
     if r.status_code != 200:
         raise _GenError(503, "ComfyUI is not available")
     prompt_id = r.json()["prompt_id"]
-    await _emit_gen_progress(ctx, run_id, "queued")
-    await _emit_gen_progress(ctx, run_id, "generating")
+    await _push_gen_progress(ctx, run_id, "queued")
+    await _push_gen_progress(ctx, run_id, "generating")
     deadline = time.monotonic() + comfy["COMFYUI_TIMEOUT_S"]
     history_body: dict | None = None
     poll_interval = 1.0

@@ -13,7 +13,7 @@
 
 # INVARIANT: the generated route path MUST equal the tool name exactly.
 # Why: the dsh driver builds the URL generically
-# (`${TOOL_API_INTERNAL_URL}/api/tool/${toolName}`)
+# (`${LORE_TOOL_API_URL}/api/tool/${toolName}`)
 # and consults no path map — a mismatch is a runtime 404 the suite catches only
 # by asserting over the served list (test_agent_tools_registry totality +
 # test_tool_api_routes_match_tool_names). This held as a per-route comment on

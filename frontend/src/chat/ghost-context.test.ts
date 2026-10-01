@@ -240,7 +240,7 @@ describe('ghost delta store', () => {
     expect(getGhostDeltas().addedDocIds).toEqual([]);
   });
 
-  it('syncGhostBaseKey RESETS deltas when the open entity changes (Decision 1)', () => {
+  it('syncGhostBaseKey RESETS deltas when the open entity changes', () => {
     syncGhostBaseKey('docA||false');
     addGhostDelta('doc', 'pick-A');
     expect(getGhostDeltas().addedDocIds).toEqual(['pick-A']);

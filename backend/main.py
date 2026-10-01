@@ -36,7 +36,8 @@ from db import (
     verify_sdk_contract,
 )
 from event_bus import on as _bus_on
-from migrations import ensure_service_user, seed_admin
+from jobs import pool as jobs_pool
+from migrations import seed_admin
 
 # WHY: starlette ≥0.40 reworked formparsers — the old class attribute
 # `MultiPartParser.max_file_size` is gone. The per-part reject limit is now
@@ -83,7 +84,6 @@ from routes import (
     collab_project_ws,
     document_shares,
     documents,
-    driver_settings,
     extractor,
     files,
     files_mcp_upload,
@@ -121,6 +121,14 @@ from routes import (
 # worker still wires its own subscription at boot; the web process wires it HERE.
 import embeddings  # noqa: F401 — load-bearing bus-subscription import (see above)
 
+# isort: split
+# The same class for the chat fan-out: its module-level
+# `_bus_on("chat_frame_push", …)` is the web-side receiver of the worker's
+# detached-image-run frames, and the module is otherwise imported only lazily
+# on the first turn — AFTER the lifespan's backplane subscription, so without
+# this import the worker's publishes on evt:chat_frame_push have no subscriber.
+import routes.chat.fanout  # noqa: F401 — load-bearing bus-subscription import (see above)
+
 collab_events.subscribe_events()
 
 setup_logging()
@@ -128,11 +136,12 @@ logger = logging.getLogger(__name__)
 
 
 # There is no per-startup sort_key repair sweep: every creation path is closed at
-# source — seed_dev routes every document through documents.service.create_document,
-# and routes/projects.py::create_project sets the index doc's sort_key in its
-# transactional CREATE. The one-time backfill for rows predating the field has run
-# on every installation and is retired with the other applied migrations.
-# INVARIANT preserved: every non-reference document gets a sort_key at creation time.
+# source — seed_dev routes every document through documents.service.create_document
+# (both kinds get a key there now), routes/projects.py::create_project sets the
+# index doc's sort_key in its transactional CREATE, and reference rows predating
+# per-ref keys are covered by the one-time reference_sort_keys_backfill migration.
+# INVARIANT preserved: every live document row, reference or not, gets a sort_key
+# at creation time.
 
 
 async def sweep_orphan_proposal_fields(db=None) -> int:
@@ -229,7 +238,6 @@ async def _recover_stuck_transcriptions() -> None:
     """Re-enqueue refs stuck in 'processing' or 'queued' status via arq."""
     try:
         from db import extract_id, get_db
-        from jobs import pool as jobs_pool
         from jobs.pool import TRANSCRIPTION_QUEUE
         db = await get_db()
         rows = await db.query(
@@ -321,7 +329,11 @@ async def lifespan(_: FastAPI):
     await sweep_orphan_proposal_fields()
     await sweep_orphan_shares()
     await seed_admin()
-    await ensure_service_user()
+    # WHY: the guide sweep runs on the worker, never on the startup path — a release
+    # that updates the guide rewrites it in every project, which outlasts the deploy's
+    # readiness window, and a web create_task dies with the next reload. The stable
+    # job_id collapses the posts of several booting web processes into one run.
+    await jobs_pool.enqueue("help_sweep_task", job_id="help-sweep")
     await _recover_stuck_transcriptions()
     from files_util import sweep_tmp_uploads
     await sweep_tmp_uploads()
@@ -351,7 +363,6 @@ async def lifespan(_: FastAPI):
     # Redis client, before the arq pool (LIFO: clients torn down while the app
     # is otherwise still intact).
     await _close_http_clients()
-    from jobs import pool as jobs_pool
     await jobs_pool.close_arq_pool()
 
 
@@ -554,7 +565,6 @@ app.include_router(extractor.router)
 app.include_router(admin_embeddings.router)
 app.include_router(admin_settings.router)
 app.include_router(admin_skills.router)
-app.include_router(driver_settings.router)
 
 # ARCH: the MCP Universal Agent Gateway is
 # mounted at the EXACT path /mcp (and /mcp/) as Route'd raw ASGI apps, NOT a

@@ -63,9 +63,8 @@ def _verdict_ask(seq, call_id="c1", turn=1):
 
 def _tool_result(seq, call_id="c1", turn=1):
     return _dsh(seq, "tool/result", {"turn": turn, "step": 1, "message": {
-        "source": {"kind": "tool", "callId": call_id},
-        "content": [{"type": "tool-result", "toolCallId": call_id,
-                     "content": [{"type": "text", "text": "ok"}]}]}})
+        "role": "tool", "source": {"kind": "tool", "callId": call_id},
+        "toolCallId": call_id, "content": [{"type": "text", "text": "ok"}]}})
 
 
 def _env(dsh_id, frame):
@@ -533,7 +532,7 @@ async def test_plain_reack_leaves_the_dedup_anchor_alone(channel):
 
 @pytest.mark.asyncio
 async def test_silence_breach_halts_persists_and_stops(channel, monkeypatch):
-    monkeypatch.setattr(config, "TURN_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(config, "TURN_PROGRESS_GRACE_S", 0.05)
     monkeypatch.setattr(config, "TURN_MAX_WALL_S", 5.0)
     monkeypatch.setattr(config, "TURN_HOLD_MAX_S", 1.0)
     ch, connector, replay, persists = channel
@@ -563,7 +562,7 @@ async def test_silence_breach_halts_persists_and_stops(channel, monkeypatch):
 @pytest.mark.asyncio
 async def test_held_turn_does_not_breach_and_resumes_on_settlement(
         channel, monkeypatch):
-    monkeypatch.setattr(config, "TURN_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(config, "TURN_PROGRESS_GRACE_S", 0.05)
     monkeypatch.setattr(config, "TURN_MAX_WALL_S", 5.0)
     monkeypatch.setattr(config, "TURN_HOLD_MAX_S", 5.0)
     ch, connector, replay, _ = channel
@@ -777,7 +776,7 @@ async def test_graceful_close_fires_on_end(channel):
 @pytest.mark.asyncio
 async def test_breach_fires_on_end(channel, monkeypatch):
     ch, connector, replay, _persists = channel
-    monkeypatch.setattr(config, "TURN_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(config, "TURN_PROGRESS_GRACE_S", 0.05)
     await ch.subscribe("lore-1")
     fired: list[int] = []
 
@@ -870,7 +869,7 @@ async def test_emit_frames_on_unsubscribed_session_raises(channel):
 
 @pytest.mark.asyncio
 async def test_breach_emits_turn_closed_after_the_error(channel, monkeypatch):
-    monkeypatch.setattr(config, "TURN_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(config, "TURN_PROGRESS_GRACE_S", 0.05)
     monkeypatch.setattr(config, "TURN_MAX_WALL_S", 5.0)
     monkeypatch.setattr(config, "TURN_HOLD_MAX_S", 1.0)
     ch, connector, replay, _persists = channel

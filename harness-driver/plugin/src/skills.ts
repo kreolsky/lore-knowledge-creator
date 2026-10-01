@@ -293,15 +293,15 @@ export const WEB_SEARCH_TOOL = 'web_search'
 
 /**
  * The names the catalog's served gate counts: the payload's tools plus
- * `web_search` when the harness serves it (`webSearchServed` — the same
- * provider-pin test as tool-web's `search` in cordis.patch.yml).
+ * `web_search`, ALWAYS — the tool has no off state (it is always offered to
+ * the model; a provider without a key fails its calls loudly).
  * WHY a separate set, not a wider `servedNames`: web_search is not a
  * registered proxy, so the restriction can neither deny nor grant it — it is
  * always callable. Folding it into core/active would log it as pruned while
  * the model can still call it.
  */
-export function catalogServedNames(servedNames: Set<string>, webSearchServed: boolean): Set<string> {
-  return webSearchServed ? new Set([...servedNames, WEB_SEARCH_TOOL]) : servedNames
+export function catalogServedNames(servedNames: Set<string>): Set<string> {
+  return new Set([...servedNames, WEB_SEARCH_TOOL])
 }
 
 /** The always-active CORE set: every served tool EXCEPT the union of all
@@ -391,15 +391,18 @@ export function skillLoadCallName(ev: any): { callId: string; name: string } | n
  */
 export function skillLoadResultName(ev: any, pending: Map<string, string>): string | null {
   if (ev?.type !== 'tool/result') return null
-  const block = ev?.data?.message?.content?.[0]
-  const callId = String(ev?.data?.message?.source?.callId ?? block?.toolCallId ?? '')
+  const message = ev?.data?.message
+  // WHY: dsh session format v4 only — the pin never rolls back, so no reader for an older shape exists; a shape change is fixed forward here.
+  // The result is a FLAT tool message (role 'tool'): callId on its typed
+  // source, isError on the message, the text directly in the blocks.
+  const callId = String(message?.source?.callId ?? '')
   if (!callId || !pending.has(callId)) return null
   const name = pending.get(callId)!
   pending.delete(callId)
-  if (block?.isError) return null
-  const inner = Array.isArray(block?.content) ? block.content : []
-  const text = inner
-    .map((b: any) => (typeof b === 'string' ? b : b?.type === 'text' ? String(b.text ?? '') : ''))
+  if (message?.isError) return null
+  const blocks: any[] = Array.isArray(message?.content) ? message.content : []
+  const text = blocks
+    .map((b: any) => (b?.type === 'text' ? String(b.text ?? '') : ''))
     .join('')
   return text ? name : null
 }
@@ -441,7 +444,7 @@ export function skillsDelta(
 
 /**
  * Normalize the lore-turn prompt section's text (string or block list). The
- * skills index concatenation is GONE (step 8): dsh's tool-skill publishes
+ * skills index concatenation is GONE: dsh's tool-skill publishes
  * the durable catalog as its own session message — the handed-over prompt is
  * the COMPLETE section, verbatim.
  */

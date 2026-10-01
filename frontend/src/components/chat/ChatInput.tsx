@@ -29,6 +29,10 @@ import { selectActivePath } from '../../store/chat-store/tree';
 import { effectiveCap } from '../../store/chat-store/misc-slice';
 import { useSystemPrompts, useAttachmentBudget } from './chat-input-hooks';
 
+// Stable empty-array reference for the `queued` selector's empty
+// branch (see the selector's INVARIANT — a fresh [] loops useSyncExternalStore).
+const NO_QUEUE: string[] = [];
+
 export function ChatInput() {
   // The composer text lives in chat-store (ONE shared draft), not local useState:
   // ChatPanel unmounts on right-panel tab switch and local state dies with it
@@ -60,6 +64,12 @@ export function ChatInput() {
   const clearPendingImages = useChatStore(s => s.clearPendingImages);
   // The active session's follow-up chips. Keyed by session so a
   // switch never surfaces another chat's chips (ChatInput is mounted once, no key).
+  // INVARIANT: the empty branch returns a STABLE module-level reference, not a fresh [].
+  // Why: Zustand uses useSyncExternalStore, which compares the selector result by
+  // identity — a fresh [] each call reads as "the store changed during render" and loops
+  // (Maximum update depth exceeded). The constant is identical to "no chips".
+  const queued = useChatStore(s => (s.activeSessionId ? s.queued[s.activeSessionId] ?? NO_QUEUE : NO_QUEUE));
+  const removeQueued = useChatStore(s => s.removeQueued);
 
   useEffect(() => {
     if (pendingInputFocus) {
@@ -651,6 +661,8 @@ export function ChatInput() {
       onToggleRecording={toggleRecording}
       images={images}
       onRemoveImage={removePendingImage}
+      queued={queued}
+      onRemoveQueued={i => { if (activeSessionId) removeQueued(activeSessionId, i); }}
       topControls={topControls}
       leftControls={leftControls}
       warnings={warnings}

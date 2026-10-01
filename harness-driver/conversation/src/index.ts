@@ -2,8 +2,9 @@
  * Headless dsh conversation assembler — the engine Lore renders over.
  *
  * # SYSTEM: dsh-conversation — dsh assembles the dialogue, Lore only renders
- *   it. `ConversationNodeAssembler` plus the eleven conversation-node
- *   definitions dsh registers run here on a BARE cordis context: no slots, no
+ *   it. `ConversationNodeAssembler` plus dsh's conversation-node
+ *   definitions (registerConversationNodes) run here on a BARE cordis
+ *   context: no slots, no
  *   locale, no connection, no React. The output is plain data
  *   (`ChatConversationViewNode[]`), so the browser reads node data and never
  *   recomputes it.
@@ -42,6 +43,7 @@ import { Context } from '@deepseek-ai/cordis'
 import type { ConversationPublication } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ChatConversationViewNode, ChatSnapshot } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { SessionEventLikeEntry } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { LlmAttemptId } from '@deepseek-ai/dsh-llm/brand'
 // WHY: relative into the workspace. The packages' mapped specifiers reach their
 // `client` barrels, which export the React apply layer (and its css modules);
 // the assembler, the two registries and the node definitions are React-free,
@@ -51,9 +53,17 @@ import type { SessionEventLikeEntry } from '@deepseek-ai/dsh-api-session-control
 import { ConversationNodeAssembler } from '../../packages/client/ui-conversation/src/client/conversation/assembler.ts'
 import { ConversationEventRegistry } from '../../packages/client/ui-conversation/src/client/conversation/event-registry.ts'
 import { ConversationViewRegistry } from '../../packages/client/ui-conversation/src/client/conversation/view-registry.ts'
+import { ConversationGroupRegistry } from '../../packages/client/ui-conversation/src/client/conversation/group-registry.ts'
 import { inspectRequestPrompt } from '../../packages/client/ui-conversation/src/client/contract/request-inspection.ts'
 import { inspectSystemPrompt } from '../../packages/client/ui-conversation/src/client/contract/system-prompt.ts'
 import { registerConversationNodes } from '../../packages/client/ui-chat/src/client/conversation-nodes/register.ts'
+// The reload's streamed-text baseline arrives as dsh's COMPACT stream records
+// (the accumulator's snapshot); the browser replays them as live chunks —
+// this is dsh's validating expansion (llm/assistant-stream.ts), reached the
+// same relative way as the registries above (not in the barrel's exports
+// contract for our surface; the function itself ships from the llm package
+// root — sealed here so the bundle stays the one dsh seam).
+import { expandAssistantStream } from '../../packages/llm/llm/src/assistant-stream.ts'
 import { registerLoreNodes } from './lore-nodes.ts'
 
 export type {
@@ -61,6 +71,8 @@ export type {
   SessionEventLikeEntry,
   ConversationPublication,
 }
+
+export { expandAssistantStream }
 
 /** The whole surface Lore consumes: feed events, read ordered nodes. */
 export interface LoreConversation {
@@ -74,6 +86,13 @@ export interface LoreConversation {
    * the window around it. Use this whenever the seq is not known to lead.
    */
   splice(input: SessionEventLikeEntry): ConversationPublication
+  /**
+   * Retire one assistant attempt's transient live-chunk rows — its `end`
+   * frame, abandoned and committed alike (a committed settlement arrives
+   * separately as a normal dsh_event through append/splice, so it is never
+   * passed here).
+   */
+  settleAssistant(attemptId: unknown): ConversationPublication
   /** Materialize and read the chat target in render order. */
   nodes(): readonly ChatConversationViewNode[]
 }
@@ -87,16 +106,17 @@ export function createLoreConversation(): LoreConversation {
   const ctx = new Context()
   const events = new ConversationEventRegistry(ctx)
   const views = new ConversationViewRegistry(ctx)
+  const groups = new ConversationGroupRegistry(ctx, views)
   // WHY: the node definitions reach the assembler through `ctx.uiConversation`
   // — the service dsh's client installs over a session connection (assembly.ts
-  // `UiConversation`). Headless, the service is the four things the
-  // definitions read off it: the two registries and the two pure prompt
+  // `UiConversation`). Headless, the service is the five things the
+  // definitions read off it: the three registries and the two pure prompt
   // inspectors it forwards to, so no connection, store or React is pulled in.
   ctx.provide('uiConversation')
-  ctx.set('uiConversation', { events, views, inspectSystemPrompt, inspectRequestPrompt })
+  ctx.set('uiConversation', { events, views, groups, inspectSystemPrompt, inspectRequestPrompt })
   registerConversationNodes(ctx)
   registerLoreNodes(ctx)
-  const assembler = new ConversationNodeAssembler(events, views)
+  const assembler = new ConversationNodeAssembler(events, views, groups)
   // The chat target materializes only once activated; activation is
   // monotonic, so once is enough for the instance's lifetime.
   assembler.activateTarget('chat')
@@ -118,6 +138,9 @@ export function createLoreConversation(): LoreConversation {
     splice: input => input.event.seq > tailSeq
       ? feedTail(input)
       : assembler.prepend([input], hasMoreHistory),
+    // The attempt id rides the relay frames as an opaque value; the brand is
+    // dsh-internal and the assembler compares it by value.
+    settleAssistant: attemptId => assembler.settleAssistant(attemptId as LlmAttemptId),
     nodes: () => {
       assembler.flush()
       const snapshot = assembler.snapshot('chat') as ChatSnapshot | undefined

@@ -27,8 +27,14 @@
 #   SURREAL_CONTAINER  lore_surreal (prod) / nnp-lore-documents-writer-surreal-1 (dev)
 #   APP_CONTAINERS     space-separated app containers to stop BEFORE the dump
 #   BACKUP_DIR         dumps land here (prod /opt/lore/backups, dev ./backups)
-#   ENV_FILE           file with SURREAL_USER/PASS/NS/DB (grep-extracted, never
-#                      sourced — see INVARIANT in .gitea/workflows/deploy.yml:241)
+#   PASS_FILE          the database password file secrets-init generated
+#                      (prod /opt/lore/data/secrets/surreal/pass). The only
+#                      password source — env SURREAL_PASS is wiring, not
+#                      config (plan component-wiring-not-settings step 4);
+#                      an explicit SURREAL_PASS is honored solely as a dev-
+#                      rehearsal escape (the dev secrets live in a named
+#                      volume with no host path).
+#   SURREAL_USER/NS/DB optional overrides (default root / lore / main)
 #   FORCE_SIZE_CHECK=1 optional: skip the dump-size-vs-history abort (legit shrink)
 set -euo pipefail
 
@@ -39,16 +45,15 @@ while [ $# -gt 0 ]; do
     --dry-run) MODE=dry ;;
     --confirm) MODE=real ;;
     --resume) shift; RESUME="${1:?--resume needs a dump path}"; MODE=real ;;
-    --help|-h) sed -n '2,32p' "$0"; exit 0 ;;
+    --help|-h) sed -n '2,38p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
   shift
 done
 [ -n "$MODE" ] || { echo "need --dry-run or --confirm (see --help)" >&2; exit 1; }
 
-: "${STORE_DIR:?}" "${SURREAL_CONTAINER:?}" "${BACKUP_DIR:?}" "${ENV_FILE:?}" "${APP_CONTAINERS:-}"
+: "${STORE_DIR:?}" "${SURREAL_CONTAINER:?}" "${BACKUP_DIR:?}" "${APP_CONTAINERS:-}"
 [ -d "$STORE_DIR" ] || { echo "store dir not found: $STORE_DIR" >&2; exit 1; }
-[ -f "$ENV_FILE" ] || { echo "env file not found: $ENV_FILE" >&2; exit 1; }
 
 log() { echo "[rebuild $(date +%H:%M:%S)] $*"; }
 fail() { echo "[rebuild] ABORT: $*" >&2; exit 1; }
@@ -56,22 +61,25 @@ fail() { echo "[rebuild] ABORT: $*" >&2; exit 1; }
 # curl container sharing surreal's netns + host paths (mkdir backup dir first)
 sql_curl() { # $1 = surrealql body, rest = extra curl args
   docker run --rm --network "container:$SURREAL_CONTAINER" \
-    --env-file "$ENV_EXTRACT" curlimages/curl:latest -sS --fail-with-body \
+    -e SURREAL_USER -e SURREAL_PASS -e SURREAL_NS -e SURREAL_DB \
+    curlimages/curl:latest -sS --fail-with-body \
     -u "$SURREAL_USER:$SURREAL_PASS" \
     -H "surreal-ns: $SURREAL_NS" -H "surreal-db: $SURREAL_DB" \
     -H "Accept: application/json" \
     --data-binary "$1" http://localhost:8000/sql "${@:2}"
 }
 
-# ── env extraction (grep, NEVER source: .env values must not execute as shell) ──
-ENV_EXTRACT=$(mktemp); trap 'rm -f "$ENV_EXTRACT"' EXIT
-grep -E '^SURREAL_(USER|PASS|NS|DB)=' "$ENV_FILE" > "$ENV_EXTRACT"
-SURREAL_USER=$(grep -m1 '^SURREAL_USER=' "$ENV_EXTRACT" | cut -d= -f2-)
-SURREAL_PASS=$(grep -m1 '^SURREAL_PASS=' "$ENV_EXTRACT" | cut -d= -f2-)
-SURREAL_NS=$(grep -m1 '^SURREAL_NS=' "$ENV_EXTRACT" | cut -d= -f2-)
-SURREAL_DB=$(grep -m1 '^SURREAL_DB=' "$ENV_EXTRACT" | cut -d= -f2-)
-[ -n "$SURREAL_USER" ] && [ -n "$SURREAL_PASS" ] && [ -n "$SURREAL_NS" ] && [ -n "$SURREAL_DB" ] \
-  || fail "SURREAL_USER/PASS/NS/DB not all present in $ENV_FILE"
+# ── credentials: the password is the file secrets-init generated ────────────
+if [ -z "${SURREAL_PASS:-}" ]; then
+  : "${PASS_FILE:?set PASS_FILE (prod: /opt/lore/data/secrets/surreal/pass) or SURREAL_PASS for a dev rehearsal}"
+  [ -f "$PASS_FILE" ] || { echo "password file not found: $PASS_FILE" >&2; exit 1; }
+  SURREAL_PASS="$(cat "$PASS_FILE")"
+fi
+SURREAL_USER="${SURREAL_USER:-root}"
+SURREAL_NS="${SURREAL_NS:-lore}"
+SURREAL_DB="${SURREAL_DB:-main}"
+[ -n "$SURREAL_PASS" ] || fail "empty database password (PASS_FILE=${PASS_FILE:-<unset>})"
+export SURREAL_USER SURREAL_PASS SURREAL_NS SURREAL_DB
 
 TS=$(date +%Y%m%d_%H%M%S)
 PARENT=$(dirname "$STORE_DIR")
@@ -130,7 +138,8 @@ for t in sys.argv[1].split():
     q = f'SELECT count() FROM `{t}` GROUP ALL;'
     out = subprocess.run(
         ["docker","run","--rm","--network","container:"+os.environ["SURREAL_CONTAINER"],
-         "--env-file",os.environ["ENV_EXTRACT"],"curlimages/curl:latest","-sS","--fail-with-body",
+         "-e","SURREAL_USER","-e","SURREAL_PASS","-e","SURREAL_NS","-e","SURREAL_DB",
+         "curlimages/curl:latest","-sS","--fail-with-body",
          "-u",f'{os.environ["SURREAL_USER"]}:{os.environ["SURREAL_PASS"]}',
          "-H",f'surreal-ns: {os.environ["SURREAL_NS"]}',"-H",f'surreal-db: {os.environ["SURREAL_DB"]}',
          "-H","Accept: application/json","--data-binary",q,"http://localhost:8000/sql"],
@@ -145,7 +154,7 @@ for t in sys.argv[1].split():
     print(t, n)
 EOF
 }
-export SURREAL_CONTAINER ENV_EXTRACT SURREAL_USER SURREAL_PASS SURREAL_NS SURREAL_DB
+export SURREAL_CONTAINER SURREAL_USER SURREAL_PASS SURREAL_NS SURREAL_DB
 
 # docker -v bind mounts need absolute paths (dev runs use ./relative overrides)
 mkdir -p "$BACKUP_DIR"
@@ -172,7 +181,8 @@ if [ "$MODE" = dry ]; then
   DUMP="$BACKUP_DIR/rebuild-dryrun-$TS.surql.gz"
   log "DRY-RUN: hot dump (apps stay up) → verify → before-counts. NO stop, NO import."
   log "dump: GET /export via netns curl → $DUMP"
-  docker run --rm --network "container:$SURREAL_CONTAINER" --env-file "$ENV_EXTRACT" \
+  docker run --rm --network "container:$SURREAL_CONTAINER" \
+    -e SURREAL_USER -e SURREAL_PASS -e SURREAL_NS -e SURREAL_DB \
     -v "$BACKUP_DIR":/mnt --user 0 --entrypoint sh curlimages/curl:latest -c '
       set -eu; set -o pipefail
       curl -sS --fail-with-body --max-time 1800 \
@@ -200,7 +210,8 @@ if [ -z "$RESUME" ]; then
 
   # ── dump (cold: apps stopped) ────────────────────────────────────────────────
   log "dump (cold): GET /export → $DUMP"
-  docker run --rm --network "container:$SURREAL_CONTAINER" --env-file "$ENV_EXTRACT" \
+  docker run --rm --network "container:$SURREAL_CONTAINER" \
+    -e SURREAL_USER -e SURREAL_PASS -e SURREAL_NS -e SURREAL_DB \
     -v "$BACKUP_DIR":/mnt --user 0 --entrypoint sh curlimages/curl:latest -c '
       set -eu; set -o pipefail
       curl -sS --fail-with-body --max-time 1800 \
@@ -242,7 +253,8 @@ log "surreal healthy on fresh store"
 
 # ── import ─────────────────────────────────────────────────────────────────────
 log "import: POST /import ← $DUMP"
-docker run --rm --network "container:$SURREAL_CONTAINER" --env-file "$ENV_EXTRACT" \
+docker run --rm --network "container:$SURREAL_CONTAINER" \
+  -e SURREAL_USER -e SURREAL_PASS -e SURREAL_NS -e SURREAL_DB \
   -v "$BACKUP_DIR":/mnt --user 0 --entrypoint sh curlimages/curl:latest -c '
     set -eu
     gunzip -c /mnt/'"$(basename "$DUMP")"' > /tmp/import.surql

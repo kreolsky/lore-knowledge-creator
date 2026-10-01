@@ -72,7 +72,11 @@ beforeEach(async () => {
   }));
   vi.doMock('./references/RefCard', () => ({
     RefCard: (props: { reference: Reference }) =>
-      createElement('div', { 'data-testid': 'refcard', 'data-ref': props.reference.reference_id }),
+      createElement('div', {
+        'data-testid': 'refcard', 'data-ref': props.reference.reference_id,
+        // The drag-reorder row attributes the real RefCard carries.
+        'data-ref-id': props.reference.reference_id, 'data-ref-group': props.reference.document_id,
+      }),
   }));
 
   ({ ReferencesPanel } = await import('./ReferencesPanel'));
@@ -150,6 +154,23 @@ describe("ReferencesPanel — 'panel' open mode", () => {
     expect(useAppStore.getState().currentReference).toBeNull();
     expect(q('[data-testid="refs-panel-plaque"]').length).toBe(0);
     expect(q('[data-testid="refcard"]').length).toBe(2);
+  });
+
+  it('after ← Refs the remounted list still starts a drag-reorder', async () => {
+    await mount('panel', REF);
+    const back = q('[data-testid="refs-panel-plaque"] button')[0];
+    await act(async () => { back.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    const card = q('[data-testid="refcard"]')[0];
+    // jsdom has no hit-testing; the drop-target lookup finds nothing (no indicator).
+    const doc = document as unknown as { elementFromPoint: (x: number, y: number) => Element | null };
+    doc.elementFromPoint = () => null;
+    act(() => {
+      card.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 10, clientY: 10 }));
+      document.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 10, clientY: 40 }));
+    });
+    // The drag hook marks an active drag by disabling text selection on <body>.
+    expect(document.body.style.userSelect).toBe('none');
+    act(() => { document.dispatchEvent(new MouseEvent('pointerup', { bubbles: true })); });
   });
 
   it('panel + no open reference: the list renders, no plaque', async () => {

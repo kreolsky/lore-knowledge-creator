@@ -3,13 +3,13 @@
 Subsystem overview and ARCH notes live in client.py.
 See SYSTEM: driver-client (entry: driver/client.py).
 
-# ARCH: the relay is no longer a
+# ARCH: the relay is not a
 # VOCABULARY. The plugin emits every dsh event verbatim (`dsh_event` frames)
 # plus the lore mints anchored in dsh events, and the BROWSER assembles the
 # conversation from them. What remains here is the backend's own share:
 # ACCUMULATION — the facts the dsh log cannot answer (content, model,
 # context_usage, the finished-call count, the driver_seq stamp) are read off
-# the verbatim frames as they pass, keyed on what they persist; and the two
+# the verbatim frames as they pass, keyed on what they persist; and the
 # lore mints whose facts are backend products (`lore/compaction-mint` — the
 # continuation-chat outcome — and `lore/halt` for a turn that ended WITHOUT a
 # dsh terminal event: deadline breach, unreachable line, stream failure).
@@ -20,7 +20,6 @@ See SYSTEM: driver-client (entry: driver/client.py).
 # event must not kill a live turn, so the accumulated row may be incomplete
 # while the verbatim relay still reaches the browser.
 """
-import json
 import logging
 import re
 import time
@@ -32,6 +31,7 @@ import time
 # (this module and the channel) see the fake. Same for the compaction mint —
 # the reload/mint tests patch `driver.compaction.mint_compaction_chats`.
 from driver import compaction, persistence
+from driver.timeline import DriverTimelineUnavailable, fetch_session_entries
 
 logger = logging.getLogger(__name__)
 
@@ -129,9 +129,8 @@ class _TurnProjection:
         # at all. Without this write a reload shows the text with no reason,
         # which is the silent degradation the halt card exists to prevent.
         """
-        # No `type` key: the card IS the row's `halt` column (plan
-        # retire-the-stored-turn-timeline step 1) — reason/steps carry the shape
-        # the renderer takes.
+        # No `type` key: the card IS the row's `halt` column — reason/steps
+        # carry the shape the renderer takes.
         halt: dict = {"reason": reason}
         if self.steps_count:
             halt["steps"] = self.steps_count
@@ -190,14 +189,21 @@ class _TurnProjection:
         Without this, a reload shows a silent empty message: the live halt never
         reached the client (it disconnected) and finalize() was skipped. We persist
         the streamed text + a `disconnected` halt card carrying how far the run got,
-        so a reload says WHAT stopped and WHERE.
-
-        # INVARIANT: this path MUST NOT stamp a consolidation reference — the run
-        # cursor is written by `next_reference`, never here.  Why: the run cursor is owned by next_reference; stamping it on this reporting path would advance the consolidation position and lose the resume point, so a killed run continues exactly where it stopped. Resume is the absence
-        # of a stamp, so a killed run simply continues on the next
-        # consolidate_memory call (reporting position must not change stamp-write
-        # behaviour — nothing here writes one)."""
+        so a reload says WHAT stopped and WHERE."""
         await self._persist_abnormal("disconnected", "".join(self.content_acc))
+
+
+def _lore_event_at(kind: str, seq, data: dict) -> dict:
+    """One backend-minted lore event at an EXACT seq (the settled events and
+    the phase ladder alike). The offsets live in the caller; the envelope is
+    the assembler's input (see _lore_event for the parity contract)."""
+    return {
+        "type": kind,
+        "seq": seq,
+        "time": int(time.time() * 1000),
+        "data": data,
+        "ignorable": True,
+    }
 
 
 def _lore_event(kind: str, anchor: int, data: dict) -> dict:
@@ -212,13 +218,7 @@ def _lore_event(kind: str, anchor: int, data: dict) -> dict:
         "lore/halt": 0.7,
         "lore/compaction-mint": 0.8,
     }
-    return {
-        "type": kind,
-        "seq": anchor + offsets[kind],
-        "time": int(time.time() * 1000),
-        "data": data,
-        "ignorable": True,
-    }
+    return _lore_event_at(kind, anchor + offsets[kind], data)
 
 
 async def _relay_frame(turn: _TurnProjection, ev: dict) -> list[dict]:
@@ -244,9 +244,10 @@ async def _relay_frame(turn: _TurnProjection, ev: dict) -> list[dict]:
 
 def _message_text(data: dict) -> str:
     """The text a settled `assistant/message` dsh event carries, or '' — the
-    shape the content accumulator keys on since v3 killed `assistant/chunk`
-    (deltas never enter the log; the live tail rides `dsh_stream` frames the
-    relay passes untouched). Only `text` blocks join: reasoning and tool-call
+    shape the content accumulator keys on: the v4 log holds only settled
+    events (deltas never enter the log; the live tail rides `dsh_stream`
+    frames the relay passes untouched). Only `text` blocks join: reasoning
+    and tool-call
     blocks are not the row's product. The row's `content` column is OURS; the
     dsh log holds the trace itself."""
     message = data.get("message")
@@ -265,42 +266,15 @@ def _message_text(data: dict) -> str:
 
 
 def _result_call_id(data: dict) -> str:
-    """The call id a settled `tool/result` names — the source rides it; the
-    block is the fallback."""
+    """The call id a settled `tool/result` names — its typed `source.callId`."""
+    # WHY: dsh session format v4 only — the pin never rolls back, so no reader for an older shape exists; a shape change is fixed forward here.
     message = data.get("message")
     if not isinstance(message, dict):
         return ""
     source = message.get("source")
     if isinstance(source, dict) and isinstance(source.get("callId"), str):
         return source["callId"]
-    content = message.get("content")
-    if isinstance(content, list) and content and isinstance(content[0], dict):
-        cid = content[0].get("toolCallId")
-        if isinstance(cid, str):
-            return cid
     return ""
-
-
-def _tool_result_text(data: dict) -> str:
-    """The raw Tool-API text a settled tool/result carries (the first block's
-    content, joined) — parsed for the generating-run memo and available to
-    future accumulation; never a re-derivation of the timeline."""
-    message = data.get("message")
-    if not isinstance(message, dict):
-        return ""
-    content = message.get("content")
-    if not isinstance(content, list) or not content or not isinstance(content[0], dict):
-        return ""
-    inner = content[0].get("content")
-    if not isinstance(inner, list):
-        return ""
-    parts = []
-    for block in inner:
-        if isinstance(block, str):
-            parts.append(block)
-        elif isinstance(block, dict) and block.get("type") == "text":
-            parts.append(str(block.get("text") or ""))
-    return "".join(parts)
 
 
 async def _dsh_event_arm(turn: _TurnProjection, ev: dict) -> list[dict]:
@@ -326,7 +300,8 @@ async def _dsh_event_arm(turn: _TurnProjection, ev: dict) -> list[dict]:
             turn.turn_no = turn_no
         return [ev]
     if kind == "assistant/message":
-        # v3: one settled message per step (the whole text, not deltas); the
+        # The v4 log holds only settled events: one settled message per step
+        # (the whole text, not deltas); the
         # join across the turn's steps is the row's content. Only the
         # `append` surface op joins — the same filter dsh's own assistant
         # node applies (`surfaceOp === 'append'`): a replace-op re-statement
@@ -543,8 +518,8 @@ async def _driver_error_frame(turn: _TurnProjection, ev: dict) -> list[dict]:
     """The backend-minted `error` frame — the driver-level failure the dsh log
     never records (deadline breach, unreachable line, stream failure, the
     harness's own catch). Persists the abnormal product and mints the lore
-    halt card at the window tail (the plan's halt anchor: "the terminal
-    frame's seq or the window tail when none exists" — here none exists). The
+    halt card at the window tail (the halt anchor: "the terminal frame's seq
+    or the window tail when none exists" — here none exists). The
     error frame itself still relays: it is the live-only end-state signal
     (toast, endReason), while the lore card is the timeline's record."""
     turn.finished = True
@@ -578,38 +553,15 @@ async def _driver_error_frame(turn: _TurnProjection, ev: dict) -> list[dict]:
 # producer minting the same anchor on both paths).
 
 
-def _result_run_id(data: dict) -> str:
-    """The generating-run id a settled `tool/result` carries — the Tool-API
-    returns its JSON envelope as the result's text block."""
-    text = _tool_result_text(data)
-    try:
-        parsed = json.loads(text)
-    except ValueError:
-        return ""
-    return parsed.get("run_id") if isinstance(parsed, dict) else ""
-
-
-def _image_run_anchor_index(frames: list[dict], run_id: str) -> int | None:
-    """The index of the run's dispatching `tool/call` frame — found through
-    its settled `tool/result` (the run id rides the result's Tool-API JSON,
-    the call id rides the result's source). This is the ONE join both mint
-    sites share: the browser derives the same anchor from the same frames on
-    the live path."""
-    call_ids: list[str] = []
-    for frame in frames:
-        if not isinstance(frame, dict) or frame.get("kind") != "tool/result":
-            continue
-        data = frame.get("data") or {}
-        if _result_run_id(data) != run_id:
-            continue
-        cid = _result_call_id(data)
-        if cid:
-            call_ids.append(cid)
-    if not call_ids:
-        return None
+def _image_run_anchor_index(frames: list[dict], call_id: str) -> int | None:
+    """The index of the run's dispatching `tool/call` frame — the one whose
+    `callId` is the call id the Tool-API received (X-Agent-Call-Id) and the
+    generate_image step persisted. This is the ONE join both mint sites share:
+    the reload attach and the launcher's anchor resolve both walk the same
+    replayed frames."""
     for i, frame in enumerate(frames):
         if (isinstance(frame, dict) and frame.get("kind") == "tool/call"
-                and (frame.get("data") or {}).get("callId") in call_ids):
+                and (frame.get("data") or {}).get("callId") == call_id):
             return i
     return None
 
@@ -618,10 +570,10 @@ def _image_gen_frame(anchor_frame: dict, gen_steps: list, run_id: str) -> dict |
     """One `lore/image-gen` frame minted at the run's dispatching call.
 
     The payload derives from the row's `gen_steps` step dicts — the SAME dicts
-    the live project-WS event carries in its `steps` field, so the browser's
-    live mint derives from those (never from the WS's structured refine field)
-    and the two paths agree by construction. Returns None when the run has no
-    chip in gen_steps (nothing honest to render)."""
+    the worker's settled frame passes (image_gen_settled_frame) and the row
+    persists, so the live card and the reload card agree by construction.
+    Returns None when the run has no chip in gen_steps (nothing honest to
+    render)."""
     gen = None
     for step in gen_steps:
         if (isinstance(step, dict) and step.get("tool") == "generate_image"
@@ -655,6 +607,99 @@ def _image_gen_frame(anchor_frame: dict, gen_steps: list, run_id: str) -> dict |
     if not isinstance(anchor, int) or isinstance(anchor, bool):
         return None
     return _lore_event("lore/image-gen", anchor, data)
+
+
+def _replay_anchor_frame(replay: dict, call_id: str) -> dict | None:
+    """The dispatching `tool/call` frame anywhere in the replay — every turn's
+    frames, the OPEN trailing turn included (the run settles while the agent
+    turn still streams; dsh writes the `tool/call` before executing the
+    tool)."""
+    for turn in replay.get("turns") or []:
+        frames = turn.get("frames") if isinstance(turn, dict) else None
+        if not isinstance(frames, list):
+            continue
+        idx = _image_run_anchor_index(frames, call_id)
+        if idx is not None:
+            return frames[idx]
+    return None
+
+
+# The run's coarse phases, in execution order — the RUNNING frame ladder's
+# step counter (image_gen_running_frame).
+_IMAGE_GEN_PHASES = ("refining", "queued", "generating", "downloading")
+
+
+def image_gen_running_frame(anchor: dict, run_id: str, phase: str) -> dict | None:
+    """One RUNNING `lore/image-gen` frame for the run's k-th phase, minted
+    from the payload anchor (no replay read per phase). The phase ladder: k sits at anchor + 0.5 + 0.1·k/(k+1) — dsh's
+    own transient formula (the live-chunk counter) — STRICTLY above a verdict
+    mint at the same anchor, STRICTLY below the settled +0.6 mint (the
+    reload's twin), and strictly increasing, so every phase of one run
+    APPENDS into the assembler's one context (a duplicate or non-appended
+    Match seq throws there). None when the anchor carries no usable seq (the
+    launcher's resolve missed — nothing honest to place)."""
+    seq = anchor.get("seq")
+    if not isinstance(seq, int) or isinstance(seq, bool):
+        return None
+    try:
+        k = _IMAGE_GEN_PHASES.index(phase) + 1
+    except ValueError:
+        k = len(_IMAGE_GEN_PHASES) + 1
+    return _lore_event_at("lore/image-gen", seq + 0.5 + 0.1 * k / (k + 1), {
+        "turn": _int_or_none(anchor.get("turn")),
+        "runId": run_id,
+        "status": "running",
+        "phase": phase,
+    })
+
+
+async def resolve_image_gen_anchor(lineage: str, call_id: str) -> dict | None:
+    """The ANCHOR half of the image-gen mint: the dispatching `tool/call`'s {seq, turn} over the driver's replay of the
+    chat's LINEAGE log — the one join the reload attach shares. The launcher
+    calls this ONCE (where the X-Agent-Call-Id is known and the call is
+    already in the log) and freezes the result into the job payload, so the
+    worker never reads the timeline. Best-effort like the mint: an
+    unreadable timeline or a missing call logs a warning naming the call and
+    returns None — no anchor, no card (a reload still shows it from the
+    row)."""
+    if not call_id:
+        return None
+    try:
+        replay = await fetch_session_entries(lineage)
+    except DriverTimelineUnavailable as exc:
+        logger.warning(
+            "image-gen anchor resolve: timeline unavailable lineage=%s call=%s: %s",
+            lineage, call_id, exc,
+        )
+        return None
+    anchor = _replay_anchor_frame(replay, call_id)
+    if anchor is None:
+        logger.warning(
+            "image-gen anchor resolve: no dispatching call in the replay "
+            "lineage=%s call=%s", lineage, call_id,
+        )
+        return None
+    seq = anchor.get("seq")
+    if not isinstance(seq, int) or isinstance(seq, bool):
+        return None
+    return {"seq": seq, "turn": _int_or_none(
+        anchor.get("data", {}).get("turn") if isinstance(anchor.get("data"), dict) else None,
+    )}
+
+
+def image_gen_settled_frame(anchor: dict, gen_steps: list, run_id: str) -> dict | None:
+    """The run's SETTLED `lore/image-gen` frame (done or failed — the step
+    dicts decide), minted from the payload anchor through the SAME builder
+    the reload attach uses (_image_gen_frame over the same gen_steps), so the
+    pushed card is byte-identical to the one a reload re-derives: one
+    producer cannot disagree with itself. None when the anchor carries no
+    usable seq — the run's chips are still persisted; only the live card is
+    skipped."""
+    seq = anchor.get("seq")
+    if not isinstance(seq, int) or isinstance(seq, bool):
+        return None
+    return _image_gen_frame({"seq": seq, "data": {"turn": anchor.get("turn")}},
+                            gen_steps, run_id)
 
 
 async def _reload_compaction_frame(
@@ -758,18 +803,21 @@ def _insert_image_gen_mints(out: list[dict], gen_steps) -> None:
     each after its dispatching `tool/call` frame. Mutates `out`."""
     if not isinstance(gen_steps, list) or not gen_steps:
         return
-    run_ids: list[str] = []
+    runs: dict[str, str] = {}
     for step in gen_steps:
-        rid = step.get("run_id") if isinstance(step, dict) else None
-        if isinstance(rid, str) and rid and rid not in run_ids:
-            run_ids.append(rid)
-    for rid in run_ids:
-        idx = _image_run_anchor_index(out, rid)
+        if not isinstance(step, dict) or step.get("tool") != "generate_image":
+            continue
+        rid = step.get("run_id")
+        if isinstance(rid, str) and rid and rid not in runs:
+            cid = step.get("call_id")
+            runs[rid] = cid if isinstance(cid, str) else ""
+    for rid, cid in runs.items():
+        idx = _image_run_anchor_index(out, cid) if cid else None
         if idx is None:
             logger.warning(
                 "image run %s has no dispatching call in the replayed "
-                "turn — no reload card (the reference itself is on the "
-                "document)", rid,
+                "turn (call id %r) — no reload card (the reference itself "
+                "is on the document)", rid, cid,
             )
             continue
         mint = _image_gen_frame(out[idx], gen_steps, rid)
@@ -791,9 +839,9 @@ async def attach_reload_lore_mints(
     The halt placement: a row whose halt stored the live mint's anchor mints
     THERE, inside its own turn — so every such halted turn keeps its card. A
     row halted before the anchor was stored has no position but the log tail
-    (the plan's "the window tail when none exists"), so at most ONE of THEM
+    (the "window tail when none exists" rule), so at most ONE of THEM
     mints, the newest: once a later turn re-seeds the log, an older turn-less
-    halt's position no longer exists anywhere — the row's `halt` column
+    halt's position does not exist anywhere — the row's `halt` column
     remains its record. A card carries reason + steps, never the live
     sentence (that is the row's `content`). See the seq-collision INVARIANT
     in _attach_halt_mints.

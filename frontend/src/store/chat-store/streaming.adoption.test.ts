@@ -1,6 +1,6 @@
-/** Plan agent-line-harness-lifecycle step 8 — reload-mid-turn ADOPTION.
+/** reload-mid-turn ADOPTION.
  *
- * Decision 16: a reload mid-turn renders the open turn as STREAMING (the
+ * A reload mid-turn renders the open turn as STREAMING (the
  * store's streaming slot non-null, the assembler boundary at the open
  * window's min), never a settled partial row that flips on the first live
  * frame. The messages GET marks the open row (`open_turn`, backend half in
@@ -23,7 +23,7 @@ vi.mock('../../api/client', () => ({
 vi.mock('../../i18n', () => ({ t: (k: string) => k }));
 
 import { streamCompletion, dispatchChatFrame, adoptOpenTurn } from './streaming';
-import { replaceWindowFromRows, stripFrames } from './conversation-feed';
+import { replaceWindowFromRows, stripFrames, __flushFeedPublishForTest } from './conversation-feed';
 import type { ChatState, Set } from './types';
 function makeStore(sessionId = 's1') {
   let state = {
@@ -50,7 +50,7 @@ function makeStore(sessionId = 's1') {
 const chunk = (seq: number) =>
   // A real assembler payload (replaceWindow rebuilds the location index, which
   // reads data.turn/data.step — a bare {turn, step} dies, unlike the live
-  // append path's tolerance). v3 vocabulary: the settled `assistant/message`.
+  // append path's tolerance). Real v4 log shape: the settled `assistant/message`.
   ({
     type: 'dsh_event', kind: 'assistant/message', seq, surfaceOp: 'append',
     data: { turn: 1, step: 1, message: { id: `m${seq}`, role: 'assistant', content: [{ type: 'text', text: 'o' }], source: { kind: 'model', provider: 'lore', model: 'test' } }, stream: [] },
@@ -80,7 +80,7 @@ describe('adoptOpenTurn — the reload seats the open turn', () => {
 
     expect(get().streaming?.messageId).toBe('am');
     // The boundary is the OPEN window's min, not the tail: the whole open
-    // turn renders in the streaming slot (Decision 16).
+    // turn renders in the streaming slot.
     expect(get().turnStartSeq).toBe(4);
 
     dispatchChatFrame(get, set, 's1', chunk(7));
@@ -105,6 +105,82 @@ describe('adoptOpenTurn — the reload seats the open turn', () => {
     replaceWindowFromRows(rows, 's1', set);
     adoptOpenTurn(get, set, 's1', rows);
     expect(get().streaming?.controller).toBeTruthy();
+  });
+});
+
+describe('adoptOpenTurn — the reload keeps the streamed text', () => {
+  // The open row carries the plugin's fold of the live stream
+  // (`assistant_stream`, dsh's accumulator snapshot) — adoption seats the
+  // attempt and replays its compact records as live-chunk entries, so the
+  // already-streamed text is on screen immediately and the next live chunk
+  // continues the same band series.
+  beforeEach(() => { vi.clearAllMocks(); postMock.mockResolvedValue({ accepted: true }); });
+
+  const BASELINE = {
+    revision: 2,
+    activeAttempt: {
+      attemptId: 'at1', startedAfterSeq: 5, turn: 1, step: 1, nextIndex: 3,
+      stream: [{ type: 'text-chunks', time0: 2000, index: 0, dt: [1, 1], texts: ['Hel', 'lo w', 'orld'] }],
+    },
+  };
+  /** The open turn's durable frames: turn/start + step/start — the v4 log
+   * holds only settled events, so a mid-STEP reload has no assistant/message
+   * row for the streaming step yet. */
+  const openTurnFrames = () => [
+    { type: 'dsh_event', kind: 'turn/start', seq: 4, time: 1004, data: { turn: 1 } },
+    { type: 'dsh_event', kind: 'step/start', seq: 5, time: 1005, data: { turn: 1, step: 1 } },
+  ];
+  const baselineRows = () => [{
+    message_id: 'am', chat_id: 's1', parent_id: 'um', role: 'assistant' as const,
+    content: '', created_at: '2026-01-01', open_turn: true,
+    frames: openTurnFrames(), assistant_stream: BASELINE,
+  }];
+  const streamedText = (state: ChatState): string => {
+    const node = state.conversation.find(n => n.kind === 'assistant-step');
+    const blocks = (node?.data as { blocks?: { kind: string; text?: string }[] } | undefined)?.blocks ?? [];
+    return blocks.filter(b => b.kind === 'text').map(b => b.text ?? '').join('');
+  };
+
+  it('adoption with a baseline renders its text before any live chunk', () => {
+    const { get, set } = makeStore();
+    const rows = baselineRows();
+    replaceWindowFromRows(rows, 's1', set);
+    adoptOpenTurn(get, set, 's1', rows);
+    set({ messages: rows.map(stripFrames) as ChatState['messages'] });
+    __flushFeedPublishForTest(set);
+
+    expect(get().streaming?.messageId).toBe('am');
+    expect(streamedText(get())).toBe('Hello world');
+    // The wire key never enters the store.
+    expect(get().messages.find(m => m.message_id === 'am')).not.toHaveProperty('assistant_stream');
+  });
+
+  it('the next live chunk continues at nextIndex; an abandoned end leaves no ghost', () => {
+    const { get, set } = makeStore();
+    const rows = baselineRows();
+    replaceWindowFromRows(rows, 's1', set);
+    adoptOpenTurn(get, set, 's1', rows);
+    __flushFeedPublishForTest(set);
+
+    // Chunk 4 must land at the band's k=4 position — above the three adopted
+    // entries. Had adoption not advanced the gap counter, this chunk would
+    // collide with the first adopted seq (append answers 'none' on a held
+    // seq) and the text would never grow.
+    dispatchChatFrame(get, set, 's1', {
+      type: 'dsh_stream',
+      frame: { type: 'chunk', attemptId: 'at1', revision: 2, index: 3, time: 2003, chunk: { type: 'text-delta', index: 0, text: '!' } },
+    });
+    __flushFeedPublishForTest(set);
+    expect(streamedText(get())).toBe('Hello world!');
+
+    // The attempt's end retires the ADOPTED transient rows too — an abandoned
+    // attempt leaves no ghost text across the reload boundary.
+    dispatchChatFrame(get, set, 's1', {
+      type: 'dsh_stream',
+      frame: { type: 'end', attemptId: 'at1', revision: 2, index: 4, outcome: { kind: 'abandoned' } },
+    });
+    __flushFeedPublishForTest(set);
+    expect(streamedText(get())).toBe('');
   });
 });
 

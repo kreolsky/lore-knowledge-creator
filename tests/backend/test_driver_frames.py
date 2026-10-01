@@ -11,7 +11,11 @@ everything else byte-identical. The units under test:
 - `_lore_event` — the backend-minted lore envelope, whose fractional offsets
   PIN the parity with the browser's LORE_SEQ_OFFSETS (lore-events.ts);
 - the reload attach mints (`attach_reload_lore_mints`) — the backend products
-  a reload re-derives from the rows, anchored where the live mints were.
+  a reload re-derives from the rows, anchored where the live mints were;
+- the image-gen anchors — the LAUNCHER's `resolve_image_gen_anchor` over
+  the same driver replay the reload reads, and the worker's settled/running
+  frame builders over that frozen anchor (one producer: live == reload by
+  construction, pinned by calling both).
 
 The offsets are mirrored LITERALS: the plugin package's import graph cannot
 reach the backend, so `driver.frames._lore_event` restates
@@ -24,6 +28,7 @@ import json
 from unittest.mock import AsyncMock
 
 import driver.frames
+from driver.timeline import DriverTimelineUnavailable
 
 
 def _turn(session_id: str = "chat-1") -> driver.frames._TurnProjection:
@@ -142,9 +147,8 @@ def test_message_text_joins_only_text_blocks():
 
 async def test_tool_result_counts_one_finished_call_per_event():
     turn = _turn()
-    result = {"message": {"source": {"kind": "tool", "callId": "c1"},
-                          "content": [{"type": "tool-result", "toolCallId": "c1",
-                                       "content": [{"type": "text", "text": "ok"}]}]}}
+    result = {"message": {"role": "tool", "source": {"kind": "tool", "callId": "c1"},
+                          "toolCallId": "c1", "content": [{"type": "text", "text": "ok"}]}}
     await _relay(turn, _dsh(1, "tool/result", result))
     await _relay(turn, _dsh(2, "tool/result", result))
     assert turn.steps_count == 2
@@ -235,9 +239,8 @@ async def test_turn_end_error_persists_the_abnormal_product():
     turn = _turn()
     await _relay(turn, _assistant_message(1, "partial"))
     await _relay(turn, _dsh(2, "tool/result", {"message": {
-        "source": {"kind": "tool", "callId": "c1"},
-        "content": [{"type": "tool-result", "toolCallId": "c1",
-                     "content": [{"type": "text", "text": "ok"}]}]}}))
+        "role": "tool", "source": {"kind": "tool", "callId": "c1"},
+        "toolCallId": "c1", "content": [{"type": "text", "text": "ok"}]}}))
     await _relay(turn, _dsh(9, "turn/end", {
         "turn": 1, "reason": {"kind": "error", "error": {"message": "gateway 502"}}}))
     assert turn.errored and not turn.finalize_pending
@@ -431,10 +434,10 @@ def _call_seq(frames, call_id):
 
 
 def _result_frame(seq, call_id, text):
+    """A settled v4 tool/result: a FLAT tool message (role 'tool')."""
     return _dsh(seq, "tool/result", {"message": {
-        "source": {"kind": "tool", "callId": call_id},
-        "content": [{"type": "tool-result", "toolCallId": call_id,
-                     "content": [{"type": "text", "text": text}]}]}})
+        "role": "tool", "source": {"kind": "tool", "callId": call_id},
+        "toolCallId": call_id, "content": [{"type": "text", "text": text}]}})
 
 
 async def test_reload_halt_mints_from_the_row_column_at_the_tail(monkeypatch):
@@ -547,17 +550,18 @@ async def test_reload_image_gen_mints_at_the_dispatching_call():
     call = _dsh(3, "tool/call", {"turn": 1, "step": 2, "callId": "call-gen",
                                  "name": "generate_image",
                                  "arguments": json.dumps({"prompt": "a cat"})})
-    result = _result_frame(4, "call-gen", json.dumps({"status": "generating", "run_id": "run-1"}))
+    # NO tool/result frame: the anchor is the dispatching call id the step
+    # carries, never a parse of the result body.
     row = {
         "message_id": "m1", "created_at": "1",
-        "frames": [_dsh(1, "turn/start", {"turn": 1}), call, result,
+        "frames": [_dsh(1, "turn/start", {"turn": 1}), call,
                    _dsh(9, "turn/end", {"turn": 1, "reason": {"kind": "completed"}})],
         "gen_steps": [
             {"tool_call_id": "gen:run-1:refine", "tool": "refine_prompt",
              "summary": "refine prompt", "detail": "a cat, refined"},
             {"tool_call_id": "gen:run-1", "tool": "generate_image",
              "summary": "generate image", "image_ref_ids": ["ref-1", "ref-2"],
-             "run_id": "run-1", "title": "Мир документа"},
+             "run_id": "run-1", "call_id": "call-gen", "title": "Мир документа"},
         ],
     }
     await driver.frames.attach_reload_lore_mints([row], chain={"m1"}, tail_seq=9, session_id="c")
@@ -579,12 +583,11 @@ async def test_reload_image_gen_failed_run_carries_the_error():
         "frames": [
             _dsh(3, "tool/call", {"turn": 1, "step": 1, "callId": "call-gen",
                                   "name": "generate_image", "arguments": "{}"}),
-            _result_frame(4, "call-gen", json.dumps({"status": "generating", "run_id": "run-f"})),
         ],
         "gen_steps": [{
             "tool_call_id": "gen:run-f", "tool": "generate_image",
             "summary": "generate image", "detail": "comfy unreachable",
-            "outcome": "failed", "run_id": "run-f",
+            "outcome": "failed", "run_id": "run-f", "call_id": "call-gen",
         }],
     }
     await driver.frames.attach_reload_lore_mints([row], chain={"m1"}, tail_seq=4, session_id="c")
@@ -606,6 +609,191 @@ async def test_reload_image_gen_without_its_call_mints_nothing():
     }
     await driver.frames.attach_reload_lore_mints([row], chain={"m1"}, tail_seq=1, session_id="c")
     assert not [f for f in row["frames"] if f.get("type") == "lore/image-gen"]
+
+
+async def test_reload_image_gen_step_without_call_id_mints_nothing(caplog):
+    """A step persisted without the dispatching call id has no anchor — even
+    when a call and a result naming its run id are both in the replay, the
+    result body is never parsed for one."""
+    row = {
+        "message_id": "m1", "created_at": "1",
+        "frames": [
+            _dsh(3, "tool/call", {"turn": 1, "step": 1, "callId": "call-gen",
+                                  "name": "generate_image", "arguments": "{}"}),
+            _result_frame(4, "call-gen", json.dumps({"status": "generating", "run_id": "run-1"})),
+        ],
+        "gen_steps": [{"tool": "generate_image", "run_id": "run-1",
+                       "image_ref_ids": ["ref-1"]}],
+    }
+    await driver.frames.attach_reload_lore_mints([row], chain={"m1"}, tail_seq=4, session_id="c")
+    assert not [f for f in row["frames"] if f.get("type") == "lore/image-gen"]
+    assert "run-1" in caplog.text
+
+
+# ─── the image-gen anchors: resolve (launcher) + settled/running frames ───────
+#
+# The LAUNCHER resolves the run's anchor ONCE over the driver's replay
+# (resolve_image_gen_anchor — the anchor half of the reload mint) and freezes
+# it into the job payload; the worker builds every frame from that anchor
+# (image_gen_settled_frame / image_gen_running_frame) — no replay per phase,
+# no replay for the settled card. The parity bound is the point: the settled
+# frame uses the SAME builder the reload attach does, over the SAME step
+# dicts — one producer, so live == reload by construction.
+
+
+def _gen_steps(call_id="call-gen", *, failed=False):
+    """The two chips a settled run persists (persist.py's step dicts)."""
+    refine = {"tool_call_id": "gen:run-1:refine", "tool": "refine_prompt",
+              "summary": "refine prompt",
+              "detail": "queue full" if failed else "a cat, refined"}
+    if failed:
+        refine["outcome"] = "failed"
+    gen = {"tool_call_id": "gen:run-1", "tool": "generate_image",
+           "summary": "generate image", "run_id": "run-1",
+           "call_id": call_id, "title": "Мир документа"}
+    if failed:
+        gen["outcome"] = "failed"
+        gen["detail"] = "comfy unreachable"
+    else:
+        gen["image_ref_ids"] = ["ref-1", "ref-2"]
+    return [refine, gen]
+
+
+def _replay_with_call(call_id="call-gen", *, open_turn=False):
+    """A ReplayedSession holding the run's dispatching `tool/call`. With
+    `open_turn` the trailing turn carries no `end_seq` (the run finished while
+    the agent turn still streams)."""
+    call = _dsh(3, "tool/call", {"turn": 1, "step": 2, "callId": call_id,
+                                 "name": "generate_image",
+                                 "arguments": json.dumps({"prompt": "a cat"})})
+    frames = [_dsh(1, "turn/start", {"turn": 1}), call]
+    turn: dict = {"frames": frames}
+    if open_turn:
+        return call, {"turns": [turn], "tail_seq": 3}
+    frames.append(_dsh(9, "turn/end", {"turn": 1, "reason": {"kind": "completed"}}))
+    turn["end_seq"] = 9
+    return call, {"turns": [turn], "tail_seq": 9}
+
+
+def _stub_replay(monkeypatch, replay=None, *, unavailable=False, forbidden=False, seen=None):
+    """The ONE seam of the anchor tests: the driver replay fetch.
+    `forbidden` proves a path never reads it; `unavailable` simulates a down
+    driver line (DriverTimelineUnavailable)."""
+    async def _fetch(session_id, line=None, *, since_seq=None):
+        if seen is not None:
+            seen.append(session_id)
+        if forbidden:
+            raise AssertionError("no replay read on this path")
+        if unavailable:
+            raise DriverTimelineUnavailable("line down")
+        return replay
+    monkeypatch.setattr(driver.frames, "fetch_session_entries", _fetch)
+
+
+async def test_settled_frame_equals_the_reload_attach(monkeypatch):
+    """The parity bound, by calling BOTH: the worker's settled frame over the
+    payload anchor and the reload's attach over the same row must return
+    EQUAL frames (the wall-clock `time` stamp aside — the drive's criterion; a
+    literal payload assertion would drift with the payload and is
+    deliberately not used)."""
+    _call, replay = _replay_with_call()
+    seen: list[str] = []
+
+    async def _fetch(session_id, line=None, *, since_seq=None):
+        seen.append(session_id)
+        return replay
+    monkeypatch.setattr(driver.frames, "fetch_session_entries", _fetch)
+    anchor = await driver.frames.resolve_image_gen_anchor("src-1", "call-gen")
+    assert seen == ["src-1"]
+    assert anchor == {"seq": 3, "turn": 1}
+
+    live = driver.frames.image_gen_settled_frame(anchor, _gen_steps(), "run-1")
+    assert live is not None
+    assert live["type"] == "lore/image-gen"
+    assert live["seq"] == 3.6
+    row = {"message_id": "m1", "created_at": "1",
+           "frames": list(replay["turns"][0]["frames"]),
+           "gen_steps": _gen_steps()}
+    await driver.frames.attach_reload_lore_mints(
+        [row], chain={"m1"}, tail_seq=9, session_id="c")
+    reload_mint = next(f for f in row["frames"] if f["type"] == "lore/image-gen")
+    live.pop("time"), reload_mint.pop("time")
+    assert live == reload_mint
+
+
+async def test_resolve_anchors_inside_the_open_trailing_turn(monkeypatch):
+    """The run settles while the agent turn still streams (no `end_seq` on the
+    trailing turn) — the dispatching call is already in the log, so the anchor
+    resolves there exactly as the reload attach will."""
+    _call, replay = _replay_with_call(open_turn=True)
+    _stub_replay(monkeypatch, replay)
+    anchor = await driver.frames.resolve_image_gen_anchor("src-1", "call-gen")
+    assert anchor == {"seq": 3, "turn": 1}
+    assert driver.frames.image_gen_settled_frame(
+        anchor, _gen_steps(), "run-1")["seq"] == 3.6
+
+
+async def test_resolve_without_a_call_id_returns_none(monkeypatch):
+    """No dispatching call id — no anchor. The replay is never even read (the
+    stub forbids the read)."""
+    _stub_replay(monkeypatch, forbidden=True)
+    assert await driver.frames.resolve_image_gen_anchor("src-1", "") is None
+
+
+async def test_resolve_without_a_matching_call_returns_none(monkeypatch, caplog):
+    """The replay holds no dispatching call for the call id — no honest
+    anchor exists. The miss is NAMED (lineage + call id), never fabricated."""
+    _call, replay = _replay_with_call(call_id="some-other-call")
+    _stub_replay(monkeypatch, replay)
+    with caplog.at_level("WARNING"):
+        anchor = await driver.frames.resolve_image_gen_anchor("src-1", "call-gen")
+    assert anchor is None
+    assert "call-gen" in caplog.text
+
+
+async def test_resolve_on_an_unreadable_timeline_returns_none(monkeypatch, caplog):
+    """The driver could not serve the replay — best-effort anchor, loud miss."""
+    _stub_replay(monkeypatch, unavailable=True)
+    with caplog.at_level("WARNING"):
+        anchor = await driver.frames.resolve_image_gen_anchor("src-1", "call-gen")
+    assert anchor is None
+    assert "call-gen" in caplog.text
+
+
+def test_running_frames_ladder_below_the_settled_offset():
+    """The RUNNING phase frames: the k-th phase
+    sits at anchor + 0.5 + 0.1·k/(k+1) — dsh's own transient ladder formula —
+    strictly above a verdict mint at the same anchor, strictly below the
+    settled +0.6 mint (the reload's twin), and strictly increasing, so every
+    phase of one run APPENDS into the assembler's one context (a duplicate or
+    non-appended Match seq throws)."""
+    anchor = {"seq": 3, "turn": 1}
+    frames = [
+        driver.frames.image_gen_running_frame(anchor, "run-1", phase)
+        for phase in ("refining", "queued", "generating", "downloading")
+    ]
+    seqs = [f["seq"] for f in frames]
+    assert seqs == sorted(seqs), "the ladder is not strictly increasing"
+    assert all(3.5 < s < 3.6 for s in seqs), seqs
+    for frame, phase in zip(frames, ("refining", "queued", "generating", "downloading")):
+        assert frame["type"] == "lore/image-gen"
+        assert frame["data"] == {
+            "turn": 1, "runId": "run-1", "status": "running", "phase": phase,
+        }
+        assert frame["ignorable"] is True
+    # An unknown phase still appends below the settled offset.
+    unknown = driver.frames.image_gen_running_frame(anchor, "run-1", "encoding")
+    assert 3.5 < unknown["seq"] < 3.6 and unknown["seq"] > seqs[-1]
+    # No anchor seq (the launcher's resolve missed) — no frame at all.
+    assert driver.frames.image_gen_running_frame({}, "run-1", "refining") is None
+    assert driver.frames.image_gen_running_frame(
+        {"seq": "3", "turn": 1}, "run-1", "refining") is None
+
+
+def test_settled_frame_without_an_anchor_is_none():
+    """A run whose anchor never resolved (payload anchor None) pushes no
+    settled card — a reload still shows it from the row's gen_steps."""
+    assert driver.frames.image_gen_settled_frame({}, _gen_steps(), "run-1") is None
 
 
 async def test_reload_compaction_mint_rides_its_frame(monkeypatch):
@@ -653,17 +841,10 @@ async def test_reload_compaction_skips_failed_and_malformed_frames(monkeypatch):
 # ─── the result-shape readers shared with the live arms ──────────────────────
 
 
-def test_result_call_id_reads_source_then_block():
-    from_source = {"message": {"source": {"kind": "tool", "callId": "src-1"}, "content": []}}
+def test_result_call_id_reads_the_source_only():
+    from_source = {"message": {"role": "tool", "source": {"kind": "tool", "callId": "src-1"},
+                               "content": []}}
     from_block = {"message": {"content": [{"type": "tool-result", "toolCallId": "blk-1"}]}}
     assert driver.frames._result_call_id(from_source) == "src-1"
-    assert driver.frames._result_call_id(from_block) == "blk-1"
+    assert driver.frames._result_call_id(from_block) == ""
     assert driver.frames._result_call_id({}) == ""
-
-
-def test_result_run_id_reads_the_tool_api_envelope():
-    data = {"message": {"content": [{"type": "tool-result", "toolCallId": "c",
-                                     "content": [{"type": "text",
-                                                  "text": json.dumps({"status": "generating", "run_id": "r1"})}]}]}}
-    assert driver.frames._result_run_id(data) == "r1"
-    assert driver.frames._result_run_id({"message": {"content": [{"type": "text", "text": "not json"}]}}) == ""

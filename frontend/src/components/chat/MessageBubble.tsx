@@ -28,7 +28,6 @@ import { useLazyMessageImages } from './useLazyMessageImages';
 // dir convention, same as store/chat-store/sessions-slice.ts + sessions-slice/).
 // Pure extraction — no behavioral change. NOTE: the dir is `internal/`, not `parts/`
 // — the blanket `parts/` .gitignore rule (Python setuptools template) would ignore it.
-import { AgentStepIcon, genPhaseLabel } from './MessageBubble/internal/agent-steps';
 import { ImageLightbox } from './MessageBubble/internal/image-lightbox';
 import { HaltCard } from './MessageBubble/internal/halt-card';
 import { TurnNodes, type TurnNodeLike } from './MessageBubble/internal/turn-nodes';
@@ -68,12 +67,6 @@ interface Props {
    * frameless rows (pre-harness / abnormal turns) — those render from the
    * row's own fields as before. */
   nodes?: TurnNodeLike[];
-  /** Plan gen-progress-display → hardening: the live generate_image phases for
-   *  THIS message, one per active run (project-WS sourced). Renders a
-   *  "Generating image — <phase>" chip per in-flight run during the ComfyUI wait.
-   *  Empty when no image is generating. Keyed by runId so two concurrent runs show
-   *  two independent chips. */
-  imageGen?: { phase: string }[];
   /** True when this bubble is the last entry in the active path. Forwarded to
    *  the segment timeline (the running plate / halt card may want it). */
   isLast?: boolean;
@@ -109,7 +102,6 @@ export const MessageBubble = memo(function MessageBubble({
   hasChildren = false,
   isStreaming = false,
   nodes = [],
-  imageGen = [],
   isLast = false,
   isAgent = false,
   actions,
@@ -369,19 +361,6 @@ export const MessageBubble = memo(function MessageBubble({
             {isStreaming && isAwaitingModel(message) && (
               <div className="text-text-dim text-xs animate-pulse">{t('thinking')}</div>
             )}
-            {/* Plan comfy-image-gen-fixes (Bug 1) → hardening (D5): one live
-                "Generating image — <phase>" chip per ACTIVE RUN on this message
-                (project-WS sourced). Shown regardless of streaming — the generation
-                outlives the agent turn, so the chip persists on the generating
-                message until its own done/failed event clears it. n images in flight
-                ⇒ n chips (keyed by runId). Live-only — never persisted. */}
-            {imageGen.length > 0 && imageGen.map((g, i) => (
-              <div key={i} className="flex items-center gap-1 text-xs text-text-dim bg-surface2 border border-border-soft px-2 py-1 my-0.5">
-                <span className="animate-pulse"><AgentStepIcon /></span>
-                <span>{t('generatingImage')}</span>
-                <span className="opacity-60">— {genPhaseLabel(g.phase, t)}</span>
-              </div>
-            ))}
             {/* The verdict decision card: the lore/verdict-ask NODE renders it
                 on the node timeline (the card stays once asked — see
                 turn-nodes.tsx). This message-field render is the frameless

@@ -24,7 +24,7 @@ from db import create_record, fetch_one, get_db
 logger = logging.getLogger(__name__)
 
 # Context-layer fields inherited from the SOURCE chat_session when minting a
-# compaction continuation. `mode` is NOT here and is no longer written anywhere
+# compaction continuation. `mode` is NOT here and is written nowhere
 # — the column stays in the schema unread; the row simply inherits the context
 # layer below.
 _INHERITABLE_CHAT_FIELDS = (
@@ -136,8 +136,8 @@ async def mint_compaction_chats(payload: dict) -> dict:
     died before the event mints nothing, and a replayed event mints nothing
     new (window-keyed idempotency).
 
-    # ARCH: the archived freeze row is deleted with the freeze subsystem —
-    # the continuation is the only row minted.
+    # ARCH: no archived freeze row is minted — the continuation is the only
+    # row.
 
     The source chat row must exist (the session had a turn); a missing source
     row mints nothing (nothing to inherit from — logged, not an error).

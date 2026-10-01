@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 # Fixed tab ids — must equal the settings ids of the frontend AdminSectionTab
 # union (theme-slice.ts). The tab LIST is fixed in TSX (saved-section validation
 # runs before any fetch); the registry is the source of the KEYS inside a tab.
-TABS = ("models", "agent", "tools", "storage", "infra")
+TABS = ("models", "search", "tools", "agent", "storage")
 
 
 class ConfigError(RuntimeError):

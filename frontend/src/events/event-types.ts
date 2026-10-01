@@ -2,7 +2,41 @@
 // ARCH: Events include editorView when originating from CM6 — multi-editor awareness (main + snapshot/cell editors).
 
 import type { EditorView } from '@codemirror/view';
-import type { AgentStep, Checkpoint, DocumentHistoryEntry } from '../types';
+import type { Checkpoint, DocumentHistoryEntry } from '../types';
+
+// ARCH: the project WS forwards an event's emitted kwargs verbatim (minus
+// project_id); the field names ARE the contract, typed once below under
+// 'ws:<type>' — the wire names (snake_case) stay snake_case, never renamed.
+// tests/backend/test_event_wiring.py binds these types to the backend emit
+// sites: a field added there and not typed here fails CI. The wire types this
+// connection can deliver besides 'init' and 'chat_frame' (which dispatch
+// handles as its own arms) — see SYSTEM: project-ws.
+export const WS_EVENT_TYPES = [
+  'document_created',
+  'document_renamed',
+  'document_moved',
+  'document_reordered',
+  'document_deleted',
+  'documents_deleted_batch',
+  'documents_moved_out',
+  'documents_moved_in',
+  'reference_created',
+  'reference_renamed',
+  'reference_moved',
+  'reference_deleted',
+  'reference_updated',
+  'reference_status_changed',
+  'content_flushed',
+  'agent_extraction_started',
+  'extraction_error',
+  'agent_error_note',
+  'embedding_degraded',
+  'embedding_recovered',
+  'project_updated',
+  'project_deleted',
+] as const;
+
+export type WsEventKey = `ws:${(typeof WS_EVENT_TYPES)[number]}`;
 
 export interface EventMap {
   // ── Navigation ──
@@ -17,24 +51,23 @@ export interface EventMap {
   'scroll-to-line': { line: number };
   'scroll-to-note-in-editor': { noteId: string };
 
-  // ── WS bridge: project tree ──
-  'project-document-created': { documentId: string; title: string; parentId: string | null; sortKey: string | null };
-  'project-document-renamed': { documentId: string; title: string };
-  'project-document-moved': {
-    documentId: string;
-    parentId: string | null;
-    sortKey: string | null;
-    previousParentId: string | null;
-    // undefined = kind not stated by the emitter (a plain move); true/false =
-    // the node's kind AFTER the move — set only when the kind CHANGED (a
-    // move_document conversion), so the tree can drop/insert the node.
-    isReference?: boolean;
-    // Title for the tree insert on a reference→document conversion.
-    title?: string | null;
+  // ── WS bridge: project tree (wire field names, verbatim) ──
+  'ws:document_created': { document_id: string; title: string; parent_id: string | null; sort_key: string | null; is_reference?: boolean };
+  'ws:document_renamed': { document_id: string; title: string };
+  // previous_parent_id lets the OLD host recognize the move concerns it;
+  // is_reference (the node's FINAL kind) + title let a second client move the
+  // node between the tree and a references panel on a conversion.
+  'ws:document_moved': {
+    document_id: string;
+    parent_id: string | null;
+    sort_key: string | null;
+    previous_parent_id: string | null;
+    is_reference: boolean;
+    title: string | null;
   };
-  'project-document-reordered': { documentId: string; parentId: string | null; sortKey: string | null };
-  'project-document-deleted': { documentId: string };
-  'project-documents-deleted-batch': { documentIds: string[]; referenceIds: string[] };
+  'ws:document_reordered': { document_id: string; parent_id: string | null; sort_key: string | null };
+  'ws:document_deleted': { document_id: string };
+  'ws:documents_deleted_batch': { document_ids: string[]; reference_ids: string[] };
   // Cross-project subtree move (SYSTEM: project-ws). OUT rides the SOURCE
   // project's channel: tree + refs drop their ids; a client whose open doc is
   // in the set toasts the target project and follows via a hard /docs/<id>
@@ -42,60 +75,42 @@ export interface EventMap {
   // keyed by the old project — piecemeal reset is the bug surface). IN rides
   // the TARGET's channel and means "refetch the whole tree" (the subtree may
   // be large and the tree needs full rows).
-  'project-documents-moved-out': {
-    documentIds: string[];
-    referenceIds: string[];
-    targetProjectId: string;
-    targetProjectName: string;
+  'ws:documents_moved_out': {
+    document_ids: string[];
+    reference_ids: string[];
+    target_project_id: string;
+    target_project_name: string;
   };
-  'project-documents-moved-in': { documentIds: string[] };
-  'project-reference-created': {
-    referenceId: string;
+  'ws:documents_moved_in': { document_ids: string[] };
+  'ws:reference_created': {
+    reference_id: string;
     title: string;
-    documentId: string | null;
-    createdBy: string | null;
-    createdByName: string | null;
+    document_id: string | null;
+    created_by: string | null;
+    created_by_name: string | null;
   };
-  'project-reference-renamed': { referenceId: string; title: string };
-  'project-reference-moved': { referenceId: string; documentId: string | null };
-  'project-reference-deleted': { referenceId: string };
-  'project-reference-updated': { referenceId: string };
-  'project-reference-status-changed': { referenceId: string; status: string };
+  'ws:reference_renamed': { reference_id: string; title: string };
+  // sort_key: the ref's key in its (new) host's group — the handler re-places
+  // the ref in that group's run instead of splitting the old one.
+  'ws:reference_moved': { reference_id: string; document_id: string | null; sort_key: string | null };
+  'ws:reference_deleted': { reference_id: string };
+  'ws:reference_updated': { reference_id: string };
+  'ws:reference_status_changed': { reference_id: string; status: string };
   // see SYSTEM: transclusion — a doc's content settled after a debounce flush. High-frequency
   // (every flush, every doc); listeners MUST gate on an existing doc transcludeMap entry.
-  'project-content-flushed': { entityId: string; entityType: string };
-  'project-agent-extraction-started': { referenceId: string };
-  // Live generate_image phase (project-WS sourced).
-  // Carries messageId so the spinner can be pinned to
-  // the generating message after the turn ends (the phase outlives the turn).
-  'project-generate-image-progress': { sessionId: string; phase: string; runId: string; messageId: string };
-  // Generation is detached — the tool
-  // returns {status:'generating'} at once and the image lands asynchronously.
-  // `done` carries the refiner outcome + image reference ids + the ALREADY-BUILT
-  // step dicts (single source — the frontend stamps them verbatim, no
-  // reconstruction drift) correlated by sessionId + runId; `failed` carries the
-  // cause (no-silent-degradation). The chips are persisted server-side; these
-  // drive the LIVE update for the active session and a non-active session shows
-  // them on return/reload.
-  'project-generate-image-done': {
-    sessionId: string;
-    runId: string;
-    messageId: string;
-    referenceIds: string[];
-    title: string;
-    refine: { prompt: string; ok: boolean; error: string | null };
-    steps: AgentStep[];
-  };
-  'project-generate-image-failed': {
-    sessionId: string;
-    runId: string;
-    messageId: string;
-    error: string;
-  };
-  'project-extraction-error': { referenceId: string; noteId: string; documentId: string };
-  'project-agent-error-note': { noteId: string; documentId: string };
-  'project-updated': Record<string, unknown>;
-  'project-deleted': void;
+  // is_reference rides the payload only when the emitter states it.
+  'ws:content_flushed': { entity_id: string; entity_type: string; is_reference?: boolean };
+  'ws:agent_extraction_started': { reference_id: string };
+  // The detached image generation's live facts do NOT ride the project WS:
+  // they are chat facts — backend-minted `lore/image-gen` frames on the
+  // owner-filtered chat channel (chat_frame envelopes) — so no
+  // ws:generate_image_* types exist.
+  'ws:extraction_error': { reference_id: string; note_id: string; document_id: string };
+  'ws:agent_error_note': { note_id: string; document_id: string };
+  'ws:embedding_degraded': Record<string, never>;
+  'ws:embedding_recovered': Record<string, never>;
+  'ws:project_updated': { updates: Record<string, unknown> };
+  'ws:project_deleted': Record<string, never>;
 
   // ── WS bridge: collab ──
   'collab-backlinks-changed': void;

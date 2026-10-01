@@ -149,8 +149,8 @@ function makeSession(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   // Settle + drop any harness-turn registration a failed prior test left
-  // dangling (streaming.ts keeps them module-level) — otherwise the next
-  // send for the same session id silently takes the bystander path.
+  // dangling (streaming.ts keeps them module-level) — otherwise a late
+  // frame for the same session id lands in a stale registration.
   clearChatCaches();
   useChatStore.setState({
     sessions: [],
@@ -441,128 +441,6 @@ describe('stopGeneration', () => {
   });
 });
 
-describe('completeImageGen / failImageGen (detached generation, B4)', () => {
-  it('setImageGenPhase sets the phase on the generating message even after the turn ended (streaming null)', () => {
-    // The generation outlives the agent turn.
-    // Previously the phase lived on `streaming`, so the instant the agent
-    // summarized (streaming→null) the spinner vanished. Now it is top-level +
-    // pinned to the message, so it shows until the done/failed event clears it.
-    useChatStore.setState({ streaming: null, imageGen: {} });
-    useChatStore.getState().setImageGenPhase('run-1', 'msg-gen', 'generating');
-    // n images in flight ⇒ n entries, keyed by runId (independent concurrent runs).
-    expect(useChatStore.getState().imageGen).toEqual({
-      'run-1': { messageId: 'msg-gen', phase: 'generating' },
-    });
-    useChatStore.getState().setImageGenPhase('run-1', 'msg-gen', 'queued');
-    useChatStore.getState().setImageGenPhase('run-2', 'msg-other', 'refining');
-    expect(useChatStore.getState().imageGen).toEqual({
-      'run-1': { messageId: 'msg-gen', phase: 'queued' },
-      'run-2': { messageId: 'msg-other', phase: 'refining' },
-    });
-    // Clearing one run leaves the other intact (keyed by runId).
-    useChatStore.getState().setImageGenPhase('run-1', 'msg-gen', null);
-    expect(useChatStore.getState().imageGen).toEqual({
-      'run-2': { messageId: 'msg-other', phase: 'refining' },
-    });
-  });
-
-  it('two concurrent runs keep independent phases (D5 key by runId)', () => {
-    // The regression this pins: per-session (not per-run) correlation meant two
-    // generate_image calls in one turn overwrote each other's progress — the 2nd
-    // done cleared the 1st run's spinner. Keying by runId keeps them independent.
-    useChatStore.setState({ streaming: null, imageGen: {} });
-    const { setImageGenPhase } = useChatStore.getState();
-    setImageGenPhase('run-a', 'msg', 'generating');
-    setImageGenPhase('run-b', 'msg', 'queued');
-    // Failing run B leaves run A's spinner up.
-    useChatStore.getState().failImageGen('run-b', 'boom');
-    expect(useChatStore.getState().imageGen).toEqual({
-      'run-a': { messageId: 'msg', phase: 'generating' },
-    });
-  });
-
-  it('completeImageGen clears that run only', () => {
-    const mid = 'msg-detached';
-    useChatStore.setState({
-      messages: [{
-        message_id: mid, chat_id: 's', parent_id: null, role: 'assistant',
-        content: 'ok', created_at: '',
-      }],
-      streaming: { messageId: mid, content: 'ok', controller: null },
-      // Two runs on the same message; only run-1 completes here.
-      imageGen: {
-        'run-1': { messageId: mid, phase: 'generating' },
-        'run-2': { messageId: mid, phase: 'queued' },
-      },
-    });
-    useChatStore.getState().completeImageGen('run-1', mid, [
-      { tool_call_id: 'gen:run-1:refine', tool: 'refine_prompt', summary: 'refine prompt', detail: 'REFINED' },
-      { tool_call_id: 'gen:run-1', tool: 'generate_image', summary: 'generate image', image_ref_ids: ['ref-1', 'ref-2'], run_id: 'run-1' },
-    ]);
-    // Only run-1 cleared; run-2's spinner is still up.
-    expect(useChatStore.getState().imageGen).toEqual({
-      'run-2': { messageId: mid, phase: 'queued' },
-    });
-  });
-
-  it('completeImageGen with no steps still clears the spinner (D5 delete-first)', () => {
-    // WHY: a done carrying no steps must still clear the spinner — clearing is
-    // unconditional, and never gated on the run having produced anything.
-    const mid = 'msg-empty';
-    useChatStore.setState({
-      messages: [{
-        message_id: mid, chat_id: 's', parent_id: null, role: 'assistant',
-        content: '', created_at: '',
-      }],
-      streaming: null,
-      imageGen: { 'run-3': { messageId: mid, phase: 'generating' } },
-    });
-    useChatStore.getState().completeImageGen('run-3', mid, []);
-    expect(useChatStore.getState().imageGen).toEqual({}); // the spinner cleared.
-  });
-
-  it('completeImageGen toasts when the live mint cannot place its card (defect D, no-silent-degradation)', async () => {
-    // The done event arrived but the anchor join missed (e.g. the session's
-    // frames were never fed to this browser): the running chip would just
-    // vanish and nothing would land — the miss must be LOUD, naming the
-    // reload as the way to see the persisted result.
-    const { useAppStore } = await import('./app-store');
-    const showToast = vi.mocked(useAppStore.getState().showToast);
-    showToast.mockClear();
-
-    const mid = 'msg-mint-miss';
-    useChatStore.setState({
-      messages: [{
-        message_id: mid, chat_id: 's', parent_id: null, role: 'assistant',
-        content: '', created_at: '',
-      }],
-      streaming: null,
-      imageGen: { 'run-9': { messageId: mid, phase: 'generating' } },
-    });
-    // No feed frames were fed — no dispatching call exists to anchor at.
-    useChatStore.getState().completeImageGen('run-9', mid, [
-      { tool_call_id: 'gen:run-9', tool: 'generate_image', run_id: 'run-9', image_ref_ids: ['ref-9'] },
-    ]);
-    expect(useChatStore.getState().imageGen).toEqual({}); // the spinner still clears
-    expect(showToast).toHaveBeenCalledTimes(1);
-    expect(showToast.mock.calls[0][1]).toBe('error');
-  });
-
-  it('failImageGen clears only that run and toasts (no-silent-degradation)', () => {
-    useChatStore.setState({
-      streaming: { messageId: 'm', content: '', controller: null },
-      imageGen: {
-        'run-3': { messageId: 'm', phase: 'generating' },
-        'run-4': { messageId: 'm', phase: 'downloading' },
-      },
-    });
-    useChatStore.getState().failImageGen('run-3', 'ComfyUI down');
-    // run-3 cleared; run-4 still spinning (independent runs).
-    expect(useChatStore.getState().imageGen).toEqual({
-      'run-4': { messageId: 'm', phase: 'downloading' },
-    });
-  });
-});
 
 describe('loadMessages — error surfacing (M3)', () => {
   it('sets messagesError on failure so the empty state is distinguishable', async () => {
@@ -960,8 +838,8 @@ describe('createSession — ghost reasoning effort', () => {
   });
 });
 
-describe('sendMessage mid-turn send (the queue died — the POST is unconditional)', () => {
-  it('a send while a turn is streaming still POSTs (the backend lock is the serializer)', async () => {
+describe('sendMessage mid-turn send (routes to the message queue)', () => {
+  it('a send while a turn is streaming makes no POST — it queues', async () => {
     const { useAppStore } = await import('./app-store');
     (useAppStore.getState as ReturnType<typeof vi.fn>).mockReturnValue({
       currentDocument: null,
@@ -973,7 +851,7 @@ describe('sendMessage mid-turn send (the queue died — the POST is unconditiona
     const { apiClient } = await import('../api/client');
     (apiClient.post as ReturnType<typeof vi.fn>).mockClear().mockResolvedValue({ accepted: true });
 
-    // A foreign open turn holds the streaming slot.
+    // An open turn holds the streaming slot.
     useChatStore.setState({
       activeSessionId: 'sess-1',
       streaming: { messageId: null, content: '', controller: null },
@@ -981,12 +859,11 @@ describe('sendMessage mid-turn send (the queue died — the POST is unconditiona
       sessions: [makeSession({ session_id: 'sess-1' })],
     });
 
-    const p = useChatStore.getState().sendMessage('hello');
-    // The bystander send POSTs unconditionally — the backend's 409 is the
-    // serializer now, not a client-side guard.
-    expect(apiClient.post).toHaveBeenCalledTimes(1);
-    wsFrame(TURN_CLOSED);
-    await p;
+    await useChatStore.getState().sendMessage('hello');
+    // The send joins the session's queue; the open turn's end drains it.
+    expect(apiClient.post).not.toHaveBeenCalled();
+    expect(useChatStore.getState().queued['sess-1']).toEqual(['hello']);
+    useChatStore.getState().clearQueued('sess-1');
   });
 });
 

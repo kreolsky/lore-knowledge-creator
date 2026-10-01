@@ -399,12 +399,12 @@ describe('DocumentPage — layout matrix', () => {
 });
 
 describe('DocumentPage — error-note events', () => {
-  it('project-extraction-error for the OPEN doc reloads sessions and opens the pinned note thread', async () => {
+  it('ws:extraction_error for the OPEN doc reloads sessions and opens the pinned note thread', async () => {
     appState.currentDocument = { document_id: 'd-1' };
     mountPage();
-    expect(eventHandlers['project-extraction-error']).toBeTruthy();
+    expect(eventHandlers['ws:extraction_error']).toBeTruthy();
     await act(async () => {
-      eventHandlers['project-extraction-error']({ noteId: 'n-err', documentId: 'd-1' });
+      eventHandlers['ws:extraction_error']({ reference_id: 'r1', note_id: 'n-err', document_id: 'd-1' });
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -418,7 +418,7 @@ describe('DocumentPage — error-note events', () => {
     appState.currentDocument = { document_id: 'd-1' };
     mountPage();
     await act(async () => {
-      eventHandlers['project-extraction-error']({ noteId: 'n-x', documentId: 'd-OTHER' });
+      eventHandlers['ws:extraction_error']({ reference_id: 'r1', note_id: 'n-x', document_id: 'd-OTHER' });
       await Promise.resolve();
     });
     expect(noteChatGetState.loadSessions).not.toHaveBeenCalled();

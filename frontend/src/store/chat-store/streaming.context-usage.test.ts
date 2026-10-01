@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // context_usage frame handler updates the active session row's context_tokens_used
 // in sessions[] (one update per turn, not per token). Driven over the harness
 // transport: the POST resolves, the frames arrive as WS envelopes through
-// dispatchChatFrame (the SSE drain is gone).
+// dispatchChatFrame.
 
 const showToast = vi.fn();
 vi.mock('../app-store', () => ({

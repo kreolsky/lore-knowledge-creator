@@ -233,7 +233,7 @@ describe('useEditorReferenceSync — per-source ownership', () => {
     // A transcluded reference lives as ref-text, not doc — the gate must skip it.
     transcludeMap.set('rtext', { kind: 'ref-text', source: 'project-ref', title: 'R', content: 'c' });
     await flushMicrotasks();
-    act(() => { emit('project-content-flushed', { entityId: 'rtext', entityType: 'doc' }); });
+    act(() => { emit('ws:content_flushed', { entity_id: 'rtext', entity_type: 'doc' }); });
     await flushMicrotasks();
     act(() => { vi.advanceTimersByTime(500); });
     // apiClient.get for /documents/rtext must never have been called.
@@ -248,7 +248,7 @@ describe('useEditorReferenceSync — per-source ownership', () => {
     const openId = useAppStore.getState().currentDocument?.document_id as string;
     transcludeMap.set(openId, { kind: 'doc', source: 'doc', title: 'Open', content: 'local' });
     await flushMicrotasks();
-    act(() => { emit('project-content-flushed', { entityId: openId, entityType: 'doc' }); });
+    act(() => { emit('ws:content_flushed', { entity_id: openId, entity_type: 'doc' }); });
     await flushMicrotasks();
     act(() => { vi.advanceTimersByTime(500); });
     const calls = (apiClient.get as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0]);
@@ -326,8 +326,8 @@ describe('useEditorReferenceSync — per-source ownership', () => {
     transcludeMap.set('dB', { kind: 'doc', source: 'doc', title: 'B', content: 'old B' });
     await flushMicrotasks();
     // Two docs flush within the same 300ms window.
-    act(() => { emit('project-content-flushed', { entityId: 'dA', entityType: 'doc' }); });
-    act(() => { emit('project-content-flushed', { entityId: 'dB', entityType: 'doc' }); });
+    act(() => { emit('ws:content_flushed', { entity_id: 'dA', entity_type: 'doc' }); });
+    act(() => { emit('ws:content_flushed', { entity_id: 'dB', entity_type: 'doc' }); });
     await act(async () => { vi.runAllTimers(); });
     await act(async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); });
     expect(transcludeMap.get('dA')?.content).toBe('body A');
@@ -343,7 +343,7 @@ describe('useEditorReferenceSync — per-source ownership', () => {
     renderHook(editorViewRef);
     transcludeMap.set('dFail', { kind: 'doc', source: 'doc', title: 'D', content: 'old body' });
     await flushMicrotasks();
-    act(() => { emit('project-content-flushed', { entityId: 'dFail', entityType: 'doc' }); });
+    act(() => { emit('ws:content_flushed', { entity_id: 'dFail', entity_type: 'doc' }); });
     await flushMicrotasks();
     await act(async () => { vi.runAllTimers(); });
     await act(async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); });

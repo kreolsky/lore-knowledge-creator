@@ -1,7 +1,10 @@
 /** Tests for the browser feed — the assembler driven from Lore's chat store. */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// ?raw: the INVARIANT test pins the SOURCE (the single splice site), same as
+// theme.test.ts reads its derived-source mapping.
+import feedSource from './conversation-feed.ts?raw';
 import {
-  isFeedFrame, feedFrame, beginTurn, endTurn, replaceWindowFromRows, mintImageGen,
+  isFeedFrame, feedFrame, beginTurn, endTurn, replaceWindowFromRows,
   rewindToLineage, clearFeed, __flushFeedPublishForTest, type FeedPublication,
 } from './conversation-feed';
 
@@ -10,7 +13,8 @@ const DSH = (kind: string, seq: number, data: unknown = {}, extra: Record<string
   ({ type: 'dsh_event', kind, seq, time: 1000 + seq, data, ...extra });
 const LORE = (kind: string, seq: number, data: unknown = {}) =>
   ({ type: kind, seq, time: 1000 + seq, data, ignorable: true });
-/** A settled assistant step (v3 log: `assistant/message` carries the whole
+/** A settled assistant step (the v4 log holds only settled events:
+ * `assistant/message` carries the whole
  * text; deltas never enter the log — the live tail rides `dsh_stream`). */
 const ASSISTANT = (seq: number, text: string, at: { turn: number; step: number } = { turn: 0, step: 0 }) =>
   DSH('assistant/message', seq, {
@@ -69,7 +73,7 @@ describe('feedFrame → the assembler', () => {
     // A user message fed AFTER the mint must stay session-level / its own turn —
     // a behind-the-tail append would rewind the location cursor onto it.
     feed(LORE('lore/halt', 3.7, { turn: 0, reason: 'aborted' }));
-    feed(DSH('turn/end', 5, { turn: 0, reason: { kind: 'aborted' } }));
+    feed(DSH('turn/end', 5, { turn: 0, reason: { kind: 'aborted', reason: { kind: 'user' } } }));
     const pubs = drain();
     const conv = last(pubs).conversation;
     // The halt node exists...
@@ -176,8 +180,11 @@ describe('rewindToLineage — the fork send rewinds the assembler to the lineage
     feed(DSH('turn/end', 3, { turn: 0, reason: { kind: 'completed' } }));
     const conv = last(drain()).conversation;
     expect(conv.some(n => n.kind === 'tool-call')).toBe(true);
-    // The abandoned lineage's nodes are gone (nothing above the fork's tail).
-    expect(conv.every(n => n.anchorSeq <= 3)).toBe(true);
+    // The abandoned lineage's nodes are gone — every anchor sits below the
+    // abandoned window's min seq (6). 0.2.0's assembler also synthesizes
+    // fractional anchors (turn-process at start+0.9, turn-tail at end+0.1),
+    // so the bound is the abandoned MIN, not the fork's last fed seq.
+    expect(conv.every(n => n.anchorSeq < 6)).toBe(true);
   });
 
   it('(b) rewinding to the chain through A1 keeps A1\'s nodes, drops A2\'s, and clears the seq space the continuation reuses', () => {
@@ -211,84 +218,31 @@ describe('rewindToLineage — the fork send rewinds the assembler to the lineage
   });
 });
 
-describe('the live lore/image-gen mint', () => {
-  const callFrame = DSH('tool/call', 6, { turn: 0, step: 0, callId: 'c1', name: 'generate_image', arguments: '{}' });
-  // The REAL Tool-API result frame (the shape backend `_tool_result_text`
-  // reads — pinned by tests/backend/test_driver_client.py `_applied_edit_result`):
-  // the result text is NESTED at message.content[0].content[*].text, wrapped in
-  // the Tool-API JSON envelope carrying the run id. The flat
-  // `content[0].text` fixture this test used before is a shape the wire never
-  // carried — the live anchor join matched only it and silently missed every
-  // real run (defect D, user smoke 2026-09-07).
-  const resultFrame = DSH('tool/result', 7, {
-    turn: 0, step: 0,
-    message: {
-      source: { kind: 'tool', callId: 'c1' },
-      content: [{
-        type: 'tool-result', toolCallId: 'c1', isError: false,
-        content: [{ type: 'text', text: JSON.stringify({ run_id: 'r1', ok: true }) }],
-      }],
-    },
-  });
-  const steps = [
-    { tool: 'generate_image', run_id: 'r1', outcome: 'ok', image_ref_ids: ['ref1', 'ref2'], title: 'Doc title' },
-    { tool: 'refine_prompt', outcome: 'ok', detail: 'a better prompt' },
-  ];
-
-  it('mints at the dispatching call + 0.6 with the payload derived from the step dicts', () => {
-    feedFrame(callFrame, 's1', vi.fn());
-    feedFrame(resultFrame, 's1', vi.fn());
-    const minted = mintImageGen('r1', steps, 's1', vi.fn());
-    expect(minted).toBe(true);
+describe('the one-mint-site INVARIANT (the browser never mints a lore node)', () => {
+  it('feeds a backend-minted lore/image-gen frame through splice like any lore frame', () => {
+    // The live card arrives as ONE opaque frame on the chat channel; the
+    // browser's only job is to feed it — the assembler places it behind the
+    // dispatching tool/call exactly as the reload's frames do.
+    const feed = (f: Record<string, unknown>) => feedFrame(f, 's1', vi.fn());
+    feed(DSH('tool/call', 6, { turn: 0, step: 0, callId: 'c1', name: 'generate_image', arguments: '{}' }));
+    feed(LORE('lore/image-gen', 6.6, { turn: 0, runId: 'r1', status: 'done', imageRefIds: ['ref1'] }));
     const conv = last(drain()).conversation;
     const mint = conv.find(n => n.kind === 'image-gen');
     expect(mint).toBeDefined();
     expect(mint!.anchorSeq).toBe(6.6);
-    const data = mint!.data as Record<string, unknown>;
-    expect(data.status).toBe('done');
-    expect(data.imageRefIds).toEqual(['ref1', 'ref2']);
-    expect(data.refine).toEqual({ ok: true, prompt: 'a better prompt' });
-    expect(data.title).toBe('Doc title');
   });
 
-  it('joins the call id through the nested toolCallId when source carries none', () => {
-    // The server twin (_result_call_id) falls back to content[0].toolCallId;
-    // the browser join must read the same two places.
-    feedFrame(callFrame, 's1', vi.fn());
-    feedFrame(DSH('tool/result', 7, {
-      turn: 0, step: 0,
-      message: {
-        content: [{
-          type: 'tool-result', toolCallId: 'c1', isError: false,
-          content: [{ type: 'text', text: JSON.stringify({ run_id: 'r1' }) }],
-        }],
-      },
-    }), 's1', vi.fn());
-    expect(mintImageGen('r1', steps, 's1', vi.fn())).toBe(true);
-    expect(last(drain()).conversation.some(n => n.kind === 'image-gen')).toBe(true);
-  });
-
-  it('derives a failed run the same way the backend does', () => {
-    feedFrame(callFrame, 's1', vi.fn());
-    feedFrame(resultFrame, 's1', vi.fn());
-    mintImageGen('r1', [
-      { tool: 'generate_image', run_id: 'r1', outcome: 'failed', detail: 'queue full' },
-    ], 's1', vi.fn());
-    const data = last(drain()).conversation.find(n => n.kind === 'image-gen')!.data as Record<string, unknown>;
-    expect(data.status).toBe('failed');
-    expect(data.error).toBe('queue full');
-    expect(data.imageRefIds).toBeUndefined();
-  });
-
-  it('returns false (the LOUD miss) without a dispatching call or a gen chip', () => {
-    // No frames fed at all — no anchor exists.
-    expect(mintImageGen('r1', steps, 's1', vi.fn())).toBe(false);
-    // The dispatching call fed, but no tool/result carries the run id.
-    feedFrame(callFrame, 's1', vi.fn());
-    expect(mintImageGen('r1', steps, 's1', vi.fn())).toBe(false);
-    // The fed call frame assembles its own tool-call node; the MINT never
-    // appears — the caller must surface the miss (no-silent-degradation).
-    expect(last(drain()).conversation.some(n => n.kind === 'image-gen')).toBe(false);
+  it('conversation-feed.ts splices EXACTLY once — inside feedFrame (the INVARIANT mechanized)', () => {
+    // The load-bearing rule, pinned on the source: every lore/* node the
+    // browser shows was minted by the backend and arrives verbatim. A second
+    // splice site in this file is a second mint site — the defect this
+    // INVARIANT exists to prevent (the browser mint drifted from the
+    // backend's three times).
+    const source = feedSource;
+    expect(source.split('.splice(').length - 1).toBe(1);
+    // And the one splice is inside feedFrame — the verbatim feed.
+    const fromFeedFrame = source.slice(source.indexOf('export function feedFrame'));
+    expect(fromFeedFrame.split('.splice(').length - 1).toBe(1);
   });
 });
 
@@ -326,5 +280,83 @@ describe('published node identity — what the renderer\'s slice reuse rests on'
     // context, so the memoized VM is the same object and the renderer reuses
     // that row's slice instead of re-rendering it per token.
     expect(secondUser).toBe(firstUser);
+  });
+});
+
+describe("the attempt's end retires the transient live-chunk rows", () => {
+  // The live tail's terminal: the `end` frame retires its attempt's
+  // transient rows through the bundle's settleAssistant — an abandoned
+  // attempt's ghost text must not survive the attempt, and a committed
+  // settlement arrives separately as a normal dsh_event (streaming.dsh-event
+  // .test.ts drives the same frames through the store; these drive the feed
+  // module directly).
+  const START = { type: 'dsh_stream', frame: { type: 'start', attemptId: 'a1', revision: 1, turn: 0, step: 0 } };
+  const CHUNK = (index: number, text: string) => ({
+    type: 'dsh_stream',
+    frame: { type: 'chunk', attemptId: 'a1', revision: 1, index, time: 2000 + index, chunk: { type: 'text-delta', index: 0, text } },
+  });
+  const END = (outcome: Record<string, unknown>) => ({
+    type: 'dsh_stream',
+    frame: { type: 'end', attemptId: 'a1', revision: 1, index: 3, outcome },
+  });
+  const openStep = () => {
+    const feed = (f: Record<string, unknown>) => feedFrame(f, 's1', vi.fn());
+    feed(DSH('turn/start', 2, { turn: 0 }));
+    feed(DSH('step/start', 3, { turn: 0, step: 0 }));
+    return feed;
+  };
+  const streamedText = (pubs: FeedPublication[]): string => {
+    const node = last(pubs).conversation.find(n => n.kind === 'assistant-step');
+    const blocks = (node?.data as { blocks?: { kind: string; text?: string }[] } | undefined)?.blocks ?? [];
+    return blocks.filter(b => b.kind === 'text').map(b => b.text ?? '').join('');
+  };
+
+  it('an abandoned end leaves no live-chunk text — no ghost survives the attempt', () => {
+    const feed = openStep();
+    feed(START);
+    feed(CHUNK(0, 'Hel')); feed(CHUNK(1, 'lo')); feed(CHUNK(2, '!'));
+    expect(streamedText(drain())).toBe('Hello!');
+    feed(END({ kind: 'abandoned' }));
+    expect(streamedText(drain())).toBe('');
+  });
+
+  it('a committed end retires the transients; the settled message renders alone', () => {
+    const feed = openStep();
+    feed(START);
+    feed(CHUNK(0, 'Hel')); feed(CHUNK(1, 'lo'));
+    feed(END({ kind: 'committed', eventType: 'assistant/message', seq: 4 }));
+    // The retirement lands at the end itself; the settlement is the NEXT
+    // frame and republishes the text as settled state.
+    expect(streamedText(drain())).toBe('');
+    feed(ASSISTANT(4, 'Hello world'));
+    const conv = last(drain()).conversation;
+    expect(conv.filter(n => n.kind === 'assistant-step')).toHaveLength(1);
+    expect(streamedText(drain())).toBe('Hello world');
+  });
+
+  it('a chunk after the end is dropped — the attempt is closed', () => {
+    const feed = openStep();
+    feed(START);
+    feed(CHUNK(0, 'Hel'));
+    feed(END({ kind: 'abandoned' }));
+    feed(CHUNK(1, 'lo'));
+    expect(streamedText(drain())).toBe('');
+  });
+
+  it("a lost start's end retires nothing and never clobbers a different open attempt", () => {
+    const feed = openStep();
+    feed(START);
+    feed(CHUNK(0, 'Hel')); feed(CHUNK(1, 'lo'));
+    expect(streamedText(drain())).toBe('Hello');
+    // An end naming an attempt this feed never saw (the start lost with a
+    // socket gap): it retires nothing, and the OPEN attempt must survive it.
+    feed({ type: 'dsh_stream', frame: { type: 'end', attemptId: 'other', revision: 1, index: 3, outcome: { kind: 'abandoned' } } });
+    expect(streamedText(drain())).toBe('Hello');
+    // The open attempt still seats chunks — the foreign end did not close it.
+    feed(CHUNK(2, '!'));
+    expect(streamedText(drain())).toBe('Hello!');
+    // The open attempt closes only when the end names it.
+    feed(END({ kind: 'abandoned' }));
+    expect(streamedText(drain())).toBe('');
   });
 });

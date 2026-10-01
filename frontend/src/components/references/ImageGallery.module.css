@@ -2,7 +2,8 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
   gap: 2px;
-  padding: 0;
+  /* WHY: room for the active thumb's 2px outline on edge thumbs, so the panel edge does not clip it. */
+  padding: 2px;
 }
 
 .thumb {
@@ -29,8 +30,15 @@
   border-color: var(--border);
 }
 
-.thumbActive {
+/* WHY: :hover would otherwise win on specificity and repaint the inner 1px light,
+ * leaving a pale strip between the image and the accent outline. */
+.thumbActive,
+.thumbActive:hover {
   border-color: var(--accent);
+  /* WHY: 1px border + 2px outline fills the whole grid gap — a 3px frame that reads
+   * at a glance while arrow-keying, without resizing the image or shifting the grid. */
+  outline: 2px solid var(--accent);
+  z-index: 2;
 }
 
 .thumbUploading {

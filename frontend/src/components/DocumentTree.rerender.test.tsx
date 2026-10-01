@@ -65,7 +65,7 @@ beforeEach(async () => {
   vi.doMock('../hooks/useHoverPreview', () => ({
     useHoverPreview: () => ({ handleHover: vi.fn(), handleHoverLeave: vi.fn() }),
   }));
-  vi.doMock('../hooks/useTreeDragReorder', () => ({ useTreeDragReorder: () => {} }));
+  vi.doMock('../hooks/useSiblingDragReorder', () => ({ useSiblingDragReorder: () => {}, treeDragAdapter: {} }));
   vi.doMock('../hooks/useDocumentRoute', () => ({ useDocumentRoute: () => ({ documentId: 'd1' }) }));
   vi.doMock('./HoverPreviewPopup', () => ({ HoverPreviewPopup: () => null }));
   vi.doMock('../i18n', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));

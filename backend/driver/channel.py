@@ -754,10 +754,8 @@ class DriverChannel:
 
     async def _open_turn(self, sub: _Subscription) -> _ChannelTurn:
         bind, sub.pending_bind = sub.pending_bind, None
-        # The turn budgets resolve per turn through instance settings. The
-        # grace is a CHAIN read: TURN_PROGRESS_GRACE_S folds
-        # TURN_TIMEOUT_S at import, so an override on the base must surface
-        # here (settings.get walks the registry fallback: row → own env → base).
+        # The turn budgets resolve per turn through instance settings, so an
+        # admin override reaches the next turn.
         budgets = await settings.get_all(["TURN_MAX_WALL_S", "TURN_HOLD_MAX_S"])
         turn = _ChannelTurn(
             projection=_TurnProjection(

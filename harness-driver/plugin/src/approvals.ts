@@ -10,9 +10,8 @@
  *   the driver's own HTTP endpoints below (the backend relays after its
  *   session-access check — our RBAC is the answerer's gate).
  *
- * # ARCH: the hold is DRIVER-OWNED — the backend decision_store is deleted.
- *   Nothing parks
- *   inside a Tool-API request anymore: dsh's ApprovalService awaits this
+ * # ARCH: the hold is DRIVER-OWNED. Nothing parks
+ *   inside a Tool-API request: dsh's ApprovalService awaits this
  *   bridge's promise inside the agent's own turn, so the turn never ends and
  *   the model never re-reasons while the user decides.
  *

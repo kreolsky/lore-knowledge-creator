@@ -1,21 +1,21 @@
 /**
  * The standing event channel — `/ws/events` — plus the ONE session-event tap
- * every relay sink subscribes to (plan agent-line-harness-lifecycle step 2).
+ * every relay sink subscribes to.
  *
  * # SYSTEM: harness-driver (standing channel half) — the SUBSCRIPTION half of
- *   the one relay: the SAME frames map.ts mints for the SSE turn stream
- *   (mapEvent verbatim, the lore mints included), delivered per subscribed
+ *   the one relay: the SAME frames map.ts mints (mapEvent verbatim, the lore
+ *   mints included), delivered per subscribed
  *   dsh session id ENVELOPED as {type:'session_frame', session_id, frame}
- *   (step 4: the frames carry no session attribution of their own, and the
+ *   (the frames carry no session attribution of their own, and the
  *   backend's one socket subscribes to many sessions), PLUS the driver's
  *   turn-lifecycle frames (model_update, context_usage, error) pushed by the
- *   followup runner (plan step 3) — addressed by session, unsequenced, never
+ *   followup runner — addressed by session, unsequenced, never
  *   window-keyed. Turn lifecycle
  *   frames are re-derivable from the turn's outcome and never replayed: a
  *   consumer that lost frames resyncs through POST /session-entries +
  *   since_seq (the extended projection), never through a second timeline
- *   replayed here. The TRANSIENT half rides the same channel since 0.1.5:
- *   dsh's own live chunk publication (agent/assistant-stream — the log holds
+ *   replayed here. The TRANSIENT half rides the same channel: dsh's own live
+ *   chunk publication (agent/assistant-stream — the log holds
  *   only settled events) relays as {type:'dsh_stream', frame} through
  *   relayAssistantStream below — same envelope, same auth, addressed by the
  *   emitting agent's session, never replayed (a resync reads the settled
@@ -41,7 +41,8 @@
  *   ERR_MODULE_NOT_FOUND). loadWs resolves it through a require anchored in
  *   the profiles dir — dsh's own mechanism, pointed at explicitly — lazily
  *   at attach; a composition where it cannot resolve logs loudly and serves
- *   NO channel (the SSE path is unaffected — dual-run, plan Decision).
+ *   NO channel — and without the channel /followup refuses every turn with
+ *   503 (the backend has no other delivery path).
  *
  * # ARCH: same trust boundary as the HTTP endpoints and no port of its own:
  *   the upgrade rides the existing HTTP server (compose network only),
@@ -51,9 +52,9 @@
  * # INVARIANT: one TurnMapState per (socket, subscribed session), seeded at
  *   subscribe and carried across turns. Why: mapEvent's mint coordinates
  *   read state.turn, which each turn/start re-seeds — a state shared across
- *   SESSIONS would cross coordinate systems, and the SSE turn listener and
- *   the replay projection (entries.ts) already hold this per-session
- *   discipline; the standing channel must not be a third divergent mapping.
+ *   SESSIONS would cross coordinate systems, and the replay projection
+ *   (entries.ts) already holds this per-session discipline; the standing
+ *   channel must not be a second divergent mapping.
  */
 
 import { createRequire } from 'node:module'
@@ -61,13 +62,14 @@ import { join } from 'node:path'
 import type http from 'node:http'
 
 import { mapEvent, newTurnMapState, type DshEvent, type TurnMapState } from './map.ts'
+import type { SessionStreamBaselines } from './stream-baselines.ts'
 
 // ── The ONE session-event tap.
 //
 // apply() owns the single ctx.on('session/event') subscription and forwards
-// into this tap; every relay sink — the per-turn SSE listener, the standing
-// WS channel — subscribes here. Fan-out is synchronous, in subscription
-// order, so a turn's SSE wire order cannot be reordered by the channel.
+// into this tap; every relay sink — the standing WS channel — subscribes
+// here. Fan-out is synchronous, in subscription order, so a turn's wire
+// order cannot be reordered by the channel.
 
 export type SessionEventSink = (session: unknown, ev: unknown) => void
 
@@ -77,7 +79,7 @@ export interface SessionEventTap {
    * default). Why pinned in the contract and not left to registration luck:
    * the followup runner's turn watcher pushes turn-lifecycle frames
    * (context_usage) that must reach subscribers BEFORE the same event's
-   * mapped frames — the SSE wire order, by construction. */
+   * mapped frames — the wire order, by construction. */
   subscribe(sink: SessionEventSink, phase?: 'watch' | 'relay'): () => void
 }
 
@@ -126,10 +128,20 @@ export interface WsServerLike {
 
 export type WsCtor = new (opts: { noServer: true }) => WsServerLike
 
+/** Render the loadWs failure line: every resolution error, then the
+ * consequence of serving no channel. Pure and exported because the failure
+ * itself is not drivable end-to-end (attempt 1 resolves inside the image),
+ * so the rendered line is pinned directly on this helper
+ * (test/ws-events.test.ts). */
+export function wsUnresolvableMessage(errors: string[]): string {
+  return `[lore-driver] ws unresolvable (${errors.join(' | ')}) `
+    + '— the standing event channel is OFF; /followup refuses every turn (503)'
+}
+
 /** Resolve the `ws` module — see the module ARCH. The plugin's own location
  * first (a future image may link it into the workspace), then the DSH
  * profile fallback. null when neither resolves — the caller serves no
- * channel; the SSE path is unaffected. */
+ * channel and every /followup turn is refused with 503. */
 export function loadWs(home: string | undefined): WsCtor | null {
   const attempts: Array<{ where: string; load: () => unknown }> = [
     { where: 'plugin node_modules walk', load: () => createRequire(import.meta.url)('ws') },
@@ -149,9 +161,7 @@ export function loadWs(home: string | undefined): WsCtor | null {
       errors.push(`${attempt.where}: ${String(err)}`)
     }
   }
-  console.error(
-    `[lore-driver] ws unresolvable (${errors.join(' | ')}) `
-    + '— the standing event channel is OFF (SSE path unaffected)')
+  console.error(wsUnresolvableMessage(errors))
   return null
 }
 
@@ -189,7 +199,7 @@ export interface EventsChannel {
    * subscriber of that session WITHOUT touching their map state — these
    * frames are not dsh log events (no seq, never window-keyed, never
    * replayed). Ordering contract: call from a 'watch'-phase sink to land the
-   * frame BEFORE the same event's mapped frames (the SSE wire order). */
+   * frame BEFORE the same event's mapped frames (the wire order). */
   push(dshId: string, frame: Record<string, unknown>): void
   /** A fork moved `loreId` from `fromDshId` to `toDshId` (the identity map
    * is already repointed by the caller): every socket table holding the old
@@ -225,7 +235,7 @@ export function attachEventsChannel(opts: EventsChannelOpts): EventsChannel {
       clients.delete(client)
       return
     }
-    // Enveloped per session (step 4): the frame itself carries no session
+    // Enveloped per session: the frame itself carries no session
     // attribution ("the listener knows; the event does not", map.ts), and a
     // shared socket subscribed to many sessions could not route a bare
     // frame. The envelope is transport addressing; the frame inside stays
@@ -327,25 +337,30 @@ export function attachEventsChannel(opts: EventsChannelOpts): EventsChannel {
   }
 }
 
-// ── The assistant-stream relay (0.1.5).
+// ── The assistant-stream relay.
 
 /**
  * The `agent/assistant-stream` sink: one live chunk publication → one
  * `{type:'dsh_stream', frame}` pushed through the standing channel, addressed
  * by the EMITTING agent's session id and otherwise untouched (the browser
  * owns the transient fold — dsh's own client contract, see its
- * ClientAssistantStream). apply() registers this on ctx.on beside the
- * session/event tap; a child (subagent) session's publications address no
- * subscriber (the backend subscribes to driving sessions only) and so emit
- * nothing, the same silence map.ts gives child LOG events.
+ * ClientAssistantStream). The same frame also feeds the session's reload
+ * baseline (`baselines.accept` — stream-baselines.ts): a reload mid-step
+ * reads the fold back through /session-entries' `assistant_stream`. apply()
+ * registers this on ctx.on beside the session/event tap; a child (subagent)
+ * session's publications address no subscriber (the backend subscribes to
+ * driving sessions only) and so emit nothing, the same silence map.ts gives
+ * child LOG events.
  */
 export function relayAssistantStream(
   channel: EventsChannel,
+  baselines: SessionStreamBaselines,
 ): (payload: { agent: unknown; frame: unknown }) => void {
   return ({ agent, frame }) => {
     const sid = String(
       (agent as { session?: { id?: unknown } } | null | undefined)?.session?.id ?? '')
     if (!sid) return
+    baselines.accept(sid, frame)
     channel.push(sid, { type: 'dsh_stream', frame })
   }
 }

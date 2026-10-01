@@ -24,47 +24,42 @@
     - id: lore-web-search
       name: '/dsh/lore-driver/src/web-search/index.ts'
 
-# The LLM route: llm-pi-ai, one hand-declared provider route (`lore`) pointing
-# at the same Lore gateway as ever; the key resolves per request from
-# AI_API_KEY, never inlined here. WHY llm-pi-ai and not the old native
-# adapter: the effort picker offers the gateway's per-model levels, and
-# llm-pi-ai's per-model `reasoningEfforts` dict is the only dsh mechanism
-# where the offered levels are configuration (the old route's set was
-# hard-coded to off/low/high/max and died with UNSUPPORTED_REASONING_EFFORT
-# on anything else); the plugin upserts each model's advertised levels into
-# its catalog entry (ensureModelEntry), so what the UI offers is what the
-# wire takes, spelled as the gateway spells it.
-# compat mirrors what the old route sent and the gateway accepts: system
+# The LLM route: llm-pi-ai, mounted DORMANT (upstream's own shape — zero
+# routes until a settings section supplies provider profiles; the web Models
+# page is the upstream writer, the lore-driver's turns are ours). Every TURN
+# declares the ONE `lore` provider route (ensureModelEntry): apiKeyEnv
+# LORE_AGENT_API_KEY, api openai-completions, the turn's gateway baseURL, the
+# compat trio and defaultContextWindow 128000 (the plugin's loreRoute
+# constant), plus the per-model catalog (contextWindow / maxTokens / image
+# input / reasoningEfforts).
+# WHY the route is NOT declared here as config: `providers` is the volatile
+# field of llm-pi-ai's Config, and every settings write clones the entry's
+# config through the volatile path — a `!!js` expression inside the volatile
+# subtree survives as a plain object and the write fails validation
+# ($.providers.lore.baseURL expected string). Env-bound values ride the
+# settings document (plain JSON), never the patch layer.
+# WHY llm-pi-ai and not the old native adapter: the effort picker offers the
+# gateway's per-model levels, and llm-pi-ai's per-model `reasoningEfforts`
+# dict is the only dsh mechanism where the offered levels are configuration
+# (the old route's set was hard-coded to off/low/high/max and died with
+# UNSUPPORTED_REASONING_EFFORT on anything else); the plugin upserts each
+# model's advertised levels into its catalog entry (ensureModelEntry), so
+# what the UI offers is what the wire takes, spelled as the gateway spells
+# it. compat mirrors what the old route sent and the gateway accepts: system
 # messages keep `role: system`, the output cap is `max_tokens`, the effort is
-# a bare `reasoning_effort` (openai thinking format).
-# `models` carries ONE bootstrap id (the gate-checked harness model) because a
-# hand-declared route refuses to resolve with none — the plugin's boot upsert
-# replaces the list wholesale with the accumulated per-model entries (the
-# settings-layer array replaces this one), so the static list never serves a
-# turn the plugin did not already declare. NO route-level `reasoning`: a route
-# default would ride every Default turn — Default must send nothing.
-# defaultContextWindow is kept from the old row: pi-ai's own fallback
-# (262144) would silently change the context_usage denominator for an id the
-# gateway does not list. No env fallbacks: an unset LORE_AI_API_URL fails at
-# the first request instead of pretending to have a route. No `maxTokens`
-# here: the per-turn output cap is the router's per-model
+# a bare `reasoning_effort` (openai thinking format). defaultContextWindow
+# is kept from the old row: pi-ai's own fallback (262144) would silently
+# change the context_usage denominator for an id the gateway does not list.
+# No env fallbacks: an unset LORE_AI_API_URL skips the route write and the
+# first request fails loud instead of pretending to have a route. No
+# `maxTokens`: the per-turn output cap is the router's per-model
 # `max_completion_tokens`, upserted into the catalog entry by the plugin
 # (ensureModelEntry) — a profile-wide number would re-hardcode the deleted
-# 8192 cap that cut every model below its real ceiling.
+# 8192 cap that cut every model below its real ceiling. NO route-level
+# `reasoning`: a route default would ride every Default turn — Default must
+# send nothing.
 - id: llm-pi-ai
-  config:
-    providers:
-      lore:
-        apiKeyEnv: AI_API_KEY
-        api: openai-completions
-        baseURL: !!js process.env.LORE_AI_API_URL
-        compat:
-          supportsDeveloperRole: false
-          maxTokensField: max_tokens
-          thinkingFormat: openai
-        defaultContextWindow: !!js Number(process.env.LORE_HARNESS_CONTEXT_WINDOW)
-        models:
-          - id: !!js process.env.LORE_HARNESS_MODEL
+  disabled: false
 
 # The old native adapter, disabled (same mechanism as the tool rows below):
 # dsh-base mounts it unconditionally with the PUBLIC DeepSeek endpoint as its
@@ -72,11 +67,22 @@
 # rename would fail SOFT onto the real DeepSeek API instead of loud.
 - id: llm-deepseek
   disabled: true
+# DeepSeek account/session surfaces: our only route is llm-pi-ai → `lore`.
+- id: deepseek-account
+  disabled: true
+- id: llm-deepseek-account
+  disabled: true
 
+# The entry itself must stay: dsh's session-controller injects
+# agentDefaultModel, and an absent row breaks activation. Its env link is cut
+# — the empty string, the value every fresh public install already evaluates
+# (undefined FAILS the entry's own validation: "$.model missing required
+# value", proven on the gray boot): the model comes only from the turn, never
+# from the composition (plan component-wiring-not-settings step 3).
 - id: agent-default-model
   config:
     provider: lore
-    model: !!js process.env.LORE_HARNESS_MODEL
+    model: ''
 
 # Lore's prep layer owns the whole prompt; the harness contributes nothing
 # (no identity opener, no runtime contexts, no persona row).
@@ -106,44 +112,39 @@
   disabled: true
 
 # Session titles come from the harness titler: dsh-base composes
-# session-title-first-prompt-llm under THIS id (overriding a config here
-# REPLACES the base row's, so the five required fields are restated). It runs
-# once per fresh non-fork session on the first prompt and never retries on its
-# own — acceptable because the session-title service's deterministic
-# first-words fallback always lands before any model call. The model is
-# CHAT_TITLE_MODEL, read straight off the process env (the service loads the
-# whole .env) — the backend makes no title call and does not read the variable,
-# so the harness is its only consumer. WHY: a separate model for cheap
-# auto-title generation; falls back to CHAT_MODEL if not set. WHY `lore`: it
-# is the single provider route this composition declares (the llm-pi-ai
-# `lore` route above, pointing at OUR gateway — the same route
-# agent-default-model rides). WHY the model must be non-reasoning on the
-# gateway: the title call names no effort, and on this openai-format route a
-# request with no `reasoning_effort` gets the PROVIDER's default — there is no
-# per-purpose way to say "don't think", so a reasoner would think on every
-# title. The plugin's boot gate enforces it (crash-on-config naming the model
-# and its levels) and upserts the model's id-only catalog entry at boot.
-# The title's byte budget: dsh-base caps a title at 80 UTF-8 bytes (40 Cyrillic
-# characters) and cuts it mid-word, which is what the chat list showed. The UI
-# ellipsizes a long title itself (ChatRow `truncate`), so the generated title
-# rides whole; the budget stays a positive integer because the service requires
-# one, and fallbackMaxBytes may not exceed it. The deterministic first-words
-# fallback keeps its 5-word cap and loses only the mid-word byte cut.
+# session-title-first-prompt-llm under the `session-title-llm` id below (a
+# config there REPLACES the base row's). It runs once per fresh non-fork
+# session on the first prompt and never retries on its own — acceptable
+# because the session-title service's deterministic first-words fallback
+# always lands before any model call. WHY `lore`: it is the
+# single provider route this composition declares (the llm-pi-ai `lore` route
+# above, pointing at OUR gateway — the same route agent-default-model rides).
+# WHY the model must be non-reasoning on the gateway: the title call names no
+# effort, and on this openai-format route a request with no
+# `reasoning_effort` gets the PROVIDER's default — there is no per-purpose
+# way to say "don't think", so a reasoner would think on every title. The
+# plugin's turn gate warns loudly (assertNonReasoningTitleModel) and upserts
+# the model's id-only catalog entry per turn (ensureTitleEntry). The title's
+# byte budget: dsh-base caps a title at 80 UTF-8 bytes (40 Cyrillic
+# characters) and cuts it mid-word; the UI ellipsizes a long title itself
+# (ChatRow `truncate`), so the budgets here sit wide and the deterministic
+# first-words fallback keeps its 5-word cap.
 - id: session-title
   config:
     fallbackMaxWords: 5
     fallbackMaxBytes: 4096
     maxTitleBytes: 4096
 
+# The titler's LLM policy: the five fixed fields live in the profile patch
+# (the config-editor's write target — see profiles/lore/cordis.patch.yml);
+# the provider/model pair is PER-TURN state, applied by the plugin from the
+# payload's title_model (admin CHAT_TITLE_MODEL, else the backend's
+# CHAT_MODEL): set while one is named, removed when it is empty — the titler
+# then rides the session's own logged route, so the entry activates on an
+# install with no AI config. dsh refuses a half or empty pair at activation,
+# which is why no pair is committed here.
 - id: session-title-llm
-  config:
-    targetWords: 5
-    targetCjkCharacters: 10
-    maxInputBytes: 4096
-    maxOutputTokens: 64
-    timeoutMs: 60000
-    provider: lore
-    model: !!js process.env.CHAT_TITLE_MODEL || process.env.CHAT_MODEL
+  disabled: false
 
 # Raw JSONL (not zstd frames): the Lore-side tooling (and any post-mortem of a
 # drive) can line-read the session logs without the backend codec.
@@ -227,37 +228,41 @@
 - id: timeout-policy
   disabled: false
 # web: the ONE web_search. The provider is chosen in Lore's admin settings
-# ("Web search"); boot-env.ts fetches the choice from the backend at harness
-# start and sets DSH_WEB_SEARCH_PROVIDER (the pinned id dsh-web selects by)
-# plus that provider's key/URL in the env. Providers: dsh's own
-# web-search-deepseek (Anthropic-compatible Messages API with DEEPSEEK_API_KEY,
-# a different plane from the AI_API_* chat route) and lore-web-search above.
-# INVARIANT: `searchProvider` is set here from the pin. Why: the base bundle's
-# row pins `searchProvider: deepseek-official`, and dsh-web reads the env pin
-# only when the config leaves it unset — without this row every provider choice
-# ran DeepSeek. `fetchProvider: http` restates the base value this `config`
-# replaces.
+# ("Web search") and rides every turn payload: the plugin edits the `web`
+# entry's `searchProvider` through the config editor when it differs
+# (profiles/lore/cordis.patch.yml carries the static default — the home row
+# must stay config-less or the editor refuses the entry) and writes the
+# credential under the ONE ref LORE_WEB_SEARCH_KEY. Providers: dsh's own
+# web-search-deepseek (Anthropic-compatible Messages API, a different plane
+# from the AI_API_* chat route) and lore-web-search above — every one of them
+# resolves the key at call time, so an admin change reaches the next search.
+# INVARIANT: `searchProvider` is pinned, always. Why: unpinned, dsh-web picks
+# any usable provider, and DeepSeek with a resolver is always usable — a
+# silent fallback; there is no off state, and a provider without a key/URL
+# fails its calls loudly naming itself and the admin path.
 - id: web
   disabled: false
-  config:
-    searchProvider: !!js process.env.DSH_WEB_SEARCH_PROVIDER
-    fetchProvider: http
+# dsh's own DeepSeek provider resolves apiKeyEnv through the credentials
+# service per request: the per-turn credential write (LORE_WEB_SEARCH_KEY)
+# serves it too. WHY not DEEPSEEK_API_KEY: credentials-local lets the
+# inherited env win and refuses to write a ref it holds, and prod's .env sets
+# DEEPSEEK_API_KEY — the same reason LORE_AGENT_API_KEY exists.
 - id: web-search-deepseek
   disabled: false
   config:
-    apiKeyEnv: DEEPSEEK_API_KEY
+    apiKeyEnv: LORE_WEB_SEARCH_KEY
 # A `config` here REPLACES the base bundle's, so the two values it set are
 # restated. `fetch: false` is upstream's deliberate choice and stays: the
 # `web-fetch-http` provider defers SSRF protection to the caller while the MODEL
 # picks the request target, and no fetch provider is mounted here — turning the
 # tool on without one served a `web_fetch` that failed every call.
-# `search` follows the pin: provider `off` serves no pin, so web_search is not
-# offered to the model at all (and the skills filter stops advertising the
-# skills that need it).
+# `search: true`, STATIC: web_search is always offered to the model — there is
+# no off state; a provider without a key fails the call loudly, and to stop
+# searching an admin clears the key.
 - id: tool-web
   disabled: false
   config:
-    search: !!js process.env.DSH_WEB_SEARCH_PROVIDER !== undefined
+    search: true
     fetch: false
     searchTimeoutMs: 60000
     searchMaxResults: 8
@@ -269,6 +274,19 @@
 - id: command-compact
   disabled: true
 - id: plan-mode
+  disabled: true
+# Interactive coding-agent surface, gated only on profileContext — and we
+# boot `--profile lore` (this composition serves Lore's Tool-API tools only).
+- id: plugin-manager
+  disabled: true
+# config-editor stays ENABLED (a 0.2.0 ruling): the settings service injects
+# `configEditor`, and the plugin's llm-pi-ai catalog upsert (the per-turn
+# maxTokens cap, image input, reasoningEfforts) rides `ctx.get('settings')` —
+# disabling this row leaves the settings fiber PENDING and every turn 502s.
+# It serves no tool and adds no prompt section; the served-surface
+# comparison after a pin move is the guard.
+# MCP resource exposure: no MCP server is mounted for the agent line.
+- id: mcp-resources
   disabled: true
 # ── subagents ─────────────────────────────────────────────────────────────────
 # The ctx.subagents registry + the stock DISPATCH tool (foreground one-shot =
@@ -297,7 +315,11 @@
   disabled: true
 - id: tool-subagent-fork
   disabled: true
-- id: workflow-worker-thread
+# The PTC (spawned sandboxed Node runtime) workflow plane — `tool-workflow`
+# is already disabled below, so the runtime and its row ride along off.
+- id: ptc-runtime
+  disabled: true
+- id: workflow-ptc
   disabled: true
 - id: tool-workflow
   disabled: true
@@ -316,4 +338,8 @@
 - id: hmr
   disabled: true
 - id: session-telemetry-otel
+  disabled: true
+# otel itself (the tracing plane session-telemetry-otel rides): no collector
+# is wired for the agent line.
+- id: otel
   disabled: true

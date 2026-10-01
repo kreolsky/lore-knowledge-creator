@@ -40,26 +40,30 @@ function store(reject: Record<string, string> = {}) {
   }
 }
 
-/** Settings seam mock: get() reflects every committed update immediately, in
- * the `llm-pi-ai` section shape ({providers: {lore: {models}}}) the plugin
- * speaks; update() applies the patch's providers.lore.models array WHOLESALE
- * (the settings seam's array semantics — objects merge, arrays replace). */
+/** Settings seam mock (0.2.0 shape): describe() reflects every committed
+ * update immediately, in the `llm-pi-ai` value shape
+ * ({providers: {lore: {…}}}) the plugin speaks; update() applies the patch's
+ * providers.lore object — scaffold fields merge, the models array applies
+ * WHOLESALE (the settings seam's array semantics — objects merge, arrays
+ * replace). */
 function fakeSettings(models: Record<string, unknown>[] = []) {
-  const state = { models: [...models] }
+  const state: { provider: Record<string, unknown> & { models?: Record<string, unknown>[] } } = {
+    provider: { models: [...models] },
+  }
   const updates: { ns: unknown; patch: Record<string, unknown> }[] = []
   return {
     updates,
-    get: () => ({ providers: { lore: { models: state.models } } }),
+    describe: () => [{ ns: 'llm-pi-ai', value: { providers: { lore: state.provider } } }],
     update: async (ns: unknown, patch: {
-      providers?: { lore?: { models?: Record<string, unknown>[] } }
+      providers?: { lore?: { models?: Record<string, unknown>[] } & Record<string, unknown> }
     }) => {
       await new Promise((resolve) => setTimeout(resolve, 5)) // force chain interleaving
-      const next = patch.providers?.lore?.models
-      if (!Array.isArray(next)) throw new Error('test seam: no providers.lore.models in patch')
-      updates.push({ ns, patch: { providers: { lore: { models: [...next] } } } })
-      for (const entry of next) {
-        state.models = [...state.models.filter((m) => m.id !== entry.id), entry]
+      const next = patch.providers?.lore
+      if (next === undefined || !Array.isArray(next.models)) {
+        throw new Error('test seam: no providers.lore.models in patch')
       }
+      updates.push({ ns, patch: { providers: { lore: { ...next, models: [...next.models] } } } })
+      state.provider = { ...state.provider, ...next, models: next.models }
     },
   }
 }
@@ -272,14 +276,20 @@ test('null levels (unreadable gateway) carry the committed declaration verbatim'
   assert.equal(settings.updates.length, 1)
 })
 
-test('a boot (ifAbsent) upsert leaves a committed entry untouched', async () => {
+test('a boot (ifAbsent) upsert leaves a committed entry on a committed route untouched', async () => {
   // The boot write exists to land an id-only entry for ids the static layer
   // does not declare — it must NOT downgrade an entry a previous turn
   // already filled (NaN caps would strip contextWindow/maxTokens until the
   // model's next turn). Inside the write chain, so no race with a turn.
+  // The skip additionally requires a committed ROUTE (a baseURL): llm-pi-ai
+  // mounts dormant, so a boot against a route-less section lands the
+  // scaffold — accepting a one-time id-only downgrade of that boot's own
+  // entry, re-filled on the model's next turn.
   const settings = fakeSettings([
     { id: 'm/x', contextWindow: 128000, maxTokens: 65536, reasoningEfforts: { low: 'low' } },
   ])
+  ;(settings.describe()[0]!.value as { providers: { lore: Record<string, unknown> } })
+    .providers.lore.baseURL = 'http://gw'
   await ensureModelEntry(settings as never, 'm/x', Number.NaN, Number.NaN, false, null, true)
   assert.equal(settings.updates.length, 0, 'no id-only downgrade of a committed entry on restart')
   const fresh = fakeSettings()
@@ -287,6 +297,24 @@ test('a boot (ifAbsent) upsert leaves a committed entry untouched', async () => 
   assert.deepEqual(fresh.updates[0]!.patch, {
     providers: { lore: { models: [{ id: 'm/y' }] } },
   }, 'an absent model still lands its id-only entry')
+})
+
+test('a boot upsert against a route-less section lands the scaffold (one-time id-only downgrade)', async () => {
+  // The transition boot after the dormant-row move: the settings section
+  // carries committed models but no route yet (the legacy settings.yaml
+  // import lands models only). The scaffold must ride the boot write; the
+  // boot's own model entry goes id-only and re-fills on its next turn.
+  const settings = fakeSettings([
+    { id: 'm/x', contextWindow: 128000, maxTokens: 65536 },
+  ])
+  const route = { apiKeyEnv: 'AI_API_KEY', api: 'openai-completions', baseURL: 'http://gw' }
+  await ensureModelEntry(settings as never, 'm/x', Number.NaN, Number.NaN, false, null, true, route)
+  assert.equal(settings.updates.length, 1)
+  const lore = (settings.updates[0]!.patch.providers as { lore: Record<string, unknown> }).lore
+  assert.equal(lore.baseURL, 'http://gw')
+  assert.deepEqual((lore.models as { id: string }[]).map(m => m.id), ['m/x'])
+  assert.equal((lore.models as Record<string, unknown>[])[0]!.contextWindow, undefined,
+    'the boot entry is id-only — the caps re-land on the model\'s next turn')
 })
 
 test('a second turn on the same model with the same caps and offer writes nothing', async () => {
@@ -342,7 +370,7 @@ test('concurrent upserts serialize: two models, both entries survive one chain',
     ensureModelEntry(settings as never, 'm/y', 524288, 131072, false, null),
   ])
   assert.equal(settings.updates.length, 2)
-  const finalModels = (settings.get() as { providers: { lore: { models: Record<string, unknown>[] } } }).providers.lore.models
+  const finalModels = (settings.describe()[0]!.value as { providers: { lore: { models: Record<string, unknown>[] } } }).providers.lore.models
   assert.deepEqual(finalModels.map((m) => m.id).sort(), ['m/x', 'm/y'])
   // each write computed from the committed state, not a shared stale snapshot
   const first = settings.updates[0]!.patch.providers as { lore: { models: unknown[] } }
@@ -361,6 +389,49 @@ test('a garbage cap cannot poison the section — and does not rewrite either', 
   // garbage-cap turn on the same model writes nothing.
   await ensureModelEntry(settings as never, 'm/x', Number.NaN, Number.NaN, false, null)
   assert.equal(settings.updates.length, 1)
+})
+
+test('the first write lands the env route scaffold beside the model; later writes are models-only', async () => {
+  const settings = fakeSettings()
+  const route = {
+    apiKeyEnv: 'AI_API_KEY', api: 'openai-completions', baseURL: 'http://gw',
+    compat: { maxTokensField: 'max_tokens' }, defaultContextWindow: 131072,
+  }
+  await ensureModelEntry(settings as never, 'm/x', 128000, 65536, false, null, false, route)
+  const first = (settings.updates[0]!.patch.providers as { lore: Record<string, unknown> }).lore
+  assert.equal(first.baseURL, 'http://gw')
+  assert.equal(first.apiKeyEnv, 'AI_API_KEY')
+  assert.equal(first.defaultContextWindow, 131072)
+  assert.deepEqual((first.models as { id: string }[]).map(m => m.id), ['m/x'])
+
+  // The same route committed: the scaffold does not ride again.
+  await ensureModelEntry(settings as never, 'm/y', 524288, 131072, false, null, false, route)
+  const second = (settings.updates[1]!.patch.providers as { lore: Record<string, unknown> }).lore
+  assert.equal(second.baseURL, undefined)
+  assert.deepEqual((second.models as { id: string }[]).map(m => m.id).sort(), ['m/x', 'm/y'])
+})
+
+test('a changed gateway URL or key ref rewrites the route scaffold on the next turn', async () => {
+  // An admin edit of AI_API_URL reaches the next request with no restart,
+  // and a route committed under the pre-admin ref (AI_API_KEY) moves to the
+  // Lore-internal one.
+  const settings = fakeSettings([{ id: 'm/x', contextWindow: 128000, maxTokens: 65536 }])
+  const lore = (settings.describe()[0]!.value as { providers: { lore: Record<string, unknown> } }).providers.lore
+  lore.baseURL = 'http://old/v1'
+  lore.apiKeyEnv = 'AI_API_KEY'
+  const route = { apiKeyEnv: 'LORE_AGENT_API_KEY', api: 'openai-completions', baseURL: 'http://old/v1' }
+  await ensureModelEntry(settings as never, 'm/x', 128000, 65536, false, null, false, route)
+  assert.equal(settings.updates.length, 1, 'the old ref alone forces the rewrite')
+  assert.equal((settings.updates[0]!.patch.providers as { lore: Record<string, unknown> }).lore.apiKeyEnv,
+    'LORE_AGENT_API_KEY')
+  await ensureModelEntry(settings as never, 'm/x', 128000, 65536, false, null, false,
+    { ...route, baseURL: 'http://new/v1' })
+  assert.equal(settings.updates.length, 2)
+  assert.equal((settings.updates[1]!.patch.providers as { lore: Record<string, unknown> }).lore.baseURL,
+    'http://new/v1')
+  await ensureModelEntry(settings as never, 'm/x', 128000, 65536, false, null, false,
+    { ...route, baseURL: 'http://new/v1' })
+  assert.equal(settings.updates.length, 2, 'an unchanged gateway writes nothing')
 })
 
 // ── prepareUserContent (mapping + the unconditional catalog upsert) ─────────

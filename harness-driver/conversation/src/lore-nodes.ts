@@ -1,7 +1,7 @@
 /**
  * Lore's own conversation-node definitions — the cards dsh has no node for.
  *
- * # SYSTEM: dsh-conversation. Plan lore-renders-dsh-conversation step 2: the
+ * # SYSTEM: dsh-conversation. The
  * four Lore-minted facts (lore-events.ts) enter the SAME registry dsh's
  * definitions live in, through this module — never by editing what dsh
  * registers (register.ts is vendored upstream). Each definition is the
@@ -44,12 +44,16 @@ declare module '../../packages/client/ui-chat/src/client/contract/chat-nodes.ts'
   }
 }
 
-/** The image chips' render payload: refiner outcome + prompt, the produced
- * reference ids (thumbnails + lightbox), the target document title, and the
- * failure detail on a failed run. */
+/** The image chips' render payload. A run ARRIVES as several events (the
+ * coarse phases, then one settled event) — the definition's state is the
+ * LATEST event's fact: `running` + `phase` while the detached generation
+ * runs, then the settled `done` (refiner outcome + prompt, the produced
+ * reference ids for thumbnails + lightbox, the target document title) or
+ * `failed` (the failure detail) payload. */
 export interface ImageGenChatData {
-  readonly status: 'done' | 'failed'
+  readonly status: 'running' | 'done' | 'failed'
   readonly runId: string
+  readonly phase?: string
   readonly imageRefIds?: readonly string[]
   readonly title?: string
   readonly refine?: { readonly ok: boolean; readonly prompt?: string; readonly error?: string }
@@ -87,7 +91,12 @@ function factOf<T extends { readonly turn: number | null }>(data: T): Omit<T, 't
   return fact as Omit<T, 'turn'>
 }
 
-/** One detached image generation. Identity: the run id — one outcome per run. */
+/** One detached image generation. Identity: the run id — one card per run,
+ * fed by SEVERAL events (every `running` phase, then the settled event).
+ * The first event opens the context (the reload path opens it with the
+ * settled event alone); every later event of the same run REPLACES the state
+ * with its own fact, so the card always renders the run's LATEST event —
+ * the phase climbs, then the settled look folds in. */
 export const imageGenDefinition: ConversationNodeDefinition<ImageGenChatData> = {
   kind: 'image-gen',
   target: 'chat',
@@ -95,7 +104,7 @@ export const imageGenDefinition: ConversationNodeDefinition<ImageGenChatData> = 
     ? { id: event.data.runId, role: 'start' }
     : null,
   start: (_context, match) => factOf(match.event.data as LoreImageGenEventData),
-  update: context => context.state,
+  update: (_context, match) => factOf(match.event.data as LoreImageGenEventData),
   buildViewNode: (context: ConversationNodeContext<ImageGenChatData>) =>
     context.state === undefined
       ? null

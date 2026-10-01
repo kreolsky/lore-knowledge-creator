@@ -48,10 +48,12 @@ class PatchMember(BaseModel):
 
 class CreateProject(BaseModel):
     name: str = Field(min_length=2, max_length=256)
+    description: str | None = Field(default=None, max_length=2000)
 
 
 class PatchProject(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=256)
+    description: str | None = Field(default=None, max_length=2000)
     status: Literal["active", "paused", "done"] | None = None
     project_context: str | None = None
     is_public: bool | None = None

@@ -21,7 +21,6 @@ import asyncio
 from agent_config_seed import memory_folder_id
 from collab.registry import get_active_session
 from fastapi import HTTPException
-from sort_keys import key_between
 
 import event_bus
 from db import extract_id, fetch_one, get_db, validate_record_id
@@ -31,6 +30,7 @@ from documents.service import (
     assert_no_cycle,
     assert_parent_valid,
     generate_path_for_title,
+    place_after,
     sibling_rows,
     top_sibling_key,
 )
@@ -292,9 +292,11 @@ async def _load_move_target(document_id: str, project_id: str) -> dict:
     # NODE-shaped, not a reference branch: a reference carries a parent_id like every
     # other node (this is the SAME operation), so the same validation runs. Two facts
     # of the data model shape the edges, both properties of the node:
-    #   - references have no sort_key → they may be RE-PARENTED but not REORDERED
-    #     (after_id rejected), and the UPDATE sets parent_id alone (minting a sort_key
-    #     would make the node appear in tree sibling queries);
+    #   - references are ordered in their OWN key space (is_reference=true group
+    #     under the host) → they may be RE-HOSTED (landing at the top of the new
+    #     host's ref group) but not TREE-reordered (after_id rejected — a ref is
+    #     not part of its host's doc siblings; the documents reorder route is the
+    #     ref reorder surface);
     #   - "project root" for a reference means the index document, not parent_id:null
     #     (a null-parent reference is listed by NO document's panel — a pre-existing
     #     defect tracked separately; this path must not mint it).
@@ -405,18 +407,27 @@ async def _assert_not_into_memory(
     )
 
 
-async def _write_reference_move(db, document_id: str, new_parent: str | None) -> None:
-    """References are not tree-ordered: set parent_id ALONE (plus the kind on
-    a conversion). Minting a sort_key would make the node appear in tree
-    sibling queries (their host list is ordered by updated_at/created_at,
-    not sort_key); a CONVERSION clears a kept key for the same reason —
-    the node renders twice (tree + panel) while the stale key survives."""
+async def write_reference_host(
+    db, ref_id: str, project_id: str, new_parent: str | None,
+) -> str:
+    """The ONE reference host writer: set parent_id + is_reference and mint the
+    TOP key of the new host's reference group. Returns the key.
+
+    Every re-host (tree move / kind conversion here, the PATCH /api/references
+    document_id branch) goes through this single writer, so a re-hosted ref
+    always lands at the top of its new group with a live key in the ref key
+    space. A CONVERSION overwrites the old tree key for the same reason — a
+    kept tree key would leave the node in tree sibling queries and it would
+    render twice (tree + panel).
+    """
+    new_key = await top_sibling_key(project_id, new_parent, is_reference=True)
     await db.query(
         "UPDATE type::record('documents', $id) "
-        "SET parent_id = $v, is_reference = true, sort_key = NONE, "
+        "SET parent_id = $v, is_reference = true, sort_key = $sk, "
         "updated_at = time::now()",
-        {"id": document_id, "v": new_parent},
+        {"id": ref_id, "v": new_parent, "sk": new_key},
     )
+    return new_key
 
 
 async def _write_tree_move(
@@ -424,31 +435,13 @@ async def _write_tree_move(
     new_parent: str | None, after_id: str | None,
 ) -> str:
     """Tree document: compute the fractional sort_key for the landing spot within
-    the NEW parent's sibling group (excluding the moved doc, which is re-keyed),
-    then write parent + key. Returns the new key."""
-    siblings = [s for s in await sibling_rows(project_id, new_parent)
-                if s["id"] != document_id]
-    if after_id is None:
-        lo, hi = None, (siblings[0]["sort_key"] if siblings else None)
-    else:
-        idx = next((i for i, s in enumerate(siblings) if s["id"] == after_id), None)
-        if idx is None:
-            raise HTTPException(
-                status_code=400,
-                detail="after_id is not a sibling under the target parent",
-            )
-        lo = siblings[idx]["sort_key"]
-        hi = siblings[idx + 1]["sort_key"] if idx + 1 < len(siblings) else None
-
-    try:
-        new_key = key_between(lo, hi)
-    except Exception:
-        # Degenerate bounds (shared keys after a concurrent move) → clean 409 so
-        # the caller refetches + retries instead of a raw 500 (parity with reorder).
-        raise HTTPException(
-            status_code=409, detail="Sibling order is stale; refetch and retry",
-        )
-
+    the NEW parent's sibling group via the shared place_after helper, then write
+    parent + key. Returns the new key."""
+    siblings = await sibling_rows(project_id, new_parent)
+    new_key = place_after(
+        siblings, document_id, after_id,
+        not_sibling_detail="after_id is not a sibling under the target parent",
+    )
     await db.query(
         "UPDATE type::record('documents', $id) "
         "SET parent_id = $v, sort_key = $sk, is_reference = false, "
@@ -461,12 +454,12 @@ async def _write_tree_move(
 async def _write_move(
     document_id: str, project_id: str, new_parent: str | None,
     after_id: str | None, final_is_reference: bool,
-) -> str | None:
-    """The single structural UPDATE; returns the new sort_key (None for a reference)."""
+) -> str:
+    """The single structural UPDATE; returns the new sort_key (a ref carries its
+    new group's top key, so document_moved always names the landing position)."""
     db = await get_db()
     if final_is_reference:
-        await _write_reference_move(db, document_id, new_parent)
-        return None
+        return await write_reference_host(db, document_id, project_id, new_parent)
     return await _write_tree_move(db, document_id, project_id, new_parent, after_id)
 
 

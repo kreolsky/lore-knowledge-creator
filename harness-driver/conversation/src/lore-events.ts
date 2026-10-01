@@ -1,8 +1,8 @@
 /**
  * The Lore event vocabulary — the facts dsh's log cannot state.
  *
- * # SYSTEM: dsh-conversation. What Lore keeps because dsh cannot state it
- * (plan lore-renders-dsh-conversation, Decisions): the detached image
+ * # SYSTEM: dsh-conversation. What Lore keeps because dsh cannot state it:
+ * the detached image
  * generation (it runs outside the dsh log, delivered over the project WS),
  * the mid-turn verdict card (dsh answers approvals in a composer panel and
  * has NO conversation node for the ask), the abnormal-end halt (a Lore-side
@@ -29,12 +29,17 @@
  * index.ts). The payload always carries its `turn` coordinate (null when the
  * fact has no turn) because an out-of-band event must not rely on the
  * location index's live cursor — a later turn-less event would otherwise
- * inherit the lore event's turn.
+ * inherit the lore event's turn. A run's PHASE events (lore/image-gen
+ * `running`) are the one sanctioned intra-anchor ladder: their seqs climb
+ * strictly from just above the anchor toward the kind's settled offset, so
+ * every phase APPENDS into the run's one context and the settled event still
+ * lands at the exact offset a reload re-derives.
  *
- * # INVARIANT (identity): one lore event per fact. The definitions key
- * contexts on the fact id (run id, call id, turn, compaction id); a re-mint
- * with a different seq is a producer bug and fails the assembler loudly
- * (double start) rather than rendering the fact twice.
+ * # INVARIANT (identity): one lore context per fact. The definitions key
+ * contexts on the fact id (run id, call id, turn, compaction id); a fact's
+ * later events (an image run's phases, its settled event) UPDATE the same
+ * context, and a re-mint of an already-held seq fails the assembler loudly
+ * (duplicate Match) rather than rendering the fact twice.
  */
 
 // Relative into the workspace, the same convention as src/index.ts: this is
@@ -43,16 +48,20 @@
 import type { SessionEvent } from '../../packages/core/session/src/types.ts'
 import type { SessionLiveEventEntry } from '@deepseek-ai/dsh-api-session-controller/client'
 
-/** The detached image generation's payload (generate_image_done / _failed +
- * the persisted gen_steps). `turn` is the dispatching call's turn — the
- * location coordinate the assembler reads; `null` places the fact at session
- * level. The other fields are the chips' content: refiner outcome and prompt
- * (which never returns to the agent), the produced reference ids, the target
- * document title, and the failure detail. */
+/** The detached image generation's payload. `turn` is the dispatching call's
+ * turn — the location coordinate the assembler reads; `null` places the fact
+ * at session level. A run arrives as SEVERAL events over its life:
+ * `status: 'running'` per coarse phase (carrying
+ * `phase`), then ONE settled event (`done`/`failed`) whose payload is the
+ * chips' content — the produced reference ids, the target document title,
+ * the refiner outcome (which never returns to the agent) and the failure
+ * detail. Every event of one run carries the same `runId`; the node
+ * definition folds them into one card (see lore-nodes.ts). */
 export interface LoreImageGenEventData {
   readonly turn: number | null
   readonly runId: string
-  readonly status: 'done' | 'failed'
+  readonly status: 'running' | 'done' | 'failed'
+  readonly phase?: string
   readonly imageRefIds?: readonly string[]
   readonly title?: string
   readonly refine?: { readonly ok: boolean; readonly prompt?: string; readonly error?: string }

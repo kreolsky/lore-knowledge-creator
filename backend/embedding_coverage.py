@@ -34,6 +34,7 @@ from __future__ import annotations
 import logging
 
 import settings
+from agent_config_seed import HELP_ID_PREFIX
 
 from models.references import is_ref_row
 
@@ -60,7 +61,9 @@ logger = logging.getLogger(__name__)
 # disjunct's worry: a failed binary ref with no content is not a candidate.
 CANDIDATE_WHERE = (
     "deleted_at IS NONE "
-    "AND string::trim(content ?? '') != ''"
+    "AND string::trim(content ?? '') != '' "
+    # The Lore guide is never embedded — see the INVARIANT in embeddings._on_content_flushed.
+    f"AND !string::starts_with(meta::id(id), '{HELP_ID_PREFIX}')"
 )
 
 # WHY(perf): chunk membership is resolved by THIS standalone statement and

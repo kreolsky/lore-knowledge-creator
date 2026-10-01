@@ -422,6 +422,7 @@ def _wire(monkeypatch, *, comfy: _FakeComfy, refined="REFINED", save=None):
 
 async def _post_and_await(
     client, token, payload, monkeypatch, *, session_id=None, message_id=None,
+    call_id=None, enqueued=None,
 ):
     """POST generate_image and run the arq task inline so the slow generation
     (refine → ComfyUI → save) completes before this returns.
@@ -449,30 +450,76 @@ async def _post_and_await(
     # (e.g. save_upload's thumbnail_task) fall through to a no-op.
     async def _inline_enqueue(fn_name, p, **kw):
         if fn_name == "generate_image_task":
+            if enqueued is not None:
+                enqueued.append(p)
             await generate_image_task({"redis": None}, p)
 
     monkeypatch.setattr("jobs.pool.enqueue", _inline_enqueue)
     headers = _hdr(token, session_id=session_id)
     if message_id:
         headers["X-Agent-Message-Id"] = message_id
+    if call_id:
+        headers["X-Agent-Call-Id"] = call_id
     resp = await client.post(
         "/api/tool/generate_image", json=payload, headers=headers,
     )
     return resp, emitted
 
 
-def _done_event(emitted):
-    for et, kw in emitted:
-        if et == "generate_image_done":
-            return kw
-    raise AssertionError("no generate_image_done event emitted")
+def _pushed_frames(emitted):
+    """The lore/image-gen frames pushed onto the chat channel, in push order."""
+    return [
+        kw["frame"] for et, kw in emitted
+        if et == "chat_frame_push" and isinstance(kw.get("frame"), dict)
+        and kw["frame"].get("type") == "lore/image-gen"
+    ]
 
 
-def _failed_event(emitted):
-    for et, kw in emitted:
-        if et == "generate_image_failed":
-            return kw
-    raise AssertionError("no generate_image_failed event emitted")
+def _done_frame(emitted):
+    """The run's settled DONE frame (the reload mint's live twin)."""
+    for frame in _pushed_frames(emitted):
+        if frame["data"]["status"] == "done":
+            return frame
+    raise AssertionError("no done lore/image-gen frame pushed onto the chat channel")
+
+
+def _failed_frame(emitted):
+    """The run's settled FAILED frame — the failure cause rides inside it."""
+    for frame in _pushed_frames(emitted):
+        if frame["data"]["status"] == "failed":
+            return frame
+    raise AssertionError("no failed lore/image-gen frame pushed onto the chat channel")
+
+
+def _wire_replay(monkeypatch, *, call_id, session=None, replay_call_id=None):
+    """Stub the launcher's anchor-resolve seam: the driver replay (the
+    dispatching `tool/call`). `replay_call_id` deliberately mismatches
+    `call_id` to fake an anchor miss. Returns the lineage spy."""
+    import driver.frames
+
+    call = {"type": "dsh_event", "kind": "tool/call", "seq": 3, "time": 1003,
+            "data": {"turn": 1, "step": 2, "callId": replay_call_id or call_id,
+                     "name": "generate_image", "arguments": "{}"}}
+    replay = {"turns": [{"frames": [call], "end_seq": 3}], "tail_seq": 3}
+    seen: list[str] = []
+
+    async def _fetch(session_id, line=None, *, since_seq=None):
+        seen.append(session_id)
+        return replay
+
+    monkeypatch.setattr(driver.frames, "fetch_session_entries", _fetch)
+    return seen
+
+
+def _owned_doc(monkeypatch, pid):
+    """The launcher's project/doc lookup stub, shared by the frame-carrying
+    tests (one seam, the established image_gen.tool fetch_one pattern)."""
+    from routes.tool_api import image_gen
+
+    monkeypatch.setattr(
+        image_gen.tool, "fetch_one",
+        lambda *a, **k: _async_return({"project_id": pid, "deleted_at": None}),
+    )
 
 
 def test_shipped_workflow_batch_marker_sits_on_the_sampler_latent_source():
@@ -618,12 +665,14 @@ async def test_generate_image_happy_path_uses_refined_prompt(
         image_gen.tool, "fetch_one",
         lambda *a, **k: _async_return({"project_id": pid, "deleted_at": None}),
     )
+    _wire_replay(monkeypatch, call_id="call-gen-1")
     token = await _make_key(uid, pid)
+    enqueued: list[dict] = []
 
     resp, emitted = await _post_and_await(
         client, token,
         {"prompt": "a cat", "document_id": idx, "orientation": "portrait"},
-        monkeypatch, session_id="sess-1",
+        monkeypatch, session_id="sess-1", call_id="call-gen-1", enqueued=enqueued,
     )
 
     assert resp.status_code == 200, resp.text
@@ -634,9 +683,18 @@ async def test_generate_image_happy_path_uses_refined_prompt(
     assert "sd_prompt" not in body
     assert isinstance(body.get("run_id"), str) and len(body["run_id"]) > 0
 
-    # The background task produced one image and delivered it via the done event.
-    done = _done_event(emitted)
-    assert done["reference_ids"] == ["ref-1"]
+    # The background task produced one image. The job payload carries the
+    # run's anchor — resolved ONCE in the launcher from the replay's
+    # dispatching tool/call (X-Agent-Call-Id) — and every live frame the
+    # worker pushes is minted from it: a non-None settled frame proves the
+    # anchor join end to end (the card anchors at the dsh call that
+    # dispatched the run).
+    assert enqueued[0]["call_id"] == "call-gen-1"
+    assert enqueued[0]["anchor"] == {"seq": 3, "turn": 1}
+    done = _done_frame(emitted)
+    assert done["seq"] == 3.6  # the anchor + the image-gen offset
+    assert done["data"]["runId"] == body["run_id"]
+    assert done["data"]["imageRefIds"] == ["ref-1"]
 
     # The workflow posted to ComfyUI carries the REFINED prompt on the
     # [lore:prompt] node (not the agent's seed), and the portrait size on the
@@ -688,7 +746,6 @@ async def test_generate_image_attaches_to_parent_when_doc_is_reference(
     )
 
     assert resp.status_code == 200, resp.text
-    _done_event(emitted)  # the generation completed + delivered the chip
     assert saved["document_id"] == idx
 
 
@@ -770,7 +827,6 @@ async def test_generate_image_target_pins_to_session_document(
     assert saved["document_id"] == session_doc
     # The return doc_id reflects the pinned target.
     assert resp.json()["doc_id"] == session_doc
-    _done_event(emitted)
 
 
 @pytest.mark.asyncio
@@ -805,7 +861,6 @@ async def test_generate_image_target_falls_back_when_session_mismatches(
     assert resp.status_code == 200, resp.text
     # Fell back to the agent's document_id (the session was not authoritative).
     assert saved["document_id"] == idx
-    _done_event(emitted)
 
 
 @pytest.mark.asyncio
@@ -843,16 +898,17 @@ async def test_generate_image_session_reference_doc_hops_to_parent(
     assert resp.status_code == 200, resp.text
     # Hopped from the session's reference doc to its parent.
     assert saved["document_id"] == idx
-    _done_event(emitted)
 
 
 @pytest.mark.asyncio
-async def test_generate_image_emits_phase_progress(
+async def test_generate_image_pushes_the_phase_ladder_and_the_settled_frame(
     client, test_db, project_with_doc, monkeypatch, comfy_enabled,
 ):
-    """Plan gen-progress-display (Option A): the handler broadcasts coarse phase
-    events (refining/queued/generating/downloading) so the chat can show progress
-    during the synchronous ComfyUI call. Correlated on session_id."""
+    """The run's phases
+    are CHAT facts — coarse `lore/image-gen` RUNNING frames pushed onto the
+    owner's chat channel (bus chat_frame_push), each phase on the ladder
+    strictly below the settled +0.6 mint, then the settled DONE frame AT the
+    anchor + 0.6 (the reload mint's position)."""
     from routes.tool_api import image_gen
 
     pid, idx, uid = project_with_doc
@@ -862,19 +918,32 @@ async def test_generate_image_emits_phase_progress(
         image_gen.tool, "fetch_one",
         lambda *a, **k: _async_return({"project_id": pid, "deleted_at": None}),
     )
+    _wire_replay(monkeypatch, call_id="call-gen")
 
-    # Capture phase emits (the imported event_bus.emit is a module global here).
     token = await _make_key(uid, pid)
     resp, emitted = await _post_and_await(
         client, token, {"prompt": "a cat", "document_id": idx},
-        monkeypatch, session_id="sess-7",
+        monkeypatch, session_id="sess-7", call_id="call-gen",
     )
     assert resp.status_code == 200, resp.text
-    # All four phases fire, in execution order, carrying the session id.
-    phases = [kw["phase"] for et, kw in emitted if et == "generate_image_progress"]
-    assert phases == ["refining", "queued", "generating", "downloading"]
-    assert all(kw.get("session_id") == "sess-7"
-               for et, kw in emitted if et == "generate_image_progress")
+    # Every push rides the chat channel, correlated on the session.
+    pushes = [(et, kw) for et, kw in emitted if et == "chat_frame_push"]
+    assert pushes, "no chat_frame_push emitted"
+    assert all(kw.get("session_id") == "sess-7" and kw.get("project_id") == pid
+               for _et, kw in pushes)
+    frames = _pushed_frames(emitted)
+    # All four phases fire, in execution order, RUNNING at ladder seqs.
+    running = [f for f in frames if f["data"]["status"] == "running"]
+    assert [f["data"]["phase"] for f in running] == [
+        "refining", "queued", "generating", "downloading",
+    ]
+    seqs = [f["seq"] for f in running]
+    assert seqs == sorted(seqs)
+    assert all(3.5 < s < 3.6 for s in seqs), seqs
+    # The settled frame closes the run at the reload mint's exact position.
+    done = _done_frame(emitted)
+    assert done["seq"] == 3.6
+    assert done["data"]["runId"] == resp.json()["run_id"]
 
 
 @pytest.mark.asyncio
@@ -919,10 +988,12 @@ async def test_generate_image_passes_seed_and_template_to_refine(
 async def test_generate_image_done_carries_refine_outcome(
     client, test_db, project_with_doc, monkeypatch, comfy_enabled,
 ):
-    """Plan comfy-image-gen-fixes (B3): the refiner outcome travels in the
-    generate_image_done event (single source — the Redis stash is gone). A real
-    refinement (ok=True) carries the refined prompt + a neutral outcome; a fallback
-    (ok=False) carries the cause + the prompt that actually rendered."""
+    """Plan comfy-image-gen-fixes (B3) → image-gen-card-single-mint: the
+    refiner outcome now travels INSIDE the worker's settled `lore/image-gen`
+    frame (the same mint the reload re-derives). A real refinement (ok=True)
+    carries the refined prompt; the frame anchors at the dispatching call
+    (the anchor the launcher froze into the payload), so a non-None frame
+    proves the call id rode the payload into the mint."""
     import image_generation.run
     from image_generation import image_refine
     from routes.tool_api import image_gen
@@ -939,22 +1010,22 @@ async def test_generate_image_done_carries_refine_outcome(
         image_gen.tool, "fetch_one",
         lambda *a, **k: _async_return({"project_id": pid, "deleted_at": None}),
     )
+    lineage = _wire_replay(monkeypatch, call_id="call-gen")
     token = await _make_key(uid, pid)
 
     resp, emitted = await _post_and_await(
         client, token, {"prompt": "a cat", "document_id": idx}, monkeypatch,
+        session_id="sess-1", call_id="call-gen",
     )
     assert resp.status_code == 200, resp.text
-    done = _done_event(emitted)
-    assert done["refine"] == {
-        "prompt": "A REFINED SD PROMPT", "ok": True, "error": None,
-    }
-    assert done["reference_ids"] == ["ref-1"]
-    # The done event ships the ALREADY-BUILT step dicts (single source — the
-    # frontend stamps them verbatim, no reconstruction drift).
-    assert [s["tool"] for s in done["steps"]] == ["refine_prompt", "generate_image"]
-    assert done["steps"][1]["image_ref_ids"] == ["ref-1"]
-    assert done["steps"][1]["run_id"] == done["run_id"]
+    assert lineage == ["sess-1"]  # no compacted_from → the chat's own log
+    frame = _done_frame(emitted)
+    assert frame["type"] == "lore/image-gen"
+    assert frame["seq"] == 3.6  # the dispatching call's seq + the image-gen offset
+    assert frame["data"]["runId"] == resp.json()["run_id"]
+    assert frame["data"]["imageRefIds"] == ["ref-1"]
+    assert frame["data"]["title"] == "a cat"
+    assert frame["data"]["refine"] == {"ok": True, "prompt": "A REFINED SD PROMPT"}
 
 
 @pytest.mark.asyncio
@@ -962,7 +1033,9 @@ async def test_generate_image_done_carries_failed_refine_outcome(
     client, test_db, project_with_doc, monkeypatch, comfy_enabled,
 ):
     """B3: a refinement fallback (ok=False) still COMPLETES the generation (D6
-    stands) and the done event carries the cause + the seed that rendered."""
+    stands) and the frame carries the cause + the seed that rendered — derived
+    from the same step dict the reload renders (the failed-refine chip's detail
+    is "<error>\\n\\n<seed>")."""
     import image_generation.run
     from image_generation import image_refine
     from routes.tool_api import image_gen
@@ -981,18 +1054,138 @@ async def test_generate_image_done_carries_failed_refine_outcome(
         image_gen.tool, "fetch_one",
         lambda *a, **k: _async_return({"project_id": pid, "deleted_at": None}),
     )
+    _wire_replay(monkeypatch, call_id="call-gen")
     token = await _make_key(uid, pid)
 
     resp, emitted = await _post_and_await(
         client, token, {"prompt": "a lone tower in fog", "document_id": idx},
-        monkeypatch,
+        monkeypatch, session_id="sess-1", call_id="call-gen",
     )
     assert resp.status_code == 200, resp.text
-    done = _done_event(emitted)
-    assert done["refine"]["ok"] is False
-    assert done["refine"]["error"] == "refinement LLM not configured"
+    frame = _done_frame(emitted)
+    assert frame["data"]["refine"]["ok"] is False
+    assert "refinement LLM not configured" in frame["data"]["refine"]["error"]
     # The seed (what actually rendered) is carried, not nothing.
-    assert done["refine"]["prompt"] == "a lone tower in fog"
+    assert "a lone tower in fog" in frame["data"]["refine"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_generate_image_anchor_miss_pushes_nothing(
+    client, test_db, project_with_doc, monkeypatch, comfy_enabled,
+):
+    """The replay holds no dispatching call for the run (the worker raced the
+    log): the launcher's anchor resolve misses, the payload carries anchor
+    None, and the worker pushes NOTHING (no running card, no settled card) —
+    the image reference itself is still persisted and a reload still shows
+    the card from the row's gen_steps."""
+    pid, idx, uid = project_with_doc
+    _wire(monkeypatch, comfy=_FakeComfy())
+    _owned_doc(monkeypatch, pid)
+    _wire_replay(monkeypatch, call_id="call-gen", replay_call_id="other-call")
+    enqueued: list[dict] = []
+    token = await _make_key(uid, pid)
+
+    resp, emitted = await _post_and_await(
+        client, token, {"prompt": "a cat", "document_id": idx}, monkeypatch,
+        session_id="sess-1", call_id="call-gen", enqueued=enqueued,
+    )
+    assert resp.status_code == 200, resp.text
+    assert enqueued[0]["anchor"] is None
+    assert _pushed_frames(emitted) == []
+
+
+@pytest.mark.asyncio
+async def test_generate_image_done_frame_equals_the_reload_mint(
+    client, test_db, project_with_doc, monkeypatch, comfy_enabled,
+):
+    """Reload parity, end to end: the worker's
+    settled DONE frame pushed over the chat channel and the reload's attach
+    over the SAME persisted chips + anchor must mint EQUAL frames — both
+    paths call the same builder, so a reload cannot disagree with the live
+    card."""
+    import driver.frames
+    from image_generation import events
+    from routes.tool_api import image_gen
+
+    import db as db_mod
+
+    pid, idx, uid = project_with_doc
+    _wire(monkeypatch, comfy=_FakeComfy())
+    monkeypatch.setattr(
+        image_gen.tool, "fetch_one",
+        lambda *a, **k: _async_return({"project_id": pid, "deleted_at": None}),
+    )
+    call = {"type": "dsh_event", "kind": "tool/call", "seq": 3, "time": 1003,
+            "data": {"turn": 1, "step": 2, "callId": "call-gen",
+                     "name": "generate_image", "arguments": "{}"}}
+    replay = {"turns": [{"frames": [call], "end_seq": 3}], "tail_seq": 3}
+
+    async def _fetch(session_id, line=None, *, since_seq=None):
+        return replay
+
+    monkeypatch.setattr(driver.frames, "fetch_session_entries", _fetch)
+
+    # Capture the persisted chips (the BOLA-passing owner path).
+    class _FakeDB:
+        calls: list[tuple[str, dict]] = []
+
+        async def query(self, sql, params=None):
+            _FakeDB.calls.append((sql, params or {}))
+            return []
+
+    async def _owned_fetch(table, rid):
+        if table == "messages":
+            return {"id": rid, "chat_id": "sess-1"}
+        if table == "chat_sessions":
+            return {"project_id": pid, "user_id": uid}
+        return {"id": rid}
+
+    monkeypatch.setattr(events, "fetch_one", _owned_fetch)
+    monkeypatch.setattr(db_mod, "get_db", lambda: _async_return(_FakeDB()))
+
+    token = await _make_key(uid, pid)
+    resp, emitted = await _post_and_await(
+        client, token, {"prompt": "a cat", "document_id": idx}, monkeypatch,
+        session_id="sess-1", message_id="msg-1", call_id="call-gen",
+    )
+    assert resp.status_code == 200, resp.text
+    live = _done_frame(emitted)
+    _sql, params = _FakeDB.calls[0]
+
+    # The reload attach over the same row: same anchor, same chips.
+    row = {"message_id": "msg-1", "created_at": "1",
+           "frames": [dict(call)], "gen_steps": params["steps"]}
+    await driver.frames.attach_reload_lore_mints(
+        [row], chain={"msg-1"}, tail_seq=3, session_id="sess-1")
+    reload_mint = next(f for f in row["frames"] if f["type"] == "lore/image-gen")
+    live.pop("time"), reload_mint.pop("time")
+    assert live == reload_mint
+
+
+@pytest.mark.asyncio
+async def test_generate_image_failed_carries_the_failed_frame(
+    client, test_db, project_with_doc, monkeypatch, comfy_enabled,
+):
+    """The failure path mints the SAME frame the reload shows for a failed run
+    (status 'failed' + the cause) — a failed card appears LIVE, not only after
+    F5."""
+    pid, idx, uid = project_with_doc
+    comfy = _FakeComfy(prompt_error=httpx.ConnectError("nope"))
+    _wire(monkeypatch, comfy=comfy)
+    _owned_doc(monkeypatch, pid)
+    _wire_replay(monkeypatch, call_id="call-gen")
+    token = await _make_key(uid, pid)
+    resp, emitted = await _post_and_await(
+        client, token, {"prompt": "a cat", "document_id": idx}, monkeypatch,
+        session_id="sess-1", call_id="call-gen",
+    )
+    assert resp.status_code == 200, resp.text
+    failed = _failed_frame(emitted)
+    assert failed["type"] == "lore/image-gen"
+    assert failed["seq"] == 3.6
+    assert failed["data"]["status"] == "failed"
+    assert failed["data"]["runId"] == resp.json()["run_id"]
+    assert "not available" in failed["data"]["error"]
 
 
 @pytest.mark.asyncio
@@ -1000,8 +1193,9 @@ async def test_generate_image_failed_on_comfyui_prompt_connection_error(
     client, test_db, project_with_doc, monkeypatch, comfy_enabled,
 ):
     """Detached: a ComfyUI POST connection error no longer raises an HTTP 503 (the
-    launcher already returned `generating`). It surfaces as generate_image_failed
-    (no-silent-degradation) — the background task caught it and emitted it."""
+    launcher already returned `generating`). It surfaces as the run's FAILED
+    chat frame (no-silent-degradation) — the background task caught it and
+    pushed it."""
     from routes.tool_api import image_gen
 
     pid, idx, uid = project_with_doc
@@ -1011,21 +1205,22 @@ async def test_generate_image_failed_on_comfyui_prompt_connection_error(
         image_gen.tool, "fetch_one",
         lambda *a, **k: _async_return({"project_id": pid, "deleted_at": None}),
     )
+    _wire_replay(monkeypatch, call_id="call-gen")
     token = await _make_key(uid, pid)
     resp, emitted = await _post_and_await(
         client, token, {"prompt": "a cat", "document_id": idx}, monkeypatch,
+        session_id="sess-1", call_id="call-gen",
     )
     assert resp.status_code == 200, resp.text  # the launcher returned `generating`
     assert resp.json()["status"] == "generating"
-    failed = _failed_event(emitted)
-    assert "not available" in failed["error"]
+    assert "not available" in _failed_frame(emitted)["data"]["error"]
 
 
 @pytest.mark.asyncio
 async def test_generate_image_failed_on_comfyui_error_status(
     client, test_db, project_with_doc, monkeypatch, comfy_enabled,
 ):
-    """Detached: a ComfyUI execution error surfaces as generate_image_failed."""
+    """Detached: a ComfyUI execution error surfaces as the run's FAILED frame."""
     from routes.tool_api import image_gen
 
     pid, idx, uid = project_with_doc
@@ -1036,20 +1231,21 @@ async def test_generate_image_failed_on_comfyui_error_status(
         image_gen.tool, "fetch_one",
         lambda *a, **k: _async_return({"project_id": pid, "deleted_at": None}),
     )
+    _wire_replay(monkeypatch, call_id="call-gen")
     token = await _make_key(uid, pid)
     resp, emitted = await _post_and_await(
         client, token, {"prompt": "a cat", "document_id": idx}, monkeypatch,
+        session_id="sess-1", call_id="call-gen",
     )
     assert resp.status_code == 200, resp.text
-    failed = _failed_event(emitted)
-    assert "generation failed" in failed["error"]
+    assert "generation failed" in _failed_frame(emitted)["data"]["error"]
 
 
 @pytest.mark.asyncio
 async def test_generate_image_failed_on_poll_timeout(
     client, test_db, project_with_doc, monkeypatch, comfy_enabled,
 ):
-    """Detached: a poll timeout (deadline passed) surfaces as generate_image_failed."""
+    """Detached: a poll timeout (deadline passed) surfaces as the run's FAILED frame."""
     from routes.tool_api import image_gen
 
     pid, idx, uid = project_with_doc
@@ -1063,20 +1259,21 @@ async def test_generate_image_failed_on_poll_timeout(
         image_gen.tool, "fetch_one",
         lambda *a, **k: _async_return({"project_id": pid, "deleted_at": None}),
     )
+    _wire_replay(monkeypatch, call_id="call-gen")
     token = await _make_key(uid, pid)
     resp, emitted = await _post_and_await(
         client, token, {"prompt": "a cat", "document_id": idx}, monkeypatch,
+        session_id="sess-1", call_id="call-gen",
     )
     assert resp.status_code == 200, resp.text
-    failed = _failed_event(emitted)
-    assert "timed out" in failed["error"]
+    assert "timed out" in _failed_frame(emitted)["data"]["error"]
 
 
 @pytest.mark.asyncio
 async def test_generate_image_failed_on_wrong_magic(
     client, test_db, project_with_doc, monkeypatch, comfy_enabled,
 ):
-    """Detached: a non-image output surfaces as generate_image_failed naming the
+    """Detached: a non-image output surfaces as the run's FAILED frame naming the
     recognized set (F4 wording)."""
     from routes.tool_api import image_gen
 
@@ -1087,20 +1284,21 @@ async def test_generate_image_failed_on_wrong_magic(
         image_gen.tool, "fetch_one",
         lambda *a, **k: _async_return({"project_id": pid, "deleted_at": None}),
     )
+    _wire_replay(monkeypatch, call_id="call-gen")
     token = await _make_key(uid, pid)
     resp, emitted = await _post_and_await(
         client, token, {"prompt": "a cat", "document_id": idx}, monkeypatch,
+        session_id="sess-1", call_id="call-gen",
     )
     assert resp.status_code == 200, resp.text
-    failed = _failed_event(emitted)
-    assert "recognized image" in failed["error"]
+    assert "recognized image" in _failed_frame(emitted)["data"]["error"]
 
 
 @pytest.mark.asyncio
 async def test_generate_image_failed_on_oversized(
     client, test_db, project_with_doc, monkeypatch, comfy_enabled,
 ):
-    """Detached: an oversized output surfaces as generate_image_failed (the size
+    """Detached: an oversized output surfaces as the run's FAILED frame (the size
     guard is enforced in the background task; save_upload does NOT enforce size)."""
     from routes.tool_api import image_gen
 
@@ -1113,13 +1311,14 @@ async def test_generate_image_failed_on_oversized(
         image_gen.tool, "fetch_one",
         lambda *a, **k: _async_return({"project_id": pid, "deleted_at": None}),
     )
+    _wire_replay(monkeypatch, call_id="call-gen")
     token = await _make_key(uid, pid)
     resp, emitted = await _post_and_await(
         client, token, {"prompt": "a cat", "document_id": idx}, monkeypatch,
+        session_id="sess-1", call_id="call-gen",
     )
     assert resp.status_code == 200, resp.text
-    failed = _failed_event(emitted)
-    assert "too large" in failed["error"]
+    assert "too large" in _failed_frame(emitted)["data"]["error"]
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1262,7 +1461,9 @@ async def test_generate_image_count_2_fills_batch_size_and_saves_two_refs(
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "generating"
-    assert len(_done_event(emitted)["reference_ids"]) == 2
+    # No session header → no anchor → no chat frames pushed (best-effort);
+    # the chips still persist for the reload.
+    assert _pushed_frames(emitted) == []
     assert comfy.calls[0][2]["prompt"]["88"]["inputs"]["batch_size"] == 2
     assert len(saved["calls"]) == 2
     assert len({c["name"] for c in saved["calls"]}) == 2
@@ -1285,8 +1486,7 @@ async def test_generate_image_count_4_saves_four_refs(
         monkeypatch,
     )
     assert resp.status_code == 200, resp.text
-    done = _done_event(emitted)
-    assert len(done["reference_ids"]) == 4
+    assert _pushed_frames(emitted) == []  # no session header → no anchor
     wf = comfy.calls[0][2]["prompt"]
     assert wf["88"]["inputs"]["batch_size"] == 4
     assert len(saved["calls"]) == 4
@@ -1355,9 +1555,9 @@ async def test_generate_image_iterates_actual_output_array(
         monkeypatch,
     )
     assert resp.status_code == 200, resp.text
-    done = _done_event(emitted)
-    # Only the actually-returned image is saved.
-    assert len(done["reference_ids"]) == 1
+    # Only the actually-returned image is saved; no session header → no
+    # anchor → no chat frames pushed.
+    assert _pushed_frames(emitted) == []
     assert len(saved["calls"]) == 1
 
 
@@ -1366,19 +1566,22 @@ async def test_generate_image_empty_output_array_emits_failed(
     client, test_db, project_with_doc, monkeypatch, comfy_enabled,
 ):
     """R2 (review fix): ComfyUI reports success but outputs["90"]["images"] is
-    empty (a degenerate batch) — the detached task surfaces generate_image_failed
+    empty (a degenerate batch) — the detached task pushes the run's FAILED frame
     (no-silent-degradation), not an IndexError. No reference is created."""
 
     pid, idx, uid = project_with_doc
     comfy = _FakeComfy(images=0)
     saved = _wire(monkeypatch, comfy=comfy)
     _doc_fetch(monkeypatch, pid)
+    _wire_replay(monkeypatch, call_id="call-gen")
     token = await _make_key(uid, pid)
     resp, emitted = await _post_and_await(
         client, token, {"prompt": "a cat", "document_id": idx}, monkeypatch,
+        session_id="sess-1", call_id="call-gen",
     )
     assert resp.status_code == 200, resp.text
-    _failed_event(emitted)  # degenerate batch → failed, no silent loss
+    # Degenerate batch → the run's FAILED frame, no silent loss.
+    assert _failed_frame(emitted)["data"]["status"] == "failed"
     # No reference created for the degenerate batch.
     assert saved["calls"] == []
 
@@ -1402,7 +1605,7 @@ async def test_generate_image_collects_outputs_from_every_save_node(
         client, token, {"prompt": "a cat", "document_id": idx}, monkeypatch,
     )
     assert resp.status_code == 200, resp.text
-    assert len(_done_event(emitted)["reference_ids"]) == 2
+    assert _pushed_frames(emitted) == []  # no session header → no anchor
     viewed = [c[2]["filename"] for c in comfy.calls if c[1].endswith("/view")]
     assert sorted(viewed) == ["img-0.png", "second.png"]
     assert len(saved["calls"]) == 2
@@ -1421,13 +1624,14 @@ async def test_generate_image_mid_batch_failure_creates_no_orphan_refs(
     comfy = _FakeComfy(images=2, view_bytes_by_name={"img-1.png": b"not-a-png"})
     saved = _wire(monkeypatch, comfy=comfy)
     _doc_fetch(monkeypatch, pid)
+    _wire_replay(monkeypatch, call_id="call-gen")
     token = await _make_key(uid, pid)
     resp, emitted = await _post_and_await(
         client, token, {"prompt": "a cat", "document_id": idx, "count": 2},
-        monkeypatch,
+        monkeypatch, session_id="sess-1", call_id="call-gen",
     )
     assert resp.status_code == 200, resp.text
-    _failed_event(emitted)
+    assert "recognized image" in _failed_frame(emitted)["data"]["error"]
     # Phase 1 raised before the first save_upload → no references persisted.
     assert saved["calls"] == []
 
@@ -1654,15 +1858,18 @@ async def test_poll_backoff_clamps_to_deadline(
     comfy = _FakeComfy(poll_completes_on=10**9)
     _wire(monkeypatch, comfy=comfy)
     _doc_fetch(monkeypatch, pid)
+    _wire_replay(monkeypatch, call_id="call-gen")
     token = await _make_key(uid, pid)
 
     start = _time.monotonic()
     resp, emitted = await _post_and_await(
         client, token, {"prompt": "a cat", "document_id": idx}, monkeypatch,
+        session_id="sess-1", call_id="call-gen",
     )
     elapsed = _time.monotonic() - start
     assert resp.status_code == 200, resp.text
-    _failed_event(emitted)  # poll never completed → the task timed out + emitted
+    # Poll never completed → the task timed out and pushed the FAILED frame.
+    assert "timed out" in _failed_frame(emitted)["data"]["error"]
     # Terminated within ~the deadline (+ slack for the network/poll overhead),
     # proving the loop did not block on an unclamped sleep.
     assert elapsed < 2.0
@@ -1693,7 +1900,7 @@ def test_generate_image_tool_description_puts_continuity_on_the_agent():
 # already-validated wf/st/prompt template) keyed by job_id=run_id; the worker
 # rebuilds a minimal ctx and calls run_generation. max_tries=1 (a retry re-runs
 # ComfyUI and persists a SECOND image — duplicate output is worse than a failure).
-# D3: CancelledError (worker shutdown) is reported as generate_image_failed, then
+# D3: CancelledError (worker shutdown) is reported as the run's FAILED frame, then
 # re-raised (never swallow cancellation).
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -1739,6 +1946,7 @@ async def test_launcher_enqueues_generate_image_task_with_validated_payload(
         image_gen.tool, "fetch_one",
         lambda *a, **k: _async_return({"project_id": pid, "deleted_at": None}),
     )
+    _wire_replay(monkeypatch, call_id="call-gen")
     # The generation must NOT run inline in the web process anymore — capture the
     # enqueue instead (and never invoke the worker task).
     enqueued: dict = {}
@@ -1751,10 +1959,12 @@ async def test_launcher_enqueues_generate_image_task_with_validated_payload(
     monkeypatch.setattr("jobs.pool.enqueue", _fake_enqueue)
 
     token = await _make_key(uid, pid)
+    hdr = _hdr(token, session_id="sess-1")
+    hdr["X-Agent-Call-Id"] = "call-gen"
     resp = await client.post(
         "/api/tool/generate_image",
         json={"prompt": "a cat", "document_id": idx, "orientation": "portrait"},
-        headers=_hdr(token, session_id="sess-1"),
+        headers=hdr,
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -1774,6 +1984,11 @@ async def test_launcher_enqueues_generate_image_task_with_validated_payload(
     # carries author attribution (plan reference-card-author-nickname rule 4).
     assert payload["user_name"], "user_name must ride the enqueue payload"
     assert payload["session_id"] == "sess-1"
+    # ... the run's placement, resolved ONCE at launch (the dispatching
+    # tool/call over the replay) and frozen so the worker never re-reads the
+    # timeline.
+    assert payload["call_id"] == "call-gen"
+    assert payload["anchor"] == {"seq": 3, "turn": 1}
     assert payload["target_doc_id"] == idx
     # ... the agent's request ...
     assert payload["prompt"] == "a cat"
@@ -1813,6 +2028,7 @@ async def test_generate_image_task_invokes_run_generation_with_rebuilt_ctx(monke
         "prompt": "a tower", "orientation": "landscape", "count": 2,
         "prompt_template": "TPL", "workflow": {"6": {"inputs": {}}},
         "size": [1216, 832],
+        "call_id": "call-x", "anchor": {"seq": 3, "turn": 1},
     }
     await tasks.generate_image_task({"redis": None}, payload)
 
@@ -1825,6 +2041,10 @@ async def test_generate_image_task_invokes_run_generation_with_rebuilt_ctx(monke
     assert called["ctx"]["user_name"] == "Alice"
     assert called["ctx"]["session_id"] == "sess-9"
     assert called["ctx"]["message_id"] == "msg-1"
+    # The frozen anchor rides the rebuilt ctx — the worker mints every frame
+    # from it and never reads the driver timeline.
+    assert called["ctx"]["call_id"] == "call-x"
+    assert called["ctx"]["anchor"] == {"seq": 3, "turn": 1}
     # ToolGenerateImage reconstructed from the payload.
     assert called["body"].prompt == "a tower"
     assert called["body"].orientation == "landscape"
@@ -1838,7 +2058,7 @@ async def test_generate_image_task_invokes_run_generation_with_rebuilt_ctx(monke
 async def test_run_generation_reports_failed_on_cancellation(monkeypatch):
     """D3: a worker shutdown mid-flight cancels the task. CancelledError is a
     BaseException (NOT caught by `except Exception`), so without a dedicated arm it
-    dies silently — a hung spinner. run_generation emits generate_image_failed, then
+    dies silently — a hung spinner. run_generation pushes the FAILED frame, then
     RE-RAISES (never swallow cancellation)."""
     import image_generation.run
 
@@ -1858,23 +2078,25 @@ async def test_run_generation_reports_failed_on_cancellation(monkeypatch):
 
     body = ToolGenerateImage(prompt="a cat", document_id="d", count=1)
     ctx = {"project_id": "p", "user_id": "u", "session_id": "s",
-           "message_id": None, "user": {"id": "u"}}
+           "message_id": None, "user": {"id": "u"},
+           "anchor": {"seq": 3, "turn": 1}}
 
     with pytest.raises(asyncio.CancelledError):
         await image_generation.run.run_generation(
             ctx, "run-cxl", "doc-1", body, "TPL", {}, [1024, 1024],
         )
 
-    # Emits a failure so the spinner clears (no-silent-degradation).
-    failed = next((kw for et, kw in emitted if et == "generate_image_failed"), None)
-    assert failed is not None, emitted
-    assert "cancel" in failed["error"].lower()
+    # Pushes the run's FAILED frame so the running card settles (no-silent-
+    # degradation).
+    failed = _failed_frame(emitted)
+    assert failed["data"]["runId"] == "run-cxl"
+    assert "cancel" in failed["data"]["error"].lower()
 
 
 @pytest.mark.asyncio
 async def test_generate_image_task_without_size_reports_failed(monkeypatch):
     """A job enqueued before the launcher sent `size` carries an unmarked graph;
-    it is refused with generate_image_failed, never rendered from the graph's
+    it is refused with the run's FAILED frame, never rendered from the graph's
     baked-in prompt."""
     import image_generation.run
 
@@ -1894,7 +2116,8 @@ async def test_generate_image_task_without_size_reports_failed(monkeypatch):
         "prompt": "a tower", "orientation": "square", "count": 1,
         "prompt_template": "TPL", "workflow": {"6": {"inputs": {}}},
         "settings": {"seed": {"node": "6"}}, "settings_id": "st-1",
+        "anchor": {"seq": 3, "turn": 1},
     }
     await tasks.generate_image_task({"redis": None}, payload)
-    assert "retry" in _failed_event(emitted)["error"]
+    assert "retry" in _failed_frame(emitted)["data"]["error"]
     assert comfy.calls == []

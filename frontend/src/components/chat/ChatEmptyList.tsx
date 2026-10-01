@@ -9,9 +9,11 @@ import { useSortedSessions, filterSessionsByTitle } from './useSortedSessions';
 import { useTranslation } from '../../i18n';
 import { HoverPreviewPopup } from '../HoverPreviewPopup';
 import { useDocumentPreview } from '../../hooks/useDocumentPreview';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useLastMessagePreview } from '../../hooks/useLastMessagePreview';
 import { useReferencePreview } from '../../hooks/useReferencePreview';
 import { useRightPanelHoverPreview } from '../../hooks/useRightPanelHoverPreview';
+import { useChatUnavailable } from './ChatUnavailableNotice';
 
 export function ChatEmptyList() {
   // Pure last-activity sort of ALL sessions.
@@ -24,6 +26,7 @@ export function ChatEmptyList() {
   const deleteSession = useChatStore(s => s.deleteSession);
   const updateSession = useChatStore(s => s.updateSession);
   const documentId = useAppStore(s => s.currentDocument?.document_id);
+  const chatUnavailable = useChatUnavailable();
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -77,6 +80,15 @@ export function ChatEmptyList() {
     ? docContent
     : hoverKind === 'ref' ? (refPreview?.content ?? '') : sessionContent;
   const hoverImageUrl = hoverKind === 'ref' ? refPreview?.imageUrl : undefined;
+  // The pill's session owns the parent label being hovered, so its served titles back the
+  // store lookups (a parent outside the loaded tree still gets a name).
+  const hoverSession = allSorted.find(s => s.session_id === hoverSessionId);
+  const hoverDocTitle = useDocumentTitle(hoverKind === 'doc' ? hoverDocId : null);
+  const hoverTitle = hoverKind === 'doc'
+    ? hoverDocTitle ?? hoverSession?.document_title ?? undefined
+    : hoverKind === 'ref'
+      ? refPreview?.title ?? hoverSession?.reference_title ?? undefined
+      : hoverSession ? hoverSession.title || t('newChat') : undefined;
   // Only the hovered kind's hook holds a non-null id, so the other reports neither error
   // nor loading. The 'session' kind has no error/loading channel (useLastMessagePreview).
   const hoverError = hoverKind === 'doc' ? docError : hoverKind === 'ref' ? refError : false;
@@ -118,7 +130,18 @@ export function ChatEmptyList() {
         </div>
       );
     }
-    return <div className="flex-1" />;
+    // No chats yet: the same dashed placeholder as the empty References tab. Without
+    // a model the composer's notice is the only message — no "start a chat" invite.
+    if (chatUnavailable) return <div className="flex-1" />;
+    return (
+      <div className="flex-1">
+        <PillList>
+          <div className="py-6 px-2 text-ui-base text-text-dim text-center border-2 border-dashed border-border mt-2" data-testid="chat-first-chat">
+            {t('chatStartFirst')}
+          </div>
+        </PillList>
+      </div>
+    );
   }
 
   return (
@@ -141,6 +164,7 @@ export function ChatEmptyList() {
       </PillList>
       <HoverPreviewPopup
         hover={hover}
+        title={hoverTitle}
         content={hoverContent}
         imageUrl={hoverImageUrl}
         error={hoverError}

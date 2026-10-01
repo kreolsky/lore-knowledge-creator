@@ -260,17 +260,54 @@ export function HistoryPanel() {
   // Hover preview for snapshot rows
   const getPopupLeft = useCallback((rect: DOMRect) => rect.left - PREVIEW_WIDTH - 8, []);
   const hover = useHoverPreview({ getPopupLeft });
-  const [hoverContent, setHoverContent] = useState<string>('');
-  const [hoverComment, setHoverComment] = useState<string>('');
+  const [hoverTitle, setHoverTitle] = useState<string>('');
+  // INVARIANT: each hover state field carries the snapshot id it describes and is
+  // read only when that id still matches the hovered one (mirrors useDocumentPreview).
+  // Why: the content fetch resolves after the pointer may have moved to another row —
+  // an id-less body painted the previous snapshot's text under the new hover, and a
+  // failed fetch painted '' which read as "No content" (error as empty, no-silent-degradation).
+  const [hoverSnapId, setHoverSnapId] = useState<string | null>(null);
+  const [hoverEntry, setHoverEntry] = useState<{ id: string; content: string } | undefined>(undefined);
+  const [hoverErrorId, setHoverErrorId] = useState<string | null>(null);
+  // The .then callback closes over a stale hoverSnapId state value — the guard
+  // must read the LATEST hovered id, so it lives in a ref.
+  const hoverSnapIdRef = useRef<string | null>(null);
+  const hoverContent = hoverEntry?.id === hoverSnapId ? hoverEntry.content : undefined;
+  const hoverError = hoverSnapId != null && hoverErrorId === hoverSnapId;
+  const hoverLoading = hoverSnapId != null && hoverContent === undefined && !hoverError;
+
+  // The row's label: last-session rows render the per-user display label BEFORE the
+  // comment fallback — a null comment must not flash the manual-snapshot fallback string.
+  const snapshotLabel = useCallback((snap: Checkpoint) => (
+    snap.label === LAST_SESSION_LABEL
+      ? t('lastSessionLabel', { name: snap.user_name ?? 'System' })
+      : (snap.comment || t('snapshotManualFallback'))
+  ), [t]);
 
   const handleRowHover = useCallback((el: HTMLElement, snap: Checkpoint) => {
+    const id = snap.checkpoint_id;
+    hoverSnapIdRef.current = id;
+    setHoverSnapId(id);
+    // Synchronous: the plaque labels the hover immediately — with the body shown
+    // as loading until its fetch lands, plaque and body can no longer disagree.
+    setHoverTitle(snapshotLabel(snap));
+    // WHY: the id guard — a response for a snapshot that is no longer the hovered
+    // one (hover A slow, hover B fast) must never overwrite B's body with A's text.
     fetchSnapshotContent(snap).then(full => {
-      const text = full.content ?? '';
-      setHoverContent(text.slice(0, 400));
-      setHoverComment(full.comment || '');
+      if (hoverSnapIdRef.current !== id) return;
+      // Failure signal is content === undefined — the same one the click path
+      // (handleSelectSnapshot) uses; the catch inside fetchSnapshotContent already
+      // swallowed the error (no toast on hover), so the popup body is the error surface.
+      if (full.content === undefined) {
+        setHoverEntry(undefined);
+        setHoverErrorId(id);
+        return;
+      }
+      setHoverErrorId(null);
+      setHoverEntry({ id, content: full.content.slice(0, 400) });
     });
     hover.handleHover(el);
-  }, [hover, fetchSnapshotContent]);
+  }, [hover, fetchSnapshotContent, snapshotLabel]);
 
   const handleRowHoverLeave = useCallback((e: React.MouseEvent) => {
     hover.handleHoverLeave(e);
@@ -347,12 +384,8 @@ export function HistoryPanel() {
           const isSelected = selectedId === snap.checkpoint_id;
           const isEditing = editingId === snap.checkpoint_id;
           const userName = snap.user_name ?? 'System';
-          // last-session rows render the per-user display label BEFORE the comment
-          // fallback — a null comment must not flash the manual-snapshot fallback string.
           const isLastSession = snap.label === LAST_SESSION_LABEL;
-          const displayComment = isLastSession
-            ? t('lastSessionLabel', { name: userName })
-            : (snap.comment || t('snapshotManualFallback'));
+          const displayComment = snapshotLabel(snap);
 
           if (isEditing) {
             return (
@@ -422,7 +455,10 @@ export function HistoryPanel() {
       {/* Hover preview popup for snapshot rows */}
       <HoverPreviewPopup
         hover={hover}
-        content={hoverComment ? `${hoverComment}\n\n${hoverContent}` : hoverContent}
+        title={hoverTitle}
+        content={hoverContent}
+        error={hoverError}
+        loading={hoverLoading}
       />
     </div>
   );

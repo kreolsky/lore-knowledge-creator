@@ -433,18 +433,19 @@ test('INVARIANT: deny and active partition registered exactly — ONE formula, b
 
 // ─── restore: the dsh session log is the activation store ────────────────────
 
-// Real 0.1.5-rc.2 shapes (driver.test.ts): tool/call carries arguments as a
-// lossless-JSON STRING; tool/result nests one tool-result block whose text is
-// the RENDERED skill body dsh's `skill` tool delivered.
+// Real 0.2.0-rc.2 shapes (observed live in a v4 session log): tool/call
+// carries arguments as a lossless-JSON STRING; tool/result is a FLAT tool
+// message — role 'tool', callId/isError on the message, the RENDERED skill
+// body directly in the blocks.
 function call(seq: number, callId: string, name: string, args: unknown): any {
   return { seq, type: 'tool/call', data: { turn: 1, step: 1, callId, name, arguments: JSON.stringify(args) } }
 }
 function result(seq: number, callId: string, text: string, isError = false): any {
   return {
-    seq, type: 'tool/result', data: { turn: 1, step: 1, message: { source: { kind: 'tool', callId }, content: [{
-      type: 'tool-result', toolCallId: callId, isError,
-      content: [{ type: 'text', text }],
-    }] } }, surfaceOp: 'append',
+    seq, type: 'tool/result', data: { turn: 1, step: 1, message: {
+      role: 'tool', source: { kind: 'tool', callId }, toolCallId: callId,
+      content: [{ type: 'text', text }], isError,
+    } }, surfaceOp: 'append',
   }
 }
 
@@ -527,15 +528,16 @@ test('assembleTurnPrompt normalizes the handed-over prompt; no index concatenati
 
 // ─── catalogServedNames: the harness's own web_search counts for the gate ────
 
-test('a web_search pack is advertised when the harness serves search, even with no backend member served', () => {
+test('a web_search pack is always advertised — the tool has no off state', () => {
+  // Web search is always served to the model (a provider without a key fails
+  // its calls loudly); the served gate must never prune the packs that need it.
   const wire = WIRE([], [{ location: 'shipped:ws', content: doc('name: web-search\ndescription: d\ntools:\n  - web_search\n  - sandbox_bash\n') }])
   const payloadTools = new Set(['search_materials'])
-  assert.deepEqual(resolveSkillCatalog(wire, catalogServedNames(payloadTools, true)).map((s) => s.name), ['web-search'])
-  assert.deepEqual(resolveSkillCatalog(wire, catalogServedNames(payloadTools, false)).map((s) => s.name), [])
+  assert.deepEqual(resolveSkillCatalog(wire, catalogServedNames(payloadTools)).map((s) => s.name), ['web-search'])
 })
 
 test('catalogServedNames leaves the payload set untouched', () => {
   const payloadTools = new Set(['search_materials'])
-  catalogServedNames(payloadTools, true)
+  catalogServedNames(payloadTools)
   assert.deepEqual([...payloadTools], ['search_materials'])
 })

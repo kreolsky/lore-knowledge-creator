@@ -124,12 +124,11 @@ async def test_list_projection_carries_author_fields(client, admin_user, project
 
 @pytest.mark.asyncio
 async def test_reference_created_ws_payload_allowlist_carries_author_fields():
-    """The project-WS allowlist whitelists created_by / created_by_name for the
-    reference_created broadcast — without the entry, _make_subscriber strips the
-    fields before they ever reach a client (so a foreign author's nick would not
-    appear until a full reload)."""
+    """The ws seam forwards emitted kwargs VERBATIM (no field list to forget), so
+    the guarantee that created_by / created_by_name reach clients is the wiring
+    test binding emit sites to 'ws:reference_created'. What this pins is the seam
+    membership itself: the event rides _SUBSCRIPTIONS (a name dropped from the
+    table never reaches a client at all)."""
     from routes.project_ws import _SUBSCRIPTIONS
 
-    allowed = dict(_SUBSCRIPTIONS)["reference_created"]
-    assert "created_by" in allowed
-    assert "created_by_name" in allowed
+    assert "reference_created" in _SUBSCRIPTIONS

@@ -7,6 +7,7 @@
 # is the sole declaration site (order matters: a `fallback` fold reads a base
 # declared above it).
 
+import base64
 import json
 import os
 from pathlib import Path
@@ -36,19 +37,12 @@ PROMPT_RETRIEVAL_QUERY_REWRITE: str = _prompts["retrieval"]["query_rewrite_syste
 
 # ─── Release version ─────────────────────────────────────────────────────────
 
-_section("infra", "Release version")
-
 # The release tag (`vMAJOR.MINOR.PATCH`) the deploy stamped in — see the `release` skill.
 # WHY not _require_env: the tag only exists in a deployed image; dev and CI run from a
 # working tree with no deploy step, and crashing the backend there buys nothing. The
 # fallback is a LOUD sentinel, never an empty string — an unversioned build must be
 # identifiable in a bug report, not indistinguishable from a real release.
-APP_VERSION = setting(
-    "APP_VERSION", str, default="dev", effect="restart",
-    label="Release version",
-    help="The release tag the deploy stamped in (`dev` in a working tree); "
-         "shown in the UI's about surface.",
-)
+APP_VERSION = os.environ.get("APP_VERSION") or "dev"
 
 # ─── Schema fingerprint guard (SYSTEM: schema-fingerprint) ──────────────────
 # Severity dial for the boot-time stale-schema-restore guard, deliberately NOT
@@ -58,48 +52,34 @@ APP_VERSION = setting(
 # is the operator escape hatch — boot a wedged environment (e.g. a SurrealDB
 # output-format change tripping a false positive) without a code push; the drift
 # still logs LOUD.
-_section("infra", "Schema fingerprint guard")
-SCHEMA_FINGERPRINT_FATAL = setting(
-    "SCHEMA_FINGERPRINT_FATAL", bool, default=True, effect="restart",
-    label="Schema drift refuses boot",
-    help="Boot-time stale-schema guard: on (default) refuses boot when "
-         "recorded fields are missing from the live schema; off boots with a "
-         "loud log — the operator escape hatch.",
+# WHY env-only, no admin row: the escape hatch is needed exactly when the backend
+# cannot boot, so an admin page could never reach it; the critical log names it.
+SCHEMA_FINGERPRINT_FATAL = (os.environ.get("SCHEMA_FINGERPRINT_FATAL") or "true").lower() in (
+    "1", "true", "yes", "on",
 )
 
 # ─── Auth ────────────────────────────────────────────────────────────────────
 
-# SECRET_KEY / COOKIE_SECURE register under the infra tab's Auth section: they
-# are bootstrap plumbing, ALL restart.
-_section("infra", "Auth")
-_SECRET_KEY_ENV = setting(
-    "SECRET_KEY", "secret", env="LORE_SECRET_KEY", default="", effect="restart",
-    label="JWT signing key",
-    help="Signs session JWTs and scoped run keys. Empty = a random key generated "
-         "on first boot under the storage root. Rotating it invalidates every "
-         "session — a deploy act, set in .env.",
-)
+# The JWT signing key (SECRET_KEY, below) is deliberately NOT a setting — no
+# env var, no admin row. It is generated per install at
+# $STORAGE_PATH/.lore/secret_key (instance_secret), a NAMED exception to
+# "secrets live in the secrets volume": the file predates secrets-init and
+# moving it would rotate the key (logging out every session). It signs only
+# session cookies and short MCP tokens. The cookie's Secure flag is not a
+# setting either: it follows the browser's scheme (auth.set_session_cookie).
 ALGORITHM = "HS256"  # JWT algorithm
 COOKIE_MAX_AGE = 60 * 60 * 24 * 14  # Session cookie lifetime (14 days)
-COOKIE_SECURE = setting(
-    "COOKIE_SECURE", bool, default=False, effect="restart",
-    label="Secure cookies",
-    help="Sets the Secure flag on session cookies (enable behind HTTPS).",
-)  # Set Secure flag on cookies (enable in prod)
 
 # ─── Storage ─────────────────────────────────────────────────────────────────
 
-# STORAGE_PATH registers under the infra tab's "Storage & Redis" section
-# (bootstrap plumbing, restart). VALUES keeps the raw str; config wraps it —
-# Path(...) is not JSON-serialisable for the admin GET, and every reader takes
-# the Path off config.
-_section("infra", "Storage & Redis")
-STORAGE_PATH = Path(setting(
-    "STORAGE_PATH", str, required=True, effect="restart",
-    label="Uploaded-files root",
-    help="Root directory for uploaded files.",
-))  # Root dir for uploaded files
-SECRET_KEY = instance_secret.resolve(_SECRET_KEY_ENV, STORAGE_PATH)  # JWT signing key
+# INFRA WIRING, not configuration (plan component-wiring-not-settings): the
+# storage root is the compose mount (/storage in every stack). The env read is
+# the TEST seam — tests/backend/conftest.py:190 points each xdist worker at
+# its own storage subtree; no compose, .env.example, deploy or README sets or
+# mentions it.
+STORAGE_PATH = Path(os.environ.get("STORAGE_PATH", "/storage"))
+# "" = no env leg: the key exists only as the per-install file.
+SECRET_KEY = instance_secret.resolve("", STORAGE_PATH)  # JWT signing key
 
 _section("storage", "Storage")
 MAX_AUDIO_SIZE_MB = setting(
@@ -139,12 +119,10 @@ MAX_ARCHIVE_SIZE_MB = setting(
 )  # Upload limit for agent-shared .zip archives (import_file sandbox_path)
 
 # DOCX→Markdown conversion is offloaded to the stateless `converter` container
-# (Pandoc, later swappable for ML engines). Internal Docker-network URL only.
-CONVERTER_URL = setting(
-    "CONVERTER_URL", str, default="http://converter:8002",
-    label="Converter URL",
-    help="Internal URL of the DOCX/PDF converter service.",
-)
+# (Pandoc, later swappable for ML engines). Internal Docker-network address —
+# wiring between Lore's own required components, not configuration (see the
+# agent-line INVARIANT below for the why).
+CONVERTER_URL = "http://converter:8002"
 EXPORT_CONVERTER_TIMEOUT_S = 120  # DOCX/PDF export via the converter (slow; > WEB_CONVERTER_TIMEOUT)
 
 # The MCP_* trio sits under config's Storage header but belongs to Tools — its
@@ -182,7 +160,8 @@ MCP_UPLOAD_TOKEN_TTL_S = setting(
          "whole stream.",
 )
 
-_section("storage", "Storage")
+# Shown with project memory in the tools tab, where an operator looks for it.
+_section("tools", "Project memory")
 # TTL (seconds) on a MEMORY consolidation run's scoped agent key
 # (`mint_memory_run_key` → `mint_run_key`). Sub-day on purpose: the run key is a
 # LIVE credential only for the run's lifetime, and the run's row IS the run — a
@@ -241,6 +220,13 @@ CHAT_MODEL = setting(
     label="Default chat model",
     help="The model a new session pins when nothing else selects one.",
 )
+CHAT_TITLE_MODEL = setting(
+    "CHAT_TITLE_MODEL", str, fallback=("CHAT_MODEL",),
+    label="Session title model",
+    help="The model the agent names chat sessions with; empty = the default "
+         "chat model. Use a non-reasoning model — a reasoning one thinks on "
+         "every title (the harness log warns). Applies from the next message.",
+)
 
 # The STT overrides keep their own admin sub-block (STT section) under this
 # header: the operator reads the base pair, then the transcription overrides.
@@ -261,9 +247,8 @@ STT_MODEL = setting(
     help="Model name sent to the transcription endpoint (whisper-1 format).",
 )
 
-# Session TITLES are minted by the harness titler (plan: session-title-from-the-harness)
-# — the retired CHAT_TITLE_MODEL / CHAT_TITLE_TIMEOUT_S / PROMPT_CHAT_AUTO_TITLE trio
-# and the /auto-title endpoint lived for the backend-side title call we no longer make.
+# Session TITLES are minted by the harness titler; CHAT_TITLE_MODEL above only
+# names its model, served to the harness per turn (the turn payload).
 # ARCH: Total budget for ALL chat image attachments in one turn, in raw source
 # bytes (not base64). The frontend enforces this sum at attach time;
 # main.py derives the request-body JSON cap from it. Single source of truth —
@@ -309,22 +294,41 @@ THIN_CRON_HOUR = setting(
 
 # ─── CRDT / Backplane / Job Queue ────────────────────────────────────────────
 
-# REDIS_URL registers under the infra tab's "Storage & Redis" section
-# (bootstrap plumbing, restart) though its config header is here.
-_section("infra", "Storage & Redis")
-REDIS_URL = setting(
-    "REDIS_URL", str, required=True, effect="restart",
-    label="Redis URL",
-    help="The Redis instance backing jobs, the backplane and caches.",
-)
+# INFRA WIRING, not configuration (plan component-wiring-not-settings): the
+# Redis backing jobs, the backplane and caches is the compose service. The env
+# read is the TEST seam — tests/backend/conftest.py:201 isolates each xdist
+# worker on Redis db 15-N (the autouse fixture FLUSHDBs it); a bare constant
+# here would point the suite at the LIVE db 0 and wipe it. No compose,
+# .env.example, deploy or README sets or mentions it.
+REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
 
-_section("storage", "CRDT / Backplane / Job Queue")
+# ─── Database ────────────────────────────────────────────────────────────────
+#
+# INFRA WIRING, not configuration (plan component-wiring-not-settings): the
+# database is the compose service — the address and the sign-in user are
+# constants, and the password exists only as the file secrets-init generates
+# into the `secrets` volume (SURREAL_PASS_FILE; read at call time by
+# db.pool.surreal_password, never an env var). The env reads on the
+# namespace/database are the TEST seam — tests/backend/conftest.py:32 and :50
+# point the suite at the lore_test namespace and the per-worker test_gwN
+# databases; a bare constant would land the suite's per-test DELETE cleanup
+# on the LIVE lore/main and wipe it. No compose, .env.example, deploy or
+# README sets or mentions either name.
+SURREAL_URL = "ws://surreal:8000/rpc"
+SURREAL_USER = "root"
+SURREAL_NS = os.environ.get("SURREAL_NS", "lore")
+SURREAL_DB = os.environ.get("SURREAL_DB", "main")
+SURREAL_PASS_FILE = Path("/secrets/surreal/pass")
+
+# Shown with the rest of STT in the models tab, where an operator looks for it.
+_section("models", "STT")
 STT_CONCURRENCY = setting(
     "STT_CONCURRENCY", int, default=2, min=1, effect="restart",
     label="STT concurrency",
     help="In-flight transcription jobs (transcription worker max_jobs). Set in "
          ".env — the worker pool is sized at boot.",
 )
+_section("storage", "CRDT / Backplane / Job Queue")
 # Backplane pub/sub publish deadline (seconds). Why: pub/sub fan-out is
 # fire-and-forget — every caller (publish_doc_update, event_bus._publish_to_backplane)
 # already wraps bp.publish in try/except and treats a failure as a tolerated
@@ -371,14 +375,14 @@ CHAT_MODELS_TIMEOUT_S = 10  # HTTP timeout for the /models gateway probe
 # Per-model capability numbers (context window, output cap, vision) are NOT
 # configured here — the DRIVER resolves them off the gateway /v1/models
 # (plugin caps.ts — plan collapse-the-editor-harness-layer step 4). The named
-# fallbacks are the composition's own: defaultContextWindow in
-# harness-driver/home/cordis.patch.yml (LORE_HARNESS_CONTEXT_WINDOW) and dsh's
-# default maxTokens when a gateway entry omits the ceiling. The frontend gauge
-# fallback (CHAT_CONTEXT_WINDOW_FALLBACK in misc-slice.ts) is the client's own
-# constant for models the picker map leaves bare.
+# fallbacks are the composition's own: defaultContextWindow 128000 (the
+# plugin's ROUTE_DEFAULT_CONTEXT_WINDOW in harness-driver/plugin/src/index.ts)
+# and dsh's default maxTokens when a gateway entry omits the ceiling. The
+# frontend gauge fallback (CHAT_CONTEXT_WINDOW_FALLBACK in misc-slice.ts) is
+# the client's own constant for models the picker map leaves bare.
 # TTL for the cached gateway /v1/models fetch behind GET /models (the picker
 # snapshot; the turn-time gates do not read it).
-_section("agent", "Chat constants")
+_section("models", "AI API")
 CHAT_MODELS_CACHE_TTL_S = setting(
     "CHAT_MODELS_CACHE_TTL_S", float, default=60.0, min=0,
     label="Models catalog cache TTL, s",
@@ -418,7 +422,7 @@ MODEL_IMAGE_SAFE_MIMES = frozenset({"image/png", "image/jpeg"})
 # Swapping the model behind the endpoint moves this number — re-measure against the
 # endpoint (the retired probe-vision method: send images, compare billed tokens
 # across pixel areas) and adjust here.
-_section("storage", "Model-bound image normalization")
+_section("models", "Images for the model")
 MODEL_IMAGE_MAX_PIXELS = setting(
     "MODEL_IMAGE_MAX_PIXELS", int, default=1_250_000, min=10_000,
     label="Model image pixel cap",
@@ -502,28 +506,32 @@ AGENT_SEARCH_DIRECT_K = setting(
 # Conservative (~20K tokens at 4 chars/tok) — leaves room for config prompt + conversation.
 CHAT_MAX_AGENT_CONTEXT_CHARS = 80_000
 
-# How the agent-line driver reaches the Tool-API over the compose network
-# (backend's internal address). The backend passes an agent key + this base URL
-# to the driver so tool calls go DIRECT (one hop saved per call).
-# NOT a settings key: no backend code reads it — it is the harness container's
-# env (LORE_TOOL_API_URL in compose), the same posture as LORE_HARNESS_MODEL.
-TOOL_API_INTERNAL_URL = os.environ.get("TOOL_API_INTERNAL_URL", "http://backend:8001")
 # ─── Agent line — the rented harness (THE line) ──────────────────────────────
 # Address + secret of the harness-driver service. This is the ONE line: chats
 # pinned to the earlier, retired line are archived read-only, and every NEW
 # session pins this line (`DRIVER_LINE_NAME`, driver/client.py).
 # Unset secret ⇒ the agent line is explicitly unavailable (no silent fallback).
+# INVARIANT(security): the driver address and secret are not configuration.
+# Why: nobody ever changes them, and every way to set one (env, the admin panel)
+# was a way to make the two sides disagree — a mismatch kills the agent behind a
+# 401 (a v0.20.3 install whose admin typed a secret stays dead across every
+# upgrade). So the address is the compose service name, and the secret exists
+# only as the file secrets-init generates per install into the volume the
+# backend and the harness both mount: no env var, no admin key, no override.
+# The secret cannot be hardcoded or dropped: /api/ is public, and it is what
+# proves a caller is OUR harness — the only caller whose "the user approved" is
+# honored (agent/context.py driver_attested) and the only one /api/driver/*
+# hands boot credentials to.
 _section("agent", "Agent line — the rented harness")
-HARNESS_DRIVER_URL = setting(
-    "HARNESS_DRIVER_URL", str, default="http://harness:8090",
-    label="Harness driver URL",
-    help="Address of the harness-driver service (the ONE agent line).",
-)
-HARNESS_DRIVER_SECRET = setting(
-    "HARNESS_DRIVER_SECRET", "secret", default="",
-    label="Harness driver secret",
-    help="Shared secret of the harness-driver service. Unset = the agent line is "
-         "explicitly unavailable.",
+HARNESS_DRIVER_URL = "http://harness:8090"
+#: The generated per-install secret (secrets-init → the `secrets` volume,
+#: mounted at /secrets). Read at IMPORT: "" (no file) ⇒ the line is
+#: UNCONFIGURED — the routing gate's explicit-unavailable signal. Readers use
+#: `config.HARNESS_DRIVER_SECRET` at call time; nothing but this file binds it.
+_DRIVER_SECRET_FILE = Path("/secrets/harness/driver_secret")
+HARNESS_DRIVER_SECRET = (
+    _DRIVER_SECRET_FILE.read_text().strip()
+    if _DRIVER_SECRET_FILE.is_file() else ""
 )
 # Availability signal: Redis-cached probe of the driver /health
 # endpoint. Positive TTL (ok) and negative TTL (down) decouple frontend Agent-mode
@@ -534,7 +542,7 @@ HARNESS_DRIVER_SECRET = setting(
 # WHY: the TTL is SHORT and a heartbeat
 # (TURN_LOCK_HEARTBEAT_S) refreshes it while the turn streams, so a leaked lock
 # (a cancelled release / a process kill mid-turn) costs one heartbeat interval
-# instead of minutes. This REPLACES the old "TTL slightly above TURN_TIMEOUT_S"
+# instead of minutes. This REPLACES the old "TTL slightly above TURN_PROGRESS_GRACE_S"
 # reasoning: a legit-but-slow turn is kept alive by the heartbeat (compare-and-
 # extend on each beat), NOT by a long TTL — so the TTL can be small (fast
 # self-heal) without evicting slow turns. The release is ALSO shielded in
@@ -562,26 +570,16 @@ TURN_LOCK_HEARTBEAT_S = setting(
 # killed by the wall clock — only a silent one is, one grace window after its
 # last frame. Env-driven so a runaway turn self-terminates without depending
 # on a human pressing stop.
-# ARCH: TURN_TIMEOUT_S is the LEGACY spelling of the no-progress budget; it
-# keeps its env name (no env rename) and feeds the default of
-# TURN_PROGRESS_GRACE_S below, so a deployment that sets only TURN_TIMEOUT_S
-# keeps its budget. The grace judges a channel that is alive but producing
-# nothing useful (a genuinely dead socket is a RECONNECT, not a breach).
-TURN_TIMEOUT_S = setting(
-    "TURN_TIMEOUT_S", float, default=300.0,
-    label="No-progress budget (legacy), s",
-    help="Legacy spelling of the turn's no-progress budget; feeds "
-         "TURN_PROGRESS_GRACE_S when that key is unset.",
-)
+# The grace judges a channel that is alive but producing nothing useful (a
+# genuinely dead socket is a RECONNECT, not a breach).
 # The re-armed no-progress window (s): the budget for ONE slow-but-legitimate
 # stretch of the turn — a single tool call can run tens of seconds emitting no
 # frames. Armed at turn start, re-armed by every relayed frame.
 TURN_PROGRESS_GRACE_S = setting(
-    "TURN_PROGRESS_GRACE_S", float, fallback=("TURN_TIMEOUT_S",), min=1,
+    "TURN_PROGRESS_GRACE_S", float, default=300.0, min=1,
     label="No-progress grace, s",
     help="Silence budget of a turn: re-armed by every driver frame; a turn with "
-         "no frames for this long is stopped. Defaults to the no-progress "
-         "budget above.",
+         "no frames for this long is stopped.",
 )
 # The absolute ceiling (s) from turn start that survives progress: past it a
 # breach fires whatever the driver is doing — without it a tool-loop that
@@ -656,37 +654,58 @@ EMBEDDING_COOLDOWN_SEC = setting(
 )  # Seconds between idle embedding re-checks
 EMBEDDING_TIMEOUT_S = 60  # HTTP timeout for a single embedding API batch request
 
-# ─── Query rewrite ────────────────────────────────────────────────────────────
+# ─── Web search: provider for the harness-served web_search tool ─────────────
+# ARCH: Lore owns these values, the harness owns search. The resolved provider
+# and its ONE credential ride EVERY turn payload (driver.client), and the
+# harness applies them with dsh's own calls at the turn's start — an admin
+# change reaches the next message, no restart. There is NO off state: the
+# web_search tool is always offered, and a provider with an empty key/URL
+# fails every search with an explicit error naming the provider and this
+# panel. To stop searching, clear the key/URL.
+_section("search", "Web search")
+# WHY default deepseek and no "off": an unpinned provider makes dsh pick any
+# usable one — DeepSeek with a key resolver is always usable, so "off" spelled
+# as an unpinned provider is a silent fallback, never an off switch; the
+# operator's rule is that clearing the key is the off switch, and a fresh
+# install's empty DeepSeek key fails loudly instead.
+WEB_SEARCH_PROVIDER = setting(
+    "WEB_SEARCH_PROVIDER", str, default="deepseek",
+    choices=("deepseek", "brave", "tavily", "searxng"),
+    label="Search provider",
+    help="The one provider behind the agent's web_search tool; it is always "
+         "offered — a provider with an empty key/URL fails every search "
+         "with an explicit error instead of falling back (to stop searching, "
+         "clear the key/URL below). DeepSeek search is a paid model call per "
+         "query. Limits (60s timeout, 8 results, 4 queries per call) are "
+         "fixed in the harness config. Applies from the next message.",
+)
+DEEPSEEK_API_KEY = setting(
+    "DEEPSEEK_API_KEY", "secret", default="",
+    visible_if=("WEB_SEARCH_PROVIDER", "deepseek"),
+    label="DeepSeek API key",
+    help="Used when the provider is deepseek. Reset falls back to .env. "
+         "Applies from the next message.",
+)
+BRAVE_API_KEY = setting(
+    "BRAVE_API_KEY", "secret", default="",
+    visible_if=("WEB_SEARCH_PROVIDER", "brave"),
+    label="Brave Search API key",
+    help="Used when the provider is brave. Applies from the next message.",
+)
+TAVILY_API_KEY = setting(
+    "TAVILY_API_KEY", "secret", default="",
+    visible_if=("WEB_SEARCH_PROVIDER", "tavily"),
+    label="Tavily API key",
+    help="Used when the provider is tavily. Applies from the next message.",
+)
+SEARXNG_URL = setting(
+    "SEARXNG_URL", str, default="",
+    visible_if=("WEB_SEARCH_PROVIDER", "searxng"),
+    label="SearXNG URL",
+    help="Base URL of a SearXNG instance with the JSON format enabled; used "
+         "when the provider is searxng. Applies from the next message.",
+)
 
-_section("models", "Query rewrite")
-CHAT_QUERY_REWRITE_MODEL = setting(
-    "CHAT_QUERY_REWRITE_MODEL", str, fallback=("CHAT_MODEL",),
-    label="Query rewrite model",
-    help="LLM that rewrites a conversational query into a standalone one; "
-         "empty = the default chat model.",
-)  # LLM model for query rewriting; falls back to CHAT_MODEL
-CHAT_QUERY_REWRITE_MAX_TOKENS = 100  # Max output tokens for rewritten query
-CHAT_QUERY_REWRITE_ENABLED = setting(
-    "CHAT_QUERY_REWRITE_ENABLED", bool, default=True,
-    label="Query rewrite on/off",
-    help="Off = retrieval embeds the raw user message (no LLM hop).",
-)  # Toggle LLM query rewriting on/off
-CHAT_QUERY_REWRITE_HISTORY_MESSAGES = setting(
-    "CHAT_QUERY_REWRITE_HISTORY_MESSAGES", int, default=6, min=0,
-    label="Rewrite history messages",
-    help="How many recent chat messages the rewriter sees.",
-)  # Number of history messages fed to rewriter
-CHAT_QUERY_REWRITE_SNIPPET_CHARS = setting(
-    "CHAT_QUERY_REWRITE_SNIPPET_CHARS", int, default=200, min=1,
-    label="Rewrite snippet chars",
-    help="Char cap per history message fed to the rewriter.",
-)  # Char limit per history message snippet
-CHAT_QUERY_REWRITE_TIMEOUT_S = setting(
-    "CHAT_QUERY_REWRITE_TIMEOUT_S", int, default=15, min=1,
-    label="Rewrite LLM timeout, s",
-    help="HTTP timeout of the rewrite call; on timeout the raw query is "
-         "used.",
-)  # HTTP timeout for rewrite LLM call
 
 # ─── Retrieval ────────────────────────────────────────────────────────────────
 # RAG pipeline: vector search → anti-monopoly → score drop-off → token budgeting.
@@ -713,7 +732,7 @@ EMBEDDING_INPUT_MAX_CHARS = 8000
 # with an instruction (`Instruct: …\nQuery: …`). Omitting it costs 1–5% retrieval per
 # the model card. Applied OPT-IN at the one query call site (retrieval.py), never as a
 # default inside embed_texts (would poison every stored document vector).
-_section("agent", "Retrieval")
+_section("search", "Retrieval")
 RETRIEVAL_QUERY_INSTRUCTION = setting(
     "RETRIEVAL_QUERY_INSTRUCTION", str,
     default="Given a user query, retrieve relevant document passages that answer it",
@@ -742,6 +761,38 @@ RETRIEVAL_SCORE_DROP_OFF = setting(
 )  # Ratio threshold: hits[i].score < hits[i-1].score * this → cutoff
 RETRIEVAL_TOKEN_SAFETY_MARGIN = 0.85  # Approx token ratio: chars/4 * margin
 
+
+# ─── Query rewrite ────────────────────────────────────────────────────────────
+
+_section("search", "Query rewrite")
+CHAT_QUERY_REWRITE_MODEL = setting(
+    "CHAT_QUERY_REWRITE_MODEL", str, fallback=("CHAT_MODEL",),
+    label="Query rewrite model",
+    help="LLM that rewrites a conversational query into a standalone one; "
+         "empty = the default chat model.",
+)  # LLM model for query rewriting; falls back to CHAT_MODEL
+CHAT_QUERY_REWRITE_MAX_TOKENS = 100  # Max output tokens for rewritten query
+CHAT_QUERY_REWRITE_ENABLED = setting(
+    "CHAT_QUERY_REWRITE_ENABLED", bool, default=True,
+    label="Query rewrite on/off",
+    help="Off = retrieval embeds the raw user message (no LLM hop).",
+)  # Toggle LLM query rewriting on/off
+CHAT_QUERY_REWRITE_HISTORY_MESSAGES = setting(
+    "CHAT_QUERY_REWRITE_HISTORY_MESSAGES", int, default=6, min=0,
+    label="Rewrite history messages",
+    help="How many recent chat messages the rewriter sees.",
+)  # Number of history messages fed to rewriter
+CHAT_QUERY_REWRITE_SNIPPET_CHARS = setting(
+    "CHAT_QUERY_REWRITE_SNIPPET_CHARS", int, default=200, min=1,
+    label="Rewrite snippet chars",
+    help="Char cap per history message fed to the rewriter.",
+)  # Char limit per history message snippet
+CHAT_QUERY_REWRITE_TIMEOUT_S = setting(
+    "CHAT_QUERY_REWRITE_TIMEOUT_S", int, default=15, min=1,
+    label="Rewrite LLM timeout, s",
+    help="HTTP timeout of the rewrite call; on timeout the raw query is "
+         "used.",
+)  # HTTP timeout for rewrite LLM call
 
 # ─── Project memory (SYSTEM: memory) ─────────────────────────────────────────
 # Order 2 (`refactor(memory): collapse the model to one fact level`) removed the
@@ -819,7 +870,7 @@ MEMORY_MERGE_CANDIDATE_CHARS = 8000
 # how you buy false refusals. What does work is the agent's own comparison against the
 # merge candidates served with the portion: on a re-run over consumed material it
 # converted 11 of 13 comparable verdicts into `merge` while this gate fired zero times.
-_section("agent", "Project memory")
+_section("tools", "Project memory")
 MEMORY_DUPLICATE_FACT_THRESHOLD = setting(
     "MEMORY_DUPLICATE_FACT_THRESHOLD", float, default=0.82, min=0.0, max=1.0,
     label="Duplicate-fact cosine",
@@ -850,16 +901,47 @@ SANDBOX_SSH_USER = setting(
     help="Unix account every console channel connects as (one shared "
          "account; separation is per-workspace).",
 )
-# INVARIANT(security): base64 of the PRIVATE key, and it lives ONLY here (env).
-# Why: it must never enter the image or the repo — both are rebuildable/readable by
-# anyone with the source, which would make it a published credential. Base64 because
-# a PEM's newlines do not survive .env parsing.
+# INVARIANT(security): base64 of the PRIVATE key, and it lives only in env or in
+# the operator's key file — never in the image or the repo.
+# Why: both are rebuildable/readable by anyone with the source, which would make
+# it a published credential. Base64 because a PEM's newlines do not survive .env
+# parsing.
 SANDBOX_SSH_KEY_B64 = setting(
     "SANDBOX_SSH_KEY_B64", "secret", default="",
     label="Sandbox SSH private key (base64)",
     help="Base64 of the PRIVATE key (a PEM's newlines do not survive .env "
-         "parsing). Lives only in env/DB, never in the image or repo.",
+         "parsing). Env wins over SANDBOX_SSH_KEY_FILE.",
 )
+# The bundled sandbox's keygen writes the pair into a named volume; the backend
+# mounts it read-only and reads the private half from disk. Empty = no file leg
+# (the external-sandbox contract: key in env only — the shape prod runs).
+# WHY env-only, no admin row: it is a path inside the container that the compose
+# file sets (docker-compose.public.yml), not an operator choice.
+SANDBOX_SSH_KEY_FILE = os.environ.get("SANDBOX_SSH_KEY_FILE", "")
+
+
+def _sandbox_key_from(env_value: str, file_path: str) -> str:
+    """The key fold: env value, else base64 of the file, else empty.
+
+    A missing file must resolve to EMPTY, not raise — an unset key means "the
+    sandbox tool is not served" (SANDBOX_ENABLED below), the same valid-deploy
+    stance as an unset host.
+    """
+    if env_value:
+        return env_value
+    if file_path and Path(file_path).is_file():
+        return base64.b64encode(Path(file_path).read_bytes()).decode("ascii")
+    return ""
+
+
+# WHY the rebind (the instance_secret.resolve precedent behind SECRET_KEY
+# above): every consumer reads the key at CALL time through settings — the
+# agent-tool gate (agent/tools.py) and the SSH transport
+# (routes/tool_api/sandbox/transport.py) — and settings._resolve ends in
+# getattr(config, key), so folding the file leg INTO the key's own config
+# value reaches all of them with no second read site to drift. Env always
+# wins, so an external sandbox overrides the bundled key.
+SANDBOX_SSH_KEY_B64 = _sandbox_key_from(SANDBOX_SSH_KEY_B64, SANDBOX_SSH_KEY_FILE)
 # The sandbox is OPTIONAL: unset SANDBOX_SSH_HOST means the tool is not served at all
 # (see agent_toolset). This is deliberately NOT a crash-on-missing-config case —
 # a deploy without a sandbox is a valid deploy, and every other chat must still work.
@@ -867,7 +949,7 @@ SANDBOX_ENABLED = bool(SANDBOX_SSH_HOST and SANDBOX_SSH_KEY_B64)
 
 # Wall-clock ceiling on a DETACHED run (`sandbox_bash(detach=true)`) — enforced by
 # `timeout` on the sandbox, the same mechanism as the foreground path. Far above
-# TURN_TIMEOUT_S and the 300 s foreground cap on purpose: the whole point of the
+# TURN_PROGRESS_GRACE_S and the 300 s foreground cap on purpose: the whole point of the
 # mode is a run that outlives the turn (a test suite, a build). It still bounds the
 # leak: the sandbox is shared by every user, and a client-side abandon does NOT kill
 # the remote process, so unbounded detach would leak a process permanently.
@@ -990,7 +1072,7 @@ COMFYUI_PROMPT_MODEL = setting(
 # seed-fallback was the only path ever taken. Kept at 90 after the refiner moved
 # to a dedicated fast model (4.4s on the real payload): pure headroom now, but it
 # still covers a slower model someone points COMFYUI_PROMPT_MODEL at.
-# Budget: TURN_TIMEOUT_S=300 bounds the turn and the ComfyUI poll deadline is
+# Budget: TURN_PROGRESS_GRACE_S=300 bounds the turn and the ComfyUI poll deadline is
 # COMFYUI_TIMEOUT_S=120, so 90+120=210 leaves ~90s for the agent's own work.
 # Not 120: that puts the sum at the edge of the budget.
 COMFYUI_PROMPT_TIMEOUT_S = setting(
@@ -1003,70 +1085,16 @@ COMFYUI_PROMPT_TIMEOUT_S = setting(
 # once on the arq worker. A burst of tool calls queues in arq instead of
 # hammering one ComfyUI box. Default 2 — one generation is ~10–20s of GPU, so 2
 # keeps a second request responsive without over-scheduling a single box.
-# Registered under the storage tab's "CRDT / Backplane / Job Queue" section
-# though it sits here: it is the worker job-concurrency twin of STT_CONCURRENCY,
-# and both enter as restart together. max(1, …) keeps the env-value clamp the
-# declaration's min bound does not apply to raw env reads.
-_section("storage", "CRDT / Backplane / Job Queue")
+# Shown with the rest of ComfyUI in the tools tab, where an operator looks for
+# it. max(1, …) keeps the env-value clamp the declaration's min bound does not
+# apply to raw env reads.
+_section("tools", "ComfyUI image generation")
 COMFY_CONCURRENCY = max(1, setting(
     "COMFY_CONCURRENCY", int, default=2, min=1, effect="restart",
     label="ComfyUI concurrency",
     help="Concurrent generate_image jobs on the worker. Set in .env — the "
          "semaphore is built once per worker.",
 ))
-
-
-# ─── Web search: provider for the harness-served web_search tool ─────────────
-# ARCH: Lore owns these values, the harness owns search. The harness reads
-# them ONCE at boot from GET /api/driver/web-search (routes/driver_settings.py)
-# and boots dsh with the pin + credential in its env. `effect="live"` is the
-# BACKEND's truth — that endpoint resolves them per request, so an override is
-# editable here — but the harness only picks it up on
-# `docker compose restart harness`, which every help text says.
-_section("tools", "Web search")
-# WHY default "off": a fresh install has no key, and DeepSeek search is a paid
-# call per query — paid search starts only when an admin picks a provider. A
-# deploy that wants search sets WEB_SEARCH_PROVIDER explicitly.
-WEB_SEARCH_PROVIDER = setting(
-    "WEB_SEARCH_PROVIDER", str, default="off",
-    choices=("off", "deepseek", "brave", "tavily", "searxng"),
-    label="Search provider",
-    help="The one provider behind the agent's web_search tool; off = the tool "
-         "is not offered. A provider with an empty key/URL fails every search "
-         "with an explicit error — there is no fallback to another provider. "
-         "DeepSeek search is a paid model call per query. Limits (60s timeout, "
-         "8 results, 4 queries per call) are fixed in the harness config. "
-         "Applies after `docker compose restart harness`.",
-)
-DEEPSEEK_API_KEY = setting(
-    "DEEPSEEK_API_KEY", "secret", default="",
-    visible_if=("WEB_SEARCH_PROVIDER", "deepseek"),
-    label="DeepSeek API key",
-    help="Used when the provider is deepseek. Reset falls back to .env. "
-         "Applies after `docker compose restart harness`.",
-)
-BRAVE_API_KEY = setting(
-    "BRAVE_API_KEY", "secret", default="",
-    visible_if=("WEB_SEARCH_PROVIDER", "brave"),
-    label="Brave Search API key",
-    help="Used when the provider is brave. Applies after "
-         "`docker compose restart harness`.",
-)
-TAVILY_API_KEY = setting(
-    "TAVILY_API_KEY", "secret", default="",
-    visible_if=("WEB_SEARCH_PROVIDER", "tavily"),
-    label="Tavily API key",
-    help="Used when the provider is tavily. Applies after "
-         "`docker compose restart harness`.",
-)
-SEARXNG_URL = setting(
-    "SEARXNG_URL", str, default="",
-    visible_if=("WEB_SEARCH_PROVIDER", "searxng"),
-    label="SearXNG URL",
-    help="Base URL of a SearXNG instance with the JSON format enabled; used "
-         "when the provider is searxng. Applies after "
-         "`docker compose restart harness`.",
-)
 
 
 def count_tokens_approx(text: str) -> int:

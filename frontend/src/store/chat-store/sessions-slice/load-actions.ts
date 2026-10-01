@@ -217,7 +217,7 @@ export function createLoadActions(set: Set, get: Get): LoadActions {
       loadInFlight.set(scopeKey, doLoad);
       // INVARIANT: Delete the cache entry once settled. Concurrent callers in the
       // same tick still dedupe via the in-flight Map lookup above, but a later visit
-      // to the same project MUST re-fetch — otherwise project A → B → A hits a  Why: the cache entry is deleted on settle so a later visit re-fetches; same-tick callers dedupe via the in-flight Map, but keeping the cache would serve stale sessions.
+      // to the same project MUST re-fetch. Why: otherwise project A → B → A hits a
       // resolved promise and returns instantly, leaving sessions / activeSessionId
       // stuck on B until page reload.
       doLoad.finally(() => {

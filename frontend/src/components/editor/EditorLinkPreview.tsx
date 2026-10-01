@@ -29,6 +29,7 @@ import { LinkPreviewPopup } from '../LinkPreviewPopup';
 import { useAppStore } from '../../store/app-store';
 import { useNoteChatStore } from '../../store/note-chat-store';
 import { useDocumentPreview } from '../../hooks/useDocumentPreview';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useReferencePreview } from '../../hooks/useReferencePreview';
 import { usePopupSlot } from '../../hooks/usePopupSlot';
 import { computePopupPosition, chooseLinkPlacement } from '../../utils/popup-position';
@@ -73,6 +74,7 @@ export function EditorLinkPreview() {
   const meta = state.meta;
   const previewDocId = meta?.type === 'doc' ? decodeLinkId('doc', meta.id) : null;
   const { content: docContent, error: docError, loading: docLoading } = useDocumentPreview(previewDocId);
+  const docTitle = useDocumentTitle(previewDocId);
 
   // Cross-document references aren't in the ancestor-scoped store; lazy-fetch on a store
   // miss so their hover preview resolves (mirrors useDocumentPreview for doc links). The
@@ -99,31 +101,32 @@ export function EditorLinkPreview() {
   // undefined forever (previewDocId is null — the body comes from the store), so an
   // inferred "loading" would spin that popup permanently. Only the branch that actually
   // owns a fetch reports its state.
-  const resolved: { content?: string; imageUrl?: string; error?: boolean; loading?: boolean } = useMemo(() => {
+  const resolved: { title?: string; content?: string; imageUrl?: string; error?: boolean; loading?: boolean } = useMemo(() => {
     if (!meta) return {};
-    if (meta.type === 'doc') return { content: docContent, error: docError, loading: docLoading };
+    if (meta.type === 'doc') return { title: docTitle, content: docContent, error: docError, loading: docLoading };
     if (meta.type === 'ref') {
       const refId = decodeLinkId('ref', meta.id);
       const ref = references.find(r => r.reference_id === refId);
       if (ref?.media_type === 'image' && ref.file_path)
-        return { imageUrl: referenceFileUrl(refId, ref.file_path) };
+        return { title: ref.title, imageUrl: referenceFileUrl(refId, ref.file_path) };
       // Hydrated in store → instant; otherwise the lazy-fetched preview (cache).
-      if (ref?.content !== undefined) return { content: ref.content };
-      return { ...(fetchedRefPreview ?? {}), error: refError, loading: refLoading };
+      if (ref?.content !== undefined) return { title: ref.title, content: ref.content };
+      return { ...(fetchedRefPreview ?? {}), title: ref?.title ?? fetchedRefPreview?.title, error: refError, loading: refLoading };
     }
     if (meta.type === 'note') {
       const noteId = decodeLinkId('note', meta.id);
       const session = noteChatSessions.find(s => s.session_id === noteId);
-      // WHY: notes carry no title; the panel hover (NotesPanel) uses last_message_preview
-      // for the same popup. Unify the editor hover with that format so it never shows the
-      // generic "No content" fallback for a note that has messages.
+      // WHY: notes carry no title; the panel hover (NotesPanel) titles the popup with the
+      // first message and fills it with last_message_preview. Unify the editor hover with
+      // that format so it never shows the generic "No content" fallback for a note that
+      // has messages.
       const preview = session?.last_message_preview?.trim()
         || session?.first_message_preview?.trim();
-      return preview ? { content: preview } : {};
+      return preview ? { title: session?.first_message_preview?.trim(), content: preview } : {};
     }
     if (meta.type === 'ext') return { content: meta.id };
     return {};
-  }, [meta, docContent, docError, docLoading, references, noteChatSessions, fetchedRefPreview, refError, refLoading]);
+  }, [meta, docTitle, docContent, docError, docLoading, references, noteChatSessions, fetchedRefPreview, refError, refLoading]);
 
   const clearTimer = useCallback(() => {
     if (timerRef.current) {
@@ -266,6 +269,7 @@ export function EditorLinkPreview() {
       bottom={state.bottom}
       left={state.left}
       maxHeight={state.maxHeight}
+      title={resolved.title}
       content={resolved.content}
       imageUrl={resolved.imageUrl}
       error={resolved.error}

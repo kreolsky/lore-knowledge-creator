@@ -14,6 +14,7 @@ from driver.client import (
     DRIVER_LINE_NAME,
     DriverLine,
     DriverLineUnreachable,
+    DriverSecretMismatch,
     resolve_driver_line,
 )
 
@@ -111,11 +112,16 @@ async def post_stop(lore_session_id: str, line: DriverLine | None = None) -> dic
         resp = await client.post(
             url, json={"session_id": lore_session_id}, headers=headers,
             timeout=_STOP_TIMEOUT)
+        # 401 is the secret mismatch — named, never "unreachable".
+        if resp.status_code == 401:
+            raise DriverSecretMismatch(ln.name)
         resp.raise_for_status()
         reply = resp.json()
         if not isinstance(reply, dict):
             raise ValueError(f"malformed stop reply: {reply!r}")
         return reply
+    except DriverSecretMismatch:
+        raise
     except Exception as exc:
         raise DriverLineUnreachable(ln.name, str(exc)) from exc
 
@@ -166,6 +172,8 @@ async def post_followup(payload: dict, line: DriverLine | None = None) -> dict:
             raise DriverLineUnreachable(ln.name, str(exc)) from exc
         if resp.status_code == 409:
             continue  # the documented busy — retry on the backoff
+        if resp.status_code == 401:
+            raise DriverSecretMismatch(ln.name)
         if resp.status_code >= 400:
             raise DriverLineUnreachable(
                 ln.name, f"followup HTTP {resp.status_code}: {resp.text[:200]}")

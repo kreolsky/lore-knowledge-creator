@@ -9,8 +9,7 @@ import { validateFrame, GUARDED_TYPES } from './frame-validate';
  * just to be asserted would widen the interface for the test's benefit.
  *
  * `dsh_event` has no arm in the map — it is HANDLED by the feed dispatch
- * (`isFeedFrame(event)` → conversation-feed, plan lore-renders-dsh-conversation
- * step 1), so the dispatch line is part of what "handles" a type.
+ * (`isFeedFrame(event)` → conversation-feed), so the dispatch line is part of what "handles" a type.
  */
 function streamingHandlerTypes(): string[] {
   const src = readFileSync(

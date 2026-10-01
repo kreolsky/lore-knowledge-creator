@@ -18,6 +18,7 @@ import { buildParentMap, sortDocumentsForChat, sortReferencesByProximity } from 
 import { referenceFileUrl } from '../../utils/reference-url';
 import { useNavMode } from '../../hooks/useNavMode';
 import { useDocumentPreview } from '../../hooks/useDocumentPreview';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useReferencePreview } from '../../hooks/useReferencePreview';
 import { usePopupSlot } from '../../hooks/usePopupSlot';
 import { PickerPreviewPopup } from '../PickerPreviewPopup';
@@ -100,6 +101,7 @@ export function ContentPickerPopup({ sessionId, selectedDocIds, selectedRefIds, 
   const [previewDocId, setPreviewDocId] = useState<string | null>(null);
   const [previewRefId, setPreviewRefId] = useState<string | null>(null);
   const { content: rawContent, error: docError, loading: docLoading } = useDocumentPreview(previewDocId);
+  const previewDocTitle = useDocumentTitle(previewDocId);
   const lastContentRef = useRef('');
   if (rawContent !== undefined) lastContentRef.current = rawContent;
   const previewContent = lastContentRef.current;
@@ -427,6 +429,7 @@ export function ContentPickerPopup({ sessionId, selectedDocIds, selectedRefIds, 
       </div>
       <PickerPreviewPopup
         pos={previewPos}
+        title={activeTab === 'documents' ? previewDocTitle : previewRef?.title}
         content={activeTab === 'documents' ? previewContent : (previewRefImageUrl ? undefined : previewRefContent)}
         imageUrl={activeTab === 'references' ? (previewRefImageUrl ?? undefined) : undefined}
         error={activeTab === 'documents' ? docError : refError}

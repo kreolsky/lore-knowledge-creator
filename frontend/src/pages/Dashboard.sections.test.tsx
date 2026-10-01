@@ -2,7 +2,9 @@
  * Dashboard sections: own projects under "My projects" (with the create
  * button in that heading row), every other visible project under "Shared
  * with me" with an access badge per level; the shared section is absent
- * when nothing is shared.
+ * when nothing is shared. Card anatomy: description under the title
+ * (line-clamped) and the one meta line (owner | members for others'
+ * projects, members only for own, nothing at 0 members).
  */
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -12,7 +14,7 @@ import type { AccessLevel, Project } from '../types';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-function makeProject(id: string, owner: string, access: AccessLevel): Project {
+function makeProject(id: string, owner: string, access: AccessLevel, overrides: Partial<Project> = {}): Project {
   return {
     project_id: id,
     name: `Project ${id}`,
@@ -27,6 +29,7 @@ function makeProject(id: string, owner: string, access: AccessLevel): Project {
     my_access: access,
     created_at: '2026-01-01T00:00:00Z',
     members_count: 0,
+    ...overrides,
   };
 }
 
@@ -52,7 +55,10 @@ beforeEach(async () => {
   vi.doMock('../components/ui', () => ({
     Button: (p: { onClick?: () => void; children?: ReactNode }) => createElement('button', { type: 'button', onClick: p.onClick }, p.children),
     IconButton: (p: { title?: string; children?: ReactNode }) => createElement('button', { type: 'button', title: p.title }, p.children),
+    Modal: (p: { open?: boolean; children?: ReactNode }) =>
+      (p.open ? createElement('div', { 'data-modal': true }, p.children) : null),
     FieldInput: forwardRef<HTMLInputElement, Record<string, unknown>>((props, ref) => createElement('input', { ...props, ref } as never)),
+    FieldTextarea: forwardRef<HTMLTextAreaElement, Record<string, unknown>>((props, ref) => createElement('textarea', { ...props, ref } as never)),
   }));
   vi.doMock('../i18n', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
   vi.doMock('../store/app-store', () => ({
@@ -111,5 +117,55 @@ describe('Dashboard own / shared sections', () => {
 
     expect(section('shared')).toBeNull();
     expect(section('own')?.textContent).toContain('noProjectsYet');
+  });
+});
+
+describe('Dashboard card meta line + description', () => {
+  it("others' project: owner | members when N>0, owner only (no separator) when N=0", () => {
+    appState.projects = [
+      makeProject('c', 'other', 'full', { members_count: 2 }),
+      makeProject('d', 'other', 'full', {}),
+    ];
+    act(() => root.render(createElement(Dashboard)));
+
+    const metas = Array.from(section('shared')?.querySelectorAll('[data-meta]') ?? []);
+    expect(metas).toHaveLength(2);
+    expect(metas[0].textContent).toContain('other');
+    expect(metas[0].textContent).toContain('2');
+    expect(metas[0].textContent).toContain('|');
+    expect(metas[1].textContent).toContain('other');
+    expect(metas[1].textContent).not.toContain('|');
+  });
+
+  it('own project: members only when N>0, no meta line at all when N=0', () => {
+    appState.projects = [
+      makeProject('a', 'me', 'full', { members_count: 2 }),
+      makeProject('b', 'me', 'full', {}),
+    ];
+    act(() => root.render(createElement(Dashboard)));
+
+    const metas = Array.from(section('own')?.querySelectorAll('[data-meta]') ?? []);
+    expect(metas).toHaveLength(1);
+    expect(metas[0].textContent).toContain('2');
+    expect(metas[0].textContent).not.toContain('me');
+    expect(metas[0].textContent).not.toContain('|');
+  });
+
+  it('renders the description under the title only when non-empty, clamped to 5 lines', () => {
+    appState.projects = [
+      makeProject('a', 'me', 'full', { description: 'Line one\nLine two' }),
+      makeProject('b', 'me', 'full', { description: null }),
+    ];
+    act(() => root.render(createElement(Dashboard)));
+
+    const own = section('own');
+    const descriptions = Array.from(own?.querySelectorAll('[data-description]') ?? []);
+    expect(descriptions).toHaveLength(1);
+    expect(descriptions[0].textContent).toBe('Line one\nLine two');
+    expect(descriptions[0].className).toContain('line-clamp-5');
+    expect(descriptions[0].className).toContain('whitespace-pre-line');
+    // The description sits below the title row, above the meta line.
+    const title = own?.querySelector('h3');
+    expect(title && descriptions[0].compareDocumentPosition(title) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
   });
 });

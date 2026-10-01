@@ -227,10 +227,9 @@ async def test_attach_mints_image_gen_from_gen_steps(monkeypatch):
     call = _dsh(3, "tool/call", {"turn": 1, "step": 1, "callId": "cg",
                                  "name": "generate_image", "arguments": "{}"})
     result = _dsh(4, "tool/result", {"message": {
-        "source": {"kind": "tool", "callId": "cg"},
-        "content": [{"type": "tool-result", "toolCallId": "cg",
-                     "content": [{"type": "text",
-                                  "text": json.dumps({"status": "generating", "run_id": "r1"})}]}]}})
+        "role": "tool", "source": {"kind": "tool", "callId": "cg"},
+        "toolCallId": "cg", "content": [{"type": "text",
+                                         "text": json.dumps({"status": "generating", "run_id": "r1"})}]}})
 
     async def fake_fetch(session_id):
         return {"turns": [{"end_seq": 9, "frames": [call, result,
@@ -244,8 +243,8 @@ async def test_attach_mints_image_gen_from_gen_steps(monkeypatch):
             return [slim("u1"), slim("a1", "u1", "assistant", "1", seq=9)]
 
     out = [{**row("a1", seq=9), "gen_steps": [
-        {"tool": "generate_image", "run_id": "r1", "image_ref_ids": ["ref-1"],
-         "title": "Мир"}]}]
+        {"tool": "generate_image", "run_id": "r1", "call_id": "cg",
+         "image_ref_ids": ["ref-1"], "title": "Мир"}]}]
     await _attach_timeline(_OneRowDB(), {}, "chat-1", out, offset=0)
     frames = out[0]["frames"]
     mint = next(f for f in frames if f.get("type") == "lore/image-gen")

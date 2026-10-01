@@ -775,11 +775,13 @@ async def test_d16_after_id_on_reference_is_rejected(
 
 
 @pytest.mark.asyncio
-async def test_d16_moved_reference_has_no_sort_key(
+async def test_d16_moved_reference_gets_top_key_of_new_ref_group(
     client, mcp_running, test_db, admin_user, project_with_doc,
 ):
-    """A moved reference must not get a sort_key (it would appear in tree sibling
-    queries). The UPDATE sets parent_id alone for a reference."""
+    """A moved reference gets the TOP key of the new host's REFERENCE group:
+    it re-lands at the head of the new group's
+    list, ordered among refs only — tree sibling queries are kind-filtered, so
+    the key never leaks a reference into the document tree."""
     from db import create_record, fetch_one
 
     pid, idx_id, admin_uid = project_with_doc
@@ -791,6 +793,12 @@ async def test_d16_moved_reference_has_no_sort_key(
             "project_id": pid, "parent_id": idx_id, "title": t, "content": "",
             "path": f"{t}.md", "is_index": False, "is_reference": False,
         })
+    pre_ref = f"sr-pre-{secrets.token_hex(4)}"
+    await create_record("documents", pre_ref, {
+        "project_id": pid, "parent_id": host_b, "title": "pre", "content": "",
+        "path": f"{pre_ref}.md", "is_index": False, "is_reference": True,
+        "media_type": "markdown", "sort_key": "a0",
+    })
     ref_id = f"sr-sk-{secrets.token_hex(4)}"
     await create_record("documents", ref_id, {
         "project_id": pid, "parent_id": host_a, "title": "r", "content": "",
@@ -799,7 +807,12 @@ async def test_d16_moved_reference_has_no_sort_key(
     })
     await _call(client, key, "move_document", {"document_id": ref_id, "parent_id": host_b})
     row = await fetch_one("documents", ref_id)
-    assert not row.get("sort_key"), row
+    assert row.get("parent_id") == host_b, row
+    moved_key = row.get("sort_key")
+    # Top of the new group's ref key space: a non-empty key strictly above (==
+    # sorting before) every pre-existing ref key of the new host.
+    assert isinstance(moved_key, str) and moved_key, row
+    assert moved_key < "a0", row
 
 
 @pytest.mark.asyncio

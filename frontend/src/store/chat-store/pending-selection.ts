@@ -80,7 +80,7 @@ export function clearPendingRegion(sessionId: string): void {
 /**
  * Resolve a PinnedRegion's Yjs RelativePosition pair to a UTF-16 [from, to] range
  * against the FOCUSED editor's live ydoc. Returns null when there is no live ydoc
- * (offline / not-yet-bound) OR the anchor no longer resolves (lost after a wholesale
+ * (offline / not-yet-bound) OR the anchor does not resolve (lost after a wholesale
  * restore/import). The single region→range resolver: consumed by the editor highlight
  * (Editor.regionResolver), the SelectionPill preview, and resolveRegion below (which
  * layers the offline-vs-lost distinction + code-point conversion on top). Extracting

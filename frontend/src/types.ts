@@ -53,6 +53,8 @@ export interface PresenceUser {
 export interface Project {
   project_id: string;
   name: string;
+  /** User-facing short description shown on the dashboard card. Null when unset. */
+  description?: string | null;
   status: 'active' | 'paused' | 'done';
   /** Markdown text with project-wide instructions and lore context. Stored in the index document. */
   project_context: string;
@@ -212,6 +214,12 @@ export interface Reference {
    * in place, sink below live refs when
    * "Show archived" is on, and a second trash click soft-deletes them. */
   archived?: boolean;
+  /**
+   * Persisted manual order within the reference's host group: `(sort_key, reference_id)` ASC inside a tier; a
+   * new ref mints the TOP key of its group. Absent only on rows the
+   * reference_sort_keys_backfill migration has not reached (reads as '').
+   */
+  sort_key?: string | null;
   headings?: HeadingItem[];
   updated_at: string;
   created_at: string;
@@ -549,8 +557,9 @@ export interface ChatMessage {
   // returned, so the replayed frames hold the call and nothing else, and the
   // refined SD prompt lives nowhere else. On reload the backend mints them into
   // the row's frames as `lore/image-gen` (driver_frames `_image_gen_frame`);
-  // live, the same step dicts arrive on the generate_image_done event and the
-  // browser mints the twin (see SYSTEM: dsh-conversation).
+  // live, the same step dicts mint the run's settled lore/image-gen chat
+  // frame — the worker pushes it, the browser feeds it verbatim (see SYSTEM:
+  // dsh-conversation).
   gen_steps?: AgentStep[];
   // The driver's replayed frames for this turn — the reload input of the
   // assembler (see SYSTEM: dsh-conversation). Present only on the wire:
@@ -562,6 +571,12 @@ export interface ChatMessage {
   // _mark_open_turn). Present only on the wire — adoptOpenTurn consumes it and
   // stripFrames drops it with `frames`; the store never carries it.
   open_turn?: boolean;
+  // The plugin's fold of the OPEN turn's live stream (dsh's
+  // SessionAssistantStreamAccumulator snapshot) — the reload's streamed-text
+  // baseline. Present only on the wire, on the open row beside `open_turn`:
+  // adoptOpenTurn seats the transient tail from it and stripFrames drops it;
+  // the store never carries it.
+  assistant_stream?: unknown;
   author_id?: string;
   author_name?: string;
   created_at: string;

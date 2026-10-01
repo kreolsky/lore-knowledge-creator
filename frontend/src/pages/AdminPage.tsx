@@ -11,7 +11,7 @@
 // The settings/skills sections fetch from inside their own components (an
 // admin-only mount), so a moderator's page open fires no 403-gated request.
 //
-// List loading (plan decision): projects are SERVER-filtered (`q` — client-side
+// List loading: projects are SERVER-filtered (`q` — client-side
 // filtering over a paged list hides unloaded matches) and scroll-paged in 100s
 // from the Projects section's first activation; users load once on mount
 // (limit 1000 — the Projects member picker needs the full list) and filter
@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FolderOpen, Users as UsersIcon, Layers, Cpu, Bot, Wrench, Database, Server, Sparkles } from 'lucide-react';
+import { FolderOpen, Users as UsersIcon, Layers, Cpu, Bot, Wrench, Search, Database, Sparkles } from 'lucide-react';
 import { apiClient } from '../api/client';
 import { listAdminProjects, listAdminUsers } from '../api/admin';
 import type { SettingsTabId } from '../api/admin';
@@ -58,10 +58,10 @@ const ADMIN_ONLY_SECTIONS: readonly {
 }[] = [
   { tab: 'embeddings', icon: <Layers size={14} />, labelKey: 'embeddings' },
   { tab: 'settings:models', icon: <Cpu size={14} />, labelKey: 'settingsModels', settingsTab: 'models' },
-  { tab: 'settings:agent', icon: <Bot size={14} />, labelKey: 'settingsAgent', settingsTab: 'agent' },
+  { tab: 'settings:search', icon: <Search size={14} />, labelKey: 'settingsSearch', settingsTab: 'search' },
   { tab: 'settings:tools', icon: <Wrench size={14} />, labelKey: 'settingsTools', settingsTab: 'tools' },
+  { tab: 'settings:agent', icon: <Bot size={14} />, labelKey: 'settingsAgent', settingsTab: 'agent' },
   { tab: 'settings:storage', icon: <Database size={14} />, labelKey: 'settingsStorage', settingsTab: 'storage' },
-  { tab: 'settings:infra', icon: <Server size={14} />, labelKey: 'settingsInfra', settingsTab: 'infra' },
   { tab: 'skills', icon: <Sparkles size={14} />, labelKey: 'skills' },
 ];
 

@@ -323,8 +323,8 @@ async def test_tool_api_routes_match_tool_names(
 ):
     """Every tool the Pi path serves must have a Tool-API route at EXACTLY its name.
 
-    The Pi driver builds the URL generically —
-    `${TOOL_API_INTERNAL_URL}/api/tool/${toolName}` (the retired line-A driver's server.ts) — and
+    The driver builds the URL generically —
+    `${LORE_TOOL_API_URL}/api/tool/${toolName}` (plugin tools.ts) — and
     consults no path map, so a route whose path differs from the tool name is a 404 at
     runtime and nothing else catches it.
 

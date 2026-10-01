@@ -7,7 +7,6 @@ import { useChatStore, selectActivePath } from '../../store/chat-store';
 import type { TurnNodeLike } from './MessageBubble/internal/turn-nodes';
 import { useAppStore } from '../../store/app-store';
 import { useTranslation, t as translate } from '../../i18n';
-import { useEvent } from '../../hooks/useEvent';
 import { PanelLoading, Button } from '../ui';
 import { apiClient } from '../../api/client';
 import { emit } from '../../events';
@@ -66,36 +65,10 @@ export function MessageList() {
   const conversation = useChatStore(s => s.conversation);
   const turnRanges = useChatStore(s => s.turnRanges);
   const turnStartSeq = useChatStore(s => s.turnStartSeq);
-  // The generate_image phase is TOP-LEVEL
-  // (not on streaming) because the detached generation outlives the agent turn.
-  const activeImageGen = useChatStore(s => s.imageGen);
-  const setImageGenPhase = useChatStore(s => s.setImageGenPhase);
-  const completeImageGen = useChatStore(s => s.completeImageGen);
-  const failImageGen = useChatStore(s => s.failImageGen);
-  // The progress event arrives on the project-WS (the agent turn carries no mid-tool-
-  // call frames). Relay only events for THIS chat's session. The phase is keyed
-  // by runId so two generations in one turn keep
-  // independent spinners; pinned to the generating message by id (survives the turn
-  // ending before the image is ready); the done/failed event clears that run.
-  useEvent('project-generate-image-progress', useCallback(({ sessionId, phase, runId, messageId }: { sessionId: string; phase: string; runId: string; messageId: string }) => {
-    if (sessionId && sessionId === useChatStore.getState().activeSessionId) {
-      setImageGenPhase(runId, messageId, phase);
-    }
-  }, [setImageGenPhase]));
-  // A detached generation
-  // finished. The chips are persisted server-side; here we drive the LIVE update for
-  // the active session only (a non-active session shows them on return/reload).
-  // Correlated by sessionId + runId.
-  useEvent('project-generate-image-done', useCallback((e) => {
-    if (e.sessionId && e.sessionId === useChatStore.getState().activeSessionId) {
-      completeImageGen(e.runId, e.messageId, e.steps);
-    }
-  }, [completeImageGen]));
-  useEvent('project-generate-image-failed', useCallback((e) => {
-    if (e.sessionId && e.sessionId === useChatStore.getState().activeSessionId) {
-      failImageGen(e.runId, e.error);
-    }
-  }, [failImageGen]));
+  // The detached image run's live facts ride the CHAT channel (chat_frame
+  // lore/image-gen envelopes → dispatchChatFrame → the assembler's image-gen
+  // node renders its own running phase) — no project-WS image events, no
+  // store-side phase map.
   const messagesLoading = useChatStore(s => s.messagesLoading);
   const messagesError = useChatStore(s => s.messagesError);
   const chatScopeLoading = useChatStore(s => s.chatScopeLoading);
@@ -358,8 +331,6 @@ export function MessageList() {
           isOwn={msg.role === 'user'}
           isStreaming={isStreaming && msg.message_id === streamingMessageId}
           nodes={nodesByMessage.get(msg.message_id)}
-          // One chip per active run on THIS message (n images in flight ⇒ n chips).
-          imageGen={activeImageGen ? Object.values(activeImageGen).filter(g => g.messageId === msg.message_id) : []}
           isLast={idx === activePath.length - 1}
           isAgent={isAgent}
           actions={actions}

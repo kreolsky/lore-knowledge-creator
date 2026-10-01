@@ -7,9 +7,8 @@ import { clearChatCaches } from './reset-registry';
 
 // Floor cap when neither the /models context_windows map nor the session's
 // persisted cap is available (gateway omitted context_length, cold models load,
-// or a model with no known window). The client's OWN constant — the server-side
-// twin is deleted (the turn's cap is the driver's own resolution, plan
-// collapse-the-editor-harness-layer step 4); it mirrors the composition's
+// or a model with no known window). The client's OWN constant (the turn's cap
+// is the driver's own resolution); it mirrors the composition's
 // defaultContextWindow (128000) rather than any backend constant.
 export const CHAT_CONTEXT_WINDOW_FALLBACK = 128000;
 
@@ -115,11 +114,13 @@ export function createMiscSlice(set: Set, get: Get): MiscSlice {
         conversation: [],
         turnRanges: {},
         turnStartSeq: null,
-        imageGen: {},
         pendingImages: [],
         // Shared composer draft — logout hygiene: the prior user's draft must
         // never render after a same-tab re-login.
         draft: '',
+        // Drop any queued follow-up chips (F5/project-switch
+        // drops them — the user's call; the queue is never persisted).
+        queued: {},
         ghostAgentAuto: false,
         ghostSystemPromptId: null,
         ghostModel: '',

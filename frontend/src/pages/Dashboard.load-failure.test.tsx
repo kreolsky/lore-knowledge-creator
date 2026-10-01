@@ -34,7 +34,10 @@ beforeEach(async () => {
   vi.doMock('../components/ui', () => ({
     Button: (p: { onClick?: () => void; children?: ReactNode }) => createElement('button', { type: 'button', onClick: p.onClick }, p.children),
     IconButton: (p: { title?: string; children?: ReactNode }) => createElement('button', { type: 'button', title: p.title }, p.children),
+    Modal: (p: { open?: boolean; children?: ReactNode }) =>
+      (p.open ? createElement('div', { 'data-modal': true }, p.children) : null),
     FieldInput: forwardRef<HTMLInputElement, Record<string, unknown>>((props, ref) => createElement('input', { ...props, ref } as never)),
+    FieldTextarea: forwardRef<HTMLTextAreaElement, Record<string, unknown>>((props, ref) => createElement('textarea', { ...props, ref } as never)),
   }));
   vi.doMock('../i18n', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
   vi.doMock('../store/app-store', () => ({

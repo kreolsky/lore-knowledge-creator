@@ -105,8 +105,7 @@ async def get(key: str):
     """Resolve `key`: DB override if present, else the config value (env⊕default).
 
     WHY the fallback walk and not a plain config read: config.py folds derived
-    defaults at import (e.g. TURN_PROGRESS_GRACE_S ← TURN_TIMEOUT_S,
-    STT_API_URL ← AI_API_URL), so a DB override on a BASE key
+    defaults at import (e.g. STT_API_URL ← AI_API_URL), so a DB override on a BASE key
     can never surface through the dependent's config value — the dependent's
     import-time folding already baked the base's ENV value in. The chain is
     the registry's `fallback` fact (declared once per dependent key); readers

@@ -27,11 +27,33 @@ def _get_comfy_semaphore() -> asyncio.Semaphore:
 
 # Why max_tries=1 on generate_image_task: a retry re-runs ComfyUI and persists a
 # SECOND image + chip; duplicate output is worse than a reported failure, so the
-# task is terminal on the first try (run_generation emits generate_image_failed on
-# every failure path). The registration guard (it MUST be in WorkerSettings.functions)
+# task is terminal on the first try (run_generation pushes the failed chat
+# frame on every failure path). The registration guard (it MUST be in WorkerSettings.functions)
 # lives in COMFY_TASK_NAMES + jobs.worker.validate_queue_config — see the frozenset
 # comment below. The payload contract (built by the launcher, rebuilt here) is
 # documented inline in generate_image_task.
+
+
+def _rebuild_ctx(payload: dict) -> dict:
+    """The minimal ctx run_generation needs for the chat-frame pushes + the
+    BOLA check — never the full agent-key context (it carries nothing the
+    generation can use, and reconstructing it would couple the worker to
+    auth). The run's anchor rides it: resolved by the LAUNCHER over the
+    driver replay, frozen into the payload — every lore/image-gen chat frame
+    the run pushes is minted from it, so the worker reads no timeline."""
+    return {
+        "project_id": payload["project_id"],
+        "user_id": payload["user_id"],
+        "user_name": payload.get("user_name"),
+        # S1: the making agent key's label, frozen into the payload at enqueue
+        # (the worker has no key context) — the persisted reference's byline.
+        "key_label": payload.get("key_label"),
+        "session_id": payload.get("session_id") or "",
+        "message_id": payload.get("message_id"),
+        "call_id": payload.get("call_id"),
+        "anchor": payload.get("anchor"),
+        "user": {"id": payload["user_id"]},
+    }
 
 
 async def generate_image_task(ctx, payload: dict) -> None:
@@ -59,25 +81,11 @@ async def generate_image_task(ctx, payload: dict) -> None:
             orientation=payload.get("orientation", "square"),
             count=payload.get("count", 1),
         )
-        # The worker rebuilds ONLY the minimal ctx run_generation needs for emit +
-        # the BOLA check — never the full agent-key context (it carries nothing the
-        # generation can use, and reconstructing it would couple the worker to auth).
-        ctx_rebuilt = {
-            "project_id": payload["project_id"],
-            "user_id": payload["user_id"],
-            "user_name": payload.get("user_name"),
-            # S1: the making agent key's label, frozen into the payload at enqueue
-            # (the worker has no key context) — the persisted reference's byline.
-            "key_label": payload.get("key_label"),
-            "session_id": payload.get("session_id") or "",
-            "message_id": payload.get("message_id"),
-            "user": {"id": payload["user_id"]},
-        }
         # WHY .get("size"): a job enqueued by a launcher that predates it
-        # carries none; run_generation refuses it with generate_image_failed
-        # (a chip the user sees) instead of a KeyError here that reports nothing.
+        # carries none; run_generation refuses it with the run's failed frame
+        # (a card the user sees) instead of a KeyError here that reports nothing.
         await run_generation(
-            ctx_rebuilt, payload["run_id"], payload["target_doc_id"], body,
+            _rebuild_ctx(payload), payload["run_id"], payload["target_doc_id"], body,
             payload.get("prompt_template") or "", payload["workflow"],
             payload.get("size"),
         )

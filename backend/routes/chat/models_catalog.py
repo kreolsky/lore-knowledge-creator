@@ -7,8 +7,7 @@ flight TTL cache over the gateway's /v1/models, the picker payload projection
 route. Turn machinery stays in completions.py.
 NOT a gate: the turn-time capability reads (vision, the compaction window,
 the output cap) ask the DRIVER (driver.client.agent_capability → the plugin's
-own /v1/models resolution — plan collapse-the-editor-harness-layer step 4);
-the resolvers that re-read this cache to arm those gates are deleted.
+own /v1/models resolution); no resolver re-reads this cache to arm a gate.
 No SYSTEM marker (internal extraction; the chat-completions entry stays in
 completions.py).
 """
@@ -240,8 +239,7 @@ def _entry_supports_vision(entry: dict) -> bool:
     flag when present, else `architecture.input_modalities`. Both are served on
     every live model and agree; accepting either keeps the badge working if one
     is dropped from the payload. (The plugin's caps.ts carries the twin
-    predicate for the turn-time gate — plan collapse-the-editor-harness-layer
-    step 4.)
+    predicate for the turn-time gate.)
 
     INVARIANT: an entry declaring NEITHER field is non-vision. Why: a model that
     rejects image parts fails the whole turn with an opaque 400, so the safe
@@ -296,8 +294,7 @@ def _models_payload(
 
     `context_windows` carries each served model's real `context_length` (only
     models the gateway reported a window for); the frontend gauge reads it as the
-    cap source (the server-side twin is deleted — the turn's cap is the driver's
-    own resolution, plan collapse-the-editor-harness-layer step 4).
+    cap source (the turn's cap is the driver's own resolution).
 
     `reasoning` is the gateway's per-model {supported, effort_levels} map —
     the effort dropdown's single source. {} when the gateway has no
@@ -321,9 +318,8 @@ def _models_payload(
 
 
 async def _capability_snapshot() -> dict:
-    """THE line's capability — configured-or-not, NO probe (plan
-    collapse-agent-stack-onto-dsh-vocabulary step 2: driver_health and its
-    cached liveness probe are deleted; a down driver surfaces at turn time).
+    """THE line's capability — configured-or-not, NO probe (a down driver
+    surfaces at turn time).
     Read through the OWNING module's attribute — the vision tests patch
     driver.client.agent_capability and a frozen binding here would make the
     patch succeed while inert."""

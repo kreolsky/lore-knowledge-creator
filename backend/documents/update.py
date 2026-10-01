@@ -9,14 +9,18 @@ See SYSTEM: documents (entry: backend/documents/__init__.py).
 import logging
 
 from fastapi import HTTPException
-from sort_keys import key_between
 
 import event_bus
 from access import get_doc_project_id
 from db import fetch_one, get_db, serialize_record
 from deps import extract_headings
 from documents.move import move_document_command
-from documents.service import rename_document, set_prefs_last_doc, sibling_rows
+from documents.service import (
+    place_after,
+    rename_document,
+    set_prefs_last_doc,
+    sibling_rows,
+)
 from models import PatchDocument, is_ref_row
 from ydoc_store import set_content
 
@@ -222,8 +226,15 @@ async def update_document_command(document_id: str, body: PatchDocument) -> dict
 
 
 async def reorder_document_command(document_id: str, after_id: str | None) -> dict:
-    """Place a document after `after_id` within its own sibling group (null = top).
+    """Place a document or reference after `after_id` within its own SAME-KIND
+    sibling group (null = top).
 
+    Serves both kinds through the one documents reorder route; the group key is
+    (project, parent, is_reference), so a ref is ordered among its host's refs
+    only. Archived refs are refused on either side (the archived sink orders
+    display; they are not hand-sortable). A ref reorder does NOT bump updated_at
+    — the panel treats a ref's updated_at as its CONTENT version (dropped-body
+    stash), and position is not an edit; docs keep today's bump.
     The parent-never-changes rule lives in the reorder_document docstring in
     routes/documents.py (the route owns the contract text).
     """
@@ -232,28 +243,34 @@ async def reorder_document_command(document_id: str, after_id: str | None) -> di
         raise HTTPException(status_code=404, detail="Document not found")
     project_id = record.get("project_id")
     parent_id = record.get("parent_id")
+    is_reference = is_ref_row(record)
 
-    siblings = [s for s in await sibling_rows(project_id, parent_id) if s["id"] != document_id]
-    if after_id is None:
-        lo, hi = None, (siblings[0]["sort_key"] if siblings else None)
-    else:
-        idx = next((i for i, s in enumerate(siblings) if s["id"] == after_id), None)
-        if idx is None:
-            raise HTTPException(status_code=400, detail="after_id is not a sibling of this document")
-        lo = siblings[idx]["sort_key"]
-        hi = siblings[idx + 1]["sort_key"] if idx + 1 < len(siblings) else None
+    if is_reference and record.get("archived") is True:
+        raise HTTPException(status_code=400, detail="archived references are not reorderable")
 
-    try:
-        new_key = key_between(lo, hi)
-    except Exception:
-        # Degenerate bounds (e.g. two siblings sharing a key after a concurrent drag):
-        # surface a clean 409 so the client can refetch + retry instead of a raw 500.
-        raise HTTPException(status_code=409, detail="Sibling order is stale; refetch and retry")
-    db = await get_db()
-    await db.query(
-        "UPDATE type::record('documents', $id) SET sort_key = $sk, updated_at = time::now()",
-        {"id": document_id, "sk": new_key},
+    siblings = await sibling_rows(project_id, parent_id, is_reference=is_reference)
+    if is_reference and after_id is not None:
+        # after_id naming an ARCHIVED sibling: it IS in the ref key space, so
+        # place_after would accept it — refuse it here (live group only).
+        after_row = next((s for s in siblings if s["id"] == after_id), None)
+        if after_row is not None and after_row.get("archived") is True:
+            raise HTTPException(status_code=400, detail="archived references are not reorderable")
+
+    new_key = place_after(
+        siblings, document_id, after_id,
+        not_sibling_detail="after_id is not a sibling of this document",
     )
+    db = await get_db()
+    if is_reference:
+        await db.query(
+            "UPDATE type::record('documents', $id) SET sort_key = $sk",
+            {"id": document_id, "sk": new_key},
+        )
+    else:
+        await db.query(
+            "UPDATE type::record('documents', $id) SET sort_key = $sk, updated_at = time::now()",
+            {"id": document_id, "sk": new_key},
+        )
     await event_bus.emit("document_reordered", project_id=project_id, document_id=document_id,
                          parent_id=parent_id, sort_key=new_key)
     updated = await fetch_one("documents", document_id)

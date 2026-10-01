@@ -1,9 +1,9 @@
-/** Plan agent-line-harness-lifecycle step 9 — the ONE chat transport.
+/** The ONE chat transport.
  *
  * Every chat session's turn is DRIVER-owned: POST /completions answers JSON
  * `{accepted, …}` and the frames ride the project lifecycle WS as
  * `{type:'chat_frame', session_id, frame}` (SYSTEM: chat-fanout), consumed by
- * dispatchChatFrame through the turn sink (the retired SSE drain's twin).
+ * dispatchChatFrame through the turn sink.
  * Pinned here:
  * - the POST is unconditional (there is no other transport to pick);
  * - a full turn over the dispatch path: ids → feed frames → done(content)
@@ -11,9 +11,7 @@
  * - turn_closed is terminal WITHOUT done (an errored turn has no done frame);
  * - a refused POST (no frames) rejects and unregisters — late frames drop;
  * - a POST rejection that arrives AFTER the failure frames settled is
- *   swallowed (the frames already told the story — SSE parity);
- * - a bystander send while a turn is open POSTs without touching the open
- *   turn's registration (the backend lock 409s it);
+ *   swallowed (the frames already told the story);
  * - chat reset settles a pending turn (no dangling await).
  */
 
@@ -35,6 +33,7 @@ import type { ChatState, Set } from './types';
 
 function makeStore(sessionId = 's1') {
   let state = {
+    activeSessionId: sessionId,
     sessions: [{
       session_id: sessionId, document_id: null, reference_id: null, user_id: 'u1',
       title: 't', model: 'm', system_prompt_id: null, context_ids: [],
@@ -133,19 +132,6 @@ describe('the harness transport — a turn over the WS dispatch', () => {
     expect(get().messages.find(m => m.message_id === 'am')).toBeTruthy();
   });
 
-  it('a bystander send while a turn is open POSTs without touching the open turn', async () => {
-    postMock.mockResolvedValueOnce({ accepted: true })
-      .mockRejectedValueOnce(new Error('409 lock busy'));
-    const { get, set } = makeStore();
-    const first = startHarness(get, set);
-    await expect(startHarness(get, set)).rejects.toThrow('409 lock busy');
-    // The open turn's registration survived: its frames still process.
-    dispatchChatFrame(get, set, 's1', IDS);
-    expect(get().streaming?.messageId).toBe('am');
-    dispatchChatFrame(get, set, 's1', DONE);
-    await first;
-  });
-
   it('chat reset settles a pending turn (no dangling await, registration dropped)', async () => {
     const { get, set } = makeStore('s-reset');
     const p = startHarness(get, set, 's-reset');
@@ -164,5 +150,63 @@ describe('the harness transport — a turn over the WS dispatch', () => {
     dispatchChatFrame(get, set, 's1', DONE);
     expect(get().messages).toEqual([]);
     expect(get().streaming).toBeNull();
+  });
+
+  it('a lore/image-gen frame with no open turn feeds the timeline for the ACTIVE session (the detached image run)', () => {
+    // The run's frames ride the chat channel AFTER the turn may have ended —
+    // no registration exists. A lore/image-gen frame for the active session
+    // feeds the assembler (the card renders live);
+    // the engine's context folds the phases, so only the settled card shows.
+    const { get, set } = makeStore('s-detached');
+    const anchor = { type: 'dsh_event', kind: 'tool/call', seq: 6, time: 1006,
+      data: { turn: 0, step: 0, callId: 'c1', name: 'generate_image', arguments: '{}' } };
+    dispatchChatFrame(get, set, 's-detached', anchor);
+    dispatchChatFrame(get, set, 's-detached', {
+      type: 'lore/image-gen', seq: 6.55, time: 1007, ignorable: true,
+      data: { turn: 0, runId: 'r1', status: 'running', phase: 'refining' },
+    });
+    dispatchChatFrame(get, set, 's-detached', {
+      type: 'lore/image-gen', seq: 6.6, time: 1008, ignorable: true,
+      data: { turn: 0, runId: 'r1', status: 'done', imageRefIds: ['ref-1'] },
+    });
+    const conv = get().conversation;
+    const gens = conv.filter(n => n.kind === 'image-gen');
+    expect(gens).toHaveLength(1);
+    expect(gens[0].data).toEqual({ runId: 'r1', status: 'done', imageRefIds: ['ref-1'] });
+    expect(gens[0].anchorSeq).toBe(6.55); // the running frame opened the context
+  });
+
+  it('a lore/image-gen frame for a NON-active session is ignored (it shows on return through the reload)', () => {
+    const { get, set } = makeStore('s-active');
+    dispatchChatFrame(get, set, 's-other', {
+      type: 'lore/image-gen', seq: 6.6, time: 1008, ignorable: true,
+      data: { turn: 0, runId: 'r1', status: 'done', imageRefIds: ['ref-1'] },
+    });
+    expect(get().conversation).toEqual([]);
+  });
+
+  it('a non-lore frame with no open turn stays ignored even for the active session', () => {
+    // The no-registration arm feeds ONLY lore/image-gen frames — a dsh_event
+    // of another tab's turn must keep dropping (the reload owns it).
+    const { get, set } = makeStore('s1');
+    dispatchChatFrame(get, set, 's1', IDS);
+    expect(get().messages).toEqual([]);
+  });
+
+  it("another tab's turn-bound lore frames with no open turn stay ignored for the active session", () => {
+    // A tab already open on the chat has no registration while another tab
+    // runs a turn (adoption happens on loadMessages only). Its verdict-ask /
+    // halt / compaction-mint frames belong to that turn and must not render
+    // here without it — the reload shows them with their turn.
+    const { get, set } = makeStore('s1');
+    const frames = [
+      { type: 'lore/verdict-ask', seq: 6.5, data: { turn: 0, callId: 'c1', toolName: 'edit_document' } },
+      { type: 'lore/halt', seq: 7.7, data: { turn: 0, reason: 'step_limit', steps: 3, limit: 3 } },
+      { type: 'lore/compaction-mint', seq: 8.8, data: { turn: 0, compactionEntryId: 'e1', mintFailed: false } },
+    ];
+    for (const f of frames) {
+      dispatchChatFrame(get, set, 's1', { ...f, time: 1007, ignorable: true });
+    }
+    expect(get().conversation).toEqual([]);
   });
 });

@@ -307,46 +307,6 @@ async def test_delete_removes_row_and_reverts_value(client, admin_user, test_db)
 
 
 @pytest.mark.asyncio
-async def test_get_walks_fallback_base_override_reaches_dependent(
-    client, admin_user, test_db, monkeypatch,
-):
-    """settings.get walks the registry's fallback links, re-deriving config.py's
-    import-time folds: an override row on the BASE key (TURN_TIMEOUT_S) surfaces
-    through the dependent (TURN_PROGRESS_GRACE_S), whose folded config value a
-    plain config read would keep serving — and the dependent's own row still
-    outranks the base's."""
-    import config
-
-    monkeypatch.delenv("TURN_PROGRESS_GRACE_S", raising=False)
-    # The stale fold a plain config read would serve for the dependent.
-    monkeypatch.setattr(config, "TURN_PROGRESS_GRACE_S", 123.0)
-    monkeypatch.setattr(config, "TURN_TIMEOUT_S", 250.0)
-    _, token = admin_user
-
-    # No rows: the walk passes the dependent (no row, no own env) and
-    # resolves the base — config value when nothing is overridden.
-    assert await settings.get("TURN_PROGRESS_GRACE_S") == 250.0
-
-    resp = await client.put(
-        "/api/admin/settings/TURN_TIMEOUT_S", json={"value": 42.0},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200
-    assert await settings.get("TURN_PROGRESS_GRACE_S") == 42.0, (
-        "a base-key override must reach the dependent's reader"
-    )
-
-    resp = await client.put(
-        "/api/admin/settings/TURN_PROGRESS_GRACE_S", json={"value": 55.0},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200
-    assert await settings.get("TURN_PROGRESS_GRACE_S") == 55.0, (
-        "the dependent's own override outranks the base's"
-    )
-
-
-@pytest.mark.asyncio
 async def test_get_walks_stt_api_fallback_base_override_reaches_dependent(
     client, admin_user, test_db, monkeypatch,
 ):
@@ -466,6 +426,35 @@ async def test_secret_masked_in_get_and_mask_put_is_noop(client, admin_user, mon
 
 
 # ─── cross-process invalidation ───────────────────────────────────────────────
+
+
+# ─── wiring is not configuration (plan component-wiring-not-settings) ────────
+
+
+@pytest.mark.asyncio
+async def test_wiring_keys_are_neither_listed_nor_editable(client, admin_user):
+    """The driver line's address/secret/secret-file, the converter URL, the
+    session signing key and the storage/Redis addresses are constants — the
+    admin surface serves none of them and refuses a PUT with 404. Why: every
+    way to set one was a way to make the backend and the harness disagree (a
+    secret typed in a v0.20.3 admin panel shadowed the generated file after
+    upgrade and killed the agent behind a 401), and the infra addresses are
+    compose wiring nobody ever changes (plan component-wiring-not-settings)."""
+    _, token = admin_user
+    resp = await client.get("/api/admin/settings", cookies={"lore_session": token})
+    assert resp.status_code == 200
+    served = {row["key"] for row in resp.json()["settings"]}
+    for key in (
+        "HARNESS_DRIVER_URL", "HARNESS_DRIVER_SECRET",
+        "HARNESS_DRIVER_SECRET_FILE", "CONVERTER_URL",
+        "SECRET_KEY", "STORAGE_PATH", "REDIS_URL",
+    ):
+        assert key not in served, f"{key} must not be an admin setting"
+        put = await client.put(
+            f"/api/admin/settings/{key}", json={"value": "x"},
+            cookies={"lore_session": token},
+        )
+        assert put.status_code == 404, f"PUT {key} must be unknown, got {put.status_code}"
 
 
 @pytest.mark.asyncio

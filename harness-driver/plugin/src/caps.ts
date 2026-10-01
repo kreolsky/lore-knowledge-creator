@@ -1,6 +1,5 @@
 /**
- * The driver's model-capability resolution — the ONE source (plan
- * collapse-the-editor-harness-layer step 4).
+ * The driver's model-capability resolution — the ONE source.
  *
  * # ARCH: the plugin owns the model-facing semantics. The gateway's /v1/models
  * metadata (`context_length`, `max_completion_tokens`, image input modalities)
@@ -8,14 +7,13 @@
  * resolved HERE — TTL-cached, single-flight — and served two ways: the
  * /capability endpoint answers the backend's vision gate, and the turn handler
  * arms its own catalog upsert (ensureModelEntry) plus the context_usage
- * denominator. Python resolves nothing: the deleted backend twins
- * (resolve_context_window / resolve_max_output_tokens / model_supports_vision)
- * re-read this same gateway payload to arm the very gates this module feeds.
+ * denominator. Python resolves nothing: no backend resolver re-reads this
+ * same gateway payload — the gates this module feeds are its only readers.
  *
  * Failure semantics: a gateway the plugin cannot read answers UNKNOWN
- * (vision false, no numbers, no levels) with a loud log — the same safe
- * direction the deleted Python gate took (strip + warn, never a raised
- * exception) — and the turn then runs on the composition's NAMED defaults
+ * (vision false, no numbers, no levels) with a loud log — strip + warn,
+ * never a raised exception — and the turn then runs on the composition's
+ * NAMED defaults
  * (defaultContextWindow in cordis.patch.yml, dsh's own default maxTokens)
  * rather than a second guess in code. An id the gateway does not serve is the
  * same UNKNOWN, logged. A /capabilities failure alone keeps the /v1/models
@@ -33,7 +31,7 @@ export interface ModelCaps {
   contextWindow: number | null
   /** The gateway's `max_completion_tokens`, or null when omitted. When null the
    * plugin writes NO maxTokens into the catalog entry and dsh's own default
-   * applies — the explicitly-named residue of this step, never a floor guess. */
+   * applies — never a floor guess. */
   maxOutputTokens: number | null
   /** The gateway /capabilities `effort_levels` list in GATEWAY spellings, or
    * null when the model is absent from the map (unknown model, non-reasoning
@@ -48,23 +46,49 @@ const UNKNOWN: ModelCaps = {
   effortLevels: null,
 }
 
-/** Injectable seams (tests fake the fetch and the clock; prod uses globals). */
+/** The AI gateway one request runs against. */
+export interface Gateway {
+  base: string
+  key: string
+}
+
+/** The gateway from the backend's per-request values (admin panel, else the
+ * backend's env); the harness's own env is only the fallback for a value the
+ * request does not carry. */
+export function gatewayOf(url: unknown, key: unknown): Gateway {
+  const given = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+  return {
+    base: (given(url) || (process.env.LORE_AI_API_URL || '').trim()).replace(/\/+$/, ''),
+    key: given(key) || process.env.AI_API_KEY || '',
+  }
+}
+
+/** Injectable seams (tests fake the fetch and the clock; prod uses globals).
+ * `gateway` absent = the harness env's (gatewayOf with nothing given). */
 export interface CapsIo {
   fetch?: typeof fetch
   now?: () => number
+  gateway?: Gateway
 }
 
 const CACHE_TTL_MS = 60_000
 
-let cache: { at: number; entries: unknown[] } | null = null
-let inFlight: Promise<unknown[]> | null = null
+// WHY keyed by the gateway: an admin change of URL or key must not be answered
+// by the previous gateway's catalog for the rest of the TTL.
+let cache: { at: number; gw: string; entries: unknown[] } | null = null
+let inFlight: { gw: string; p: Promise<unknown[]> } | null = null
 
 // The /capabilities twin of the /models cache: same TTL, same single-flight,
-// its own module state. Value = the effort_levels list in GATEWAY spellings;
-// an entry with supported=false stores [] (definitely non-reasoning), a model
-// absent from the map reads null (unknown) via resolveModelCaps.
-let effortCache: { at: number; map: Record<string, string[]> } | null = null
-let effortInFlight: Promise<Record<string, string[]>> | null = null
+// same gateway key, its own module state. Value = the effort_levels list in
+// GATEWAY spellings; an entry with supported=false stores [] (definitely
+// non-reasoning), a model absent from the map reads null (unknown) via
+// resolveModelCaps.
+let effortCache: { at: number; gw: string; map: Record<string, string[]> } | null = null
+let effortInFlight: { gw: string; p: Promise<Record<string, string[]>> } | null = null
+
+function _gwKey(gw: Gateway): string {
+  return `${gw.base}\n${gw.key}`
+}
 
 function _positiveInt(value: unknown): number | null {
   const n = typeof value === 'number' ? value : Number(value)
@@ -86,37 +110,40 @@ function _entryVision(entry: Record<string, unknown>): boolean {
 async function _gatewayEntries(io: CapsIo): Promise<unknown[]> {
   const doFetch = io.fetch ?? fetch
   const now = io.now ?? Date.now
-  if (cache && now() - cache.at < CACHE_TTL_MS) return cache.entries
-  if (inFlight) return inFlight
-  const base = (process.env.LORE_AI_API_URL || '').replace(/\/+$/, '')
-  const key = process.env.AI_API_KEY || ''
-  inFlight = (async () => {
-    const resp = await doFetch(`${base}/models`, {
-      headers: { Authorization: `Bearer ${key}` },
+  const gw = io.gateway ?? gatewayOf(undefined, undefined)
+  const gwKey = _gwKey(gw)
+  if (cache && cache.gw === gwKey && now() - cache.at < CACHE_TTL_MS) return cache.entries
+  if (inFlight && inFlight.gw === gwKey) return inFlight.p
+  const p = (async () => {
+    const resp = await doFetch(`${gw.base}/models`, {
+      headers: { Authorization: `Bearer ${gw.key}` },
     })
     if (!resp.ok) throw new Error(`gateway /models HTTP ${resp.status}`)
     const body = await resp.json() as { data?: unknown }
     const entries = Array.isArray(body?.data) ? body.data : []
-    cache = { at: now(), entries }
+    cache = { at: now(), gw: gwKey, entries }
     return entries
   })()
+  inFlight = { gw: gwKey, p }
   try {
-    return await inFlight
+    return await p
   } finally {
-    inFlight = null
+    if (inFlight?.p === p) inFlight = null
   }
 }
 
 async function _gatewayEffortMap(io: CapsIo): Promise<Record<string, string[]>> {
   const doFetch = io.fetch ?? fetch
   const now = io.now ?? Date.now
-  if (effortCache && now() - effortCache.at < CACHE_TTL_MS) return effortCache.map
-  if (effortInFlight) return effortInFlight
-  const base = (process.env.LORE_AI_API_URL || '').replace(/\/+$/, '')
-  const key = process.env.AI_API_KEY || ''
-  effortInFlight = (async () => {
-    const resp = await doFetch(`${base}/capabilities`, {
-      headers: { Authorization: `Bearer ${key}` },
+  const gw = io.gateway ?? gatewayOf(undefined, undefined)
+  const gwKey = _gwKey(gw)
+  if (effortCache && effortCache.gw === gwKey && now() - effortCache.at < CACHE_TTL_MS) {
+    return effortCache.map
+  }
+  if (effortInFlight && effortInFlight.gw === gwKey) return effortInFlight.p
+  const p = (async () => {
+    const resp = await doFetch(`${gw.base}/capabilities`, {
+      headers: { Authorization: `Bearer ${gw.key}` },
     })
     if (!resp.ok) throw new Error(`gateway /capabilities HTTP ${resp.status}`)
     const body = await resp.json() as unknown
@@ -136,13 +163,14 @@ async function _gatewayEffortMap(io: CapsIo): Promise<Record<string, string[]>> 
           : []
       }
     }
-    effortCache = { at: now(), map: out }
+    effortCache = { at: now(), gw: gwKey, map: out }
     return out
   })()
+  effortInFlight = { gw: gwKey, p }
   try {
-    return await effortInFlight
+    return await p
   } finally {
-    effortInFlight = null
+    if (effortInFlight?.p === p) effortInFlight = null
   }
 }
 
@@ -255,19 +283,20 @@ export function reasoningEffortsDeclaration(
   return decl
 }
 
-/** Crash-on-config gate for the title model: the titler names no effort, and
- * on this openai-format route a request with no `reasoning_effort` gets the
+/** Gate for the title model: the titler names no effort, and on this
+ * openai-format route a request with no `reasoning_effort` gets the
  * PROVIDER's default — there is no per-purpose way to say "don't think", so a
- * model advertising levels would think on every title call. Refused at boot
- * (same class as harnessModel); an unreadable gateway (effortLevels null)
- * passes — the caller warns instead of gating blind. */
+ * model advertising levels would think on every title call. The caller
+ * refuses that title-model write loudly (the harness never exits on
+ * configuration); an unreadable gateway (effortLevels null) passes — the
+ * caller warns instead of gating blind. */
 export function assertNonReasoningTitleModel(caps: ModelCaps, model: string): void {
   if (caps.effortLevels && caps.effortLevels.length > 0) {
     throw new Error(
       `CHAT_TITLE_MODEL "${model}" advertises reasoning effort levels `
       + `[${caps.effortLevels.join(', ')}] — the title call names no effort, so the provider's `
-      + 'default would think on every title. Set CHAT_TITLE_MODEL to a non-reasoning model '
-      + '(supported=false on the gateway).')
+      + 'default would think on every title. Set the session title model in Admin panel → '
+      + 'Models & APIs to a non-reasoning model (supported=false on the gateway).')
   }
 }
 

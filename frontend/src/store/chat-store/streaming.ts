@@ -7,13 +7,14 @@ import type { ChatMessage, ChatSource } from '../../types';
 import { apiClient } from '../../api/client';
 import { useAppStore } from '../app-store';
 import { t } from '../../i18n';
-import type { ChatState, Set, StreamingState } from './types';
+import type { ChatState, Set, StreamingState, TurnEndReason } from './types';
 import { ROOT_KEY } from './tree';
 import { validateFrame, type Frame } from './frame-validate';
 import { registerChatResetHandler } from './reset-registry';
 import {
-  isFeedFrame, feedFrame, beginTurn, endTurn,
+  isFeedFrame, feedFrame, beginTurn, endTurn, adoptStreamBaseline,
 } from './conversation-feed';
+import { scheduleTurnEndFlush } from './queue-slice';
 
 /** A wire field is usable as display text only when it is a non-empty string —
  * the unguarded terminal frames render a fallback otherwise (see `error` /
@@ -169,6 +170,8 @@ function createTurnSink(
       // frame as the aborted turn winds down, and surfacing it would falsely report a
       // failure for an action the user chose.
       if (get().streaming?.controller?.signal.aborted) return;
+      // The turn is ending in failure — the queue restores instead of auto-firing.
+      set(s => (s.streaming ? { streaming: { ...s.streaming, endReason: 'error' } } : {}));
       // APPEND the error notice to the row's content rather than replacing it.
       // Why: an empty-completion error still has the partial work the agent did,
       // and a frameless row (and a reload, where content is the row's own)
@@ -250,8 +253,12 @@ function createTurnSink(
         messages: s.messages.map(m => (m.message_id === mid ? { ...m, content } : m)),
       }));
     },
-    // The halt CARD is the assembler's node; the end REASON is not a rendering.
-    'lore/halt'() { /* the card rides the feed */ },
+    // The halt CARD is the assembler's node; the end REASON is stamped on the
+    // slot so the turn's terminal does not auto-fire the queue (see
+    // scheduleTurnEndFlush's INVARIANT on 'halted').
+    'lore/halt'() {
+      set(s => (s.streaming ? { streaming: { ...s.streaming, endReason: 'halted' } } : {}));
+    },
     // The compaction mint OUTCOME rides the timeline as `lore/compaction-mint`
     // (the frame is ALSO fed to the assembler — the dispatch below does both).
     // The toast is LIVE-only beside the feed (a reload shows the minted card,
@@ -330,8 +337,9 @@ function createTurnSink(
 // The registration is per CHAT session id (the WS envelope's session_id — the
 // fan-out keys it by the chat id even for continuation chats). Frames for a
 // session with NO registration are ignored: another tab's turn, or a turn this
-// tab never sent (a reload mid-turn adopts nothing — the reload path renders
-// the rows; live continuation is the acceptance drive's own step).
+// tab never sent. A reload mid-turn is NOT that case — adoptOpenTurn seats the
+// open turn's assistant_stream baseline and registers the sink, so the next
+// live chunk continues the band.
 
 interface _HarnessTurn {
   sink: ReturnType<typeof createTurnSink>;
@@ -371,7 +379,9 @@ export function adoptOpenTurn(
   get: () => ChatState,
   set: Set,
   sessionId: string,
-  rows: ReadonlyArray<{ message_id?: string; open_turn?: boolean }>,
+  rows: ReadonlyArray<{
+    message_id?: string; open_turn?: boolean; assistant_stream?: unknown;
+  }>,
 ): void {
   const reg = harnessTurns.get(sessionId);
   const open = rows.find(r => r.open_turn === true);
@@ -384,6 +394,8 @@ export function adoptOpenTurn(
       harnessTurns.delete(sessionId);
       reg.settled = true;
       reg.settle();
+      // How it ended died with the socket — never auto-fire the queue on a guess.
+      scheduleTurnEndFlush(get, sessionId, 'lost');
     }
     return;
   }
@@ -393,6 +405,13 @@ export function adoptOpenTurn(
   // The boundary is the OPEN window's min (replaceWindowFromRows just
   // published it) — the whole open turn renders in the streaming slot.
   beginTurn(sessionId, set, get().turnRanges[open.message_id]?.min);
+  // The reload's streamed text: the open row carries the plugin's fold of the
+  // live stream (`assistant_stream`) — seat the attempt and replay its
+  // compact records so the already-streamed text is on screen immediately;
+  // the next live chunk continues the same band series.
+  if (open.assistant_stream !== undefined) {
+    adoptStreamBaseline(open.assistant_stream, sessionId, set);
+  }
   if (!reg) {
     let resolveEnd!: () => void;
     const turnEnded = new Promise<void>(r => { resolveEnd = r; });
@@ -416,6 +435,13 @@ export function adoptOpenTurn(
  * the other is a no-op (the registration is gone). */
 const TERMINAL_FRAME_TYPES: ReadonlySet<string> = new Set(['done', 'turn_closed']);
 
+/** The end reason of the turn whose slot this is: a stamped error/halt wins, a
+ * Stop shows as the aborted controller, anything else is a clean end. */
+function turnEndReason(st: StreamingState | null): TurnEndReason {
+  if (st?.endReason) return st.endReason;
+  return st?.controller?.signal.aborted ? 'aborted' : 'done';
+}
+
 /** One project-WS chat_frame envelope, dispatched into the open harness turn.
  * Project-connection stays transport-dumb: this is the store-side sink. */
 export function dispatchChatFrame(
@@ -425,7 +451,26 @@ export function dispatchChatFrame(
   frame: unknown,
 ): void {
   const turn = harnessTurns.get(sessionId);
-  if (!turn) return;
+  if (!turn) {
+    // No registration: another tab's turn, a reload that adopted nothing —
+    // or a DETACHED RUN. Its facts ride the chat channel as lore/image-gen
+    // frames with no open turn; one for the ACTIVE session feeds the
+    // assembler (the card renders live), everything else keeps dropping (a
+    // non-active session shows its card on return through the reload).
+    // WHY lore/image-gen only: the other lore kinds (verdict-ask, halt,
+    // compaction-mint) belong to a TURN — a tab already open on the chat has
+    // no registration while another tab runs one (adoption is on
+    // loadMessages), and feeding them here renders orphan cards without it.
+    if (sessionId !== get().activeSessionId) return;
+    if ((frame as { type?: unknown } | null)?.type !== 'lore/image-gen') return;
+    const validated = validateFrame(frame);
+    if (!validated) {
+      console.warn('Chat frame handler failed: malformed lore frame', frame);
+      return;
+    }
+    feedFrame(validated, sessionId, set);
+    return;
+  }
   let event: Frame | null = null;
   try {
     event = turn.sink.accept(frame);
@@ -436,6 +481,8 @@ export function dispatchChatFrame(
     console.error('Chat frame handler failed:', e);
   }
   if (event && TERMINAL_FRAME_TYPES.has(event.type)) {
+    // Why the turn ended is read off the slot BEFORE the flush drops it.
+    const reason = turnEndReason(get().streaming);
     // The turn's transport end: bind the fed nodes, flush the
     // slot, THEN settle — runCompletion's finally reads a clean slate.
     endTurn(sessionId, get().streaming?.messageId ?? null, set);
@@ -443,6 +490,7 @@ export function dispatchChatFrame(
     harnessTurns.delete(sessionId);
     turn.settled = true;
     turn.settle();
+    scheduleTurnEndFlush(get, sessionId, reason);
   }
 }
 
@@ -461,16 +509,6 @@ async function _harnessCompletion(
 ): Promise<void> {
   const { sessionId } = opts;
   const endpoint = `/chat/sessions/${sessionId}/completions`;
-  // The bystander: another harness turn is open in THIS tab — POST anyway
-  // (the plan's unconditional send; the backend's per-session lock answers
-  // 409, surfaced by handleSendError). No registration and no streaming slot:
-  // the open turn's sink owns this session's frames. A POST that slips in
-  // after the open turn's terminal (µs window) renders on the next reload —
-  // noted, not solved here.
-  if (harnessTurns.has(sessionId)) {
-    await apiClient.post(endpoint, opts.body, { signal: opts.signal });
-    return;
-  }
   let resolveEnd!: () => void;
   const turnEnded = new Promise<void>(r => { resolveEnd = r; });
   const turn: _HarnessTurn = {
@@ -500,6 +538,8 @@ async function _harnessCompletion(
     // the assembler window, and let runCompletion's catch surface it.
     harnessTurns.delete(sessionId);
     endTurn(sessionId, get().streaming?.messageId ?? null, set);
+    // A turn that never opened is no clean end: the queue goes back to the composer.
+    scheduleTurnEndFlush(get, sessionId, opts.signal.aborted ? 'aborted' : 'error');
     throw e;
   }
   await turnEnded;

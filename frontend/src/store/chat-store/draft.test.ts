@@ -52,7 +52,6 @@ function buildStore() {
     messages: [],
     streaming: null,
     pendingImages: [],
-    imageGen: {},
     ghostAgentAuto: false,
     ghostSystemPromptId: null,
     ghostModel: '',

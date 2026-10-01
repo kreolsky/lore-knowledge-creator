@@ -20,6 +20,7 @@ from uuid import uuid4
 import http_clients
 import httpx
 import settings
+from agent_config_seed import is_help_doc_id
 from markdown_chunker import Chunk, _breadcrumb_text, _chunk_hash, chunk_markdown
 
 from config import (
@@ -312,7 +313,7 @@ async def _chunk_hashes(title: str, chunks: list[Chunk]) -> tuple[list[str], str
 
 
 async def _reembed(entity_type: str, entity_id: str, project_id: str) -> None:
-    if entity_type not in ("doc", "ref"):
+    if entity_type not in ("doc", "ref") or is_help_doc_id(entity_id):
         return
     try:
         await _ensure_config()
@@ -568,7 +569,14 @@ EMBED_DEGRADED_THRESHOLD = 3
 
 
 async def _on_content_flushed(entity_type: str, entity_id: str, project_id: str, **kwargs) -> None:
-
+    # INVARIANT: the Lore guide is never embedded — not queued here, not a coverage
+    # candidate (embedding_coverage.CANDIDATE_WHERE), not re-embedded (_reembed).
+    # Why: operator ruling — the guide is reached through the agent prompt's pointer
+    # and full-text search; embedding ~20 pages in every project, again on every
+    # guide update, flooded the worker queue for hours and put Lore's docs into the
+    # project's semantic search.
+    if is_help_doc_id(entity_id):
+        return
     skip_cooldown = False
     if entity_type in ("doc", "ref"):
         try:

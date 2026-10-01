@@ -41,8 +41,8 @@ export type AdminSectionTab =
   | 'settings:models'
   | 'settings:agent'
   | 'settings:tools'
+  | 'settings:search'
   | 'settings:storage'
-  | 'settings:infra'
   | 'skills';
 
 export interface GlobalPrefs {

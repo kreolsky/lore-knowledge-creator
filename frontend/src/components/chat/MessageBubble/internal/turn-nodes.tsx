@@ -17,7 +17,7 @@ import { ToolPlate } from '../../ToolPlate';
 import { MarkdownContent } from '../../MarkdownContent';
 import { VerdictCard } from '../../VerdictCard';
 import { HaltCard } from './halt-card';
-import { AgentStepIcon } from './agent-steps';
+import { AgentStepIcon, genPhaseLabel } from './agent-steps';
 import { GeneratedImageThumb, ImageLightbox } from './image-lightbox';
 import { useTranslation } from '../../../../i18n';
 import { referenceFileUrl } from '../../../../utils/reference-url';
@@ -184,14 +184,28 @@ function HaltNode({ data, nodes, self, onContinue }: {
   );
 }
 
-/** The settled detached image run: TWO chips — the refined prompt plate and
- * the images plate; a single flat block would lose the prompt chip. The payload
- * is the same node data on BOTH paths (the live mint and the reload mint derive
+/** The detached image run: a RUNNING phase renders the live progress chip; a
+ * settled run renders TWO chips — the refined prompt plate and the images
+ * plate; a single flat block would lose the prompt chip. The payload is the
+ * same node data on BOTH paths (the live frames and the reload mint derive
  * from the same gen_steps dicts). */
 function ImageGenNode({ data }: { data: unknown }) {
   const { t } = useTranslation();
   const d = (typeof data === 'object' && data !== null ? data : {}) as Record<string, unknown>;
   const [openIndex, setOpenIndex] = useState<number | null>(null);
+  if (d.status === 'running') {
+    // The live phase chip (the run rides the chat channel), rendered from
+    // the node's own data. Shown while the run streams; the
+    // settled frame folds this node into its settled look.
+    const phase = typeof d.phase === 'string' ? d.phase : '';
+    return (
+      <div className="flex items-center gap-1 text-xs text-text-dim bg-surface2 border border-border-soft px-2 py-1 my-0.5">
+        <span className="animate-pulse"><AgentStepIcon /></span>
+        <span>{t('generatingImage')}</span>
+        {phase && <span className="opacity-60">— {genPhaseLabel(phase, t)}</span>}
+      </div>
+    );
+  }
   if (d.status === 'failed') {
     // Same plate + tone as every other failed step — a failure is a chip, not
     // a stray red line. INVARIANT: the failed plate opens expanded.

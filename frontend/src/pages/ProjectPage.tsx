@@ -240,7 +240,7 @@ export function ProjectPage() {
 
   useAudioRecorder(handleRecordingComplete);
 
-  useEvent('project-updated', useCallback((updates: Record<string, unknown>) => {
+  useEvent('ws:project_updated', useCallback(({ updates }) => {
     const project = useAppStore.getState().currentProject;
     if (!project) return;
     const merged = { ...project, ...updates } as typeof project;

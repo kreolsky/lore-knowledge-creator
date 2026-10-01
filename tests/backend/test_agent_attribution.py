@@ -475,7 +475,7 @@ async def test_persist_and_announce_prefers_key_label(monkeypatch):
         return None
 
     monkeypatch.setattr(image_generation.persist, "save_upload", _fake_save_upload)
-    monkeypatch.setattr(image_generation.persist, "_emit_gen_done", _noop)
+    monkeypatch.setattr(image_generation.persist, "_push_gen_settled", _noop)
 
     ctx = {
         "project_id": "p1", "user_id": "u1", "key_label": "Art Bot",

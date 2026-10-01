@@ -78,7 +78,7 @@ The chat panel is a full agent loop, not a text box bolted onto an editor. It wo
 
 Everything below is written to be followed literally — by a person or by an AI agent. Each step is a command followed by the check that proves it worked.
 
-**Requirements:** Docker Engine with Docker Compose **v2.24 or newer** (`docker compose version`), and a free TCP port 8080.
+**Requirements:** Docker Engine **26.0 or newer** (`docker version`) with Docker Compose **v2.26.0 or newer** (`docker compose version`), and a free TCP port 8080.
 
 ### 1. Download and start
 
@@ -88,7 +88,7 @@ curl -fsSLO https://raw.githubusercontent.com/kreolsky/lore-knowledge-creator/ma
 docker compose up -d
 ```
 
-No configuration file is needed. The first start downloads the images and takes a few minutes.
+No configuration file is needed. The first start downloads the images and builds the AI agent and its sandbox from this repository, so the Docker host needs git and network access, and it takes several minutes.
 
 ### 2. Check that it runs
 
@@ -96,7 +96,7 @@ No configuration file is needed. The first start downloads the images and takes 
 curl -s http://localhost:8080/api/health
 ```
 
-Expected: a JSON object containing `"status":"ok"`. Until the backend has finished starting, the request fails or returns an error page — repeat it after 15 seconds. `"harness":"unconfigured"` is normal: it only means the AI agent is not enabled yet.
+Expected: a JSON object containing `"status":"ok"` and `"harness":"reachable"`. Until the backend has finished starting, the request fails or returns an error page — repeat it after 15 seconds.
 
 ### 3. Sign in
 
@@ -108,7 +108,9 @@ Open http://localhost:8080 and sign in:
 
 **Change this password right away** (**Profile settings**). Anyone who can reach the port can try the default.
 
-That is a complete install: the editor, collaboration, files and document conversion all work without AI.
+That is a complete install: the editor, collaboration, files and document conversion all work without AI. To turn on the AI features, see [Enable AI](#enable-ai) below — it takes only the admin panel.
+
+To run it on a server behind your own domain with HTTPS, continue with [docs/self-hosting.md](docs/self-hosting.md): settings for a server, the reverse proxy, a password in front of Lore, updates and rollback.
 
 ### Settings
 
@@ -120,8 +122,6 @@ Settings go into a file named `.env` next to `docker-compose.yml`, one `NAME=val
 | `LORE_VERSION` | latest release | Pin a release, e.g. `v0.21.0` |
 | `LORE_ADMIN_USERNAME` | `admin` | First admin, created once on the first start; the login is `<username>@lore.app` |
 | `LORE_ADMIN_PASSWORD` | `lore-admin` | Password of that first admin; has no effect after the first start |
-| `COOKIE_SECURE` | `false` | Set to `true` when Lore is served over HTTPS |
-| `LORE_SECRET_KEY` | generated | Session signing key; generated on the first start and kept in the data volume |
 
 Every other setting is documented in [`.env.example`](.env.example).
 
@@ -129,47 +129,40 @@ Every other setting is documented in [`.env.example`](.env.example).
 
 Lore talks to any **OpenAI-compatible API** (a hosted provider, or your own models behind LiteLLM, vLLM, llama.cpp, Ollama…).
 
-**Transcription and semantic search** need no restart: sign in as admin, open **Admin panel → Models & APIs**, set the API base URL and key, and set the speech-to-text and embedding model names to models your endpoint serves.
+Sign in as admin, open **Admin panel → Models & APIs** and set:
 
-**The AI agent (chat)** runs in an extra service. Create `.env` next to `docker-compose.yml`:
+- the **AI API base URL** and **key**;
+- the **default chat model** — the agent's model;
+- optionally the **session title model** (a non-reasoning model; empty = the chat model), and the speech-to-text and embedding model names for transcription and semantic search.
 
-```sh
-AI_API_URL=https://your-endpoint.example/v1
-AI_API_KEY=your-key
-HARNESS_MODEL=model-id-your-endpoint-serves
-HARNESS_DRIVER_SECRET=any-long-random-string
-```
-
-(`openssl rand -hex 32` prints a good value for `HARNESS_DRIVER_SECRET`.) Then start with the `ai` profile:
-
-```sh
-docker compose --profile ai up -d
-```
-
-The first run builds the agent service from this repository and takes several minutes. Check it with `curl -s http://localhost:8080/api/health`: the response now contains `"harness":"reachable"`.
+Every name must be a model your endpoint serves. No restart is needed: the agent uses the new settings from the next message. The agent and its sandbox — the isolated shell it runs scripts in — are already running; the secret between Lore and the agent and the sandbox key were generated on the first start. A value set in the admin panel wins over the same setting in `.env`.
 
 ### Troubleshooting
 
 | Symptom | Check | Fix |
 |---|---|---|
 | `docker compose up` fails with `address already in use` or `port is already allocated` | another service uses 8080 | put `LORE_PORT=8090` (any free port) in `.env`, run `docker compose up -d`, use that port |
-| `env_file` / `required` error on `up` | `docker compose version` | upgrade Docker Compose to v2.24 or newer |
+| `env_file` / `required` or `subpath is not allowed` error on `up` | `docker compose version` | upgrade Docker Compose to v2.26.0 or newer (and Docker Engine to 26.0 or newer) |
 | health never returns `"status":"ok"` | `docker compose logs backend` | the log names the failing setting or service |
-| `"harness":"unreachable"` after enabling AI | `docker compose --profile ai logs harness` | if the log says the title model *advertises reasoning effort levels*, add `CHAT_TITLE_MODEL=` with a non-reasoning model your endpoint serves, then `docker compose --profile ai up -d` |
+| the agent answers *harness service is not reachable*, or health shows `"harness":"unreachable"` | `docker compose logs harness` | the agent is still the previous build: run `docker compose up -d --build` (the agent is built from source, so an update without `--build` keeps the old one) |
+| the agent answers *No chat model is set* or *No AI API URL is set* | **Admin panel → Models & APIs** | set the missing value; the next message uses it |
+| chat sessions keep untitled-looking names | `docker compose logs harness` | if the log says the title model *advertises reasoning effort levels*, set **Session title model** in **Admin panel → Models & APIs** to a non-reasoning model your endpoint serves |
 | forgot the admin password | — | put `LORE_ADMIN_USERNAME=admin2` and `LORE_ADMIN_PASSWORD=<new password>` in `.env`, run `docker compose up -d`; sign in as `admin2@lore.app` and set a new password for the old admin in **Admin panel** |
+| behind a reverse proxy: a project does not open, the browser console shows `WebSocket … Unexpected response code: 404` | the proxy drops the WebSocket upgrade | [docs/self-hosting.md → The reverse proxy](docs/self-hosting.md#the-reverse-proxy) |
 
 ### Update
 
 ```sh
+curl -O https://raw.githubusercontent.com/kreolsky/lore-knowledge-creator/main/docker-compose.yml
 docker compose pull
-docker compose up -d
+docker compose up -d --build
 ```
 
-With the AI agent enabled, also rebuild it: `docker compose --profile ai up -d --build harness`.
+All three lines are needed: the compose file itself changes between releases, and the agent and its sandbox are built from source — without `--build` they keep running the previous version.
 
 ### Data and backups
 
-All data lives in Docker volumes named `lore_surreal` (database), `lore_storage` (uploaded files and the session key) and `lore_redis`. `docker compose down` keeps them; `docker compose down -v` **deletes everything**. To back up, stop the stack and archive the volumes:
+All data lives in Docker volumes named `lore_surreal` (database), `lore_storage` (uploaded files and the session key), `lore_secrets` (generated database password and agent secret) and `lore_redis`. `docker compose down` keeps them; `docker compose down -v` **deletes everything**. To back up, stop the stack and archive the volumes:
 
 ```sh
 docker compose stop

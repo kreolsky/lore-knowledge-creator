@@ -42,6 +42,8 @@ from jobs.tasks import (
     embed_sweep_task,
     extract_task,
     generate_image_task,
+    help_seed_task,
+    help_sweep_task,
     nullout_inline_content_task,
     pipeline_schedule_tick_task,
     telemetry_retention_task,
@@ -225,6 +227,9 @@ class WorkerSettings:
         # cron slot; a retry storm adds nothing.
         func(embed_sweep_task, max_tries=1),
         func(thumbnail_task, max_tries=4),
+        # Lore guide: idempotent (deterministic ids), so a retry is safe.
+        func(help_seed_task, max_tries=3),
+        func(help_sweep_task, max_tries=2),
         func(auto_backup_loss_task, max_tries=4),
         func(auto_backup_handoff_task, max_tries=4),
         func(auto_backup_open_task, max_tries=4),

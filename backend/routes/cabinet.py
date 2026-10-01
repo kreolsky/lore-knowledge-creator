@@ -7,7 +7,7 @@ so the frontend stays in sync without re-login.
 
 import re
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from password import hash_secret, verify_secret
 from rate_limit import check_pin_rate_limit, check_rate_limit, reset_rate_limit
 from security_log import log_security
@@ -32,6 +32,7 @@ _PIN_RE = re.compile(r"^\d{4}$")
 @router.patch("/api/cabinet/name")
 async def change_name(
     body: UpdateProfileName,
+    request: Request,
     response: Response,
     user: dict = Depends(get_current_user),
     db: AsyncSurreal = Depends(get_db),
@@ -43,13 +44,14 @@ async def change_name(
     )
     if not rows:
         raise HTTPException(status_code=404, detail="User not found")
-    set_session_cookie(response, user["user_id"], body.name, user.get("email", ""), user["role"], token_version=user.get("token_version") or 0)
+    set_session_cookie(request, response, user["user_id"], body.name, user.get("email", ""), user["role"], token_version=user.get("token_version") or 0)
     return serialize_record(rows[0], "user_id")
 
 
 @router.patch("/api/cabinet/email")
 async def change_email(
     body: UpdateProfileEmail,
+    request: Request,
     response: Response,
     user: dict = Depends(get_current_user),
     db: AsyncSurreal = Depends(get_db),
@@ -80,7 +82,7 @@ async def change_email(
     )
     if not updated:
         raise HTTPException(status_code=404, detail="User not found")
-    set_session_cookie(response, user["user_id"], user["name"], body.email, user["role"], token_version=user.get("token_version") or 0)
+    set_session_cookie(request, response, user["user_id"], user["name"], body.email, user["role"], token_version=user.get("token_version") or 0)
     log_security("email_changed", user_id=user["user_id"])
     return serialize_record(updated[0], "user_id")
 

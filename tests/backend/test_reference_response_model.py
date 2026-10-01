@@ -15,10 +15,11 @@ from test_files import _make_doc
 # ReferenceMetaResponse model so the frontend can dim archived refs in place).
 # + `created_by` / `created_by_name` (plan reference-card-author-nickname — the
 # reference creator's identity + denormalized nick for the RefCard meta row).
+# + `sort_key` (the persisted manual order within the host's ref group).
 EXPECTED_LIST_KEYS = {
     "archived", "created_at", "created_at_fmt", "document_id", "file_meta", "file_path",
     "has_content", "is_index", "is_reference", "media_type", "path",
-    "processing_status", "project_id", "reference_id", "source_url", "title",
+    "processing_status", "project_id", "reference_id", "sort_key", "source_url", "title",
     "updated_at", "updated_at_fmt",
     "created_by", "created_by_name",
 }

@@ -193,6 +193,8 @@ export interface AppState {
   addReference: (ref: Reference) => void;
   removeReference: (id: string) => void;
   updateReference: (id: string, patch: Partial<Reference>) => void;
+  /** Merge a patch and re-place the ref in its group run (manual order). */
+  placeReference: (id: string, patch: Partial<Reference>) => void;
   replaceReference: (tempId: string, ref: Reference) => void;
   bumpReferencesReload: () => void;
 

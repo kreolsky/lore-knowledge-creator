@@ -40,6 +40,7 @@ vi.mock('../../api/client', () => ({
 }));
 
 import { createMessagesSlice } from './messages-slice';
+import { createQueueSlice } from './queue-slice';
 import { streamCompletion } from './streaming';
 import { apiClient } from '../../api/client';
 import type { ChatState } from './types';
@@ -174,7 +175,7 @@ describe('stopGeneration — cancel POST feedback', () => {
   });
 });
 
-describe('sendMessage — mid-turn send (plan agent-line-harness-lifecycle step 9: the queue died)', () => {
+describe('sendMessage — mid-turn send routes to the message queue', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     appStoreState.currentReference = null;
@@ -185,24 +186,26 @@ describe('sendMessage — mid-turn send (plan agent-line-harness-lifecycle step 
   function busyStore() {
     return create<ChatState>((set, get) => ({
       ...createMessagesSlice(set, get),
+      ...createQueueSlice(set, get),
       sessions: [sess('active', null, '2026-01-01T00:00:00Z')],
       activeSessionId: 'active',
       messages: [],
       selectedSiblings: {},
+      queued: {},
       streaming: { messageId: 'm1', content: '', controller: null },
     } as unknown as ChatState));
   }
 
-  it('a mid-turn send POSTs unconditionally — the backend lock is the serializer', async () => {
+  it('a mid-turn send starts no turn — the text joins the session queue', async () => {
     const store = busyStore();
     await store.getState().sendMessage('follow-up');
-    expect(streamCompletion).toHaveBeenCalledTimes(1);
+    expect(streamCompletion).not.toHaveBeenCalled();
+    expect(store.getState().queued['active']).toEqual(['follow-up']);
   });
 
-  it('the bystander send owns no streaming slot — the open turn keeps its messageId', async () => {
+  it('the open turn keeps its streaming slot', async () => {
     const store = busyStore();
     await store.getState().sendMessage('follow-up');
-    // The foreign turn's slot was neither replaced nor cleared by the bystander.
     expect(store.getState().streaming?.messageId).toBe('m1');
   });
 });

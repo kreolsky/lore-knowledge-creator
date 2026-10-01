@@ -16,6 +16,7 @@ from uuid import uuid4
 import settings
 from agent.context import get_agent_context
 from comfy_markers import marked_nodes, parse_size
+from driver.frames import resolve_image_gen_anchor
 from fastapi import Depends, HTTPException
 
 from access import get_project_access
@@ -38,18 +39,19 @@ async def _require_configured() -> str:
 # ComfyUI generation runs OUT OF the request/turn lifecycle. The tool handler
 # (tool_generate_image) is a fast LAUNCHER: it validates the doc + target + the
 # count/workflow pairing (everything that can surface a clean HTTP error —
-# 400/403/404), mints a run_id, enqueues an arq task with the admin workflow,
-# size and prompt template read at launch, and returns {status:"generating"} at once.
+# 400/403/404), resolves the run's ANCHOR (where the chat card renders), mints
+# a run_id, enqueues an arq task with the admin workflow, size and prompt
+# template read at launch, and returns {status:"generating"} at once.
 #
 # ARCH: the generation runs on the arq
 # DEFAULT queue, NOT as a web-process asyncio.create_task. Why: the web process is
 # reload-volatile (uvicorn --reload on any .py edit, a deploy, a container restart),
 # and create_task dies with CancelledError (a BaseException — not caught by
-# `except Exception`) — no generate_image_failed, no chip, a spinner that never
+# `except Exception`) — no failed card, no chip, a spinner that never
 # stops. A worker survives those events. max_tries=1 (see generate_image_task): a
 # retry re-runs ComfyUI and persists a SECOND image + chip — duplicate output is
 # worse than a reported failure. run_generation's CancelledError arm still
-# covers a worker SHUTDOWN mid-flight: it emits generate_image_failed then
+# covers a worker SHUTDOWN mid-flight: it pushes the run's failed frame then
 # re-raises (never swallows cancellation). Concurrency is bounded at the worker via
 # the COMFY_CONCURRENCY semaphore, not by a set in the web process.
 
@@ -78,9 +80,30 @@ async def _resolve_target_doc_id(ctx: dict, body: ToolGenerateImage) -> str:
             return str(session["document_id"])
     return body.document_id
 
+
+async def _resolve_run_anchor(ctx: dict) -> dict | None:
+    """The run's placement, resolved ONCE at launch: {seq, turn} of the dispatching `tool/call`, taken over the
+    chat's LINEAGE log (a continuation chat's turns live under
+    `compacted_from`) — the anchor half of the reload mint
+    (driver.frames.resolve_image_gen_anchor), frozen into the job payload so
+    the worker mints every frame from it and reads no driver timeline. A
+    miss (no call id, unreadable timeline, call not yet in the log) is
+    best-effort None: the run proceeds, the chips persist, only the live
+    card is skipped (a reload still shows it from the row)."""
+    session_id = ctx.get("session_id") or ""
+    call_id = ctx.get("call_id") or ""
+    if not session_id or not call_id:
+        return None
+    try:
+        session = await fetch_one("chat_sessions", session_id)
+    except Exception:
+        session = None
+    lineage = (session.get("compacted_from") if isinstance(session, dict) else None) or session_id
+    return await resolve_image_gen_anchor(lineage, call_id)
+
 # INVARIANT: the route path MUST equal the tool name exactly.
 # Why: the dsh driver builds the URL generically
-# (`${TOOL_API_INTERNAL_URL}/api/tool/${toolName}`) and consults no path map, so a mismatch is a runtime
+# (`${LORE_TOOL_API_URL}/api/tool/${toolName}`) and consults no path map, so a mismatch is a runtime
 # 404 the test suite cannot catch without asserting over the served list
 # (test_tool_api_routes_match_tool_names). Same invariant as the sandbox routes.
 
@@ -105,11 +128,12 @@ async def tool_generate_image(
     task — the web process is reload-volatile and a create_task dies with an
     unreported CancelledError on any .py edit/deploy/restart). The image lands
     asynchronously on the chat's working document (the session's stable parent)
-    and is delivered to the chat via the project-WS generate_image_done /
-    _failed events; the chips are persisted server-side to messages.gen_steps so a
-    reload still shows them (the driver's log never sees the background task). The
-    refined SD prompt is NOT in the result (it would land in the agent's context) —
-    it travels in the generate_image_done event and that persisted chip.
+    and is delivered to the chat as backend-minted `lore/image-gen` frames on
+    the owner-filtered chat channel (bus chat_frame_push → the chat_frame WS
+    envelope); the chips are persisted server-side to messages.gen_steps so a
+    reload still shows them (the driver's log never sees the background task).
+    The refined SD prompt is NOT in the result (it would land in the agent's
+    context) — it travels inside the minted frame and the persisted chip.
     """
     await _require_configured()
     # B2a: pin the target to the chat session's stable parent document, not the
@@ -168,6 +192,9 @@ async def tool_generate_image(
                     f"call generate_image once per image."),
         )
     run_id = uuid4().hex
+    # The run's anchor, resolved once while the dispatching tool/call is
+    # fresh in the log; the worker mints every chat frame from it.
+    anchor = await _resolve_run_anchor(ctx)
     logger.info(
         "comfy: enqueued run_id=%s (workflow %dB)", run_id,
         len(comfy["COMFYUI_WORKFLOW"]),
@@ -186,6 +213,12 @@ async def tool_generate_image(
             "key_label": ctx.get("key_label"),
             "session_id": ctx.get("session_id") or "",
             "message_id": ctx.get("message_id"),
+            # The dispatching dsh call id (X-Agent-Call-Id) — the persisted step
+            # carries it so the reload mint anchors at that tool/call frame.
+            "call_id": ctx.get("call_id"),
+            # The run's placement ({seq, turn} of the dispatching call), frozen
+            # at launch: the worker's chat frames are minted from it.
+            "anchor": anchor,
             "target_doc_id": parent_doc_id,
             "prompt": body.prompt,
             "orientation": body.orientation,

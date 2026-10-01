@@ -25,7 +25,9 @@ class TestProjectWsConnection:
         with sync_app.websocket_connect(
             f"/ws/collab/project/{pid}", cookies={"lore_session": admin_token}
         ) as ws:
-            ws.send_text(json.dumps({"type": "heartbeat"}))  # no crash = alive
+            ws.send_text(json.dumps({"type": "heartbeat"}))
+            reply = json.loads(ws.receive_text())
+        assert reply["type"] == "heartbeat_ack"
 
     def test_heartbeat_echoes_t_for_rtt(self, sync_app, collab_project):
         # WHY: the multiplexed channel must echo heartbeat_ack with the client `t`

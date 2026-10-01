@@ -20,6 +20,8 @@ import { createResourceCache } from '../api/swr-cache';
 import { registerLogoutHandler } from '../store/logout-handlers';
 
 export interface RefPreview {
+  /** The reference's title — the preview plaque for refs absent from the store. */
+  title?: string;
   content?: string;
   imageUrl?: string;
 }
@@ -77,8 +79,8 @@ export function fetchRefPreview(refId: string): Promise<RefPreview> {
 
 export function buildRefPreview(ref: Reference): RefPreview {
   if (ref.media_type === 'image' && ref.file_path)
-    return { imageUrl: referenceFileUrl(ref.reference_id, ref.file_path) };
-  return { content: ref.content ?? '' };
+    return { title: ref.title, imageUrl: referenceFileUrl(ref.reference_id, ref.file_path) };
+  return { title: ref.title, content: ref.content ?? '' };
 }
 
 export function useReferencePreview(refId: string | null): {

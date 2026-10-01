@@ -717,6 +717,18 @@
       },
       "CreateProject": {
         "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
           "name": {
             "maxLength": 256,
             "minLength": 2,
@@ -1257,6 +1269,18 @@
       },
       "PatchProject": {
         "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
           "is_public": {
             "anyOf": [
               {
@@ -1628,6 +1652,17 @@
               }
             ],
             "title": "Reference Id"
+          },
+          "sort_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sort Key"
           },
           "source_url": {
             "anyOf": [
@@ -7915,7 +7950,7 @@
     },
     "/api/documents/{document_id}/reorder": {
       "patch": {
-        "description": "Place a document after `after_id` within its own sibling group (null = top).",
+        "description": "Place a document or reference after `after_id` within its own sibling group\n(null = top).",
         "operationId": "reorder_document_api_documents__document_id__reorder_patch",
         "parameters": [
           {
@@ -7975,60 +8010,6 @@
           }
         },
         "summary": "Reorder Document"
-      }
-    },
-    "/api/driver/web-search": {
-      "get": {
-        "description": "Env pairs for the harness: the dsh pin plus ONLY the selected provider's\ncredential; `{}` when search is off. An empty credential is still served —\ndsh then fails every call with WEB_PROVIDER_CONFIGURED_UNAVAILABLE.",
-        "operationId": "web_search_env_api_driver_web_search_get",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "x-driver-secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Driver-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "title": "Response Web Search Env Api Driver Web Search Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Web Search Env",
-        "tags": [
-          "driver-settings"
-        ]
       }
     },
     "/api/files/{reference_id}/thumb": {
@@ -8949,7 +8930,7 @@
         "summary": "Get Project"
       },
       "patch": {
-        "description": "Update project fields (name, status, is_public, project_context, ref_image_preview). Requires full access or admin.",
+        "description": "Update project fields (name, description, status, is_public, project_context, ref_image_preview). Requires full access or admin.",
         "operationId": "patch_project_api_projects__project_id__patch",
         "parameters": [
           {
@@ -10329,7 +10310,7 @@
     },
     "/api/references": {
       "get": {
-        "description": "List references (documents with is_reference=true) for a project or doc.\n\nFor document_id scope, walks ancestors and collects ref-children of each.\nSort: own refs first, then parent, then grandparent (depth-asc); newest\nfirst within the same parent. Archived refs (when include_archived=true)\nalways sort BELOW all live refs.",
+        "description": "List references (documents with is_reference=true) for a project or doc.\n\nFor document_id scope, walks ancestors and collects ref-children of each.\nSort: own refs first, then parent, then grandparent (depth-asc); manual\norder ((sort_key, id) ASC) within each tier — a content edit does not move\na ref. Archived refs (when include_archived=true) always sort BELOW all\nlive refs.",
         "operationId": "list_references_api_references_get",
         "parameters": [
           {
@@ -12657,7 +12638,7 @@
     },
     "/api/tool/generate_image": {
       "post": {
-        "description": "Generate an image via ComfyUI and attach it as an image reference to the\nworking document.\n\nThe agent's `prompt` — a complete, self-contained scene description — is\nrefined server-side into an SD prompt before it reaches ComfyUI.\nDETACHED: this handler is a\nfast LAUNCHER. It validates the doc + target + the count/workflow pairing\n(everything that surfaces a clean HTTP error), mints a run_id, enqueues an\narq task with the admin workflow, size and prompt template, and returns\nat once:\n\n    {status:\"generating\", run_id, doc_id}\n\nThe ~10–20s generation runs on the arq DEFAULT queue (NOT a web-process\ntask — the web process is reload-volatile and a create_task dies with an\nunreported CancelledError on any .py edit/deploy/restart). The image lands\nasynchronously on the chat's working document (the session's stable parent)\nand is delivered to the chat via the project-WS generate_image_done /\n_failed events; the chips are persisted server-side to messages.gen_steps so a\nreload still shows them (the driver's log never sees the background task). The\nrefined SD prompt is NOT in the result (it would land in the agent's context) —\nit travels in the generate_image_done event and that persisted chip.",
+        "description": "Generate an image via ComfyUI and attach it as an image reference to the\nworking document.\n\nThe agent's `prompt` — a complete, self-contained scene description — is\nrefined server-side into an SD prompt before it reaches ComfyUI.\nDETACHED: this handler is a\nfast LAUNCHER. It validates the doc + target + the count/workflow pairing\n(everything that surfaces a clean HTTP error), mints a run_id, enqueues an\narq task with the admin workflow, size and prompt template, and returns\nat once:\n\n    {status:\"generating\", run_id, doc_id}\n\nThe ~10–20s generation runs on the arq DEFAULT queue (NOT a web-process\ntask — the web process is reload-volatile and a create_task dies with an\nunreported CancelledError on any .py edit/deploy/restart). The image lands\nasynchronously on the chat's working document (the session's stable parent)\nand is delivered to the chat as backend-minted `lore/image-gen` frames on\nthe owner-filtered chat channel (bus chat_frame_push → the chat_frame WS\nenvelope); the chips are persisted server-side to messages.gen_steps so a\nreload still shows them (the driver's log never sees the background task).\nThe refined SD prompt is NOT in the result (it would land in the agent's\ncontext) — it travels inside the minted frame and the persisted chip.",
         "operationId": "tool_generate_image_api_tool_generate_image_post",
         "parameters": [
           {

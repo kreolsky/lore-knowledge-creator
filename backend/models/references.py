@@ -76,7 +76,7 @@ class WidgetSession(BaseModel):
 # ARCH: the /api/references LIST route projects an EXPLICIT column set
 # (db.REF_META_COLUMNS + has_content via _REF_META_SELECT), so its response field set is
 # fixed/deterministic — attaching response_model here has ZERO blast radius (no SELECT *
-# to silently filter). The pilot (W1) measured this live: the 17 keys below are exactly
+# to silently filter). The pilot (W1) measured this live: the 18 keys below are exactly
 # the unfiltered response keys, so response_model drops nothing.
 # The full GET route (_serialize_ref over SELECT *) is deliberately NOT given a model in
 # this pilot — its field set is the whole `documents` row, which a static model cannot
@@ -89,6 +89,9 @@ class ReferenceMetaResponse(BaseModel):
     reference_id: str | None = None
     project_id: str | None = None
     document_id: str | None = None
+    # Persisted manual order within the host's reference group ((sort_key, id)
+    # ASC); surfaced so the panel renders the shared order without a re-sort.
+    sort_key: str | None = None
     title: str | None = None
     media_type: str | None = None
     source_url: str | None = None

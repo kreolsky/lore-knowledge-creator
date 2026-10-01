@@ -40,7 +40,7 @@ function toolResult(seq: number, callId: string, text: string, isError = false):
 test('every dsh event relays verbatim: kind, seq, time, data, surface metadata', () => {
   const checkpoint = ev(4, 'user/message', {
     role: 'user', content: [{ type: 'text', text: 'checkpoint' }],
-  }, { op: 'replace', start: 1, end: 3 })
+  }, { op: 'replace', startSeq: 1, endSeq: 3 })
   checkpoint.sourceEventSeqs = [1, 2, 3]
   const samples: DshEvent[] = [
     ev(1, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'Hi' } }),

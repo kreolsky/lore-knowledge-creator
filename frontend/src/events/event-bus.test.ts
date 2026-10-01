@@ -35,7 +35,7 @@ describe('event-bus core', () => {
   });
 
   it('emit with no subscribers does not throw', () => {
-    expect(() => emit('project-deleted')).not.toThrow();
+    expect(() => emit('open-sidebar-docs')).not.toThrow();
   });
 
   it('multiple subscribers all get called', () => {
@@ -85,8 +85,8 @@ describe('event-bus core', () => {
 
   it('void-payload events work without second arg', () => {
     const handler = vi.fn();
-    on('project-deleted', handler);
-    emit('project-deleted');
+    on('open-sidebar-docs', handler);
+    emit('open-sidebar-docs');
     expect(handler).toHaveBeenCalledOnce();
     expect(handler).toHaveBeenCalledWith(undefined);
   });

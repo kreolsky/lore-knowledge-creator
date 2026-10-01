@@ -57,6 +57,17 @@ async def _make_doc(client, token, project_id, title, content="", parent_id=None
     return resp.json()["document_id"]
 
 
+async def _mk_ref(client, token, project_id, host, title):
+    resp = await client.post(
+        "/api/references",
+        json={"project_id": project_id, "document_id": host, "title": title,
+              "media_type": "markdown", "content": "body"},
+        cookies={"lore_session": token},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["reference_id"]
+
+
 async def _row(test_db, doc_id):
     rows = await test_db.query(
         "SELECT is_reference, parent_id, sort_key, file_path, media_type, title "
@@ -262,12 +273,16 @@ async def test_move_converts_document_to_reference(
     client, test_db, admin_user, project_with_doc,
 ):
     """"take it and make it a reference" — one structural op, not a third node:
-    is_reference=true, parent=host, sort_key CLEARED (a kept key leaves the node
-    in tree sibling queries and it renders twice)."""
+    is_reference=true, parent=host, sort_key = the TOP key of the host's
+    reference group (the old tree key must not survive the conversion — a kept
+    key leaves the node in tree sibling queries and it renders twice)."""
     pid, _, admin_uid = project_with_doc
     _, token = admin_user
     host = await _make_doc(client, token, pid, "Host")
     child = await _make_doc(client, token, pid, "Child", parent_id=host)
+    # An existing ref on the host pins the ref group: the converted node must
+    # land at its TOP (key below the existing ref's key), not keep its tree key.
+    existing_ref = await _mk_ref(client, token, pid, host, "Existing")
     tok = await _make_agent_key(test_db, admin_uid, pid)
 
     resp = await client.post("/api/tool/move_document", json={
@@ -279,7 +294,9 @@ async def test_move_converts_document_to_reference(
     row = await _row(test_db, child)
     assert row["is_reference"] is True
     assert row["parent_id"] == host
-    assert row["sort_key"] is None
+    assert isinstance(row["sort_key"], str) and row["sort_key"]
+    existing_key = (await _row(test_db, existing_ref))["sort_key"]
+    assert row["sort_key"] < existing_key, "conversion lands at the group's top"
     # The node left the tree listing (the project doc list is non-reference).
     listing = await client.get(
         f"/api/projects/{pid}", cookies={"lore_session": token},

@@ -1,41 +1,22 @@
-/** Unit tests for ProjectConnection — mock WebSocket, test lifecycle + dispatch. */
+/** Unit tests for ProjectConnection — mock WebSocket, test lifecycle + dispatch.
+ *
+ * Dispatch contract: every known message type is
+ * re-emitted on the app EventBus as `ws:<type>` with the message's fields
+ * VERBATIM (deep-equal minus `type`) — never projected, never renamed.
+ */
 
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ProjectConnection, type ProjectWsCallbacks } from './project-connection';
 import { MockWebSocket } from './__tests__/mock-ws';
+import { on, off, type EventMap } from '../events';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function makeCallbacks(overrides: Partial<ProjectWsCallbacks> = {}): ProjectWsCallbacks {
   return {
-    onDocumentCreated: vi.fn(),
-    onDocumentRenamed: vi.fn(),
-    onDocumentMoved: vi.fn(),
-    onDocumentReordered: vi.fn(),
-    onDocumentDeleted: vi.fn(),
-    onDocumentsDeletedBatch: vi.fn(),
-    onDocumentsMovedOut: vi.fn(),
-    onDocumentsMovedIn: vi.fn(),
-    onReferenceCreated: vi.fn(),
-    onReferenceRenamed: vi.fn(),
-    onReferenceMoved: vi.fn(),
-    onReferenceDeleted: vi.fn(),
-    onReferenceUpdated: vi.fn(),
-    onReferenceStatusChanged: vi.fn(),
-    onContentFlushed: vi.fn(),
-    onAgentExtractionStarted: vi.fn(),
-    onGenerateImageProgress: vi.fn(),
-    onGenerateImageDone: vi.fn(),
-    onGenerateImageFailed: vi.fn(),
-    onExtractionError: vi.fn(),
-    onAgentErrorNote: vi.fn(),
     onChatFrame: vi.fn(),
     onProjectWsResync: vi.fn(),
-    onEmbeddingDegraded: vi.fn(),
-    onEmbeddingRecovered: vi.fn(),
-    onProjectUpdated: vi.fn(),
-    onProjectDeleted: vi.fn(),
     onStatusChange: vi.fn(),
     onError: vi.fn(),
     ...overrides,
@@ -50,6 +31,14 @@ function createConnected(overrides: Partial<ProjectWsCallbacks> = {}) {
   ws.simulateOpen();
   ws.simulateMessage({ type: 'init' });
   return { conn, ws, cb };
+}
+
+/** Subscribe a loose spy on the bus; returns [spy, unsub]. */
+function busSpy<K extends keyof EventMap>(key: K): [ReturnType<typeof vi.fn>, () => void] {
+  const spy = vi.fn();
+  const handler = spy as unknown as (payload: EventMap[K]) => void;
+  on(key, handler);
+  return [spy, () => off(key, handler)];
 }
 
 // ── Setup ────────────────────────────────────────────────────────────────────
@@ -219,186 +208,83 @@ describe('ProjectConnection reconnection', () => {
   });
 });
 
-describe('ProjectConnection message dispatch', () => {
-  it('dispatches document_created', () => {
-    const { ws, cb, conn } = createConnected();
-    ws.simulateMessage({ type: 'document_created', document_id: 'd1', title: 'New', parent_id: 'p1', sort_key: 'a0' });
-    expect(cb.onDocumentCreated).toHaveBeenCalledWith('d1', 'New', 'p1', 'a0');
-    conn.disconnect();
-  });
-
-  it('dispatches document_created with null parent_id', () => {
-    const { ws, cb, conn } = createConnected();
-    ws.simulateMessage({ type: 'document_created', document_id: 'd1', title: 'Root', parent_id: null });
-    expect(cb.onDocumentCreated).toHaveBeenCalledWith('d1', 'Root', null, null);
-    conn.disconnect();
-  });
-
-  it('dispatches document_renamed', () => {
-    const { ws, cb, conn } = createConnected();
-    ws.simulateMessage({ type: 'document_renamed', document_id: 'd1', title: 'Renamed' });
-    expect(cb.onDocumentRenamed).toHaveBeenCalledWith('d1', 'Renamed');
-    conn.disconnect();
-  });
-
-  it('dispatches document_moved (forwards previous_parent_id)', () => {
-    const { ws, cb, conn } = createConnected();
-    ws.simulateMessage({ type: 'document_moved', document_id: 'd1', parent_id: 'p2', sort_key: 'a1', previous_parent_id: 'p0' });
-    expect(cb.onDocumentMoved).toHaveBeenCalledWith('d1', 'p2', 'a1', 'p0', undefined, null);
-    conn.disconnect();
-  });
-
-  it('dispatches document_moved with the conversion kind + title', () => {
-    const { ws, cb, conn } = createConnected();
-    ws.simulateMessage({
-      type: 'document_moved', document_id: 'd1', parent_id: 'p2',
-      sort_key: null, previous_parent_id: 'p0',
-      is_reference: true, title: 'Converted',
-    });
-    expect(cb.onDocumentMoved).toHaveBeenCalledWith('d1', 'p2', null, 'p0', true, 'Converted');
-    conn.disconnect();
-  });
-
-  it('dispatches document_reordered', () => {
-    const { ws, cb, conn } = createConnected();
-    ws.simulateMessage({ type: 'document_reordered', document_id: 'd1', parent_id: 'p1', sort_key: 'a0V' });
-    expect(cb.onDocumentReordered).toHaveBeenCalledWith('d1', 'p1', 'a0V');
-    conn.disconnect();
-  });
-
-  it('dispatches document_deleted', () => {
-    const { ws, cb, conn } = createConnected();
-    ws.simulateMessage({ type: 'document_deleted', document_id: 'd1' });
-    expect(cb.onDocumentDeleted).toHaveBeenCalledWith('d1');
-    conn.disconnect();
-  });
-
-  it('dispatches reference_created', () => {
-    const { ws, cb, conn } = createConnected();
-    ws.simulateMessage({ type: 'reference_created', reference_id: 'r1', title: 'Ref', document_id: 'd1' });
-    // Author fields default to null when absent (impersonal/widget-key creation).
-    expect(cb.onReferenceCreated).toHaveBeenCalledWith('r1', 'Ref', 'd1', null, null);
-    conn.disconnect();
-  });
-
-  it('dispatches reference_created with author fields', () => {
-    const { ws, cb, conn } = createConnected();
-    ws.simulateMessage({
-      type: 'reference_created', reference_id: 'r2', title: 'Ref', document_id: 'd1',
-      created_by: 'u1', created_by_name: 'Alice',
-    });
-    expect(cb.onReferenceCreated).toHaveBeenCalledWith('r2', 'Ref', 'd1', 'u1', 'Alice');
-    conn.disconnect();
-  });
-
-  it('dispatches reference_renamed', () => {
-    const { ws, cb, conn } = createConnected();
-    ws.simulateMessage({ type: 'reference_renamed', reference_id: 'r1', title: 'New Name' });
-    expect(cb.onReferenceRenamed).toHaveBeenCalledWith('r1', 'New Name');
-    conn.disconnect();
-  });
-
-  it('dispatches reference_moved', () => {
-    const { ws, cb, conn } = createConnected();
-    ws.simulateMessage({ type: 'reference_moved', reference_id: 'r1', document_id: 'd2' });
-    expect(cb.onReferenceMoved).toHaveBeenCalledWith('r1', 'd2');
-    conn.disconnect();
-  });
-
-  it('dispatches reference_moved with null document_id', () => {
-    const { ws, cb, conn } = createConnected();
-    ws.simulateMessage({ type: 'reference_moved', reference_id: 'r1', document_id: null });
-    expect(cb.onReferenceMoved).toHaveBeenCalledWith('r1', null);
-    conn.disconnect();
-  });
-
-  it('dispatches reference_deleted', () => {
-    const { ws, cb, conn } = createConnected();
-    ws.simulateMessage({ type: 'reference_deleted', reference_id: 'r1' });
-    expect(cb.onReferenceDeleted).toHaveBeenCalledWith('r1');
-    conn.disconnect();
-  });
-
-  it('dispatches reference_updated', () => {
-    const { ws, cb, conn } = createConnected();
-    ws.simulateMessage({ type: 'reference_updated', reference_id: 'r1' });
-    expect(cb.onReferenceUpdated).toHaveBeenCalledWith('r1');
-    conn.disconnect();
-  });
-
-  it('dispatches reference_status_changed', () => {
-    const { ws, cb, conn } = createConnected();
-    ws.simulateMessage({ type: 'reference_status_changed', reference_id: 'r1', status: 'ready' });
-    expect(cb.onReferenceStatusChanged).toHaveBeenCalledWith('r1', 'ready');
-    conn.disconnect();
-  });
-
-  it('dispatches content_flushed', () => {
-    const { ws, cb, conn } = createConnected();
-    ws.simulateMessage({ type: 'content_flushed', entity_id: 'd1', entity_type: 'doc' });
-    expect(cb.onContentFlushed).toHaveBeenCalledWith('d1', 'doc');
-    conn.disconnect();
-  });
-
-  it('dispatches generate_image_progress', () => {
-    const { ws, cb, conn } = createConnected();
-    ws.simulateMessage({ type: 'generate_image_progress', session_id: 's1', phase: 'generating', run_id: 'r1', message_id: 'm1' });
-    expect(cb.onGenerateImageProgress).toHaveBeenCalledWith('s1', 'generating', 'r1', 'm1');
-    conn.disconnect();
-  });
-
-  it('dispatches generate_image_done with validated fields', () => {
-    const { ws, cb, conn } = createConnected();
-    const steps = [
-      { tool_call_id: 'gen:r1:refine', tool: 'refine_prompt', summary: 'refine prompt', detail: 'REFINED' },
-      { tool_call_id: 'gen:r1', tool: 'generate_image', summary: 'generate image', image_ref_ids: ['ref-a', 'ref-b'], run_id: 'r1' },
-    ];
-    ws.simulateMessage({
-      type: 'generate_image_done', session_id: 's1', run_id: 'r1', message_id: 'm1',
-      reference_ids: ['ref-a', 'ref-b'], title: 'a cat',
-      refine: { prompt: 'REFINED', ok: true, error: null },
-      steps,
-    });
-    expect(cb.onGenerateImageDone).toHaveBeenCalledWith({
-      sessionId: 's1', runId: 'r1', messageId: 'm1',
-      referenceIds: ['ref-a', 'ref-b'], title: 'a cat',
-      refine: { prompt: 'REFINED', ok: true, error: null },
-      steps,
-    });
-    conn.disconnect();
-  });
-
-  it('dispatches generate_image_failed with validated fields', () => {
-    const { ws, cb, conn } = createConnected();
-    ws.simulateMessage({
-      type: 'generate_image_failed', session_id: 's1', run_id: 'r1',
-      message_id: 'm1', error: 'ComfyUI is not available',
-    });
-    expect(cb.onGenerateImageFailed).toHaveBeenCalledWith({
-      sessionId: 's1', runId: 'r1', messageId: 'm1', error: 'ComfyUI is not available',
-    });
-    conn.disconnect();
-  });
-
-  it('dispatches project_updated', () => {
-    const { ws, cb, conn } = createConnected();
-    ws.simulateMessage({ type: 'project_updated', name: 'New Name' });
-    expect(cb.onProjectUpdated).toHaveBeenCalledWith(expect.objectContaining({ name: 'New Name' }));
-    conn.disconnect();
-  });
-
-  it('dispatches project_deleted', () => {
-    const { ws, cb, conn } = createConnected();
-    ws.simulateMessage({ type: 'project_deleted' });
-    expect(cb.onProjectDeleted).toHaveBeenCalled();
-    conn.disconnect();
-  });
-
-  it('ignores unknown message types without error', () => {
+describe('ProjectConnection message dispatch (the verbatim ws:* bridge)', () => {
+  it('emits ws:<type> deep-equal to the message minus type — unknown extra fields included', () => {
     const { ws, conn } = createConnected();
+    const [spy, unsub] = busSpy('ws:document_created');
+    try {
+      ws.simulateMessage({
+        type: 'document_created', document_id: 'd1', title: 'New', parent_id: 'p1',
+        sort_key: 'a0', is_reference: false, futureField: { deep: [1, 2] },
+      });
+    } finally {
+      unsub();
+    }
+    expect(spy).toHaveBeenCalledOnce();
+    expect(spy).toHaveBeenCalledWith({
+      document_id: 'd1', title: 'New', parent_id: 'p1',
+      sort_key: 'a0', is_reference: false, futureField: { deep: [1, 2] },
+    });
+    conn.disconnect();
+  });
+
+  it('forwards a nested opaque payload untouched (project_updated updates)', () => {
+    const { ws, conn } = createConnected();
+    const updates = {
+      deep: [{ refIds: ['ref-a', 'ref-b'], refine: { ok: true, prompt: 'REFINED' } }],
+      futureField: { deep: [1, 2] },
+    };
+    const [spy, unsub] = busSpy('ws:project_updated');
+    try {
+      ws.simulateMessage({ type: 'project_updated', updates });
+    } finally {
+      unsub();
+    }
+    expect(spy).toHaveBeenCalledWith({ updates });
+    conn.disconnect();
+  });
+
+  it('forwards a wire payload of nulls verbatim (document_moved)', () => {
+    const { ws, conn } = createConnected();
+    const [spy, unsub] = busSpy('ws:document_moved');
+    try {
+      ws.simulateMessage({
+        type: 'document_moved', document_id: 'd1', parent_id: null, sort_key: null,
+        previous_parent_id: 'p0', is_reference: true, title: 'Converted',
+      });
+    } finally {
+      unsub();
+    }
+    expect(spy).toHaveBeenCalledWith({
+      document_id: 'd1', parent_id: null, sort_key: null,
+      previous_parent_id: 'p0', is_reference: true, title: 'Converted',
+    });
+    conn.disconnect();
+  });
+
+  it('forwards a zero-field message as an empty payload (embedding_degraded)', () => {
+    const { ws, conn } = createConnected();
+    const [spy, unsub] = busSpy('ws:embedding_degraded');
+    try {
+      ws.simulateMessage({ type: 'embedding_degraded' });
+    } finally {
+      unsub();
+    }
+    expect(spy).toHaveBeenCalledWith({});
+    conn.disconnect();
+  });
+
+  it('warns ONCE per unknown type (forward-compat) and does not throw', () => {
+    const { ws, conn } = createConnected();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     expect(() => {
-      ws.simulateMessage({ type: 'unknown_event', data: 'foo' });
+      ws.simulateMessage({ type: 'totally_new_event', data: 'x' });
+      ws.simulateMessage({ type: 'totally_new_event', data: 'x' });
+      ws.simulateMessage({ type: 'another_new_event' });
     }).not.toThrow();
+    const warned = warn.mock.calls.map(c => String(c[0]));
+    const count = warned.filter(w => w.includes('totally_new_event')).length;
+    expect(count).toBe(1); // once per type, not per message
     conn.disconnect();
   });
 
@@ -407,96 +293,6 @@ describe('ProjectConnection message dispatch', () => {
     expect(() => {
       ws.onmessage?.({ data: 'not json' });
     }).not.toThrow();
-    conn.disconnect();
-  });
-
-  it('dispatches extraction_error with all required fields', () => {
-    const onExtractionError = vi.fn();
-    const { ws, conn } = createConnected({ onExtractionError });
-    ws.simulateMessage({
-      type: 'extraction_error',
-      reference_id: 'r1',
-      note_id: 'n1',
-      document_id: 'd1',
-    });
-    expect(onExtractionError).toHaveBeenCalledWith('r1', 'n1', 'd1');
-    conn.disconnect();
-  });
-
-  it('ignores extraction_error when a required field is missing', () => {
-    const onExtractionError = vi.fn();
-    const { ws, conn } = createConnected({ onExtractionError });
-    ws.simulateMessage({ type: 'extraction_error', reference_id: 'r1', note_id: 'n1' });
-    expect(onExtractionError).not.toHaveBeenCalled();
-    conn.disconnect();
-  });
-
-  it('dispatches embedding_degraded and embedding_recovered', () => {
-    const onEmbeddingDegraded = vi.fn();
-    const onEmbeddingRecovered = vi.fn();
-    const { ws, conn } = createConnected({ onEmbeddingDegraded, onEmbeddingRecovered });
-    ws.simulateMessage({ type: 'embedding_degraded' });
-    ws.simulateMessage({ type: 'embedding_recovered' });
-    expect(onEmbeddingDegraded).toHaveBeenCalledTimes(1);
-    expect(onEmbeddingRecovered).toHaveBeenCalledTimes(1);
-    conn.disconnect();
-  });
-
-  it('dispatches documents_deleted_batch', () => {
-    const onDocumentsDeletedBatch = vi.fn();
-    const { ws, conn } = createConnected({ onDocumentsDeletedBatch });
-    ws.simulateMessage({
-      type: 'documents_deleted_batch',
-      document_ids: ['d1', 'd2'],
-      reference_ids: ['d2'],
-    });
-    expect(onDocumentsDeletedBatch).toHaveBeenCalledWith(['d1', 'd2'], ['d2']);
-    conn.disconnect();
-  });
-
-  it('ignores documents_deleted_batch when document_ids is missing', () => {
-    const onDocumentsDeletedBatch = vi.fn();
-    const { ws, conn } = createConnected({ onDocumentsDeletedBatch });
-    ws.simulateMessage({ type: 'documents_deleted_batch', reference_ids: [] });
-    expect(onDocumentsDeletedBatch).not.toHaveBeenCalled();
-    conn.disconnect();
-  });
-
-  it('dispatches documents_moved_out with the target project fields', () => {
-    const onDocumentsMovedOut = vi.fn();
-    const { ws, conn } = createConnected({ onDocumentsMovedOut });
-    ws.simulateMessage({
-      type: 'documents_moved_out',
-      document_ids: ['d1'],
-      reference_ids: ['r1'],
-      target_project_id: 'p2',
-      target_project_name: 'Target',
-    });
-    expect(onDocumentsMovedOut).toHaveBeenCalledWith(['d1'], ['r1'], 'p2', 'Target');
-    conn.disconnect();
-  });
-
-  it('defaults documents_moved_out optional fields when absent', () => {
-    const onDocumentsMovedOut = vi.fn();
-    const { ws, conn } = createConnected({ onDocumentsMovedOut });
-    ws.simulateMessage({ type: 'documents_moved_out', document_ids: ['d1'] });
-    expect(onDocumentsMovedOut).toHaveBeenCalledWith(['d1'], [], '', '');
-    conn.disconnect();
-  });
-
-  it('dispatches documents_moved_in', () => {
-    const onDocumentsMovedIn = vi.fn();
-    const { ws, conn } = createConnected({ onDocumentsMovedIn });
-    ws.simulateMessage({ type: 'documents_moved_in', document_ids: ['d1', 'd2'] });
-    expect(onDocumentsMovedIn).toHaveBeenCalledWith(['d1', 'd2']);
-    conn.disconnect();
-  });
-
-  it('ignores documents_moved_in when document_ids is missing', () => {
-    const onDocumentsMovedIn = vi.fn();
-    const { ws, conn } = createConnected({ onDocumentsMovedIn });
-    ws.simulateMessage({ type: 'documents_moved_in' });
-    expect(onDocumentsMovedIn).not.toHaveBeenCalled();
     conn.disconnect();
   });
 });

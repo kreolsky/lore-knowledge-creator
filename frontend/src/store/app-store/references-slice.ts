@@ -80,6 +80,36 @@ export function mergeRefLists(incoming: Reference[], existing: Reference[]): Ref
   });
 }
 
+// Pure placement of one reference inside the LIST.
+// Removes `ref`, then inserts it into the FIRST contiguous run of LIVE refs with
+// the same document_id, at its (sort_key, reference_id) position — so a live
+// event (create, WS reorder, re-host) re-sorts ONLY that group's run and the
+// backend's depth-tier order between runs is preserved. No run present → the
+// ref is prepended (today's stale-until-reload for unrelated hosts). An
+// archived ref keeps its slot — archived refs are not hand-sortable, the
+// archived sink owns their display order.
+export function placeInGroup(list: Reference[], ref: Reference): Reference[] {
+  if (ref.archived === true) {
+    const idx = list.findIndex(r => r.reference_id === ref.reference_id);
+    return idx === -1 ? [...list, ref] : list.map(r => r.reference_id === ref.reference_id ? ref : r);
+  }
+  const without = list.filter(r => r.reference_id !== ref.reference_id);
+  const group = ref.document_id ?? null;
+  const inRun = (r: Reference) => r.archived !== true && (r.document_id ?? null) === group;
+  const start = without.findIndex(inRun);
+  if (start === -1) return [ref, ...without];
+  let end = start;
+  while (end < without.length && inRun(without[end])) end++;
+  const key = (r: Reference) => r.sort_key ?? '';
+  let at = start;
+  while (at < end) {
+    const r = without[at];
+    if (key(ref) < key(r) || (key(ref) === key(r) && ref.reference_id < r.reference_id)) break;
+    at++;
+  }
+  return [...without.slice(0, at), ref, ...without.slice(at)];
+}
+
 // Hydrated bodies of refs that LEFT the list on a doc switch (a ref owned by doc A is not
 // in doc B's scope), keyed by id. Insertion-ordered Map, capped as a FIFO.
 // INVARIANT(no-silent-degradation): a stashed body is restored only onto a row whose
@@ -127,6 +157,7 @@ export type ReferencesSlice = Pick<
   | 'addReference'
   | 'removeReference'
   | 'updateReference'
+  | 'placeReference'
   | 'replaceReference'
   | 'bumpReferencesReload'
   | 'addRefToDeleting'
@@ -155,13 +186,15 @@ export function createReferencesSlice(set: AppSet, get: AppGet): ReferencesSlice
       references: commitRefList(mergeRefLists(refs, references), true, deletedRefIds),
     })),
     addReference: (ref) => set(({ references, deletedRefIds }) => {
-      const filtered = references.filter(r => r.reference_id !== ref.reference_id);
+      // Placed in the ref's group run (placeInGroup): a new ref mints the top
+      // key of its host's group, so it lands at the head of that host's run —
+      // an ancestor-host add never jumps above the current doc's own tier.
       // Re-adding an id that is pending deletion cancels the delete — otherwise
       // commitRefList would mask the ref the user just recreated.
       const nextDeleted = deletedRefIds.has(ref.reference_id)
         ? (() => { const s = new Set(deletedRefIds); s.delete(ref.reference_id); return s; })()
         : deletedRefIds;
-      return { references: commitRefList([ref, ...filtered], false, nextDeleted), deletedRefIds: nextDeleted };
+      return { references: commitRefList(placeInGroup(references, ref), false, nextDeleted), deletedRefIds: nextDeleted };
     }),
     removeReference: (id) => set(({ references, deletedRefIds }) => ({
       references: commitRefList(references.filter(r => r.reference_id !== id), false, deletedRefIds),
@@ -169,6 +202,14 @@ export function createReferencesSlice(set: AppSet, get: AppGet): ReferencesSlice
     updateReference: (id, patch) => set(({ references }) => ({
       references: references.map(r => r.reference_id === id ? { ...r, ...patch } : r),
     })),
+    // Merge a patch and RE-PLACE the ref in its group run (updateReference keeps
+    // the row's slot; placeReference moves it). Used by the drag commit and the
+    // reorder/re-host WS handlers. No-op when the id is not in the list.
+    placeReference: (id, patch) => set(({ references }) => {
+      const cur = references.find(r => r.reference_id === id);
+      if (!cur) return {};
+      return { references: placeInGroup(references, { ...cur, ...patch }) };
+    }),
     replaceReference: (tempId, ref) => set(({ references }) => {
       const without = references.filter(r => r.reference_id !== tempId);
       if (without.some(r => r.reference_id === ref.reference_id)) return { references: without };

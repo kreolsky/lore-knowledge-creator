@@ -36,6 +36,23 @@ export interface ChatConversationViewNode {
 
 export type ConversationPublication = 'none' | 'animation-frame' | 'immediate'
 
+/** One model chunk paired with its original timestamp (dsh TimedStreamChunk). */
+export interface TimedStreamChunk {
+  readonly time: number
+  readonly chunk: unknown
+}
+
+/**
+ * Expand dsh's compact assistant-stream records (the accumulator snapshot the
+ * reload's `assistant_stream` baseline carries) into the exact timed chunk
+ * sequence — one member per originally pushed chunk. The VALIDATING path for
+ * records read off the wire: throws TypeError when a record is invalid;
+ * callers recover by skipping the seat (the text returns with settlement).
+ */
+export declare function expandAssistantStream(
+  stream: readonly unknown[],
+): readonly TimedStreamChunk[]
+
 export interface LoreConversation {
   replaceWindow(
     entries: readonly SessionEventLikeEntry[],
@@ -43,6 +60,10 @@ export interface LoreConversation {
   ): ConversationPublication
   append(input: SessionEventLikeEntry): ConversationPublication
   splice(input: SessionEventLikeEntry): ConversationPublication
+  /** Retire one assistant attempt's transient live-chunk rows — its `end`
+   * frame, abandoned and committed alike (a committed settlement arrives
+   * separately as a normal dsh_event). */
+  settleAssistant(attemptId: unknown): ConversationPublication
   nodes(): readonly ChatConversationViewNode[]
 }
 

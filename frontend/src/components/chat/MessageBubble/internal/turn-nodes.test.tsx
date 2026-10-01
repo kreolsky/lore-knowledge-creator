@@ -142,4 +142,30 @@ describe('TurnNodes', () => {
     })).textContent ?? '';
     expect(failedRefine).toContain('refinePrompt');
   });
+
+  it('renders a RUNNING run as the live phase chip (the run rides the chat channel)', () => {
+    // The phases are lore/image-gen RUNNING frames — the node renders the
+    // "Generating image — <phase>" chip until the settled frame
+    // folds the node into its two-chip (or failed) look.
+    const html = render(createElement(TurnNodes, {
+      nodes: [node('image-gen', {
+        turn: 0, runId: 'r1', status: 'running', phase: 'generating',
+      })],
+      isStreaming: true,
+    }));
+    const text = html.textContent ?? '';
+    expect(text).toContain('generatingImage');
+    expect(text).toContain('genPhaseGenerating');
+    // Not the settled look: no refine prompt plate, no thumbs.
+    expect(text).not.toContain('refinePrompt');
+    expect(text).not.toContain('generatedImage');
+
+    // No phase known (a running frame without one) — the bare label stands.
+    const bare = render(createElement(TurnNodes, {
+      nodes: [node('image-gen', { turn: 0, runId: 'r1', status: 'running' })],
+      isStreaming: true,
+    })).textContent ?? '';
+    expect(bare).toContain('generatingImage');
+    expect(bare).not.toContain('genPhaseGenerating');
+  });
 });

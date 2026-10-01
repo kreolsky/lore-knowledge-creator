@@ -107,12 +107,12 @@ describe('useEvent hook', () => {
     const handler = vi.fn();
 
     function TestComponent() {
-      useEvent('project-deleted', useCallback(handler, []));
+      useEvent('open-sidebar-docs', useCallback(handler, []));
       return null;
     }
 
     act(() => root.render(createElement(TestComponent)));
-    act(() => emit('project-deleted'));
+    act(() => emit('open-sidebar-docs'));
 
     expect(handler).toHaveBeenCalledOnce();
   });

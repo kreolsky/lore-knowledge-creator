@@ -30,6 +30,7 @@ from jobs.tasks.comfy import COMFY_TASK_NAMES, generate_image_task
 from jobs.tasks.cp_migrations import backfill_cp_blobs_task, nullout_inline_content_task
 from jobs.tasks.embed import EMBED_MAX_TRIES, embed_document_task, embed_sweep_task
 from jobs.tasks.extract import extract_task
+from jobs.tasks.help import help_seed_task, help_sweep_task
 from jobs.tasks.media import (
     _post_to_converter,
     _read_docx_bytes,
@@ -58,6 +59,9 @@ __all__ = [
     "EMBED_MAX_TRIES",
     # thumbnails
     "thumbnail_task",
+    # Lore guide
+    "help_seed_task",
+    "help_sweep_task",
     # auto_backup
     "auto_backup_loss_task",
     "auto_backup_handoff_task",

@@ -31,6 +31,7 @@ from agent.tools import MUTATING_TOOLS, agent_toolset
 from driver.client import (
     DriverLine,
     DriverLineUnreachable,
+    DriverSecretMismatch,
     resolve_driver_line,
 )
 from fastapi import Depends, HTTPException
@@ -266,7 +267,10 @@ async def _validate_turn_and_model(
     await _validate_chat_turn(session, user)
     model = body.model or session.get("model") or await settings.get("CHAT_MODEL")
     if not model:
-        raise HTTPException(status_code=400, detail="No model specified")
+        raise HTTPException(
+            status_code=400,
+            detail="Set the chat model in Admin panel → Models & APIs",
+        )
     # ARCH: the SESSION is the single source
     # for the effort (no per-request override — the composer PATCHes first).
     # No fallback: None = Default, the harness materializes the adapter
@@ -371,6 +375,11 @@ async def cancel_completion(
 
     try:
         await post_stop(session.get("compacted_from") or session_id)
+    except DriverSecretMismatch as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=DriverSecretMismatch.CAUSE,
+        ) from exc
     except DriverLineUnreachable as exc:
         raise HTTPException(
             status_code=502,

@@ -18,7 +18,7 @@ import event_bus
 # (tests/backend/db_leak_guard.py: call-time resolution re-reads the module
 # attribute a monkeypatch.setattr("db.fetch_one", ...) has rebound).
 from access import is_instance_admin
-from config import ALGORITHM, COOKIE_MAX_AGE, COOKIE_SECURE, SECRET_KEY
+from config import ALGORITHM, COOKIE_MAX_AGE, SECRET_KEY
 from models.auth import USER_MANAGER_ROLES
 
 # token_version is read on EVERY request/WS connect; a short TTL cache keeps auth
@@ -74,8 +74,21 @@ async def refresh_user_role_cache(user_id: str) -> None:
     await event_bus.emit("token_version_bumped", user_id=user_id)
 
 
+def _browser_scheme_is_https(request: Request) -> bool:
+    """Whether the BROWSER reached Lore over HTTPS.
+
+    The first hop of X-Forwarded-Proto (set by the operator's TLS proxy and
+    passed on by the bundled nginx), else the request's own scheme.
+    WHY trust the header: a client spoofing it only changes the flag on its
+    own cookie.
+    """
+    forwarded = request.headers.get("x-forwarded-proto", "")
+    scheme = forwarded.split(",")[0].strip().lower() or request.url.scheme
+    return scheme == "https"
+
+
 def set_session_cookie(
-    response: Response, user_id: str, name: str, email: str, role: str,
+    request: Request, response: Response, user_id: str, name: str, email: str, role: str,
     token_version: int = 0,
 ) -> None:
     """Encode a JWT and set it as the httpOnly session cookie."""
@@ -92,7 +105,11 @@ def set_session_cookie(
     response.set_cookie(
         key="lore_session", value=token,
         httponly=True, samesite="lax",
-        secure=COOKIE_SECURE, max_age=COOKIE_MAX_AGE,
+        # INVARIANT(security): Secure follows the browser's scheme, never a setting.
+        # Why: a Secure cookie over plain HTTP never comes back (sign-in does not
+        # stick), and a non-Secure one over HTTPS leaks on a downgrade — a
+        # one-file install must get both right with no operator action.
+        secure=_browser_scheme_is_https(request), max_age=COOKIE_MAX_AGE,
     )
 
 

@@ -21,7 +21,7 @@ FROM python:3.12-slim
 # puts the background command in its own session so it survives the SSH channel.
 # xz-utils is what `tar -J` shells out to — the node tarball below is .tar.xz.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        openssh-server gcc python3-dev git ca-certificates procps curl nftables \
+        openssh-server gcc python3-dev git ca-certificates procps curl \
         util-linux xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
@@ -58,11 +58,12 @@ RUN set -eux; \
     rm "$tarball"; \
     node --version; npm --version
 
-# INVARIANT(security): the agent user is NEVER root and NEVER gets sudo. Why: the
-# dev image has no in-guest firewall (the compose network is the boundary here), but
-# on prod CT 703 the egress nftables ruleset is owned by root — a sudo-capable agent
-# could flush it and reach the home LAN. Keep the two ends identical so dev never
-# teaches a habit prod forbids.
+# INVARIANT(security): the agent user is NEVER root and NEVER gets sudo. Why:
+# this box exists to run arbitrary code, and the egress boundary is enforced
+# OUTSIDE it (sandbox-gw's ruleset in the shared netns, which no caps in here
+# can reach); on prod CT 703 the same boundary is the root-owned nftables
+# ruleset — a sudo-capable agent could flush it and reach the home LAN. Keep
+# the two ends identical so dev never teaches a habit prod forbids.
 RUN useradd --create-home --shell /bin/bash --uid 1000 agent \
     && mkdir -p /workspace /var/run/sshd \
     && chown agent:agent /workspace
@@ -82,12 +83,8 @@ RUN { \
       echo 'AcceptEnv LANG LC_* LORE_*'; \
     } > /etc/ssh/sshd_config.d/lore-sandbox.conf
 
-# The egress ruleset is applied at boot by the entrypoint, not baked into a layer —
-# nftables state is kernel/netns state, not filesystem state, so it cannot survive in
-# an image and MUST be re-applied on every container start.
-COPY nftables.conf /etc/nftables.conf
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod 755 /usr/local/bin/entrypoint.sh && chmod 644 /etc/nftables.conf
+RUN chmod 755 /usr/local/bin/entrypoint.sh
 
 EXPOSE 22
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

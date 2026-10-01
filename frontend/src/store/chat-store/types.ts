@@ -1,6 +1,16 @@
 /** ChatState interface and Set/Get aliases for slice creators. */
-import type { AgentStep, ChatUIMode, ChatSession, ChatMessage, Reference, PinnedRegion, ReasoningCapability } from '../../types';
+import type { ChatUIMode, ChatSession, ChatMessage, Reference, PinnedRegion, ReasoningCapability } from '../../types';
 import type { ConversationVM, TurnRange } from './conversation-feed';
+
+/**
+ * Why a turn ended — read at the turn's terminal, before the slot is flushed.
+ * 'done' is the DEFAULT: nothing is stamped through a clean turn. 'error'/'halted'
+ * are stamped on the slot by their frame handlers (`endReason`); 'aborted' is read
+ * off the slot's controller (Stop aborted it); 'lost' is a turn whose terminal never
+ * reached this tab (the WS-gap close). The queue
+ * flush decision hangs on this value: only 'done' auto-fires.
+ */
+export type TurnEndReason = 'done' | 'aborted' | 'error' | 'halted' | 'lost';
 
 /**
  * The single streaming state machine object.
@@ -17,6 +27,10 @@ export interface StreamingState {
   content: string;
   /** The in-flight AbortController (former abortController). */
   controller: AbortController | null;
+  /** Why the turn is ending, stamped by the `error` and `lore/halt` frame handlers;
+   *  absent through a clean turn. Ephemeral + live-only — never persisted
+   *  (flushStreaming drops it along with the rest of the streaming object). */
+  endReason?: 'error' | 'halted';
 }
 
 /**
@@ -149,6 +163,13 @@ export interface ChatState {
   // user's call, consistent with pendingImages). Contrast note-chat's
   // PER-SESSION drafts (a note draft is thread-scoped).
   draft: string;
+
+  // SYSTEM: chat-message-queue — follow-up chips typed while a turn streams, keyed by
+  // session. Why keyed: the composer draft is ONE shared string that crosses a session
+  // switch; a flat queue would surface chat A's chips inside chat B. Not persisted (F5
+  // drops it — the user's call). The backend never learns the queue exists: one
+  // ordinary sendMessage fires on flush.
+  queued: Record<string, string[]>;
   // Chat-list title filter typed in the ghost header's search mode. null = search
   // mode OFF (the hint shows); '' … = search mode ON with that query. NEVER
   // persisted and NEVER survives leaving the ghost state — ChatHeader clears it on
@@ -250,31 +271,23 @@ export interface ChatState {
   forkAndResend: (messageId: string, content: string, images?: string[]) => Promise<void>;
   regenerate: (messageId: string) => Promise<void>;
   stopGeneration: () => void;
-  /** Plan comfy-image-gen-fixes → hardening: the active detached
-   *  generate_image phases, TOP-LEVEL and keyed by `runId` (NOT on the streaming
-   *  object). Why detached: the generation outlives the agent turn, so tying the
-   *  phase to `streaming` (nulled when the turn ends) made the spinner vanish the
-   *  instant the agent summarized. Why keyed by runId (not the prior per-session
-   *  single value): two generate_image calls in one turn are now possible (the tool
-   *  returns instantly + enqueues) — per-session correlation let the 2nd run
-   *  overwrite/clear the 1st run's progress. n images in flight ⇒ n entries.
-   *  Ephemeral + live-only — NEVER persisted. */
-  imageGen: Record<string, { messageId: string; phase: string }>;
-  /** Upsert the detached phase for one run (keyed by runId); `phase === null`
-   *  deletes that run's entry (the run settled). No-op when no messageId. */
-  setImageGenPhase: (runId: string, messageId: string, phase: string | null) => void;
-  /** A detached generation completed. DELETES that run's entry FIRST (unconditional clear — closes the
-   *  bug where a done carrying no steps left the spinner running forever), then
-   *  appends the server-built chips if any (deduped by tool_call_id). The chips are
-   *  ALSO persisted server-side, so a non-active session shows them on return/reload. */
-  completeImageGen: (runId: string, messageId: string, steps: AgentStep[]) => void;
-  /** A detached generation failed. Deletes only THAT run's entry (independent runs survive) + surfaces the
-   *  cause (no-silent-degradation). */
-  failImageGen: (runId: string, error: string) => void;
 
   // Actions — forks
   selectSibling: (parentId: string, messageId: string) => void;
   getSiblings: (parentId: string | null) => ChatMessage[];
+
+  // Actions — message queue. Guard lives in the store, not
+  // the UI: sendMessage itself routes here when streaming !== null, so the MicButton
+  // transcription path and hotkeys can't bypass it.
+  enqueueMessage: (sessionId: string, text: string) => void;
+  removeQueued: (sessionId: string, index: number) => void;
+  clearQueued: (sessionId: string) => void;
+  // Auto-fire the coalesced queue for a session at a clean turn-end. Session-owned:
+  // brings the user to the owning session (single-session streaming model) then sends.
+  flushQueued: (sessionId: string) => Promise<void>;
+  // Restore the joined queue text into the composer (abort/error/halted/lost) instead
+  // of auto-firing a follow-up into a turn the user just killed.
+  restoreQueued: (sessionId: string) => void;
 
   // Actions — models
   loadModels: () => Promise<void>;

@@ -13,6 +13,7 @@ import { ChatHeader } from './chat/ChatHeader';
 import { MessageList } from './chat/MessageList';
 import { ChatInput } from './chat/ChatInput';
 import { ChatClarifyPopover } from './chat/ChatClarifyPopover';
+import { ChatUnavailableNotice, useChatUnavailable } from './chat/ChatUnavailableNotice';
 import { useTranslation } from '../i18n';
 import { useChatStore } from '../store/chat-store';
 import { useAppStore } from '../store/app-store';
@@ -41,10 +42,11 @@ export function ChatPanel() {
   const documentId = useAppStore(s => s.currentDocument?.document_id);
   const loadSessions = useChatStore(s => s.loadSessions);
   const addPendingImage = useChatStore(s => s.addPendingImage);
+  const chatUnavailable = useChatUnavailable();
   const { isDragging, dragHandlers } = useImageDropHandlers({
     getPending: () => useChatStore.getState().pendingImages,
     addImage: addPendingImage,
-    enabled: true,
+    enabled: !chatUnavailable,
   });
 
   // ARCH: the active chat is PROJECT-SCOPED and
@@ -95,7 +97,9 @@ export function ChatPanel() {
       <ChatHeader />
       <ChatClarifyPopover />
       <MessageList />
-      <ChatInput />
+      {/* No model for this user ⇒ nothing to send to: the whole composer (context,
+          persona, input, auto-send, mic) gives way to the notice. History stays readable. */}
+      {chatUnavailable ? <ChatUnavailableNotice /> : <ChatInput />}
       {isDragging && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-bg/60 border-2 border-dashed border-accent pointer-events-none">
           <span className="text-text-muted text-sm">{t('dropImagesHere')}</span>

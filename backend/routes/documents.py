@@ -221,15 +221,20 @@ async def patch_document(document_id: str, body: PatchDocument, user: dict = Dep
 # ARCH: manual reorder within a sibling group. Backend-authoritative key generation
 # (thin-client): the client sends `after_id` (the sibling to land after, null = top),
 # the server computes the fractional key strictly between that neighbour and the next.
+# Serves BOTH kinds — a reference id reorders it within its host's REFERENCE group
+# (same-kind key space; archived refs refused).
 @router.patch("/api/documents/{document_id}/reorder")
 async def reorder_document(
     document_id: str, body: ReorderDocument, user: dict = Depends(get_current_user)
 ):
-    """Place a document after `after_id` within its own sibling group (null = top).
+    """Place a document or reference after `after_id` within its own sibling group
+    (null = top).
 
-    INVARIANT: reorder never changes parent — `after_id` must be a sibling of the
-    moved doc (same project_id and parent_id) or null. A cross-level `after_id` is
-    rejected with 400. Why: user spec 2026-06-03 — drag reorders within one level only.
+    INVARIANT: reorder never changes parent — `after_id` must be a same-kind
+    sibling of the moved row (same project_id, parent_id and is_reference) or
+    null. A cross-level or cross-kind `after_id` is rejected with 400. Why: user
+    spec — drag reorders within one level only; refs keep the rule (their own
+    group, same endpoint).
     """
     await require_document_full(document_id, user)
     return await reorder_document_command(document_id, body.after_id)

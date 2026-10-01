@@ -89,13 +89,16 @@ export default defineConfig({
     // name (Host: frontend). Vite's host check rejects unknown hosts with 403 —
     // allow the service name so E2E_BASE_URL=http://frontend:5173 works.
     allowedHosts: ['frontend', 'localhost'],
+    // INFRA WIRING, not configuration: the dev proxy targets the backend by
+    // its compose service name (plan component-wiring-not-settings step 2) —
+    // nothing runs on the host, so there is no host-run fallback anymore.
     proxy: {
       '/api': {
-        target: process.env.VITE_BACKEND_URL || 'http://localhost:8001',
+        target: 'http://backend:8001',
         changeOrigin: true,
       },
       '/ws': {
-        target: process.env.VITE_BACKEND_URL || 'http://localhost:8001',
+        target: 'http://backend:8001',
         changeOrigin: true,
         ws: true,
       },

@@ -63,8 +63,8 @@ export function createRegionActions(set: Set, get: Get): RegionActions {
       useAppStore.getState().showToast(t('regionUnpinnedAutoEnabled'), 'info');
     },
 
-    // see SYSTEM: selection-region-agent — the pin's RelativePosition anchor no longer
-    // resolves against the live ydoc (only a wholesale content replace — checkpoint
+    // see SYSTEM: selection-region-agent — the pin's RelativePosition anchor does
+    // not resolve against the live ydoc (only a wholesale content replace — checkpoint
     // restore / doc import — destroys it; ordinary edits and the agent's own surgical
     // edits preserve it). A pin over lost anchors is dead weight: it forces confirm
     // and rejects every apply forever, so we auto-unpin and tell the user to re-pin.

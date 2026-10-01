@@ -1,10 +1,11 @@
 /** User cabinet: self-service profile management (name, email, password, PIN). Store slices: currentUser, setCurrentUser; ui-store (the aside width shared with the admin panel + project sidebar, panelWidths.left). */
 
 import type React from 'react';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { User } from 'lucide-react';
 import { useAppStore } from '../store/app-store';
 import { useSectionAsideWidth } from '../hooks/useSectionAsideWidth';
+import { useAppVersion } from '../hooks/useAppVersion';
 import { Button, FieldInput } from '../components/ui';
 import { SectionShell, SectionAsideRow } from '../components/SectionShell';
 import { useTranslation } from '../i18n';
@@ -51,19 +52,7 @@ export function CabinetPage() {
   const { initialAsideWidth, onAsideWidthChange } = useSectionAsideWidth();
 
   // ─── Release version ──────────────────────────────────────────────────────
-  // Read from /api/health rather than a build-time constant: the prod frontend is a
-  // static nginx bundle, so a baked-in version would go stale whenever the backend is
-  // redeployed without a frontend rebuild. `null` = still loading, `''` = fetch failed
-  // (rendered as an explicit error, never as a blank line — no silent degradation).
-  const [version, setVersion] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/health', { credentials: 'include' })
-      .then(res => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
-      .then(data => { if (!cancelled) setVersion(String(data.version ?? '')); })
-      .catch(() => { if (!cancelled) setVersion(''); });
-    return () => { cancelled = true; };
-  }, []);
+  const version = useAppVersion();
 
   // ─── Name ─────────────────────────────────────────────────────────────────
   const [name, setName] = useState(currentUser?.name ?? '');

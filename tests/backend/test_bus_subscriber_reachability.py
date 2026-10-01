@@ -31,12 +31,37 @@ Plan 1785964800000, D1.
 """
 
 import ast
+import functools
+import json
 import pathlib
-
-import event_bus
-import main  # noqa: F401  — importing it IS the test: it must wire every subscription
+import subprocess
+import sys
 
 _BACKEND = pathlib.Path("/app")
+
+# INVARIANT: the subscription snapshot is taken in a FRESH interpreter that
+# imports `main` and nothing else.
+# Why: in-process, any module an earlier test imported (test_chat_fanout imports
+# routes.chat.fanout) already sits in _subscribers, so the check would pass over
+# a web process that never subscribes the handler — and a worker event with no
+# web subscriber is dropped silently.
+_SNAPSHOT = """
+import json, main, event_bus
+print(json.dumps({evt: [[getattr(h, "__module__", ""), getattr(h, "__qualname__", "")]
+                        for h in hs] for evt, hs in event_bus._subscribers.items()}))
+"""
+
+
+@functools.cache
+def _subscribed_after_import_main() -> dict[str, list[tuple[str, str]]]:
+    """event → [(module, qualname)] subscribed once `import main` has run, and
+    only that."""
+    out = subprocess.run(
+        [sys.executable, "-c", _SNAPSHOT], cwd=_BACKEND,
+        capture_output=True, text=True, check=True, timeout=120,
+    )
+    last = out.stdout.strip().splitlines()[-1]
+    return {evt: [tuple(h) for h in hs] for evt, hs in json.loads(last).items()}
 
 
 def _dotted_module(py: pathlib.Path) -> str:
@@ -90,10 +115,9 @@ class TestModuleLevelSubscriptionsReachable:
         assert derived, "AST scan found no module-level _bus_on sites — parser broke"
 
         # Snapshot the subscribed handler identities reachable at runtime.
-        subscribed: set[tuple[str, str]] = set()
-        for evt, handlers in event_bus._subscribers.items():
-            for h in handlers:
-                subscribed.add((getattr(h, "__module__", ""), getattr(h, "__qualname__", "")))
+        subscribed: set[tuple[str, str]] = {
+            h for hs in _subscribed_after_import_main().values() for h in hs
+        }
 
         missing = [
             (evt, mod, qn)
@@ -133,8 +157,8 @@ class TestCallerFiredSubscriptionsReachable:
         missing = [
             evt for evt in self._EVENTS
             if not any(
-                getattr(h, "__module__", "") == "collab.events"
-                for h in event_bus._subscribers.get(evt, ())
+                mod == "collab.events"
+                for mod, _qn in _subscribed_after_import_main().get(evt, ())
             )
         ]
         assert not missing, (

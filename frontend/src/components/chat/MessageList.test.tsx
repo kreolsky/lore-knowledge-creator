@@ -20,7 +20,6 @@ const chatState: Record<string, unknown> = {
   conversation: [],
   turnRanges: {},
   turnStartSeq: null,
-  imageGen: {},
   messagesLoading: false,
   messagesError: null,
   chatScopeLoading: false,
@@ -34,9 +33,6 @@ const chatState: Record<string, unknown> = {
   getSiblings: vi.fn(() => []),
   selectSibling: vi.fn(),
   sendMessage: vi.fn(),
-  setImageGenPhase: vi.fn(),
-  completeImageGen: vi.fn(),
-  failImageGen: vi.fn(),
   decideVerdict: vi.fn(),
 };
 vi.mock('../../store/chat-store', () => ({

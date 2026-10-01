@@ -659,7 +659,7 @@ describe('computeContextPrune (A.5)', () => {
   });
 
   it('a deleted document IS pruned while references is still empty (documents loaded) — pins the relaxed guard', () => {
-    // The guard no longer waits on `references`; documents present is enough.
+    // The guard does not wait on `references`; documents present is enough.
     const decision = computeContextPrune(
       { documentIds: ['deadDoc'], referenceIds: [] },
       [],

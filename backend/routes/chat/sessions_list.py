@@ -84,7 +84,7 @@ async def _load_candidate_rows(
 
 
 async def _document_titles(db, rows: list, ref_map: dict) -> dict[str, str]:
-    """Document-session titles in ONE batched query (thin client — Decision 1).
+    """Document-session titles in ONE batched query (thin client).
     Only genuine document-sessions carry a document_title; ref-sessions are labelled
     from reference_title (their OWN title, in ref_map) and are skipped here. The
     serializer consumes this map with zero DB calls of its own (its purity INVARIANT

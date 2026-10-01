@@ -10,8 +10,9 @@ import { EventEmitter } from 'node:events'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { lastTurnEndSeq, turnEndIndex } from '../src/leaf.ts'
+import { lastTurnEndSeq } from '../src/leaf.ts'
 import { createSessionEventTap, type EventsChannel } from '../src/ws-events.ts'
+import { createSessionStreamBaselines } from '../src/stream-baselines.ts'
 import { newTurnMapState } from '../src/map.ts'
 import { READ_TOOL_TIMEOUT_MS, registerLoreTools } from '../src/tools.ts'
 import {
@@ -28,17 +29,19 @@ import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 // dynamic import runs after both env guards; every other test file keeps
 // plain imports because only index.ts reads this secret.
 process.env.LORE_DRIVER_SECRET ||= 't3st-s3cr3t'
-process.env.LORE_HARNESS_MODEL ||= 'test-model'
 const {
-  contextUsageFrame, harnessModel, PROVIDER, sessionLeaf,
+  AGENT_KEY_REF, contextUsageFrame, ensureAgentKey, ensureTitleConfig,
+  ensureTitleEntry, ensureWebSearch, forkModel, loreRoute, PROVIDER,
+  sessionLeaf, turnConfigProblem,
 } = await import('../src/index.ts')
+import { WEB_SEARCH_KEY_REF } from '../src/web-search/key.ts'
 
 function ev(seq: number, type: string, data?: any, surfaceOp?: any): any {
   return { seq, type, data, surfaceOp }
 }
 
-// Real 0.1.5-rc.2 shapes: surfaceOp is the STRING 'append' or the object
-// {op:'replace',start,end}; user/message carries the payload as `data` itself.
+// Real 0.2.0-rc.2 shapes: surfaceOp is the STRING 'append' or the object
+// {op:'replace',startSeq,endSeq}; user/message carries the payload as `data` itself.
 function userMsg(seq: number, text: string): any {
   return ev(seq, 'user/message',
     { role: 'user', content: [{ type: 'text', text }] }, 'append')
@@ -70,21 +73,32 @@ function log(): any[] {
 }
 
 // ─── leaf: the dsh seq IS the branch-point id ────────────────────────────────
-// (plan collapse-the-editor-harness-layer step 5: the ordinal translation —
-// the Nth turn/end — is deleted; the backend names a DRIVER id directly.)
 
-test('a seq resolves only to ITS turn/end row; anything else is unresolvable', () => {
-  const events = log()
-  assert.equal(turnEndIndex(events, 5), 5)   // branch after turn 1 (log index of seq 5's row)
-  assert.equal(turnEndIndex(events, 9), 9)   // branch after turn 2
-  // A seq that exists but is NOT a turn/end is not a forkable boundary.
-  assert.equal(turnEndIndex(events, 4), -1)
-  assert.equal(turnEndIndex(events, 2), -1)
-  // Unknown / out-of-range / malformed seqs never resolve.
-  assert.equal(turnEndIndex(events, 99), -1)
-  assert.equal(turnEndIndex([], 5), -1)
-  assert.equal(turnEndIndex(events, 2.5), -1)
-  assert.equal(turnEndIndex(events, -1), -1)
+/** The expected dsh fork seed for a boundary `seq`: the source rows [0..seq]
+ * plus dsh's inherited-cut marker at seq + 1 (a `turn/end` boundary is
+ * balanced, so buildForkSeed's forked closers add nothing). */
+function forkSeed(events: any[], seq: number): any[] {
+  return [...events.slice(0, seq + 1), {
+    type: 'session/end-seed', seq: seq + 1, time: events[seq].time,
+    data: { inherited: true },
+  }]
+}
+
+test('a real v4 session log is indexed by seq (the read contract the fork relies on)', () => {
+  // The fork's boundary guard addresses rows BY SEQ (`events[seq].seq ===
+  // seq`), which holds only if a read log is contiguous from 0 — the v4
+  // format's own contract ("sequence numbers stay contiguous", dsh session
+  // types.ts). Pinned on the REAL recorded fixture so a format change that
+  // breaks seq-addressing fails HERE, not as a silently wrong fork.
+  const rows = readFileSync(
+    join(import.meta.dirname, '../../lore-conversation/test/fixtures/session-turn.jsonl'),
+    'utf8').trim().split('\n').map((line) => JSON.parse(line) as any)
+  // Row 0 is the header (no seq); persistence's read() returns the events.
+  const events = rows.filter((r) => typeof r.seq === 'number')
+  assert.ok(events.length > 1, 'the fixture carries real events')
+  for (let i = 0; i < events.length; i++) {
+    assert.equal(events[i].seq, i, `the event at index ${i} must carry seq ${i}`)
+  }
 })
 
 test('a log-only tail after the last turn never moves the live tail', () => {
@@ -140,38 +154,64 @@ test('cordis.patch.yml routes line B through the llm-pi-ai lore route', () => {
   // where the offered levels are configuration (the plugin upserts them from
   // /capabilities), while the old llm-deepseek route hard-coded
   // off/low/high/max and died with UNSUPPORTED_REASONING_EFFORT on anything
-  // else. A hand-declared route refuses to resolve with NO models, so the
-  // static layer carries ONE bootstrap id (the gate-checked harness model) —
-  // the plugin's boot upsert replaces the list wholesale with the
-  // accumulated per-model entries.
+  // else. 0.2.0 shape: llm-pi-ai mounts DORMANT in the composition (its
+  // `providers` field is volatile, and a `!!js` expression inside the
+  // volatile subtree breaks every settings write — the route cannot live in
+  // the patch layer), and the plugin's boot/turn upsert declares the `lore`
+  // route beside the model entries (loreRoute + ensureModelEntry in index.ts).
   const yml = readFileSync(
     join(process.env.DSH_HOME || '/app/home', 'cordis.patch.yml'), 'utf8')
   assert.ok(!yml.includes('lore-gateway'),
     'the lore-gateway route is gone (the pi row falls back to its dormant bare mount)')
-  assert.match(yml,
-    /- id: llm-pi-ai\n  config:\n    providers:\n      lore:\n        apiKeyEnv: AI_API_KEY\n        api: openai-completions\n        baseURL: !!js process\.env\.LORE_AI_API_URL\n        compat:\n          supportsDeveloperRole: false\n          maxTokensField: max_tokens\n          thinkingFormat: openai\n        defaultContextWindow: !!js Number\(process\.env\.LORE_HARNESS_CONTEXT_WINDOW\)\n        models:\n          - id: !!js process\.env\.LORE_HARNESS_MODEL/,
-    'the lore route carries the gateway facts, the deepseek-mirroring compat, and ONE bootstrap model id')
-  // compat mirrors what the old route sent and the gateway accepts: role
-  // system, max_tokens, bare reasoning_effort (openai thinking format).
-  assert.match(yml, /- id: llm-deepseek\n  disabled: true/,
-    'the old native adapter is disabled loudly (its default endpoint is the PUBLIC DeepSeek API, and DEEPSEEK_API_KEY is in the env — a soft miss would bill another tenant)')
-  // No profile-wide `maxTokens`: the output cap is the router's per-model
-  // `max_completion_tokens`, upserted into the catalog entry by the plugin
-  // (ensureModelEntry) — a number here re-hardcodes the 8192 cap that cut
-  // every model below its real ceiling (plan output-token-cap-from-the-router).
-  // The route BLOCK only (comments above it name the word; compat's
-  // maxTokensField is the wire spelling, not a cap).
+  assert.match(yml, /- id: llm-pi-ai\n  disabled: false/,
+    'the pi row stays mounted (dormant — the plugin declares the route through settings)')
   const routeBlock = yml.split('- id: llm-pi-ai')[1]!.split('- id: llm-deepseek')[0]!
+  assert.ok(!/providers:/.test(routeBlock),
+    'the composition declares NO provider config — env-bound values ride the settings document, never the volatile patch layer')
   assert.ok(!/\n\s+maxTokens:/.test(routeBlock),
     'the lore route declares NO maxTokens (per-model catalog upsert owns the cap)')
-  assert.ok(!yml.includes('process.env.LORE_AI_API_URL ||'),
-    'no dead baseURL fallback: the backend serves no /v1/chat/completions')
-  assert.ok(!yml.includes('|| 128000'),
-    'no dead context-window fallback: compose already defaults the env')
-  assert.match(yml, /- id: agent-default-model\n  config:\n    provider: lore\n    model: !!js process\.env\.LORE_HARNESS_MODEL/,
-    'the boot-gated default model points at the lore route')
-  assert.match(yml, /- id: session-title-llm\n  config:\n    targetWords: 5\n    targetCjkCharacters: 10\n    maxInputBytes: 4096\n    maxOutputTokens: 64\n    timeoutMs: 60000\n    provider: lore\n    model: !!js process\.env\.CHAT_TITLE_MODEL \|\| process\.env\.CHAT_MODEL/,
-    'the titler points at the lore route too')
+  // The route FACTS live in index.ts now — pinned by source shape, like the
+  // provider-route test below: apiKeyEnv (the Lore-internal credentials
+  // ref), the openai-completions api, the deepseek-mirroring compat trio
+  // (role system, max_tokens, bare reasoning_effort), no fallback (no gateway
+  // URL skips the scaffold and the turn is refused).
+  const index = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  assert.match(index, /apiKeyEnv: AGENT_KEY_REF,\n    api: 'openai-completions',\n    baseURL,/,
+    'loreRoute carries the route facts the dormant row cannot')
+  assert.match(index, /supportsDeveloperRole: false,\n      maxTokensField: 'max_tokens',\n      thinkingFormat: 'openai',/,
+    'compat mirrors what the old route sent and the gateway accepts')
+  assert.match(index, /if \(!baseURL\) return null/,
+    'no baseURL fallback: the backend serves no /v1/chat/completions')
+  assert.match(yml, /- id: llm-deepseek\n  disabled: true/,
+    'the old native adapter is disabled loudly (its default endpoint is the PUBLIC DeepSeek API, and DEEPSEEK_API_KEY is in the env — a soft miss would bill another tenant)')
+  assert.match(yml, /- id: agent-default-model\n  config:\n    provider: lore\n    model: ''/,
+    'the entry stays (dsh injects agentDefaultModel — deleting it breaks activation) with NO env link: no model rides the composition, every turn names its own. The empty string, not undefined — undefined fails the entry\'s own "$.model missing required value" validation (proven on the gray boot)')
+  // The MOVED composition: `web` and `session-title-llm` carry no config in
+  // the home patch (the config-editor refuses an entry a home patch
+  // overrides); their whole config lives in the profile patch — the editor's
+  // write target — as STATIC rows the per-turn apply edits.
+  const homeDir = process.env.DSH_HOME || '/app/home'
+  const profilePatch = readFileSync(join(homeDir, 'profiles/lore/cordis.patch.yml'), 'utf8')
+  const homeTitleBlock = yml.split('- id: session-title-llm')[1]!.split('\n- id:')[0]!
+  assert.ok(!/config:/.test(homeTitleBlock),
+    'the home row carries no titler config — the editor must reach the entry')
+  const profileTitleBlock = profilePatch.split('- id: session-title-llm')[1]!.split('- id:')[0]!
+  for (const field of ['targetWords: 5', 'targetCjkCharacters: 10', 'maxInputBytes: 4096', 'maxOutputTokens: 64', 'timeoutMs: 60000']) {
+    assert.ok(profileTitleBlock.includes(field), `the profile row restates ${field}`)
+  }
+  assert.ok(!/provider:/.test(profileTitleBlock) && !/model:/.test(profileTitleBlock),
+    'NO committed provider/model pair — the pair is per-turn state (ensureTitleConfig), dsh refuses a half or empty one at activation')
+  const homeWebBlock = yml.split('- id: web')[1]!.split('\n- id:')[0]!
+  assert.ok(!/config:/.test(homeWebBlock), 'the home web row carries no config either')
+  const profileWebBlock = profilePatch.split('- id: web')[1]!.split('- id:')[0]!
+  assert.match(profileWebBlock, /searchProvider: deepseek-official/,
+    'the static default pin (the per-turn edit moves it on admin change)')
+  assert.match(profileWebBlock, /fetchProvider: http/,
+    'every other field survives the per-turn edit (the change keeps them)')
+  assert.match(yml, /- id: web-search-deepseek\n  disabled: false\n  config:\n    apiKeyEnv: LORE_WEB_SEARCH_KEY/,
+    'dsh DeepSeek resolves its key per request through the Lore-internal ref (the per-turn credential write)')
+  assert.match(yml, /- id: tool-web\n  disabled: false\n  config:\n    search: true/,
+    'web_search is ALWAYS offered — there is no off state; to stop searching an admin clears the key')
 })
 
 // ─── the provider route string: declared once, shared with the composition ──
@@ -189,24 +229,208 @@ test('the provider route key is declared ONCE and matches the composition', () =
 
 // ─── config gate ──────────────────────────────────────────────────────────────
 
-test('an unset model CRASHES the driver instead of serving a fallback', () => {
-  // The composition declares exactly ONE roster entry and cordis.patch.yml
-  // reads the same var with no `||` fallback: an unset var used to serve
-  // local/orange/chat — the model the default flip was measured AGAINST —
-  // so a deploy that forgot HARNESS_MODEL ran the agent on the wrong brain
-  // with no error anywhere. apply() calls this at boot.
-  const saved = process.env.LORE_HARNESS_MODEL
+test('a turn with no model is refused by name — there is no env fallback', () => {
+  // The model comes only from the turn: the backend resolves body.model →
+  // session row → admin CHAT_MODEL and refuses a model-less turn itself
+  // (completions.py), so the harness's named refusal is the second gate, and
+  // index.ts must carry no LORE_HARNESS_MODEL read at all — wiring, not
+  // configuration (plan component-wiring-not-settings step 3).
+  const index = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  assert.ok(!index.includes('LORE_HARNESS_MODEL'),
+    'no env model read remains in the plugin')
+  const gw = { base: 'http://gw/v1', key: 'k' }
+  assert.equal(turnConfigProblem('m', gw), null)
+  assert.match(turnConfigProblem('', gw)!, /chat model.*Admin panel → Models & APIs/)
+  assert.match(turnConfigProblem('m', { ...gw, base: '' })!, /AI API URL.*Admin panel → Models & APIs/)
+  assert.match(turnConfigProblem('m', { ...gw, key: '' })!, /AI API key.*Admin panel → Models & APIs/)
+})
+
+// ─── the route default window: a constant, not configuration ──────────────────
+
+test('the route default window is the constant 128000 — no env read', () => {
+  // The real window comes from the gateway caps per model (caps.ts); the
+  // scaffold's number is the composition fallback for models the gateway
+  // leaves bare — the same 128000 the composes carried as
+  // LORE_HARNESS_CONTEXT_WINDOW's default, now a constant (plan
+  // component-wiring-not-settings step 3).
+  const saved = process.env.LORE_HARNESS_CONTEXT_WINDOW
   try {
-    delete process.env.LORE_HARNESS_MODEL
-    assert.throws(() => harnessModel(), /LORE_HARNESS_MODEL is required/)
-    process.env.LORE_HARNESS_MODEL = '   '
-    assert.throws(() => harnessModel(), /LORE_HARNESS_MODEL is required/)
-    process.env.LORE_HARNESS_MODEL = 'deepseek/flash'
-    assert.equal(harnessModel(), 'deepseek/flash')
+    delete process.env.LORE_HARNESS_CONTEXT_WINDOW
+    assert.equal(loreRoute('http://gw/v1')!.defaultContextWindow, 128000,
+      'no env → the composition default')
+    process.env.LORE_HARNESS_CONTEXT_WINDOW = '999999'
+    assert.equal(loreRoute('http://gw/v1')!.defaultContextWindow, 128000,
+      'a set env must not move the route default')
+    assert.equal(loreRoute('') , null, 'no baseURL → no route (the turn is refused)')
   } finally {
-    if (saved === undefined) delete process.env.LORE_HARNESS_MODEL
-    else process.env.LORE_HARNESS_MODEL = saved
+    if (saved === undefined) delete process.env.LORE_HARNESS_CONTEXT_WINDOW
+    else process.env.LORE_HARNESS_CONTEXT_WINDOW = saved
   }
+  const index = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  assert.ok(!index.includes('LORE_HARNESS_CONTEXT_WINDOW'),
+    'no env window read remains in the plugin')
+})
+
+// ─── the agent key: dsh credentials, written only on difference ──────────────
+
+function fakeCredentials(stored?: string) {
+  const values = new Map<string, string>(stored === undefined ? [] : [[AGENT_KEY_REF, stored]])
+  const sets: [string, string | undefined][] = []
+  return {
+    sets,
+    resolve: async (ref: string) => (values.has(ref) ? { value: values.get(ref)! } : undefined),
+    set: async (ref: string, value: string) => {
+      sets.push([ref, value])
+      values.set(ref, value)
+    },
+    unset: async (ref: string) => {
+      sets.push([ref, undefined])
+      values.delete(ref)
+    },
+  }
+}
+
+test('the turn key is stored under the internal ref only when it differs', async () => {
+  const creds = fakeCredentials()
+  await ensureAgentKey(creds, 'sk-admin')
+  await ensureAgentKey(creds, 'sk-admin')
+  assert.deepEqual(creds.sets, [['LORE_AGENT_API_KEY', 'sk-admin']],
+    'one write for a new key, none for the same key')
+  await ensureAgentKey(creds, 'sk-rotated')
+  assert.deepEqual(creds.sets.at(-1), ['LORE_AGENT_API_KEY', 'sk-rotated'])
+  await assert.rejects(ensureAgentKey(undefined, 'sk'), /credentials service is not composed/)
+})
+
+// ─── the per-turn admin config: search pin + credential, title pair ──────────
+
+/** A duck-typed configEditor: rows by id, `edit` recorded and applied. */
+function fakeConfigEditor(rows: Record<string, Record<string, unknown>>) {
+  const edits: Array<{ id: string, next: Record<string, unknown> }> = []
+  return {
+    edits,
+    entries: () => Object.entries(rows).map(([id, config]) => ({ options: { id, config } })),
+    edit: async (
+      entry: { options: { id: string } },
+      change: (current: Record<string, unknown>) => Record<string, unknown>,
+    ) => {
+      const id = entry.options.id
+      const next = change(structuredClone(rows[id] ?? {}))
+      edits.push({ id, next })
+      rows[id] = next
+    },
+  }
+}
+
+const TITLE_FIXED = {
+  targetWords: 5, targetCjkCharacters: 10, maxInputBytes: 4096,
+  maxOutputTokens: 64, timeoutMs: 60000,
+}
+
+test('a changed provider edits web exactly once, keeping every other field; the same value again edits nothing', async () => {
+  const editor = fakeConfigEditor({
+    web: { searchProvider: 'deepseek-official', fetchProvider: 'http' },
+  })
+  const creds = fakeCredentials()
+  await ensureWebSearch(editor, creds, 'lore-brave', 'brave-key')
+  await ensureWebSearch(editor, creds, 'lore-brave', 'brave-key')
+  assert.deepEqual(editor.edits, [
+    { id: 'web', next: { searchProvider: 'lore-brave', fetchProvider: 'http' } },
+  ])
+})
+
+test('the credential lands under the ONE ref only when it differs — empty UNSETS, never stores', async () => {
+  const editor = fakeConfigEditor({ web: { searchProvider: 'deepseek-official', fetchProvider: 'http' } })
+  const creds = fakeCredentials()
+  // First turn on a fresh install: nothing stored, the payload says '' — a
+  // missing ref IS the empty credential (the loud no-key failure).
+  await ensureWebSearch(editor, creds, 'deepseek-official', '')
+  await ensureWebSearch(editor, creds, 'deepseek-official', '')
+  assert.deepEqual(creds.sets, [], 'no write and no unset for an already-absent key')
+  // An admin sets a key: one write.
+  await ensureWebSearch(editor, creds, 'deepseek-official', 'sk-deepseek')
+  assert.deepEqual(creds.sets, [[WEB_SEARCH_KEY_REF, 'sk-deepseek']])
+  // An admin clears the key: the off switch UNSETS the ref (credentials-local
+  // refuses to store '').
+  await ensureWebSearch(editor, creds, 'deepseek-official', '')
+  assert.deepEqual(creds.sets.at(-1), [WEB_SEARCH_KEY_REF, undefined])
+  assert.deepEqual(editor.edits, [], 'an unchanged provider never edits, whatever the key does')
+})
+
+test('a missing seam fails loud — the pin and the key are not optional', async () => {
+  const editor = fakeConfigEditor({ web: {} })
+  await assert.rejects(
+    ensureWebSearch(undefined, fakeCredentials(), 'lore-brave', 'k'),
+    /config editor is not composed/)
+  await assert.rejects(
+    ensureWebSearch(editor, undefined, 'lore-brave', 'k'),
+    /credentials service is not composed/)
+})
+
+test('a title change edits session-title-llm with the pair; an empty title removes it; no change edits nothing', async () => {
+  const editor = fakeConfigEditor({ 'session-title-llm': { ...TITLE_FIXED } })
+  await ensureTitleConfig(editor, 'local/orange/titler')
+  await ensureTitleConfig(editor, 'local/orange/titler')
+  assert.deepEqual(editor.edits, [
+    { id: 'session-title-llm', next: { ...TITLE_FIXED, provider: 'lore', model: 'local/orange/titler' } },
+  ], 'one edit for a change, none for the same value')
+  await ensureTitleConfig(editor, '')
+  assert.deepEqual(editor.edits.at(-1)!.next, TITLE_FIXED,
+    'an empty title_model removes the pair — the titler rides the session\'s own route')
+  await ensureTitleConfig(editor, '')
+  assert.equal(editor.edits.length, 2, 'removing an absent pair edits nothing')
+  await assert.rejects(ensureTitleConfig(undefined, 'm'), /config editor is not composed/)
+})
+
+// ─── the title model: a catalog entry, a warning never an exit ──────────────
+
+function fakeCatalogSettings() {
+  const updates: [unknown, Record<string, unknown>][] = []
+  const lore: Record<string, unknown> = { baseURL: 'http://gw/v1', apiKeyEnv: 'LORE_AGENT_API_KEY', models: [] }
+  return {
+    updates,
+    describe: () => [{ ns: 'llm-pi-ai', value: { providers: { lore } } }],
+    update: async (ns: unknown, patch: Record<string, unknown>) => {
+      updates.push([ns, patch])
+      Object.assign(lore, (patch.providers as { lore: Record<string, unknown> }).lore)
+    },
+  }
+}
+
+const PLAIN = { known: true, vision: false, contextWindow: null, maxOutputTokens: null, effortLevels: [] }
+
+test('the title model is catalogued once; a reasoner is still catalogued, with a warning', async () => {
+  // pi-ai refuses an id outside the catalog, and the composition already
+  // points the titler at the model — so a reasoner is warned about, never
+  // left uncatalogued (titles would fail) and never an exit.
+  const route = { apiKeyEnv: 'LORE_AGENT_API_KEY', api: 'openai-completions', baseURL: 'http://gw/v1', compat: {} }
+  const settings = fakeCatalogSettings()
+  await ensureTitleEntry(settings, 'titler/plain', PLAIN, route)
+  await ensureTitleEntry(settings, 'titler/plain', PLAIN, route)
+  assert.equal(settings.updates.length, 1, 'the committed entry writes nothing')
+  const logged: string[] = []
+  const saved = console.error
+  console.error = (...args: unknown[]) => { logged.push(args.join(' ')) }
+  try {
+    await ensureTitleEntry(settings, 'titler/thinks', { ...PLAIN, effortLevels: ['low'] }, route)
+    await ensureTitleEntry(settings, 'titler/thinks', { ...PLAIN, effortLevels: ['low'] }, route)
+  } finally {
+    console.error = saved
+  }
+  assert.equal(settings.updates.length, 2)
+  assert.equal(logged.filter((l) => l.includes('advertises reasoning effort levels')).length, 1,
+    'one loud line per model, not one per turn')
+})
+
+// ─── the fork model: the parent's last requested route ────────────────────────
+
+test('a fork seeds with the model the parent last requested at the branch point', () => {
+  const header = (seq: number, model: string) =>
+    ev(seq, 'request/header', { header: { config: { provider: 'lore', model } } })
+  const events = [header(0, 'm/first'), ev(1, 'turn/end'), header(2, 'm/second'), ev(3, 'turn/end')]
+  assert.equal(forkModel(events, 1), 'm/first', 'a header past the branch point is not the parent\'s')
+  assert.equal(forkModel(events, 3), 'm/second')
+  assert.equal(forkModel([ev(0, 'turn/end')], 0), '',
+    'no header → no fallback (the value every fresh install already forks with; the next turn selects its own model)')
 })
 
 // ─── the timeout-policy split (step 9): reads declare a budget, mutations none ─
@@ -241,7 +465,7 @@ test('registerLoreTools declares the hang bound ONLY on read-only proxies', () =
 
 test('the turn resolves its caps via caps.ts; the payload numbers are gone', async () => {
   const src = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
-  assert.match(src, /const caps = await resolveModelCaps\(model\)/,
+  assert.match(src, /const caps = await resolveModelCaps\(model, \{ gateway \}\)/,
     'the turn handler resolves the model capability off the ONE source')
   assert.ok(!src.includes('body.context_window'),
     'the payload no longer threads a context window (the deleted Python resolver)')
@@ -289,8 +513,8 @@ test('contextUsageFrame: absent pressure (or a missing service) emits nothing', 
 })
 
 
-// ─── /session-leaf takes the dsh seq (plan collapse-the-editor-harness-layer ──
-// step 5: one id space — the ordinal the backend used to send is deleted).
+// ─── /session-leaf takes the dsh seq: one id space — the branch point is a
+// dsh log seq, never a turn ordinal.
 
 test('the leaf endpoint reads body.seq; the turn ordinal is gone', async () => {
   // Pinned by source shape, like the caps test above: the wire rename is the
@@ -384,23 +608,28 @@ test('the leaf handler repoints on a REAL fork (tail = the boundary seq) and NOT
   const { ctx, created } = leafCtx(log()) // live tail: turn/end seq 9
   const { sets, map } = fakeMap()
   const { repoints, channel } = fakeChannel()
+  const baselines = createSessionStreamBaselines()
 
   // Real fork: branch after turn 1 (seq 5 < the live tail 9).
   const forkRes = leafRes()
-  await sessionLeaf(ctx, map, channel, leafReq({ session_id: 'lore-1', seq: 5 }), forkRes)
+  await sessionLeaf(ctx, map, channel, baselines, leafReq({ session_id: 'lore-1', seq: 5 }), forkRes)
   assert.equal(forkRes.status, 200)
   assert.equal(created.length, 1, 'a fresh session was seeded')
+  assert.deepEqual(created[0].seed, forkSeed(log(), 5),
+    'the seed is dsh’s buildForkSeed: rows [0..5] plus one inherited-cut marker')
+  assert.equal(created[0].inheritedEventCount, 6,
+    'the inherited cut is the boundary seq + 1 (dsh SessionController.fork’s shape)')
   assert.equal(sets.length, 1, 'the map repointed')
   const [loreId, from, to, tail] = repoints[0]
   assert.equal(loreId, 'lore-1')
   assert.equal(from, 'dsh-a', 'repointed FROM the pre-fork dsh id')
   assert.equal(to, sets[0][1], 'repointed TO the id the map took')
   assert.match(to, /^lore-1~f/, 'the fresh id is the fork spelling')
-  assert.equal(tail, 5, "the tail is the seed's last seq — the boundary turn/end")
+  assert.equal(tail, 5, 'the dedup anchor is the boundary seq, not the marker’s')
 
   // Live-tail no-op (seq = the live tail 9): no seed, no map.set, no repoint.
   const noopRes = leafRes()
-  await sessionLeaf(ctx, map, channel, leafReq({ session_id: 'lore-1', seq: 9 }), noopRes)
+  await sessionLeaf(ctx, map, channel, baselines, leafReq({ session_id: 'lore-1', seq: 9 }), noopRes)
   assert.equal(noopRes.status, 200)
   assert.equal(created.length, 1, 'no second seed on the live-tail no-op')
   assert.equal(sets.length, 1)
@@ -411,13 +640,76 @@ test('the root fork repoints with a null tail', async () => {
   const { ctx } = leafCtx(log())
   const { sets, map } = fakeMap()
   const { repoints, channel } = fakeChannel()
+  const baselines = createSessionStreamBaselines()
+  baselines.observe('dsh-a', 4)
+  baselines.accept('dsh-a', { type: 'start', attemptId: 'a1', revision: 1, turn: 2, step: 0 })
+  assert.ok(baselines.snapshot('dsh-a')?.activeAttempt, 'the pre-fork id holds a live fold')
 
   const res = leafRes()
-  await sessionLeaf(ctx, map, channel, leafReq({ session_id: 'lore-1', seq: null }), res)
+  await sessionLeaf(ctx, map, channel, baselines, leafReq({ session_id: 'lore-1', seq: null }), res)
   assert.equal(res.status, 200)
   assert.equal(sets.length, 1, 'the map repointed')
   assert.deepEqual(repoints[0], ['lore-1', 'dsh-a', sets[0][1], null],
     'root fork: repoint with tail null (the fresh log is empty)')
+  assert.equal(baselines.snapshot('dsh-a'), undefined,
+    'the root fork forgets the displaced id\'s fold too (same map move)')
+})
+
+test('a fork forgets the displaced id\'s stream fold; the live-tail no-op keeps it', async () => {
+  // The map's move orphans the pre-fork id's fold: nothing reads it (a
+  // snapshot keys by the CURRENT dsh id) and dsh's own consumer deletes a
+  // fold on agent/disposed, which a forked-away id never receives — without
+  // an explicit forget one fold leaks per fork for the process's lifetime.
+  // The live-tail no-op is the counter-case: the session keeps streaming, so
+  // its fold must survive (that path returns before any fork).
+  const { ctx } = leafCtx(log()) // live tail: turn/end seq 9
+  const { sets, map } = fakeMap()
+  const { channel } = fakeChannel()
+  const baselines = createSessionStreamBaselines()
+  const seedFold = (): void => {
+    baselines.observe('dsh-a', 4)
+    baselines.accept('dsh-a', { type: 'start', attemptId: 'a1', revision: 1, turn: 2, step: 0 })
+    baselines.accept('dsh-a', {
+      type: 'chunk', attemptId: 'a1', revision: 2, index: 0, time: 5,
+      chunk: { type: 'text-delta', index: 0, text: 'hi' },
+    })
+  }
+
+  seedFold()
+  assert.ok(baselines.snapshot('dsh-a')?.activeAttempt, 'the pre-fork id holds a live fold')
+  const forkRes = leafRes()
+  await sessionLeaf(ctx, map, channel, baselines, leafReq({ session_id: 'lore-1', seq: 5 }), forkRes)
+  assert.equal(forkRes.status, 200)
+  assert.equal(baselines.snapshot('dsh-a'), undefined,
+    'the displaced id\'s fold is gone')
+  assert.equal(baselines.snapshot(sets[0][1]), undefined,
+    'the fresh id carries no fold (it never streamed)')
+
+  // The live-tail no-op: the fold of the STILL-CURRENT session survives.
+  seedFold()
+  const noopRes = leafRes()
+  await sessionLeaf(ctx, map, channel, baselines, leafReq({ session_id: 'lore-1', seq: 9 }), noopRes)
+  assert.equal(noopRes.status, 200)
+  assert.ok(baselines.snapshot('dsh-a')?.activeAttempt,
+    'the live-tail no-op never drops the active fold')
+})
+
+test('a seq naming a non-turn/end row is refused (422), and so is a seq past the log', async () => {
+  const { ctx, created } = leafCtx(log())
+  const { map } = fakeMap()
+  const { repoints, channel } = fakeChannel()
+  const baselines = createSessionStreamBaselines()
+
+  const notBoundary = leafRes()
+  await sessionLeaf(ctx, map, channel, baselines, leafReq({ session_id: 'lore-1', seq: 4 }), notBoundary)
+  assert.equal(notBoundary.status, 422, 'seq 4 is an assistant/message row, not a forkable boundary')
+
+  const pastLog = leafRes()
+  await sessionLeaf(ctx, map, channel, baselines, leafReq({ session_id: 'lore-1', seq: 99 }), pastLog)
+  assert.equal(pastLog.status, 422, 'a seq beyond the last row never resolves')
+
+  assert.equal(created.length, 0, 'an unresolvable branch point never seeds')
+  assert.equal(repoints.length, 0)
 })
 
 // ─── /session-leaf `source`: the branch point is the pair (dsh session, seq) ──
@@ -468,14 +760,15 @@ test('a seq plus its source seeds from THAT log, not the current one', async () 
   const { repoints, channel } = fakeChannel()
 
   const res = leafRes()
-  await sessionLeaf(ctx, map, channel,
+  await sessionLeaf(ctx, map, channel, createSessionStreamBaselines(),
     leafReq({ session_id: 'lore-1', seq: 5, source: 'lore-1' }), res)
   assert.equal(res.status, 200)
   assert.deepEqual(opened, ['lore-1'], 'only the source log is read')
   assert.equal(created.length, 1)
-  assert.deepEqual(created[0].seed, log().slice(0, 6),
-    "the seed is the SOURCE's prefix through its seq-5 turn/end")
+  assert.deepEqual(created[0].seed, forkSeed(log(), 5),
+    "the seed is the SOURCE's prefix through its seq-5 turn/end, plus the marker")
   assert.equal(String(created[0].meta.parentSession), 'lore-1', 'the fork descends from the source')
+  assert.equal(created[0].inheritedEventCount, 6)
   assert.deepEqual(repoints[0], ['lore-1', 'dsh-a', sets[0][1], 5],
     'the live subscription still moves FROM the current session')
 })
@@ -486,7 +779,7 @@ test('a seq without source resolves against current and 422s when absent there',
   const { repoints, channel } = fakeChannel()
 
   const res = leafRes()
-  await sessionLeaf(ctx, map, channel, leafReq({ session_id: 'lore-1', seq: 9 }), res)
+  await sessionLeaf(ctx, map, channel, createSessionStreamBaselines(), leafReq({ session_id: 'lore-1', seq: 9 }), res)
   assert.equal(res.status, 422, 'seq 9 is a turn/end only in the abandoned log')
   assert.deepEqual(opened, ['dsh-a'], 'legacy: the current log is the one read')
   assert.equal(created.length, 0)
@@ -513,11 +806,11 @@ test("a seq equal to current's live tail but from another source forks, never no
   const { repoints, channel } = fakeChannel()
 
   const res = leafRes()
-  await sessionLeaf(ctx, map, channel,
+  await sessionLeaf(ctx, map, channel, createSessionStreamBaselines(),
     leafReq({ session_id: 'lore-1', seq: 6, source: 'lore-1~fold0001' }), res)
   assert.equal(res.status, 200)
   assert.equal(created.length, 1, 'a real fork, not the live-tail no-op')
-  assert.deepEqual(created[0].seed, abandoned.slice(0, 7))
+  assert.deepEqual(created[0].seed, forkSeed(abandoned, 6))
   assert.equal(sets.length, 1)
   assert.equal(repoints.length, 1)
 })
@@ -529,7 +822,7 @@ test('source equal to the current session keeps the live-tail no-op', async () =
   const { repoints, channel } = fakeChannel()
 
   const res = leafRes()
-  await sessionLeaf(ctx, map, channel,
+  await sessionLeaf(ctx, map, channel, createSessionStreamBaselines(),
     leafReq({ session_id: 'lore-1', seq: 6, source: 'lore-1~fcur0001' }), res)
   assert.equal(res.status, 200)
   assert.equal(created.length, 0, 'no seed at the live tail')
@@ -544,14 +837,14 @@ test("a source outside this chat's sessions is refused, and so is a missing one"
 
   for (const source of ['lore-2', 'lore-10', 'lore-2~fabc', 7]) {
     const res = leafRes()
-    await sessionLeaf(ctx, map, channel,
+    await sessionLeaf(ctx, map, channel, createSessionStreamBaselines(),
       leafReq({ session_id: 'lore-1', seq: 5, source }), res)
     assert.equal(res.status, 422, `source ${JSON.stringify(source)} must be refused`)
   }
   assert.deepEqual(opened, [], "a foreign source's log is never opened")
 
   const missing = leafRes()
-  await sessionLeaf(ctx, map, channel,
+  await sessionLeaf(ctx, map, channel, createSessionStreamBaselines(),
     leafReq({ session_id: 'lore-1', seq: 5, source: 'lore-1~fgone000' }), missing)
   assert.equal(missing.status, 422, 'a missing source log is unresolvable, not a 500')
   assert.equal(created.length, 0)
@@ -572,24 +865,28 @@ test('the driver never deletes a dsh session log (abandoned branches stay contin
   }
 })
 
-test('a compacted source seeds its POSITIONAL prefix through the boundary row', async () => {
-  // In-place compaction: a checkpoint replaced turn 1's rows, and seq-less
-  // companion rows sit between seq'd events. The seed keeps both.
-  const checkpoint = ev(10, 'user/message',
-    { role: 'user', content: [{ type: 'text', text: 'checkpoint' }] },
-    { op: 'replace', start: 1, end: 5 })
-  const companion = { type: 'tool-call-chunks', data: { batch: [] } }
+test('a compacted source seeds its prefix with the checkpoint row verbatim', async () => {
+  // v4 compaction is append-only: the checkpoint row REPLACES rows 1..4 on
+  // the message surface (surfaceOp replace) but sits at its OWN seq — the
+  // log stays contiguous. The seed through a post-compaction turn/end keeps
+  // the checkpoint row and its replace window verbatim inside the prefix.
   const compacted = [
     ev(0, 'session/title', { title: 't' }),
-    checkpoint,
-    ev(11, 'compaction/end', { compactionId: 'cpt', turn: 2 }),
-    ev(6, 'turn/start', { turn: 2 }),
-    userMsg(7, 'Q2'),
-    companion,
-    assistantMsg(8, 'A2', 'm2'),
-    ev(9, 'turn/end', { reason: { kind: 'completed' } }),
-    ev(12, 'turn/start', { turn: 3 }),
-    userMsg(13, 'Q3'),
+    ev(1, 'turn/start', { turn: 1 }),
+    userMsg(2, 'Q1'),
+    assistantMsg(3, 'A1', 'm1'),
+    ev(4, 'turn/end', { reason: { kind: 'completed' } }),
+    ev(5, 'turn/start', { turn: 2 }),
+    userMsg(6, 'Q2'),
+    assistantMsg(7, 'A2', 'm2'),
+    ev(8, 'turn/end', { reason: { kind: 'completed' } }),
+    ev(9, 'user/message',
+      { role: 'user', content: [{ type: 'text', text: 'checkpoint' }] },
+      { op: 'replace', startSeq: 1, endSeq: 4 }),
+    ev(10, 'compaction/end', { compactionId: 'cpt', turn: 2 }),
+    ev(11, 'turn/start', { turn: 3 }),
+    userMsg(12, 'Q3'),
+    assistantMsg(13, 'A3', 'm3'),
     ev(14, 'turn/end', { reason: { kind: 'completed' } }),
   ]
   const { ctx, created } = leafCtxBy({ 'dsh-a': rootForkedLog(), 'lore-1~fcmp0001': compacted })
@@ -597,11 +894,12 @@ test('a compacted source seeds its POSITIONAL prefix through the boundary row', 
   const { channel } = fakeChannel()
 
   const res = leafRes()
-  await sessionLeaf(ctx, map, channel,
-    leafReq({ session_id: 'lore-1', seq: 9, source: 'lore-1~fcmp0001' }), res)
+  await sessionLeaf(ctx, map, channel, createSessionStreamBaselines(),
+    leafReq({ session_id: 'lore-1', seq: 14, source: 'lore-1~fcmp0001' }), res)
   assert.equal(res.status, 200)
-  assert.deepEqual(created[0].seed, compacted.slice(0, 8),
-    'rows in log order through the seq-9 turn/end, companion row included')
+  assert.deepEqual(created[0].seed, forkSeed(compacted, 14),
+    'rows 0..14 in seq order — the checkpoint row and its replace window ride verbatim')
+  assert.equal(created[0].inheritedEventCount, 15)
 })
 
 // ─── reasoning effort: dsh's own model-selection seam (plan ───────────────────

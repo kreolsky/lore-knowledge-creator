@@ -112,11 +112,12 @@ async def test_reparent_reference_to_project_level_is_refused(
 
 
 @pytest.mark.asyncio
-async def test_reparent_reference_keeps_no_sort_key(
+async def test_reparent_reference_gets_top_key_of_new_host_group(
     client, test_db, chain, project_with_doc,
 ):
     token, _, a, _, s = chain
     pid, _, _ = project_with_doc
+    existing = await _mk_ref(client, pid, token, host=s)
     ref = await _mk_ref(client, pid, token, host=a)
     resp = await _reparent(client, token, ref, s)
     assert resp.status_code == 200, resp.text
@@ -125,8 +126,12 @@ async def test_reparent_reference_keeps_no_sort_key(
         {"id": ref},
     )
     assert extract_id(rows[0]["parent_id"]) == s
-    assert rows[0].get("sort_key") is None
+    assert rows[0].get("sort_key"), "a re-hosted ref carries the new group's top key"
     assert rows[0]["is_reference"] is True
+    existing_key = (await test_db.query(
+        "SELECT sort_key FROM type::record('documents', $id)", {"id": existing},
+    ))[0]["sort_key"]
+    assert rows[0]["sort_key"] < existing_key, "re-host lands at the TOP of the group"
 
 
 @pytest_asyncio.fixture

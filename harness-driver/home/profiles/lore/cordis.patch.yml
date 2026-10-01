@@ -1,4 +1,22 @@
-# The profile's own patch layer stays EMPTY — the whole composition
-# (plugin insert, provider, disables) lives in the DSH_HOME cordis.patch.yml
-# one level up, applied over every profile.
-[]
+# The profile patch is the config-editor's WRITE TARGET — the editor refuses
+# an entry a home patch overrides, so the two rows the plugin edits PER TURN
+# (an admin change of the search provider or the title model reaches the next
+# turn, no restart) carry their whole config HERE, static:
+#   web               — the static default pin; `searchProvider` moves on an
+#                       admin change, every other field survives the edit.
+#   session-title-llm — the five fixed fields, NO provider/model pair (the
+#                       pair is per-turn state: set while a title model is
+#                       configured, removed when it clears).
+# The rest of the composition (plugin insert, provider, disables) lives in
+# the DSH_HOME cordis.patch.yml one level up, applied over every profile.
+- id: web
+  config:
+    searchProvider: deepseek-official
+    fetchProvider: http
+- id: session-title-llm
+  config:
+    targetWords: 5
+    targetCjkCharacters: 10
+    maxInputBytes: 4096
+    maxOutputTokens: 64
+    timeoutMs: 60000

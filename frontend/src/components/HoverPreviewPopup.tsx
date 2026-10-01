@@ -2,7 +2,7 @@
  * LinkPreviewPopup driven by a useHoverPreview return object.
  *
  * Wires positioning, the popup root ref, and both leave handlers from the hook so call
- * sites pass only what is genuinely theirs: the body (`content`/`imageUrl`) and its
+ * sites pass only what is genuinely theirs: the `title`, the body (`content`/`imageUrl`) and its
  * fetch state (`error`/`loading`).
  */
 // ARCH: completes the useHoverPreview extraction — that one stopped at the hook and left
@@ -15,6 +15,7 @@ import { LinkPreviewPopup } from './LinkPreviewPopup';
 
 interface HoverPreviewPopupProps {
   hover: ReturnType<typeof useHoverPreview>;
+  title?: string;
   content?: string;
   imageUrl?: string;
   error?: boolean;
@@ -23,7 +24,7 @@ interface HoverPreviewPopupProps {
   visible?: boolean;
 }
 
-export function HoverPreviewPopup({ hover, content, imageUrl, error, loading, visible }: HoverPreviewPopupProps) {
+export function HoverPreviewPopup({ hover, title, content, imageUrl, error, loading, visible }: HoverPreviewPopupProps) {
   const { state } = hover;
   if (!state) return null;
 
@@ -34,6 +35,7 @@ export function HoverPreviewPopup({ hover, content, imageUrl, error, loading, vi
       bottom={state.bottom}
       left={state.left}
       maxHeight={state.maxHeight}
+      title={title}
       content={content}
       imageUrl={imageUrl}
       error={error}

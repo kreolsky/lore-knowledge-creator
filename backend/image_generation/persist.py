@@ -1,9 +1,9 @@
-"""Image generation persist — references + chips + failure announce.
+"""Image generation persist — references + chips + the settled push.
 
 Subsystem overview: image_generation/__init__.py (see SYSTEM: comfy-image-gen).
 save_upload, the _persist_gen_steps BOLA-gated chip write, the server-side chip
-builders and the done/failed announce calls RESOLVE here
-(image_generation.persist.* — including `image_generation.persist._emit_gen_done`,
+builders and the settled chat-frame push call RESOLVE here
+(image_generation.persist.* — including `image_generation.persist._push_gen_settled`,
 the binding _persist_and_announce imports from .events).
 """
 
@@ -14,18 +14,17 @@ from files_util import IMAGE_EXT_BY_MIME, save_upload
 from image_generation.image_refine import _RefineResult
 
 from .events import (
-    _emit_gen_done,
-    _emit_gen_failed,
     _persist_gen_steps,
+    _push_gen_settled,
 )
 
 logger = logging.getLogger(__name__)
 
 def _gen_call_ids(run_id: str) -> tuple[str, str]:
     """Stable tool_call_ids for the detached generation's two chips, keyed by
-    run_id (NOT the agent tool-call id — the background task does not see it). The
-    refiner chip precedes the generation chip; both share the run_id so the live
-    `done` handler and reload render them consistently."""
+    run_id (the dispatching agent call id rides the generate_image step's own
+    `call_id`). The refiner chip precedes the generation chip; both share the
+    run_id so the live `done` handler and reload render them consistently."""
     gen = f"gen:{run_id}"
     return f"{gen}:refine", gen
 
@@ -60,10 +59,12 @@ async def _persist_and_announce(
 ) -> None:
     """Persist each output as an image reference (save_upload enqueues thumbnails +
     emits reference_created), build the refiner + image chips server-side and write
-    them to `messages.gen_steps` (BEFORE the done emit so a reload always shows
-    them), then emit generate_image_done. ARCH: the refined SD prompt is never
-    returned to the agent — it reaches the chat through the done event and the
-    persisted chip, which carry the same step dicts."""
+    them to `messages.gen_steps` (BEFORE the settled push so a reload always shows
+    them), then push the run's settled `lore/image-gen` frame onto the owner's
+    chat channel — minted from the payload anchor through the SAME builder the
+    reload uses. ARCH: the refined SD prompt is never returned to the agent — it
+    reaches the chat inside the minted frame and the persisted chip, which derive
+    from the same step dicts."""
     # Agent-driven creation IS attributed (plan reference-card-author-nickname rule 4):
     # the key-owning human is the author. user_name rides the rebuilt worker ctx;
     # the web/test path resolves it from the full agent ctx's user dict.
@@ -86,20 +87,26 @@ async def _persist_and_announce(
         "summary": "generate image",
         "image_ref_ids": reference_ids,
         "run_id": run_id,
-        # The target document title rides the chip so the reload lore/image-gen
-        # mint (driver.frames.attach_reload_lore_mints) carries what the live
-        # WS event does — the browser derives BOTH mints from these step dicts.
+        # The dispatching dsh call id — the ONLY anchor the card mint uses
+        # (driver.frames._image_run_anchor_index, both the reload attach and
+        # the worker's live mint over the replay).
+        "call_id": ctx.get("call_id"),
+        # The target document title rides the chip so the lore/image-gen mint
+        # (driver.frames) carries it on BOTH paths — the live frame and the
+        # reload re-derivation are the same bytes from the same step dicts.
         "title": title,
     }]
     await _persist_gen_steps(ctx, message_id, steps)
-    await _emit_gen_done(ctx, run_id, message_id, reference_ids, title, refine, steps)
+    await _push_gen_settled(ctx, run_id, steps)
     logger.info("comfy: generate SUCCEEDED run_id=%s refs=%s", run_id, reference_ids)
+
 
 async def _announce_failure(
     ctx: dict, run_id: str, message_id: str | None, error: str,
 ) -> None:
-    """Persist the failure chip to `messages.gen_steps`, then announce the failed
-    generation over the project WS (generate_image_failed).
+    """Persist the failure chip to `messages.gen_steps`, then push the run's
+    SETTLED FAILED frame onto the owner's chat channel (minted from the same
+    step dicts the reload renders) — a failed run shows its card live.
 
     # ARCH: the failed detached run is persisted for the same reason the
     # successful one is — it finished in a background task the driver's log never
@@ -107,12 +114,14 @@ async def _announce_failure(
     # generation that died minutes ago.
     """
     _refine_call_id, gen_call_id = _gen_call_ids(run_id)
-    await _persist_gen_steps(ctx, message_id, [{
+    steps = [{
         "tool_call_id": gen_call_id,
         "tool": "generate_image",
         "summary": "generate image",
         "detail": error,
         "outcome": "failed",
         "run_id": run_id,
-    }])
-    await _emit_gen_failed(ctx, run_id, message_id, error)
+        "call_id": ctx.get("call_id"),
+    }]
+    await _persist_gen_steps(ctx, message_id, steps)
+    await _push_gen_settled(ctx, run_id, steps)

@@ -75,7 +75,7 @@ beforeEach(async () => {
   vi.doMock('../hooks/useHoverPreview', () => ({
     useHoverPreview: () => ({ handleHover: vi.fn(), handleHoverLeave: vi.fn() }),
   }));
-  vi.doMock('../hooks/useTreeDragReorder', () => ({ useTreeDragReorder: () => {} }));
+  vi.doMock('../hooks/useSiblingDragReorder', () => ({ useSiblingDragReorder: () => {}, treeDragAdapter: {} }));
   vi.doMock('./HoverPreviewPopup', () => ({ HoverPreviewPopup: () => null }));
   vi.doMock('./ui', () => ({ Button: () => null }));
   vi.doMock('react-router-dom', () => ({ useParams: () => ({ documentId: 'doc-1' }) }));
@@ -119,7 +119,7 @@ afterEach(() => {
   container.remove();
   vi.doUnmock('../hooks/useDocumentPreview');
   vi.doUnmock('../hooks/useHoverPreview');
-  vi.doUnmock('../hooks/useTreeDragReorder');
+  vi.doUnmock('../hooks/useSiblingDragReorder');
   vi.doUnmock('./HoverPreviewPopup');
   vi.doUnmock('./ui');
   vi.doUnmock('react-router-dom');

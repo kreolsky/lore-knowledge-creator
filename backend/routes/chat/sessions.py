@@ -92,9 +92,10 @@ async def _require_session_access(session_id: str, user: dict) -> dict:
     if session.get("user_id") != user["user_id"]:
         raise HTTPException(status_code=404, detail="Chat session not found")
     # WHY: re-validate project membership for AI chats on EVERY request. Why: a user
-    # removed from a project (or whose access was lowered) used to keep full AI-chat access
-    # as long as they still owned the session — they could drive completions against
-    # documents they could still name. get_project_access reads project_members fresh per
+    # removed from a project (or whose access was lowered) must not keep full AI-chat
+    # access merely because they still own the session — they could drive
+    # completions against documents they can still name. get_project_access reads
+    # project_members fresh per
     # request, so this closes the data-exfiltration vector for removed/revoked users.
     # 404 (not 403) mirrors both branches above — avoids leaking session existence.
     access = await get_project_access(session.get("project_id", ""), user)

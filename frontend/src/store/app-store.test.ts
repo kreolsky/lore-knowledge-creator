@@ -664,10 +664,14 @@ describe('selectionEmpty', () => {
 // ── Granular reference actions ───────────────────────────────────────────────
 
 describe('addReference', () => {
-  it('prepends a new reference', () => {
-    const existing = makeRef({ reference_id: 'ref-1' });
+  // Contract: a new ref is PLACED in its group's
+  // run by (sort_key, id) — the backend mints the top key of the host's ref
+  // group, so a new ref lands at the head of its run. The old contract
+  // (unconditional prepend of the whole list) is gone.
+  it('places a new reference at the head of its group’s run', () => {
+    const existing = makeRef({ reference_id: 'ref-1', document_id: 'd1', sort_key: 'a2' });
     useAppStore.getState().setReferences([existing]);
-    const newRef = makeRef({ reference_id: 'ref-2', title: 'New' });
+    const newRef = makeRef({ reference_id: 'ref-2', title: 'New', document_id: 'd1', sort_key: 'a0' });
     useAppStore.getState().addReference(newRef);
     const refs = useAppStore.getState().references;
     expect(refs).toHaveLength(2);

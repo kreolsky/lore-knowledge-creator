@@ -27,7 +27,7 @@ const FLUSH_DELAY_MS = 800;
 const BATCH_SIZE_THRESHOLD = 5;
 // INVARIANT: deletedRefIds must outlive any in-flight GET /references that started  Why: an in-flight GET started before the delete reaches the DB would re-fetch deleted refs; deletedRefIds outlives that race and filters them until the WS event confirms.
 // before the POST batch-delete reached the DB. Primary cleanup path is the WS
-// `project-reference-deleted` event (useReferenceEvents) — it clears the entry as
+// `ws:reference_deleted` event (useReferenceEvents) — it clears the entry as
 // soon as the backend confirms. This timer is the fallback for the case where the
 // WS connection is degraded or the event is dropped: under slow networks an
 // in-flight GET could return the row before backend wrote deleted_at; without the
@@ -57,7 +57,7 @@ export function useReferenceDelete() {
       // Grace period: any GET /references that started before the POST may still be
       // in flight and return rows whose deleted_at hadn't been written yet. Keep them
       // in deletedRefIds so mergeReferences filters them out. The WS event
-      // `project-reference-deleted` clears the entry sooner (useReferenceEvents).
+      // `ws:reference_deleted` clears the entry sooner (useReferenceEvents).
       setTimeout(() => {
         const store = useAppStore.getState();
         ids.forEach(id => store.removeRefFromDeleting(id));

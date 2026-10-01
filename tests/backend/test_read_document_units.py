@@ -2,13 +2,14 @@
 
 `_read_document_exec` was a 210-line executor. The extracted phases are pinned
 here at the unit level: the target resolve (not-found → soft error), the RBAC +
-scope gate chain, the normalized read window, and the sidecar attach
-(tables / references).
+scope gate chain, the normalized read window, the base payload, and the
+sidecar attach (tables / references).
 """
 
 from unittest.mock import AsyncMock, patch
 
 from agent.readonly_executors import (
+    _build_read_result,
     _read_gate_error,
     _ReadTarget,
     _resolve_read_document_target,
@@ -141,3 +142,21 @@ class TestSliceReadWindow:
                 max_chars=config.AGENT_READ_MAX_CHARS,
             )
         assert (start, content) == (0, "he")
+
+
+# ─── _build_read_result ──────────────────────────────────────────────────────
+
+
+class TestBuildReadResult:
+    def _build(self, doc: dict) -> dict:
+        return _build_read_result(
+            doc, "d1", "body", offset=0, limit=None, slice_chars=100, max_chars=100,
+        )
+
+    def test_parent_id_is_the_bare_parent_id(self):
+        out = self._build({"parent_id": "documents:parent1"})
+        assert out["parent_id"] == "parent1"
+
+    def test_root_doc_has_null_parent_id(self):
+        out = self._build({"parent_id": None})
+        assert "parent_id" in out and out["parent_id"] is None

@@ -1,4 +1,4 @@
-"""The instance's JWT signing key: the env value, else one persisted random key.
+"""Per-instance random secrets: the JWT signing key and the keys secrets-init persists.
 
 A self-hosted install starts with no configuration at all, so the key cannot be
 something the operator types. It is created once, on first boot, under the
@@ -25,12 +25,22 @@ def resolve(env_value: str, storage_path: Path) -> str:
     # install, so anyone could sign a session cookie for any other instance.
     if env_value:
         return env_value
-    path = storage_path / _KEY_FILE
+    try:
+        return ensure_key(storage_path / _KEY_FILE)
+    except ConfigError as exc:
+        raise ConfigError(f"{exc} (logs everyone out)") from exc
+
+
+def ensure_key(path: Path) -> str:
+    """Return the random key persisted at `path`, creating it on first call.
+
+    Raises ConfigError when the file exists but holds no key.
+    """
     if not path.exists():
         _create(path)
     key = path.read_text().strip()
     if not key:
-        raise ConfigError(f"{path} is empty — delete it to generate a new key (logs everyone out)")
+        raise ConfigError(f"{path} is empty — delete it to generate a new key")
     return key
 
 

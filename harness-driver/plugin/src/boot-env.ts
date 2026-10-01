@@ -1,86 +1,75 @@
 /**
- * Harness entry: fetch the web-search env from Lore, set it on `process.env`,
- * then run the dsh CLI in the same process.
+ * Harness entry: fold the driver secret, retire legacy state, then run the
+ * dsh CLI in the same process.
  *
- * # ARCH: Lore owns the web-search settings (admin page); the harness reads
- *   them ONCE here, before dsh builds its launch-environment snapshot (inside
- *   `runCli` → `loadLayeredEnv`) and before the web seam reads its pin — so a
- *   change applies on `docker compose restart harness`. The backend is the
- *   one source: a pin absent from the response is DELETED from the env, so a
- *   stray `.env` value cannot re-enable a provider the admin turned off.
+ * # ARCH: the harness boots STANDALONE — every admin-owned value (the AI
+ *   gateway, the session title model, the web-search provider and its
+ *   credential) rides a TURN payload and is applied with dsh's own calls at
+ *   the turn's start (plugin index.ts), so there is no boot-time backend
+ *   round trip and no `docker compose restart harness` class of setting any
+ *   more.
  */
 
-import { WEB_SEARCH_PIN } from './web-search/pin.ts'
-
-export { WEB_SEARCH_PIN }
-
-/** A GET attempt that could not connect is retried this many times… */
-const CONNECT_ATTEMPTS = 10
-/** …this far apart (the backend may still be starting; compose restarts us after). */
-const CONNECT_DELAY_MS = 2000
-
-export interface FetchBootEnvOptions {
-  fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>
-  attempts?: number
-  delayMs?: number
-  log?: (line: string) => void
-}
-
-/** A refusal that retrying cannot fix (the backend answered, and said no). */
-export class BootEnvRefused extends Error {}
+import { existsSync, readFileSync, renameSync } from 'node:fs'
+import { join } from 'node:path'
 
 /**
- * GET the env map. Connect errors are retried; any non-200 answer throws
- * `BootEnvRefused` at once with its status and body.
+ * The generated driver secret secrets-init writes into the `secrets` volume
+ * (mounted at /secrets — the `harness` subpath). The file, when present, IS
+ * the secret: it overrides `LORE_DRIVER_SECRET` unconditionally, mirroring
+ * the backend's constant (config.py reads the same volume) — a settable env
+ * value was a value the two sides could disagree on. No file (no volume
+ * mounted) leaves the env untouched: the TEST seam (driver.test.ts boots
+ * with LORE_DRIVER_SECRET). Runs before anything reads the env (tools.ts and
+ * index.ts read it at import, inside `runCli`).
  */
-export async function fetchBootEnv(
-  baseUrl: string, secret: string, options: FetchBootEnvOptions = {},
-): Promise<Record<string, string>> {
-  const { fetchImpl = fetch, attempts = CONNECT_ATTEMPTS, delayMs = CONNECT_DELAY_MS, log = () => {} } = options
-  const url = `${baseUrl.replace(/\/+$/, '')}/api/driver/web-search`
-  for (let attempt = 1; ; attempt++) {
-    let response: Response
-    try {
-      response = await fetchImpl(url, { headers: { 'X-Driver-Secret': secret } })
-    } catch (error: unknown) {
-      if (attempt >= attempts) throw error
-      log(`[boot-env] ${url} unreachable (${String(error)}), retry ${attempt}/${attempts - 1}`)
-      await new Promise(resolve => setTimeout(resolve, delayMs))
-      continue
-    }
-    const body = await response.text()
-    if (response.status === 401) {
-      throw new BootEnvRefused(
-        `${url} refused the driver secret (401) — check HARNESS_DRIVER_SECRET matches the backend's: ${body}`,
-      )
-    }
-    if (response.status !== 200) throw new BootEnvRefused(`${url} answered ${response.status}: ${body}`)
-    return JSON.parse(body) as Record<string, string>
-  }
+export const DRIVER_SECRET_FILE = '/secrets/driver_secret'
+
+export function foldDriverSecret(
+  env: NodeJS.ProcessEnv = process.env,
+  file: string = DRIVER_SECRET_FILE,
+): void {
+  if (!existsSync(file)) return
+  env.LORE_DRIVER_SECRET = readFileSync(file, 'utf8').trim()
 }
 
-/** Apply the response to `target`: its pairs win, and a pin it omits is removed. */
-export function applyBootEnv(env: Record<string, string>, target: NodeJS.ProcessEnv = process.env): void {
-  delete target[WEB_SEARCH_PIN]
-  Object.assign(target, env)
+/**
+ * The Tool-API base URL: the compose service name constant, with the env read
+ * kept ONLY as the TEST seam (boot-env.test.ts / the stub-server tests point
+ * it at a local listener). Wiring, not configuration (plan
+ * component-wiring-not-settings step 2) — no compose sets LORE_TOOL_API_URL.
+ * tools.ts carries its own copy of the literal: it cannot import from here
+ * (see the entry-module INVARIANT test — a re-import deadlocks the boot).
+ */
+export function toolApiUrl(env: NodeJS.ProcessEnv = process.env): string {
+  return env.LORE_TOOL_API_URL || 'http://backend:8001'
 }
 
-async function loadWebSearchEnv(): Promise<void> {
-  const baseUrl = process.env.LORE_TOOL_API_URL
-  if (!baseUrl) throw new Error('LORE_TOOL_API_URL is not set')
-  const env = await fetchBootEnv(baseUrl, process.env.LORE_DRIVER_SECRET ?? '', {
-    log: line => console.error(line),
-  })
-  applyBootEnv(env)
-  console.error(`[boot-env] web search: ${env[WEB_SEARCH_PIN] ?? 'off'}`)
+/** The 0.1.5 settings.yaml is DERIVED state (its own header: "nothing is
+ * hand-maintained here"), but its llm-pi-ai.providers.lore carries model
+ * entries WITHOUT the api/baseURL the 0.2.0 catalog validation requires —
+ * the on-boot legacy import composes them into the active profile patch and
+ * llm-pi-ai refuses the WHOLE boot ("provider lore model … needs an api",
+ * INVALID_CONFIG) before any plugin write can heal it. Retire the file
+ * BEFORE runCli: the turns re-land every used model with the route scaffold
+ * (ensureModelEntry / ensureTitleEntry), so only unused ids stay unlanded.
+ * Bytes kept for forensics; idempotent — dsh's own import renames the
+ * file after the first successful boot, so this fires at most once per home. */
+export function retireLegacySettings(
+  dshHome: string, log: (line: string) => void = () => {},
+): boolean {
+  const legacy = join(dshHome, 'settings.yaml')
+  if (!existsSync(legacy)) return false
+  renameSync(legacy, `${legacy}.retired-0.1.5`)
+  log('[boot-env] retired the 0.1.5 settings.yaml (derived models, re-landed per turn) '
+    + '— its providers.lore would import without api/baseURL and fail 0.2.0 validation')
+  return true
 }
 
 if (import.meta.main) {
-  try {
-    await loadWebSearchEnv()
-  } catch (error: unknown) {
-    console.error(`[boot-env] harness boot failed: ${error instanceof Error ? error.message : String(error)}`)
-    process.exit(1)
+  foldDriverSecret()
+  if (process.env.DSH_HOME) {
+    retireLegacySettings(process.env.DSH_HOME, line => console.error(line))
   }
   // WHY runCli() and not a bare import: bin.ts only self-runs as the entry
   // module (`import.meta.main`); imported, it just exports runCli.

@@ -3,37 +3,49 @@
 #   curl -O https://raw.githubusercontent.com/kreolsky/lore-knowledge-creator/main/docker-compose.yml
 #   docker compose up -d
 #
-# Then open http://localhost:8080 and sign in as admin@lore.app / lore-admin
-# (change the password in your profile). No .env is needed; to change anything,
-# put VAR=value lines in a .env file next to this one — every ${VAR:-default}
-# below and every setting in .env.example can be set there.
+# The first `up` builds the agent (harness) and its sandbox from this repository
+# on GitHub, so it needs git and network on the Docker host and takes several
+# minutes. Then open http://localhost:8080, sign in as admin@lore.app /
+# lore-admin (change the password in your profile), and set the AI API URL, key
+# and chat model in Admin panel → Models & APIs — the agent works from the next
+# message, no restart.
 #
-# AI features (agent chat) are off until you add a .env with AI_API_URL,
-# AI_API_KEY, HARNESS_MODEL and HARNESS_DRIVER_SECRET and run
-#   docker compose --profile ai up -d
+# No .env is needed; to change anything, put VAR=value lines in a .env file next
+# to this one — every ${VAR:-default} below and every setting in .env.example can
+# be set there. A value set in the admin panel wins over .env.
+#
+# The secrets only these containers share — the database password and the
+# agent's driver secret — are generated on first start by secrets-init and kept
+# in the `secrets` volume; the containers read them from there, and there is
+# no way to set them from outside.
+#
+# The agent sandbox is a locked-down container the agent runs bash in, behind an
+# egress firewall it cannot touch (an SSH keypair is generated on first boot; the
+# backend reads the private half from a volume, the sandbox installs the public
+# half). To use your own SSH host instead, set SANDBOX_SSH_HOST +
+# SANDBOX_SSH_KEY_B64 (optionally SANDBOX_SSH_PORT / SANDBOX_SSH_USER): the
+# backend then uses yours. SANDBOX_EGRESS_DENY (comma-separated CIDRs) additionally
+# blocks egress to those addresses — set it to the HOST's own public IP if a
+# firewall in front of the published port filters by source IP: Docker hairpin
+# DNAT would otherwise let the sandbox reach that port from inside.
 
 name: lore
 
 x-app-env: &app-env
-  SURREAL_URL: ws://surreal:8000/rpc
-  SURREAL_USER: ${SURREAL_USER:-root}
-  SURREAL_PASS: ${SURREAL_PASS:-root}
-  SURREAL_NS: ${SURREAL_NS:-lore}
-  SURREAL_DB: ${SURREAL_DB:-main}
-  REDIS_URL: redis://redis:6379/0
-  STORAGE_PATH: /storage
-  CONVERTER_URL: http://converter:8002
   MAX_AUDIO_SIZE_MB: ${MAX_AUDIO_SIZE_MB:-500}
   MAX_IMAGE_SIZE_MB: ${MAX_IMAGE_SIZE_MB:-50}
   MAX_MARKDOWN_SIZE_MB: ${MAX_MARKDOWN_SIZE_MB:-50}
-  # Empty = the backend generates a random key on first boot and keeps it in the
-  # storage volume.
-  LORE_SECRET_KEY: ${LORE_SECRET_KEY:-}
   # The first admin, created once on first boot.
   LORE_ADMIN_USERNAME: ${LORE_ADMIN_USERNAME:-admin}
   LORE_ADMIN_PASSWORD: ${LORE_ADMIN_PASSWORD:-lore-admin}
-  # The default chat model is the agent's model unless set on its own.
-  CHAT_MODEL: ${CHAT_MODEL:-${HARNESS_MODEL:-}}
+  # The default chat model; a value set in the admin panel wins.
+  CHAT_MODEL: ${CHAT_MODEL:-}
+  # The bundled sandbox contract: host resolves to the sandbox-gw netns alias,
+  # and the key comes from the keygen volume (config folds the file under an
+  # empty SANDBOX_SSH_KEY_B64 — env always wins, so an external sandbox set via
+  # SANDBOX_SSH_HOST/KEY_B64 overrides both).
+  SANDBOX_SSH_HOST: ${SANDBOX_SSH_HOST:-sandbox}
+  SANDBOX_SSH_KEY_FILE: /sandbox-keys/id_ed25519
 
 x-app: &app
   image: ghcr.io/kreolsky/lore-backend:${LORE_VERSION:-stable}
@@ -44,6 +56,7 @@ x-app: &app
   environment: *app-env
   volumes:
     - storage:/storage
+    - secrets:/secrets:ro
   depends_on:
     surreal:
       condition: service_healthy
@@ -51,13 +64,39 @@ x-app: &app
       condition: service_healthy
 
 services:
+  # One-shot, every `up`: generates the database password and the driver secret
+  # (scripts/init_secrets.py in the backend image) and renders the database's
+  # root-user statement. Exits 0 when the secrets already exist, so they survive
+  # restarts (do not `down -v` unless you mean to rotate them).
+  # INVARIANT(security): the secrets this one-shot writes are GENERATED AT RUNTIME
+  # per install, never shipped — a default in this file or an image is the same
+  # on every install. No env var can override either one.
+  secrets-init:
+    image: ghcr.io/kreolsky/lore-backend:${LORE_VERSION:-stable}
+    command: python -m scripts.init_secrets
+    volumes:
+      - secrets:/secrets
+
   surreal:
     image: surrealdb/surrealdb:v3.3.0
-    command: start --user ${SURREAL_USER:-root} --pass ${SURREAL_PASS:-root} --bind 0.0.0.0:8000 surrealkv:///data/lore.db
+    # WHY --import-file and no --user/--pass: the image has no shell to read a
+    # file into a flag, and --user/--pass only create a root user when none
+    # exists. The import runs on every start and OVERWRITEs the root user, so the
+    # password always equals the one the backend signs in with.
+    command: start --import-file /secrets/init.surql --bind 0.0.0.0:8000 surrealkv:///data/lore.db
     user: root
     restart: unless-stopped
     volumes:
       - surreal:/data
+      - type: volume
+        source: secrets
+        target: /secrets
+        volume:
+          subpath: surreal
+        read_only: true
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "/surreal", "isready", "--endpoint", "http://localhost:8000"]
       interval: 5s
@@ -78,6 +117,22 @@ services:
 
   backend:
     <<: *app
+    # The private half of the bundled sandbox key (written by sandbox-keygen).
+    # Read-only, backend-only: the sandbox itself gets just the pub/ subpath.
+    volumes:
+      - storage:/storage
+      - secrets:/secrets:ro
+      - sandbox-keys:/sandbox-keys:ro
+    networks:
+      - default
+      - sandbox-net
+    depends_on:
+      surreal:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      sandbox-keygen:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/api/health')"]
       interval: 10s
@@ -113,9 +168,10 @@ services:
         condition: service_healthy
 
   # The agent loop. Not published as an image (it bundles a dependency that may not
-  # be redistributed), so it is built from this repository on first `--profile ai up`.
+  # be redistributed), so it is built from this repository on the first `up`.
+  # It boots with no AI configuration: the endpoint, key and models ride each
+  # turn from the backend (admin panel settings, .env as their fallback).
   harness:
-    profiles: ["ai"]
     build: https://github.com/kreolsky/lore-knowledge-creator.git#${LORE_VERSION:-main}:harness-driver
     image: lore-harness:${LORE_VERSION:-main}
     restart: unless-stopped
@@ -124,22 +180,120 @@ services:
         required: false
     environment:
       PORT: "8090"
-      LORE_DRIVER_SECRET: ${HARNESS_DRIVER_SECRET:-}
+      # The driver secret comes from the mounted secrets volume (boot-env.ts
+      # reads the file) — the same value the backend reads from the same
+      # volume; no env carries it.
+      # LORE_AI_API_URL is the fallback gateway for a turn whose payload
+      # names none. No model is here: every turn names its own (admin
+      # CHAT_MODEL is the default), and the title model is served by the
+      # backend at the harness's start (admin Session title model).
       LORE_AI_API_URL: ${AI_API_URL:-}
-      LORE_HARNESS_MODEL: ${HARNESS_MODEL:-}
-      # Session titles use CHAT_TITLE_MODEL, else CHAT_MODEL; without either the
-      # harness refuses to start.
-      CHAT_MODEL: ${CHAT_MODEL:-${HARNESS_MODEL:-}}
-      LORE_HARNESS_CONTEXT_WINDOW: ${HARNESS_CONTEXT_WINDOW:-128000}
-      LORE_TOOL_API_URL: http://backend:8001
     volumes:
       - harness-sessions:/app/home/sessions
+      - type: volume
+        source: secrets
+        target: /secrets
+        volume:
+          subpath: harness
+        read_only: true
     depends_on:
       backend:
         condition: service_healthy
 
+  # One-shot: writes the SSH keypair the bundled sandbox and the backend share
+  # — the private half stays in the volume (backend reads it read-only), the
+  # public half is installed into sshd by the sandbox entrypoint. Exits 0
+  # whether or not the key already existed, so every later `up` passes the gate
+  # and the key survives restarts (do not `down -v` unless you mean to rotate).
+  # INVARIANT(security): the private key is GENERATED AT RUNTIME, never baked —
+  # a published image carrying it would hand every install the same credential.
+  sandbox-keygen:
+    build: https://github.com/kreolsky/lore-knowledge-creator.git#${LORE_VERSION:-main}:sandbox
+    image: lore-sandbox:${LORE_VERSION:-main}
+    # Each half is checked on its own: a run killed between the two writes
+    # re-derives the public half from the private one on the next `up`, instead
+    # of leaving the sandbox on its baked key until `down -v`.
+    entrypoint: ["sh", "-c", "set -e; test -f /keys/id_ed25519 || ssh-keygen -q -t ed25519 -N '' -f /keys/id_ed25519; mkdir -p /keys/pub; test -s /keys/pub/authorized_keys || ssh-keygen -y -f /keys/id_ed25519 > /keys/pub/authorized_keys"]
+    volumes:
+      - sandbox-keys:/keys
+
+  # The sandbox's netns owner — the egress boundary lives HERE, not inside the
+  # agent-bearing container. Applies the ruleset with the ONE NET_ADMIN in the
+  # stack (on a container with no agent code), then idles. The network alias
+  # keeps `sandbox` resolving to this netns. Never on the default network: a
+  # compromised gw must have no path to surreal/redis either.
+  sandbox-gw:
+    build: https://github.com/kreolsky/lore-knowledge-creator.git#${LORE_VERSION:-main}:sandbox-gw
+    image: lore-sandbox-gw:${LORE_VERSION:-main}
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    environment:
+      # Comma-separated CIDRs folded into the egress deny sets — for the HOST's
+      # own public IP (Docker hairpin DNAT). Empty = no extra denies.
+      - SANDBOX_EGRESS_DENY=${SANDBOX_EGRESS_DENY:-}
+    healthcheck:
+      # Deterministic, no network probe: a resolver outage cannot flip it. The
+      # sandbox never starts before the rules exist and is recreated with the
+      # netns (depends_on below).
+      test: ["CMD", "nft", "list", "table", "inet", "lore_sandbox"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      sandbox-net:
+        aliases:
+          - sandbox
+
+  # The agent's console: sshd only. It does NOT own its network namespace
+  # (sandbox-gw does, above) and holds no NET_ADMIN, so neither root nor the
+  # agent in here can alter the egress ruleset in the shared netns. Only the
+  # pub/ subpath of the key volume is mounted, read-only — the sandbox never
+  # sees the private half.
+  sandbox:
+    build: https://github.com/kreolsky/lore-knowledge-creator.git#${LORE_VERSION:-main}:sandbox
+    image: lore-sandbox:${LORE_VERSION:-main}
+    restart: unless-stopped
+    network_mode: "service:sandbox-gw"
+    depends_on:
+      sandbox-gw:
+        condition: service_healthy
+        restart: true
+    # Hardening: drop everything, then re-add only what sshd privsep needs.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - SYS_CHROOT
+      - AUDIT_WRITE
+      - KILL
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: ${SANDBOX_MEM_LIMIT:-2g}
+    volumes:
+      - sandbox-workspace:/workspace
+      - type: volume
+        source: sandbox-keys
+        target: /sandbox-keys/pub
+        volume:
+          subpath: pub
+        read_only: true
+
+networks:
+  # Not `internal: true` — the sandbox is meant to reach the internet (pip,
+  # research). What it must not reach is the default app network; the gw's
+  # ruleset enforces that (see sandbox-gw/nftables.conf in the repo).
+  sandbox-net:
+
 volumes:
+  secrets:
   surreal:
   redis:
   storage:
   harness-sessions:
+  sandbox-keys:
+  sandbox-workspace:

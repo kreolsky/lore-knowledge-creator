@@ -31,6 +31,8 @@ import TranscriptionAgentConfigManager from './transcription/TranscriptionAgentC
 import { Button, IconButton, Modal, PanelLoading, PillList } from './ui';
 import { useTranslation } from '../i18n';
 import { RefCard } from './references/RefCard';
+import { refDragAdapter } from './references/refDragAdapter';
+import { useSiblingDragReorder } from '../hooks/useSiblingDragReorder';
 import { TableBadge } from './references/TableBadge';
 import { ImageGallery } from './references/ImageGallery';
 import { RefPanelPlaque } from './references/RefPanelPlaque';
@@ -265,18 +267,20 @@ export function ReferencesPanel() {
     return documentTitleById.get(ref.document_id) ?? 'Unknown';
   }, [currentDocument?.document_id, currentProject?.index_doc_id, currentProject?.name, documentTitleById]);
 
-  // Backend depth-tiered order: own refs first (newest-edited first), then
-  // ancestor refs by proximity (immediate parent before grandparent, …), newest
-  // within each tier. The store preserves this LIST order between fetches
-  // (mergeRefLists maps over incoming; addReference prepends a new OWN ref;
-  // updateReference mutates in place). Do NOT re-sort client-side.
-  // INVARIANT: the authoritative reference order is the backend LIST (own →
-  // ancestors by proximity, newest within each tier). Why: re-sorting client-side
-  // collapses depth tiers into a flat newest-first list, breaking ancestry grouping.
-  // PUBLIC carve-out (plan public-refs-panel-scope-parity): the panel RENDER list is
+  // Backend depth-tiered order: own refs first (manual order), then ancestor
+  // refs by proximity (immediate parent before grandparent, …), (sort_key, id)
+  // ASC within each tier — a content edit no longer moves a ref. The store
+  // preserves this LIST order between fetches (mergeRefLists maps over incoming;
+  // addReference/placeReference place a ref inside ITS group's run; updateReference
+  // mutates in place). Do NOT re-sort client-side.
+  // WHY: never re-sort across tiers — the authoritative reference order is
+  // the backend LIST (own → ancestors by proximity, manual key order within each
+  // tier). Why: re-sorting client-side collapses depth tiers into a flat list,
+  // breaking ancestry grouping.
+  // PUBLIC carve-out: the panel RENDER list is
   // a pure order-preserving projection to {currentDoc} ∪ ancestors — a filter, never
   // a re-sort; the backend's tier order is already exactly right for that subset.
-  // The INVARIANT above protects the AUTHED stale-until-reload semantics (live moves
+  // The WHY above protects the AUTHED stale-until-reload semantics (live moves
   // persist with a parent label until reload) — it does not apply to public: no WS
   // events, no mutations, and the list re-fetches on every doc switch. The STORE list
   // stays whole-subtree either way (public transclusion, hydrateReference, hover
@@ -293,6 +297,21 @@ export function ReferencesPanel() {
   const visibleCount = isPublicShare ? sortedRefs.length : references.length;
 
   const { scheduleDelete } = useReferenceDelete();
+
+  // Manual order drag: reorder a ref WITHIN its own group. Works in preview mode too — images then live in ImageGallery,
+  // but gallery tiles carry no row attributes, so only the visible non-image
+  // RefCards are draggable/targets and keys are computed server-side over the
+  // FULL live group (ordering around invisible image members is harmless).
+  // Disabled on public share (no write surface) and for non-full roles (the
+  // route gates too, defense in depth).
+  // WHY: `!panelRef` is part of the gate, not decoration — the PillList unmounts
+  // while a ref is open in panel mode and remounts as a NEW node on return; the
+  // hook binds its listeners to the node present when its effect runs, so the
+  // gate flip is what re-runs it against the fresh node (otherwise drag is dead
+  // until the panel remounts).
+  const listRef = useRef<HTMLDivElement>(null);
+  const dragEnabled = canEdit && !isPublicShare && !panelRef;
+  useSiblingDragReorder(listRef, dragEnabled, refDragAdapter);
 
   // Live table list for the current document, derived from the document editor's ydoc.
   // see SYSTEM: table-block — tables are listed ABOVE references (document/anchor order) as
@@ -616,7 +635,7 @@ export function ReferencesPanel() {
         onChange={handleFileInput}
       />
 
-      {!panelRef && <PillList className={isDragging ? 'bg-accent-soft' : undefined}>
+      {!panelRef && <PillList ref={listRef} className={isDragging ? 'bg-accent-soft' : undefined}>
         {showAgentConfig && currentDocument && (
           <TranscriptionAgentConfigManager documentId={currentDocument.document_id} />
         )}
@@ -756,6 +775,7 @@ export function ReferencesPanel() {
       )}
       <HoverPreviewPopup
         hover={hover}
+        title={hoverRef?.title}
         content={hoverContent}
         imageUrl={hoverImageUrl}
         error={hoverError}

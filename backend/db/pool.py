@@ -1,19 +1,20 @@
 """SurrealDB connection singleton (DBPool) + timed query proxy.
 
-Split out of the former backend/db.py (behavior-preserving). Depends on db._patch
-being imported first (the _recv_task monkeypatch must be installed before any
-get_db() — enforced by db.__init__ import order).
+Depends on db._patch being imported first (the _recv_task monkeypatch must be
+installed before any get_db() — enforced by db.__init__ import order).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 
 from query_stats import record_query
+from settings_registry import ConfigError
 from surrealdb import AsyncSurreal
+
+import config
 
 logger = logging.getLogger("db")
 
@@ -51,12 +52,30 @@ def _is_write_conflict(exc: BaseException) -> bool:
     return isinstance(exc, QueryError) and "write conflict" in str(exc).lower()
 
 
+def surreal_password() -> str:
+    """The database password: the file secrets-init generated
+    (config.SURREAL_PASS_FILE — a wiring constant, no env leg).
+
+    Read on every connect; a missing or empty file raises ConfigError — the
+    backend refuses to sign in with a blank password rather than lock itself
+    out of its own database with a silent mismatch.
+    """
+    path = config.SURREAL_PASS_FILE
+    password = path.read_text().strip() if path.is_file() else ""
+    if not password:
+        raise ConfigError(
+            f"the database password file {path} is missing or empty — "
+            "secrets-init generates it into the secrets volume on every `up`"
+        )
+    return password
+
+
 async def _connect() -> AsyncSurreal:
     """Create a new SurrealDB connection, authenticate, and select namespace."""
-    conn = AsyncSurreal(os.environ["SURREAL_URL"])
+    conn = AsyncSurreal(config.SURREAL_URL)
     try:
-        await conn.signin({"username": os.environ["SURREAL_USER"], "password": os.environ["SURREAL_PASS"]})
-        await conn.use(os.environ["SURREAL_NS"], os.environ["SURREAL_DB"])
+        await conn.signin({"username": config.SURREAL_USER, "password": surreal_password()})
+        await conn.use(config.SURREAL_NS, config.SURREAL_DB)
     except Exception:
         await _close(conn)
         raise

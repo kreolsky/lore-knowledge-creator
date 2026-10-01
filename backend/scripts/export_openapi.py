@@ -32,21 +32,21 @@ _BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_BACKEND_DIR))
 
 # Config loads at `import main` time and _require_env-s a handful of vars
-# (LORE_SECRET_KEY, STORAGE_PATH, MAX_*_SIZE_MB, REDIS_URL — see backend/config.py,
-# the canonical list). openapi export never starts the server or opens DB/Redis (the
-# FastAPI lifespan does not run on import), so load-bearing dummies are enough to
-# satisfy import; real env wins via setdefault when present (dev / prod).
+# (MAX_*_SIZE_MB — see backend/config.py, the canonical list; the infra
+# addresses are constants and the session key is generated at
+# $STORAGE_PATH/.lore/secret_key, so STORAGE_PATH is kept as a dummy to keep
+# that write inside /tmp). openapi export never starts the server or opens
+# DB/Redis (the FastAPI lifespan does not run on import), so load-bearing
+# dummies are enough to satisfy import; real env wins when present (dev/prod).
 for _k, _v in {
-    "LORE_SECRET_KEY": "ci-openapi-export",
     "STORAGE_PATH": "/tmp/lore-storage",
     "MAX_AUDIO_SIZE_MB": "1",
     "MAX_IMAGE_SIZE_MB": "1",
     "MAX_MARKDOWN_SIZE_MB": "1",
-    "REDIS_URL": "redis://localhost:6379/0",
 }.items():
-    # Not setdefault: CI loads .env into the container where these keys are PRESENT
-    # but EMPTY (e.g. LORE_SECRET_KEY=) — setdefault keeps the empty value and
-    # _require_env still raises. Treat empty the same as absent.
+    # Not setdefault: CI loads .env into the container where a key can be
+    # PRESENT but EMPTY — setdefault keeps the empty value and _require_env
+    # still raises. Treat empty the same as absent.
     if not os.environ.get(_k):
         os.environ[_k] = _v
 

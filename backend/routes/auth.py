@@ -51,7 +51,7 @@ async def login(body: LoginRequest, request: Request, response: Response, db: As
     # the UI's gear gate reads can_manage_users straight after login, before
     # any /me refresh, and must never compare role strings in TSX.
     payload.update(capability_flags(user["role"]))
-    set_session_cookie(response, user_id, user["name"], user.get("email", ""), user["role"], token_version=tv)
+    set_session_cookie(request, response, user_id, user["name"], user.get("email", ""), user["role"], token_version=tv)
     log_security("login_success", user_id=user_id, ip=client_ip)
     return payload
 
@@ -80,7 +80,7 @@ async def logout(request: Request, response: Response):
 
 
 @router.get("/api/auth/me")
-async def me(response: Response, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
+async def me(request: Request, response: Response, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
     """Return current authenticated user info with has_pin flag.
 
     Sliding window: re-issues the session cookie on every call, pushing
@@ -103,5 +103,5 @@ async def me(response: Response, user: dict = Depends(get_current_user), db: Asy
     except Exception:
         logger.error("DB unavailable during /me for user %s", user["user_id"])
         return JSONResponse(status_code=503, content={"detail": "Service temporarily unavailable"})
-    set_session_cookie(response, user["user_id"], user["name"], user.get("email", ""), user.get("role", "user"), token_version=tv)
+    set_session_cookie(request, response, user["user_id"], user["name"], user.get("email", ""), user.get("role", "user"), token_version=tv)
     return user

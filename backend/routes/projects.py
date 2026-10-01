@@ -29,6 +29,7 @@ from db import (
     validate_record_id,
 )
 from event_bus import emit
+from jobs import pool as jobs_pool
 from models import (
     CreateProject,
     PatchProject,
@@ -254,7 +255,7 @@ async def create_project(body: CreateProject, user: dict = Depends(get_current_u
         db,
         [
             "CREATE type::record('projects', $pid) CONTENT {"
-            "  name: $name, status: 'active', project_context: '',"
+            "  name: $name, description: $description, status: 'active', project_context: '',"
             "  index_doc_id: $idx_id, owner_id: $uid"
             "}",
             "CREATE type::record('documents', $idx_id) CONTENT {"
@@ -266,14 +267,21 @@ async def create_project(body: CreateProject, user: dict = Depends(get_current_u
         {
             "pid": project_id, "idx_id": index_doc_id,
             "uid": user["user_id"], "name": body.name,
+            "description": body.description,
             "idx_sort_key": index_sort_key,
         },
     )
+
+    # WHY: the guide (see SYSTEM: help-subtree) is seeded by a worker job, not inline —
+    # ~20 document writes would add seconds to every project create; the tree picks the
+    # pages up from their creation broadcasts a moment later.
+    await jobs_pool.enqueue("help_seed_task", project_id, job_id=f"help-seed:{project_id}")
 
     record = await fetch_one("projects", project_id)
     result = serialize_record(record, "project_id") if record else {
         "project_id": project_id,
         "name": body.name,
+        "description": body.description,
         "index_doc_id": index_doc_id,
         "owner_id": user["user_id"],
         "is_public": False,
@@ -639,7 +647,7 @@ def _build_snippet(content: str, query_lower: str, context_chars: int = 60) -> d
 
 @router.patch("/api/projects/{project_id}")
 async def patch_project(project_id: str, body: PatchProject, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
-    """Update project fields (name, status, is_public, project_context, ref_image_preview). Requires full access or admin."""
+    """Update project fields (name, description, status, is_public, project_context, ref_image_preview). Requires full access or admin."""
     await require_admin_or_project_full(project_id, user)
     updates = body.model_dump(exclude_unset=True)
     # INVARIANT(security): only the project owner (or admin) may toggle is_public.

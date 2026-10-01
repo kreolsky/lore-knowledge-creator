@@ -296,6 +296,9 @@ export function ParentPickerPopup({ doc, currentDocumentId, onMoved, anchorRect,
       {previewDocId && (
         <PickerPreviewPopup
           pos={previewPos}
+          // WHY not useDocumentTitle: `documents` may be another project's tree (the
+          // AccessPanel move target), absent from the store the hook reads.
+          title={documents.find(d => d.document_id === previewDocId)?.title}
           content={previewContent}
           error={previewError}
           loading={previewLoading}

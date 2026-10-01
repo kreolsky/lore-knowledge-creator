@@ -81,6 +81,9 @@
      triggers read as controls sitting on the field. Light: surface2 < surface;
      Dark: bg < surface. */
   --composer-control-bg: var(--surface2);
+  /* Preview popup title plaque — one step darker than the popup (--surface) in BOTH
+     themes, same pairing as --composer-control-bg. */
+  --preview-title-bg: var(--surface2);
   --border: #cccac4;
   --border-soft: #e4e2dd;
   --header-bg: #d6d3cd;
@@ -154,6 +157,7 @@ html.dark {
   --surface3: #434343;
   /* Dark theme: --bg (#1e1e1e) is darker than --surface (#262626). */
   --composer-control-bg: var(--bg);
+  --preview-title-bg: var(--bg);
   --border: #363636;
   --border-soft: #2a2a2a;
   --header-bg: #363636;
@@ -658,24 +662,6 @@ body.is-resizing * { transition: none !important; }
   opacity: 0.6;
   font-weight: 300;
 }
-
-/* Dashboard project-card rename input: typography identical to the static
- * card title (text-base = 16px, weight 600, 24px line-height) so entering
- * edit mode moves NOTHING; the underline is an outset box-shadow, not a
- * border, so the input box is exactly the title's line box. Scoped to the
- * Dashboard card title — the shared .doc-rename-input (13px; doc-tree /
- * api-key rename) is intentionally NOT touched. Layered
- * alongside the base class (defined later in the file → wins at equal
- * specificity), same precedent as .chat-rename-input above. */
-.project-rename-input {
-  display: block;
-  font-size: 1rem;
-  font-weight: 600;
-  line-height: 1.5rem;
-  border-bottom: none;
-  box-shadow: 0 1px 0 0 var(--accent);
-}
-
 
 /* Scroll wrapper — both edit and preview modes */
 .editor-scroll {

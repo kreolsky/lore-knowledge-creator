@@ -24,7 +24,7 @@
  *   runs without an apply mode or outside the pinned region.
  *
  * # INVARIANT: MUTATING proxy tools NEVER declare `timeoutMs` — only the
- *   read-only ones do (step 9: dsh's tool-call timeout-policy arms the
+ *   read-only ones do (dsh's tool-call timeout-policy arms the
  *   declared budget). Why the split: a mutating confirm call can ASK for the
  *   user's approval (approvals.ts), parking for up to LORE_APPROVAL_MAX_S
  *   (600 s) inside its own execute, and a declared budget would kill exactly
@@ -60,7 +60,7 @@ export interface TurnToolCtx {
   region: Record<string, unknown> | null
 }
 
-/** The STANDING half (plan agent-line-harness-lifecycle step 3): identity +
+/** The STANDING half: identity +
  * the payload-derived tool sets, registered ONCE per chat session — they key
  * the SESSION's permissions, not one request. `TurnToolCtx` above is the
  * merged view this and the request half compose into. */
@@ -81,6 +81,11 @@ export interface TurnRequestCtx {
   region: Record<string, unknown> | null
 }
 
+// The Tool-API base: the compose service name constant; the env read is the
+// TEST seam only (no compose sets LORE_TOOL_API_URL — plan
+// component-wiring-not-settings step 2). Own literal copy — importing
+// boot-env.ts from here is forbidden (its INVARIANT test: a re-import
+// deadlocks the boot).
 const TOOL_API = process.env.LORE_TOOL_API_URL || 'http://backend:8001'
 
 /** The shared secret this driver and the backend already use on the driver's
@@ -98,10 +103,10 @@ const CONFIRMATION_REQUIRED = 'confirmation_required'
  * approval ask legitimately parks for up to LORE_APPROVAL_MAX_S. */
 export const READ_TOOL_TIMEOUT_MS = 120_000
 
-/** The registry, split (plan agent-line-harness-lifecycle step 3): the
+/** The registry, split: the
  * standing half per dsh session id, the per-request half per TURN. The
  * merged lookup answers only when BOTH halves exist — a tool call with no
- * turn in flight still errors (the plan keeps that refusal deliberately),
+ * turn in flight still errors (a deliberate refusal),
  * and between driver-owned turns only the standing half remains. */
 const sessionCtx = new Map<string, SessionToolCtx>()
 const requestCtx = new Map<string, TurnRequestCtx>()

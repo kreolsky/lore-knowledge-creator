@@ -225,6 +225,13 @@ export const RefCard = memo(function RefCard({
       activeColor="blue"
       clickable={!isUploading}
       className={`${fading ? styles.fading : ''} ${isUploading ? 'opacity-70' : ''} ${reference.archived ? 'opacity-50' : ''}`}
+      // Drag-reorder attributes (useSiblingDragReorder + refDragAdapter): the
+      // row id, and the group = the HOST document. Archived and unhosted cards
+      // carry no group attribute → neither draggable nor a drop target.
+      data-ref-id={reference.reference_id}
+      data-ref-group={
+        reference.archived === true || !reference.document_id ? undefined : reference.document_id
+      }
       onClick={() => { if (!isUploading) onSelect(reference); }}
       onMouseEnter={() => {
         if (!isUploading && cardRef.current && onRefHover) onRefHover(reference.reference_id, cardRef.current);

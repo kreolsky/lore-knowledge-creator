@@ -1,7 +1,6 @@
 /**
- * The standing event channel (plan agent-line-harness-lifecycle step 2):
- * `/ws/events` delivers, per subscribed session, the SAME frames map.ts
- * mints for the SSE turn stream — one mapEvent, one set of mints — so the
+ * The standing event channel: `/ws/events` delivers, per subscribed session,
+ * the SAME frames map.ts mints — one mapEvent, one set of mints — so the
  * identity assertions here are against an independent live mapping, never
  * against a fixture copy. The ws module itself is injected (a fake here):
  * the real one resolves only inside the harness image (see ws-events.ts's
@@ -12,8 +11,9 @@ import assert from 'node:assert/strict'
 
 import {
   attachEventsChannel, createSessionEventTap, relayAssistantStream,
-  type WsCtor, type WsSocketLike,
+  wsUnresolvableMessage, type WsCtor, type WsSocketLike,
 } from '../src/ws-events.ts'
+import { createSessionStreamBaselines } from '../src/stream-baselines.ts'
 import { mapEvent, newTurnMapState } from '../src/map.ts'
 
 function ev(seq: number, type: string, data?: any): any {
@@ -21,9 +21,9 @@ function ev(seq: number, type: string, data?: any): any {
 }
 
 function assistantMessage(seq: number, text: string): any {
-  // Real v3 shape: the settled `assistant/message` carries the whole step
-  // text (assistant/chunk died with the old format — live deltas ride the
-  // agent/assistant-stream tap, see relayAssistantStream below).
+  // Real v4 log shape: the settled `assistant/message` carries the whole step
+  // text (live deltas ride the agent/assistant-stream tap, see
+  // relayAssistantStream below).
   return ev(seq, 'assistant/message', {
     turn: 1, step: 1,
     message: {
@@ -125,7 +125,7 @@ function accept(server: ReturnType<typeof fakeServer>, wss: FakeWss): FakeSocket
   return socket
 }
 
-test('subscribe acks with the resolved dsh id, then delivers the SAME frames the SSE listener mints', () => {
+test('subscribe acks with the resolved dsh id, then delivers the SAME frames mapEvent mints', () => {
   const { tap, server } = channelFixture()
   const socket = accept(server, FakeWss.last!)
 
@@ -134,8 +134,8 @@ test('subscribe acks with the resolved dsh id, then delivers the SAME frames the
     type: 'subscribed', session_id: 'lore-1', dsh_session_id: 'dsh-9',
   })
 
-  // The independent live mapping the SSE listener would run for the same
-  // events — the identity the channel must not diverge from.
+  // The independent mapping a live consumer would run for the same events —
+  // the identity the channel must not diverge from.
   const live = newTurnMapState()
   const expected: Record<string, unknown>[] = []
   const events = [
@@ -148,7 +148,7 @@ test('subscribe acks with the resolved dsh id, then delivers the SAME frames the
   }
 
   for (const e of events) tap.emit({ id: 'dsh-9' }, e)
-  // Enveloped per session (step 4): the frame itself carries no session
+  // Enveloped per session: the frame itself carries no session
   // attribution ("the listener knows; the event does not", map.ts), so the
   // shared socket addresses it — the frame inside stays mapEvent verbatim.
   assert.deepEqual(socket.sent.slice(1), expected.map((frame) => ({
@@ -275,9 +275,9 @@ test('push() delivers a driver-addressed frame to subscribers of that session on
 })
 
 test("a watch-phase sink's pushes land BEFORE the same event's mapped frames", () => {
-  // The followup runner's turn watcher (step 3): the turn-end context_usage
+  // The followup runner's turn watcher: the turn-end context_usage
   // must reach subscribers before the terminal relay and its halt mint — the
-  // SSE wire order (the backend captures cu at turn finalization; after the
+  // wire order (the backend captures cu at turn finalization; after the
   // terminal frame it is too late).
   const { tap, server, channel } = channelFixture()
   const socket = accept(server, FakeWss.last!)
@@ -294,9 +294,9 @@ test("a watch-phase sink's pushes land BEFORE the same event's mapped frames", (
     'context_usage precedes the terminal relay (and its halt mint)')
 })
 
-// ── repoint: a fork re-keys live subscriptions (plan ──────────────────────────
-// fork-repoints-live-subscription). The plugin owns the repoint because it
-// owns both the identity map and this table; the subscriber does nothing.
+// ── repoint: a fork re-keys live subscriptions ──────────────────────────
+// The plugin owns the repoint because it owns both the identity map and
+// this table; the subscriber does nothing.
 
 test('repoint re-keys the table: the fresh id delivers, the old one no longer does, and the re-ack carries the tail', () => {
   const { tap, server, channel } = channelFixture()
@@ -354,9 +354,9 @@ test('close() detaches the channel from the tap and the server', () => {
   )
 })
 
-// ── The assistant-stream relay (0.1.5): live chunks ride dsh_stream ─────────
+// ── The assistant-stream relay: live chunks ride dsh_stream ─────────────
 //
-// v3 killed assistant/chunk in the log: the live tail is dsh's own
+// The v4 log holds only settled events: the live tail is dsh's own
 // `agent/assistant-stream` publication (transient; the loop appends the final
 // assistant/message before the end frame). apply() registers the sink below
 // on ctx.on('agent/assistant-stream') and it pushes `{type:'dsh_stream',
@@ -372,11 +372,11 @@ test('an assistant-stream publication relays as dsh_stream to that session only'
   owner.sent.length = 0
   other.sent.length = 0
 
-  const onStream = relayAssistantStream(channel)
+  const onStream = relayAssistantStream(channel, createSessionStreamBaselines())
   const emit = (id: unknown, frame: unknown) => onStream({ agent: { session: { id } }, frame })
   const start = { type: 'start', attemptId: 'a1', revision: 1, turn: 1, step: 1 }
   const chunk = {
-    type: 'chunk', attemptId: 'a1', revision: 1, index: 0, time: 5,
+    type: 'chunk', attemptId: 'a1', revision: 2, index: 0, time: 5,
     chunk: { type: 'text-delta', index: 0, text: 'hi' },
   }
   emit('dsh-9', start)
@@ -401,7 +401,7 @@ test('a stream chunk lands on the wire before the same attempt\'s settlement', (
   socket.receive({ type: 'subscribe', session_id: 'dsh-9' })
   socket.sent.length = 0
 
-  const onStream = relayAssistantStream(channel)
+  const onStream = relayAssistantStream(channel, createSessionStreamBaselines())
   onStream({
     agent: { session: { id: 'dsh-9' } },
     frame: {
@@ -412,4 +412,63 @@ test('a stream chunk lands on the wire before the same attempt\'s settlement', (
   tap.emit({ id: 'dsh-9' }, assistantMessage(1, 'hi'))
 
   assert.deepEqual(socket.sent.map((f) => f.frame.type), ['dsh_stream', 'dsh_event'])
+})
+
+test('the relay also folds each frame into the session\'s reload baseline', () => {
+  // The same sink that pushes dsh_stream feeds dsh's own
+  // SessionAssistantStreamAccumulator keyed by session, with
+  // the session's last observed event seq as the durable cursor —
+  // /session-entries serves the fold's snapshot on the open turn, so a reload
+  // mid-step keeps the streamed text. A revision gap (a missed frame) resets
+  // the fold: the snapshot then carries NO active attempt — no baseline is
+  // served, never a wrong one.
+  const { channel } = channelFixture()
+  const baselines = createSessionStreamBaselines()
+  const onStream = relayAssistantStream(channel, baselines)
+  baselines.observe('dsh-9', 4)
+  // Revisions are DENSE across frames (agent-loop allocates each from one
+  // counter): start=1, chunk=2, … — the fold's own contract.
+  onStream({
+    agent: { session: { id: 'dsh-9' } },
+    frame: { type: 'start', attemptId: 'a1', revision: 1, turn: 1, step: 1 },
+  })
+  onStream({
+    agent: { session: { id: 'dsh-9' } },
+    frame: {
+      type: 'chunk', attemptId: 'a1', revision: 2, index: 0, time: 5,
+      chunk: { type: 'text-delta', index: 0, text: 'hi' },
+    },
+  })
+  let snap = baselines.snapshot('dsh-9')!
+  assert.equal(snap.activeAttempt?.attemptId, 'a1')
+  assert.equal(snap.activeAttempt?.startedAfterSeq, 4)
+  assert.equal(snap.activeAttempt?.nextIndex, 1)
+  assert.deepEqual(snap.activeAttempt?.stream, [
+    { type: 'text-chunks', time0: 5, index: 0, dt: [], texts: ['hi'] },
+  ])
+  // A revision gap (a missed frame) resets the fold: the attempt is gone.
+  onStream({
+    agent: { session: { id: 'dsh-9' } },
+    frame: {
+      type: 'chunk', attemptId: 'a1', revision: 4, index: 1, time: 6,
+      chunk: { type: 'text-delta', index: 0, text: '!' },
+    },
+  })
+  snap = baselines.snapshot('dsh-9')!
+  assert.equal(snap.activeAttempt, undefined)
+  // An unknown session serves no snapshot at all.
+  assert.equal(baselines.snapshot('dsh-none'), undefined)
+})
+
+// ── loadWs's failure line ────────────────────────────────────────────────
+// The composition where `ws` cannot resolve is not drivable end-to-end
+// (attempt 1 resolves inside the image — dsh's node_modules is one walk up),
+// so the rendered line is pinned directly on the pure helper that builds it.
+
+test('wsUnresolvableMessage renders every resolution error and the 503 consequence', () => {
+  const line = wsUnresolvableMessage(['a: x', 'b: y'])
+  assert.ok(line.includes('(a: x | b: y)'), `the errors join verbatim: ${line}`)
+  assert.match(line, /the standing event channel is OFF; \/followup refuses every turn \(503\)/,
+    'the consequence the operator reads when the channel is off')
+  assert.ok(line.startsWith('[lore-driver] ws unresolvable'), line)
 })

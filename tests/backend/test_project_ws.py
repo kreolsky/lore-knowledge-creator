@@ -420,13 +420,41 @@ class TestProjectWs:
             assert msg["status"] == "error"
 
     @pytest.mark.asyncio
-    async def test_content_flushed_reaches_project_ws(self, sync_app, client, collab_project):
-        """content_flushed event → project WS client receives a stripped payload.
+    async def test_subscribed_event_forwards_every_emitted_kwarg(self, sync_app, collab_project):
+        """Verbatim seam: a subscribed event's kwargs
+        reach the client EXACTLY as emitted (minus project_id) — a field no frontend
+        type knows yet still arrives; nothing is dropped for not being on a list."""
+        import asyncio
+        pid, *_ = collab_project
+        from event_bus import emit
+        with sync_app.websocket_connect(
+            f"/ws/project/{pid}", cookies={"lore_session": collab_project[2]}
+        ) as ws:
+            json.loads(ws.receive_text())  # init
+            await emit(
+                "document_created",
+                project_id=pid, document_id="d-verbatim", title="Verbatim",
+                parent_id=None, sort_key="k1", is_reference=False,
+                future_field="unknown-to-ts",
+            )
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            msg = json.loads(ws.receive_text())
+            assert msg == {
+                "type": "document_created",
+                "document_id": "d-verbatim",
+                "title": "Verbatim",
+                "parent_id": None,
+                "sort_key": "k1",
+                "is_reference": False,
+                "future_field": "unknown-to-ts",
+            }
 
-        _make_subscriber drops every field NOT in the subscription list, so the
-        payload is {type, entity_id, entity_type} only — is_reference never arrives
-        (the frontend gate relies on the local transcludeMap kind, not a payload flag).
-        """
+    @pytest.mark.asyncio
+    async def test_content_flushed_reaches_project_ws(self, sync_app, client, collab_project):
+        """Verbatim seam: content_flushed arrives with every emitted field —
+        is_reference included (references.py states it on the reference flush) —
+        minus project_id, the routing key, which never leaks to the wire."""
         import asyncio
         pid, doc_id, *_ = collab_project
         from event_bus import emit
@@ -444,8 +472,9 @@ class TestProjectWs:
             assert msg["type"] == "content_flushed"
             assert msg["entity_id"] == doc_id
             assert msg["entity_type"] == "doc"
-            # INVARIANT: is_reference + project_id are stripped (not in the field list).
-            assert "is_reference" not in msg
+            # INVARIANT: the seam forwards verbatim — is_reference arrives,
+            # project_id (the routing key) is the only field removed.
+            assert msg["is_reference"] is True
             assert "project_id" not in msg
 
     @pytest.mark.asyncio

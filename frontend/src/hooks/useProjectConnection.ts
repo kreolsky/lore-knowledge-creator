@@ -6,7 +6,6 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../store/app-store';
 import { apiClient, isAccessRefusal } from '../api/client';
-import { emit } from '../events';
 import { useEvent } from './useEvent';
 import { ProjectConnection } from '../collab/project-connection';
 import { YjsProjectProvider } from '../collab/yjs-provider';
@@ -74,60 +73,6 @@ export function useProjectConnection({ projectId }: UseProjectConnectionParams) 
   useEffect(() => {
     if (!projectId) return;
     const conn = new ProjectConnection(projectId, {
-      onDocumentCreated: (documentId, title, parentId, sortKey) =>
-        emit('project-document-created', { documentId, title, parentId, sortKey }),
-      onDocumentRenamed: (documentId, title) =>
-        emit('project-document-renamed', { documentId, title }),
-      onDocumentMoved: (documentId, parentId, sortKey, previousParentId, isReference, title) =>
-        emit('project-document-moved', { documentId, parentId, sortKey, previousParentId, isReference, title }),
-      onDocumentReordered: (documentId, parentId, sortKey) =>
-        emit('project-document-reordered', { documentId, parentId, sortKey }),
-      onDocumentDeleted: (documentId) =>
-        emit('project-document-deleted', { documentId }),
-      onDocumentsDeletedBatch: (documentIds, referenceIds) =>
-        emit('project-documents-deleted-batch', { documentIds, referenceIds }),
-      onDocumentsMovedOut: (documentIds, referenceIds, targetProjectId, targetProjectName) =>
-        emit('project-documents-moved-out', { documentIds, referenceIds, targetProjectId, targetProjectName }),
-      onDocumentsMovedIn: (documentIds) =>
-        emit('project-documents-moved-in', { documentIds }),
-      onReferenceCreated: (referenceId, title, documentId, createdBy, createdByName) =>
-        emit('project-reference-created', { referenceId, title, documentId, createdBy, createdByName }),
-      onReferenceRenamed: (referenceId, title) =>
-        emit('project-reference-renamed', { referenceId, title }),
-      onReferenceMoved: (referenceId, documentId) =>
-        emit('project-reference-moved', { referenceId, documentId }),
-      onReferenceDeleted: (referenceId) =>
-        emit('project-reference-deleted', { referenceId }),
-      onReferenceUpdated: (referenceId) =>
-        emit('project-reference-updated', { referenceId }),
-      onReferenceStatusChanged: (referenceId, status) =>
-        emit('project-reference-status-changed', { referenceId, status }),
-      onContentFlushed: (entityId, entityType) =>
-        emit('project-content-flushed', { entityId, entityType }),
-      onAgentExtractionStarted: (referenceId) =>
-        emit('project-agent-extraction-started', { referenceId }),
-      onGenerateImageProgress: (sessionId, phase, runId, messageId) =>
-        emit('project-generate-image-progress', { sessionId, phase, runId, messageId }),
-      onGenerateImageDone: (e) =>
-        emit('project-generate-image-done', e),
-      onGenerateImageFailed: (e) =>
-        emit('project-generate-image-failed', e),
-      onExtractionError: (referenceId, noteId, documentId) => {
-        // INVARIANT: extraction-failure toast is persistent. Why: the single-slot 3s
-        // auto-dismiss toast was raced/clobbered by the "extraction started" info toast
-        // and clearToast() on collab 'connected', so the error vanished while only the
-        // (easy-to-miss) error note remained. A pipeline failure must stay visible until
-        // the user dismisses it.
-        useAppStore.getState().showToast(t('pipelineExtractionFailed'), 'error', { persistent: true });
-        emit('project-extraction-error', { referenceId, noteId, documentId });
-      },
-      onAgentErrorNote: (noteId, documentId) => {
-        // ARCH: an agent proposal apply failed and the backend recorded a system note
-        // on the document. Surface a persistent toast (mirrors extraction_error) and
-        // forward the note id so DocumentPage refreshes the notes panel + opens it.
-        useAppStore.getState().showToast(t('agentApplyFailed'), 'error', { persistent: true });
-        emit('project-agent-error-note', { noteId, documentId });
-      },
       // Plan agent-line-harness-lifecycle step 7: the harness lifecycle's chat
       // frames enter the chat store's ONE sink here — the connection stays
       // transport-dumb, the dispatch decides (registered turn → the same
@@ -140,16 +85,6 @@ export function useProjectConnection({ projectId }: UseProjectConnectionParams) 
       onProjectWsResync: () => {
         void useChatStore.getState().resyncOpenHarnessTurn();
       },
-      onEmbeddingDegraded: () => {
-        useAppStore.getState().showToast(t('embeddingsIndexFailed'), 'error');
-      },
-      onEmbeddingRecovered: () => {
-        useAppStore.getState().showToast(t('embeddingsIndexRecovered'), 'info');
-      },
-      onProjectUpdated: (updates) =>
-        emit('project-updated', updates as Record<string, unknown>),
-      onProjectDeleted: () =>
-        emit('project-deleted'),
       onStatusChange: () => {},
       onError: (msg) => useAppStore.getState().showToast(msg, 'error'),
     });
@@ -173,7 +108,29 @@ export function useProjectConnection({ projectId }: UseProjectConnectionParams) 
     };
   }, [projectId]);
 
-  useEvent('project-deleted', useCallback(() => navigate('/'), [navigate]));
+  // Side effects of the project WS events, consumed directly as ws:* events.
+  useEvent('ws:extraction_error', useCallback((_: { reference_id: string; note_id: string; document_id: string }) => {
+    // INVARIANT: extraction-failure toast is persistent. Why: the single-slot 3s
+    // auto-dismiss toast was raced/clobbered by the "extraction started" info toast
+    // and clearToast() on collab 'connected', so the error vanished while only the
+    // (easy-to-miss) error note remained. A pipeline failure must stay visible until
+    // the user dismisses it.
+    useAppStore.getState().showToast(t('pipelineExtractionFailed'), 'error', { persistent: true });
+  }, []));
+  useEvent('ws:agent_error_note', useCallback((_: { note_id: string; document_id: string }) => {
+    // ARCH: an agent proposal apply failed and the backend recorded a system note
+    // on the document. Surface a persistent toast (mirrors extraction_error);
+    // DocumentPage (ws:agent_error_note) refreshes the notes panel + opens it.
+    useAppStore.getState().showToast(t('agentApplyFailed'), 'error', { persistent: true });
+  }, []));
+  useEvent('ws:embedding_degraded', useCallback(() => {
+    useAppStore.getState().showToast(t('embeddingsIndexFailed'), 'error');
+  }, []));
+  useEvent('ws:embedding_recovered', useCallback(() => {
+    useAppStore.getState().showToast(t('embeddingsIndexRecovered'), 'info');
+  }, []));
+
+  useEvent('ws:project_deleted', useCallback(() => navigate('/'), [navigate]));
 
   return { projectCollabConn };
 }

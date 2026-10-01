@@ -97,8 +97,7 @@ function loreInputs(): any[] {
   ]
 }
 
-test('an image generation appended out of band lands at its anchor', () => {
-  const inputs = loadFixture()
+test('an image generation appended out of band lands at its anchor', () => {  const inputs = loadFixture()
   const calls = inputs.map(input => input.event).filter(event => event.type === 'tool/call')
   const anchor = calls[calls.length - 1]!
   const earlier = calls[calls.length - 2]!
@@ -146,6 +145,57 @@ test('an image generation appended out of band lands at its anchor', () => {
   assert.equal(failed?.kind, 'image-gen')
   assert.equal(failed.data.status, 'failed')
   assert.equal(failed.data.error, 'comfy unreachable')
+})
+
+test('a run\'s live phases fold into ONE node ending done (the run rides the chat channel)', () => {
+  // The run's phases are CHAT facts — RUNNING
+  // lore/image-gen frames pushed per phase, then the settled frame at the
+  // reload mint's exact position. The definition keys ONE context per run id
+  // and its update takes the LATEST event, so the phases never render as
+  // separate cards: running → done is one node whose data ends 'done'.
+  const inputs = loadFixture()
+  const anchor = lastEvent(inputs, 'tool/call')
+
+  /** The k-th phase's WIRE position: anchor + 0.5 + 0.1·k/(k+1) — above a
+   * verdict mint at the same anchor, below the settled +0.6, strictly
+   * increasing so every phase APPENDS into the one context. */
+  const phaseEvent = (k: number, phase: string) => ({
+    type: 'event' as const,
+    event: {
+      type: 'lore/image-gen',
+      seq: anchor.seq + 0.5 + 0.1 * k / (k + 1),
+      time: anchor.time,
+      data: { turn: anchor.data.turn, runId: 'run-live', status: 'running', phase },
+      ignorable: true,
+    },
+  })
+
+  const conversation = createLoreConversation()
+  conversation.replaceWindow(inputs, false)
+  conversation.splice(phaseEvent(1, 'refining'))
+  conversation.splice(phaseEvent(2, 'queued'))
+  conversation.splice(phaseEvent(3, 'generating'))
+  conversation.splice(phaseEvent(4, 'downloading'))
+  let gens = conversation.nodes().filter(node => node.kind === 'image-gen')
+  assert.equal(gens.length, 1, 'the run\'s phases rendered as more than one node')
+  assert.equal(gens[0].id, 'run-live')
+  assert.deepEqual(gens[0].data, {
+    runId: 'run-live', status: 'running', phase: 'downloading',
+  })
+
+  // The settled frame closes the run at +0.6 — the reload mint's position —
+  // and the node's data becomes the settled fact.
+  conversation.splice(loreEvent('lore/image-gen', anchor.seq, {
+    turn: anchor.data.turn,
+    runId: 'run-live',
+    status: 'done',
+    imageRefIds: ['ref-1'],
+  }, anchor.time))
+  gens = conversation.nodes().filter(node => node.kind === 'image-gen')
+  assert.equal(gens.length, 1)
+  assert.deepEqual(gens[0].data, {
+    runId: 'run-live', status: 'done', imageRefIds: ['ref-1'],
+  })
 })
 
 test('an abnormal halt renders its card', () => {

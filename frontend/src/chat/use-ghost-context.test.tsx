@@ -30,6 +30,16 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../store/app-store', () => ({ useAppStore: (sel: (s: unknown) => unknown) => sel(mocks.appState) }));
 vi.mock('../store/ui-store', () => ({ useUIStore: (sel: (s: unknown) => unknown) => sel(mocks.uiState) }));
 
+// use-ghost-context reads the ghost gate via useChatStore.getState() in its
+// editor-doc-changed handler; this suite never emits that event, but the module
+// import must resolve — mock the store (the real chat-store's module init needs
+// useAppStore.subscribe, which the app-store mock above does not provide).
+vi.mock('../store/chat-store', () => {
+  const fn = (sel: (s: unknown) => unknown) => sel({ activeSessionId: null });
+  fn.getState = () => ({ activeSessionId: null });
+  return { useChatStore: fn };
+});
+
 // REAL links.ts over a mocked apiClient: warming via the fetcher writes the cache AND
 // bumps the shared version the derived selector subscribes to (keystone test).
 vi.mock('../api/client', () => ({ apiClient: { get: vi.fn() } }));

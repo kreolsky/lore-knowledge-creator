@@ -182,6 +182,6 @@ async def register_with_invite(
     token_hash = _hash_token(token)
     await _claim_single_use(db, token_hash)
     uid = await _create_registered_user(db, invite, body, token_hash)
-    set_session_cookie(response, uid, body.name, body.email, "user", token_version=0)
+    set_session_cookie(request, response, uid, body.name, body.email, "user", token_version=0)
     log_security("register_success", user_id=uid, ip=client_ip)
     return {"user_id": uid, "name": body.name, "email": body.email, "role": "user"}

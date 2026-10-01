@@ -15,6 +15,7 @@ import { useNoteChatStore } from '../../store/note-chat-store';
 import { useEvent } from '../../hooks/useEvent';
 import { useNavMode } from '../../hooks/useNavMode';
 import { useDocumentPreview } from '../../hooks/useDocumentPreview';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useReferencePreview } from '../../hooks/useReferencePreview';
 import { usePopupSlot } from '../../hooks/usePopupSlot';
 import { useEditorView } from '../../editor/active-editor';
@@ -55,6 +56,7 @@ export function LinkSuggestionsPopup() {
   const [previewDocId, setPreviewDocId] = useState<string | null>(null);
   const [previewRefId, setPreviewRefId] = useState<string | null>(null);
   const { content: rawContent, error: docError, loading: docLoading } = useDocumentPreview(previewDocId);
+  const previewDocTitle = useDocumentTitle(previewDocId);
   const lastContentRef = useRef('');
   if (rawContent !== undefined) lastContentRef.current = rawContent;
   const previewContent = lastContentRef.current;
@@ -346,6 +348,7 @@ export function LinkSuggestionsPopup() {
       </div>
       <PickerPreviewPopup
         pos={previewPos}
+        title={isRefMode ? previewRef?.title : previewDocTitle}
         content={isRefMode && previewRefImageUrl ? undefined : (isRefMode ? previewRefContent : previewContent)}
         imageUrl={isRefMode ? (previewRefImageUrl ?? undefined) : undefined}
         error={isRefMode ? refError : docError}

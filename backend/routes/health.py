@@ -74,13 +74,17 @@ async def _probe_redis() -> tuple[bool, str | None]:
 
 
 async def _probe_agent_line(line) -> str:
-    """One driver line's liveness: "reachable" | "unreachable".
+    """One driver line's liveness: "reachable" | "unreachable" |
+    "secret_mismatch".
 
     # WHY: the probe result only DEGRADES the report (200 + named in the
     # body) — never a 503 — because the editor and collab work fine without
     # the agent line; pulling the service out of rotation over a chat outage
     # would invert the dependency graph. Unconfigured lines are skipped by the
     # caller: an unset optional line is a choice, not an outage.
+    # A 401 is its OWN name: the service is up and refusing — the backend and
+    # the harness hold different driver secrets, and the report says so
+    # instead of crying "unreachable" (plan component-wiring-not-settings).
     """
     try:
         async with httpx.AsyncClient(timeout=_DRIVER_PROBE_TIMEOUT_S) as client:
@@ -88,6 +92,8 @@ async def _probe_agent_line(line) -> str:
                 f"{line.url}/health",
                 headers={"X-Driver-Secret": line.secret},
             )
+        if resp.status_code == 401:
+            return "secret_mismatch"
         if resp.status_code == 200 and resp.json().get("status") == "ok":
             return "reachable"
         return "unreachable"
@@ -97,9 +103,9 @@ async def _probe_agent_line(line) -> str:
 
 async def _probe_agent_lines() -> dict[str, str]:
     """THE agent line's liveness: {name: reachable | unreachable |
-    unconfigured}. Unconfigured answers "unconfigured" without a probe (the
-    resolver INVARIANT) — a line that was never enabled is not an outage.
-    Kept a one-entry map for the `agent_lines` body shape."""
+    secret_mismatch | unconfigured}. Unconfigured answers "unconfigured"
+    without a probe (the resolver INVARIANT) — a line that was never enabled
+    is not an outage. Kept a one-entry map for the `agent_lines` body shape."""
     from driver.client import DRIVER_LINE_NAME, resolve_driver_line
 
     line = await resolve_driver_line()
@@ -147,10 +153,13 @@ def _health_body(
     agent_lines: dict[str, str] | None = None,
 ) -> dict:
     """Assemble the /api/health response payload (observability counters + drift)."""
-    # A configured line being unreachable degrades; an UNCONFIGURED line
-    # never does (it was never enabled — reporting it as degraded would cry
-    # wolf on a driver-less deployment).
-    lines_down = any(v == "unreachable" for v in (agent_lines or {}).values())
+    # A configured line being unreachable — or refusing with a secret
+    # mismatch — degrades; an UNCONFIGURED line never does (it was never
+    # enabled — reporting it as degraded would cry wolf on a driver-less
+    # deployment).
+    lines_down = any(
+        v in ("unreachable", "secret_mismatch") for v in (agent_lines or {}).values()
+    )
     status = (
         "ok"
         if db_ok and redis_ok and not lines_down

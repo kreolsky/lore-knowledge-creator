@@ -74,6 +74,85 @@ async def test_patch_project(client, admin_user, project_with_doc):
 
 
 @pytest.mark.asyncio
+async def test_create_project_with_description(client, admin_user):
+    _, token = admin_user
+    resp = await client.post(
+        "/api/projects",
+        json={"name": "Described Project", "description": "A world of endless seas"},
+        cookies={"lore_session": token},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["description"] == "A world of endless seas"
+    listed = await client.get("/api/projects", cookies={"lore_session": token})
+    row = next(p for p in listed.json() if p["project_id"] == data["project_id"])
+    assert row["description"] == "A world of endless seas"
+
+
+@pytest.mark.asyncio
+async def test_create_project_without_description_reads_none(client, admin_user):
+    _, token = admin_user
+    resp = await client.post(
+        "/api/projects",
+        json={"name": "Plain Project"},
+        cookies={"lore_session": token},
+    )
+    assert resp.status_code == 200
+    assert resp.json().get("description") is None
+
+
+@pytest.mark.asyncio
+async def test_patch_description_set_and_clear(client, admin_user, project_with_doc):
+    pid, _, _ = project_with_doc
+    _, token = admin_user
+    resp = await client.patch(
+        f"/api/projects/{pid}",
+        json={"description": "First lore"},
+        cookies={"lore_session": token},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["description"] == "First lore"
+    resp = await client.patch(
+        f"/api/projects/{pid}",
+        json={"description": None},
+        cookies={"lore_session": token},
+    )
+    assert resp.status_code == 200
+    # Cleared reads back empty: Surreal drops NONE fields from the row, so the
+    # key is absent from the response (contract: absent or None, never stale).
+    assert resp.json().get("description") is None
+
+
+@pytest.mark.asyncio
+async def test_create_project_description_over_2000_rejected(client, admin_user):
+    _, token = admin_user
+    resp = await client.post(
+        "/api/projects",
+        json={"name": "Too Long", "description": "x" * 2001},
+        cookies={"lore_session": token},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_readonly_member_cannot_patch_description(client, regular_user, admin_user, project_with_doc):
+    pid, _, _ = project_with_doc
+    user_uid, user_token = regular_user
+    _, admin_token = admin_user
+    await client.post(
+        f"/api/admin/projects/{pid}/members",
+        json={"user_id": user_uid, "access_level": "readonly"},
+        cookies={"lore_session": admin_token},
+    )
+    resp = await client.patch(
+        f"/api/projects/{pid}",
+        json={"description": "Hacked"},
+        cookies={"lore_session": user_token},
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_search_documents(client, admin_user, project_with_doc):
     pid, _, _ = project_with_doc
     _, token = admin_user

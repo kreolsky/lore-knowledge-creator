@@ -2,26 +2,30 @@
  * Pure replay projection: a session's dsh event log → per-turn frame lists.
  *
  * # SYSTEM: harness-driver (replay half) — the RELOAD input of the one
- *   projection. The frames this returns are the SAME frames the live listener
- *   streamed (map.ts's verbatim `dsh_event` relay + the `lore/verdict-ask`
- *   mint), grouped by turn, so a reload and the live stream agree by
+ *   projection. The frames this returns are the SAME frames the live
+ *   channel delivers (map.ts's verbatim `dsh_event` relay + the
+ *   `lore/verdict-ask` and `lore/halt` mints), grouped by turn, so a reload
+ *   and the live stream agree by
  *   construction rather than by two synchronized copies of the timeline.
  *   PURE — no ctx, no http (test/entries.test.ts).
  *
  * # ARCH: the driving session's log is the ONLY input. A child (subagent)
- *   session keeps its own log, so its nested chips were live-only; the driving
+ *   session keeps its own log, which the projection never reads; the driving
  *   turn's own dispatch replays. Why: inspect() takes one session id, and
  *   walking children would need the child ids the driving log does not record.
  *
  * # ARCH: the replay does not fold the log into a step timeline —
  *   it emits the events VERBATIM (toRelayFrame, the same builder map.ts uses)
- *   and the browser assembles the conversation from them. The only mint is
- *   `lore/verdict-ask` (the one lore fact anchored inside a dsh session event).
- *   The other three lore facts are minted Lore-side on reload: the backend's
- *   timeline attach mints `lore/image-gen` from the row's gen_steps,
- *   `lore/halt` from the row's halt column, and `lore/compaction-mint` from
- *   the compaction/end frame's mint outcome.
+ *   and the browser assembles the conversation from them. The mints are the
+ *   two whose anchors sit inside dsh session events: `lore/verdict-ask` (on
+ *   `approval/asked`) and `lore/halt` (on a `turn/end` whose reason dsh
+ *   renders no node for). The other lore facts are minted Lore-side on
+ *   reload: the backend's timeline attach mints `lore/image-gen` from the
+ *   row's gen_steps, `lore/halt` from the row's halt column, and
+ *   `lore/compaction-mint` from the compaction/end frame's mint outcome.
  */
+
+import type { SessionAssistantStreamBaseline } from '@deepseek-ai/dsh-api-session-controller/types'
 
 import { mapEvent, newTurnMapState, type DshEvent } from './map.ts'
 
@@ -32,10 +36,13 @@ import { mapEvent, newTurnMapState, type DshEvent } from './map.ts'
  * active lineage, breaking any positional pairing). `end_seq` ABSENT marks
  * an OPEN turn (no closing row — a mid-turn replay): the resync primitive;
  * which record a session renders for it, this open turn or the halt card, is
- * the consumer's split (the replay-split INVARIANT below). */
+ * the consumer's split (the replay-split INVARIANT below). An open turn may
+ * also carry `assistant_stream` — the live-stream fold's snapshot (see
+ * projectSessionEntries), the reload's streamed-text baseline. */
 export interface ReplayedTurn {
   frames: Record<string, unknown>[]
   end_seq?: number
+  assistant_stream?: SessionAssistantStreamBaseline
 }
 
 /** The whole session-entries reply: the turns plus the log's tail seq — the
@@ -53,7 +60,7 @@ export interface ReplayedSession {
  * leading rows, the session-level bookkeeping dsh writes between turns — buffer
  * into the next turn that opens, so nothing is dropped for sitting BETWEEN two
  * turns. Events sitting after the LAST `turn/end` get no turn to flush into and
- * are NOT replayed, although the live listener relayed them. That is harmless
+ *   are NOT replayed, although the live channel relayed them. That is harmless
  * because of what actually lands there: over 283 real gray session logs, only 4
  * carry such a tail, and its every event is `agent/inbox/spliced` (2) or
  * `session/end-seed` (2) — neither renders. The inbox definition publishes
@@ -71,26 +78,48 @@ export interface ReplayedSession {
  * HOLDS — mints included, so the value may be fractional. Filtering happens
  * AFTER mapping, never before: the map state still evolves over the whole log
  * (it resets per turn at `turn/start`), so the surviving frames are the SAME
- * frames the live listener relayed above that seq — a resync is a subsequence
+ * frames the live channel relayed above that seq — a resync is a subsequence
  * of the full replay, not a re-derivation. A closed turn left with no
  * surviving frames drops (the consumer already holds it whole, `turn/end`
  * included); the OPEN turn never drops — zero new frames still answers "the
  * turn is open". `tail_seq` stays the WHOLE log's tail regardless: it anchors
  * the reload halt mint and the log's high-water mark, neither of which is a
  * frame.
+ *
+ * `assistantStream` (optional): the live-stream fold's snapshot
+ * (stream-baselines.ts, dsh's SessionAssistantStreamAccumulator). It rides
+ * the OPEN turn only, and only while it holds an ACTIVE attempt that BEGAN
+ * inside that turn — `startedAfterSeq` at or above the open turn's own
+ * `turn/start` seq, recorded in the same projection pass (one id space, one
+ * log — never a boundary seq from outside it): a turn that died without a
+ * stream `end` (a driver crash) leaves its attempt active in the fold, and
+ * serving its baseline onto a LATER open turn would seat dead text on a live
+ * turn. A revision-only fold (nothing streaming, or a missed frame reset it)
+ * seats nothing on a reload and is not carried. The resync keeps it beside
+ * the surviving frames for the same reason the reload carries it: the
+ * browser re-seats the transient tail from it.
  */
 export function projectSessionEntries(
   events: DshEvent[], sinceSeq?: number,
+  assistantStream?: SessionAssistantStreamBaseline,
 ): ReplayedSession {
   const turns: ReplayedTurn[] = []
   let pending: DshEvent[] = []
-  let open: { frames: Record<string, unknown>[]; state: ReturnType<typeof newTurnMapState> } | null = null
+  let open: {
+    frames: Record<string, unknown>[]
+    state: ReturnType<typeof newTurnMapState>
+    /** The turn/start row's seq — the coordinate the fold's active attempt
+     * must clear (startedAfterSeq at or above it) to seat on this open
+     * turn. Undefined on a seq-less start row: unprovable, so nothing
+     * seats. */
+    startSeq: number | undefined
+  } | null = null
   let tail: number | null = null
 
   for (const ev of events) {
     if (typeof ev.seq === 'number') tail = Math.max(tail ?? Number.NEGATIVE_INFINITY, ev.seq)
     if (ev.type === 'turn/start') {
-      open = { frames: [], state: newTurnMapState() }
+      open = { frames: [], state: newTurnMapState(), startSeq: ev.seq }
       for (const buffered of pending) {
         open.frames.push(...mapEvent(buffered, open.state))
       }
@@ -115,9 +144,17 @@ export function projectSessionEntries(
   // row's `lore/halt` mint (whose qualifier is "frames is None") stays that
   // turn's ONE record; a resync consumer instead assembles the open turn by
   // seq and renders it live. Why: emitting the open turn AND letting the halt
-  // mint land on the same turn would render two records for one dead turn
-  // (plan agent-line-harness-lifecycle step 1).
-  if (open) turns.push({ frames: open.frames })
+  // mint land on the same turn would render two records for one dead turn.
+  if (open) turns.push({
+    frames: open.frames,
+    // The gate: only an attempt that began inside THIS open turn seats —
+    // startedAfterSeq at or above the turn's own start (see the param doc).
+    ...(assistantStream?.activeAttempt !== undefined
+      && open.startSeq !== undefined
+      && assistantStream.activeAttempt.startedAfterSeq >= open.startSeq
+      ? { assistant_stream: assistantStream }
+      : {}),
+  })
   if (sinceSeq === undefined) return { turns, tail_seq: tail }
   return {
     turns: turns

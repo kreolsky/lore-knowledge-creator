@@ -90,9 +90,9 @@ DOC_META_COLUMNS: tuple[str, ...] = (
 # computed alias (string::len(content ?? '') > 0 AS has_content) added by the route —
 # NOT a plain column, so it lives outside this tuple and is exempt from the sync check.
 REF_META_COLUMNS: tuple[str, ...] = (
-    "id", "project_id", "parent_id", "title", "media_type", "source_url", "path",
-    "is_index", "is_reference", "processing_status", "file_path", "file_meta",
-    "archived", "created_at", "updated_at",
+    "id", "project_id", "parent_id", "sort_key", "title", "media_type",
+    "source_url", "path", "is_index", "is_reference", "processing_status",
+    "file_path", "file_meta", "archived", "created_at", "updated_at",
     "created_by", "created_by_name",
 )
 # Batch soft-delete access probe (documents.delete).

@@ -26,9 +26,10 @@ import { useTranslation } from '../i18n';
 import { PREVIEW_WIDTH } from '../utils/preview-geometry';
 import { HoverPreviewPopup } from './HoverPreviewPopup';
 import { useDocumentPreview } from '../hooks/useDocumentPreview';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useDocumentRoute } from '../hooks/useDocumentRoute';
 import { useHoverPreview } from '../hooks/useHoverPreview';
-import { useTreeDragReorder } from '../hooks/useTreeDragReorder';
+import { useSiblingDragReorder, treeDragAdapter } from '../hooks/useSiblingDragReorder';
 import { keyIconClassFromCapabilities } from '../utils/key-icon';
 import s from './Sidebar.module.css';
 
@@ -322,7 +323,7 @@ export function DocumentTree({ onDelete, onCreateChild, onChangeParent, canEdit 
 
   // INVARIANT(security): drag reordering is gated on edit access (handler no-ops + the rows
   // only respond when canEdit). Never rely on hiding alone.  Why: hiding is not enforcement — a readonly user could still dispatch a drag event, so the handler no-ops and the rows ignore drag unless canEdit (defense in depth).
-  useTreeDragReorder(treeRef, canEdit);
+  useSiblingDragReorder(treeRef, canEdit, treeDragAdapter);
 
   // reveal-in-tree — explicit "show me where this document is" gesture
   // (breadcrumb active crumb). Expands collapsed ancestors, switches the sidebar
@@ -345,6 +346,7 @@ export function DocumentTree({ onDelete, onCreateChild, onChangeParent, canEdit 
 
   const [hoverDocId, setHoverDocId] = useState<string | null>(null);
   const { content: hoverContent, error: hoverError, loading: hoverLoading } = useDocumentPreview(hoverDocId);
+  const hoverTitle = useDocumentTitle(hoverDocId);
 
   const hover = useHoverPreview({
     shiftOffset: SHIFT_OFFSET,
@@ -527,6 +529,7 @@ export function DocumentTree({ onDelete, onCreateChild, onChangeParent, canEdit 
       </div>
       <HoverPreviewPopup
         hover={hover}
+        title={hoverTitle}
         content={hoverContent}
         error={hoverError}
         loading={hoverLoading}

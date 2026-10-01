@@ -32,6 +32,7 @@
  */
 import {
   createLoreConversation,
+  expandAssistantStream,
   type SessionEventLikeEntry,
   type ConversationPublication,
   type LoreConversation,
@@ -69,7 +70,7 @@ export type FeedSet = (patch: FeedPublication) => void;
 interface FeedState {
   sessionId: string | null;
   engine: LoreConversation | null;
-  /** Every relay frame fed this session — the image-gen anchor join's input. */
+  /** Every relay frame fed this session — the lineage rewind's input. */
   fedFrames: Record<string, unknown>[];
   /** Per-assistant-row turn windows, rebuilt wholesale by replaceWindow. */
   turnRanges: Record<string, TurnRange>;
@@ -210,6 +211,14 @@ function ensureEngine(sessionId: string | null): LoreConversation {
  * `dsh_stream` → the transient arm below. A frame without a finite seq
  * cannot enter the assembler's seq space and is dropped (the relay emits
  * `seq: null` only for degenerate events).
+ *
+ * INVARIANT: the browser never mints a lore node — every lore/* frame it
+ * feeds was minted by the backend and arrives verbatim. Why: a second mint
+ * site in the browser drifted from the backend's three times; one producer
+ * cannot disagree with itself. (The detached image-gen card arrives here the
+ * same way: the backend mints it from the run's frozen anchor and ships it on
+ * the chat channel; conversation-feed.test.ts pins that this module splices
+ * EXACTLY once, here.)
  */
 export function feedFrame(
   frame: Record<string, unknown>,
@@ -236,7 +245,7 @@ export function feedFrame(
 
 // ─── The transient live tail (dsh_stream) ────────────────────────────────────
 //
-// v3 killed assistant/chunk in the log: the live tail is dsh's own
+// The v4 log holds only settled events: the live tail is dsh's own
 // `agent/assistant-stream` publication, relayed verbatim by the plugin
 // (ws-events.ts relayAssistantStream). The START frame opens the attempt (a
 // chunk carries no turn/step of its own); each CHUNK becomes the assembler's
@@ -251,19 +260,94 @@ export function feedFrame(
 // holds, so a chunk seq equal to a mint seq drops whichever arrives second —
 // the verdict/compaction card or a text delta — and the bare k/(k+1) series
 // hits 0.5 (verdictAsk) at k=1 and 0.8 (compactionMint) at k=4 on an
-// integral tail; the band starts above the largest offset. A durable frame resets the gap counter (feedFrame above); END closes the
-// attempt and publishes nothing (the settlement arrives through the normal
-// path). Chunks with no open attempt — a subscribe that lost the attempt's
-// start — are dropped, dsh's own fold's rule; the settlement renders the
-// text. Transient rows are never retired here (dsh retires them through
-// `assembler.settleAssistant`, which the Lore bundle does not expose): the
-// settlement's finalNode supersedes them visually, and they live in the
-// engine until the next replaceWindow / session switch.
+// integral tail; the band starts above the largest offset. A durable frame resets the gap counter (feedFrame above). END retires the
+// attempt's transient rows through the bundle's `settleAssistant` on EVERY
+// outcome (feedStreamFrame below): an abandoned attempt's ghost text has no
+// other remover, and a committed settlement arrives separately as a normal
+// dsh_event. Chunks with no open attempt — a subscribe that lost the
+// attempt's start — are dropped, dsh's own fold's rule; the settlement
+// renders the text.
 
 // The largest LORE_SEQ_OFFSETS value (compactionMint 0.8) as a pinned literal
-// — the bundle exports no offsets (same convention as IMAGE_GEN_SEQ_OFFSET
-// below); the collision test pins it against the mint offsets.
+// — the bundle exports no offsets (the same convention the backend's
+// `_lore_event` mirrors); the collision test pins it against the mint offsets.
 const STREAM_CHUNK_BAND = 0.9;
+
+/** Append one transient live-chunk entry for the OPEN attempt at the next
+ * band position (the WHY-the-band block above). Shared by the live `dsh_stream`
+ * chunk arm and the reload baseline's replay — one series, one rule. */
+function appendLiveChunk(
+  attempt: { attemptId: unknown; turn: number; step: number },
+  chunk: unknown,
+  time: number,
+  set: FeedSet,
+): void {
+  if (!feed.engine || !Number.isFinite(feed.tailSeq)) return;
+  feed.transientInGap += 1;
+  const gap = Math.floor(feed.tailSeq) + 1 - feed.tailSeq; // (0,1]; 1 on an integral tail
+  const cadence = feed.engine.append({
+    type: 'transient',
+    event: {
+      type: 'assistant/live-chunk',
+      // No chunk seq equals a mint seq (see WHY the band above).
+      seq: feed.tailSeq + gap * (STREAM_CHUNK_BAND
+        + (1 - STREAM_CHUNK_BAND) * (feed.transientInGap / (feed.transientInGap + 1))),
+      time,
+      data: {
+        attemptId: attempt.attemptId,
+        turn: attempt.turn,
+        step: attempt.step,
+        chunk,
+      },
+    },
+  });
+  publish(cadence, set);
+}
+
+/** One `assistant_stream` baseline's ACTIVE attempt off the wire (the
+ * plugin's fold, dsh's SessionAssistantStreamAccumulator snapshot) — the
+ * reload's streamed text. */
+interface StreamBaseline {
+  attemptId: unknown;
+  turn: number;
+  step: number;
+  nextIndex: number;
+  stream: readonly unknown[];
+}
+
+/**
+ * Seat the reload's streamed-text baseline (the open row's `assistant_stream`):
+ * seat the feed's open attempt from the baseline's ACTIVE attempt and replay
+ * the compact records as live-chunk entries through the SAME band path a live
+ * chunk takes — the text is on screen before any live frame, and the next
+ * live chunk continues at nextIndex's band position (the fold's expansion
+ * length IS nextIndex by construction). A baseline with no active attempt, or
+ * a malformed record set, skips the seat: the streamed text returns with the
+ * settlement (today's behaviour), never garbled.
+ */
+export function adoptStreamBaseline(
+  baseline: unknown,
+  sessionId: string | null,
+  set: FeedSet,
+): void {
+  const b = (baseline as { activeAttempt?: StreamBaseline } | null | undefined)
+    ?.activeAttempt;
+  if (!b || typeof b.turn !== 'number' || typeof b.step !== 'number'
+    || !Array.isArray(b.stream)) return;
+  ensureEngine(sessionId);
+  let timed;
+  try {
+    timed = expandAssistantStream(b.stream as never);
+  } catch (e) {
+    console.warn('assistant_stream baseline unreadable — streamed text returns with settlement', e);
+    return;
+  }
+  feed.streamAttempt = { attemptId: b.attemptId, turn: b.turn, step: b.step };
+  const attempt = feed.streamAttempt;
+  for (const member of timed) {
+    appendLiveChunk(attempt, member.chunk, member.time, set);
+  }
+}
 
 function feedStreamFrame(frame: Record<string, unknown>, set: FeedSet): void {
   const stream = frame.frame as Record<string, unknown> | undefined;
@@ -275,32 +359,26 @@ function feedStreamFrame(frame: Record<string, unknown>, set: FeedSet): void {
     return;
   }
   if (stream.type === 'end') {
-    feed.streamAttempt = null;
+    // The attempt's terminal: retire its transient rows NOW, on every
+    // outcome — the end names its OWN attempt (not the open one), so a lost
+    // start's end is a no-op retirement and never clobbers a different open
+    // attempt. The open attempt closes only when the end names it.
+    const cadence = feed.engine
+      ? feed.engine.settleAssistant(stream.attemptId)
+      : 'none';
+    if (feed.streamAttempt !== null && feed.streamAttempt.attemptId === stream.attemptId) {
+      feed.streamAttempt = null;
+    }
+    publish(cadence, set);
     return;
   }
-  if (stream.type !== 'chunk' || !feed.engine) return;
+  if (stream.type !== 'chunk') return;
   const attempt = feed.streamAttempt;
   if (!attempt || attempt.attemptId !== stream.attemptId) return;
-  if (!Number.isFinite(feed.tailSeq)) return;
-  feed.transientInGap += 1;
-  const gap = Math.floor(feed.tailSeq) + 1 - feed.tailSeq; // (0,1]; 1 on an integral tail
-  const cadence = feed.engine.append({
-    type: 'transient',
-    event: {
-      type: 'assistant/live-chunk',
-      // No chunk seq equals a mint seq (see WHY the band above).
-      seq: feed.tailSeq + gap * (STREAM_CHUNK_BAND
-        + (1 - STREAM_CHUNK_BAND) * (feed.transientInGap / (feed.transientInGap + 1))),
-      time: typeof stream.time === 'number' ? stream.time : 0,
-      data: {
-        attemptId: attempt.attemptId,
-        turn: attempt.turn,
-        step: attempt.step,
-        chunk: stream.chunk,
-      },
-    },
-  });
-  publish(cadence, set);
+  appendLiveChunk(
+    attempt, stream.chunk,
+    typeof stream.time === 'number' ? stream.time : 0, set,
+  );
 }
 
 /**
@@ -308,9 +386,9 @@ function feedStreamFrame(frame: Record<string, unknown>, set: FeedSet): void {
  * boundary (the `ids` handler calls this). Nodes anchored above it render in
  * the streaming message; everything up to it belongs to earlier rows.
  *
- * `boundary` (plan agent-line-harness-lifecycle step 8): an ADOPTED turn
+ * `boundary`: an ADOPTED turn
  * (reload mid-turn) seats at the OPEN window's min seq instead of the tail —
- * the whole open turn renders in the streaming slot (Decision 16), and
+ * the whole open turn renders in the streaming slot, and
  * endTurn's merge then spans replay + live frames.
  */
 export function beginTurn(
@@ -467,165 +545,18 @@ export function replaceWindowFromRows(
  * the row would hold a second copy of every turn's whole driver replay in the
  * store, and invite a component to fold them a second time. What renders is
  * the published nodes; a frameless row still renders from its own fields.
- * `open_turn` (step 8) joins it: adoptOpenTurn consumes the mark beside the
- * fold, and the store never carries it.
+ * `open_turn` and its `assistant_stream` join it: adoptOpenTurn consumes both
+ * beside the fold, and the store never carries them.
  */
-export function stripFrames<T extends { frames?: unknown; open_turn?: unknown }>(row: T): T {
-  if (row.frames === undefined && row.open_turn === undefined) return row;
-  const { frames: _frames, open_turn: _openTurn, ...rest } = row;
+export function stripFrames<T extends {
+  frames?: unknown; open_turn?: unknown; assistant_stream?: unknown;
+}>(row: T): T {
+  if (row.frames === undefined && row.open_turn === undefined
+    && row.assistant_stream === undefined) return row;
+  const {
+    frames: _frames, open_turn: _openTurn, assistant_stream: _assistantStream, ...rest
+  } = row;
   return rest as T;
-}
-
-// ─── The live lore/image-gen mint ────────────────────────────────────────────
-//
-// The detached generation settles OUTSIDE the dsh log (an arq run announced on
-// the project WS), so the browser mints the card live — the reload twin comes
-// from the row's gen_steps (driver_frames.py `_image_gen_frame`). Both sides
-// derive the payload from the SAME step dicts and anchor at the SAME
-// dispatching `tool/call` (the ONE join both mint sites share: the run id rides
-// the settled tool/result's Tool-API JSON, the call id rides its source).
-// The 0.6 offset is LORE_SEQ_OFFSETS.imageGen as a pinned literal — the
-// backend's `_lore_event` does the same (its import graph cannot reach the
-// bundle); the parity test pins all three sites.
-
-const IMAGE_GEN_SEQ_OFFSET = 0.6;
-
-/** The settled run's gen-step dict (`tool: 'generate_image'`, keyed by run_id)
- * — the same shape the project-WS done event carries in `steps` and the row
- * persists in `gen_steps`. */
-function genStepOf(steps: unknown, runId: string): Record<string, unknown> | null {
-  if (!Array.isArray(steps)) return null;
-  let gen: Record<string, unknown> | null = null;
-  for (const step of steps) {
-    if (typeof step !== 'object' || step === null) continue;
-    const s = step as Record<string, unknown>;
-    if (s.tool === 'generate_image' && s.run_id === runId) gen = s;
-  }
-  return gen;
-}
-
-/** The raw Tool-API text a settled `tool/result` carries — the browser twin of
- * backend `_tool_result_text` (driver_frames.py): the text blocks NEST at
- * `message.content[0].content[*]` (each a string or a {type:'text'} block).
- * The flat `content[0].text` is a shape the wire never carries — a join that
- * reads it silently misses every anchor. */
-function toolResultText(message: Record<string, unknown> | undefined): string {
-  const content = message?.content;
-  if (!Array.isArray(content) || content.length === 0 || typeof content[0] !== 'object' || content[0] === null) {
-    return '';
-  }
-  const inner = (content[0] as Record<string, unknown>).content;
-  if (!Array.isArray(inner)) return '';
-  const parts: string[] = [];
-  for (const block of inner) {
-    if (typeof block === 'string') parts.push(block);
-    else if (typeof block === 'object' && block !== null && (block as Record<string, unknown>).type === 'text') {
-      parts.push(String((block as Record<string, unknown>).text ?? ''));
-    }
-  }
-  return parts.join('');
-}
-
-/** The anchor join: the dispatching `tool/call` frame's seq for a run id —
- * found through the settled `tool/result` whose Tool-API JSON carries the run
- * id (driver_frames.py `_image_run_anchor_index`'s browser twin). The call id
- * reads the same two places the backend `_result_call_id` does: the result's
- * `source.callId`, then the block's `toolCallId`. */
-function imageRunAnchor(frames: Record<string, unknown>[], runId: string): Record<string, unknown> | null {
-  const callIds: string[] = [];
-  for (const frame of frames) {
-    if (frame.kind !== 'tool/result') continue;
-    const data = typeof frame.data === 'object' && frame.data !== null
-      ? frame.data as Record<string, unknown> : {};
-    const message = typeof data.message === 'object' && data.message !== null
-      ? data.message as Record<string, unknown> : undefined;
-    let runIdInResult = '';
-    try {
-      const parsed: unknown = JSON.parse(toolResultText(message));
-      if (typeof parsed === 'object' && parsed !== null && 'run_id' in parsed) {
-        runIdInResult = String((parsed as Record<string, unknown>).run_id ?? '');
-      }
-    } catch { /* a non-JSON result text names no run */ }
-    if (runIdInResult !== runId) continue;
-    const source = typeof message?.source === 'object' && message.source !== null
-      ? message.source as Record<string, unknown> : undefined;
-    const cid = String(source?.callId ?? '') || toolResultCallId(message);
-    if (cid) callIds.push(cid);
-  }
-  if (callIds.length === 0) return null;
-  for (const frame of frames) {
-    if (frame.kind !== 'tool/call') continue;
-    const data = typeof frame.data === 'object' && frame.data !== null ? frame.data as Record<string, unknown> : {};
-    if (callIds.includes(String(data.callId ?? ''))) return frame;
-  }
-  return null;
-}
-
-/** The call id off the result's first block (`toolCallId`) — the fallback the
- * backend `_result_call_id` reads when the result carries no source. */
-function toolResultCallId(message: Record<string, unknown> | undefined): string {
-  const content = message?.content;
-  if (!Array.isArray(content) || content.length === 0 || typeof content[0] !== 'object' || content[0] === null) {
-    return '';
-  }
-  const cid = (content[0] as Record<string, unknown>).toolCallId;
-  return typeof cid === 'string' ? cid : '';
-}
-
-/**
- * Mint one `lore/image-gen` node for a settled detached run (the project-WS
- * done event). Returns whether the card LANDED; the miss cases (no chip in
- * `steps`, no dispatching call in the fed frames) return false and the CALLER
- * must surface them — a vanished running chip with nothing in its place is
- * the silent degradation defect D was (the reload twin logs the same two
- * outcomes server-side).
- */
-export function mintImageGen(
-  runId: string,
-  steps: unknown,
-  sessionId: string | null,
-  set: FeedSet,
-): boolean {
-  if (!runId) return false;
-  const gen = genStepOf(steps, runId);
-  if (!gen) return false;
-  const anchorFrame = imageRunAnchor(feed.fedFrames, runId);
-  if (!anchorFrame || typeof anchorFrame.seq !== 'number') return false;
-  const failed = gen.outcome === 'failed';
-  const anchorData = typeof anchorFrame.data === 'object' && anchorFrame.data !== null
-    ? anchorFrame.data as Record<string, unknown> : {};
-  const turn = typeof anchorData.turn === 'number' ? anchorData.turn : null;
-  const data: Record<string, unknown> = { turn, runId, status: failed ? 'failed' : 'done' };
-  if (failed) {
-    if (gen.detail) data.error = String(gen.detail);
-  } else if (Array.isArray(gen.image_ref_ids) && gen.image_ref_ids.length > 0) {
-    data.imageRefIds = gen.image_ref_ids.map(r => String(r));
-  }
-  if (Array.isArray(steps)) {
-    for (const step of steps) {
-      if (typeof step !== 'object' || step === null) continue;
-      const s = step as Record<string, unknown>;
-      if (s.tool !== 'refine_prompt') continue;
-      const ok = s.outcome !== 'failed';
-      const refine: Record<string, unknown> = { ok };
-      if (s.detail) refine[ok ? 'prompt' : 'error'] = String(s.detail);
-      data.refine = refine;
-    }
-  }
-  if (typeof gen.title === 'string' && gen.title) data.title = gen.title;
-  const engine = ensureEngine(sessionId);
-  const cadence = engine.splice({
-    type: 'event',
-    event: {
-      seq: anchorFrame.seq + IMAGE_GEN_SEQ_OFFSET,
-      type: 'lore/image-gen',
-      data,
-      time: typeof anchorFrame.time === 'number' ? anchorFrame.time : 0,
-      ignorable: true,
-    },
-  });
-  publish(cadence, set);
-  return true;
 }
 
 /**

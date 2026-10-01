@@ -12,6 +12,7 @@ import assert from 'node:assert/strict'
 
 import {
   assertNonReasoningTitleModel,
+  gatewayOf,
   piAiEffortKey,
   reasoningEffortsDeclaration,
   resolveModelCaps,
@@ -169,6 +170,44 @@ test('concurrent cold reads share one in-flight fetch per endpoint', async () =>
     resolveModelCaps('local/orange/chat', io),
   ])
   assert.equal(log.length, 2)
+})
+
+test('the cache is keyed by the gateway: an admin change of URL or key refetches at once', async () => {
+  resetCapsCache()
+  const calls: { url: string; auth: string }[] = []
+  const fetch = (async (url: unknown, init?: { headers?: Record<string, string> }) => {
+    calls.push({ url: String(url), auth: init?.headers?.Authorization ?? '' })
+    if (String(url).endsWith('/capabilities')) return { ok: true, status: 200, json: async () => ({}) }
+    return { ok: true, status: 200, json: async () => ({ data: SERVED }) }
+  }) as unknown as typeof fetch
+  const now = () => 1_000
+  await resolveModelCaps('deepseek/flash', { fetch, now, gateway: { base: 'http://old/v1', key: 'k1' } })
+  await resolveModelCaps('deepseek/flash', { fetch, now, gateway: { base: 'http://old/v1', key: 'k1' } })
+  assert.equal(calls.length, 2, 'the same gateway inside the TTL is served from the cache')
+  await resolveModelCaps('deepseek/flash', { fetch, now, gateway: { base: 'http://new/v1', key: 'k1' } })
+  await resolveModelCaps('deepseek/flash', { fetch, now, gateway: { base: 'http://new/v1', key: 'k2' } })
+  assert.deepEqual(calls.slice(2).map((c) => [c.url, c.auth]), [
+    ['http://new/v1/models', 'Bearer k1'], ['http://new/v1/capabilities', 'Bearer k1'],
+    ['http://new/v1/models', 'Bearer k2'], ['http://new/v1/capabilities', 'Bearer k2'],
+  ])
+})
+
+test('gatewayOf: the request values win; the harness env is only the fallback', () => {
+  const saved = { url: process.env.LORE_AI_API_URL, key: process.env.AI_API_KEY }
+  try {
+    process.env.LORE_AI_API_URL = 'http://env/v1'
+    process.env.AI_API_KEY = 'env-key'
+    assert.deepEqual(gatewayOf('http://admin/v1/', 'admin-key'), { base: 'http://admin/v1', key: 'admin-key' })
+    assert.deepEqual(gatewayOf('', undefined), { base: 'http://env/v1', key: 'env-key' })
+    delete process.env.LORE_AI_API_URL
+    delete process.env.AI_API_KEY
+    assert.deepEqual(gatewayOf(undefined, ''), { base: '', key: '' })
+  } finally {
+    for (const [name, value] of [['LORE_AI_API_URL', saved.url], ['AI_API_KEY', saved.key]] as const) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
 })
 
 // ─── the pi-ai level translation (the adapter twin of the backend filter) ─────

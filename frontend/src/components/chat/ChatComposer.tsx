@@ -13,6 +13,7 @@ import { useVerticalDragResize } from '../../hooks/useVerticalDragResize';
 import { useTranslation } from '../../i18n';
 import { MicButton } from './shared/MicButton';
 import { AttachmentChips } from './shared/AttachmentChips';
+import { QueuedChips } from './shared/QueuedChips';
 
 interface Props {
   variant: 'ai' | 'note';
@@ -38,6 +39,8 @@ interface Props {
   onRemoveImage: (index: number) => void;
   // Plan chat-message-queue: optional follow-up chips typed while a turn streams (AI
   // chat only; notes pass nothing). Empty → not rendered.
+  queued?: string[];
+  onRemoveQueued?: (index: number) => void;
   // AI-only slots (omitted by notes)
   topControls?: ReactNode;
   leftControls?: ReactNode;
@@ -64,6 +67,8 @@ export function ChatComposer({
   onToggleRecording,
   images,
   onRemoveImage,
+  queued,
+  onRemoveQueued,
   topControls,
   leftControls,
   warnings,
@@ -91,6 +96,18 @@ export function ChatComposer({
 
   return (
     <>
+      {/* Queued follow-ups sit ABOVE the divider, in the message stream's column —
+          they are pending user bubbles, not composer controls. */}
+      {queued && onRemoveQueued && (
+        // Zero-height anchor: the strip is absolutely positioned so it OVERLAYS the
+        // message stream instead of pushing it up — the agent's answer shows through
+        // the translucent plates.
+        <div className="relative z-10 flex-shrink-0">
+          <div className="absolute bottom-0 left-0 right-0 px-3 pb-2">
+            <QueuedChips queued={queued} onRemove={onRemoveQueued} />
+          </div>
+        </div>
+      )}
       <div ref={dragHandleRef} className="resizer-v" />
       <div
         className={`flex-shrink-0 border-t pb-safe ${panelBg} ${panelBorderClass}`}

@@ -42,6 +42,13 @@ from migrations.migrate_document_access_drop import _migrate_document_access_dro
 from migrations.migrate_messages_schemafull_converge import (
     _migrate_messages_schemafull_converge,
 )
+from migrations.migrate_reference_sort_keys_backfill import (
+    _migrate_reference_sort_keys_backfill,
+)
+from migrations.migrate_turn_timeout_override_fold import (
+    _migrate_turn_timeout_override_fold,
+)
+from migrations.migrate_web_search_off_drop import _migrate_web_search_off_drop
 
 # --- Per-migration modules (registry composition) ---
 # ARCH: each migrate_<name>.py imports only from `_shared` (never from runner),
@@ -79,6 +86,16 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     # settings. Tombstones the rows (tag kept), logging hand-edited ones. No
     # dependency.
     ("comfy_config_docs_drop", _migrate_comfy_config_docs_drop),
+    # Reference rows join the fractional-order world: keys every NONE-key reference row in its own
+    # (project, parent, ref) group, updated_at DESC per group. Idempotent
+    # (NONE rows only); runs last, no dependency.
+    ("reference_sort_keys_backfill", _migrate_reference_sort_keys_backfill),
+    # A persisted WEB_SEARCH_PROVIDER='off' predates the value leaving the
+    # choices: rows are read without validation, so the stale value would
+    # KeyError every turn's payload build. Deletes exactly the `off` row.
+    # No dependency.
+    ("web_search_off_drop", _migrate_web_search_off_drop),
+    ("turn_timeout_override_fold", _migrate_turn_timeout_override_fold),
 ]
 
 

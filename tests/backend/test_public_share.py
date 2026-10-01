@@ -676,47 +676,45 @@ async def test_public_references_scope_whole_subtree_excludes_outside(
 
 
 @pytest.mark.asyncio
-async def test_public_references_sorted_depth_tier_then_updated_at(
+async def test_public_references_sorted_depth_tier_then_sort_key(
     client, admin_user, project_with_doc,
 ):
-    """Defect 2b: public_references now sorts depth-tier (parity with the authed
-    list_references): own refs first, then ancestors by proximity, newest
-    updated_at DESC within each tier; archived sunk (archived rows are already
-    filtered out on this surface, so only the tier+newest ordering is exercised).
+    """Defect 2b parity with the authed list_references: depth-tier (own refs
+    first, then ancestors by proximity), then (sort_key, id) ASC within each
+    tier — manual order, not updated_at; archived rows are already filtered out
+    on this surface, so only the tier+key ordering is exercised.
     """
     pid, _, _ = project_with_doc
     _, admin_token = admin_user
     root, child, _, _ = await _build_tree(client, admin_token, pid)
 
-    child_ref_new = await _make_ref(client, admin_token, pid, child, "Child new", "cn")
-    child_ref_old = await _make_ref(client, admin_token, pid, child, "Child old", "co")
+    child_ref_top = await _make_ref(client, admin_token, pid, child, "Child top", "ct")
+    child_ref_bottom = await _make_ref(client, admin_token, pid, child, "Child bottom", "cb")
     root_ref = await _make_ref(client, admin_token, pid, root, "Root ref", "rr")
 
-    # Pin deterministic updated_at values — creation order / clock resolution are
-    # not reliable tiebreakers. ISO strings → SurrealDB datetime → serialized
-    # back as ISO-8601, lexicographically comparable (proven by the authed sort).
+    # Pin deterministic keys — creation order is not the contract; the key is.
     from db import get_db
     db = await get_db()
-    stamps = {
-        child_ref_new: "2026-03-03T00:00:00Z",
-        child_ref_old: "2026-02-02T00:00:00Z",
-        root_ref: "2026-01-01T00:00:00Z",
+    keys = {
+        child_ref_top: "a0",
+        child_ref_bottom: "c0",
+        root_ref: "b0",
     }
-    for rid, ts in stamps.items():
+    for rid, sk in keys.items():
         await db.query(
-            "UPDATE type::record('documents', $id) SET updated_at = <datetime>$t",
-            {"id": rid, "t": ts},
+            "UPDATE type::record('documents', $id) SET sort_key = $sk",
+            {"id": rid, "sk": sk},
         )
 
     data = await _mint_share(client, admin_token, pid, root, "subtree")
     token = data["token"]
 
-    # Viewing child: own tier (child) first newest-first, then ancestor tier (root).
+    # Viewing child: own tier (child) first in key order, then ancestor tier (root).
     resp = await client.get(f"/api/public/{token}/documents/{child}/references")
     assert resp.status_code == 200, resp.text
     order = [r["reference_id"] for r in resp.json()["references"]]
-    assert order == [child_ref_new, child_ref_old, root_ref], (
-        f"depth-tier sort (own newest-first, then ancestors) failed: {order}"
+    assert order == [child_ref_top, child_ref_bottom, root_ref], (
+        f"depth-tier sort (own by sort_key, then ancestors) failed: {order}"
     )
 
 

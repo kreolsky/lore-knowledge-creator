@@ -24,11 +24,11 @@ from emit_recorder import EmitRecorder
 from enqueue_recorder import EnqueueRecorder
 from surrealdb import AsyncSurreal
 
-# SAFETY: force test namespace/database regardless of what Docker compose sets.
-# WHY force-overwrite: `docker compose exec backend` inherits SURREAL_NS=lore /
-# SURREAL_DB=main from docker-compose.yml. Using setdefault() would NOT override
-# these, causing test cleanup (DELETE on every table) to wipe production data.
-# This happened on 2026-03-19 and destroyed all local test data.
+# SAFETY: force the test namespace/database regardless of ambient env.
+# WHY force-overwrite: SURREAL_NS/SURREAL_DB are the TEST seam (config.py
+# reads them with constant defaults lore/main); setting them here points the
+# suite's per-test DELETE cleanup at the test namespace instead. A bare
+# constant default would wipe production data — this happened on 2026-03-19.
 os.environ["SURREAL_NS"] = "lore_test"
 # INVARIANT: each pytest-xdist worker gets its OWN SurrealDB database (test_gwN) and
 # Redis db index, so parallel workers never see each other's rows through the per-test
@@ -176,10 +176,10 @@ if not os.environ.get("PYTEST_XDIST_WORKER"):
     os.ftruncate(_suite_lock_fd, 0)
     os.write(_suite_lock_fd, f"{os.getpid()} {time.time()}\n".encode())
     # No atexit/unlink: the flock + fd are released by the OS on process death.
-os.environ["LORE_SECRET_KEY"] = os.environ.get("LORE_SECRET_KEY", "") or "test-secret-key"
-os.environ.setdefault("SURREAL_URL", "ws://surreal:8000/rpc")
-os.environ.setdefault("SURREAL_USER", "root")
-os.environ.setdefault("SURREAL_PASS", "root")
+# No `docker compose exec` inherits these anymore — SURREAL_URL/USER/PASS left
+# the compose env with the wiring constants (plan component-wiring-not-settings
+# step 4): the test DB signs in as root with the password file secrets-init
+# generated (/secrets/surreal/pass — the container mounts the secrets volume).
 # Per-worker storage subtree, mirroring the DB (_WORKER_IDX) and Redis (15 - idx)
 # isolation above. Why: every worker reuses the SAME project ids (project_with_doc
 # hardcodes "test-project-001") in its OWN DB, so a SHARED storage root lets one
@@ -208,14 +208,29 @@ from password import hash_secret
 # every consumer) keeps the name out of each module's namespace, so the
 # parameter never shadows a module-level import (ruff F811).
 # INVARIANT: this import stays BELOW the env block above. Why: test_harness_turn
-# imports driver.channel → config, and config reads LORE_SECRET_KEY / REDIS_URL /
-# STORAGE_PATH at import time — placed at the top it crashed collection in CI
-# (no LORE_SECRET_KEY in the runner env) and on dev/gray silently bound every
+# imports driver.channel → config, and config reads REDIS_URL / STORAGE_PATH at
+# import time (the test seams) — placed at the top it silently bound every
 # xdist worker's Redis client to db 0 instead of its isolated 15-N.
 from test_harness_turn import (
     driver_line_pinned,  # noqa: F401 — conftest-wide fixture registration
     harness_env,  # noqa: F401 — conftest-wide fixture registration
 )
+
+
+@pytest.fixture(autouse=True)
+def driver_line_unconfigured(monkeypatch):
+    """Every test starts with the agent line UNCONFIGURED.
+
+    # INVARIANT: a test gets a driver line only by requesting driver_line_pinned
+    # (or patching resolve_driver_line). Why: config reads the secret from the
+    # mounted secrets volume, so without this default the RUNNER decides — the
+    # line is configured wherever the volume is mounted, and every context build
+    # calls the real harness /capability: green on gray (a harness answers), DNS
+    # failure in CI (none runs). Runs #1280, #1393, #1394.
+    """
+    import config
+
+    monkeypatch.setattr(config, "HARNESS_DRIVER_SECRET", "")
 
 # ARCH (perf): the constant test passwords are bcrypt-hashed ONCE per process and
 # reused by every admin_user/regular_user fixture. bcrypt is ~275ms/hash and those
@@ -318,18 +333,29 @@ _DELETE_ALL_SQL = "; ".join(f"DELETE {t}" for t in _EDGE_TABLES + _DATA_TABLES)
 _conns_by_loop_id: dict[int, AsyncSurreal] = {}
 
 
-async def _connect_test_db(url: str) -> AsyncSurreal:
+async def _connect_test_db() -> AsyncSurreal:
     """Create and authenticate a SurrealDB test connection with retry.
+
+    Sign-in mirrors db.pool: the constant address/user (config) and the
+    password file secrets-init generated — same file the running surreal
+    imported at start, so the pair cannot drift.
 
     WHY retry: CI environments (Docker networking) can have transient connection
     failures on first attempt. The SDK raises RuntimeError on WebSocket errors,
     and create_record() propagates it — causing the first test to ERROR while
     subsequent tests succeed because the connection stabilises by then.
     """
+    # Function-local: importing db.pool pulls config, and config binds the
+    # SURREAL_NS/DB/STORAGE_PATH/REDIS_URL seams at import time — the env
+    # block above must run first (see the INVARIANT at the test_harness_turn
+    # import below).
+    import config
+    from db.pool import surreal_password
+
     for attempt in range(3):
         try:
-            conn = AsyncSurreal(url)
-            await conn.signin({"username": "root", "password": "root"})
+            conn = AsyncSurreal(config.SURREAL_URL)
+            await conn.signin({"username": config.SURREAL_USER, "password": surreal_password()})
             await conn.use("lore_test", TEST_DB_NAME)
             return conn
         except Exception:
@@ -360,10 +386,9 @@ async def _get_test_db() -> AsyncSurreal:
         except Exception:
             _conns_by_loop_id.pop(loop_id, None)
     # INVARIANT: always use test-specific namespace/database, never production.
-    # Docker compose sets SURREAL_NS=lore / SURREAL_DB=main for the backend
-    # container — these env vars must NOT leak into tests.
-    url = os.environ.get("TEST_SURREAL_URL", "ws://surreal:8000/rpc")
-    conn = await _connect_test_db(url)
+    # The seam env vars (SURREAL_NS/SURREAL_DB, set at the top of this file)
+    # force lore_test / test_gwN — ambient values must NOT leak into tests.
+    conn = await _connect_test_db()
     _conns_by_loop_id[loop_id] = conn
     return conn
 

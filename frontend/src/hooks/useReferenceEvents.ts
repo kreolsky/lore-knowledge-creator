@@ -46,7 +46,7 @@ export function useReferenceEvents() {
   // to the panel even when its parent is a different/unrelated document — shown with that
   // parent's label. Why: same stale-until-reload feature; lets the user see and open a
   // just-created reference in context. Do NOT gate addReference on current-doc scope.
-  useEvent('project-reference-created', useCallback(async ({ referenceId }: { referenceId: string }) => {
+  useEvent('ws:reference_created', useCallback(async ({ reference_id: referenceId }) => {
     const state = useAppStore.getState();
     if (state.references.some(r => r.reference_id === referenceId)) return;
     if (state.pendingUploadRefIds.has(referenceId)) return;
@@ -55,41 +55,54 @@ export function useReferenceEvents() {
     if (ref) addReference(ref);
   }, [addReference, fetchRef]));
 
-  useEvent('project-reference-renamed', useCallback(({ referenceId, title }: { referenceId: string; title: string }) => {
+  useEvent('ws:reference_renamed', useCallback(({ reference_id: referenceId, title }) => {
     updateReference(referenceId, { title });
   }, [updateReference]));
 
   // WHY: a moved reference stays in the References panel under its NEW parent's
-  // label; we only patch document_id, never remove it from the current view.
+  // label; we re-place it (document_id + sort_key) into the new group's run,
+  // never remove it from the current view.
   // Why: deliberate "stale-until-reload" UX — the user can keep working with a just-moved
   // reference in place. The panel re-scopes to the current doc only on the next full load
-  // (ReferencesPanel scoped fetch). Do NOT add scope-revalidation/removal here.
-  useEvent('project-reference-moved', useCallback(({ referenceId, documentId }: { referenceId: string; documentId: string | null }) => {
-    updateReference(referenceId, { document_id: documentId });
-  }, [updateReference]));
+  // (ReferencesPanel scoped fetch). Do NOT add scope-revalidation/removal here. placeReference
+  // makes the ref JOIN its new group's run (leaving the old run contiguous) instead of
+  // patching document_id in place and splitting the old run.
+  useEvent('ws:reference_moved', useCallback(({ reference_id: referenceId, document_id: documentId, sort_key: sortKey }) => {
+    useAppStore.getState().placeReference(referenceId, { document_id: documentId, sort_key: sortKey ?? undefined });
+  }, []));
+
+  // A reference REORDER rides the one `document_reordered` event (both kinds).
+  // The tree handler in Sidebar maps by document
+  // ids, so a ref id is a no-op there; here the id names a reference in this
+  // client's list → re-place it in its group with the authoritative key.
+  // Doc reorders never enter this branch (a doc id is not in `references`).
+  useEvent('ws:document_reordered', useCallback(({ document_id: documentId, sort_key: sortKey }) => {
+    const state = useAppStore.getState();
+    if (sortKey && state.references.some(r => r.reference_id === documentId)) {
+      state.placeReference(documentId, { sort_key: sortKey });
+    }
+  }, []));
 
   // A reference re-parented via move_document
-  // arrives as a `project-document-moved` bus event (the tree move), NOT a
-  // project-reference-moved event. The reference panel loads per-host, so a client
+  // arrives as a `ws:document_moved` bus event (the tree move), NOT a
+  // ws:reference_moved event. The reference panel loads per-host, so a client
   // showing EITHER the new or the previous host must re-fetch its list — otherwise an
   // open panel keeps listing a file that left, or misses one that arrived (stale-as-
   // current). Each client shows one doc, so it only reloads when ITS current doc is a
   // host of the move. (Harmless for tree-document moves: the per-host reference list
   // is unaffected, so the re-fetch returns the same data.)
-  useEvent('project-document-moved', useCallback(({ parentId, previousParentId }: {
-    documentId: string; parentId: string | null; sortKey: string | null; previousParentId: string | null;
-  }) => {
+  useEvent('ws:document_moved', useCallback(({ parent_id: parentId, previous_parent_id: previousParentId }) => {
     const cur = useAppStore.getState().currentDocument?.document_id ?? null;
     if (cur && (cur === parentId || cur === previousParentId)) {
       useAppStore.getState().bumpReferencesReload();
     }
   }, []));
 
-  useEvent('project-reference-deleted', useCallback(({ referenceId }: { referenceId: string }) => {
+  useEvent('ws:reference_deleted', useCallback(({ reference_id: referenceId }) => {
     _cleanupReferenceDeletion(referenceId);
   }, []));
 
-  useEvent('project-documents-deleted-batch', useCallback(({ referenceIds }: { documentIds: string[]; referenceIds: string[] }) => {
+  useEvent('ws:documents_deleted_batch', useCallback(({ reference_ids: referenceIds }) => {
     // ARCH: reference cleanup for batch-delete lives here (always mounted), NOT in Sidebar
     // (conditionally rendered). Without this, batch-deleted references leave ghost entries
     // when the user is on a non-docs tab.
@@ -103,15 +116,13 @@ export function useReferenceEvents() {
   // panels — the same cleanup as batch-delete (drop + preview evict + chat
   // reset when the moved ref was open). The ref is not deleted, it lives in
   // the target project now; this client's project-A context cannot serve it.
-  useEvent('project-documents-moved-out', useCallback(({ referenceIds }: {
-    documentIds: string[]; referenceIds: string[]; targetProjectId: string; targetProjectName: string;
-  }) => {
+  useEvent('ws:documents_moved_out', useCallback(({ reference_ids: referenceIds }) => {
     for (const refId of referenceIds) {
       _cleanupReferenceDeletion(refId);
     }
   }, []));
 
-  useEvent('project-reference-updated', useCallback(async ({ referenceId }: { referenceId: string }) => {
+  useEvent('ws:reference_updated', useCallback(async ({ reference_id: referenceId }) => {
     // WHY: on a content change, evict the cached body.
     // Why: the next hover preview / transclusion must re-fetch fresh content —
     // a surviving entry serves the pre-edit body.
@@ -142,7 +153,7 @@ export function useReferenceEvents() {
     }
   }, [updateReference, setCurrentReference, fetchRef]));
 
-  useEvent('project-reference-status-changed', useCallback(async ({ referenceId, status }: { referenceId: string; status: string }) => {
+  useEvent('ws:reference_status_changed', useCallback(async ({ reference_id: referenceId, status }) => {
     updateReference(referenceId, { processing_status: status } as Partial<Reference>);
     if (status === 'ready') {
       // WHY: when transcription/content lands, evict the cached body.
@@ -158,7 +169,7 @@ export function useReferenceEvents() {
     }
   }, [updateReference, setCurrentReference, fetchRef]));
 
-  useEvent('project-agent-extraction-started', useCallback((_: { referenceId: string }) => {
+  useEvent('ws:agent_extraction_started', useCallback(() => {
     useAppStore.getState().showToast(t('agentAutoStarted'), 'info');
   }, [t]));
 }

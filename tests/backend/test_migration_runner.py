@@ -45,6 +45,9 @@ def test_migrations_registry_order_snapshot():
         "chat_lifecycle_drop",
         "document_access_drop",
         "comfy_config_docs_drop",
+        "reference_sort_keys_backfill",
+        "web_search_off_drop",
+        "turn_timeout_override_fold",
     ]
     # Every entry resolves to a distinct callable (a lost import would leave a
     # duplicated/None fn but keep the name).

@@ -81,6 +81,7 @@ from __future__ import annotations
 import logging
 
 from agent_config_load import (
+    live_help_root,
     load_agent_system_docs,
     load_instance_skill_docs,
     load_instance_skill_tombstones,
@@ -131,12 +132,17 @@ WHAT THIS TURN IS ASKING FOR
 WHAT YOU ALREADY HAVE, AND WHAT TO GO AND READ
 - The documents attached to this turn are in this prompt in full, and they are the
   live text as it stands on screen right now. Answer from those.
-- Everything else, go and read. A document the user names, and anything in the
-  subtree of the document they have open, has an address: get_project_structure
-  shows the tree around the open document, then read_document opens the node you
-  found there, by id. search_materials is for material nobody has named yet —
-  finding wording you cannot place. Reading is free — the user waits a moment and
-  pays nothing, so read whenever it would make your answer better.
+- A question you can answer from general knowledge, from this conversation or from
+  the attached documents — a definition, an explanation, advice, work on text the
+  user pasted — gets its answer straight away, with no tool calls. The user is
+  waiting, and the answer is already in hand.
+- A question about what THIS project says — a document the user names, "what do we
+  have on X", a fact of this world, anything in the subtree of the open document —
+  gets read first. get_project_structure shows the tree around the open document,
+  then read_document opens the node you found there, by id. search_materials is for
+  material nobody has named yet — finding wording you cannot place.
+- When you cannot tell which of the two a question is, answer from what you have and
+  close with one sentence offering to check it against the project's documents.
 - A restriction the user states in the request holds for the whole turn and
   outranks the reading advice above: when they name the source to work from, or
   draw a boundary, work inside it.
@@ -294,9 +300,11 @@ def render_subtree_section(
 
 def build_agent_system_prompt(
     docs_by_role: dict[str, object], selected_persona_id: str | None = None,
+    help_root: dict | None = None,
 ) -> str:
     """Assemble the agent system prompt: immutable bootstrap + (selected) persona +
-    rules subtree + knowledge subtree + skills subtree.
+    rules subtree + knowledge subtree + a pointer to the Lore guide (`help_root`,
+    `{id, title}`, None → no section).
 
     Pure function (no DB) so it is unit-testable. The bootstrap tier is ALWAYS
     first and is code-injected (immutable); rules/knowledge/skills come from the
@@ -345,6 +353,16 @@ def build_agent_system_prompt(
         if section:
             parts.append(section)
 
+    # WHY: a pointer, never the guide body — the guide is ~16 pages and is read on
+    # demand; injecting it would inflate every turn (see SYSTEM: help-subtree).
+    if help_root:
+        parts.append(
+            "# Lore help\n"
+            f"The user guide to Lore for this project is [{help_root['title']}]({help_root['id']}) "
+            "and its child pages. When the user asks what Lore can do or how to do something "
+            "in it, read the relevant page before answering."
+        )
+
     return "\n\n".join(parts)
 
 
@@ -370,7 +388,10 @@ async def build_prompt_and_skill_docs(
     """
     await ensure_agent_system_docs(project_id)
     docs = await load_agent_system_docs(project_id)
-    prompt = build_agent_system_prompt(docs, selected_persona_id=selected_persona_id)
+    prompt = build_agent_system_prompt(
+        docs, selected_persona_id=selected_persona_id,
+        help_root=await live_help_root(project_id),
+    )
     # ARCH: the served skill set is the
     # OVERLAY — project skills shadow instance ones by name, instance skills
     # shadow shipped ones; shipped skills are indexed from backend/configs/ at

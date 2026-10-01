@@ -23,10 +23,9 @@ def test_tabs_within_fixed_admin_tab_list():
 
     The frontend tab list is fixed in TSX (AdminSectionTab union), not derived
     from the server — a registry tab outside this set renders nowhere, and a
-    fixed tab with no registry keys renders an empty center. Equality is bound
-    now that the last tab (infra) is seeded.
+    fixed tab with no registry keys renders an empty center.
     """
-    assert TABS == ("models", "agent", "tools", "storage", "infra")
+    assert TABS == ("models", "search", "tools", "agent", "storage")
     registry_tabs = {e.tab for e in REGISTRY}
     assert registry_tabs == set(TABS), (
         f"registry tabs diverged from the fixed list: "
@@ -85,11 +84,34 @@ def test_fallback_links_resolve():
 
 # Env reads allowed OUTSIDE a setting(...) call in config.py, each with its
 # reason. A new member here is a review-visible decision, not an accident.
+# All four current members are TEST SEAMS (plan component-wiring-not-settings):
+# the constant is the DEFAULT, the env read exists only because the suite
+# must vary the value per worker/namespace — no compose, .env.example, deploy
+# or README sets or mentions any name. A bare constant for the first two
+# points the suite at the LIVE Redis db 0 / the shared storage root; for the
+# last two at the LIVE lore/main database (the per-test DELETE cleanup).
 _ALLOWED_BARE_ENV_READS = {
-    # Harness-container env (LORE_TOOL_API_URL in compose), same posture as
-    # LORE_HARNESS_MODEL: no backend code reads it, so a settings row could
-    # never have an effect and there is no honest value to edit.
-    "TOOL_API_INTERNAL_URL",
+    # tests/backend/conftest.py:190 — each xdist worker gets its own storage
+    # subtree (cross-worker reference-write races otherwise).
+    "STORAGE_PATH",
+    # tests/backend/conftest.py:201 — each xdist worker gets Redis db 15-N;
+    # the autouse fixture FLUSHDBs it between tests.
+    "REDIS_URL",
+    # tests/backend/conftest.py:32 — the suite forces the lore_test namespace;
+    # the per-test DELETE cleanup must never land on the live one.
+    "SURREAL_NS",
+    # tests/backend/conftest.py:50 — each xdist worker gets its own test_gwN
+    # database (the per-test DELETE cleanup is global-by-table).
+    "SURREAL_DB",
+    # The release stamp baked into the backend image (backend/Dockerfile.prod);
+    # served by /api/health, never edited by an operator.
+    "APP_VERSION",
+    # The boot guard's recovery hatch: needed exactly when the backend cannot
+    # boot, so no admin page could ever reach it; the critical log names it.
+    "SCHEMA_FINGERPRINT_FATAL",
+    # A path inside the container the compose file sets
+    # (docker-compose.public.yml), not an operator choice.
+    "SANDBOX_SSH_KEY_FILE",
 }
 
 
@@ -179,16 +201,36 @@ def test_restart_rule_pinned_for_worker_frozen_keys():
     assert entry.effect == "restart", "EMBEDDING_CONCURRENCY is a module-level semaphore"
 
 
-def test_infra_tab_is_all_restart():
-    """# INVARIANT: every Infrastructure entry is restart. Why: the tab is
-    bootstrap plumbing (JWT key, storage/Redis wiring, cookie flag, public
-    origin, boot guard, release stamp) — a deploy-level fact whose honest edit
-    is .env + restart, and a `live` entry here would offer an edit that cannot
-    take effect."""
-    infra = [e for e in REGISTRY if e.tab == "infra"]
-    assert infra, "the Infrastructure tab must be seeded"
-    for e in infra:
-        assert e.effect == "restart", f"{e.key}: infrastructure keys are read-only"
+def test_deploy_facts_are_not_settings():
+    """The release stamp, the boot guard's severity and the cookie flag are not
+    admin rows. Why: an operator never edits them — the version is baked into
+    the image, the guard is fatal by default, the Secure flag follows the
+    browser's scheme — and a read-only row is noise on a one-file install."""
+    for key in (
+        "APP_VERSION", "SCHEMA_FINGERPRINT_FATAL", "COOKIE_SECURE",
+        "SANDBOX_SSH_KEY_FILE", "TURN_TIMEOUT_S",
+    ):
+        assert find(key) is None, f"{key} must not be an admin setting"
+
+
+def test_settings_sit_where_an_operator_looks_for_them():
+    """Operator's placement: worker concurrency sits with its service, the
+    model-facing knobs with the models, web search with search. Why: a knob
+    filed by implementation layer (job queue, storage) is a knob nobody finds."""
+    placement = {
+        "STT_CONCURRENCY": ("models", "STT"),
+        "COMFY_CONCURRENCY": ("tools", "ComfyUI image generation"),
+        "MEM_RUN_KEY_TTL_S": ("tools", "Project memory"),
+        "CHAT_MODELS_CACHE_TTL_S": ("models", "AI API"),
+        "MODEL_IMAGE_MAX_PIXELS": ("models", "Images for the model"),
+        "MODEL_IMAGE_JPEG_QUALITY": ("models", "Images for the model"),
+        "WEB_SEARCH_PROVIDER": ("search", "Web search"),
+    }
+    for key, where in placement.items():
+        entry = find(key)
+        assert entry is not None and (entry.tab, entry.section) == where, key
+    web = [e.key for e in REGISTRY if e.section == "Web search"]
+    assert web and all(find(k).tab == "search" for k in web)
 
 
 # ─── derived-surface: live keys must not be read at import time ───────────────
@@ -363,3 +405,50 @@ def test_comfy_workflow_is_a_validated_text_setting():
     assert spec.validate is validate_workflow
     for orientation in ("SQUARE", "PORTRAIT", "LANDSCAPE"):
         assert find(f"COMFYUI_SIZE_{orientation}").validate is validate_size
+
+
+# ─── choices: an off-list value is refused at PUT and at import ───────────────
+
+
+def test_coerce_refuses_an_off_list_value():
+    spec = settings_registry.SettingSpec(
+        key="K", env="K", tab="tools", section="S", type="str", label="L",
+        help="", effect="live", choices=("a", "b"),
+    )
+    assert spec.coerce("b") == "b"
+    with pytest.raises(settings_registry.SettingValueError):
+        spec.coerce("c")
+
+
+@pytest.fixture
+def probe_section(monkeypatch):
+    """Aim `setting()` at a probe section, as config.py's `_section()` would."""
+    monkeypatch.setattr(settings_registry, "_CURSOR", ("tools", "Probe"))
+
+
+def test_off_list_env_value_fails_at_declaration(monkeypatch, probe_section):
+    """An off-list env value is a deploy error: ConfigError at import, and the
+    bad declaration never enters the registry."""
+    monkeypatch.setenv("LORE_TEST_CHOICE_PROBE", "c")
+    before = len(REGISTRY)
+    with pytest.raises(settings_registry.ConfigError):
+        settings_registry.setting(
+            "LORE_TEST_CHOICE_PROBE", str, default="a", choices=("a", "b"),
+            label="probe", help="",
+        )
+    assert len(REGISTRY) == before
+    assert find("LORE_TEST_CHOICE_PROBE") is None
+
+
+# ─── visible_if: a dependent row names a declared choice ─────────────────────
+
+
+def test_visible_if_naming_no_declared_choice_fails_at_declaration(probe_section):
+    before = len(REGISTRY)
+    for link in (("WEB_SEARCH_PROVIDER", "google"), ("NO_SUCH_KEY", "x"), ("BRAVE_API_KEY", "x")):
+        with pytest.raises(settings_registry.ConfigError):
+            settings_registry.setting(
+                "LORE_TEST_VISIBLE_IF_PROBE", str, default="", visible_if=link,
+                label="probe", help="",
+            )
+    assert len(REGISTRY) == before

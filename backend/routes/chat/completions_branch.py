@@ -97,7 +97,7 @@ async def _reset_leaf_for_root_fork(
     chat_id: str, driver_session_id: str, line: DriverLine | None = None,
 ) -> None:
     """A parent_id=null turn: root fork or genuine first message, decided from
-    the PROJECTION (the one truth — the canonical read is deleted). A chat with
+    the PROJECTION (the one truth — there is no canonical read). A chat with
     existing messages means the driver session has history, so the leaf is
     RESET to root; otherwise no-op (the session starts fresh).
 

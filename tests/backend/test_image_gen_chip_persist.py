@@ -58,7 +58,7 @@ async def _run_success(monkeypatch, ctx, message_id):
         return None
 
     monkeypatch.setattr(image_generation.persist, "save_upload", fake_save_upload)
-    monkeypatch.setattr(image_generation.persist, "_emit_gen_done", noop)
+    monkeypatch.setattr(image_generation.persist, "_push_gen_settled", noop)
     await image_generation.persist._persist_and_announce(
         ctx, "run-1", "doc-1", "A cat", message_id,
         image_refine._RefineResult(prompt="a refined cat", ok=True, error=None),
@@ -90,15 +90,16 @@ async def test_failure_persists_a_failed_chip(monkeypatch, owned):
     async def noop(*a, **k):
         return None
 
-    monkeypatch.setattr(image_generation.persist, "_emit_gen_failed", noop)
+    monkeypatch.setattr(image_generation.persist, "_push_gen_settled", noop)
     await image_generation.persist._announce_failure(
-        {"project_id": "p1", "user_id": "u1"}, "run-2", "msg-1", "ComfyUI unreachable",
+        {"project_id": "p1", "user_id": "u1", "call_id": "call-2"}, "run-2", "msg-1",
+        "ComfyUI unreachable",
     )
     _sql, params = owned.calls[0]
     assert params["steps"] == [{
         "tool_call_id": "gen:run-2", "tool": "generate_image",
         "summary": "generate image", "detail": "ComfyUI unreachable",
-        "outcome": "failed", "run_id": "run-2",
+        "outcome": "failed", "run_id": "run-2", "call_id": "call-2",
     }]
 
 

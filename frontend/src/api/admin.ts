@@ -37,7 +37,7 @@ export async function listAdminUsers({ limit = 1000 }: { limit?: number } = {}):
 
 /** Registry tab ids — must equal backend settings_registry.TABS (the ids after
  * the `settings:` prefix of AdminSectionTab). */
-export type SettingsTabId = 'models' | 'agent' | 'tools' | 'storage' | 'infra';
+export type SettingsTabId = 'models' | 'search' | 'tools' | 'agent' | 'storage';
 
 /** One editable instance setting — a GET /api/admin/settings row, derived from
  * the backend registry at call time. `value` is the EFFECTIVE value (a row

@@ -285,6 +285,78 @@ async def test_turn_answers_json_and_feeds_followup(
     assert msgs[1]["content"] == "Hello "
 
 
+@pytest.mark.asyncio
+async def test_turn_carries_the_admin_ai_settings_and_never_logs_the_key(
+    client, collab_project, harness_env, caplog, test_db,
+):
+    """A fresh install sets the AI endpoint and key in the admin panel only;
+    the next turn carries exactly those to the harness (admin wins over env,
+    no restart), and the key reaches no log line."""
+    import settings
+
+    pid, doc_id, admin_token, user_token, _a, _u = collab_project
+    admin = {
+        "AI_API_URL": "http://gw.admin.example/v1",
+        "AI_API_KEY": "sk-admin-only-7f3e",
+    }
+    try:
+        for key, value in admin.items():
+            resp = await client.put(
+                f"/api/admin/settings/{key}", json={"value": value},
+                cookies={"lore_session": admin_token},
+            )
+            assert resp.status_code == 200, resp.text
+        sid = await _harness_chat(client, pid, doc_id, user_token)
+        with caplog.at_level("DEBUG"):
+            resp = await client.post(
+                f"/api/chat/sessions/{sid}/completions", json=_body(user_token),
+                cookies={"lore_session": user_token},
+            )
+        assert resp.status_code == 200, resp.text
+        payload = harness_env.followups.payloads[0]
+        assert payload["ai_api_url"] == admin["AI_API_URL"]
+        assert payload["ai_api_key"] == admin["AI_API_KEY"]
+        assert any("_build_turn_payload" in r.getMessage() for r in caplog.records)
+        assert not [r for r in caplog.records if admin["AI_API_KEY"] in r.getMessage()]
+    finally:
+        await test_db.query("DELETE instance_settings")
+        settings.drop_cache()
+
+
+@pytest.mark.asyncio
+async def test_a_turn_with_no_model_names_the_admin_setting(
+    client, collab_project, harness_env, test_db,
+):
+    """A fresh install has no chat model: the turn is refused before the
+    harness is called, and the refusal says where to set one."""
+    import settings
+
+    pid, doc_id, admin_token, user_token, _a, _u = collab_project
+    try:
+        resp = await client.put(
+            "/api/admin/settings/CHAT_MODEL", json={"value": ""},
+            cookies={"lore_session": admin_token},
+        )
+        assert resp.status_code == 200, resp.text
+        resp = await client.post(
+            "/api/chat/sessions",
+            json={"project_id": pid, "document_id": doc_id},
+            cookies={"lore_session": user_token},
+        )
+        assert resp.status_code == 201, resp.text
+        sid = resp.json()["session_id"]
+        resp = await client.post(
+            f"/api/chat/sessions/{sid}/completions", json=_body(user_token),
+            cookies={"lore_session": user_token},
+        )
+        assert resp.status_code == 400, resp.text
+        assert "Admin panel → Models & APIs" in resp.json()["detail"]
+        assert harness_env.followups.payloads == []
+    finally:
+        await test_db.query("DELETE instance_settings")
+        settings.drop_cache()
+
+
 async def _content_landed(client, token, sid, content) -> bool:
     msgs = await _list_messages(client, token, sid)
     return any(m.get("content") == content for m in msgs)
@@ -476,6 +548,55 @@ async def test_cancel_unreachable_line_is_a_502(
     assert "unavailable" in resp.json()["detail"].lower()
 
 
+@pytest.mark.asyncio
+async def test_cancel_secret_mismatch_names_the_cause(
+    client, collab_project, harness_env, monkeypatch,
+):
+    """401 on Stop states the cause — different driver secrets, recreate the
+    pair — not the generic 'not reachable' wording."""
+    pid, doc_id, _admin_token, user_token, _a, _u = collab_project
+    sid = await _harness_chat(client, pid, doc_id, user_token)
+
+    import driver.timeline
+    from driver.client import DriverSecretMismatch
+
+    async def _mismatch(session_id, line=None):
+        raise DriverSecretMismatch("harness")
+
+    monkeypatch.setattr(driver.timeline, "post_stop", _mismatch)
+
+    resp = await client.post(
+        f"/api/chat/sessions/{sid}/completions/cancel", json={},
+        cookies={"lore_session": user_token},
+    )
+    assert resp.status_code == 502, resp.text
+    detail = resp.json()["detail"]
+    assert "different driver secrets" in detail
+    assert "docker compose up -d" in detail
+
+
+@pytest.mark.asyncio
+async def test_turn_refusal_names_the_secret_mismatch_cause(
+    client, collab_project, harness_env,
+):
+    """A 401 on /followup refuses the turn naming the cause — the same
+    wording as Stop — instead of the generic unreachable message."""
+    pid, doc_id, _admin_token, user_token, _a, _u = collab_project
+    sid = await _harness_chat(client, pid, doc_id, user_token)
+
+    from driver.client import DriverSecretMismatch
+
+    harness_env.followups.error = DriverSecretMismatch("harness")
+    resp = await client.post(
+        f"/api/chat/sessions/{sid}/completions", json=_body(user_token),
+        cookies={"lore_session": user_token},
+    )
+    assert resp.status_code == 502, resp.text
+    detail = resp.json()["detail"]
+    assert "different driver secrets" in detail
+    assert "docker compose up -d" in detail
+
+
 # ─── post_followup itself: the 409-retry contract ────────────────────────────
 
 
@@ -577,3 +698,31 @@ async def test_post_followup_error_status_is_line_unreachable(monkeypatch, http_
 
     with pytest.raises(DriverLineUnreachable):
         await driver.timeline.post_followup({"session_id": "s1"})
+
+
+@pytest.mark.asyncio
+async def test_post_followup_401_is_a_secret_mismatch(monkeypatch, driver_line_pinned, http_pool):
+    """401 is the named subclass, never the generic unreachable: the pair
+    holds different driver secrets (plan component-wiring-not-settings)."""
+    import driver.timeline
+    from driver.client import DriverSecretMismatch
+
+    _FakePostClient.replies = [_FakeReply(401, {"detail": "Driver secret required"})]
+    _FakePostClient.calls = []
+    http_pool("driver", _FakePostClient())
+
+    with pytest.raises(DriverSecretMismatch):
+        await driver.timeline.post_followup({"session_id": "s1"})
+    assert len(_FakePostClient.calls) == 1, "401 is never retried"
+
+
+@pytest.mark.asyncio
+async def test_post_stop_401_is_a_secret_mismatch(monkeypatch, driver_line_pinned, http_pool):
+    import driver.timeline
+    from driver.client import DriverSecretMismatch
+
+    _FakePostClient.replies = [_FakeReply(401, {"detail": "Driver secret required"})]
+    http_pool("driver", _FakePostClient())
+
+    with pytest.raises(DriverSecretMismatch):
+        await driver.timeline.post_stop("s1")

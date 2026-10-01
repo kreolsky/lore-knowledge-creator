@@ -7,7 +7,9 @@ import logging
 import os
 from logging.handlers import RotatingFileHandler
 
-LOG_DIR = os.environ.get("LOG_DIR", "/logs")
+# INFRA WIRING, not configuration (plan component-wiring-not-settings): the
+# log directory is the compose mount (/logs in every stack) — no env leg.
+LOG_DIR = "/logs"
 LOG_FORMAT = "%(asctime)s %(name)s %(levelname)s %(message)s"
 
 

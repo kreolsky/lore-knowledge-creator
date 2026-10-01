@@ -2,7 +2,7 @@
 
 Subsystem overview: image_generation/__init__.py (see SYSTEM: comfy-image-gen);
 the graph is filled by comfy_markers.fill_workflow. The config seams
-(MAX_IMAGE_SIZE_MB via settings.get, COMFYUI_URL) and the _emit_gen_progress call
+(MAX_IMAGE_SIZE_MB via settings.get, COMFYUI_URL) and the _push_gen_progress call
 resolve in THIS module (image_generation.workflow.*).
 """
 
@@ -12,7 +12,7 @@ from files_util import detect_image_mime
 
 from image_generation.image_comfy import _GenError
 
-from .events import _emit_gen_progress
+from .events import _push_gen_progress
 
 
 def _extract_images(history_body: dict, prompt_id: str) -> list[dict]:
@@ -36,7 +36,7 @@ async def _download_outputs(
     """Download + validate EVERY batch output via /view BEFORE any persistence so a
     mid-batch failure leaves no orphaned references. Returns (bytes, mime) pairs;
     mime is detected from magic bytes (ComfyUI /view carries no MIME)."""
-    await _emit_gen_progress(ctx, run_id, "downloading")
+    await _push_gen_progress(ctx, run_id, "downloading")
     comfy_url = await settings.get("COMFYUI_URL")
     outputs: list[tuple[bytes, str]] = []
     for out in images:

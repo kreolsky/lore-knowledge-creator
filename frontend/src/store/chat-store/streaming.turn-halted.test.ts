@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock the app store (currentUser + showToast) and the API client's post()
-// (the harness transport's only HTTP arm — the SSE drain is gone).
+// (the harness transport's only HTTP arm).
 const showToast = vi.fn();
 vi.mock('../app-store', () => ({
   useAppStore: { getState: () => ({ currentUser: { user_id: 'u1', name: 'U' }, showToast }) },
@@ -47,14 +47,13 @@ async function drive(frames: Record<string, unknown>[]) {
 
 /**
  * The halt CARD and the turn's timeline are the assembler's nodes; the live
- * arms beside the feed owe only the error notice + toast (the retired
- * end-reason stamp died with the queue — plan agent-line-harness-lifecycle
- * step 9).
+ * arms beside the feed owe the error notice + toast, and the end-reason stamp
+ * the message queue reads at the terminal (queue-slice.test.ts).
  */
 describe('halt and error frames — what the live path still owes', () => {
   beforeEach(() => { vi.clearAllMocks(); postMock.mockResolvedValue({ accepted: true }); });
 
-  it('a lore/halt frame rides the feed as the halt card (the handler is a no-op)', async () => {
+  it('a lore/halt frame rides the feed as the halt card', async () => {
     const { get } = await drive([
       { type: 'lore/halt', seq: 5, data: { reason: 'tool_call_limit', turn: 0 } },
     ]);

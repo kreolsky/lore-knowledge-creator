@@ -20,7 +20,8 @@ import asyncio
 
 import http_clients
 import httpx
-import settings
+
+import config
 
 # Default timeout for the worker (batch reference conversion tolerates long runs).
 WORKER_CONVERTER_TIMEOUT = 600
@@ -81,7 +82,7 @@ async def post_docx_to_converter(
     if client is None:
         client = http_clients.get_http_client("docx", timeout=WEB_CONVERTER_TIMEOUT)
 
-    converter_url = await settings.get("CONVERTER_URL")
+    converter_url = config.CONVERTER_URL
     resp = await asyncio.wait_for(
         client.post(
             f"{converter_url}/convert",

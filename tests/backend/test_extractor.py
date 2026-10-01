@@ -335,54 +335,6 @@ async def test_run_agent_accepted(client, admin_user, project_with_doc):
 
 
 @pytest.mark.asyncio
-async def test_extractor_event_hook(client, admin_user, project_with_doc):
-    pid, idx_id, admin_uid = project_with_doc
-    _, admin_token = admin_user
-
-    config_doc_resp = await client.post(
-        "/api/documents",
-        json={"project_id": pid, "title": "Config", "content": "", "parent_id": None},
-        cookies={"lore_session": admin_token},
-    )
-    config_doc_id = config_doc_resp.json()["document_id"]
-
-    target_doc_resp = await client.post(
-        "/api/documents",
-        json={"project_id": pid, "title": "Target", "content": "", "parent_id": None},
-        cookies={"lore_session": admin_token},
-    )
-    target_doc_id = target_doc_resp.json()["document_id"]
-
-    await client.put(
-        "/api/agent-config",
-        json={
-            "document_id": idx_id,
-            "config_doc_id": config_doc_id,
-            "target_doc_id": target_doc_id,
-            "trigger_event": "transcription_complete",
-        },
-        cookies={"lore_session": admin_token},
-    )
-
-    ref_resp = await client.post(
-        "/api/documents",
-        json={
-            "project_id": pid,
-            "parent_id": idx_id,
-            "title": "Hook Ref",
-            "media_type": "markdown",
-            "is_reference": True,
-            "content": "Some text",
-        },
-        cookies={"lore_session": admin_token},
-    )
-    ref_id = ref_resp.json()["document_id"]
-
-    from pipeline.extractor.runner import on_transcription_complete
-    await on_transcription_complete(reference_id=ref_id, project_id=pid)
-
-
-@pytest.mark.asyncio
 async def test_extractor_dedup_on_duplicate_trigger(client, admin_user, project_with_doc, enqueue_recorder):
     """A doubled transcription_complete must enqueue extract_task only once per config (arq dedup via job_id)."""
     import asyncio

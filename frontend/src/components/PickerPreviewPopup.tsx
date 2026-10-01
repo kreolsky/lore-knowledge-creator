@@ -2,7 +2,7 @@
  *
  *  The picker-side twin of HoverPreviewPopup: a picker holds a box (its list) and
  *  renders the preview flush beside it. Position is pre-computed via
- *  computeBesideBoxPreviewPosition; the picker passes only the body + fetch state.
+ *  computeBesideBoxPreviewPosition; the picker passes only the title, the body + fetch state.
  *
  *  Completes the preview-window unification — HoverPreviewPopup covered the hover
  *  sites; this covers the three picker sites (LinkSuggestions, ParentPicker,
@@ -14,6 +14,7 @@ import { LinkPreviewPopup } from './LinkPreviewPopup';
 
 interface PickerPreviewPopupProps {
   pos: { top: number; left: number; maxHeight: number } | null;
+  title?: string;
   content?: string;
   imageUrl?: string;
   error?: boolean;
@@ -21,7 +22,7 @@ interface PickerPreviewPopupProps {
   popupRef?: (el: HTMLDivElement | null) => void;
 }
 
-export function PickerPreviewPopup({ pos, content, imageUrl, error, loading, popupRef }: PickerPreviewPopupProps) {
+export function PickerPreviewPopup({ pos, title, content, imageUrl, error, loading, popupRef }: PickerPreviewPopupProps) {
   if (!pos) return null;
 
   return (
@@ -30,6 +31,7 @@ export function PickerPreviewPopup({ pos, content, imageUrl, error, loading, pop
       top={pos.top}
       left={pos.left}
       maxHeight={pos.maxHeight}
+      title={title}
       content={content}
       imageUrl={imageUrl}
       error={error}

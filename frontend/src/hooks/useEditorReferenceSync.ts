@@ -353,14 +353,14 @@ export function useEditorReferenceSync({ editorViewRef }: UseEditorReferenceSync
   // (a kind:'doc' entry in transcludeMap), invalidate its preview cache + reload the content so
   // the band stays live. Otherwise early-return (chattiness guard).
   //
-  // INVARIANT: content_flushed fires on EVERY debounce flush from 4 emit sites, so this listener
+  // INVARIANT: content_flushed fires on EVERY debounce flush from many emit sites, so this listener
   // MUST early-return unless entity_id is already in transcludeMap AS A kind:'doc' entry — never
   // fetch on an unrelated flush. Why: avoid N wasted re-fetches per keystroke across all project-WS
   // clients. A transcluded reference lives as kind:'ref-text'/'ref-image', so the kind:'doc' gate
-  // already skips reference flushes (is_reference is stripped from the payload anyway).
+  // skips reference flushes (the payload's is_reference, when the emitter states it, is not
+  // consulted — the local map kind is the gate).
   const contentFlushTimerRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  useEvent('project-content-flushed', useCallback((payload: { entityId: string; entityType: string }) => {
-    const { entityId, entityType } = payload;
+  useEvent('ws:content_flushed', useCallback(({ entity_id: entityId, entity_type: entityType }) => {
     if (entityType !== 'doc') return;
     const existing = transcludeMap.get(entityId);
     if (!existing || existing.kind !== 'doc') return; // chattiness guard

@@ -164,6 +164,21 @@ def memory_folder_id(project_id: str) -> str:
     return _deterministic_id(project_id, "memory_folder")
 
 
+# Every Lore guide row (page or picture) carries this id prefix — see SYSTEM: help-subtree.
+HELP_ID_PREFIX = "sys-help-"
+
+
+def help_doc_id(project_id: str, slug: str) -> str:
+    """Deterministic id of a Lore guide page (see SYSTEM: help-subtree) — pure, so
+    the agent prompt can point at the guide root without importing the seeder."""
+    return _deterministic_id(project_id, "help", f"-{slug}")
+
+
+def is_help_doc_id(doc_id: str) -> bool:
+    """True for a Lore guide row. The guide is never embedded (see embeddings)."""
+    return doc_id.startswith(HELP_ID_PREFIX)
+
+
 async def _find_system_docs(project_id: str) -> list[dict]:
     db = await get_db()
     rows = await db.query(

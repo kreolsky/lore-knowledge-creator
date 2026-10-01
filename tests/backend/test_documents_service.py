@@ -45,16 +45,23 @@ async def test_create_document_prepends_newest_first(project_with_doc):
 
 
 @pytest.mark.asyncio
-async def test_create_document_reference_skips_sort_key(project_with_doc):
-    """Reference documents do not participate in reorder → no sort_key assigned."""
+async def test_create_document_reference_gets_ref_group_key(project_with_doc):
+    """A reference created via the factory gets the TOP key of its host's
+    reference group (its own key space — a ref never enters the doc key space)."""
     from documents.service import create_document
     pid, idx_id, _ = project_with_doc
-    rec = await create_document(_uid(), {
+    first = await create_document(_uid(), {
         "project_id": pid, "parent_id": idx_id, "title": "Ref",
         "content": "", "path": "_ref/r.md", "is_index": False,
         "is_reference": True, "media_type": "markdown", "source_url": "",
     })
-    assert rec.get("sort_key") is None
+    second = await create_document(_uid(), {
+        "project_id": pid, "parent_id": idx_id, "title": "Ref 2",
+        "content": "", "path": "_ref/r2.md", "is_index": False,
+        "is_reference": True, "media_type": "markdown", "source_url": "",
+    })
+    assert isinstance(first.get("sort_key"), str) and first["sort_key"]
+    assert second["sort_key"] < first["sort_key"], "new ref lands at the TOP"
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import { EditorLinkPreview } from './EditorLinkPreview';
+import { useAppStore } from '../../store/app-store';
+import type { Document } from '../../types';
 
 vi.mock('../../hooks/useDocumentPreview', () => ({
   useDocumentPreview: vi.fn((id: string | null) => ({
@@ -98,5 +100,19 @@ describe('EditorLinkPreview — metadata branches', () => {
     // Give the 300ms delay room to fire; the popup must stay absent.
     await new Promise(r => setTimeout(r, 500));
     expect(document.querySelector('.fixed.z-55')).toBeNull();
+  });
+
+  it('titles the popup with the linked document name from the store', async () => {
+    useAppStore.setState({ documents: [{ document_id: 'doc789', title: 'Kingdoms of the North' } as Document] });
+    const a = testLink();
+    a.className = 'chat-link';
+    a.setAttribute('data-link-type', 'doc');
+    a.setAttribute('data-link-id', 'doc789');
+    await renderHostAndHover(a);
+    await waitFor(() => {
+      const plaque = document.querySelector('[data-preview-title]');
+      expect(plaque?.textContent).toBe('Kingdoms of the North');
+    });
+    useAppStore.setState({ documents: [] });
   });
 });

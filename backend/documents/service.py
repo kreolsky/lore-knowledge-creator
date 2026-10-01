@@ -34,8 +34,19 @@ from transclusion_grammar import NON_DOC_TARGET
 logger = logging.getLogger(__name__)
 
 
-async def sibling_rows(project_id: str, parent_id: str | None) -> list[dict]:
-    """Non-reference siblings in a group with an assigned sort_key, ascending."""
+async def sibling_rows(
+    project_id: str, parent_id: str | None, *, is_reference: bool = False,
+) -> list[dict]:
+    """Siblings of ONE kind in a group with an assigned sort_key, ascending.
+
+    Group key = (project_id, parent_id, is_reference) — refs and child docs
+    share parent_id but never a key space. The REF key space deliberately
+    INCLUDES archived refs (no archived filter): a new ref's top key must never
+    equal an archived ref's key (a group holding only archived refs would
+    otherwise mint key_between(None, None) again) and an unarchive must not
+    create an equal-key pair. "Live only" is the reorder command's check, not
+    the key space's.
+    """
     db = await get_db()
     # INVARIANT: tie-break equal sort_keys by id ASC. Why: must match the order the
     # user sees (projects.py list: `sort_key ASC, id ASC`; frontend tie-breaks by
@@ -43,30 +54,62 @@ async def sibling_rows(project_id: str, parent_id: str | None) -> list[dict]:
     # DB-arbitrary order, so reorder computes the new key against a different neighbour
     # than displayed — non-deterministic placement (and a flaky 409 boundary).
     rows = await db.query(
-        "SELECT meta::id(id) AS id, sort_key FROM documents "
+        "SELECT meta::id(id) AS id, sort_key, archived FROM documents "
         "WHERE project_id = $pid AND parent_id = $par AND deleted_at IS NONE "
-        "AND is_reference = false AND sort_key IS NOT NONE "
+        "AND is_reference = $kind AND sort_key IS NOT NONE "
         "ORDER BY sort_key ASC, id ASC",
-        {"pid": project_id, "par": parent_id},
+        {"pid": project_id, "par": parent_id, "kind": is_reference},
     )
     return rows or []
 
 
-async def top_sibling_key(project_id: str, parent_id: str | None) -> str:
-    """Key that places a doc at the TOP (newest-first) of its sibling group."""
-    rows = await sibling_rows(project_id, parent_id)
+async def top_sibling_key(
+    project_id: str, parent_id: str | None, *, is_reference: bool = False,
+) -> str:
+    """Key that places a row of `is_reference` kind at the TOP (newest-first) of
+    its own kind's sibling group."""
+    rows = await sibling_rows(project_id, parent_id, is_reference=is_reference)
     return key_before(rows[0]["sort_key"]) if rows else key_between(None, None)
 
 
-async def create_document(uid: str, data: dict, *, user_id: str | None = None, user_name: str | None = None) -> dict:
-    """Create a tree document, guaranteeing a sort_key for non-reference docs.
+def place_after(
+    siblings: list[dict], moved_id: str, after_id: str | None, *,
+    not_sibling_detail: str,
+) -> str:
+    """The ONE "place after sibling X" bounds computation (null = top).
 
-    INVARIANT: every non-reference document gets a sort_key at creation time
-    (newest-first, i.e. above its current siblings) unless one is passed explicitly.
-    Why: a document created without sort_key stays NONE and is filtered out of the
-    sibling list, so dragging another doc onto it returns 400 "after_id is not a
-    sibling" (extractor pipeline). Reference documents never
-    participate in reorder, so they intentionally get no key.
+    Drops `moved_id` from `siblings`, computes the fractional key strictly
+    between the anchor and its successor, 400s with the CALLER's detail when
+    `after_id` is not in the list, 409s on degenerate bounds (shared keys after
+    a concurrent drag — the client refetches and retries). Shared by the reorder
+    command and the tree move; their 400 detail strings pass through unchanged.
+    """
+    group = [s for s in siblings if s["id"] != moved_id]
+    if after_id is None:
+        lo, hi = None, (group[0]["sort_key"] if group else None)
+    else:
+        idx = next((i for i, s in enumerate(group) if s["id"] == after_id), None)
+        if idx is None:
+            raise HTTPException(status_code=400, detail=not_sibling_detail)
+        lo = group[idx]["sort_key"]
+        hi = group[idx + 1]["sort_key"] if idx + 1 < len(group) else None
+    try:
+        return key_between(lo, hi)
+    except Exception:
+        # Degenerate bounds (e.g. two siblings sharing a key after a concurrent drag):
+        # surface a clean 409 so the client can refetch + retry instead of a raw 500.
+        raise HTTPException(status_code=409, detail="Sibling order is stale; refetch and retry")
+
+
+async def create_document(uid: str, data: dict, *, user_id: str | None = None, user_name: str | None = None) -> dict:
+    """Create a document or reference row, guaranteeing a sort_key for both kinds.
+
+    INVARIANT: every live document row, ref or not, gets a sort_key at creation time
+    in its OWN key space (newest-first) unless one is passed explicitly.
+    Why: a row created without sort_key stays NONE and is filtered out of its
+    sibling list, so dragging another row onto it returns 400 "after_id is not a
+    sibling" (extractor pipeline — the doc case), and a ref without a key has no
+    panel order at all.
     """
     # INVARIANT: project_id is validated BEFORE create_record, not read for the
     # first time by the emit below. Why: the emit runs after the row is written,
@@ -76,8 +119,11 @@ async def create_document(uid: str, data: dict, *, user_id: str | None = None, u
     # a project belongs nowhere).
     if not data.get("project_id"):
         raise ValueError(f"create_document({uid}): project_id is required")
-    if not data.get("is_reference") and data.get("sort_key") is None:
-        data["sort_key"] = await top_sibling_key(data["project_id"], data.get("parent_id"))
+    if data.get("sort_key") is None:
+        data["sort_key"] = await top_sibling_key(
+            data["project_id"], data.get("parent_id"),
+            is_reference=bool(data.get("is_reference")),
+        )
     record = await create_record("documents", uid, data)
     if not data.get("is_reference"):
         from history_service import log_event
@@ -473,16 +519,15 @@ async def export_document(document_id: str, format: str = "pdf", checkpoint_id: 
         media_type = "text/markdown; charset=utf-8"
     else:
         import http_clients
-        import settings
         from docx_convert import WEB_CONVERTER_TIMEOUT
 
-        from config import EXPORT_CONVERTER_TIMEOUT_S
+        from config import CONVERTER_URL, EXPORT_CONVERTER_TIMEOUT_S
 
         # The shared "docx" pool client (web timeout) with the export's own
         # longer per-request budget — the pool must not pin the export latency.
         client = http_clients.get_http_client("docx", timeout=WEB_CONVERTER_TIMEOUT)
         resp = await client.post(
-            f"{await settings.get('CONVERTER_URL')}/export",
+            f"{CONVERTER_URL}/export",
             data={"markdown": content, "format": format},
             timeout=EXPORT_CONVERTER_TIMEOUT_S,
         )
@@ -693,10 +738,15 @@ async def create_reference_row(
     # bridge inserts the ref twice in the panel.
     """
 
+    # Refs get a key at birth like every live row — the TOP key of the host's
+    # reference group (newest-first: a new reference lands at the top of its
+    # group in the panel, key_before semantics shared with docs).
+    sort_key = await top_sibling_key(project_id, host_id, is_reference=True)
     row: dict = {
         "project_id": project_id, "parent_id": host_id, "title": title,
         "content": content or "", "path": f"_ref/{ref_id}.md",
         "is_index": False, "is_reference": True, "media_type": media_type,
+        "sort_key": sort_key,
     }
     if source_url is not None:
         row["source_url"] = source_url

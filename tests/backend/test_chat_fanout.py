@@ -312,14 +312,81 @@ class TestFanoutBackpressure:
 # ─── the doc contract ─────────────────────────────────────────────────────────
 
 
-def test_wiring_table_documents_chat_frame():
-    """The chat_frame kind is documented in project_ws.py's Event Wiring
-    Table (all five columns) — the fan-out is a custom sender, so nothing
-    else forces the row to exist."""
+def test_module_documents_the_owner_filtered_chat_frames():
+    """The chat_frame delivery is a CUSTOM sender (never broadcast), so the
+    project-WS module must keep stating it: owner-filtered chat frames over
+    send_to_user. Nothing else forces the doc row to exist."""
     text = (pathlib.Path("/app") / "routes" / "project_ws.py").read_text()
-    table = text.split("Event Wiring Table", 1)[1].split(
-        "_SUBSCRIPTIONS:", 1)[0]
-    assert "chat_frame" in table
+    assert "OWNER-FILTERED chat frames" in text
+    assert "send_to_user" in text
+
+
+# ─── chat_frame_push: the worker's frames onto the owner's sockets ────────────
+
+
+class TestChatFramePush:
+    @pytest.mark.asyncio
+    async def test_push_reaches_only_the_owner(
+        self, sync_app, client, collab_project,
+    ):
+        """A worker-side `chat_frame_push` (the
+        detached image run's lore/image-gen frames) resolves the owner the way
+        the fan-out does (the session row's user_id) and delivers the SAME
+        `{type:'chat_frame', session_id, frame}` envelope the turn frames use
+        — the member's NEXT message is the shared broadcast sentinel, never a
+        chat frame."""
+        pid, _doc, admin_token, user_token, _admin_uid, _user_uid = collab_project
+        sid = await _harness_chat(client, pid, _doc, user_token)
+
+        owner = _open_ws(sync_app, pid, user_token)
+        member = _open_ws(sync_app, pid, admin_token)
+        try:
+            from event_bus import emit
+            frame = {
+                "type": "lore/image-gen", "seq": 3.6, "time": 1003,
+                "ignorable": True,
+                "data": {"turn": 1, "runId": "run-1", "status": "running",
+                         "phase": "refining"},
+            }
+            await emit("chat_frame_push", project_id=pid, session_id=sid,
+                       frame=frame)
+            await _settle()
+            assert json.loads(owner[1].receive_text()) == {
+                "type": "chat_frame", "session_id": sid, "frame": frame,
+            }
+
+            # The leak actor: the member's next message is the shared
+            # broadcast sentinel, not the owner's chat frame.
+            await emit("embedding_degraded", project_id=pid)
+            await _settle()
+            assert json.loads(member[1].receive_text()) == {
+                "type": "embedding_degraded"}
+        finally:
+            owner[0].__exit__(None, None, None)
+            member[0].__exit__(None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_push_without_a_session_row_sends_nothing(self, monkeypatch):
+        """A push naming a session that no longer exists resolves no owner —
+        nothing is sent (the frame was best-effort; a reload may still show
+        the persisted card)."""
+        from routes.chat import fanout as chat_fanout
+
+        async def _missing(table, rid):
+            return None
+
+        sent: list[tuple] = []
+
+        async def _send(project_id, user_id, message):
+            sent.append((project_id, user_id, message))
+
+        monkeypatch.setattr(chat_fanout, "fetch_one", _missing)
+        monkeypatch.setattr(chat_fanout, "send_to_project_user", _send)
+        from event_bus import emit
+        await emit("chat_frame_push", project_id="p", session_id="ghost",
+                   frame={"type": "lore/image-gen", "seq": 1.6, "data": {}})
+        await _settle()
+        assert sent == []
 
 
 def _orig_send_to_project_user():

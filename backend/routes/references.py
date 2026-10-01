@@ -20,6 +20,7 @@
 
 from uuid import uuid4
 
+from documents.move import write_reference_host
 from documents.service import (
     create_reference_row,
     rename_document,
@@ -165,30 +166,30 @@ def _archived_sink_key(ref: dict) -> bool:
 
 
 def sort_refs_by_depth_tier(refs: list[dict], ancestor_ids: list[str]) -> list[dict]:
-    """Depth-tier sort: own refs first (newest-edited first), then ancestors by
-    proximity, newest within each tier; archived sunk below live (stable).
+    """Depth-tier sort: own refs first (manual key order), then ancestors by
+    proximity, (sort_key, id) ASC within each tier; archived sunk below live
+    (stable).
 
     # WHY: the SINGLE expression of the reference panel order, shared by the
     # authed LIST (list_references) and the anonymous public references surface
     # (public_share.public_references). `ancestor_ids` is [doc, parent, grandparent,
     # ...] — index 0 is the current doc, so its refs surface first. The three
     # `sorted` passes are applied in order of increasing precedence (last wins):
-    # newest-edited first → group by depth tier → archived sink as the outermost key.
+    # manual key order → group by depth tier → archived sink as the outermost key.
     # Why extract: a second copy on the public surface had drifted to "whole subtree,
     # no sort" (plan "public-share-subtree-tree-and-refs-sort"); one function closes
     # the parity gap permanently.
     #
-    # `updated_at` is serialized to an ISO-8601 string by serialize_record
-    # (db/records.py) — lexicographically comparable, so the newest-first pass is
-    # correct without parsing. Refs whose `document_id` is not in `ancestor_ids`
-    # sort via the `len(depth)` fallback (after every known tier) — defensively
-    # consistent with the authed path.
+    # The within-tier pass is the persisted MANUAL order ((sort_key or "", id)
+    # ASC) — a content edit no longer moves a ref (updated_at is its content
+    # version, not its position). `sort_key` may be missing only on rows the
+    # reference_sort_keys_backfill migration has not reached (reads as "" → top).
     """
     depth = {doc_id: i for i, doc_id in enumerate(ancestor_ids)}
-    refs = sorted(refs, key=lambda r: r.get("updated_at", ""), reverse=True)
+    refs = sorted(refs, key=lambda r: (r.get("sort_key") or "", r.get("reference_id") or ""))
     refs = sorted(refs, key=lambda r: depth.get(r.get("document_id"), len(depth)))
     # Applied as the OUTERMOST stable key (last sort wins), so archived refs sink
-    # below live while preserving the depth→newest sub-order above.
+    # below live while preserving the depth→key sub-order above.
     refs = sorted(refs, key=_archived_sink_key)
     return refs
 
@@ -233,9 +234,10 @@ async def list_references(
     """List references (documents with is_reference=true) for a project or doc.
 
     For document_id scope, walks ancestors and collects ref-children of each.
-    Sort: own refs first, then parent, then grandparent (depth-asc); newest
-    first within the same parent. Archived refs (when include_archived=true)
-    always sort BELOW all live refs.
+    Sort: own refs first, then parent, then grandparent (depth-asc); manual
+    order ((sort_key, id) ASC) within each tier — a content edit does not move
+    a ref. Archived refs (when include_archived=true) always sort BELOW all
+    live refs.
     """
     if document_id:
         await require_document_read(document_id, user)
@@ -276,25 +278,27 @@ async def list_references(
         # point-seek, unioned (UnionIndexScan) — bounded to O(ancestor depth) seeks,
         # NOT a full-table scan. Without that index the planner falls back to a
         # TableScan of ALL documents (verified via EXPLAIN; ~84ms on prod at 3098 docs).
-        # NOTE: a SQL `ORDER BY archived ASC` here is a NO-OP — this branch re-sorts in
-        # Python below; `_archived_sink_key` is what actually sinks archived refs.
+        # NOTE: no SQL ORDER BY here — the Python depth-tier sort below owns the
+        # final order (tiers + key + archived sink); a SQL ORDER BY would be a no-op.
         rows = await db.query(
             f"SELECT {_REF_META_SELECT} FROM documents WHERE parent_id IN $ids "
             "AND is_reference = true AND deleted_at IS NONE "
-            f"{archived_clause}"
-            "ORDER BY updated_at DESC",
+            f"{archived_clause}",
             {"ids": ancestor_ids},
         )
     else:
-        # `archived ASC,` must lead the SQL ORDER BY here because this branch paginates in
-        # SQL (LIMIT/START): the sink has to be global across pages, which a post-hoc
-        # Python sort over one page cannot do. The `_archived_sink_key` pass below is then
-        # a no-op re-affirmation — it keeps the RULE expressed in exactly one place.
+        # SQL paginates (LIMIT/START), so the sink and the grouping must be global
+        # in SQL, which a post-hoc Python sort over one page cannot do:
+        # `archived ASC,` sinks archived refs; `parent_id ASC,` keeps each host's
+        # group contiguous; `sort_key ASC, id ASC` is the manual order within a
+        # group. The `_archived_sink_key` pass below is then a no-op re-affirmation
+        # — it keeps the RULE expressed in exactly one place.
         rows = await db.query(
             f"SELECT {_REF_META_SELECT} FROM documents WHERE project_id = $pid "
             "AND is_reference = true AND deleted_at IS NONE "
             f"{archived_clause}"
-            "ORDER BY archived ASC, created_at DESC LIMIT $limit START $offset",
+            "ORDER BY archived ASC, parent_id ASC, sort_key ASC, id ASC "
+            "LIMIT $limit START $offset",
             {"pid": project_id, "limit": limit, "offset": offset},
         )
 
@@ -370,11 +374,14 @@ async def patch_reference(reference_id: str, body: PatchReference, user: dict = 
         # Empty document_id = "move to project level" → re-host on the index doc.
         # INVARIANT: paired with the documents_reference_parent_check schema event.  Why: the app-level host write is backed by a schema event so the parent invariant can't be bypassed by a stray write — enforcement sits at the DB layer, not just this handler.
         new_parent = await resolve_reference_host(body.document_id, pid)
-        await db.query(
-            "UPDATE type::record('documents', $id) SET parent_id = $pid, updated_at = time::now()",
-            {"id": reference_id, "pid": new_parent},
+        # The ONE host writer (documents.move.write_reference_host — the same
+        # writer a tree move uses): lands the ref at the TOP of the new host's
+        # ref group and returns the key, so no raw parent_id UPDATE here.
+        new_key = await write_reference_host(db, reference_id, pid, new_parent)
+        await emit(
+            "reference_moved", project_id=pid, reference_id=reference_id,
+            document_id=new_parent, sort_key=new_key,
         )
-        await emit("reference_moved", project_id=pid, reference_id=reference_id, document_id=new_parent)
     if "archived" in body.model_fields_set and body.archived is not None:
         await _apply_archived_patch(db, reference_id, body.archived, pid)
     if body.content is not None:

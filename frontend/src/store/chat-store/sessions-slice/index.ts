@@ -100,7 +100,7 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
         // Step 2: Load the project-wide list (doc-scope) so initGhostFromScope has
         // a donor + the empty-screen list is populated. loadSessions' resolver MAY
         // restore a session; we override it to a ghost next. loadMessages'
-        // staleness guard (returns when activeSessionId no longer matches) protects
+        // staleness guard (returns when activeSessionId does not match) protects
         // against an in-flight restored-session message fetch landing in the ghost.
         await get().loadSessions(project.project_id, doc.document_id);
       } catch {
@@ -139,7 +139,6 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
         messages: preloadedMessages ?? [],
         selectedSiblings: {},
         streaming: null,
-        imageGen: {},
       });
       const session = sessionId ? get().sessions.find(s => s.session_id === sessionId) : null;
       if (session) {

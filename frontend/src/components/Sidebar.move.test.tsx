@@ -1,10 +1,10 @@
 /**
  * Sidebar — cross-project move reactions (SYSTEM: project-ws):
- * - 'project-documents-moved-out' drops the moved ids from the tree + doc states;
+ * - 'ws:documents_moved_out' drops the moved ids from the tree + doc states;
  * - when the OPEN doc is among them: toast + hard follow via
  *   window.location.assign('/docs/<id>') (both WS channels and the collab join
  *   set are keyed by the old project — reload, not in-app navigation);
- * - 'project-documents-moved-in' refetches GET /projects/:id and replaces the
+ * - 'ws:documents_moved_in' refetches GET /projects/:id and replaces the
  *   tree wholesale.
  */
 // @vitest-environment jsdom
@@ -120,14 +120,14 @@ afterEach(() => {
 
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 
-describe('Sidebar — project-documents-moved-out', () => {
+describe('Sidebar — ws:documents_moved_out', () => {
   it('drops the moved ids from the tree and the doc states', async () => {
     act(() => {
-      registered['project-documents-moved-out']({
-        documentIds: ['d-moved', 'd-child'],
-        referenceIds: [],
-        targetProjectId: 'p2',
-        targetProjectName: 'Target',
+      registered['ws:documents_moved_out']({
+        document_ids: ['d-moved', 'd-child'],
+        reference_ids: [],
+        target_project_id: 'p2',
+        target_project_name: 'Target',
       } as never);
     });
     expect(setDocuments).toHaveBeenCalledWith(
@@ -142,11 +142,11 @@ describe('Sidebar — project-documents-moved-out', () => {
   it('toasts and hard-follows the OPEN doc to /docs/<id> when it is in the set', async () => {
     openDocId = 'd-child';
     act(() => {
-      registered['project-documents-moved-out']({
-        documentIds: ['d-moved', 'd-child'],
-        referenceIds: [],
-        targetProjectId: 'p2',
-        targetProjectName: 'Target',
+      registered['ws:documents_moved_out']({
+        document_ids: ['d-moved', 'd-child'],
+        reference_ids: [],
+        target_project_id: 'p2',
+        target_project_name: 'Target',
       } as never);
     });
     expect(showToast).toHaveBeenCalledWith(
@@ -156,12 +156,12 @@ describe('Sidebar — project-documents-moved-out', () => {
   });
 });
 
-describe('Sidebar — project-documents-moved-in', () => {
+describe('Sidebar — ws:documents_moved_in', () => {
   it('refetches GET /projects/:id and replaces the tree wholesale', async () => {
     const fresh = [{ document_id: 'd-idx', parent_id: null, title: 'Index', is_index: true }];
     getMock.mockResolvedValue({ documents: fresh });
     act(() => {
-      registered['project-documents-moved-in']({ documentIds: ['d-new'] } as never);
+      registered['ws:documents_moved_in']({ document_ids: ['d-new'] } as never);
     });
     await flush();
     expect(getMock).toHaveBeenCalledWith('/projects/p1');

@@ -121,7 +121,7 @@ export function Sidebar() {
   // Subscribing is harmless (the bus is in-memory only without a socket).
 
   // Project WS: real-time tree updates from other users
-  useEvent('project-document-created', useCallback(({ documentId: docId, title, parentId, sortKey }: { documentId: string; title: string; parentId: string | null; sortKey: string | null }) => {
+  useEvent('ws:document_created', useCallback(({ document_id: docId, title, parent_id: parentId, sort_key: sortKey }) => {
     const docs = useAppStore.getState().documents;
     if (docs.some(d => d.document_id === docId)) return;
     setDocuments([...docs, { document_id: docId, title, parent_id: parentId, is_index: false, sort_key: sortKey ?? undefined } as typeof docs[0]]);
@@ -130,33 +130,30 @@ export function Sidebar() {
     }
   }, [setDocuments]));
 
-  useEvent('project-document-renamed', useCallback(({ documentId: docId, title }: { documentId: string; title: string }) => {
+  useEvent('ws:document_renamed', useCallback(({ document_id: docId, title }) => {
     const docs = useAppStore.getState().documents;
     setDocuments(docs.map(d => d.document_id === docId ? { ...d, title } : d));
   }, [setDocuments]));
 
   // Moved and reordered both carry the authoritative new sort_key — apply it so peers re-sort.
-  // A CONVERSION (isReference stated by the agent move executor) additionally
+  // A CONVERSION (is_reference = the node's FINAL kind) additionally
   // moves the node BETWEEN the tree and the references panels: this list holds
   // non-reference docs only (GET /projects/:id filters is_reference=false), so a
   // doc→reference conversion must REMOVE the row (a kept row renders as a phantom
   // tree child until reload) and a reference→doc conversion must INSERT one
   // (title rides the payload — the only source this client has).
-  useEvent('project-document-moved', useCallback(({ documentId: docId, parentId, sortKey, isReference, title }: {
-    documentId: string; parentId: string | null; sortKey: string | null; previousParentId: string | null;
-    isReference?: boolean; title?: string | null;
-  }) => {
+  useEvent('ws:document_moved', useCallback(({ document_id: docId, parent_id: parentId, sort_key: sortKey, is_reference: isReference, title }) => {
     const docs = useAppStore.getState().documents;
     const reparent = (list: typeof docs) => list.map(d => (
       d.document_id === docId ? { ...d, parent_id: parentId, ...(sortKey ? { sort_key: sortKey } : {}) } : d
     ));
-    if (isReference === true) {
+    if (isReference) {
       if (docs.some(d => d.document_id === docId)) {
         setDocuments(docs.filter(d => d.document_id !== docId));
       }
       return;
     }
-    if (isReference === false && !docs.some(d => d.document_id === docId)) {
+    if (!docs.some(d => d.document_id === docId)) {
       setDocuments([...docs, {
         document_id: docId, title: title ?? '', parent_id: parentId,
         is_index: false, sort_key: sortKey ?? undefined,
@@ -166,19 +163,19 @@ export function Sidebar() {
     setDocuments(reparent(docs));
   }, [setDocuments]));
 
-  useEvent('project-document-reordered', useCallback(({ documentId: docId, sortKey }: { documentId: string; parentId: string | null; sortKey: string | null }) => {
+  useEvent('ws:document_reordered', useCallback(({ document_id: docId, sort_key: sortKey }) => {
     if (!sortKey) return;
     const docs = useAppStore.getState().documents;
     setDocuments(docs.map(d => d.document_id === docId ? { ...d, sort_key: sortKey } : d));
   }, [setDocuments]));
 
-  useEvent('project-document-deleted', useCallback(({ documentId: docId }: { documentId: string }) => {
+  useEvent('ws:document_deleted', useCallback(({ document_id: docId }) => {
     const docs = useAppStore.getState().documents;
     setDocuments(docs.filter(d => d.document_id !== docId));
     useUIStore.getState().removeDocState(docId);
   }, [setDocuments]));
 
-  useEvent('project-documents-deleted-batch', useCallback(({ documentIds }: { documentIds: string[]; referenceIds: string[] }) => {
+  useEvent('ws:documents_deleted_batch', useCallback(({ document_ids: documentIds }) => {
     // ARCH: single filter for all deleted docs — replaces N individual document_deleted events.
     // Reference cleanup is handled by useReferenceEvents (always-mounted) via the same event.
     const idSet = new Set(documentIds);
@@ -194,9 +191,7 @@ export function Sidebar() {
   // re-resolves the new project, re-subscribes both WS channels and drops the
   // stale collab join — resetting currentProject + both sockets + the joined
   // set piecemeal is the bug surface this handler must not open.
-  useEvent('project-documents-moved-out', useCallback(({ documentIds, targetProjectName }: {
-    documentIds: string[]; referenceIds: string[]; targetProjectId: string; targetProjectName: string;
-  }) => {
+  useEvent('ws:documents_moved_out', useCallback(({ document_ids: documentIds, target_project_name: targetProjectName }) => {
     const idSet = new Set(documentIds);
     const docs = useAppStore.getState().documents;
     setDocuments(docs.filter(d => !idSet.has(d.document_id)));
@@ -214,7 +209,7 @@ export function Sidebar() {
   // arrived here. Refetch the whole tree (GET /projects/:id) instead of
   // patching rows: the moved subtree may be large, the payload carries full
   // rows (sort_key, is_system, …), and one RTT reuses the canonical listing.
-  useEvent('project-documents-moved-in', useCallback((_: { documentIds: string[] }) => {
+  useEvent('ws:documents_moved_in', useCallback(() => {
     if (isPublicShare || !projectId) return;
     apiClient.get(`/projects/${projectId}`).then((data) => {
       setDocuments(data.documents);

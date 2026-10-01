@@ -101,7 +101,7 @@ async def _external_agent_env(requested: bool) -> dict | None:
 
 # INVARIANT: the route path MUST equal the tool name exactly — the dsh driver builds the
 # Why: this route shipped as "/sandbox/bash" and every live agent call 404'd while tests stayed green (tests hardcoded the same wrong path).
-# URL generically (`${TOOL_API_INTERNAL_URL}/api/tool/${toolName}`),
+# URL generically (`${LORE_TOOL_API_URL}/api/tool/${toolName}`),
 # so it never consults a path map. Why this is pinned: this route shipped as
 # "/sandbox/bash" and every live agent call 404'd while the whole test suite stayed
 # green — the tests had hardcoded the same wrong path, so they proved the handler, not

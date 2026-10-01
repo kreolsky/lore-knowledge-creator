@@ -10,11 +10,10 @@
 // INVARIANT: an unknown `type` — and an unknown dsh `kind` inside a dsh_event —
 // ALWAYS passes. Why: the dsh vocabulary relays end to end, so a kind the
 // assembler has no definition for still reaches the browser (its node
-// definitions — not a relay filter — decide that it produces no node; plan
-// lore-renders-dsh-conversation step 3). A renderer is an improvement, never
-// the condition for being visible. That is what the guards below are NOT for,
-// and mistaking the two is what deleted them once (plan
-// collapse-agent-stack-onto-dsh-vocabulary step 1) — a KNOWN frame missing a
+// definitions — not a relay filter — decide that it produces no node).
+// A renderer is an improvement, never
+// the condition for being visible. That is what the guards below are NOT for:
+// a KNOWN frame missing a
 // field its handler destructures is a protocol breach, not a new kind, and
 // dropping it is only safe because the caller toasts.
 
@@ -48,7 +47,8 @@ const GUARDS: Record<string, (f: Record<string, unknown>) => boolean> = {
   context_usage: f => typeof f.used === 'number' && typeof f.cap === 'number',
   // The assembler's input. ONLY `kind` is required — it names the node
   // definition, and a kind without one still publishes as the neutral fallback
-  // chip. `seq` is null on a companion row, so it may not gate visibility (the
+  // chip. `seq` may be null on a degenerate event (a real v4 log row always
+  // carries one), so it may not gate visibility (the
   // feed drops a seq-less frame at its own door, not here).
   dsh_event: f => isStr(f.kind),
 };

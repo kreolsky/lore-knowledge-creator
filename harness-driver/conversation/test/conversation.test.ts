@@ -1,9 +1,9 @@
 /**
  * The engine Lore will render over, fed a REAL dsh session log.
  *
- * The turn in the fixture (a v3 log recorded on gray) thinks between tool
- * calls across six steps — the exact shape Lore's hand-written translator
- * flattened into one concatenated trace. What is asserted here is what step 3 will put on screen: reasoning
+ * The turn in the fixture (a v4 log recorded on gray) thinks between tool
+ * calls across two steps — the exact shape Lore's hand-written translator
+ * flattened into one concatenated trace. What is asserted here is what the step will put on screen: reasoning
  * stays a separate block, in place, and a reload equals the live stream.
  */
 import { readFileSync } from 'node:fs'
@@ -15,7 +15,7 @@ import { createLoreConversation } from '../src/index.ts'
 
 const FIXTURE = join(import.meta.dirname, 'fixtures', 'session-turn.jsonl')
 
-/** Read a v3 session JSONL (one event per row, no packed chunks) into assembler inputs. */
+/** Read a v4 session JSONL (one event per row, no packed chunks) into assembler inputs. */
 function loadFixture(): any[] {
   const inputs: any[] = []
   for (const line of readFileSync(FIXTURE, 'utf8').split('\n')) {

@@ -6,16 +6,17 @@ payload builder.
 # over the project WS (chat-fanout) and the reload path; the driver owns the
 # turn lifecycle.
 #
-# ARCH: the relay NO LONGER
-# TRANSLATES. The plugin emits every dsh event verbatim (`dsh_event` frames)
+# ARCH: the relay translates
+# NOTHING. The plugin emits every dsh event verbatim (`dsh_event` frames)
 # plus the lore mints anchored in dsh events, and the BROWSER assembles the
 # conversation from them. This package RELAYS verbatim and derives nothing
 # from a frame it can pass through. The backend's own share is the
 # ACCUMULATION (content, model, context_usage, the finished-call count, the
-# driver_seq stamp — frames.py), the two backend-product lore mints
-# (`lore/compaction-mint`, and `lore/halt` for a turn that died without a
-# dsh terminal event), and the session-title write (the harness titler's
-# `session/title` lands in chat_sessions — plan session-title-from-the-harness).
+# driver_seq stamp — frames.py), the backend-product lore mints
+# (`lore/compaction-mint`, `lore/halt` for a turn that died without a dsh
+# terminal event, and `lore/image-gen` for the detached generation), and the
+# session-title write (the harness titler's `session/title` lands in
+# chat_sessions).
 #
 # ARCH: the DRIVER owns the turn lifecycle. A turn is POST /followup
 # (timeline.py) + the STANDING event channel (channel.py — ONE
@@ -53,6 +54,7 @@ import http_clients
 import httpx
 import settings
 
+import config
 from models.tools import RegionRef
 
 logger = logging.getLogger(__name__)
@@ -92,6 +94,24 @@ class DriverLineUnreachable(RuntimeError):
         super().__init__(f"{line_name} driver unreachable: {detail}")
 
 
+class DriverSecretMismatch(DriverLineUnreachable):
+    """HTTP 401 from the driver: the backend and the harness hold different
+    driver secrets — the pair was recreated one side at a time (or an old
+    install's typed secret survived the upgrade). Both read the secrets
+    volume, so the fix is recreating them together, and every refusal names
+    that cause with `CAUSE` instead of the generic not-reachable wording."""
+
+    CAUSE = (
+        "Agent line unavailable — the backend and the harness hold different "
+        "driver secrets. Both read the secrets volume: recreate them together "
+        "(`docker compose up -d`; an install that builds the harness also "
+        "needs `--build`)."
+    )
+
+    def __init__(self, line_name: str) -> None:
+        super().__init__(line_name, "HTTP 401 — driver secret mismatch")
+
+
 async def resolve_driver_line() -> DriverLine | None:
     """The configured driver line, or None when unconfigured.
 
@@ -99,16 +119,18 @@ async def resolve_driver_line() -> DriverLine | None:
     # UNCONFIGURED. Why: the routing gate then surfaces an explicit error and
     # the capability signal answers unavailable WITHOUT a probe or any other
     # reachability dependency — a misconfigured deployment must never call an
-    # unauthenticated RPC surface, and the address/secret are read through
-    # instance settings at CALL time (DB override → env), so a change applies
-    # to the next turn/reconnect without a reload.
+    # unauthenticated RPC surface. The address and secret are not
+    # configuration (see the INVARIANT above the agent section in config.py):
+    # constants bound at import off the compose service name and the
+    # generated secret file — read through config at call time so the value
+    # is the module's, not a stale from-import.
     """
-    secret = ((await settings.get("HARNESS_DRIVER_SECRET")) or "").strip()
+    secret = (config.HARNESS_DRIVER_SECRET or "").strip()
     if not secret:
         return None
     return DriverLine(
         name=DRIVER_LINE_NAME,
-        url=((await settings.get("HARNESS_DRIVER_URL")) or "").rstrip("/"),
+        url=config.HARNESS_DRIVER_URL.rstrip("/"),
         secret=secret,
     )
 
@@ -152,26 +174,39 @@ async def _driver_capability(line: DriverLine, model: str) -> dict:
     Raises DriverLineUnreachable on ANY failure to answer (connect error,
     error status, malformed reply): a gate that cannot ask the driver must
     surface an explicit error, never guess and never run unarmed."""
+    # The gateway rides as headers (admin panel, else env — the turn
+    # payload's source), so the key never lands in a URL or an access log.
+    gateway = await settings.get_all(["AI_API_URL", "AI_API_KEY"])
     try:
         client = http_clients.get_http_client("driver", timeout=_CAPABILITY_TIMEOUT)
         resp = await client.get(
             f"{line.url}/capability",
             params={"model": model},
-            headers={"X-Driver-Secret": line.secret},
+            headers={
+                "X-Driver-Secret": line.secret,
+                "X-AI-API-URL": gateway["AI_API_URL"],
+                "X-AI-API-Key": gateway["AI_API_KEY"],
+            },
             timeout=_CAPABILITY_TIMEOUT,
         )
+        # 401 is the secret mismatch — named, not folded into "unreachable"
+        # (the service is up and refusing; the pair must be recreated).
+        if resp.status_code == 401:
+            raise DriverSecretMismatch(line.name)
         resp.raise_for_status()
         reply = resp.json()
         if not isinstance(reply, dict) or not isinstance(reply.get("vision"), bool):
             raise ValueError(f"malformed capability reply: {reply!r}")
         return {"vision": reply["vision"]}
+    except DriverSecretMismatch:
+        raise
     except Exception as exc:
         raise DriverLineUnreachable(line.name, str(exc)) from exc
 
 
 # ─── Driver wire (harness POST /followup → frames on /ws/events) ──────────────
 # The wire format between the driver service and this client: the plugin
-# no longer translates. Every dsh session event arrives VERBATIM as
+# translates nothing. Every dsh session event arrives VERBATIM as
 #   {"type":"dsh_event","kind":<str>,"seq":<n>,"time":<ms>?,"data":<obj>,
 #    "surfaceOp"?:…,"sourceEventSeqs"?:[…]}
 # — the whole event, no truncation, no hide list — and the BROWSER assembles
@@ -180,28 +215,44 @@ async def _driver_capability(line: DriverLine, model: str) -> dict:
 #   {"type":"model_update","model":<str>}                               # turn model
 #   {"type":"context_usage","used":<n>,"cap":<n>}                       # per-turn
 #       occupation, emitted right before the terminal frame. Non-terminal.
+#   {"type":"dsh_stream","frame":<obj>}                                 # the
+#       transient live tail: dsh's own agent/assistant-stream publication
+#       relayed by the plugin, unsequenced, never replayed. Non-terminal.
 #   {"type":"lore/verdict-ask","seq":<anchor+0.5>,"data":{turn,callId,toolName},
-#       "ignorable":true}                                               # the ONE
-#       lore mint anchored inside a dsh session event (approval/asked): the
+#       "ignorable":true}                                               # a lore
+#       mint anchored inside a dsh session event (approval/asked): the
 #       mid-turn ask card is OURS — dsh answers approvals in a composer panel
 #       and has no conversation node for the ask.
 #   {"type":"lore/halt","seq":<anchor+0.7>,"data":{turn,reason,message?},
-#       "ignorable":true}                                               # minted
-#       plugin-side on a turn/end whose reason dsh renders no node for
-#       (aborted / blocked / interrupted / unknown).
+#       "ignorable":true}                                               # three
+#       producers: the plugin (a turn/end whose reason dsh renders no node
+#       for — aborted / blocked / interrupted / unknown), the backend's live
+#       relay (a turn that ended with NO dsh terminal event — frames.py), and
+#       the backend's reload attach (the row's `halt` column).
 #   {"type":"session_title","title":<str>}                              # the
 #       harness titler's revision AFTER the guarded chat-row write landed
 #       (the verbatim dsh_event does NOT ride for session/title — the
 #       backend's arm replaces it).
-#   {"type":"error","message":<str>,"halt_reason":<str>}                # terminal,
+#   {"type":"turn_closed"}                                              # TERMINAL
+#       (a browser terminal): pushed by the plugin after the turn's last
+#       mapped frame — a driver-owned turn has no stream whose end closes it.
+#   {"type":"error","message":<str>,"halt_reason":<str>}                # TERMINAL,
 #       backend-minted (deadline breach, unreachable line, stream failure,
 #       the harness's own catch) — the relay mints the lore halt at the
 #       window tail and persists the abnormal product.
 # Any OTHER type relays verbatim too (forward-compat): the relay drops nothing
-# for being unrendered. The lore mints whose facts are backend products —
-# `lore/image-gen` (detached generation), `lore/compaction-mint` (the
-# continuation-chat outcome), and the turn-less `lore/halt` — are minted on
-# the RELOAD side from the rows (frames.attach_reload_lore_mints).
+# for being unrendered. The browser's terminals are `done` and `turn_closed`
+# — whichever arrives first closes the turn. The backend also feeds the SAME
+# chat channel beside the driver's frames: the turn preamble (completions_
+# harness.py — `ids` names the user/assistant row pair, `sources` the context
+# panel, `context_warning`; non-terminal) and `done` (frames.py — TERMINAL,
+# carries the row's joined content on a graceful end; also emitted beside
+# `error` on a refused turn). The lore mints whose facts are backend
+# products — `lore/image-gen` (the detached generation: live as the run's
+# frames ride the owner's chat channel, and on reload from the row's
+# gen_steps), `lore/compaction-mint` (the continuation-chat outcome), and the
+# turn-less `lore/halt` — are ALSO minted on the RELOAD side from the rows
+# (frames.attach_reload_lore_mints).
 
 
 def _derived_tool_sets() -> dict[str, list[str]]:
@@ -218,11 +269,44 @@ def _derived_tool_sets() -> dict[str, list[str]]:
     }
 
 
+#: WEB_SEARCH_PROVIDER value → (the dsh provider id the harness pins, the
+#: setting that is its credential — the key, or the URL for SearXNG). The
+#: turn payload builder is the one reader.
+WEB_SEARCH_PROVIDERS: dict[str, tuple[str, str]] = {
+    "deepseek": ("deepseek-official", "DEEPSEEK_API_KEY"),
+    "brave": ("lore-brave", "BRAVE_API_KEY"),
+    "tavily": ("lore-tavily", "TAVILY_API_KEY"),
+    "searxng": ("lore-searxng", "SEARXNG_URL"),
+}
+
+
+def _admin_config_fields(
+    title_model: str, web_search_provider: str, web_search_credential: str,
+) -> dict:
+    """The per-turn admin-config trio (always present; see WEB_SEARCH_PROVIDERS
+    above): an empty title_model = the session's own model titles, an empty
+    credential = the loud no-key failure — no off state."""
+    return {
+        "title_model": title_model,
+        "web_search_provider": web_search_provider,
+        "web_search_credential": web_search_credential,
+    }
+
+
 # The turn-payload contract (why _build_turn_payload's fields are what they are):
-# Gateway + Tool-API base URLs are env-bound on the driver side; only the per-user
-# agent_key travels in the request. MUTATING_TOOLS is the SINGLE source of truth
-# for which tools get `apply` injected — mirrored into the request as
-# `mutating_tools` so the driver never re-hardcodes the set.
+# The Tool-API base URL is env-bound on the driver side; the per-user agent_key
+# travels in the request. The AI endpoint + key travel too: the admin panel
+# owns them (settings.get — admin override, else env), and the turn
+# is the one path by which an admin change reaches the harness without a restart.
+# The session title model and the web-search provider + its ONE credential ride
+# the SAME path (title_model keeps config.py's CHAT_MODEL fallback; an unset
+# credential rides as '' — web search has no off state, the harness fails the
+# call loudly naming the provider and the admin path).
+# INVARIANT(security): ai_api_key and web_search_credential never reach a log
+# line or a frame. Why: they are the operator's credentials; /followup is
+# gated by the driver secret, the log is not. MUTATING_TOOLS is the SINGLE
+# source of truth for which tools get `apply` injected — mirrored into the
+# request as `mutating_tools` so the driver never re-hardcodes the set.
 #
 # The turn contract carries NO messages[]: only the last user turn (`prompt`,
 # multimodal shape) + the layered system_prompt + the session id — history is
@@ -241,6 +325,9 @@ def _build_turn_payload(
     prompt: str | list = "", assistant_msg_id: str = "",
     skills: dict | list | None = None, region: RegionRef | None = None,
     reasoning_effort: str | None = None,
+    ai_api_url: str = "", ai_api_key: str = "",
+    title_model: str = "", web_search_provider: str = "",
+    web_search_credential: str = "",
 ) -> dict:
     payload = {
         "model": model,
@@ -256,6 +343,9 @@ def _build_turn_payload(
         "document_id": document_id,
         "prompt": prompt,
         "assistant_msg_id": assistant_msg_id,
+        "ai_api_url": ai_api_url,
+        "ai_api_key": ai_api_key,
+        **_admin_config_fields(title_model, web_search_provider, web_search_credential),
         # The RAW skills wire: {project, shipped, tombstones} documents — the
         # plugin parses them.
         "skills": skills if skills else [],

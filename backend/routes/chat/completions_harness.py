@@ -42,8 +42,14 @@ import logging
 from typing import TYPE_CHECKING
 
 import driver.timeline as timeline
+import settings
 from driver.channel import get_driver_channel
-from driver.client import DriverLineUnreachable, _build_turn_payload
+from driver.client import (
+    WEB_SEARCH_PROVIDERS,
+    DriverLineUnreachable,
+    DriverSecretMismatch,
+    _build_turn_payload,
+)
 from driver.timeline import DriverTurnBusy
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
@@ -146,8 +152,19 @@ async def _ensure_fanout_or_refuse(
         )
 
 
-def _turn_payload(turn: "_AgentTurn", plan, agent_key: str, driver_session_id: str) -> dict:
-    """The /followup payload — _build_turn_payload is the one contract."""
+async def _turn_payload(turn: "_AgentTurn", plan, agent_key: str, driver_session_id: str) -> dict:
+    """The /followup payload — _build_turn_payload is the one contract. The AI
+    endpoint and key, the session title model and the web-search provider +
+    credential are read per turn (admin override, else env), so an admin
+    change reaches the harness on the next turn without a restart."""
+    ai = await settings.get_all(["AI_API_URL", "AI_API_KEY"])
+    # KeyError on the provider row is unreachable: `choices` refuses an
+    # off-list value at import (env) and at PUT (override); the migration
+    # deletes a persisted pre-change `off`.
+    provider = await settings.get("WEB_SEARCH_PROVIDER")
+    pin, credential_key = WEB_SEARCH_PROVIDERS[provider]
+    config = await settings.get_all(
+        ["CHAT_TITLE_MODEL", credential_key])
     return _build_turn_payload(
         model=turn.model, system_prompt=plan.system_prompt,
         tools=plan.tools, agent_key=agent_key, apply_mode=plan.apply_mode,
@@ -158,6 +175,10 @@ def _turn_payload(turn: "_AgentTurn", plan, agent_key: str, driver_session_id: s
         prompt=plan.prompt, assistant_msg_id=turn.assistant_msg_id,
         skills=plan.skill_docs, region=plan.region,
         reasoning_effort=turn.reasoning_effort,
+        ai_api_url=ai["AI_API_URL"], ai_api_key=ai["AI_API_KEY"],
+        title_model=config["CHAT_TITLE_MODEL"],
+        web_search_provider=pin,
+        web_search_credential=config[credential_key],
     )
 
 
@@ -203,7 +224,7 @@ async def _accept_harness_turn(
     # ordering point, so the browser can never see a driver frame ahead
     # of the ids/sources/warnings it belongs after.
     channel.emit_frames(driver_session_id, _preamble_frames(turn))
-    payload = _turn_payload(turn, plan, agent_key, driver_session_id)
+    payload = await _turn_payload(turn, plan, agent_key, driver_session_id)
     reply = await timeline.post_followup(payload, line=turn.line)
     return reply, heartbeat
 
@@ -247,6 +268,10 @@ async def run_harness_turn(turn: "_AgentTurn", db, lock_token: str) -> JSONRespo
         await _fail(
             message="A turn is already in progress on this chat.",
             status=409, reason="driver_turn_busy", source="followup")
+    except DriverSecretMismatch:
+        await _fail(
+            message=DriverSecretMismatch.CAUSE,
+            status=502, reason="driver_secret_mismatch", source="followup")
     except DriverLineUnreachable as exc:
         await _fail(
             message=(

@@ -172,9 +172,9 @@ async def list_messages(
 # CURRENT lineage (a fork re-seeds it at the branch point), so any positional
 # pairing lands the
 # fork turn's frames on the abandoned branch's row and leaves the fork row
-# frameless — observed live on the plan-level drive. The stamp is the same id
-# the fork seam names (step 5's one id space), and the projection returns each
-# turn's `end_seq`; rows whose stamp no longer resolves (abandoned branches,
+# frameless — observed live. The stamp is the same id
+# the fork seam names, and the projection returns each
+# turn's `end_seq`; rows whose stamp does not resolve (abandoned branches,
 # pre-harness turns, abnormally ended turns) keep no `frames` key and the
 # client renders what the row carries.
 def _active_stamp_chain(
@@ -263,12 +263,15 @@ def _assign_frames_by_stamp(
 def _mark_open_turn(
     assistants: list[dict], turns: list[dict], chain: set[str] | None,
 ) -> None:
-    """Attach the OPEN turn (the projection's trailing turn with no `end_seq`
-    — step 1's extension) to the row that turn is writing, flagged
-    `open_turn`: the reload's streaming re-seat input (plan
-    agent-line-harness-lifecycle step 8, Decision 16 — a reload mid-turn
+    """Attach the OPEN turn (the projection's trailing turn with no `end_seq`)
+    to the row that turn is writing, flagged
+    `open_turn`: the reload's streaming re-seat input (a reload mid-turn
     renders the open turn as STREAMING, never a settled partial row that
-    flips on the next live frame).
+    flips on the next live frame). The open turn's `assistant_stream` (the
+    plugin's live-stream fold — the streamed text the log does not hold yet)
+    passes through VERBATIM beside the mark: the browser seats the transient
+    tail from it. Only the trailing OPEN turn's field is read — a closed
+    turn never carries one (entries.ts attaches it to the open turn only).
 
     # INVARIANT(replay-split, corruption, read side): a row that carries `halt`
     # never takes the open mark. Why: a turn that ended without a terminal event
@@ -301,6 +304,9 @@ def _mark_open_turn(
     newest = max(candidates, key=lambda r: r.get("created_at") or "")
     newest["frames"] = list(open_frames)
     newest["open_turn"] = True
+    baseline = turns[-1].get("assistant_stream")
+    if isinstance(baseline, dict):
+        newest["assistant_stream"] = baseline
 
 
 async def _fetch_session_turns(session: dict, session_id: str) -> dict:
@@ -380,7 +386,7 @@ async def _attach_timeline(
         return
     all_rows = await _lineage_rows(db, session_id)
     _assign_frames_by_stamp(assistants, turns, all_rows)
-    # The open turn (step 8): AFTER the stamp pass — its row is by definition
+    # The open turn: AFTER the stamp pass — its row is by definition
     # unstamped, so the two never contend for one row.
     _mark_open_turn(assistants, turns, _active_stamp_chain(all_rows, turns))
     from driver.frames import attach_reload_lore_mints
@@ -493,13 +499,12 @@ async def create_message(session_id: str, body: MessageCreate, user: dict = Depe
         "UPDATE type::record('chat_sessions', $id) SET updated_at = time::now()",
         {"id": session_id},
     )
-    # ARCH: note `title` is NO
-    # LONGER copied from the first message. Why: the column was a one-shot 100-char
+    # ARCH: note `title` is never
+    # copied from the first message. Why: the column was a one-shot 100-char
     # snapshot that the backend never refreshed, so it showed stale "copied lines"
     # after edits/deletes. Note display is now derived live from messages
     # (see list_sessions preview aggregate). `title` is left untouched for notes;
-    # AI chats get theirs from the harness titler's relayed session/title event
-    # (plan session-title-from-the-harness).
+    # AI chats get theirs from the harness titler's relayed session/title event.
     author_names = await _resolve_author_names(db, session, [row])
     out = _serialize_message(row, session, author_names)
 

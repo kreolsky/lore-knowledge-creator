@@ -14,6 +14,35 @@ async def test_login_success(client, admin_user):
     assert "lore_session" in resp.cookies
 
 
+def _session_set_cookie(resp) -> str:
+    """The raw Set-Cookie header of the session cookie (attributes included)."""
+    headers = [h for h in resp.headers.get_list("set-cookie") if h.startswith("lore_session=")]
+    assert len(headers) == 1, resp.headers.get_list("set-cookie")
+    return headers[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("forwarded", "secure"), [
+    (None, False),              # plain HTTP, no proxy (http://localhost:8080)
+    ("http", False),
+    ("https", True),            # TLS terminated by the operator's proxy
+    ("https, http", True),      # proxy chain: the first hop is the browser's scheme
+])
+async def test_login_cookie_secure_follows_browser_scheme(client, admin_user, forwarded, secure):
+    """The Secure flag is derived from the scheme the browser used — no setting.
+
+    A Secure cookie over plain HTTP never comes back (sign-in does not stick);
+    a non-Secure one over HTTPS can leak on a downgrade. Neither may depend on
+    an operator finding an env var."""
+    headers = {"X-Forwarded-Proto": forwarded} if forwarded else {}
+    resp = await client.post(
+        "/api/auth/login", json={"email": "admin@test.com", "password": "adminpass"}, headers=headers,
+    )
+    assert resp.status_code == 200
+    attrs = [a.strip().lower() for a in _session_set_cookie(resp).split(";")]
+    assert ("secure" in attrs) is secure, attrs
+
+
 @pytest.mark.asyncio
 async def test_login_wrong_password(client, admin_user):
     resp = await client.post("/api/auth/login", json={"email": "admin@test.com", "password": "wrong"})

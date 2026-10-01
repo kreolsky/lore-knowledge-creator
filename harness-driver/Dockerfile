@@ -1,9 +1,9 @@
 # The agent line — the RENTED loop (DeepSeek Harness) behind Lore's driver
-# contract. The image pins the harness at the tag dsh-v0.1.5-rc.2
-# (= fb2c4b9e, 2026-09-10 — the newest rc; alphas and master are never
+# contract. The image pins the harness at the tag dsh-v0.2.0-rc.2
+# (= 639ed015, 2026-09-29 — the newest rc; alphas and master are never
 # pinned). The pin moves ATOMICALLY with vendor/dsh and the browser bundle
 # banners (dsh-pin-gate.py); the harness migrates its OWN session logs on
-# open (format v0→v3), so logs written by older images keep loading.
+# open (format v0→v4), so logs written by older images keep loading.
 FROM node:24-bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN corepack enable
 
 WORKDIR /dsh
-ARG DSH_SHA=fb2c4b9e698e30edb738bca4cf0618587db7d203
+ARG DSH_SHA=639ed015397290b3745d163aafe02ffee4aa3f84
 RUN git clone --filter=blob:none https://github.com/deepseek-ai/deepseek-harness.git . \
     && git checkout $DSH_SHA
 RUN pnpm install --frozen-lockfile && pnpm run build
@@ -41,7 +41,8 @@ COPY conversation /dsh/lore-conversation
 # the served-toolset filter;  images.test.ts gates the multimodal prompt blocks + the per-turn
 # image-capability upsert; caps.test.ts gates the model-capability resolution
 # (the ONE source); web-search.test.ts gates the Lore search providers' wire
-# mapping; boot-env.test.ts gates the boot-time env fetch (retry, refusal, exit).
+# mapping + call-time credential resolution; boot-env.test.ts gates the
+# standalone boot (no backend fetch rides the entry).
 RUN node --import tsx/esm --test lore-driver/test/map.test.ts lore-driver/test/entries.test.ts lore-driver/test/driver.test.ts lore-driver/test/ws-events.test.ts lore-driver/test/approvals.test.ts lore-driver/test/skills.test.ts lore-driver/test/images.test.ts lore-driver/test/caps.test.ts lore-driver/test/web-search.test.ts lore-driver/test/boot-env.test.ts
 
 # The test feeds a real session log.
