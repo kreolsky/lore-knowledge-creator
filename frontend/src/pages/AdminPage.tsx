@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FolderOpen, Users as UsersIcon, Layers, Cpu, Bot, Wrench, Search, Database, Sparkles } from 'lucide-react';
+import { FolderOpen, Users as UsersIcon, Layers, Cpu, Bot, Wrench, Search, Database, Sparkles, Gauge } from 'lucide-react';
 import { apiClient } from '../api/client';
 import { listAdminProjects, listAdminUsers } from '../api/admin';
 import type { SettingsTabId } from '../api/admin';
@@ -35,6 +35,7 @@ import type { TranslationKey } from '../i18n/en';
 import { ProjectsTab } from '../components/admin/ProjectsTab';
 import { UsersTab, UserUpdates } from '../components/admin/UsersTab';
 import { EmbeddingsTab } from '../components/admin/EmbeddingsTab';
+import { InfoTab } from '../components/admin/InfoTab';
 import { SettingsSection } from '../components/admin/SettingsSection';
 import { SkillsSection } from '../components/admin/SkillsSection';
 import { withOptimistic } from '../utils/optimistic';
@@ -56,6 +57,7 @@ const ADMIN_ONLY_SECTIONS: readonly {
   /** `settings:<registry tab>` rows carry the registry tab id for the center. */
   settingsTab?: SettingsTabId;
 }[] = [
+  { tab: 'info', icon: <Gauge size={14} />, labelKey: 'adminInfo' },
   { tab: 'embeddings', icon: <Layers size={14} />, labelKey: 'embeddings' },
   { tab: 'settings:models', icon: <Cpu size={14} />, labelKey: 'settingsModels', settingsTab: 'models' },
   { tab: 'settings:search', icon: <Search size={14} />, labelKey: 'settingsSearch', settingsTab: 'search' },
@@ -510,6 +512,7 @@ export function AdminPage() {
               </>
             )}
 
+            {tab === 'info' && <InfoTab />}
             {tab === 'embeddings' && <EmbeddingsTab />}
             {settingsTab !== undefined && <SettingsSection tab={settingsTab} />}
             {tab === 'skills' && <SkillsSection />}

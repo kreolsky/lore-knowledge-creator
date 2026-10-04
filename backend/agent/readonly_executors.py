@@ -25,6 +25,7 @@ from fastapi import HTTPException
 # _search_materials_exec directly — hence that one private helper is re-exported too.
 # _get_project_structure_exec is NOT re-exported: its only caller was the deleted
 # execute_readonly_tool; structure tests reach it via get_project_structure_tool.
+import config
 from access import get_document_access
 from agent import doc_state
 from agent.search_exec import (  # noqa: F401
@@ -266,13 +267,12 @@ async def _read_document_exec(
     # Reuse the shared helper — do NOT re-derive. (Contract: the parity-by-read
     # INVARIANT above _build_read_result.)
     full_content, _tables_json = await doc_state.resolve_live_doc_state(target.resolved)
-    read_bounds = await settings.get_all(
-        ["AGENT_READ_SLICE_CHARS", "AGENT_READ_MAX_CHARS"],
-    )
+    # The slice window is a config constant; the hard
+    # ceiling stays a settings read.
     result = _build_read_result(
         target.doc, target.resolved, full_content, offset=offset, limit=limit,
-        slice_chars=read_bounds["AGENT_READ_SLICE_CHARS"],
-        max_chars=read_bounds["AGENT_READ_MAX_CHARS"],
+        slice_chars=config.AGENT_READ_SLICE_CHARS,
+        max_chars=await settings.get("AGENT_READ_MAX_CHARS"),
     )
     await _attach_read_sidecars(
         result, resolved=target.resolved, full_content=full_content, tables=tables,

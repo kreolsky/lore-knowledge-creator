@@ -1097,6 +1097,27 @@ async def test_public_notes_for_in_scope_docs(client, admin_user, project_with_d
     )
 
 
+@pytest.mark.asyncio
+async def test_public_document_404_after_project_delete(client, admin_user, project_with_doc):
+    """A live share row on a DELETED project serves nothing: project delete
+    marks only the project row (the share and the document survive), so
+    resolve_share must check project liveness itself — uniform 404, no
+    existence oracle for anonymous callers."""
+    pid, idx_id, _ = project_with_doc
+    _, admin_token = admin_user
+
+    await _mint_share(client, admin_token, pid, idx_id, "doc")
+    # False-green check: the share serves BEFORE the delete.
+    resp = await client.get(f"/api/public/documents/{idx_id}")
+    assert resp.status_code == 200, resp.text
+
+    resp = await client.delete(f"/api/projects/{pid}", cookies={"lore_session": admin_token})
+    assert resp.status_code == 200, resp.text
+
+    resp = await client.get(f"/api/public/documents/{idx_id}")
+    assert resp.status_code == 404
+
+
 # ─── REFUSED principal — the security surface is the whole story ──────────
 
 

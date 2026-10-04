@@ -106,6 +106,35 @@ async def test_empty_session_id_is_a_noop(fake_redis):
 
 
 @pytest.mark.asyncio
+async def test_ttl_override_row_does_not_shadow_the_constant(
+    fake_redis, test_db, monkeypatch,
+):
+    """An instance_settings row on TURN_LOCK_TTL_S does not reach the lock: the
+    TTL is the config constant read at call time, so a
+    stale override row left from the setting era must not stretch the lock the
+    next acquire takes."""
+    import json
+
+    import settings
+    from turn_lock import acquire_turn_lock
+
+    monkeypatch.delenv("TURN_LOCK_TTL_S", raising=False)
+    await test_db.query(
+        "CREATE instance_settings CONTENT { key: 'TURN_LOCK_TTL_S', "
+        "value: $v, updated_by: 'x', updated_at: time::now() }",
+        {"v": json.dumps(300)},
+    )
+    settings.drop_cache()
+    token = await acquire_turn_lock("s1")
+    assert token is not None
+    got = fake_redis.expires["pi:turn-lock:s1"] - time.monotonic()
+    assert got <= config.TURN_LOCK_TTL_S + 1, (
+        f"acquire took TTL {got:.0f}s — a TURN_LOCK_TTL_S row shadowed the "
+        f"constant {config.TURN_LOCK_TTL_S}s"
+    )
+
+
+@pytest.mark.asyncio
 async def test_fencing_release_does_not_erase_a_newer_turns_lock(fake_redis):
     """F1: a turn that outlives the TTL must NOT delete a newer turn's lock when it
     finally releases. acquire returns a unique token per holder; release is a

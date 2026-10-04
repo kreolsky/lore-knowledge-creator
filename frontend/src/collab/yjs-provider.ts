@@ -22,7 +22,7 @@ import { YjsAwarenessAdapter, removeAwarenessStatesForUser, type AwarenessAdapte
 import type { WsStatus } from './ws-status';
 import { ReconnectController, MAX_RECONNECT_ATTEMPTS } from './reconnect-controller';
 import { isAuthCloseCode } from './ws-close-codes';
-import { logCollabEvent } from './collab-log';
+import { logCollabEvent, watchDeadDoc } from './collab-log';
 import { recordRtt, recordAckLatency, recordSyncLatency, recordRecovered } from '../telemetry/perf';
 import {
   MSG_AWARENESS,
@@ -62,6 +62,8 @@ export interface EntityYjsState {
   localLoaded: boolean;
   /** Set when the doc changed while not synced — the sync pushes those edits up once. */
   hasUnsyncedLocalEdits: boolean;
+  /** An edit-unsent row went out since the last sync — one row per episode, not per keystroke. */
+  unsentReported: boolean;
   synced: boolean;
   refCount: number;
   /** Per-registration teardown — removes THIS joinEntity's bundle only (multi-consumer). */
@@ -308,11 +310,17 @@ export class YjsProjectProvider {
     }
     window.removeEventListener('pageshow', this._onForeground);
     document.removeEventListener('visibilitychange', this._onForeground);
+    logCollabEvent('yjs', 'disconnect', undefined, {
+      entities: this.entities.size,
+      unsynced: [...this.entities.values()].filter(e => e.hasUnsyncedLocalEdits).length,
+      path: window.location.pathname,
+    });
     for (const [entityId, entity] of this.entities) {
       this.send({ type: 'flush', entity_id: entityId });
       entity.disposeAwareness();
       if (!this._dropMirrorIfFullySynced(entityId, entity)) void entity.local?.detach();
       entity.ydoc.destroy();
+      watchDeadDoc(entity.ydoc, entityId, 'disconnect');
       // WHY: a torn-down entity reports synced=false to the handles still held. The
       // project page unmounts before its editor (React runs deletion cleanups
       // parent-first), so the editor's leave checkpoint reads this handle AFTER the
@@ -345,6 +353,7 @@ export class YjsProjectProvider {
       // the first consumer's callbacks, so it silently stopped receiving onSynced /
       // onUserJoined. Every registered consumer now receives every dispatched event.
       existing.callbackBundles.push(callbacks);
+      logCollabEvent('yjs', 'entity-join', entityId, { refCount: existing.refCount, fresh: false });
       return existing;
     }
 
@@ -374,6 +383,10 @@ export class YjsProjectProvider {
       // still loading, so no join was sent and the server would drop the update.
       const sent = this._sendUpdate(entityId, update);
       if (current && (!sent || !current.localLoaded)) current.hasUnsyncedLocalEdits = true;
+      if (current && !sent && !current.unsentReported) {
+        current.unsentReported = true;
+        logCollabEvent('yjs', 'edit-unsent', entityId, { readyState: this.ws?.readyState ?? -1 });
+      }
     };
     ydoc.on('update', onUpdate);
     const disposeObserver = () => ydoc.off('update', onUpdate);
@@ -415,6 +428,7 @@ export class YjsProjectProvider {
       local,
       localLoaded: local === null,
       hasUnsyncedLocalEdits: false,
+      unsentReported: false,
       synced: false,
       refCount: 1,
       // Per-registration teardown: remove THIS caller's bundle by reference so concurrent
@@ -430,6 +444,7 @@ export class YjsProjectProvider {
       },
     };
     this.entities.set(entityId, entity);
+    logCollabEvent('yjs', 'entity-join', entityId, { refCount: 1, fresh: true });
 
     if (local !== null) {
       local.whenReady.then(() => {
@@ -511,15 +526,25 @@ export class YjsProjectProvider {
       if (idx >= 0) entity.callbackBundles.splice(idx, 1);
     }
     entity.refCount--;
-    if (entity.refCount > 0 && entity.callbackBundles.length > 0) return;
+    if (entity.refCount > 0 && entity.callbackBundles.length > 0) {
+      logCollabEvent('yjs', 'entity-leave', entityId, { refCount: entity.refCount, teardown: false });
+      return;
+    }
     this.send({ type: 'leave', entity_id: entityId });
     entity.disposeAwareness();
     entity.disposeObserver();
+    const { synced, hasUnsyncedLocalEdits } = entity;
     // A leave with everything synced retires the mirror; otherwise it is kept, because the
     // unsynced state is exactly what it exists to carry. Either way detach BEFORE destroying
     // the doc — writing into a destroyed doc is not something the mirror survives.
-    if (!this._dropMirrorIfFullySynced(entityId, entity)) void entity.local?.detach();
+    const dropped = this._dropMirrorIfFullySynced(entityId, entity);
+    if (!dropped) void entity.local?.detach();
     entity.ydoc.destroy();
+    watchDeadDoc(entity.ydoc, entityId, 'leave');
+    logCollabEvent('yjs', 'entity-leave', entityId, {
+      refCount: entity.refCount, teardown: true, mirror: dropped ? 'dropped' : 'kept',
+      synced, unsynced: hasUnsyncedLocalEdits,
+    });
     this.entities.delete(entityId);
   }
 
@@ -633,6 +658,7 @@ export class YjsProjectProvider {
   private _applyPendingFlip(entity: EntityYjsState, entityId: string): void {
     if (!entity.synced) {
       entity.synced = true;
+      entity.unsentReported = false;
       this._broadcast(entity, cb => cb.onSynced());
       this._recordSynced(entityId);
     }

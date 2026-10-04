@@ -40,10 +40,11 @@ export function LinkSuggestionsPopup() {
   const currentProject = useAppStore(s => s.currentProject);
 
   const [isOpen, setIsOpen] = useState(false);
-  // INVARIANT: the link-creation popup offers EVERY reference in the project, not just the
-  // current doc's ancestor-scoped set (which the shared store.references slice / ReferencesPanel
-  // hold). Why: a reference attached to a sibling document must be linkable. Fetched project-wide
-  // on open; the store slice stays ancestor-scoped for the panel's depth-sorted display.
+  // INVARIANT: ref: suggestions come from a BOUNDED server title search
+  // (GET /references?project_id=…&q=…&limit=50), never a project-wide list. Why: the
+  // LIST is capped server-side (limit ≤1000), so a project-wide fetch cannot find — or
+  // list — references past the cap in large projects. Holds the current search PAGE
+  // only; the store slice stays ancestor-scoped for the panel's depth-sorted display.
   const [projectReferences, setProjectReferences] = useState<Reference[]>([]);
   const [insertPos, setInsertPos] = useState<number | null>(null);
   const [coords, setCoords] = useState<{ top: number; lineTop: number; left: number } | null>(null);
@@ -96,6 +97,9 @@ export function LinkSuggestionsPopup() {
 
   const linkItems = useMemo(() => {
     if (isExternalMode) return [{ id: searchQuery, label: t('insertExternalLink'), prefix: '' }];
+    // WHY: the server page is re-filtered locally — between a keystroke and the
+    // debounced response the page still holds the PREVIOUS query's rows, and Enter
+    // must never insert one that does not match what is typed now.
     if (isRefMode) return sortReferences(
       projectReferences.filter(r => r.title.toLowerCase().includes(refSearch.toLowerCase())),
       refSearch,
@@ -125,17 +129,23 @@ export function LinkSuggestionsPopup() {
     else if (isRefMode && firstItemId) setPreviewRefId(firstItemId.replace(/^ref:/, ''));
   }, [firstItemId, isOpen, isDocMode, isRefMode]);
 
-  // Fetch all project references when the popup opens (ref: mode lists them).
+  // ref: suggestions — debounced (200 ms) bounded server title search. The server
+  // filters by q (case-insensitive CONTAINS); sortReferences re-tiers the returned
+  // page client-side. An empty query asks for the 50 most recently updated refs.
+  // Non-ref modes never touch /references.
   useEffect(() => {
-    if (!isOpen || !currentProject) return;
+    if (!isOpen || !currentProject || !isRefMode) return;
+    const pid = currentProject.project_id;
     let cancelled = false;
-    apiClient.get(`/references?project_id=${currentProject.project_id}&limit=1000`)
-      .then((refs: Reference[]) => { if (!cancelled) setProjectReferences(refs); })
-      .catch(() => {
-        if (!cancelled) useAppStore.getState().showToast(t('failedToLoadReferences'), 'error');
-      });
-    return () => { cancelled = true; };
-  }, [isOpen, currentProject?.project_id]);
+    const timer = setTimeout(() => {
+      apiClient.get(`/references?project_id=${encodeURIComponent(pid)}&q=${encodeURIComponent(refSearch)}&limit=50`)
+        .then((refs: Reference[]) => { if (!cancelled) setProjectReferences(refs); })
+        .catch(() => {
+          if (!cancelled) useAppStore.getState().showToast(t('failedToLoadReferences'), 'error');
+        });
+    }, 200);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [isOpen, isRefMode, refSearch, currentProject?.project_id]);
 
   const clampedIndex = Math.max(0, Math.min(selectedIndex, linkItems.length - 1));
 

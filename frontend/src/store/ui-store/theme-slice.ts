@@ -35,6 +35,7 @@ export const SPLIT_RATIO_MAX = 0.8;
  * the saved-section validation at mount runs before any fetch); the registry
  * is only the source of the KEYS inside a tab. */
 export type AdminSectionTab =
+  | 'info'
   | 'users'
   | 'projects'
   | 'embeddings'

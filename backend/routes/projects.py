@@ -4,7 +4,6 @@
 import logging
 from uuid import uuid4
 
-from cascade import _cascade_delete_document
 from documents.service import last_doc_rule, live_doc_ids
 from fastapi import APIRouter, Depends, HTTPException, Query
 from share_guard import system_root_id
@@ -20,7 +19,6 @@ from access import (
 )
 from auth import get_current_user, require_user_manager_role
 from db import (
-    extract_id,
     fetch_one,
     get_db,
     run_in_transaction,
@@ -683,16 +681,16 @@ async def patch_project(project_id: str, body: PatchProject, user: dict = Depend
 
 @router.delete("/api/projects/{project_id}")
 async def delete_project(project_id: str, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
-    """Soft-delete a project by cascading through all its documents (references included)."""
+    """Mark the project itself deleted — instantly; its contents keep their own state.
+
+    # INVARIANT(persisted): deleting a project marks only the project row; documents,
+    # references, chats, checkpoints and chunks keep their own deleted_at.
+    # Why: soft delete is the general principle; keeping each document's own
+    # state inside the project makes a later restore a one-field flip and keeps
+    # "deleted by the user" distinguishable from "alive when the project died".
+    """
     await require_admin_or_project_full(project_id, user)
-    doc_rows = await db.query(
-        "SELECT id FROM documents WHERE project_id = $pid AND deleted_at IS NONE",
-        {"pid": project_id},
-    )
-    for row in (doc_rows or []):
-        did = extract_id(row["id"])
-        if did:
-            await _cascade_delete_document(db, did)
+    await soft_delete("projects", project_id)
     # Cascade the project's pending invites.
     await db.query(
         "DELETE pending_invites WHERE project_id = $pid", {"pid": project_id},
@@ -710,5 +708,4 @@ async def delete_project(project_id: str, user: dict = Depends(get_current_user)
         {"pid": project_id},
     )
     await emit("project_deleted", project_id=project_id)
-    await soft_delete("projects", project_id)
     return {"success": True}

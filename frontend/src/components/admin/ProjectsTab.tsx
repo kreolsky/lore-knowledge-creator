@@ -117,9 +117,11 @@ function ProjectCard({
 
         {/* Rename edits IN PLACE (references' contract, see .ref-rename-input):
          * the title span stays, its text becomes a borderless input with the
-         * accent underline; the members chip stays where it was. The owner is
-         * NOT chipped here — the expanded member list's pinned owner row is
-         * the single owner surface. */}
+         * accent underline; owner / members chips stay where they were. */}
+        {/* INVARIANT: the collapsed card shows the owner's name as a chip,
+         * even though the expanded member list repeats it in the owner row.
+         * Why: the owner must read from the list without expanding a card;
+         * the duplication when expanded is intended. */}
         {/* Chips are separate flex children spaced by the parent's `gap-2`,
          * exactly like UsersTab's RoleChip — no inline `&nbsp;|` that would
          * add to the gap on one item only. */}
@@ -142,6 +144,11 @@ function ProjectCard({
             />
           ) : (
             <span className="truncate">{project.name}</span>
+          )}
+          {project.owner_name && (
+            <span className="text-xs text-text-dim font-normal whitespace-nowrap">
+              {project.owner_name}
+            </span>
           )}
           {(project.members_count ?? 0) > 0 && (
             <span className="text-xs text-text-dim font-normal whitespace-nowrap">

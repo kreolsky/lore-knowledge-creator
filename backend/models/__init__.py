@@ -72,6 +72,7 @@ from models.references import (
     DeleteReferencesRequest,
     PatchReference,
     ReferenceMetaResponse,
+    ResolveReferencesRequest,
     WidgetSession,
     is_ref_row,
 )
@@ -135,6 +136,7 @@ __all__ = [
     "PatchProject",
     "PatchReference",
     "ReferenceMetaResponse",
+    "ResolveReferencesRequest",
     "RegionRef",
     "RegisterRequest",
     "RenameApiKey",

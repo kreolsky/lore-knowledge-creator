@@ -9,6 +9,7 @@
 */
 import { clearLastSavedBlobs } from '../ui-store';
 import { clearUserScopedCaches } from '../logout-handlers';
+import { sendTelemetry } from '../../telemetry/telemetry';
 import type { AppState } from '../app-store';
 
 export type SessionSlice = Pick<
@@ -57,7 +58,12 @@ export function createSessionSlice(set: AppSet): SessionSlice {
         set({ currentUser: user });
       }
     },
-    setPinLocked: (locked) => set({ pinLocked: locked }),
+    setPinLocked: (locked) => {
+      // WHY: the lock replaces the whole tree, tearing down the collab provider — the
+      // row names that trigger next to the provider's own `disconnect`.
+      sendTelemetry({ category: 'collab', kind: 'pin-lock', detail: { locked } });
+      set({ pinLocked: locked });
+    },
 
     showToast: (message, type = 'error', options) =>
       set({ toast: { message, type, persistent: options?.persistent } }),

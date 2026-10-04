@@ -46,6 +46,18 @@ class DeleteReferencesRequest(BaseModel):
     reference_ids: list[str] = Field(min_length=1, max_length=100)
 
 
+class ResolveReferencesRequest(BaseModel):
+    """Batch ref: link validity probe (POST /api/references/resolve).
+
+    `ids` is capped at 200 (the client chunks larger sets). An id absent from the
+    response is missing/foreign/deleted — never an error; an empty response is a
+    valid answer (see the INVARIANT(security) in resolve_references).
+    """
+
+    project_id: str
+    ids: list[str] = Field(max_length=200)
+
+
 class WidgetSession(BaseModel):
     """External session identity on a widget-extract upload (the `session` form
     field of POST /api/widget/extract, a JSON string).

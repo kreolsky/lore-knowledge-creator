@@ -14,7 +14,8 @@ import { apiClient } from '../api/client';
 import { fetchContentBatch } from '../api/content-batch';
 import { Reference } from '../types';
 import { fetchReferences } from '../editor/editor-utils';
-import { transcludeMap, linkContextChanged, validDocIds, validNoteThreadIds, validRefIds, projectRefIds, type TransclusionEntry } from '../components/editor/live-preview';
+import { transcludeMap, linkContextChanged, validDocIds, validNoteThreadIds, validRefIds, projectRefIds, missingRefIds, type TransclusionEntry } from '../components/editor/live-preview';
+import { LINK_TYPES } from '../components/editor/live-preview/link-types';
 import { parseTarget } from '../components/editor/live-preview/transclusion-grammar';
 import { setsEqual } from '../components/editor/live-preview/set-equality';
 import { fetchDocumentContent, invalidatePreviewCache, seedDocPreview } from './useDocumentPreview';
@@ -67,6 +68,27 @@ function carryContent(
   if (prev && prev.kind === next.kind && prev.content !== undefined)
     return { ...next, content: prev.content };            // carry the fetched body forward
   return next;                                             // nothing to carry → LOADING
+}
+
+// see SYSTEM: link-types — the ref entry's match is the single source of the
+// `[x](ref:id)` grammar (its `!?` also covers labeled embeds `![x](ref:id)`).
+const REF_LINK_ENTRY = LINK_TYPES.find((e) => e.kind === 'ref')!;
+
+/** Collect every ref: id present in a text, from BOTH link forms:
+ * `[x](ref:id)` links (via the LINK_TYPES ref entry — the same grammar the
+ * decorations use) and `![…](ref:id)` embeds including the EMPTY-label form the
+ * ref entry's `[^\]]+` label cannot match (via parseTarget, the same grammar the
+ * lazy-fetch effect uses). Duplicate ids collapse — the resolver probes SETS. */
+function collectRefIdsFromText(text: string): Set<string> {
+  const ids = new Set<string>();
+  for (const m of REF_LINK_ENTRY.match(text)) ids.add(m.id);
+  const embedRe = /!\[[^\]]*\]\(([^)]+)\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = embedRe.exec(text)) !== null) {
+    const parsed = parseTarget(m[1]);
+    if (parsed?.scheme === 'ref') ids.add(parsed.id);
+  }
+  return ids;
 }
 
 interface UseEditorReferenceSyncParams {
@@ -122,62 +144,154 @@ export function useEditorReferenceSync({ editorViewRef }: UseEditorReferenceSync
       : { kind: 'ref-text', title: ref.title };
   }, []);
 
-  // INVARIANT: project-wide ref IDs power link validity for cross-document references.  Why: references are project-wide; fetching all ref IDs lets the editor validate [[links]] to refs in other documents, not just the open one.
+  // i18n read via a ref — `t` is a NEW function every render and must never enter
+  // a dep array (the resolver + content_flushed listeners read it at fire time).
   const { t } = useTranslation();
   const tRef = useRef(t);
   tRef.current = t;
 
-  // WHY: project-wide ref IDs power link validity for cross-document references.  Why: references are project-wide; fetching all ref IDs lets the editor validate [[links]] to refs in other documents, not just the open one.
-  // Why: validRefIds (built from ancestor-scoped storeReferences below) marks a link to a
-  // sibling doc's reference as broken; this set restores correct validity. Fetched once per
-  // project (IDs only — no panel/image-map impact). On change, dispatch a single rebuild.
-  useEffect(() => {
-    if (!currentProjectId) { projectRefIds.clear(); return; }
-    let cancelled = false;
-    apiClient.get(`/references?project_id=${currentProjectId}&limit=1000`)
-      .then((refs: Reference[]) => {
-        if (cancelled) return;
-        const next = new Set(refs.map(r => r.reference_id));
-        const idChanged = !setsEqual(projectRefIds, next);
-        // see SYSTEM: transclusion — project-ref writer. Owns the `project-ref` source: seeds
-        // cross-document refs (not in the ancestor-scoped storeReferences) so a sibling-doc
-        // transclusion resolves like the link-validity path. Read the store imperatively
-        // (not via deps) so a reference mutation doesn't re-trigger this project-wide fetch —
-        // it must fire once per project. Replaces only its own source; ancestor-ref/doc
-        // entries (owned by the rebuild effect) and content-mutating writes are preserved.
-        const ancestorRefIds = new Set(useAppStore.getState().references.map(r => r.reference_id));
-        let transclusionChanged = false;
-        const keepProjectRefIds = new Set<string>();
-        for (const ref of refs) {
-          if (ancestorRefIds.has(ref.reference_id)) continue;
-          keepProjectRefIds.add(ref.reference_id);
-          const base = refToEntry(ref);
-          if (!base) continue;
-          const entry: TransclusionEntry = { ...base, source: 'project-ref' };
-          const existing = transcludeMap.get(ref.reference_id);
-          if (!existing || !entriesEqual(existing, entry)) {
-            transcludeMap.set(ref.reference_id, entry);
-            transclusionChanged = true;
-          }
-        }
-        // Prune project-ref entries that are no longer in the project (own-source delete).
-        for (const [id, entry] of transcludeMap) {
-          if (entry.source === 'project-ref' && !keepProjectRefIds.has(id) && !ancestorRefIds.has(id)) {
+  // ─── project-ref resolver ────────────────────────────────────────────────────
+  // ARCH: no code path loads every reference of a project — the project LIST is
+  // capped server-side (limit ≤1000), so a project-wide fetch renders refs past the
+  // cap as broken. Validity + cross-doc embeds are resolved ONLY for the ref ids that
+  // appear in the OPEN document's text: a debounced (300 ms) pass collects them
+  // from both link forms, drops ids already known (validRefIds ∪ projectRefIds ∪
+  // missingRefIds) and POSTs the rest in chunks of 200 to /references/resolve.
+  // Found → projectRefIds + a `project-ref` transcludeMap entry (source ownership
+  // unchanged); missing → missingRefIds, so a broken link is not re-asked on every
+  // keystroke. A link typed while a pass is pending shows broken for ≤ debounce +
+  // RTT — the click recheck (onBrokenLinkClick) still resolves it.
+  const resolveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // WHY: one toast per failure streak — a failed pass memoizes nothing, so every
+  // editing pause retries, and each retry must not stack another toast.
+  const resolveFailedRef = useRef(false);
+
+  const runRefResolve = useCallback(() => {
+    const pid = useAppStore.getState().currentProject?.project_id;
+    const view = editorViewRef.current;
+    if (!pid || !view) return;
+    const todo = [...collectRefIdsFromText(view.state.doc.toString())].filter(
+      (id) => !validRefIds.has(id) && !projectRefIds.has(id) && !missingRefIds.has(id),
+    );
+    if (todo.length === 0) return;
+    const chunks: string[][] = [];
+    for (let i = 0; i < todo.length; i += 200) chunks.push(todo.slice(i, i + 200));
+    Promise.all(chunks.map((chunk) =>
+      apiClient.post('/references/resolve', { project_id: pid, ids: chunk })
+        .then((found: Reference[]) => ({ chunk, found: Array.isArray(found) ? found : [] })),
+    )).then((results) => {
+      resolveFailedRef.current = false;
+      // INVARIANT: a response for a project that is no longer current is dropped.
+      // Why: the module Sets are global and were cleared on the switch — writing the
+      // old project's verdicts would mark its ids valid/missing in the new one.
+      if (useAppStore.getState().currentProject?.project_id !== pid) return;
+      // see SYSTEM: transclusion — project-ref writer. Owns the `project-ref` source:
+      // seeds cross-document refs (not in the ancestor-scoped storeReferences) so a
+      // sibling-doc transclusion resolves like the link-validity path. Read the store
+      // imperatively (not via deps) so a reference mutation does not re-trigger this
+      // resolver. Replaces only its own source; ancestor-ref/doc entries (owned by
+      // the rebuild effect) and content-mutating writes are preserved.
+      const ancestorRefIds = new Set(useAppStore.getState().references.map((r) => r.reference_id));
+      let validityChanged = false;
+      let transclusionChanged = false;
+      for (const { chunk, found } of results) {
+        const foundIds = new Set(found.map((r) => r.reference_id));
+        for (const id of chunk) {
+          if (foundIds.has(id)) continue;
+          // The server's "absent" verdict — memoized so the id is not re-asked on
+          // every keystroke. Also drops a stale project-ref entry (the re-probe a
+          // ws:reference_deleted invalidation schedules lands here).
+          missingRefIds.add(id);
+          const existing = transcludeMap.get(id);
+          if (existing?.source === 'project-ref') {
             transcludeMap.delete(id);
             transclusionChanged = true;
           }
         }
-        if (!idChanged && !transclusionChanged) return;
-        projectRefIds.clear();
-        for (const id of next) projectRefIds.add(id);
-        const view = editorViewRef.current;
-        if (view) view.dispatch({ effects: linkContextChanged.of(null) });
-      })
-      .catch(() => {
-        if (!cancelled) useAppStore.getState().showToast(tRef.current('failedToLoadReferences'), 'error');
-      });
-    return () => { cancelled = true; };
-  }, [currentProjectId, refToEntry, editorViewRef]);
+        for (const ref of found) {
+          projectRefIds.add(ref.reference_id);
+          missingRefIds.delete(ref.reference_id);
+          validityChanged = true;
+          if (ancestorRefIds.has(ref.reference_id)) continue;
+          const base = refToEntry(ref);
+          if (!base) continue;
+          // Carry a previously-fetched body across the re-seed so a re-resolve never
+          // flips a loaded band back to LOADING (same contract as the rebuild writer).
+          const entry: TransclusionEntry = carryContent(
+            { ...base, source: 'project-ref' },
+            transcludeMap.get(ref.reference_id),
+          );
+          const prev = transcludeMap.get(ref.reference_id);
+          if (!prev || !entriesEqual(prev, entry)) {
+            transcludeMap.set(ref.reference_id, entry);
+            transclusionChanged = true;
+          }
+        }
+      }
+      if (!validityChanged && !transclusionChanged) return;
+      const v = editorViewRef.current;
+      if (v) v.dispatch({ effects: linkContextChanged.of(null) });
+    }).catch(() => {
+      if (resolveFailedRef.current) return;
+      resolveFailedRef.current = true;
+      useAppStore.getState().showToast(tRef.current('failedToLoadReferences'), 'error');
+    });
+  }, [refToEntry, editorViewRef]);
+
+  const scheduleRefResolve = useCallback(() => {
+    if (resolveTimerRef.current) clearTimeout(resolveTimerRef.current);
+    resolveTimerRef.current = setTimeout(() => {
+      resolveTimerRef.current = null;
+      runRefResolve();
+    }, 300);
+  }, [runRefResolve]);
+
+  // Project (re)entry: the module Sets are global — reset resolution state so ids
+  // resolved for the previous project never leak validity into this one, then run
+  // the pass for the open text. Own-source delete of project-ref entries.
+  useEffect(() => {
+    if (!currentProjectId) {
+      projectRefIds.clear();
+      missingRefIds.clear();
+      return;
+    }
+    projectRefIds.clear();
+    missingRefIds.clear();
+    let transclusionChanged = false;
+    for (const [id, entry] of transcludeMap) {
+      if (entry.source === 'project-ref') {
+        transcludeMap.delete(id);
+        transclusionChanged = true;
+      }
+    }
+    if (transclusionChanged) {
+      const view = editorViewRef.current;
+      if (view) view.dispatch({ effects: linkContextChanged.of(null) });
+    }
+    scheduleRefResolve();
+    return () => {
+      if (resolveTimerRef.current) clearTimeout(resolveTimerRef.current);
+    };
+  }, [currentProjectId, scheduleRefResolve, editorViewRef]);
+
+  // Doc open (incl. switches within the same project): probe the new text.
+  useEffect(() => {
+    if (!currentProjectId || !currentDocId) return;
+    scheduleRefResolve();
+    return () => {
+      if (resolveTimerRef.current) clearTimeout(resolveTimerRef.current);
+    };
+  }, [currentDocId, currentProjectId, scheduleRefResolve]);
+
+  // Editor doc changes (already debounced upstream by editor-observer) and
+  // reference lifecycle invalidations (see useReferenceEvents →
+  // 'ref-links-invalidate') re-run the pass.
+  useEvent('editor-doc-changed', useCallback(() => {
+    scheduleRefResolve();
+  }, [scheduleRefResolve]));
+  useEvent('ref-links-invalidate', useCallback(() => {
+    scheduleRefResolve();
+  }, [scheduleRefResolve]));
 
   // INVARIANT: refs are fetched here (editor owner), not in ReferencesPanel alone.  Why: ReferencesPanel only mounts on the References tab; if refs were fetched only there, a doc switch while on Chat/Notes would leave link validity stale.
   // ReferencesPanel mounts only when the right panel is on the References tab —

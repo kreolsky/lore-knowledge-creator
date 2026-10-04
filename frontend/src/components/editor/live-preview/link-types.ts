@@ -26,8 +26,11 @@
 import { noteLink, refLink, docLink, extLink, bareUrl } from '../link-patterns';
 import { validDocIds, validNoteThreadIds, validRefIds, projectRefIds } from './link-validity';
 import { useAppStore } from '../../../store/app-store';
+import { useUIStore } from '../../../store/ui-store';
 import { emit } from '../../../events';
 import { t } from '../../../i18n';
+import { isAccessRefusal } from '../../../api/client';
+import { fetchRefPreview } from '../../../hooks/useReferencePreview';
 
 export type LinkKind = 'note' | 'ref' | 'doc' | 'ext' | 'bare';
 
@@ -59,6 +62,12 @@ export interface LinkTypeEntry {
    * omit the `t` export don't break module loading of consumers.
    */
   brokenTooltip(): string;
+  /**
+   * Server recheck for a click on a link the validity Sets miss. Resolves true when the
+   * target exists, false when the server refuses it (404/403), null on any other failure
+   * (the entry has already reported that failure itself).
+   */
+  recheck?(id: string): Promise<boolean | null>;
 }
 
 const NOTE: LinkTypeEntry = {
@@ -101,6 +110,23 @@ const REF: LinkTypeEntry = {
   action(id) { emit('navigate-to-reference', { referenceId: id }); },
   decorationClass: 'cm-ref-link',
   brokenTooltip: () => t('linkBrokenReference'),
+  // WHY: the Sets are a client snapshot of the project's refs; a miss there is not a
+  // verdict — the hover preview already resolves the same id by GET, so the click asks
+  // the same source before calling the link broken.
+  recheck(id) {
+    // WHY: the anonymous /s/:token viewer has no session — the authed GET answers 401 and
+    // apiClient redirects to login. Its Sets already hold the whole shared subtree, so a
+    // miss there is final.
+    if (useUIStore.getState().isPublicShare) return Promise.resolve(false);
+    return fetchRefPreview(id).then(
+      () => true,
+      (err) => {
+        if (isAccessRefusal(err)) return false;
+        useAppStore.getState().showToast(t('failedToLoadReferences'), 'error');
+        return null;
+      },
+    );
+  },
 };
 
 const DOC: LinkTypeEntry = {
@@ -198,4 +224,16 @@ export function showBrokenToast(cls: string): void {
   const msg = entry.brokenTooltip();
   if (!msg) return;
   useAppStore.getState().showToast(msg, 'warning');
+}
+
+/**
+ * Click on a link the validity Sets call broken: recheck with the server when the entry
+ * can, act on a confirmed target, toast as broken on a refusal. Used by the click router.
+ */
+export function onBrokenLinkClick(entry: LinkTypeEntry, id: string): void {
+  if (!entry.recheck) { showBrokenToast(entry.decorationClass); return; }
+  void entry.recheck(id).then((exists) => {
+    if (exists === true) entry.action(id);
+    else if (exists === false) showBrokenToast(entry.decorationClass);
+  });
 }

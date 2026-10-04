@@ -11,6 +11,7 @@ import json
 import logging
 import time
 
+from collab.drop_telemetry import is_mutation, record_dropped_update
 from collab.join import (
     SessionCapExceeded,
     join_collab_session,
@@ -147,6 +148,9 @@ async def _route_binary_message(
     ws: WebSocket,
     data: bytes,
     joined: dict[str, tuple[CollabSession, ConnectedClient]],
+    *,
+    user_id: str,
+    project_id: str,
 ) -> None:
     """Route a binary frame to the correct entity session."""
     from collab.sync import unwrap_binary
@@ -154,13 +158,26 @@ async def _route_binary_message(
     unwrapped = unwrap_binary(data)
     if unwrapped is None:
         return
-    entity_id, _msg_type, _payload = unwrapped
+    entity_id, msg_type, payload = unwrapped
 
     entry = joined.get(entity_id)
     if entry is None:
+        if is_mutation(msg_type, payload):
+            await record_dropped_update(
+                "server-drop-unjoined", ws_id=id(ws), user_id=user_id,
+                project_id=project_id, entity_id=entity_id, message=payload,
+            )
         return
 
     session, _client = entry
+    # WHY: handle_binary_message returns silently for a socket the session no longer lists
+    # as a client (session.py: `if not sender_client`); recorded here, where the user is known.
+    if id(ws) not in session.clients:
+        if is_mutation(msg_type, payload):
+            await record_dropped_update(
+                "server-drop-unregistered", ws_id=id(ws), user_id=user_id,
+                project_id=project_id, entity_id=entity_id, message=payload,
+            )
     await session.handle_binary_message(data, ws, is_multiplexed=True)
 
 
@@ -263,7 +280,7 @@ async def collab_project_ws(ws: WebSocket, project_id: str):
                 binary_data = raw["bytes"]
                 if len(binary_data) > MAX_WS_MESSAGE_SIZE:
                     continue
-                await _route_binary_message(ws, binary_data, joined)
+                await _route_binary_message(ws, binary_data, joined, user_id=user_id, project_id=project_id)
 
     except WebSocketDisconnect:
         logger.debug("Project collab WS disconnect: project=%s user=%s", project_id, user_name)

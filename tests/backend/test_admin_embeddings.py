@@ -81,6 +81,38 @@ async def test_stats_pending_reembed_counts_dead_lettered_docs(
 
 
 @pytest.mark.asyncio
+async def test_stats_pending_reembed_skips_dead_project(
+    client, admin_user, project_with_doc,
+):
+    """A failed doc in a DELETED project leaves pending_reembed_count: project
+    delete keeps the doc's deleted_at = NONE and the sweep skips it, so counting
+    it would leave a number nothing can drain."""
+    _, token = admin_user
+    pid, idx_id, _ = project_with_doc
+    db = await get_db()
+
+    async def _pending() -> int:
+        resp = await client.get(
+            "/api/admin/embeddings/stats", cookies={"lore_session": token},
+        )
+        assert resp.status_code == 200
+        return resp.json()["pending_reembed_count"]
+
+    await db.query(
+        "UPDATE type::record('documents', $id) SET "
+        "embedding_status = 'failed', last_embed_error = 'embed failed: repro'",
+        {"id": idx_id},
+    )
+    # False-green check: counted while the project is live.
+    before = await _pending()
+    assert before >= 1
+
+    resp = await client.delete(f"/api/projects/{pid}", cookies={"lore_session": token})
+    assert resp.status_code == 200, resp.text
+    assert await _pending() == before - 1
+
+
+@pytest.mark.asyncio
 async def test_stats_chunked_audio_ref_is_never_negative(
     client, admin_user, project_with_doc,
 ):

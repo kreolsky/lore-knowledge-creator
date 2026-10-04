@@ -13,8 +13,10 @@ import time
 from query_stats import record_query
 from settings_registry import ConfigError
 from surrealdb import AsyncSurreal
+from websockets.exceptions import ConnectionClosed, WebSocketException
 
 import config
+from db._patch import SurrealReaderDiedError
 
 logger = logging.getLogger("db")
 
@@ -39,6 +41,14 @@ _STARTUP_BACKOFF_BASE = 0.5
 # one row raised the conflict in 3 of 200 attempts.
 DB_WRITE_CONFLICT_ATTEMPTS = 4
 _WRITE_CONFLICT_BACKOFF_S = 0.02
+# Uncertain-delivery failures (reader death / transport loss) re-issue on a SLOWER
+# ramp — a dial refused during a SurrealDB restart blip clears in seconds, not
+# milliseconds; 4 attempts at a 2s ramp keep re-dialing across ~12s of downtime
+# (measured on gray: a `docker compose restart surreal` is back healthy in ~7s).
+_UNCERTAIN_BACKOFF_S = 2.0
+# Transport-class uncertain-delivery signatures: the statement's delivery is
+# unknown (send failed / connection gone), never a DB-level answer.
+_TRANSPORT_LOST: tuple = (ConnectionError, ConnectionClosed, WebSocketException)
 
 
 def _is_write_conflict(exc: BaseException) -> bool:
@@ -219,7 +229,7 @@ class _TimedDB:
     def __getattr__(self, name):
         return getattr(self._conn, name)
 
-    async def _run_retrying(self, call, sql, params, site):
+    async def _run_retrying(self, call, sql, params, site, *, idempotent=False):
         """Time one statement and re-issue it while SurrealDB reports a write conflict.
 
         # INVARIANT: ONLY the retryable write conflict is re-issued, and only up to
@@ -228,27 +238,45 @@ class _TimedDB:
         # other error carries that guarantee, and repeating a non-idempotent
         # statement on a guess would double a write. The cap keeps a permanently
         # contended row from pinning a request forever.
+        #
+        # The ONE opt-in extension: with idempotent=True the caller declares the
+        # statement safe to re-issue even when its delivery is UNCERTAIN —
+        # SurrealReaderDiedError (the WS reader died mid-query) or a transport loss
+        # (ConnectionRefused/ConnectionClosed during a SurrealDB blip) then joins
+        # the retry set. The re-issue rides the same connection object, which
+        # self-heals inside _send via the patched connect (db/_patch.py). These
+        # failures carry NO committed-nothing guarantee, so default OFF: a retried
+        # CREATE with a lost response would duplicate a row.
         """
         for attempt in range(DB_WRITE_CONFLICT_ATTEMPTS):
             start = time.perf_counter()
+            backoff = _WRITE_CONFLICT_BACKOFF_S
             try:
                 return await call(sql, params)
             except Exception as e:
-                if not _is_write_conflict(e) or attempt == DB_WRITE_CONFLICT_ATTEMPTS - 1:
+                conflict = _is_write_conflict(e)
+                uncertain = isinstance(e, (SurrealReaderDiedError, *_TRANSPORT_LOST))
+                retryable = conflict or (idempotent and uncertain)
+                if not retryable or attempt == DB_WRITE_CONFLICT_ATTEMPTS - 1:
                     raise
+                if not conflict:
+                    backoff = _UNCERTAIN_BACKOFF_S
                 logger.warning(
-                    "Write conflict on site=%s (attempt %d/%d) — retrying",
+                    "%s on site=%s (attempt %d/%d) — re-issuing",
+                    "Write conflict" if conflict else "uncertain delivery (transport loss)",
                     site, attempt + 1, DB_WRITE_CONFLICT_ATTEMPTS,
                 )
             finally:
                 record_query(site, (time.perf_counter() - start) * 1000.0)
-            await asyncio.sleep(_WRITE_CONFLICT_BACKOFF_S * (attempt + 1))
+            await asyncio.sleep(backoff * (attempt + 1))
 
-    async def query(self, sql, params=None, *, site="unspecified"):
-        return await self._run_retrying(self._conn.query, sql, params, site)
+    async def query(self, sql, params=None, *, site="unspecified", idempotent=False):
+        return await self._run_retrying(self._conn.query, sql, params, site, idempotent=idempotent)
 
-    async def query_raw(self, sql, params=None, *, site="unspecified"):
-        return await self._run_retrying(self._conn.query_raw, sql, params, site)
+    async def query_raw(self, sql, params=None, *, site="unspecified", idempotent=False):
+        return await self._run_retrying(
+            self._conn.query_raw, sql, params, site, idempotent=idempotent
+        )
 
 
 async def get_db() -> AsyncSurreal:

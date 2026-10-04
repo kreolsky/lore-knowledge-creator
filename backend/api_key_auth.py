@@ -152,6 +152,12 @@ async def resolve_api_key(
         doc = await fetch_one("documents", scope_root)
         if not doc or doc.get("deleted_at"):
             raise HTTPException(status_code=410, detail="Document has been deleted")
+        # …and that its project is alive: project delete marks only the project
+        # row (the document keeps deleted_at = NONE), so the document check
+        # alone would keep a dead project's widget alive. Same 410 family.
+        widget_pid = doc.get("project_id")
+        if not widget_pid or not await fetch_one("projects", widget_pid):
+            raise HTTPException(status_code=410, detail="Project has been deleted")
     else:
         # INVARIANT (stale-credential IDOR): re-verify CURRENT membership here on
         # the agent surface — the key grants identity, live RBAC re-asserts it on

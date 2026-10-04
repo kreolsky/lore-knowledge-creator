@@ -29,7 +29,7 @@ logger = logging.getLogger("lore.collab.client")
 MAX_BATCH = 50
 
 # kinds that warrant an at-a-glance WARNING in lore.collab.client (prod-debug signal)
-_WARN_COLLAB_KINDS = {"close", "gave-up", "server-reap"}
+_WARN_COLLAB_KINDS = {"close", "gave-up", "server-reap", "edit-dead-doc", "edit-unsent"}
 _WARN_PERF_KINDS = {"lag", "history-large"}
 
 

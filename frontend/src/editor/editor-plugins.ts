@@ -13,7 +13,7 @@ import { RangeSetBuilder, Compartment } from '@codemirror/state';
 import { bareUrl } from '../components/editor/link-patterns';
 import { isViewportCovered, revealAtCursor } from '../components/editor/live-preview';
 import { collectCodeRanges, makeInCodeChecker, isPosInCode } from '../components/editor/code-range-utils';
-import { LINK_TYPES, showBrokenToast } from '../components/editor/live-preview/link-types';
+import { LINK_TYPES, onBrokenLinkClick } from '../components/editor/live-preview/link-types';
 import { getRoleView } from './active-editor';
 import { useUIStore } from '../store/ui-store';
 import { refIsScope } from '../store/ui-store/documents-slice';
@@ -207,7 +207,7 @@ export const linkClickExtension = EditorView.domEventHandlers({
               entry.action(m.id);
             }
           } else {
-            showBrokenToast(entry.decorationClass);
+            onBrokenLinkClick(entry, m.id);
           }
         });
         if (handled) return true;

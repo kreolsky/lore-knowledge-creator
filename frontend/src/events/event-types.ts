@@ -174,6 +174,13 @@ export interface EventMap {
   // ── Image resolution ──
   'unresolved-image-ref': void;
 
+  // ── ref: link resolution ──
+  // see SYSTEM: transclusion — a reference lifecycle change (created/deleted) made
+  // the editor's ref: resolve caches (projectRefIds/missingRefIds) stale.
+  // useReferenceEvents mutates the module Sets and emits this; the editor's
+  // resolver (useEditorReferenceSync) re-probes the open document's text.
+  'ref-links-invalidate': { reference_id: string };
+
   // ── Chat clarify ──
   // Fired by ChatClarifyPopover when the user confirms a clarifying question on a
   // selected fragment of an assistant message. ChatInput appends it to the draft

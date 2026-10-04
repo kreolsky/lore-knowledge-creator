@@ -16,7 +16,8 @@ from collections.abc import Callable
 from typing import Any
 
 import redis_pool
-import settings
+
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +129,7 @@ class RedisBackplane(Backplane):
         # try/except. An unbounded await hangs the whole process on a wedged Redis
         # connection (DinD CI: 120s suite kill, no traceback). The timeout converts
         # that hang into the already-handled asyncio.TimeoutError path.
-        publish_timeout_s = await settings.get("BACKPLANE_PUBLISH_TIMEOUT_S")
+        publish_timeout_s = config.BACKPLANE_PUBLISH_TIMEOUT_S
         await asyncio.wait_for(self._ensure(conn), timeout=publish_timeout_s)
         await asyncio.wait_for(conn.pub.publish(channel, data), timeout=publish_timeout_s)
 

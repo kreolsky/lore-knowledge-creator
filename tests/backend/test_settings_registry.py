@@ -9,7 +9,10 @@ read at import time anywhere under backend/).
 """
 
 import ast
+import os
 import pathlib
+import subprocess
+import sys
 
 import pytest
 import settings_registry
@@ -186,7 +189,6 @@ def test_restart_rule_pinned_for_worker_frozen_keys():
         assert entry is not None, f"{key} must be registered"
         assert entry.effect == "restart", f"{key} is frozen in a worker class/cron body"
     assert find("MAX_IMAGE_SIZE_MB").effect == "live"
-    assert find("FLUSH_SNAPSHOT_MIN_INTERVAL_SEC").effect == "live"
     # The agent-line table caps are frozen the same way — inside Pydantic
     # Field(max_length=…) class bodies, which evaluate at import; the advertised
     # tool schema is the authoritative enforcement point.
@@ -220,8 +222,6 @@ def test_settings_sit_where_an_operator_looks_for_them():
     placement = {
         "STT_CONCURRENCY": ("models", "STT"),
         "COMFY_CONCURRENCY": ("tools", "ComfyUI image generation"),
-        "MEM_RUN_KEY_TTL_S": ("tools", "Project memory"),
-        "CHAT_MODELS_CACHE_TTL_S": ("models", "AI API"),
         "MODEL_IMAGE_MAX_PIXELS": ("models", "Images for the model"),
         "MODEL_IMAGE_JPEG_QUALITY": ("models", "Images for the model"),
         "WEB_SEARCH_PROVIDER": ("search", "Web search"),
@@ -356,6 +356,35 @@ def test_embedding_calibration_set_moves_together():
         "three cuts on it first (see the WHY on EMBEDDING_MODEL in config.py)"
     )
     assert declared == _EMBEDDING_CALIBRATION[model]
+
+
+# ─── upload caps: code defaults, not a required-env contract ─────────────────
+
+
+def test_upload_caps_boot_on_code_defaults_without_env():
+    """The upload-size trio carries code defaults, like MAX_DOCX/PDF/ARCHIVE.
+
+    # INVARIANT: a value every surface supplied identically (compose,
+    .env.example, deploy) is a code default, not a required env contract — a
+    bare `docker run` of the backend image must boot.
+    Proven in a fresh interpreter with the three env names scrubbed, because
+    the in-process config was shaped by conftest's env seeding.
+    """
+    code = (
+        "import config; "
+        "assert config.MAX_AUDIO_SIZE_MB == 500, config.MAX_AUDIO_SIZE_MB; "
+        "assert config.MAX_IMAGE_SIZE_MB == 50, config.MAX_IMAGE_SIZE_MB; "
+        "assert config.MAX_MARKDOWN_SIZE_MB == 50, config.MAX_MARKDOWN_SIZE_MB"
+    )
+    probe = subprocess.run(
+        [sys.executable, "-c", code],
+        env={k: v for k, v in os.environ.items() if k not in (
+            "MAX_AUDIO_SIZE_MB", "MAX_IMAGE_SIZE_MB", "MAX_MARKDOWN_SIZE_MB",
+        )},
+        cwd=pathlib.Path(config.__file__).parent,
+        capture_output=True, text=True, timeout=120,
+    )
+    assert probe.returncode == 0, probe.stderr
 
 
 # ─── validate: a value check beyond type/bounds ──────────────────────────────

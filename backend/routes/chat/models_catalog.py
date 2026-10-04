@@ -20,6 +20,7 @@ import http_clients
 import settings
 from fastapi import Depends, HTTPException
 
+import config
 from auth import get_current_user
 from config import (
     CHAT_MAX_IMAGE_SIZE_MB,
@@ -102,7 +103,7 @@ async def _gateway_model_entries() -> list[dict]:
     (double-checked — a caller that waited re-reads the freshly-populated cache
     instead of fetching again)."""
     import time
-    ttl = await settings.get("CHAT_MODELS_CACHE_TTL_S")
+    ttl = config.CHAT_MODELS_CACHE_TTL_S
     if _gateway_models_cache is not None and (
         time.monotonic() - _gateway_models_cache_at
     ) < ttl:
@@ -201,7 +202,7 @@ async def gateway_reasoning_map() -> dict:
     cache beside it. A failed refresh populates nothing, so the next caller
     retries after the in-flight attempt — bounded by lock serialization."""
     import time
-    ttl = await settings.get("CHAT_MODELS_CACHE_TTL_S")
+    ttl = config.CHAT_MODELS_CACHE_TTL_S
     if _gateway_reasoning_cache is not None and (
         time.monotonic() - _gateway_reasoning_cache_at
     ) < ttl:

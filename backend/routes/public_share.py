@@ -168,7 +168,10 @@ async def resolve_share(document_id: str) -> dict:
         # Uniform 404 — unknown/unpublished/system: indistinguishable.
         raise HTTPException(status_code=404, detail="Document not found")
     project_id = doc.get("project_id")
-    if not project_id:
+    if not project_id or not await fetch_one("projects", project_id):
+        # Uniform 404 — no project row, or the project is deleted (project delete
+        # marks only the project row, the share row survives): indistinguishable
+        # from an unknown doc for anonymous callers.
         raise HTTPException(status_code=404, detail="Document not found")
     if await is_unshareable_by_ancestry(document_id, project_id):
         # Uniform 404 — system subtree is unpublishable by ancestry.

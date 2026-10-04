@@ -147,3 +147,30 @@ async def test_widget_info_unauthorized(client):
         headers={"Authorization": "Bearer invalid_token_here"},
     )
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_widget_call_after_project_delete_410(client, admin_user, project_with_doc):
+    """A widget key on a doc whose PROJECT was deleted answers 410 — project
+    delete marks only the project row (the document keeps deleted_at = NONE),
+    so the document liveness check alone would keep a dead project's widget
+    alive. Same 410 family as the deleted-document case."""
+    pid, _, _ = project_with_doc
+    _, admin_token = admin_user
+    doc_id, api_token = await _create_api_key(client, admin_token, pid)
+
+    # False-green check: the key works BEFORE the delete.
+    resp = await client.get(
+        "/api/widget/info",
+        headers={"Authorization": f"Bearer {api_token}"},
+    )
+    assert resp.status_code == 200
+
+    resp = await client.delete(f"/api/projects/{pid}", cookies={"lore_session": admin_token})
+    assert resp.status_code == 200, resp.text
+
+    resp = await client.get(
+        "/api/widget/info",
+        headers={"Authorization": f"Bearer {api_token}"},
+    )
+    assert resp.status_code == 410

@@ -61,9 +61,10 @@ async def mint_memory_run_key(*, user_id: str, project_id: str) -> MemoryRun:
     # would silently drop the wall entirely; and it token-rotates on a cache miss,
     # which would break the live chat that is holding it.
     """
-    import settings
     from agent.keys import mint_run_key
     from agent_config import ensure_agent_system_docs
+
+    import config
 
     # DEBT: a run is never explicitly closed — its key dies only when the TTL runs out.
     # Why deferred: there is no close point to hang a revocation on (the loop just stops
@@ -78,7 +79,7 @@ async def mint_memory_run_key(*, user_id: str, project_id: str) -> MemoryRun:
     scope_root = roles["memory_folder"]
     token, key_id, _expires = await mint_run_key(
         user_id, project_id, scope_root,
-        timedelta(seconds=await settings.get("MEM_RUN_KEY_TTL_S")),
+        timedelta(seconds=config.MEM_RUN_KEY_TTL_S),
     )
     return MemoryRun(
         run_id=key_id, token=token, scope_root=scope_root,

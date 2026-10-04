@@ -34,6 +34,7 @@ function makeHandle(opts: { synced?: boolean } = {}): EntityYjsState {
     local: null,
     localLoaded: true,
     hasUnsyncedLocalEdits: false,
+    unsentReported: false,
     synced: opts.synced ?? true,
     refCount: 1,
     leave: () => {},

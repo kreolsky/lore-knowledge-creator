@@ -34,11 +34,12 @@
 # revive that expired lock and re-break the fencing above. The compare-and-extend
 # only refreshes THIS holder's lock, so a stale heartbeat is a harmless no-op.
 #
-# WHY (patch seams): the turn-budget constants are resolved through
-# settings.get at call time HERE — tests patch config (TURN_LOCK_HEARTBEAT_S /
-# TURN_LOCK_TTL_S / TURN_MAX_WALL_S / TURN_HOLD_MAX_S), not the completions
-# facade, so the beats see the patch (the settings fallback leg reads config
-# per call).
+# WHY (patch seams): the turn-lock TTL/heartbeat pair are bare config
+# constants read as `config.<KEY>` at CALL time HERE
+# — tests patch config (monkeypatch.setattr(config, "TURN_LOCK_HEARTBEAT_S", …)),
+# not the completions facade, so the beats see the patch. The remaining budget
+# knobs (TURN_MAX_WALL_S / TURN_HOLD_MAX_S) stay settings reads whose fallback
+# leg also reads config per call.
 """
 import asyncio
 import contextlib
@@ -48,6 +49,8 @@ import secrets
 
 import redis_pool
 import settings
+
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -95,18 +98,18 @@ async def acquire_turn_lock(
 ) -> str | None:
     """Atomically acquire the per-session turn lock.
 
-    `ttl` defaults to the instance-setting TURN_LOCK_TTL_S (env⊕default when no
-    override row exists). Returns a fencing token (str) if acquired, or None if
-    a turn is already in flight. Uses SET NX EX (atomic — no check-then-set
-    window). The token MUST be passed back to release_turn_lock so only THIS
-    holder's lock is ever removed.
+    `ttl` defaults to the config constant TURN_LOCK_TTL_S (read at call time).
+    Returns a fencing token (str) if acquired, or None if a turn is already in
+    flight. Uses SET NX EX (atomic — no check-then-set window). The token MUST
+    be passed back to release_turn_lock so only THIS holder's lock is ever
+    removed.
     """
     if not session_id:
         # No session id (legacy/Ask path) → no lock. The lock only governs the
         # harness path, which always carries a chat_session id.
         return _NOOP_TOKEN
     if ttl is None:
-        ttl = await settings.get("TURN_LOCK_TTL_S")
+        ttl = config.TURN_LOCK_TTL_S
     r = await redis_pool.get_redis()
     key = f"{_LOCK_KEY_PREFIX}{session_id}"
     token = secrets.token_urlsafe(16)
@@ -139,8 +142,8 @@ async def extend_turn_lock(
 ) -> int:
     """Refresh the per-session turn lock's TTL via fencing-token compare-and-extend.
 
-    `ttl` defaults to the instance-setting TURN_LOCK_TTL_S. Driven by the
-    heartbeat (_heartbeat_turn_lock here) while a turn runs: it
+    `ttl` defaults to the config constant TURN_LOCK_TTL_S (read at call time).
+    Driven by the heartbeat (_heartbeat_turn_lock here) while a turn runs: it
     keeps a slow-but-legit turn alive while the TTL stays short (plan:
     chat-wedged-after-stop). The compare-and-extend means a STALE heartbeat — whose
     turn outlived the TTL so a newer turn re-acquired the lock — is a no-op; it
@@ -153,7 +156,7 @@ async def extend_turn_lock(
     if not session_id or not token or token == _NOOP_TOKEN:
         return 0
     if ttl is None:
-        ttl = await settings.get("TURN_LOCK_TTL_S")
+        ttl = config.TURN_LOCK_TTL_S
     r = await redis_pool.get_redis()
     key = f"{_LOCK_KEY_PREFIX}{session_id}"
     try:
@@ -188,14 +191,13 @@ async def _heartbeat_turn_lock(session_id: str, token: str) -> None:
     # EXPIRE the lock forever and defeat the short TTL that is the wedge's
     # last line of defence.
     """
-    cadence = await settings.get_all([
-        "TURN_LOCK_TTL_S", "TURN_LOCK_HEARTBEAT_S",
-        "TURN_MAX_WALL_S", "TURN_HOLD_MAX_S",
-    ])
-    ttl = cadence["TURN_LOCK_TTL_S"]
-    heartbeat_s = cadence["TURN_LOCK_HEARTBEAT_S"]
+    # The TTL/heartbeat pair are config constants (call-time reads); the wall
+    # and hold budgets stay settings reads.
+    budget = await settings.get_all(["TURN_MAX_WALL_S", "TURN_HOLD_MAX_S"])
+    ttl = config.TURN_LOCK_TTL_S
+    heartbeat_s = config.TURN_LOCK_HEARTBEAT_S
     max_beats = math.ceil(
-        (cadence["TURN_MAX_WALL_S"] + cadence["TURN_HOLD_MAX_S"]) / heartbeat_s
+        (budget["TURN_MAX_WALL_S"] + budget["TURN_HOLD_MAX_S"]) / heartbeat_s
     ) + 1
     for _ in range(max_beats):
         await asyncio.sleep(heartbeat_s)

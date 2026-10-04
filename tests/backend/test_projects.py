@@ -319,8 +319,12 @@ async def test_delete_project(client, admin_user, test_db):
 
 
 @pytest.mark.asyncio
-async def test_delete_project_cascades_all_children(client, admin_user, test_db):
-    """Deleting a project soft-deletes all its documents, references, checkpoints, and chat sessions."""
+async def test_delete_project_marks_only_the_project(client, admin_user, test_db):
+    """Deleting a project marks ONLY the project row: its documents, references,
+    chat sessions and checkpoints keep their own deleted_at = NONE.
+
+    The handler is one UPDATE with no per-document walk, so restore stays a
+    one-field flip."""
     _, token = admin_user
     cookies = {"lore_session": token}
 
@@ -352,20 +356,75 @@ async def test_delete_project_cascades_all_children(client, admin_user, test_db)
     from db import get_db
     db = await get_db()
 
-    docs = await db.query("SELECT deleted_at FROM type::record('documents', $id)", {"id": doc_a})
-    assert docs[0]["deleted_at"] is not None
+    # The project row is the ONLY thing marked.
+    proj = await db.query("SELECT deleted_at FROM type::record('projects', $id)", {"id": pid})
+    assert proj[0]["deleted_at"] is not None
 
-    docs = await db.query("SELECT deleted_at FROM type::record('documents', $id)", {"id": doc_b})
-    assert docs[0]["deleted_at"] is not None
+    # Every child keeps its own state — alive, exactly as before the delete.
+    for table, row_id in (
+        ("documents", doc_a), ("documents", doc_b), ("documents", ref_id),
+        ("chat_sessions", session_id), ("checkpoints", cp_id),
+    ):
+        rows = await db.query(
+            f"SELECT deleted_at FROM type::record('{table}', $id)", {"id": row_id},
+        )
+        assert rows[0]["deleted_at"] is None, f"{table}:{row_id} was touched by project delete"
 
-    refs = await db.query("SELECT deleted_at FROM type::record('documents', $id)", {"id": ref_id})
-    assert refs[0]["deleted_at"] is not None
 
-    sessions = await db.query("SELECT deleted_at FROM type::record('chat_sessions', $id)", {"id": session_id})
-    assert sessions[0]["deleted_at"] is not None
+@pytest.mark.asyncio
+async def test_deleted_project_documents_unreachable(client, admin_user, test_db):
+    """After a project delete, the owner gets 404 on the project AND on every
+    document in it — document access IS project access, and a soft-deleted
+    project row reads as absent."""
+    _, token = admin_user
+    cookies = {"lore_session": token}
 
-    cps = await db.query("SELECT deleted_at FROM type::record('checkpoints', $id)", {"id": cp_id})
-    assert cps[0]["deleted_at"] is not None
+    resp = await client.post("/api/projects", json={"name": "Unreachable"}, cookies=cookies)
+    pid = resp.json()["project_id"]
+    resp = await client.post("/api/documents", json={"project_id": pid, "title": "Doc"}, cookies=cookies)
+    doc_id = resp.json()["document_id"]
+
+    # False-green check: both reads are live BEFORE the delete.
+    assert (await client.get(f"/api/projects/{pid}", cookies=cookies)).status_code == 200
+    assert (await client.get(f"/api/documents/{doc_id}", cookies=cookies)).status_code == 200
+
+    resp = await client.delete(f"/api/projects/{pid}", cookies=cookies)
+    assert resp.status_code == 200
+
+    # require_document_read raises 404 for None access (access.py).
+    resp = await client.get(f"/api/projects/{pid}", cookies=cookies)
+    assert resp.status_code == 404
+    resp = await client.get(f"/api/documents/{doc_id}", cookies=cookies)
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_project_returns_without_touching_documents(client, admin_user, test_db):
+    """A project with 50 references deletes in one round-trip — no per-document
+    walk — and every reference row is left exactly as it was."""
+    _, token = admin_user
+    cookies = {"lore_session": token}
+
+    resp = await client.post("/api/projects", json={"name": "Fifty Refs"}, cookies=cookies)
+    pid = resp.json()["project_id"]
+    for i in range(50):
+        resp = await client.post("/api/references", json={
+            "project_id": pid, "title": f"Ref {i}", "media_type": "markdown", "content": "body",
+        }, cookies=cookies)
+        assert resp.status_code == 200
+
+    resp = await client.delete(f"/api/projects/{pid}", cookies=cookies)
+    assert resp.status_code == 200
+
+    from db import get_db
+    db = await get_db()
+    rows = await db.query(
+        "SELECT count() AS c FROM documents "
+        "WHERE project_id = $pid AND deleted_at IS NONE AND is_reference = true "
+        "GROUP ALL",
+        {"pid": pid},
+    )
+    assert rows and rows[0]["c"] == 50, "project delete must not touch reference rows"
 
 
 # ─── last-accessed document tracking (owner + per-user independence) ─────────

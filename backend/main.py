@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 # this import the web process would never drop its override cache on another
 # replica's PUT.
 import settings  # noqa: E402 — load-bearing bus-subscription import (see above)
+from embedding_coverage import LIVE_PROJECTS_SQL
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -74,6 +75,7 @@ from collab.registry import flush_all_sessions
 from logging_conf import setup_logging
 from routes import (
     admin_embeddings,
+    admin_info,
     admin_settings,
     admin_skills,
     api_keys,
@@ -247,9 +249,11 @@ async def _recover_stuck_transcriptions() -> None:
         )
         if not rows:
             return
+        # A dead project's refs keep deleted_at = NONE — never re-transcribe them.
+        live_projects: set[str] = set(await db.query(LIVE_PROJECTS_SQL) or [])
         for row in rows:
             ref_id = extract_id(row.get("id"))
-            if not ref_id:
+            if not ref_id or row.get("project_id") not in live_projects:
                 continue
             await db.query(
                 "UPDATE type::record('documents', $id) SET processing_status = 'queued'",
@@ -563,6 +567,7 @@ app.include_router(tool_api.router)
 app.include_router(widget.router)
 app.include_router(extractor.router)
 app.include_router(admin_embeddings.router)
+app.include_router(admin_info.router)
 app.include_router(admin_settings.router)
 app.include_router(admin_skills.router)
 

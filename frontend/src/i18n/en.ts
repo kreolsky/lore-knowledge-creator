@@ -723,6 +723,23 @@ export const en = {
   failedToRebuildIndex: 'Failed to start index rebuild',
   confirm: 'Confirm',
 
+  // info admin (storage panel)
+  adminInfo: 'Info',
+  infoDbOnDisk: 'Database on disk',
+  infoVolumeTotal: 'Volume total',
+  infoDeletedData: 'Deleted data',
+  infoLogicalEstimate: 'Byte columns are the logical size (estimate), not disk usage',
+  infoTable: 'Table',
+  infoLiveRows: 'Live rows',
+  infoLiveBytes: 'Live bytes',
+  infoDeletedRows: 'Deleted rows',
+  infoDeletedBytes: 'Deleted bytes',
+  infoInDeletedProjects: 'In deleted projects',
+  infoRefresh: 'Refresh',
+  infoMeasuring: 'Measuring…',
+  infoMeasured: 'Measured in {ms} ms',
+  failedToLoadStorageStats: 'Failed to load storage stats',
+
   // instance settings + skills admin
   settingsModels: 'Models & APIs',
   settingsAgent: 'Agent',

@@ -55,6 +55,7 @@ async def _collect_subtree_ids(db, document_id: str) -> list[str]:
             "SELECT VALUE meta::id(id) FROM documents "
             "WHERE parent_id IN $ids AND deleted_at IS NONE",
             {"ids": frontier},
+            idempotent=True,
         )
         nxt: list[str] = []
         for rid in (rows or []):
@@ -104,6 +105,7 @@ async def _delete_lift(db, project_id: str | None, document_id: str, doc: dict |
         db.query(
             "UPDATE type::record('documents', $id) SET deleted_at = time::now()",
             {"id": document_id},
+            idempotent=True,
         ),
     ]
     if doc:
@@ -112,6 +114,7 @@ async def _delete_lift(db, project_id: str | None, document_id: str, doc: dict |
             "UPDATE documents SET parent_id = $gp, updated_at = time::now() "
             "WHERE parent_id = $did AND is_reference = false AND deleted_at IS NONE",
             {"gp": grandparent_id, "did": document_id},
+            idempotent=True,
         ))
 
     cascade_task = asyncio.ensure_future(_cascade_cleanup_document(db, document_id))
@@ -126,10 +129,35 @@ async def _delete_lift(db, project_id: str | None, document_id: str, doc: dict |
     return {"success": True}
 
 
+async def _tombstone_subtree(db, docs: dict[str, dict]) -> None:
+    # Bulk tombstone (bound record refs, idempotent) + concurrent per-id cascade.
+    # Post-tombstone each cleanup's own "live ref children" read returns empty —
+    # harmless: every descendant id still gets its chunks/checkpoints/mentions/
+    # chats/messages cleaned via the direct branches
+    # (cascade is idempotent per cascade.py INVARIANT).
+    write_tasks: list = [
+        # WHY: a `WHERE id IN [list]` filter scans the whole table and its read set
+        # conflicts with any concurrent write to that table (the embed worker's
+        # per-reference status write then fails the delete after minutes of
+        # scanning), so the tombstone targets records like cascade.py does.
+        # A missing id is a no-op (pinned by test_documents_references.py).
+        db.query(
+            "UPDATE $rids.map(|$x| type::record('documents', $x)) "
+            "SET deleted_at = time::now() WHERE deleted_at IS NONE",
+            {"rids": list(docs.keys())},
+            idempotent=True,
+        ),
+    ]
+    write_tasks.extend(
+        asyncio.ensure_future(_cascade_cleanup_document(db, did)) for did in docs
+    )
+    await asyncio.gather(*write_tasks)
+
+
 async def _delete_subtree(db, project_id: str | None, document_id: str) -> dict:
     """Subtree-mode body of delete_document_command (see its docstring for mode)."""
     subtree_ids = await _collect_subtree_ids(db, document_id)
-    in_clause, docs = await _collect_live_docs(subtree_ids)
+    docs = await _collect_live_docs(subtree_ids)
     if not docs:
         return {"success": True, "deleted": 0}
     # Defensive all-or-nothing: a protected skeleton anywhere in the subtree
@@ -143,20 +171,7 @@ async def _delete_subtree(db, project_id: str | None, document_id: str) -> dict:
             detail="One or more documents are protected system documents and cannot be deleted.",
         )
 
-    # Bulk tombstone (bound record refs, idempotent) + concurrent per-id cascade.
-    # Post-tombstone each cleanup's own "live ref children" read returns empty —
-    # harmless: every descendant id still gets its chunks/checkpoints/mentions/
-    # chats/messages cleaned via the direct branches
-    # (cascade is idempotent per cascade.py INVARIANT).
-    write_tasks: list = [
-        db.query(
-            f"UPDATE documents SET deleted_at = time::now() "
-            f"WHERE id IN [{in_clause}] AND deleted_at IS NONE"
-        ),
-    ]
-    cascade_tasks = [asyncio.ensure_future(_cascade_cleanup_document(db, did)) for did in docs]
-    write_tasks.extend(cascade_tasks)
-    await asyncio.gather(*write_tasks)
+    await _tombstone_subtree(db, docs)
 
     # WHY: subtree mode emits exactly ONE documents_deleted_batch — never per-doc
     # entity_deleted/document_deleted/reference_deleted. Why: the batch subscriber
@@ -172,22 +187,28 @@ async def _delete_subtree(db, project_id: str | None, document_id: str) -> dict:
     return {"success": True, "deleted": len(docs)}
 
 
-async def _collect_live_docs(document_ids: list[str]) -> tuple[str, dict[str, dict]]:
-    """Live (non-deleted) rows for the batch, keyed by id, plus the bound in-clause."""
+async def _collect_live_docs(document_ids: list[str]) -> dict[str, dict]:
+    """Live (non-deleted) rows for the batch, keyed by id.
+
+    # WHY the interpolated record-ref in-clause stays: reads take no conflicting
+    # write locks, so this SELECT has none of the scan-class conflict the tombstone
+    # UPDATE had; switching it to a $rids.map form would ripple for no benefit.
+    """
     db = await get_db()
     in_clause = ",".join(
         f"type::record('documents','{validate_record_id(d)}')" for d in document_ids
     )
     rows = await db.query(
         f"SELECT {', '.join(DOC_BATCH_DELETE_COLUMNS)} FROM documents "
-        f"WHERE id IN [{in_clause}] AND deleted_at IS NONE"
+        f"WHERE id IN [{in_clause}] AND deleted_at IS NONE",
+        idempotent=True,
     )
     docs: dict[str, dict] = {}
     for r in (rows or []):
         did = extract_id(r.get("id"))
         if did and r.get("project_id"):
             docs[did] = r
-    return in_clause, docs
+    return docs
 
 
 async def _emit_batch_deleted(
@@ -224,7 +245,7 @@ async def _emit_batch_deleted(
 
 
 async def _execute_batch_delete(
-    db, in_clause: str, docs: dict[str, dict], *, delete_children: bool = True,
+    db, docs: dict[str, dict], *, delete_children: bool = True,
 ) -> dict[str, asyncio.Future]:
     """Cascade-clean, bulk soft-delete and (lift mode only) reparent children.
 
@@ -236,10 +257,12 @@ async def _execute_batch_delete(
     write_tasks: list = []
     cascade_tasks = {did: asyncio.ensure_future(_cascade_cleanup_document(db, did)) for did in docs}
     write_tasks.extend(cascade_tasks.values())
-    # Bulk soft-delete in one statement.
+    # Bulk soft-delete in one statement (record-targeted — see _delete_subtree WHY).
     write_tasks.append(db.query(
-        f"UPDATE documents SET deleted_at = time::now() "
-        f"WHERE id IN [{in_clause}] AND deleted_at IS NONE"
+        "UPDATE $rids.map(|$x| type::record('documents', $x)) "
+        "SET deleted_at = time::now() WHERE deleted_at IS NONE",
+        {"rids": list(docs.keys())},
+        idempotent=True,
     ))
     if not delete_children:
         for did, d in docs.items():
@@ -251,17 +274,18 @@ async def _execute_batch_delete(
                 "UPDATE documents SET parent_id = $gp, updated_at = time::now() "
                 "WHERE parent_id = $did AND is_reference = false AND deleted_at IS NONE",
                 {"gp": d.get("parent_id"), "did": did},
+                idempotent=True,
             ))
     await asyncio.gather(*write_tasks)
     return cascade_tasks
 
 
-async def _expand_batch_to_subtrees(db, docs: dict[str, dict]) -> tuple[str, dict[str, dict]]:
+async def _expand_batch_to_subtrees(db, docs: dict[str, dict]) -> dict[str, dict]:
     """BFS-expand the collected live docs with their live descendants and
-    re-collect rows for the expanded set (in_clause + docs rebuilt).
+    re-collect rows for the expanded set.
 
-    Why the re-collect: in_clause and docs were built from the request ids and
-    must be rebuilt so the bulk tombstone, the protected-skeleton 403 and
+    Why the re-collect: docs was built from the request ids and must be rebuilt
+    so the bulk tombstone, the protected-skeleton 403 and
     _emit_batch_deleted cover the descendants. Deduped — a descendant also
     selected is fine, the tombstone is idempotent.
     """
@@ -291,7 +315,7 @@ async def delete_documents_batch_command(
     — direct callers (references batch-delete) get it too.
     """
     db = await get_db()
-    in_clause, docs = await _collect_live_docs(document_ids)
+    docs = await _collect_live_docs(document_ids)
     if not docs:
         return {"deleted": 0, "skipped": len(document_ids)}
 
@@ -303,7 +327,7 @@ async def delete_documents_batch_command(
     await require_project_full(project_id, user)
 
     if delete_children:
-        in_clause, docs = await _expand_batch_to_subtrees(db, docs)
+        docs = await _expand_batch_to_subtrees(db, docs)
 
     # ARCH: reject the whole batch if ANY member is a protected skeleton doc —
     # checked over the EXPANDED set, so a protected folder UNDER a deleted parent
@@ -317,5 +341,5 @@ async def delete_documents_batch_command(
             detail="One or more documents are protected system documents and cannot be deleted.",
         )
 
-    cascade_tasks = await _execute_batch_delete(db, in_clause, docs, delete_children=delete_children)
+    cascade_tasks = await _execute_batch_delete(db, docs, delete_children=delete_children)
     return await _emit_batch_deleted(docs, cascade_tasks, project_id, document_ids)

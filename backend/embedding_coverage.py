@@ -96,6 +96,18 @@ STALE_MODEL_IDS_SQL = (
     "WHERE model IS NONE OR model != $model GROUP BY document_id"
 )
 
+# Live project ids — the project-liveness half of candidacy. Why: project
+# delete marks ONLY the project row (see the INVARIANT(persisted) in
+# routes/projects.py delete_project); its documents keep deleted_at = NONE, so
+# CANDIDATE_WHERE — which filters the document's OWN deleted_at — still counts
+# them, and the sweep/admin coverage would re-embed a dead project's corpus
+# forever (e.g. after an EMBEDDING_MODEL swap). Hoisted and folded in Python
+# for the same WHY(perf) as EMBEDDED_IDS_SQL: never inlined into the documents
+# scan. The same statement help_subtree.py already uses.
+LIVE_PROJECTS_SQL = (
+    "SELECT VALUE meta::id(id) FROM projects WHERE deleted_at IS NONE"
+)
+
 
 async def chunkable_candidates(db, project_id: str | None = None) -> list[dict]:
     """`{id, project_id, is_reference, embedded, failed, stale}` per live
@@ -124,6 +136,7 @@ async def chunkable_candidates(db, project_id: str | None = None) -> list[dict]:
     stale: set[str] = set(
         await db.query(STALE_MODEL_IDS_SQL, {"model": model}) or []
     )
+    live_projects: set[str] = set(await db.query(LIVE_PROJECTS_SQL) or [])
 
     where_project = "AND project_id = $pid " if project_id else ""
     rows = await db.query(
@@ -141,7 +154,9 @@ async def chunkable_candidates(db, project_id: str | None = None) -> list[dict]:
             "stale": r["id"] in stale,
         }
         for r in rows
-        if chunk_markdown(r.get("content") or "")
+        # Dead project → not a candidate, whatever the document row says.
+        if r["project_id"] in live_projects
+        and chunk_markdown(r.get("content") or "")
     ]
 
 

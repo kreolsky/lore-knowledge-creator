@@ -9,6 +9,8 @@ import { apiClient } from '../api/client';
 import { useEvent } from './useEvent';
 import { useTranslation } from '../i18n';
 import { invalidateRefPreview } from './useReferencePreview';
+import { projectRefIds, missingRefIds } from '../components/editor/live-preview/link-validity';
+import { emit } from '../events';
 import type { Reference } from '../types';
 
 function _cleanupReferenceDeletion(referenceId: string): void {
@@ -47,6 +49,11 @@ export function useReferenceEvents() {
   // parent's label. Why: same stale-until-reload feature; lets the user see and open a
   // just-created reference in context. Do NOT gate addReference on current-doc scope.
   useEvent('ws:reference_created', useCallback(async ({ reference_id: referenceId }) => {
+    // see SYSTEM: transclusion — the ref: resolver may have memoized this id as
+    // missing; a creation flips that verdict. Drop it and ask the editor to
+    // re-probe the open doc's text ('ref-links-invalidate' → resolve pass).
+    missingRefIds.delete(referenceId);
+    emit('ref-links-invalidate', { reference_id: referenceId });
     const state = useAppStore.getState();
     if (state.references.some(r => r.reference_id === referenceId)) return;
     if (state.pendingUploadRefIds.has(referenceId)) return;
@@ -99,6 +106,13 @@ export function useReferenceEvents() {
   }, []));
 
   useEvent('ws:reference_deleted', useCallback(({ reference_id: referenceId }) => {
+    // The ref: resolver's verdict is now stale in the OTHER direction: drop the
+    // id from both Sets (a re-created id re-probes) and ask the editor to re-run
+    // the pass — the probe answers "absent", the link goes broken and the pass's
+    // own-source delete drops any project-ref band entry.
+    projectRefIds.delete(referenceId);
+    missingRefIds.delete(referenceId);
+    emit('ref-links-invalidate', { reference_id: referenceId });
     _cleanupReferenceDeletion(referenceId);
   }, []));
 
@@ -153,7 +167,15 @@ export function useReferenceEvents() {
     }
   }, [updateReference, setCurrentReference, fetchRef]));
 
-  useEvent('ws:reference_status_changed', useCallback(async ({ reference_id: referenceId, status }) => {
+  // WHY: every content flush evicts that id's cached reference body — not only
+  // reference_updated, which the REST paths emit but a collab edit never does. The cache is the hover-preview source, so an edited reference kept showing the
+  // body fetched when the tab opened. Unconditional on is_reference: not every emitter
+  // states it, and evicting an id the cache does not hold is a no-op.
+  useEvent('ws:content_flushed', useCallback(({ entity_id: entityId }) => {
+    invalidateRefPreview(entityId);
+  }, []));
+
+  useEvent('ws:reference_status_changed',useCallback(async ({ reference_id: referenceId, status }) => {
     updateReference(referenceId, { processing_status: status } as Partial<Reference>);
     if (status === 'ready') {
       // WHY: when transcription/content lands, evict the cached body.

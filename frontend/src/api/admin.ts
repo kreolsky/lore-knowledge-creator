@@ -112,3 +112,34 @@ export async function putAdminSkill(name: string, body: { content?: string; enab
 export async function deleteAdminSkill(name: string): Promise<void> {
   await apiClient.delete(`/admin/skills/${name}`);
 }
+
+// ── Instance info (admin Info section) ─────────────────────────────────────
+
+/** Per-table storage stats from GET /api/admin/info/storage. The bytes are a
+ *  LOGICAL estimate (serialized row length), never disk usage — the UI must
+ *  label them as an estimate and show the disk number separately. The deleted
+ *  and in-deleted-projects buckets are disjoint (a row both soft-deleted and
+ *  in a dead project counts once, in `deleted`). */
+export interface AdminStorageTableStats {
+  name: string;
+  live_rows: number;
+  live_bytes: number;
+  deleted_rows: number;
+  deleted_bytes: number;
+  in_deleted_projects_rows: number;
+  in_deleted_projects_bytes: number;
+}
+
+export interface AdminStorageInfo {
+  /** Null = the DB directory is not mounted; `disk_error` names the path. */
+  disk: { db_bytes: number; volume_bytes: number } | null;
+  disk_error: string | null;
+  tables: AdminStorageTableStats[];
+  totals: Omit<AdminStorageTableStats, 'name'>;
+  measured_ms: number;
+}
+
+/** Computed on request — the backend never polls, never caches this. */
+export async function getAdminStorageInfo(): Promise<AdminStorageInfo> {
+  return await apiClient.get('/admin/info/storage') as AdminStorageInfo;
+}

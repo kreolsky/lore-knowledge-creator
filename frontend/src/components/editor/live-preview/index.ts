@@ -8,4 +8,4 @@ export type { TransclusionEntry, TransclusionKind } from './effects';
 export { parseSizeFromAlt } from './widgets';
 export { resolveTransclusion } from './build-structural';
 export { livePreviewField, listLinePlugin, cursorLinePlugin, tableRenderField, tableBlockField, mathBlockRenderField, mermaidBlockRenderField } from './fields';
-export { validDocIds, validNoteThreadIds, validRefIds, projectRefIds } from './link-validity';
+export { validDocIds, validNoteThreadIds, validRefIds, projectRefIds, missingRefIds } from './link-validity';

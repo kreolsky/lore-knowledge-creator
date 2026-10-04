@@ -721,6 +721,23 @@ export const ru: Record<TranslationKey, string> = {
   failedToRebuildIndex: 'Не удалось запустить пересборку индекса',
   confirm: 'Подтвердить',
 
+  // info admin (storage panel)
+  adminInfo: 'Инфо',
+  infoDbOnDisk: 'База на диске',
+  infoVolumeTotal: 'Весь том',
+  infoDeletedData: 'Удалённые данные',
+  infoLogicalEstimate: 'Колонки байтов — логический размер (оценка), не место на диске',
+  infoTable: 'Таблица',
+  infoLiveRows: 'Живых строк',
+  infoLiveBytes: 'Живых байтов',
+  infoDeletedRows: 'Удалённых строк',
+  infoDeletedBytes: 'Удалённых байтов',
+  infoInDeletedProjects: 'В удалённых проектах',
+  infoRefresh: 'Обновить',
+  infoMeasuring: 'Измеряю…',
+  infoMeasured: 'Измерено за {ms} мс',
+  failedToLoadStorageStats: 'Не удалось загрузить статистику хранилища',
+
   // instance settings + skills admin
   settingsModels: 'Модели и API',
   settingsAgent: 'Агент',

@@ -44,6 +44,7 @@ from db import (
     get_ancestor_ids,
     get_db,
     serialize_record,
+    validate_record_id,
 )
 from deps import extract_headings
 from event_bus import emit
@@ -53,6 +54,7 @@ from models import (
     DeleteReferencesRequest,
     PatchReference,
     ReferenceMetaResponse,
+    ResolveReferencesRequest,
     is_ref_row,
 )
 from ydoc_store import set_content
@@ -216,6 +218,28 @@ def dedup_refs_by_id(rows: list[dict]) -> list[dict]:
     return result
 
 
+async def _search_project_refs(
+    db: AsyncSurreal, project_id: str, q: str, archived_clause: str, limit: int, offset: int
+) -> list[dict]:
+    """Bounded title-match page for pickers (the `q` mode of the project LIST).
+
+    Presence of q (even empty) selects this mode; `updated_at DESC` orders the empty-query
+    default page by recency and gives the client a stable tiering base. The archived clause
+    stays applied — a picker must not suggest archived refs (linking one is still fine:
+    /resolve includes them).
+    """
+    search_clause = "AND string::lowercase(title) CONTAINS string::lowercase($q) " if q else ""
+    return await db.query(
+        f"SELECT {_REF_META_SELECT} FROM documents WHERE project_id = $pid "
+        "AND is_reference = true AND deleted_at IS NONE "
+        f"{archived_clause}"
+        f"{search_clause}"
+        "ORDER BY updated_at DESC "
+        "LIMIT $limit START $offset",
+        {"pid": project_id, **({"q": q} if q else {}), "limit": limit, "offset": offset},
+    )
+
+
 @router.get("/api/references", response_model=list[ReferenceMetaResponse])
 async def list_references(
     document_id: str | None = Query(None),
@@ -226,6 +250,11 @@ async def list_references(
     # Archived refs are hidden from the default LIST and sink
     # to the bottom when included. The "Show archived" panel toggle forwards this flag.
     include_archived: bool = Query(False),
+    # Bounded title search for pickers (project branch only). PRESENT but empty =
+    # "the N most recently updated" default page; ABSENT = the legacy panel order.
+    # Why the presence distinction: the link-suggestions popup sends q=&limit=50 for
+    # its default page, while Sidebar/panel callers omit q and keep the manual order.
+    q: str | None = Query(None),
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     user: dict = Depends(get_current_user),
@@ -287,20 +316,25 @@ async def list_references(
             {"ids": ancestor_ids},
         )
     else:
-        # SQL paginates (LIMIT/START), so the sink and the grouping must be global
-        # in SQL, which a post-hoc Python sort over one page cannot do:
-        # `archived ASC,` sinks archived refs; `parent_id ASC,` keeps each host's
-        # group contiguous; `sort_key ASC, id ASC` is the manual order within a
-        # group. The `_archived_sink_key` pass below is then a no-op re-affirmation
-        # — it keeps the RULE expressed in exactly one place.
-        rows = await db.query(
-            f"SELECT {_REF_META_SELECT} FROM documents WHERE project_id = $pid "
-            "AND is_reference = true AND deleted_at IS NONE "
-            f"{archived_clause}"
-            "ORDER BY archived ASC, parent_id ASC, sort_key ASC, id ASC "
-            "LIMIT $limit START $offset",
-            {"pid": project_id, "limit": limit, "offset": offset},
-        )
+        if q is not None:
+            rows = await _search_project_refs(
+                db, project_id, q, archived_clause, limit, offset
+            )
+        else:
+            # SQL paginates (LIMIT/START), so the sink and the grouping must be global
+            # in SQL, which a post-hoc Python sort over one page cannot do:
+            # `archived ASC,` sinks archived refs; `parent_id ASC,` keeps each host's
+            # group contiguous; `sort_key ASC, id ASC` is the manual order within a
+            # group. The `_archived_sink_key` pass below is then a no-op re-affirmation
+            # — it keeps the RULE expressed in exactly one place.
+            rows = await db.query(
+                f"SELECT {_REF_META_SELECT} FROM documents WHERE project_id = $pid "
+                "AND is_reference = true AND deleted_at IS NONE "
+                f"{archived_clause}"
+                "ORDER BY archived ASC, parent_id ASC, sort_key ASC, id ASC "
+                "LIMIT $limit START $offset",
+                {"pid": project_id, "limit": limit, "offset": offset},
+            )
 
     result = dedup_refs_by_id(rows)
 
@@ -309,6 +343,49 @@ async def list_references(
         return result[offset:offset + limit]
     result.sort(key=_archived_sink_key)
     return result
+
+
+@router.post("/api/references/resolve", response_model=list[ReferenceMetaResponse])
+async def resolve_references(
+    body: ResolveReferencesRequest,
+    user: dict = Depends(get_current_user),
+    db: AsyncSurreal = Depends(get_db),
+):
+    """Resolve which of `ids` are live references of the project (validity probe).
+
+    ARCH: the editor's ref: link validity + cross-doc embed resolver. The probe is bounded
+    by the ids the OPEN document's text references; the client chunks at 200 (the model
+    cap) — no code path loads every reference of a project. Archived refs are INCLUDED (an
+    archived reference still exists and its link must not read as broken); soft-deleted
+    are absent.
+    """
+    await require_project_read(body.project_id, user)
+    # `id` is a record ref, so bind per-id (mirrors documents.batch_read's
+    # _bind_batch_ids). A malformed id is DROPPED, not a 400 — for a probe it is
+    # just "missing" (the guard's real job is keeping injection out of the SQL).
+    params: dict[str, str] = {}
+    refs: list[str] = []
+    for i, raw in enumerate(body.ids):
+        try:
+            validate_record_id(raw)
+        except ValueError:
+            continue
+        params[f"id{i}"] = raw
+        refs.append(f"type::record('documents', $id{i})")
+    if not refs:
+        return []
+    # INVARIANT(security): ids that are not live references of THIS project are ABSENT
+    # from the response, never a 404. Why: "missing" is the probe's normal output and must
+    # stay indistinguishable from a foreign-project id — `project_id = $pid` filters both
+    # the same way, so no existence oracle leaks (documents batch_read's uniform 404 is
+    # the CONTENT path's posture, not a probe's).
+    rows = await db.query(
+        f"SELECT {_REF_META_SELECT} FROM documents "
+        f"WHERE id IN [{', '.join(refs)}] AND project_id = $pid "
+        "AND is_reference = true AND deleted_at IS NONE",
+        {**params, "pid": body.project_id},
+    )
+    return dedup_refs_by_id(rows)
 
 
 @router.get("/api/references/{reference_id}")

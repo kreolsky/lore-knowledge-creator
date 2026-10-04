@@ -1809,6 +1809,29 @@
         "title": "ReorderDocument",
         "type": "object"
       },
+      "ResolveReferencesRequest": {
+        "description": "Batch ref: link validity probe (POST /api/references/resolve).\n\n`ids` is capped at 200 (the client chunks larger sets). An id absent from the\nresponse is missing/foreign/deleted — never an error; an empty response is a\nvalid answer (see the INVARIANT(security) in resolve_references).",
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Ids",
+            "type": "array"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "ids"
+        ],
+        "title": "ResolveReferencesRequest",
+        "type": "object"
+      },
       "SessionCreate": {
         "properties": {
           "agent_auto": {
@@ -3869,6 +3892,54 @@
         "summary": "Get Status",
         "tags": [
           "admin-embeddings"
+        ]
+      }
+    },
+    "/api/admin/info/storage": {
+      "get": {
+        "description": "Database size on disk + soft-deleted data, table by table (admin only).",
+        "operationId": "get_storage_api_admin_info_storage_get",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Storage",
+        "tags": [
+          "admin-info"
         ]
       }
     },
@@ -8826,7 +8897,7 @@
     },
     "/api/projects/{project_id}": {
       "delete": {
-        "description": "Soft-delete a project by cascading through all its documents (references included).",
+        "description": "Mark the project itself deleted — instantly; its contents keep their own state.",
         "operationId": "delete_project_api_projects__project_id__delete",
         "parameters": [
           {
@@ -10373,6 +10444,22 @@
           },
           {
             "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
@@ -10545,6 +10632,67 @@
           }
         },
         "summary": "Delete References Batch"
+      }
+    },
+    "/api/references/resolve": {
+      "post": {
+        "description": "Resolve which of `ids` are live references of the project (validity probe).",
+        "operationId": "resolve_references_api_references_resolve_post",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveReferencesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ReferenceMetaResponse"
+                  },
+                  "title": "Response Resolve References Api References Resolve Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resolve References"
       }
     },
     "/api/references/upload": {

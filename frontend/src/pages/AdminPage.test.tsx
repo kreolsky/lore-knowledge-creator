@@ -5,8 +5,8 @@
  *   plus (admin-only) the five settings tabs and Skills as rows, the section
  *   restores from the user's saved global prefs (Users when nothing/invalid
  *   is saved; a moderator's stale settings or skills tab falls back to Users);
- * - the center shows the active section's FULL list: project cards (no owner
- *   chip — the expanded member list's pinned owner row is the owner surface)
+ * - the center shows the active section's FULL list: project cards (with the
+ *   owner chip on the collapsed card, repeated by the expanded owner row)
  *   under the projects filter; the add-user form, a "Users"
  *   heading, the users filter and user cards (with email);
  * - the expanded member list pins a non-editable owner row first and offers
@@ -101,6 +101,7 @@ const I18N: Record<string, string> = {
   copied: 'Copied!',
   save: 'Save',
   cancel: 'Cancel',
+  adminInfo: 'Info',
   settingsModels: 'Models & APIs',
   settingsAgent: 'Agent',
   settingsTools: 'Tools',
@@ -328,7 +329,7 @@ describe('AdminPage — sections (initial = Users)', () => {
     await render();
     const rows = Array.from(aside()!.querySelectorAll('button.doc-item'));
     expect(rows.map(r => r.textContent)).toEqual([
-      'Users', 'Projects', 'Embeddings',
+      'Users', 'Projects', 'Info', 'Embeddings',
       'Models & APIs', 'Search', 'Tools', 'Agent', 'Storage & Jobs', 'Skills',
     ]);
     expect(rows[0].classList.contains('active')).toBe(true);
@@ -359,12 +360,16 @@ describe('AdminPage — sections (initial = Users)', () => {
     expect(main()?.querySelector('[data-testid^="settings-section-"]')).toBeNull();
   });
 
-  it('center shows the FULL project card list (no owner chip — owner lives in the expanded list)', async () => {
+  it('center shows the FULL project card list, each collapsed card chipping its owner', async () => {
     await openProjects();
     expect(main()?.textContent).toContain('Alpha Project');
     expect(main()?.textContent).toContain('Beta Project');
-    // No owner chip after the title: the pinned owner row in the expanded member list is the single surface.
-    expect(main()?.textContent).not.toContain('Alice Admin');
+    // Owner chip on the COLLAPSED card — readable without expanding.
+    const card = (title: string) =>
+      Array.from(main()!.querySelectorAll('section'))
+        .find(s => s.textContent!.startsWith(title))!;
+    expect(card('Alpha Project').textContent).toContain('Alice Admin');
+    expect(card('Beta Project').textContent).toContain('Bob');
     expect(main()?.querySelectorAll('section').length).toBe(100);
   });
 

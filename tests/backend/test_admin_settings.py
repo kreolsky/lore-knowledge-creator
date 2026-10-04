@@ -458,6 +458,31 @@ async def test_wiring_keys_are_neither_listed_nor_editable(client, admin_user):
 
 
 @pytest.mark.asyncio
+async def test_internal_knobs_are_neither_listed_nor_editable(client, admin_user):
+    """The seven purely internal knobs are constants, not admin rows:
+    GET serves none of them and a PUT on each is a 404 —
+    the same contract the wiring keys carry above. Why: a knob nobody can
+    meaningfully choose (a lock TTL sized against its own heartbeat, a cache
+    TTL, a read-slice window) is an admin row that only invites drift from the
+    value the surrounding code was sized for."""
+    _, token = admin_user
+    resp = await client.get("/api/admin/settings", cookies={"lore_session": token})
+    assert resp.status_code == 200
+    served = {row["key"] for row in resp.json()["settings"]}
+    for key in (
+        "MEM_RUN_KEY_TTL_S", "BACKPLANE_PUBLISH_TIMEOUT_S",
+        "FLUSH_SNAPSHOT_MIN_INTERVAL_SEC", "CHAT_MODELS_CACHE_TTL_S",
+        "AGENT_READ_SLICE_CHARS", "TURN_LOCK_TTL_S", "TURN_LOCK_HEARTBEAT_S",
+    ):
+        assert key not in served, f"{key} must not be an admin setting"
+        put = await client.put(
+            f"/api/admin/settings/{key}", json={"value": 1},
+            cookies={"lore_session": token},
+        )
+        assert put.status_code == 404, f"PUT {key} must be unknown, got {put.status_code}"
+
+
+@pytest.mark.asyncio
 async def test_backplane_event_drops_cache(client, admin_user):
     """A backplane-delivered instance_settings_changed (a web PUT seen from
     another process) drops this process's override cache."""

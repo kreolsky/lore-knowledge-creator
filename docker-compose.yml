@@ -32,9 +32,6 @@
 name: lore
 
 x-app-env: &app-env
-  MAX_AUDIO_SIZE_MB: ${MAX_AUDIO_SIZE_MB:-500}
-  MAX_IMAGE_SIZE_MB: ${MAX_IMAGE_SIZE_MB:-50}
-  MAX_MARKDOWN_SIZE_MB: ${MAX_MARKDOWN_SIZE_MB:-50}
   # The first admin, created once on first boot.
   LORE_ADMIN_USERNAME: ${LORE_ADMIN_USERNAME:-admin}
   LORE_ADMIN_PASSWORD: ${LORE_ADMIN_PASSWORD:-lore-admin}
@@ -122,6 +119,10 @@ services:
     volumes:
       - storage:/storage
       - secrets:/secrets:ro
+      # Read-only: the surreal data volume, for GET /api/admin/info/storage to
+      # stat the lore.db files (backend/config.py SURREAL_DB_DIR). The endpoint
+      # only reads file sizes, never contents.
+      - surreal:/surreal-data:ro
       - sandbox-keys:/sandbox-keys:ro
     networks:
       - default

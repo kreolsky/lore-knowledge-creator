@@ -76,7 +76,6 @@
 
 import asyncio
 import logging
-import os
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -92,7 +91,8 @@ logger = logging.getLogger(__name__)
 # margin — a replica dying mid-apply wedges the document for at most 30s, and
 # no realistic apply approaches the ceiling, so no heartbeat extend is wired
 # (turn_lock's compare-and-extend is the shape to copy if that ever changes).
-DOC_EDIT_LOCK_TTL_S = int(os.environ.get("DOC_EDIT_LOCK_TTL_S", "30"))
+# A bare constant, not a setting: nobody can meaningfully choose it.
+DOC_EDIT_LOCK_TTL_S = 30
 
 # Contention poll: how often a blocked acquire retries SET NX EX. The old
 # asyncio.Lock woke waiters on release; polling trades up to this much latency

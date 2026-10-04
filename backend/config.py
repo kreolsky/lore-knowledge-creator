@@ -83,18 +83,18 @@ SECRET_KEY = instance_secret.resolve("", STORAGE_PATH)  # JWT signing key
 
 _section("storage", "Storage")
 MAX_AUDIO_SIZE_MB = setting(
-    "MAX_AUDIO_SIZE_MB", int, required=True, min=1,
+    "MAX_AUDIO_SIZE_MB", int, default=500, min=1,
     label="Max audio upload, MB",
     help="Upload limit for audio references. The multipart pre-reject applies the "
          "boot value; the authoritative check is live.",
 )  # Upload limit for audio
 MAX_IMAGE_SIZE_MB = setting(
-    "MAX_IMAGE_SIZE_MB", int, required=True, min=1,
+    "MAX_IMAGE_SIZE_MB", int, default=50, min=1,
     label="Max image upload, MB",
     help="Upload limit for image references.",
 )  # Upload limit for images
 MAX_MARKDOWN_SIZE_MB = setting(
-    "MAX_MARKDOWN_SIZE_MB", int, required=True, min=1,
+    "MAX_MARKDOWN_SIZE_MB", int, default=50, min=1,
     label="Max markdown upload, MB",
     help="Upload limit for markdown/text files.",
 )  # Upload limit for markdown files
@@ -160,8 +160,6 @@ MCP_UPLOAD_TOKEN_TTL_S = setting(
          "whole stream.",
 )
 
-# Shown with project memory in the tools tab, where an operator looks for it.
-_section("tools", "Project memory")
 # TTL (seconds) on a MEMORY consolidation run's scoped agent key
 # (`mint_memory_run_key` → `mint_run_key`). Sub-day on purpose: the run key is a
 # LIVE credential only for the run's lifetime, and the run's row IS the run — a
@@ -169,13 +167,10 @@ _section("tools", "Project memory")
 # use (its plaintext dies at mint). 6 h matches the session run-pointer horizon
 # (memory/run_key.MEM_RUN_TTL_S); beyond it the session has no pointer anyway.
 # Mitigation for a run that outlives the TTL: a tool call then 401s loudly at the
-# next auth (reads as a bug, but only on a run nobody resumed) — an operator
-# whose runs are routinely longer raises this via env, no release needed.
-MEM_RUN_KEY_TTL_S = setting(
-    "MEM_RUN_KEY_TTL_S", int, default=6 * 3600, min=60,
-    label="Memory run-key TTL, s",
-    help="Lifetime of a memory-consolidation run's scoped agent key.",
-)
+# next auth (reads as a bug, but only on a run nobody resumed).
+# A bare constant, not a setting: nobody meaningfully
+# chose it — sizing runs longer is a release change, not a live knob.
+MEM_RUN_KEY_TTL_S = 6 * 3600
 
 AUDIO_MIMES = {
     "audio/webm",
@@ -319,6 +314,12 @@ SURREAL_USER = "root"
 SURREAL_NS = os.environ.get("SURREAL_NS", "lore")
 SURREAL_DB = os.environ.get("SURREAL_DB", "main")
 SURREAL_PASS_FILE = Path("/secrets/surreal/pass")
+# Read-only view of the surreal data volume, mounted into the backend by all
+# three compose files (dev binds ./data/surreal; prod/public mount the volume).
+# admin_info stats the FILES under it (GET /api/admin/info/storage); it never
+# reads their contents. INFRA WIRING, not configuration — the path is fixed by
+# compose, like SURREAL_URL above; no env carries it.
+SURREAL_DB_DIR = Path("/surreal-data/lore.db")
 
 # Shown with the rest of STT in the models tab, where an operator looks for it.
 _section("models", "STT")
@@ -328,7 +329,7 @@ STT_CONCURRENCY = setting(
     help="In-flight transcription jobs (transcription worker max_jobs). Set in "
          ".env — the worker pool is sized at boot.",
 )
-_section("storage", "CRDT / Backplane / Job Queue")
+# ─── CRDT / Backplane / Job Queue ────────────────────────────────────────────
 # Backplane pub/sub publish deadline (seconds). Why: pub/sub fan-out is
 # fire-and-forget — every caller (publish_doc_update, event_bus._publish_to_backplane)
 # already wraps bp.publish in try/except and treats a failure as a tolerated
@@ -336,18 +337,14 @@ _section("storage", "CRDT / Backplane / Job Queue")
 # when the per-loop Redis connection wedges, and pytest-timeout then kills the
 # whole suite (120s, no traceback) at whatever test boundary it lands on. Bounding
 # it turns a hang into the already-handled TimeoutError → logged warning path.
-BACKPLANE_PUBLISH_TIMEOUT_S = setting(
-    "BACKPLANE_PUBLISH_TIMEOUT_S", float, default=5.0, min=0.1,
-    label="Backplane publish timeout, s",
-    help="Deadline for one Redis pub/sub publish (hang → tolerated miss).",
-)
+# A bare constant, not a setting.
+BACKPLANE_PUBLISH_TIMEOUT_S = 5.0
 # WHY: Redis mandatory; Redis down = service down. No in-process fallback.  Why: the collab backplane + arq job queue both depend on Redis; an in-process fallback would silently drop cross-replica broadcasts/jobs, so a Redis outage is a hard failure, not a degraded one.
 # ARCH: Single Redis instance serves both backplane pub/sub and arq job queue —
 # disjoint keyspaces (ydoc:/evt: channels vs arq: keys), no collision.
 
 # ─── Collab limits ───────────────────────────────────────────────────────────
 
-_section("storage", "Collab limits")
 BATCH_INTERVAL = 0.05  # Broadcast batching window (seconds)
 FLUSH_INTERVAL_SEC = 1  # Periodic flush-loop tick (s); also zombie-client reap cadence
 # WHY: minimum spacing between SNAPSHOT DB writes on the periodic path. Why:
@@ -361,12 +358,8 @@ FLUSH_INTERVAL_SEC = 1  # Periodic flush-loop tick (s); also zombie-client reap 
 # keep the 1s retry tick so save_degraded signalling stays fast. The FIRST edit
 # of a session flushes immediately (leading edge). Force paths
 # (close/leave/handoff/shutdown) bypass pacing entirely.
-FLUSH_SNAPSHOT_MIN_INTERVAL_SEC = setting(
-    "FLUSH_SNAPSHOT_MIN_INTERVAL_SEC", float, default=15.0, min=0,
-    label="Snapshot flush min interval, s",
-    help="Minimum spacing between successful snapshot DB writes (store-bloat "
-         "pace; the append-only log is the durability floor).",
-)
+# A bare constant, not a setting.
+FLUSH_SNAPSHOT_MIN_INTERVAL_SEC = 15.0
 
 # ─── Chat constants ────────────────────────────────────────────────────────────
 
@@ -382,13 +375,8 @@ CHAT_MODELS_TIMEOUT_S = 10  # HTTP timeout for the /models gateway probe
 # the client's own constant for models the picker map leaves bare.
 # TTL for the cached gateway /v1/models fetch behind GET /models (the picker
 # snapshot; the turn-time gates do not read it).
-_section("models", "AI API")
-CHAT_MODELS_CACHE_TTL_S = setting(
-    "CHAT_MODELS_CACHE_TTL_S", float, default=60.0, min=0,
-    label="Models catalog cache TTL, s",
-    help="TTL of the cached gateway /v1/models + /capabilities fetches behind "
-         "GET /models.",
-)
+# A bare constant, not a setting.
+CHAT_MODELS_CACHE_TTL_S = 60.0
 CHAT_ERROR_TRUNCATE_CHARS = 200  # Max chars to show from error messages
 CHAT_CONTEXT_SNIPPET_LEN = 300  # Max chars for context snippet in prompts
 MAX_PROPOSAL_NEW_TEXT_CHARS = (
@@ -464,12 +452,9 @@ AGENT_EDIT_MAX_CHARS = MAX_PROPOSAL_NEW_TEXT_CHARS
 # Default sized so a typical document still arrives in ONE call (~7.5K tokens);
 # the self-describing next_offset metadata keeps paging an agent-driven
 # decision instead of silent truncation.
-AGENT_READ_SLICE_CHARS = setting(
-    "AGENT_READ_SLICE_CHARS", int, default=30_000, min=1000,
-    label="read_document slice, chars",
-    help="Default window size of one read_document call (explicit `limit` caps "
-         "below it).",
-)
+# A bare constant, not a setting: the slice window is
+# sized against AGENT_READ_MAX_CHARS, not chosen by an operator.
+AGENT_READ_SLICE_CHARS = 30_000
 # Hard ceiling for an explicit `limit`, DERIVED from AGENT_EDIT_MAX_CHARS (not a
 # copied literal, which would drift): one read may fetch at most what one edit
 # may write.
@@ -548,21 +533,14 @@ HARNESS_DRIVER_SECRET = (
 # self-heal) without evicting slow turns. The release is ALSO shielded in
 # completions (defence in depth); this short TTL is the backstop for the
 # process-kill case where even the shield cannot run.
-TURN_LOCK_TTL_S = setting(
-    "TURN_LOCK_TTL_S", int, default=30, min=1,
-    label="Turn lock TTL, s",
-    help="Redis TTL of the per-session turn lock; the heartbeat extends it while "
-         "the turn streams.",
-)
+# A bare constant, not a setting: the TTL is sized
+# against TURN_LOCK_HEARTBEAT_S (>= 2 beats inside it), not chosen live.
+TURN_LOCK_TTL_S = 30
 # Heartbeat cadence: the relay/stream task refreshes the holder's lock TTL on this
 # interval, independent of frame emission (a turn can emit no frames for tens of
 # seconds during a single tool call). Sized so >=2 beats land inside the TTL.
-TURN_LOCK_HEARTBEAT_S = setting(
-    "TURN_LOCK_HEARTBEAT_S", float, default=10.0, min=0.1,
-    label="Turn lock heartbeat, s",
-    help="Cadence of the turn-lock heartbeat refresh (>= 2 beats fit in the "
-         "TTL).",
-)
+# A bare constant with the TTL above.
+TURN_LOCK_HEARTBEAT_S = 10.0
 # Agent emergency stop, enforced as a HOLD-PAUSED, progress-extended deadline
 # in the channel (driver.channel._HoldPausedDeadline): every real driver frame
 # re-arms the no-progress window to now + TURN_PROGRESS_GRACE_S, clamped at the

@@ -25,22 +25,24 @@ vi.mock('../editor/editor-utils', () => ({ fetchReferences: vi.fn() }));
 import { useAppStore } from '../store/app-store';
 import { useNoteChatStore } from '../store/note-chat-store';
 import { useEditorReferenceSync } from './useEditorReferenceSync';
-import { transcludeMap } from '../components/editor/live-preview';
+import { useReferenceEvents } from './useReferenceEvents';
+import { transcludeMap, projectRefIds, missingRefIds } from '../components/editor/live-preview';
 import { apiClient } from '../api/client';
 import { clearPreviewCache } from './useDocumentPreview';
-import { clearRefPreviewCache } from './useReferencePreview';
+import { clearRefPreviewCache, fetchRefPreview, seedRefPreview } from './useReferencePreview';
 import { emit } from '../events';
 import type { Reference } from '../types';
 
 let container: HTMLDivElement;
 let root: Root;
 
-function renderHook(editorViewRef?: React.RefObject<unknown>) {
+function renderHook(editorViewRef?: React.RefObject<unknown>, withRefEvents = false) {
   container = document.createElement('div');
   document.body.appendChild(container);
   const Wrapper = () => {
     const localRef = useRef(null);
     useEditorReferenceSync({ editorViewRef: (editorViewRef ?? localRef) as never });
+    if (withRefEvents) useReferenceEvents();
     return null;
   };
   root = createRoot(container);
@@ -78,6 +80,8 @@ const doc = (id: string, title = id, content?: string) => ({
 describe('useEditorReferenceSync — per-source ownership', () => {
   beforeEach(() => {
     transcludeMap.clear();
+    projectRefIds.clear();
+    missingRefIds.clear();
     clearPreviewCache();
     clearRefPreviewCache();
     useAppStore.getState().setReferences([]);
@@ -90,24 +94,33 @@ describe('useEditorReferenceSync — per-source ownership', () => {
     (apiClient.get as ReturnType<typeof vi.fn>).mockReset();
     (apiClient.get as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (apiClient.post as ReturnType<typeof vi.fn>).mockReset();
-    (apiClient.post as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
+    (apiClient.post as ReturnType<typeof vi.fn>).mockImplementation((endpoint: string) =>
+      Promise.resolve(endpoint === '/references/resolve' ? [] : { items: [] }),
+    );
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     act(() => root.unmount());
     container.remove();
   });
 
   it('an ancestor store mutation does NOT wipe a project-ref entry', async () => {
-    // The project-wide writer seeds cross-doc refs from /references. Have it seed
-    // sibling-ref as project-ref, then prove an ancestor rebuild leaves it intact.
-    (apiClient.get as ReturnType<typeof vi.fn>).mockImplementation((endpoint: string) =>
-      Promise.resolve(endpoint.startsWith('/references') ? [textRef('sibling-ref')] : []),
+    // The resolver seeds cross-doc refs found in the open text via POST
+    // /references/resolve. Have it seed sibling-ref as project-ref, then prove an
+    // ancestor rebuild leaves it intact.
+    (apiClient.post as ReturnType<typeof vi.fn>).mockImplementation((endpoint: string) =>
+      Promise.resolve(
+        endpoint === '/references/resolve' ? [textRef('sibling-ref')] : { items: [] },
+      ),
     );
-    renderHook();
-    await flushMicrotasks();
+    const view = spyView();
+    (view as unknown as { state: { doc: { toString: () => string } } })
+      .state.doc.toString = () => '[note](ref:sibling-ref)';
+    renderHook({ current: view } as never);
+    await act(async () => { vi.advanceTimersByTime(400); });
     await flushMicrotasks();
     expect(transcludeMap.get('sibling-ref')?.source).toBe('project-ref');
     // A store mutation (ancestor scope) triggers the rebuild — project-ref must survive.
@@ -117,6 +130,206 @@ describe('useEditorReferenceSync — per-source ownership', () => {
     expect(entry).toBeDefined();
     expect(entry!.source).toBe('project-ref');
     expect(entry!.content).toBe('text of sibling-ref');
+  });
+
+  // ─── project-ref resolver ────────────────────────────────────────────────────
+
+  /** Drive the debounced resolve pass and let its POST settle. */
+  async function runResolvePass() {
+    await act(async () => { vi.advanceTimersByTime(400); });
+    await act(async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); });
+  }
+
+  function resolveCalls(): [string, unknown][] {
+    return (apiClient.post as ReturnType<typeof vi.fn>).mock.calls
+      .filter((c: unknown[]) => c[0] === '/references/resolve') as [string, unknown][];
+  }
+
+  it('an id in text not in validRefIds is POSTed once; the missing verdict sticks', async () => {
+    const view = spyView();
+    (view as unknown as { state: { doc: { toString: () => string } } })
+      .state.doc.toString = () => '[x](ref:cross1)';
+    renderHook({ current: view } as never);
+    await runResolvePass();
+    expect(resolveCalls()).toEqual([
+      ['/references/resolve', { project_id: 'p', ids: ['cross1'] }],
+    ]);
+    expect(missingRefIds.has('cross1')).toBe(true);
+    // Next change (keystroke → editor-doc-changed): NOT re-POSTed.
+    act(() => { emit('editor-doc-changed'); });
+    await runResolvePass();
+    expect(resolveCalls().length).toBe(1);
+  });
+
+  it('a found id lands in projectRefIds and as a project-ref entry', async () => {
+    (apiClient.post as ReturnType<typeof vi.fn>).mockImplementation((endpoint: string) =>
+      Promise.resolve(
+        endpoint === '/references/resolve' ? [textRef('found1')] : { items: [] },
+      ),
+    );
+    const view = spyView();
+    (view as unknown as { state: { doc: { toString: () => string } } })
+      .state.doc.toString = () => '[x](ref:found1)';
+    renderHook({ current: view } as never);
+    await runResolvePass();
+    expect(projectRefIds.has('found1')).toBe(true);
+    expect(missingRefIds.has('found1')).toBe(false);
+    const entry = transcludeMap.get('found1');
+    expect(entry?.source).toBe('project-ref');
+    expect(entry?.content).toBe('text of found1');
+    expect(view.dispatch).toHaveBeenCalled();
+  });
+
+  it('an id already in validRefIds (ancestor store) is not POSTed at all', async () => {
+    act(() => { useAppStore.getState().setReferences([textRef('own1')]); });
+    await flushMicrotasks();
+    const view = spyView();
+    (view as unknown as { state: { doc: { toString: () => string } } })
+      .state.doc.toString = () => '[x](ref:own1)';
+    renderHook({ current: view } as never);
+    await runResolvePass();
+    expect(resolveCalls().length).toBe(0);
+  });
+
+  it('both link forms collect ids: [x](ref:a) and ![](ref:b) in one POST', async () => {
+    const view = spyView();
+    (view as unknown as { state: { doc: { toString: () => string } } })
+      .state.doc.toString = () => '[x](ref:x1) and ![](ref:x2)';
+    renderHook({ current: view } as never);
+    await runResolvePass();
+    const calls = resolveCalls();
+    expect(calls.length).toBe(1);
+    expect((calls[0][1] as { ids: string[] }).ids.sort()).toEqual(['x1', 'x2']);
+  });
+
+  it('no GET /references?project_id= call is made at all', async () => {
+    const view = spyView();
+    (view as unknown as { state: { doc: { toString: () => string } } })
+      .state.doc.toString = () => '[x](ref:any1)';
+    renderHook({ current: view } as never);
+    await runResolvePass();
+    const calls = (apiClient.get as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0]);
+    expect(calls.some((c) => typeof c === 'string' && c.startsWith('/references?project_id='))).toBe(false);
+  });
+
+  it('ws:reference_created for a missing id re-resolves it', async () => {
+    let resolveAnswer: Reference[] = [];
+    (apiClient.post as ReturnType<typeof vi.fn>).mockImplementation((endpoint: string) =>
+      Promise.resolve(endpoint === '/references/resolve' ? resolveAnswer : { items: [] }),
+    );
+    // fetchRef for the created ref FAILS → addReference never runs → the only path
+    // to validity is the resolver re-POST (what this test isolates).
+    (apiClient.get as ReturnType<typeof vi.fn>).mockImplementation((endpoint: string) =>
+      Promise.resolve(
+        typeof endpoint === 'string' && endpoint.startsWith('/references/gone1')
+          ? Promise.reject(new Error('net'))
+          : [],
+      ),
+    );
+    const view = spyView();
+    (view as unknown as { state: { doc: { toString: () => string } } })
+      .state.doc.toString = () => '[x](ref:gone1)';
+    renderHook({ current: view } as never, true /* mount useReferenceEvents */);
+    await runResolvePass();
+    expect(resolveCalls().length).toBe(1);
+    expect(missingRefIds.has('gone1')).toBe(true);
+    resolveAnswer = [textRef('gone1')];
+    act(() => {
+      emit('ws:reference_created', {
+        reference_id: 'gone1', title: 'Gone', document_id: null,
+        created_by: null, created_by_name: null,
+      });
+    });
+    await flushMicrotasks();
+    await runResolvePass();
+    expect(resolveCalls().length).toBe(2);
+    expect(projectRefIds.has('gone1')).toBe(true);
+    expect(transcludeMap.get('gone1')?.source).toBe('project-ref');
+  });
+
+  it('ws:reference_deleted drops the resolved id and its project-ref entry', async () => {
+    let resolveAnswer: Reference[] = [textRef('del1')];
+    (apiClient.post as ReturnType<typeof vi.fn>).mockImplementation((endpoint: string) =>
+      Promise.resolve(endpoint === '/references/resolve' ? resolveAnswer : { items: [] }),
+    );
+    const view = spyView();
+    (view as unknown as { state: { doc: { toString: () => string } } })
+      .state.doc.toString = () => '[x](ref:del1)';
+    renderHook({ current: view } as never, true /* mount useReferenceEvents */);
+    await runResolvePass();
+    expect(transcludeMap.get('del1')?.source).toBe('project-ref');
+    resolveAnswer = [];
+    act(() => { emit('ws:reference_deleted', { reference_id: 'del1' }); });
+    await runResolvePass();
+    expect(projectRefIds.has('del1')).toBe(false);
+    expect(transcludeMap.get('del1')).toBeUndefined();
+    expect(missingRefIds.has('del1')).toBe(true);
+  });
+
+  it('a project switch clears both Sets and project-ref entries', async () => {
+    (apiClient.post as ReturnType<typeof vi.fn>).mockImplementation((endpoint: string) =>
+      Promise.resolve(
+        endpoint === '/references/resolve' ? [textRef('sw1')] : { items: [] },
+      ),
+    );
+    const view = spyView();
+    (view as unknown as { state: { doc: { toString: () => string } } })
+      .state.doc.toString = () => '[x](ref:sw1)';
+    renderHook({ current: view } as never);
+    await runResolvePass();
+    expect(projectRefIds.has('sw1')).toBe(true);
+    expect(transcludeMap.get('sw1')?.source).toBe('project-ref');
+    act(() => {
+      useAppStore.setState({ currentProject: { project_id: 'p2', index_doc_id: 'idx2' } as never });
+    });
+    await flushMicrotasks();
+    expect(projectRefIds.has('sw1')).toBe(false);
+    expect(missingRefIds.has('sw1')).toBe(false);
+    expect(transcludeMap.get('sw1')).toBeUndefined();
+  });
+
+  it('a resolve response that lands after a project switch is dropped', async () => {
+    let answer!: (refs: Reference[]) => void;
+    (apiClient.post as ReturnType<typeof vi.fn>).mockImplementation((endpoint: string) =>
+      endpoint === '/references/resolve'
+        ? new Promise((r) => { answer = r; })
+        : Promise.resolve({ items: [] }),
+    );
+    const view = spyView();
+    (view as unknown as { state: { doc: { toString: () => string } } })
+      .state.doc.toString = () => '[x](ref:late1) [y](ref:late2)';
+    renderHook({ current: view } as never);
+    await act(async () => { vi.advanceTimersByTime(400); });
+    expect(resolveCalls().length).toBe(1);
+    act(() => {
+      useAppStore.setState({ currentProject: { project_id: 'p2', index_doc_id: 'idx2' } as never });
+    });
+    await flushMicrotasks();
+    await act(async () => { answer([textRef('late1')]); });
+    await act(async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); });
+    expect(projectRefIds.has('late1')).toBe(false);
+    expect(missingRefIds.has('late2')).toBe(false);
+    expect(transcludeMap.get('late1')).toBeUndefined();
+  });
+
+  it('a failing resolve toasts once per failure streak, not on every editing pause', async () => {
+    (apiClient.post as ReturnType<typeof vi.fn>).mockImplementation((endpoint: string) =>
+      endpoint === '/references/resolve'
+        ? Promise.reject(new Error('network'))
+        : Promise.resolve({ items: [] }),
+    );
+    const showToastSpy = vi.spyOn(useAppStore.getState(), 'showToast');
+    const view = spyView();
+    (view as unknown as { state: { doc: { toString: () => string } } })
+      .state.doc.toString = () => '[x](ref:fail1)';
+    renderHook({ current: view } as never);
+    await runResolvePass();
+    act(() => { emit('editor-doc-changed'); });
+    await runResolvePass();
+    act(() => { emit('editor-doc-changed'); });
+    await runResolvePass();
+    expect(resolveCalls().length).toBe(3);
+    expect(showToastSpy.mock.calls.filter((c) => c[1] === 'error').length).toBe(1);
   });
 
   it('a Task-5 content reload of a doc entry SURVIVES the next storeDocuments rebuild', async () => {
@@ -239,6 +452,17 @@ describe('useEditorReferenceSync — per-source ownership', () => {
     // apiClient.get for /documents/rtext must never have been called.
     const calls = (apiClient.get as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0]);
     expect(calls.some((c) => typeof c === 'string' && c.includes('/documents/rtext'))).toBe(false);
+  });
+
+  it('content_flushed for a reference evicts its cached preview body (next hover re-fetches)', async () => {
+    renderHook(undefined, true);
+    seedRefPreview('rflush', { title: 'R', content: 'old body' });
+    (apiClient.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      reference_id: 'rflush', title: 'R', media_type: 'markdown', content: 'new body',
+    });
+    act(() => { emit('ws:content_flushed', { entity_id: 'rflush', entity_type: 'doc', is_reference: true }); });
+    await flushMicrotasks();
+    await expect(fetchRefPreview('rflush')).resolves.toMatchObject({ content: 'new body' });
   });
 
   it('content_flushed for the CURRENTLY OPEN doc triggers NO server fetch (local buffer wins)', async () => {

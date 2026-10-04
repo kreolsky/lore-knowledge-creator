@@ -91,6 +91,34 @@ async def test_skips_deleted_refs(test_db):
 
 
 @pytest.mark.asyncio
+async def test_skips_refs_of_deleted_project(test_db):
+    """A dead project's refs keep deleted_at = NONE (project delete marks only
+    the project row), so recovery must skip them by project liveness."""
+    await create_record("projects", "recovery-dead-project", {
+        "name": "Recovery Dead", "status": "active",
+    })
+    await create_record("documents", "recovery-dead-host", {
+        "project_id": "recovery-dead-project", "parent_id": None,
+        "title": "Host", "content": "", "path": "host.md",
+    })
+    await create_record("documents", "stuck-deadproj-1", {
+        "project_id": "recovery-dead-project", "parent_id": "recovery-dead-host",
+        "title": "Ref", "media_type": "audio", "processing_status": "processing",
+        "path": "_ref/stuck-deadproj-1.md", "is_reference": True,
+    })
+    db = await get_db()
+    await db.query(
+        "UPDATE type::record('projects', $id) SET deleted_at = time::now()",
+        {"id": "recovery-dead-project"},
+    )
+    with EnqueueRecorder.active() as enq:
+        await _recover_stuck_transcriptions()
+    rows = await db.query("SELECT processing_status FROM type::record('documents', $id)", {"id": "stuck-deadproj-1"})
+    assert rows[0]["processing_status"] == "processing"
+    assert "transcribe:stuck-deadproj-1" not in _enqueued_job_ids(enq)
+
+
+@pytest.mark.asyncio
 async def test_skips_ready_refs(test_db):
     await _create_test_ref("stuck-ready-1", "ready")
     with EnqueueRecorder.active() as enq:

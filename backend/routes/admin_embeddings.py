@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from embedding_coverage import chunkable_candidates
+from embedding_coverage import LIVE_PROJECTS_SQL, chunkable_candidates
 from fastapi import APIRouter, Body, Depends
 from pydantic import BaseModel
 from surrealdb import AsyncSurreal
@@ -50,10 +50,13 @@ async def get_stats(_: dict = Depends(require_admin), db: AsyncSurreal = Depends
     # and to the operator, for two months. A stub that always reads healthy is worse
     # than no field: silent degradation with a green light on top. Pinned by
     # test_stats_pending_reembed_counts_dead_lettered_docs (asserts both directions).
+    # A dead project's documents keep deleted_at = NONE and the sweep skips them,
+    # so they are dropped here too — otherwise this number never drains.
+    live_projects: set[str] = set(await db.query(LIVE_PROJECTS_SQL) or [])
     failed_rows = await db.query(
-        "SELECT count() AS c FROM documents "
-        "WHERE embedding_status = 'failed' AND deleted_at IS NONE GROUP ALL"
-    )
+        "SELECT project_id FROM documents "
+        "WHERE embedding_status = 'failed' AND deleted_at IS NONE"
+    ) or []
 
     return {
         "doc_chunks_count": doc_chunks[0]["c"] if doc_chunks else 0,
@@ -63,7 +66,9 @@ async def get_stats(_: dict = Depends(require_admin), db: AsyncSurreal = Depends
         "refs_without_embeddings": sum(
             1 for c in candidates if c["is_reference"] and not c["embedded"]
         ),
-        "pending_reembed_count": failed_rows[0]["c"] if failed_rows else 0,
+        "pending_reembed_count": sum(
+            1 for r in failed_rows if r.get("project_id") in live_projects
+        ),
         # The number the operator watches drain after an EMBEDDING_MODEL swap.
         "stale_model_count": sum(1 for c in candidates if c["stale"]),
     }

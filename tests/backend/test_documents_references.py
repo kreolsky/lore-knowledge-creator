@@ -277,3 +277,182 @@ async def test_batch_delete_skips_unknown(client, admin_user, project_with_doc):
     body = resp.json()
     assert body["deleted"] == 1
     assert body["skipped"] == 1
+
+
+# ─── Cascade delete: record-targeted writes ──────────────────────────────────
+
+
+async def _mk_doc(client, pid, token, *, title, parent_id=None):
+    r = await client.post(
+        "/api/documents",
+        json={"project_id": pid, "title": title, "parent_id": parent_id},
+        cookies={"lore_session": token},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["document_id"]
+
+
+async def _mk_ref(client, pid, token, parent_id, title):
+    r = await client.post(
+        "/api/documents",
+        json={
+            "project_id": pid, "is_reference": True, "media_type": "markdown",
+            "parent_id": parent_id, "title": title, "content": "ref body",
+        },
+        cookies={"lore_session": token},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["document_id"]
+
+
+async def _deleted_at(test_db, table, rid):
+    rows = await test_db.query(
+        f"SELECT deleted_at FROM type::record('{table}', $id)", {"id": rid},
+    )
+    return rows[0].get("deleted_at") if rows and rows[0] else None
+
+
+@pytest.mark.asyncio
+async def test_document_delete_soft_deletes_hosted_refs_only(
+    client, test_db, admin_user, project_with_doc,
+):
+    """DELETE of a hosting document soft-deletes exactly its hosted references,
+    leaves another project's document untouched, and creates no new documents row
+    (the cascade's record-targeted UPDATE is a strict no-op for absent ids)."""
+    pid, idx_id, _ = project_with_doc
+    _, token = admin_user
+    cookies = {"lore_session": token}
+
+    host = await _mk_doc(client, pid, token, title="Host", parent_id=idx_id)
+    ref_ids = [await _mk_ref(client, pid, token, host, f"Ref{i}") for i in range(5)]
+
+    other_proj = await client.post(
+        "/api/projects", json={"name": "Other Project"}, cookies=cookies,
+    )
+    assert other_proj.status_code == 200, other_proj.text
+    other_doc = await _mk_doc(client, other_proj.json()["project_id"], token, title="OtherDoc")
+
+    count_before = await test_db.query("SELECT VALUE count() FROM documents GROUP ALL")
+
+    resp = await client.delete(f"/api/documents/{host}", cookies=cookies)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["deleted"] == 6
+
+    for rid in ref_ids:
+        assert await _deleted_at(test_db, "documents", rid) is not None, \
+            f"{rid} must be soft-deleted"
+    assert await _deleted_at(test_db, "documents", other_doc) is None, \
+        "another project's document must be untouched"
+
+    count_after = await test_db.query("SELECT VALUE count() FROM documents GROUP ALL")
+    assert count_after == count_before, "cascade delete must create no documents row"
+
+
+@pytest.mark.asyncio
+async def test_cascade_soft_deletes_chat_sessions_by_id(
+    client, test_db, admin_user, project_with_doc,
+):
+    """Deleting a document soft-deletes its chat sessions AND their messages,
+    targeted by record id (no table scan)."""
+    from uuid import uuid4
+
+    from db import create_record
+
+    pid, idx_id, _ = project_with_doc
+    _, token = admin_user
+    cookies = {"lore_session": token}
+
+    doc = await _mk_doc(client, pid, token, title="ChatHost", parent_id=idx_id)
+    session_ids = [str(uuid4()) for _ in range(2)]
+    for sid in session_ids:
+        await create_record("chat_sessions", sid, {
+            "project_id": pid, "document_id": doc, "user_id": "cascade-user",
+        })
+        await create_record("messages", str(uuid4()), {
+            "chat_id": sid, "role": "user", "content": "hi",
+        })
+
+    resp = await client.delete(f"/api/documents/{doc}", cookies=cookies)
+    assert resp.status_code == 200, resp.text
+
+    for sid in session_ids:
+        assert await _deleted_at(test_db, "chat_sessions", sid) is not None, \
+            f"chat session {sid} must be soft-deleted"
+    live_msgs = await test_db.query(
+        "SELECT VALUE count() FROM messages "
+        "WHERE chat_id IN $cids AND deleted_at IS NONE GROUP ALL",
+        {"cids": session_ids},
+    )
+    assert not live_msgs or live_msgs[0] == 0, "chat messages must be soft-deleted"
+
+
+@pytest.mark.asyncio
+async def test_cascade_deletes_inbound_and_outbound_mentions(
+    client, test_db, admin_user, project_with_doc,
+):
+    """Deleting a document removes BOTH its inbound and outbound doc_mentions edges
+    and leaves unrelated edges alone."""
+    pid, idx_id, _ = project_with_doc
+    _, token = admin_user
+    cookies = {"lore_session": token}
+
+    a = await _mk_doc(client, pid, token, title="A", parent_id=idx_id)
+    b = await _mk_doc(client, pid, token, title="B", parent_id=idx_id)
+    c = await _mk_doc(client, pid, token, title="C", parent_id=idx_id)
+    # Outbound A→B, inbound C→A, unrelated B→C. ids are server UUIDs — ⟨⟩ escape
+    # the dashes for the record-literal parse.
+    await test_db.query(f"RELATE documents:⟨{a}⟩->doc_mentions->documents:⟨{b}⟩")
+    await test_db.query(f"RELATE documents:⟨{c}⟩->doc_mentions->documents:⟨{a}⟩")
+    await test_db.query(f"RELATE documents:⟨{b}⟩->doc_mentions->documents:⟨{c}⟩")
+
+    async def edge_count(src, dst):
+        rows = await test_db.query(
+            "SELECT VALUE count() FROM doc_mentions "
+            "WHERE in = type::record('documents', $src) "
+            "AND out = type::record('documents', $dst) GROUP ALL",
+            {"src": src, "dst": dst},
+        )
+        return rows[0] if rows else 0
+
+    resp = await client.delete(f"/api/documents/{a}", cookies=cookies)
+    assert resp.status_code == 200, resp.text
+
+    assert await edge_count(a, b) == 0, "outbound mention of the deleted doc must be gone"
+    assert await edge_count(c, a) == 0, "inbound mention of the deleted doc must be gone"
+    assert await edge_count(b, c) == 1, "unrelated mention edge must survive"
+
+
+@pytest.mark.asyncio
+async def test_record_targeted_update_on_missing_id_is_a_noop(
+    client, test_db, admin_user, project_with_doc,
+):
+    """PIN: the delete path's record-targeted tombstone form relies on SurrealDB
+    treating an absent record id as a silent no-op (cascade.py WHY block). A
+    server/SDK bump that turns the absent id into an error would 500 every
+    delete — this test makes that drift fail loudly here instead."""
+    pid, idx_id, _ = project_with_doc
+    _, token = admin_user
+    live_id = await _mk_doc(client, pid, token, title="NoopPin", parent_id=idx_id)
+    # uuid4-shaped but never created.
+    missing = "00000000-0000-4000-8000-000000000000"
+    count_before = await test_db.query("SELECT VALUE count() FROM documents GROUP ALL")
+
+    # The exact production form (cascade.py, documents/delete.py).
+    await test_db.query(
+        "UPDATE $rids.map(|$x| type::record('documents', $x)) "
+        "SET deleted_at = time::now() WHERE deleted_at IS NONE",
+        {"rids": [live_id, missing]},
+    )
+
+    count_after = await test_db.query("SELECT VALUE count() FROM documents GROUP ALL")
+    assert count_after == count_before, "an absent id must not materialize a row"
+    assert await _deleted_at(test_db, "documents", live_id) is not None
+    assert await _deleted_at(test_db, "documents", missing) is None
+
+    # Same contract for the chat_sessions variant ($cids form).
+    await test_db.query(
+        "UPDATE $rids.map(|$x| type::record('chat_sessions', $x)) "
+        "SET deleted_at = time::now() WHERE deleted_at IS NONE",
+        {"rids": [missing]},
+    )
+    assert await _deleted_at(test_db, "chat_sessions", missing) is None

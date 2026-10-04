@@ -605,3 +605,36 @@ async def test_stale_or_unknown_model_chunks_are_a_coverage_miss(project_with_do
 
     rows = await documents_missing_embed(await get_db(), pid)
     assert {r["id"] for r in rows} == {"embcov-stale-other", "embcov-stale-none"}
+
+
+# ─── Dead project: documents live on, candidacy must not ────────────────────
+
+
+async def test_dead_project_documents_are_never_candidates(client, admin_user):
+    """A deleted project's documents keep deleted_at = NONE (project delete
+    marks only the project row), so the predicate must drop them by PROJECT
+    liveness — otherwise the sweep and the admin coverage page count a dead
+    corpus forever and re-embed it on every EMBEDDING_MODEL swap."""
+    _, admin_token = admin_user
+    resp = await client.post(
+        "/api/projects", json={"name": "Dead Project Coverage"}, cookies={"lore_session": admin_token},
+    )
+    pid = resp.json()["project_id"]
+
+    doc_id = "embcov-dead-project-1"
+    await _seed_row(doc_id, pid, content="body inside what becomes a dead project")
+
+    # False-green check: while the project is live the doc IS a candidate.
+    from embedding_coverage import documents_missing_embed
+    from routes.admin_embeddings import _documents_needing_embed
+
+    db = await get_db()
+    assert doc_id in {r["id"] for r in await documents_missing_embed(db, pid)}
+
+    resp = await client.delete(f"/api/projects/{pid}", cookies={"lore_session": admin_token})
+    assert resp.status_code == 200, resp.text
+
+    # Neither the instrument (scoped and unscoped) nor the sweep may count it.
+    assert doc_id not in {r["id"] for r in await documents_missing_embed(db, pid)}
+    assert doc_id not in {r["id"] for r in await documents_missing_embed(db)}
+    assert doc_id not in {r["id"] for r in await _documents_needing_embed(db, None)}

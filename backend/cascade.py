@@ -39,14 +39,19 @@ async def _cascade_cleanup_document(db: AsyncSurreal, document_id: str) -> list[
     safe_did = validate_record_id(document_id)
 
     # ─── Phase 1: concurrent reads ───────────────────────────────────────────
+    # idempotent=True on every statement: a WS reader death mid-cascade may leave
+    # delivery uncertain, and every statement here is a guarded record-targeted
+    # write or a read — safe to re-issue (see pool.py's retry contract).
     ref_doc_ids_task = db.query(
         "SELECT VALUE meta::id(id) FROM documents "
         "WHERE parent_id = $did AND is_reference = true AND deleted_at IS NONE",
         {"did": document_id},
+        idempotent=True,
     )
     chat_ids_task = db.query(
         "SELECT VALUE meta::id(id) FROM chat_sessions WHERE document_id = $did AND deleted_at IS NONE",
         {"did": document_id},
+        idempotent=True,
     )
 
     ref_doc_id_rows, chat_id_rows = await asyncio.gather(
@@ -59,17 +64,27 @@ async def _cascade_cleanup_document(db: AsyncSurreal, document_id: str) -> list[
     # ─── Phase 2: concurrent writes ──────────────────────────────────────────
     write_tasks: list = [
         # doc_chunks — hard delete, independent.
-        db.query("DELETE doc_chunks WHERE document_id = $did", {"did": document_id}),
+        db.query(
+            "DELETE doc_chunks WHERE document_id = $did",
+            {"did": document_id},
+            idempotent=True,
+        ),
         # checkpoints — soft delete, independent.
         db.query(
             "UPDATE checkpoints SET deleted_at = time::now() "
             "WHERE document_id = $did AND deleted_at IS NONE",
             {"did": document_id},
+            idempotent=True,
         ),
         # doc_mentions — hard delete by record reference, independent.
+        # WHY: same class as the documents UPDATE below — a `WHERE in = … OR out = …`
+        # filter scans the whole edge table, so the graph delete targets the endpoint
+        # records (`Iterate Record` per edge).
         db.query(
-            f"DELETE doc_mentions WHERE in = type::record('documents', '{safe_did}') "
-            f"OR out = type::record('documents', '{safe_did}')"
+            "DELETE type::record('documents', $id)->doc_mentions, "
+            "type::record('documents', $id)<-doc_mentions",
+            {"id": safe_did},
+            idempotent=True,
         ),
     ]
 
@@ -78,20 +93,27 @@ async def _cascade_cleanup_document(db: AsyncSurreal, document_id: str) -> list[
         # embeddings live in doc_chunks keyed by document_id, alongside regular
         # docs — hard-delete here, then soft-delete the rows themselves.
         write_tasks.append(db.query(
-            "DELETE doc_chunks WHERE document_id IN $rids", {"rids": ref_doc_ids}
+            "DELETE doc_chunks WHERE document_id IN $rids",
+            {"rids": ref_doc_ids},
+            idempotent=True,
         ))
-        ref_doc_exprs = ", ".join(
-            f"type::record('documents', '{validate_record_id(rid)}')" for rid in ref_doc_ids
-        )
+        # WHY: a `WHERE id IN [list]` filter scans the whole table and its read set
+        # conflicts with any concurrent write to that table (surrealkv checks the
+        # read set at commit — the embed worker's per-reference status write then
+        # fails the cascade after minutes of scanning), so the cascade targets
+        # records: `Iterate Record` per id. A missing id is a no-op.
         write_tasks.append(db.query(
-            f"UPDATE documents SET deleted_at = time::now() "
-            f"WHERE id IN [{ref_doc_exprs}] AND deleted_at IS NONE"
+            "UPDATE $rids.map(|$x| type::record('documents', $x)) "
+            "SET deleted_at = time::now() WHERE deleted_at IS NONE",
+            {"rids": ref_doc_ids},
+            idempotent=True,
         ))
         # Cascade chat_sessions anchored to those reference-documents.
         write_tasks.append(db.query(
             "UPDATE chat_sessions SET deleted_at = time::now() "
             "WHERE document_id IN $rids AND deleted_at IS NONE",
             {"rids": ref_doc_ids},
+            idempotent=True,
         ))
 
     if chat_ids:
@@ -99,12 +121,13 @@ async def _cascade_cleanup_document(db: AsyncSurreal, document_id: str) -> list[
             "UPDATE messages SET deleted_at = time::now() "
             "WHERE chat_id IN $cids AND deleted_at IS NONE",
             {"cids": chat_ids},
+            idempotent=True,
         ))
-        chat_exprs = ", ".join(
-            f"type::record('chat_sessions', '{validate_record_id(cid)}')" for cid in chat_ids
-        )
         write_tasks.append(db.query(
-            f"UPDATE chat_sessions SET deleted_at = time::now() WHERE id IN [{chat_exprs}] AND deleted_at IS NONE"
+            "UPDATE $cids.map(|$x| type::record('chat_sessions', $x)) "
+            "SET deleted_at = time::now() WHERE deleted_at IS NONE",
+            {"cids": chat_ids},
+            idempotent=True,
         ))
 
     await asyncio.gather(*write_tasks)
@@ -121,4 +144,5 @@ async def _cascade_delete_document(db: AsyncSurreal, document_id: str) -> None:
     await db.query(
         "UPDATE type::record('documents', $id) SET deleted_at = time::now()",
         {"id": document_id},
+        idempotent=True,
     )

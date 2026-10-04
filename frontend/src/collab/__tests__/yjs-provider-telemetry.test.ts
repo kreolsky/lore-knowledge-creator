@@ -1,7 +1,7 @@
 /** Telemetry wiring in YjsProjectProvider — a non-auth close records a `close` log. */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('../collab-log', () => ({ logCollabEvent: vi.fn() }));
+vi.mock('../collab-log', () => ({ logCollabEvent: vi.fn(), watchDeadDoc: vi.fn() }));
 vi.mock('../../telemetry/perf', () => ({
   recordRtt: vi.fn(),
   recordAckLatency: vi.fn(),

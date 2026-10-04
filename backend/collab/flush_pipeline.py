@@ -27,8 +27,7 @@ import asyncio
 import logging
 import time
 
-import settings
-
+import config
 import event_bus
 from collab.timeout import (
     TIMEOUT_DB_QUERY_SEC,
@@ -104,7 +103,7 @@ class FlushPipeline:
         """
         if self._last_flush_ok_monotonic is None:
             return True
-        min_interval_s = await settings.get("FLUSH_SNAPSHOT_MIN_INTERVAL_SEC")
+        min_interval_s = config.FLUSH_SNAPSHOT_MIN_INTERVAL_SEC
         return time.monotonic() - self._last_flush_ok_monotonic >= min_interval_s
 
     async def _flush_if_needed(self, *, force: bool = False) -> None:
