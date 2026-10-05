@@ -8,7 +8,6 @@
 # declared above it).
 
 import base64
-import json
 import os
 from pathlib import Path
 
@@ -17,23 +16,10 @@ from comfy_markers import validate_size, validate_workflow
 from settings_registry import (
     ConfigError as ConfigError,  # re-export: `from config import ConfigError` callers stay valid
 )
+from settings_registry import SettingValueError, _section, setting
 from settings_registry import (
     _require_env as _require_env,  # re-export (test seam: tests/backend/test_unit_db.py)
 )
-from settings_registry import _section, setting
-
-# ─── Prompts ─────────────────────────────────────────────────────────────────
-# Loaded from configs/prompts.json. Each key maps to an LLM system message template.
-# Placeholders use Python str.format() syntax: {title}, {content}, {chunks}, {refs}.
-
-_prompts_path = Path(__file__).parent / "configs" / "prompts.json"
-_prompts: dict = json.loads(_prompts_path.read_text())
-
-# prompts.json carries no chat context templates (context pins scope, not
-# bodies — see routes/chat/context.py) and no agent system prompt: the live one
-# is BOOTSTRAP_SYSTEM_PROMPT (backend/agent_config.py), layered with persona/
-# rules/skills from the agent-config subtree.
-PROMPT_RETRIEVAL_QUERY_REWRITE: str = _prompts["retrieval"]["query_rewrite_system"]
 
 # ─── Release version ─────────────────────────────────────────────────────────
 
@@ -126,17 +112,19 @@ CONVERTER_URL = "http://converter:8002"
 EXPORT_CONVERTER_TIMEOUT_S = 120  # DOCX/PDF export via the converter (slow; > WEB_CONVERTER_TIMEOUT)
 
 # The MCP_* trio sits under config's Storage header but belongs to Tools — its
-# registry section is "MCP gateway".
-_section("tools", "MCP gateway")
+# registry section is "MCP gateway (external agents)".
+_section("tools", "MCP gateway (external agents)")
 # preview_extractor (the env var keeps the tool's older `RUN_EXTRACTOR` name) is a
 # ~50s dev/benchmark tool that dry-runs the local LLM. Off the default MCP surface
 # (a heavy tool advertised to every external client is a footgun). An explicitly-
 # enabled deployment (the CIR benchmark work) sets MCP_RUN_EXTRACTOR=1 to surface it.
 MCP_RUN_EXTRACTOR = setting(
     "MCP_RUN_EXTRACTOR", bool, default=False,
-    label="Serve preview_extractor over MCP",
-    help="Dry-run benchmark tool, off the default external-MCP surface (a "
-         "~50s tool advertised to every client is a footgun).",
+    label="Let external agents test-run the extractor",
+    help="Adds the preview_extractor tool for agents connected over MCP: it runs "
+         "the extractor on one reference and returns the result without creating "
+         "a document. Meant for model benchmarks; each call takes ~50s on the "
+         "local LLM, so keep it off unless you need it.",
 )
 # TTL (seconds) on the signed download URL minted by the MCP get_file tool. Short
 # by design — the token authorizes exactly one ref_id and expires; it is not a
@@ -144,9 +132,9 @@ MCP_RUN_EXTRACTOR = setting(
 # a tool call, short enough that a leaked URL stops working quickly.
 MCP_DOWNLOAD_TOKEN_TTL_S = setting(
     "MCP_DOWNLOAD_TOKEN_TTL_S", int, default=300, min=1,
-    label="get_file URL TTL, s",
-    help="Lifetime of the signed one-ref_id download URL minted by the "
-         "get_file tool.",
+    label="File download link lifetime, s",
+    help="An external agent downloads a file through a temporary link that opens "
+         "only that file. After this many seconds the link stops working.",
 )
 # TTL (seconds) on the signed UPLOAD URL minted by attach_file. Longer than the
 # download TTL on purpose: the whole point is files the base64 path could
@@ -155,9 +143,9 @@ MCP_DOWNLOAD_TOKEN_TTL_S = setting(
 # expiring a leaked URL quickly. See INVARIANT in mcp_gateway/upload.py.
 MCP_UPLOAD_TOKEN_TTL_S = setting(
     "MCP_UPLOAD_TOKEN_TTL_S", int, default=900, min=1,
-    label="attach_file URL TTL, s",
-    help="Lifetime of the signed upload URL — the clock covers the client's "
-         "whole stream.",
+    label="File upload link lifetime, s",
+    help="An external agent uploads a file (e.g. long audio) through a temporary "
+         "link. The whole upload must finish within this many seconds.",
 )
 
 # TTL (seconds) on a MEMORY consolidation run's scoped agent key
@@ -427,6 +415,39 @@ MODEL_IMAGE_JPEG_QUALITY = setting(
 # gate reads the driver's reply (driver.client.agent_capability).
 
 
+# ─── Agent prompt ────────────────────────────────────────────────────────────
+_section("agent", "Agent prompt")
+# The token agent_config.render_bootstrap replaces with transclusion_grammar's
+# projected embed-scheme list.
+BOOTSTRAP_EMBED_TOKEN = "{embed_schemes}"
+
+
+def _validate_bootstrap_prompt(raw: object) -> None:
+    """The bootstrap must carry the embed-scheme token exactly once."""
+    count = str(raw).count(BOOTSTRAP_EMBED_TOKEN)
+    # INVARIANT: an override keeps exactly one BOOTSTRAP_EMBED_TOKEN.
+    # Why: the embed grammar the agent is taught is projected from SCHEME_TABLE,
+    # never hand-written (see INVARIANT in backend/transclusion_grammar.py) — a
+    # text without the token would freeze a grammar the parser may no longer have.
+    if count != 1:
+        raise SettingValueError(
+            f"must contain {BOOTSTRAP_EMBED_TOKEN} exactly once (found {count})"
+        )
+
+
+AGENT_BOOTSTRAP_PROMPT = setting(
+    "AGENT_BOOTSTRAP_PROMPT", "text",
+    default=(Path(__file__).parent / "configs" / "agent_bootstrap_prompt.md").read_text(encoding="utf-8"),
+    validate=_validate_bootstrap_prompt,
+    label="Agent system prompt",
+    help="The fixed head of every agent turn's system prompt, in every project; "
+         "the project's Persona, Rules and Knowledge follow it. "
+         f"{BOOTSTRAP_EMBED_TOKEN} must appear exactly once — it is replaced with "
+         "the editor's embed forms. A change applies on the next turn and resets "
+         "the model's prompt cache for every chat.",
+)
+
+
 # ─── Agent line ──────────────────────────────────────────────────────────────
 # ARCH: the agent line (harness) is the brain and the ONLY AI line — there is no
 # in-process multi-tool agent loop, no zero-tools Ask line and no `mode` axis. Every
@@ -609,10 +630,10 @@ EMBEDDING_MODEL = setting(
     "EMBEDDING_MODEL", str, default="embeddings/giga/480m",
     label="Embedding model",
     help="Embedding model name. Changing it marks every stored vector stale "
-         "(the chunk hash mixes the model name) and OBLIGES re-calibrating the "
-         "three cosine cuts (see config.py); the hourly sweep re-embeds a "
-         "capped batch per run — Admin → Embeddings → embed missing does all "
-         "at once.",
+         "(the chunk hash mixes the model name) and OBLIGES re-calibrating "
+         "every row in Embedding calibration; the hourly sweep re-embeds a "
+         "capped batch per run — Admin → Embeddings → Embed now does all at "
+         "once.",
 )  # Embedding model name
 EMBEDDING_BATCH_SIZE = setting(
     "EMBEDDING_BATCH_SIZE", int, default=32, min=1,
@@ -630,7 +651,143 @@ EMBEDDING_COOLDOWN_SEC = setting(
     label="Re-embed debounce, s",
     help="Idle window after the last edit before a document re-embeds.",
 )  # Seconds between idle embedding re-checks
-EMBEDDING_TIMEOUT_S = 60  # HTTP timeout for a single embedding API batch request
+EMBEDDING_TIMEOUT_S = setting(
+    "EMBEDDING_TIMEOUT_S", int, default=60, min=1,
+    label="Embedding request timeout, s",
+    help="How long one embedding request (one batch of texts) may take before "
+         "it is abandoned. A timed-out batch fails that document's embed and "
+         "the hourly sweep retries it. Raise it for a slow or busy provider; "
+         "lower it and more batches fail under load, leaving documents out of "
+         "search until the retry. Applies from the next request.",
+)
+RETRIEVAL_CHUNK_MAX_CHARS = setting(
+    "RETRIEVAL_CHUNK_MAX_CHARS", int, default=3000, min=500, max=8000,
+    label="Chunk size, chars",
+    help="Soft target size of one search chunk when a document is split for "
+         "indexing. Bigger = fewer, broader chunks: each hit carries more "
+         "context but matches less precisely and spends more of the search "
+         "budget; smaller = sharper but more fragmented hits. Applies only to "
+         "documents re-chunked after the change — on their next edit, or all "
+         "at once via Admin → Embeddings → Rebuild index, then Embed now. "
+         "Reset does not undo chunks already rebuilt. The score floor in "
+         "Embedding calibration was measured at 3000. A value above the "
+         "embedding input ceiling is capped at the ceiling.",
+)
+# Hard ceiling the chunker can NEVER exceed — provider rejects oversized input strings
+# (measured on dev: 12k OK, 20k → HTTP 400). Well under the safe boundary so token
+# variance across content cannot trip it. Only the final character-split fallback for
+# pathological no-separator input (e.g. a base64 blob) reaches this high.
+EMBEDDING_INPUT_MAX_CHARS = setting(
+    "EMBEDDING_INPUT_MAX_CHARS", int, default=8000, min=1000, max=12000,
+    label="Embedding input ceiling, chars",
+    help="Hard cap: no chunk sent to the embedding model is ever longer than "
+         "this. The provider rejected a 20,000-char input and accepted "
+         "12,000; 8000 leaves a margin for token-count variance. Normal text "
+         "is split by Chunk size long before this — only pathological text "
+         "with no paragraph, line, sentence or word breaks (e.g. a base64 "
+         "blob) is cut here. Raise it only if the provider is known to accept "
+         "more: too high and such documents fail to embed (HTTP 400). Applies "
+         "to documents re-chunked after the change.",
+)
+
+# ─── Embedding calibration ───────────────────────────────────────────────────
+# Every value here is a point on EMBEDDING_MODEL's score distribution (see the
+# WHY on EMBEDDING_MODEL) — one calibration set, one admin section.
+_section("models", "Embedding calibration")
+# The embedding model is asymmetric (giga/480m and qwen3/600m share the convention):
+# documents are embedded plain, queries are prefixed with an instruction
+# (`Instruct: …\nQuery: …`). Omitting it costs 1–5% retrieval per the Qwen3 model card;
+# the giga/480m calibration was measured with it on. Applied OPT-IN at the one query
+# call site (retrieval.py), never as a default inside embed_texts (would poison every
+# stored document vector).
+RETRIEVAL_QUERY_INSTRUCTION = setting(
+    "RETRIEVAL_QUERY_INSTRUCTION", str,
+    default="Given a user query, retrieve relevant document passages that answer it",
+    label="Query-side embedding instruction",
+    help="Task line the embedding model reads before every search query: the "
+         "query is sent as \"Instruct: <this text>\\nQuery: <query>\". Documents "
+         "are embedded without it, so a change needs no re-embedding, but it "
+         "shifts every query's scores — the score floor below was calibrated "
+         "for embeddings/giga/480m with exactly this default text. Change both "
+         "together. Applies from the next search.",
+)
+# WHY: 0.18 is calibrated against embeddings/giga/480m and must be re-derived
+# on any EMBEDDING_MODEL change. Why: it is the all-hits median of that model's
+# correct-answer scores on the 20-query hard set — the same place 0.35 sat for
+# qwen3/600m. At 0.35 giga loses 10 of 20 correct hits (the `section` answers it
+# wins included) while qwen3 loses none; at 0.18 it keeps 20 of 20.
+RETRIEVAL_MIN_SCORE = setting(
+    "RETRIEVAL_MIN_SCORE", float, default=0.18, min=0.0, max=1.0,
+    label="Retrieval score floor",
+    help="Absolute cut: a hit whose cosine similarity to the query is below "
+         "this value is never returned by search (applied to documents, "
+         "references and memory facts alike, before the drop-off). The value "
+         "belongs to the embedding model, not to the corpus: 0.18 is "
+         "calibrated for embeddings/giga/480m — the median score of correct "
+         "answers on a 20-question test set; it keeps 20 of 20, while the old "
+         "qwen3 value 0.35 lost 10 of 20 under giga. Raise it for fewer, "
+         "stricter hits; too high and \"why/how\" questions return no sources "
+         "at all. Re-calibrate whenever Embedding model changes.",
+)  # Minimum cosine similarity to include a hit
+# The cosine at or above which a `new` fact is refused as restating a stored one
+# (SYSTEM: memory, memory/dedup.py).
+# WHY: 0.82 is calibrated against embeddings/giga/480m and must be re-derived
+# on any EMBEDDING_MODEL change. Why: it is the equal-recall point of qwen3's 0.89 —
+# 0.89 recalled 21.8% of known duplicates under qwen3 and only 7.9% under giga; 0.82
+# restores 21.8% at the same 0% false-positive rate (separation AUC 0.857 -> 0.876).
+# Every number in the census below was read under qwen3/600m at 0.89; the SHAPE of
+# the argument (the classes interleave just below the cut) carries over, the cosines do not.
+# WHY: this is a KNOB, never a hard-coded constant, and it is corpus-dependent.
+# Why: 0.89 was read off 51 labelled pairs from ONE project, ONE domain and one house
+# style — every fact there opens "В лекции…", which inflates every score. On that set
+# it caught 7 of the 8 duplicates a live run deposited with zero false positives, and
+# the classes interleave just below it (a true duplicate at 0.870, genuinely distinct
+# facts at 0.885 and 0.865), so lowering it does not catch "more thoroughly" — below
+# ~0.86 cosine measures shared topic and vocabulary, not shared assertion.
+#
+# A full pair census of a live project (94 facts: 154 same-subject + 4217 cross-subject
+# pairs) puts numbers on that interleaving and on what this knob can be worth:
+#   - NO pair in the whole project reaches 0.89. The gate fires on the incoming fact
+#     at apply time, not on what has settled, so a zero here is expected — but it also
+#     means every near-duplicate that survives sits in 0.80–0.89.
+#   - inside that band the classes do not separate: true duplicates at 0.808 / 0.840 /
+#     0.856 / 0.872 / 0.881 interleave with genuinely distinct pairs at 0.828 / 0.834 /
+#     0.836. The widest safe gap is thousandths, i.e. no threshold exists that catches
+#     the band's duplicates without refusing its distinct facts.
+# So this number is NOT the lever for the surviving duplicates, and tuning it down is
+# how you buy false refusals. What does work is the agent's own comparison against the
+# merge candidates served with the portion: on a re-run over consumed material it
+# converted 11 of 13 comparable verdicts into `merge` while this gate fired zero times.
+MEMORY_DUPLICATE_FACT_THRESHOLD = setting(
+    "MEMORY_DUPLICATE_FACT_THRESHOLD", float, default=0.82, min=0.0, max=1.0,
+    label="Duplicate-fact cosine",
+    help="Cosine similarity at or above which a new memory fact is refused as "
+         "restating a stored one. 0.82 is calibrated for "
+         "embeddings/giga/480m: it restores the 21.8% duplicate recall that "
+         "qwen3/600m had at 0.89, with 0% false refusals on the labelled set. "
+         "Below about 0.86 the score measures shared topic and vocabulary, "
+         "not a repeated claim — lowering it buys false refusals of genuinely "
+         "new facts rather than catching more duplicates; raise it to refuse "
+         "less. Re-calibrate whenever Embedding model changes. Applies from "
+         "the next fact applied.",
+)
+# WHY: 0.25 is calibrated against embeddings/giga/480m and must be re-derived
+# on any EMBEDDING_MODEL change. Why: it is qwen3's 0.35 scaled by the shift in the
+# fact-vs-fact null median (0.601 -> 0.464 across the two models); a loose floor,
+# so the lowest-risk of the three cuts, but still a point on the model's distribution.
+MEMORY_MERGE_CANDIDATE_MIN_SCORE = setting(
+    "MEMORY_MERGE_CANDIDATE_MIN_SCORE", float, default=0.25, min=0.0, max=1.0,
+    label="Merge-candidate score floor",
+    help="Minimum cosine similarity for a stored fact to be offered to the "
+         "agent as a merge candidate while it consolidates a reference into "
+         "memory. 0.25 is calibrated for embeddings/giga/480m (qwen3's 0.35 "
+         "scaled by how much lower giga scores unrelated facts). A loose "
+         "floor: it only keeps unrelated facts out of the list. Raise it for "
+         "shorter, more relevant lists; too high and real duplicates are not "
+         "shown to the agent — and above Duplicate-fact cosine it also "
+         "weakens the duplicate check. Re-calibrate whenever Embedding model "
+         "changes. Applies from the next portion.",
+)
 
 # ─── Web search: provider for the harness-served web_search tool ─────────────
 # ARCH: Lore owns these values, the harness owns search. The resolved provider
@@ -688,96 +845,74 @@ SEARXNG_URL = setting(
 # ─── Retrieval ────────────────────────────────────────────────────────────────
 # RAG pipeline: vector search → anti-monopoly → score drop-off → token budgeting.
 # All retrieval_* constants control the search quality/quantity tradeoff.
-
-RETRIEVAL_TOP_K_DOCS = 8  # Max document chunks returned by vector search
-RETRIEVAL_TOP_K_REFS = 8  # Max reference chunks returned by vector search
-RETRIEVAL_MAX_PER_DOC = 2  # Max chunks per single document (anti-monopoly)
-RETRIEVAL_BUDGET_TOKENS_DOCS = 8000  # Token budget for document context injection
-RETRIEVAL_BUDGET_TOKENS_REFS = 4000  # Token budget for reference context injection
-RETRIEVAL_TOP_K_MEMORY = 8  # Max memory fact-docs returned by vector search
-# Smaller than the docs budget on purpose: a fact body IS the distilled fact, so a
-# memory hit buys far more per token than a raw chunk — and the
-# budget is what stops a large Memory folder from evicting the raw material the answer
-# still has to be grounded in.
-RETRIEVAL_BUDGET_TOKENS_MEMORY = 3000
-RETRIEVAL_CHUNK_MAX_CHARS = 3000  # Soft target: max chars per chunk during indexing
-# Hard ceiling the chunker can NEVER exceed — provider rejects oversized input strings
-# (measured on dev: 12k OK, 20k → HTTP 400). Well under the safe boundary so token
-# variance across content cannot trip it. Only the final character-split fallback for
-# pathological no-separator input (e.g. a base64 blob) reaches this high.
-EMBEDDING_INPUT_MAX_CHARS = 8000
-# Qwen3-Embedding is asymmetric: documents are embedded plain, queries are prefixed
-# with an instruction (`Instruct: …\nQuery: …`). Omitting it costs 1–5% retrieval per
-# the model card. Applied OPT-IN at the one query call site (retrieval.py), never as a
-# default inside embed_texts (would poison every stored document vector).
+# The score floor and the query instruction live in Embedding calibration.
 _section("search", "Retrieval")
-RETRIEVAL_QUERY_INSTRUCTION = setting(
-    "RETRIEVAL_QUERY_INSTRUCTION", str,
-    default="Given a user query, retrieve relevant document passages that answer it",
-    label="Query-side embedding instruction",
-    help="Instruction prefixed to retrieval queries (Qwen3-Embedding asymmetric "
-         "format); documents are embedded plain.",
-)
-# WHY: 0.18 is calibrated against embeddings/giga/480m and must be re-derived
-# on any EMBEDDING_MODEL change. Why: it is the all-hits median of that model's
-# correct-answer scores on the 20-query hard set — the same place 0.35 sat for
-# qwen3/600m. At 0.35 giga loses 10 of 20 correct hits (the `section` answers it
-# wins included) while qwen3 loses none; at 0.18 it keeps 20 of 20.
-RETRIEVAL_MIN_SCORE = setting(
-    "RETRIEVAL_MIN_SCORE", float, default=0.18, min=0.0, max=1.0,
-    label="Retrieval score floor",
-    help="Minimum cosine similarity for a chunk hit to be included "
-         "(calibrated per embedding model — see config.py before touching).",
-)  # Minimum cosine similarity to include a hit
 # WHY: RETRIEVAL_SCORE_DROP_OFF uses relative ratio, not absolute — a hit scoring 65% of the
 # previous one indicates a relevance cliff, catching topic transitions absolute thresholds miss.
 RETRIEVAL_SCORE_DROP_OFF = setting(
     "RETRIEVAL_SCORE_DROP_OFF", float, default=0.65, min=0.0, max=1.0,
     label="Retrieval drop-off ratio",
-    help="A hit scoring below this ratio of the previous one is a relevance "
-         "cliff — everything after it is cut.",
+    help="Relative cut: hits are sorted by score and the list ends at the "
+         "first hit that scores below this share of the one before it (0.65 "
+         "= a drop of more than 35% is a relevance cliff). Applied separately "
+         "to documents, references and memory facts. A ratio does not depend "
+         "on the model's score scale, so 0.65 was kept unchanged through the "
+         "move to embeddings/giga/480m. Lower = more lenient (0 turns the cut "
+         "off); higher = shorter lists (1.0 keeps only the top hit and its "
+         "ties).",
 )  # Ratio threshold: hits[i].score < hits[i-1].score * this → cutoff
+RETRIEVAL_TOP_K_MEMORY = setting(
+    "RETRIEVAL_TOP_K_MEMORY", int, default=8, min=0,
+    label="Memory facts per search",
+    help="How many memory facts one search may return when the caller sets "
+         "no limit — the agent's search_materials tool (the REST semantic "
+         "search uses its own k for every kind). More = the agent sees more "
+         "of what the project already knows, at the cost of context tokens; "
+         "0 = no memory facts in agent searches. The memory token budget "
+         "below still caps the total. Applies from the next search.",
+)
+RETRIEVAL_MAX_PER_DOC = setting(
+    "RETRIEVAL_MAX_PER_DOC", int, default=2, min=1,
+    label="Chunks per document",
+    help="At most this many chunks of one document in a single search's "
+         "results, so one long document cannot fill the answer and crowd out "
+         "the others (references are not capped). Raise it when answers need "
+         "several passages of the same document; lower it for more variety "
+         "across documents. Applies from the next search.",
+)
+RETRIEVAL_BUDGET_TOKENS_DOCS = setting(
+    "RETRIEVAL_BUDGET_TOKENS_DOCS", int, default=8000, min=0,
+    label="Token budget: documents",
+    help="Ceiling on the document text one search returns, in approximate "
+         "tokens. Hits are taken best-first; one that would overflow the "
+         "budget is skipped. Higher = more material per search and more "
+         "context tokens per agent turn; lower = cheaper, terser results. "
+         "Applies from the next search.",
+)
+RETRIEVAL_BUDGET_TOKENS_REFS = setting(
+    "RETRIEVAL_BUDGET_TOKENS_REFS", int, default=4000, min=0,
+    label="Token budget: references",
+    help="The same ceiling for reference text (uploaded sources, "
+         "transcripts). Higher = more source material per search and more "
+         "context tokens per agent turn. Applies from the next search.",
+)
+# Smaller than the docs budget on purpose: a fact body IS the distilled fact, so a
+# memory hit buys far more per token than a raw chunk — and the
+# budget is what stops a large Memory folder from evicting the raw material the answer
+# still has to be grounded in.
+RETRIEVAL_BUDGET_TOKENS_MEMORY = setting(
+    "RETRIEVAL_BUDGET_TOKENS_MEMORY", int, default=3000, min=0,
+    label="Token budget: memory",
+    help="The same ceiling for memory facts. Smaller than the documents "
+         "budget on purpose: a fact is already distilled, so a few buy a lot, "
+         "and a large Memory folder must not crowd out the raw material an "
+         "answer still has to be grounded in. Applies from the next search.",
+)
 RETRIEVAL_TOKEN_SAFETY_MARGIN = 0.85  # Approx token ratio: chars/4 * margin
 
 
-# ─── Query rewrite ────────────────────────────────────────────────────────────
-
-_section("search", "Query rewrite")
-CHAT_QUERY_REWRITE_MODEL = setting(
-    "CHAT_QUERY_REWRITE_MODEL", str, fallback=("CHAT_MODEL",),
-    label="Query rewrite model",
-    help="LLM that rewrites a conversational query into a standalone one; "
-         "empty = the default chat model.",
-)  # LLM model for query rewriting; falls back to CHAT_MODEL
-CHAT_QUERY_REWRITE_MAX_TOKENS = 100  # Max output tokens for rewritten query
-CHAT_QUERY_REWRITE_ENABLED = setting(
-    "CHAT_QUERY_REWRITE_ENABLED", bool, default=True,
-    label="Query rewrite on/off",
-    help="Off = retrieval embeds the raw user message (no LLM hop).",
-)  # Toggle LLM query rewriting on/off
-CHAT_QUERY_REWRITE_HISTORY_MESSAGES = setting(
-    "CHAT_QUERY_REWRITE_HISTORY_MESSAGES", int, default=6, min=0,
-    label="Rewrite history messages",
-    help="How many recent chat messages the rewriter sees.",
-)  # Number of history messages fed to rewriter
-CHAT_QUERY_REWRITE_SNIPPET_CHARS = setting(
-    "CHAT_QUERY_REWRITE_SNIPPET_CHARS", int, default=200, min=1,
-    label="Rewrite snippet chars",
-    help="Char cap per history message fed to the rewriter.",
-)  # Char limit per history message snippet
-CHAT_QUERY_REWRITE_TIMEOUT_S = setting(
-    "CHAT_QUERY_REWRITE_TIMEOUT_S", int, default=15, min=1,
-    label="Rewrite LLM timeout, s",
-    help="HTTP timeout of the rewrite call; on timeout the raw query is "
-         "used.",
-)  # HTTP timeout for rewrite LLM call
-
 # ─── Project memory (SYSTEM: memory) ─────────────────────────────────────────
-# Order 2 (`refactor(memory): collapse the model to one fact level`) removed the
-# entity level: a fact is a document, there is no `mem_entity_type`, and the closed
-# type list that gated merges across it is gone (D6 — the type flips were unstable
-# run-to-run and a closed list nobody applies consistently is a coin flip that splits
-# subjects, not a guard).
+# The duplicate cosine and the merge-candidate floor live in Embedding calibration.
 # The verdict-batch ceiling — a TRUNCATION GUARD, not a batch-size target.
 # The unit of consolidation is the REFERENCE: a run extracts
 # everything a reference carries and applies it in batches that FIT the driver's output
@@ -792,68 +927,62 @@ CHAT_QUERY_REWRITE_TIMEOUT_S = setting(
 # description (testing.md: derive, don't copy).
 MEMORY_VERDICTS_MAX_PER_BATCH = 100
 
-# The payload budget for get_memory_facts. This is its
-# OWN budget — RETRIEVAL_BUDGET_TOKENS_MEMORY must NOT be reused here: that constant
-# governs the stage-5 semantic-injection path where the server chooses what to
-# surface, while get_memory_facts is an explicit id-list fetch (the agent named
-# exactly these facts); silently budgeting a direct request would drop what was
-# explicitly asked for — a different contract, a different knob.
-MEMORY_FACTS_PAGE_CHARS = 48_000  # total chars ceiling per fetch payload
-
-# The portion payload's `merge_candidates` — how many
-# nearest-neighbour memory facts to surface, and the minimum cosine below which a
-# fact is NOT a candidate (an orthogonal fact is noise, not a hint). The cap keeps
-# the payload bounded; the floor keeps the list signal, not padding.
-MEMORY_MERGE_CANDIDATES = 8
-# WHY: 0.25 is calibrated against embeddings/giga/480m and must be re-derived
-# on any EMBEDDING_MODEL change. Why: it is qwen3's 0.35 scaled by the shift in the
-# fact-vs-fact null median (0.601 -> 0.464 across the two models); a loose floor,
-# so the lowest-risk of the three cuts, but still a point on the model's distribution.
-MEMORY_MERGE_CANDIDATE_MIN_SCORE = 0.25
-MEMORY_MERGE_CANDIDATE_QUERY_CHARS = 2000  # bounded prefix of the reference embed
+_section("tools", "Project memory")
+# The portion payload's `merge_candidates` — how many nearest-neighbour memory facts
+# to surface. The cap keeps the payload bounded; the floor
+# (MEMORY_MERGE_CANDIDATE_MIN_SCORE, in Embedding calibration) keeps the list signal,
+# not padding — an orthogonal fact is noise, not a hint.
+MEMORY_MERGE_CANDIDATES = setting(
+    "MEMORY_MERGE_CANDIDATES", int, default=8, min=0,
+    label="Merge candidates per portion",
+    help="When the agent consolidates a reference into memory, each portion "
+         "shows it this many stored facts nearest to that reference, so it "
+         "can merge into an existing fact instead of creating a duplicate. "
+         "More = better duplicate avoidance on a large memory, at the cost of "
+         "a longer portion; 0 = no candidates (the agent sees only the flat "
+         "fact index). Applies from the next portion.",
+)
+MEMORY_MERGE_CANDIDATE_QUERY_CHARS = setting(
+    "MEMORY_MERGE_CANDIDATE_QUERY_CHARS", int, default=2000, min=100,
+    label="Candidate search prefix, chars",
+    help="How much of the start of the reference is embedded to find those "
+         "candidates — a reference's head usually names its subject. Longer "
+         "= the search sees more of the reference, at a slightly higher "
+         "embedding cost per portion; shorter = cheaper but may miss subjects "
+         "that appear later. Applies from the next portion.",
+)
 # The char ceiling for the FACT BODIES that ride along with those candidates. Its own
 # knob, and deliberately small: a candidate's body is served as `{id, text}` only,
 # because that is all sameness is judged on. At the measured ~600 chars of fact text
 # per fact, 8 candidates cost a bounded slice of a portion, whose bulk is the
 # transcript itself. Raising this trades the one thing the incremental run exists to
 # protect.
-MEMORY_MERGE_CANDIDATE_CHARS = 8000
-
-# The cosine at or above which a `new` fact is refused as restating a stored one
-# (SYSTEM: memory, memory/dedup.py).
-# WHY: 0.82 is calibrated against embeddings/giga/480m and must be re-derived
-# on any EMBEDDING_MODEL change. Why: it is the equal-recall point of qwen3's 0.89 —
-# 0.89 recalled 21.8% of known duplicates under qwen3 and only 7.9% under giga; 0.82
-# restores 21.8% at the same 0% false-positive rate (separation AUC 0.857 -> 0.876).
-# Every number in the census below was read under qwen3/600m at 0.89; the SHAPE of
-# the argument (the classes interleave just below the cut) carries over, the cosines do not.
-# INVARIANT: this is a KNOB, never a hard-coded constant, and it is corpus-dependent.
-# Why: 0.89 was read off 51 labelled pairs from ONE project, ONE domain and one house
-# style — every fact there opens "В лекции…", which inflates every score. On that set
-# it caught 7 of the 8 duplicates a live run deposited with zero false positives, and
-# the classes interleave just below it (a true duplicate at 0.870, genuinely distinct
-# facts at 0.885 and 0.865), so lowering it does not catch "more thoroughly" — below
-# ~0.86 cosine measures shared topic and vocabulary, not shared assertion.
-#
-# A full pair census of a live project (94 facts: 154 same-subject + 4217 cross-subject
-# pairs) puts numbers on that interleaving and on what this knob can be worth:
-#   - NO pair in the whole project reaches 0.89. The gate fires on the incoming fact
-#     at apply time, not on what has settled, so a zero here is expected — but it also
-#     means every near-duplicate that survives sits in 0.80–0.89.
-#   - inside that band the classes do not separate: true duplicates at 0.808 / 0.840 /
-#     0.856 / 0.872 / 0.881 interleave with genuinely distinct pairs at 0.828 / 0.834 /
-#     0.836. The widest safe gap is thousandths, i.e. no threshold exists that catches
-#     the band's duplicates without refusing its distinct facts.
-# So this number is NOT the lever for the surviving duplicates, and tuning it down is
-# how you buy false refusals. What does work is the agent's own comparison against the
-# merge candidates served with the portion: on a re-run over consumed material it
-# converted 11 of 13 comparable verdicts into `merge` while this gate fired zero times.
-_section("tools", "Project memory")
-MEMORY_DUPLICATE_FACT_THRESHOLD = setting(
-    "MEMORY_DUPLICATE_FACT_THRESHOLD", float, default=0.82, min=0.0, max=1.0,
-    label="Duplicate-fact cosine",
-    help="Cosine at/above which a new fact is refused as restating a stored "
-         "one (corpus-dependent knob — see config.py before touching).",
+MEMORY_MERGE_CANDIDATE_CHARS = setting(
+    "MEMORY_MERGE_CANDIDATE_CHARS", int, default=8000, min=0,
+    label="Candidate bodies budget, chars",
+    help="Total text of candidate fact bodies shown with a portion. The first "
+         "candidate is always shown in full; candidates past the budget are "
+         "still listed by id and title, marked deferred, never dropped. Kept "
+         "small on purpose: a portion's bulk should be the reference being "
+         "consolidated. Raise it if the agent keeps creating facts a deferred "
+         "candidate already held; it costs portion size. Applies from the "
+         "next portion.",
+)
+# The payload budget for get_memory_facts. This is its
+# OWN budget — RETRIEVAL_BUDGET_TOKENS_MEMORY must NOT be reused here: that constant
+# governs the semantic search path (search_materials) where the server chooses
+# what to surface, while get_memory_facts is an explicit id-list fetch (the agent named
+# exactly these facts); silently budgeting a direct request would drop what was
+# explicitly asked for — a different contract, a different knob.
+MEMORY_FACTS_PAGE_CHARS = setting(
+    "MEMORY_FACTS_PAGE_CHARS", int, default=48_000, min=1000,
+    label="Fact fetch budget, chars",
+    help="Total text one get_memory_facts call returns when the agent fetches "
+         "facts by id. The first fact is always served; facts past the budget "
+         "are named as deferred for a follow-up call, never dropped. Separate "
+         "from the memory search budget because here the agent asked for "
+         "exactly these facts. Higher = fewer round trips, larger tool "
+         "results. Applies from the next call.",
 )
 
 
@@ -984,21 +1113,8 @@ COMFYUI_URL = setting(
     help="Internal ComfyUI service. Empty = the generate_image tool is not "
          "served.",
 )
-COMFYUI_TIMEOUT_S = setting(
-    "COMFYUI_TIMEOUT_S", int, default=120, min=1,
-    label="Generation poll deadline, s",
-    help="Bound on the /prompt + /history poll loop of one generation.",
-)
 COMFYUI_ENABLED = bool(COMFYUI_URL)
 _COMFY_CONFIGS = Path(__file__).parent / "configs"
-COMFYUI_PROMPT = setting(
-    "COMFYUI_PROMPT", "text",
-    default=(_COMFY_CONFIGS / "comfy_prompt.txt").read_text(encoding="utf-8"),
-    label="Prompt refinement instructions",
-    help="Sent verbatim as the system message to the prompt refinement model, "
-         "which must answer {\"prompt\": \"...\"}. On any failure the agent's "
-         "raw description is used.",
-)
 COMFYUI_WORKFLOW = setting(
     "COMFYUI_WORKFLOW", "text",
     default=(_COMFY_CONFIGS / "comfy_workflow.json").read_text(encoding="utf-8"),
@@ -1010,21 +1126,6 @@ COMFYUI_WORKFLOW = setting(
          "seed), [lore:size] (width, height; without it the workflow's size "
          "applies), [lore:batch] (batch_size = image count; without it only one "
          "image per call). Every SaveImage node saves under lore/<run id>.",
-)
-COMFYUI_SIZE_SQUARE = setting(
-    "COMFYUI_SIZE_SQUARE", str, default="1024x1024", validate=validate_size,
-    label="Square size",
-    help="WIDTHxHEIGHT filled into the [lore:size] node for orientation=square.",
-)
-COMFYUI_SIZE_PORTRAIT = setting(
-    "COMFYUI_SIZE_PORTRAIT", str, default="832x1216", validate=validate_size,
-    label="Portrait size",
-    help="WIDTHxHEIGHT filled into the [lore:size] node for orientation=portrait.",
-)
-COMFYUI_SIZE_LANDSCAPE = setting(
-    "COMFYUI_SIZE_LANDSCAPE", str, default="1216x832", validate=validate_size,
-    label="Landscape size",
-    help="WIDTHxHEIGHT filled into the [lore:size] node for orientation=landscape.",
 )
 # Prompt refinement: the refinement LLM model (falls back to CHAT_MODEL)
 # and that call's HTTP timeout. The refiner reads NO chat history — see the
@@ -1058,6 +1159,34 @@ COMFYUI_PROMPT_TIMEOUT_S = setting(
     label="Refinement LLM timeout, s",
     help="HTTP timeout of the refinement call; on failure the raw prompt is "
          "used.",
+)
+COMFYUI_PROMPT = setting(
+    "COMFYUI_PROMPT", "text",
+    default=(_COMFY_CONFIGS / "comfy_prompt.txt").read_text(encoding="utf-8"),
+    label="Prompt refinement instructions",
+    help="Sent verbatim as the system message to the prompt refinement model, "
+         "which must answer {\"prompt\": \"...\"}. On any failure the agent's "
+         "raw description is used.",
+)
+COMFYUI_SIZE_SQUARE = setting(
+    "COMFYUI_SIZE_SQUARE", str, default="1024x1024", validate=validate_size,
+    label="Square size",
+    help="WIDTHxHEIGHT filled into the [lore:size] node for orientation=square.",
+)
+COMFYUI_SIZE_PORTRAIT = setting(
+    "COMFYUI_SIZE_PORTRAIT", str, default="832x1216", validate=validate_size,
+    label="Portrait size",
+    help="WIDTHxHEIGHT filled into the [lore:size] node for orientation=portrait.",
+)
+COMFYUI_SIZE_LANDSCAPE = setting(
+    "COMFYUI_SIZE_LANDSCAPE", str, default="1216x832", validate=validate_size,
+    label="Landscape size",
+    help="WIDTHxHEIGHT filled into the [lore:size] node for orientation=landscape.",
+)
+COMFYUI_TIMEOUT_S = setting(
+    "COMFYUI_TIMEOUT_S", int, default=120, min=1,
+    label="Generation poll deadline, s",
+    help="Bound on the /prompt + /history poll loop of one generation.",
 )
 # Bounds how many generate_image jobs run at
 # once on the arq worker. A burst of tool calls queues in arq instead of

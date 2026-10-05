@@ -61,8 +61,8 @@ const ADMIN_ONLY_SECTIONS: readonly {
   { tab: 'embeddings', icon: <Layers size={14} />, labelKey: 'embeddings' },
   { tab: 'settings:models', icon: <Cpu size={14} />, labelKey: 'settingsModels', settingsTab: 'models' },
   { tab: 'settings:search', icon: <Search size={14} />, labelKey: 'settingsSearch', settingsTab: 'search' },
-  { tab: 'settings:tools', icon: <Wrench size={14} />, labelKey: 'settingsTools', settingsTab: 'tools' },
   { tab: 'settings:agent', icon: <Bot size={14} />, labelKey: 'settingsAgent', settingsTab: 'agent' },
+  { tab: 'settings:tools', icon: <Wrench size={14} />, labelKey: 'settingsTools', settingsTab: 'tools' },
   { tab: 'settings:storage', icon: <Database size={14} />, labelKey: 'settingsStorage', settingsTab: 'storage' },
   { tab: 'skills', icon: <Sparkles size={14} />, labelKey: 'skills' },
 ];

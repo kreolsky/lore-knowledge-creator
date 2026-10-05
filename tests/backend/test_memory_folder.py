@@ -14,6 +14,7 @@ import pytest
 from agent_config import (
     _MEMORY_ROLES,
     _REQUIRED_ROLES,
+    DEFAULT_BOOTSTRAP_PROMPT,
     PROTECTED_SYSTEM_ROLES,
     SYSTEM_DOC_ROLES,
     build_agent_system_prompt,
@@ -125,7 +126,7 @@ def test_renderer_never_injects_memory_even_when_handed_it():
     section loop turns this red.
     """
     marker = "MEMORY-BODY-MUST-NOT-RENDER"
-    prompt = build_agent_system_prompt({
+    prompt = build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT, {
         "rules_folder": {"id": "rf", "title": "Rules", "content": "a rule"},
         "rules_children": [],
         "memory_folder": {"id": "mf", "title": "Memory", "content": ""},
@@ -169,7 +170,7 @@ async def test_memory_is_not_injected_into_the_prompt(test_db, project_with_doc)
     })
 
     docs = await load_agent_system_docs(pid)
-    prompt = build_agent_system_prompt(docs)
+    prompt = build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT, docs)
 
     assert rules_marker in prompt, "the Rules subtree stopped being injected"
     assert memory_marker not in prompt, (

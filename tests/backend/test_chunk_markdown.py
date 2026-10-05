@@ -15,19 +15,24 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from markdown_chunker import chunk_markdown
 
-from config import EMBEDDING_INPUT_MAX_CHARS
+from config import EMBEDDING_INPUT_MAX_CHARS, RETRIEVAL_CHUNK_MAX_CHARS
+
+_LIMITS = {
+    "max_chunk_chars": RETRIEVAL_CHUNK_MAX_CHARS,
+    "input_max_chars": EMBEDDING_INPUT_MAX_CHARS,
+}
 
 
 class TestChunkMarkdown:
     def test_empty_text(self):
-        assert chunk_markdown("") == []
+        assert chunk_markdown("", **_LIMITS) == []
 
     def test_whitespace_only(self):
-        assert chunk_markdown("   \n  \n  ") == []
+        assert chunk_markdown("   \n  \n  ", **_LIMITS) == []
 
     def test_plain_text_no_headings(self):
         text = "Hello world. This is a plain paragraph."
-        chunks = chunk_markdown(text)
+        chunks = chunk_markdown(text, **_LIMITS)
         assert len(chunks) == 1
         assert chunks[0].heading is None
         assert chunks[0].content == text
@@ -36,7 +41,7 @@ class TestChunkMarkdown:
 
     def test_h2_sections(self):
         text = "## Section One\nContent one.\n\n## Section Two\nContent two."
-        chunks = chunk_markdown(text)
+        chunks = chunk_markdown(text, **_LIMITS)
         assert len(chunks) == 2
         assert chunks[0].heading == "## Section One"
         assert "Content one" in chunks[0].content
@@ -45,7 +50,7 @@ class TestChunkMarkdown:
 
     def test_h3_nested(self):
         text = "## Parent\nParent content.\n### Child\nChild content."
-        chunks = chunk_markdown(text)
+        chunks = chunk_markdown(text, **_LIMITS)
         assert len(chunks) == 2
         assert chunks[0].heading == "## Parent"
         assert chunks[1].heading == "### Child"
@@ -54,7 +59,7 @@ class TestChunkMarkdown:
         max_chars = 200
         para = "Word " * 40
         text = f"## Long\n{para}\n\n{para}\n\n{para}"
-        chunks = chunk_markdown(text, max_chunk_chars=max_chars)
+        chunks = chunk_markdown(text, max_chunk_chars=max_chars, input_max_chars=EMBEDDING_INPUT_MAX_CHARS)
         assert len(chunks) > 1
         # S2: every chunk stays under the hard provider ceiling (soft target is a hint).
         for c in chunks:
@@ -62,13 +67,13 @@ class TestChunkMarkdown:
 
     def test_single_h1(self):
         text = "# Title\nBody text here."
-        chunks = chunk_markdown(text)
+        chunks = chunk_markdown(text, **_LIMITS)
         assert len(chunks) == 1
         assert chunks[0].heading == "# Title"
 
     def test_mixed_heading_levels(self):
         text = "# H1\nh1 body\n## H2\nh2 body\n### H3\nh3 body"
-        chunks = chunk_markdown(text)
+        chunks = chunk_markdown(text, **_LIMITS)
         assert len(chunks) == 3
         assert chunks[0].heading == "# H1"
         assert chunks[1].heading == "## H2"
@@ -84,7 +89,7 @@ class TestChunkMarkdown:
         # gap (the old .find landed chunk 2/3 inside the gap before the copy).
         para = "Sentence one here. " * 13  # ~247 chars, one paragraph, no newline
         text = f"## A\n{para}\n\n{para}\n\n{para}"
-        chunks = chunk_markdown(text, max_chunk_chars=300)
+        chunks = chunk_markdown(text, max_chunk_chars=300, input_max_chars=EMBEDDING_INPUT_MAX_CHARS)
         assert len(chunks) == 3
         starts = [c.offset_start for c in chunks]
         assert starts == sorted(starts)  # strictly increasing
@@ -101,7 +106,7 @@ class TestChunkMarkdown:
         # chunker (split on \n\n only) produced a single oversized chunk and the
         # provider rejected it, so the whole document stayed out of the index.
         text = "word " * 4000  # 20k chars, single line, no newline
-        chunks = chunk_markdown(text, max_chunk_chars=3000)
+        chunks = chunk_markdown(text, max_chunk_chars=3000, input_max_chars=EMBEDDING_INPUT_MAX_CHARS)
         assert len(chunks) > 1
         for c in chunks:
             assert len(c.content) <= EMBEDDING_INPUT_MAX_CHARS
@@ -112,17 +117,27 @@ class TestChunkMarkdown:
         # includes the \n\n separators BETWEEN the leaves — exceeded the hard ceiling.
         # The packer now bounds by span width (leaves[j].end - leaves[i].start).
         text = "## A\n" + ("x\n\n" * 3000)  # 3000 one-char paragraphs, wide separators
-        chunks = chunk_markdown(text, max_chunk_chars=3000)
+        chunks = chunk_markdown(text, max_chunk_chars=3000, input_max_chars=EMBEDDING_INPUT_MAX_CHARS)
         assert len(chunks) > 1  # must split — must NOT collapse to one 8998-char chunk
         for c in chunks:
             assert len(c.content) <= EMBEDDING_INPUT_MAX_CHARS
+
+    def test_soft_target_above_ceiling_is_capped_at_ceiling(self):
+        # Both limits are live admin knobs, so an operator can set the chunk size
+        # above the input ceiling; a paragraph that fits the soft target must still
+        # be split to the ceiling, or the provider rejects the chunk (HTTP 400).
+        text = "\n\n".join(f"Paragraph {i}. " + "word " * 500 for i in range(4))
+        chunks = chunk_markdown(text, max_chunk_chars=3000, input_max_chars=1000)
+        assert len(chunks) > 1
+        for c in chunks:
+            assert len(c.content) <= 1000
 
     def test_sentence_level_split(self):
         # A single paragraph longer than the soft target splits at sentence
         # boundaries (descends past \n\n / \n to [.!?] + space).
         sent = "This is a clear sentence. "  # 26 chars
         text = "## A\n" + sent * 100  # ~2600 chars, no newline
-        chunks = chunk_markdown(text, max_chunk_chars=300)
+        chunks = chunk_markdown(text, max_chunk_chars=300, input_max_chars=EMBEDDING_INPUT_MAX_CHARS)
         assert len(chunks) > 1
         for c in chunks:
             assert len(c.content) <= EMBEDDING_INPUT_MAX_CHARS
@@ -138,7 +153,7 @@ class TestChunkMarkdown:
         # label alternated on/off down a long section. It must appear ONCE.
         para = "Body content line. " * 30  # ~600 chars → forces a split under 300
         text = f"## Only\n{para}"
-        chunks = chunk_markdown(text, max_chunk_chars=300)
+        chunks = chunk_markdown(text, max_chunk_chars=300, input_max_chars=EMBEDDING_INPUT_MAX_CHARS)
         assert len(chunks) >= 3
         assert chunks[0].heading == "## Only"
         # Every subsequent chunk in THIS section inherits None (no alternation).
@@ -152,7 +167,7 @@ class TestChunkMarkdown:
         # minimum merges into the previous chunk rather than standing alone.
         body = "x" * 600
         text = f"## A\n{body}\n\nhi"  # a 2-char trailing paragraph
-        chunks = chunk_markdown(text, max_chunk_chars=300)
+        chunks = chunk_markdown(text, max_chunk_chars=300, input_max_chars=EMBEDDING_INPUT_MAX_CHARS)
         # The "hi" tail must not survive as its own sub-minimum chunk.
         assert all(len(c.content) >= 50 for c in chunks)
 
@@ -163,7 +178,7 @@ class TestChunkMarkdown:
         # contract; the minimum size is only a quality preference, so the ceiling wins
         # and the tiny tail survives as its own (sub-minimum) chunk.
         text = "A" * 16000 + " tail."  # no separators except the space before 'tail'
-        chunks = chunk_markdown(text)
+        chunks = chunk_markdown(text, **_LIMITS)
         assert chunks
         for c in chunks:
             assert len(c.content) <= EMBEDDING_INPUT_MAX_CHARS, (
@@ -181,7 +196,7 @@ class TestChunkMarkdown:
             "```python\n# not a heading\nx = 1\n```\n\n"
             "After code."
         )
-        chunks = chunk_markdown(text)
+        chunks = chunk_markdown(text, **_LIMITS)
         headings = [c.heading for c in chunks if c.heading]
         assert headings == ["## Real"]
         # The fenced "# not a heading" must not become chunk content's heading.
@@ -191,7 +206,7 @@ class TestChunkMarkdown:
         # The chunker requests H1–H6 from extract_headings (max_level=6), so an H5
         # opens its own section. Guards that the depth is not silently capped at H4.
         text = "## H2\nbody\n##### H5\nh5 body"
-        chunks = chunk_markdown(text)
+        chunks = chunk_markdown(text, **_LIMITS)
         assert any(c.heading == "##### H5" for c in chunks)
 
     # ── S2: strip transclusion embed nodes from chunk text (D6) ──
@@ -205,7 +220,7 @@ class TestChunkMarkdown:
             "See the embedded part ![section](doc:abc-123) inline.\n\n"
             "And a real image ![pic](https://example.com/x.png) here."
         )
-        chunks = chunk_markdown(text)
+        chunks = chunk_markdown(text, **_LIMITS)
         joined = "\n".join(c.content for c in chunks)
         assert "doc:abc-123" not in joined
         assert "![section](doc:abc-123)" not in joined
@@ -221,7 +236,7 @@ class TestChunkMarkdown:
         from markdown_chunker import _strip_transclusions
 
         text = "## A\nBefore ![t](ref:r1) after."
-        chunks = chunk_markdown(text)
+        chunks = chunk_markdown(text, **_LIMITS)
         assert chunks
         for c in chunks:
             assert 0 <= c.offset_start <= c.offset_end <= len(text)
@@ -234,7 +249,7 @@ class TestChunkMarkdown:
         # padding whitespace. Tightening to the post-.strip() bounds is the computable
         # part; interior transclusion nodes remain in the span as the accepted residual.
         text = "## A\n\n   indented body."
-        chunks = chunk_markdown(text)
+        chunks = chunk_markdown(text, **_LIMITS)
         body = [c for c in chunks if "indented" in c.content]
         assert body, "expected a chunk carrying the indented body"
         c = body[0]
@@ -320,7 +335,7 @@ class TestAncestorStack:
 
     def test_heading_path_nested(self):
         text = "# Top\ntop body.\n## Mid\nmid body.\n### Deep\ndeep body."
-        chunks = chunk_markdown(text)
+        chunks = chunk_markdown(text, **_LIMITS)
         by_heading = {c.heading: c for c in chunks if c.heading}
         assert by_heading["# Top"].heading_path == ("Top",)
         assert by_heading["## Mid"].heading_path == ("Top", "Mid")
@@ -329,7 +344,7 @@ class TestAncestorStack:
     def test_heading_path_resets_on_sibling(self):
         # An H1 after an H2 must NOT carry the earlier H2 — the stack pops on level.
         text = "# A\na body.\n## B\nb body.\n# C\nc body."
-        chunks = chunk_markdown(text)
+        chunks = chunk_markdown(text, **_LIMITS)
         by_heading = {c.heading: c for c in chunks if c.heading}
         assert by_heading["# A"].heading_path == ("A",)
         assert by_heading["## B"].heading_path == ("A", "B")
@@ -337,7 +352,7 @@ class TestAncestorStack:
 
     def test_preamble_chunk_has_empty_path(self):
         text = "Intro with no heading.\n\n## First\nbody."
-        chunks = chunk_markdown(text)
+        chunks = chunk_markdown(text, **_LIMITS)
         preamble = [c for c in chunks if c.heading is None]
         assert preamble and preamble[0].heading_path == ()
 

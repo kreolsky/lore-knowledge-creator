@@ -461,7 +461,7 @@ def _dedupe_semantic_hits(hits, allowed: set[str] | None) -> list[dict]:
 
 
 async def _retrieve_semantic_result(
-    *, project_id: str, query: str, history: list | None,
+    *, project_id: str, query: str,
     corpus: str, k: int,
     allowed: set[str] | None,
 ):
@@ -481,22 +481,15 @@ async def _retrieve_semantic_result(
     # single-raw-kind values, so the kind gate runs in SQL here and no second
     # post-filter layer can drift against it.
     """
-    from config import (
-        RETRIEVAL_BUDGET_TOKENS_DOCS,
-        RETRIEVAL_BUDGET_TOKENS_REFS,
-    )
     from retrieval import retrieve_context
 
     include_docs, include_refs, include_memory = _CORPUS_FLAGS[corpus]
     return await retrieve_context(
         project_id=project_id,
         user_query=query,
-        history=list(history) if history else [],
         include_documents=include_docs,
         include_references=include_refs,
         include_memory=include_memory,
-        token_budget_docs=RETRIEVAL_BUDGET_TOKENS_DOCS,
-        token_budget_refs=RETRIEVAL_BUDGET_TOKENS_REFS,
         top_k_docs=k,
         top_k_refs=k,
         allowed_doc_ids=allowed,
@@ -504,7 +497,7 @@ async def _retrieve_semantic_result(
 
 
 async def _semantic_layer(
-    *, project_id: str, query: str, history: list | None,
+    *, project_id: str, query: str,
     corpus: str, k: int,
     allowed: set[str] | None, warnings: list[str],
 ) -> list[dict]:
@@ -516,7 +509,7 @@ async def _semantic_layer(
     """
     try:
         result = await _retrieve_semantic_result(
-            project_id=project_id, query=query, history=history,
+            project_id=project_id, query=query,
             corpus=corpus, k=k,
             allowed=allowed,
         )
@@ -573,10 +566,6 @@ async def _assemble_search_result(
 
 # ─── Two-layer search — the orchestrator's ARCH notes ─────────────────────────
 #
-# ARCH: `history` is threaded into retrieve_context so _rewrite_query (gated by
-# CHAT_QUERY_REWRITE_ENABLED) can normalize the raw query using conversational
-# turns. Default [] = raw query (back-compat).
-#
 # ARCH: search ranks WITHOUT an anchor — rank_rows is called with anchor_id=None,
 # so ranking is tier → recency (the no-anchor branch). An anchor tier was
 # evaluated and deliberately NOT wired: memory facts live under
@@ -617,7 +606,6 @@ async def _search_materials_exec(
     query: str,
     corpus: str = "all",
     k: int = 5,
-    history: list | None = None,
     scope_root: str | None = None,
     under_document_id: str | None = None,
     mode: str = "semantic",
@@ -649,7 +637,7 @@ async def _search_materials_exec(
     semantic: list[dict] = []
     if not exact:
         semantic = await _semantic_layer(
-            project_id=project_id, query=query, history=history,
+            project_id=project_id, query=query,
             corpus=corpus, k=k,
             allowed=allowed, warnings=warnings,
         )
@@ -685,7 +673,6 @@ async def search_materials_tool(
     query: str,
     corpus: str = "all",
     k: int = 5,
-    history: list | None = None,
     scope_root: str | None = None,
     under_document_id: str | None = None,
     mode: str = "semantic",
@@ -697,7 +684,6 @@ async def search_materials_tool(
         query=query,
         corpus=corpus,
         k=k,
-        history=history,
         scope_root=scope_root,
         under_document_id=under_document_id,
         mode=mode,

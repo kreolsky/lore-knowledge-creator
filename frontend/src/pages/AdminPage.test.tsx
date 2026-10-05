@@ -330,7 +330,7 @@ describe('AdminPage — sections (initial = Users)', () => {
     const rows = Array.from(aside()!.querySelectorAll('button.doc-item'));
     expect(rows.map(r => r.textContent)).toEqual([
       'Users', 'Projects', 'Info', 'Embeddings',
-      'Models & APIs', 'Search', 'Tools', 'Agent', 'Storage & Jobs', 'Skills',
+      'Models & APIs', 'Search', 'Agent', 'Tools', 'Storage & Jobs', 'Skills',
     ]);
     expect(rows[0].classList.contains('active')).toBe(true);
     expect(container.querySelector('.left-bar-tab')).toBeNull();

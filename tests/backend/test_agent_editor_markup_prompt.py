@@ -14,7 +14,7 @@ so a substring twin of it is strictly weaker and just fails a second time.
 import pathlib
 import re
 
-from agent_config import BOOTSTRAP_SYSTEM_PROMPT
+from agent_config import DEFAULT_BOOTSTRAP_PROMPT
 
 from transclusion_grammar import _EMBED_FORMS, SCHEME_TABLE, render_embed_schemes
 
@@ -39,7 +39,7 @@ def test_every_embeddable_scheme_reaches_the_prompt_as_a_form_it_can_write():
     reaching the model as a bare prefix.
     """
     rendered = render_embed_schemes()
-    assert rendered in BOOTSTRAP_SYSTEM_PROMPT
+    assert rendered in DEFAULT_BOOTSTRAP_PROMPT
     for prefix, is_transclusion, _ in SCHEME_TABLE:
         if not is_transclusion:
             continue
@@ -130,6 +130,6 @@ def _palette_from_css() -> list[tuple[str, str]]:
 
 def test_each_palette_color_is_named_in_the_bootstrap():
     for name, hexval in _palette_from_css():
-        assert f"#{hexval}" in BOOTSTRAP_SYSTEM_PROMPT, (
+        assert f"#{hexval}" in DEFAULT_BOOTSTRAP_PROMPT, (
             f"palette color {name} (#{hexval}) from index.css is not named in the bootstrap"
         )

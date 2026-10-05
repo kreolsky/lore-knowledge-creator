@@ -23,12 +23,7 @@ import settings
 from agent_config_seed import is_help_doc_id
 from markdown_chunker import Chunk, _breadcrumb_text, _chunk_hash, chunk_markdown
 
-from config import (
-    EMBEDDING_CONCURRENCY,
-    EMBEDDING_TIMEOUT_S,
-    MEMORY_MERGE_CANDIDATE_MIN_SCORE,
-    MEMORY_MERGE_CANDIDATES,
-)
+from config import EMBEDDING_CONCURRENCY
 from db import get_db, run_in_transaction
 from event_bus import emit as _bus_emit
 from event_bus import on as _bus_on
@@ -60,20 +55,22 @@ async def _ensure_config() -> str:
 _embed_semaphore = asyncio.Semaphore(EMBEDDING_CONCURRENCY)
 
 # The embedding API client is the shared pool's "embeddings" entry
-# (SYSTEM: http-clients), built with EMBEDDING_TIMEOUT_S — reused across
-# requests so the connection pool / keep-alive survives instead of being
-# rebuilt per call. Closed at shutdown by both the web lifespan (main.py) and
-# the worker (_on_worker_shutdown), since embed_texts runs in both processes.
+# (SYSTEM: http-clients) — reused across requests so the connection pool /
+# keep-alive survives instead of being rebuilt per call. EMBEDDING_TIMEOUT_S
+# rides each request as `timeout=`: the pool applies a build-time timeout
+# only once, so a live override would otherwise never reach the client.
+# Closed at shutdown by both the web lifespan (main.py) and the worker
+# (_on_worker_shutdown), since embed_texts runs in both processes.
 
 
 async def embed_texts(
     texts: list[str], *, instruction: str | None = None,
 ) -> list[list[float]]:
-    """Embed `texts`. Pass `instruction` ONLY for a query (Qwen3-Embedding asymmetric
-    format: `Instruct: …\\nQuery: …`); documents are embedded PLAIN.
+    """Embed `texts`. Pass `instruction` ONLY for a query (asymmetric embedding
+    format, shared by giga/480m and Qwen3: `Instruct: …\\nQuery: …`); documents are embedded PLAIN.
 
     INVARIANT: `instruction` is opt-in per call site, never a default. A blanket prefix
-    here would poison every stored document vector.  Why: Qwen3-Embedding is asymmetric — documents embed PLAIN, only queries take the prefix; defaulting it here corrupts every stored vector. The four callers:
+    here would poison every stored document vector.  Why: the embedding model is asymmetric — documents embed PLAIN, only queries take the prefix; defaulting it here corrupts every stored vector. The four callers:
       _reembed (documents)            -> no instruction
       retrieval.py (the user query)   -> instruction=RETRIEVAL_QUERY_INSTRUCTION
       memory/_candidates.py (a body)  -> no instruction (it is a document, not a question)
@@ -85,13 +82,14 @@ async def embed_texts(
     api_key = await settings.get("EMBEDDING_API_KEY")
     model = await settings.get("EMBEDDING_MODEL")
     batch_size = await settings.get("EMBEDDING_BATCH_SIZE")
+    timeout_s = await settings.get("EMBEDDING_TIMEOUT_S")
 
     # Apply the query instruction per-input, only when explicitly requested.
     payload_inputs = (
         [f"Instruct: {instruction}\nQuery: {t}" for t in texts] if instruction else texts
     )
     results: list[list[float]] = []
-    client = http_clients.get_http_client("embeddings", timeout=EMBEDDING_TIMEOUT_S)
+    client = http_clients.get_http_client("embeddings", timeout=timeout_s)
     for i in range(0, len(payload_inputs), batch_size):
         batch = payload_inputs[i:i + batch_size]
         async with _embed_semaphore:
@@ -102,6 +100,7 @@ async def embed_texts(
                     "Content-Type": "application/json",
                 },
                 json={"model": model, "input": batch},
+                timeout=timeout_s,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -329,7 +328,11 @@ async def _reembed(entity_type: str, entity_id: str, project_id: str) -> None:
     version = parent.get("content_version", 0)
     title = parent.get("title") or ""
 
-    chunks = chunk_markdown(content)
+    chunks = chunk_markdown(
+        content,
+        max_chunk_chars=await settings.get("RETRIEVAL_CHUNK_MAX_CHARS"),
+        input_max_chars=await settings.get("EMBEDDING_INPUT_MAX_CHARS"),
+    )
     if not chunks:
         await _drop_all_chunks(db, entity_id)
         return
@@ -631,7 +634,7 @@ _bus_on("content_flushed", _on_content_flushed)
 async def nearest_memory_facts(
     *, project_id: str, query_vec: list[float],
     exclude: tuple[str, ...] = (),
-    limit: int = MEMORY_MERGE_CANDIDATES,
+    limit: int | None = None,
 ) -> list[dict]:
     """Top-N memory entities whose stored chunks are nearest to `query_vec` (cosine).
 
@@ -642,6 +645,9 @@ async def nearest_memory_facts(
     # next to an existing one; an empty list falls back to the flat `memory_index`,
     # which is the pre-candidate behaviour — degraded, not broken.
     """
+    if limit is None:
+        limit = await settings.get("MEMORY_MERGE_CANDIDATES")
+    min_score = await settings.get("MEMORY_MERGE_CANDIDATE_MIN_SCORE")
     try:
         db = await get_db()
         ranked = await _rank_memory_chunks(db, project_id, query_vec, exclude, limit * 4)
@@ -654,7 +660,7 @@ async def nearest_memory_facts(
     # Collapse to the BEST chunk per entity, drop the host + sub-floor noise, cap.
     best: dict[str, float] = {}
     for doc_id, score in ranked:
-        if doc_id in excluded or score < MEMORY_MERGE_CANDIDATE_MIN_SCORE:
+        if doc_id in excluded or score < min_score:
             continue
         if doc_id not in best or score > best[doc_id]:
             best[doc_id] = score

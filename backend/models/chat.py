@@ -165,7 +165,7 @@ class CompletionRequest(BaseModel):
     # prepare_agent_turn). There is no per-request persona override — the session
     # is the single source of truth for selection.
     # ARCH: search is now the agent's on-demand search_materials tool (model decides,
-    # or user says "поищи в…"), with a model-formed + history-normalized query. The
+    # or user says "поищи в…"), with a model-formed query. The
     # per-turn forced semantic injection + the docs/refs toggle booleans were removed
     # — the `corpus` switch lives on the tool args instead.
     # ARCH: Primary document/reference must be explicitly included in context_ids

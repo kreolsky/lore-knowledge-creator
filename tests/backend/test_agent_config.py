@@ -18,7 +18,7 @@ from agent.apply_policy import resolve_apply_mode
 from agent_config import (
     _DEFAULT_KNOWLEDGE,
     _DEFAULT_RULES,
-    BOOTSTRAP_SYSTEM_PROMPT,
+    DEFAULT_BOOTSTRAP_PROMPT,
     PROTECTED_SYSTEM_ROLES,
     SYSTEM_DOC_ROLES,
     build_agent_system_prompt,
@@ -151,8 +151,8 @@ async def test_ensure_resurrects_soft_deleted_folder_preserving_content(
 def test_build_prompt_has_immutable_bootstrap_tier():
     """The bootstrap tier is injected from CODE (immutable) — the agent can never
     edit it, only the persona/rules/skills docs beneath it (plan §3.4 edit tiers)."""
-    prompt = build_agent_system_prompt({})
-    assert prompt.startswith(BOOTSTRAP_SYSTEM_PROMPT)
+    prompt = build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT, {})
+    assert prompt.startswith(DEFAULT_BOOTSTRAP_PROMPT)
 
 
 def test_build_prompt_assembles_selected_persona_and_rules():
@@ -162,7 +162,7 @@ def test_build_prompt_assembles_selected_persona_and_rules():
         {"id": "p1", "title": "Editor", "content": "You are a careful editor."},
         {"id": "p2", "title": "Coder", "content": "You are a terse coder."},
     ]
-    prompt = build_agent_system_prompt(
+    prompt = build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT,
         {"personas": personas,
          "rules_folder": {"id": "rf", "title": "Rules", "content": "Always confirm."},
          "rules_children": [{"id": "r1", "title": "Extra", "content": "Be brief."}]},
@@ -178,7 +178,7 @@ def test_build_prompt_null_selected_injects_no_persona_section():
     """No persona selected (Default) → no # Persona section at all, even when
     personas exist in the subtree."""
     personas = [{"id": "p1", "title": "Editor", "content": "You are a careful editor."}]
-    prompt = build_agent_system_prompt({"personas": personas}, selected_persona_id=None)
+    prompt = build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT, {"personas": personas}, selected_persona_id=None)
     assert "# Persona" not in prompt
     assert "You are a careful editor." not in prompt
 
@@ -187,7 +187,7 @@ def test_build_prompt_unknown_selected_persona_injects_none():
     """A selected_persona_id that matches no persona child injects nothing (guards
     a stale id pointing at a deleted doc)."""
     personas = [{"id": "p1", "title": "Editor", "content": "You are a careful editor."}]
-    prompt = build_agent_system_prompt({"personas": personas}, selected_persona_id="ghost-id")
+    prompt = build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT, {"personas": personas}, selected_persona_id="ghost-id")
     assert "# Persona" not in prompt
 
 
@@ -195,7 +195,7 @@ def test_build_prompt_emits_knowledge_section_when_content_present():
     """Knowledge is a folder-held subtree: the folder's own content renders under a
     `## title (append new here) (id: …)` header, every descendant under
     `## title (id: …)`, so content↔id is mappable for revisions."""
-    prompt = build_agent_system_prompt({
+    prompt = build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT, {
         "knowledge_folder": {"id": "kf", "title": "Knowledge", "content": "Prefers metric units."},
         "knowledge_children": [{"id": "k2", "title": "Notes", "content": "Uses British spelling."}],
     })
@@ -207,7 +207,7 @@ def test_build_prompt_emits_knowledge_section_when_content_present():
 
 
 def test_build_prompt_omits_knowledge_section_when_empty():
-    prompt = build_agent_system_prompt({"knowledge_folder": {"id": "kf", "title": "Knowledge", "content": ""}})
+    prompt = build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT, {"knowledge_folder": {"id": "kf", "title": "Knowledge", "content": ""}})
     assert "# Knowledge" not in prompt
 
 
@@ -215,7 +215,7 @@ def test_build_prompt_folder_is_append_target_no_footer():
     """The folder (always exists, protected from deletion) is the append target —
     its header carries `(append new here)`. The legacy `# Your configuration`
     footer and the duplicate seeded canonical child are both gone."""
-    prompt = build_agent_system_prompt({
+    prompt = build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT, {
         "rules_folder": {"id": "rf", "title": "Rules", "content": "Some rules."},
         "rules_children": [{"id": "r1", "title": "Extra", "content": "More."}],
         "knowledge_folder": {"id": "kf", "title": "Knowledge", "content": "Some fact."},
@@ -237,7 +237,7 @@ def test_build_prompt_folder_is_append_target_no_footer():
 def test_build_prompt_each_node_carries_id_header_only_folder_marked():
     """Per-node `## title (id: …)` headers make content↔id mappable; only the
     folder carries the append marker (deterministic append target per turn)."""
-    prompt = build_agent_system_prompt({
+    prompt = build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT, {
         "rules_folder": {"id": "rf", "title": "Rules", "content": "Be concise."},
         "rules_children": [
             {"id": "r1", "title": "Core", "content": "Metric units."},
@@ -252,7 +252,7 @@ def test_build_prompt_each_node_carries_id_header_only_folder_marked():
 
 
 def test_build_prompt_omits_your_configuration_block_when_docs_missing():
-    prompt = build_agent_system_prompt({})
+    prompt = build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT, {})
     assert "# Your configuration" not in prompt
 
 
@@ -286,7 +286,7 @@ def test_build_prompt_skills_without_frontmatter_are_not_inlined():
     in the prompt NOR as an inlined body — the catalog is published by dsh's tool-skill.
     Only frontmatter skills join <available_skills> (see
     test_build_prompt_renders_available_skills_index_not_bodies)."""
-    prompt = build_agent_system_prompt({
+    prompt = build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT, {
         "skills_folder": {"id": "sf", "title": "Skills", "content": ""},
         "skills_children": [
             {"id": "s1", "title": "Summarize", "content": "How to summarize a document."},
@@ -302,14 +302,14 @@ def test_build_prompt_skills_without_frontmatter_are_not_inlined():
 
 def test_build_prompt_omits_skills_section_when_empty():
     """Empty skills folder + no descendants → no # Skills section."""
-    prompt = build_agent_system_prompt({"skills_folder": {"id": "sf", "title": "Skills", "content": ""}})
+    prompt = build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT, {"skills_folder": {"id": "sf", "title": "Skills", "content": ""}})
     assert "# Skills" not in prompt
 
 
 def test_build_prompt_injects_whole_subtree_any_depth():
     """Pure-fn contract: every descendant at ANY depth injects (tree = organization
     only). A grandchild nested two levels under the folder still renders."""
-    prompt = build_agent_system_prompt({
+    prompt = build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT, {
         "rules_folder": {"id": "rf", "title": "Rules", "content": "FOLDER-CONTENT"},
         "rules_children": [
             {"id": "r1", "title": "Child", "content": "CHILD-CONTENT"},
@@ -343,7 +343,7 @@ async def test_build_for_project_uses_selected_persona(client, test_db, project_
     })
     prompt = (await build_prompt_and_skill_docs(pid, selected_persona_id=persona_id))[0]
     assert "Persona-from-editable-doc." in prompt
-    assert prompt.startswith(BOOTSTRAP_SYSTEM_PROMPT)
+    assert prompt.startswith(DEFAULT_BOOTSTRAP_PROMPT)
 
     # Default (null selection) injects no persona even though one exists.
     prompt_default = (await build_prompt_and_skill_docs(pid, selected_persona_id=None))[0]
@@ -433,7 +433,7 @@ async def test_persona_is_direct_child_of_folder_positional(client, test_db, pro
     assert "PLAIN-PERSONA-MARKER" in prompt
     # The grandchild's content is NOT injected (personas are not cumulative subtrees).
     assert "GRANDCHILD-UNDER-PERSONA" not in prompt
-    assert prompt.startswith(BOOTSTRAP_SYSTEM_PROMPT)
+    assert prompt.startswith(DEFAULT_BOOTSTRAP_PROMPT)
 
     # Default (null selection) injects no persona even though one exists.
     prompt_default = (await build_prompt_and_skill_docs(pid, selected_persona_id=None))[0]
@@ -708,7 +708,7 @@ def test_build_prompt_skills_section_moved_to_driver_not_in_base():
     NOT by this Python builder. The base system prompt carries NO skills
     section at all — neither an index nor inlined bodies — regardless of what
     the skills subtree holds."""
-    prompt = build_agent_system_prompt({
+    prompt = build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT, {
         "skills_folder": {"id": "sf", "title": "Skills", "content": ""},
         "skills_children": [
             {"id": "s1", "title": "Web", "content": _FRONT_SKILL},
@@ -723,7 +723,7 @@ def test_build_prompt_skills_section_moved_to_driver_not_in_base():
 def test_build_prompt_skills_section_omitted_when_no_valid_skills():
     """No skills section is rendered for an empty skills folder (the driver adds the
     catalog only from the payload's skills wire, which is empty here)."""
-    assert "# Skills" not in build_agent_system_prompt(
+    assert "# Skills" not in build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT,
         {"skills_folder": {"id": "sf", "title": "Skills", "content": ""}}
     )
 
@@ -932,7 +932,7 @@ def test_bootstrap_prompt_names_only_statuses_the_tool_api_returns():
     from pathlib import Path
 
     import routes
-    from agent_config import BOOTSTRAP_SYSTEM_PROMPT
+    from agent_config import DEFAULT_BOOTSTRAP_PROMPT
     routes_dir = Path(routes.__file__).resolve().parent
     sources = list((routes_dir / "tool_api").rglob("*.py"))
     sources += list((routes_dir / "chat" / "agent").glob("*.py"))
@@ -943,7 +943,7 @@ def test_bootstrap_prompt_names_only_statuses_the_tool_api_returns():
     }
     assert emitted, "no Tool-API status literals found — the scan lost its target"
 
-    taught = set(re.findall(r'status:\s*"([a-z_]+)"', BOOTSTRAP_SYSTEM_PROMPT))
+    taught = set(re.findall(r'status:\s*"([a-z_]+)"', DEFAULT_BOOTSTRAP_PROMPT))
     assert taught, "the bootstrap prompt names no tool status — did the contract move?"
     assert taught <= emitted, (
         f"the bootstrap prompt teaches statuses no Tool-API path returns: "

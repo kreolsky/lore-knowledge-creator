@@ -176,7 +176,7 @@ async def test_retrieve_context_flags_per_corpus(
     from agent.search_exec import _retrieve_semantic_result
 
     await _retrieve_semantic_result(
-        project_id="p", query="q", history=None, corpus=corpus, k=5, allowed=None,
+        project_id="p", query="q", corpus=corpus, k=5, allowed=None,
     )
     kwargs = mock.call_args.kwargs
     assert kwargs["include_documents"] is inc_docs

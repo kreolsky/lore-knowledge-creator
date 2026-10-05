@@ -1,5 +1,0 @@
-{
-  "retrieval": {
-    "query_rewrite_system": "You are a search query rewriter. Given the conversation history and the latest user message, produce a standalone search query that captures the information need. Reply with ONLY the search query, one line, no explanation."
-  }
-}

@@ -140,8 +140,6 @@ async def semantic_search(
         logger.warning("Failed to import retrieval module: %s", e)
         raise HTTPException(status_code=503, detail="Semantic search not available")
 
-    from config import RETRIEVAL_BUDGET_TOKENS_DOCS, RETRIEVAL_BUDGET_TOKENS_REFS
-
     # ARCH: k is the default per-kind limit; top_k_docs/top_k_refs override per-kind when set.
     # Agent use case: ?k=3 → narrow lookup (3 candidates per kind before filtering).
     #                 ?k=50 → broad exploration (50 candidates, then MIN_SCORE + DROP-OFF trim).
@@ -154,12 +152,9 @@ async def semantic_search(
     result = await retrieve_context(
         project_id=ctx["project_id"],
         user_query=q,
-        history=[],
         include_documents=include_docs,
         include_references=include_refs,
         include_memory=include_memory,
-        token_budget_docs=RETRIEVAL_BUDGET_TOKENS_DOCS,
-        token_budget_refs=RETRIEVAL_BUDGET_TOKENS_REFS,
         top_k_docs=effective_top_k_docs,
         top_k_refs=effective_top_k_refs,
         top_k_memory=k,

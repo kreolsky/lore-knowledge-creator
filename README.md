@@ -9,7 +9,7 @@
 [![Docker images](https://img.shields.io/badge/images-ghcr.io-2496ED?logo=docker&logoColor=white)](https://github.com/kreolsky?tab=packages&repo_name=lore-knowledge-creator)
 [![Self-hosted](https://img.shields.io/badge/self--hosted-Docker%20Compose-555)](#install)
 
-[Features](#features) · [Install](#install) · [AI agent](#an-ai-agent-that-lives-in-your-project) · [Architecture](#architecture) · [License](#license)
+[Features](#features) · [Install](#install) · [AI agent](#an-ai-agent-that-lives-in-your-project) · [Architecture](#architecture) · [Related projects](#related-projects) · [License](#license)
 
 </div>
 
@@ -208,6 +208,17 @@ flowchart LR
 - **Database**: SurrealDB — documents, links and access rules live in one graph.
 - **Agent**: the agent loop runs in a separate harness service built on [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (vendored as `vendor/dsh`); Lore owns identity, permissions, storage and the tools.
 - The backend is the only authority: every tool call — from the chat, the MCP server or a recorder app — passes the same permission check.
+
+## Tuning search
+
+Semantic search and the agent's retrieval depend on the embedding model and on two cut-offs set under **Admin → Settings → Search** — the score floor and the drop-off ratio. Both are calibrated per model: switch the model and re-derive them. [`scripts/search-tuning/`](scripts/search-tuning/) holds the measurement harness: it runs a fixed query set through the real retrieval, compares models by the rank of the right answer, and reads the cut-offs off the correct answers' scores.
+
+## Related projects
+
+Services Lore is built to run with — each is a separate, self-hosted repository with an OpenAI-compatible API, so Lore needs only a base URL and a key:
+
+- **[LLM API Gateway](https://github.com/kreolsky/llm-api-gateway)** — one endpoint and one key in front of every model: cloud providers and local servers (llama.cpp, local embeddings, speech-to-text) side by side, with per-client access, pricing and usage. Point Lore's AI, embedding and transcription settings at it.
+- **[STT API Server](https://github.com/kreolsky/stt-api-server)** — local speech recognition (Whisper, GigaAM) behind an OpenAI-compatible `/v1/audio/transcriptions`; transcribes Lore's audio references, voice input and recorder-app uploads.
 
 ## Contributing and security
 

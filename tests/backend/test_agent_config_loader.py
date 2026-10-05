@@ -21,7 +21,7 @@ import pathlib
 
 import pytest
 from agent_config import (
-    BOOTSTRAP_SYSTEM_PROMPT,
+    DEFAULT_BOOTSTRAP_PROMPT,
     build_agent_system_prompt,
     build_prompt_and_skill_docs,
     ensure_agent_system_docs,
@@ -298,7 +298,7 @@ def test_build_prompt_reads_uniform_children_keys():
     internal contract with the loader. Rules + Knowledge render inline; Skills does
     NOT (dsh's `tool-skill` publishes the catalog from the payload's skills[],
     so a skill BODY is never in this base string)."""
-    prompt = build_agent_system_prompt({
+    prompt = build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT, {
         "personas": [{"id": "p1", "title": "Ed", "content": "PERSONA-BODY"}],
         "rules_folder": {"id": "rf", "title": "Rules", "content": "RULES-FOLDER"},
         "rules_children": [{"id": "r1", "title": "Extra", "content": "RULES-CHILD"}],
@@ -307,7 +307,7 @@ def test_build_prompt_reads_uniform_children_keys():
         "skills_folder": {"id": "sf", "title": "Skills", "content": ""},
         "skills_children": [{"id": "s1", "title": "S", "content": "SKILL-CHILD"}],
     }, selected_persona_id="p1")
-    assert prompt.startswith(BOOTSTRAP_SYSTEM_PROMPT)
+    assert prompt.startswith(DEFAULT_BOOTSTRAP_PROMPT)
     for marker in ("PERSONA-BODY", "RULES-FOLDER", "RULES-CHILD", "KN-FOLDER", "KN-CHILD"):
         assert marker in prompt
     # Skills bodies leave the base prompt (index-only; delivered on demand via

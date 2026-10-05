@@ -131,8 +131,11 @@ async def _find_twin(
     [] on any query miss, so the fail-open contract holds."""
     import embeddings
 
+    # WHY limit=1: only the top neighbour is compared, and an explicit limit keeps
+    # this gate independent of MEMORY_MERGE_CANDIDATES — set to 0 to stop serving
+    # merge candidates, it must not silently switch the duplicate check off too.
     neighbours = await embeddings.nearest_memory_facts(
-        project_id=project_id, query_vec=query_vec,
+        project_id=project_id, query_vec=query_vec, limit=1,
     )
     if not neighbours:
         return None

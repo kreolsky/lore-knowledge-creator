@@ -109,6 +109,14 @@ LIVE_PROJECTS_SQL = (
 )
 
 
+async def _chunk_limits() -> dict[str, int]:
+    """chunk_markdown's two size limits, resolved the way _reembed resolves them."""
+    return {
+        "max_chunk_chars": await settings.get("RETRIEVAL_CHUNK_MAX_CHARS"),
+        "input_max_chars": await settings.get("EMBEDDING_INPUT_MAX_CHARS"),
+    }
+
+
 async def chunkable_candidates(db, project_id: str | None = None) -> list[dict]:
     """`{id, project_id, is_reference, embedded, failed, stale}` per live
     document that the embedder WOULD chunk — the ONE population every
@@ -133,6 +141,7 @@ async def chunkable_candidates(db, project_id: str | None = None) -> list[dict]:
 
     embedded: set[str] = set(await db.query(EMBEDDED_IDS_SQL) or [])
     model = await settings.get("EMBEDDING_MODEL")
+    limits = await _chunk_limits()
     stale: set[str] = set(
         await db.query(STALE_MODEL_IDS_SQL, {"model": model}) or []
     )
@@ -156,7 +165,7 @@ async def chunkable_candidates(db, project_id: str | None = None) -> list[dict]:
         for r in rows
         # Dead project → not a candidate, whatever the document row says.
         if r["project_id"] in live_projects
-        and chunk_markdown(r.get("content") or "")
+        and chunk_markdown(r.get("content") or "", **limits)
     ]
 
 

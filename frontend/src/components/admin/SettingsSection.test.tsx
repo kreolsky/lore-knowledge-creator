@@ -39,7 +39,7 @@ const ENTRIES = [
   { key: 'CHAT_MODEL', env: 'CHAT_MODEL', tab: 'models', section: 'AI API', type: 'str', label: 'Default chat model', help: 'The model a new session pins.', effect: 'live', min: null, max: null, source: 'override', value: 'gpt-test' },
   { key: 'EMBEDDING_BATCH_SIZE', env: 'EMBEDDING_BATCH_SIZE', tab: 'models', section: 'Embeddings', type: 'int', label: 'Embedding batch size', help: 'Texts per embedding API call.', effect: 'live', min: 1, max: null, source: 'default', value: 16 },
   { key: 'EMBEDDING_CONCURRENCY', env: 'EMBEDDING_CONCURRENCY', tab: 'models', section: 'Embeddings', type: 'int', label: 'Embedding concurrency', help: 'Parallel embedding requests.', effect: 'restart', min: 1, max: null, source: 'default', value: 4 },
-  { key: 'CHAT_QUERY_REWRITE_ENABLED', env: 'CHAT_QUERY_REWRITE_ENABLED', tab: 'models', section: 'Query rewrite', type: 'bool', label: 'Query rewrite on/off', help: 'Off = retrieval embeds the raw user message.', effect: 'live', min: null, max: null, source: 'default', value: true },
+  { key: 'MCP_RUN_EXTRACTOR', env: 'MCP_RUN_EXTRACTOR', tab: 'tools', section: 'MCP gateway', type: 'bool', label: 'Run extractor over MCP', help: 'Lets an MCP key launch the extractor.', effect: 'live', min: null, max: null, source: 'default', value: true },
   { key: 'TURN_TIMEOUT_S', env: 'TURN_TIMEOUT_S', tab: 'agent', section: 'Agent line — the rented harness', type: 'float', label: 'No-progress budget (legacy), s', help: 'Legacy spelling.', effect: 'live', min: 1, max: null, source: 'default', value: 240 },
   // A section config.py aims at TWICE, non-adjacently (the real registry does
   // this for "CRDT / Backplane / Job Queue"): must fold into ONE heading.
@@ -158,9 +158,11 @@ function clickButton(scope: ParentNode, text: string) {
 describe('SettingsSection — layout', () => {
   it("renders only this tab's entries under section sub-headers, in server order", async () => {
     await render('models');
-    expect(sectionTitles()).toEqual(['AI API', 'Embeddings', 'Query rewrite']);
+    expect(sectionTitles()).toEqual(['AI API', 'Embeddings']);
     expect(field('AI_API_URL')).toBeDefined();
-    expect(field('CHAT_QUERY_REWRITE_ENABLED')).toBeDefined();
+    expect(field('EMBEDDING_BATCH_SIZE')).toBeDefined();
+    // The tools-tab entry is filtered out.
+    expect(container.querySelector('[data-setting-key="MCP_RUN_EXTRACTOR"]')).toBeNull();
     // The agent-tab entry is filtered out.
     expect(container.querySelector('[data-setting-key="TURN_TIMEOUT_S"]')).toBeNull();
   });
@@ -196,12 +198,12 @@ describe('SettingsSection — save per type', () => {
   });
 
   it('bool: checkbox + Save PUTs {value: false}', async () => {
-    await render();
-    act(() => { (field('CHAT_QUERY_REWRITE_ENABLED').querySelector('input[type=checkbox]') as HTMLInputElement).click(); });
+    await render('tools');
+    act(() => { (field('MCP_RUN_EXTRACTOR').querySelector('input[type=checkbox]') as HTMLInputElement).click(); });
     apiPut.mockResolvedValueOnce({ ...ENTRIES[5], value: false });
-    clickButton(field('CHAT_QUERY_REWRITE_ENABLED'), 'Save');
+    clickButton(field('MCP_RUN_EXTRACTOR'), 'Save');
     await act(async () => {});
-    expect(apiPut.mock.calls).toEqual([['/admin/settings/CHAT_QUERY_REWRITE_ENABLED', { value: false }]]);
+    expect(apiPut.mock.calls).toEqual([['/admin/settings/MCP_RUN_EXTRACTOR', { value: false }]]);
   });
 
   it('secret: password input prefilled with the mask; unchanged → Save disabled (no PUT); changed → PUTs the typed string', async () => {
@@ -320,21 +322,21 @@ describe('SettingsSection — visible_if', () => {
       settings: ENTRIES.map(e => (e.key === 'WEB_SEARCH_PROVIDER' ? { ...e, value: 'deepseek' } : e)),
     }));
     await render('tools');
-    expect(shownKeys()).toEqual(['WEB_SEARCH_PROVIDER', 'DEEPSEEK_API_KEY']);
+    expect(shownKeys()).toEqual(['MCP_RUN_EXTRACTOR', 'WEB_SEARCH_PROVIDER', 'DEEPSEEK_API_KEY']);
 
     const block = field('WEB_SEARCH_PROVIDER');
     act(() => block.querySelector('button')!.click());
     act(() => (Array.from(block.querySelectorAll('[role="option"]'))[2] as HTMLElement).click());
     // A picked-but-unsaved provider does not move the rows yet.
-    expect(shownKeys()).toEqual(['WEB_SEARCH_PROVIDER', 'DEEPSEEK_API_KEY']);
+    expect(shownKeys()).toEqual(['MCP_RUN_EXTRACTOR', 'WEB_SEARCH_PROVIDER', 'DEEPSEEK_API_KEY']);
     apiPut.mockResolvedValueOnce({ ...ENTRIES[10], source: 'override', value: 'brave' });
     clickButton(block, 'Save');
     await act(async () => {});
-    expect(shownKeys()).toEqual(['WEB_SEARCH_PROVIDER', 'BRAVE_API_KEY']);
+    expect(shownKeys()).toEqual(['MCP_RUN_EXTRACTOR', 'WEB_SEARCH_PROVIDER', 'BRAVE_API_KEY']);
   });
 
   it('off shows no key row at all', async () => {
     await render('tools');
-    expect(shownKeys()).toEqual(['WEB_SEARCH_PROVIDER']);
+    expect(shownKeys()).toEqual(['MCP_RUN_EXTRACTOR', 'WEB_SEARCH_PROVIDER']);
   });
 });

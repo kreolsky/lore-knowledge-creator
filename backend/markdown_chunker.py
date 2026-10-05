@@ -14,10 +14,6 @@ import hashlib
 import re
 from dataclasses import dataclass
 
-from config import (
-    EMBEDDING_INPUT_MAX_CHARS,
-    RETRIEVAL_CHUNK_MAX_CHARS,
-)
 from deps import extract_headings
 from transclusion_grammar import parse_target
 
@@ -25,12 +21,12 @@ from transclusion_grammar import parse_target
 # WHY: recursive separator split. A section is split by progressively finer
 #       separators (paragraph → line → sentence → word) descending ONLY when the
 #       current unit overflows the soft target. A final character-split fallback
-#       guarantees no chunk can exceed EMBEDDING_INPUT_MAX_CHARS, so the embedding
+#       guarantees no chunk can exceed `input_max_chars`, so the embedding
 #       provider can never reject an oversized input string (the ROOT CAUSE:
 #       a one-line transcript became a single 48k chunk and the whole document
 #       stayed out of the index). Offsets are carried POSITIONALLY through the
 #       recursion — never re-located via str.find (which drifts on repeats).
-# INVARIANT: every emitted chunk has len(content) <= EMBEDDING_INPUT_MAX_CHARS.  Why: the recursive char-split fallback above enforces this so the embedding provider never rejects an oversized input.
+# INVARIANT: every emitted chunk has len(content) <= input_max_chars.  Why: the recursive char-split fallback above enforces this so the embedding provider never rejects an oversized input.
 
 
 @dataclass
@@ -74,16 +70,29 @@ _MIN_CHUNK_CHARS = 100      # a sub-minimum trailing chunk merges into its neigh
 _OVERLAP_FRACTION = 0.12    # ~12% of the soft target — whole sentences, not char slices
 
 
-def chunk_markdown(text: str, *, max_chunk_chars: int = RETRIEVAL_CHUNK_MAX_CHARS) -> list[Chunk]:
+def chunk_markdown(
+    text: str, *, max_chunk_chars: int, input_max_chars: int,
+) -> list[Chunk]:
+    """Split `text` into chunks of about `max_chunk_chars` (soft target), none
+    longer than `input_max_chars` (hard ceiling). Callers resolve both from
+    RETRIEVAL_CHUNK_MAX_CHARS / EMBEDDING_INPUT_MAX_CHARS via settings.get —
+    the chunker stays pure (no settings, no DB)."""
     if not text.strip():
         return []
+    # WHY: the soft target is capped at the hard ceiling. Why: both are live admin
+    # knobs, and a leaf that fits the soft target is emitted whole — a target above
+    # the ceiling would emit chunks the provider rejects (HTTP 400).
+    max_chunk_chars = min(max_chunk_chars, input_max_chars)
 
     headings = extract_headings(text, max_level=6)
     sections = _build_sections(text, headings)
 
     chunks: list[Chunk] = []
     for heading_label, heading_path, s_start, s_end in sections:
-        _chunk_section(text, s_start, s_end, heading_label, heading_path, max_chunk_chars, chunks)
+        _chunk_section(
+            text, s_start, s_end, heading_label, heading_path,
+            max_chunk_chars, input_max_chars, chunks,
+        )
 
     for i, c in enumerate(chunks):
         c.ord = i
@@ -144,16 +153,16 @@ def _build_sections(
 def _chunk_section(
     text: str, s_start: int, s_end: int,
     heading_label: str | None, heading_path: tuple[str, ...],
-    max_chars: int, result: list[Chunk],
+    max_chars: int, hard_max: int, result: list[Chunk],
 ) -> None:
     # Skip empty sections (e.g. a heading immediately followed by another heading).
     if text[s_start:s_end].strip() == "":
         return
 
     # Recursive split into leaf spans, each <= max_chars (or a hard char-split
-    # piece <= EMBEDDING_INPUT_MAX_CHARS). Leaves carry absolute offsets.
+    # piece <= hard_max). Leaves carry absolute offsets.
     leaves: list[tuple[int, int]] = []
-    _split_into_leaves(text, s_start, s_end, max_chars, EMBEDDING_INPUT_MAX_CHARS, leaves)
+    _split_into_leaves(text, s_start, s_end, max_chars, hard_max, leaves)
     if not leaves:
         return
 
@@ -180,7 +189,7 @@ def _chunk_section(
         nxt = _overlap_start(leaves, i, j, overlap_chars)
         i = nxt if nxt > i else j
 
-    _merge_tiny_tail(spans, _MIN_CHUNK_CHARS, EMBEDDING_INPUT_MAX_CHARS)
+    _merge_tiny_tail(spans, _MIN_CHUNK_CHARS, hard_max)
     _emit_chunks(text, spans, heading_label, heading_path, result)
 
 

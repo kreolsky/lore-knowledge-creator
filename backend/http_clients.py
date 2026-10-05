@@ -3,7 +3,7 @@
 # SYSTEM: http-clients — the per-site httpx pool: one factory, one close, both processes
 #
 # ARCH: one pool, one factory — no module keeps its own httpx singleton.
-# `name` is the SITE ("transcription", "embeddings", "retrieval", "docx",
+# `name` is the SITE ("transcription", "embeddings", "docx",
 # "media", "comfy", "comfy_prompt", "models_catalog", "driver"); `timeout` is
 # the only per-site parameter.
 #

@@ -17,7 +17,7 @@ copy of either.
 
 import agent_skills
 from agent.tools import agent_toolset
-from agent_config import BOOTSTRAP_SYSTEM_PROMPT
+from agent_config import DEFAULT_BOOTSTRAP_PROMPT
 from helpers import skill_frontmatter
 
 _CONTENT = (agent_skills.CONFIGS_DIR / "skill_sandbox.md").read_text(encoding="utf-8").strip()
@@ -87,7 +87,7 @@ def test_bootstrap_promises_no_packed_tool_by_name():
     bootstrap rather than leaving a stale literal behind."""
     assert _SKILL is not None
     for packed in _SKILL["tools"]:
-        assert packed not in BOOTSTRAP_SYSTEM_PROMPT, (
+        assert packed not in DEFAULT_BOOTSTRAP_PROMPT, (
             f"bootstrap names packed tool {packed!r} — it is not callable until the "
             "sandbox skill is activated; point at the skill instead"
         )

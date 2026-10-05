@@ -1,0 +1,4 @@
+# Snapshots are local measurement artifacts, not source.
+# They embed verbatim document content from whatever corpus was probed, and any of them
+# is regenerated in seconds by run.sh; the corpus_fingerprint is what makes a re-run comparable.
+snapshots/

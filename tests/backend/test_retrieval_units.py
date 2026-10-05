@@ -243,8 +243,8 @@ class TestFetchModelPredicateRealRows:
 
         monkeypatch.setattr(retrieval, "embed_texts", _embed)
         result = await retrieval.retrieve_context(
-            pid, "row", [], include_documents=True, include_references=False,
-            include_memory=False, top_k_docs=10,
+            pid, "row", include_documents=True, include_references=False,
+            include_memory=False, top_k_docs=10, top_k_refs=10,
         )
         snippets = [h.snippet for h in result.hits]
         try:
@@ -264,11 +264,12 @@ class TestFetchModelPredicateRealRows:
 class TestClassifyChunkHits:
     def _classify(self, rows, meta, **kw):
         from retrieval import _classify_chunk_hits
-        # min_score resolves HERE (config read at call time, so the patch
-        # contexts below shape it) — the production caller resolves it through
+        # min_score and max_per_doc resolve HERE (config read at call time, so
+        # the patch contexts below shape them) — the production caller resolves it through
         # settings.get instead.
         include = {"include_documents": True, "include_references": True,
-                   "include_memory": True, "min_score": config.RETRIEVAL_MIN_SCORE}
+                   "include_memory": True, "min_score": config.RETRIEVAL_MIN_SCORE,
+                   "max_per_doc": config.RETRIEVAL_MAX_PER_DOC}
         include.update(kw)
         return _classify_chunk_hits(rows, meta, **include)
 
@@ -317,7 +318,7 @@ class TestClassifyChunkHits:
     def test_anti_monopoly_caps_chunks_per_document(self):
         meta = {"d1": _meta("Doc")}
         rows = [_row("d1", 0.9 - i * 0.01) for i in range(5)]
-        with patch("retrieval.RETRIEVAL_MAX_PER_DOC", 2):
+        with patch.object(config, "RETRIEVAL_MAX_PER_DOC", 2):
             doc, ref, mem = self._classify(rows, meta)
         assert len(doc) == 2
         assert [h.score for h in doc] == [0.9, 0.89]  # keeps the strongest

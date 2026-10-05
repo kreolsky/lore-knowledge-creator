@@ -1,13 +1,12 @@
 """Unit tests for retrieval pipeline — mocked DB and embedding API."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import config
 from embeddings import EmbeddingConfigError
 from retrieval import (
     RetrievalResult,
     _apply_drop_off,
-    _rewrite_query,
     retrieve_context,
 )
 
@@ -21,7 +20,7 @@ class TestRetrieveContext:
         mock_db.query = AsyncMock(return_value=[])
         mock_get_db.return_value = mock_db
 
-        result = await retrieve_context("proj1", "query", [], include_documents=True, include_references=True)
+        result = await retrieve_context("proj1", "query", top_k_docs=8, top_k_refs=8, include_documents=True, include_references=True)
         assert isinstance(result, RetrievalResult)
         assert result.hits == []
 
@@ -42,13 +41,13 @@ class TestRetrieveContext:
         # include_memory=False: the fetch is ONE query per switched-on kind, so
         # the canned side_effect maps 1:1 (document scan → parent-meta join).
         # This test exercises doc-hit assembly, not memory.
-        result = await retrieve_context("proj1", "query", [], include_documents=True,
+        result = await retrieve_context("proj1", "query", top_k_docs=8, top_k_refs=8, include_documents=True,
                                         include_references=False, include_memory=False)
         assert len(result.hits) == 1
         assert result.hits[0].parent_id == "d1"
         assert result.hits[0].kind == "document"
 
-    @patch("retrieval.RETRIEVAL_MAX_PER_DOC", 2)
+    @patch.object(config, "RETRIEVAL_MAX_PER_DOC", 2)
     @patch("retrieval.embed_texts", new_callable=AsyncMock)
     @patch("retrieval.get_db", new_callable=AsyncMock)
     async def test_retrieve_anti_monopoly(self, mock_get_db, mock_embed):
@@ -65,12 +64,12 @@ class TestRetrieveContext:
         ])
         mock_get_db.return_value = mock_db
 
-        result = await retrieve_context("proj1", "query", [], include_documents=True,
+        result = await retrieve_context("proj1", "query", top_k_docs=8, top_k_refs=8, include_documents=True,
                                         include_references=False, include_memory=False)
         doc_hits = [h for h in result.hits if h.kind == "document"]
         assert len(doc_hits) <= 2
 
-    @patch("retrieval.RETRIEVAL_BUDGET_TOKENS_DOCS", 1)
+    @patch.object(config, "RETRIEVAL_BUDGET_TOKENS_DOCS", 1)
     @patch("retrieval.embed_texts", new_callable=AsyncMock)
     @patch("retrieval.get_db", new_callable=AsyncMock)
     async def test_retrieve_token_budget(self, mock_get_db, mock_embed):
@@ -87,7 +86,7 @@ class TestRetrieveContext:
         ])
         mock_get_db.return_value = mock_db
 
-        result = await retrieve_context("proj1", "query", [], include_documents=True,
+        result = await retrieve_context("proj1", "query", top_k_docs=8, top_k_refs=8, include_documents=True,
                                         include_references=False, include_memory=False)
         assert len(result.hits) < 5
 
@@ -106,7 +105,7 @@ class TestRetrieveContext:
         ])
         mock_get_db.return_value = mock_db
 
-        result = await retrieve_context("proj1", "query", [], include_documents=True,
+        result = await retrieve_context("proj1", "query", top_k_docs=8, top_k_refs=8, include_documents=True,
                                         include_references=False, include_memory=False)
         assert len(result.hits) == 0
 
@@ -116,7 +115,7 @@ class TestRetrieveContext:
         # Every include flag false → nothing is retrievable; the embed call and the
         # DB round-trip are pure waste on that path and must not happen.
         result = await retrieve_context(
-            "proj1", "query", [],
+            "proj1", "query", top_k_docs=8, top_k_refs=8,
             include_documents=False, include_references=False, include_memory=False,
         )
         assert result.hits == []
@@ -125,7 +124,7 @@ class TestRetrieveContext:
 
     @patch("retrieval.embed_texts", new_callable=AsyncMock, side_effect=EmbeddingConfigError("no config"))
     async def test_retrieve_config_error(self, mock_embed):
-        result = await retrieve_context("proj1", "query", [], include_documents=True, include_references=True)
+        result = await retrieve_context("proj1", "query", top_k_docs=8, top_k_refs=8, include_documents=True, include_references=True)
         assert result.error == "not_configured"
 
     @patch.object(config, "RETRIEVAL_SCORE_DROP_OFF", 0.7)
@@ -155,7 +154,7 @@ class TestRetrieveContext:
         mock_db.query = AsyncMock(side_effect=[doc_chunks, ref_chunks, parent_meta])
         mock_get_db.return_value = mock_db
 
-        result = await retrieve_context("proj1", "query", [], include_documents=True,
+        result = await retrieve_context("proj1", "query", top_k_docs=8, top_k_refs=8, include_documents=True,
                                         include_references=True, include_memory=False)
         ref_hits = [h for h in result.hits if h.kind == "reference"]
         assert any(h.parent_id == "ref1" for h in ref_hits)
@@ -192,33 +191,3 @@ class TestApplyDropOff:
         with patch.object(config, "RETRIEVAL_SCORE_DROP_OFF", 0.5):
             result = _apply_drop_off(hits, config.RETRIEVAL_SCORE_DROP_OFF)
         assert len(result) == 5
-
-
-class TestQueryRewrite:
-    async def test_query_rewrite_disabled(self):
-        with patch("config.CHAT_QUERY_REWRITE_ENABLED", False):
-            result = await _rewrite_query("hello", [{"role": "user", "content": "hi"}])
-            assert result == "hello"
-
-    async def test_query_rewrite_enabled(self, http_pool):
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "choices": [{"message": {"content": "rewritten query"}}]
-        }
-        mock_resp.raise_for_status = MagicMock()
-        mock_client = AsyncMock()
-        mock_client.post = AsyncMock(return_value=mock_resp)
-        http_pool("retrieval", mock_client)
-
-        with patch("config.CHAT_QUERY_REWRITE_ENABLED", True):
-            result = await _rewrite_query("hello", [{"role": "user", "content": "hi"}])
-            assert result == "rewritten query"
-
-    async def test_query_rewrite_failure(self, http_pool):
-        mock_client = AsyncMock()
-        mock_client.post = AsyncMock(side_effect=Exception("API down"))
-        http_pool("retrieval", mock_client)
-
-        with patch("config.CHAT_QUERY_REWRITE_ENABLED", True):
-            result = await _rewrite_query("hello", [{"role": "user", "content": "hi"}])
-            assert result == "hello"

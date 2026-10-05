@@ -19,7 +19,7 @@ from config import AGENT_FULL_REWRITE_FRACTION
 # ─── Config constants present ───────────────────────────────────────────────
 # plan: remove-ask-line-mode-axis (audit §B): test_multi_tool_system_prompt_loaded
 # asserted on PROMPT_CHAT_AGENT_MULTI_TOOL_SYSTEM_PROMPT — a dead prompt that never
-# reached an agent turn (the live prompt is BOOTSTRAP_SYSTEM_PROMPT in
+# reached an agent turn (the live prompt is the AGENT_BOOTSTRAP_PROMPT setting, in
 # agent_config.py). Deleted with the constant (D7).
 
 
@@ -35,10 +35,10 @@ async def test_selected_persona_injected_exactly_once(client, test_db, project_w
     """The selected persona text appears EXACTLY once in the assembled Pi system
     prompt — never twice (the double-inject bug). build_agent_system_prompt is the
     sole injection point."""
-    from agent_config import build_agent_system_prompt
+    from agent_config import DEFAULT_BOOTSTRAP_PROMPT, build_agent_system_prompt
 
     persona_text = "UNIQUE-PERSONA-MARKER-7c3a"
-    prompt = build_agent_system_prompt(
+    prompt = build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT,
         {
             "personas": [
                 {"id": "p1", "title": "Editor", "content": persona_text},

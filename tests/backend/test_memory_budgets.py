@@ -28,14 +28,13 @@ class _FakeDb:
 
 @pytest.fixture(autouse=True)
 def _tiny_budgets(monkeypatch):
-    monkeypatch.setattr(config, "MEMORY_FACTS_PAGE_CHARS", 100, raising=False)
     monkeypatch.setattr(config, "MEMORY_MERGE_CANDIDATE_CHARS", 100, raising=False)
 
 
 class TestPageFactsByBudget:
     def test_first_fact_serves_even_when_alone_over_budget(self):
         big = _fact("f1", "x" * 500)
-        res = _page_facts_by_budget(["f1"], {"f1": big})
+        res = _page_facts_by_budget(["f1"], {"f1": big}, budget_chars=100)
         assert [f["id"] for f in res["facts"]] == ["f1"]
         assert res["deferred"] == []
         assert res["missing"] == []
@@ -43,18 +42,19 @@ class TestPageFactsByBudget:
     def test_over_budget_fact_is_deferred_by_name_not_dropped(self):
         res = _page_facts_by_budget(
             ["f1", "f2"], {"f1": _fact("f1", "x" * 60), "f2": _fact("f2", "y" * 500, title="T2")},
+            budget_chars=100,
         )
         assert [f["id"] for f in res["facts"]] == ["f1"]
         assert res["deferred"] == [{"id": "f2", "title": "T2"}]
 
     def test_missing_ids_are_reported(self):
-        res = _page_facts_by_budget(["gone"], {})
+        res = _page_facts_by_budget(["gone"], {}, budget_chars=100)
         assert res["facts"] == []
         assert res["missing"] == ["gone"]
 
     def test_within_budget_all_serve_in_order(self):
         res = _page_facts_by_budget(
-            ["f1", "f2"], {"f1": _fact("f1", "a"), "f2": _fact("f2", "b")},
+            ["f1", "f2"], {"f1": _fact("f1", "a"), "f2": _fact("f2", "b")}, budget_chars=100,
         )
         assert [f["id"] for f in res["facts"]] == ["f1", "f2"]
         assert res["deferred"] == []

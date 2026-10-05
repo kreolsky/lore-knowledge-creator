@@ -31,7 +31,7 @@ def test_small_doc_chunks_with_valid_offsets():
     from markdown_chunker import chunk_markdown
 
     text = "# A\n\nfirst section body.\n\n# B\n\nsecond section body."
-    chunks = chunk_markdown(text)
+    chunks = chunk_markdown(text, max_chunk_chars=3000, input_max_chars=8000)
     assert [c.heading for c in chunks] == ["# A", "# B"]
     assert [c.heading_path for c in chunks] == [("A",), ("B",)]
     for c in chunks:
@@ -49,7 +49,9 @@ def test_no_separator_overflow_never_exceeds_hard_ceiling():
     blob = "A" * (EMBEDDING_INPUT_MAX_CHARS * 2 + 17)
     # `max_chunk_chars` cannot be honoured with no separator to split on — the
     # provider ceiling is the bound that must still hold.
-    chunks = chunk_markdown(blob, max_chunk_chars=200)
+    chunks = chunk_markdown(
+        blob, max_chunk_chars=200, input_max_chars=EMBEDDING_INPUT_MAX_CHARS,
+    )
     assert len(chunks) >= 2
     for c in chunks:
         assert len(c.content) <= EMBEDDING_INPUT_MAX_CHARS

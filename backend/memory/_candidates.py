@@ -23,8 +23,9 @@ async def _merge_candidates_for_reference(
     transcript; only its head is needed to locate the subject, and bounding keeps the
     per-portion embed cost flat.
     """
+    import settings
+
     import embeddings
-    from config import MEMORY_MERGE_CANDIDATE_QUERY_CHARS
 
     content = (reference or {}).get("content") or ""
     if not content.strip():
@@ -38,9 +39,8 @@ async def _merge_candidates_for_reference(
         # keeps it comparable to the stored fact vectors, which are also document-
         # embedded. The rationale lived only in the embed_texts docstring; this marker is
         # where the next reader stands when reaching to add a prefix.
-        vec = (await embeddings.embed_texts(
-            [content[:MEMORY_MERGE_CANDIDATE_QUERY_CHARS]]
-        ))[0]
+        query_chars = await settings.get("MEMORY_MERGE_CANDIDATE_QUERY_CHARS")
+        vec = (await embeddings.embed_texts([content[:query_chars]]))[0]
     except Exception:
         # Best-effort stays (the portion falls back to the flat memory_index), but
         # NEVER silently: matches the dedup-gate and nearest-facts twins — a broken
@@ -77,8 +77,9 @@ async def _attach_candidate_bodies(
         return []
     import json
 
-    import config
+    import settings
 
+    budget_chars = await settings.get("MEMORY_MERGE_CANDIDATE_CHARS")
     rows = await db.query(
         "SELECT meta::id(id) AS id, content FROM documents WHERE project_id = $pid "
         "AND meta::id(id) IN $ids AND is_memory = true "
@@ -92,7 +93,7 @@ async def _attach_candidate_bodies(
         body = body_by_id.get(candidate["id"], "")
         page_chars = len(json.dumps({"id": candidate["id"], "text": body}, ensure_ascii=False))
         entry = {**candidate}
-        if out and total_chars + page_chars > config.MEMORY_MERGE_CANDIDATE_CHARS:
+        if out and total_chars + page_chars > budget_chars:
             entry["text"] = ""
             entry["body_deferred"] = True
         else:

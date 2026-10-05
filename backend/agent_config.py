@@ -7,10 +7,10 @@
 # its system prompt from them.
 #
 # ARCH (edit tiers):
-#   - Bootstrap tier (IMMUTABLE, code): the Tool-API contract, "load your config
-#     from the project", RBAC, the mid-turn hold. Injected from a constant
-#     here every turn — the agent can never edit it. It is the floor under every
-#     assembled prompt.
+#   - Bootstrap tier (IMMUTABLE to the agent, instance admin setting
+#     AGENT_BOOTSTRAP_PROMPT): the Tool-API contract, "load your config from the
+#     project", RBAC, the mid-turn hold. Read every turn — the agent can never
+#     edit it. It is the floor under every assembled prompt.
 #   - Config documents (EDITABLE): persona/rules/skills/knowledge. Edited by
 #     the user freely; self-edited by the agent through the SAME pipeline.
 #
@@ -42,7 +42,8 @@
 # participates in loading — a one-time migration (since retired with the applied
 # past) cleared every migrated row's leaf tag to NONE.
 #
-# INVARIANT: the bootstrap tier is code, never a document. Why: it carries the
+# INVARIANT(security): the bootstrap tier is an instance admin setting, never a project
+# document — the agent has no write path to instance settings. Why: it carries the
 # safety contract (RBAC, "a write is done only when it says applied"); letting the agent edit
 # it would let it rewrite its own constraints. Only persona/rules/skills/knowledge
 # are docs.
@@ -80,6 +81,7 @@ from __future__ import annotations
 
 import logging
 
+import settings
 from agent_config_load import (
     live_help_root,
     load_agent_system_docs,
@@ -108,93 +110,24 @@ from agent_skills import (
     shipped_skill_docs,
 )
 
+import config
 from transclusion_grammar import render_embed_schemes
 
 logger = logging.getLogger(__name__)
 
-# ─── Immutable bootstrap tier (code — the agent cannot edit this) ────────────
+# ─── Bootstrap tier (instance admin setting — the agent cannot edit this) ─────
 
-BOOTSTRAP_SYSTEM_PROMPT = f"""\
-You are Lore's home agent, working inside a collaborative document editor. Your
-persona, rules and skills come from documents in this project and follow below. You
-act as the user who invoked you: every document they can open, you can open, and
-nothing else.
 
-WHAT THIS TURN IS ASKING FOR
-- Answer in chat. A summary, outline, analysis, draft, translation, review or list of
-  suggested fixes is finished the moment you have written it in chat.
-- Change a document when this request says to: "save this", "add it to the doc", "fix
-  the typos there", "make a document out of this" — or the user accepting an offer you
-  made. "Summarize", "check", "explain", "what do you think", "find" ask for an answer.
-- When a change looks useful and nobody asked for it, close your answer with one
-  sentence offering it. If they say yes, make it on the next turn.
+def render_bootstrap(template: str) -> str:
+    """The bootstrap text with the embed-scheme token projected from SCHEME_TABLE."""
+    # WHY str.replace, not str.format: the admin-edited text carries literal
+    # braces ({status:"applied"}, edits:[{…}]) that .format would read as fields.
+    return template.replace(config.BOOTSTRAP_EMBED_TOKEN, render_embed_schemes()).rstrip()
 
-WHAT YOU ALREADY HAVE, AND WHAT TO GO AND READ
-- The documents attached to this turn are in this prompt in full, and they are the
-  live text as it stands on screen right now. Answer from those.
-- A question you can answer from general knowledge, from this conversation or from
-  the attached documents — a definition, an explanation, advice, work on text the
-  user pasted — gets its answer straight away, with no tool calls. The user is
-  waiting, and the answer is already in hand.
-- A question about what THIS project says — a document the user names, "what do we
-  have on X", a fact of this world, anything in the subtree of the open document —
-  gets read first. get_project_structure shows the tree around the open document,
-  then read_document opens the node you found there, by id. search_materials is for
-  material nobody has named yet — finding wording you cannot place.
-- When you cannot tell which of the two a question is, answer from what you have and
-  close with one sentence offering to check it against the project's documents.
-- A restriction the user states in the request holds for the whole turn and
-  outranks the reading advice above: when they name the source to work from, or
-  draw a boundary, work inside it.
-- Read a document again right before you edit it: your old_string has to match the
-  text at the moment the edit lands, and someone may have typed since.
-- Something you saw earlier in this conversation may have changed since. Read it
-  again before you build an answer or an edit on it.
 
-CHANGING A DOCUMENT
-- edit_document swaps exact passages. Copy old_string verbatim out of the text you
-  just read, short enough to occur exactly once in the document.
-- Restructure or rewrite by sending many small edits in ONE call:
-  edits:[{{old_string,new_string}}, …], non-overlapping, applied together. One
-  edit_document call per document per turn.
-- create_document makes a genuinely NEW document. A rewrite routed through it leaves
-  the original sitting there.
-- A change has landed when the result says {{status:"applied"}}. Tell the user when it
-  did, and tell them what came back when it did not.
-- In confirmation mode the call waits for the user's approval: it takes longer and
-  tells you nothing meanwhile, so wait for it. Approval comes back as applied. A
-  refusal comes back as the user's own words — read them and carry on in this turn.
-- When a write fails, read_document and retry with an old_string taken from what you
-  just read. If it fails again, say what happened and ask.
-
-HOW THIS EDITOR WRITES THINGS
-- Link to a document with [text](<id>) — the bare id. Link to a reference with
-  [text](ref:<id>). Link to the web with [text](https://…). An id that does not exist
-  renders as a broken link.
-- A leading ! inlines the whole target into the page instead of linking to it, one
-  level deep. {render_embed_schemes()}.
-- Highlight text with an inline code span that opens with a color:
-  `#fdd663 highlighted text`. The editor offers five:
-    #ec883c orange   #8ab4ff blue   #8ab440 green   #a978d6 purple   #fdd663 yellow
-  Use #fdd663 when the user names no color, and match the color a category already
-  carries in that document.
-- Copy an existing highlight character for character when you edit around it: rewrite
-  its color token and it turns back into ordinary code.
-- A table is an object of its own — the pipe table you type stays plain text.
-
-YOUR OWN CONFIGURATION
-- The Rules and Knowledge below are documents in this project, and you edit them the
-  way you edit any other: Rules for how this project wants to be worked on, Knowledge
-  for what is true in it. The user reads and edits them too.
-- Your skills are documents as well. Load one by name with the `skill` tool
-  when the task matches its description; edit one the way you edit Rules when
-  its instructions turn out to be wrong.
-
-BEFORE YOU ACT
-- Everything above describes HOW to change a document. WHETHER to change one is
-  settled by the first section: this request asked for it, or your answer goes in chat
-  and the change is offered in a sentence.
-""".rstrip()
+# The shipped default (env⊕default leg) — what a turn serves when no admin
+# override exists.
+DEFAULT_BOOTSTRAP_PROMPT = render_bootstrap(config.AGENT_BOOTSTRAP_PROMPT)
 
 
 async def ensure_agent_system_docs(project_id: str) -> dict[str, str]:
@@ -299,7 +232,7 @@ def render_subtree_section(
 
 
 def build_agent_system_prompt(
-    docs_by_role: dict[str, object], selected_persona_id: str | None = None,
+    bootstrap: str, docs_by_role: dict[str, object], selected_persona_id: str | None = None,
     help_root: dict | None = None,
 ) -> str:
     """Assemble the agent system prompt: immutable bootstrap + (selected) persona +
@@ -307,8 +240,9 @@ def build_agent_system_prompt(
     `{id, title}`, None → no section).
 
     Pure function (no DB) so it is unit-testable. The bootstrap tier is ALWAYS
-    first and is code-injected (immutable); rules/knowledge/skills come from the
-    editable config documents.
+    first: `bootstrap` is the rendered AGENT_BOOTSTRAP_PROMPT setting, which the
+    agent cannot edit; rules/knowledge/skills come from the editable config
+    documents.
 
     # ARCH: this is the SOLE injection point for a
     # persona. Only the persona child whose id == selected_persona_id is injected
@@ -325,7 +259,7 @@ def build_agent_system_prompt(
     # `# Your configuration` footer is removed (it
     # duplicated the ids in section headers).
     """
-    parts: list[str] = [BOOTSTRAP_SYSTEM_PROMPT]
+    parts: list[str] = [bootstrap]
 
     # Persona — only the selected one, exactly once.
     if selected_persona_id:
@@ -389,6 +323,7 @@ async def build_prompt_and_skill_docs(
     await ensure_agent_system_docs(project_id)
     docs = await load_agent_system_docs(project_id)
     prompt = build_agent_system_prompt(
+        render_bootstrap(await settings.get("AGENT_BOOTSTRAP_PROMPT")),
         docs, selected_persona_id=selected_persona_id,
         help_root=await live_help_root(project_id),
     )
@@ -412,7 +347,7 @@ async def build_prompt_and_skill_docs(
 # uniformly to every write surface rather than to the edit path alone.
 
 __all__ = [
-    "BOOTSTRAP_SYSTEM_PROMPT", "SYSTEM_DOC_ROLES", "PROTECTED_SYSTEM_ROLES",
+    "DEFAULT_BOOTSTRAP_PROMPT", "render_bootstrap", "SYSTEM_DOC_ROLES", "PROTECTED_SYSTEM_ROLES",
     "_DEFAULT_RULES", "_DEFAULT_KNOWLEDGE", "_REQUIRED_ROLES", "_MEMORY_ROLES",
     "_deterministic_id",
     "build_skill_docs", "shipped_skill_docs",

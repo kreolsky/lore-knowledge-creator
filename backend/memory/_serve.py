@@ -13,6 +13,7 @@ public readers.
 """
 from __future__ import annotations
 
+import settings
 from fastapi import HTTPException
 
 from db import get_db
@@ -93,10 +94,14 @@ async def get_memory_facts(
         {"pid": project_id, "ids": ids},
     )
     by_id = {r.get("id"): r for r in (rows or [])}
-    return _page_facts_by_budget(ids, by_id)
+    return _page_facts_by_budget(
+        ids, by_id, budget_chars=await settings.get("MEMORY_FACTS_PAGE_CHARS"),
+    )
 
 
-def _page_facts_by_budget(ids: list[str], by_id: dict[str, dict]) -> dict:
+def _page_facts_by_budget(
+    ids: list[str], by_id: dict[str, dict], *, budget_chars: int,
+) -> dict:
     """Walk `ids` in order, serving each fact's body under a per-call char budget.
 
     Returns `{facts, missing, deferred}`. A fact whose body would push the call over
@@ -109,8 +114,6 @@ def _page_facts_by_budget(ids: list[str], by_id: dict[str, dict]) -> dict:
     # Why: facts are shipped as their body text, so measuring it is measuring the
     # payload that ships.
     """
-    from config import MEMORY_FACTS_PAGE_CHARS
-
     facts: list[dict] = []
     deferred: list[dict] = []
     missing: list[str] = []
@@ -122,7 +125,7 @@ def _page_facts_by_budget(ids: list[str], by_id: dict[str, dict]) -> dict:
             continue
         served = _serve_fact(r)
         page_chars = len(served["text"])
-        if facts and total_chars + page_chars > MEMORY_FACTS_PAGE_CHARS:
+        if facts and total_chars + page_chars > budget_chars:
             deferred.append({"id": doc_id, "title": served["title"]})
             continue
         total_chars += page_chars

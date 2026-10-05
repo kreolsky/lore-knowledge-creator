@@ -62,8 +62,10 @@ async def _retrieve(corpus, *, narrow=None, **kw):
 
     kw.setdefault("include_documents", True)
     kw.setdefault("include_references", True)
+    kw.setdefault("top_k_docs", 8)
+    kw.setdefault("top_k_refs", 8)
     return await retrieve_context(
-        corpus["pid"], TOKEN, [], allowed_doc_ids=narrow, **kw,
+        corpus["pid"], TOKEN, allowed_doc_ids=narrow, **kw,
     )
 
 

@@ -1,0 +1,343 @@
+{
+  "name": "xling-bench",
+  "project_id": "e11c0000-0000-4000-8000-000000000001",
+  "comment": "Synthetic RU/EN cross-language bench. 24 invented documents, 12 written only in English and 12 only in Russian, on 24 non-overlapping subjects so no document can answer another's query. Each document carries TWO queries that are translations of each other: one in its own language (control) and one in the other (cross). The measurement is the CONTROL-minus-CROSS gap, never the cross score alone — a low cross score means nothing unless the same question in the document's own language scored higher. Both queries are equally paraphrastic; neither reuses the document's distinctive wording, so the control is not an exact-match freebie.",
+  "queries": [
+    {
+      "id": "ctrl-en-rooftop-beehive-program",
+      "class": "ctrl-en",
+      "query": "how often are the hives checked in summer and why not in cold weather",
+      "expect": "Rooftop Beehive Program",
+      "why": "Control: query and document are both EN. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-ru2en-rooftop-beehive-program",
+      "class": "cross-ru2en",
+      "query": "как часто проверяют ульи летом и почему нельзя открывать их в холод",
+      "expect": "Rooftop Beehive Program",
+      "why": "Cross-language twin of ctrl-en-rooftop-beehive-program: the same information need in RU, against a document written only in EN."
+    },
+    {
+      "id": "ctrl-en-winter-tyre-policy",
+      "class": "ctrl-en",
+      "query": "what triggers the seasonal changeover and who decides it",
+      "expect": "Winter Tyre Policy",
+      "why": "Control: query and document are both EN. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-ru2en-winter-tyre-policy",
+      "class": "cross-ru2en",
+      "query": "что служит поводом для сезонной замены и кто принимает это решение",
+      "expect": "Winter Tyre Policy",
+      "why": "Cross-language twin of ctrl-en-winter-tyre-policy: the same information need in RU, against a document written only in EN."
+    },
+    {
+      "id": "ctrl-en-sourdough-starter-care",
+      "class": "ctrl-en",
+      "query": "why throw away part of the culture before feeding it",
+      "expect": "Sourdough Starter Care",
+      "why": "Control: query and document are both EN. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-ru2en-sourdough-starter-care",
+      "class": "cross-ru2en",
+      "query": "зачем выбрасывать часть закваски перед подкормкой",
+      "expect": "Sourdough Starter Care",
+      "why": "Cross-language twin of ctrl-en-sourdough-starter-care: the same information need in RU, against a document written only in EN."
+    },
+    {
+      "id": "ctrl-en-lighthouse-keeper-rotation",
+      "class": "ctrl-en",
+      "query": "why does the outgoing keeper stay an extra night",
+      "expect": "Lighthouse Keeper Rotation",
+      "why": "Control: query and document are both EN. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-ru2en-lighthouse-keeper-rotation",
+      "class": "cross-ru2en",
+      "query": "почему сменяющийся смотритель остаётся ещё на одну ночь",
+      "expect": "Lighthouse Keeper Rotation",
+      "why": "Cross-language twin of ctrl-en-lighthouse-keeper-rotation: the same information need in RU, against a document written only in EN."
+    },
+    {
+      "id": "ctrl-en-coral-nursery-transplant",
+      "class": "ctrl-en",
+      "query": "when should fragments not be moved to the reef",
+      "expect": "Coral Nursery Transplant",
+      "why": "Control: query and document are both EN. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-ru2en-coral-nursery-transplant",
+      "class": "cross-ru2en",
+      "query": "когда нельзя пересаживать фрагменты на риф",
+      "expect": "Coral Nursery Transplant",
+      "why": "Cross-language twin of ctrl-en-coral-nursery-transplant: the same information need in RU, against a document written only in EN."
+    },
+    {
+      "id": "ctrl-en-archive-humidity-limits",
+      "class": "ctrl-en",
+      "query": "why is a stable level better than a perfect one",
+      "expect": "Archive Humidity Limits",
+      "why": "Control: query and document are both EN. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-ru2en-archive-humidity-limits",
+      "class": "cross-ru2en",
+      "query": "почему стабильный уровень важнее идеального значения",
+      "expect": "Archive Humidity Limits",
+      "why": "Cross-language twin of ctrl-en-archive-humidity-limits: the same information need in RU, against a document written only in EN."
+    },
+    {
+      "id": "ctrl-en-night-bus-frequency",
+      "class": "ctrl-en",
+      "query": "why publish an interval instead of exact departure times",
+      "expect": "Night Bus Frequency",
+      "why": "Control: query and document are both EN. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-ru2en-night-bus-frequency",
+      "class": "cross-ru2en",
+      "query": "почему публикуют интервал, а не точное время отправления",
+      "expect": "Night Bus Frequency",
+      "why": "Cross-language twin of ctrl-en-night-bus-frequency: the same information need in RU, against a document written only in EN."
+    },
+    {
+      "id": "ctrl-en-volcano-ash-flight-rule",
+      "class": "ctrl-en",
+      "query": "why does ash damage an engine",
+      "expect": "Volcano Ash Flight Rule",
+      "why": "Control: query and document are both EN. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-ru2en-volcano-ash-flight-rule",
+      "class": "cross-ru2en",
+      "query": "чем пепел опасен для двигателя",
+      "expect": "Volcano Ash Flight Rule",
+      "why": "Cross-language twin of ctrl-en-volcano-ash-flight-rule: the same information need in RU, against a document written only in EN."
+    },
+    {
+      "id": "ctrl-en-sled-dog-feeding",
+      "class": "ctrl-en",
+      "query": "why is water given before the meal and not after",
+      "expect": "Sled Dog Feeding",
+      "why": "Control: query and document are both EN. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-ru2en-sled-dog-feeding",
+      "class": "cross-ru2en",
+      "query": "почему воду дают до еды, а не после",
+      "expect": "Sled Dog Feeding",
+      "why": "Cross-language twin of ctrl-en-sled-dog-feeding: the same information need in RU, against a document written only in EN."
+    },
+    {
+      "id": "ctrl-en-church-bell-maintenance",
+      "class": "ctrl-en",
+      "query": "what happens when the striking face wears flat",
+      "expect": "Church Bell Maintenance",
+      "why": "Control: query and document are both EN. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-ru2en-church-bell-maintenance",
+      "class": "cross-ru2en",
+      "query": "что происходит, когда ударная часть стирается до площадки",
+      "expect": "Church Bell Maintenance",
+      "why": "Cross-language twin of ctrl-en-church-bell-maintenance: the same information need in RU, against a document written only in EN."
+    },
+    {
+      "id": "ctrl-en-cheese-cave-rotation",
+      "class": "ctrl-en",
+      "query": "why are the shelves never washed with detergent",
+      "expect": "Cheese Cave Rotation",
+      "why": "Control: query and document are both EN. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-ru2en-cheese-cave-rotation",
+      "class": "cross-ru2en",
+      "query": "почему полки никогда не моют моющим средством",
+      "expect": "Cheese Cave Rotation",
+      "why": "Cross-language twin of ctrl-en-cheese-cave-rotation: the same information need in RU, against a document written only in EN."
+    },
+    {
+      "id": "ctrl-en-telescope-dome-seeing",
+      "class": "ctrl-en",
+      "query": "why open the dome long before the first exposure",
+      "expect": "Telescope Dome Seeing",
+      "why": "Control: query and document are both EN. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-ru2en-telescope-dome-seeing",
+      "class": "cross-ru2en",
+      "query": "зачем открывать купол задолго до первого снимка",
+      "expect": "Telescope Dome Seeing",
+      "why": "Cross-language twin of ctrl-en-telescope-dome-seeing: the same information need in RU, against a document written only in EN."
+    },
+    {
+      "id": "ctrl-ru-ru12",
+      "class": "ctrl-ru",
+      "query": "почему треснувшее стекло склеивают, а не заменяют новым",
+      "expect": "Реставрация витражей",
+      "why": "Control: query and document are both RU. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-en2ru-ru12",
+      "class": "cross-en2ru",
+      "query": "why is cracked glass glued back rather than replaced",
+      "expect": "Реставрация витражей",
+      "why": "Cross-language twin of ctrl-ru-ru12: the same information need in EN, against a document written only in RU."
+    },
+    {
+      "id": "ctrl-ru-ru13",
+      "class": "ctrl-ru",
+      "query": "почему машины идут с интервалом и на малой скорости",
+      "expect": "Ледовая переправа",
+      "why": "Control: query and document are both RU. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-en2ru-ru13",
+      "class": "cross-en2ru",
+      "query": "why must vehicles keep spacing and drive slowly",
+      "expect": "Ледовая переправа",
+      "why": "Cross-language twin of ctrl-ru-ru13: the same information need in EN, against a document written only in RU."
+    },
+    {
+      "id": "ctrl-ru-ru14",
+      "class": "ctrl-ru",
+      "query": "когда обтачивают дно и почему нельзя тянуть с этим",
+      "expect": "Гончарный круг",
+      "why": "Control: query and document are both RU. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-en2ru-ru14",
+      "class": "cross-en2ru",
+      "query": "when is the base trimmed and why does the timing matter",
+      "expect": "Гончарный круг",
+      "why": "Cross-language twin of ctrl-ru-ru14: the same information need in EN, against a document written only in RU."
+    },
+    {
+      "id": "ctrl-ru-ru15",
+      "class": "ctrl-ru",
+      "query": "почему нельзя сушить быстро",
+      "expect": "Сушка древесины",
+      "why": "Control: query and document are both RU. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-en2ru-ru15",
+      "class": "cross-en2ru",
+      "query": "why is fast drying harmful",
+      "expect": "Сушка древесины",
+      "why": "Cross-language twin of ctrl-ru-ru15: the same information need in EN, against a document written only in RU."
+    },
+    {
+      "id": "ctrl-ru-ru16",
+      "class": "ctrl-ru",
+      "query": "в каком порядке идут обжиги и почему",
+      "expect": "Роспись по фарфору",
+      "why": "Control: query and document are both RU. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-en2ru-ru16",
+      "class": "cross-en2ru",
+      "query": "in what order are the firings done and why",
+      "expect": "Роспись по фарфору",
+      "why": "Cross-language twin of ctrl-ru-ru16: the same information need in EN, against a document written only in RU."
+    },
+    {
+      "id": "ctrl-ru-ru17",
+      "class": "ctrl-ru",
+      "query": "чем опасна сырая масса при закладке",
+      "expect": "Заготовка сена",
+      "why": "Control: query and document are both RU. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-en2ru-ru17",
+      "class": "cross-en2ru",
+      "query": "what is the danger of storing the crop while it is still damp",
+      "expect": "Заготовка сена",
+      "why": "Cross-language twin of ctrl-ru-ru17: the same information need in EN, against a document written only in RU."
+    },
+    {
+      "id": "ctrl-ru-ru18",
+      "class": "ctrl-ru",
+      "query": "что делать, если срок наблюдения пропущен",
+      "expect": "Метеостанция в тундре",
+      "why": "Control: query and document are both RU. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-en2ru-ru18",
+      "class": "cross-en2ru",
+      "query": "what to do when a scheduled observation is missed",
+      "expect": "Метеостанция в тундре",
+      "why": "Cross-language twin of ctrl-ru-ru18: the same information need in EN, against a document written only in RU."
+    },
+    {
+      "id": "ctrl-ru-ru19",
+      "class": "ctrl-ru",
+      "query": "почему решает порыв, а не средняя скорость ветра",
+      "expect": "Канатная дорога",
+      "why": "Control: query and document are both RU. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-en2ru-ru19",
+      "class": "cross-en2ru",
+      "query": "why is the gust decisive rather than the average wind speed",
+      "expect": "Канатная дорога",
+      "why": "Cross-language twin of ctrl-ru-ru19: the same information need in EN, against a document written only in RU."
+    },
+    {
+      "id": "ctrl-ru-ru20",
+      "class": "ctrl-ru",
+      "query": "почему малая вода бывает опаснее большой",
+      "expect": "Сплав по реке",
+      "why": "Control: query and document are both RU. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-en2ru-ru20",
+      "class": "cross-en2ru",
+      "query": "why can low water be more dangerous than high water",
+      "expect": "Сплав по реке",
+      "why": "Cross-language twin of ctrl-ru-ru20: the same information need in EN, against a document written only in RU."
+    },
+    {
+      "id": "ctrl-ru-ru21",
+      "class": "ctrl-ru",
+      "query": "чем опасно переусердствовать при забивке пряди",
+      "expect": "Ремонт деревянной лодки",
+      "why": "Control: query and document are both RU. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-en2ru-ru21",
+      "class": "cross-en2ru",
+      "query": "what goes wrong if the seam is packed too hard",
+      "expect": "Ремонт деревянной лодки",
+      "why": "Cross-language twin of ctrl-ru-ru21: the same information need in EN, against a document written only in RU."
+    },
+    {
+      "id": "ctrl-ru-ru22",
+      "class": "ctrl-ru",
+      "query": "когда снимать обвязку после прививки",
+      "expect": "Питомник саженцев",
+      "why": "Control: query and document are both RU. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-en2ru-ru22",
+      "class": "cross-en2ru",
+      "query": "when should the tie be removed after grafting",
+      "expect": "Питомник саженцев",
+      "why": "Cross-language twin of ctrl-ru-ru22: the same information need in EN, against a document written only in RU."
+    },
+    {
+      "id": "ctrl-ru-ru23",
+      "class": "ctrl-ru",
+      "query": "что укрепляют до того, как трогать красочный слой",
+      "expect": "Реставрация икон",
+      "why": "Control: query and document are both RU. Its ONLY purpose is to be the baseline the cross-language twin is read against."
+    },
+    {
+      "id": "x-en2ru-ru23",
+      "class": "cross-en2ru",
+      "query": "what must be consolidated before touching the paint layer",
+      "expect": "Реставрация икон",
+      "why": "Cross-language twin of ctrl-ru-ru23: the same information need in EN, against a document written only in RU."
+    }
+  ]
+}

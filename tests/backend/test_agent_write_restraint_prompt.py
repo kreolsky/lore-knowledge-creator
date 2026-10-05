@@ -16,7 +16,7 @@ assembled prompt in the golden fixture (test_agent_config_loader.py).
 import re
 
 from agent.tools import MUTATING_TOOLS
-from agent_config import BOOTSTRAP_SYSTEM_PROMPT
+from agent_config import DEFAULT_BOOTSTRAP_PROMPT
 from agent_tools.registry import agent_entries
 
 
@@ -24,7 +24,7 @@ def test_every_tool_the_bootstrap_names_is_a_tool_the_agent_is_served():
     served = {e.name for e in agent_entries()}
     # Every snake_case token in the prompt that the registry has ever served —
     # derived, so the next tool added to the prompt is covered without an edit here.
-    named = set(re.findall(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b", BOOTSTRAP_SYSTEM_PROMPT))
+    named = set(re.findall(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b", DEFAULT_BOOTSTRAP_PROMPT))
     tool_shaped = {n for n in named if n in served or n in MUTATING_TOOLS}
     assert tool_shaped, "the bootstrap names no tools at all — the scan lost its target"
     assert tool_shaped <= served, f"bootstrap names unserved tools: {tool_shaped - served}"

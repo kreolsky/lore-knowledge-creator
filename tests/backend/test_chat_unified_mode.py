@@ -157,83 +157,9 @@ async def test_create_note_chat_commentator_still_allowed(monkeypatch):
     assert out.get("is_note") is True
 
 
-# ─── §4 Search normalization — history threaded ────────────────────────────
-
-
-async def test_search_threads_history_into_retrieve_context(monkeypatch):
-    """Non-empty history reaches retrieve_context (so _rewrite_query can fire)."""
-    import types as _types
-
-    # _search_materials_exec moved to search_exec (plan: chat-large-file-decomposition);
-    # its call-time deps (get_db / get_document_access) resolve off search_exec.
-    from agent import search_exec as ro
-
-    captured: dict = {}
-
-    class _FakeDB:
-        async def query(self, _q, _p):
-            return []
-
-    async def fake_get_db():
-        return _FakeDB()
-
-    async def fake_access(_d, _u):
-        return "full"
-
-    async def fake_retrieve(**kw):
-        captured.update(kw)
-        return _types.SimpleNamespace(error=None, hits=[])
-
-    monkeypatch.setattr(ro, "get_db", fake_get_db)
-    monkeypatch.setattr(ro, "get_document_access", fake_access)
-    import retrieval
-    monkeypatch.setattr(retrieval, "retrieve_context", fake_retrieve)
-
-    await ro._search_materials_exec(
-        project_id="p-1", user={"user_id": "u-1"}, query="dragons",
-        history=[{"role": "user", "content": "tell me about dragons in the north"}],
-    )
-    assert captured["history"] == [{"role": "user", "content": "tell me about dragons in the north"}]
-
-
-async def test_search_default_history_empty(monkeypatch):
-    """Back-compat: omitting history passes an empty list (raw query)."""
-    import types as _types
-
-    # _search_materials_exec moved to search_exec (plan: chat-large-file-decomposition);
-    # its call-time deps (get_db / get_document_access) resolve off search_exec.
-    from agent import search_exec as ro
-
-    captured: dict = {}
-
-    class _FakeDB:
-        async def query(self, _q, _p):
-            return []
-
-    async def fake_get_db():
-        return _FakeDB()
-
-    async def fake_access(_d, _u):
-        return "full"
-
-    async def fake_retrieve(**kw):
-        captured.update(kw)
-        return _types.SimpleNamespace(error=None, hits=[])
-
-    monkeypatch.setattr(ro, "get_db", fake_get_db)
-    monkeypatch.setattr(ro, "get_document_access", fake_access)
-    import retrieval
-    monkeypatch.setattr(retrieval, "retrieve_context", fake_retrieve)
-
-    await ro._search_materials_exec(
-        project_id="p-1", user={"user_id": "u-1"}, query="x",
-    )
-    assert captured["history"] == []
-
-
 # ─── §5 Prompt rewrite ──────────────────────────────────────────────────────
 # plan: remove-ask-line-mode-axis (audit §B): the two tests that asserted on
 # PROMPT_CHAT_AGENT_MULTI_TOOL_SYSTEM_PROMPT were "tests that bind nothing" —
 # that prompt never reached an agent turn (the live prompt is
-# BOOTSTRAP_SYSTEM_PROMPT in agent_config.py). Deleted with the constant (D7).
+# the AGENT_BOOTSTRAP_PROMPT setting). Deleted with the constant (D7).
 

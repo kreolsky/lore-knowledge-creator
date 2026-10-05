@@ -1,4 +1,4 @@
-"""Retrieval pipeline — vector search, token budgeting, query rewrite."""
+"""Retrieval pipeline — vector search, token budgeting."""
 # ARCH: Per-kind vector search over doc_chunks (kind column, stamped at every
 # chunk write) with anti-monopoly per-doc. References fold into the same corpus
 # as documents — that folding fact has ONE wording source
@@ -11,7 +11,6 @@
 # embedded by the existing pipeline, so they need no separate index. Two levels — FACT
 # level (whole fact-docs, distilled and served with their source references) and CHUNK
 # level (the raw documents and references) — with the fact level ranked ahead.
-# ARCH: Query rewrite via LLM — optional, falls back to raw query on failure.
 # SYSTEM: retrieval — RAG context retrieval for AI chat
 
 from __future__ import annotations
@@ -19,21 +18,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-import http_clients
 import settings
 
-from config import (
-    CHAT_QUERY_REWRITE_MAX_TOKENS,
-    PROMPT_RETRIEVAL_QUERY_REWRITE,
-    RETRIEVAL_BUDGET_TOKENS_DOCS,
-    RETRIEVAL_BUDGET_TOKENS_MEMORY,
-    RETRIEVAL_BUDGET_TOKENS_REFS,
-    RETRIEVAL_MAX_PER_DOC,
-    RETRIEVAL_TOP_K_DOCS,
-    RETRIEVAL_TOP_K_MEMORY,
-    RETRIEVAL_TOP_K_REFS,
-    count_tokens_approx,
-)
+from config import count_tokens_approx
 from db import get_db
 from embeddings import EmbeddingConfigError, embed_texts
 from models import is_ref_row
@@ -41,10 +28,6 @@ from models import is_ref_row
 logger = logging.getLogger(__name__)
 
 
-# The query-rewrite chat/LLM client is the shared pool's "retrieval" entry
-# (SYSTEM: http-clients), built with the rewrite timeout resolved at call time
-# — reused across requests (connection pool / keep-alive survives). Closed on
-# web shutdown through the pool.
 
 
 @dataclass
@@ -80,56 +63,6 @@ class _Limits:
     top_k_docs: int
     top_k_refs: int
     top_k_mem: int
-
-
-async def _rewrite_query(user_query: str, history: list) -> str:
-    # INVARIANT: Always returns a string — never raises. Falls back to raw query on any failure.  Why: rewrite is a best-effort optimization on the retrieval path; raising here would break search on a transient LLM error, so any failure falls back to the raw query.
-    # The chat line is a fallback chain (CHAT ← AI ← STT) and the rewrite model
-    # defaults to the chat model — both re-derived here, override-aware.
-    vals = await settings.get_all([
-        "CHAT_QUERY_REWRITE_ENABLED", "CHAT_QUERY_REWRITE_HISTORY_MESSAGES",
-        "CHAT_QUERY_REWRITE_SNIPPET_CHARS", "CHAT_QUERY_REWRITE_TIMEOUT_S",
-    ])
-    rewrite_model = await settings.get("CHAT_QUERY_REWRITE_MODEL")
-    if not vals["CHAT_QUERY_REWRITE_ENABLED"] or not history:
-        return user_query
-
-    snippet_chars = vals["CHAT_QUERY_REWRITE_SNIPPET_CHARS"]
-    history_snippets = []
-    for msg in history[-vals["CHAT_QUERY_REWRITE_HISTORY_MESSAGES"]:]:
-        role = msg.role if hasattr(msg, 'role') else msg.get('role', '')
-        content = msg.content if hasattr(msg, 'content') else msg.get('content', '')
-        history_snippets.append(f"{role}: {content[:snippet_chars]}")
-
-    history_text = "\n".join(history_snippets)
-
-    try:
-        client = http_clients.get_http_client("retrieval", timeout=vals["CHAT_QUERY_REWRITE_TIMEOUT_S"])
-        resp = await client.post(
-            f"{await settings.get('AI_API_URL')}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {await settings.get('AI_API_KEY')}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": rewrite_model,
-                "messages": [
-                    {"role": "system", "content": PROMPT_RETRIEVAL_QUERY_REWRITE},
-                    {"role": "user", "content": f"History:\n{history_text}\n\nLatest: {user_query}"},
-                ],
-                "max_tokens": CHAT_QUERY_REWRITE_MAX_TOKENS,
-                "stream": False,
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        rewritten = data["choices"][0]["message"]["content"].strip()
-        if rewritten:
-            return rewritten
-    except Exception as e:
-        logger.warning("Query rewrite failed, using raw query: %s", e)
-
-    return user_query
 
 
 def _apply_drop_off(
@@ -246,38 +179,33 @@ async def _allowed_fact_ids(db, project_id: str, allowed: set[str]) -> set[str]:
     return out
 
 
-def _resolve_retrieval_limits(
-    token_budget_docs: int | None, token_budget_refs: int | None,
-    token_budget_memory: int | None, top_k_docs: int | None,
-    top_k_refs: int | None, top_k_memory: int | None,
+async def _resolve_retrieval_limits(
+    top_k_docs: int, top_k_refs: int, top_k_memory: int | None,
 ) -> _Limits:
-    # WHY: top_k overrides let search.py pass caller-controlled limits (e.g. agent
-    # requesting ?k=3 for a narrow lookup or ?k=50 for broad exploration). Chat.py
-    # keeps config defaults. Budgets likewise: None on the wire = the config default.
+    # WHY: docs/refs top_k always come from the caller (the agent's or the REST
+    # client's `k`: 3 for a narrow lookup, 50 for broad exploration). Memory top_k
+    # (None = the instance setting) and the budgets are instance settings.
     return _Limits(
-        budget_docs=token_budget_docs if token_budget_docs is not None else RETRIEVAL_BUDGET_TOKENS_DOCS,
-        budget_refs=token_budget_refs if token_budget_refs is not None else RETRIEVAL_BUDGET_TOKENS_REFS,
-        budget_mem=token_budget_memory if token_budget_memory is not None else RETRIEVAL_BUDGET_TOKENS_MEMORY,
-        top_k_docs=top_k_docs if top_k_docs is not None else RETRIEVAL_TOP_K_DOCS,
-        top_k_refs=top_k_refs if top_k_refs is not None else RETRIEVAL_TOP_K_REFS,
-        top_k_mem=top_k_memory if top_k_memory is not None else RETRIEVAL_TOP_K_MEMORY,
+        budget_docs=await settings.get("RETRIEVAL_BUDGET_TOKENS_DOCS"),
+        budget_refs=await settings.get("RETRIEVAL_BUDGET_TOKENS_REFS"),
+        budget_mem=await settings.get("RETRIEVAL_BUDGET_TOKENS_MEMORY"),
+        top_k_docs=top_k_docs,
+        top_k_refs=top_k_refs,
+        top_k_mem=(top_k_memory if top_k_memory is not None
+                   else await settings.get("RETRIEVAL_TOP_K_MEMORY")),
     )
 
 
 async def _embed_user_query(
-    user_query: str, history: list,
+    user_query: str,
 ) -> tuple[list[list[float]] | None, str | None]:
-    """Rewrite then embed the query — `(vecs, None)`, or `(None, error)` on failure."""
+    """Embed the query — `(vecs, None)`, or `(None, error)` on failure."""
     try:
-        rewritten = await _rewrite_query(user_query, history)
-    except Exception:
-        rewritten = user_query
-    try:
-        # D3: Qwen3-Embedding asymmetric format — the query is prefixed with the
+        # Asymmetric embedding format — the query is prefixed with the
         # retrieval instruction; documents were embedded plain (no prefix). Opt-in here
         # only; embed_texts never prefixes by default (would poison stored vectors).
         query_embeddings = await embed_texts(
-            [rewritten],
+            [user_query],
             instruction=await settings.get("RETRIEVAL_QUERY_INSTRUCTION"),
         )
     except EmbeddingConfigError as e:
@@ -442,7 +370,7 @@ def _unpositioned_hit(kind: str, did: str, title: str, r: dict) -> RetrievalHit:
 def _classify_chunk_hits(
     rows: list[dict], parent_meta: dict[str, dict], *,
     include_documents: bool, include_references: bool, include_memory: bool,
-    min_score: float,
+    min_score: float, max_per_doc: int,
 ) -> tuple[list[RetrievalHit], list[RetrievalHit], list[RetrievalHit]]:
     """Split chunk rows into `(doc, ref, mem)` hits by parent kind — the score
     floor, kind gates, one-per-fact and anti-monopoly cap all live here."""
@@ -477,9 +405,9 @@ def _classify_chunk_hits(
         if is_ref:
             ref_hits.append(_unpositioned_hit("reference", did, meta["title"], r))
             continue
-        # WHY: No more than RETRIEVAL_MAX_PER_DOC chunks per document (anti-monopoly).  Why: without a per-doc cap one large document could fill the retrieval budget and crowd out every other doc; the cap keeps the context diverse.
+        # WHY: No more than max_per_doc chunks per document (anti-monopoly).  Why: without a per-doc cap one large document could fill the retrieval budget and crowd out every other doc; the cap keeps the context diverse.
         count = doc_count.get(did, 0)
-        if count >= RETRIEVAL_MAX_PER_DOC:
+        if count >= max_per_doc:
             continue
         doc_count[did] = count + 1
         doc_hits.append(RetrievalHit(
@@ -504,6 +432,7 @@ async def _classify_chunk_rows(
         include_references=include_references,
         include_memory=include_memory,
         min_score=await settings.get("RETRIEVAL_MIN_SCORE"),
+        max_per_doc=await settings.get("RETRIEVAL_MAX_PER_DOC"),
     )
 
 
@@ -552,16 +481,12 @@ def _apply_token_budgets(
 async def retrieve_context(
     project_id: str,
     user_query: str,
-    history: list,
     *,
     include_documents: bool,
     include_references: bool,
     include_memory: bool = True,
-    token_budget_docs: int | None = None,
-    token_budget_refs: int | None = None,
-    token_budget_memory: int | None = None,
-    top_k_docs: int | None = None,
-    top_k_refs: int | None = None,
+    top_k_docs: int,
+    top_k_refs: int,
     top_k_memory: int | None = None,
     allowed_doc_ids: set[str] | None = None,
 ) -> RetrievalResult:
@@ -576,11 +501,8 @@ async def retrieve_context(
     """
     if not (include_documents or include_references or include_memory):
         return RetrievalResult()
-    limits = _resolve_retrieval_limits(
-        token_budget_docs, token_budget_refs, token_budget_memory,
-        top_k_docs, top_k_refs, top_k_memory,
-    )
-    query_vecs, error = await _embed_user_query(user_query, history)
+    limits = await _resolve_retrieval_limits(top_k_docs, top_k_refs, top_k_memory)
+    query_vecs, error = await _embed_user_query(user_query)
     if error or not query_vecs:
         return RetrievalResult(error=error)
 

@@ -358,6 +358,30 @@ def test_embedding_calibration_set_moves_together():
     assert declared == _EMBEDDING_CALIBRATION[model]
 
 
+def test_embedding_calibration_set_sits_in_one_admin_section():
+    """The admin shows the model and everything calibrated against it on one
+    screen: the cuts and the query instruction in `Embedding calibration`,
+    directly after the model's own `Embeddings` section.
+
+    Derived from `_EMBEDDING_CALIBRATION`, so a cut added to the set without
+    moving its declaration fails here. Why: a cut filed elsewhere is a cut an
+    operator swaps the model without — the qwen3 cuts under giga lost 10 of 20
+    correct hits.
+    """
+    calibrated = set(next(iter(_EMBEDDING_CALIBRATION.values())))
+    calibrated.add("RETRIEVAL_QUERY_INSTRUCTION")
+    for key in calibrated:
+        entry = find(key)
+        assert entry is not None, f"{key} must be registered"
+        assert (entry.tab, entry.section) == ("models", "Embedding calibration"), key
+    model = find("EMBEDDING_MODEL")
+    assert (model.tab, model.section) == ("models", "Embeddings")
+    sections = list(dict.fromkeys(e.section for e in REGISTRY if e.tab == "models"))
+    assert sections.index("Embedding calibration") == sections.index("Embeddings") + 1
+    in_section = [e.key for e in REGISTRY if e.section == "Embedding calibration"]
+    assert set(in_section) == calibrated, in_section
+
+
 # ─── upload caps: code defaults, not a required-env contract ─────────────────
 
 

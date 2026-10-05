@@ -231,11 +231,11 @@ async def test_sweep_runs_once_per_bundle(test_db, project_with_doc):
 
 
 def test_prompt_help_section_only_with_a_root():
-    from agent_config import build_agent_system_prompt
-    with_root = build_agent_system_prompt({}, help_root={"id": "sys-help-p-index", "title": "Справка Lore"})
+    from agent_config import DEFAULT_BOOTSTRAP_PROMPT, build_agent_system_prompt
+    with_root = build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT, {}, help_root={"id": "sys-help-p-index", "title": "Справка Lore"})
     assert "# Lore help" in with_root
     assert "[Справка Lore](sys-help-p-index)" in with_root
-    assert "# Lore help" not in build_agent_system_prompt({})
+    assert "# Lore help" not in build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT, {})
 
 
 @pytest.mark.asyncio

@@ -90,7 +90,7 @@ def test_splice_rejects_inverted_range():
 # ─── System prompt config ───────────────────────────────────────────────────
 # plan: remove-ask-line-mode-axis (audit §B): test_agent_system_prompt_loaded_
 # and_non_empty asserted on PROMPT_CHAT_AGENT_SYSTEM_PROMPT — a dead prompt that
-# never reached an agent turn (the live prompt is BOOTSTRAP_SYSTEM_PROMPT in
+# never reached an agent turn (the live prompt is the AGENT_BOOTSTRAP_PROMPT setting, in
 # agent_config.py). Deleted with the constant (D7).
 
 

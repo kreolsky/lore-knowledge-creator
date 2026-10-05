@@ -227,7 +227,9 @@ async def test_stats_counts_only_what_embed_missing_would_enqueue(
     _, token = admin_user
     pid, _idx, _ = project_with_doc
     from markdown_chunker import chunk_markdown
-    assert chunk_markdown(_EMBED_ONLY) == [], "fixture must be embed-only"
+    assert chunk_markdown(
+        _EMBED_ONLY, max_chunk_chars=3000, input_max_chars=8000,
+    ) == [], "fixture must be embed-only"
 
     await _seed_doc(pid, "stats-embedonly-nochunks", content=_EMBED_ONLY)
     await _seed_doc(pid, "stats-embedonly-stale", content=_EMBED_ONLY,

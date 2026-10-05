@@ -15,6 +15,17 @@ from pycrdt import Doc, Text
 from db import get_db
 
 
+def _drop_session(doc_id: str) -> None:
+    """Simulate a server restart: pop the session and stop its tasks — a popped
+    session is invisible to the _clear_sessions teardown, so it would leak."""
+    session = _sessions.pop(_session_key("doc", doc_id), None)
+    if session is None:
+        return
+    session.stop_periodic_flush()
+    if session._batch_task and not session._batch_task.done():
+        session._batch_task.cancel()
+
+
 async def _db_content(doc_id: str) -> str | None:
     db = await get_db()
     rows = await db.query(
@@ -183,7 +194,7 @@ async def test_reconnect_after_edit_does_not_duplicate(collab_project, _clear_se
     assert await _db_content(doc_id) == "Hello world"
 
     # Server "restart" / re-enter: drop the in-memory session.
-    _sessions.pop(_session_key("doc", doc_id), None)
+    _drop_session(doc_id)
 
     # Reconnect: a fresh server session loads from the store; the same client
     # (still holding "Hello world") asks for any items it is missing.
@@ -271,7 +282,7 @@ async def test_set_content_persist_prunes_update_log(collab_project, _clear_sess
     await session.flush_to_db()
     assert await _ydoc_updates_count(doc_id) >= 1
 
-    _sessions.pop(_session_key("doc", doc_id), None)
+    _drop_session(doc_id)
     await set_content(doc_id, "Fresh content", persist=True)
 
     assert await _ydoc_updates_count(doc_id) == 0
@@ -284,7 +295,7 @@ async def test_load_after_set_content_persist_returns_correct_content(collab_pro
     from ydoc_store import load, set_content
 
     await set_content(doc_id, "New content", persist=True)
-    _sessions.pop(_session_key("doc", doc_id), None)
+    _drop_session(doc_id)
 
     doc = await load(doc_id)
     assert str(doc.get("content", type=Text)) == "New content"
