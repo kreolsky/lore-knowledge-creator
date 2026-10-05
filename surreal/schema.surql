@@ -42,6 +42,32 @@ DEFINE FIELD IF NOT EXISTS updated_at    ON users TYPE option<datetime>;
 DEFINE FIELD IF NOT EXISTS deleted_at    ON users TYPE option<datetime>;
 DEFINE INDEX IF NOT EXISTS idx_users_email ON users FIELDS email UNIQUE;
 
+-- ─── Model access (see SYSTEM: model-access, backend/model_access.py) ─────────
+-- model_grants: ONE table carries all model access. `subject` is 'public',
+-- 'mod:<moderator uid>' (the virtual moderator group, derived from
+-- users.moderator_id — never stored) or 'group:<groups id>' (an admin group).
+-- Keyed by the gateway model id string; a model gone from the gateway keeps its rows.
+DEFINE TABLE IF NOT EXISTS model_grants SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS model_id   ON model_grants TYPE string;
+DEFINE FIELD IF NOT EXISTS subject    ON model_grants TYPE string;
+DEFINE FIELD IF NOT EXISTS created_at ON model_grants TYPE datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS idx_model_grants_unique ON model_grants FIELDS model_id, subject UNIQUE;
+DEFINE INDEX IF NOT EXISTS idx_model_grants_subject ON model_grants FIELDS subject;
+
+-- groups: ADMIN groups only (moderator groups are virtual). Hard-deleted together
+-- with their group_members rows and their 'group:<id>' grants.
+DEFINE TABLE IF NOT EXISTS groups SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS name       ON groups TYPE string;
+DEFINE FIELD IF NOT EXISTS created_at ON groups TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS updated_at ON groups TYPE option<datetime>;
+
+DEFINE TABLE IF NOT EXISTS group_members SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS group_id   ON group_members TYPE string;
+DEFINE FIELD IF NOT EXISTS user_id    ON group_members TYPE string;
+DEFINE FIELD IF NOT EXISTS created_at ON group_members TYPE datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS idx_group_members_unique ON group_members FIELDS group_id, user_id UNIQUE;
+DEFINE INDEX IF NOT EXISTS idx_group_members_user ON group_members FIELDS user_id;
+
 -- ─── App Meta (one-shot migration markers, e.g. sort_keys_backfill) ──────────
 -- WHY: created lazily by startup migrations (main.py); must be declared so a SELECT
 -- against it on a fresh DB doesn't fail. surrealdb 2.0.0 raises NotFoundError on a query

@@ -108,6 +108,8 @@ const I18N: Record<string, string> = {
   settingsSearch: 'Search',
   settingsStorage: 'Storage & Jobs',
   skills: 'Skills',
+  adminModelAccess: 'Model access',
+  adminGroups: 'Groups',
 };
 const tFn = (k: string) => I18N[k] ?? k;
 
@@ -325,14 +327,14 @@ async function openProjects() {
 }
 
 describe('AdminPage — sections (initial = Users)', () => {
-  it('aside lists all section rows (admin: + settings tabs + Skills) with Users active; no top tabs; projects not fetched until opened', async () => {
+  it('aside lists all section rows (admin: Info on top, Groups + Model access under Users, settings tabs + Skills) with Users active; no top tabs; projects not fetched until opened', async () => {
     await render();
     const rows = Array.from(aside()!.querySelectorAll('button.doc-item'));
     expect(rows.map(r => r.textContent)).toEqual([
-      'Users', 'Projects', 'Info', 'Embeddings',
-      'Models & APIs', 'Search', 'Agent', 'Tools', 'Storage & Jobs', 'Skills',
+      'Info', 'Users', 'Groups', 'Model access', 'Projects',
+      'Models & APIs', 'Search', 'Agent', 'Tools', 'Storage & Jobs', 'Embeddings', 'Skills',
     ]);
-    expect(rows[0].classList.contains('active')).toBe(true);
+    expect(rows[1].classList.contains('active')).toBe(true);
     expect(container.querySelector('.left-bar-tab')).toBeNull();
     expect(projectsCalls()).toEqual([]);
     expect(main()?.textContent).toContain('Add user');
@@ -581,6 +583,8 @@ describe('AdminPage — per-user persistence: last section + shared width (panel
       await render();
       expect(aside()?.querySelector('button.doc-item.active')?.textContent).toBe('Users');
       expect(aside()?.textContent).not.toContain('Skills');
+      expect(aside()?.textContent).not.toContain('Model access');
+      expect(aside()?.textContent).not.toContain('Groups');
       expect(main()?.querySelector('[data-testid^="settings-section-"]')).toBeNull();
       expect(main()?.querySelector('[data-testid="skills-section"]')).toBeNull();
       expect(main()?.textContent).toContain('Add user');

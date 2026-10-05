@@ -154,6 +154,12 @@ async def harness_env(monkeypatch, driver_line_pinned):
 
     monkeypatch.setattr(comp, "_sync_leaf_to_branch_point", _no_leaf_move)
 
+    # The turns here run as a plain project member on model "test": it is public
+    # (SYSTEM: model-access). The gate itself is pinned in test_model_access.py.
+    from db import get_db
+    await (await get_db()).query(
+        "CREATE model_grants CONTENT { model_id: 'test', subject: 'public' }")
+
     driver.channel._channel = None
     yield SimpleNamespace(
         connector=connector, replay=replay, followups=followups)

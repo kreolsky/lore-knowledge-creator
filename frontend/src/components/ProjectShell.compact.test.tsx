@@ -15,7 +15,7 @@ vi.mock('./UserControls', () => ({ UserControls: () => null }));
 import { ProjectShell, type ProjectShellHandle, type LeftTabEntry, type RightTabEntry } from './ProjectShell';
 import { useUIStore, DEFAULT_DOC_STATE } from '../store/ui-store';
 import { useAppStore } from '../store/app-store';
-import type { Document, Reference } from '../types';
+import type { Document, Project, Reference } from '../types';
 
 const ORIGINAL_UI = useUIStore.getState();
 const ORIGINAL_APP = useAppStore.getState();
@@ -83,8 +83,24 @@ describe('ProjectShell — compact viewport', () => {
     expect(drawerOpen()).toBe(false);
     expect(byTestId('shell-right')).toBeNull();
     expect(byTestId('compact-scrim')).toBeNull();
-    expect(container.querySelector('.left-tab-bar')).toBeNull();
     expect(container.querySelector('.resizer')).toBeNull();
+  });
+
+  it('drawer keeps the desktop tab bar; title names the project on docs, the document on toc', () => {
+    useAppStore.setState({
+      currentProject: { project_id: 'p-1', name: 'Atlas' } as Project,
+      currentDocument: { document_id: 'doc-1', title: 'Chapter One' } as Document,
+    });
+    mount();
+    click(byTitle('compactToggleTree'));
+    const drawer = byTestId('shell-left')!;
+    expect(drawer.querySelector('.left-tab-bar button[title="docs"]')).not.toBeNull();
+    click(byTitle('docs'));
+    expect(drawer.textContent).toContain('Atlas');
+    expect(drawer.textContent).not.toContain('Chapter One');
+    click(byTitle('toc'));
+    expect(drawer.textContent).toContain('Chapter One');
+    expect(drawer.textContent).not.toContain('Atlas');
   });
 
   it('tree button opens the drawer; scrim closes it; tree button toggles it', () => {

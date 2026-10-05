@@ -17,6 +17,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import httpx
 import pytest
 import pytest_asyncio
+from arq.connections import ArqRedis
 from db_leak_guard import restore_leaked_db_fakes
 from db_probe import PROBE_SQL, probe_answer_is_healthy
 from db_reset import db_name_for_worker, reset_test_database_sql
@@ -308,6 +309,7 @@ _DATA_TABLES = [
     "document_shares", "pending_invites",
     "registration_invites",
     "documents", "project_members", "projects", "users",
+    "model_grants", "group_members", "groups",
     # ydoc_updates: the append-only CRDT log. NOT cleaning it lets a prior session's
     # update replay on load() and mutate a freshly-seeded doc's content, so an edit
     # re-resolves as STALE (old_string already applied) — a cross-session flake.
@@ -522,6 +524,52 @@ async def _db_patch_every_worker(test_db):
     # function-scoped variant would re-run the sys.modules scan per test.
     """
     yield
+
+
+# Event loop id → (loop, arq pool); the loop is kept to detect id reuse by a new loop.
+_arq_pools_by_loop_id: dict[int, tuple[asyncio.AbstractEventLoop, ArqRedis]] = {}
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _arq_pool_per_loop():
+    """Give every event loop its own arq pool (production keeps one per process).
+
+    # INVARIANT: a TestClient portal loop never shares an arq pool with the session loop.
+    # Why: an async WS test blocks the session loop in a synchronous ws.receive_text();
+    # a session-loop task (e.g. the embeddings content_flushed hook) holding the shared
+    # redis ConnectionPool lock then never releases it, and the WS join's open-backup
+    # enqueue on the portal waits on that lock until the zombie reaper closes the socket
+    # with 4008 after 90 s. Production runs one loop per web process, so the seam is
+    # test-only — same reason as the per-loop SurrealDB cache (_get_test_db).
+    """
+    from arq import create_pool
+
+    from jobs import pool as jobs_pool
+
+    async def get_arq_pool_for_this_loop() -> ArqRedis:
+        loop = asyncio.get_running_loop()
+        entry = _arq_pools_by_loop_id.get(id(loop))
+        if entry is None or entry[0] is not loop:
+            entry = (loop, await create_pool(jobs_pool._redis_settings()))
+            _arq_pools_by_loop_id[id(loop)] = entry
+        return entry[1]
+
+    async def close_arq_pool_for_this_loop() -> None:
+        # WHY prune: a portal loop is closed when its WS session ends, so its pool can
+        # neither be closed nor reused — dropping the reference lets GC reclaim it
+        # instead of growing the map by one pool per WS test.
+        for loop_id, (loop, _pool) in list(_arq_pools_by_loop_id.items()):
+            if loop.is_closed():
+                del _arq_pools_by_loop_id[loop_id]
+        entry = _arq_pools_by_loop_id.pop(id(asyncio.get_running_loop()), None)
+        if entry is not None:
+            await entry[1].close()
+
+    original = (jobs_pool.get_arq_pool, jobs_pool.close_arq_pool)
+    jobs_pool.get_arq_pool = get_arq_pool_for_this_loop
+    jobs_pool.close_arq_pool = close_arq_pool_for_this_loop
+    yield
+    jobs_pool.get_arq_pool, jobs_pool.close_arq_pool = original
 
 
 @pytest_asyncio.fixture(scope="session")

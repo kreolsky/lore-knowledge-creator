@@ -7,7 +7,9 @@ Pins the admin-info plan's contract:
   (the buckets are disjoint: deleted = own deleted_at, any project state;
   in_deleted_projects = own live + project dead — the union is the plain sum);
 - the disk numbers sum the real files; a missing DB mount is an explicit error (`disk: null` + `disk_error` naming
-  the path), never 0 — no silent degradation.
+  the path), never 0 — no silent degradation;
+- a plain read is served from the memo (same `measured_at`); `?fresh=1`
+  re-measures. Tests that compare before/after read with `fresh`.
 """
 
 from pathlib import Path
@@ -18,9 +20,10 @@ import config
 from db import get_db
 
 
-async def _storage(client, token: str) -> dict:
+async def _storage(client, token: str, fresh: bool = True) -> dict:
     resp = await client.get(
         "/api/admin/info/storage",
+        params={"fresh": "1"} if fresh else None,
         cookies={"lore_session": token},
     )
     assert resp.status_code == 200, resp.text
@@ -48,6 +51,7 @@ async def test_storage_admin_shape(client, admin_user, project_with_doc):
     assert "disk" in data
     assert "disk_error" in data
     assert "measured_ms" in data
+    assert "measured_at" in data
     assert isinstance(data["tables"], list) and data["tables"]
     row = data["tables"][0]
     for key in ("name", "live_rows", "live_bytes", "deleted_rows", "deleted_bytes",
@@ -117,6 +121,40 @@ async def test_live_document_in_deleted_project_raises_in_dead_bucket(
     assert after["in_deleted_projects_rows"] == before["in_deleted_projects_rows"] + 1
     # The document itself is untouched: the own-deleted bucket must not move.
     assert after["deleted_rows"] == before["deleted_rows"]
+
+
+@pytest.mark.asyncio
+async def test_plain_read_is_memoized_fresh_remeasures(client, admin_user, project_with_doc):
+    """A plain read returns the memoized measurement — a soft-delete after it
+    does not show; `fresh` re-measures and does show it, with a new stamp."""
+    _, token = admin_user
+    _, idx_id, _ = project_with_doc
+    measured = await _storage(client, token)
+
+    db = await get_db()
+    await db.query(
+        "UPDATE type::record('documents', $id) SET deleted_at = time::now()",
+        {"id": idx_id},
+    )
+
+    cached = await _storage(client, token, fresh=False)
+    assert cached["measured_at"] == measured["measured_at"]
+    assert _documents_row(cached)["deleted_rows"] == _documents_row(measured)["deleted_rows"]
+
+    refreshed = await _storage(client, token)
+    assert refreshed["measured_at"] != measured["measured_at"]
+    assert _documents_row(refreshed)["deleted_rows"] == _documents_row(measured)["deleted_rows"] + 1
+
+
+@pytest.mark.asyncio
+async def test_memo_not_served_to_non_admin(client, admin_user, regular_user):
+    """A warm memo does not bypass the admin gate."""
+    await _storage(client, admin_user[1])
+    resp = await client.get(
+        "/api/admin/info/storage",
+        cookies={"lore_session": regular_user[1]},
+    )
+    assert resp.status_code == 403
 
 
 _MISSING_DB_DIR = Path("/nonexistent-lore-info-test/lore.db")

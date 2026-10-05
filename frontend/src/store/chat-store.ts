@@ -81,6 +81,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   agentUnavailableReason: null,
 
   pendingInputFocus: false,
+  modelPickerOpen: false,
   pendingImages: [],
   // SYSTEM: chat-draft — composer text held in-store (survives tab-switch unmount).
   draft: '',

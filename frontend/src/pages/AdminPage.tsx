@@ -5,7 +5,8 @@
  */
 // ARCH: Thin shell — SectionShell owns the chrome with NO top tabs: the gear
 // button in UserControls is the section's tab, the aside lists the sections
-// (Users / Projects / Embeddings + the admin-only settings tabs and Skills)
+// (Users / Projects / Embeddings + the admin-only settings tabs, Skills,
+// Model access and Groups)
 // as rows, the center carries the active section's FULL list. All domain
 // handlers live here; the list renderers (ProjectsTab, UsersTab) render only.
 // The settings/skills sections fetch from inside their own components (an
@@ -20,7 +21,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FolderOpen, Users as UsersIcon, Layers, Cpu, Bot, Wrench, Search, Database, Sparkles, Gauge } from 'lucide-react';
+import { FolderOpen, Users as UsersIcon, Layers, Cpu, Bot, Wrench, Search, Database, Sparkles, Gauge, KeyRound, UsersRound } from 'lucide-react';
 import { apiClient } from '../api/client';
 import { listAdminProjects, listAdminUsers } from '../api/admin';
 import type { SettingsTabId } from '../api/admin';
@@ -38,13 +39,16 @@ import { EmbeddingsTab } from '../components/admin/EmbeddingsTab';
 import { InfoTab } from '../components/admin/InfoTab';
 import { SettingsSection } from '../components/admin/SettingsSection';
 import { SkillsSection } from '../components/admin/SkillsSection';
+import { ModelsSection } from '../components/admin/ModelsSection';
+import { GroupsSection } from '../components/admin/GroupsSection';
 import { withOptimistic } from '../utils/optimistic';
 import { serverRefusalDetail } from '../utils/server-refusal-detail';
 import { AddUserForm } from '../components/admin/AddUserForm';
 
 type AdminTab = AdminSectionTab;
 
-/** The admin-only sections, appended after Users / Projects in this order —
+/** The admin-only sections in aside order — `slot` places a row above Users
+ * ('top') or between Users and Projects ('users'); the rest follow Projects —
  * ONE row per section feeds the aside rows, the saved-section validation
  * list (sectionsAtMount) and the settings-tab lookup. The tab LIST is fixed
  * here, never derived from the server (a new section needs an i18n label
@@ -56,14 +60,17 @@ const ADMIN_ONLY_SECTIONS: readonly {
   labelKey: TranslationKey;
   /** `settings:<registry tab>` rows carry the registry tab id for the center. */
   settingsTab?: SettingsTabId;
+  slot?: 'top' | 'users';
 }[] = [
-  { tab: 'info', icon: <Gauge size={14} />, labelKey: 'adminInfo' },
-  { tab: 'embeddings', icon: <Layers size={14} />, labelKey: 'embeddings' },
+  { tab: 'info', icon: <Gauge size={14} />, labelKey: 'adminInfo', slot: 'top' },
+  { tab: 'groups', icon: <UsersRound size={14} />, labelKey: 'adminGroups', slot: 'users' },
+  { tab: 'model-access', icon: <KeyRound size={14} />, labelKey: 'adminModelAccess', slot: 'users' },
   { tab: 'settings:models', icon: <Cpu size={14} />, labelKey: 'settingsModels', settingsTab: 'models' },
   { tab: 'settings:search', icon: <Search size={14} />, labelKey: 'settingsSearch', settingsTab: 'search' },
   { tab: 'settings:agent', icon: <Bot size={14} />, labelKey: 'settingsAgent', settingsTab: 'agent' },
   { tab: 'settings:tools', icon: <Wrench size={14} />, labelKey: 'settingsTools', settingsTab: 'tools' },
   { tab: 'settings:storage', icon: <Database size={14} />, labelKey: 'settingsStorage', settingsTab: 'storage' },
+  { tab: 'embeddings', icon: <Layers size={14} />, labelKey: 'embeddings' },
   { tab: 'skills', icon: <Sparkles size={14} />, labelKey: 'skills' },
 ];
 
@@ -421,13 +428,19 @@ export function AdminPage() {
     }
   };
 
-  // Embeddings, the settings tabs and Skills are admin-only (capability
-  // flag, not a role comparison). Flat rows beside the others — a section is
-  // a heading in the center, never a second navigation level.
+  // Embeddings, the settings tabs, Skills, Model access and Groups are
+  // admin-only (capability flag, not a role comparison). Flat rows beside the
+  // others — a section is a heading in the center, never a second navigation
+  // level. Each admin row's `slot` picks its place around Users / Projects.
+  const adminRows = (slot: 'top' | 'users' | undefined) => (isAdmin
+    ? ADMIN_ONLY_SECTIONS.filter(s => s.slot === slot).map(s => ({ tab: s.tab, icon: s.icon, label: t(s.labelKey) }))
+    : []);
   const sections: { tab: AdminTab; icon: ReactNode; label: string }[] = [
+    ...adminRows('top'),
     { tab: 'users', icon: <UsersIcon size={14} />, label: t('users') },
+    ...adminRows('users'),
     { tab: 'projects', icon: <FolderOpen size={14} />, label: t('projects') },
-    ...(isAdmin ? ADMIN_ONLY_SECTIONS.map(s => ({ tab: s.tab, icon: s.icon, label: t(s.labelKey) })) : []),
+    ...adminRows(undefined),
   ];
   const settingsTab = ADMIN_ONLY_SECTIONS.find(s => s.tab === tab)?.settingsTab;
 
@@ -516,6 +529,8 @@ export function AdminPage() {
             {tab === 'embeddings' && <EmbeddingsTab />}
             {settingsTab !== undefined && <SettingsSection tab={settingsTab} />}
             {tab === 'skills' && <SkillsSection />}
+            {tab === 'model-access' && <ModelsSection />}
+            {tab === 'groups' && <GroupsSection />}
           </div>
         </div>
       )}

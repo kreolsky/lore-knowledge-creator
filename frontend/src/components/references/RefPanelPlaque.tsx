@@ -52,7 +52,7 @@ export function RefPanelPlaque({
 
   return (
     <div data-testid="refs-panel-plaque" className="flex items-center gap-1 px-3 py-2 border-b border-border bg-surface min-h-[40px]">
-      <Button variant="yellow" size="sm" onClick={onBack}>
+      <Button variant="primary" size="sm" onClick={onBack}>
         <ArrowLeft size={13} />
         {t('references')}
       </Button>

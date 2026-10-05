@@ -2,6 +2,7 @@
 import type { ChatMessage, RegionRef } from '../../types';
 import { deriveUIMode } from '../../types';
 import { apiClient, RequestTooLargeError } from '../../api/client';
+import type { ForbiddenError } from '../../api/client';
 import { useAppStore } from '../app-store';
 import { useUIStore } from '../ui-store';
 import { refIsScope } from '../ui-store/documents-slice';
@@ -202,7 +203,7 @@ export async function runCompletion(set: Set, get: Get, opts: RunCompletionOpts)
       optimisticUserId: opts.optimisticUserId,
     });
   } catch (e) {
-    const failed = handleSendError(e, opts.errorLabel);
+    const failed = handleSendError(e, opts.errorLabel, set, get);
     if (failed) markStreamingFailed(set, get);
     rollbackOptimisticUser(set, opts.optimisticUserId);
   } finally {
@@ -215,6 +216,8 @@ export async function runCompletion(set: Set, get: Get, opts: RunCompletionOpts)
  *
  * - 413 (body over the server cap — usually accumulated history images) → the
  *   explicit "request too large" toast.
+ * - 403 `model_forbidden` (the turn's model is not granted to this user) → a
+ *   toast naming the model, a fresh /models roster, and the picker opened.
  * - AbortError → silent (user-initiated stop).
  * - Any other failure (network 500, stream throw mid-turn) → a generic error
  *   toast.
@@ -222,9 +225,22 @@ export async function runCompletion(set: Set, get: Get, opts: RunCompletionOpts)
  * Returns true for a genuine failure (caller marks the truncated bubble unsaved);
  * false for AbortError (user-initiated stop — silent, no failure badge).
  */
-function handleSendError(e: unknown, label: string): boolean {
+function handleSendError(e: unknown, label: string, set: Set, get: Get): boolean {
   if (e instanceof RequestTooLargeError) {
     useAppStore.getState().showToast(t('chatRequestTooLarge'), 'error');
+    return true;
+  }
+  const refused = modelForbidden(e);
+  if (refused !== null) {
+    // WHY: a refused model is never silently swapped for another one — the
+    // user is told which model and picks the next one themself; a swap would
+    // answer with a model the user did not choose, under the name of the one
+    // they did.
+    useAppStore.getState().showToast(t('chatModelForbidden', { model: refused }), 'error');
+    // The cached roster still lists the revoked model — refetch before the
+    // picker opens on it.
+    set({ modelsLoaded: false, modelPickerOpen: true });
+    void get().loadModels();
     return true;
   }
   if ((e as Error).name === 'AbortError') {
@@ -233,6 +249,15 @@ function handleSendError(e: unknown, label: string): boolean {
   console.error(label, e);
   useAppStore.getState().showToast(t('chatSendFailed'), 'error');
   return true;
+}
+
+/** The refused model id of a 403 `{code: 'model_forbidden', model}`, else null. */
+function modelForbidden(e: unknown): string | null {
+  // Matched by name, like the AbortError check in handleSendError.
+  if ((e as Error | null)?.name !== 'ForbiddenError') return null;
+  const detail = (e as ForbiddenError).detail as { code?: unknown; model?: unknown } | null | undefined;
+  if (detail?.code !== 'model_forbidden') return null;
+  return typeof detail.model === 'string' ? detail.model : '';
 }
 
 /**

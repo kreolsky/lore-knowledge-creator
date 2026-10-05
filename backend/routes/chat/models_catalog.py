@@ -19,6 +19,7 @@ import driver.client
 import http_clients
 import settings
 from fastapi import Depends, HTTPException
+from model_access import available_models
 
 import config
 from auth import get_current_user
@@ -269,6 +270,14 @@ def _context_windows_map(entries: list[dict]) -> dict[str, int]:
     return out
 
 
+async def gateway_model_ids() -> list[str]:
+    """Ids the gateway serves now (TTL-cached); [] when AI_API_URL is unset.
+    Raises on a gateway failure — the admin Models list answers 503 like the picker."""
+    if not await settings.get("AI_API_URL"):
+        return []
+    return [m["id"] for m in await _gateway_model_entries() if m.get("id")]
+
+
 # ─── Models endpoint ──────────────────────────────────────────────────────────
 
 
@@ -328,7 +337,7 @@ async def _capability_snapshot() -> dict:
 
 
 @router.get("/models")
-async def list_models(_user: dict = Depends(get_current_user)):
+async def list_models(user: dict = Depends(get_current_user)):
     """Proxy GET /v1/models from the AI API. Returns model ID list + capability flags.
 
     Reports Agent-line availability and the vision-capable model set
@@ -345,11 +354,16 @@ async def list_models(_user: dict = Depends(get_current_user)):
     changes on the order of weeks, so the staleness is accepted over a per-open
     gateway RTT. The `reasoning` map rides its own cache with the same TTL and
     the same accepted lag.
+
+    The roster is FILTERED to the caller's available models (SYSTEM:
+    model-access) — the picker only; the turn gate is require_model_access.
     """
     api_url = await settings.get("AI_API_URL")
     if not api_url:
         cap = await _capability_snapshot()
         return _models_payload([], cap)
+    # Read before the try: a DB failure here is not "AI service unavailable".
+    allowed = await available_models(user)
     try:
         # Run the gateway fetches and the capability check concurrently — they're
         # independent. agent_capability is a config read (no probe, cannot
@@ -360,6 +374,9 @@ async def list_models(_user: dict = Depends(get_current_user)):
             _capability_snapshot(),
             gateway_reasoning_map(),
         )
+        if allowed is not None:
+            entries = [e for e in entries if e.get("id") in allowed]
+            reasoning = {k: v for k, v in reasoning.items() if k in allowed}
         return _models_payload(
             entries, cap, reasoning=reasoning,
             default_model=await settings.get("CHAT_MODEL"),

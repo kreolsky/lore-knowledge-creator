@@ -1,16 +1,21 @@
 """Admin info routes — instance-level storage stats for the admin Info section.
 
-# ARCH: computed ON REQUEST, never polled and never cached. These numbers feed
-# a human looking at Admin → Info once; nothing schedules or subscribes to
+# ARCH: computed ON REQUEST, never polled and never prewarmed. These numbers
+# feed a human looking at Admin → Info; nothing schedules or subscribes to
 # them. A full run is seconds of serial per-table scans — fine on demand, wrong
-# on a timer. Do not add polling, caching or a background job for this.
+# on a timer. Do not add polling or a background job for this. The last result
+# is memoized for STORAGE_CACHE_TTL_S (the data moves slowly) and always
+# carries its `measured_at`, so a cached answer is never shown as current;
+# `?fresh=1` (the Refresh button) bypasses the memo.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends
@@ -23,6 +28,15 @@ from db import get_db, validate_record_id
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin/info", tags=["admin-info"])
+
+STORAGE_CACHE_TTL_S = 30 * 60
+
+# Process-local memo (per replica): one admin reads this, a restart recomputes
+# once. Only successful measurements are stored — a failed scan raises and the
+# next request retries.
+_storage_cache: dict | None = None
+_storage_cache_at: float = 0.0
+_storage_lock = asyncio.Lock()
 
 # One statement per table. The inner SELECT derives the group keys and the row
 # length; `$this` is refused directly under GROUP BY, hence the subquery.
@@ -157,9 +171,8 @@ async def _tables_part(db: AsyncSurreal) -> tuple[list[dict], dict]:
     return tables, totals
 
 
-@router.get("/storage")
-async def get_storage(_: dict = Depends(require_admin), db: AsyncSurreal = Depends(get_db)):
-    """Database size on disk + soft-deleted data, table by table (admin only)."""
+async def _measure(db: AsyncSurreal) -> dict:
+    """One full storage measurement, stamped with when it was taken."""
     started = time.monotonic()
     disk, disk_error = _disk_part()
     tables, totals = await _tables_part(db)
@@ -169,4 +182,31 @@ async def get_storage(_: dict = Depends(require_admin), db: AsyncSurreal = Depen
         "tables": tables,
         "totals": totals,
         "measured_ms": round((time.monotonic() - started) * 1000),
+        "measured_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@router.get("/storage")
+async def get_storage(
+    fresh: bool = False,
+    _: dict = Depends(require_admin),
+    db: AsyncSurreal = Depends(get_db),
+):
+    """Database size on disk + soft-deleted data, table by table (admin only).
+
+    Served from a STORAGE_CACHE_TTL_S memo unless `fresh` is set. A `fresh`
+    request that waited on an in-flight run reuses that run — it finished after
+    the request was made, and a second scan right behind it would only repeat it.
+    """
+    global _storage_cache, _storage_cache_at
+    asked_at = time.monotonic()
+    async with _storage_lock:  # INVARIANT: at most one measurement runs at a time; a waiter reuses its result.
+        # Why: each run is seconds of serial scans on the ONE shared DB connection —
+        # stacked runs contend with every other query instead of finishing sooner.
+        if _storage_cache is not None:
+            age = time.monotonic() - _storage_cache_at
+            if (not fresh and age < STORAGE_CACHE_TTL_S) or _storage_cache_at >= asked_at:
+                return _storage_cache
+        _storage_cache = await _measure(db)
+        _storage_cache_at = time.monotonic()
+        return _storage_cache

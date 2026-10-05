@@ -25,7 +25,7 @@
 //       single right tab — no special-case branch inside Shell.
 
 import type React from 'react';
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 import { PanelLeft, PanelRight, X } from 'lucide-react';
 import { useResizer } from '../hooks/useResizer';
 import { useDocumentNavigation } from '../navigation/useDocumentNavigation';
@@ -151,6 +151,9 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
   const docKey = useAppStore(s => s.currentDocument?.document_id ?? null);
   const refKey = useAppStore(s => s.currentReference?.reference_id ?? null);
   const tableKey = useAppStore(s => s.currentTable);
+  const currentDocTitle = useAppStore(s => s.currentDocument?.title ?? null);
+  const currentProjectName = useAppStore(s => s.currentProject?.name ?? null);
+  const publicProjectName = useUIStore(s => s.publicProjectName);
   // Whatever opens an entity in the center (tree pick, link in chat, a reference)
   // closes the compact panel — one rule, no per-call-site wiring.
   useEffect(() => { setCompactPanel('none'); }, [docKey, refKey, tableKey]);
@@ -292,10 +295,15 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
   const hasLeftBar = leftTabs.length > 0;
   const hasRight = rightTabs.length > 0;
 
+  // Compact drawer title: the docs tab names the project, the toc tab the open document.
+  const compactLeftTitle = effectiveSidebarTab === 'toc'
+    ? currentDocTitle
+    : (currentProjectName ?? publicProjectName);
+
   const renderLeftTabButtons = () => leftTabs.map(entry => (
     <button
       key={entry.tab}
-      className={`left-bar-tab ${compact ? COMPACT_TAB_CLS : ''} ${sidebarIsOpen && effectiveSidebarTab === entry.tab ? 'active' : ''}`}
+      className={`left-bar-tab ${sidebarIsOpen && effectiveSidebarTab === entry.tab ? 'active' : ''}`}
       onClick={() => handleSidebarTabClick(entry.tab)}
       title={entry.title}
     >
@@ -337,21 +345,12 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
               data-testid="shell-left"
               className={compact
                 ? `compact-drawer ${sidebarIsOpen ? 'compact-drawer--open' : ''} fixed inset-y-0 left-0 z-[31] w-[min(calc(100vw-56px),360px)] flex flex-col bg-surface`
-                : 'flex shrink-0 h-full'}
+                : 'flex flex-col shrink-0 h-full'}
             >
-              {!compact && (
-                <div className="left-tab-bar">
-                  <div className="flex flex-col items-center gap-0.5">
-                    {renderLeftTabButtons()}
-                  </div>
-                  <div className="flex-1" />
-                  <UserControls layout="vertical" variant={userControlsVariant} />
-                </div>
-              )}
+              {/* Compact title row spans the whole drawer; the tab bar starts below it. */}
               {compact && (
-                <div className="flex shrink-0 h-12 bg-header-bg border-b border-border-soft">
-                  {renderLeftTabButtons()}
-                  <div className="flex-1" />
+                <div className="flex items-center shrink-0 h-12 pl-3 bg-header-bg border-b border-border-soft">
+                  <span className="flex-1 min-w-0 truncate text-sm font-medium">{compactLeftTitle}</span>
                   <div className={COMPACT_CELL_CLS}>
                     <IconButton title={t('close')} onClick={() => setCompactPanel('none')}>
                       <X size={16} />
@@ -360,23 +359,30 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
                 </div>
               )}
 
-              <aside
-                className={`${s.sidebar} ${compact ? 'flex-1 min-h-0 !w-full !max-w-none' : ''}`}
-                style={compact ? undefined : {
-                  width: sidebarResizer.isOpen ? sidebarResizer.width : 0,
-                  minWidth: sidebarResizer.isOpen ? undefined : 0,
-                  overflow: sidebarResizer.isOpen ? undefined : 'hidden',
-                }}
-              >
-                {leftTabs.map(entry => effectiveSidebarTab === entry.tab ? (
-                  <div key={entry.tab} className="h-full">{entry.renderPanel()}</div>
-                ) : null)}
-              </aside>
-              {compact && (
-                <div className="flex items-center gap-0.5 shrink-0 px-1 pt-1 border-t border-border-soft pb-[env(safe-area-inset-bottom)]">
-                  <UserControls variant={userControlsVariant} />
+              <div className="flex flex-1 min-h-0">
+                <div className="left-tab-bar">
+                  <div className="flex flex-col items-center gap-0.5">
+                    {renderLeftTabButtons()}
+                  </div>
+                  <div className="flex-1" />
+                  <UserControls layout="vertical" variant={userControlsVariant} />
                 </div>
-              )}
+
+                <aside
+                  className={`${s.sidebar} ${compact ? 'flex-1 min-w-0 !w-auto !max-w-none' : ''}`}
+                  style={compact ? undefined : {
+                    width: sidebarResizer.isOpen ? sidebarResizer.width : 0,
+                    minWidth: sidebarResizer.isOpen ? undefined : 0,
+                    overflow: sidebarResizer.isOpen ? undefined : 'hidden',
+                  }}
+                >
+                  {/* WHY: the panel is a DIRECT child of the flex-column aside — its root
+                      (.sidebarToc / .sidebarDocs) scrolls via flex:1, which a block wrapper voids. */}
+                  {leftTabs.map(entry => effectiveSidebarTab === entry.tab ? (
+                    <Fragment key={entry.tab}>{entry.renderPanel()}</Fragment>
+                  ) : null)}
+                </aside>
+              </div>
             </div>
           )}
 

@@ -35,6 +35,7 @@ from driver.client import (
     resolve_driver_line,
 )
 from fastapi import Depends, HTTPException
+from model_access import require_model_access
 from rate_limit import check_completion_rate_limit
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
@@ -271,6 +272,10 @@ async def _validate_turn_and_model(
             status_code=400,
             detail="Set the chat model in Admin panel → Models & APIs",
         )
+    # INVARIANT(security): the ONE model-access gate, AFTER resolution — explicit,
+    # session-pinned, inherited and revoked-after-pinning models all 403 here.
+    # Why: session create/PATCH stay unchecked; the turn is where a model runs.
+    await require_model_access(user, model)
     # ARCH: the SESSION is the single source
     # for the effort (no per-request override — the composer PATCHes first).
     # No fallback: None = Default, the harness materializes the adapter

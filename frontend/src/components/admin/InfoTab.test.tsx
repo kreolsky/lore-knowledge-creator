@@ -33,6 +33,7 @@ const RESPONSE = {
   ],
   totals: { live_rows: 53, live_bytes: 45300, deleted_rows: 2, deleted_bytes: 12000, in_deleted_projects_rows: 1, in_deleted_projects_bytes: 100 },
   measured_ms: 42,
+  measured_at: '2026-10-05T11:07:00+00:00',
 };
 
 const I18N: Record<string, string> = {
@@ -49,11 +50,11 @@ const I18N: Record<string, string> = {
   infoInDeletedProjects: 'In deleted projects',
   infoRefresh: 'Refresh',
   infoMeasuring: 'Measuring…',
-  infoMeasured: 'Measured in {ms} ms',
+  infoMeasured: 'Measured at {at} in {ms} ms',
   failedToLoadStorageStats: 'Failed to load storage stats',
 };
 const tFn = (k: string, vars?: Record<string, string | number>) =>
-  vars ? (I18N[k] ?? k).replace('{ms}', String(vars.ms ?? '')) : (I18N[k] ?? k);
+  Object.entries(vars ?? {}).reduce((s, [v, x]) => s.replace(`{${v}}`, String(x)), I18N[k] ?? k);
 
 beforeEach(async () => {
   vi.resetModules();
@@ -113,6 +114,7 @@ describe('InfoTab — numbers', () => {
     const stats = Array.from(container.querySelectorAll('[data-info-stat]')).map(e => e.textContent);
     expect(stats).toEqual(['1.5 KB', '11.8 KB']); // db_bytes=1536; deleted 12000+100=12100B
     expect(container.textContent).toContain('Volume total: 2.0 KB');
+    // Opening the tab reads the backend memo — no forced re-measure.
     expect(apiGet).toHaveBeenCalledWith('/admin/info/storage');
   });
 
@@ -120,10 +122,12 @@ describe('InfoTab — numbers', () => {
     await render();
     // doc_chunks (9000) > documents (3000) > users (0)
     expect(rowNames()).toEqual(['doc_chunks', 'documents', 'users']);
-    expect(container.textContent).toContain('Measured in 42 ms');
+    // The measurement time is always shown, so a memoized answer never reads as current.
+    const at = new Date(RESPONSE.measured_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    expect(container.textContent).toContain(`Measured at ${at} in 42 ms`);
   });
 
-  it('Refresh refetches', async () => {
+  it('Refresh forces a fresh measurement', async () => {
     await render();
     const before = apiGet.mock.calls.length;
     const btn = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.trim() === 'Refresh');
@@ -131,6 +135,7 @@ describe('InfoTab — numbers', () => {
     await act(async () => { btn!.click(); });
     await act(async () => {});
     expect(apiGet.mock.calls.length).toBe(before + 1);
+    expect(apiGet).toHaveBeenLastCalledWith('/admin/info/storage?fresh=1');
   });
 
   it('disables Refresh while a measurement is in flight, so clicks cannot stack scans', async () => {

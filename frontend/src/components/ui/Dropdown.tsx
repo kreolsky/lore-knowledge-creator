@@ -43,6 +43,9 @@ export interface DropdownProps {
   /** Trigger height: `sm` (composer rows) or `lg` = FieldInput's 37px, for a
    * selector sitting in the same row as inputs (admin forms). */
   size?: 'sm' | 'lg';
+  /** Controlled open state, passed through to Popover; omit for uncontrolled. */
+  open?: boolean;
+  onOpenChange?: (v: boolean) => void;
 }
 
 export function Dropdown({
@@ -58,6 +61,8 @@ export function Dropdown({
   align = 'left',
   placement = 'top',
   size = 'sm',
+  open,
+  onOpenChange,
 }: DropdownProps) {
   // -1 when no option carries `value` (an action picker such as "Add user…"):
   // the keyboard cursor then seeds on nothing, so no row opens pre-highlighted
@@ -101,6 +106,8 @@ export function Dropdown({
       }
       align={align}
       placement={placement}
+      open={open}
+      onOpenChange={onOpenChange}
       keyboardNav
       itemCount={options.length}
       isItemDisabled={isItemDisabled}

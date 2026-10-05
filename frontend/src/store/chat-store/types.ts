@@ -155,6 +155,10 @@ export interface ChatState {
 
   // UI signals
   pendingInputFocus: boolean;
+  // The composer's model picker, opened by a turn refused with 403
+  // `model_forbidden` so the user picks an available model (ChatInput
+  // controls the Dropdown with it).
+  modelPickerOpen: boolean;
   pendingImages: string[];
   // SYSTEM: chat-draft — the composer text held in the store (ONE shared string,
   // session-agnostic) so it survives ChatPanel unmount on right-panel tab switches.
@@ -291,6 +295,7 @@ export interface ChatState {
 
   // Actions — models
   loadModels: () => Promise<void>;
+  setModelPickerOpen: (v: boolean) => void;
 
   // Actions — agent mode
   // (proposal apply actions were deleted with the proposal cluster —

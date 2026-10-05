@@ -1,7 +1,9 @@
 /** Admin info tab — instance storage: DB size on disk + soft-deleted data.
 
- * Computed on request by GET /api/admin/info/storage (never polled, never
- * cached): the Refresh button is the only way numbers change. The disk number
+ * Read from GET /api/admin/info/storage, which memoizes the last measurement
+ * for 30 min (never polled): opening the tab reads the memo, the Refresh
+ * button forces a new measurement, and the time the numbers were taken is
+ * always shown so a memoized answer never reads as current. The disk number
  * is the live lore.db directory (volume total shown beside it); the per-table
  * bytes are a LOGICAL estimate — labelled as such, never presented as disk
  * usage. A missing mount renders the backend's disk_error text as an error,
@@ -51,10 +53,10 @@ export function InfoTab() {
   const { t } = useTranslation();
   const showToast = useAppStore(s => s.showToast);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (fresh: boolean) => {
     setLoading(true);
     try {
-      const data = await getAdminStorageInfo();
+      const data = await getAdminStorageInfo(fresh);
       setInfo(data);
       setLoadFailed(false);
     } catch {
@@ -66,7 +68,7 @@ export function InfoTab() {
   }, [showToast]);
 
   useEffect(() => {
-    load();
+    load(false);
   }, [load]);
 
   const tables = info
@@ -99,7 +101,7 @@ export function InfoTab() {
           <div>
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs text-text-dim">{t('infoLogicalEstimate')}</span>
-              <Button size="sm" onClick={load} disabled={loading}>
+              <Button size="sm" onClick={() => load(true)} disabled={loading}>
                 {loading ? t('infoMeasuring') : t('infoRefresh')}
               </Button>
             </div>
@@ -133,7 +135,10 @@ export function InfoTab() {
                 </tbody>
               </table>
             </div>
-            <div className="text-xs text-text-dim mt-2">{t('infoMeasured', { ms: info.measured_ms })}</div>
+            <div className="text-xs text-text-dim mt-2">{t('infoMeasured', {
+              at: new Date(info.measured_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              ms: info.measured_ms,
+            })}</div>
           </div>
         </>
       )}

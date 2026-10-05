@@ -33,6 +33,7 @@ type MiscSlice = Pick<
   | 'setDraft'
   | 'setListFilter'
   | 'loadModels'
+  | 'setModelPickerOpen'
   | 'reset'
 >;
 
@@ -88,6 +89,10 @@ export function createMiscSlice(set: Set, get: Get): MiscSlice {
       } catch {
         useAppStore.getState().showToast(t('failedToLoadModels'), 'error');
       }
+    },
+
+    setModelPickerOpen(v: boolean) {
+      set({ modelPickerOpen: v });
     },
 
     reset() {

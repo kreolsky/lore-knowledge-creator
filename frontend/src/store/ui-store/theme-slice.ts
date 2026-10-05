@@ -44,7 +44,9 @@ export type AdminSectionTab =
   | 'settings:tools'
   | 'settings:search'
   | 'settings:storage'
-  | 'skills';
+  | 'skills'
+  | 'model-access'
+  | 'groups';
 
 export interface GlobalPrefs {
   theme: 'light' | 'dark';

@@ -10,7 +10,9 @@ export class AuthError extends Error {
 }
 
 export class ForbiddenError extends Error {
-  constructor() { super('Access forbidden'); this.name = 'ForbiddenError'; }
+  /** The 403 body's `detail` (a string or a `{code, …}` object); undefined on a bare body. */
+  detail: unknown;
+  constructor(detail?: unknown) { super('Access forbidden'); this.name = 'ForbiddenError'; this.detail = detail; }
 }
 
 /**
@@ -75,7 +77,13 @@ async function handleResponse(res: Response): Promise<any> {
     if (!redirecting) { redirecting = true; window.location.href = '/'; }
     throw new AuthError();
   }
-  if (res.status === 403) throw new ForbiddenError();
+  if (res.status === 403) {
+    // WHY: a structured 403 (`{code: 'model_forbidden', model}` from the chat
+    // turn) names WHICH refusal fired — the caller's toast hangs on it.
+    let detail: unknown;
+    try { detail = (await res.clone().json())?.detail; } catch { /* bare body */ }
+    throw new ForbiddenError(detail);
+  }
   if (res.status === 502 || res.status === 503) throw new ServiceUnavailableError(res.status);
   if (res.status === 413) {
     // WHY: the chat-completions body cap answers 413 with a structured

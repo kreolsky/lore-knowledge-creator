@@ -22,5 +22,6 @@ import routes.chat.sessions_list  # noqa: F401 — binds GET /sessions (list pat
 import routes.chat.transcription  # noqa: F401
 import routes.chat.verdicts  # noqa: F401 — binds GET/POST /api/chat/verdicts
 from routes.chat._router import router  # noqa: F401
+from routes.chat.models_catalog import gateway_model_ids
 
-__all__ = ["router"]
+__all__ = ["router", "gateway_model_ids"]

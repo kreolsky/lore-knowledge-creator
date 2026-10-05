@@ -940,6 +940,37 @@
         "title": "EmbedMissingRequest",
         "type": "object"
       },
+      "GroupMembers": {
+        "properties": {
+          "user_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "User Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "user_ids"
+        ],
+        "title": "GroupMembers",
+        "type": "object"
+      },
+      "GroupName": {
+        "properties": {
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "GroupName",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1155,6 +1186,22 @@
           }
         },
         "title": "MessageUpdate",
+        "type": "object"
+      },
+      "ModelSubjects": {
+        "properties": {
+          "subjects": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Subjects",
+            "type": "array"
+          }
+        },
+        "required": [
+          "subjects"
+        ],
+        "title": "ModelSubjects",
         "type": "object"
       },
       "MoveDocumentToProject": {
@@ -3895,11 +3942,312 @@
         ]
       }
     },
+    "/api/admin/groups": {
+      "get": {
+        "description": "Admin groups, then one read-only entry per live moderator (kind='moderator',\nname = the moderator's name — the client renders the \"Moderator · \" label).",
+        "operationId": "list_groups_api_admin_groups_get",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Groups",
+        "tags": [
+          "admin-model-access"
+        ]
+      },
+      "post": {
+        "operationId": "create_group_api_admin_groups_post",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupName"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Group",
+        "tags": [
+          "admin-model-access"
+        ]
+      }
+    },
+    "/api/admin/groups/{group_id}": {
+      "delete": {
+        "description": "Hard delete: the group, its membership rows and its `group:<id>` grants.",
+        "operationId": "delete_group_api_admin_groups__group_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Group",
+        "tags": [
+          "admin-model-access"
+        ]
+      },
+      "patch": {
+        "operationId": "rename_group_api_admin_groups__group_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupName"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rename Group",
+        "tags": [
+          "admin-model-access"
+        ]
+      }
+    },
+    "/api/admin/groups/{group_id}/members": {
+      "put": {
+        "description": "Full replace of an admin group's members; every id must be a live user (422).",
+        "operationId": "put_group_members_api_admin_groups__group_id__members_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupMembers"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Group Members",
+        "tags": [
+          "admin-model-access"
+        ]
+      }
+    },
     "/api/admin/info/storage": {
       "get": {
-        "description": "Database size on disk + soft-deleted data, table by table (admin only).",
+        "description": "Database size on disk + soft-deleted data, table by table (admin only).\n\nServed from a STORAGE_CACHE_TTL_S memo unless `fresh` is set. A `fresh`\nrequest that waited on an in-flight run reuses that run — it finished after\nthe request was made, and a second scan right behind it would only repeat it.",
         "operationId": "get_storage_api_admin_info_storage_get",
         "parameters": [
+          {
+            "in": "query",
+            "name": "fresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Fresh",
+              "type": "boolean"
+            }
+          },
           {
             "in": "cookie",
             "name": "lore_session",
@@ -3940,6 +4288,121 @@
         "summary": "Get Storage",
         "tags": [
           "admin-info"
+        ]
+      }
+    },
+    "/api/admin/models": {
+      "get": {
+        "description": "Gateway roster ∪ granted ids → [{id, in_gateway, is_default, subjects}].\n\n`in_gateway` is None on every row when the gateway cannot be read: the grants\nstay listed and revocable during a gateway outage, and the client names the\noutage instead of marking every model \"not in gateway\".",
+        "operationId": "list_model_grants_api_admin_models_get",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Model Grants",
+        "tags": [
+          "admin-model-access"
+        ]
+      }
+    },
+    "/api/admin/models/{model_id}": {
+      "put": {
+        "description": "Full replace of a model's subjects. A kept subject keeps its row; a\nrevoked one is deleted, so granting it again creates a fresh row.",
+        "operationId": "put_model_grants_api_admin_models__model_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelSubjects"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Model Grants",
+        "tags": [
+          "admin-model-access"
         ]
       }
     },
@@ -5918,7 +6381,7 @@
     },
     "/api/chat/models": {
       "get": {
-        "description": "Proxy GET /v1/models from the AI API. Returns model ID list + capability flags.\n\nReports Agent-line availability and the vision-capable model set\nso the frontend picker can badge vision models instead of erroring at send time.\nBoth capability fields are merged into the success AND empty-AI_API_URL bodies.\nThe 503-on-gateway-down path stays: when the whole gateway is down the flags are\nirrelevant. Also returns `context_windows` (per-model real context length)\nfrom the same cached gateway fetch.\n\nFreshness: the served model list, default_model, and context_windows come from a\nCHAT_MODELS_CACHE_TTL_S (60s) TTL cache — a freshly-added gateway model (or a\nremoved one) can lag by up to that bound, and a chat-panel open reads the\ncached snapshot rather than a fresh gateway fetch. The set of served models\nchanges on the order of weeks, so the staleness is accepted over a per-open\ngateway RTT. The `reasoning` map rides its own cache with the same TTL and\nthe same accepted lag.",
+        "description": "Proxy GET /v1/models from the AI API. Returns model ID list + capability flags.\n\nReports Agent-line availability and the vision-capable model set\nso the frontend picker can badge vision models instead of erroring at send time.\nBoth capability fields are merged into the success AND empty-AI_API_URL bodies.\nThe 503-on-gateway-down path stays: when the whole gateway is down the flags are\nirrelevant. Also returns `context_windows` (per-model real context length)\nfrom the same cached gateway fetch.\n\nFreshness: the served model list, default_model, and context_windows come from a\nCHAT_MODELS_CACHE_TTL_S (60s) TTL cache — a freshly-added gateway model (or a\nremoved one) can lag by up to that bound, and a chat-panel open reads the\ncached snapshot rather than a fresh gateway fetch. The set of served models\nchanges on the order of weeks, so the staleness is accepted over a per-open\ngateway RTT. The `reasoning` map rides its own cache with the same TTL and\nthe same accepted lag.\n\nThe roster is FILTERED to the caller's available models (SYSTEM:\nmodel-access) — the picker only; the turn gate is require_model_access.",
         "operationId": "list_models_api_chat_models_get",
         "parameters": [
           {

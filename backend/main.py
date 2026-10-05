@@ -76,6 +76,7 @@ from logging_conf import setup_logging
 from routes import (
     admin_embeddings,
     admin_info,
+    admin_model_access,
     admin_settings,
     admin_skills,
     api_keys,
@@ -568,6 +569,7 @@ app.include_router(widget.router)
 app.include_router(extractor.router)
 app.include_router(admin_embeddings.router)
 app.include_router(admin_info.router)
+app.include_router(admin_model_access.router)
 app.include_router(admin_settings.router)
 app.include_router(admin_skills.router)
 

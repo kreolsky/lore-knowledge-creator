@@ -114,6 +114,8 @@ export function ChatInput() {
   // absence, not degradation).
   const reasoning = useChatStore(s => s.reasoning);
   const defaultModel = useChatStore(s => s.defaultModel);
+  const modelPickerOpen = useChatStore(s => s.modelPickerOpen);
+  const setModelPickerOpen = useChatStore(s => s.setModelPickerOpen);
   const maxAttachmentMb = useAppStore(s => s.maxAttachmentMb);
   // Audit fix #2: proactively gate the Agent option on agent-service availability.
   const agentAvailable = useChatStore(s => s.agentAvailable);
@@ -589,20 +591,31 @@ export function ChatInput() {
       {models.length > 0 && (
         <Dropdown
           value={displayModel}
-          options={models.map(m => ({
-            value: m,
-            label: m,
-            // WHY: EyeOff badge marks models WITHOUT vision — the ones the
-            // backend's image-stripping gate strips images for. Vision is the
-            // common case, so it carries no mark. Same badge reaches the
-            // collapsed trigger via options[selectedIndex]?.badge.
-            badge: visionModels.includes(m)
-              ? undefined
-              : <EyeOff size={11} className="opacity-50 shrink-0" aria-label={t('chatModelNoVision')} />,
-          }))}
+          options={[
+            ...models.map(m => ({
+              value: m,
+              label: m,
+              // WHY: EyeOff badge marks models WITHOUT vision — the ones the
+              // backend's image-stripping gate strips images for. Vision is the
+              // common case, so it carries no mark. Same badge reaches the
+              // collapsed trigger via options[selectedIndex]?.badge.
+              badge: visionModels.includes(m)
+                ? undefined
+                : <EyeOff size={11} className="opacity-50 shrink-0" aria-label={t('chatModelNoVision')} />,
+            })),
+            // WHY: a session pinned to a model outside the user's roster (a
+            // revoked grant) renders as its OWN disabled option — the Dropdown
+            // clamps an unknown value to the first option, which would show a
+            // model the turn will not run.
+            ...(displayModel && !models.includes(displayModel)
+              ? [{ value: displayModel, label: t('chatModelUnavailableOption', { model: displayModel }), disabled: true }]
+              : []),
+          ]}
           onSelect={handleModelSelect}
           disabled={isStreaming}
           placement="top"
+          open={modelPickerOpen}
+          onOpenChange={setModelPickerOpen}
         />
       )}
       {reasoningLevels.length > 0 && (

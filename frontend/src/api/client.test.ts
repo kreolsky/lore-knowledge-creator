@@ -55,6 +55,24 @@ describe('handleResponse (via apiClient)', () => {
     await expect(apiClient.get('/test')).rejects.toThrow(ForbiddenError);
   });
 
+  it('carries a structured 403 detail on the ForbiddenError', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ detail: { code: 'model_forbidden', model: 'vendor/x' } }),
+      { status: 403 },
+    ));
+    await expect(apiClient.post('/chat/sessions/s/completions', {})).rejects.toMatchObject({
+      name: 'ForbiddenError',
+      detail: { code: 'model_forbidden', model: 'vendor/x' },
+    });
+  });
+
+  it('leaves detail undefined on a 403 with a non-JSON body', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response('nope', { status: 403 }));
+    const err = await apiClient.get('/test').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ForbiddenError);
+    expect((err as ForbiddenError).detail).toBeUndefined();
+  });
+
   it('throws HttpError with status 500 on 500', async () => {
     mockFetch(500);
     await expect(apiClient.get('/test')).rejects.toBeInstanceOf(HttpError);

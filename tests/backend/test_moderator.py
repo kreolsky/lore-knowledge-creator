@@ -294,6 +294,48 @@ async def test_demote_with_nonempty_group_409(client, admin_user, moderator_user
 
 
 @pytest.mark.asyncio
+async def test_demote_and_delete_drop_moderator_group_grants(client, test_db, admin_user, moderator_user):
+    """The virtual group's grants go with the moderator role; a re-promoted
+    moderator starts with none, and a deleted one leaves none behind."""
+    mod_uid, admin_token = moderator_user[0], admin_user[1]
+    admin = {"lore_session": admin_token}
+
+    async def grants() -> list:
+        return await test_db.query(
+            "SELECT VALUE model_id FROM model_grants WHERE subject = $s", {"s": f"mod:{mod_uid}"},
+        )
+
+    resp = await client.put("/api/admin/models/a/b", json={"subjects": [f"mod:{mod_uid}"]}, cookies=admin)
+    assert resp.status_code == 200, resp.text
+    assert await grants() == ["a/b"]
+    assert (await client.patch(f"/api/admin/users/{mod_uid}", json={"role": "user"}, cookies=admin)).status_code == 200
+    assert await grants() == []
+    assert (await client.patch(f"/api/admin/users/{mod_uid}", json={"role": "moderator"}, cookies=admin)).status_code == 200
+    assert await grants() == []
+
+    await client.put("/api/admin/models/a/b", json={"subjects": [f"mod:{mod_uid}"]}, cookies=admin)
+    assert (await client.delete(f"/api/admin/users/{mod_uid}", cookies=admin)).status_code == 200
+    assert await grants() == []
+
+
+@pytest.mark.asyncio
+async def test_promotion_drops_grants_left_by_a_failed_demotion_drop(client, test_db, admin_user, regular_user):
+    """The demotion drop is not in the role write's transaction; a grant it
+    failed to delete must not come back with a re-promotion."""
+    uid, admin_token = regular_user[0], admin_user[1]
+    await test_db.query(
+        "CREATE model_grants CONTENT { model_id: 'a/b', subject: $s }", {"s": f"mod:{uid}"},
+    )
+    resp = await client.patch(
+        f"/api/admin/users/{uid}", json={"role": "moderator"}, cookies={"lore_session": admin_token},
+    )
+    assert resp.status_code == 200, resp.text
+    assert await test_db.query(
+        "SELECT VALUE model_id FROM model_grants WHERE subject = $s", {"s": f"mod:{uid}"},
+    ) == []
+
+
+@pytest.mark.asyncio
 async def test_delete_moderator_with_group_409(client, admin_user, moderator_user, group_user):
     """Soft-deleting a moderator with a non-empty group is guarded the same way."""
     mod_uid, admin_token = moderator_user[0], admin_user[1]

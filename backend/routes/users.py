@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
+from model_access import drop_moderator_grants
 from password import hash_secret
 from surrealdb import AsyncSurreal
 
@@ -316,6 +317,13 @@ async def patch_user_admin(user_id: str, body: UpdateUserAdmin, current_user: di
     if not updates:
         raise HTTPException(status_code=400, detail="Nothing to update")
     row = await _apply_user_updates(db, user_id, updates)
+    # A moderator's virtual group starts and ends with the role: its grants go on
+    # demotion AND on promotion, after the role write (_collect_admin_field_updates
+    # may still refuse with 409/422). WHY on promotion too: the drop is not in the
+    # role write's transaction, so a failed drop on demotion would otherwise hand
+    # its grants back to a re-promoted moderator.
+    if "role" in updates and (target.get("role") == "moderator") != (updates["role"] == "moderator"):
+        await drop_moderator_grants(db, user_id)
     # INVARIANT: a credential reset (password change) must invalidate the target's existing
     # sessions immediately. Why: without this the target's in-flight cookies stay valid for
     # up to JWT TTL (14 days) + token_version cache TTL on the old credential. Bumping the
@@ -355,6 +363,8 @@ async def delete_user(user_id: str, current_user: dict = Depends(require_user_ma
             {"id": user_id, "released": f"deleted:{user_id}:{target['email']}"},
         )
     await soft_delete("users", user_id)
+    if target and target.get("role") == "moderator":
+        await drop_moderator_grants(db, user_id)
     return {"success": True}
 
 
