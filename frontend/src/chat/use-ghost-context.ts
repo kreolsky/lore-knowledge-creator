@@ -45,7 +45,7 @@ export function useGhostChatContext(): ChatContext {
   // exception-carrier is the MODE: in 'panel' quick preview the reference is a
   // viewer, not the scope, so it reads through refIsScope and the ghost base is
   // the document's (splitActive stays true — harmless with a null refId).
-  const mode = useUIStore(s => readRefOpenMode(s.documents[docId ?? '']));
+  const mode = useUIStore(s => readRefOpenMode(s.documents[docId ?? ''], s.compactLayout));
   const refId = refIsScope(mode) ? rawRefId : null;
   const splitActive = !!docId && showsBothPanes(mode);
   const snap = useGhostDeltaSnapshot();
@@ -177,7 +177,7 @@ function makeWarmCycle(isCancelled: () => boolean): WarmCycle {
 export function useGhostContextWarm(): void {
   const docId = useAppStore(s => s.currentDocument?.document_id ?? null);
   const rawRefId = useAppStore(s => s.currentReference?.reference_id ?? null);
-  const mode = useUIStore(s => readRefOpenMode(s.documents[docId ?? '']));
+  const mode = useUIStore(s => readRefOpenMode(s.documents[docId ?? ''], s.compactLayout));
   // Same projection as the selector: warm exactly the ids the derived base folds —
   // a panel-previewed ref contributes nothing, so its first-circle is not fetched.
   const refId = refIsScope(mode) ? rawRefId : null;

@@ -262,10 +262,14 @@ export const en = {
   noDocsLinkHere: 'No documents link here.',
   failedToLoadBacklinks: 'Failed to load backlinks.',
 
+  // compact layout
+  compactToggleTree: 'Documents',
+  compactOpenPanel: 'Open panel',
+
   // chat
   chatRenameHint: 'Double-click to rename',
   newChat: 'Untitled Chat',
-  chats: 'Chats',
+  chatNew: 'New chat',
   gotoParentDoc: 'Go to {title}',
   changeChatParent: 'Change chat parent',
   refParentLabel: 'ref: {title}',

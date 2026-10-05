@@ -264,10 +264,14 @@ export const ru: Record<TranslationKey, string> = {
   noDocsLinkHere: 'Нет документов, ссылающихся сюда.',
   failedToLoadBacklinks: 'Не удалось загрузить обратные ссылки.',
 
+  // compact layout
+  compactToggleTree: 'Документы',
+  compactOpenPanel: 'Открыть панель',
+
   // chat
   chatRenameHint: 'Двойной клик — переименовать',
   newChat: 'Безымянный чат',
-  chats: 'Чаты',
+  chatNew: 'Новый чат',
   gotoParentDoc: 'Перейти к «{title}»',
   changeChatParent: 'Изменить родителя чата',
   refParentLabel: 'ref: {title}',

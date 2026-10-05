@@ -244,7 +244,7 @@ export function DocumentPage() {
   const currentTable = useAppStore(s => s.currentTable);
   const previewDocument = useAppStore(s => s.previewDocument);
   const snapshotPreview = useAppStore(s => s.snapshotPreview);
-  const refOpenMode = readRefOpenMode(useDocState(currentDocument?.document_id ?? null));
+  const refOpenMode = readRefOpenMode(useDocState(currentDocument?.document_id ?? null), useUIStore(s => s.compactLayout));
 
   // WHY: split layout is shown only with a document AND a selected reference or
   // focused table, and never during snapshot/document-preview (those own the full center

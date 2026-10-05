@@ -59,7 +59,7 @@ The chat panel is a full agent loop, not a text box bolted onto an editor. It wo
 - **Skills**: reusable instructions the agent loads on demand; the agent can write new ones for itself.
 - **Web search**, **image generation** (ComfyUI) and an optional **sandboxed shell** for scripts and data work.
 - **Personas**: switch the system prompt per chat session.
-- Works with **any OpenAI-compatible endpoint** — hosted models or your own (LiteLLM, vLLM, llama.cpp, Ollama behind a proxy).
+- Works with **any OpenAI-compatible endpoint** — hosted models or your own (LiteLLM, vLLM, llama.cpp behind a proxy).
 
 ### Automation and integrations
 
@@ -127,7 +127,9 @@ Every other setting is documented in [`.env.example`](.env.example).
 
 ### Enable AI
 
-Lore talks to any **OpenAI-compatible API** (a hosted provider, or your own models behind LiteLLM, vLLM, llama.cpp, Ollama…).
+Lore talks to any **OpenAI-compatible API** (a hosted provider, or your own models behind LiteLLM, vLLM, llama.cpp…).
+
+Recommended: [LLM API Gateway](https://github.com/kreolsky/llm-api-gateway) — a small self-hosted OpenAI-compatible gateway that puts cloud providers and local servers (llama.cpp, embeddings, speech-to-text) behind one endpoint, with a separate key per app. Give Lore its own key and point the AI API base URL at the gateway.
 
 Sign in as admin, open **Admin panel → Models & APIs** and set:
 

@@ -40,7 +40,7 @@ export function LinksPanel() {
   // Panel quick preview: the Links tab is the DOCUMENT's. The reference-first
   // resolution below still holds for the scope modes (center/split); a previewed
   // ref reads as null through the ONE projection, matching the TOC/notes/tree.
-  const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocument?.document_id ?? '']));
+  const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocument?.document_id ?? ''], s.compactLayout));
   const currentReference = refIsScope(refOpenMode) ? rawReference : null;
   // INVARIANT: a reference shows its OWN links/backlinks, not its parent document's.  Why: while a ref is open both currentDocument (parent) and currentReference are set; resolving reference-first shows the ref's own links, matching the canonical activeItem.
   // Both currentDocument (parent) and currentReference are set while a ref is

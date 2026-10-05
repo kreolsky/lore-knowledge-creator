@@ -36,11 +36,13 @@ export function Header() {
   // Panel quick preview: the header is the DOCUMENT's — title, rename and the
   // share-link button follow the doc scope; the previewed ref's own chrome lives
   // on the Refs tab plaque. Reads through the ONE projection.
-  const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocument?.document_id ?? '']));
+  const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocument?.document_id ?? ''], s.compactLayout));
   const currentReference = refIsScope(refOpenMode) ? rawReference : null;
   const accessLevel = useAppStore(s => s.accessLevel);
   const sectionCrumb = useAppStore(s => s.sectionCrumb);
   const rightPanelOpen = useDocState(currentDocument?.document_id ?? null).rightPanelOpen;
+  // Compact viewport: no floating right tab bar over the header, so nothing to reserve.
+  const compactLayout = useUIStore(s => s.compactLayout);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -181,7 +183,7 @@ export function Header() {
         </>
       )}
 
-      <div className="ml-auto flex items-center gap-1" style={!rightPanelOpen ? { marginRight: 'var(--right-tab-bar-w)' } : undefined}>
+      <div className="ml-auto flex items-center gap-1" style={!rightPanelOpen && !compactLayout ? { marginRight: 'var(--right-tab-bar-w)' } : undefined}>
         {/* Recording button: hidden on public share (gated by accessLevel + URL check). */}
         {!isPublicShare && isEditorShell(location.pathname) && (
           <button

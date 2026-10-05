@@ -45,7 +45,7 @@ export function useNoteCrud({ highlightNote }: UseNoteCrudParams) {
   const loadSessions = useNoteChatStore(s => s.loadSessions);
   const deleteSession = useNoteChatStore(s => s.deleteSession);
 
-  const refOpenMode = readRefOpenMode(useDocState(currentDocument?.document_id ?? null));
+  const refOpenMode = readRefOpenMode(useDocState(currentDocument?.document_id ?? null), useUIStore(s => s.compactLayout));
   // Panel quick preview: notes are the DOCUMENT's (decision A — no notes on the
   // preview). Reading the open reference through the ONE projection drops both
   // isRefMode and isSplitMode to their document values while a ref is previewed.

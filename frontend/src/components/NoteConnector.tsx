@@ -10,7 +10,7 @@ import { useEditorView, getRoleView, subscribeRoleView, type EditorRole } from '
 import { useNoteStore } from '../store/note-store';
 import { useAppStore } from '../store/app-store';
 import { useNoteChatStore } from '../store/note-chat-store';
-import { useDocState } from '../store/ui-store';
+import { useDocState, useUIStore } from '../store/ui-store';
 import { readRefOpenMode, showsBothPanes, refIsScope } from '../store/ui-store/documents-slice';
 
 interface Coords { x1: number; y1: number; x2: number; y2: number }
@@ -67,7 +67,7 @@ export function NoteConnector() {
   const currentDocument = useAppStore(s => s.currentDocument);
   const rawReference = useAppStore(s => s.currentReference);
   const sessions = useNoteChatStore(s => s.sessions);
-  const refOpenMode = readRefOpenMode(useDocState(currentDocument?.document_id ?? null));
+  const refOpenMode = readRefOpenMode(useDocState(currentDocument?.document_id ?? null), useUIStore(s => s.compactLayout));
   // Same projection as useNoteCrud/NotesPanel: a panel-mode previewed reference
   // is not the notes scope, so the connector resolves against the document only.
   const currentReference = refIsScope(refOpenMode) ? rawReference : null;

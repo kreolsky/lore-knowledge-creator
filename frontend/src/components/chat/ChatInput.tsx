@@ -140,7 +140,7 @@ export function ChatInput() {
   // through the ONE projection — session materialization, the agent target and
   // the picker's default tab all follow the doc scope; the ref is added by hand
   // through the picker like any material.
-  const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocId ?? '']));
+  const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocId ?? ''], s.compactLayout));
   const currentReference = refIsScope(refOpenMode) ? rawReference : null;
   // Ghost: when no session is active, context is DERIVED from the open entity
   // (useGhostChatContext) — it is never stored. The content picker writes manual

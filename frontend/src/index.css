@@ -851,6 +851,15 @@ body.is-resizing * { transition: none !important; }
   height: 36px;
 }
 
+/* ─── COMPACT DRAWER (tree over the center on a compact viewport) ─── */
+.compact-drawer {
+  transform: translateX(-100%);
+  transition: transform 0.2s ease;
+}
+.compact-drawer--open {
+  transform: translateX(0);
+}
+
 /* ─── RIGHT PANEL HEADER (horizontal tabs) ─── */
 .right-panel-header {
   height: 48px;

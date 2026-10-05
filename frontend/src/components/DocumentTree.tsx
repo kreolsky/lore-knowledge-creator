@@ -93,7 +93,7 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
   // Panel quick preview: the open reference is NOT the tree's scope — read it
   // through the ONE projection so the current document stays active and no
   // ref-parent/ref-source plaque fires while the ref shows in the Refs tab.
-  const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocument?.document_id ?? '']));
+  const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocument?.document_id ?? ''], s.compactLayout));
   const scopeReference = refIsScope(refOpenMode) ? currentReference : null;
   const isActive = doc.document_id === activeDocId && !scopeReference;
   const isRefParent = !!scopeReference && doc.document_id === scopeReference.document_id;
@@ -309,7 +309,7 @@ export function DocumentTree({ onDelete, onCreateChild, onChangeParent, canEdit 
   // Same projection as DocumentTreeItem: in 'panel' quick preview the reference
   // takes part in nothing but its own tab, so the tree (incl. the project-index
   // row) highlights as if no reference were open.
-  const scopeRefOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocument?.document_id ?? '']));
+  const scopeRefOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocument?.document_id ?? ''], s.compactLayout));
   const scopeReference = refIsScope(scopeRefOpenMode) ? currentReference : null;
   const collapsedDocIds = useUIStore(s => s.collapsedDocIds);
   const toggleDocExpanded = useUIStore(s => s.toggleDocExpanded);

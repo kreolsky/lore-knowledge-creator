@@ -278,7 +278,7 @@ export function ProjectPage() {
   // (Checkpoint, Access) exist while a reference is merely previewed. The
   // reveal effect below keeps reading currentReference RAW — it is the mechanism
   // that makes the preview visible in the Refs tab.
-  const refOpenMode = readRefOpenMode(docState);
+  const refOpenMode = readRefOpenMode(docState, useUIStore(s => s.compactLayout));
   const isReference = !!(currentReference && refIsScope(refOpenMode));
   const setSnapshotPreview = useAppStore(s => s.setSnapshotPreview);
 

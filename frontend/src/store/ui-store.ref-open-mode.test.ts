@@ -52,11 +52,23 @@ describe('reference open mode — per-document tristate', () => {
     expect(useUIStore.getState().getRefOpenMode('docB')).toBe('center');
   });
 
+  it("compact viewport reads every stored mode as 'center' and leaves it stored", () => {
+    expect(readRefOpenMode({ ...DEFAULT_DOC_STATE, refOpenMode: 'split' }, true)).toBe('center');
+    expect(readRefOpenMode({ ...DEFAULT_DOC_STATE, refOpenMode: 'split' }, false)).toBe('split');
+    expect(readRefOpenMode({ ...DEFAULT_DOC_STATE, splitView: true }, true)).toBe('center');
+    useUIStore.getState().setRefOpenMode('docA', 'panel');
+    useUIStore.setState({ compactLayout: true });
+    expect(useUIStore.getState().getRefOpenMode('docA')).toBe('center');
+    expect(useUIStore.getState().documents['docA'].refOpenMode).toBe('panel');
+    useUIStore.setState({ compactLayout: false });
+    expect(useUIStore.getState().getRefOpenMode('docA')).toBe('panel');
+  });
+
   it("a persisted legacy {splitView: true} with no refOpenMode reads as 'split'", () => {
     useUIStore.setState({ documents: { docA: { ...DEFAULT_DOC_STATE, splitView: true } } });
     expect(useUIStore.getState().getRefOpenMode('docA')).toBe('split');
-    expect(readRefOpenMode({ ...DEFAULT_DOC_STATE, splitView: false })).toBe('center');
-    expect(readRefOpenMode(undefined)).toBe('center');
+    expect(readRefOpenMode({ ...DEFAULT_DOC_STATE, splitView: false }, false)).toBe('center');
+    expect(readRefOpenMode(undefined, false)).toBe('center');
   });
 
   it("writing 'center' over a legacy splitView:true drops the flag — it must not resurrect", () => {

@@ -69,8 +69,13 @@ export const DEFAULT_DOC_STATE: DocumentUIState = Object.freeze({
 // useDocState still reference it.
 export const ORPHAN_KEY = '__orphan__';
 
-/** The ONE reader of a doc entry's reference open mode — folds the legacy splitView flag. */
-export function readRefOpenMode(entry: DocumentUIState | undefined): RefOpenMode {
+/** The ONE reader of a doc entry's reference open mode — folds the legacy splitView flag
+ *  and the compact viewport. `compact` is required so every reader states it. */
+export function readRefOpenMode(entry: DocumentUIState | undefined, compact: boolean): RefOpenMode {
+  // INVARIANT: on a compact viewport the second window opens in the center; the
+  // stored mode is untouched.
+  // Why: operator decision — a phone has one window; desktop keeps its own layout.
+  if (compact) return 'center';
   // INVARIANT(persisted): refOpenMode wins; a legacy `splitView: true` with no
   // refOpenMode reads as 'split'.
   // Why: already-stored preferences carry the boolean; they must keep opening in split.
@@ -186,7 +191,7 @@ export function createDocumentsSlice(set: UISet, get: UIGet): DocumentsSlice {
       set({ documents: { ...prev, [docId]: { ...rest, refOpenMode: mode } } });
       get().saveUIStateNow();
     },
-    getRefOpenMode: (docId) => readRefOpenMode(get().documents[docId]),
+    getRefOpenMode: (docId) => readRefOpenMode(get().documents[docId], get().compactLayout),
     // Pin the right panel OPEN on `tab` for a document the user is about to navigate to.
     // The panel state is per-document (ProjectShell reads `documents[id].rightPanelTab /
     // rightPanelOpen`), so a "go to parent, keep X open" jump must write the TARGET doc's

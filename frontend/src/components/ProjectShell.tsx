@@ -13,6 +13,10 @@
  * open-right-panel) can drive the same Shell the user clicks on — no second
  * source of truth for resizer state.
  *
+ * Compact viewport (ui-store `compactLayout`): center only; the tree is a drawer
+ * over the center and the right panel covers the whole screen. At most one is
+ * open. Same element tree as desktop — only classes change.
+ *
  * SYSTEM: project-shell — shared layout for project + public-share surfaces.
  */
 // ARCH: Slot-based shell — parent owns all hooks (collab, recording, refs events);
@@ -21,17 +25,24 @@
 //       single right tab — no special-case branch inside Shell.
 
 import type React from 'react';
-import { forwardRef, useCallback, useImperativeHandle, useLayoutEffect, useRef } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
+import { PanelLeft, PanelRight, X } from 'lucide-react';
 import { useResizer } from '../hooks/useResizer';
 import { useDocumentNavigation } from '../navigation/useDocumentNavigation';
 import { useUIStore, type RightTab } from '../store/ui-store';
 import { useNoteStore } from '../store/note-store';
+import { useAppStore } from '../store/app-store';
+import { useTranslation } from '../i18n';
 import { Header } from './Header';
 import { UserControls } from './UserControls';
-import { PanelLoading } from './ui';
+import { IconButton, PanelLoading } from './ui';
 import s from './Sidebar.module.css';
 
 export type LeftTab = 'docs' | 'toc';
+
+// Compact tab rows: every cell is a square as wide as the row is tall.
+const COMPACT_TAB_CLS = '!w-auto !h-full aspect-square';
+const COMPACT_CELL_CLS = 'h-full aspect-square shrink-0 flex items-center justify-center';
 
 /** A renderable right-tab entry. Parent filters/extends this list per role. */
 export interface RightTabEntry {
@@ -128,6 +139,22 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
   // ── Document navigation (the ONE bus handler — see INVARIANT above) ──────
   useDocumentNavigation();
 
+  const { t } = useTranslation();
+
+  // ── Compact viewport ─────────────────────────────────────────────────────
+  // WHY: compact panel state is shell-local, never the persisted sidebarOpen /
+  // rightPanelOpen. The per-doc default rightPanelOpen=true would open a full-screen
+  // panel on every navigation, and a phone session must not rewrite the desktop
+  // layout. One value makes "only one open" structural.
+  const compact = useUIStore(s => s.compactLayout);
+  const [compactPanel, setCompactPanel] = useState<'none' | 'left' | 'right'>('none');
+  const docKey = useAppStore(s => s.currentDocument?.document_id ?? null);
+  const refKey = useAppStore(s => s.currentReference?.reference_id ?? null);
+  const tableKey = useAppStore(s => s.currentTable);
+  // Whatever opens an entity in the center (tree pick, link in chat, a reference)
+  // closes the compact panel — one rule, no per-call-site wiring.
+  useEffect(() => { setCompactPanel('none'); }, [docKey, refKey, tableKey]);
+
   // ── Store reads (panel state) ────────────────────────────────────────────
   const sidebarTab = useUIStore(s => s.sidebarTab);
   const setSidebarTab = useUIStore(s => s.setSidebarTab);
@@ -162,6 +189,7 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
   useLayoutEffect(() => {
     if (!firstMountRef.current) return;
     firstMountRef.current = false;
+    if (compact) return;
     if (initialSidebarOpen && !sidebarOpenStored) setSidebarOpen(true);
     if (initialRightOpen && rightPanelOpenStored === undefined) setRightPanelOpen(rightPanelDocId, true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -194,9 +222,18 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
     onOpenChange: (open) => setRightPanelOpen(rightPanelDocId, open),
   });
 
+  // Closing kills a live search overlay, like the desktop close (setRightPanelOpen).
+  const clearSearchTabOverlay = useUIStore(s => s.clearSearchTabOverlay);
+  const closeCompactRight = () => { clearSearchTabOverlay(); setCompactPanel('none'); };
+
+  const sidebarIsOpen = compact ? compactPanel === 'left' : sidebarResizer.isOpen;
+  const rightIsOpen = compact ? compactPanel === 'right' : rightPanelResizer.isOpen;
+
   // ── Tab-click handlers (the Shell owns these) ───────────────────────────
   const handleSidebarTabClick = useCallback((tab: LeftTab) => {
-    if (!sidebarResizer.isOpen) {
+    if (compact) {
+      setSidebarTab(tab);
+    } else if (!sidebarResizer.isOpen) {
       setSidebarTab(tab);
       sidebarResizer.open();
     } else if (effectiveSidebarTab === tab) {
@@ -204,10 +241,13 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
     } else {
       setSidebarTab(tab);
     }
-  }, [sidebarResizer, effectiveSidebarTab, setSidebarTab]);
+  }, [compact, sidebarResizer, effectiveSidebarTab, setSidebarTab]);
 
   const handleRightTabClick = useCallback((tab: RightTab) => {
-    if (!rightPanelResizer.isOpen) {
+    if (compact) {
+      // Tab-only write — the compact panel is already open (its tab row is visible).
+      setRightPanelTab(rightPanelDocId, tab);
+    } else if (!rightPanelResizer.isOpen) {
       setRightPanelTab(rightPanelDocId, tab);
       rightPanelResizer.open();
     } else if (effectiveRightTab === tab) {
@@ -218,19 +258,21 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
       setRightPanelTab(rightPanelDocId, tab);
     }
     onRightTabClick?.(tab);
-  }, [rightPanelResizer, effectiveRightTab, setRightPanelTab, rightPanelDocId, onRightTabClick]);
+  }, [compact, rightPanelResizer, effectiveRightTab, setRightPanelTab, rightPanelDocId, onRightTabClick]);
 
   // ── Imperative handle for parent's event handlers ───────────────────────
   useImperativeHandle(ref, () => ({
     openRightPanel: (tab?: RightTab) => {
       if (tab) setRightPanelTab(rightPanelDocId, tab);
-      if (!rightPanelResizer.isOpen) rightPanelResizer.open();
+      if (compact) setCompactPanel('right');
+      else if (!rightPanelResizer.isOpen) rightPanelResizer.open();
     },
     openSidebar: (tab?: LeftTab) => {
       if (tab) setSidebarTab(tab);
-      if (!sidebarResizer.isOpen) sidebarResizer.open();
+      if (compact) setCompactPanel('left');
+      else if (!sidebarResizer.isOpen) sidebarResizer.open();
     },
-  }), [rightPanelResizer, sidebarResizer, setRightPanelTab, setSidebarTab, rightPanelDocId]);
+  }), [compact, rightPanelResizer, sidebarResizer, setRightPanelTab, setSidebarTab, rightPanelDocId]);
 
   // ── Right-tab-bar width CSS var (Header reads it for layout margin) ─────
   const rightTabBarRef = useRef<HTMLDivElement>(null);
@@ -248,37 +290,79 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
 
   // No left tabs → no left tab bar at all (single-doc public share shows only toc).
   const hasLeftBar = leftTabs.length > 0;
+  const hasRight = rightTabs.length > 0;
+
+  const renderLeftTabButtons = () => leftTabs.map(entry => (
+    <button
+      key={entry.tab}
+      className={`left-bar-tab ${compact ? COMPACT_TAB_CLS : ''} ${sidebarIsOpen && effectiveSidebarTab === entry.tab ? 'active' : ''}`}
+      onClick={() => handleSidebarTabClick(entry.tab)}
+      title={entry.title}
+    >
+      {entry.icon}
+    </button>
+  ));
 
   return (
     /* data-testid: the shell root is the node e2e captures to prove a route change
        did not remount the whole app. */
     <div data-testid="project-shell" className="relative flex h-[100dvh] overflow-hidden bg-bg text-text">
       <div className="flex flex-col flex-1 min-w-0 h-full">
-        {header}
+        {/* The wrapper is rendered in both modes so crossing the breakpoint does
+            not remount the header. */}
+        <div className="flex shrink-0">
+          {compact && hasLeftBar && (
+            <div className="flex items-center h-12 pl-2 bg-header-bg border-b border-border-soft">
+              <IconButton
+                title={t('compactToggleTree')}
+                onClick={() => setCompactPanel(p => p === 'left' ? 'none' : 'left')}
+              >
+                <PanelLeft size={16} />
+              </IconButton>
+            </div>
+          )}
+          <div className="flex-1 min-w-0">{header}</div>
+          {compact && hasRight && (
+            <div className="flex items-center h-12 pr-2 bg-header-bg border-b border-border-soft">
+              <IconButton title={t('compactOpenPanel')} onClick={() => setCompactPanel('right')}>
+                <PanelRight size={16} />
+              </IconButton>
+            </div>
+          )}
+        </div>
 
         <div className="flex flex-1 overflow-hidden">
           {hasLeftBar && (
-            <div className="flex shrink-0 h-full">
-              <div className="left-tab-bar">
-                <div className="flex flex-col items-center gap-0.5">
-                  {leftTabs.map(entry => (
-                    <button
-                      key={entry.tab}
-                      className={`left-bar-tab ${sidebarResizer.isOpen && effectiveSidebarTab === entry.tab ? 'active' : ''}`}
-                      onClick={() => handleSidebarTabClick(entry.tab)}
-                      title={entry.title}
-                    >
-                      {entry.icon}
-                    </button>
-                  ))}
+            <div
+              data-testid="shell-left"
+              className={compact
+                ? `compact-drawer ${sidebarIsOpen ? 'compact-drawer--open' : ''} fixed inset-y-0 left-0 z-[31] w-[min(calc(100vw-56px),360px)] flex flex-col bg-surface`
+                : 'flex shrink-0 h-full'}
+            >
+              {!compact && (
+                <div className="left-tab-bar">
+                  <div className="flex flex-col items-center gap-0.5">
+                    {renderLeftTabButtons()}
+                  </div>
+                  <div className="flex-1" />
+                  <UserControls layout="vertical" variant={userControlsVariant} />
                 </div>
-                <div className="flex-1" />
-                <UserControls layout="vertical" variant={userControlsVariant} />
-              </div>
+              )}
+              {compact && (
+                <div className="flex shrink-0 h-12 bg-header-bg border-b border-border-soft">
+                  {renderLeftTabButtons()}
+                  <div className="flex-1" />
+                  <div className={COMPACT_CELL_CLS}>
+                    <IconButton title={t('close')} onClick={() => setCompactPanel('none')}>
+                      <X size={16} />
+                    </IconButton>
+                  </div>
+                </div>
+              )}
 
               <aside
-                className={s.sidebar}
-                style={{
+                className={`${s.sidebar} ${compact ? 'flex-1 min-h-0 !w-full !max-w-none' : ''}`}
+                style={compact ? undefined : {
                   width: sidebarResizer.isOpen ? sidebarResizer.width : 0,
                   minWidth: sidebarResizer.isOpen ? undefined : 0,
                   overflow: sidebarResizer.isOpen ? undefined : 'hidden',
@@ -288,10 +372,15 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
                   <div key={entry.tab} className="h-full">{entry.renderPanel()}</div>
                 ) : null)}
               </aside>
+              {compact && (
+                <div className="flex items-center gap-0.5 shrink-0 px-1 pt-1 border-t border-border-soft pb-[env(safe-area-inset-bottom)]">
+                  <UserControls variant={userControlsVariant} />
+                </div>
+              )}
             </div>
           )}
 
-          {sidebarResizer.isOpen && hasLeftBar && (
+          {!compact && sidebarResizer.isOpen && hasLeftBar && (
             <div className="resizer" ref={sidebarResizer.resizerRef} />
           )}
 
@@ -301,22 +390,32 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
         </div>
       </div>
 
-      {rightPanelResizer.isOpen && rightTabs.length > 0 && (
+      {!compact && rightIsOpen && hasRight && (
         <div className="resizer resizer--right" ref={rightPanelResizer.resizerRef} />
       )}
 
-      {rightTabs.length > 0 && (
+      {hasRight && (!compact || rightIsOpen) && (
         <div
-          className={`flex flex-col shrink-0 h-full ${!rightPanelResizer.isOpen ? 'absolute right-0 top-0 z-[13] pointer-events-none' : ''}`}
-          style={{ width: rightPanelResizer.isOpen ? rightPanelResizer.width : undefined }}
+          data-testid="shell-right"
+          className={compact
+            ? 'fixed inset-0 z-[31] flex flex-col bg-bg'
+            : `flex flex-col shrink-0 h-full ${!rightIsOpen ? 'absolute right-0 top-0 z-[13] pointer-events-none' : ''}`}
+          style={{ width: !compact && rightIsOpen ? rightPanelResizer.width : undefined }}
           onDragEnter={onPanelDragEnter}
         >
-          <div ref={rightTabBarRef} className={`right-panel-header ${!rightPanelResizer.isOpen ? 'pointer-events-auto bg-transparent' : ''}`}>
+          <div ref={rightTabBarRef} className={`right-panel-header ${compact ? 'overflow-x-auto' : ''} ${!rightIsOpen ? 'pointer-events-auto bg-transparent' : ''}`}>
+            {compact && (
+              <div className={COMPACT_CELL_CLS}>
+                <IconButton title={t('close')} onClick={closeCompactRight}>
+                  <X size={16} />
+                </IconButton>
+              </div>
+            )}
             {/* Document-scoped tabs (chat/refs/notes/links/checkpoint/access/find). */}
             {rightTabs.filter(e => !e.aside).map(entry => (
               <button
                 key={entry.tab}
-                className={`right-tab ${entry.className ?? ''} ${rightPanelResizer.isOpen && effectiveRightTab === entry.tab ? 'active' : 'inactive'}`}
+                className={`right-tab ${compact ? COMPACT_TAB_CLS : ''} ${entry.className ?? ''} ${rightIsOpen && effectiveRightTab === entry.tab ? 'active' : 'inactive'}`}
                 onClick={() => handleRightTabClick(entry.tab)}
                 title={entry.title}
               >
@@ -332,7 +431,7 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
             {rightTabs.filter(e => e.aside).map(entry => (
               <button
                 key={entry.tab}
-                className={`right-tab ${entry.className ?? ''} ${rightPanelResizer.isOpen && effectiveRightTab === entry.tab ? 'active' : 'inactive'}`}
+                className={`right-tab ${compact ? COMPACT_TAB_CLS : ''} ${entry.className ?? ''} ${rightIsOpen && effectiveRightTab === entry.tab ? 'active' : 'inactive'}`}
                 onClick={() => handleRightTabClick(entry.tab)}
                 title={entry.title}
               >
@@ -341,12 +440,12 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
             ))}
           </div>
 
-          {rightPanelResizer.isOpen && !rightPanelReady && (
+          {rightIsOpen && !rightPanelReady && (
             <aside className="right-panel">
               <PanelLoading />
             </aside>
           )}
-          {rightPanelResizer.isOpen && rightPanelReady && effectiveRightTab && (
+          {rightIsOpen && rightPanelReady && effectiveRightTab && (
             <aside
               className={`right-panel${effectiveRightTab === 'notes' && activeNoteThreadId ? ' right-panel--notes-thread' : ''}`}
             >
@@ -357,6 +456,15 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
             </aside>
           )}
         </div>
+      )}
+
+      {compact && sidebarIsOpen && (
+        <div
+          data-testid="compact-scrim"
+          role="presentation"
+          className="fixed inset-0 z-[30] bg-black/40"
+          onClick={() => setCompactPanel('none')}
+        />
       )}
 
       {overlays}

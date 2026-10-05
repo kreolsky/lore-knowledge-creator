@@ -44,7 +44,7 @@ export const ChatRow = memo(function ChatRow({ session, isActive, onSelect, onDe
   const rawReferenceId = useAppStore(s => s.currentReference?.reference_id);
   // Panel quick preview: the doc is the chat's scope, so a ref-session is NOT
   // "current" while its ref is merely previewed — the goto-ref affordance shows.
-  const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocumentId ?? '']));
+  const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocumentId ?? ''], s.compactLayout));
   const currentReferenceId = refIsScope(refOpenMode) ? rawReferenceId : null;
   const deleteAction = useArmedAction();
   // Inline rename — same contract as the reference plaque (RefCard): pencil or

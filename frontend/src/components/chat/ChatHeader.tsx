@@ -1,7 +1,7 @@
 /** Chat header — static title (double-click to rename) + new chat / goto-parent / export / delete. Chat-store slices: sessions, activeSessionId, modelsLoaded, createSession, setActiveSession, deleteSession, updateSession, loadModels. App-store slices: currentProject, currentDocument, currentReference. */
 
 import { useState, useCallback, useEffect } from 'react';
-import { ArrowLeft, Trash2, Download, FileText, Network, Clock, FolderUp, Search } from 'lucide-react';
+import { Plus, Trash2, Download, FileText, Network, Clock, FolderUp, Search } from 'lucide-react';
 import { Button, IconButton, FieldInput, Popover } from '../ui';
 import { ParentPickerPopup } from '../ParentPickerPopup';
 import { useChatStore, selectActivePath } from '../../store/chat-store';
@@ -32,7 +32,7 @@ export function ChatHeader() {
   const rawReferenceId = useAppStore(s => s.currentReference?.reference_id);
   // Same projection as ChatRow: in panel quick preview the chat's scope is the
   // document, so a ref-session is not "current" and goto-parent shows.
-  const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocumentId ?? '']));
+  const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocumentId ?? ''], s.compactLayout));
   const currentReferenceId = refIsScope(refOpenMode) ? rawReferenceId : null;
   // per-document proximity-sort preference (reactive read). The toggle in the
   // ghost plaque flips this; useSortedSessions consumes it to switch sort modes.
@@ -256,14 +256,14 @@ export function ChatHeader() {
 
   return (
     <div className="flex items-center gap-1 px-3 py-2 border-b border-border bg-surface min-h-[40px]">
-      <Button variant="yellow" size="sm" onClick={handleNewChat}>
-        <ArrowLeft size={13} />
-        {t('chats')}
+      <Button variant="primary" size="sm" onClick={handleNewChat}>
+        <Plus size={13} />
+        {t('chatNew')}
       </Button>
 
       {activeSessionId && (
         // WHY this 22×22 slot (IconButton size="sm" footprint) is ALWAYS rendered
-        // between the "← Chats" button and the title with AT MOST one icon —
+        // between the "+ New chat" button and the title with AT MOST one icon —
         // goto-parent / change-parent / empty: the title's left edge must not
         // shift across states (icon shown / hidden / renaming); a slot that
         // unmounts would make the rename input slide left into its place. The

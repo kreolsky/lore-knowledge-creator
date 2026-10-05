@@ -90,7 +90,7 @@ describe('ChatHeader', () => {
   it('ghost state renders the new-chat plaque, not the session toolbar', () => {
     const host = mount();
     expect(host.textContent).toContain('chatEmptyHint');
-    expect(host.textContent).not.toContain('chats');
+    expect(host.textContent).not.toContain('chatNew');
     unmount();
   });
 

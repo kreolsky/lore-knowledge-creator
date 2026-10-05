@@ -151,7 +151,8 @@ export function ReferencesPanel() {
   const docUIState = useDocState(currentDocId);
   // Project-wide setting (ProjectSettingsPanel), shared by every member; default gallery.
   const previewMode = currentProject?.ref_image_preview ?? true;
-  const refOpenMode = readRefOpenMode(docUIState);
+  const compactLayout = useUIStore(s => s.compactLayout);
+  const refOpenMode = readRefOpenMode(docUIState, compactLayout);
   // INVARIANT: the active toggle shows the CHOSEN mode, whether or not a reference is
   // open right now. Why: the mode decides how the NEXT click on a reference opens it,
   // so the user must see it before clicking — a highlight gated on an open reference
@@ -590,22 +591,27 @@ export function ReferencesPanel() {
                 {t('upload')}
               </Button>
               {archiveToggle}
-              <IconButton
-                size="sm"
-                title={t('toggleSplitView')}
-                className={modeActive('split') ? ACTIVE_TOGGLE_CLS : undefined}
-                onClick={() => toggleMode('split')}
-              >
-                <Columns2 size={13} />
-              </IconButton>
-              <IconButton
-                size="sm"
-                title={t('toggleRefInPanel')}
-                className={modeActive('panel') ? ACTIVE_TOGGLE_CLS : undefined}
-                onClick={() => toggleMode('panel')}
-              >
-                <Eye size={13} />
-              </IconButton>
+              {/* Compact viewport always opens references in the center — no mode to pick. */}
+              {!compactLayout && (
+                <>
+                  <IconButton
+                    size="sm"
+                    title={t('toggleSplitView')}
+                    className={modeActive('split') ? ACTIVE_TOGGLE_CLS : undefined}
+                    onClick={() => toggleMode('split')}
+                  >
+                    <Columns2 size={13} />
+                  </IconButton>
+                  <IconButton
+                    size="sm"
+                    title={t('toggleRefInPanel')}
+                    className={modeActive('panel') ? ACTIVE_TOGGLE_CLS : undefined}
+                    onClick={() => toggleMode('panel')}
+                  >
+                    <Eye size={13} />
+                  </IconButton>
+                </>
+              )}
               <div className="flex-1" />
               <Button variant="ghost" size="sm" onClick={() => setShowAgentConfig(true)}>
                 <Bot size={13} />

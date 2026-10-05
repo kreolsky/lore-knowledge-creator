@@ -48,6 +48,14 @@ interface PersistedUIState {
   searchMode?: 'fulltext' | 'semantic';
 }
 
+// WHY: phones in both orientations and portrait tablets; landscape tablets keep desktop.
+export const COMPACT_LAYOUT_QUERY = '(max-width: 767px), (orientation: portrait) and (max-width: 1100px), (max-height: 500px)';
+
+// jsdom has no matchMedia — tests that need compact set the store field directly.
+const compactMql: MediaQueryList | null =
+  typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia(COMPACT_LAYOUT_QUERY) : null;
+
 export const UI_DEFAULTS: PersistedUIState = {
   sidebarTab: 'docs',
   sidebarOpen: true,
@@ -300,6 +308,9 @@ export interface UIState {
   // need read access without prop-drilling. The public page sets it on mount,
   // clears on unmount. Pairs with `accessLevel='readonly'` (the access gate) and
   // the page-level `setPublicFileContext(token)` (the file-URL gate).
+  // Viewport is compact (COMPACT_LAYOUT_QUERY). Transient, never persisted
+  // (buildUIBlob is field-by-field): a phone session must not rewrite desktop layout.
+  compactLayout: boolean;
   isPublicShare: boolean;
   setPublicShare: (v: boolean) => void;
   // Owning project's name on the anonymous surface — the public Header breadcrumb
@@ -328,6 +339,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   lastActiveChatSessionId: null,
   lastMoveTargetProjectId: null,
   findSeedText: '',
+  compactLayout: compactMql?.matches ?? false,
   ...createPublicShareSlice(set),
 
   getActiveDocState: () => {
@@ -452,6 +464,8 @@ export const useUIStore = create<UIState>((set, get) => ({
     });
   },
 }));
+
+compactMql?.addEventListener('change', e => useUIStore.setState({ compactLayout: e.matches }));
 
 /**
  * React hook returning the UI slice for an explicit document id.

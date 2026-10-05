@@ -135,7 +135,7 @@ export function TableOfContents() {
   const liveHeadings = useAppStore(s => s.liveHeadings);
   // Panel quick preview: the TOC is the DOCUMENT's — read the open reference
   // through the ONE projection so headings + copy-links follow the doc scope.
-  const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocument?.document_id ?? '']));
+  const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocument?.document_id ?? ''], s.compactLayout));
   const currentReference = refIsScope(refOpenMode) ? rawReference : null;
 
   const activeEntityId = currentReference?.reference_id ?? currentDocument?.document_id;

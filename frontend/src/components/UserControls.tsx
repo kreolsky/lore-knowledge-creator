@@ -8,7 +8,7 @@ import { useAppStore } from '../store/app-store';
 import { useShallow } from 'zustand/react/shallow';
 import { apiClient } from '../api/client';
 import { Moon, Sun, LogOut, Settings, Lock, User } from 'lucide-react';
-import { IconButton, Button } from './ui';
+import { IconButton } from './ui';
 import { useTheme } from '../hooks/useTheme';
 import { useLanguage } from '../hooks/useLanguage';
 import { useTranslation } from '../i18n';
@@ -148,14 +148,12 @@ export function UserControls({
         <span className="text-ui-2xs font-bold leading-none">{language.toUpperCase()}</span>
       </IconButton>
       <div className="w-px h-5 bg-border mx-1" />
-      <Button
-        variant="ghost"
-        size="sm"
+      <IconButton
         onClick={() => openSection('/cabinet')}
-        title={t('profileSettings')}
+        title={currentUser?.name ?? t('profileSettings')}
       >
-        {currentUser?.name}
-      </Button>
+        <User size={15} />
+      </IconButton>
       {currentUser?.can_manage_users && (
         <IconButton
           onClick={() => openSection('/admin')}

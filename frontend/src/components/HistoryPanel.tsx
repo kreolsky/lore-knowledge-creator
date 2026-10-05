@@ -56,7 +56,7 @@ export function HistoryPanel() {
   // Panel quick preview: the Checkpoint tab is the DOCUMENT's — a previewed
   // reference is not the scope, so it does not lock the panel to
   // "history not available".
-  const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocument?.document_id ?? '']));
+  const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocument?.document_id ?? ''], s.compactLayout));
   const currentReference = refIsScope(refOpenMode) ? rawReference : null;
   const showToast = useAppStore(s => s.showToast);
   const getContent = useEditorContent();

@@ -194,7 +194,7 @@ export function NotesPanel() {
   // Panel quick preview: the notes panel is the DOCUMENT's (decision A). Same
   // projection as useNoteCrud, so isRefMode/isSplitMode and the anchored-scan /
   // click / create paths below all agree on one scope.
-  const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocument?.document_id ?? '']));
+  const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocument?.document_id ?? ''], s.compactLayout));
   const currentReference = refIsScope(refOpenMode) ? rawReference : null;
   const activeNoteThreadId = useNoteStore(s => s.activeNoteThreadId);
   const addPendingImage = useNoteChatStore(s => s.addPendingImage);
