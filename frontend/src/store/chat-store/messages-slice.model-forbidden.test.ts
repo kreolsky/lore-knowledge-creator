@@ -51,6 +51,10 @@ function buildStore() {
     modelsLoaded: true,
     modelPickerOpen: false,
     loadModels,
+    // runCompletion's restore-on-fail writes the composer (misc-slice in the
+    // real store).
+    draft: '',
+    setDraft: (v: string) => set({ draft: v }),
   } as unknown as ChatState));
   return { store, loadModels };
 }

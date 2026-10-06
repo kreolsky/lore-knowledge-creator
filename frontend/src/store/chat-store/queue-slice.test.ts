@@ -77,7 +77,7 @@ vi.mock('../../i18n', () => ({ t: (k: string) => k }));
 import { useChatStore } from '../chat-store';
 import { dispatchChatFrame, adoptOpenTurn } from './streaming';
 import { clearChatCaches } from './reset-registry';
-import { apiClient } from '../../api/client';
+import { apiClient, HttpError } from '../../api/client';
 import { useAppStore } from '../app-store';
 import type { ChatMessage, ChatSession } from '../../types';
 
@@ -167,11 +167,54 @@ describe('clean turn-end — auto-flushes ONE coalesced message', () => {
     await useChatStore.getState().sendMessage('  ');
     await useChatStore.getState().sendMessage('part two');
     frame({ type: 'done', content: 'answer' });
+    frame(TURN_CLOSED);
     await p;
     await tick();
     expect(completionPosts()).toHaveLength(2);
     expect(lastUserContent()).toBe('part one\n\npart two');
     expect(useChatStore.getState().queued['A']).toBeUndefined();
+  });
+
+  it('`done` alone does NOT flush — only turn_closed POSTs the follow-up', async () => {
+    const p = openTurn();
+    await useChatStore.getState().sendMessage('queued while streaming');
+    frame({ type: 'done', content: 'answer' });
+    await tick();
+    await tick();
+    // `done` is a content frame minted BEFORE the backend's finalize + lock
+    // release: the turn is still open and the chips still stand.
+    expect(completionPosts()).toHaveLength(1);
+    expect(useChatStore.getState().queued['A']).toEqual(['queued while streaming']);
+    frame(TURN_CLOSED);
+    await p;
+    await tick();
+    await tick();
+    expect(completionPosts()).toHaveLength(2);
+    expect(lastUserContent()).toBe('queued while streaming');
+    expect(useChatStore.getState().queued['A']).toBeUndefined();
+  });
+
+  it('done → turn_closed → the flushed follow-up receives its own frames (no terminal mis-route)', async () => {
+    const p = openTurn();
+    await useChatStore.getState().sendMessage('follow-up');
+    frame({ type: 'done', content: 'answer' });
+    // Give a `done`-triggered flush its macrotask: were `done` the terminal,
+    // the follow-up would POST and register here, and the turn_closed below
+    // would close THAT registration and drop its frames.
+    await tick();
+    await tick();
+    frame(TURN_CLOSED);
+    await p;
+    await tick();
+    await tick();
+    expect(completionPosts()).toHaveLength(2);
+    // The follow-up turn is REGISTERED: its ids lands in its own slot — the
+    // previous turn's terminal already fired (it triggered the flush), so no
+    // stale terminal can close this registration and drop its frames.
+    frame({ type: 'ids', user_message_id: 'um2', assistant_message_id: 'am2' });
+    expect(useChatStore.getState().streaming?.messageId).toBe('am2');
+    frame({ type: 'delta', content: 'follow-up reply' });
+    expect(useChatStore.getState().streaming?.messageId).toBe('am2');
   });
 
   it("the drained send's NEW streaming slot survives the old turn's runCompletion finally", async () => {
@@ -251,7 +294,13 @@ describe('abort / error / halted / lost — restore the text to the composer', (
     const p = useChatStore.getState().sendMessage('kickoff');
     // The POST is in flight: the slot is claimed, so these queue.
     await queueTwo();
-    await endsWithRestore(() => {}, p);
+    await p.catch(() => {});
+    await tick();
+    expect(completionPosts()).toHaveLength(1);
+    expect(useChatStore.getState().queued['A']).toBeUndefined();
+    // The failed kickoff restores its OWN text first (sendMessage's
+    // restore-on-fail), then the queue's error restore appends after it.
+    expect(useChatStore.getState().draft).toBe('kickoff\n\nsaved one\n\nsaved two');
   });
 
   it('restore appends to text typed since queueing, never overwrites it', async () => {
@@ -293,6 +342,55 @@ describe('flush is session-owned', () => {
     expect(useChatStore.getState().queued['A']).toBeUndefined();
     expect(showToast()).toHaveBeenCalledWith('chatQueueDropped', 'info');
     expect(completionPosts()).toHaveLength(0);
+  });
+});
+
+describe('a failed send keeps its text (restore-on-fail)', () => {
+  it('a flush whose POST rejects restores the joined text, empties the chips, and toasts', async () => {
+    const p = openTurn();
+    await useChatStore.getState().sendMessage('queued one');
+    await useChatStore.getState().sendMessage('queued two');
+    frame(TURN_CLOSED);
+    await p;
+    post.mockRejectedValueOnce(new HttpError(409));
+    await tick();
+    await tick();
+    await tick();
+    // The chips cleared at flush time; the joined text is back in the composer.
+    expect(useChatStore.getState().queued['A']).toBeUndefined();
+    expect(useChatStore.getState().draft).toBe('queued one\n\nqueued two');
+    expect(showToast()).toHaveBeenCalledWith('chatSendFailed', 'error');
+    expect(completionPosts()).toHaveLength(2);
+  });
+
+  it('a manual send whose POST rejects restores its text after text typed meanwhile', async () => {
+    post.mockRejectedValueOnce(new Error('500'));
+    const p = useChatStore.getState().sendMessage('manual text');
+    useChatStore.setState({ draft: 'typed meanwhile' });
+    await p.catch(() => {});
+    expect(useChatStore.getState().draft).toBe('typed meanwhile\n\nmanual text');
+  });
+
+  it('a send that fails after the user switched chats returns as a chip of its OWN chat', async () => {
+    let reject!: (e: unknown) => void;
+    post.mockImplementationOnce(() => new Promise((_, r) => { reject = r; }));
+    useChatStore.setState({ sessions: [sess('A'), sess('B')] });
+    const p = useChatStore.getState().sendMessage('meant for A');
+    useChatStore.setState({ activeSessionId: 'B', draft: 'typed in B' });
+    reject(new Error('500'));
+    await p.catch(() => {});
+    // The shared composer now belongs to B: the text must not land there.
+    expect(useChatStore.getState().draft).toBe('typed in B');
+    expect(useChatStore.getState().queued['A']).toEqual(['meant for A']);
+  });
+
+  it('an aborted send does NOT restore (a deliberate stop keeps the composer)', async () => {
+    const err = new Error('aborted');
+    err.name = 'AbortError';
+    post.mockRejectedValueOnce(err);
+    const p = useChatStore.getState().sendMessage('stopped text');
+    await p.catch(() => {});
+    expect(useChatStore.getState().draft).toBe('');
   });
 });
 

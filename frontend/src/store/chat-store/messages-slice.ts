@@ -75,16 +75,29 @@ function insertOptimisticUser(set: Set, get: Get, req: OptimisticInsert): string
  * continued presence in `messages` means the request failed before `ids`
  * arrived — the optimistic bubble must be pulled to avoid a phantom message.
  *
+ * `restoreRewind`: when the send started from a rewound state, the optimistic
+ * insert overwrote the REWIND_KEY sentinel with the temp id — a plain rollback
+ * would silently re-show the branch the user just cut. Write the sentinel back
+ * at the send's parent level instead.
+ *
  * INVARIANT: no silent degradation — a failed send never leaves a phantom
  * optimistic bubble visible as if it succeeded. Why: showing an unsent message
  * as sent violates the "never show stale content as current" principle.
  */
-function rollbackOptimisticUser(set: Set, tempId: string): void {
+function rollbackOptimisticUser(
+  set: Set,
+  tempId: string,
+  restoreRewind = false,
+  rewindParentId: string | null = null,
+): void {
   set(s => {
     if (!s.messages.some(m => m.message_id === tempId)) return {};
     const selectedSiblings = { ...s.selectedSiblings };
     for (const [key, val] of Object.entries(selectedSiblings)) {
       if (key === tempId || val === tempId) delete selectedSiblings[key];
+    }
+    if (restoreRewind) {
+      selectedSiblings[rewindParentId ?? ROOT_KEY] = REWIND_KEY;
     }
     return {
       messages: s.messages.filter(m => m.message_id !== tempId),
@@ -93,7 +106,7 @@ function rollbackOptimisticUser(set: Set, tempId: string): void {
   });
 }
 
-import { buildChildrenMap, resolveActivePath, resolveAncestorChain, ROOT_KEY } from './tree';
+import { buildChildrenMap, resolveActivePath, resolveAncestorChain, ROOT_KEY, REWIND_KEY, withoutRewind } from './tree';
 import { streamCompletion, flushStreaming, emptyStreaming, adoptOpenTurn, hasOpenHarnessTurn } from './streaming';
 import { replaceWindowFromRows, rewindToLineage } from './conversation-feed';
 import { loadMessagesFor, patchMessageContent, deleteMessageById } from '../chat-message-crud';
@@ -121,6 +134,15 @@ interface RunCompletionOpts {
   userImages?: string[];
   optimisticUserId: string;
   errorLabel: string;
+  // sendMessage only: the send started from a rewound state (a REWIND_KEY
+  // sentinel sat at `parentId`'s level before the optimistic insert overwrote
+  // it) — the rollback must write the sentinel back, not drop it.
+  restoreRewind?: boolean;
+  // sendMessage only (the queue flush rides sendMessage, so it shares this):
+  // on a genuine failure the send's own text goes back to the composer.
+  // forkAndResend/regenerate do not pass it — their text lives on in the
+  // edit box / the existing message.
+  restoreDraftOnFail?: boolean;
 }
 
 export async function runCompletion(set: Set, get: Get, opts: RunCompletionOpts): Promise<void> {
@@ -205,10 +227,28 @@ export async function runCompletion(set: Set, get: Get, opts: RunCompletionOpts)
   } catch (e) {
     const failed = handleSendError(e, opts.errorLabel, set, get);
     if (failed) markStreamingFailed(set, get);
-    rollbackOptimisticUser(set, opts.optimisticUserId);
+    rollbackOptimisticUser(set, opts.optimisticUserId, opts.restoreRewind ?? false, opts.parentId);
+    if (failed && opts.restoreDraftOnFail && opts.userContent) {
+      restoreFailedSend(get, activeSessionId, opts.userContent);
+    }
   } finally {
     set(flushStreaming);
   }
+}
+
+// INVARIANT(data-loss): a failed send's text goes back to its OWN chat.
+// Why: the bubble was rolled back and the composer/chips cleared at send
+// time, so without this the text exists nowhere; the draft is ONE shared
+// string, so writing it while another chat is shown sends it into the wrong
+// chat. Active chat → the composer, appended after anything typed meanwhile
+// (the same rule as restoreQueued); otherwise → a queued chip of that chat.
+function restoreFailedSend(get: Get, sessionId: string, text: string): void {
+  if (get().activeSessionId !== sessionId) {
+    get().enqueueMessage(sessionId, text);
+    return;
+  }
+  const draft = get().draft;
+  get().setDraft(draft ? `${draft}\n\n${text}` : text);
 }
 
 /**
@@ -291,6 +331,8 @@ type MessagesSlice = Pick<
   | 'regenerate'
   | 'stopGeneration'
   | 'selectSibling'
+  | 'rewindTo'
+  | 'cancelRewind'
   | 'getSiblings'
 >;
 
@@ -373,6 +415,11 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
       const apiMessages = toApiMessages(activePath);
       apiMessages.push({ role: 'user', content, images });
 
+      // Read BEFORE insertOptimisticUser: it overwrites
+      // selectedSiblings[parentId ?? ROOT_KEY] with the temp id, erasing the
+      // sentinel this flag preserves across a failed send's rollback.
+      const restoreRewind = selectedSiblings[parentId ?? ROOT_KEY] === REWIND_KEY;
+
       const optimisticUserId = insertOptimisticUser(set, get, { parentId, content, images });
 
       await runCompletion(set, get, {
@@ -382,6 +429,8 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
         userImages: images,
         optimisticUserId,
         errorLabel: 'Chat send error:',
+        restoreRewind,
+        restoreDraftOnFail: true,
       });
     },
 
@@ -513,9 +562,34 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
     },
 
     selectSibling(parentId: string, messageId: string) {
+      // WHY: switching a branch above the cut abandons the rewind — dropping the
+      // sentinel keeps it from re-truncating the old branch when the user
+      // switches back to it.
       set(s => ({
-        selectedSiblings: { ...s.selectedSiblings, [parentId]: messageId },
+        selectedSiblings: { ...withoutRewind(s.selectedSiblings), [parentId]: messageId },
       }));
+    },
+
+    rewindTo(messageId: string) {
+      if (get().streaming) return;
+      const target = get().messages.find(m => m.message_id === messageId);
+      if (!target) return;
+      set(s => {
+        // INVARIANT: one rewind at a time — a stale sentinel deep in an
+        // abandoned branch would truncate that branch again when the user
+        // switches back to it via the fork switcher. Why: the sentinel's cut
+        // applies wherever the path walk crosses its key, not only on the
+        // branch it was armed on.
+        const selectedSiblings = withoutRewind(s.selectedSiblings);
+        selectedSiblings[target.parent_id ?? ROOT_KEY] = REWIND_KEY;
+        return { selectedSiblings };
+      });
+    },
+
+    cancelRewind() {
+      // The path falls back to its previous resolution (explicit selection or
+      // freshest sibling), i.e. everything hidden by the rewind reappears.
+      set(s => ({ selectedSiblings: withoutRewind(s.selectedSiblings) }));
     },
 
     getSiblings(parentId: string | null): ChatMessage[] {

@@ -175,10 +175,10 @@ class TestRunHarnessTurn:
                 await run_harness_turn(_turn(line=self._line()), db, "tok")
         assert e.value.status_code == 500
         assert "Agent setup failed" in e.value.detail
-        # No silent degradation: the owner saw error + done through the
+        # No silent degradation: the owner saw error + turn_closed through the
         # listener queue, and the placeholder row + lock were torn down.
         emitted = channel.emit_frames.call_args.args[1]
-        assert [f["type"] for f in emitted] == ["error", "done"]
+        assert [f["type"] for f in emitted] == ["error", "turn_closed"]
         teardown.assert_awaited_once_with("s1", "tok", None)
         deleter.assert_awaited_once_with(db, "am1")
 

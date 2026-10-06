@@ -191,6 +191,7 @@ services:
       LORE_AI_API_URL: ${AI_API_URL:-}
     volumes:
       - harness-sessions:/app/home/sessions
+      - harness-attachments:/app/home/attachments
       - type: volume
         source: secrets
         target: /secrets
@@ -296,5 +297,6 @@ volumes:
   redis:
   storage:
   harness-sessions:
+  harness-attachments:
   sandbox-keys:
   sandbox-workspace:

@@ -23,11 +23,12 @@ frames live on the project WS (routes.chat.fanout) and the reload path.
 # created for a followup the driver then refuses).
 
 # ARCH: the preamble frames (ids/sources/context_warning) and the failure
-# frames (error/done) ride the SAME listener queue as the driver's frames —
-# the preamble BEFORE the followup POST (the queue is the ONE ordering
-# point; a driver frame can never overtake the preamble it belongs after),
-# the failure frames on a refused turn (no silent degradation: a browser
-# that saw `ids` must see the turn die explicitly). These are frame DICTS —
+# frames (error/turn_closed) ride the SAME listener queue as the driver's
+# frames — the preamble BEFORE the followup POST (the queue is the ONE
+# ordering point; a driver frame can never overtake the preamble it belongs
+# after), the failure frames on a refused turn (no silent degradation: a
+# browser that saw `ids` must see the turn die explicitly, and turn_closed
+# is the browser's ONLY terminal). These are frame DICTS —
 # the WS frame vocabulary the relay arms speak. One exception: a
 # line-unavailable/unopenable-channel failure emits NO frames at all (no
 # transport exists to carry them) — the HTTP error status is the entire
@@ -81,13 +82,16 @@ def _preamble_frames(turn) -> list[dict]:
 
 
 def _emit_failure_frames_quietly(driver_session_id: str, message: str) -> None:
-    """error + done into the listener queue — the setup-failure frame shape.
-    Quiet because the channel may be exactly what is broken (the frames are
-    best-effort; the HTTP error status is the guaranteed signal)."""
+    """error + turn_closed into the listener queue — the setup-failure frame
+    shape. turn_closed (not done) because the browser ends a turn ONLY on
+    turn_closed; the empty-content done it replaces carried nothing the
+    store's done handler reads. Quiet because the channel may be exactly what
+    is broken (the frames are best-effort; the HTTP error status is the
+    guaranteed signal)."""
     try:
         get_driver_channel().emit_frames(driver_session_id, [
             {"type": "error", "message": message},
-            {"type": "done", "content": ""},
+            {"type": "turn_closed"},
         ])
     except Exception:
         logger.warning(

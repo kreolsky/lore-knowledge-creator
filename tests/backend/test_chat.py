@@ -650,7 +650,20 @@ async def _completion_ctx(captured: list, api_url: str = "http://fake"):
     import routes.chat.completions as comp
     from driver.client import DriverLine
     from test_driver_channel import FakeConnector, FakeReplay, _env, _turn_end
-    from test_harness_turn import FollowupFake, _reset_fanout, _settle
+    from test_harness_turn import (
+        FollowupFake,
+        _reset_fanout,
+        _settle,
+        _until_async,
+    )
+    from turn_lock import acquire_turn_lock, release_turn_lock
+
+    async def _lock_free(session_id: str) -> bool:
+        token = await acquire_turn_lock(session_id)
+        if token is None:
+            return False
+        await release_turn_lock(session_id, token)
+        return True
 
     line = DriverLine(name="pi", url="http://pi.test", secret="s")
     connector = FakeConnector()
@@ -695,6 +708,11 @@ async def _completion_ctx(captured: list, api_url: str = "http://fake"):
                     sock.push(_env(payload["session_id"],
                                    {"type": "model_update", "model": "test"}))
                     sock.push(_env(payload["session_id"], _turn_end(10)))
+            # A fixed sleep raced the turn-end teardown on a slow runner; wait
+            # until each driven turn's lock is released (on_end has run).
+            for payload in followups.payloads:
+                await _until_async(
+                    lambda sid=payload["session_id"]: _lock_free(sid), timeout=5.0)
             await _settle()
             await driver.channel.get_driver_channel().aclose()
             driver.channel._channel = None

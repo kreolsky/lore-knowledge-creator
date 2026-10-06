@@ -4,6 +4,7 @@ import { useEffect, useRef, useMemo, useLayoutEffect, useCallback } from 'react'
 import { MessageBubble, type MessageBubbleActions } from './MessageBubble';
 import { ChatEmptyList } from './ChatEmptyList';
 import { useChatStore, selectActivePath } from '../../store/chat-store';
+import { isPathRewound } from '../../store/chat-store/tree';
 import type { TurnNodeLike } from './MessageBubble/internal/turn-nodes';
 import { useAppStore } from '../../store/app-store';
 import { useTranslation, t as translate } from '../../i18n';
@@ -93,6 +94,13 @@ export function MessageList() {
   const regenerate = useChatStore(s => s.regenerate);
   const getSiblings = useChatStore(s => s.getSiblings);
   const selectSibling = useChatStore(s => s.selectSibling);
+  // Rewind-to-message: the action arms the cut; `rewindActive` is true only
+  // while the RENDERED path ends at the cut (the plaque + cancel button render
+  // while it is) — a sentinel left off-path by a branch switch shows nothing.
+  const rewindTo = useChatStore(s => s.rewindTo);
+  const cancelRewind = useChatStore(s => s.cancelRewind);
+  const selectedSiblings = useChatStore(s => s.selectedSiblings);
+  const rewindActive = isPathRewound(basePath, selectedSiblings);
 
   const handleCopy = useCallback((text: string) => {
     // A settled agent row whose `done` frame never carried text (or a
@@ -147,7 +155,8 @@ export function MessageList() {
     getSiblings,
     selectSibling,
     onContinue: handleContinue,
-  }), [handleCopy, editMessage, deleteMessage, forkAndResend, regenerate, handleCreateDocument, getSiblings, selectSibling, handleContinue]);
+    onRewind: rewindTo,
+  }), [handleCopy, editMessage, deleteMessage, forkAndResend, regenerate, handleCreateDocument, getSiblings, selectSibling, handleContinue, rewindTo]);
 
   // ARCH: Streaming substitution lives here (not in the selector) because
   // useSyncExternalStore requires getSnapshot to return a stable reference.
@@ -312,7 +321,20 @@ export function MessageList() {
     );
   }
 
-  if (activePath.length === 0) {
+  // The rewind plaque: shown while a REWIND_KEY sentinel is armed — the path
+  // is cut, and this is the only visible way back besides a reload. Square
+  // corners (project rule); ui/Button primitive (styling.md).
+  const rewindPlaque = rewindActive ? (
+    <div className="flex items-center justify-center gap-2 py-2 text-ui-2xs text-text-dim">
+      <span>{t('rewindActive')}</span>
+      <Button variant="ghost" size="sm" onClick={cancelRewind}>{t('cancel')}</Button>
+    </div>
+  ) : null;
+
+  // WHY: a rewind of the very first message cuts the path to [] — that is an
+  // empty conversation with the plaque, not the chat picker (ChatEmptyList
+  // lists other chats; a click there would drop the rewind silently).
+  if (activePath.length === 0 && !rewindActive) {
     return <ChatEmptyList />;
   }
 
@@ -336,6 +358,7 @@ export function MessageList() {
           actions={actions}
         />
       ))}
+      {rewindPlaque}
     </div>
   );
 }

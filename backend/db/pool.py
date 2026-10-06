@@ -75,7 +75,9 @@ def surreal_password() -> str:
     if not password:
         raise ConfigError(
             f"the database password file {path} is missing or empty — "
-            "secrets-init generates it into the secrets volume on every `up`"
+            "secrets-init generates it into the secrets volume on every `up`; "
+            "a docker-compose.yml older than v0.21.0 has no secrets-init — download "
+            "it again (README → Update) and run `docker compose up -d --build`"
         )
     return password
 
@@ -149,6 +151,10 @@ class DBPool:
                         self._startup_complete = True
                         logger.info("SurrealDB connected")
                         return self._db
+                    # WHY: a ConfigError is the install's wiring, not a DB still
+                    # booting — retrying it only hides the cause behind "not ready".
+                    except ConfigError:
+                        raise
                     except Exception:
                         elapsed += delay
                         if elapsed > _STARTUP_MAX_WAIT:
@@ -165,6 +171,8 @@ class DBPool:
                         self._last_check_ts = time.monotonic()
                         logger.info("SurrealDB reconnected (attempt %d)", attempt + 1)
                         return self._db
+                    except ConfigError:
+                        raise
                     except Exception:
                         if attempt == 2:
                             logger.error("SurrealDB reconnect failed after 3 attempts")

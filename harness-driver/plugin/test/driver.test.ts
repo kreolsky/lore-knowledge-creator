@@ -196,7 +196,7 @@ test('cordis.patch.yml routes line B through the llm-pi-ai lore route', () => {
   assert.ok(!/config:/.test(homeTitleBlock),
     'the home row carries no titler config — the editor must reach the entry')
   const profileTitleBlock = profilePatch.split('- id: session-title-llm')[1]!.split('- id:')[0]!
-  for (const field of ['targetWords: 5', 'targetCjkCharacters: 10', 'maxInputBytes: 4096', 'maxOutputTokens: 64', 'timeoutMs: 60000']) {
+  for (const field of ['targetWords: 5', 'targetCjkCharacters: 10', 'maxInputBytes: 4096', 'maxOutputTokens: 2048', 'timeoutMs: 60000']) {
     assert.ok(profileTitleBlock.includes(field), `the profile row restates ${field}`)
   }
   assert.ok(!/provider:/.test(profileTitleBlock) && !/model:/.test(profileTitleBlock),
@@ -323,7 +323,7 @@ function fakeConfigEditor(rows: Record<string, Record<string, unknown>>) {
 
 const TITLE_FIXED = {
   targetWords: 5, targetCjkCharacters: 10, maxInputBytes: 4096,
-  maxOutputTokens: 64, timeoutMs: 60000,
+  maxOutputTokens: 2048, timeoutMs: 60000,
 }
 
 test('a changed provider edits web exactly once, keeping every other field; the same value again edits nothing', async () => {
@@ -396,29 +396,16 @@ function fakeCatalogSettings() {
   }
 }
 
-const PLAIN = { known: true, vision: false, contextWindow: null, maxOutputTokens: null, effortLevels: [] }
-
-test('the title model is catalogued once; a reasoner is still catalogued, with a warning', async () => {
+test('the title model is catalogued once, a reasoner like any other', async () => {
   // pi-ai refuses an id outside the catalog, and the composition already
-  // points the titler at the model — so a reasoner is warned about, never
-  // left uncatalogued (titles would fail) and never an exit.
+  // points the titler at the model — an uncatalogued title model fails titles.
   const route = { apiKeyEnv: 'LORE_AGENT_API_KEY', api: 'openai-completions', baseURL: 'http://gw/v1', compat: {} }
   const settings = fakeCatalogSettings()
-  await ensureTitleEntry(settings, 'titler/plain', PLAIN, route)
-  await ensureTitleEntry(settings, 'titler/plain', PLAIN, route)
+  await ensureTitleEntry(settings, 'titler/plain', route)
+  await ensureTitleEntry(settings, 'titler/plain', route)
   assert.equal(settings.updates.length, 1, 'the committed entry writes nothing')
-  const logged: string[] = []
-  const saved = console.error
-  console.error = (...args: unknown[]) => { logged.push(args.join(' ')) }
-  try {
-    await ensureTitleEntry(settings, 'titler/thinks', { ...PLAIN, effortLevels: ['low'] }, route)
-    await ensureTitleEntry(settings, 'titler/thinks', { ...PLAIN, effortLevels: ['low'] }, route)
-  } finally {
-    console.error = saved
-  }
+  await ensureTitleEntry(settings, 'titler/thinks', route)
   assert.equal(settings.updates.length, 2)
-  assert.equal(logged.filter((l) => l.includes('advertises reasoning effort levels')).length, 1,
-    'one loud line per model, not one per turn')
 })
 
 // ─── the fork model: the parent's last requested route ────────────────────────

@@ -283,23 +283,6 @@ export function reasoningEffortsDeclaration(
   return decl
 }
 
-/** Gate for the title model: the titler names no effort, and on this
- * openai-format route a request with no `reasoning_effort` gets the
- * PROVIDER's default — there is no per-purpose way to say "don't think", so a
- * model advertising levels would think on every title call. The caller
- * refuses that title-model write loudly (the harness never exits on
- * configuration); an unreadable gateway (effortLevels null) passes — the
- * caller warns instead of gating blind. */
-export function assertNonReasoningTitleModel(caps: ModelCaps, model: string): void {
-  if (caps.effortLevels && caps.effortLevels.length > 0) {
-    throw new Error(
-      `CHAT_TITLE_MODEL "${model}" advertises reasoning effort levels `
-      + `[${caps.effortLevels.join(', ')}] — the title call names no effort, so the provider's `
-      + 'default would think on every title. Set the session title model in Admin panel → '
-      + 'Models & APIs to a non-reasoning model (supported=false on the gateway).')
-  }
-}
-
 /** Test seam: drop the TTL caches + any in-flight fetches. */
 export function resetCapsCache(): void {
   cache = null

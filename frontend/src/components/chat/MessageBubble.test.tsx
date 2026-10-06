@@ -595,3 +595,53 @@ describe('unified MessageBubble — the thinking line while the relay shows noth
     expect(renderStreaming({ content: 'the answer so far' })).not.toContain('thinking');
   });
 });
+
+describe('unified MessageBubble — rewind button (agent user messages)', () => {
+  function renderBubble(props: {
+    role?: 'user' | 'assistant';
+    isAgent?: boolean;
+    onRewind?: (messageId: string) => void;
+  }) {
+    act(() => {
+      root.render(createElement(MessageBubble, {
+        variant: 'ai',
+        isAgent: props.isAgent ?? true,
+        isOwn: (props.role ?? 'user') === 'user',
+        message: makeMsg({ role: props.role ?? 'user' }),
+        actions: { onCopy: vi.fn(), onForkResend: vi.fn(), onEdit: vi.fn(), onRewind: props.onRewind },
+      }));
+    });
+  }
+
+  function titles(): string[] {
+    return Array.from(container.querySelectorAll('[title]')).map(b => b.getAttribute('title')!);
+  }
+
+  it('shows the rewind button for an agent user bubble when onRewind is wired', () => {
+    renderBubble({ onRewind: vi.fn() });
+    expect(titles()).toContain('rewindHere');
+  });
+
+  it('a single click only arms; the second click fires onRewind (double-click confirm)', async () => {
+    const onRewind = vi.fn();
+    renderBubble({ onRewind });
+    const btn = container.querySelector('[title="rewindHere"]') as HTMLElement;
+    expect(btn.className).not.toContain('bg-red');
+    await act(async () => { btn.click(); });
+    expect(onRewind).not.toHaveBeenCalled();
+    // The armed state is visible: the first click turns the button solid red.
+    expect(container.querySelector('[title="rewindHere"]')!.className).toContain('bg-red');
+    await act(async () => { btn.click(); });
+    expect(onRewind).toHaveBeenCalledWith('m1');
+  });
+
+  it('an assistant bubble shows no rewind button even with onRewind wired', () => {
+    renderBubble({ role: 'assistant', onRewind: vi.fn() });
+    expect(titles()).not.toContain('rewindHere');
+  });
+
+  it('a non-agent bubble shows no rewind button even with onRewind wired', () => {
+    renderBubble({ isAgent: false, onRewind: vi.fn() });
+    expect(titles()).not.toContain('rewindHere');
+  });
+});

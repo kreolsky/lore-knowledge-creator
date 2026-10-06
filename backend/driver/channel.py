@@ -534,7 +534,9 @@ class DriverChannel:
         recv_task = asyncio.ensure_future(sock.recv())
         wake_task = asyncio.ensure_future(self._wake.wait())
         try:
-            while True:
+            # WHY: _closing ends the read loop too — a cancel swallowed below
+            # this frame must not park the worker forever and hang aclose().
+            while not self._closing:
                 await asyncio.wait(
                     {recv_task, wake_task}, return_when=asyncio.FIRST_COMPLETED)
                 fired_wake = wake_task.done()

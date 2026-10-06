@@ -207,8 +207,9 @@ CHAT_TITLE_MODEL = setting(
     "CHAT_TITLE_MODEL", str, fallback=("CHAT_MODEL",),
     label="Session title model",
     help="The model the agent names chat sessions with; empty = the default "
-         "chat model. Use a non-reasoning model — a reasoning one thinks on "
-         "every title (the harness log warns). Applies from the next message.",
+         "chat model. A reasoning model works but thinks on every title, so "
+         "a fast non-reasoning one names sessions sooner. Applies from the "
+         "next message.",
 )
 
 # The STT overrides keep their own admin sub-block (STT section) under this

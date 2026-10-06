@@ -101,7 +101,7 @@ Update as [README → Update](../README.md#update) describes. Take a backup firs
 
 To choose each update yourself, pin a release with `LORE_VERSION=vX.Y.Z` in `.env`. What changed in each release, and what an update needs from you, is in [releases/](releases/).
 
-To roll back, set `LORE_VERSION` to the previous release and run `docker compose pull` and `docker compose up -d`. This is safe only when no database migration lies between the two versions — an older version may refuse to start on a newer database. The release notes say when a release migrates the database; to go back across one, restore the backup taken before the update.
+To roll back, set `LORE_VERSION` to the previous release and run `docker compose pull --ignore-buildable` and `docker compose up -d` (the flag skips the agent and sandbox images, which are built from source, not pulled). This is safe only when no database migration lies between the two versions — an older version may refuse to start on a newer database. The release notes say when a release migrates the database; to go back across one, restore the backup taken before the update.
 
 ## Troubleshooting
 

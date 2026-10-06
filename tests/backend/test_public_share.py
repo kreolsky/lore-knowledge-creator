@@ -292,6 +292,37 @@ async def test_public_tree_subtree_scope_returns_root_plus_descendants(
 
 
 @pytest.mark.asyncio
+async def test_public_tree_nodes_carry_iso_dates(
+    client, admin_user, project_with_doc,
+):
+    """Every tree node exposes created_at/updated_at as parseable ISO strings.
+
+    WHY: a blog built on the public tree needs dates for ordering and feeds.
+    Pins the OUTPUT (datetime.fromisoformat parses), not the input type —
+    SurrealDB may hand the driver a datetime or a string depending on path.
+    Also pins that no `*_fmt` key rides along (same encoding contract as
+    serialize_record: ISO strings only, the client formats).
+    """
+    pid, _, _ = project_with_doc
+    _, admin_token = admin_user
+    root, child, grandchild, _ = await _build_tree(client, admin_token, pid)
+
+    await _mint_share(client, admin_token, pid, root, "subtree")
+
+    resp = await client.get(f"/api/public/documents/{root}/tree")
+    assert resp.status_code == 200, resp.text
+    nodes = resp.json()["nodes"]
+    assert nodes, "tree must have nodes to assert over"
+    from datetime import datetime
+    for n in nodes:
+        for key in ("created_at", "updated_at"):
+            assert key in n, f"node {n['id']} missing {key}"
+            assert datetime.fromisoformat(n[key]), f"node {n['id']} {key} not ISO"
+        fmt_keys = [k for k in n if k.endswith("_fmt")]
+        assert not fmt_keys, f"node {n['id']} carries preformatted keys: {fmt_keys}"
+
+
+@pytest.mark.asyncio
 async def test_public_tree_excludes_references_from_document_structure(
     client, admin_user, project_with_doc,
 ):

@@ -36,13 +36,13 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 
-import { mapEvent, newTurnMapState } from './map.ts'
+import { mapEvent, newTurnMapState, turnFailureLine } from './map.ts'
 import { loreEvent } from '../../lore-conversation/src/lore-events.ts'
 import { lastTurnEndSeq } from './leaf.ts'
 import {
-  assertNonReasoningTitleModel, gatewayOf, piAiEffortKey,
+  gatewayOf, piAiEffortKey,
   reasoningEffortsDeclaration, resolveModelCaps,
-  type Gateway, type ModelCaps,
+  type Gateway,
 } from './caps.ts'
 import { projectSessionEntries } from './entries.ts'
 import { createSessionStreamBaselines, type SessionStreamBaselines } from './stream-baselines.ts'
@@ -578,28 +578,15 @@ export async function ensureTitleConfig(
   })
 }
 
-/** Title models already warned about as reasoning — one loud line per model
- * per process, not one per turn. */
-const warnedTitleModels = new Set<string>()
-
 /** Declare the turn's title model (payload `title_model` — admin CHAT_TITLE_MODEL,
  * else the backend's CHAT_MODEL) in the route's catalog: pi-ai refuses an id
  * outside it, and a fresh install's first route write is a turn, not the
- * boot. A reasoning title model is warned about loudly, never a harness exit
- * (assertNonReasoningTitleModel). */
+ * boot. A reasoning model is accepted: its thinking rides the titler's
+ * maxOutputTokens budget in the profile patch. */
 export async function ensureTitleEntry(
-  settings: SettingsSeam, model: string, caps: ModelCaps,
-  route: LoreRouteScaffold | null,
+  settings: SettingsSeam, model: string, route: LoreRouteScaffold | null,
 ): Promise<void> {
   if (!model) return
-  try {
-    assertNonReasoningTitleModel(caps, model)
-  } catch (err) {
-    if (!warnedTitleModels.has(model)) {
-      warnedTitleModels.add(model)
-      console.error(`[lore-caps] WARNING: ${(err as Error).message}`)
-    }
-  }
   await ensureModelEntry(settings, model, Number.NaN, Number.NaN, false, null, true, route)
 }
 
@@ -1483,8 +1470,7 @@ async function prepareTurnDrive(ctx: Context, map: SessionMap, body: Record<stri
     // After the chat model's own upsert (which carries the route scaffold);
     // the titler runs after the turn's first request, so this lands first.
     if (titleModel && titleModel !== model) {
-      await ensureTitleEntry(ctx.get('settings') as SettingsSeam, titleModel,
-        await resolveModelCaps(titleModel, { gateway }), route)
+      await ensureTitleEntry(ctx.get('settings') as SettingsSeam, titleModel, route)
     }
     await ensureTitleConfig(
       ctx.get('configEditor') as ConfigEditorSeam | undefined, titleModel)
@@ -1578,6 +1564,11 @@ async function followup(
       drive.restriction.apply()
     }
     if (ev?.type !== 'turn/end') return
+    // The operator's one line for a failed turn (the chat blanks an AUTH
+    // message; the raw gateway reason survives only here and in the session
+    // JSONL). Per-turn tap, so a failure logs once — not once per browser.
+    const failed = turnFailureLine(ev, { loreId, dshId, model })
+    if (failed) console.error(failed)
     drive.state.finished = true
     const cu = contextUsageFrame(
       (ctx as any).get?.('sessionProjections'), agent.session, cap)

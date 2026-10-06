@@ -85,6 +85,8 @@ describe('adoptOpenTurn — the reload seats the open turn', () => {
 
     dispatchChatFrame(get, set, 's1', chunk(7));
     dispatchChatFrame(get, set, 's1', DONE);
+    // done is a content frame — the adopted turn closes on its terminal.
+    dispatchChatFrame(get, set, 's1', { type: 'turn_closed' });
     expect(get().streaming).toBeNull();
     // The settled window spans replay + live frames.
     expect(get().turnRanges['am']).toEqual({ min: 4, max: 7 });
@@ -208,6 +210,7 @@ describe('adoptOpenTurn — the browser-WS-gap resync', () => {
 
     dispatchChatFrame(get, set, 's-resync', chunk(8));
     dispatchChatFrame(get, set, 's-resync', DONE);
+    dispatchChatFrame(get, set, 's-resync', { type: 'turn_closed' });
     await p; // the ORIGINAL registration settles — no dangling await
     expect(get().streaming).toBeNull();
   });

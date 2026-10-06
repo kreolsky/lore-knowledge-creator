@@ -145,6 +145,7 @@ Every name must be a model your endpoint serves. No restart is needed: the agent
 |---|---|---|
 | `docker compose up` fails with `address already in use` or `port is already allocated` | another service uses 8080 | put `LORE_PORT=8090` (any free port) in `.env`, run `docker compose up -d`, use that port |
 | `env_file` / `required` or `subpath is not allowed` error on `up` | `docker compose version` | upgrade Docker Compose to v2.26.0 or newer (and Docker Engine to 26.0 or newer) |
+| after an update the backend log says `the database password file /secrets/surreal/pass is missing or empty` | `docker compose config --services` lists no `secrets-init` | the compose file predates v0.21.0: download it again and run `docker compose up -d --build` (see Update below) |
 | health never returns `"status":"ok"` | `docker compose logs backend` | the log names the failing setting or service |
 | the agent answers *harness service is not reachable*, or health shows `"harness":"unreachable"` | `docker compose logs harness` | the agent is still the previous build: run `docker compose up -d --build` (the agent is built from source, so an update without `--build` keeps the old one) |
 | the agent answers *No chat model is set* or *No AI API URL is set* | **Admin panel → Models & APIs** | set the missing value; the next message uses it |
@@ -156,11 +157,11 @@ Every name must be a model your endpoint serves. No restart is needed: the agent
 
 ```sh
 curl -O https://raw.githubusercontent.com/kreolsky/lore-knowledge-creator/main/docker-compose.yml
-docker compose pull
+docker compose pull --ignore-buildable
 docker compose up -d --build
 ```
 
-All three lines are needed: the compose file itself changes between releases, and the agent and its sandbox are built from source — without `--build` they keep running the previous version.
+All three lines are needed: the compose file itself changes between releases, and the agent and its sandbox are built from source — without `--build` they keep running the previous version. `--ignore-buildable` skips those locally built images in `pull`; without it `pull` reports *pull access denied* for `lore-harness`, `lore-sandbox` and `lore-sandbox-gw`, which is harmless.
 
 ### Data and backups
 

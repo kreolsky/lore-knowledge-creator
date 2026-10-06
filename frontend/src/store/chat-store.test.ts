@@ -1180,7 +1180,8 @@ describe('flushStreaming (via sendMessage finally block)', () => {
       showToast: vi.fn(),
     });
 
-    // The turn's text reaches the row on the terminal `done` frame — the
+    // The turn's text reaches the row on the `done` content frame (the
+    // turn's terminal is `turn_closed`) — the
     // BACKEND's accumulation. Nothing folds deltas in the browser any more:
     // the reply is drawn from the assembler's nodes, and `content` is what the
     // list preview and a frameless fallback read.

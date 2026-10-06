@@ -42,7 +42,9 @@ vi.mock('../../api/client', () => ({
 import { createMessagesSlice } from './messages-slice';
 import { createQueueSlice } from './queue-slice';
 import { streamCompletion } from './streaming';
+import { REWIND_KEY, ROOT_KEY, resolveActivePath, isPathRewound } from './tree';
 import { apiClient } from '../../api/client';
+import type { ChatMessage } from '../../types';
 import type { ChatState } from './types';
 
 function buildStore(sessions: ChatState['sessions'], activeSessionId: string | null) {
@@ -53,6 +55,10 @@ function buildStore(sessions: ChatState['sessions'], activeSessionId: string | n
     messages: [],
     selectedSiblings: {},
     streaming: null,
+    // runCompletion's restore-on-fail writes the composer (misc-slice in the
+    // real store).
+    draft: '',
+    setDraft: (v: string) => set({ draft: v }),
   } as unknown as ChatState));
 }
 
@@ -172,6 +178,153 @@ describe('stopGeneration — cancel POST feedback', () => {
       '/chat/sessions/active/completions/cancel', {},
     );
     expect(toast).toHaveBeenCalledWith('stopGenerationFailed', 'error');
+  });
+});
+
+describe('rewindTo / cancelRewind — REWIND_KEY sentinel', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    appStoreState.currentReference = null;
+    appStoreState.currentDocument = null;
+  });
+
+  /** A stored message row (role/content defaulted for brevity). */
+  function msg(
+    id: string,
+    parent_id: string | null,
+    created_at: string,
+    role: 'user' | 'assistant' = 'user',
+  ): ChatMessage {
+    return { message_id: id, chat_id: 'active', parent_id, role, content: id, created_at } as ChatMessage;
+  }
+
+  /** Default fixture: a(null) → b(user) → bReply; c is b's fresher sibling. */
+  function rewindStore() {
+    const store = buildStore([sess('active', null, '2026-01-01T00:00:00Z')], 'active');
+    store.setState({
+      messages: [
+        msg('a', null, '2026-01-01T00:00:00Z'),
+        msg('b', 'a', '2026-01-01T00:01:00Z'),
+        msg('bReply', 'b', '2026-01-01T00:02:00Z', 'assistant'),
+        msg('c', 'a', '2026-01-01T00:03:00Z'),
+      ],
+    } as unknown as Partial<ChatState>);
+    return store;
+  }
+
+  it('resolveActivePath with a REWIND_KEY selection ends the path at that level, excluding every child', () => {
+    const { messages } = rewindStore().getState();
+    // Sentinel keyed at b's parent (a): the path renders up to and including a.
+    const path = resolveActivePath(messages, { a: REWIND_KEY });
+    expect(path.map(m => m.message_id)).toEqual(['a']);
+  });
+
+  it('resolveActivePath with the sentinel at ROOT_KEY returns an empty path', () => {
+    const { messages } = rewindStore().getState();
+    expect(resolveActivePath(messages, { [ROOT_KEY]: REWIND_KEY })).toEqual([]);
+  });
+
+  it('rewindTo(m) then sendMessage parents the new turn on m.parent_id and excludes the hidden branch', async () => {
+    const store = rewindStore();
+    store.getState().rewindTo('b');
+    await store.getState().sendMessage('x');
+    const body = lastBody();
+    expect(body.parent_id).toBe('a');
+    const contents = (body.messages as Array<{ role: string; content: string }>).map(m => m.content);
+    expect(contents).toEqual(['a', 'x']);
+    expect(contents).not.toContain('b');
+    expect(contents).not.toContain('bReply');
+  });
+
+  it('after the post-rewind send the hidden branch survives as a sibling (fork switcher offers both)', async () => {
+    const store = rewindStore();
+    store.getState().rewindTo('b');
+    await store.getState().sendMessage('x');
+    const sib = store.getState().getSiblings('a').map(m => m.message_id);
+    expect(sib).toContain('b');
+    expect(sib).toContain('c');
+    // The optimistic user message is the third sibling at the same level.
+    expect(sib).toHaveLength(3);
+  });
+
+  it('rewindTo a first message → sendMessage posts parent_id: null (root sibling)', async () => {
+    const store = rewindStore();
+    store.setState({ messages: [msg('a', null, '2026-01-01T00:00:00Z')] } as unknown as Partial<ChatState>);
+    store.getState().rewindTo('a');
+    await store.getState().sendMessage('x');
+    expect(lastBody().parent_id).toBeNull();
+    expect(lastBody().messages).toEqual([{ role: 'user', content: 'x', images: undefined }]);
+  });
+
+  it('a second rewindTo moves the single sentinel (exactly one REWIND_KEY entry)', () => {
+    const store = rewindStore();
+    store.getState().rewindTo('b');      // sentinel at 'a'
+    store.getState().rewindTo('bReply'); // sentinel moves to bReply's parent ('b')
+    const s = store.getState().selectedSiblings;
+    const sentinelKeys = Object.entries(s).filter(([, v]) => v === REWIND_KEY).map(([k]) => k);
+    expect(sentinelKeys).toEqual(['b']);
+  });
+
+  it('rewindTo while streaming changes nothing', () => {
+    const store = rewindStore();
+    store.setState({ streaming: { messageId: 'live', content: '', controller: null } } as unknown as Partial<ChatState>);
+    store.getState().rewindTo('b');
+    expect(store.getState().selectedSiblings).toEqual({});
+  });
+
+  it('cancelRewind restores the pre-rewind path deep-equal', () => {
+    const store = rewindStore();
+    const { messages } = store.getState();
+    const before = resolveActivePath(messages, {});
+    store.getState().rewindTo('b');
+    expect(resolveActivePath(messages, store.getState().selectedSiblings).map(m => m.message_id)).toEqual(['a']);
+    store.getState().cancelRewind();
+    expect(resolveActivePath(messages, store.getState().selectedSiblings)).toEqual(before);
+  });
+
+  it('selectSibling above the cut drops the sentinel — switching back shows the full old branch', () => {
+    const store = rewindStore();
+    store.getState().rewindTo('bReply'); // sentinel at 'b' (inside b's branch)
+    store.getState().selectSibling('a', 'c'); // user switches to the c branch
+    store.getState().selectSibling('a', 'b'); // ...and back to b
+    const s = store.getState();
+    expect(Object.values(s.selectedSiblings).includes(REWIND_KEY)).toBe(false);
+    expect(resolveActivePath(s.messages, s.selectedSiblings).map(m => m.message_id)).toEqual(['a', 'b', 'bReply']);
+  });
+
+  it('isPathRewound is true only while the rendered path ends at the cut', () => {
+    const { messages } = rewindStore().getState();
+    const cut = { a: REWIND_KEY };
+    expect(isPathRewound(resolveActivePath(messages, cut), cut)).toBe(true);
+    // Sentinel parked inside a branch the path does not walk: inert, no plaque.
+    const offPath = { a: 'c', b: REWIND_KEY };
+    expect(isPathRewound(resolveActivePath(messages, offPath), offPath)).toBe(false);
+    const root = { [ROOT_KEY]: REWIND_KEY };
+    expect(isPathRewound(resolveActivePath(messages, root), root)).toBe(true);
+  });
+
+  it('a failed send from a rewound state keeps the rewind (sentinel back at the parent, branch still hidden)', async () => {
+    vi.mocked(streamCompletion).mockRejectedValueOnce(new Error('network'));
+    const store = rewindStore();
+    store.getState().rewindTo('b');
+    await store.getState().sendMessage('x');
+    const s = store.getState();
+    expect(s.selectedSiblings['a']).toBe(REWIND_KEY);
+    // Hidden branch still hidden: the path excludes b and everything below it.
+    expect(resolveActivePath(s.messages, s.selectedSiblings).map(m => m.message_id)).toEqual(['a']);
+    // The phantom optimistic bubble is gone (no-silent-degradation unchanged).
+    expect(s.messages.some(m => m.content === 'x')).toBe(false);
+  });
+
+  it('a failed send from a NON-rewound state plants no sentinel', async () => {
+    vi.mocked(streamCompletion).mockRejectedValueOnce(new Error('network'));
+    const store = rewindStore();
+    await store.getState().sendMessage('x');
+    const s = store.getState();
+    expect(Object.values(s.selectedSiblings).includes(REWIND_KEY)).toBe(false);
+    // The optimistic bubble is still rolled back — the restore flag must not
+    // turn a plain failure into a rewind.
+    expect(resolveActivePath(s.messages, s.selectedSiblings).map(m => m.message_id)).toEqual(['a', 'c']);
   });
 });
 

@@ -11,6 +11,32 @@ import { registerChatResetHandler } from './reset-registry';
  */
 export const ROOT_KEY = '__root__';
 
+/**
+ * Sentinel VALUE inside `selectedSiblings` (a map otherwise keyed by parent id
+ * → chosen message id): marks the level whose active path is CUT — the
+ * rewind-to-message feature. Keyed by the hidden message's parent (ROOT_KEY
+ * for a first message); `resolveActivePath` stops there, so the hidden message
+ * and everything below it drop off the rendered path and off sendMessage's
+ * parent derivation. The branch itself is NOT deleted — once the next message
+ * exists as a sibling, the fork switcher offers both. In-memory by design:
+ * every reset site clears `selectedSiblings` wholesale and
+ * `insertOptimisticUser` overwrites the entry with the temp id on send, so
+ * session switch, reload and send end the rewind with zero extra code.
+ */
+export const REWIND_KEY = '__rewind__';
+
+/** True when `path` ends at a REWIND_KEY cut — the rewind is what the user sees,
+ *  not merely a sentinel parked somewhere in the map (an off-path one is inert). */
+export function isPathRewound(path: ChatMessage[], selectedSiblings: Record<string, string>): boolean {
+  const endKey = path.length > 0 ? path[path.length - 1].message_id : ROOT_KEY;
+  return selectedSiblings[endKey] === REWIND_KEY;
+}
+
+/** Copy of `selectedSiblings` with every REWIND_KEY entry dropped. */
+export function withoutRewind(selectedSiblings: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(selectedSiblings).filter(([, v]) => v !== REWIND_KEY));
+}
+
 // ─── Children map cache ──────────────────────────────────────────────────────
 
 /** Build children map: parentId -> message[]. Cached by reference to avoid O(n) on each call. */
@@ -114,6 +140,12 @@ export function resolveActivePath(
     // Pick explicit selection, else the freshest-subtree sibling.
     const parentKey = currentChildren[0].parent_id ?? ROOT_KEY;
     const selectedId = selectedSiblings[parentKey];
+    // INVARIANT: a REWIND_KEY selection ends the active path at that level —
+    // no sibling is chosen and nothing below is pushed.
+    // Why: the next send must parent on the node BEFORE the hidden message so
+    // it forks a sibling of the hidden branch, and sendMessage derives its
+    // parent from this same path (activePath's last node).
+    if (selectedId === REWIND_KEY) break;
     const chosen = currentChildren.find(m => m.message_id === selectedId)
       ?? pickFreshestSubtree(currentChildren, subtreeMax);
     path.push(chosen);

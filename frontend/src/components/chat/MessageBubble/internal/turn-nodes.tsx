@@ -336,11 +336,17 @@ function TurnNode({ node, nodes, isStreaming, onContinue }: {
     case 'compaction-mint': return <CompactionMintNode data={node.data} />;
     case 'turn-error': {
       const d = (typeof node.data === 'object' && node.data !== null ? node.data : {}) as Record<string, unknown>;
+      // WHY: dsh blanks an AUTH failure's message deliberately (a provider auth
+      // error can echo credentials); Lore maps the stable CODE to the actionable
+      // sentence here — never the message text (dsh's own routing rule).
+      const raw = typeof d.message === 'string' ? d.message.trim() : '';
+      const isAuth = d.code === 'AUTH';
+      const text = isAuth ? t('chatTurnErrorAuth') : (raw || t('chatHaltReasonError'));
       return (
         <div className="flex items-start gap-2 my-1 text-sm text-red-500">
           <AlertTriangle size={15} className="mt-0.5 shrink-0" />
           <div className="min-w-0">
-            <div>{String(d.message ?? 'The agent turn failed.')}</div>
+            <div>{text}</div>
             {d.code ? <div className="text-xs opacity-70">{String(d.code)}</div> : null}
           </div>
         </div>

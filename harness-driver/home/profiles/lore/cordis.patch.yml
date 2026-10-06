@@ -14,9 +14,11 @@
     searchProvider: deepseek-official
     fetchProvider: http
 - id: session-title-llm
+  # WHY: maxOutputTokens counts a reasoning model's thinking too — 64 left a
+  # reasoning title model no room to reach the title text (finish max-tokens).
   config:
     targetWords: 5
     targetCjkCharacters: 10
     maxInputBytes: 4096
-    maxOutputTokens: 64
+    maxOutputTokens: 2048
     timeoutMs: 60000

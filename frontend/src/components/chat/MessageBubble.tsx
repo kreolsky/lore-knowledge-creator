@@ -46,6 +46,10 @@ export interface MessageBubbleActions {
    *  reset naturally, and the transcript stays honest about why the agent
    *  restarted. Hidden when absent (the card renders read-only). */
   onContinue?: () => void;
+  /** Agent chats: rewind-to-message — hide this message and everything below
+   *  it; the next send forks a sibling from the point before it (the hidden
+   *  branch stays in history). Hidden when absent (button never renders). */
+  onRewind?: (messageId: string) => void;
 }
 
 interface Props {
@@ -109,6 +113,7 @@ export const MessageBubble = memo(function MessageBubble({
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState('');
   const deleteAction = useArmedAction();
+  const rewindAction = useArmedAction();
   const bubbleRef = useRef<HTMLDivElement>(null);
   const [bubbleW, setBubbleW] = useState<number>();
   const [openAttachIndex, setOpenAttachIndex] = useState<number | null>(null);
@@ -437,6 +442,23 @@ export const MessageBubble = memo(function MessageBubble({
             {(isAgent ? (isUser && actions?.onForkResend) : (actions?.onEdit && (!isNote || noteCanEdit))) && (
               <IconButton size="sm" theme={variant === 'note' ? 'note' : undefined} title={t('edit')} onClick={handleStartEdit}>
                 <Pencil size={12} />
+              </IconButton>
+            )}
+            {/* Rewind (agent user messages only): hide this message and
+             * everything below it — the next send forks a sibling before it.
+             * Armed double-click like delete, and styled like it: IconButton's
+             * `filled` armed state only shows with a colour, so without `danger`
+             * the first click looked like it did nothing. */}
+            {isUser && isAgent && actions?.onRewind && (
+              <IconButton
+                size="sm"
+                danger
+                filled={rewindAction.armed}
+                title={t('rewindHere')}
+                onClick={() => rewindAction.handleClick(() => actions.onRewind?.(message.message_id))}
+                onMouseLeave={rewindAction.disarm}
+              >
+                <Trash2 size={12} />
               </IconButton>
             )}
             {isUser && !isAgent && actions?.onForkResend && (

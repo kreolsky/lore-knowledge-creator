@@ -43,7 +43,7 @@ const GUARDS: Record<string, (f: Record<string, unknown>) => boolean> = {
   ids: f => isStr(f.user_message_id) && isStr(f.assistant_message_id),
   sources: f => Array.isArray(f.sources),
   // Per-turn context-occupation signal (used + cap = ints). Emitted by the
-  // driver before the terminal done; relayed by the backend reducer.
+  // driver before the turn's `done` content frame; relayed by the backend reducer.
   context_usage: f => typeof f.used === 'number' && typeof f.cap === 'number',
   // The assembler's input. ONLY `kind` is required — it names the node
   // definition, and a kind without one still publishes as the neutral fallback

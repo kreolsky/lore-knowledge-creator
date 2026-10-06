@@ -11,7 +11,6 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  assertNonReasoningTitleModel,
   gatewayOf,
   piAiEffortKey,
   reasoningEffortsDeclaration,
@@ -281,31 +280,3 @@ test('reasoningEffortsDeclaration: an offer naming nothing beyond off declares n
   assert.match(errors[2]!, /"ultra".*unnameable/, 'the off-only line names unnameable levels')
 })
 
-// ─── the title-model boot gate ────────────────────────────────────────────────
-
-test('assertNonReasoningTitleModel: a model advertising levels fails the gate naming them', () => {
-  assert.throws(
-    () => assertNonReasoningTitleModel(
-      { known: true, vision: false, contextWindow: 1, maxOutputTokens: 1,
-        effortLevels: ['low', 'xhigh'] },
-      'local/orange/reasoner'),
-    /CHAT_TITLE_MODEL "local\/orange\/reasoner"/,
-    'crash-on-config: the message names the model and its levels')
-  assert.throws(
-    () => assertNonReasoningTitleModel(
-      { known: true, vision: false, contextWindow: 1, maxOutputTokens: 1,
-        effortLevels: ['low', 'xhigh'] },
-      'local/orange/reasoner'),
-    /\[low, xhigh\]/)
-})
-
-test('assertNonReasoningTitleModel: null levels (unreadable gateway) and [] pass', () => {
-  assertNonReasoningTitleModel(
-    { known: false, vision: false, contextWindow: null, maxOutputTokens: null,
-      effortLevels: null },
-    'm/unknown')
-  assertNonReasoningTitleModel(
-    { known: true, vision: false, contextWindow: 1, maxOutputTokens: 1,
-      effortLevels: [] },
-    'deepseek/flash')
-})

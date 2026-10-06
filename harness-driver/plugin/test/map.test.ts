@@ -10,7 +10,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { mapEvent, newTurnMapState, toRelayFrame, type DshEvent } from '../src/map.ts'
+import { mapEvent, newTurnMapState, toRelayFrame, turnFailureLine, type DshEvent } from '../src/map.ts'
 
 function ev(seq: number, type: string, data?: any, surfaceOp?: any): any {
   return { seq, type, data, time: 1_700_000_000_000 + seq, surfaceOp }
@@ -138,6 +138,37 @@ test('turn/end completed / max-tokens / error mint NO halt (dsh renders them)', 
     assert.equal(frames.length, 1, kind)
     assert.equal((frames[0] as any).type, 'dsh_event', kind)
   }
+})
+
+// ─── the per-turn failure log line ────────────────────────────────────────────
+
+test('turnFailureLine: an error turn/end names lore, dsh, model, the code and the raw message', () => {
+  const line = turnFailureLine(
+    ev(9, 'turn/end', { turn: 1, reason: { kind: 'error', error: { code: 'AUTH', message: '403 Access to endpoint /v1/chat/completions is not allowed (endpoint_not_allowed)' } } }),
+    { loreId: 'lore-1', dshId: 'dsh-1', model: 'glm-x' },
+  )
+  assert.ok(line, 'an error turn/end must produce a log line')
+  assert.match(line, /^\[lore-driver\] turn failed lore=lore-1 dsh=dsh-1 model=glm-x code=AUTH: /)
+  assert.ok(line.includes('403 Access to endpoint /v1/chat/completions is not allowed (endpoint_not_allowed)'))
+})
+
+test('turnFailureLine clips the message to 500 chars (a provider HTML page must not flood the log)', () => {
+  const line = turnFailureLine(
+    ev(9, 'turn/end', { turn: 1, reason: { kind: 'error', error: { code: 'SERVER', message: 'x'.repeat(2000) } } }),
+    { loreId: 'l', dshId: 'd', model: 'm' },
+  )
+  assert.ok(line)
+  assert.ok(line.endsWith('x'.repeat(500)), 'the message part is exactly the first 500 chars')
+  assert.ok(!line.includes('x'.repeat(501)), 'nothing beyond 500 chars survives')
+})
+
+test('turnFailureLine: only an error turn/end produces a line', () => {
+  const ids = { loreId: 'l', dshId: 'd', model: 'm' }
+  for (const kind of ['completed', 'max-tokens', 'aborted']) {
+    assert.equal(turnFailureLine(ev(9, 'turn/end', { turn: 1, reason: { kind } }), ids), null, kind)
+  }
+  assert.equal(turnFailureLine(ev(1, 'assistant/chunk', { chunk: { type: 'text-delta', text: 'x' } }), ids), null)
+  assert.equal(turnFailureLine(ev(2, 'approval/asked', { callId: 'c', toolName: 'edit_document' }), ids), null)
 })
 
 // ─── child sessions emit nothing ──────────────────────────────────────────────

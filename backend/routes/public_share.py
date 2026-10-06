@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 from share_guard import is_unshareable_by_ancestry
@@ -228,6 +229,15 @@ async def _token_to_root(token: str) -> str:
 # ─── Handlers (shared by canonical + token-shim routes) ─────────────────────
 
 
+def _iso_or_none(v) -> str | None:
+    """Normalize a DB date cell to an ISO string (datetime → isoformat, str passes)."""
+    if isinstance(v, datetime):
+        return v.isoformat()
+    if isinstance(v, str):
+        return v
+    return None
+
+
 def _build_public_tree_nodes(rows: list[dict], root_id: str) -> list[dict]:
     """Shape DB rows into public tree nodes, nulling the share root's parent_id.
 
@@ -254,12 +264,20 @@ def _build_public_tree_nodes(rows: list[dict], root_id: str) -> list[dict]:
             "title": r.get("title") or "",
             "parent_id": parent_id,
             "sort_key": r.get("sort_key"),
+            # WHY expose dates: dates of already-published documents are no
+            # disclosure beyond the content itself, and a blog built on this
+            # surface needs them for ordering and feeds. ISO strings only, no
+            # *_fmt keys — same encoding contract as serialize_record; the
+            # SurrealDB driver may hand us a datetime OR a string depending on
+            # the query path, so normalize both.
+            "created_at": _iso_or_none(r.get("created_at")),
+            "updated_at": _iso_or_none(r.get("updated_at")),
         })
     return nodes
 
 
 async def _handle_tree(document_id: str) -> dict:
-    """Subtree structure (id/title/parent/sort_key). Doc-scope = root only.
+    """Subtree structure (id/title/parent/sort_key/created_at/updated_at). Doc-scope = root only.
 
     document_id is the doc the caller navigated to; the tree is always rooted at
     the SHARE root (ctx['document_id']) so the sidebar shows the whole published
@@ -273,7 +291,7 @@ async def _handle_tree(document_id: str) -> dict:
         # that built `doc_ids`. Without this filter they leak into the public tree and
         # render as document nodes (reported bug). Mirrors the authed tree query
         # (projects.py: "AND is_reference = false"). References have their own panel.
-        "SELECT id, title, parent_id, sort_key FROM documents "
+        "SELECT id, title, parent_id, sort_key, created_at, updated_at FROM documents "
         "WHERE project_id = $pid AND deleted_at IS NONE "
         "AND is_reference = false AND meta::id(id) IN $ids ORDER BY sort_key",
         {"pid": ctx["project_id"], "ids": ctx["doc_ids"]},

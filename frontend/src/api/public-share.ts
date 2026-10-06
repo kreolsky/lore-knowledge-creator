@@ -27,6 +27,10 @@ export interface PublicTreeNode {
   title: string;
   parent_id: string | null;
   sort_key?: string | null;
+  /** ISO-8601 — nothing reads them yet in the FE; the type documents the payload
+   *  (external consumers, e.g. the blog PoC, order and feed off these). */
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface PublicTreeResponse {

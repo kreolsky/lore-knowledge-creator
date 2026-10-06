@@ -7,8 +7,9 @@
  * Pinned here:
  * - the POST is unconditional (there is no other transport to pick);
  * - a full turn over the dispatch path: ids → feed frames → done(content)
- *   resolves streamCompletion and flushes the streaming slot (done IS terminal);
- * - turn_closed is terminal WITHOUT done (an errored turn has no done frame);
+ *   stamps the row text but leaves the turn OPEN (done is a content frame,
+ *   not a terminal); turn_closed is the ONLY terminal — it flushes the
+ *   streaming slot and resolves streamCompletion;
  * - a refused POST (no frames) rejects and unregisters — late frames drop;
  * - a POST rejection that arrives AFTER the failure frames settled is
  *   swallowed (the frames already told the story);
@@ -27,7 +28,7 @@ vi.mock('../../api/client', () => ({
 }));
 vi.mock('../../i18n', () => ({ t: (k: string) => k }));
 
-import { streamCompletion, dispatchChatFrame } from './streaming';
+import { streamCompletion, dispatchChatFrame, hasOpenHarnessTurn } from './streaming';
 import { clearChatCaches } from './reset-registry';
 import type { ChatState, Set } from './types';
 
@@ -77,7 +78,7 @@ function startHarness(get: () => ChatState, set: Set, sessionId = 's1') {
 describe('the harness transport — a turn over the WS dispatch', () => {
   beforeEach(() => { vi.clearAllMocks(); postMock.mockResolvedValue({ accepted: true }); });
 
-  it('ids creates the rows, done stamps the content and IS terminal (flush + resolve)', async () => {
+  it('ids creates the rows, done stamps the content and leaves the turn open; turn_closed is terminal', async () => {
     // A fresh session id: the assembler engine is module-level, so a shared id
     // would MERGE this turn's window with the previous test's (the resumed-turn
     // merge), muddying the range assertion.
@@ -90,14 +91,18 @@ describe('the harness transport — a turn over the WS dispatch', () => {
 
     dispatchChatFrame(get, set, 's-win', { type: 'dsh_event', kind: 'step/start', seq: 3, data: { turn: 0, step: 0 } });
     dispatchChatFrame(get, set, 's-win', DONE);
-    await p;
+    // done is a CONTENT frame (the backend's text fold): the registration
+    // stands and the slot keeps streaming — the turn is not closed yet.
+    expect(hasOpenHarnessTurn('s-win')).toBe(true);
+    expect(get().streaming).not.toBeNull();
     expect(get().messages.find(m => m.message_id === 'am')?.content).toBe('Hello world');
+
+    // turn_closed — the only terminal — flushes the slot and resolves.
+    dispatchChatFrame(get, set, 's-win', TURN_CLOSED);
+    await p;
     expect(get().streaming).toBeNull();
     // The fed frame's window bound to the assistant row at the terminal.
     expect(get().turnRanges['am']).toEqual({ min: 3, max: 3 });
-    // A late turn_closed (the plugin push after done) is a no-op, not a crash.
-    dispatchChatFrame(get, set, 's-win', TURN_CLOSED);
-    expect(get().streaming).toBeNull();
   });
 
   it('turn_closed is terminal without done (an errored turn mints no done)', async () => {
@@ -126,7 +131,7 @@ describe('the harness transport — a turn over the WS dispatch', () => {
     const p = startHarness(get, set);
     dispatchChatFrame(get, set, 's1', IDS);
     dispatchChatFrame(get, set, 's1', { type: 'error', message: 'busy' });
-    dispatchChatFrame(get, set, 's1', { type: 'done', content: '' });
+    dispatchChatFrame(get, set, 's1', TURN_CLOSED);
     rejectPost(new Error('409'));
     await p; // resolves — the frames told the story already
     expect(get().messages.find(m => m.message_id === 'am')).toBeTruthy();

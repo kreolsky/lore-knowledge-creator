@@ -241,16 +241,17 @@ async def _driver_capability(line: DriverLine, model: str) -> dict:
 #       the harness's own catch) — the relay mints the lore halt at the
 #       window tail and persists the abnormal product.
 # Any OTHER type relays verbatim too (forward-compat): the relay drops nothing
-# for being unrendered. The browser's terminals are `done` and `turn_closed`
-# — whichever arrives first closes the turn. The backend also feeds the SAME
-# chat channel beside the driver's frames: the turn preamble (completions_
-# harness.py — `ids` names the user/assistant row pair, `sources` the context
-# panel, `context_warning`; non-terminal) and `done` (frames.py — TERMINAL,
-# carries the row's joined content on a graceful end; also emitted beside
-# `error` on a refused turn). The lore mints whose facts are backend
-# products — `lore/image-gen` (the detached generation: live as the run's
-# frames ride the owner's chat channel, and on reload from the row's
-# gen_steps), `lore/compaction-mint` (the continuation-chat outcome), and the
+# for being unrendered. The browser's ONLY terminal is `turn_closed`. The
+# backend also feeds the SAME chat channel beside the driver's frames: the
+# turn preamble (completions_harness.py — `ids` names the user/assistant row
+# pair, `sources` the context panel, `context_warning`; non-terminal), `done`
+# (frames.py — a CONTENT frame, not a terminal: carries the row's joined
+# content on a graceful end, emitted before finalize + the turn-lock release)
+# and the setup-failure tail `error` + `turn_closed` (completions_harness.py).
+# The lore mints whose facts are backend products — `lore/image-gen` (the
+# detached generation: live as the run's frames ride the owner's chat
+# channel, and on reload from the row's gen_steps), `lore/compaction-mint`
+# (the continuation-chat outcome), and the
 # turn-less `lore/halt` — are ALSO minted on the RELOAD side from the rows
 # (frames.attach_reload_lore_mints).
 

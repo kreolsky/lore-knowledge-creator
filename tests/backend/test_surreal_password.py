@@ -71,3 +71,19 @@ async def test_pool_signs_in_with_the_file_password_and_the_seam_namespace(tmp_p
     assert seen["url"] == "ws://surreal:8000/rpc"
     assert seen["creds"] == {"username": "root", "password": "file-pass"}
     assert seen["nsdb"] == ("lore_test", db_name_for_worker(worker))
+
+
+async def test_a_missing_file_fails_startup_at_once_with_the_upgrade_hint(tmp_path, monkeypatch, caplog):
+    """A missing password file is the install's wiring (a pre-v0.21 compose has
+    no secrets-init), not a database still booting: the startup loop raises it
+    on the first attempt instead of logging "not ready" for a minute."""
+    import db.pool
+
+    monkeypatch.setattr(config, "SURREAL_PASS_FILE", tmp_path / "absent")
+    monkeypatch.setattr(db.pool, "_STARTUP_MAX_WAIT", 1.0)
+    monkeypatch.setattr(db.pool.DBPool, "_instance", None)
+    pool = db.pool.DBPool()
+
+    with pytest.raises(ConfigError, match="docker-compose.yml older than v0.21.0"):
+        await pool.get_db()
+    assert not [r for r in caplog.records if "not ready" in r.getMessage()]

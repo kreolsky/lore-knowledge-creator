@@ -3,7 +3,7 @@
  * turn's per-row node slice (SYSTEM: dsh-conversation).
  */
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
@@ -32,6 +32,11 @@ const chatState: Record<string, unknown> = {
   regenerate: vi.fn(),
   getSiblings: vi.fn(() => []),
   selectSibling: vi.fn(),
+  // Rewind-to-message: the component reads the sentinel + the two actions
+  // from the store.
+  selectedSiblings: {},
+  rewindTo: vi.fn(),
+  cancelRewind: vi.fn(),
   sendMessage: vi.fn(),
   decideVerdict: vi.fn(),
 };
@@ -285,5 +290,65 @@ describe('MessageList — empty-content guard (plan chat-message-content-empty-u
     host.remove();
     appState.currentProject = null;
     appState.currentDocument = null;
+  });
+});
+
+describe('MessageList — rewind plaque', () => {
+  function userMessage(id: string) {
+    return { message_id: id, chat_id: 's1', parent_id: null, role: 'user', content: id, created_at: '2026-05-20T14:59:00Z' };
+  }
+
+  function renderWith(activePath: unknown[], selectedSiblings: Record<string, string>) {
+    chatState.activePath = activePath;
+    chatState.selectedSiblings = selectedSiblings;
+    chatState.streaming = null;
+    (chatState.cancelRewind as ReturnType<typeof vi.fn>).mockClear();
+    return mount();
+  }
+
+  // jsdom lacks ResizeObserver; the user-bubble width-measurement effect uses it.
+  let prevRO: unknown;
+  beforeEach(() => {
+    prevRO = (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver;
+    (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+  });
+  afterEach(() => {
+    (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver = prevRO;
+  });
+
+  function cleanup({ host, root }: { host: HTMLElement; root: Root }) {
+    act(() => root.unmount());
+    host.remove();
+    chatState.activePath = [];
+    chatState.selectedSiblings = {};
+  }
+
+  it('a path ending at the cut shows the plaque; its cancel calls cancelRewind', () => {
+    const mounted = renderWith([userMessage('u1')], { u1: '__rewind__' });
+    expect(mounted.host.textContent).toContain('rewindActive');
+    const cancel = Array.from(mounted.host.querySelectorAll('button')).find(b => b.textContent === 'cancel')!;
+    act(() => cancel.click());
+    expect(chatState.cancelRewind).toHaveBeenCalledTimes(1);
+    cleanup(mounted);
+  });
+
+  it('a sentinel off the rendered path shows no plaque', () => {
+    const mounted = renderWith([userMessage('u1')], { elsewhere: '__rewind__' });
+    expect(mounted.host.textContent).not.toContain('rewindActive');
+    cleanup(mounted);
+  });
+
+  it('a rewound first message renders an empty conversation with the plaque, not the chat picker', () => {
+    const mounted = renderWith([], { __root__: '__rewind__' });
+    expect(mounted.host.textContent).toContain('rewindActive');
+    // The conversation scroll container, holding only the plaque — no message rows.
+    const list = scrollContainer(mounted.host);
+    expect(list.className).toContain('overflow-y-auto');
+    expect(list.childElementCount).toBe(1);
+    cleanup(mounted);
   });
 });

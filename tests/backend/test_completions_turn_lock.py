@@ -278,6 +278,10 @@ async def test_cancelled_teardown_releases_the_turn_lock(monkeypatch):
     assert "pi:turn-lock:s1" not in slow.store, (
         "shielded release must complete despite the task being cancelled mid-roundtrip"
     )
+    # The cancel still reaches the caller: the driver channel runs this
+    # teardown inside its worker, and a swallowed cancel left that worker
+    # looping after aclose() had cancelled it — aclose() hung forever.
+    assert task.cancelled(), "the cancel must propagate, not be swallowed"
 
 
 # ─── Plan: review-fixes-restore-path-timeline, C — pre-hand-off driver outage ──

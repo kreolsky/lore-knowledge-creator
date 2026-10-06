@@ -202,3 +202,28 @@ export function mapEvent(
   }
   return [toRelayFrame(ev)]
 }
+
+/**
+ * The operator log line for a FAILED turn, or null for anything else.
+ *
+ * `displayFailure` blanks an AUTH failure's message before it reaches the
+ * browser, and a dsh `turn-error` node carries no rendered reason either way —
+ * so the operator's own container log is the only surface where the gateway's
+ * raw refusal stays visible. One line per turn, from the per-turn watch tap
+ * (NOT the per-client relay in ws-events.ts): a failure logs once, not once
+ * per subscribed browser. The raw message is clip-safe here (the operator's
+ * own log, never sent to the browser); 500 chars keeps a provider HTML error
+ * page from flooding it.
+ */
+export function turnFailureLine(
+  ev: DshEvent,
+  ids: { loreId: string; dshId: string; model: string },
+): string | null {
+  if (ev.type !== 'turn/end') return null
+  const reason = ev.data?.reason as { kind?: unknown; error?: unknown } | undefined
+  if (reason?.kind !== 'error') return null
+  const error = (reason.error ?? {}) as { code?: unknown; message?: unknown }
+  const code = typeof error.code === 'string' ? error.code : 'UNKNOWN'
+  const raw = typeof error.message === 'string' ? error.message : ''
+  return `[lore-driver] turn failed lore=${ids.loreId} dsh=${ids.dshId} model=${ids.model} code=${code}: ${raw.slice(0, 500)}`
+}

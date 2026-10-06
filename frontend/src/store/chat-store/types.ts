@@ -278,6 +278,16 @@ export interface ChatState {
 
   // Actions — forks
   selectSibling: (parentId: string, messageId: string) => void;
+  // Rewind-to-message (agent chats): cut the active path so the message and
+  // everything below it stop rendering, and the next send forks a SIBLING from
+  // the point before it (a REWIND_KEY sentinel in selectedSiblings — the
+  // branch is NOT deleted, the fork switcher offers it once the sibling
+  // exists). Refused while streaming. In-memory: a reload or session switch
+  // clears it with selectedSiblings and the full branch shows again.
+  rewindTo: (messageId: string) => void;
+  // Drop the rewind sentinel — the path falls back to its previous resolution
+  // and the hidden branch reappears.
+  cancelRewind: () => void;
   getSiblings: (parentId: string | null) => ChatMessage[];
 
   // Actions — message queue. Guard lives in the store, not

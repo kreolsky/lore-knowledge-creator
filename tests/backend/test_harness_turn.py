@@ -436,10 +436,10 @@ async def test_followup_busy_after_retries_is_a_409_with_cleanup(
         msgs = await _list_messages(client, user_token, sid)
         assert [m["role"] for m in msgs] == ["user"]
 
-        # No silent degradation: the owner saw ids, then error + done.
+        # No silent degradation: the owner saw ids, then error + turn_closed.
         await _settle()
         got = _recv_chat_frames(owner[1], 3)
-        assert [g["frame"]["type"] for g in got] == ["ids", "error", "done"]
+        assert [g["frame"]["type"] for g in got] == ["ids", "error", "turn_closed"]
     finally:
         owner[0].__exit__(None, None, None)
 

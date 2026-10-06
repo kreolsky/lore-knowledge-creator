@@ -328,11 +328,15 @@ function createTurnSink(
 // frames ride the PROJECT lifecycle WS as `{type:'chat_frame', session_id,
 // frame}` (SYSTEM: chat-fanout) and enter through dispatchChatFrame — the SAME
 // sink, the same assembler, the same handlers. streamCompletion
-// for a harness session resolves only when the turn ENDS: a terminal frame
-// (`done` — the graceful and setup-failure tail — or `turn_closed` — the
-// transport terminal the plugin pushes / the channel re-mints) settles it, so
-// runCompletion's catch/finally see the SAME turn lifecycle semantics as a
-// (the stream end), not the POST's return.
+// for a harness session resolves only when the turn ENDS: the terminal frame
+// (`turn_closed` — the ONLY terminal; the plugin pushes it after the turn's
+// last mapped frame, the channel re-mints it on resync/deadline, the
+// setup-failure tail carries it after `error`) settles it, so
+// runCompletion's catch/finally see the turn's lifecycle end (the
+// transport terminal), not the POST's return. `done` is a CONTENT frame — the
+// backend's text fold for the row, minted before finalize + lock release;
+// treating it as a terminal made the queue flush POST into the held turn
+// lock.
 //
 // The registration is per CHAT session id (the WS envelope's session_id — the
 // fan-out keys it by the chat id even for continuation chats). Frames for a
@@ -428,12 +432,26 @@ export function adoptOpenTurn(
   }
 }
 
-/** The frame types that END a turn on the WS transport: `done` (minted
- * backend-side for graceful ends and harness setup failures) and
- * `turn_closed` (pushed by the plugin after the turn's last mapped frame —
- * an errored turn mints no done). Whichever arrives first closes the turn;
- * the other is a no-op (the registration is gone). */
-const TERMINAL_FRAME_TYPES: ReadonlySet<string> = new Set(['done', 'turn_closed']);
+/** The frame type that ENDS a turn on the WS transport: `turn_closed` —
+ * pushed by the plugin after the turn's last mapped frame (graceful and
+ * errored ends), re-minted by the channel on a resync replay and a deadline
+ * breach, and emitted as the setup-failure tail (error + turn_closed).
+ * `done` is NOT in the set: it is a content frame — the backend's text fold
+ * for the row.
+ * INVARIANT: on a GRACEFUL end `turn_closed` is the frame that follows the
+ * backend's turn-lock release. Why: the queue flush (which fires only on a
+ * clean end) POSTs into a free lock and no later terminal of the same turn
+ * can reach the follow-up's registration — whereas `done` is emitted BEFORE
+ * finalize + lock release, so flushing on it hits the held lock (409; the
+ * chips already cleared, so the text is lost) or has the follow-up's fresh
+ * registration closed by the previous turn's late `turn_closed` (the
+ * follow-up renders nothing). NOT claimed: that `turn_closed` always
+ * arrives after the release — on the setup-failure and refused paths the
+ * frames are emitted before `_teardown_turn_lock`, and the plugin pushes
+ * the refusal's `turn_closed` independently of the backend teardown;
+ * harmless there, because an error end restores the queue instead of
+ * flushing it. */
+const TERMINAL_FRAME_TYPES: ReadonlySet<string> = new Set(['turn_closed']);
 
 /** The end reason of the turn whose slot this is: a stamped error/halt wins, a
  * Stop shows as the aborted controller, anything else is a clean end. */

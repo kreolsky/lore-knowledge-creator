@@ -230,12 +230,10 @@ async def _teardown_turn_lock(
     )
     if not token:
         return
-    try:
-        await asyncio.shield(release_turn_lock(session_id, token))
-    except asyncio.CancelledError:
-        # The outer task was cancelled; the shielded release keeps running
-        # detached and completes regardless. Swallow so the cancel does not mask it.
-        pass
+    # WHY: a cancel landing here propagates — the shielded release keeps
+    # running detached and completes regardless; swallowing it kept a cancelled
+    # caller alive (the driver channel's worker never stopped, aclose() hung).
+    await asyncio.shield(release_turn_lock(session_id, token))
 
 
 async def _record_turn_lock_rejection(

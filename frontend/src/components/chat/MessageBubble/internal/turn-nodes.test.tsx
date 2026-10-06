@@ -75,6 +75,34 @@ describe('TurnNodes', () => {
     expect(html).toContain('chatHaltReasonUnknown');
   });
 
+  it('renders an AUTH turn-error as the translated gateway-refusal sentence above the AUTH chip', () => {
+    // dsh blanks the AUTH message deliberately (it can echo credentials); Lore
+    // maps the stable code to the actionable sentence at render time.
+    const html = render(createElement(TurnNodes, {
+      nodes: [node('turn-error', { code: 'AUTH', message: '' })],
+      isStreaming: false,
+    })).textContent ?? '';
+    expect(html).toContain('chatTurnErrorAuth');
+    expect(html).toContain('AUTH');
+  });
+
+  it('renders an empty-message turn-error as chatHaltReasonError instead of a blank line', () => {
+    const html = render(createElement(TurnNodes, {
+      nodes: [node('turn-error', { code: 'RATE_LIMIT', message: '' })],
+      isStreaming: false,
+    })).textContent ?? '';
+    expect(html).toContain('chatHaltReasonError');
+  });
+
+  it('renders a non-empty turn-error message as today (unchanged path)', () => {
+    const html = render(createElement(TurnNodes, {
+      nodes: [node('turn-error', { code: 'RATE_LIMIT', message: 'slow down' })],
+      isStreaming: false,
+    })).textContent ?? '';
+    expect(html).toContain('slow down');
+    expect(html).not.toContain('chatHaltReasonError');
+  });
+
   it('renders an unrendered kind as the neutral fallback chip labelled by kind', () => {
     const html = render(createElement(TurnNodes, {
       nodes: [node('todo/updated', { items: ['a'] })],
