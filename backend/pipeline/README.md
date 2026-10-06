@@ -41,11 +41,10 @@ A pipeline is wired up by **documents in the database**, not by JSON in the repo
    - `typography` — fenced YAML `replacements:` table; applied deterministically AFTER `calculate:` (not a prompt slot).
    - Any other child doc title becomes a `{title}` placeholder for `render_prompt`.
 
-> **Full config reference (field types `enum`/`multiselect`/`prefix`, `default:`, `calculate:`
-> syntax, placeholder cheat-sheet, what reaches the LLM): see
-> [`docs/pipelines/extractor/configuration.md`](../../docs/pipelines/extractor/configuration.md).**
-> The config sections previously duplicated in this README were stale; that file is now the
-> single source of truth.
+> **Full config reference (field types `enum`/`multiselect`/`prefix`, `default:`, `calculate:`,
+> `ranges`, placeholder cheat-sheet): the agent skill
+> [`backend/configs/skill_extractor_config.md`](../configs/skill_extractor_config.md).**
+> It is the single source of truth, bound to the code by `tests/backend/test_skill_extractor_config.py`.
 4. **`agent_configs` row** — links source doc → config doc → target doc, with `trigger_event` (e.g. `transcription_complete`) and optional `title_template`, `model`. Multiple configs per document are allowed (one per `trigger_event`); enforced by index `idx_agent_configs_doc_trigger`.
 
 ## Triggering
@@ -83,8 +82,8 @@ docker compose exec backend pytest /tests/backend/test_extractor.py /tests/backe
 The authoritative reference for `variables` YAML — field types
 (`string`/`number`/`integer`/`boolean`/`enum`/`multiselect`/`prefix`), `options:`, `default:`,
 the legacy `enum:` alias, duplicate-key handling, `calculate:` expressions, and the three
-distinct placeholder syntaxes — is
-[`docs/pipelines/extractor/configuration.md`](../../docs/pipelines/extractor/configuration.md).
+distinct placeholder syntaxes — is the agent skill
+[`backend/configs/skill_extractor_config.md`](../configs/skill_extractor_config.md).
 
 Highlights (see the reference for full detail):
 - `enum`/`multiselect`/`prefix` are declared via `type:` + `options:`. `enum`/`prefix` are

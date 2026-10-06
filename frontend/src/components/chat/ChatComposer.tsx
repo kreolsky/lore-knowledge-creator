@@ -11,6 +11,7 @@ import { Send, Square } from 'lucide-react';
 import { Button, FieldTextarea } from '../ui';
 import { useVerticalDragResize } from '../../hooks/useVerticalDragResize';
 import { useTranslation } from '../../i18n';
+import { useUIStore } from '../../store/ui-store';
 import { MicButton } from './shared/MicButton';
 import { AttachmentChips } from './shared/AttachmentChips';
 import { QueuedChips } from './shared/QueuedChips';
@@ -75,6 +76,7 @@ export function ChatComposer({
   textareaRef,
 }: Props) {
   const { t } = useTranslation();
+  const compactLayout = useUIStore(s => s.compactLayout);
   const { height: inputHeight, handleRef: dragHandleRef } = useVerticalDragResize({
     defaultHeight: 300,
     // INVARIANT: input min-height equals the default floor (200) — the form must
@@ -147,6 +149,7 @@ export function ChatComposer({
                   recording={recording}
                   transcribing={transcribing}
                   onToggleRecording={onToggleRecording}
+                  filled={variant !== 'note'}
                 />
                 {/*
                   Plan chat-message-queue (kilocode model): one button, state derived from
@@ -161,9 +164,17 @@ export function ChatComposer({
                     <Square size={14} className="mr-1" /> {t('stop')}
                   </Button>
                 ) : (
-                  <Button variant="primary" onClick={onSend} disabled={!canSend}>
-                    <Send size={14} className="mr-1" /> {t('sendHotkey')}
-                  </Button>
+                  // WHY: on a compact (phone) layout the hotkey label means nothing and
+                  // costs row width — send collapses to an icon-only square.
+                  compactLayout ? (
+                    <Button variant="primary" size="md-square" onClick={onSend} disabled={!canSend} title={t('send')}>
+                      <Send size={14} />
+                    </Button>
+                  ) : (
+                    <Button variant="primary" onClick={onSend} disabled={!canSend}>
+                      <Send size={14} className="mr-1" /> {t('sendHotkey')}
+                    </Button>
+                  )
                 )}              </div>
             </div>
           </div>

@@ -19,7 +19,7 @@ is the grammar the code enforces.
 | child `template` | yes | fenced Markdown with `{{name}}` |
 | child `instructions` | no | free Markdown, the WHOLE document (not fenced) |
 | child `typography` | no | YAML block with a `replacements:` table |
-| child `ranges` | no | YAML interval tables for `range()` in `calculate:` |
+| child `ranges` | no | YAML interval/mark tables — bound to variables, or `range()` in `calculate:` |
 | any other child title | no | free text, injected into the prompt as `{title}` |
 
 YAML and template content is read from the FIRST fenced code block of the document —
@@ -68,6 +68,7 @@ variables:
     type: multiselect
     description: "Ultrasound access route(s)."
     options: [трансвагинальный, трансабдоминальный]
+    separator: " и "
 
   cervical_canal:
     type: prefix
@@ -86,17 +87,20 @@ calculate:
   extraction instruction, not a label.
 - `default` (a string, any type) is substituted when extraction comes back empty.
 - `enum` = one of a closed list, ASR slips snapped to the closest option; `multiselect`
-  = several from the list, joined into «A и B»; `prefix` = a chosen start plus a free
-  dictated tail. All three REQUIRE a non-empty `options` list.
+  = several from the list, joined with ", " — override the join string with
+  `separator: " и "` (multiselect only, every gap); `prefix` = a chosen start plus a
+  free dictated tail. The three kinds REQUIRE a non-empty `options` list.
 - A bare `enum:` key (as on `status` above) is the legacy alias for type: enum plus the
   same list — never combine it with an explicit type word.
 - `calculate:` outputs start with `=` and reference fields with double braces. Operators
   are `+ - * / **` and unary `-`; functions are `round(x)`, `round(x, ndigits)`,
   `abs(x)`. Inputs coerce to float — keep them type: number with a numeric default like
   `"0"`. A cycle between calculated fields fails the run.
-- `range({{value}}, table[, {{key}}])` holds the NAME of the interval the value fell
-  in, read from the `ranges` child (see Layout). The model never sees the table — the
-  flag is computed deterministically:
+- Per-value marks (a flag, a colour, the value printed bold) come from `ranges` tables
+  bound to the variable — see *Ranges tables bound to a variable* below. No
+  `calculate:` line is needed for them.
+- `range({{value}}, table[, {{key}}])` — the single-value form: a `calculate:` output
+  holding the NAME of the interval the value fell in:
 
   ```yaml
   uterus_length:                # flat table
@@ -105,7 +109,7 @@ calculate:
     - {name: выше, min: 60}
 
   m_echo_thickness:             # conditional — one sub-table per key value
-    by: postmenopause           # documentation only, dropped on load
+    by: postmenopause           # range() ignores by: — the key is its 3rd argument
     "0":
       - {name: норма, max: 15}
       - {name: выше, min: 15}
@@ -129,9 +133,142 @@ calculate:
   `max` exclusive); a value outside every interval, an empty (or blank) measurement,
   or a missing key yields `""`. An unknown table, or a key given to a flat table /
   missing on a conditional one, fails the run on every row — it is a config error,
-  not data. The flag is a string — never feed it back into arithmetic.
-  To print a flag value styled, add it to `typography` (e.g. `"критично":
-  "**критично**"`) — the dictionary runs after the formulas.
+  not data. The flag is a string — never feed it back into arithmetic. To print a
+  value styled, prefer a bound table's `view: "**{{value}}**"` attribute over
+  `range()` + typography.
+
+## Ranges tables bound to a variable
+
+A table in the `ranges` child whose name equals a variable (or a `calculate:` output)
+is BOUND to it. Each row is a CONDITION plus OUTPUT ATTRIBUTES; every attribute key
+becomes a template variable `<variable>_<key>`. The model never sees the table — the
+marks are computed deterministically after extraction and `calculate:`.
+
+```yaml
+uterus_length:                       # bound to the variable uterus_length
+  - {flag: ниже нормы, color: "8ab4ff", view: "{{value}}",     max: 40}
+  - {flag: норма,      color: "8ab440", view: "{{value}}",     min: 40, max: 60}
+  - {flag: выше нормы, color: "ec883c", view: "**{{value}}**", min: 60}
+  - {view: "{{value}}"}              # catch-all: no condition, matches anything
+```
+
+The template then writes `{{uterus_length_view}} мм ({{uterus_length_flag}})`; for 72
+that renders `**72** мм (выше нормы)`, and `{{uterus_length_color}}` is `ec883c`.
+
+Row keys:
+
+| Key | Role |
+|-----|------|
+| `min` | condition: value ≥ min (inclusive) — numbers only |
+| `max` | condition: value < max (exclusive) — numbers only |
+| `is` | condition: value equals ANY listed option — a YAML list, enum variables only |
+| `name` | what `range()` returns — generates no variable |
+| anything else | an output attribute → `<variable>_<key>` |
+
+How a row is chosen:
+
+- Rows are tried TOP TO BOTTOM; the FIRST matching row wins.
+- A row with no `min`/`max`/`is` is the catch-all — it matches anything, so put it
+  LAST (rows below it never match). A table whose attributes use `{{value}}` MUST end
+  with one, or a value outside the table would vanish from the report.
+- No row matches (and no catch-all), or the value is empty → every attribute is `""`.
+- A row that lacks an attribute another row has gives `""` for it.
+
+What an attribute holds:
+
+- A plain string or number, printed as is. `{{value}}` inside it is replaced by
+  exactly what `{{variable}}` prints; no other `{{…}}` is allowed there.
+- Quote words YAML reads as booleans (`yes`, `no`, `on`, `off`, `true`, `false`):
+  `flag: "yes"`. Unquoted, the table is rejected.
+- Key names are letters, digits and underscore (`flag`, `color_hex`) — the generated
+  name must be addressable from the template.
+- Use the generated names in the TEMPLATE only: `calculate:` runs before the marks,
+  so `={{uterus_length_flag}}` fails as an unknown variable. Typography replacements
+  run after the marks and apply to them too.
+
+### `is:` — marks by an enum value
+
+`is:` matches an `enum` variable by value. It is ALWAYS a list, even for one value
+(`is: [укорочена]`, never `is: укорочена`), and every listed value must be one of the
+variable's `options` — the comparison runs on the option the value was snapped to,
+not on the dictated words. A table is either numeric (`min`/`max`) or categorical
+(`is`), never both.
+
+```yaml
+variables:
+  cervix_state:
+    type: enum
+    description: "Cervix state."
+    options: [норма, деформирована, укорочена]
+```
+
+```yaml
+cervix_state:
+  - {is: [деформирована, укорочена], flag: патология, view: "**{{value}}**"}
+  - {is: [норма], flag: норма, view: "{{value}}"}
+  - {view: "{{value}}"}              # catch-all, for an option added later
+```
+
+`укорочена` → `{{cervix_state_flag}}` = `патология`, `{{cervix_state_view}}` =
+`**укорочена**`.
+
+### `by:` — a different table per value of another variable
+
+When the norm depends on another variable, the table becomes a mapping of SUB-TABLES.
+`by:` names the selector variable; every other key is a VALUE of that variable and
+holds an ordinary list of rows, matched by the rules above.
+
+```yaml
+variables:
+  m_echo_thickness:
+    type: number
+    description: "M-echo thickness in mm."
+  postmenopause:
+    type: boolean
+    description: "Patient is postmenopausal."
+```
+
+```yaml
+m_echo_thickness:
+  by: postmenopause                  # the selector variable
+  "0": [{flag: норма, max: 15}, {flag: выше нормы, min: 15}]   # postmenopause = false
+  "1": [{flag: норма, max: 5},  {flag: критично, min: 5}]      # postmenopause = true
+```
+
+Sub-table keys are matched against the selector's value: a number or a boolean
+addresses `"0"`/`"1"` (`false`, `0`, `"0"`, `0.0` all → `"0"`); any other value — an
+enum option, for example — must equal the key exactly (`"норма"`, `"беременность"`).
+`0:` and `"0":` in YAML are the same key. An empty selector value, or a value no
+sub-table names, leaves every attribute `""` (the latter also logs a warning). Each
+sub-table needs its own catch-all when it uses `{{value}}`; `is:` rows are allowed in
+sub-tables of an enum variable.
+
+### When a table binds, and what fails
+
+A table binds ONLY when its name is a declared variable or `calculate:` output AND its
+rows carry at least one attribute. A table of bare `{name, min, max}` rows, or one
+whose name matches no variable, stays a plain `range()` table. A row may carry `name`
+and attributes together; then both consumers read it.
+
+A malformed table that matches no variable is dropped with a log warning. Every other
+mistake FAILS THE RUN before extraction, and the reason appears in a Pipeline Error
+system note on the source document:
+
+- a malformed table named after a variable — not a list of mappings, a non-number
+  `min`/`max`, a scalar `is:`, an unquoted YAML boolean, a list or mapping as an
+  attribute value;
+- `min`/`max` on an enum, prefix, multiselect or boolean variable;
+- `is:` on anything but an enum variable, an `is:` value outside `options`, or `is:`
+  mixed with `min`/`max`;
+- a `{{…}}` other than `{{value}}`, or an attribute key that is not a valid name part;
+- a `{{value}}` table without a final catch-all row;
+- a sub-table mapping without `by:`, or a `by:` naming an undeclared variable;
+- a generated `<variable>_<key>` equal to a declared variable, a `calculate:` output,
+  or another table's generated name.
+
+`min`/`max` on a `string` variable is allowed: its value is read as a number when the
+marks are computed, and a value that is not a number fails that run with the same
+message as `range()`.
 
 ## Shared defaults
 

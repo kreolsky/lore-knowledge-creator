@@ -39,17 +39,11 @@
 .plain {
   background: transparent;
 }
-.plain:hover {
-  background: var(--surface2);
-}
 
 /* plain active — chat purple accent */
 .plain.activeAccent {
   background: var(--accent-soft);
   color: var(--accent);
-}
-.plain.activeAccent:hover {
-  background: var(--accent-soft);
 }
 
 /* plain active — reference blue (functional: marks the OPEN reference) */
@@ -57,35 +51,20 @@
   background: var(--sticky-blue-dark);
   color: var(--text);
 }
-.plain.activeBlue:hover {
-  background: var(--sticky-blue-dark);
-}
 
 /* ── Anchored steady — yellow. Borderless fill in every state. ── */
 .anchored {
   background: var(--sticky-yellow-light);
 }
-.anchored:hover {
-  background: var(--sticky-yellow-dark);
-}
 :global(html.dark) .anchored {
   background: var(--sticky-yellow-light);
-}
-:global(html.dark) .anchored:hover {
-  background: var(--sticky-yellow-dark);
 }
 
 /* Highlight — transient scroll/blink state layered on the yellow base. */
 .highlight {
   background: var(--sticky-yellow-dark);
 }
-.highlight:hover {
-  background: var(--sticky-yellow-dark);
-}
 :global(html.dark) .highlight {
-  background: var(--sticky-yellow-dark);
-}
-:global(html.dark) .highlight:hover {
   background: var(--sticky-yellow-dark);
 }
 
@@ -93,28 +72,16 @@
 .anchorless {
   background: var(--surface);
 }
-.anchorless:hover {
-  background: var(--surface2);
-}
 :global(html.dark) .anchorless {
   background: var(--surface);
-}
-:global(html.dark) .anchorless:hover {
-  background: var(--surface2);
 }
 
 /* Backlink — green tint, background only (border dropped for uniform alignment). */
 .backlink {
   background: rgba(40, 180, 100, 0.08);
 }
-.backlink:hover {
-  background: rgba(40, 180, 100, 0.14);
-}
 :global(html.dark) .backlink {
   background: rgba(40, 180, 100, 0.10);
-}
-:global(html.dark) .backlink:hover {
-  background: rgba(40, 180, 100, 0.16);
 }
 
 /* ── Highlight variant overrides for inner note-time element ── */
@@ -125,25 +92,74 @@
   color: rgba(220, 180, 60, 0.55);
 }
 
-/* ── Delete-button backdrop on pill hover ── */
-/* ARCH: the floating note delete IconButton (group-hover:opacity-100) overlaps
- * list text; give it a solid backdrop matching the variant hover fill so text
- * never bleeds through. Specificity (.var:hover .class = 0,3,0) beats IconButton's
- * own hover:bg-surface3 (0,2,0).
- * INVARIANT: gated on :not(.note-delete-armed) — an armed (red) button's own
- * bg-red must win over the 0,3,0 backdrop. Why: the confirmation state must read
- * as red, not the variant fill. */
-.anchored:hover :global(.note-delete-btn:not(.note-delete-armed)),
-.highlight:hover :global(.note-delete-btn:not(.note-delete-armed)) {
-  background: var(--sticky-yellow-dark);
+/* WHY: every hover fill is gated on (hover: hover) — on touch a tapped pill would keep a
+   sticky :hover fill. Relative order of the hover rules is preserved from their original
+   positions, so variant/active overrides still win the same way. */
+@media (hover: hover) {
+  .plain:hover {
+    background: var(--surface2);
+  }
+  .plain.activeAccent:hover {
+    background: var(--accent-soft);
+  }
+  .plain.activeBlue:hover {
+    background: var(--sticky-blue-dark);
+  }
+  .anchored:hover {
+    background: var(--sticky-yellow-dark);
+  }
+  :global(html.dark) .anchored:hover {
+    background: var(--sticky-yellow-dark);
+  }
+  .highlight:hover {
+    background: var(--sticky-yellow-dark);
+  }
+  :global(html.dark) .highlight:hover {
+    background: var(--sticky-yellow-dark);
+  }
+  .anchorless:hover {
+    background: var(--surface2);
+  }
+  :global(html.dark) .anchorless:hover {
+    background: var(--surface2);
+  }
+  .backlink:hover {
+    background: rgba(40, 180, 100, 0.14);
+  }
+  :global(html.dark) .backlink:hover {
+    background: rgba(40, 180, 100, 0.16);
+  }
+  /* ── Delete-button backdrop on pill hover ── */
+  /* ARCH: the floating note delete IconButton (group-hover:opacity-100) overlaps
+   * list text; give it a solid backdrop matching the variant hover fill so text
+   * never bleeds through. Specificity (.var:hover .class = 0,3,0) beats IconButton's
+   * own hover:bg-surface3 (0,2,0).
+   * INVARIANT: gated on :not(.note-delete-armed) — an armed (red) button's own
+   * bg-red must win over the 0,3,0 backdrop. Why: the confirmation state must read
+   * as red, not the variant fill. */
+  .anchored:hover :global(.note-delete-btn:not(.note-delete-armed)),
+  .highlight:hover :global(.note-delete-btn:not(.note-delete-armed)) {
+    background: var(--sticky-yellow-dark);
+  }
+  :global(html.dark) .anchored:hover :global(.note-delete-btn:not(.note-delete-armed)),
+  :global(html.dark) .highlight:hover :global(.note-delete-btn:not(.note-delete-armed)) {
+    background: var(--sticky-yellow-dark);
+  }
+  .anchorless:hover :global(.note-delete-btn:not(.note-delete-armed)) {
+    background: var(--surface2);
+  }
+  :global(html.dark) .anchorless:hover :global(.note-delete-btn:not(.note-delete-armed)) {
+    background: var(--surface2);
+  }
 }
-:global(html.dark) .anchored:hover :global(.note-delete-btn:not(.note-delete-armed)),
-:global(html.dark) .highlight:hover :global(.note-delete-btn:not(.note-delete-armed)) {
-  background: var(--sticky-yellow-dark);
+
+/* WHY: on touch the note delete button is always shown (no hover to reveal it); give it
+   the pill's own fill so list text never bleeds through. */
+@media (hover: none) {
+  .pill > :global(.note-delete-btn:not(.note-delete-armed)) { background: inherit; }
 }
-.anchorless:hover :global(.note-delete-btn:not(.note-delete-armed)) {
-  background: var(--surface2);
-}
-:global(html.dark) .anchorless:hover :global(.note-delete-btn:not(.note-delete-armed)) {
-  background: var(--surface2);
+
+/* Finger-sized rows on touch; horizontal inset unchanged so glyphs stay aligned. */
+@media (pointer: coarse) {
+  .pill { padding-top: 11px; padding-bottom: 11px; }
 }

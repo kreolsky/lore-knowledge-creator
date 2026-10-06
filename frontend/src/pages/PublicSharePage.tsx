@@ -244,7 +244,7 @@ export function PublicSharePage(
   // ── Render gates ─────────────────────────────────────────────────────────
   if (phase === 'loading') {
     return (
-      <div className="h-screen flex items-center justify-center bg-bg text-text">
+      <div className="h-dvh flex items-center justify-center bg-bg text-text">
         <div className="w-6 h-6 border-2 border-text-dim border-t-transparent animate-spin" />
       </div>
     );
@@ -252,7 +252,7 @@ export function PublicSharePage(
 
   if (phase === 'error') {
     return (
-      <div className="h-screen flex items-center justify-center bg-bg text-text">
+      <div className="h-dvh flex items-center justify-center bg-bg text-text">
         <div className="flex flex-col items-center gap-3 max-w-md text-center px-4">
           <AlertCircle size={32} className="text-text-dim" />
           <h1 className="text-lg font-medium">{t('publicShareNotFound')}</h1>

@@ -176,14 +176,13 @@ def build_json_schema(
     }
 
 
-def _join_russian(items: list) -> str:
-    """Render a list as a Russian enumeration: "X", "X и Y", "X, Y и Z"."""
-    parts = [str(i) for i in items]
-    if not parts:
-        return ""
-    if len(parts) == 1:
-        return parts[0]
-    return ", ".join(parts[:-1]) + " и " + parts[-1]
+def _join_items(items: list, separator: str = ", ") -> str:
+    """Render a list by joining every gap with separator (default ", ").
+
+    A config that wants «X и Y и Z» declares `separator: " и "` on the variable
+    (config.py::_normalize_variable_entry), which lands here verbatim.
+    """
+    return separator.join(str(i) for i in items)
 
 
 # WHY: 0.55 (not 0.6) — a surname ASR slip like «Збитник»→«Сбитнев» scores 0.57 on the
@@ -480,12 +479,14 @@ def normalize_extracted(
     kinds: dict[str, str] | None = None,
     defaults: dict[str, str] | None = None,
     enums: dict[str, list[str]] | None = None,
+    separators: dict[str, str] | None = None,
 ) -> dict:
     """Collapse categorical extraction shapes to display strings and apply defaults.
 
     Runs AFTER extraction, BEFORE Compute/Render (which only ``str()`` values):
-    - multiselect list  → Russian enumeration string (see _join_russian), ordered by
-      ``enums[name]`` when supplied.
+    - multiselect list  → separator-joined string (see _join_items), ordered by
+      ``enums[name]`` when supplied; the separator comes from ``separators[name]``
+      (the variable's ``separator:`` key), default ", ".
     - prefix object      → "prefix detail".strip().
     - any field whose collapsed value is empty AND has a ``default:`` → the default.
 
@@ -494,6 +495,7 @@ def normalize_extracted(
     effective_kinds = kinds or {}
     effective_defaults = defaults or {}
     effective_enums = enums or {}
+    effective_separators = separators or {}
     result = dict(extracted)
 
     for name, value in list(result.items()):
@@ -508,7 +510,7 @@ def normalize_extracted(
             options = effective_enums.get(name)
             if options:
                 items = _sort_by_options(items, options)
-            result[name] = _join_russian(items)
+            result[name] = _join_items(items, effective_separators.get(name, ", "))
         elif kind == "prefix" and isinstance(value, dict):
             prefix = value.get("prefix", "") or ""
             detail = value.get("detail", "") or ""

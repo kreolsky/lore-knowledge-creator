@@ -144,6 +144,28 @@ async def test_migration_run_refreshes_the_record_despite_prior_drift():
     assert db.updates == [new]
 
 
+async def test_added_only_drift_is_recorded_without_migration():
+    """An additive release (new DEFINEs, no migration) is recorded on the boot that sees
+    it, so the next boot is clean instead of re-reporting the same added fields forever."""
+    from migrations.runner import _fingerprint_record
+
+    db = _FakeDB(recorded=["documents|content|string"])
+    live = ["documents|content|string", "groups|name|string"]
+    await _fingerprint_record(db, live, migrations_ran=False, drift=diff_fingerprints(db.recorded, live))
+    assert db.updates == [live]
+
+
+async def test_mixed_drift_is_not_recorded_without_migration():
+    """Any `removed` side keeps the record untouched, even alongside `added` entries."""
+    from migrations.runner import _fingerprint_record
+
+    db = _FakeDB(recorded=["documents|content|string"])
+    live = ["groups|name|string"]
+    await _fingerprint_record(db, live, migrations_ran=False, drift=diff_fingerprints(db.recorded, live))
+    assert db.updates == []
+    assert db.recorded == ["documents|content|string"]
+
+
 # ─── W2: boot-fatal on unexplained field loss ─────────────────────────────────
 
 

@@ -92,7 +92,11 @@ def _build_yaml_error_snippet(yaml_str: str, mark: object, context_lines: int = 
 
 
 def _parse_yaml_from_code_block(
-    content: str, *, doc_label: str = "YAML", dup_sink: list[str] | None = None
+    content: str,
+    *,
+    doc_label: str = "YAML",
+    dup_sink: list[str] | None = None,
+    unwrap_single_key: bool = True,
 ) -> dict:
     """Extract YAML from the first fenced code block and parse it.
 
@@ -103,6 +107,8 @@ def _parse_yaml_from_code_block(
 
     When ``dup_sink`` is a list, any duplicated mapping keys found while parsing are
     appended to it (last-wins output is unchanged) — see _DupCollectingLoader.
+    ``unwrap_single_key=False`` keeps a lone top-level mapping key as is (a
+    `ranges` doc holding one conditional table).
     """
     open_match = re.search(r"^[ \t]*(`{3,})(?:ya?ml)?[ \t]*\n", content, re.MULTILINE)
     if not open_match:
@@ -146,7 +152,7 @@ def _parse_yaml_from_code_block(
     if not isinstance(parsed, dict):
         raise ValueError(f"YAML config must be a dict, got {type(parsed).__name__}")
 
-    if len(parsed) == 1:
+    if unwrap_single_key and len(parsed) == 1:
         inner = next(iter(parsed.values()))
         if isinstance(inner, dict):
             logger.debug("[_parse_yaml] flattening single-key wrapper, inner keys=%s", list(inner.keys()))
@@ -199,8 +205,8 @@ def _validate_options(name: str, options: object, *, key: str = "options") -> li
 
 def _normalize_variable_entry(
     name: str, value: str | dict
-) -> tuple[str, str, list[str] | None, str | None, str | None]:
-    """Normalize a variable entry to (description, json_type, options, kind, default).
+) -> tuple[str, str, list[str] | None, str | None, str | None, str | None]:
+    """Normalize a variable entry to (description, json_type, options, kind, default, separator).
 
     - String values → plain string field (no options/kind/default).
     - Categorical fields declare ``type: enum|multiselect|prefix`` + ``options: [...]``;
@@ -208,10 +214,13 @@ def _normalize_variable_entry(
     - The legacy ``enum:`` key is an alias for ``type: enum`` + ``options`` = that list,
       and is mutually exclusive with an explicit ``type:``.
     - Optional ``default:`` (any field) must be a string; applied when extraction is empty.
+    - Optional ``separator:`` (multiselect ONLY) must be a string; it is joined between
+      the selected options (default ", "). On any other type it is a config error —
+      a misplaced key must fail loud, not hide among the ignored keys.
     Unknown dict keys are ignored.
     """
     if isinstance(value, str):
-        return value, "string", None, None, None
+        return value, "string", None, None, None, None
     if not isinstance(value, dict):
         raise ValueError(
             f"Variable '{name}': expected string or dict, got {type(value).__name__}"
@@ -222,6 +231,10 @@ def _normalize_variable_entry(
     default = value.get("default")
     if default is not None and not isinstance(default, str):
         raise ValueError(f"Variable '{name}': 'default' must be a string")
+
+    separator = value.get("separator")
+    if separator is not None and not isinstance(separator, str):
+        raise ValueError(f"Variable '{name}': 'separator' must be a string")
 
     explicit_type = value.get("type")
     legacy_enum = value.get("enum")
@@ -235,21 +248,33 @@ def _normalize_variable_entry(
     # INVARIANT: legacy `enum:` normalizes to kind=enum + options. Why: the live config
     # relies on the bare `enum:` key; it must keep working after the type: migration.
     if legacy_enum is not None:
+        if separator is not None:
+            raise ValueError(
+                f"Variable '{name}': 'separator:' is legal only with type: multiselect"
+            )
         options = _validate_options(name, legacy_enum, key="enum")
-        return description, "string", options, "enum", default
+        return description, "string", options, "enum", default, None
 
     json_type = explicit_type or "string"
 
     if json_type in CATEGORICAL_VARIABLE_TYPES:
+        if separator is not None and json_type != "multiselect":
+            raise ValueError(
+                f"Variable '{name}': 'separator:' is legal only with type: multiselect"
+            )
         options = _validate_options(name, value.get("options"))
-        return description, "string", options, json_type, default
+        return description, "string", options, json_type, default, separator
 
     if json_type not in ALLOWED_VARIABLE_TYPES:
         raise ValueError(
             f"Variable '{name}': unknown type '{json_type}'. "
             f"Allowed: {ALLOWED_VARIABLE_TYPES | CATEGORICAL_VARIABLE_TYPES}"
         )
-    return description, json_type, None, None, default
+    if separator is not None:
+        raise ValueError(
+            f"Variable '{name}': 'separator:' is legal only with type: multiselect"
+        )
+    return description, json_type, None, None, default, None
 
 
 def _extract_sections(parsed: dict) -> tuple[dict, dict, list]:
@@ -396,16 +421,17 @@ async def resolve_variables_sections(
     rows: list[dict] | None = None,
 ) -> tuple[
     dict[str, str], dict[str, str], dict[str, str],
-    dict[str, list[str]], dict[str, str], dict[str, str], list[str],
-    list[str],
+    dict[str, list[str]], dict[str, str], dict[str, str], dict[str, str],
+    list[str], list[str],
 ]:
     """Parse variables YAML once.
 
-    Returns (variables, types, calculations, enums, kinds, defaults, duplicates,
-    refine_passes).
+    Returns (variables, types, calculations, enums, kinds, defaults, separators,
+    duplicates, refine_passes).
     - enums: {name: options list} for every categorical field (enum/multiselect/prefix).
     - kinds: {name: categorical type} — drives per-kind JSON schema and post-extract collapse.
     - defaults: {name: default string} applied when the extracted value is empty.
+    - separators: {name: separator string} declared by multiselect fields (default ", ").
     - duplicates: variable names defined more than once (last-wins parse; warning only).
     - refine_passes: declared `refine:` list, one dict {fields, prompt} per pass,
       validated against `variables` and `calculations` (unknown names fail loud,
@@ -502,6 +528,32 @@ def _resolve_refine_passes(
     return passes
 
 
+def _resolve_variable_dicts(
+    vars_section: dict,
+) -> tuple[dict[str, str], dict[str, str], dict[str, list[str]], dict[str, str], dict[str, str], dict[str, str]]:
+    """Normalize the variables section into (variables, types, enums, kinds,
+    defaults, separators)."""
+    variables: dict[str, str] = {}
+    types: dict[str, str] = {}
+    enums: dict[str, list[str]] = {}
+    kinds: dict[str, str] = {}
+    defaults: dict[str, str] = {}
+    separators: dict[str, str] = {}
+    for name, value in vars_section.items():
+        description, json_type, options, kind, default, separator = _normalize_variable_entry(name, value)
+        variables[name] = description
+        types[name] = json_type
+        if options is not None:
+            enums[name] = options
+        if kind is not None:
+            kinds[name] = kind
+        if default is not None:
+            defaults[name] = default
+        if separator is not None:
+            separators[name] = separator
+    return variables, types, enums, kinds, defaults, separators
+
+
 async def _resolve_variables_sections(
     config_doc_id: str,
     *,
@@ -509,8 +561,8 @@ async def _resolve_variables_sections(
 ) -> tuple:
     """Internal: parse variables YAML once.
 
-    Returns (variables, types, calculations, enums, kinds, defaults, duplicates,
-    refine_passes).
+    Returns (variables, types, calculations, enums, kinds, defaults, separators,
+    duplicates, refine_passes).
     """
     duplicates: list[str] = []
     raw = await _get_variables_raw(config_doc_id, rows=rows, dup_sink=duplicates)
@@ -522,21 +574,7 @@ async def _resolve_variables_sections(
         list(calc_section.keys()) if isinstance(calc_section, dict) else type(calc_section).__name__,
     )
 
-    variables: dict[str, str] = {}
-    types: dict[str, str] = {}
-    enums: dict[str, list[str]] = {}
-    kinds: dict[str, str] = {}
-    defaults: dict[str, str] = {}
-    for name, value in vars_section.items():
-        description, json_type, options, kind, default = _normalize_variable_entry(name, value)
-        variables[name] = description
-        types[name] = json_type
-        if options is not None:
-            enums[name] = options
-        if kind is not None:
-            kinds[name] = kind
-        if default is not None:
-            defaults[name] = default
+    variables, types, enums, kinds, defaults, separators = _resolve_variable_dicts(vars_section)
 
     calculations: dict[str, str] = {}
     if isinstance(calc_section, dict):
@@ -551,7 +589,7 @@ async def _resolve_variables_sections(
 
     refine_passes = _resolve_refine_passes(refine_section, variables, calculations)
 
-    return variables, types, calculations, enums, kinds, defaults, duplicates, refine_passes
+    return variables, types, calculations, enums, kinds, defaults, separators, duplicates, refine_passes
 
 
 async def resolve_typography_doc(
@@ -604,61 +642,118 @@ async def resolve_typography_doc(
     return {}
 
 
-def _validate_interval_list(value: object) -> list[dict] | None:
-    """Validate a list of {name, min?, max?} interval dicts.
+# `ranges` row keys (see SYSTEM: extractor). Condition keys gate matching
+# (min/max numeric, is categorical); `name` is range()'s return value; every OTHER
+# key is an output attribute of a table BOUND to its variable (validate_mark_tables).
+_MARK_CONDITION_KEYS = ("min", "max", "is")
+MARK_RESERVED_KEYS = ("name", "min", "max", "is")
 
-    Returns the normalised list, or None when the shape is wrong anywhere —
-    the caller drops the whole top-level field and warns (field granularity:
-    a half-parsed table is a config author's error, not a partial win).
+
+def _parse_interval_list(value: object) -> list[dict]:
+    """Parse a list of interval/attribute rows; raise ValueError naming the fault.
+
+    A row is ``{name?, min?, max?, is?, <attr>…}``: ``name`` (range()'s return
+    value), numeric bounds ``min``/``max``, a categorical condition ``is`` (list of
+    strings) and any number of output attributes (string or number values) that a
+    table bound to its variable turns into ``<table>_<attr>`` outputs.
+
+    Field granularity: a half-parsed table is a config author's error, not a
+    partial win — one bad row rejects the whole table.
     """
     if not isinstance(value, list) or not value:
-        return None
+        raise ValueError("expected a non-empty list of rows")
     out: list[dict] = []
-    for entry in value:
+    for number, entry in enumerate(value, start=1):
         if not isinstance(entry, dict):
-            return None
-        name = entry.get("name")
-        if not isinstance(name, str) or not name.strip():
-            return None
-        interval: dict = {"name": name}
-        for bound in ("min", "max"):
-            raw = entry.get(bound)
-            if raw is None:
-                continue
-            if isinstance(raw, bool) or not isinstance(raw, (int, float)):
-                return None
-            interval[bound] = raw
-        out.append(interval)
+            raise ValueError(f"row {number} is not a mapping {{key: value, …}}")
+        out.append(_parse_interval_row(number, entry))
     return out
 
 
-def _normalize_ranges_table(value: object) -> list[dict] | dict[str, list[dict]] | None:
-    """Normalise one top-level ranges field: flat list or keyed sub-tables.
+def _parse_interval_row(number: int, entry: dict) -> dict:
+    """One ranges row, validated key by key (see _parse_interval_list)."""
+    row: dict = {}
+    name = entry.get("name")
+    if name is not None:
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"row {number}: name must be a non-empty string")
+        row["name"] = name
+    for bound in ("min", "max"):
+        raw = entry.get(bound)
+        if raw is None:
+            continue
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise ValueError(f"row {number}: {bound} must be a number, got {raw!r}")
+        row[bound] = raw
+    raw_is = entry.get("is")
+    if raw_is is not None:
+        if (
+            not isinstance(raw_is, list) or not raw_is
+            or not all(isinstance(v, str) for v in raw_is)
+        ):
+            raise ValueError(
+                f"row {number}: is: must be a list of strings, even for one value — "
+                f"write is: [{raw_is}], got {raw_is!r}"
+            )
+        row["is"] = raw_is
+    for key, attr in entry.items():
+        if key in MARK_RESERVED_KEYS:
+            continue
+        # WHY: YAML reads bare yes/no/on/off/true/false as booleans, which would
+        # print as "True"/"False" in the report — the author meant the word.
+        if isinstance(attr, bool):
+            raise ValueError(
+                f"row {number}: attribute '{key}' was read as a YAML boolean "
+                f"({attr!r}) — quote the word, e.g. {key}: \"yes\""
+            )
+        if not isinstance(attr, (str, int, float)):
+            raise ValueError(
+                f"row {number}: attribute '{key}' must be a single string or "
+                f"number, got {type(attr).__name__}"
+            )
+        row[key] = attr
+    return row
+
+
+def _parse_ranges_table(value: object) -> list[dict] | dict[str, list[dict]]:
+    """Parse one top-level ranges field: flat list or keyed sub-tables.
 
     A dict field is a CONDITIONAL table: sub-tables keyed by string (int keys
     are stringified so `0:` and `"0":` in YAML both address "0"), with an
-    optional `by: <variable name>` documentation key that is dropped on load.
-    Returns None when the shape is wrong.
+    optional `by: <variable name>` key that is KEPT on the parsed table — it is
+    functional for tables bound to a variable (validate_mark_tables, apply_mark_
+    tables) and ignored by range().
+    Raises ValueError naming the fault when the shape is wrong.
     """
     if isinstance(value, list):
-        return _validate_interval_list(value)
-    if isinstance(value, dict):
-        sub_tables: dict[str, list[dict]] = {}
-        for k, v in value.items():
-            if k == "by":
-                continue
-            intervals = _validate_interval_list(v)
-            if intervals is None:
-                return None
-            sub_tables[str(k)] = intervals
-        return sub_tables or None
-    return None
+        return _parse_interval_list(value)
+    if not isinstance(value, dict):
+        raise ValueError(
+            "expected a list of rows or a mapping of sub-tables keyed by the "
+            f"by: variable's value, got {type(value).__name__}"
+        )
+    sub_tables: dict[str, list[dict]] = {}
+    by: object = None
+    for k, v in value.items():
+        if k == "by":
+            by = v
+            continue
+        try:
+            sub_tables[str(k)] = _parse_interval_list(v)
+        except ValueError as exc:
+            raise ValueError(f"sub-table {str(k)!r}: {exc}") from None
+    if not sub_tables:
+        raise ValueError("a conditional table needs at least one sub-table")
+    if by is not None:
+        sub_tables["by"] = by
+    return sub_tables
 
 
 async def resolve_ranges_doc(
     config_doc_id: str,
     *,
     rows: list[dict] | None = None,
+    rejected_sink: dict[str, str] | None = None,
 ) -> dict[str, list[dict] | dict[str, list[dict]]]:
     """Find the `ranges` child doc and parse its interval tables.
 
@@ -669,27 +764,16 @@ async def resolve_ranges_doc(
     child is a prompt slot whose measured cost of a misused table is the 8-field
     shift recorded there. Content reaches the prompt ONLY through a literal
     `{ranges}` placeholder in a custom `prompt:` — the shipped default has none.
-
-    Shape (yaml in a code block, same as the other config children):
-
-        uterus_length:                 # flat table
-          - {name: ниже, max: 40}
-          - {name: норма, min: 40, max: 60}
-          - {name: выше, min: 60}
-
-        m_echo_thickness:              # conditional: sub-tables per key value
-          by: postmenopause            # documentation only, dropped on load
-          "0":
-            - {name: норма, max: 15}
-            - {name: выше, min: 15}
-          "1":
-            - {name: норма, max: 5}
-            - {name: критично, min: 5}
+    A table whose name equals a variable name and whose rows carry output
+    attributes is BOUND to that variable (validate_mark_tables here,
+    apply_mark_tables in compute.py) — the SECOND deterministic consumer of
+    this doc. Row/sub-table shape: see _parse_ranges_table.
 
     Returns {} when the doc is absent, empty, or unparseable. A top-level field
     of the wrong shape — or whose key is not a Python identifier, because
     range() parses table names as code — is dropped with a warning naming it;
-    the other fields survive.
+    the other fields survive. Shape drops land in ``rejected_sink`` as
+    {name: reason} when a dict is passed.
     """
     if rows is None:
         rows = await fetch_child_rows(config_doc_id)
@@ -700,21 +784,29 @@ async def resolve_ranges_doc(
         content = (row.get("content") or "").strip()
         if not content:
             return {}
-        return _ranges_tables_from_content(content, config_doc_id)
+        return _ranges_tables_from_content(content, config_doc_id, rejected_sink)
 
     return {}
 
 
 def _ranges_tables_from_content(
-    content: str, config_doc_id: str
+    content: str,
+    config_doc_id: str,
+    rejected_sink: dict[str, str] | None = None,
 ) -> dict[str, list[dict] | dict[str, list[dict]]]:
     """Parse ranges-doc content and normalize each top-level field.
 
     Unparseable content yields {} with a warning; per-field drops are decided
     here (non-identifier key, wrong shape) and leave the other fields standing.
+    A field dropped for its SHAPE is recorded in ``rejected_sink`` as
+    {name: reason} — validate_mark_tables turns it into a config error when
+    the name is a declared variable.
     """
     try:
-        parsed = _parse_yaml_from_code_block(content)
+        # WHY: a ranges doc is never unwrapped — its one top-level key may be a
+        # conditional table (a mapping); unwrapping turned its `by` and sub-table
+        # keys into tables and the real table vanished from the report.
+        parsed = _parse_yaml_from_code_block(content, unwrap_single_key=False)
     except ValueError:
         logger.warning("[ranges] unparseable content in config %s", config_doc_id)
         return {}
@@ -728,17 +820,271 @@ def _ranges_tables_from_content(
                 key, config_doc_id,
             )
             continue
-        table = _normalize_ranges_table(value)
-        if table is None:
+        try:
+            tables[key] = _parse_ranges_table(value)
+        except ValueError as exc:
             logger.warning(
-                "[ranges] dropping field '%s' in config %s: expected a list of "
-                "{name, min, max} intervals or a dict of such lists keyed by "
-                "sub-table name",
-                key, config_doc_id,
+                "[ranges] dropping field '%s' in config %s: %s", key, config_doc_id, exc,
             )
-            continue
-        tables[key] = table
+            if rejected_sink is not None:
+                rejected_sink[key] = str(exc)
     return tables
+
+
+def mark_table_units(table: list | dict) -> list[tuple[str, list[dict]]]:
+    """The matchable units of a ranges table: the flat list, or each sub-table.
+
+    Each unit is (label, rows); the label names the sub-table in error messages
+    ("" for a flat table).
+    """
+    if isinstance(table, list):
+        return [("", table)]
+    return [
+        (f" (sub-table {key!r})", rows)
+        for key, rows in table.items()
+        if key != "by"
+    ]
+
+
+def mark_table_attr_keys(table: list | dict) -> list[str]:
+    """Output attribute keys of a ranges table, first-seen order (excluding by)."""
+    keys: list[str] = []
+    for _, rows in mark_table_units(table):
+        for row in rows:
+            for key in row:
+                if key not in MARK_RESERVED_KEYS and key not in keys:
+                    keys.append(key)
+    return keys
+
+
+# ARCH: bound-table config errors fail at SETUP (SetupNode), not at first match —
+# same posture as range() config errors in compute.py. Why: a config author's
+# error must fail the run on every row with a Pipeline Error note, never surface
+# only on rows whose measurement happens to hit the broken part of the table.
+def validate_mark_tables(
+    tables: dict[str, list[dict] | dict[str, list[dict]]],
+    variables: dict[str, str],
+    calculations: dict[str, str],
+    kinds: dict[str, str] | None = None,
+    enums: dict[str, list[str]] | None = None,
+    types: dict[str, str] | None = None,
+    rejected: dict[str, str] | None = None,
+) -> None:
+    """Validate `ranges` tables BOUND to a variable (SYSTEM: extractor).
+
+    A table binds to the variable — or calculate: output — with the same name
+    ONLY when its rows carry at least one output attribute; a name-only table,
+    or one matching no variable, stays a plain range() table: not bound, not
+    validated, nothing generated.
+
+    Raises ValueError (config error) when a table named after a declared
+    variable or calculate: output was REJECTED for its shape at parse time
+    (``rejected``, from resolve_ranges_doc's sink) — e.g. a scalar ``is: x``.
+
+    Raises ValueError (config error) when a BOUND table breaks a gate — attribute
+    keys/placeholders, numeric vs categorical mode against the variable's kind,
+    the final catch-all, by:, generated-name collisions; each gate's rule is on
+    its _check_mark_* function. A string variable stays legal for min/max: live
+    configs run range() over string-typed measurements, and coercion happens at
+    evaluation with range()'s message.
+    """
+    kinds = kinds or {}
+    enums = enums or {}
+    types = types or {}
+    declared = set(variables) | set(calculations)
+    generated: dict[str, str] = {}
+    _check_rejected_tables(rejected or {}, declared)
+
+    for table_name, table in tables.items():
+        attr_keys = mark_table_attr_keys(table)
+        if not attr_keys:
+            continue  # name-only rows: a plain range() table
+        if table_name not in declared:
+            continue  # matches no variable: stays a plain range() table
+
+        rows = [row for _, unit in mark_table_units(table) for row in unit]
+        _validate_bound_table(table_name, table, rows, attr_keys, kinds, enums, types, declared, generated)
+
+
+def _check_rejected_tables(rejected: dict[str, str], declared: set[str]) -> None:
+    """A table dropped for its shape fails the run when named after a variable."""
+    for table_name, reason in rejected.items():
+        # INVARIANT: a malformed table named after a declared variable FAILS the run.
+        # Why: dropping it with a log warning left every {{<var>_<attr>}} empty in the
+        # report with no visible error — explicit failure beats silent degradation.
+        if table_name in declared:
+            raise ValueError(
+                f"Ranges table '{table_name}' (named after the variable "
+                f"'{table_name}') is malformed: {reason}"
+            )
+
+
+def _validate_bound_table(
+    table_name: str,
+    table: list | dict,
+    rows: list[dict],
+    attr_keys: list[str],
+    kinds: dict[str, str],
+    enums: dict[str, list[str]],
+    types: dict[str, str],
+    declared: set[str],
+    generated: dict[str, str],
+) -> None:
+    """Gate one BOUND table; binding was decided by the caller."""
+    _check_mark_attr_keys(table_name, rows, attr_keys)
+    _check_mark_table_mode(table_name, rows, kinds, enums, types)
+    _check_mark_catch_all(table_name, table)
+    _check_mark_by(table_name, table, declared)
+    _check_mark_generated_names(table_name, attr_keys, declared, generated)
+
+
+def _check_mark_attr_keys(table_name: str, rows: list[dict], attr_keys: list[str]) -> None:
+    """Attribute keys must be identifiers; string values may carry only {{value}}."""
+    for key in attr_keys:
+        if not re.fullmatch(r"\w+", key):
+            raise ValueError(
+                f"Ranges table '{table_name}': attribute key {key!r} is not a valid "
+                "variable-name part (letters/digits/underscore) — it would generate "
+                "a variable no {{…}} placeholder can address"
+            )
+    for row in rows:
+        for key in attr_keys:
+            value = row.get(key)
+            if not isinstance(value, str):
+                continue
+            for found in re.findall(r"\{\{[^}]*\}\}", value):
+                if found != "{{value}}":
+                    raise ValueError(
+                        f"Ranges table '{table_name}': attribute '{key}' may only "
+                        f"contain the {{{{value}}}} placeholder, found {found!r} — "
+                        "render does not re-scan substituted values"
+                    )
+
+
+def _check_mark_table_mode(
+    table_name: str,
+    rows: list[dict],
+    kinds: dict[str, str],
+    enums: dict[str, list[str]],
+    types: dict[str, str],
+) -> None:
+    """A table is numeric (min/max) or categorical (is:) — never mixed — and the
+    mode must fit the bound variable's kind/type."""
+    categorical = any("is" in row for row in rows)
+    has_bounds = any("min" in row or "max" in row for row in rows)
+    if categorical and has_bounds:
+        raise ValueError(
+            f"Ranges table '{table_name}' mixes is: and min/max — a table is either "
+            "numeric (min/max) or categorical (is:), never both"
+        )
+    if categorical:
+        _check_mark_categorical(table_name, rows, kinds, enums)
+        return
+    _check_mark_numeric(table_name, kinds, types)
+
+
+def _check_mark_categorical(
+    table_name: str,
+    rows: list[dict],
+    kinds: dict[str, str],
+    enums: dict[str, list[str]],
+) -> None:
+    kind = kinds.get(table_name)
+    if kind != "enum":
+        declared_as = (
+            f"type: {kind}" if kind else "a non-enum variable or calculate: output"
+        )
+        raise ValueError(
+            f"Ranges table '{table_name}' is categorical (is:) but {table_name} is "
+            f"{declared_as} — an is: table is legal only on type: enum"
+        )
+    options = enums.get(table_name, [])
+    for row in rows:
+        for value in row.get("is", []):
+            if value not in options:
+                raise ValueError(
+                    f"Ranges table '{table_name}': is: value {value!r} is not one "
+                    f"of the variable's options {options} — a typo would never match"
+                )
+
+
+def _check_mark_numeric(
+    table_name: str,
+    kinds: dict[str, str],
+    types: dict[str, str],
+) -> None:
+    kind = kinds.get(table_name)
+    if kind in ("enum", "prefix", "multiselect"):
+        raise ValueError(
+            f"Ranges table '{table_name}' is numeric (min/max) but variable "
+            f"'{table_name}' is type: {kind} — numeric bounds cannot match it"
+        )
+    var_type = types.get(table_name, "string")
+    if var_type == "boolean":
+        raise ValueError(
+            f"Ranges table '{table_name}' is numeric (min/max) but variable "
+            f"'{table_name}' is type: boolean — numeric bounds cannot match it"
+        )
+
+
+def _check_mark_catch_all(table_name: str, table: list | dict) -> None:
+    """A unit whose attributes use {{value}} must END with a condition-less row."""
+    for label, unit_rows in mark_table_units(table):
+        uses_value = any(
+            isinstance(row.get(key), str) and "{{value}}" in row[key]
+            for row in unit_rows
+            for key in row
+            if key not in MARK_RESERVED_KEYS
+        )
+        if not uses_value:
+            continue
+        last_row = unit_rows[-1]
+        if any(cond in last_row for cond in _MARK_CONDITION_KEYS):
+            raise ValueError(
+                f"Ranges table '{table_name}'{label}: attributes use {{{{value}}}} — "
+                "the table must END with a catch-all row (a row without min/max/is) "
+                "so a value outside the table does not silently vanish from the report"
+            )
+
+
+def _check_mark_by(table_name: str, table: list | dict, declared: set[str]) -> None:
+    """A bound conditional table needs by: naming a declared variable."""
+    if not isinstance(table, dict):
+        return
+    by = table.get("by")
+    if not isinstance(by, str) or not by.strip():
+        raise ValueError(
+            f"Ranges table '{table_name}' is conditional (keyed sub-tables) and "
+            "bound to a variable — it needs by: <variable name> naming the "
+            "variable whose value selects the sub-table"
+        )
+    if by not in declared:
+        raise ValueError(
+            f"Ranges table '{table_name}': by: names '{by}', which is not a "
+            "declared variable or calculate: output"
+        )
+
+
+def _check_mark_generated_names(
+    table_name: str,
+    attr_keys: list[str],
+    declared: set[str],
+    generated: dict[str, str],
+) -> None:
+    """<table>_<attr> must not collide with a declared or already-generated name."""
+    for key in attr_keys:
+        gen = f"{table_name}_{key}"
+        if gen in declared:
+            raise ValueError(
+                f"Ranges table '{table_name}': generated name '{gen}' collides with "
+                "a declared variable or calculate: output — rename one of them"
+            )
+        if gen in generated:
+            raise ValueError(
+                f"Ranges table '{table_name}': generated name '{gen}' collides with "
+                f"the one generated by table '{generated[gen]}' — rename one of them"
+            )
+        generated[gen] = table_name
 
 
 async def resolve_instructions_doc(

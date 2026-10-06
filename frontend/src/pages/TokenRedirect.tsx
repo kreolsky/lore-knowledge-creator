@@ -24,7 +24,7 @@ import { Button } from '../components/ui';
 
 function RouteLoading() {
   return (
-    <div className="flex h-screen items-center justify-center bg-bg text-text">
+    <div className="flex h-dvh items-center justify-center bg-bg text-text">
       <div className="w-6 h-6 border-2 border-text-dim border-t-transparent animate-spin" />
     </div>
   );
@@ -34,7 +34,7 @@ function NotFound() {
   const navigate = useNavigate();
   const { t } = useTranslation();
   return (
-    <div className="h-screen flex flex-col items-center justify-center gap-4 bg-bg text-text">
+    <div className="h-dvh flex flex-col items-center justify-center gap-4 bg-bg text-text">
       <h1 className="text-lg font-medium text-text-dim">{t('publicShareNotFound')}</h1>
       <Button variant="primary" onClick={() => navigate('/')}>{t('backToHome')}</Button>
     </div>

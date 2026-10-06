@@ -1,26 +1,26 @@
-"""Schema fingerprint — detect stale-schema restores (debt-paydown W2, log-only).
+"""Schema fingerprint — detect stale-schema restores.
 
 # SYSTEM: schema-fingerprint — boot-time guard comparing the live DB schema to the
 # fingerprint recorded when migrations last completed.
 
-Problem (incident 2026-06-30): a restored backup can carry a newer
-`app_meta:migrations.applied` marker over an older schema. The migration runner trusts
-the marker and skips, leaving orphan field definitions that coerce-fail every write.
+Problem: a restored backup can carry a newer `app_meta:migrations.applied` marker over
+an older schema. The migration runner trusts the marker and skips, leaving orphan field
+definitions that coerce-fail every write.
 
 Guard: reduce the live schema to a sorted set of (table, field, type) and compare it at
-boot to the set recorded after the last `run_migrations()` completion. Since W2 the
-verdict is two-tier: `removed` drift (recorded fields missing live) with no migration
-having run that boot REFUSES startup — that is the stale-schema-restore signature and
+boot to the set recorded after the last `run_migrations()` completion. The verdict is
+two-tier: `removed` drift (recorded fields missing live) with no migration having run
+that boot REFUSES startup — that is the stale-schema-restore signature and
 data-loss-grade (INVARIANT on the enforce site, migrations/runner.py
 _enforce_fingerprint_fatal). `added`-only drift stays log-only: apply_schema() runs
 BEFORE run_migrations() (main.py lifespan), so an ordinary additive release always
-reaches the check with `added=[…]`. An introspection failure (any table unreadable)
-is NOT drift: the whole check skips itself rather than manufacturing `removed`
-entries. Escape hatch: SCHEMA_FINGERPRINT_FATAL=false (config.py), default on.
+reaches the check with `added=[…]`, and that boot records the superset so the next one
+is clean. An introspection failure (any table unreadable) is NOT drift: the whole check
+skips itself rather than manufacturing `removed` entries. Escape hatch:
+SCHEMA_FINGERPRINT_FATAL=false (config.py), default on.
 
-v1 scope: steps 1–3 only (detection + recording). Sweep retirement (step 4) is NOT done
-by default — `sweep_orphan_proposal_fields` carries its own live INVARIANT(data-loss)
-and stays until a rehearsed restore proves this guard subsumes it.
+Sweep retirement is NOT done — `sweep_orphan_proposal_fields` carries its own live
+INVARIANT(data-loss) and stays until a rehearsed restore proves this guard subsumes it.
 """
 from __future__ import annotations
 

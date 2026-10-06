@@ -96,7 +96,7 @@ const PROBE_TIMEOUT_MS = 8000;
 // specifically.
 function RouteLoading() {
   return (
-    <div data-testid="route-loading" className="flex h-screen items-center justify-center bg-bg text-text">
+    <div data-testid="route-loading" className="flex h-dvh items-center justify-center bg-bg text-text">
       <div className="w-6 h-6 border-2 border-text-dim border-t-transparent animate-spin" />
     </div>
   );
@@ -188,7 +188,7 @@ export function SessionRoute() {
     // with a Retry that re-probes. Mirrors the no-silent-degradation rule: never
     // show the read-only surface when we simply couldn't determine the audience.
     return (
-      <div className="h-screen flex flex-col items-center justify-center gap-4 bg-bg text-text">
+      <div className="h-dvh flex flex-col items-center justify-center gap-4 bg-bg text-text">
         <p className="text-text-dim">{t('publicShareSessionProbeFailed')}</p>
         <Button variant="subtle" type="button" onClick={retry}>{t('retry')}</Button>
       </div>

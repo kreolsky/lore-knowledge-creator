@@ -115,7 +115,7 @@ export function Dashboard() {
             <IconButton
               size="sm"
               title={t('editProject')}
-              className="shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              className="shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
               onClick={(e) => {
                 e.stopPropagation();
                 setEditing(project);

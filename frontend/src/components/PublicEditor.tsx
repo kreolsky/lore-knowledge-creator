@@ -44,6 +44,7 @@ import { ReferenceViewerBanner } from './editor/ReferenceViewerBanner';
 import { ReferenceMediaBar } from './editor/ReferenceMediaBar';
 import { hasReferenceContent } from '../types';
 import { useAppStore } from '../store/app-store';
+import { useUIStore } from '../store/ui-store';
 import { useImageReferenceNav } from '../hooks/useImageReferenceNav';
 import { usePublicTransclusionSync } from '../hooks/usePublicTransclusionSync';
 import { useScrollToLine } from '../hooks/useScrollToLine';
@@ -93,6 +94,7 @@ export function buildPublicEditorExtensions({ tablesJson }: { tablesJson: string
 
 export function PublicEditor() {
   const { t } = useTranslation();
+  const compactLayout = useUIStore(s => s.compactLayout);
   const currentDocument = useAppStore(s => s.currentDocument);
   const currentReference = useAppStore(s => s.currentReference);
   const setCurrentReference = useAppStore(s => s.setCurrentReference);
@@ -170,7 +172,7 @@ export function PublicEditor() {
             referenceFileUrl), never the delete. */}
         {activeRef && <ReferenceMediaBar reference={activeRef} canEdit={false} />}
         {!isImageRef && (
-          <div className="editor-content" style={{ minHeight: 0, width: '100%', padding: 0 }}>
+          <div className={`editor-content${compactLayout ? ' editor-content--compact' : ''}`} style={{ minHeight: 0, width: '100%', padding: 0 }}>
             <CodeMirrorEditor
               key={activeId}
               doc={content}

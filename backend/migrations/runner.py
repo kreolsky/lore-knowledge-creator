@@ -163,19 +163,21 @@ async def _fingerprint_record(
 ) -> None:
     """Record `post` as the expected schema fingerprint; best-effort (never blocks boot).
 
-    # INVARIANT(data-loss): an unresolved drift is NEVER overwritten — the recorded
-    # fingerprint survives, so the mismatch is re-detected on every subsequent boot.
+    # INVARIANT(data-loss): an unresolved `removed` drift is NEVER overwritten — the
+    # recorded fingerprint survives, so the mismatch is re-detected on every subsequent boot.
     # Why: the fatal gate (and the escape-hatch/advisory paths) read this same recorded
     # set on the NEXT boot; recording the stale schema as the new expectation would make
     # boot #2 look clean and erase the signal permanently — the exact failure this guard
     # exists to catch (2026-06-30 / 2026-07-28 incident class).
-    # `migrations_ran` is the resolving condition: migrations changed the schema on
+    # Two resolving conditions: `migrations_ran` — migrations changed the schema on
     # purpose, so the pre-migration drift is what they just fixed and the new snapshot is
-    # the correct expectation.
+    # the correct expectation; and added-only drift — the live set is a superset of the
+    # recorded one (an ordinary additive release), so recording it erases no `removed`
+    # signal and the next boot stops re-reporting the same added fields.
     """
     from migrations.schema_fingerprint import record_fingerprint
 
-    if drift and not migrations_ran:
+    if drift and drift["removed"] and not migrations_ran:
         logger.error(
             "schema-fingerprint record SKIPPED — unresolved drift is kept on record so "
             "every boot re-reports it. Investigate the restore, then re-record by "

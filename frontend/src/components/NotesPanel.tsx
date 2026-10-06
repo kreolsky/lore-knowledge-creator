@@ -168,7 +168,7 @@ function NoteSessionCard({
           filled={deleteAction.armed}
           // WHY: delete button floats at the top-right of the card, on the same
           // level as the title, overlapping the text only when revealed on hover.
-          className={`absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity note-delete-btn${deleteAction.armed ? ' note-delete-armed' : ''}`}
+          className={`absolute top-2 right-2 opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity note-delete-btn${deleteAction.armed ? ' note-delete-armed' : ''}`}
           title={t('deleteNote')}
           onClick={(e: React.MouseEvent) => {
             e.stopPropagation();

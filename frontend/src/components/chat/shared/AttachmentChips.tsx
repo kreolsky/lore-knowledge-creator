@@ -26,7 +26,7 @@ export function AttachmentChips({ images, onRemove }: Props) {
           title={t('removeImage')}
         >
           <img src={img} alt="" className="w-full h-full object-cover" />
-          <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
             <div className="w-10 h-10 bg-black/50 flex items-center justify-center">
               <X size={20} className="text-white" />
             </div>

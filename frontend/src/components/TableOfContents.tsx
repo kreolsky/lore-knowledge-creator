@@ -94,7 +94,7 @@ function TocItem({
           // clipped by the row edge (no ellipsis), the icon fades in on a gradient
           // backdrop matching the row's hover fill.
           <div
-            className="absolute right-0 top-0 bottom-0 flex items-center pl-4 pr-0.5 opacity-0 group-hover:opacity-100 bg-[linear-gradient(to_right,transparent_0px,var(--surface3)_16px)]"
+            className="absolute right-0 top-0 bottom-0 flex items-center pl-4 pr-0.5 opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 bg-[linear-gradient(to_right,transparent_0px,var(--surface3)_16px)] [@media(hover:none)]:bg-[linear-gradient(to_right,transparent_0px,var(--surface)_16px)]"
             onClick={(e) => e.stopPropagation()}
           >
             <IconButton

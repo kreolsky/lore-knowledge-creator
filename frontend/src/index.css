@@ -299,12 +299,15 @@ html, body { height: 100%; overflow: hidden; }
    FIRST paint — before any route chunk mounts a shell.
    Why: the top-level <Suspense fallback={<RouteLoading/>}> in App.tsx centers via
    h-full; with #root at height:auto it resolved to 0 and the spinner painted pinned
-   to the top of the viewport, then jumped to center once the h-screen shell mounted.
+   to the top of the viewport, then jumped to center once the h-dvh shell mounted.
    Canvas first, spinner second. No overflow here — html/body already clip. */
 #root { height: 100%; }
 * { scrollbar-width: thin; scrollbar-color: var(--text-dim) transparent; }
 
 body {
+  /* WHY: drop the tap flash and the double-tap-zoom wait on touch. */
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
   background: var(--bg);
   color: var(--text);
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -439,7 +442,11 @@ body.is-resizing * { transition: none !important; }
   transition: all 0.1s;
   user-select: none;
 }
-.toc-item:hover { background: var(--surface3); color: var(--text); border-radius: 0; box-shadow: -6px 0 0 0 var(--surface3); }
+/* WHY: row hover fills are gated on (hover: hover) — on touch a tapped row would keep a
+   sticky :hover fill that reads as a second selection. */
+@media (hover: hover) {
+  .toc-item:hover { background: var(--surface3); color: var(--text); border-radius: 0; box-shadow: -6px 0 0 0 var(--surface3); }
+}
 .toc-item.toc-root { font-weight: 600; color: var(--text); }
 
 .doc-item {
@@ -455,7 +462,12 @@ body.is-resizing * { transition: none !important; }
   user-select: none;
   position: relative;
 }
-.doc-item:hover,
+/* INVARIANT: the row hover fill stays ABOVE .ref-parent / .snapshot-parent in source order.
+   Why: equal specificity — placed after them, hover repaints the blue/green parent plate grey
+   while its action plate stays coloured. */
+@media (hover: hover) {
+  .doc-item:hover { background: var(--surface3); color: var(--text); border-radius: 0; box-shadow: -6px 0 0 0 var(--surface3); }
+}
 .doc-item.active { background: var(--surface3); color: var(--text); border-radius: 0; box-shadow: -6px 0 0 0 var(--surface3); }
 .doc-item.active .doc-icon { color: var(--text); }
 .doc-item.ref-parent {
@@ -469,7 +481,6 @@ body.is-resizing * { transition: none !important; }
   opacity: 1;
   background: linear-gradient(to right, transparent 0px, var(--sticky-blue-dark) 16px);
 }
-.doc-item--right-panel:hover,
 .doc-item--right-panel.active { box-shadow: 6px 0 0 0 var(--surface3); }
 .doc-item-context { margin-bottom: 4px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
 .doc-icon { flex-shrink: 0; }
@@ -489,13 +500,23 @@ body.is-resizing * { transition: none !important; }
   transition: opacity 0.1s;
   background: linear-gradient(to right, transparent 0px, var(--surface) 16px);
 }
-.doc-item:hover .doc-item-actions,
 .doc-item.active .doc-item-actions {
   opacity: 1;
   background: linear-gradient(to right, transparent 0px, var(--surface3) 16px);
 }
-.doc-item.ref-parent:hover .doc-item-actions {
-  background: linear-gradient(to right, transparent 0px, var(--sticky-blue-dark) 16px);
+@media (hover: hover) {
+  .doc-item--right-panel:hover { box-shadow: 6px 0 0 0 var(--surface3); }
+  .doc-item:hover .doc-item-actions {
+    opacity: 1;
+    background: linear-gradient(to right, transparent 0px, var(--surface3) 16px);
+  }
+  .doc-item.ref-parent:hover .doc-item-actions {
+    background: linear-gradient(to right, transparent 0px, var(--sticky-blue-dark) 16px);
+  }
+}
+/* WHY: touch has no hover to reveal row actions — keep the burger always visible. */
+@media (hover: none) {
+  .doc-item-actions { opacity: 1; }
 }
 
 .doc-action-btn {
@@ -797,6 +818,12 @@ body.is-resizing * { transition: none !important; }
 }
 .editor-content .cm-editor .cm-scroller {
   font-family: inherit;
+}
+/* WHY: on a phone-width viewport the theme's 2rem side gutter eats ~20% of the line;
+   halve it. Gated on the store's compactLayout (single source: COMPACT_LAYOUT_QUERY). */
+.editor-content--compact .cm-editor .cm-scroller {
+  padding-left: 1rem;
+  padding-right: 1rem;
 }
 .editor-content .cm-editor .cm-content {
   padding: 0;
@@ -1159,6 +1186,14 @@ html.dark .right-panel--notes-thread textarea {
 /* Touch devices: widen the invisible grab zones (~8px → 24px) so a finger can
    catch the resizer edge. Targets coarse pointers only — desktop mouse keeps 8px. */
 @media (pointer: coarse) {
+  /* Finger-sized hit zones: taller tree rows, wider row-action buttons. */
+  .doc-item { padding-top: 10px; padding-bottom: 10px; }
+  .doc-action-btn,
+  .doc-action-btn.add-child,
+  .doc-gear-actions .doc-action-btn { width: 32px; height: auto; align-self: stretch; }
+  .doc-gear-icon { width: 32px; height: auto; align-self: stretch; }
+  /* WHY: iOS Safari zooms the page when focusing a field whose font-size is < 16px. */
+  input, textarea, [contenteditable="true"] { font-size: 16px !important; }
   .resizer::after {
     left: -12px;
     width: 24px;
@@ -1646,6 +1681,8 @@ html.dark .right-panel--notes-thread textarea {
   text-decoration: line-through;
 }
 /* Voice mic button — consistent with header recording button */
+/* AI-chat composer: idle fill one tone darker than the bg-surface panel. */
+.mic-btn-wrap > button.mic-filled { background: var(--surface2); }
 .mic-btn-wrap > button:hover:not(:disabled):not(.mic-recording):not(.mic-transcribing) {
   background: var(--accent-green, #22c55e);
   color: white;

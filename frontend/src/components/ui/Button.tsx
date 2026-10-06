@@ -7,7 +7,7 @@ import { forwardRef } from 'react';
 
 interface ButtonProps {
   variant?: 'primary' | 'ghost' | 'ghost-note' | 'yellow' | 'dashed' | 'danger' | 'subtle' | 'highlight' | 'composer';
-  size?: 'sm' | 'md' | 'lg' | 'lg-square';
+  size?: 'sm' | 'md' | 'md-square' | 'lg' | 'lg-square';
   danger?: boolean;
   fullWidth?: boolean;
   onClick?: React.MouseEventHandler<HTMLButtonElement>;
@@ -51,6 +51,8 @@ const variants: Record<string, string> = {
 
 const sizes: Record<string, string> = {
   md: 'h-[30px] px-3',
+  // Icon-only square at the md height (compact-layout chat send).
+  'md-square': 'h-[30px] w-[30px] p-0',
   sm: 'text-xs h-[22px] px-2.5',
   // lg = FieldInput's pinned height (h-[37px], FieldInput.tsx) — for a button
   // in the same row as an input (cabinet / admin forms). Never the default.

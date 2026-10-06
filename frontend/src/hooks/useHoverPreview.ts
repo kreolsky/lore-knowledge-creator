@@ -14,6 +14,7 @@ import { useState, useRef, useCallback } from 'react';
 import { computePopupPosition } from '../utils/popup-position';
 import { PREVIEW_MAX_HEIGHT } from '../utils/preview-geometry';
 import { usePopupSlot } from './usePopupSlot';
+import { isTouchPointer } from '../utils/last-pointer';
 
 interface HoverPreviewState {
   top?: number;
@@ -48,6 +49,9 @@ export function useHoverPreview(options: UseHoverPreviewOptions) {
 
   const handleHover = useCallback((el: HTMLElement) => {
     clearTimer();
+    // WHY: on touch the "hover" is the tap's compat mouseenter — the tap already opened
+    // the target, so a preview would only cover it.
+    if (isTouchPointer()) return;
     timerRef.current = setTimeout(() => {
       const rect = el.getBoundingClientRect();
       const pos = computePopupPosition(rect, maxHeight);

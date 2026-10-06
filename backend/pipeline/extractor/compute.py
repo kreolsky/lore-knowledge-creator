@@ -2,11 +2,16 @@
 
 Supports arithmetic (+, -, *, /, **) and functions (round, abs, range).
 Variables are referenced via {{name}} syntax and substituted before AST
-evaluation. `range(value, table[, key])` is the string-valued exception:
-it maps a measurement onto interval names from a `ranges` config table
-(resolve_ranges_doc in backend/pipeline/core/config.py) and returns the
-NAME of the interval the value fell in ("" when it falls in none or the
-measurement is empty).
+evaluation.
+
+The `ranges` config tables (resolve_ranges_doc in backend/pipeline/core/config.py)
+have TWO deterministic consumers:
+- `range(value, table[, key])` inside `calculate:` — returns the NAME of the
+  interval the value fell in ("" when it falls in none or the measurement
+  is empty);
+- `apply_mark_tables(result, tables)` — evaluates tables BOUND to a variable
+  into `<var>_<attr>` display strings (flag/color/view...), no `calculate:`
+  line needed.
 """
 # SYSTEM: compute — safe expression evaluator for calculated extractor variables
 # ARCH: Uses Python ast module (whitelist-based) — never eval(). Topological sort
@@ -16,12 +21,20 @@ measurement is empty).
 #        table/key arguments are read RAW (not coerced floats), so it is dispatched
 #        by name in visit_Call, not via _ALLOWED_FUNCTIONS whose entries receive
 #        already-visited float args.
+# ARCH: apply_mark_tables runs AFTER process_calculations and BEFORE
+#        apply_dictionary — its outputs are display strings never fed back into
+#        arithmetic, so they need no place in the topological sort, and running
+#        after compute lets a table bind to a calculated value. Cost: a
+#        `calculate:` expression cannot reference `<var>_flag` — it fails as an
+#        unknown variable, loud, not silent.
 import ast
 import logging
 import operator
 import re
 from collections import deque
 from typing import Any
+
+from pipeline.core.config import mark_table_attr_keys
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +124,12 @@ class ExpressionEvaluator(ast.NodeVisitor):
                 continue
             if hi is not None and value >= hi:
                 continue
+            if "name" not in interval:
+                raise ValueError(
+                    f"Ranges table '{table_name}' has no 'name' on the matched row — "
+                    f"use the bound-table placeholders {{{{{table_name}_<attr>}}}} "
+                    "instead"
+                )
             return str(interval["name"])
         return ""
 
@@ -167,7 +186,9 @@ class ExpressionEvaluator(ast.NodeVisitor):
         key = self._range_key(node.args[2])
         if key is None:
             return None
-        if key not in table:
+        # "by" is the table's selector-variable key, not a sub-table — range()
+        # keeps ignoring it (it names the variable for BOUND tables).
+        if key == "by" or key not in table:
             # WHY: a missing norm returns "" instead of raising — one missing
             # interval must not fail the whole protocol run; the warning
             # names what to add to the ranges doc.
@@ -354,3 +375,110 @@ def process_calculations(
         )
 
     return result
+
+
+# ── ranges tables BOUND to variables (apply_mark_tables) ─────────────────────
+
+def _render_mark_attr(value: object, raw: object) -> str:
+    """An attribute as a display string: {{value}} → str(raw), exactly what the
+    template's {{var}} prints (render_template does not re-scan substitutions)."""
+    rendered = str(value)
+    return rendered.replace("{{value}}", str(raw))
+
+
+def _select_mark_rows(name: str, table: list | dict, result: dict) -> list[dict] | None:
+    """The rows to match: the flat list, or the sub-table the by: value selects.
+
+    None means "empty by-data" (empty selector value, or a key no sub-table
+    names — same warning range() logs) — every attribute is "".
+    """
+    if isinstance(table, list):
+        return table
+    by = table.get("by")
+    raw_by = result.get(by) if isinstance(by, str) else None
+    if raw_by is None or (isinstance(raw_by, str) and not raw_by.strip()):
+        return None
+    key = _normalize_range_key(raw_by)
+    if key == "by" or key not in table:
+        logger.warning(
+            "[mark] key %r not found in ranges table '%s' — attributes left empty",
+            key, name,
+        )
+        return None
+    return table[key]
+
+
+def _match_mark_row(rows: list[dict], raw: object, value: float | int | None) -> dict | None:
+    """First matching row: is-membership, bounds (min inclusive, max exclusive),
+    or the first condition-less catch-all. None when no row matches."""
+    for row in rows:
+        if "is" in row:
+            if str(raw) in row["is"]:
+                return row
+            continue
+        lo, hi = row.get("min"), row.get("max")
+        if lo is None and hi is None:  # catch-all: no condition, matches anything
+            return row
+        if lo is not None and value < lo:
+            continue
+        if hi is not None and value >= hi:
+            continue
+        return row
+    return None
+
+
+def _evaluate_bound_table(name: str, table: list | dict, result: dict) -> dict[str, str]:
+    """One bound table's attributes for the current row.
+
+    Empty value, empty `by:` selector, or a selector key no sub-table names →
+    every attribute "" (parity with range()).
+    """
+    attr_keys = mark_table_attr_keys(table)
+    blanks = {key: "" for key in attr_keys}
+    raw = result.get(name)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return blanks
+    rows = _select_mark_rows(name, table, result)
+    if rows is None:
+        return blanks
+    # Numeric bounds coerce exactly like range() does (same failure message); a
+    # categorical-only table never coerces — its values match as strings.
+    if any("min" in row or "max" in row for row in rows):
+        value = ExpressionEvaluator._coerce_number(raw, name)
+    else:
+        value = None
+    row = _match_mark_row(rows, raw, value)
+    if row is None:
+        return blanks
+    return {
+        key: _render_mark_attr(row.get(key), raw) if key in row else ""
+        for key in attr_keys
+    }
+
+
+def apply_mark_tables(result: dict, tables: dict | None) -> dict:
+    """Evaluate `ranges` tables BOUND to variables into `<var>_<attr>` outputs.
+
+    A table binds when its name matches a key of ``result`` (an extracted
+    variable or a calculate: output) AND its rows carry at least one output
+    attribute — a name-only table, or one matching no variable, stays a plain
+    range() table and generates nothing. Every attribute key of the table
+    becomes ``<table>_<attr>``; the matched row's value (str, with
+    ``{{value}}`` → ``str(raw)``) is the output, missing attributes are "".
+
+    Pure: returns a new dict. Called between process_calculations and
+    apply_dictionary (see the ARCH note in the module docstring) — validation
+    of the table shape happened at Setup (validate_mark_tables in
+    backend/pipeline/core/config.py).
+    """
+    if not tables:
+        return dict(result)
+    out = dict(result)
+    for table_name, table in tables.items():
+        if table_name not in out:
+            continue  # matches no variable: plain range() table
+        if not mark_table_attr_keys(table):
+            continue  # name-only rows: plain range() table
+        for key, value in _evaluate_bound_table(table_name, table, out).items():
+            out[f"{table_name}_{key}"] = value
+    return out

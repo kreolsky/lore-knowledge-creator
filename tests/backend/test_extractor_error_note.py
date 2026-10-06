@@ -149,7 +149,38 @@ calculate:
   b: ={{a}}
 ```"""
 
+_MARK_VARIABLES = """```yaml
+variables:
+  patient_name:
+    description: Patient name
+    type: string
+  age:
+    description: Age in years
+    type: integer
+  cervix_state:
+    type: enum
+    description: Cervix state
+    options: [деформирована, укорочена, норма]
+calculate:
+  double_age: ={{age}} * 2
+```"""
+
+# `is:` written as a scalar — the parser rejects the table; it is named after a
+# declared variable, so Setup must fail instead of dropping it silently.
+_RANGES_SCALAR_IS = """```yaml
+cervix_state:
+  - {is: укорочена, flag: патология}
+  - {flag: норма}
+```"""
+
+# {{value}} in an attribute with no final catch-all row — a bound-table gate.
+_RANGES_NO_CATCH_ALL = """```yaml
+age:
+  - {view: "**{{value}}**", min: 60}
+```"""
+
 _VARS = ("err-vars", "variables", _VALID_VARIABLES)
+_MARK_VARS = ("err-vars", "variables", _MARK_VARIABLES)
 _TMPL = ("err-template", "template", _TEMPLATE)
 
 _SCENARIOS = [
@@ -197,6 +228,24 @@ _SCENARIOS = [
             "llm_patch": "values",
         },
         id="circular-calculate-dependency",
+    ),
+    pytest.param(
+        {
+            "id": "ranges_scalar_is",
+            "children": [_MARK_VARS, _TMPL, ("err-ranges", "ranges", _RANGES_SCALAR_IS)],
+            "expected": ["cervix_state", "malformed", "is: [укорочена]"],
+            "llm_patch": None,
+        },
+        id="ranges-malformed-table-named-after-variable",
+    ),
+    pytest.param(
+        {
+            "id": "ranges_no_catch_all",
+            "children": [_VARS, _TMPL, ("err-ranges", "ranges", _RANGES_NO_CATCH_ALL)],
+            "expected": ["age", "catch-all"],
+            "llm_patch": None,
+        },
+        id="ranges-bound-table-gate",
     ),
 ]
 

@@ -4,6 +4,7 @@ import logging
 import pytest
 from pipeline.extractor.compute import (
     ExpressionEvaluator,
+    apply_mark_tables,
     evaluate_expression,
     process_calculations,
 )
@@ -371,3 +372,215 @@ def test_process_calculations_range_flags_merge_into_extracted():
     )
     assert result["uterus_length_flag"] == "норма"
     assert result["m_echo_flag"] == "критично"
+
+
+def test_range_on_row_without_name_raises():
+    # name is optional in a table; range() against a matched row that lacks it is a config error pointing at the bound-table placeholders.
+    table = {"t": [{"flag": "норма", "min": 0}]}
+    with pytest.raises(ValueError, match=r"no 'name'|t_flag"):
+        evaluate_expression("=range({{v}}, t)", {"v": 5}, ranges=table)
+
+
+def test_range_on_nameless_table_no_match_returns_empty():
+    # No row matched → "" without touching the missing name (same as today).
+    table = {"t": [{"flag": "норма", "min": 40, "max": 60}]}
+    assert evaluate_expression("=range({{v}}, t)", {"v": 70}, ranges=table) == ""
+
+
+# ── apply_mark_tables — ranges tables BOUND to variables ────────────────────
+
+BOUND_RANGES = {
+    "uterus_length": [
+        {"flag": "ниже нормы", "color": "8ab4ff", "view": "{{value}}", "max": 40},
+        {"flag": "норма", "color": "8ab440", "view": "{{value}}", "min": 40, "max": 60},
+        {"flag": "выше нормы", "color": "ec883c", "view": "**{{value}}**", "min": 60},
+        {"view": "{{value}}"},  # catch-all
+    ],
+}
+
+BOUND_CONDITIONAL = {
+    "m_echo_thickness": {
+        "by": "postmenopause",
+        "0": [{"flag": "норма", "max": 15}, {"flag": "выше", "min": 15}],
+        "1": [{"flag": "норма", "max": 5}, {"flag": "критично", "min": 5}],
+    },
+}
+
+BOUND_CATEGORICAL = {
+    "cervix_state": [
+        {"is": ["деформирована", "укорочена"], "flag": "патология", "view": "**{{value}}**"},
+        {"flag": "норма", "view": "{{value}}"},
+    ],
+}
+
+
+def test_mark_table_bound_numeric_above_norm():
+    out = apply_mark_tables({"uterus_length": 72}, BOUND_RANGES)
+    assert out["uterus_length_flag"] == "выше нормы"
+    assert out["uterus_length_view"] == "**72**"
+    assert out["uterus_length_color"] == "ec883c"
+
+
+def test_mark_table_bound_numeric_normal():
+    out = apply_mark_tables({"uterus_length": 50}, BOUND_RANGES)
+    assert out["uterus_length_flag"] == "норма"
+    assert out["uterus_length_view"] == "50"
+    assert out["uterus_length_color"] == "8ab440"
+
+
+def test_mark_table_bounds_keep_range_semantics():
+    assert apply_mark_tables({"uterus_length": 40}, BOUND_RANGES)["uterus_length_flag"] == "норма"
+    assert apply_mark_tables({"uterus_length": 60}, BOUND_RANGES)["uterus_length_flag"] == "выше нормы"
+
+
+def test_mark_table_empty_value_all_attributes_empty():
+    out = apply_mark_tables({"uterus_length": ""}, BOUND_RANGES)
+    assert out["uterus_length_flag"] == ""
+    assert out["uterus_length_view"] == ""
+    assert out["uterus_length_color"] == ""
+    out = apply_mark_tables({"uterus_length": None}, BOUND_RANGES)
+    assert out["uterus_length_view"] == ""
+
+
+def test_mark_table_catch_all_row_covers_out_of_table():
+    tables = {
+        "uterus_length": [
+            {"flag": "норма", "min": 40, "max": 60},
+            {"view": "{{value}}"},  # catch-all: covers everything outside the interval
+        ],
+    }
+    out = apply_mark_tables({"uterus_length": 70}, tables)
+    assert out["uterus_length_view"] == "70"
+    assert out["uterus_length_flag"] == ""  # the catch-all row omits it
+
+
+def test_mark_table_string_variable_numeric_string_coerced():
+    out = apply_mark_tables({"uterus_length": "72"}, BOUND_RANGES)
+    assert out["uterus_length_flag"] == "выше нормы"
+
+
+def test_mark_table_string_variable_non_numeric_fails_like_range():
+    with pytest.raises(ValueError, match=r"cannot be coerced"):
+        apply_mark_tables({"uterus_length": "много"}, BOUND_RANGES)
+
+
+def test_mark_table_calculate_output_view_renders_like_template():
+    # {{value}} prints exactly what {{var}} prints: str(value), float tail included.
+    tables = {"volume": [{"view": "{{value}}", "min": 0}]}
+    out = apply_mark_tables({"volume": 2589.36}, tables)
+    assert out["volume_view"] == str(2589.36)
+
+
+def test_mark_table_rows_may_omit_attributes():
+    tables = {
+        "v": [
+            {"flag": "норма", "color": "red", "min": 0, "max": 10},
+            {"flag": "выше", "min": 10},
+        ],
+    }
+    out = apply_mark_tables({"v": 20}, tables)
+    assert out["v_flag"] == "выше"
+    assert out["v_color"] == ""  # the matched row omits it
+
+
+def test_mark_table_conditional_by_selects_subtable():
+    out = apply_mark_tables(
+        {"m_echo_thickness": 10, "postmenopause": True}, BOUND_CONDITIONAL
+    )
+    assert out["m_echo_thickness_flag"] == "критично"
+    out = apply_mark_tables(
+        {"m_echo_thickness": 10, "postmenopause": 0}, BOUND_CONDITIONAL
+    )
+    assert out["m_echo_thickness_flag"] == "норма"  # 10 < 15 inside sub-table "0"
+
+
+def test_mark_table_conditional_empty_by_value_all_empty():
+    out = apply_mark_tables(
+        {"m_echo_thickness": 10, "postmenopause": ""}, BOUND_CONDITIONAL
+    )
+    assert out["m_echo_thickness_flag"] == ""
+
+
+def test_mark_table_conditional_unknown_key_all_empty_with_warning(caplog):
+    with caplog.at_level(logging.WARNING):
+        out = apply_mark_tables(
+            {"m_echo_thickness": 10, "postmenopause": "фолликулярная"}, BOUND_CONDITIONAL
+        )
+    assert out["m_echo_thickness_flag"] == ""
+    assert "m_echo_thickness" in caplog.text
+
+
+def test_mark_table_categorical_enum_matching_value():
+    out = apply_mark_tables({"cervix_state": "укорочена"}, BOUND_CATEGORICAL)
+    assert out["cervix_state_flag"] == "патология"
+    assert out["cervix_state_view"] == "**укорочена**"
+
+
+def test_mark_table_categorical_enum_catch_all():
+    out = apply_mark_tables({"cervix_state": "норма"}, BOUND_CATEGORICAL)
+    assert out["cervix_state_flag"] == "норма"
+    assert out["cervix_state_view"] == "норма"
+
+
+def test_mark_table_categorical_empty_value_all_empty():
+    out = apply_mark_tables({"cervix_state": ""}, BOUND_CATEGORICAL)
+    assert out["cervix_state_flag"] == ""
+    assert out["cervix_state_view"] == ""
+
+
+def test_mark_table_bound_to_calculate_output_after_process_calculations():
+    extracted = {"a": 10, "b": 20}
+    calculations = {"area": "={{a}} * {{b}}"}
+    tables = {"area": [{"flag": "большая", "min": 100}, {"flag": "малая"}]}
+    computed = process_calculations(extracted, calculations)
+    out = apply_mark_tables(computed, tables)
+    assert out["area"] == 200
+    assert out["area_flag"] == "большая"
+
+
+def test_mark_table_name_only_table_not_bound():
+    # Rows of bare {name, min, max} intervals named after a variable stay a plain
+    # range() table: nothing generated, range() unchanged.
+    tables = {
+        "v": [
+            {"name": "норма", "min": 0, "max": 10},
+            {"name": "выше", "min": 10},
+        ],
+    }
+    out = apply_mark_tables({"v": 5}, tables)
+    assert out == {"v": 5}  # no v_name / v_flag keys
+    assert evaluate_expression("=range({{v}}, v)", {"v": 5}, ranges=tables) == "норма"
+
+
+def test_mark_table_name_matching_no_variable_generates_nothing():
+    tables = {
+        "no_such_var": [
+            {"flag": "норма", "min": 0},
+        ],
+    }
+    out = apply_mark_tables({"other": 1}, tables)
+    assert out == {"other": 1}
+
+
+def test_mark_table_empty_tables_passthrough():
+    data = {"x": 1}
+    assert apply_mark_tables(data, {}) == data
+    assert apply_mark_tables(data, None) == data
+
+
+def test_mark_table_conditional_is_rows_inside_subtables():
+    tables = {
+        "cervix_state": {
+            "by": "postmenopause",
+            "0": [{"is": ["деформирована"], "flag": "патология"}, {"flag": "норма"}],
+            "1": [{"flag": "всё норма"}],
+        },
+    }
+    out = apply_mark_tables(
+        {"cervix_state": "деформирована", "postmenopause": 0}, tables
+    )
+    assert out["cervix_state_flag"] == "патология"
+    out = apply_mark_tables(
+        {"cervix_state": "деформирована", "postmenopause": 1}, tables
+    )
+    assert out["cervix_state_flag"] == "всё норма"

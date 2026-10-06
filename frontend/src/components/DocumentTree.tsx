@@ -29,6 +29,7 @@ import { useDocumentPreview } from '../hooks/useDocumentPreview';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useDocumentRoute } from '../hooks/useDocumentRoute';
 import { useHoverPreview } from '../hooks/useHoverPreview';
+import { useGearMenu } from '../hooks/useGearMenu';
 import { useSiblingDragReorder, treeDragAdapter } from '../hooks/useSiblingDragReorder';
 import { keyIconClassFromCapabilities } from '../utils/key-icon';
 import s from './Sidebar.module.css';
@@ -66,22 +67,9 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
   const toggleDocExpanded = useUIStore(s => s.toggleDocExpanded);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
-  const [gearOpen, setGearOpen] = useState(false);
-  const gearEnterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gear = useGearMenu();
   const renameInputRef = useRef<HTMLInputElement>(null);
   const labelRef = useRef<HTMLDivElement>(null);
-
-  const handleGearEnter = useCallback(() => {
-    gearEnterTimer.current = setTimeout(() => setGearOpen(true), 400);
-  }, []);
-
-  const handleGearLeave = useCallback(() => {
-    if (gearEnterTimer.current) {
-      clearTimeout(gearEnterTimer.current);
-      gearEnterTimer.current = null;
-    }
-    setGearOpen(false);
-  }, []);
 
   const children = doc.children;
   const hasChildren = children.length > 0;
@@ -220,8 +208,8 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
         )}
         {!isRenaming && canEdit && (
           <div className="doc-item-actions" onClick={e => e.stopPropagation()}>
-            <div className={`doc-gear-zone ${gearOpen ? 'doc-gear-open' : ''}`} onMouseEnter={handleGearEnter} onMouseLeave={handleGearLeave}>
-              <span className="doc-gear-icon">
+            <div ref={gear.ref} className={`doc-gear-zone ${gear.open ? 'doc-gear-open' : ''}`} onMouseEnter={gear.handleEnter} onMouseLeave={gear.close}>
+              <span className="doc-gear-icon" onClick={gear.handleIconClick}>
                 <Menu size={13} />
               </span>
               <div className="doc-gear-actions">

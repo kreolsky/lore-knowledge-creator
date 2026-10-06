@@ -10,14 +10,16 @@ interface Props {
   recording: boolean;
   transcribing: boolean;
   onToggleRecording: () => void;
+  /** Idle fill one tone darker than the composer, so the icon doesn't melt into it. */
+  filled?: boolean;
 }
 
-export function MicButton({ recording, transcribing, onToggleRecording }: Props) {
+export function MicButton({ recording, transcribing, onToggleRecording, filled = false }: Props) {
   const { t } = useTranslation();
   return (
     <div className="mic-btn-wrap">
       <IconButton
-        className={recording ? 'mic-recording' : transcribing ? 'mic-transcribing' : ''}
+        className={`${recording ? 'mic-recording' : transcribing ? 'mic-transcribing' : ''}${filled ? ' mic-filled' : ''}`}
         title={recording ? t('stopRecording') : transcribing ? t('transcribing') : t('voiceInput')}
         onClick={onToggleRecording}
         disabled={transcribing}

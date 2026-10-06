@@ -31,7 +31,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   if (pinLocked) return <PinLockScreen />;
   if (inEditorShell) {
     return (
-      <div className="h-screen bg-bg text-text">
+      <div className="h-dvh bg-bg text-text">
         <main className="h-full">{children}</main>
       </div>
     );
@@ -42,7 +42,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const isSectionShell = location.pathname === '/admin' || location.pathname === '/cabinet';
 
   return (
-    <div className="flex flex-col h-screen bg-bg text-text">
+    <div className="flex flex-col h-dvh bg-bg text-text">
       <Header />
       <div className="flex flex-1 overflow-hidden">
         {!isSectionShell && <NavigationTabBar />}

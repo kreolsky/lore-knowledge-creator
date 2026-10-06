@@ -21,8 +21,9 @@ from pipeline.core.config import (
     resolve_template_doc,
     resolve_typography_doc,
     resolve_variables_sections,
+    validate_mark_tables,
 )
-from pipeline.extractor.compute import process_calculations
+from pipeline.extractor.compute import apply_mark_tables, process_calculations
 from pipeline.extractor.utils import (
     apply_dictionary,
     build_json_schema,
@@ -74,7 +75,8 @@ class SetupNode(AsyncNode):
         child_docs = await resolve_child_docs(config_doc_id, rows=child_rows)
         (
             variables, variable_types, calculations, variable_enums,
-            variable_kinds, variable_defaults, variable_duplicates, refine_fields,
+            variable_kinds, variable_defaults, variable_separators,
+            variable_duplicates, refine_fields,
         ) = await resolve_variables_sections(config_doc_id, rows=child_rows)
         logger.info("[SetupNode] variables keys=%s", list(variables.keys()))
         logger.info("[SetupNode] variable_types=%s", variable_types)
@@ -83,6 +85,7 @@ class SetupNode(AsyncNode):
         logger.info("[SetupNode] variable_enums=%s", variable_enums)
         logger.info("[SetupNode] variable_kinds=%s", variable_kinds)
         logger.info("[SetupNode] variable_defaults=%s", variable_defaults)
+        logger.info("[SetupNode] variable_separators=%s", variable_separators)
         if variable_duplicates:
             logger.warning("[SetupNode] duplicate variable keys=%s", variable_duplicates)
 
@@ -92,8 +95,17 @@ class SetupNode(AsyncNode):
         typography = await resolve_typography_doc(config_doc_id, rows=child_rows)
         logger.info("[SetupNode] typography entries=%d", len(typography))
 
-        ranges = await resolve_ranges_doc(config_doc_id, rows=child_rows)
+        ranges_rejected: dict[str, str] = {}
+        ranges = await resolve_ranges_doc(
+            config_doc_id, rows=child_rows, rejected_sink=ranges_rejected,
+        )
         logger.info("[SetupNode] ranges tables=%d", len(ranges))
+        # WHY: bound-table config errors fire at Setup so the run fails on every
+        # row with a Pipeline Error note — same posture as range() config errors.
+        validate_mark_tables(
+            ranges, variables, calculations, variable_kinds, variable_enums,
+            variable_types, rejected=ranges_rejected,
+        )
 
         instructions_string = await resolve_instructions_doc(config_doc_id, rows=child_rows)
         logger.info("[SetupNode] instructions_string length=%d", len(instructions_string))
@@ -105,6 +117,7 @@ class SetupNode(AsyncNode):
             "variable_enums": variable_enums,
             "variable_kinds": variable_kinds,
             "variable_defaults": variable_defaults,
+            "variable_separators": variable_separators,
             "variable_duplicates": variable_duplicates,
             "refine_fields": refine_fields,
             "calculations": calculations,
@@ -125,6 +138,7 @@ class SetupNode(AsyncNode):
         shared["variable_enums"] = exec_res["variable_enums"]
         shared["variable_kinds"] = exec_res["variable_kinds"]
         shared["variable_defaults"] = exec_res["variable_defaults"]
+        shared["variable_separators"] = exec_res["variable_separators"]
         shared["variable_duplicates"] = exec_res["variable_duplicates"]
         shared["refine_fields"] = exec_res["refine_fields"]
         shared["calculations"] = exec_res["calculations"]
@@ -196,6 +210,7 @@ class ExtractionNode(AsyncNode):
             shared.get("variable_kinds", {}),
             shared.get("variable_defaults", {}),
             shared.get("variable_enums", {}),
+            shared.get("variable_separators", {}),
         )
         logger.info("[ExtractionNode] normalized_data=%s", normalized)
         shared["extracted_data"] = normalized
@@ -335,6 +350,7 @@ class RefineNode(AsyncNode):
                 shared.get("variable_kinds", {}),
                 refine_defaults,
                 shared.get("variable_enums", {}),
+                shared.get("variable_separators", {}),
             )
             # INVARIANT: each pass overwrites ONLY its declared keys — a field
             # outside the pass must never move (movement elsewhere is a wiring
@@ -351,7 +367,7 @@ class RefineNode(AsyncNode):
 
 
 class ComputeNode(AsyncNode):
-    """Evaluate calculated variables (=expr) and merge with extracted data."""
+    """Evaluate calculated variables (=expr), bound ranges tables, and typography."""
 
     async def prep_async(self, shared):
         return (
@@ -369,9 +385,16 @@ class ComputeNode(AsyncNode):
             logger.info("[ComputeNode] calculations keys=%s", list(calculations.keys()))
             result = process_calculations(extracted_data, calculations, ranges=ranges)
             logger.info("[ComputeNode] merged keys=%s", list(result.keys()))
-        # INVARIANT: the dictionary runs AFTER the formulas, never before. Why: folding
-        # 'восемь миллиметров' → '8 мм' ahead of compute would change what a
-        # `calculate:` expression parses; typography is a rendering concern.
+        # ARCH: bound ranges tables run AFTER the formulas, BEFORE the dictionary.
+        # Why: their outputs are display strings (view/flag/color) never fed back
+        # into arithmetic — no place in the topological sort — and running after
+        # compute lets a table bind to a calculated value. Cost: a `calculate:`
+        # expression cannot reference `<var>_flag` (fails loud as unknown).
+        result = apply_mark_tables(result, ranges)
+        # INVARIANT: the dictionary runs AFTER the formulas and mark tables, never
+        # before. Why: folding 'восемь миллиметров' → '8 мм' ahead of compute would
+        # change what a `calculate:` expression parses; typography is a rendering
+        # concern.
         return apply_dictionary(result, typography)
 
     async def post_async(self, shared, prep_res, exec_res):

@@ -36,6 +36,7 @@ import { computePopupPosition, chooseLinkPlacement } from '../../utils/popup-pos
 import { PREVIEW_MAX_HEIGHT } from '../../utils/preview-geometry';
 import { decodeLinkId, parseInAppLink } from '../../utils/in-app-link';
 import { referenceFileUrl } from '../../utils/reference-url';
+import { isTouchPointer } from '../../utils/last-pointer';
 
 // Editor link decorations (CM6) + chat link/source elements tagged with data-link-type
 // + dsh chat anchors: internal doc:/ref:/note: links the chat markdown wrapper rewrote
@@ -194,6 +195,8 @@ export function EditorLinkPreview() {
   const handleMouseEnter = useCallback((e: Event) => {
     // Document-level listener: e.target may be a text node / document (no .closest).
     if (!(e.target instanceof Element)) return;
+    // WHY: a touch tap's compat mouseenter is not a hover — the tap follows the link.
+    if (isTouchPointer()) return;
     const el = e.target.closest(EVERY_LINK_SELECTOR) as HTMLElement | null;
     if (!el) return;
 

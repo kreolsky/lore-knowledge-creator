@@ -72,6 +72,7 @@ interface EditorProps {
 
 export function Editor({ entity, role = 'primary', hideBanner = false }: EditorProps = {}) {
   const { t } = useTranslation();
+  const compactLayout = useUIStore(s => s.compactLayout);
   const roleRef = useRef(role);
   roleRef.current = role;
   const currentDocument = useAppStore(s => s.currentDocument);
@@ -434,7 +435,7 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
             canEdit={!isReadonly}
           />
         )}
-        <div className="editor-content" style={cmEditMode && activeReference?.media_type !== 'image' ? { height: '100%', minHeight: 0, width: '100%', padding: 0 } : cmEditMode ? { minHeight: 0, width: '100%', padding: 0 } : undefined}>
+        <div className={`editor-content${compactLayout ? ' editor-content--compact' : ''}`} style={cmEditMode && activeReference?.media_type !== 'image' ? { height: '100%', minHeight: 0, width: '100%', padding: 0 } : cmEditMode ? { minHeight: 0, width: '100%', padding: 0 } : undefined}>
           {snapshotPreview ? (
             <CodeMirrorEditor
               key={snapshotPreview.checkpoint_id}

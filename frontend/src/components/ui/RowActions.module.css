@@ -22,9 +22,17 @@
   background: linear-gradient(to right, transparent 0px, var(--surface2) 16px);
 }
 /* Revealed on parent pill hover (group) or when active. */
-:global(.group):hover .actions,
 .active {
   opacity: 1;
+}
+@media (hover: hover) {
+  :global(.group):hover .actions { opacity: 1; }
+}
+/* WHY: touch has no hover to reveal row actions — keep the burger always visible, on a
+   plate matching the un-hovered panel. */
+@media (hover: none) {
+  .actions { opacity: 1; background: linear-gradient(to right, transparent 0px, var(--surface) 16px); }
+  .active { background: linear-gradient(to right, transparent 0px, var(--surface2) 16px); }
 }
 /* Blue backdrop for the open/active reference (functional: marks which ref is open). */
 .activeBlue {
@@ -66,4 +74,10 @@
 .gearActions button {
   align-self: stretch;
   height: auto;
+}
+
+/* Finger-sized hit zones on touch. */
+@media (pointer: coarse) {
+  .gearIcon { width: 32px; height: auto; align-self: stretch; }
+  .actions button { min-width: 32px; height: auto; align-self: stretch; }
 }

@@ -3,7 +3,7 @@
  * // SYSTEM: row-actions — reusable primary + gear-expand menu cluster for list pills
  *
  * Extracted verbatim from RefCard's .actions/.gearZone. `primary` buttons stay inline;
- * `menu` buttons hide behind a gear that expands on 400ms hover. Reveal is driven by
+ * `menu` buttons hide behind a gear that expands on 400ms hover or on click/tap. Reveal is driven by
  * the parent ListPill's `group` class (group-hover) or `active`.
  *
  * ARCH: the gear opens on hover over .gearZone (400ms delay) and closes only on
@@ -11,9 +11,9 @@
  * expanded menu buttons and the inline primary buttons does not collapse it.
  */
 
-import { useState, useRef, useCallback } from 'react';
 import type React from 'react';
 import { Menu } from 'lucide-react';
+import { useGearMenu } from '../../hooks/useGearMenu';
 import styles from './RowActions.module.css';
 
 interface RowActionsProps {
@@ -28,20 +28,7 @@ interface RowActionsProps {
 }
 
 export function RowActions({ primary, menu, active = false, activeBackdrop }: RowActionsProps) {
-  const [gearOpen, setGearOpen] = useState(false);
-  const gearEnterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const handleGearEnter = useCallback(() => {
-    gearEnterTimer.current = setTimeout(() => setGearOpen(true), 400);
-  }, []);
-
-  const handleGearLeave = useCallback(() => {
-    if (gearEnterTimer.current) {
-      clearTimeout(gearEnterTimer.current);
-      gearEnterTimer.current = null;
-    }
-    setGearOpen(false);
-  }, []);
+  const gear = useGearMenu();
 
   // `active` keeps the cluster revealed; `activeBackdrop='blue'` additionally tints
   // the plate blue (the functional open-reference indicator).
@@ -50,14 +37,15 @@ export function RowActions({ primary, menu, active = false, activeBackdrop }: Ro
 
   return (
     <div
+      ref={gear.ref}
       className={`${styles.actions} ${activeCls} ${backdropCls}`}
       onClick={e => e.stopPropagation()}
-      onMouseLeave={handleGearLeave}
+      onMouseLeave={gear.close}
     >
       {primary}
       {menu && (
-        <div className={`${styles.gearZone} ${gearOpen ? styles.gearOpen : ''}`} onMouseEnter={handleGearEnter}>
-          <span className={styles.gearIcon}>
+        <div className={`${styles.gearZone} ${gear.open ? styles.gearOpen : ''}`} onMouseEnter={gear.handleEnter}>
+          <span className={styles.gearIcon} onClick={gear.handleIconClick}>
             <Menu size={13} />
           </span>
           <div className={styles.gearActions}>

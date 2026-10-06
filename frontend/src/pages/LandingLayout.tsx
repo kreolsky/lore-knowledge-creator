@@ -12,7 +12,7 @@ export function LandingLayout({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
 
   return (
-    <div className="flex h-screen bg-bg text-text font-sans overflow-hidden">
+    <div className="flex h-dvh bg-bg text-text font-sans overflow-hidden">
 
       {/* ── Left: brand / hero ─────────────────────────────────── */}
       <div className="flex-1 flex flex-col relative overflow-hidden">

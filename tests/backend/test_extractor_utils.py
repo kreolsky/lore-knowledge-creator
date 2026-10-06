@@ -123,16 +123,18 @@ def test_build_json_schema():
     assert schema["additionalProperties"] is False
 
 
-# ── _normalize_variable_entry: kinds + default ─────────────────────────────
+# ── _normalize_variable_entry: kinds + default + separator ─────────────────
 
 
 def test_normalize_variable_entry_plain_string():
-    desc, jtype, enum, kind, default = _normalize_variable_entry("x", "just a string")
-    assert (desc, jtype, enum, kind, default) == ("just a string", "string", None, None, None)
+    desc, jtype, enum, kind, default, separator = _normalize_variable_entry("x", "just a string")
+    assert (desc, jtype, enum, kind, default, separator) == (
+        "just a string", "string", None, None, None, None,
+    )
 
 
 def test_normalize_variable_entry_legacy_enum_key():
-    desc, jtype, enum, kind, default = _normalize_variable_entry(
+    desc, jtype, enum, kind, default, separator = _normalize_variable_entry(
         "doc_surname", {"description": "Surname", "enum": ["A", "B"]}
     )
     assert kind == "enum"
@@ -141,7 +143,7 @@ def test_normalize_variable_entry_legacy_enum_key():
 
 
 def test_normalize_variable_entry_type_enum():
-    desc, jtype, enum, kind, default = _normalize_variable_entry(
+    desc, jtype, enum, kind, default, separator = _normalize_variable_entry(
         "f", {"description": "d", "type": "enum", "options": ["A", "B"]}
     )
     assert kind == "enum"
@@ -149,15 +151,16 @@ def test_normalize_variable_entry_type_enum():
 
 
 def test_normalize_variable_entry_type_multiselect():
-    desc, jtype, enum, kind, default = _normalize_variable_entry(
+    desc, jtype, enum, kind, default, separator = _normalize_variable_entry(
         "access", {"description": "d", "type": "multiselect", "options": ["x", "y", "z"]}
     )
     assert kind == "multiselect"
     assert enum == ["x", "y", "z"]
+    assert separator is None
 
 
 def test_normalize_variable_entry_type_prefix():
-    desc, jtype, enum, kind, default = _normalize_variable_entry(
+    desc, jtype, enum, kind, default, separator = _normalize_variable_entry(
         "canal", {"description": "d", "type": "prefix", "options": ["расширен", "не расширен"]}
     )
     assert kind == "prefix"
@@ -165,7 +168,7 @@ def test_normalize_variable_entry_type_prefix():
 
 
 def test_normalize_variable_entry_default():
-    desc, jtype, enum, kind, default = _normalize_variable_entry(
+    desc, jtype, enum, kind, default, separator = _normalize_variable_entry(
         "f", {"description": "d", "default": "Не указано"}
     )
     assert default == "Не указано"
@@ -197,6 +200,39 @@ def test_normalize_variable_entry_rejects_unknown_type():
 def test_normalize_variable_entry_rejects_non_string_default():
     with pytest.raises(ValueError, match="default"):
         _normalize_variable_entry("f", {"description": "d", "default": 5})
+
+
+def test_normalize_variable_entry_separator_on_multiselect():
+    desc, jtype, enum, kind, default, separator = _normalize_variable_entry(
+        "access",
+        {"description": "d", "type": "multiselect", "options": ["x", "y"], "separator": " и "},
+    )
+    assert kind == "multiselect"
+    assert separator == " и "
+
+
+def test_normalize_variable_entry_separator_on_enum_raises():
+    with pytest.raises(ValueError, match="separator"):
+        _normalize_variable_entry(
+            "f", {"description": "d", "type": "enum", "options": ["A"], "separator": " и "}
+        )
+
+
+def test_normalize_variable_entry_separator_on_legacy_enum_raises():
+    with pytest.raises(ValueError, match="separator"):
+        _normalize_variable_entry("f", {"description": "d", "enum": ["A"], "separator": " и "})
+
+
+def test_normalize_variable_entry_separator_on_non_categorical_raises():
+    with pytest.raises(ValueError, match="separator"):
+        _normalize_variable_entry("f", {"description": "d", "type": "number", "separator": ", "})
+
+
+def test_normalize_variable_entry_separator_non_string_raises():
+    with pytest.raises(ValueError, match="separator"):
+        _normalize_variable_entry(
+            "f", {"description": "d", "type": "multiselect", "options": ["x"], "separator": 5}
+        )
 
 
 # ── build_json_schema: kinds ────────────────────────────────────────────────
@@ -395,9 +431,11 @@ def test_canonicalize_prefix_free_string_snaps_to_option():
 # ── normalize_extracted ─────────────────────────────────────────────────────
 
 
+# multiselect joins with ", " by default; configs that want «A и B» declare
+# `separator: " и "` (tests below).
 def test_normalize_extracted_multiselect_two():
     out = normalize_extracted({"a": ["X", "Y"]}, {"a": "multiselect"}, {})
-    assert out["a"] == "X и Y"
+    assert out["a"] == "X, Y"
 
 
 def test_normalize_extracted_multiselect_one():
@@ -407,7 +445,37 @@ def test_normalize_extracted_multiselect_one():
 
 def test_normalize_extracted_multiselect_three():
     out = normalize_extracted({"a": ["X", "Y", "Z"]}, {"a": "multiselect"}, {})
-    assert out["a"] == "X, Y и Z"
+    assert out["a"] == "X, Y, Z"
+
+
+def test_normalize_extracted_multiselect_default_comma_lowercase():
+    out = normalize_extracted({"a": ["a", "b", "c"]}, {"a": "multiselect"}, {})
+    assert out["a"] == "a, b, c"
+
+
+def test_normalize_extracted_multiselect_separator_joins_every_gap():
+    out = normalize_extracted(
+        {"a": ["a", "b", "c"]}, {"a": "multiselect"}, {}, separators={"a": " и "}
+    )
+    assert out["a"] == "a и b и c"
+
+
+def test_normalize_extracted_multiselect_separator_two_items():
+    out = normalize_extracted(
+        {"a": ["X", "Y"]}, {"a": "multiselect"}, {}, separators={"a": " + "}
+    )
+    assert out["a"] == "X + Y"
+
+
+def test_normalize_extracted_multiselect_separator_scoped_per_name():
+    out = normalize_extracted(
+        {"a": ["X", "Y"], "b": ["X", "Y"]},
+        {"a": "multiselect", "b": "multiselect"},
+        {},
+        separators={"a": " и "},
+    )
+    assert out["a"] == "X и Y"
+    assert out["b"] == "X, Y"
 
 
 def test_normalize_extracted_multiselect_empty_no_default():
@@ -425,7 +493,7 @@ def test_normalize_extracted_multiselect_sorts_by_option_order():
         {},
         enums={"a": _ACCESS_OPTIONS},
     )
-    assert out["a"] == "трансвагинальный и трансабдоминальный"
+    assert out["a"] == "трансвагинальный, трансабдоминальный"
 
 
 def test_normalize_extracted_multiselect_order_independent():
@@ -446,7 +514,7 @@ def test_normalize_extracted_multiselect_three_keeps_option_order():
         {},
         enums={"a": _ACCESS_OPTIONS},
     )
-    assert out["a"] == "трансвагинальный, трансабдоминальный и трансректальный"
+    assert out["a"] == "трансвагинальный, трансабдоминальный, трансректальный"
 
 
 def test_normalize_extracted_multiselect_unknown_item_appends_last():
@@ -456,14 +524,14 @@ def test_normalize_extracted_multiselect_unknown_item_appends_last():
         {},
         enums={"a": _ACCESS_OPTIONS},
     )
-    assert out["a"] == "трансвагинальный, трансабдоминальный и неизвестный"
+    assert out["a"] == "трансвагинальный, трансабдоминальный, неизвестный"
 
 
 def test_normalize_extracted_multiselect_without_enums_keeps_model_order():
     out = normalize_extracted(
         {"a": ["трансабдоминальный", "трансвагинальный"]}, {"a": "multiselect"}, {}
     )
-    assert out["a"] == "трансабдоминальный и трансвагинальный"
+    assert out["a"] == "трансабдоминальный, трансвагинальный"
 
 
 def test_normalize_extracted_multiselect_empty_with_enums_still_empty():
@@ -524,7 +592,7 @@ def test_normalize_extracted_non_categorical_untouched():
     out = normalize_extracted(
         {"cat": ["A", "B"], "plain": "kept"}, {"cat": "multiselect"}, {}
     )
-    assert out["cat"] == "A и B"
+    assert out["cat"] == "A, B"
     assert out["plain"] == "kept"
 
 
@@ -1002,7 +1070,7 @@ async def test_setup_node_stores_instructions():
         patch("pipeline.extractor.nodes.fetch_child_rows", return_value=[]),
         patch("pipeline.extractor.nodes.resolve_child_docs", return_value={}),
         patch("pipeline.extractor.nodes.resolve_variables_sections", return_value=(
-            {"name": "The name"}, {"name": "string"}, {}, {}, {}, {}, [], []
+            {"name": "The name"}, {"name": "string"}, {}, {}, {}, {}, {}, [], []
         )),
         patch("pipeline.extractor.nodes.resolve_template_doc", return_value="{{name}}"),
         patch("pipeline.extractor.nodes.resolve_instructions_doc", return_value="Use formal tone"),
@@ -1104,7 +1172,7 @@ def test_build_json_schema_enum_partial():
 
 
 def test_normalize_variable_entry_enum_valid():
-    desc, typ, enum_vals, kind, default = _normalize_variable_entry(
+    desc, typ, enum_vals, kind, default, separator = _normalize_variable_entry(
         "role", {"description": "The role", "enum": ["a", "b"]}
     )
     assert desc == "The role"
@@ -1158,8 +1226,8 @@ variables:
     mock_db = AsyncMock()
     mock_db.query = AsyncMock(return_value=rows)
     with patch("pipeline.core.config.get_db", return_value=mock_db):
-        variables, types, calculations, enums, kinds, defaults, duplicates, refine = \
-            await resolve_variables_sections("cfg-1")
+        variables, types, calculations, enums, kinds, defaults, separators, \
+            duplicates, refine = await resolve_variables_sections("cfg-1")
 
     assert variables["role"] == "The user role"
     assert types["role"] == "string"
@@ -1168,6 +1236,62 @@ variables:
     assert calculations == {}
     assert duplicates == []
     assert refine == []
+
+
+# ── resolve_variables_sections: separator extraction ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_resolve_variables_sections_extracts_separators():
+    from pipeline.core.config import resolve_variables_sections
+
+    rows = [
+        _make_row(
+            "variables",
+            """```yaml
+variables:
+  access:
+    description: Access routes
+    type: multiselect
+    options: [a, b]
+    separator: " и "
+  symptoms:
+    description: Symptoms
+    type: multiselect
+    options: [x, y]
+```""",
+        ),
+    ]
+    mock_db = AsyncMock()
+    mock_db.query = AsyncMock(return_value=rows)
+    with patch("pipeline.core.config.get_db", return_value=mock_db):
+        separators = (await resolve_variables_sections("cfg-1"))[6]
+
+    assert separators == {"access": " и "}  # only fields that declare one
+
+
+@pytest.mark.asyncio
+async def test_resolve_variables_sections_separator_on_enum_fails_loud():
+    from pipeline.core.config import resolve_variables_sections
+
+    rows = [
+        _make_row(
+            "variables",
+            """```yaml
+variables:
+  role:
+    description: The role
+    type: enum
+    options: [admin, user]
+    separator: " и "
+```""",
+        ),
+    ]
+    mock_db = AsyncMock()
+    mock_db.query = AsyncMock(return_value=rows)
+    with patch("pipeline.core.config.get_db", return_value=mock_db):
+        with pytest.raises(ValueError, match="separator"):
+            await resolve_variables_sections("cfg-1")
 
 
 # ── resolve_variables_sections: refine section ─────────────────────────────
@@ -1193,7 +1317,8 @@ refine:
     mock_db.query = AsyncMock(return_value=rows)
     with patch("pipeline.core.config.get_db", return_value=mock_db):
         (
-            variables, types, calculations, enums, kinds, defaults, duplicates, refine,
+            variables, types, calculations, enums, kinds, defaults, separators,
+            duplicates, refine,
         ) = await resolve_variables_sections("cfg-1")
 
     assert refine == [{"fields": ["localization_uterus"], "prompt": None}]
@@ -1217,7 +1342,8 @@ variables:
     mock_db.query = AsyncMock(return_value=rows)
     with patch("pipeline.core.config.get_db", return_value=mock_db):
         (
-            variables, types, calculations, enums, kinds, defaults, duplicates, refine,
+            variables, types, calculations, enums, kinds, defaults, separators,
+            duplicates, refine,
         ) = await resolve_variables_sections("cfg-1")
 
     assert refine == []
@@ -1268,7 +1394,8 @@ refine:
     mock_db.query = AsyncMock(return_value=rows)
     with patch("pipeline.core.config.get_db", return_value=mock_db):
         (
-            variables, types, calculations, enums, kinds, defaults, duplicates, refine,
+            variables, types, calculations, enums, kinds, defaults, separators,
+            duplicates, refine,
         ) = await resolve_variables_sections("cfg-1")
 
     assert refine == [{"fields": ["width"], "prompt": None}]
@@ -1300,7 +1427,8 @@ refine:
     mock_db.query = AsyncMock(return_value=rows)
     with patch("pipeline.core.config.get_db", return_value=mock_db):
         (
-            variables, types, calculations, enums, kinds, defaults, duplicates, refine,
+            variables, types, calculations, enums, kinds, defaults, separators,
+            duplicates, refine,
         ) = await resolve_variables_sections("cfg-1")
 
     assert refine == [
@@ -1420,7 +1548,7 @@ description: |
 
 
 def test_normalize_variable_entry_string():
-    desc, typ, enum_vals, kind, default = _normalize_variable_entry("name", "Person name")
+    desc, typ, enum_vals, kind, default, separator = _normalize_variable_entry("name", "Person name")
     assert desc == "Person name"
     assert typ == "string"
     assert enum_vals is None
@@ -1429,21 +1557,21 @@ def test_normalize_variable_entry_string():
 
 
 def test_normalize_variable_entry_dict_full():
-    desc, typ, enum_vals, kind, default = _normalize_variable_entry("height", {"description": "Height in mm", "type": "number"})
+    desc, typ, enum_vals, kind, default, separator = _normalize_variable_entry("height", {"description": "Height in mm", "type": "number"})
     assert desc == "Height in mm"
     assert typ == "number"
     assert enum_vals is None
 
 
 def test_normalize_variable_entry_dict_no_type():
-    desc, typ, enum_vals, kind, default = _normalize_variable_entry("name", {"description": "The name"})
+    desc, typ, enum_vals, kind, default, separator = _normalize_variable_entry("name", {"description": "The name"})
     assert desc == "The name"
     assert typ == "string"
     assert enum_vals is None
 
 
 def test_normalize_variable_entry_dict_empty_description():
-    desc, typ, enum_vals, kind, default = _normalize_variable_entry("x", {})
+    desc, typ, enum_vals, kind, default, separator = _normalize_variable_entry("x", {})
     assert desc == ""
     assert typ == "string"
     assert enum_vals is None
@@ -1867,7 +1995,7 @@ async def test_compute_node_variables_with_types_flow():
             {"height": "Height in mm", "width": "Width in mm"},
             {"height": "number", "width": "number"},
             {"area": "={{height}} * {{width}}"},
-            {}, {}, {}, [], [],
+            {}, {}, {}, {}, [], [],
         )),
         patch("pipeline.extractor.nodes.resolve_template_doc", return_value="{{height}}x{{width}} = {{area}}"),
         patch("pipeline.extractor.nodes.resolve_instructions_doc", return_value=""),
