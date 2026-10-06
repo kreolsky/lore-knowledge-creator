@@ -1623,9 +1623,11 @@ async function followup(
       // signals the turn's close, so THIS explicit push is that terminal —
       // pushed after every mapped frame of the turn (the terminal relay and
       // its halt mint included) and after the not-finished error above.
-      // Best-effort: a closed channel loses it,
-      // and the backend's resync replay re-mints the close on reconnect.
-      try { channel.push(dshId, { type: 'turn_closed' }) } catch { /* gone — resync covers */ }
+      // Best-effort: a closed channel loses it, and the backend re-mints on
+      // reconnect — the resync replay for a turn/end lost mid-gap, the
+      // owed-close re-mint for a turn that had already ENDED live before
+      // the gap (driver.channel._resync_all).
+      try { channel.push(dshId, { type: 'turn_closed' }) } catch { /* gone — the resync re-mints */ }
     }
   })()
 }

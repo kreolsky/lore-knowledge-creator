@@ -25,6 +25,22 @@ export function effectiveCap(
   return CHAT_CONTEXT_WINDOW_FALLBACK;
 }
 
+/**
+ * Append `text` to the composer draft — the ONE restore rule for text that
+ * must not be lost (chips restored on an errored/stopped turn, a send that
+ * cleared the composer and then failed).
+ *
+ * INVARIANT(data-loss): append, never overwrite. Why: the incoming text was
+ * written BEFORE whatever the user may have typed since (chips queued before
+ * the stop, a failed send's text versus typing that followed it) —
+ * overwriting would discard the newer text; a blank draft takes the text
+ * bare.
+ */
+export function appendDraft(get: Get, text: string): void {
+  const draft = get().draft;
+  get().setDraft(draft ? `${draft}\n\n${text}` : text);
+}
+
 type MiscSlice = Pick<
   ChatState,
   | 'addPendingImage'

@@ -251,11 +251,13 @@ class _Subscription:
     turn: _ChannelTurn | None = None
     ack: asyncio.Event = field(default_factory=asyncio.Event)
     listeners: set[asyncio.Queue] = field(default_factory=set)
-    #: How many turns _close_turn has closed on this subscription. The resync
-    #: replay snapshots it to learn that a REPLAYED frame ended a turn — the
-    #: plugin's own turn_closed push for that turn died with the lost socket,
-    #: so the channel re-mints the transport terminal itself.
-    closes: int = 0
+    #: A turn closed on this subscription while the plugin's turn_closed
+    #: push had not yet arrived. _close_turn arms it (the push is owed); a
+    #: relayed turn_closed clears it; a NEWER turn opening retires it. The
+    #: resync re-mint consumes it: a turn that ended LIVE before a socket
+    #: gap leaves the browser's terminal undeliverable — the push is
+    #: best-effort and not a log entry, so no replay can carry it.
+    close_owed: bool = False
 
 
 class DriverChannel:
@@ -609,7 +611,6 @@ class DriverChannel:
         for sub in list(self._subs.values()):
             if not sub.anchored or sub.last_seq is None:
                 continue
-            closes_before = sub.closes
             try:
                 payload = await fetch_session_entries(
                     sub.lore_session_id, line=line, since_seq=sub.last_seq)
@@ -624,14 +625,22 @@ class DriverChannel:
                 for frame in turn.get("frames") or []:
                     if isinstance(frame, dict):
                         await self._dispatch_frame(sub, frame)
-            if sub.closes > closes_before:
-                # A REPLAYED frame ended a turn whose plugin-side turn_closed
-                # push died with the lost socket (the plugin pushed it during
-                # the gap, into a socket that never delivered). Emitted AFTER
-                # the whole replay, so the turn's trailing frames — the halt
-                # mint — reach the listener ahead of the terminal (the same
-                # ordering the plugin's own push guarantees live).
+            if sub.close_owed and sub.turn is None and sub.pending_bind is None:
+                # A turn CLOSED without its delivered terminal: either a
+                # REPLAYED frame just ended it (the plugin's push died with
+                # the lost socket) or it had already ended LIVE before the
+                # gap — the browser saw the turn's `done`, but the plugin's
+                # turn_closed push (best-effort, NOT a log entry) never
+                # arrived, and no replay can carry it. Re-mint the transport
+                # terminal — the browser ends a turn ONLY on turn_closed.
+                # pending_bind guard: a followup already accepted for the
+                # NEXT turn must not have its registration closed by the
+                # PREVIOUS turn's re-minted terminal. Emitted AFTER the whole
+                # replay, so the turn's trailing frames — the halt mint —
+                # reach the listener ahead of the terminal (the same ordering
+                # the plugin's own push guarantees live).
                 self._emit(sub, [{"type": "turn_closed"}])
+                sub.close_owed = False
 
     async def _send_new_subscribes(self, sock) -> None:
         """Subscriptions registered while connected: send their subscribe
@@ -736,6 +745,11 @@ class DriverChannel:
                     "driver channel: unclaimed turn/start session=%s — "
                     "frames relay without persistence", sub.lore_session_id)
         if sub.turn is None:
+            if frame.get("type") == "turn_closed":
+                # The plugin's own terminal push, delivered — the owed close
+                # (armed by _close_turn) is settled; a later resync must not
+                # re-mint it.
+                sub.close_owed = False
             self._emit(sub, [frame])
             return
         turn = sub.turn
@@ -756,6 +770,10 @@ class DriverChannel:
 
     async def _open_turn(self, sub: _Subscription) -> _ChannelTurn:
         bind, sub.pending_bind = sub.pending_bind, None
+        # A NEWER turn claimed its first frame: an older turn's owed terminal
+        # is moot (its browser registration is gone or superseded), and a
+        # later resync re-minting it could close THIS turn's registration.
+        sub.close_owed = False
         # The turn budgets resolve per turn through instance settings, so an
         # admin override reaches the next turn.
         budgets = await settings.get_all(["TURN_MAX_WALL_S", "TURN_HOLD_MAX_S"])
@@ -794,12 +812,17 @@ class DriverChannel:
         # was closed by a LIVE terminal frame, and the plugin's followup task
         # pushes turn_closed after every mapped frame of that same event (the
         # halt mint included). An emit here would race AHEAD of that mint and
-        # make the browser drop the card. The replay path re-mints the close
-        # where the plugin's push is gone (see _resync_all)."""
+        # make the browser drop the card. The resync re-mint covers the pushes
+        # that are gone: a turn/end lost mid-gap (replayed close) AND a turn
+        # that ended live before the gap (the owed-close flag) — see
+        # _resync_all."""
         turn, sub.turn = sub.turn, None
         if turn is None:
             return
-        sub.closes += 1
+        # The plugin's turn_closed push is now owed (see _Subscription.
+        # close_owed) — a delivered push clears it; a socket gap before it
+        # arrives leaves the resync re-mint as the browser's only terminal.
+        sub.close_owed = True
         projection = turn.projection
         if projection.finalize_pending:
             try:

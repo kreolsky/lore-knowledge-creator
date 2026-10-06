@@ -235,7 +235,11 @@ async def _driver_capability(line: DriverLine, model: str) -> dict:
 #       backend's arm replaces it).
 #   {"type":"turn_closed"}                                              # TERMINAL
 #       (a browser terminal): pushed by the plugin after the turn's last
-#       mapped frame — a driver-owned turn has no stream whose end closes it.
+#       mapped frame — a driver-owned turn has no stream whose end closes
+#       it — and re-minted by the backend where the push cannot arrive: the
+#       deadline breach (driver.channel) and the resync close re-mint (a
+#       turn/end lost mid-gap, or a turn that ended live before the gap —
+#       the owed-close flag in driver.channel._resync_all).
 #   {"type":"error","message":<str>,"halt_reason":<str>}                # TERMINAL,
 #       backend-minted (deadline breach, unreachable line, stream failure,
 #       the harness's own catch) — the relay mints the lore halt at the

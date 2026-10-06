@@ -8,6 +8,7 @@
 import { useAppStore } from '../app-store';
 import { t } from '../../i18n';
 import { joinQueued } from '../../chat/queue-join';
+import { appendDraft } from './misc-slice';
 import type { Get, Set, TurnEndReason } from './types';
 
 export interface QueueSlice {
@@ -89,13 +90,11 @@ export function createQueueSlice(set: Set, get: Get): QueueSlice {
       // would send it into the wrong chat. For the cross-session case the chips are
       // left intact so the user finds them on return.
       if (get().activeSessionId !== sessionId) return;
-      // INVARIANT(data-loss): append, never overwrite — the user may have typed more since the
-      // chips were queued.
-      // Why: overwriting the composer on stop would discard text typed after queueing —
-      // the plan's "losing text on stop" risk; append preserves everything the user wrote.
-      const draft = get().draft;
+      // Append through the shared restore rule (appendDraft, where the
+      // invariant and its Why live): never overwrite — the user may have
+      // typed more since the chips were queued.
       const restored = joinQueued(parts);
-      get().setDraft(draft ? `${draft}\n\n${restored}` : restored);
+      appendDraft(get, restored);
       get().clearQueued(sessionId);
     },
   };

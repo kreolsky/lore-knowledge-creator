@@ -107,6 +107,7 @@ function rollbackOptimisticUser(
 }
 
 import { buildChildrenMap, resolveActivePath, resolveAncestorChain, ROOT_KEY, REWIND_KEY, withoutRewind } from './tree';
+import { appendDraft } from './misc-slice';
 import { streamCompletion, flushStreaming, emptyStreaming, adoptOpenTurn, hasOpenHarnessTurn } from './streaming';
 import { replaceWindowFromRows, rewindToLineage } from './conversation-feed';
 import { loadMessagesFor, patchMessageContent, deleteMessageById } from '../chat-message-crud';
@@ -241,14 +242,14 @@ export async function runCompletion(set: Set, get: Get, opts: RunCompletionOpts)
 // time, so without this the text exists nowhere; the draft is ONE shared
 // string, so writing it while another chat is shown sends it into the wrong
 // chat. Active chat → the composer, appended after anything typed meanwhile
-// (the same rule as restoreQueued); otherwise → a queued chip of that chat.
+// (appendDraft — the shared restore rule); otherwise → a queued chip of
+// that chat.
 function restoreFailedSend(get: Get, sessionId: string, text: string): void {
   if (get().activeSessionId !== sessionId) {
     get().enqueueMessage(sessionId, text);
     return;
   }
-  const draft = get().draft;
-  get().setDraft(draft ? `${draft}\n\n${text}` : text);
+  appendDraft(get, text);
 }
 
 /**
