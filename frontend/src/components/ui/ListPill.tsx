@@ -23,6 +23,11 @@ interface ListPillProps {
   active?: boolean;
   /** Active fill color when variant is 'plain': chat purple 'accent' or reference 'blue'. */
   activeColor?: ListPillActiveColor;
+  /** see SYSTEM: inbox — this object arrived from OUTSIDE flagged for the viewer.
+   * Paints the sticky-yellow inbox mark OVER the variant fill (the anchored
+   * yellow family; the mark is the dark shade, matching the tab tint). Clearing
+   * happens on open, so an active+unread overlap is a transient failure state. */
+  unread?: boolean;
   id?: string;
   clickable?: boolean;
   tabIndex?: number;
@@ -42,6 +47,7 @@ export const ListPill = memo(function ListPill({
   variant = 'plain',
   active = false,
   activeColor = 'accent',
+  unread = false,
   id,
   clickable = true,
   tabIndex,
@@ -62,6 +68,7 @@ export const ListPill = memo(function ListPill({
     styles.pill,
     styles[variant],
     activeCls,
+    unread ? styles.unread : '',
     clickable ? 'cursor-pointer' : 'cursor-default',
     'group',
     className,

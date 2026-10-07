@@ -1,9 +1,10 @@
 """Authentication — JWT encode/decode, cookie management, WS token validation."""
-# ARCH: Cookie-only auth — query param tokens were removed (security audit C-2).
+# ARCH: Cookie-only auth — no query-param tokens.
 # ARCH: token_version in JWT — bump user.token_version in DB to invalidate all sessions.
 # SYSTEM: auth — JWT cookie-based auth with token versioning for session invalidation
 
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -40,21 +41,25 @@ def _invalidate_token_version_cache(user_id: str) -> None:
     _token_version_cache.pop(user_id, None)
 
 
-async def bump_token_version(user_id: str) -> None:
+async def bump_token_version(user_id: str) -> int:
     """Invalidate all of a user's sessions by incrementing token_version.
 
     Bumps the DB value, drops the local cache *synchronously* (emit is
     fire-and-forget — the local invalidation cannot wait on it), then fans the
     invalidation out to other replicas via the event_bus (Redis evt: channel).
+    Returns the new token_version, so a caller that keeps its own session alive
+    re-issues its cookie on it. Raises on a missing user row.
     """
     from db import get_db
     db = await get_db()
-    await db.query(
-        "UPDATE type::record('users', $id) SET token_version = (token_version ?? 0) + 1",
+    rows = await db.query(
+        "UPDATE type::record('users', $id) SET token_version = (token_version ?? 0) + 1 "
+        "RETURN AFTER",
         {"id": user_id},
     )
     _invalidate_token_version_cache(user_id)
     await event_bus.emit("token_version_bumped", user_id=user_id)
+    return rows[0]["token_version"]
 
 
 def on_token_version_bumped(user_id: str) -> None:
@@ -111,6 +116,55 @@ def set_session_cookie(
         # one-file install must get both right with no operator action.
         secure=_browser_scheme_is_https(request), max_age=COOKIE_MAX_AGE,
     )
+
+
+DEVICE_COOKIE = "lore_device"
+_DEVICE_COOKIE_MAX_AGE = 60 * 60 * 24 * 180  # 180 days
+
+
+def _device_subject(email: str) -> str:
+    return email.strip().lower()
+
+
+def set_device_cookie(request: Request, response: Response, email: str) -> None:
+    """Mark this browser as a known device for `email`, with a fresh nonce.
+
+    The nonce keys the device's own login-throttle counter; a new one on every
+    success means a copied cookie stops matching after the owner's next sign-in.
+    """
+    now = datetime.now(timezone.utc)
+    token = jwt.encode(
+        {
+            "typ": "device", "sub": _device_subject(email), "nonce": uuid.uuid4().hex,
+            "iat": now, "exp": now + timedelta(seconds=_DEVICE_COOKIE_MAX_AGE),
+        },
+        SECRET_KEY, algorithm=ALGORITHM,
+    )
+    response.set_cookie(
+        key=DEVICE_COOKIE, value=token,
+        httponly=True, samesite="lax", path="/api/auth",
+        # Same Secure rule as the session cookie: see the INVARIANT in set_session_cookie.
+        secure=_browser_scheme_is_https(request), max_age=_DEVICE_COOKIE_MAX_AGE,
+    )
+
+
+def read_device_nonce(request: Request, email: str) -> str | None:
+    """The device nonce, only for a valid unexpired device cookie bound to `email`.
+
+    Anything else (absent, forged, expired, another account's) is None: an
+    untrusted client, not an error.
+    """
+    token = request.cookies.get(DEVICE_COOKIE)
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except jwt.InvalidTokenError:
+        return None
+    if payload.get("typ") != "device" or payload.get("sub") != _device_subject(email):
+        return None
+    nonce = payload.get("nonce")
+    return nonce if isinstance(nonce, str) and nonce else None
 
 
 async def _verify_token_version(payload: dict, path: str = "") -> str | None:

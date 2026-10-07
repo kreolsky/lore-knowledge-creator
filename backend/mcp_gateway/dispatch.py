@@ -21,6 +21,10 @@ import logging
 
 from agent_tools.registry import REGISTRY, resolve_handler
 from fastapi import HTTPException
+from inbox import KIND_REF, mark_arrived
+
+from db import extract_id, fetch_one
+from models import is_ref_row
 
 logger = logging.getLogger(__name__)
 
@@ -228,9 +232,45 @@ async def dispatch_tool(name: str, args: dict, ctx: dict) -> dict:
     handler = resolve_handler(entry)
     if entry.request_model is None:
         # Gateway-only entries: the handler consumes the raw args dict.
-        return await handler(canonical, ctx)
-    body = entry.request_model(**canonical)
-    return await handler(body=body, ctx=ctx)
+        result = await handler(canonical, ctx)
+    else:
+        body = entry.request_model(**canonical)
+        result = await handler(body=body, ctx=ctx)
+    await _flag_arrived_reference(result, ctx)
+    return result
+
+
+async def _flag_arrived_reference(result: object, ctx: dict) -> None:
+    """Inbox hook: a reference a NON-internal MCP key just created flags its key
+    owner.
+
+    # ARCH: keys on the RESULT carrying `reference_id` — the one shape every
+    reference-creating handler returns (create_document's reference branch). The
+    registry-derived test (tests/backend/test_inbox.py) walks every MCP-served
+    tool whose handler touches a reference factory and demands this hook covers
+    it, so a tool that starts creating references is caught by CI even if it
+    ever returned the id under a different key.
+
+    The HOST is read from the created row (parent_id), never from the call args
+    — the args key differs per tool, the row is the one truth. Recipient is the
+    key owner (ctx["user_id"]); the dsh driver's internal key never flags.
+    """
+    if not isinstance(result, dict):
+        return
+    ref_id = result.get("reference_id")
+    if not ref_id or ctx.get("internal") is True:
+        return
+    row = await fetch_one("documents", extract_id(ref_id))
+    if not row or not is_ref_row(row):
+        return
+    host = row.get("parent_id") or ""
+    if not host:
+        return
+    await mark_arrived(
+        KIND_REF, object_id=extract_id(ref_id),
+        project_id=row.get("project_id") or ctx["project_id"],
+        document_id=str(host), recipient_id=ctx["user_id"],
+    )
 
 
 __all__ = [

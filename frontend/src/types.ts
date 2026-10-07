@@ -206,6 +206,13 @@ export interface Reference {
    * state instead of an empty editor (no-silent-degradation).
    */
   has_content?: boolean;
+  /**
+   * see SYSTEM: inbox — VIEWER-relative unread flag: this reference arrived
+   * from OUTSIDE (a widget key or an MCP key) for the CURRENT user and has not
+   * been opened. Always present on the authed LIST (false for everyone else —
+   * the raw recipient id never crosses the wire); absent on public-share rows.
+   */
+  unread?: boolean;
   /** Audio/image processing pipeline status. Null for markdown refs (no processing needed). */
   processing_status: 'uploading' | 'queued' | 'processing' | 'ready' | 'error' | null;
   file_path: string | null;
@@ -471,6 +478,12 @@ export interface ChatSession {
   // and the client falls back to its refIdSet split.
   context_reference_ids?: string[];
   is_note?: boolean;
+  /**
+   * see SYSTEM: inbox — VIEWER-relative unread flag: this NOTE arrived from
+   * OUTSIDE (a widget key) for the CURRENT user and has not been opened. The
+   * raw recipient id never crosses the wire; false for everyone else's view.
+   */
+  unread?: boolean;
   // ARCH: note display fields
   // derived live from messages by the backend (never read `title` for notes).
   // first/last preview + message_count stay note-only (is_note=true); undefined

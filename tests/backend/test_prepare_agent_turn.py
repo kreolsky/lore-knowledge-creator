@@ -7,8 +7,10 @@ section), apply-mode resolution, and message/tool wiring are all verifiable
 directly from the DTO.
 
 The turn-time stamp suite (send stamp every turn, `[chat started ...]` anchor
-on root turns) lives here too — see `_turn_time_stamps` /
-`_build_last_user_prompt(time_stamps=...)` in completions_turn.
+on root turns) lives here too — the stamps ride `plan.time_stamps` and reach
+the model as their OWN `lore-time` context message, never the prompt (see
+`_turn_time_stamps` in completions_turn; the plugin's time-stamps.ts emits the
+message).
 """
 import inspect
 import logging
@@ -103,10 +105,9 @@ async def test_prepare_agent_turn_assembles_prompt_and_apply_mode():
     # Full access, no debug, opted in via auto_apply → auto.
     assert plan.apply_mode == "auto"
     # Stage 9: only the LAST user turn travels as `prompt` (no history replay).
-    # The send stamp now rides the tail — assert the stable part; stamp bytes
-    # are pinned by the stamp suite below.
-    assert plan.prompt.startswith("hi")
-    assert SENT_STAMP_RE.search(plan.prompt)
+    # The prompt is the RAW user text — the time ground rides plan.time_stamps
+    # (pinned by the stamp suite below).
+    assert plan.prompt == "hi"
     assert plan.tools == [{"function": {"name": "edit_document"}}]
 
 
@@ -155,20 +156,22 @@ def test_stream_sse_agent_branch_is_thin():
 # ─── Turn time ground: send stamp + session-start anchor ─────────────────────
 
 
-async def test_send_stamp_appended_to_string_prompt():
-    """Every turn: the last user text ends with the send stamp — user-tz
-    ISO 8601, seconds, explicit offset."""
+async def test_send_stamp_rides_time_stamps_not_the_prompt():
+    """Every turn: the prompt is the raw user text; the send stamp rides
+    plan.time_stamps — user-tz ISO 8601, seconds, explicit offset."""
     body = _fake_body(
         messages=[SimpleNamespace(role="user", content="hello", images=None)],
     )
     plan = await _run_turn(body=body, user_row={"timezone": "Europe/Moscow"})
-    assert plan.prompt.startswith("hello")
-    assert SENT_STAMP_RE.search(plan.prompt), plan.prompt
+    assert plan.prompt == "hello"
+    assert len(plan.time_stamps) == 1, plan.time_stamps
+    assert SENT_STAMP_RE.search(plan.time_stamps[0]), plan.time_stamps
 
 
-async def test_send_stamp_inside_text_part_of_multimodal_prompt():
-    """Multimodal turns: the stamp rides parts[0].text; attachments stay
-    LAST (the ctx-image merge order is untouched)."""
+async def test_multimodal_prompt_is_raw_and_attachments_stay_last():
+    """Multimodal turns: parts[0].text is the raw user text (no stamp bytes);
+    attachments stay LAST (the ctx-image merge order is untouched); the
+    stamps ride plan.time_stamps."""
     body = _fake_body(
         messages=[SimpleNamespace(
             role="user", content="describe this",
@@ -179,9 +182,10 @@ async def test_send_stamp_inside_text_part_of_multimodal_prompt():
     plan = await _run_turn(body=body, user_row={"timezone": "Europe/Moscow"})
     assert isinstance(plan.prompt, list)
     assert plan.prompt[0]["type"] == "text"
-    assert plan.prompt[0]["text"].startswith("describe this")
-    assert SENT_STAMP_RE.search(plan.prompt[0]["text"])
+    assert plan.prompt[0]["text"] == "describe this"
     assert [p["type"] for p in plan.prompt[1:]] == ["image_url"], plan.prompt
+    assert len(plan.time_stamps) == 1
+    assert SENT_STAMP_RE.search(plan.time_stamps[0])
 
 
 async def test_root_turn_anchor_from_session_created_at_in_user_tz():
@@ -197,11 +201,10 @@ async def test_root_turn_anchor_from_session_created_at_in_user_tz():
     plan = await _run_turn(
         session=session, body=body, user_row={"timezone": "Europe/Moscow"},
     )
-    assert plan.prompt.startswith(
-        "hi\n\n[chat started 2026-08-31T18:05:00+03:00]"
-    ), plan.prompt
-    assert plan.prompt.index("[chat started") < plan.prompt.index("[sent ")
-    assert SENT_STAMP_RE.search(plan.prompt)
+    assert plan.prompt == "hi"
+    assert len(plan.time_stamps) == 2, plan.time_stamps
+    assert plan.time_stamps[0] == "[chat started 2026-08-31T18:05:00+03:00]"
+    assert SENT_STAMP_RE.search(plan.time_stamps[1])
 
 
 async def test_non_root_turn_gets_no_anchor():
@@ -217,8 +220,9 @@ async def test_non_root_turn_gets_no_anchor():
     plan = await _run_turn(
         session=session, body=body, user_row={"timezone": "Europe/Moscow"},
     )
-    assert "[chat started" not in plan.prompt
-    assert SENT_STAMP_RE.search(plan.prompt)
+    assert "[chat started" not in "".join(plan.time_stamps)
+    assert len(plan.time_stamps) == 1
+    assert SENT_STAMP_RE.search(plan.time_stamps[0])
 
 
 async def test_compaction_continuation_root_gets_no_anchor():
@@ -234,8 +238,9 @@ async def test_compaction_continuation_root_gets_no_anchor():
     plan = await _run_turn(
         session=session, body=body, user_row={"timezone": "Europe/Moscow"},
     )
-    assert "[chat started" not in plan.prompt
-    assert SENT_STAMP_RE.search(plan.prompt)
+    assert "[chat started" not in "".join(plan.time_stamps)
+    assert len(plan.time_stamps) == 1
+    assert SENT_STAMP_RE.search(plan.time_stamps[0])
 
 
 async def test_root_fork_anchor_bytes_are_stable():
@@ -251,9 +256,9 @@ async def test_root_fork_anchor_bytes_are_stable():
         plan = await _run_turn(
             session=session, body=body, user_row={"timezone": "Europe/Moscow"},
         )
-        m = re.search(r"\[chat started [^\]]+\]", plan.prompt)
-        assert m, plan.prompt
-        anchors.append(m.group(0))
+        assert plan.prompt == "q"
+        assert len(plan.time_stamps) == 2, plan.time_stamps
+        anchors.append(plan.time_stamps[0])
     assert anchors[0] == anchors[1] == "[chat started 2026-08-31T18:05:00+03:00]"
 
 
@@ -272,15 +277,16 @@ async def test_tz_null_invalid_and_fetch_failure_fall_back_to_utc(caplog):
         caplog.clear()
         with caplog.at_level(logging.WARNING, logger="routes.chat.completions_turn"):
             plan = await _run_turn(body=body, **case)
-        assert SENT_STAMP_RE.search(plan.prompt), plan.prompt
-        assert plan.prompt.endswith("+00:00]"), plan.prompt
+        assert len(plan.time_stamps) == 1, plan.time_stamps
+        assert SENT_STAMP_RE.search(plan.time_stamps[0]), plan.time_stamps
+        assert plan.time_stamps[0].endswith("+00:00]"), plan.time_stamps
         warnings = [r for r in caplog.records if "timezone" in r.getMessage()]
         assert len(warnings) == 1, [r.getMessage() for r in caplog.records]
 
 
-async def test_images_only_turn_stamp_is_sole_text_without_leading_blanks():
-    """Images-only turn (content ""): the stamp is the ONLY text, with no
-    leading blank lines; attachments stay last."""
+async def test_images_only_turn_prompt_has_empty_text_and_stamps_survive():
+    """Images-only turn (content ""): the text part is empty and the stamps
+    still ride time_stamps; attachments stay last."""
     body = _fake_body(
         messages=[SimpleNamespace(
             role="user", content="", images=["data:image/png;base64,AAAA"],
@@ -291,48 +297,31 @@ async def test_images_only_turn_stamp_is_sole_text_without_leading_blanks():
     assert isinstance(plan.prompt, list)
     text_part = plan.prompt[0]
     assert text_part["type"] == "text"
-    assert re.match(r"^\[sent \d{4}-", text_part["text"]), text_part["text"]
+    assert text_part["text"] == ""
     assert [p["type"] for p in plan.prompt[1:]] == ["image_url"]
+    assert len(plan.time_stamps) == 1
+    assert SENT_STAMP_RE.search(plan.time_stamps[0])
 
 
-async def test_prompt_stamped_while_source_message_object_untouched():
-    """The DB row content stays raw: plan.prompt is stamped but
-    body.messages[-1].content is never mutated in place."""
+async def test_prompt_stays_raw_and_source_message_object_untouched():
+    """The DB row content stays raw AND the delivered prompt equals it: no
+    stamp is glued onto the user's text, and body.messages[-1].content is
+    never mutated in place."""
     msg = SimpleNamespace(role="user", content="hello", images=None)
     body = _fake_body(messages=[msg])
     plan = await _run_turn(body=body, user_row={"timezone": "Europe/Moscow"})
-    assert plan.prompt != "hello"
-    assert SENT_STAMP_RE.search(plan.prompt)
+    assert plan.prompt == "hello"
+    assert SENT_STAMP_RE.search(plan.time_stamps[0])
     assert msg.content == "hello"
     assert body.messages[-1].content == "hello"
 
 
-async def test_build_last_user_prompt_default_is_stamp_free():
-    """Backward compat: with no time_stamps the prompt is the raw content
-    (the direct two-arg callers keep their contract)."""
-    from routes.chat.completions_turn import _build_last_user_prompt
-
-    out = await _build_last_user_prompt(
-        [SimpleNamespace(role="user", content="x", images=None)],
-    )
-    assert out == "x"
-
-
-async def test_build_last_user_prompt_appends_stamp_lines_without_mutation():
-    """Stamp lines append as a NEW string: anchor first, sent last, `\n\n`
-    separators, source object untouched."""
+async def test_build_last_user_prompt_returns_raw_content():
+    """The prompt builder's contract is the RAW last user content — the
+    stamp channel is plan.time_stamps, not the prompt."""
     from routes.chat.completions_turn import _build_last_user_prompt
 
     msg = SimpleNamespace(role="user", content="x", images=None)
-    out = await _build_last_user_prompt(
-        [msg],
-        time_stamps=[
-            "[chat started 2026-08-31T18:05:00+03:00]",
-            "[sent 2026-09-01T23:14:05+03:00]",
-        ],
-    )
-    assert out == (
-        "x\n\n[chat started 2026-08-31T18:05:00+03:00]"
-        "\n\n[sent 2026-09-01T23:14:05+03:00]"
-    )
+    out = await _build_last_user_prompt([msg])
+    assert out == "x"
     assert msg.content == "x"

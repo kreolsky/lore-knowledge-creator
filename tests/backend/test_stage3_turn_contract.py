@@ -1,10 +1,9 @@
-"""Stage 3/9 tests — the turn contract (drop history replay, decision 5).
+"""Turn contract tests — no history replay.
 
 # SYSTEM: driver turn contract — the payload carries NO messages[], only the
 # last user turn (`prompt`, multimodal) + the layered system_prompt + the session
 # id. The named system-prompt overlay (layer a) is present in every emitted
-# system_prompt. Stage 9 made this the only contract (the legacy agentLoop path
-# is deleted).
+# system_prompt.
 """
 import re
 from types import SimpleNamespace
@@ -12,8 +11,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-# [sent 2026-09-01T23:14:05+03:00] — the per-turn send stamp (the full stamp
-# suite lives in test_prepare_agent_turn).
+# [sent 2026-09-01T23:14:05+03:00] — the per-turn send stamp, carried in
+# `time_stamps`, never in `prompt` (the full stamp suite lives in
+# test_prepare_agent_turn).
 SENT_STAMP_RE = re.compile(
     r"\[sent \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\]$"
 )
@@ -85,11 +85,11 @@ async def test_named_system_prompt_overlay_is_present_in_every_mode():
     assert "You are a grim historian." in plan.system_prompt
     # Layer (c) persona is also present.
     assert "PERSONA" in plan.system_prompt
-    # Stage 3: prompt is the last user turn content. The send stamp rides the
-    # tail (UTC here — fetch_one stubbed to no users row); the stable part is
-    # asserted, stamp bytes belong to the stamp suite.
-    assert plan.prompt.startswith("hello")
-    assert SENT_STAMP_RE.search(plan.prompt)
+    # prompt is exactly the last user turn content; the send stamp rides
+    # `time_stamps` (UTC here — fetch_one stubbed to no users row); stamp bytes
+    # belong to the stamp suite.
+    assert plan.prompt == "hello"
+    assert SENT_STAMP_RE.search(plan.time_stamps[-1])
 
 
 @pytest.mark.asyncio
@@ -121,12 +121,12 @@ async def test_prompt_is_multimodal_when_last_turn_has_images():
             user={"user_id": "u1"}, toolset=[], capability_is_mutating=True,
         )
 
-    # Stamp rides parts[0].text; the image part is asserted unchanged and
-    # still last (stamp bytes pinned in test_prepare_agent_turn).
+    # parts[0].text is the raw user text; the stamp rides `time_stamps`; the
+    # image part is asserted unchanged and still last.
     assert isinstance(plan.prompt, list)
     assert plan.prompt[0]["type"] == "text"
-    assert plan.prompt[0]["text"].startswith("describe this")
-    assert SENT_STAMP_RE.search(plan.prompt[0]["text"])
+    assert plan.prompt[0]["text"] == "describe this"
+    assert SENT_STAMP_RE.search(plan.time_stamps[-1])
     assert plan.prompt[1] == {
         "type": "image_url",
         "image_url": {"url": "data:image/png;base64,AAAA"},

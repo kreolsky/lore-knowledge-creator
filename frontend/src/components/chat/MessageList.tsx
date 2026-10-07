@@ -327,7 +327,7 @@ export function MessageList() {
   const rewindPlaque = rewindActive ? (
     <div className="flex items-center justify-center gap-2 py-2 text-ui-2xs text-text-dim">
       <span>{t('rewindActive')}</span>
-      <Button variant="ghost" size="sm" onClick={cancelRewind}>{t('cancel')}</Button>
+      <Button variant="primary" size="sm" onClick={cancelRewind}>{t('cancel')}</Button>
     </div>
   ) : null;
 

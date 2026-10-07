@@ -197,6 +197,7 @@ class PersistSpy:
         self.turn_session: list[tuple] = []
         self.context_usage: list[tuple] = []
         self.turn_errors: list[dict] = []
+        self.titles: list[tuple] = []
         self.stops: list[str] = []
 
         async def content(mid, content):
@@ -221,12 +222,17 @@ class PersistSpy:
         async def stop(sid, line=None):
             self.stops.append(sid)
 
+        async def title(sid, text):
+            self.titles.append((sid, text))
+            return True
+
         monkeypatch.setattr(driver.persistence, "_persist_content", content)
         monkeypatch.setattr(driver.persistence, "_persist_sources", sources)
         monkeypatch.setattr(driver.persistence, "_persist_projection_extras", extras)
         monkeypatch.setattr(driver.persistence, "_persist_turn_seq", turn_seq)
         monkeypatch.setattr(driver.persistence, "_persist_context_usage", context_usage)
         monkeypatch.setattr(driver.persistence, "_record_turn_error", turn_error)
+        monkeypatch.setattr(driver.persistence, "_persist_session_title", title)
         monkeypatch.setattr(driver.channel, "post_stop", stop)
 
 
@@ -330,6 +336,30 @@ async def test_turn_flows_through_relay_arms_and_finalizes(channel):
     assert persists.extras == []  # no halt card on a graceful end
     assert persists.turn_errors == []
     await _until(lambda: ch._subs["lore-1"].turn is None)  # the turn closed
+
+
+@pytest.mark.asyncio
+async def test_a_title_arriving_after_the_turn_closed_still_names_the_chat(channel):
+    # The titler runs beside the turn, not inside it: a short answer closes
+    # the turn before a slow (reasoning) title model answers, so the LLM title
+    # lands AFTER turn/end. It must still reach the chat row and the open
+    # client — otherwise the chat keeps the deterministic fallback forever.
+    ch, connector, replay, persists = channel
+    await ch.subscribe("lore-1")
+    ch.bind_turn("lore-1", assistant_msg_id="m1", user_id="u1")
+    queue, _ = ch.add_listener("lore-1")
+    sock = connector.sockets[0]
+    for frame in ({"type": "model_update", "model": "x"}, _chunk(8, "Pong"),
+                  _turn_end(9, "completed")):
+        sock.push(_env("dsh-9", frame))
+    for _ in range(4):
+        await _recv(queue)
+    await _until(lambda: ch._subs["lore-1"].turn is None)
+
+    sock.push(_env("dsh-9", _dsh(10, "session/title", {"title": "Ping and pong"})))
+
+    assert (await _recv(queue)) == {"type": "session_title", "title": "Ping and pong"}
+    assert persists.titles == [("lore-1", "Ping and pong")]
 
 
 @pytest.mark.asyncio

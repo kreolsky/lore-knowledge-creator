@@ -2,8 +2,9 @@
  * API key management view — the SINGLE issuance surface for every capability
  * mix. Rendered inside the unified Access tab (AccessPanel.tsx).
  *
- * ARCH: one key row carries a capabilities set (widget = audio widget on this
- * doc, agent = MCP/Tool-API sandboxed to this doc's subtree). The server
+ * ARCH: one key row carries a capabilities set (widget = notes + file uploads
+ * on this doc — see SYSTEM: inbox, agent = MCP/Tool-API sandboxed to this doc's
+ * subtree). The server
  * returns only the raw `lore_…` token; the widget's base64 {url, token}
  * envelope is copy-time packaging built client-side ("Copy widget key"), never
  * a second key format. After create/delete the project documents are refetched

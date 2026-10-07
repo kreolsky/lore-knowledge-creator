@@ -120,6 +120,16 @@
   --sticky-green-darkest: #53A166;
   --sticky-purple-light: #DAD6F2;
 
+  /* SYSTEM: inbox — the unread-arrival mark.
+   * ONE token pair for every inbox tint surface: the flagged list item
+   * (ListPill.module.css .pill.unread), the notes/refs right-tab and
+   * the .doc-item row. Alias, not a new colour — the sticky-yellow family owns
+   * the yellows; the token exists so "inbox mark" greps to one definition.
+   * --inbox-mark = the flagged surface itself; --inbox-mark-muted = a collapsed
+   * tree ANCESTOR of a flagged doc (reads as "something inside", not "this"). */
+  --inbox-mark: var(--sticky-yellow-dark);
+  --inbox-mark-muted: var(--sticky-yellow-mid);
+
   --code-key: #001080;
   --code-string: #8a4a1a;
   --code-plain-scalar: #a31515;
@@ -560,6 +570,54 @@ body.is-resizing * { transition: none !important; }
 .doc-item.selected-snap:hover { background: var(--sticky-green-dark) !important; box-shadow: 6px 0 0 0 var(--sticky-green-dark); }
 .doc-item.selected-snap .note-time,
 .doc-item.selected-snap .doc-icon { color: var(--sticky-green-darkest); }
+
+/* ─── SYSTEM: inbox — unread-arrival mark on tree rows ──────────────────── */
+/* Full-row paint, the same shape as .ref-parent: row fill, the -6px gutter
+ * shadow and the action plate's fade all in the inbox yellow, so the trailing
+ * ☰/+ plate never fades the mark into gray. Direct flag = --inbox-mark (the
+ * same token as the *-tab-unread tint and .pill.unread — one mark everywhere);
+ * a COLLAPSED ancestor of a flagged row = --inbox-mark-muted ("something
+ * inside", not "this"); an expanded ancestor stays plain (the flagged child is
+ * visible).
+ * INVARIANT: precedence is blue (.ref-parent) / green (.snapshot-parent) >
+ * inbox yellow > gray (.active, :hover).
+ * Why: an open reference or snapshot is the more specific "where am I" state,
+ * while a flag is cleared by opening the OBJECT, not the document — a gray
+ * active row winning would hide unread arrivals in the very document open now.
+ * The :not() pair lifts specificity above .active and :hover regardless of
+ * source order. */
+.doc-item.inbox-unread:not(.ref-parent):not(.snapshot-parent),
+.doc-item.inbox-unread-muted:not(.ref-parent):not(.snapshot-parent) {
+  --inbox-row: var(--inbox-mark);
+  background: var(--inbox-row);
+  color: var(--sticky-yellow-ink);
+  box-shadow: -6px 0 0 0 var(--inbox-row);
+}
+.doc-item.inbox-unread-muted:not(.ref-parent):not(.snapshot-parent) {
+  --inbox-row: var(--inbox-mark-muted);
+}
+.doc-item.inbox-unread:not(.ref-parent):not(.snapshot-parent) .doc-icon,
+.doc-item.inbox-unread-muted:not(.ref-parent):not(.snapshot-parent) .doc-icon,
+.doc-item.inbox-unread:not(.ref-parent):not(.snapshot-parent) .doc-action-btn,
+.doc-item.inbox-unread-muted:not(.ref-parent):not(.snapshot-parent) .doc-action-btn {
+  color: var(--sticky-yellow-ink);
+}
+.doc-item.inbox-unread:not(.ref-parent):not(.snapshot-parent) .doc-item-actions,
+.doc-item.inbox-unread-muted:not(.ref-parent):not(.snapshot-parent) .doc-item-actions {
+  background: linear-gradient(to right, transparent 0px, var(--inbox-row) 16px);
+}
+/* The opened burger on a yellow row: every button, delete included, hovers
+ * with ONE fill — gray, the role .ref-parent gives its darkest blue. Delete
+ * keeps its red ink as the danger cue; the + (add-child) keeps its own accent. */
+.doc-item.inbox-unread:not(.ref-parent):not(.snapshot-parent) .doc-gear-actions .doc-action-btn:hover,
+.doc-item.inbox-unread-muted:not(.ref-parent):not(.snapshot-parent) .doc-gear-actions .doc-action-btn:hover {
+  background: var(--surface3);
+  color: var(--text);
+}
+.doc-item.inbox-unread:not(.ref-parent):not(.snapshot-parent) .doc-gear-actions .doc-action-btn.delete:hover,
+.doc-item.inbox-unread-muted:not(.ref-parent):not(.snapshot-parent) .doc-gear-actions .doc-action-btn.delete:hover {
+  color: var(--red);
+}
 /* Doc-tree key indicator (plan "glimmering-knitting-pebble" + "orange-tree-icon"):
    blue = widget capability, red = agent capability, orange = covered by a live
    anonymous public link. One color per row — the adapter (utils/key-icon.ts)
@@ -945,6 +1003,8 @@ html.dark .resizer:not(:hover):not(.dragging)::before {
  * margin only re-centered it, leaving half the border visible as a line. */
 .right-tab.active,
 .right-tab.notes-tab-thread.inactive,
+.right-tab.notes-tab-unread.inactive,
+.right-tab.refs-tab-unread.inactive,
 .right-tab.access-tab--red.inactive,
 .right-tab.access-tab--yellow.inactive,
 .right-tab.access-tab--blue.inactive {
@@ -955,30 +1015,47 @@ html.dark .resizer:not(:hover):not(.dragging)::before {
 /* Yellow tab tint — shared by the notes tab with an open thread and the chat tab
  * in the new-chat/ghost state (plan: chat-list-ux-and-sort-fixes, F1). The chat
  * tab deliberately has NO .inactive variant: a collapsed/background chat tab
- * stays neutral so it does not mimic the "a note thread is open" signal. */
+ * stays neutral so it does not mimic the "a note thread is open" signal.
+ * SYSTEM: inbox — the *-tab-unread classes (a flagged external note/reference
+ * arrived for this user, see useInboxSummary) join the SAME selector groups:
+ * one yellow, one meaning. The values ARE --inbox-mark's tokens (the alias in
+ * :root points at these very vars), so the tab, the flagged list item and
+ * the row cannot drift apart. */
 .right-tab.notes-tab-thread.active,
+.right-tab.notes-tab-unread.active,
+.right-tab.refs-tab-unread.active,
 .right-tab.chat-tab-new.active {
   background: var(--sticky-yellow-light);
   color: #6b5e10;
 }
 html.dark .right-tab.notes-tab-thread.active,
+html.dark .right-tab.notes-tab-unread.active,
+html.dark .right-tab.refs-tab-unread.active,
 html.dark .right-tab.chat-tab-new.active {
   background: var(--sticky-yellow-light);
   color: #c8b840;
 }
-.right-tab.notes-tab-thread.inactive {
+.right-tab.notes-tab-thread.inactive,
+.right-tab.notes-tab-unread.inactive,
+.right-tab.refs-tab-unread.inactive {
   background: var(--sticky-yellow-dark);
   color: #6b5e10;
 }
-.right-tab.notes-tab-thread.inactive:hover {
+.right-tab.notes-tab-thread.inactive:hover,
+.right-tab.notes-tab-unread.inactive:hover,
+.right-tab.refs-tab-unread.inactive:hover {
   background: var(--sticky-yellow-light);
   color: #504810;
 }
-html.dark .right-tab.notes-tab-thread.inactive {
+html.dark .right-tab.notes-tab-thread.inactive,
+html.dark .right-tab.notes-tab-unread.inactive,
+html.dark .right-tab.refs-tab-unread.inactive {
   background: var(--sticky-yellow-dark);
   color: #c8b840;
 }
-html.dark .right-tab.notes-tab-thread.inactive:hover {
+html.dark .right-tab.notes-tab-thread.inactive:hover,
+html.dark .right-tab.notes-tab-unread.inactive:hover,
+html.dark .right-tab.refs-tab-unread.inactive:hover {
   background: var(--sticky-yellow-light);
   color: #d4c84a;
 }

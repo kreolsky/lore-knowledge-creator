@@ -68,7 +68,12 @@ import settings
 # — this channel and the relay arms alike — sees the fake.
 from driver import persistence
 from driver.client import DriverLine, resolve_driver_line
-from driver.frames import _relay_frame, _result_call_id, _TurnProjection
+from driver.frames import (
+    _relay_frame,
+    _result_call_id,
+    _session_title_arm,
+    _TurnProjection,
+)
 from driver.timeline import fetch_session_entries, post_stop
 
 logger = logging.getLogger(__name__)
@@ -745,12 +750,7 @@ class DriverChannel:
                     "driver channel: unclaimed turn/start session=%s — "
                     "frames relay without persistence", sub.lore_session_id)
         if sub.turn is None:
-            if frame.get("type") == "turn_closed":
-                # The plugin's own terminal push, delivered — the owed close
-                # (armed by _close_turn) is settled; a later resync must not
-                # re-mint it.
-                sub.close_owed = False
-            self._emit(sub, [frame])
+            await self._dispatch_outside_turn(sub, frame)
             return
         turn = sub.turn
         turn.deadline.note_progress()
@@ -767,6 +767,24 @@ class DriverChannel:
         self._emit(sub, out)
         if turn.projection.finished:
             await self._close_turn(sub)
+
+    async def _dispatch_outside_turn(self, sub: _Subscription, frame: dict) -> None:
+        """A frame no open turn claims: relayed raw, except the two kinds that
+        still settle state — the plugin's terminal push and a title revision."""
+        if frame.get("type") == "turn_closed":
+            # The plugin's own terminal push, delivered — the owed close
+            # (armed by _close_turn) is settled; a later resync must not
+            # re-mint it.
+            sub.close_owed = False
+        elif frame.get("type") == "dsh_event" and frame.get("kind") == "session/title":
+            # WHY: the titler runs beside the turn — a short answer closes the
+            # turn before a slow (reasoning) title model answers, and the LLM
+            # title then arrives after turn/end; relayed raw, it never reached
+            # the chat row and the chat kept its fallback title forever.
+            self._emit(sub, await _session_title_arm(
+                sub.lore_session_id, frame.get("data") or {}))
+            return
+        self._emit(sub, [frame])
 
     async def _open_turn(self, sub: _Subscription) -> _ChannelTurn:
         bind, sub.pending_bind = sub.pending_bind, None

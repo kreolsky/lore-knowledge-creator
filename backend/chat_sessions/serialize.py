@@ -45,6 +45,7 @@ def serialize_session(
     previews_by_session_id: dict | None = None,
     last_at_by_session: dict | None = None,
     document_titles: dict[str, str] | None = None,
+    viewer_id: str | None = None,
 ) -> dict:
     """Serialize a chat session row for the API surface.
 
@@ -76,6 +77,12 @@ def serialize_session(
     # callers omit the map (None) → the field is None there, and the frontend
     # falls back to updated_at (correct for a freshly-created / just-PATCHed row).
     out["last_message_at"] = (last_at_by_session or {}).get(out.get("session_id", ""))
+    # see SYSTEM: inbox — the unread flag is exposed VIEWER-relative as a bool; the
+    # raw recipient id (unread_for) NEVER serializes (security rule: other
+    # members see the same objects, never whose mail it is — Why: a member list
+    # leak would turn a shared note into a per-user mailbox).
+    out["unread"] = bool(viewer_id) and out.get("unread_for") == viewer_id
+    out.pop("unread_for", None)
     return out
 
 

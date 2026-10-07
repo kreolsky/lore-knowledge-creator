@@ -46,6 +46,7 @@ vi.mock('../store/note-store', () => ({
 const noteChatStoreState: Record<string, unknown> = {
   sessions: [],
   sessionsLoading: false,
+  sessionsScope: 'p1:doc-1:note',
   activeSessionId: null,
   addPendingImage: vi.fn(),
   pendingImages: [],
@@ -55,6 +56,17 @@ const noteChatStoreState: Record<string, unknown> = {
 };
 vi.mock('../store/note-chat-store', () => ({
   useNoteChatStore: Object.assign((sel: (s: unknown) => unknown) => sel(noteChatStoreState), { getState: () => noteChatStoreState }),
+}));
+
+// Real inbox-store against a mocked API client: the read POST and the local
+// summary decrement stay observable (mocking the store module would hide them).
+const { apiPost } = vi.hoisted(() => ({ apiPost: vi.fn() }));
+vi.mock('../api/client', () => ({
+  apiClient: {
+    post: apiPost,
+    get: vi.fn().mockResolvedValue({}),
+    put: vi.fn().mockResolvedValue({}),
+  },
 }));
 
 const crudState: Record<string, unknown> = {
@@ -69,7 +81,12 @@ const crudState: Record<string, unknown> = {
 vi.mock('../hooks/useNoteCrud', () => ({ useNoteCrud: () => crudState }));
 
 const emitted: Array<[string, unknown]> = [];
-vi.mock('../events', () => ({ emit: (...a: [string, unknown]) => emitted.push([a[0], a[1]]) }));
+vi.mock('../events', () => ({
+  emit: (...a: [string, unknown]) => { emitted.push([a[0], a[1]]); },
+  // inbox-store imports on/off for useInboxSummary (not exercised here).
+  on: () => {},
+  off: () => {},
+}));
 
 vi.mock('../editor/active-editor', () => ({ getRoleView: () => null }));
 vi.mock('../hooks/useArmedAction', () => ({
@@ -92,6 +109,7 @@ vi.mock('./HoverPreviewPopup', () => ({
 vi.mock('../i18n', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
 
 import { NotesPanel } from './NotesPanel';
+import { useInboxStore } from '../store/inbox-store';
 
 let root: Root | null = null;
 function mountPanel() {
@@ -144,6 +162,9 @@ beforeEach(() => {
   appState.references = [];
   noteStoreState.activeNoteThreadId = null;
   noteChatStoreState.createNoteSession = vi.fn();
+  noteChatStoreState.sessionsScope = 'p1:doc-1:note';
+  apiPost.mockReset().mockResolvedValue(undefined);
+  useInboxStore.setState({ summary: {}, toggles: {} });
   Object.assign(crudState, {
     isRefMode: false,
     isSplitMode: false,
@@ -265,6 +286,84 @@ describe('NotesPanel', () => {
     expect(host.textContent).toContain('backToAllNotes');
     expect(host.querySelector('[data-testid="note-thread"]')).not.toBeNull();
     expect(document.getElementById('note-n-t1')).toBeNull();
+    unmount();
+  });
+
+  // ── SYSTEM: inbox — unread-flagged external notes ─────────────────────────
+  // Fresh doc ids per test: the auto-open once-per-doc guard is a module-level
+  // Set (it must survive remounts — see the panel source), so re-using a doc id
+  // across tests would silently skip its auto-open.
+  it('auto-opens the EARLIEST unread note on mount (created_at ASC): thread opens, read POST fires, summary decrements, pill painted', async () => {
+    appState.currentDocument = { document_id: 'doc-ia', content: '' };
+    noteChatStoreState.sessionsScope = 'p1:doc-ia:note';
+    crudState.noteItems = [
+      note({ session_id: 'n-later', unread: true, created_at: '2026-03-02T00:00:00Z' }),
+      note({ session_id: 'n-early', unread: true, created_at: '2026-03-01T00:00:00Z' }),
+    ];
+    useInboxStore.setState({ summary: { 'doc-ia': { notes: 2, refs: 0 } } });
+    mountPanel();
+    // Flush the openInboxObject microtask chain (POST mock → applyRead).
+    await act(async () => { await Promise.resolve(); });
+    expect(noteStoreState.setActiveNoteThreadId).toHaveBeenCalledWith('n-early', 'doc-ia');
+    expect(apiPost).toHaveBeenCalledWith('/inbox/read', { kind: 'note', id: 'n-early' });
+    expect(useInboxStore.getState().summary['doc-ia'].notes).toBe(1);
+    // Both flagged pills carry the unread mark class (composed by ListPill).
+    const map = styles as Record<string, string>;
+    expect(document.getElementById('note-n-early')!.classList.contains(map.unread)).toBe(true);
+    expect(document.getElementById('note-n-later')!.classList.contains(map.unread)).toBe(true);
+    unmount();
+  });
+
+  it('auto-open fires once per document: a remount does not drag the user back in', async () => {
+    appState.currentDocument = { document_id: 'doc-ib', content: '' };
+    noteChatStoreState.sessionsScope = 'p1:doc-ib:note';
+    crudState.noteItems = [note({ session_id: 'n-once', unread: true })];
+    useInboxStore.setState({ summary: { 'doc-ib': { notes: 1, refs: 0 } } });
+    mountPanel();
+    await act(async () => { await Promise.resolve(); });
+    expect(noteStoreState.setActiveNoteThreadId).toHaveBeenCalledTimes(1);
+    unmount();
+    // Simulate the user leaving the thread, then reopening the notes tab.
+    noteStoreState.activeNoteThreadId = null;
+    (noteStoreState.setActiveNoteThreadId as ReturnType<typeof vi.fn>).mockClear();
+    mountPanel();
+    await act(async () => { await Promise.resolve(); });
+    expect(noteStoreState.setActiveNoteThreadId).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('no auto-open when a thread is already open (no intrusion into an open read)', () => {
+    appState.currentDocument = { document_id: 'doc-ic', content: '' };
+    noteChatStoreState.sessionsScope = 'p1:doc-ic:note';
+    noteStoreState.activeNoteThreadId = 'n-open';
+    crudState.activeNoteSessionId = 'n-open';
+    crudState.noteItems = [note({ session_id: 'n-open' }), note({ session_id: 'n-flag', unread: true })];
+    mountPanel();
+    expect(apiPost).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('no auto-open while the loaded list belongs to another document (sessionsScope mismatch)', () => {
+    appState.currentDocument = { document_id: 'doc-id', content: '' };
+    // Scope left at doc-1 — the stale doc-switch render window.
+    crudState.noteItems = [note({ session_id: 'n-stale', unread: true })];
+    mountPanel();
+    expect(apiPost).not.toHaveBeenCalled();
+    expect(noteStoreState.setActiveNoteThreadId).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('clicking an unread note fires the read POST and decrements the summary', async () => {
+    appState.currentDocument = { document_id: 'doc-id', content: '' };
+    // Scope mismatch suppresses the auto-open so the CLICK path is what fires.
+    crudState.noteItems = [note({ session_id: 'n-click', unread: true })];
+    useInboxStore.setState({ summary: { 'doc-id': { notes: 1, refs: 0 } } });
+    const host = mountPanel();
+    act(() => document.getElementById('note-n-click')!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    await act(async () => { await Promise.resolve(); });
+    expect(apiPost).toHaveBeenCalledWith('/inbox/read', { kind: 'note', id: 'n-click' });
+    expect(useInboxStore.getState().summary['doc-id'].notes).toBe(0);
+    expect(noteStoreState.setActiveNoteThreadId).toHaveBeenCalledWith('n-click', 'doc-id');
     unmount();
   });
 });

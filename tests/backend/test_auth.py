@@ -44,6 +44,22 @@ async def test_login_cookie_secure_follows_browser_scheme(client, admin_user, fo
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("forwarded", "secure"), [(None, False), ("https", True)])
+async def test_login_sets_device_cookie(client, admin_user, forwarded, secure):
+    """A successful login marks the browser as a known device for that account."""
+    headers = {"X-Forwarded-Proto": forwarded} if forwarded else {}
+    resp = await client.post(
+        "/api/auth/login", json={"email": "admin@test.com", "password": "adminpass"}, headers=headers,
+    )
+    assert resp.status_code == 200
+    headers = [h for h in resp.headers.get_list("set-cookie") if h.startswith("lore_device=")]
+    assert len(headers) == 1, resp.headers.get_list("set-cookie")
+    attrs = [a.strip().lower() for a in headers[0].split(";")]
+    assert "httponly" in attrs and "path=/api/auth" in attrs and "samesite=lax" in attrs, attrs
+    assert ("secure" in attrs) is secure, attrs
+
+
+@pytest.mark.asyncio
 async def test_login_wrong_password(client, admin_user):
     resp = await client.post("/api/auth/login", json={"email": "admin@test.com", "password": "wrong"})
     assert resp.status_code == 401

@@ -50,7 +50,8 @@ def _stub_agent_timeline(monkeypatch):
     monkeypatch.setattr(driver.timeline, "fetch_session_entries", no_turns)
 
 
-# The per-turn send stamp rides the outbound prompt tail (UTC in tests).
+# The per-turn send stamp rides the payload's `time_stamps` (UTC in tests),
+# never the prompt itself.
 SENT_STAMP_RE = re.compile(
     r"\[sent \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\]$"
 )
@@ -143,11 +144,14 @@ async def test_reasoning_streamed_and_excluded_from_history(
 
     # (c) the outbound turn contract carries only the last user turn as `prompt` —
     # never a messages[] history or a reasoning key — so the model can't see its
-    # own prior CoT (Stage 9 / decision 5). The send stamp rides the tail; the
-    # session's pinned reasoning effort rides the payload (absent = Default —
-    # pinned by test_reasoning_effort).
+    # own prior CoT (Stage 9 / decision 5). The prompt is the RAW user text; the
+    # stamps (root anchor + send) ride `time_stamps`; the session's pinned
+    # reasoning effort rides the payload (absent = Default — pinned by
+    # test_reasoning_effort).
     payload = env.followups.payloads[0]
-    assert payload["prompt"].startswith("Q?")
-    assert SENT_STAMP_RE.search(payload["prompt"])
+    assert payload["prompt"] == "Q?"
+    assert len(payload["time_stamps"]) == 2, payload["time_stamps"]
+    assert payload["time_stamps"][0].startswith("[chat started ")
+    assert SENT_STAMP_RE.search(payload["time_stamps"][1])
     assert "messages" not in payload
     assert payload["reasoning_effort"] == "high"

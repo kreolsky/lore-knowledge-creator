@@ -314,8 +314,10 @@ def _admin_config_fields(
 # request as `mutating_tools` so the driver never re-hardcodes the set.
 #
 # The turn contract carries NO messages[]: only the last user turn (`prompt`,
-# multimodal shape) + the layered system_prompt + the session id — history is
-# canonical in the driver's session tree, NOT replayed.
+# multimodal shape — the RAW user text) + the layered system_prompt + the
+# session id — history is canonical in the driver's session tree, NOT replayed.
+# The turn's time stamps ride `time_stamps` as their own field — see ARCH in
+# harness-driver/plugin/src/time-stamps.ts.
 #
 # ARCH: assistant_msg_id is the assistant message row this turn writes; the
 # driver forwards it as X-Agent-Message-Id on every Tool-API call so a DETACHED
@@ -328,6 +330,7 @@ def _build_turn_payload(
     agent_key: str, apply_mode: str, session_id: str = "", user_id: str = "",
     project_id: str = "", document_id: str | None = None,
     prompt: str | list = "", assistant_msg_id: str = "",
+    time_stamps: list[str] | None = None,
     skills: dict | list | None = None, region: RegionRef | None = None,
     reasoning_effort: str | None = None,
     ai_api_url: str = "", ai_api_key: str = "",
@@ -348,6 +351,7 @@ def _build_turn_payload(
         "document_id": document_id,
         "prompt": prompt,
         "assistant_msg_id": assistant_msg_id,
+        "time_stamps": time_stamps or [],
         "ai_api_url": ai_api_url,
         "ai_api_key": ai_api_key,
         **_admin_config_fields(title_model, web_search_provider, web_search_credential),

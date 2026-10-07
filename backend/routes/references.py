@@ -70,13 +70,19 @@ router = APIRouter()
 # `has_content` is a computed alias appended here — `content` is referenced ONLY in
 # this expression, never projected back to the client. INVARIANT: keep REF_META_COLUMNS
 # in sync with the Reference TS type's metadata fields (and with `serialize_ref_meta`).  Why: REF_META_COLUMNS is a hand-written SQL list with no compile-time link to the TS type or serializer; drift silently drops a field the frontend Reference depends on (schema-sync surfaces it).
-_REF_META_SELECT = ", ".join(REF_META_COLUMNS) + ", string::len(content ?? '') > 0 AS has_content"
+# `unread_for` rides the projection so serialize_ref_meta can compute the
+# VIEWER-relative `unread` bool (see SYSTEM: inbox) — it is popped at the serializer,
+# never serialized raw.
+_REF_META_SELECT = ", ".join(REF_META_COLUMNS) + ", unread_for, string::len(content ?? '') > 0 AS has_content"
 
 
-def _serialize_ref(row: dict) -> dict:
+def _serialize_ref(row: dict, viewer_id: str | None = None) -> dict:
     out = serialize_record(row, "reference_id")
     if "parent_id" in out:
         out["document_id"] = out.pop("parent_id")
+    # see SYSTEM: inbox — viewer-relative unread; the raw recipient id never serializes.
+    out["unread"] = bool(viewer_id) and out.get("unread_for") == viewer_id
+    out.pop("unread_for", None)
     out["headings"] = extract_headings(out.get("content") or "")
     return out
 
@@ -196,7 +202,7 @@ def sort_refs_by_depth_tier(refs: list[dict], ancestor_ids: list[str]) -> list[d
     return refs
 
 
-def dedup_refs_by_id(rows: list[dict]) -> list[dict]:
+def dedup_refs_by_id(rows: list[dict], viewer_id: str | None = None) -> list[dict]:
     """Serialize + dedup reference rows by reference_id, keeping the first occurrence.
 
     # WHY: the SINGLE serialize+dedup pass shared by the authed LIST and the
@@ -206,11 +212,15 @@ def dedup_refs_by_id(rows: list[dict]) -> list[dict]:
     # get_ancestor_ids repeat a doc (so its refs appear twice); keep-first by
     # reference_id collapses them. Expressing this once stops the two surfaces
     # drifting on dedup semantics (plan "public-share-subtree-tree-and-refs-sort").
+
+    `viewer_id` (see SYSTEM: inbox): the authed surface passes the caller so
+    serialize_ref_meta can stamp the viewer-relative `unread` bool; the
+    anonymous public surface passes nothing → unread is always False there.
     """
     seen: set[str] = set()
     result: list[dict] = []
     for r in (rows or []):
-        serialized = serialize_ref_meta(r)
+        serialized = serialize_ref_meta(r, viewer_id=viewer_id)
         rid = serialized["reference_id"]
         if rid not in seen:
             seen.add(rid)
@@ -336,7 +346,7 @@ async def list_references(
                 {"pid": project_id, "limit": limit, "offset": offset},
             )
 
-    result = dedup_refs_by_id(rows)
+    result = dedup_refs_by_id(rows, viewer_id=user["user_id"])
 
     if ancestor_ids:
         result = sort_refs_by_depth_tier(result, ancestor_ids)
@@ -385,13 +395,13 @@ async def resolve_references(
         "AND is_reference = true AND deleted_at IS NONE",
         {**params, "pid": body.project_id},
     )
-    return dedup_refs_by_id(rows)
+    return dedup_refs_by_id(rows, viewer_id=user["user_id"])
 
 
 @router.get("/api/references/{reference_id}")
 async def get_reference(reference_id: str, user: dict = Depends(get_current_user)):
     ref = await _require_ref_access(reference_id, user)
-    return _serialize_ref(ref)
+    return _serialize_ref(ref, viewer_id=user["user_id"])
 
 
 @router.get("/api/references/{reference_id}/links")
@@ -428,7 +438,7 @@ async def create_reference(body: CreateReference, user: dict = Depends(get_curre
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    return _serialize_ref(record)
+    return _serialize_ref(record, viewer_id=user["user_id"])
 
 
 @router.patch("/api/references/{reference_id}")
@@ -464,7 +474,7 @@ async def patch_reference(reference_id: str, body: PatchReference, user: dict = 
     if body.content is not None:
         await _apply_content_patch(db, ref, reference_id, body.content, pid)
     updated = await fetch_one("documents", reference_id)
-    return _serialize_ref(updated) if updated else {}
+    return _serialize_ref(updated, viewer_id=user["user_id"]) if updated else {}
 
 
 @router.post("/api/references/batch-delete")

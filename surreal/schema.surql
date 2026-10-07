@@ -298,6 +298,16 @@ DEFINE FIELD IF NOT EXISTS system_role ON documents TYPE option<string>;
 -- SCHEMAFULL and dies on legacy rows carrying pre-SCHEMAFULL fields ("Found field
 -- 'position', but no such field exists"), which crash-looped the backend at startup.
 DEFINE FIELD IF NOT EXISTS archived     ON documents TYPE option<bool> DEFAULT false;
+-- Document inbox (SYSTEM: inbox): the unread
+-- flag on a reference that arrived from OUTSIDE (a widget key or an MCP key over
+-- the gateway). `unread_for` = the RECIPIENT user id (the key owner). Written
+-- ONLY by backend/inbox.py::mark_arrived, and ONLY on is_reference=true rows
+-- (see the chat_sessions twin for the note half). option<string> with NO
+-- non-option DEFAULT — NONE = "not unread"; deliberately NOT backfilled (the
+-- backfill INVARIANT below covers non-option fields only).
+DEFINE FIELD IF NOT EXISTS unread_for   ON documents TYPE option<string>;
+DEFINE INDEX IF NOT EXISTS idx_documents_unread
+    ON documents FIELDS project_id, unread_for;
 
 -- ─── Project memory (plan project-memory-mvp §1 / design record P8, P12) ────
 -- A FACT doc: one document per distilled fact (Order 2 — the entity level was
@@ -855,6 +865,19 @@ DEFINE FIELD IF NOT EXISTS anchor_offset_end   ON chat_sessions TYPE option<int>
 
 DEFINE INDEX IF NOT EXISTS idx_chatsessions_is_note
     ON chat_sessions FIELDS project_id, is_note;
+
+-- Document inbox (SYSTEM: inbox): ONE unread
+-- flag per externally arrived object. `unread_for` is the RECIPIENT user id —
+-- the key owner of the surface the object arrived from (widget key, MCP key).
+-- Written ONLY by backend/inbox.py::mark_arrived, and ONLY on is_note=true
+-- chat_sessions rows / is_reference=true documents rows; the dsh chat agent's
+-- internal key never flags. `option<string>` with NO non-option DEFAULT, so a
+-- row predating the field reads NONE = "not unread" — deliberately NOT
+-- backfilled (the backfill INVARIANT below covers non-option fields only;
+-- NONE is the correct resting state for every existing row).
+DEFINE FIELD IF NOT EXISTS unread_for ON chat_sessions TYPE option<string>;
+DEFINE INDEX IF NOT EXISTS idx_chatsessions_unread
+    ON chat_sessions FIELDS project_id, unread_for;
 
 -- messages: per-message author (nullable; NONE ⇒ resolves to session.user_id).
 -- INVARIANT: every code path that needs message authorship calls

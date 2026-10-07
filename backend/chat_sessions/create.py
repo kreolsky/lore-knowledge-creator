@@ -154,7 +154,8 @@ async def create_session_command(db, body: SessionCreate, user_id: str) -> dict:
     else:
         data.update(await _ai_chat_fields(db, body, user_id))
     row = await create_record("chat_sessions", str(uuid4()), data)
-    out = serialize_session(row, await build_session_ref_map(db, data))
+    out = serialize_session(row, await build_session_ref_map(db, data),
+                            viewer_id=user_id)
     if body.is_note:
         # WHY: realtime nudge for a freshly-created
         # note. Fire-and-forget (background task) so create latency is unaffected; the

@@ -984,6 +984,52 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "InboxReadBody": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ],
+        "title": "InboxReadBody",
+        "type": "object"
+      },
+      "InboxTogglesBody": {
+        "properties": {
+          "notes": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "refs": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refs"
+          }
+        },
+        "title": "InboxTogglesBody",
+        "type": "object"
+      },
       "InviteMember": {
         "description": "Self-service silent invite — email-keyed, role-bounded.",
         "properties": {
@@ -1732,6 +1778,17 @@
               }
             ],
             "title": "Title"
+          },
+          "unread": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unread"
           },
           "updated_at": {
             "anyOf": [
@@ -3734,6 +3791,30 @@
           "pin"
         ],
         "title": "VerifyPinRequest",
+        "type": "object"
+      },
+      "WidgetNoteBody": {
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "body"
+        ],
+        "title": "WidgetNoteBody",
         "type": "object"
       }
     }
@@ -6094,7 +6175,7 @@
     },
     "/api/cabinet/password": {
       "patch": {
-        "description": "Change password. Requires current password for confirmation.",
+        "description": "Change password. Requires current password for confirmation.\n\nA password change ends every OTHER session (bump_token_version) and\nre-issues the caller's cookie on the new token_version, so the current tab\nstays signed in.",
         "operationId": "change_password_api_cabinet_password_patch",
         "parameters": [
           {
@@ -8725,6 +8806,56 @@
         "summary": "Health Storage"
       }
     },
+    "/api/inbox/read": {
+      "post": {
+        "description": "Clear the caller's unread flag on ONE object (no-op when it isn't theirs).",
+        "operationId": "read_inbox_object_api_inbox_read_post",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InboxReadBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Inbox Object"
+      }
+    },
     "/api/invites": {
       "post": {
         "description": "Mint one single-use invite token. Moderator: the row is pinned to the own\ngroup (body's moderator_id ignored — same forcing as create_user_admin).\nAdmin: optional moderator_id from the body, validated as a moderator uid.",
@@ -9658,6 +9789,194 @@
           }
         },
         "summary": "Create Share"
+      }
+    },
+    "/api/projects/{project_id}/inbox": {
+      "get": {
+        "description": "The caller's unread pool: {documents: {<document_id>: {notes, refs}}}.",
+        "operationId": "project_inbox_summary_api_projects__project_id__inbox_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Project Inbox Summary"
+      }
+    },
+    "/api/projects/{project_id}/inbox/toggles/{document_id}": {
+      "get": {
+        "description": "The caller's per-document notify toggles (defaults notes ON, refs OFF).",
+        "operationId": "get_inbox_toggles_api_projects__project_id__inbox_toggles__document_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Inbox Toggles"
+      },
+      "put": {
+        "description": "Upsert the caller's toggles for one document; omitted fields keep their value.",
+        "operationId": "put_inbox_toggles_api_projects__project_id__inbox_toggles__document_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InboxTogglesBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Inbox Toggles"
       }
     },
     "/api/projects/{project_id}/invites": {
@@ -15667,6 +15986,54 @@
         "summary": "Widget Info"
       }
     },
+    "/api/widget/note": {
+      "post": {
+        "description": "Create a system note on the key's bound document — the note INGRESS.\n\nThe note is authored by the PIPELINE_AUTHOR_ID sentinel (the \"system notes\"\nauthor), titled with the key label (plus the optional caller title), flagged\nfor the key owner (inbox.mark_arrived — notes toggle defaults ON), and\nannounced live via note_session_created with the minimal {session_id} frame.",
+        "operationId": "widget_note_api_widget_note_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WidgetNoteBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Widget Note"
+      }
+    },
     "/api/widget/status/{reference_id}": {
       "get": {
         "description": "Poll transcription status for a widget-uploaded reference.",
@@ -15716,7 +16083,7 @@
     },
     "/api/widget/upload": {
       "post": {
-        "description": "Upload audio from the desktop widget and enqueue transcription.",
+        "description": "Upload ANY supported file from the desktop widget; it lands as a\nreference under the key's bound document.\n\ndispatcher the MCP import_file tool uses (_import_document,\nis_reference=True, binary_allowed=True) — one funnel for caps, magic\nvalidation, format dispatch, thumbnails/transcription, and the\nreference_created event. The former audio-only gate is gone; audio still\ntranscribes through the dispatcher's binary branch (normalize_audio_upload +\nenqueue_transcription). The response shape {reference_id, status} is\nUNCHANGED — the Rust client deserializes both fields strictly but never\nreads the status VALUE (it polls by id), so audio's status changing from\n'queued' to 'applied' is harmless.\n\nThe reference flags the key owner ONLY when the doc's refs toggle is ON\n(inbox.mark_arrived; refs default OFF — deposits are routine).",
         "operationId": "widget_upload_api_widget_upload_post",
         "parameters": [
           {

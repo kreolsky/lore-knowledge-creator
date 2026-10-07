@@ -5,13 +5,24 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from password import verify_secret
-from rate_limit import check_rate_limit, reset_rate_limit
+from rate_limit import (
+    check_login_device_rate_limit,
+    check_login_email_rate_limit,
+    reset_login_device_rate_limit,
+    reset_login_email_rate_limit,
+)
 from security_log import log_security
 from surrealdb import AsyncSurreal
 
 # NOTE: `bump_token_version` lives in the top-level auth module (backend/auth.py), not this
 # routes/auth.py module. The bare `from auth import ...` resolves to the top-level package.
-from auth import bump_token_version, get_current_user, set_session_cookie
+from auth import (
+    bump_token_version,
+    get_current_user,
+    read_device_nonce,
+    set_device_cookie,
+    set_session_cookie,
+)
 from db import extract_id, get_db
 from models import LoginRequest, capability_flags
 
@@ -24,8 +35,16 @@ router = APIRouter()
 async def login(body: LoginRequest, request: Request, response: Response, db: AsyncSurreal = Depends(get_db)):
     """Authenticate user and set httpOnly session cookie."""
     client_ip = request.client.host if request.client else "unknown"
-    if not await check_rate_limit(client_ip):
-        log_security("login_rate_limited", ip=client_ip)
+    # INVARIANT(security): a client with a valid device cookie for this account is
+    # throttled only on its own counter; every other client shares the account's.
+    # Why: strangers' failed guesses must never lock the owner's known device out.
+    nonce = read_device_nonce(request, body.email)
+    allowed = (
+        await check_login_device_rate_limit(nonce) if nonce
+        else await check_login_email_rate_limit(body.email)
+    )
+    if not allowed:
+        log_security("login_rate_limited", ip=client_ip, tier="device" if nonce else "email")
         raise HTTPException(status_code=429, detail="Too many login attempts. Try again later.")
     try:
         rows = await db.query(
@@ -43,7 +62,12 @@ async def login(body: LoginRequest, request: Request, response: Response, db: As
         log_security("login_failed", user_id=extract_id(user["id"]), ip=client_ip, reason="wrong_password")
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    await reset_rate_limit(client_ip)
+    # A success resets only the counter this attempt was judged on, then issues
+    # a fresh device nonce: a copied cookie stops matching after this sign-in.
+    if nonce:
+        await reset_login_device_rate_limit(nonce)
+    else:
+        await reset_login_email_rate_limit(body.email)
     user_id = extract_id(user["id"])
     tv = user.get("token_version") or 0
     payload = {"user_id": user_id, "name": user["name"], "email": user.get("email", ""), "role": user["role"]}
@@ -52,6 +76,7 @@ async def login(body: LoginRequest, request: Request, response: Response, db: As
     # any /me refresh, and must never compare role strings in TSX.
     payload.update(capability_flags(user["role"]))
     set_session_cookie(request, response, user_id, user["name"], user.get("email", ""), user["role"], token_version=tv)
+    set_device_cookie(request, response, body.email)
     log_security("login_success", user_id=user_id, ip=client_ip)
     return payload
 
@@ -75,6 +100,7 @@ async def logout(request: Request, response: Response):
             pass
         except Exception:
             logger.warning("Failed to bump token version on logout", exc_info=True)
+    # WHY the device cookie stays: it marks a device, not a session.
     response.delete_cookie(key="lore_session", samesite="lax")
     return {"success": True}
 

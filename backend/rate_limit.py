@@ -130,7 +130,7 @@ def make_tier(name: str, max_count: int, window: int) -> RedisSlidingWindow:
 
 # ─── Tier registration (one make_tier per existing tier) ─────────────────────
 
-# Default tier: 5 attempts per 60s (login + the short half of PIN).
+# Default tier: 5 attempts per 60s (the short half of PIN, invites, cabinet).
 _default_bucket = make_tier("default", MAX_ATTEMPTS, WINDOW_SEC)
 
 # PIN long tier: 15 attempts per 15 min (the long half of PIN, on top of 5/60s).
@@ -185,6 +185,38 @@ _TRANSCRIBE_MAX = 5
 _TRANSCRIBE_WINDOW = 60
 _transcribe_bucket = make_tier("transcribe", _TRANSCRIBE_MAX, _TRANSCRIBE_WINDOW)
 
+# Login email tier: 10 attempts / 15 min per TARGET ACCOUNT, for clients that
+# do NOT hold a valid device cookie for it (see the login_device tier below).
+# Keyed on the account, not the source address: the address is only as real as
+# the proxy chain makes it, while the account being guessed at stays ONE key.
+# Accepted cost: anyone can lock a NEW browser out of a known account for 15
+# minutes after 10 bad guesses; the owner's known devices are on their own tier.
+# Keyed with the `login-email:` prefix so the account key can never collide
+# with an IP key in reset_rate_limit's registry sweep: an IP-keyed reset
+# addresses no account budget, and one account's key exists in no other tier.
+_LOGIN_EMAIL_MAX = 10
+_LOGIN_EMAIL_WINDOW = 900  # 15 minutes
+
+
+def _login_email_key(email: str) -> str:
+    return f"login-email:{email.strip().lower()}"
+
+
+_login_email_bucket = make_tier("login_email", _LOGIN_EMAIL_MAX, _LOGIN_EMAIL_WINDOW)
+
+# Login device tier: 10 attempts / 15 min per DEVICE NONCE — a client holding a
+# valid device cookie for the account it signs in to is throttled only here, so
+# strangers exhausting the account's email tier never lock a known device out.
+_LOGIN_DEVICE_MAX = 10
+_LOGIN_DEVICE_WINDOW = 900  # 15 minutes
+
+
+def _login_device_key(nonce: str) -> str:
+    return f"login-device:{nonce}"
+
+
+_login_device_bucket = make_tier("login_device", _LOGIN_DEVICE_MAX, _LOGIN_DEVICE_WINDOW)
+
 # Public share tier: REMOVED. The public-share
 # router no longer rate-limits — threat-model audit found the per-IP bucket
 # protected nothing real (content is by-design public; token is 256-bit entropy;
@@ -238,6 +270,26 @@ async def check_verdict_rate_limit(user_id: str) -> bool:
 async def check_transcribe_rate_limit(user_id: str) -> bool:
     """Return True if the request is allowed. 5 transcriptions/minute per user."""
     return await _transcribe_bucket.allow(user_id)
+
+
+async def check_login_email_rate_limit(email: str) -> bool:
+    """Return True if an untrusted client's login on this ACCOUNT is allowed (10/15min)."""
+    return await _login_email_bucket.allow(_login_email_key(email))
+
+
+async def reset_login_email_rate_limit(email: str) -> None:
+    """Clear ONLY this account's email-tier budget (on that account's success)."""
+    await _login_email_bucket.reset(_login_email_key(email))
+
+
+async def check_login_device_rate_limit(nonce: str) -> bool:
+    """Return True if a known device's login attempt is allowed (10/15min)."""
+    return await _login_device_bucket.allow(_login_device_key(nonce))
+
+
+async def reset_login_device_rate_limit(nonce: str) -> None:
+    """Clear ONLY this device's budget (on that device's success)."""
+    await _login_device_bucket.reset(_login_device_key(nonce))
 
 
 async def check_pin_rate_limit(key: str) -> bool:

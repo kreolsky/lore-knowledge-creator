@@ -223,6 +223,7 @@ export const RefCard = memo(function RefCard({
       variant="plain"
       active={isActive}
       activeColor="blue"
+      unread={reference.unread === true}
       clickable={!isUploading}
       className={`${fading ? styles.fading : ''} ${isUploading ? 'opacity-70' : ''} ${reference.archived ? 'opacity-50' : ''}`}
       // Drag-reorder attributes (useSiblingDragReorder + refDragAdapter): the

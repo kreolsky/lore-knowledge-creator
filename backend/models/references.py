@@ -124,6 +124,10 @@ class ReferenceMetaResponse(BaseModel):
     # (no "System" label).
     created_by: str | None = None
     created_by_name: str | None = None
+    # see SYSTEM: inbox — VIEWER-relative unread flag (the raw `unread_for` recipient
+    # id is popped at the serializer, never serialized). Always present on the
+    # authed LIST; False for the anonymous public surface.
+    unread: bool | None = None
     has_content: bool | None = None
     created_at_fmt: str | None = None
     updated_at_fmt: str | None = None

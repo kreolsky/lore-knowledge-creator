@@ -30,6 +30,8 @@ export const en = {
   signOut: 'Sign out',
   signOutInstead: 'Sign out instead',
   invalidCredentials: 'Invalid email or password',
+  tooManyAttempts: 'Too many attempts. Try again in a few minutes.',
+  signInFailed: 'Could not sign in. Try again later.',
   accessInviteOnly: 'Access is by invitation only.',
   landingTagline1: 'Document-first.',
   landingTagline2: 'Agent-ready.',
@@ -497,7 +499,7 @@ export const en = {
   noApiKeysForDoc: 'No API keys for this document',
   unnamedKey: 'Unnamed key',
   deleteKey: 'Delete key',
-  keyCapWidget: 'Widget — audio widget on this document',
+  keyCapWidget: 'Widget — send notes and files to this document',
   keyCapAgent: 'Agent — MCP / Tool-API access to this document\'s subtree',
   keyBadgeWidget: 'widget',
   keyBadgeAgent: 'agent',
@@ -876,6 +878,16 @@ export const en = {
   accessShareDepthWarning: 'A subtree deeper than 50 levels is silently truncated by the descendant walk.',
   accessApiTitle: 'API access',
   accessApiDesc: 'Widget and agent keys for this document',
+
+  // inbox arrival toggles (Access tab, SYSTEM: inbox)
+  accessInboxTitle: 'Arrival notifications',
+  accessInboxDesc: 'Flag notes and references arriving from outside (widget or MCP keys) as unread',
+  inboxToggleNotes: 'Flag external notes',
+  inboxToggleRefs: 'Flag external references',
+  inboxToggleLoadFailed: 'Failed to load arrival-notification settings',
+  inboxToggleSaveFailed: 'Failed to save arrival-notification settings',
+  inboxReadFailed: 'Failed to mark the item as read',
+  inboxSummaryLoadFailed: 'Failed to load unread arrivals',
 
   // move to another project (Access tab)
   accessMoveTitle: 'Move to another project',

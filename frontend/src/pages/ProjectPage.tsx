@@ -31,6 +31,7 @@ import { useNoteStore } from '../store/note-store';
 import { useChatStore } from '../store/chat-store';
 import { useEvent } from '../hooks/useEvent';
 import { useAccessTabState } from '../hooks/useAccessTabState';
+import { useInboxSummary } from '../store/inbox-store';
 import { ProjectCollabContext } from '../collab/ProjectCollabContext';
 import { useTranslation, t as tImperative } from '../i18n';
 import { FileText, List, MessageSquare, Paperclip, Archive, MessagesSquare, Search, ArrowDownLeft, Settings, Replace, ShieldCheck } from 'lucide-react';
@@ -288,6 +289,11 @@ export function ProjectPage() {
     currentDocId, currentProject?.project_id ?? null, !!currentProject?.is_public,
   );
 
+  // see SYSTEM: inbox — the caller's unread pool for this project (loaded once,
+  // refetched on the owner-filtered ws:inbox_changed frame). Drives the
+  // notes/refs tab tints here; the tree reads the same store slice.
+  const inboxCounts = useInboxSummary(currentProject?.project_id, currentDocId);
+
   // Side effect of a right-tab click: exit snapshot preview unless the user is
   // actively opening the checkpoint tab. (Snapshot preview is the only authed-mode
   // state tied to right-tab clicks; lives here, not in the Shell.)
@@ -332,14 +338,25 @@ export function ProjectPage() {
       className: isGhostChat ? 'chat-tab-new' : undefined,
     });
   }
-  rightTabs.push({ tab: 'refs', icon: <Paperclip size={15} />, title: t('tabReferences'), renderPanel: () => <ReferencesPanel /> });
+  rightTabs.push({
+    tab: 'refs',
+    icon: <Paperclip size={15} />,
+    title: t('tabReferences'),
+    renderPanel: () => <ReferencesPanel />,
+    className: inboxCounts.refs > 0 ? 'refs-tab-unread' : undefined,
+  });
   if (accessLevel !== 'readonly') {
     rightTabs.push({
       tab: 'notes',
       icon: <MessageSquare size={15} />,
       title: t('tabNotes'),
       renderPanel: () => <NotesPanel />,
-      className: activeNoteThreadId ? 'notes-tab-thread' : undefined,
+      // One yellow, one meaning (plan decision): the thread-open tint and the
+      // inbox-unread tint compose — both are "attention on notes".
+      className: [
+        activeNoteThreadId ? 'notes-tab-thread' : null,
+        inboxCounts.notes > 0 ? 'notes-tab-unread' : null,
+      ].filter(Boolean).join(' ') || undefined,
     });
   }
   if (!isReference && accessLevel === 'full') {

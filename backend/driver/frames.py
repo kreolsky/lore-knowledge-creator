@@ -321,7 +321,7 @@ async def _dsh_event_arm(turn: _TurnProjection, ev: dict) -> list[dict]:
     if kind == "compaction/end":
         return await _compaction_mint_arm(turn, ev, data)
     if kind == "session/title":
-        return await _session_title_arm(turn, data)
+        return await _session_title_arm(turn.session_id, data)
     return [ev]
 
 
@@ -441,7 +441,7 @@ async def _compaction_mint_arm(turn: _TurnProjection, ev: dict, data: dict) -> l
     return out
 
 
-async def _session_title_arm(turn: _TurnProjection, data: dict) -> list[dict]:
+async def _session_title_arm(session_id: str, data: dict) -> list[dict]:
     """The harness titler's revision: write it onto the chat row, then relay it.
 
     `chat_sessions.title` is where a RELOAD reads the title, and the open
@@ -473,17 +473,17 @@ async def _session_title_arm(turn: _TurnProjection, data: dict) -> list[dict]:
     if not trimmed or any(p.search(trimmed) for p in _TITLE_LEAK_PATTERNS):
         return []
     try:
-        written = await persistence._persist_session_title(turn.session_id, trimmed)
+        written = await persistence._persist_session_title(session_id, trimmed)
     except Exception:
         logger.warning(
-            "session title persist failed session=%s", turn.session_id,
+            "session title persist failed session=%s", session_id,
             exc_info=True,
         )
         return []
     if not written:
         logger.info(
             "session title not written (pinned or empty) session=%s",
-            turn.session_id,
+            session_id,
         )
         return []
     return [{"type": "session_title", "title": trimmed}]

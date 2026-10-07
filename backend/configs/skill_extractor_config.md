@@ -36,51 +36,51 @@ A bare string is the description. The dict form declares more:
 
 ```yaml
 variables:
-  patient_name: "Patient full name from the doctor's speech."
+  client_name: "Client full name from the inspector's speech."
 
-  m_echo_structure:
-    description: "M-echo structure as described."
+  floor_finish:
+    description: "Floor finish as described."
     default: "Не указано"
 
-  uterus_length:
+  temperature:
     type: number
-    description: "Uterus length in mm."
+    description: "Air temperature in °C."
     default: "0"
 
-  age:
+  building_age:
     type: integer
-    description: "Patient age in years."
+    description: "Building age in years."
 
-  pregnant:
+  occupied:
     type: boolean
-    description: "Pregnancy stated by the doctor."
+    description: "The premises are occupied, as stated by the inspector."
 
   comment:
     type: string
     description: "Free-text remark."
 
-  uterus_flexio:
+  window_side:
     type: enum
-    description: "Uterus flexion."
-    options: [Anteflexio, Retroflexio, без сгиба]
+    description: "Side the windows face."
+    options: [север, юг, восток, запад]
 
-  access:
+  method:
     type: multiselect
-    description: "Ultrasound access route(s)."
-    options: [трансвагинальный, трансабдоминальный]
+    description: "Inspection method(s)."
+    options: [визуальный, инструментальный]
     separator: " и "
 
-  cervical_canal:
+  ventilation:
     type: prefix
-    description: "Cervical canal state; the doctor may add a measurement."
-    options: [расширен, не расширен]
+    description: "Ventilation state; the inspector may add a measurement."
+    options: [работает, не работает]
 
   status:
     description: "Document status."
     enum: [draft, review, published]
 
 calculate:
-  uterus_volume: "={{uterus_length}} * {{uterus_width}} * {{uterus_thickness}} * 0.523"
+  room_volume: "={{room_length}} * {{room_width}} * {{room_height}}"
 ```
 
 - `description` is the ONLY per-field instruction the model reads — write it as an
@@ -103,29 +103,29 @@ calculate:
   holding the NAME of the interval the value fell in:
 
   ```yaml
-  uterus_length:                # flat table
-    - {name: ниже, max: 40}
-    - {name: норма, min: 40, max: 60}
-    - {name: выше, min: 60}
+  temperature:                  # flat table
+    - {name: ниже, max: 18}
+    - {name: норма, min: 18, max: 24}
+    - {name: выше, min: 24}
 
-  m_echo_thickness:             # conditional — one sub-table per key value
-    by: postmenopause           # range() ignores by: — the key is its 3rd argument
+  humidity:                     # conditional — one sub-table per key value
+    by: heating_season          # range() ignores by: — the key is its 3rd argument
     "0":
-      - {name: норма, max: 15}
-      - {name: выше, min: 15}
+      - {name: норма, max: 60}
+      - {name: выше, min: 60}
     "1":
-      - {name: норма, max: 5}
-      - {name: критично, min: 5}
+      - {name: норма, max: 45}
+      - {name: критично, min: 45}
   ```
 
   ```yaml
   calculate:
-    uterus_length_flag: "=range({{uterus_length}}, uterus_length)"
-    m_echo_flag: "=range({{m_echo_thickness}}, m_echo_thickness, {{postmenopause}})"
+    temperature_flag: "=range({{temperature}}, temperature)"
+    humidity_flag: "=range({{humidity}}, humidity, {{heating_season}})"
   ```
 
   Grammar rules: a table name is an identifier — letters, digits, underscore (a
-  hyphenated key like `m-echo` is dropped with a warning); `key` is a `{{var}}`,
+  hyphenated key like `air-temp` is dropped with a warning); `key` is a `{{var}}`,
   never a literal (`"1"` and `1` both fail the run); key values are `0`/`1` (any
   numeric spelling, booleans included) or the exact sub-table strings — a value no
   sub-table names (`"да"` against `"0"`/`"1"`) falls through to an empty flag +
@@ -145,15 +145,15 @@ becomes a template variable `<variable>_<key>`. The model never sees the table �
 marks are computed deterministically after extraction and `calculate:`.
 
 ```yaml
-uterus_length:                       # bound to the variable uterus_length
-  - {flag: ниже нормы, color: "8ab4ff", view: "{{value}}",     max: 40}
-  - {flag: норма,      color: "8ab440", view: "{{value}}",     min: 40, max: 60}
-  - {flag: выше нормы, color: "ec883c", view: "**{{value}}**", min: 60}
+temperature:                         # bound to the variable temperature
+  - {flag: ниже нормы, color: "8ab4ff", view: "{{value}}",     max: 18}
+  - {flag: норма,      color: "8ab440", view: "{{value}}",     min: 18, max: 24}
+  - {flag: выше нормы, color: "ec883c", view: "**{{value}}**", min: 24}
   - {view: "{{value}}"}              # catch-all: no condition, matches anything
 ```
 
-The template then writes `{{uterus_length_view}} мм ({{uterus_length_flag}})`; for 72
-that renders `**72** мм (выше нормы)`, and `{{uterus_length_color}}` is `ec883c`.
+The template then writes `{{temperature_view}} °C ({{temperature_flag}})`; for 28
+that renders `**28** °C (выше нормы)`, and `{{temperature_color}}` is `ec883c`.
 
 Row keys:
 
@@ -183,34 +183,34 @@ What an attribute holds:
 - Key names are letters, digits and underscore (`flag`, `color_hex`) — the generated
   name must be addressable from the template.
 - Use the generated names in the TEMPLATE only: `calculate:` runs before the marks,
-  so `={{uterus_length_flag}}` fails as an unknown variable. Typography replacements
+  so `={{temperature_flag}}` fails as an unknown variable. Typography replacements
   run after the marks and apply to them too.
 
 ### `is:` — marks by an enum value
 
 `is:` matches an `enum` variable by value. It is ALWAYS a list, even for one value
-(`is: [укорочена]`, never `is: укорочена`), and every listed value must be one of the
+(`is: [сырость]`, never `is: сырость`), and every listed value must be one of the
 variable's `options` — the comparison runs on the option the value was snapped to,
 not on the dictated words. A table is either numeric (`min`/`max`) or categorical
 (`is`), never both.
 
 ```yaml
 variables:
-  cervix_state:
+  wall_state:
     type: enum
-    description: "Cervix state."
-    options: [норма, деформирована, укорочена]
+    description: "Wall state."
+    options: [норма, трещины, сырость]
 ```
 
 ```yaml
-cervix_state:
-  - {is: [деформирована, укорочена], flag: патология, view: "**{{value}}**"}
+wall_state:
+  - {is: [трещины, сырость], flag: дефект, view: "**{{value}}**"}
   - {is: [норма], flag: норма, view: "{{value}}"}
   - {view: "{{value}}"}              # catch-all, for an option added later
 ```
 
-`укорочена` → `{{cervix_state_flag}}` = `патология`, `{{cervix_state_view}}` =
-`**укорочена**`.
+`сырость` → `{{wall_state_flag}}` = `дефект`, `{{wall_state_view}}` =
+`**сырость**`.
 
 ### `by:` — a different table per value of another variable
 
@@ -220,24 +220,24 @@ holds an ordinary list of rows, matched by the rules above.
 
 ```yaml
 variables:
-  m_echo_thickness:
+  humidity:
     type: number
-    description: "M-echo thickness in mm."
-  postmenopause:
+    description: "Relative humidity in %."
+  heating_season:
     type: boolean
-    description: "Patient is postmenopausal."
+    description: "The heating season is on."
 ```
 
 ```yaml
-m_echo_thickness:
-  by: postmenopause                  # the selector variable
-  "0": [{flag: норма, max: 15}, {flag: выше нормы, min: 15}]   # postmenopause = false
-  "1": [{flag: норма, max: 5},  {flag: критично, min: 5}]      # postmenopause = true
+humidity:
+  by: heating_season                 # the selector variable
+  "0": [{flag: норма, max: 60}, {flag: выше нормы, min: 60}]   # heating_season = false
+  "1": [{flag: норма, max: 45}, {flag: критично, min: 45}]     # heating_season = true
 ```
 
 Sub-table keys are matched against the selector's value: a number or a boolean
 addresses `"0"`/`"1"` (`false`, `0`, `"0"`, `0.0` all → `"0"`); any other value — an
-enum option, for example — must equal the key exactly (`"норма"`, `"беременность"`).
+enum option, for example — must equal the key exactly (`"норма"`, `"сырость"`).
 `0:` and `"0":` in YAML are the same key. An empty selector value, or a value no
 sub-table names, leaves every attribute `""` (the latter also logs a warning). Each
 sub-table needs its own catch-all when it uses `{{value}}`; `is:` rows are allowed in
@@ -307,9 +307,9 @@ the `N × N × N` layout) lives HERE, never in descriptions:
 ```markdown
 # {{doc_title}}
 
-**Patient:** {{patient_name}}
-Dimensions: {{uterus_length}} × {{uterus_width}} × {{uterus_thickness}} mm
-Volume: {{uterus_volume}}
+**Client:** {{client_name}}
+Dimensions: {{room_length}} × {{room_width}} × {{room_height}} m
+Volume: {{room_volume}}
 ```
 
 Builtins — always available, never declare them as fields: {{doc_id}} {{ref_id}}
@@ -320,7 +320,7 @@ Builtins — always available, never declare them as fields: {{doc_id}} {{ref_id
 
 | Surface | Syntax | Example |
 |---------|--------|---------|
-| template | `{{name}}` | `{{patient_name}}`, `{{yyyy}}` |
+| template | `{{name}}` | `{{client_name}}`, `{{yyyy}}` |
 | calculate refs | `{{name}}` | `={{a}} * {{b}}` |
 | prompt | `{name}` | `{transcription}`, `{variables}` |
 | any other child title | `{title}` | `{dictionary}` |

@@ -224,6 +224,44 @@ async def _resolve_attachment(
     return payload, resolved_filename
 
 
+def _categorise_upload_bytes(raw: bytes, filename: str) -> tuple[str | None, str | None]:
+    """bytes → the import dispatcher's input form: (content, content_base64),
+    exactly one populated.
+
+    # ARCH: extracted from
+    _resolve_sandbox_path, which inlined this categoriser for the sandbox byte
+    channel — the widget upload route now shares it so BOTH external byte
+    channels (agent workspace file, widget multipart) route a file to
+    _import_document identically.
+
+    # WHY branch on category rather than always returning base64:
+    `content_base64` in _import_document is hardwired to mean binary/.docx (it
+    never runs normalize_markdown). A text/.md file MUST go through `content` so
+    the shared text gate (is_text_bytes) + the conditional normalize_markdown
+    run — handing it through base64 would misroute it to the binary path and 400
+    a .md as "binary is not a document". The category is read from the EXTENSION
+    (not magic — magic needs the bytes, and reading a 2 GB file to learn its type
+    is the OOM risk the stat-before-read cap exists to prevent).
+
+    An extension that claims text but whose bytes are binary (is_text_bytes
+    fails) is handed to base64 so _import_document rejects it with its own
+    message rather than a confusing UTF-8 decode error.
+    """
+    mime = mime_for_filename(filename)
+    if mime in (DOCX_MIME, ARCHIVE_MIME):
+        # archive binary → the binary save path (content_base64). Never the text
+        # path: is_text_bytes would happily accept a zip of text files as "text".
+        return None, base64.b64encode(raw).decode()
+    if detect_media_type(mime) is not None:
+        # image / audio binary → the binary save path (content_base64).
+        return None, base64.b64encode(raw).decode()
+    # text / markdown → the text path so normalize_markdown + is_text_bytes run.
+    text = is_text_bytes(raw)
+    if text is not None:
+        return text, None
+    return None, base64.b64encode(raw).decode()
+
+
 async def _resolve_sandbox_path(
     ctx: dict, sandbox_path: str, filename: str,
 ) -> tuple[str | None, str | None]:
@@ -236,39 +274,12 @@ async def _resolve_sandbox_path(
     # read_workspace_file itself (it calls _require_console_key), so this resolution
     # refusing a non-console key IS the per-form gate — content_base64 still serves
     # those keys.
-
-    # WHY branch on category rather than always returning base64: `content_base64`
-    # in _import_document is hardwired to mean binary/.docx (it never runs
-    # normalize_markdown). A text/.md file MUST go through `content` so the shared
-    # text gate (is_text_bytes) + the conditional normalize_markdown run — handing
-    # it through base64 would misroute it to the binary path and 400 a .md as
-    # "binary is not a document". The category is read from the EXTENSION (not magic
-    # — magic needs the bytes, and reading a 2 GB file to learn its type is the OOM
-    # risk the stat-before-read cap exists to prevent).
-
-    An extension that claims text but whose bytes are binary (is_text_bytes fails)
-    is handed to base64 so _import_document rejects it with its own message rather
-    than a confusing UTF-8 decode error.
     """
     from routes.tool_api.sandbox.files import read_workspace_file
 
     max_bytes = await _sandbox_path_max_bytes(filename)
     raw = await read_workspace_file(ctx, sandbox_path, max_bytes=max_bytes)
-    mime = mime_for_filename(filename)
-    if mime == DOCX_MIME:
-        return None, base64.b64encode(raw).decode()
-    if mime == ARCHIVE_MIME:
-        # archive binary → the binary save path (content_base64). Never the text
-        # path: is_text_bytes would happily accept a zip of text files as "text".
-        return None, base64.b64encode(raw).decode()
-    if detect_media_type(mime) is not None:
-        # image / audio binary → the binary save path (content_base64).
-        return None, base64.b64encode(raw).decode()
-    # text / markdown → the text path so normalize_markdown + is_text_bytes run.
-    text = is_text_bytes(raw)
-    if text is not None:
-        return text, None
-    return None, base64.b64encode(raw).decode()
+    return _categorise_upload_bytes(raw, filename)
 
 
 async def _convert_docx_sync(data: bytes, filename: str) -> str:

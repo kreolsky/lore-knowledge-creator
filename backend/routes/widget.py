@@ -1,30 +1,121 @@
-"""Widget routes — desktop voice recorder upload, status and batch extract."""
+"""Widget routes — desktop recorder upload, status, note, batch extract."""
 # ARCH: API-key auth (not JWT). Desktop widget authenticates via per-document
 # API keys resolved by get_api_key_context, bypassing session cookies entirely.
 # ARCH (plan widget-extract-batch-api): /api/widget/extract is a SEPARATE surface
 # from /api/widget/upload on purpose — upload promises the transcription_complete
 # → wet-extraction path; extract promises NO document. The two coexist on one key.
+# ARCH: /api/widget/note is the note ingress —
+# a system note that ARRIVED FROM OUTSIDE. It flags the key owner via
+# inbox.mark_arrived (notes default ON) and emits note_session_created inline
+# with the minimal {session_id} frame, exactly like the extractor's
+# _emit_note_created — but WITHOUT importing from chat_sessions.create
+# (module-boundary precedent: runner.py's docstring).
 
 import json
 import logging
 import mimetypes
 
-import settings
 from documents.service import find_reference_by_idempotency_key
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from files_util import save_audio_upload
+from files_util import AUDIO_CHUNK_SIZE, save_audio_upload
+from inbox import KIND_NOTE, KIND_REF, mark_arrived
+from notes_service import create_system_note
 from pipeline.extractor.params import resolve_extractor_params
-from pydantic import ValidationError
-from transcription import enqueue_transcription
+from pipeline.extractor.runner import PIPELINE_AUTHOR_ID
+from pydantic import BaseModel, ValidationError
 
 from config import AUDIO_MIMES
 from db import extract_id, fetch_one, get_db
+from event_bus import emit
 from jobs import pool as jobs_pool
 from models import WidgetSession, is_ref_row
 from routes.api_keys import get_api_key_context
+from routes.tool_api.imports import (
+    _categorise_upload_bytes,
+    _import_document,
+    _sandbox_path_max_bytes,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# WHY: a widget note body is bounded so one caller cannot push an unbounded
+# transcript through the note path in one POST — the note body is stored whole
+# in a single messages row (no chunking), and the composer-side cap is the only
+# other bound. 100_000 chars ≈ a long session transcript; a real recording's
+# text lands well below it.
+MAX_WIDGET_NOTE_BODY = 100_000
+
+
+class WidgetNoteBody(BaseModel):
+    title: str | None = None
+    body: str
+
+
+@router.post("/api/widget/note")
+async def widget_note(
+    note: WidgetNoteBody,
+    ctx: dict = Depends(get_api_key_context),
+):
+    """Create a system note on the key's bound document — the note INGRESS.
+
+    The note is authored by the PIPELINE_AUTHOR_ID sentinel (the "system notes"
+    author), titled with the key label (plus the optional caller title), flagged
+    for the key owner (inbox.mark_arrived — notes toggle defaults ON), and
+    announced live via note_session_created with the minimal {session_id} frame.
+
+    # ARCH: create_system_note NEVER raises and returns None on failure
+    # (the notes_service contract: diagnostics are best-effort). THIS surface is not
+    # diagnostics — the caller asked for a note and must not read silence as
+    # success, so None turns into an explicit 5xx (no silent degradation).
+    """
+    if not note.body.strip():
+        raise HTTPException(status_code=400, detail="body must not be empty")
+    if len(note.body) > MAX_WIDGET_NOTE_BODY:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Note body too large (max {MAX_WIDGET_NOTE_BODY} chars)",
+        )
+    session_uid = await _create_widget_note(ctx, note)
+    if session_uid is None:
+        logger.error("Widget note creation failed (doc %s)", ctx["scope_root"])
+        raise HTTPException(status_code=500, detail="Note could not be created")
+
+    # The dsh driver's own (internal) key never flags — external = a key that is
+    # not internal, the same rule the MCP dispatch hook applies.
+    if ctx.get("internal") is not True:
+        await mark_arrived(
+            KIND_NOTE, object_id=session_uid, project_id=ctx["project_id"],
+            document_id=ctx["scope_root"], recipient_id=ctx["user_id"],
+        )
+    await _emit_widget_note_created(ctx["scope_root"], session_uid)
+    return {"session_id": session_uid}
+
+
+async def _create_widget_note(ctx: dict, note: WidgetNoteBody) -> str | None:
+    """The system-note row: PIPELINE_AUTHOR_ID author, key-label title."""
+    label = ctx.get("key_label") or "Widget"
+    title = label if not (note.title or "").strip() else f"{label} — {note.title.strip()}"
+    return await create_system_note(
+        project_id=ctx["project_id"],
+        document_id=ctx["scope_root"],
+        title=title,
+        body=note.body,
+        author_id=PIPELINE_AUTHOR_ID,
+    )
+
+
+async def _emit_widget_note_created(document_id: str, session_uid: str) -> None:
+    """The realtime nudge, inline (this is a WEB-process route — the bus
+    subscriber in collab/events.py fans it to the doc channel directly; no
+    worker → backplane hop). Minimal payload per the _emit_note_created ARCH:
+    the receiving replica does a best-effort loadSessions."""
+    await emit(
+        "note_session_created",
+        entity_type="doc",
+        entity_id=document_id,
+        event={"type": "note_session_created", "session_id": session_uid},
+    )
 
 
 @router.post("/api/widget/upload")
@@ -32,29 +123,80 @@ async def widget_upload(
     file: UploadFile = File(...),
     ctx: dict = Depends(get_api_key_context),
 ):
-    """Upload audio from the desktop widget and enqueue transcription."""
+    """Upload ANY supported file from the desktop widget; it lands as a
+    reference under the key's bound document.
+
+    # ARCH: the widget rides the SAME import
+    dispatcher the MCP import_file tool uses (_import_document,
+    is_reference=True, binary_allowed=True) — one funnel for caps, magic
+    validation, format dispatch, thumbnails/transcription, and the
+    reference_created event. The former audio-only gate is gone; audio still
+    transcribes through the dispatcher's binary branch (normalize_audio_upload +
+    enqueue_transcription). The response shape {reference_id, status} is
+    UNCHANGED — the Rust client deserializes both fields strictly but never
+    reads the status VALUE (it polls by id), so audio's status changing from
+    'queued' to 'applied' is harmless.
+
+    The reference flags the key owner ONLY when the doc's refs toggle is ON
+    (inbox.mark_arrived; refs default OFF — deposits are routine).
+    """
     project_id = ctx["project_id"]
     document_id = ctx["scope_root"]
 
-    mime = file.content_type or mimetypes.guess_type(file.filename or "")[0] or ""
-    if mime not in AUDIO_MIMES:
-        logger.warning("Widget upload rejected — unsupported MIME: %s", mime)
-        raise HTTPException(status_code=400, detail=f"Only audio files accepted, got: {mime}")
-
-    original_name = file.filename or f"widget-recording.{mime.split('/')[-1]}"
-    # Attributed to the key-owning user (resolve_api_key already resolved the display
-    # name for RBAC) — the same human transcription is enqueued for below.
-    ref_id, _, _ = await save_audio_upload(
-        file, mime, original_name, project_id, document_id,
-        title=original_name, processing_status="queued",
-        created_by=ctx["user_id"],
-        created_by_name=(ctx.get("user") or {}).get("name"),
+    original_name = file.filename or _fallback_name(file.content_type)
+    data = await _read_capped(file, await _sandbox_path_max_bytes(original_name))
+    content, content_base64 = _categorise_upload_bytes(data, original_name)
+    result = await _import_document(
+        is_reference=True,
+        binary_allowed=True,
+        filename=original_name,
+        content=content,
+        content_base64=content_base64,
+        title=original_name,
+        parent_id=None,
+        document_id=document_id,
+        project_id=project_id,
+        user=ctx["user"],
+        scope_root=document_id,
     )
+    ref_id = result["reference_id"]
+    # The dsh driver's own (internal) key never flags (same rule as the note
+    # route and the MCP dispatch hook).
+    if ctx.get("internal") is not True:
+        await mark_arrived(
+            KIND_REF, object_id=ref_id, project_id=project_id,
+            document_id=document_id, recipient_id=ctx["user_id"],
+        )
+    return {"reference_id": ref_id, "status": result["status"]}
 
-    if await settings.get("STT_API_URL"):
-        await enqueue_transcription(ctx["user_id"], ref_id)
 
-    return {"reference_id": ref_id, "status": "queued"}
+async def _read_capped(file: UploadFile, max_bytes: int) -> bytes:
+    """Read the multipart part in chunks, refusing it with 413 past max_bytes.
+
+    # WHY: a bare file.read() buffers the whole part before any size check, and
+    the dispatcher then holds it again as base64 and decoded bytes — an
+    oversized recording would cost several times its size in the web process
+    before _import_document's own cap could refuse it. The cap is the same
+    extension-derived one the sandbox byte channel applies.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await file.read(AUDIO_CHUNK_SIZE):
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large (max {max_bytes // (1024 * 1024)}MB)",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _fallback_name(mime: str | None) -> str:
+    """A filename for a part that shipped none — the extension from its MIME."""
+    ext = (mime or "").split("/")[-1] or "bin"
+    safe = "".join(ch for ch in ext if ch.isalnum())[:8] or "bin"
+    return f"widget-recording.{safe}"
 
 
 @router.get("/api/widget/info")

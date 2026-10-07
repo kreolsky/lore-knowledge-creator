@@ -32,6 +32,8 @@ export const ru: Record<TranslationKey, string> = {
   signOut: 'Выйти',
   signOutInstead: 'Выйти из аккаунта',
   invalidCredentials: 'Неверный email или пароль',
+  tooManyAttempts: 'Слишком много попыток. Попробуйте через несколько минут.',
+  signInFailed: 'Не удалось войти. Попробуйте позже.',
   accessInviteOnly: 'Доступ только по приглашению.',
   landingTagline1: 'Документ в центре.',
   landingTagline2: 'Агент наготове.',
@@ -496,7 +498,7 @@ export const ru: Record<TranslationKey, string> = {
   noApiKeysForDoc: 'Нет API-ключей для этого документа',
   unnamedKey: 'Ключ без имени',
   deleteKey: 'Удалить ключ',
-  keyCapWidget: 'Виджет — аудио-виджет на этом документе',
+  keyCapWidget: 'Виджет — отправка заметок и файлов на этот документ',
   keyCapAgent: 'Агент — доступ MCP / Tool-API к поддереву этого документа',
   keyBadgeWidget: 'виджет',
   keyBadgeAgent: 'агент',
@@ -874,6 +876,16 @@ export const ru: Record<TranslationKey, string> = {
   accessShareDepthWarning: 'Поддерево глубже 50 уровней тихо обрезается обходом потомков.',
   accessApiTitle: 'API-доступ',
   accessApiDesc: 'Ключи виджетов и агентов для этого документа',
+
+  // уведомления о поступлениях (вкладка «Доступ», SYSTEM: inbox)
+  accessInboxTitle: 'Уведомления о поступлениях',
+  accessInboxDesc: 'Отмечать заметки и референсы, пришедшие извне (виджет или MCP-ключи), как непрочитанные',
+  inboxToggleNotes: 'Отмечать внешние заметки',
+  inboxToggleRefs: 'Отмечать внешние референсы',
+  inboxToggleLoadFailed: 'Не удалось загрузить настройки уведомлений',
+  inboxToggleSaveFailed: 'Не удалось сохранить настройки уведомлений',
+  inboxReadFailed: 'Не удалось отметить как прочитанное',
+  inboxSummaryLoadFailed: 'Не удалось загрузить непрочитанные поступления',
 
   // перенос в другой проект (вкладка «Доступ»)
   accessMoveTitle: 'Перенести в другой проект',

@@ -256,8 +256,8 @@ async def _resolve_user_timezone(user: dict) -> tzinfo:
 def _turn_time_stamps(
     session: dict, body_parent_id_is_none: bool, user_tz: tzinfo,
 ) -> list[str]:
-    """Time-stamp lines for the last user prompt — session anchor first (ROOT
-    turns only), send stamp last. Pure: same inputs → same bytes, so a root
+    """Time-stamp lines for the turn's `lore-time` context message — session
+    anchor first (ROOT turns only), send stamp last. Pure: same inputs → same bytes, so a root
     fork re-sends a byte-identical anchor.
 
     # ARCH: time rides the HISTORY zone (the driver's append-only session
@@ -284,27 +284,11 @@ def _turn_time_stamps(
     return stamps
 
 
-def _stamped_text(text: str, stamps: list[str]) -> str:
-    """Append stamp lines to prompt text WITHOUT mutating the source string.
-
-    # INVARIANT(persisted): a NEW string is built — the DB row (written from
-    # last_msg.content verbatim) keeps the raw user text.
-    # Why: the stamp is a model-delivery-only decoration; touching the source
-    # would leak stamp bytes into the messages projection on reload. Empty
-    # text degrades to the bare stamps (no leading blank lines) so an
-    # images-only turn reads cleanly.
-    """
-    if not stamps:
-        return text
-    tail = "\n\n".join(stamps)
-    return f"{text}\n\n{tail}" if text else tail
-
-
 async def _build_last_user_prompt(
     body_messages: list, vision_ok: bool = True,
-    time_stamps: list[str] | None = None,
 ) -> str | list:
-    """Build the LAST user turn's content in its multimodal shape.
+    """Build the LAST user turn's content in its multimodal shape — RAW user
+    text, no decorations.
 
     The full history is never replayed to dsh (history is canonical in the agent
     session tree). Only the last user message travels as `prompt` —
@@ -316,21 +300,19 @@ async def _build_last_user_prompt(
     non-vision model) image parts are stripped entirely; the caller surfaces a
     warning so the drop is never silent.
 
-    `time_stamps` (default None = no stamps, the legacy contract) appends the
-    send/session-start lines to the string / parts[0].text — the model's only
-    temporal ground. Stamp bytes live in the HISTORY zone; attachments stay
-    LAST either way.
+    # WHY no time stamps here: they ride `AgentTurnPlan.time_stamps` — see
+    # ARCH in harness-driver/plugin/src/time-stamps.ts.
     """
     if not body_messages:
         return ""
     last = body_messages[-1]
     if last.images and vision_ok:
-        return await _multimodal_parts(last, time_stamps or [])
-    return _stamped_text(last.content, time_stamps or [])
+        return await _multimodal_parts(last)
+    return last.content
 
 
-async def _multimodal_parts(last, stamps: list[str]) -> list[dict]:
-    """The multimodal ContentPart[] for the last user turn: stamped text part
+async def _multimodal_parts(last) -> list[dict]:
+    """The multimodal ContentPart[] for the last user turn: raw text part
     first, normalized image parts after (attachments stay last).
 
     # INVARIANT: normalization runs in a thread, never inline on the event loop.
@@ -341,7 +323,7 @@ async def _multimodal_parts(last, stamps: list[str]) -> list[dict]:
     # against — this path just does two orders of magnitude more work.
     """
     parts: list[dict] = [
-        {"type": "text", "text": _stamped_text(last.content, stamps)}
+        {"type": "text", "text": last.content}
     ]
     n_imgs = 0
     # Settings resolve BEFORE the thread hop — the thread has no loop to await on
@@ -416,6 +398,10 @@ class AgentTurnPlan:
     # only the last user turn (`prompt`, multimodal shape). History is canonical
     # in the agent session tree, NOT replayed.
     prompt: str | list = ""
+    # The turn's time-stamp lines (root anchor + send stamp — `_turn_time_stamps`),
+    # never inside `prompt`: the plugin emits them as their own `lore-time`
+    # context message — see ARCH in harness-driver/plugin/src/time-stamps.ts.
+    time_stamps: list[str] = field(default_factory=list)
     # The RAW skills wire for the agent payload — threaded from the SAME
     # config-subtree load that built `system_prompt`, so the turn does ONE walk
     # (not two) and the wire stays byte-stable with the prompt. The plugin
@@ -520,8 +506,9 @@ def _merge_context_images(prompt: str | list, ctx) -> str | list:
     return [head, *ctx_images, *tail]
 
 
-async def _build_turn_prompt(*, session: dict, body: CompletionRequest, ctx, user: dict) -> str | list:
-    """The last user turn as `prompt`: time-stamped, vision-gated, context images merged.
+async def _build_turn_prompt(*, body: CompletionRequest, ctx) -> str | list:
+    """The last user turn as `prompt`: vision-gated, context images merged —
+    the RAW user content (the time stamps ride `time_stamps`, not the text).
 
     The turn contract sends only the LAST user turn as `prompt`
     (multimodal shape), never the full history. History is canonical in the agent
@@ -534,18 +521,22 @@ async def _build_turn_prompt(*, session: dict, body: CompletionRequest, ctx, use
     # post-gate ctx, so attachments pass. Production always carries the field
     # (build_context sets it), so the default never masks a missing gate read.
     vision_ok = getattr(ctx, "vision_ok", True)
-    # ── Time ground: send stamp every turn, session anchor on root turns ──
-    # (getattr defends bare SimpleNamespace test stubs without parent_id.)
+    prompt = await _build_last_user_prompt(body.messages, vision_ok=vision_ok)
+    return _merge_context_images(prompt, ctx)
+
+
+async def _resolve_turn_time_stamps(
+    *, session: dict, body: CompletionRequest, user: dict,
+) -> list[str]:
+    """The turn's time ground: send stamp every turn, session anchor on root
+    turns (the `_turn_time_stamps` contract — pure, same inputs → same bytes)."""
     user_tz = await _resolve_user_timezone(user)
-    time_stamps = _turn_time_stamps(
+    # (getattr defends bare SimpleNamespace test stubs without parent_id.)
+    return _turn_time_stamps(
         session,
         body_parent_id_is_none=getattr(body, "parent_id", None) is None,
         user_tz=user_tz,
     )
-    prompt = await _build_last_user_prompt(
-        body.messages, vision_ok=vision_ok, time_stamps=time_stamps,
-    )
-    return _merge_context_images(prompt, ctx)
 
 
 async def prepare_agent_turn(
@@ -584,7 +575,10 @@ async def prepare_agent_turn(
         system_prompt=system_prompt,
         apply_mode=apply_mode,
         tools=toolset,
-        prompt=await _build_turn_prompt(session=session, body=body, ctx=ctx, user=user),
+        prompt=await _build_turn_prompt(body=body, ctx=ctx),
+        time_stamps=await _resolve_turn_time_stamps(
+            session=session, body=body, user=user,
+        ),
         skill_docs=skill_docs,
         region=body.region,
     )

@@ -1,7 +1,9 @@
 """Integration tests for cabinet (user profile) routes."""
 
+import httpx
 import jwt
 import pytest
+from helpers import make_token
 
 from config import ALGORITHM, SECRET_KEY
 
@@ -106,6 +108,57 @@ async def test_change_password_wrong_current(client, regular_user):
         cookies={"lore_session": token},
     )
     assert resp.status_code == 403
+
+
+# ─── Credential change ends other sessions ────────────────────────────────────
+
+
+async def _second_client(app) -> httpx.AsyncClient:
+    """A second cookie jar — another device holding its own session."""
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+
+
+@pytest.mark.asyncio
+async def test_password_change_ends_other_sessions(client, app, regular_user):
+    """Two sessions, one user: A changes the password → B's OLD cookie is 401
+    on /api/auth/me; A's re-issued cookie still works (a credential change
+    must end every other session — see INVARIANT(security) in auth.py)."""
+    uid, token_a = regular_user
+    token_b = make_token(uid, "testuser", "user", "user@test.com")
+    resp = await client.patch(
+        "/api/cabinet/password",
+        json={"current_password": "userpass", "new_password": "newpass123"},
+        cookies={"lore_session": token_a},
+    )
+    assert resp.status_code == 200
+    new_cookie = resp.cookies.get("lore_session")
+    assert new_cookie is not None, "the caller must stay signed in via a re-issued cookie"
+    async with await _second_client(app) as client_b:
+        me_b = await client_b.get("/api/auth/me", cookies={"lore_session": token_b})
+        assert me_b.status_code == 401
+    me_a = await client.get("/api/auth/me", cookies={"lore_session": new_cookie})
+    assert me_a.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_email_change_ends_other_sessions(client, app, regular_user):
+    """Same contract for the email change: the OTHER device's cookie dies, the
+    caller's re-issued cookie survives."""
+    uid, token_a = regular_user
+    token_b = make_token(uid, "testuser", "user", "user@test.com")
+    resp = await client.patch(
+        "/api/cabinet/email",
+        json={"email": "moved@test.com", "current_password": "userpass"},
+        cookies={"lore_session": token_a},
+    )
+    assert resp.status_code == 200
+    new_cookie = resp.cookies.get("lore_session")
+    assert new_cookie is not None
+    async with await _second_client(app) as client_b:
+        me_b = await client_b.get("/api/auth/me", cookies={"lore_session": token_b})
+        assert me_b.status_code == 401
+    me_a = await client.get("/api/auth/me", cookies={"lore_session": new_cookie})
+    assert me_a.status_code == 200
 
 
 # ─── PIN Management ─────────────────────────────────────────────────────────

@@ -1,8 +1,10 @@
 """Cabinet routes — user self-service profile management.
 
 ARCH: Cabinet endpoints let authenticated users manage their own profile
-(name, email, password, PIN). Name/email changes re-issue the JWT cookie
-so the frontend stays in sync without re-login.
+(name, email, password, PIN). Email/password changes bump token_version to
+end every OTHER session (see INVARIANT(security) in
+auth._invalidate_token_version_cache) and re-issue the caller's JWT cookie, so
+the current tab stays signed in without re-login while a stolen cookie dies.
 """
 
 import re
@@ -13,7 +15,7 @@ from rate_limit import check_pin_rate_limit, check_rate_limit, reset_rate_limit
 from security_log import log_security
 from surrealdb import AsyncSurreal
 
-from auth import get_current_user, set_session_cookie
+from auth import bump_token_version, get_current_user, set_session_cookie
 from db import get_db, serialize_record
 from models import (
     UpdateProfileEmail,
@@ -82,7 +84,10 @@ async def change_email(
     )
     if not updated:
         raise HTTPException(status_code=404, detail="User not found")
-    set_session_cookie(request, response, user["user_id"], user["name"], body.email, user["role"], token_version=user.get("token_version") or 0)
+    # An email change is a credential change (the login identifier): end every
+    # OTHER session and re-issue the caller's cookie on the new token_version.
+    tv = await bump_token_version(user["user_id"])
+    set_session_cookie(request, response, user["user_id"], user["name"], body.email, user["role"], token_version=tv)
     log_security("email_changed", user_id=user["user_id"])
     return serialize_record(updated[0], "user_id")
 
@@ -90,10 +95,16 @@ async def change_email(
 @router.patch("/api/cabinet/password")
 async def change_password(
     body: UpdateProfilePassword,
+    request: Request,
+    response: Response,
     user: dict = Depends(get_current_user),
     db: AsyncSurreal = Depends(get_db),
 ):
-    """Change password. Requires current password for confirmation."""
+    """Change password. Requires current password for confirmation.
+
+    A password change ends every OTHER session (bump_token_version) and
+    re-issues the caller's cookie on the new token_version, so the current tab
+    stays signed in."""
     if not await check_rate_limit(f"cabinet-pwd:{user['user_id']}"):
         raise HTTPException(status_code=429, detail="Too many attempts. Try again later.")
     rows = await db.query(
@@ -109,6 +120,8 @@ async def change_password(
         "UPDATE type::record('users', $id) SET password_hash = $ph, updated_at = time::now()",
         {"id": user["user_id"], "ph": new_hash},
     )
+    tv = await bump_token_version(user["user_id"])
+    set_session_cookie(request, response, user["user_id"], user["name"], user.get("email", ""), user["role"], token_version=tv)
     log_security("password_changed", user_id=user["user_id"])
     return {"success": True}
 

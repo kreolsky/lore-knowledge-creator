@@ -12,6 +12,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { Plus, Upload, ArrowLeft, Bot, Columns2, Eye, Archive } from 'lucide-react';
 import { useAppStore } from '../store/app-store';
 import { useChatStore } from '../store/chat-store';
+import { claimAutoOpen, openInboxObject } from '../store/inbox-store';
 import { useUIStore, useDocState } from '../store/ui-store';
 import { readRefOpenMode, type RefOpenMode } from '../store/ui-store/documents-slice';
 import { Editor } from './Editor';
@@ -494,14 +495,39 @@ export function ReferencesPanel() {
   const handleChatWithReference = (ref: Reference) =>
     useChatStore.getState().openChatWithReference(ref);
 
-  const handleRefClick = (ref: Reference) => {
+  const handleRefClick = useCallback((ref: Reference) => {
     if (ref.processing_status === 'uploading') return;
+    // see SYSTEM: inbox — read = OPENED: selecting the reference clears the
+    // viewer's flag (decrement keyed on the ref's OWN document — an ancestor
+    // ref flags its own doc's pool, not the focused one). Fire-and-forget;
+    // openInboxObject reports its own failure, ws:inbox_changed reconciles.
+    if (ref.unread) {
+      void openInboxObject(ref.document_id ?? currentDocument?.document_id, 'ref', ref.reference_id);
+    }
     if (currentReference?.reference_id === ref.reference_id) {
       emit('reset-reference-banner');
       return;
     }
     emit('navigate-to-reference', { referenceId: ref.reference_id, stayInContext: true });
-  };
+  }, [currentReference?.reference_id, currentDocument?.document_id]);
+
+  // see SYSTEM: inbox — opening the refs tab while flagged references exist
+  // opens the EARLIEST flagged one (created_at ASC). Gates mirror the panel's
+  // own scope-settling: refsLoading (fetch in flight) and isFading (the render
+  // after a doc switch still shows the previous doc's list — prevDocIdRef is
+  // reconciled only when the load lands). Skips panel mode with a reference
+  // already open and fires once per arrival (claimAutoOpen in inbox-store).
+  // Public share has no viewer → no unread fields → natural no-op.
+  useEffect(() => {
+    const docId = currentDocId;
+    if (!docId || isPublicShare || refsLoading || isFading || panelRef) return;
+    const earliest = sortedRefs
+      .filter(r => r.unread === true)
+      .sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''))[0];
+    if (!earliest) return;
+    if (!claimAutoOpen('ref', docId)) return;
+    handleRefClick(earliest);
+  }, [currentDocId, isPublicShare, refsLoading, isFading, panelRef, sortedRefs, handleRefClick]);
 
   // ONE toggle element for both mounts (editor toolbar +
   // read-only row) so the icon, the tooltip and the on/off styling cannot drift apart.

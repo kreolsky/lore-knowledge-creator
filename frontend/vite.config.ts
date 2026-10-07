@@ -92,14 +92,17 @@ export default defineConfig({
     // INFRA WIRING, not configuration: the dev proxy targets the backend by
     // its compose service name (plan component-wiring-not-settings step 2) —
     // nothing runs on the host, so there is no host-run fallback anymore.
+    // WHY changeOrigin false: the backend's same-host Origin guard compares the
+    // Origin with the Host it receives; a rewritten Host (backend:8001) 403s every
+    // write from a page opened at an address not in CORS_ORIGINS (an IP, a LAN name).
     proxy: {
       '/api': {
         target: 'http://backend:8001',
-        changeOrigin: true,
+        changeOrigin: false,
       },
       '/ws': {
         target: 'http://backend:8001',
-        changeOrigin: true,
+        changeOrigin: false,
         ws: true,
       },
     },

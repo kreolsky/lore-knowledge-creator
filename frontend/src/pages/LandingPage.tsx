@@ -4,7 +4,15 @@ import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../store/app-store';
 import { Button, FieldInput } from '../components/ui';
 import { useTranslation } from '../i18n';
+import type { TranslationKey } from '../i18n/en';
 import { LandingLayout } from './LandingLayout';
+
+// WHY only 401 reads "invalid credentials": any other refusal (an Origin 403, a
+// 503) is not about what the user typed, and saying so hides the real cause.
+const LOGIN_ERROR_KEYS: Partial<Record<number, TranslationKey>> = {
+  401: 'invalidCredentials',
+  429: 'tooManyAttempts',
+};
 
 /**
  * Combined landing + login page at `/`, rendered in the shared two-column
@@ -42,12 +50,14 @@ export function LandingPage() {
         body: JSON.stringify({ email, password }),
       });
       if (!res.ok) {
-        setError(t('invalidCredentials'));
+        setError(t(LOGIN_ERROR_KEYS[res.status] ?? 'signInFailed'));
         return;
       }
       const user = await res.json();
       setCurrentUser(user);
       navigate('/projects');
+    } catch {
+      setError(t('signInFailed'));
     } finally {
       setLoading(false);
     }

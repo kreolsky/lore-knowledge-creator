@@ -10,7 +10,7 @@
  * Store slices: note-chat-store (sessions, messages), note-store (activeNoteThreadId).
  */
 
-import { useState, useRef, useCallback, useMemo } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { ArrowLeft, Trash2, FileText, Plus, MessageSquare, Paperclip } from 'lucide-react';
 import { EditorView } from '@codemirror/view';
 import { DEFAULT_HOTKEYS } from './editor/hotkey-config';
@@ -19,6 +19,7 @@ import { useUIStore } from '../store/ui-store';
 import { readRefOpenMode, refIsScope } from '../store/ui-store/documents-slice';
 import { useNoteStore } from '../store/note-store';
 import { useNoteChatStore } from '../store/note-chat-store';
+import { claimAutoOpen, openInboxObject } from '../store/inbox-store';
 import { emit } from '../events';
 import { getRoleView, type EditorRole } from '../editor/active-editor';
 import { useArmedAction } from '../hooks/useArmedAction';
@@ -144,6 +145,7 @@ function NoteSessionCard({
   return (
     <ListPill
       variant={variant}
+      unread={session.unread === true}
       id={`note-${session.session_id}`}
       onClick={onClick}
       onMouseEnter={onHover}
@@ -331,6 +333,13 @@ export function NotesPanel() {
 
 
   const handleNoteClick = useCallback((session: ChatSession) => {
+    // see SYSTEM: inbox — read = OPENED: any path that opens the note (thread
+    // open here, or the pendingNoteNavigation that opens it after the reference
+    // jump) clears the viewer's flag. Fire-and-forget: openInboxObject reports
+    // its own failure; the ws:inbox_changed refetch reconciles the store.
+    if (session.unread) {
+      void openInboxObject(currentDocument?.document_id, 'note', session.session_id);
+    }
     // WHY: in split view focus the OWNING column
     // (programmatic view.focus() runs claimFocus so caret/hotkeys/
     // snapshot target the owning material), open the thread, and scroll THAT
@@ -371,6 +380,32 @@ export function NotesPanel() {
       useNoteStore.getState().setConnectedNoteId(session.session_id);
     }
   }, [isSplitMode, isRefMode, currentReference?.reference_id, currentDocument?.document_id]);
+
+  // see SYSTEM: inbox — opening the notes tab while flagged notes exist opens
+  // the EARLIEST flagged one (created_at ASC). Waits for the list to settle
+  // (loading gate + sessionsScope identity: doc-switch commits render before
+  // DocumentPage's loadSessions drops the previous doc's rows — without the
+  // scope check the effect would open the OLD doc's note under the new one),
+  // skips a thread already open (no intrusion into an open read) and fires
+  // once per arrival (claimAutoOpen, see its INVARIANT in inbox-store).
+  const sessionsScope = useNoteChatStore(s => s.sessionsScope);
+  useEffect(() => {
+    const projectId = currentProject?.project_id;
+    const docId = currentDocument?.document_id;
+    const expectedScope = projectId && docId
+      ? `${projectId}:${docId}:note`
+      : null;
+    if (
+      !docId || isThreadView || crud.sessionsLoading
+      || sessionsScope !== expectedScope
+    ) return;
+    const earliest = crud.noteItems
+      .filter(s => s.unread === true)
+      .sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''))[0];
+    if (!earliest) return;
+    if (!claimAutoOpen('note', docId)) return;
+    handleNoteClick(earliest);
+  }, [currentProject?.project_id, currentDocument?.document_id, isThreadView, crud.sessionsLoading, crud.noteItems, sessionsScope, handleNoteClick]);
 
   const handleCreateNote = useCallback(async () => {
     if (!currentProject || !currentDocument) return;

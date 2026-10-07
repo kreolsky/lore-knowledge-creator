@@ -359,11 +359,10 @@ async def extract_and_replace_images(
 # returns is serialized into an UNAUTHENTICATED response (the anonymous /references
 # LIST on /s/:token). Do not add a field here unless it is safe to publish publicly. Why:
 # the public-share data-leak class.
-def serialize_ref_meta(row: dict) -> dict:
+def serialize_ref_meta(row: dict, viewer_id: str | None = None) -> dict:
     """Metadata-only list serialization — no `content`, no `headings`.
 
     # WHY: LIST responses (/api/references with document_id or project_id
-    # Why: LIST payloads are fetched 2-3x per doc switch; omitting content/headings keeps them small.
     # scope) carry NO `content` and NO `headings`. Content is lazy-fetched per
     # reference via GET /api/references/{id} (the single-ref serializer
     # `_serialize_ref` in routes/references.py keeps content + headings).
@@ -383,8 +382,14 @@ def serialize_ref_meta(row: dict) -> dict:
     # 401 anonymously). Do not "fix" this serializer to drop `content` without
     # also reworking the public transclusion seed — see the WHY SELECT * comment
     # on public_references.
+
+    # see SYSTEM: inbox — the unread flag serializes VIEWER-relative as `unread`
+    # (bool); the raw recipient id (`unread_for`) NEVER leaves the backend. The
+    # anonymous public surface passes no viewer → unread is always False there.
     """
     out = serialize_record(row, "reference_id")
     if "parent_id" in out:
         out["document_id"] = out.pop("parent_id")
+    out["unread"] = bool(viewer_id) and out.get("unread_for") == viewer_id
+    out.pop("unread_for", None)
     return out

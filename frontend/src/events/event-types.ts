@@ -30,6 +30,7 @@ export const WS_EVENT_TYPES = [
   'agent_extraction_started',
   'extraction_error',
   'agent_error_note',
+  'inbox_changed',
   'embedding_degraded',
   'embedding_recovered',
   'project_updated',
@@ -107,6 +108,10 @@ export interface EventMap {
   // ws:generate_image_* types exist.
   'ws:extraction_error': { reference_id: string; note_id: string; document_id: string };
   'ws:agent_error_note': { note_id: string; document_id: string };
+  // see SYSTEM: inbox — the CALLER's unread pool changed (owner-filtered send, the
+  // user_id never rides the wire). document_id is the doc whose pool moved; the
+  // client refetches GET /api/projects/{id}/inbox.
+  'ws:inbox_changed': { document_id: string };
   'ws:embedding_degraded': Record<string, never>;
   'ws:embedding_recovered': Record<string, never>;
   'ws:project_updated': { updates: Record<string, unknown> };

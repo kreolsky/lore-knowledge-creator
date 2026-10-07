@@ -139,6 +139,8 @@ async def _dispatch_attach_file(args: dict, ctx: dict) -> dict:
         # S1: the redeem route has no key — the making key's label rides the token
         # (authorization-bound facts are frozen at mint, scope included).
         agent_label=ctx.get("key_label"),
+        # the dsh driver's own key never flags.
+        internal=ctx.get("internal") is True,
     )
     return await _build_attach_response(filename, attach_to, kind, max_mb, token, expires_iso, ctx)
 

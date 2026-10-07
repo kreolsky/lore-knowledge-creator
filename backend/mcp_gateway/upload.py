@@ -52,6 +52,7 @@ _TOKEN_KIND = "mcp_upload"
 def _upload_token_claims(
     *, project_id: str, document_id: str, filename: str, title: str,
     mime: str, user_id: str, agent_label: str | None,
+    internal: bool,
     jti: str, exp, now,
 ) -> dict:
     """The upload-token claim dict — one build site shared by the mint.
@@ -59,6 +60,9 @@ def _upload_token_claims(
     agent_label (S1): the making agent key's label rides the claims ONLY when
     truthy (internal keys / blank labels) — a falsy label must NOT appear as a
     null claim, so pre-S1 mints in flight and new mints stay claim-compatible.
+    `internal` rides the same way: the dsh
+    driver's own key mints URLs whose redeem must NEVER flag the inbox, and an
+    absent claim (pre-inbox mints in flight) reads as not-internal.
     """
     return {
         "kind": _TOKEN_KIND,
@@ -69,6 +73,7 @@ def _upload_token_claims(
         "mime": mime,
         "user_id": user_id,
         **({"agent_label": agent_label} if agent_label else {}),
+        **({"internal": True} if internal else {}),
         "jti": jti,
         "exp": exp,
         "iat": now,
@@ -84,28 +89,19 @@ async def mint_upload_token(
     mime: str,
     user_id: str,
     agent_label: str | None = None,
+    internal: bool = False,
 ) -> tuple[str, str, str]:
     """Mint a short-lived JWT authorizing ONE file upload. Returns (token, iso_exp,
     jti).
 
-    `agent_label` (S1): the making agent key's label, frozen into the claims at
-    mint — the redeem route has no key to read, so the byline must ride the token
-    like every other authorization-bound fact (scope, user, mime). Omitted when
-    falsy (internal keys / blank labels) → the redeem falls back to the minting
-    user's name.
-
-    Signed with the existing SECRET_KEY + ALGORITHM (same pair as the session cookie
-    and the download token) — no new key material, no new table, no persisted row.
-
-    TTL is read at call time through settings (row → env → default) so a
-    settings PUT (e.g. shortening it) reaches the next minted URL — same
-    pattern as mint_download_token.
-
-    D10: a `jti` (JWT id) is embedded so the redeem
-    route can SETNX jti→created_id and make a replay return the SAME node id (a
-    dropped POST connection is recoverable by retrying the same URL). The jti is
-    stable per token: replaying the SAME url dedups, re-minting does not (content
-    dedup is deliberately NOT added — see D10).
+    Every authorization-bound fact rides the claims (see _upload_token_claims):
+    the redeem route has no key to read, so scope/user/byline/`internal` are
+    frozen at mint. Signed with the existing SECRET_KEY + ALGORITHM (same pair
+    as the session cookie and the download token) — no new key material, no new
+    table, no persisted row. TTL is read at call time through settings so a
+    settings PUT reaches the next minted URL. The `jti` makes a replay of
+    the SAME url return the SAME node id; re-minting does not dedup (content
+    dedup deliberately NOT added).
     """
     import uuid
 
@@ -117,7 +113,7 @@ async def mint_upload_token(
         _upload_token_claims(
             project_id=project_id, document_id=document_id, filename=filename,
             title=title, mime=mime, user_id=user_id, agent_label=agent_label,
-            jti=jti, exp=exp, now=now,
+            internal=internal, jti=jti, exp=exp, now=now,
         ),
         SECRET_KEY,
         algorithm=ALGORITHM,

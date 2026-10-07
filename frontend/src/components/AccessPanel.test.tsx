@@ -5,6 +5,10 @@
  * access/share-state.test.ts. Here we assert only the WIRING the component adds:
  * the Include-subtree checkbox is disabled until the document is shared (or covered
  * by an inherited ancestor), and a failed write rolls the optimistic checkbox back.
+ *
+ * SYSTEM: inbox — the Inbox arrival-toggles section (per-user × document notify
+ * prefs) is covered at the bottom: defaults render (notes ON, refs OFF), a flip
+ * is optimistic + PUTs a partial patch, a failed PUT reverts and toasts.
  */
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -19,6 +23,7 @@ let root: Root;
 let AccessPanel: typeof import('./AccessPanel').AccessPanel;
 let apiPublicShare: typeof import('../api/public-share');
 let apiAccess: typeof import('../api/access');
+let apiInbox: typeof import('../api/inbox');
 let apiClientGet: ReturnType<typeof vi.fn>;
 let dropdownProps: { value: string; options: { value: string; label: string }[]; onSelect: (v: string) => void } | null;
 let modalProps: Record<string, unknown> | null;
@@ -72,7 +77,7 @@ beforeEach(async () => {
   }));
   const icon = () => null;
   vi.doMock('lucide-react', () => ({
-    X: icon, Link2: icon, Plus: icon, KeyRound: icon, Trash2: icon, FileLock2: icon, Check: icon, FolderOutput: icon, ChevronDown: icon,
+    X: icon, Link2: icon, Plus: icon, KeyRound: icon, Trash2: icon, FileLock2: icon, Check: icon, FolderOutput: icon, ChevronDown: icon, Inbox: icon,
   }));
   vi.doMock('../i18n', () => ({
     // `t` is used directly by the shared copyWithToast helper; useTranslation by the panel.
@@ -101,6 +106,15 @@ beforeEach(async () => {
     return mod as unknown as typeof import('../api/public-share');
   })();
 
+  apiInbox = await (async () => {
+    const mod = {
+      fetchInboxToggles: vi.fn().mockResolvedValue({ notes: true, refs: false }),
+      setInboxToggles: vi.fn().mockResolvedValue({ notes: true, refs: false }),
+    };
+    vi.doMock('../api/inbox', () => mod);
+    return mod as unknown as typeof import('../api/inbox');
+  })();
+
   showToast = vi.fn();
 
   container = document.createElement('div');
@@ -118,6 +132,7 @@ afterEach(() => {
   vi.doUnmock('../i18n');
   vi.doUnmock('../api/access');
   vi.doUnmock('../api/public-share');
+  vi.doUnmock('../api/inbox');
   vi.doUnmock('../api/client');
   vi.doUnmock('../store/app-store');
 });
@@ -404,5 +419,58 @@ describe('General access link plaque', () => {
     // No inline "Copied!" swap — the plaque keeps showing the URL (unified feedback only).
     expect(plaque.textContent).not.toContain('copied');
     expect(plaque.textContent).toContain('/docs/');
+  });
+});
+
+describe('Inbox arrival toggles (SYSTEM: inbox)', () => {
+  function inboxCheckbox(label: 'inboxToggleNotes' | 'inboxToggleRefs') {
+    return container.querySelector(`input[data-label="${label}"]`) as HTMLInputElement;
+  }
+
+  it('renders the defaults (notes ON, refs OFF) and seeds the store from the GET', async () => {
+    await renderWith({ isOwner: true, docId: 'doc-1' });
+    // First paint, before the GET resolves: the backend defaults.
+    expect(inboxCheckbox('inboxToggleNotes').checked).toBe(true);
+    expect(inboxCheckbox('inboxToggleRefs').checked).toBe(false);
+    await flush();
+    expect(apiInbox.fetchInboxToggles).toHaveBeenCalledWith('p1', 'doc-1');
+    expect(inboxCheckbox('inboxToggleNotes').checked).toBe(true);
+    expect(inboxCheckbox('inboxToggleRefs').checked).toBe(false);
+    const { useInboxStore } = await import('../store/inbox-store');
+    expect(useInboxStore.getState().getToggles('p1', 'doc-1')).toEqual({ notes: true, refs: false });
+  });
+
+  it('a flip is optimistic and PUTs the partial patch', async () => {
+    vi.mocked(apiInbox.setInboxToggles).mockResolvedValue({ notes: true, refs: true });
+    await renderWith({ isOwner: true, docId: 'doc-1' });
+    await flush();
+    await act(async () => { inboxCheckbox('inboxToggleRefs').click(); });
+    expect(apiInbox.setInboxToggles).toHaveBeenCalledWith('p1', 'doc-1', { refs: true });
+    // Optimistic paint + resolved pair in the store.
+    expect(inboxCheckbox('inboxToggleRefs').checked).toBe(true);
+    const { useInboxStore } = await import('../store/inbox-store');
+    expect(useInboxStore.getState().getToggles('p1', 'doc-1')).toEqual({ notes: true, refs: true });
+  });
+
+  it('a failed PUT reverts to the prior pair and toasts (no silent degradation)', async () => {
+    vi.mocked(apiInbox.setInboxToggles).mockRejectedValue(new Error('boom'));
+    await renderWith({ isOwner: true, docId: 'doc-1' });
+    await flush();
+    await act(async () => { inboxCheckbox('inboxToggleRefs').click(); });
+    await flush();
+    // Reverted: refs back to OFF, store holds the pre-click pair.
+    expect(inboxCheckbox('inboxToggleRefs').checked).toBe(false);
+    const { useInboxStore } = await import('../store/inbox-store');
+    expect(useInboxStore.getState().getToggles('p1', 'doc-1')).toEqual({ notes: true, refs: false });
+    expect(showToast).toHaveBeenCalledWith('inboxToggleSaveFailed', 'error');
+  });
+
+  it('a failed GET leaves the defaults rendered and toasts', async () => {
+    vi.mocked(apiInbox.fetchInboxToggles).mockRejectedValue(new Error('boom'));
+    await renderWith({ isOwner: true, docId: 'doc-1' });
+    await flush();
+    expect(inboxCheckbox('inboxToggleNotes').checked).toBe(true);
+    expect(inboxCheckbox('inboxToggleRefs').checked).toBe(false);
+    expect(showToast).toHaveBeenCalledWith('inboxToggleLoadFailed', 'error');
   });
 });

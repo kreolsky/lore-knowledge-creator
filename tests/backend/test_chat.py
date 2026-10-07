@@ -1,25 +1,19 @@
 """Tests for AI Chat routes — sessions CRUD, messages, access control, system prompt injection."""
 
-import re
 from contextlib import ExitStack, asynccontextmanager
 from unittest.mock import patch
 
 import pytest
 from helpers import pin_chat_api, pinned_chat_api
 
-# The per-turn send stamp rides the tail of every outbound `prompt` (UTC in
-# tests — users carry no timezone); assertions pin the stable part. Full stamp
-# suite: test_prepare_agent_turn.py.
-SENT_STAMP_RE = re.compile(
-    r"\[sent \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\]$"
-)
 
-
+# The outbound `prompt` is the RAW user text — the time ground rides the
+# payload's own `time_stamps` field (a separate lore-time context message
+# plugin-side; the stamp suite lives in test_prepare_agent_turn.py and
+# test_driver_client.py).
 def _assert_prompt_text(prompt, expected: str) -> None:
-    """The outbound prompt is the user text + time stamps (anchor may ride the
-    middle on root turns) — assert the stable leading part + the send stamp."""
-    assert prompt.startswith(expected), prompt
-    assert SENT_STAMP_RE.search(prompt), prompt
+    """The outbound prompt is exactly the user's text — no stamp bytes."""
+    assert prompt == expected, prompt
 
 # ─── Retired proposal render tail ─────────────────────────────────────────────
 
@@ -804,6 +798,9 @@ async def test_completions_system_prompt_injected(client, admin_user, project_wi
     assert "You are a pirate" in system_prompt
     # The last user turn travels as `prompt`, not replayed in system_prompt history.
     _assert_prompt_text(captured[0]["prompt"], "Ahoy!")
+    # Integration pin: the turn's time ground rides the payload's own
+    # `time_stamps` (the plugin emits it as a lore-time context message).
+    assert len(captured[0]["time_stamps"]) >= 1, captured[0]["time_stamps"]
 
 
 async def test_completions_system_prompt_plus_document_context(client, admin_user, project_with_doc):

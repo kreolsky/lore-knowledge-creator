@@ -263,3 +263,21 @@ async def _on_agent_error_note(project_id: str, note_id: str, document_id: str, 
 
 
 _bus_on("agent_error_note", _on_agent_error_note)
+
+
+async def _on_inbox_changed(project_id: str, user_id: str, document_id: str, **_kwargs) -> None:
+    """see SYSTEM: inbox — the unread pool of ONE user changed; tell ONLY that user.
+
+    A CUSTOM handler with send_to_project_user, NOT a _SUBSCRIPTIONS entry:
+    the declarative table BROADCASTS to every member, and the flag is
+    per-recipient — another member must not learn whose mail arrived (the
+    serializer hides the raw id for the same reason). user_id is the routing
+    key here, never a wire field.
+    """
+    await send_to_project_user(project_id, user_id, {
+        "type": "inbox_changed",
+        "document_id": document_id,
+    })
+
+
+_bus_on("inbox_changed", _on_inbox_changed)

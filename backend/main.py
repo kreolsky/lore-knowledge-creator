@@ -27,6 +27,8 @@ from http_clients import close_all as _close_http_clients
 from mcp_gateway.upload import MCP_UPLOAD_ROUTE_PREFIX
 from pipeline.extractor.runner import on_transcription_complete
 from redis_pool import close_redis
+from security_log import log_security
+from starlette.requests import HTTPConnection
 from starlette.requests import Request as _StarletteRequest
 
 from config import CHAT_MAX_IMAGE_SIZE_MB
@@ -91,6 +93,7 @@ from routes import (
     files,
     files_mcp_upload,
     health,
+    inbox,
     invites,
     pipeline_schedules,
     preferences,
@@ -464,8 +467,11 @@ async def csrf_origin_check(request: Request, call_next):
     return await call_next(request)
 
 
-def _same_host(origin: str, request: Request) -> bool:
+def _same_host(origin: str, conn: HTTPConnection) -> bool:
     """Whether the Origin names the host the request was sent to.
+
+    Takes HTTPConnection (not Request) so the HTTP CSRF guard and the WS
+    Origin guard below share one rule — both scopes satisfy it.
 
     INVARIANT(security): a page served by this instance may write to it from any
     address it is reached at; any other site is refused. Why: a self-hosted install
@@ -473,8 +479,41 @@ def _same_host(origin: str, request: Request) -> bool:
     every browser write there was 403'd. Hostnames are compared without the port:
     nginx forwards `Host $host` (no port), and cookies are not port-scoped anyway.
     """
-    host = request.headers.get("host", "").rsplit(":", 1)[0].strip("[]").lower()
+    host = conn.headers.get("host", "").rsplit(":", 1)[0].strip("[]").lower()
     return bool(host) and urlsplit(origin).hostname == host
+
+
+# ARCH: CSRF defense-in-depth for the WebSocket channels. The HTTP
+# csrf_origin_check above is an @app.middleware("http") — it never sees a
+# websocket scope, and both WS routes authenticate by cookie (SameSite=Lax),
+# so a page on any other origin could open a collab socket as the victim.
+# One pure-ASGI middleware covers every present and future WS route; the
+# handlers themselves are not touched.
+class WSOriginGuardMiddleware:
+    """Close any websocket whose Origin is neither listed nor same-host.
+
+    Same allow-list and same _same_host rule as the HTTP guard: a listed origin
+    or the instance's own host passes; a foreign site is closed with 4003
+    BEFORE accept (uvicorn answers the handshake with HTTP 403). A missing
+    Origin passes — non-browser clients carry no ambient cookie across sites,
+    mirroring the HTTP guard's treatment of Origin-less requests.
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "websocket":
+            conn = HTTPConnection(scope)
+            origin = conn.headers.get("origin")
+            if origin and origin not in _CORS_ORIGINS and not _same_host(origin, conn):
+                log_security("ws_origin_rejected", origin=origin, path=scope.get("path", ""))
+                await send({"type": "websocket.close", "code": 4003})
+                return
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(WSOriginGuardMiddleware)
 
 
 _JSON_MAX_BYTES = 1 * 1024 * 1024  # 1MB limit for non-upload JSON endpoints
@@ -560,6 +599,7 @@ app.include_router(references.router)
 app.include_router(public_share.router)
 app.include_router(files.router)
 app.include_router(files_mcp_upload.router)
+app.include_router(inbox.router)
 app.include_router(preferences.router)
 app.include_router(telemetry.router)
 app.include_router(api_keys.router)

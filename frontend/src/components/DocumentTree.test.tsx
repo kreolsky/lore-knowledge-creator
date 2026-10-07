@@ -30,6 +30,11 @@ let __isPublicShare = false;
 // Per-doc UI state handed to the mocked ui-store selector (refOpenMode etc.).
 let __docUi: Record<string, { refOpenMode?: string }>;
 
+// Mutable per-test inputs: which tree nodes are collapsed, and the inbox-store
+// summary slice (SYSTEM: inbox — {docId: {notes, refs}} unread counts).
+let __collapsedDocIds: string[];
+let __inboxSummary: Record<string, { notes: number; refs: number }>;
+
 // Hoisted so a test can mutate `documentTree` (e.g. inject a public_share node)
 // before render; the doMock factory references this same object.
 let appState: any;
@@ -66,6 +71,8 @@ beforeEach(async () => {
   vi.resetModules();
   __isPublicShare = false;
   __docUi = {};
+  __collapsedDocIds = [];
+  __inboxSummary = {};
 
   // Spy: records every docId DocumentTree feeds to useDocumentPreview. The gate
   // is correct iff this is never called with a real id on the public surface.
@@ -102,8 +109,14 @@ beforeEach(async () => {
   vi.doMock('../store/ui-store', () => ({
     useUIStore: (selector?: (s: any) => any) =>
       selector
-        ? selector({ collapsedDocIds: [], toggleDocExpanded: () => {}, isPublicShare: __isPublicShare, documents: __docUi })
+        ? selector({ collapsedDocIds: __collapsedDocIds, toggleDocExpanded: () => {}, isPublicShare: __isPublicShare, documents: __docUi })
         : { isPublicShare: __isPublicShare },
+  }));
+
+  // SYSTEM: inbox — the tree subscribes ONLY to the summary slice; the flags
+  // themselves arrive via serializers on the list payloads (not exercised here).
+  vi.doMock('../store/inbox-store', () => ({
+    useInboxStore: (selector: (s: any) => any) => selector({ summary: __inboxSummary }),
   }));
 
   const mod = await import('./DocumentTree');
@@ -127,6 +140,7 @@ afterEach(() => {
   vi.doUnmock('../i18n');
   vi.doUnmock('../store/app-store');
   vi.doUnmock('../store/ui-store');
+  vi.doUnmock('../store/inbox-store');
 });
 
 /** Fire the row's onMouseEnter via the mouseover event React synthesizes it from. */
@@ -235,5 +249,68 @@ describe('DocumentTree reference plaques — source and parent never coincide', 
     expect(cur.classList.contains('ref-parent')).toBe(false);
     expect(parent.classList.contains('ref-parent')).toBe(false);
     expect(parent.classList.contains('active')).toBe(false);
+  });
+});
+
+describe('DocumentTree inbox mark — SYSTEM: inbox unread painting', () => {
+  it('a flagged row carries .inbox-unread; an unflagged sibling does not', () => {
+    appState.documentTree = [makeNode('doc-1', 'Doc 1'), makeNode('doc-2', 'Doc 2')];
+    __inboxSummary = { 'doc-2': { notes: 1, refs: 0 } };
+    act(() => root.render(createElement(Harness)));
+
+    expect(container.querySelector('[data-doc-id="doc-2"]')!.classList.contains('inbox-unread')).toBe(true);
+    expect(container.querySelector('[data-doc-id="doc-1"]')!.classList.contains('inbox-unread')).toBe(false);
+    expect(container.querySelector('[data-doc-id="doc-1"]')!.classList.contains('inbox-unread-muted')).toBe(false);
+  });
+
+  it('a zeroed summary entry paints nothing (all read → plain row)', () => {
+    appState.documentTree = [makeNode('doc-1', 'Doc 1')];
+    __inboxSummary = { 'doc-1': { notes: 0, refs: 0 } };
+    act(() => root.render(createElement(Harness)));
+
+    expect(container.querySelector('[data-doc-id="doc-1"]')!.classList.contains('inbox-unread')).toBe(false);
+  });
+
+  it('a COLLAPSED ancestor of a flagged row is muted; an EXPANDED ancestor stays plain', () => {
+    const child = makeNode('doc-child', 'Child');
+    appState.documentTree = [makeNode('doc-parent', 'Parent', { children: [child] })];
+    __inboxSummary = { 'doc-child': { notes: 0, refs: 2 } };
+
+    // Expanded (default): parent plain, flagged child visible and direct-marked.
+    act(() => root.render(createElement(Harness)));
+    const parentRow = container.querySelector('[data-doc-id="doc-parent"]')!;
+    expect(parentRow.classList.contains('inbox-unread-muted')).toBe(false);
+    expect(parentRow.classList.contains('inbox-unread')).toBe(false);
+    expect(container.querySelector('[data-doc-id="doc-child"]')!.classList.contains('inbox-unread')).toBe(true);
+
+    // Collapsed: child row unmounts, parent takes the muted hint.
+    __collapsedDocIds = ['doc-parent'];
+    act(() => root.render(createElement(Harness)));
+    const parentRow2 = container.querySelector('[data-doc-id="doc-parent"]')!;
+    expect(parentRow2.classList.contains('inbox-unread-muted')).toBe(true);
+    expect(parentRow2.classList.contains('inbox-unread')).toBe(false);
+    expect(container.querySelector('[data-doc-id="doc-child"]')).toBeNull();
+  });
+
+  it('active + flagged compose on one row: both classes (CSS keeps the gray action plate)', () => {
+    // doc-1 is the route-active doc (useParams documentId='doc-1') AND flagged.
+    __inboxSummary = { 'doc-1': { notes: 1, refs: 0 } };
+    act(() => root.render(createElement(Harness)));
+
+    const row = container.querySelector('[data-doc-id="doc-1"]')!;
+    expect(row.classList.contains('active')).toBe(true);
+    expect(row.classList.contains('inbox-unread')).toBe(true);
+  });
+
+  it('ref-parent (blue) + flagged compose: blue row, yellow title (both classes, neither dropped)', () => {
+    appState.documentTree = [makeNode('doc-1', 'Doc 1'), makeNode('doc-2', 'Doc 2')];
+    appState.currentReference = { document_id: 'doc-2' };
+    appState.referenceSourceDocId = 'doc-1';
+    __inboxSummary = { 'doc-2': { notes: 1, refs: 0 } };
+    act(() => root.render(createElement(Harness)));
+
+    const row = container.querySelector('[data-doc-id="doc-2"]')!;
+    expect(row.classList.contains('ref-parent')).toBe(true);
+    expect(row.classList.contains('inbox-unread')).toBe(true);
   });
 });

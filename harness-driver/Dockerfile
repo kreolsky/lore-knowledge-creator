@@ -42,8 +42,9 @@ COPY conversation /dsh/lore-conversation
 # image-capability upsert; caps.test.ts gates the model-capability resolution
 # (the ONE source); web-search.test.ts gates the Lore search providers' wire
 # mapping + call-time credential resolution; boot-env.test.ts gates the
-# standalone boot (no backend fetch rides the entry).
-RUN node --import tsx/esm --test lore-driver/test/map.test.ts lore-driver/test/entries.test.ts lore-driver/test/driver.test.ts lore-driver/test/ws-events.test.ts lore-driver/test/approvals.test.ts lore-driver/test/skills.test.ts lore-driver/test/images.test.ts lore-driver/test/caps.test.ts lore-driver/test/web-search.test.ts lore-driver/test/boot-env.test.ts
+# standalone boot (no backend fetch rides the entry); time-stamps.test.ts gates
+# the turn's time ground as its own lore-time context message.
+RUN node --import tsx/esm --test lore-driver/test/map.test.ts lore-driver/test/entries.test.ts lore-driver/test/driver.test.ts lore-driver/test/ws-events.test.ts lore-driver/test/approvals.test.ts lore-driver/test/skills.test.ts lore-driver/test/images.test.ts lore-driver/test/caps.test.ts lore-driver/test/web-search.test.ts lore-driver/test/boot-env.test.ts lore-driver/test/time-stamps.test.ts
 
 # The test feeds a real session log.
 RUN node --import tsx/esm --test lore-conversation/test/conversation.test.ts lore-conversation/test/lore-nodes.test.ts

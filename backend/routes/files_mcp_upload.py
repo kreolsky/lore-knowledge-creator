@@ -41,6 +41,7 @@ from files_util import (
     save_upload,
     validate_magic,
 )
+from inbox import KIND_REF, mark_arrived
 from mcp_gateway.upload import MCP_UPLOAD_ROUTE_PREFIX, verify_upload_token
 from transcription import enqueue_transcription
 
@@ -113,6 +114,8 @@ async def redeem_mcp_upload(token: str, file: UploadFile = File(...)):
     if dedup_key:
         await _write_dedup(dedup_key, ref_id, claims)
 
+    await _flag_redeemed_inbox(claims, ref_id)
+
     # Normalize the redeem response so it carries the NEW node's document_id
     # (the mint echoed attach_to only). The agent gets the id without a follow-up call.
     return {
@@ -122,6 +125,20 @@ async def redeem_mcp_upload(token: str, file: UploadFile = File(...)):
         "processing_status": result.get("processing_status"),
         "deduplicated": False,
     }
+
+
+async def _flag_redeemed_inbox(claims: dict, ref_id: str) -> None:
+    """Inbox (see SYSTEM: inbox): the redeem IS an external arrival — flag the
+    minting user (the recipient) for this reference. mark_arrived consults the
+    doc's refs toggle (default OFF) itself. A dedup replay never reaches this
+    call (it returned above), so a replay cannot re-flag; an internal agent's
+    mint (the dsh driver) never flags."""
+    if claims.get("internal") is True:
+        return
+    await mark_arrived(
+        KIND_REF, object_id=ref_id, project_id=claims["project_id"],
+        document_id=claims["document_id"], recipient_id=claims["user_id"],
+    )
 
 
 async def _resolve_redeem_inputs(token: str, file: UploadFile):

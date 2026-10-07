@@ -249,3 +249,153 @@ async def test_redis_tier_implements_rate_limiter_protocol():
     assert await b.allow("k") is True
     assert await b.allow("k") is False
     await b.reset("k")
+
+
+# ─── login tiers: per-device + per-account ───────────────────────────────────────
+
+
+class _FromIP:
+    """ASGI wrapper that pins scope["client"] — a login from one source address.
+
+    A sync TestClient with client= spins a portal loop the loop-bound Redis
+    singleton cannot serve (rate limiter fails closed); riding the session-loop
+    httpx transport with this wrapper varies the address the route keys on."""
+
+    def __init__(self, app, ip: str):
+        self.app, self.ip = app, ip
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            scope["client"] = (self.ip, 50000)
+        await self.app(scope, receive, send)
+
+
+def _client_from(app, ip: str):
+    import httpx
+
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_FromIP(app, ip)), base_url="http://test"
+    )
+
+
+async def _login(c, email: str, password: str):
+    return await c.post("/api/auth/login", json={"email": email, "password": password})
+
+
+async def test_login_email_tier_caps_one_account_across_addresses(app, regular_user):
+    """The per-account tier bounds guesses on ONE email regardless of how
+    many client addresses they come from (10/15min), while a different email
+    from a fresh address is judged on credentials, not throttle."""
+    # 10 failed logins on one email, each from a DISTINCT client address.
+    for i in range(10):
+        async with _client_from(app, f"198.51.100.{i}") as c:
+            assert (await _login(c, "user@test.com", "wrong")).status_code == 401
+    # The 11th, from a fresh address: the email tier refuses it.
+    async with _client_from(app, "198.51.100.99") as c:
+        assert (await _login(c, "user@test.com", "wrong")).status_code == 429
+    # A different email from its own fresh address: 401, not 429.
+    async with _client_from(app, "198.51.100.100") as c:
+        assert (await _login(c, "ghost@test.com", "wrong")).status_code == 401
+
+
+def _device_jwt(email: str, *, key: str | None = None, exp_offset: int = 3600, typ: str = "device") -> str:
+    import jwt
+
+    from config import ALGORITHM, SECRET_KEY
+
+    now = int(time.time())
+    return jwt.encode(
+        {"typ": typ, "sub": email, "nonce": "f" * 32, "iat": now, "exp": now + exp_offset},
+        key or SECRET_KEY, algorithm=ALGORITHM,
+    )
+
+
+async def _exhaust_untrusted(app, email: str):
+    """10 wrong guesses on `email` from cookie-less clients, then the 11th is 429."""
+    for i in range(10):
+        async with _client_from(app, f"198.51.100.{i}") as c:
+            assert (await _login(c, email, "wrong")).status_code == 401
+    async with _client_from(app, "198.51.100.99") as c:
+        assert (await _login(c, email, "wrong")).status_code == 429
+
+
+async def test_known_device_signs_in_while_strangers_exhausted_the_account(app, regular_user):
+    """Strangers' guesses never lock the owner's known device out."""
+    async with _client_from(app, "203.0.113.1") as owner:
+        assert (await _login(owner, "user@test.com", "userpass")).status_code == 200
+        assert owner.cookies.get("lore_device")
+        await _exhaust_untrusted(app, "user@test.com")
+        assert (await _login(owner, "user@test.com", "userpass")).status_code == 200
+
+
+async def test_device_cookie_for_another_account_is_untrusted(app, admin_user, regular_user):
+    async with _client_from(app, "203.0.113.2") as c:
+        assert (await _login(c, "user@test.com", "userpass")).status_code == 200
+        await _exhaust_untrusted(app, "admin@test.com")
+        assert (await _login(c, "admin@test.com", "adminpass")).status_code == 429
+
+
+@pytest.mark.parametrize("cookie_kind", ["forged", "expired", "wrong_typ"])
+async def test_invalid_device_cookie_is_untrusted(app, regular_user, cookie_kind):
+    value = {
+        "forged": lambda: _device_jwt("user@test.com", key="not-the-secret-key-at-all-0123456789"),
+        "expired": lambda: _device_jwt("user@test.com", exp_offset=-10),
+        "wrong_typ": lambda: _device_jwt("user@test.com", typ="session"),
+    }[cookie_kind]()
+    await _exhaust_untrusted(app, "user@test.com")
+    async with _client_from(app, "203.0.113.3") as c:
+        c.cookies.set("lore_device", value, path="/api/auth")
+        assert (await _login(c, "user@test.com", "userpass")).status_code == 429
+
+
+async def test_device_counter_is_its_own(app, regular_user):
+    """A device's failures throttle that device only — never the untrusted counter."""
+    async with _client_from(app, "203.0.113.4") as dev:
+        assert (await _login(dev, "user@test.com", "userpass")).status_code == 200
+        for _ in range(10):
+            assert (await _login(dev, "user@test.com", "wrong")).status_code == 401
+        assert (await _login(dev, "user@test.com", "userpass")).status_code == 429
+    async with _client_from(app, "203.0.113.5") as other:
+        assert (await _login(other, "user@test.com", "userpass")).status_code == 200
+
+
+async def test_each_success_rotates_device_cookie(app, regular_user):
+    async with _client_from(app, "203.0.113.6") as c:
+        first = (await _login(c, "user@test.com", "userpass")).cookies.get("lore_device")
+        second = (await _login(c, "user@test.com", "userpass")).cookies.get("lore_device")
+    assert first and second and first != second
+
+
+async def test_logout_keeps_device_cookie(app, regular_user):
+    async with _client_from(app, "203.0.113.7") as c:
+        assert (await _login(c, "user@test.com", "userpass")).status_code == 200
+        resp = await c.post("/api/auth/logout")
+        assert resp.status_code == 200
+        assert not [h for h in resp.headers.get_list("set-cookie") if h.startswith("lore_device=")]
+        assert c.cookies.get("lore_device")
+
+
+async def test_login_has_no_per_address_tier(app):
+    """One client address guessing at many accounts is judged per account only."""
+    async with _client_from(app, "203.0.113.8") as c:
+        for i in range(8):
+            assert (await _login(c, f"ghost{i}@test.com", "wrong")).status_code == 401
+
+
+def test_login_device_tier_thresholds_pinned_in_registry():
+    assert _tiers["login_device"].max == 10 and _tiers["login_device"].window == 900
+
+
+def test_login_email_tier_thresholds_pinned_in_registry():
+    assert _tiers["login_email"].max == 10 and _tiers["login_email"].window == 900
+
+
+def test_login_email_key_never_collides_with_ip_keys():
+    # The `login-email:` prefix keeps the account key outside reset_rate_limit's
+    # registry sweep semantics: an IP-keyed reset can never address an account
+    # budget, and a reset of one account's key exists in no other tier.
+    assert (
+        _tiers["login_email"]._key("login-email:victim@test.com")
+        == "rl:login_email:login-email:victim@test.com"
+    )
+

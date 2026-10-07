@@ -14,6 +14,7 @@ import { memo, useState, useRef, useCallback, useMemo } from 'react';
 import { FileText, Trash2, Plus, ChevronRight, ChevronDown, Pencil, BookOpen, Menu, FolderUp } from 'lucide-react';
 import { useAppStore } from '../store/app-store';
 import { useUIStore } from '../store/ui-store';
+import { useInboxStore } from '../store/inbox-store';
 import { readRefOpenMode, refIsScope } from '../store/ui-store/documents-slice';
 import { useShallow } from 'zustand/react/shallow';
 import { apiClient } from '../api/client';
@@ -43,6 +44,7 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
   onCreateChild,
   onChangeParent,
   canEdit = true,
+  inboxMarks,
   onDocHover,
   onDocHoverLeave,
 }: {
@@ -52,6 +54,10 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
   onCreateChild: (parentId: string) => void,
   onChangeParent: (doc: DocumentTreeNode, anchorRect: DOMRect) => void,
   canEdit?: boolean,
+  /** see SYSTEM: inbox — {flagged, muted} id sets derived ONCE in the
+   * container (stable useMemo identity) and handed down verbatim, so the row
+   * memo INVARIANT holds: no row subscribes to the shared summary slice. */
+  inboxMarks?: { flagged: Set<string>; muted: Set<string> },
   onDocHover: (docId: string, titleEl: HTMLElement) => void,
   onDocHoverLeave: (e?: React.MouseEvent) => void,
 }) {
@@ -132,7 +138,7 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
         tabIndex={-1}
         data-doc-id={doc.document_id}
         data-parent-id={doc.parent_id ?? ''}
-        className={`doc-item ${isActive ? 'active' : ''} ${isRefSource ? 'active' : ''} ${isRefParent ? 'ref-parent' : ''} ${isSnapshotParent ? 'snapshot-parent' : ''} ${level > 0 ? 'doc-item-child' : ''}`}
+        className={`doc-item ${isActive ? 'active' : ''} ${isRefSource ? 'active' : ''} ${isRefParent ? 'ref-parent' : ''} ${isSnapshotParent ? 'snapshot-parent' : ''} ${inboxMarks?.flagged.has(doc.document_id) ? 'inbox-unread' : ''} ${inboxMarks?.muted.has(doc.document_id) ? 'inbox-unread-muted' : ''} ${level > 0 ? 'doc-item-child' : ''}`}
         style={level > 0 ? { paddingLeft: level * 12 + 4 } : undefined}
         onMouseEnter={() => {
           if (labelRef.current) onDocHover(doc.document_id, labelRef.current);
@@ -263,6 +269,7 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
               onCreateChild={onCreateChild}
               onChangeParent={onChangeParent}
               canEdit={canEdit}
+              inboxMarks={inboxMarks}
               onDocHover={onDocHover}
               onDocHoverLeave={onDocHoverLeave}
             />
@@ -303,6 +310,35 @@ export function DocumentTree({ onDelete, onCreateChild, onChangeParent, canEdit 
   const toggleDocExpanded = useUIStore(s => s.toggleDocExpanded);
   const expandDocs = useUIStore(s => s.expandDocs);
   const setSidebarTab = useUIStore(s => s.setSidebarTab);
+
+  // see SYSTEM: inbox — the caller's unread pool paints the tree. The
+  // container derives BOTH marks from the one summary slice (fed by
+  // ProjectPage's useInboxSummary): `flagged` = this row's own doc has unread
+  // arrivals (direct mark), `muted` = a COLLAPSED ancestor of a flagged row
+  // ("something inside"); an EXPANDED ancestor stays plain — the flagged child
+  // is already visible under it. Ancestors are derived on the client from the
+  // tree (plan decision) — the backend summary is flat per-document only.
+  const inboxSummary = useInboxStore(s => s.summary);
+  const inboxMarks = useMemo(() => {
+    const flagged = new Set<string>();
+    for (const [docId, counts] of Object.entries(inboxSummary)) {
+      if (counts.notes + counts.refs > 0) flagged.add(docId);
+    }
+    const muted = new Set<string>();
+    const walk = (nodes: DocumentTreeNode[]): boolean => {
+      let subtreeHas = false;
+      for (const n of nodes) {
+        const childHas = n.children.length > 0 && walk(n.children);
+        if (childHas && !flagged.has(n.document_id) && collapsedDocIds.includes(n.document_id)) {
+          muted.add(n.document_id);
+        }
+        if (childHas || flagged.has(n.document_id)) subtreeHas = true;
+      }
+      return subtreeHas;
+    };
+    walk(documentTree);
+    return { flagged, muted };
+  }, [inboxSummary, documentTree, collapsedDocIds]);
 
   const treeRef = useRef<HTMLDivElement>(null);
   // INVARIANT: focusedIdRef tracks the currently focused doc ID for roving tabindex.
@@ -483,6 +519,8 @@ export function DocumentTree({ onDelete, onCreateChild, onChangeParent, canEdit 
               !!scopeReference && currentProject.index_doc_id === scopeReference?.document_id ? 'ref-parent' : ''
             } ${
               !!snapshotPreview && !scopeReference && currentProject.index_doc_id === snapshotPreview.document_id ? 'snapshot-parent' : ''
+            } ${
+              inboxMarks.flagged.has(currentProject.index_doc_id) ? 'inbox-unread' : ''
             }`}
             onClick={() => emit('navigate-to-document', { documentId: currentProject.index_doc_id!, restore: true })}
           >
@@ -501,6 +539,7 @@ export function DocumentTree({ onDelete, onCreateChild, onChangeParent, canEdit 
             onCreateChild={onCreateChild}
             onChangeParent={onChangeParent}
             canEdit={canEdit}
+            inboxMarks={inboxMarks}
             onDocHover={handleDocHover}
             onDocHoverLeave={hover.handleHoverLeave}
           />

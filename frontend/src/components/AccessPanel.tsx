@@ -6,7 +6,8 @@
  *      Read-only by invariant for everyone-except-owner; the backend enforces
  *      owner-only mint/revoke.
  *   2. Move — move the current document to another project.
- *   3. API — widget/agent keys + transcription agent config for the current
+ *   3. Inbox — per-(user × document) arrival-notify toggles (SYSTEM: inbox).
+ *   4. API — widget/agent keys + transcription agent config for the current
  *      document. Project-wide members live in ProjectSettingsPanel.MembersSection.
  *
  * ARCH: the tab is full-only and hidden when a reference is open (gated in
@@ -33,9 +34,11 @@ import { ParentPickerPopup } from './ParentPickerPopup';
 import { copyWithToast } from './chat/shared/copy';
 import { useTranslation } from '../i18n';
 import { useIsProjectOwner } from '../hooks/useIsProjectOwner';
-import { Link2, KeyRound, FolderOutput, ChevronDown } from 'lucide-react';
+import { Link2, KeyRound, FolderOutput, Inbox, ChevronDown } from 'lucide-react';
 import type { Document, Project } from '../types';
 import { deriveShareState, planShareToggle, type ShareAction } from './access/share-state';
+import { useInboxStore } from '../store/inbox-store';
+import { fetchInboxToggles, type InboxToggles } from '../api/inbox';
 
 export function AccessPanel() {
   const project = useAppStore(s => s.currentProject);
@@ -58,6 +61,12 @@ export function AccessPanel() {
             projectId={project.project_id}
             docId={docId}
             docTitle={currentDocument?.title ?? null}
+          />
+        )}
+        {docId && (
+          <InboxTogglesSection
+            projectId={project.project_id}
+            docId={docId}
           />
         )}
         {docId && (
@@ -436,6 +445,81 @@ function MoveDocumentSection({ projectId, docId, docTitle }: {
           })}
         </p>
       </Modal>
+    </>
+  );
+}
+
+// ─── Inbox arrival toggles — per (user × document) notify prefs ─────────────
+//
+// see SYSTEM: inbox. Ruling: the toggles
+// live in the Access tab — it is the per-document settings surface, and the
+// audience is full-only recipients like every other write affordance here (the
+// tab itself is full-only, gated in ProjectPage — no second gate owed).
+// The defaults mirror the backend's (notes ON, refs OFF — the same pair a
+// missing user_preferences row resolves to). GET seeds the store slice the
+// checkboxes read; a flip is an optimistic seedToggles + PUT (updateToggles)
+// that REVERTS to the exact prior pair and toasts on failure — no silent
+// degradation.
+
+const INBOX_TOGGLE_DEFAULTS: InboxToggles = { notes: true, refs: false };
+
+export function InboxTogglesSection({ projectId, docId }: { projectId: string; docId: string }) {
+  const { t } = useTranslation();
+  const toggles = useInboxStore(s => s.toggles[`${projectId}:${docId}`]) ?? null;
+  // i18n rule: `t` is a NEW function every render — read it in effects/handlers
+  // via a ref, never through the dep arrays.
+  const tRef = useRef(t);
+  tRef.current = t;
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchInboxToggles(projectId, docId)
+      .then((value) => {
+        if (!cancelled) useInboxStore.getState().seedToggles(projectId, docId, value);
+      })
+      .catch((err) => {
+        console.error('Failed to load inbox toggles', err);
+        if (!cancelled) {
+          useAppStore.getState().showToast(tRef.current('inboxToggleLoadFailed'), 'error');
+        }
+      });
+    return () => { cancelled = true; };
+  }, [projectId, docId]);
+
+  const flip = (kind: keyof InboxToggles, next: boolean) => {
+    const prev = toggles ?? INBOX_TOGGLE_DEFAULTS;
+    useInboxStore.getState().seedToggles(projectId, docId, { ...prev, [kind]: next });
+    useInboxStore.getState().updateToggles(projectId, docId, { [kind]: next })
+      .catch((err) => {
+        console.error('Failed to save inbox toggle', err);
+        useInboxStore.getState().seedToggles(projectId, docId, prev);
+        useAppStore.getState().showToast(tRef.current('inboxToggleSaveFailed'), 'error');
+      });
+  };
+
+  const value = toggles ?? INBOX_TOGGLE_DEFAULTS;
+
+  return (
+    <>
+      <SectionHeader
+        icon={<Inbox size={11} />}
+        title={t('accessInboxTitle')}
+        description={t('accessInboxDesc')}
+      />
+      <div className="px-3.5">
+        <div className="flex flex-col gap-1.5 mt-1">
+          <FieldCheckbox
+            checked={value.notes}
+            onChange={(v) => flip('notes', v)}
+            label={t('inboxToggleNotes')}
+          />
+          <FieldCheckbox
+            checked={value.refs}
+            onChange={(v) => flip('refs', v)}
+            label={t('inboxToggleRefs')}
+          />
+        </div>
+      </div>
     </>
   );
 }

@@ -312,6 +312,31 @@ def test_build_turn_payload_carries_no_capability_numbers():
     assert "max_output_tokens" not in payload
 
 
+def test_build_turn_payload_carries_time_stamps():
+    """The turn contract carries the stamp lines as their OWN field — `prompt`
+    is the raw user content and the plugin emits the stamps as a separate
+    `lore-time` context message, never inside the user's text."""
+    payload = _build_turn_payload(
+        model="m", system_prompt="s", tools=[],
+        agent_key="lore_x", apply_mode="confirm",
+        time_stamps=[
+            "[chat started 2026-08-31T18:05:00+03:00]",
+            "[sent 2026-09-01T23:14:05+03:00]",
+        ],
+    )
+    assert payload["time_stamps"] == [
+        "[chat started 2026-08-31T18:05:00+03:00]",
+        "[sent 2026-09-01T23:14:05+03:00]",
+    ]
+    # Absent stamps degrade to [] (an unconditional key, never a missing field
+    # the plugin has to probe for).
+    empty = _build_turn_payload(
+        model="m", system_prompt="s", tools=[],
+        agent_key="lore_x", apply_mode="confirm",
+    )
+    assert empty["time_stamps"] == []
+
+
 # ─── Integration: completions → /followup apply_mode (F3) ─────────────────────
 
 

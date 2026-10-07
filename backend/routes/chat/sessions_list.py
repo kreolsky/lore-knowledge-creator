@@ -314,6 +314,7 @@ async def list_sessions(
     serialized = [
         serialize_session(
             r, ref_map, previews_by_session_id, last_at_by_session, document_titles,
+            viewer_id=user["user_id"],
         )
         for r in page
     ]

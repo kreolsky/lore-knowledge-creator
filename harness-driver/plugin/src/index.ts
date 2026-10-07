@@ -34,6 +34,7 @@ import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 
 import { mapEvent, newTurnMapState, turnFailureLine } from './map.ts'
@@ -45,6 +46,7 @@ import {
   type Gateway,
 } from './caps.ts'
 import { projectSessionEntries } from './entries.ts'
+import { parseTimeStamps, timeStampMessage } from './time-stamps.ts'
 import { createSessionStreamBaselines, type SessionStreamBaselines } from './stream-baselines.ts'
 import {
   attachEventsChannel, createSessionEventTap, loadWs, relayAssistantStream,
@@ -1282,6 +1284,11 @@ async function prepareTurnDrive(ctx: Context, map: SessionMap, body: Record<stri
   // CHAT_MODEL — the backend folds the fallback); applied to the titler entry
   // in buildUserContent, after the catalog declares the model.
   const titleModel = (typeof body.title_model === 'string' ? body.title_model : '').trim()
+  // The turn's time ground (backend-owned bytes: user timezone, `[chat started]`
+  // root anchor, root-fork stability — completions_turn._turn_time_stamps).
+  // Kept per turn; the setup's pre-step listener emits them — see ARCH in
+  // time-stamps.ts.
+  const timeStamps = parseTimeStamps(body.time_stamps)
   // The per-turn reasoning effort, in the GATEWAY's spelling:
   // null = Default — no explicit selection, NO reasoning_effort field on the
   // wire, and the provider's own default applies. The backend sends the field
@@ -1421,6 +1428,16 @@ async function prepareTurnDrive(ctx: Context, map: SessionMap, body: Record<stri
       complete: true,
     })
     installModelSelection(agentCtx, selection)
+    // The time ground rides its own context message on the turn's FIRST step
+    // (see ARCH in time-stamps.ts). Scoped to THIS turn's agent, disposed with
+    // it in finish(): no per-session stamp state. DELEGATE first (context alone is not a veto),
+    // then append after the downstream decision's admitted messages.
+    agentCtx.on('agent/pre-step', async ({ step }, next): Promise<PreStepDecision> => {
+      const downstream = await next()
+      const ours = timeStampMessage(timeStamps, step)
+      if (ours === undefined || downstream.kind !== 'enter') return downstream
+      return { ...downstream, messages: [...downstream.messages, ours] }
+    })
     restriction.attach(agentCtx)
     if (skillProvider) {
       // Scoped to THIS agent: the provider serves exactly this turn's payload

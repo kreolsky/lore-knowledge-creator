@@ -155,4 +155,5 @@ async def update_session_command(
         f"UPDATE type::record('chat_sessions', $id) SET {', '.join(sets)} RETURN AFTER",
         params,
     )
-    return serialize_session(rows[0], await build_session_ref_map(db, rows[0]))
+    return serialize_session(rows[0], await build_session_ref_map(db, rows[0]),
+                             viewer_id=user["user_id"])

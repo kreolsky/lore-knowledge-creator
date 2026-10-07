@@ -84,6 +84,17 @@
   background: rgba(40, 180, 100, 0.10);
 }
 
+/* ── Inbox unread mark (SYSTEM: inbox) ── */
+/* An externally arrived (widget/MCP) note or reference flagged for the viewer.
+ * --inbox-mark (index.css :root) is the same sticky-yellow dark shade the tab
+ * and the tree row paint, layered over the variant fill by specificity
+ * (.pill.unread = 0,2,0 beats every single-class variant). Active+unread can
+ * only appear when the read call failed (open clears the flag), so no active
+ * guard is owed. The token aliases the theme-aware sticky var — no dark rule. */
+.pill.unread {
+  background: var(--inbox-mark);
+}
+
 /* ── Highlight variant overrides for inner note-time element ── */
 .highlight :global(.note-time) {
   color: rgba(160, 120, 10, 0.75);
@@ -104,6 +115,12 @@
   }
   .plain.activeBlue:hover {
     background: var(--sticky-blue-dark);
+  }
+  /* Keep the inbox mark while hovering — the plain/anchorless hover fills
+   * (surface2) are same-specificity and later, so without this the flag
+   * visually disappears under the pointer. */
+  .pill.unread:hover {
+    background: var(--inbox-mark);
   }
   .anchored:hover {
     background: var(--sticky-yellow-dark);
