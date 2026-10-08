@@ -192,6 +192,26 @@ describe('MarkdownContent — the Lore wrapper contract', () => {
     expect(emit).toHaveBeenCalledWith('navigate-to-document', { documentId: 'doc123' });
   });
 
+  it.each([
+    ['bare', '[the doc](1169966b-afe4-4bfd-b532-5187f3ba1a30)'],
+    ['angle', '[the doc](<1169966b-afe4-4bfd-b532-5187f3ba1a30>)'],
+  ])('a scheme-less (%s) id link is a document link — the form the agent prompt prescribes', async (_shape, src) => {
+    const { container } = await renderMarkdown(src);
+    const anchor = await waitFor(() => {
+      const a = container.querySelector<HTMLAnchorElement>('a[href^="https://lore.local/l/doc/"]');
+      if (!a) throw new Error('rewritten anchor not mounted');
+      return a;
+    });
+    fireEvent.click(anchor);
+    expect(emit).toHaveBeenCalledWith('navigate-to-document', { documentId: '1169966b-afe4-4bfd-b532-5187f3ba1a30' });
+  });
+
+  it('http, mailto and anchor links are not rewritten to the document form', async () => {
+    const { container } = await renderMarkdown('[w](https://example.com/x) [m](mailto:a@b.c) [h](#top)');
+    await waitFor(() => { if (!container.querySelector('a[href="https://example.com/x"]')) throw new Error('not mounted'); });
+    expect(container.querySelector('a[href*="lore.local"]')).toBeNull();
+  });
+
   it('a ref: link click emits navigate-to-reference with stayInContext', async () => {
     const { container } = await renderMarkdown('[see ref](ref:ref456)');
     const anchor = await waitFor(() => {

@@ -7,6 +7,11 @@
  *   `lore/verdict-ask` and `lore/halt` mints), grouped by turn, so a reload
  *   and the live stream agree by
  *   construction rather than by two synchronized copies of the timeline.
+ *   One declared addition: for a session with no registered driver-owned
+ *   turn, every closed turn's frames end with the transport terminal
+ *   `turn_closed` (see projectSessionEntries's `terminals`) — the live
+ *   channel pushes the same fact best-effort and unsequenced, and only the
+ *   replay can recover its loss.
  *   PURE — no ctx, no http (test/entries.test.ts).
  *
  * # ARCH: the driving session's log is the ONLY input. A child (subagent)
@@ -53,6 +58,14 @@ export interface ReplayedSession {
   tail_seq: number | null
 }
 
+/** The replayed transport terminal's fractional offset after the closing
+ * turn/end's seq — the LORE_SEQ_OFFSETS PATTERN (a fractional seq between the
+ * anchor event and the next one), not that table: turn_closed is TRANSPORT
+ * state, not an assembler fact, so it never enters the lore registry. The
+ * value sits above every lore offset (0.5/0.6/0.7/0.8) so the terminal always
+ * orders after a mint anchored at the same turn/end — the halt mint included. */
+const TURN_CLOSED_OFFSET = 0.9
+
 /**
  * Group a session log into turns and map each turn's events to relay frames.
  *
@@ -98,10 +111,25 @@ export interface ReplayedSession {
  * seats nothing on a reload and is not carried. The resync keeps it beside
  * the surviving frames for the same reason the reload carries it: the
  * browser re-seats the transient tail from it.
+ *
+ * `terminals` (optional, default off): append the transport terminal
+ * `turn_closed` (seq-anchored at each closed turn's `end_seq` +
+ * TURN_CLOSED_OFFSET) after the turn's last frame. The caller gates it on
+ * liveness — the session has NO registered driver-owned turn (the same
+ * `followupTurns` key the crash closers branch on): a live session's running
+ * turn is OPEN (no end_seq → no terminal) and its previous turns' terminals
+ * are the LIVE push's to deliver, never the replay's. Why the replay carries
+ * it at all: the plugin's live push is best-effort and NOT a log entry, so a
+ * socket gap that swallows it would leave the browser's only terminal
+ * undeliverable — with the terminal INSIDE the frames list, the since_seq
+ * filter and the per-turn grouping handle it like any frame (a consumer that
+ * holds through the terminal drops the turn whole; one that holds only
+ * through the last mint receives the terminal alone).
  */
 export function projectSessionEntries(
   events: DshEvent[], sinceSeq?: number,
   assistantStream?: SessionAssistantStreamBaseline,
+  terminals?: boolean,
 ): ReplayedSession {
   const turns: ReplayedTurn[] = []
   let pending: DshEvent[] = []
@@ -131,6 +159,11 @@ export function projectSessionEntries(
     }
     open.frames.push(...mapEvent(ev, open.state))
     if (ev.type === 'turn/end') {
+      // After mapEvent's own output (the verbatim turn/end relay + the halt
+      // mint when the reason mints one) — the terminal always orders last.
+      if (terminals) open.frames.push({
+        type: 'turn_closed', seq: ev.seq + TURN_CLOSED_OFFSET,
+      })
       turns.push({ frames: open.frames, end_seq: ev.seq })
       open = null
     }

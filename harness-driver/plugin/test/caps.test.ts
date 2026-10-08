@@ -43,6 +43,12 @@ const SERVED = [
     context_length: 524288, max_completion_tokens: 131072,
   },
   {
+    // The router's anthropic-protocol entry:
+    // `api` names the wire protocol, `compat` rides verbatim.
+    id: 'deepseek-a/flash', api: 'anthropic-messages',
+    context_length: 524288, max_completion_tokens: 131072,
+  },
+  {
     id: 'local/orange/chat', supports_vision: true,
     architecture: { input_modalities: ['text', 'image'] },
     context_length: 131072, max_completion_tokens: 32768,
@@ -52,6 +58,7 @@ const SERVED = [
   { id: 'm/modalities', architecture: { input_modalities: ['text', 'image'] } },
   { id: 'm/string-window', context_length: '262144' },
   { id: 'm/garbage-levels' }, // served, so its /capabilities entry is read
+  { id: 'm/weird-api', api: 'carrier-pigeon' }, // a protocol we do not speak
 ]
 
 test('a served model resolves its numbers and vision off the roster', async () => {
@@ -59,6 +66,7 @@ test('a served model resolves its numbers and vision off the roster', async () =
   const caps = await resolveModelCaps('deepseek/flash', { fetch: fakeFetch(SERVED) })
   assert.deepEqual(caps, {
     known: true, vision: false, contextWindow: 524288, maxOutputTokens: 131072,
+    api: 'openai-completions', compat: null,
     effortLevels: null,
   }, 'no /capabilities entry for the model → null levels (unknown)')
   const vision = await resolveModelCaps('local/orange/chat', { fetch: fakeFetch(SERVED) })
@@ -89,6 +97,7 @@ test('an unserved id answers UNKNOWN (named defaults, never a guess)', async () 
   const caps = await resolveModelCaps('never-served/model', { fetch: fakeFetch(SERVED) })
   assert.deepEqual(caps, {
     known: false, vision: false, contextWindow: null, maxOutputTokens: null,
+    api: 'openai-completions', compat: null,
     effortLevels: null,
   })
 })
@@ -98,8 +107,48 @@ test('an unreadable gateway degrades to UNKNOWN, never a thrown gate', async () 
   const caps = await resolveModelCaps('local/orange/chat', { fetch: brokenFetch() })
   assert.deepEqual(caps, {
     known: false, vision: false, contextWindow: null, maxOutputTokens: null,
+    api: 'openai-completions', compat: null,
     effortLevels: null,
   })
+})
+
+// ─── the roster api + compat: which route a model rides ──────────────────────
+// The router's /v1/models `api` field picks the
+// pi-ai route name; its `compat` rides the catalog entry verbatim (the router
+// owns the allow-list — dsh refuses a withheld key loudly, naming it).
+
+test('the roster api names the wire protocol; absent or unknown stays openai-completions', async () => {
+  resetCapsCache()
+  const io = { fetch: fakeFetch(SERVED) }
+  assert.equal((await resolveModelCaps('deepseek-a/flash', io)).api,
+    'anthropic-messages', 'the entry names the Messages protocol')
+  assert.equal((await resolveModelCaps('deepseek/flash', io)).api,
+    'openai-completions', 'an entry without api keeps today\'s one route')
+  assert.equal((await resolveModelCaps('m/weird-api', io)).api,
+    'openai-completions', 'a protocol Lore does not route degrades to the openai route, never a guess')
+  assert.equal((await resolveModelCaps('never-served/model', io)).api,
+    'openai-completions', 'an unserved id answers the openai route (UNKNOWN)')
+})
+
+test('the entry compat rides verbatim — null when absent, no key filtering here', async () => {
+  resetCapsCache()
+  const roster = [
+    {
+      id: 'deepseek-a/flash', api: 'anthropic-messages',
+      compat: { forceAdaptiveThinking: true, supportsTemperature: false },
+      context_length: 524288, max_completion_tokens: 131072,
+    },
+    { id: 'claude/opus', api: 'anthropic-messages' },
+    { id: 'm/compat-list', compat: ['not', 'an', 'object'] },
+  ]
+  const io = { fetch: fakeFetch(roster) }
+  assert.deepEqual((await resolveModelCaps('deepseek-a/flash', io)).compat,
+    { forceAdaptiveThinking: true, supportsTemperature: false },
+    'the plugin does NOT filter compat keys: the router owns the allow-list')
+  assert.equal((await resolveModelCaps('claude/opus', io)).compat, null,
+    'absent compat is null, not {} — null means "write no compat key"')
+  assert.equal((await resolveModelCaps('m/compat-list', io)).compat, null,
+    'a non-object compat value is absence, never a failed turn')
 })
 
 // ─── the /capabilities reasoning map ─────────────────────────────────────────

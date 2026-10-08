@@ -12,6 +12,7 @@ from db import (
     _fmt_datetime,
     extract_id,
     fetch_many,
+    record_refs,
     serialize_record,
     validate_record_id,
 )
@@ -67,6 +68,37 @@ class TestValidateRecordId:
     def test_rejects_empty_string(self):
         with pytest.raises(ValueError):
             validate_record_id("")
+
+
+class TestRecordRefs:
+    def test_binds_ids_as_params(self):
+        """Ids ride params; no id bytes reach the query-text fragment."""
+        refs, params = record_refs("documents", ["aaa-1", "bbb_2"])
+        assert refs == (
+            "type::record('documents', $id0), type::record('documents', $id1)"
+        )
+        assert params == {"id0": "aaa-1", "id1": "bbb_2"}
+        assert "aaa-1" not in refs and "bbb_2" not in refs
+
+    def test_rejects_bad_table(self):
+        with pytest.raises(ValueError):
+            record_refs("documents; DROP TABLE users", ["aaa"])
+
+    def test_rejects_bad_table_even_with_no_ids(self):
+        with pytest.raises(ValueError):
+            record_refs("users'; --", [])
+
+    def test_empty_ids(self):
+        assert record_refs("documents", []) == ("", {})
+
+    def test_rejects_bad_id(self):
+        with pytest.raises(ValueError):
+            record_refs("documents", ["aaa", "bbb'--"])
+
+    def test_prefix_avoids_param_collision(self):
+        refs, params = record_refs("users", ["u-1"], prefix="owner")
+        assert refs == "type::record('users', $owner0)"
+        assert params == {"owner0": "u-1"}
 
 
 class TestFmtDatetime:

@@ -1,8 +1,14 @@
-# Runtime state from the DSH_HOME volume mount must never enter the build
-# context: the container (root) writes home/attachments and home/sessions into
-# the mounted host dir, and a root-owned directory under the context root
-# kills `docker compose build harness` with "error from sender: permission
-# denied". The image ships the PRESET only — runtime state arrives by mount.
+# The image ships the PRESET home only (the tracked seed: cordis.patch.yml, the
+# profile's package.json + patch). Everything else under home/ is runtime state
+# the harness writes in a container — dev attachments by bind mount, the rest in
+# the container layer — and must never enter the build context: COPY home would
+# bake it into the image, and a root-owned 0600 file kills the build with
+# "error from sender: permission denied". Mirrors the home entries in .gitignore.
 home/attachments
 home/sessions
 home/storages
+home/settings.yaml*
+home/.credentials.yaml
+home/.anonymous-user-id
+home/profiles/*/cordis.yml
+**/.DS_Store

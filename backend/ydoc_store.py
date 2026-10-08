@@ -243,12 +243,6 @@ async def maybe_compact(entity_id: str) -> None:
     logger.debug("Compacted ydoc for document %s (%d updates merged)", entity_id, total)
 
 
-async def derive_content(entity_id: str) -> str:
-    """Compute the plaintext content from the CRDT state (table anchors → GFM)."""
-    doc = await load(entity_id)
-    return expand_tables(doc)
-
-
 async def capture_live_state(document_id: str) -> tuple[str, str]:
     """Capture the raw anchor text + full tables JSON from the live Y.Doc.
 

@@ -10,7 +10,7 @@ import { useAppStore } from '../../store/app-store';
 import { useTranslation, t as translate } from '../../i18n';
 import { PanelLoading, Button } from '../ui';
 import { apiClient } from '../../api/client';
-import { emit } from '../../events';
+import { emit, on, off } from '../../events';
 import type { Document } from '../../types';
 import { copyWithToast } from './shared/copy';
 
@@ -223,27 +223,63 @@ export function MessageList() {
   // (new message / user turn) owned by the smooth glide effect below.
   const prevPathLenRef = useRef<number | null>(null);
 
+  // Last "scrolled away" value broadcast to the composer's scroll-to-bottom button.
+  // WHY: a ref + event, not state — a scroll must not re-render the message list.
+  const awayRef = useRef(false);
+  const setAway = useCallback((away: boolean) => {
+    if (awayRef.current === away) return;
+    awayRef.current = away;
+    emit('chat-scrolled-away', { away });
+  }, []);
+
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     stickToBottomRef.current = distance < STICK_EPSILON;
-  }, []);
+    // WHY: the scroll-to-bottom button shows exactly when auto-follow is off — one
+    // threshold for both, no separate button threshold (operator requirement).
+    setAway(!stickToBottomRef.current);
+  }, [setAway]);
+
+  useEffect(() => () => setAway(false), [setAway]);
+
+  useEffect(() => {
+    const jump = () => {
+      const el = containerRef.current;
+      if (!el) return;
+      // WHY: instant, not smooth — a smooth glide emits mid-way scroll events above the
+      // threshold (re-unsticking) and is cancelled by the anchor branch's scrollTop writes.
+      el.scrollTop = el.scrollHeight;
+      stickToBottomRef.current = true;
+      anchorElRef.current = null;
+      anchorTopRef.current = null;
+      setAway(false);
+    };
+    on('chat-scroll-to-bottom', jump);
+    return () => off('chat-scroll-to-bottom', jump);
+  }, [setAway]);
 
   // Instant snap to bottom on session switch or after messages finish loading.
   // useLayoutEffect runs synchronously before paint — user never sees a "starts at top, scrolls down" animation.
   useLayoutEffect(() => {
+    // A new session / reload starts at the bottom — and a list too short to scroll
+    // fires no scroll event that would clear the button.
+    setAway(false);
     if (messagesLoading) return;
     const el = containerRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
     stickToBottomRef.current = true;
-  }, [activeSessionId, messagesLoading]);
+  }, [activeSessionId, messagesLoading, setAway]);
 
   // ARCH: one layout effect owns scroll position, replacing the old smooth
   // follow (plan reasoning-growth-stops-shaking-tool-chips). No dep array — it
   // must run after every commit that changed layout, before paint.
   useLayoutEffect(() => {
+    // An empty / error state renders no scroll container — nothing to jump to, so
+    // the button must not linger from a scroll made before the list went away.
+    if (!containerRef.current) setAway(false);
     // A path-length change is a message boundary: the keyed effect below owns it
     // with a smooth glide — skip this pass so the glide is actually visible.
     if (prevPathLenRef.current !== null && activePath.length !== prevPathLenRef.current) {

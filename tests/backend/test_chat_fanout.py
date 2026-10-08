@@ -192,7 +192,7 @@ class TestFanoutDelivery:
             got = [json.loads(owner[1].receive_text()) for _ in range(4)]
             assert [g["frame"]["type"] for g in got] == [
                 "model_update", "dsh_event", "dsh_event", "done"]
-            assert got[-1]["frame"]["content"] == "Hello "
+            assert got[-1]["frame"]["content"] == "Hello"
             assert got[-1]["session_id"] == sid
         finally:
             owner[0].__exit__(None, None, None)

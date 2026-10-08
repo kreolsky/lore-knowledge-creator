@@ -39,7 +39,7 @@ def _make_table(doc: Y.Doc, tid: str, matrix: list[list[str]], widths: list[int]
 
 
 def test_read_table_grid_returns_columns_and_rows():
-    from table_serialize import read_table_grid
+    from helpers import read_table_grid
 
     doc = Y.Doc()
     _make_table(doc, "t1", [["Name", "Role"], ["Aragorn", "Ranger"]], [200, 300])
@@ -49,7 +49,7 @@ def test_read_table_grid_returns_columns_and_rows():
 
 
 def test_read_table_grid_missing_id_returns_none():
-    from table_serialize import read_table_grid
+    from helpers import read_table_grid
 
     doc = Y.Doc()
     assert read_table_grid(doc, "missing") is None
@@ -561,7 +561,9 @@ async def test_table_cell_parallel_edits_all_apply(monkeypatch):
 
 
 def test_add_table_rows_appends_at_bottom():
-    from table_serialize import add_table_rows, read_table_grid
+    from helpers import read_table_grid
+
+    from table_serialize import add_table_rows
 
     doc = Y.Doc()
     _make_table(doc, "t1", [["A", "B"], ["1", "2"]])
@@ -571,7 +573,9 @@ def test_add_table_rows_appends_at_bottom():
 
 
 def test_add_table_rows_pads_shorter_row():
-    from table_serialize import add_table_rows, read_table_grid
+    from helpers import read_table_grid
+
+    from table_serialize import add_table_rows
 
     doc = Y.Doc()
     _make_table(doc, "t1", [["A", "B"]])
@@ -581,7 +585,9 @@ def test_add_table_rows_pads_shorter_row():
 
 
 def test_add_table_rows_empty_is_noop():
-    from table_serialize import add_table_rows, read_table_grid
+    from helpers import read_table_grid
+
+    from table_serialize import add_table_rows
 
     doc = Y.Doc()
     _make_table(doc, "t1", [["A"]])
@@ -599,7 +605,9 @@ def test_add_table_rows_missing_table_is_noop():
 
 
 def test_add_table_column_at_end_inserts_into_every_row():
-    from table_serialize import add_table_column, read_table_grid
+    from helpers import read_table_grid
+
+    from table_serialize import add_table_column
 
     doc = Y.Doc()
     _make_table(doc, "t1", [["Name", "HP"], ["Goblin", "7"]])
@@ -610,7 +618,9 @@ def test_add_table_column_at_end_inserts_into_every_row():
 
 
 def test_add_table_column_at_index_shifts_existing():
-    from table_serialize import add_table_column, read_table_grid
+    from helpers import read_table_grid
+
+    from table_serialize import add_table_column
 
     doc = Y.Doc()
     _make_table(doc, "t1", [["A", "B"], ["1", "2"], ["3", "4"]])
@@ -620,7 +630,9 @@ def test_add_table_column_at_index_shifts_existing():
 
 
 def test_add_table_column_pads_short_values():
-    from table_serialize import add_table_column, read_table_grid
+    from helpers import read_table_grid
+
+    from table_serialize import add_table_column
 
     doc = Y.Doc()
     _make_table(doc, "t1", [["A"], ["1"], ["2"], ["3"]])
@@ -632,7 +644,9 @@ def test_add_table_column_pads_short_values():
 
 
 def test_create_table_entry_builds_model_and_returns_width():
-    from table_serialize import create_table_entry, read_table_grid
+    from helpers import read_table_grid
+
+    from table_serialize import create_table_entry
 
     doc = Y.Doc()
     doc.get("tables", type=Y.Map)
@@ -644,7 +658,9 @@ def test_create_table_entry_builds_model_and_returns_width():
 
 
 def test_create_table_entry_ragged_pads():
-    from table_serialize import create_table_entry, read_table_grid
+    from helpers import read_table_grid
+
+    from table_serialize import create_table_entry
 
     doc = Y.Doc()
     doc.get("tables", type=Y.Map)
@@ -658,8 +674,7 @@ def test_create_table_entry_ragged_pads():
 
 async def test_apply_add_table_rows_appends_at_bottom(monkeypatch):
     from agent.table_writes import apply_add_table_rows
-
-    from table_serialize import read_table_grid
+    from helpers import read_table_grid
 
     doc = Y.Doc()
     _make_table(doc, "t1", [["Name", "HP"], ["Goblin", "7"]])
@@ -724,8 +739,7 @@ async def test_apply_add_table_rows_unknown_table_404(monkeypatch):
 
 async def test_apply_add_table_column_inserts_at_end(monkeypatch):
     from agent.table_writes import apply_add_table_column
-
-    from table_serialize import read_table_grid
+    from helpers import read_table_grid
 
     doc = Y.Doc()
     _make_table(doc, "t1", [["Name", "HP"], ["Goblin", "7"]])
@@ -758,8 +772,9 @@ async def test_apply_add_table_column_bad_index_400(monkeypatch):
 
 async def test_apply_create_table_builds_anchor_and_model(monkeypatch):
     from agent.table_writes import apply_create_table
+    from helpers import read_table_grid
 
-    from table_serialize import extract_table_labels, read_table_grid
+    from table_serialize import extract_table_labels
 
     doc = Y.Doc()
     # non-empty content at the doc tail — set on BOTH the resolve snapshot and the doc

@@ -1,17 +1,18 @@
 /**
  * The assembled turn's renderer — Lore's components over the dsh nodes' data.
  *
- * // SYSTEM: dsh-conversation. The ONE rule (plan lore-renders-dsh-conversation,
- * //   Decisions): these components READ node data and never recompute it — no
- * //   second fold, no re-derived chip. Each `ChatNodeDataMap` kind maps to the
- * //   Lore component that draws it; `user`/`steering`/`context` draw nothing
- * //   here (Lore's own message rows render them), `turn-tail` draws nothing
- * //   (Lore's action row stays row-driven), and ANY other unrendered kind —
- * //   including `unknown` — degrades to the neutral fallback chip. A renderer
- * //   for a kind is an improvement, never the condition for being visible.
+ * // SYSTEM: dsh-conversation. The ONE rule: these components READ node data
+ * //   and never recompute it — no second fold, no re-derived chip. Each
+ * //   `ChatNodeDataMap` kind maps to the Lore component that draws it;
+ * //   `user`/`steering`/`context` draw nothing here (Lore's own message rows
+ * //   render them), `turn-tail` draws nothing (Lore's action row stays
+ * //   row-driven), `turn-process` draws nothing (Lore has no whole-turn
+ * //   fold), and ANY other unrendered kind — including `unknown` —
+ * //   degrades to the neutral fallback chip. A renderer for a kind is an
+ * //   improvement, never the condition for being visible.
  */
 
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { AlertTriangle, Brain, FileText, ShieldAlert } from 'lucide-react';
 import { ToolPlate } from '../../ToolPlate';
 import { MarkdownContent } from '../../MarkdownContent';
@@ -22,6 +23,7 @@ import { GeneratedImageThumb, ImageLightbox } from './image-lightbox';
 import { useTranslation } from '../../../../i18n';
 import { referenceFileUrl } from '../../../../utils/reference-url';
 import type { HaltReason } from '../../../../types';
+import type { ProcessGroupInfo } from '../../../../dsh/lore-conversation.js';
 
 /** One published node, plain-data (the chat store's `conversation` entry). */
 export interface TurnNodeLike {
@@ -29,6 +31,9 @@ export interface TurnNodeLike {
   kind: string;
   anchorSeq: number;
   data: unknown;
+  /** dsh's process group holding the node (see ConversationVM). */
+  groupKey?: string;
+  group?: ProcessGroupInfo;
 }
 
 interface AssistantBlockLike {
@@ -92,16 +97,20 @@ function ToolCallNode({ data, isStreaming }: { data: unknown; isStreaming: boole
       isStreaming={isStreaming && !settled}
     >
       {body
-        ? <pre className="text-xs font-mono whitespace-pre-wrap break-words max-h-80 overflow-auto bg-surface2 border border-border-soft p-2 m-0">{body}</pre>
+        ? <pre className="text-xs font-mono whitespace-pre-wrap break-words m-0">{body}</pre>
         : <div className="text-ui-sm text-text-dim">{t('agentStepNoop')}</div>}
     </ToolPlate>
   );
 }
 
 /** One assistant step: the text and reasoning blocks IN ORDER — the thinking
- * renders WHERE it happened (the plan's human-validation item). Tool-call
- * blocks draw nothing (the tool-call node is the chip). */
-function AssistantStepNode({ data, isStreaming }: { data: unknown; isStreaming: boolean }) {
+ * renders WHERE it happened. Tool-call
+ * blocks draw nothing (the tool-call node is the chip). `only` draws one
+ * part: dsh's process group holds a step's reasoning while its reply stays
+ * outside the group. */
+function AssistantStepNode({ data, isStreaming, only }: {
+  data: unknown; isStreaming: boolean; only?: 'reasoning' | 'text';
+}) {
   const { t } = useTranslation();
   const d = (typeof data === 'object' && data !== null ? data : {}) as Record<string, unknown>;
   const blocks = Array.isArray(d.blocks) ? d.blocks as AssistantBlockLike[] : [];
@@ -109,10 +118,10 @@ function AssistantStepNode({ data, isStreaming }: { data: unknown; isStreaming: 
   return (
     <>
       {blocks.map((b, i) => {
-        if (b.kind === 'text' && (b.text ?? '').trim() !== '') {
+        if (b.kind === 'text' && only !== 'reasoning' && (b.text ?? '').trim() !== '') {
           return <MarkdownContent key={i} content={b.text!} streaming={isStreaming} />;
         }
-        if (b.kind === 'reasoning' && (b.text ?? '').trim() !== '') {
+        if (b.kind === 'reasoning' && only !== 'text' && (b.text ?? '').trim() !== '') {
           return (
             <ToolPlate
               key={i}
@@ -133,27 +142,31 @@ function AssistantStepNode({ data, isStreaming }: { data: unknown; isStreaming: 
   );
 }
 
-/** The verdict ask card. THE renderer call this step owed (plan Progress): the
- * card STAYS once asked — while the parked call has no tool row it renders the
- * decision card; once the call's own tool-call node exists (the verdict
- * published, the call ran) it renders as a settled record under that row. */
-function VerdictAskNode({ data, nodes }: { data: unknown; nodes: TurnNodeLike[] }) {
-  const { t } = useTranslation();
-  const d = (typeof data === 'object' && data !== null ? data : {}) as Record<string, unknown>;
-  const callId = String(d.callId ?? '');
-  const toolName = String(d.toolName ?? '');
+/** Whether a verdict ask has been answered: its call settled. */
+function isDecidedVerdict(callId: string, nodes: TurnNodeLike[]): boolean {
   // INVARIANT: the ask is decided only once the call's node carries a
   // tool-result — a bare tool-call node is NOT a decision.
   // Why: dsh appends `tool/call` BEFORE it asks for approval, so the running
   // node already exists when the verdict-ask arrives; keying on its presence
   // rendered every live ask as the settled card, with no buttons to answer it.
-  const decided = nodes.some(n => {
+  return nodes.some(n => {
     if (n.kind !== 'tool-call') return false;
     const root = (typeof n.data === 'object' && n.data !== null ? n.data : {}) as Record<string, unknown>;
     const block = root.root as Record<string, unknown> | undefined;
     return block?.kind === 'tool-result' && String(block.callId ?? '') === callId;
   });
-  if (decided) {
+}
+
+/** The verdict ask card. The card STAYS once asked — while the parked call
+ * has no tool row it renders the decision card; once the call's own tool-call
+ * node exists (the verdict published, the call ran) it renders as a settled
+ * record under that row. */
+function VerdictAskNode({ data, nodes }: { data: unknown; nodes: TurnNodeLike[] }) {
+  const { t } = useTranslation();
+  const d = (typeof data === 'object' && data !== null ? data : {}) as Record<string, unknown>;
+  const callId = String(d.callId ?? '');
+  const toolName = String(d.toolName ?? '');
+  if (isDecidedVerdict(callId, nodes)) {
     return (
       <ToolPlate icon={<ShieldAlert size={13} />} title={toolName}>
         <div className="text-ui-sm text-text-dim">{t('verdictBody')}</div>
@@ -164,7 +177,7 @@ function VerdictAskNode({ data, nodes }: { data: unknown; nodes: TurnNodeLike[] 
 }
 
 /** The halt card: what stopped the turn and how far it got. The sentence is
- * the row's `content`, never the card's (the plan's Not-doing). */
+ * the row's `content`, never the card's. */
 function HaltNode({ data, nodes, self, onContinue }: {
   data: unknown; nodes: TurnNodeLike[]; self: TurnNodeLike; onContinue?: () => void;
 }) {
@@ -199,7 +212,7 @@ function ImageGenNode({ data }: { data: unknown }) {
     // settled frame folds this node into its settled look.
     const phase = typeof d.phase === 'string' ? d.phase : '';
     return (
-      <div className="flex items-center gap-1 text-xs text-text-dim bg-surface2 border border-border-soft px-2 py-1 my-0.5">
+      <div className="flex items-center gap-1 text-xs text-text-dim py-1 my-0.5">
         <span className="animate-pulse"><AgentStepIcon /></span>
         <span>{t('generatingImage')}</span>
         {phase && <span className="opacity-60">— {genPhaseLabel(phase, t)}</span>}
@@ -242,7 +255,7 @@ function ImageGenNode({ data }: { data: unknown }) {
           ariaLabel={refineFailed ? `${t('agentStepFailed')}: ${t('refinePrompt')}` : undefined}
         >
           {refineText
-            ? <pre className="text-xs font-mono whitespace-pre-wrap break-words max-h-80 overflow-auto bg-surface2 border border-border-soft p-2 m-0">{refineText}</pre>
+            ? <pre className="text-xs font-mono whitespace-pre-wrap break-words m-0">{refineText}</pre>
             : <div className="text-ui-sm text-text-dim">{t('agentStepNoop')}</div>}
         </ToolPlate>
       )}
@@ -314,21 +327,22 @@ function FallbackNode({ node }: { node: TurnNodeLike }) {
   return (
     <ToolPlate icon={<FileText size={13} />} title={node.kind}>
       {body
-        ? <pre className="text-xs font-mono whitespace-pre-wrap break-words max-h-40 overflow-auto bg-surface2 border border-border-soft p-2 m-0">{body.slice(0, 2000)}</pre>
+        ? <pre className="text-xs font-mono whitespace-pre-wrap break-words m-0">{body.slice(0, 2000)}</pre>
         : null}
     </ToolPlate>
   );
 }
 
-function TurnNode({ node, nodes, isStreaming, onContinue }: {
+function TurnNode({ node, nodes, isStreaming, onContinue, only }: {
   node: TurnNodeLike;
   nodes: TurnNodeLike[];
   isStreaming: boolean;
   onContinue?: () => void;
+  only?: 'reasoning' | 'text';
 }) {
   const { t } = useTranslation();
   switch (node.kind) {
-    case 'assistant-step': return <AssistantStepNode data={node.data} isStreaming={isStreaming} />;
+    case 'assistant-step': return <AssistantStepNode data={node.data} isStreaming={isStreaming} only={only} />;
     case 'tool-call': return <ToolCallNode data={node.data} isStreaming={isStreaming} />;
     case 'verdict-ask': return <VerdictAskNode data={node.data} nodes={nodes} />;
     case 'halt': return <HaltNode data={node.data} nodes={nodes} self={node} onContinue={onContinue} />;
@@ -361,23 +375,152 @@ function TurnNode({ node, nodes, isStreaming, onContinue }: {
     // Lore's own rows render the message kinds; the action row stays row-driven.
     case 'user': case 'steering': case 'context': case 'turn-tail':
       return null;
+    // WHY: dsh's whole-turn fold control (counts for a "worked for…" header);
+    // Lore does not fold whole turns, so the control has nothing to draw.
+    case 'turn-process':
+      return null;
     default: return <FallbackNode node={node} />;
   }
 }
 
-/** ONE turn's assembled nodes, in the assembler's order. */
+/** dsh's process-group title: the live activity while the group runs, the
+ * top three finished categories once it closes (no counts). */
+function groupTitle(info: ProcessGroupInfo, t: ReturnType<typeof useTranslation>['t']): string {
+  const { summary } = info;
+  if (!info.closed) {
+    return summary.running ? t(`processGroupRunning_${summary.running}`) : t('processGroupAnalyzing');
+  }
+  const labels = summary.counts.slice(0, 3).map(c => t(`processGroupDone_${c.kind}`));
+  if (labels.length === 0) return t('processGroupAnalyzed');
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return t('processGroupAnd', { first: labels[0], second: labels[1] });
+  const list = labels.join(', ');
+  return summary.counts.length > 3 ? t('processGroupEtc', { title: list }) : list;
+}
+
+function hasReplyText(node: TurnNodeLike): boolean {
+  const d = (typeof node.data === 'object' && node.data !== null ? node.data : {}) as Record<string, unknown>;
+  const blocks = Array.isArray(d.blocks) ? d.blocks as AssistantBlockLike[] : [];
+  return blocks.some(b => b.kind === 'text' && (b.text ?? '').trim() !== '');
+}
+
+function isFailedToolCall(node: TurnNodeLike): boolean {
+  if (node.kind !== 'tool-call') return false;
+  const d = (typeof node.data === 'object' && node.data !== null ? node.data : {}) as Record<string, unknown>;
+  const root = d.root as Record<string, unknown> | undefined;
+  return root?.kind === 'tool-result' && root.isError === true;
+}
+
+/** One dsh process group as one collapsible plate over its member chips. */
+function ProcessGroupNode({ info, members, nodes, isStreaming, onContinue, afterText }: {
+  info: ProcessGroupInfo;
+  afterText: boolean;
+  members: TurnNodeLike[];
+  nodes: TurnNodeLike[];
+  isStreaming: boolean;
+  onContinue?: () => void;
+}) {
+  const { t } = useTranslation();
+  // A failure inside a collapsed group must still show on its header — the
+  // no-silent-degradation rule.
+  const failed = members.some(isFailedToolCall);
+  return (
+    // WHY: a group between paragraphs of the answer gets a 24px gap above
+    // (my-1's 4px + pt-5) so it does not run into the text; a group opening
+    // the answer keeps the plain chip spacing.
+    <div className={afterText ? 'pt-5' : undefined}>
+      <ToolPlate
+        icon={<AgentStepIcon outcome={failed ? 'failed' : undefined} />}
+        title={groupTitle(info, t)}
+        tone={failed ? 'failed' : undefined}
+        bare
+        defaultExpanded={isStreaming && !info.closed}
+        autoCollapse
+        collapseWhen={info.closed}
+        isStreaming={isStreaming}
+      >
+        {members.map(node => (
+          <div key={node.key} className="my-0.5">
+            <TurnNode node={node} nodes={nodes} isStreaming={isStreaming} onContinue={onContinue} only="reasoning" />
+          </div>
+        ))}
+      </ToolPlate>
+    </div>
+  );
+}
+
+/** Fewer folded members render flat (operator ruling: fold from 2 chips —
+ * at most one process chip ever stands unfolded in a run). */
+const MIN_GROUP_MEMBERS = 2;
+
+function staysOutOfGroup(node: TurnNodeLike, nodes: TurnNodeLike[]): boolean {
+  if (node.kind === 'halt') return true;
+  if (node.kind !== 'verdict-ask') return false;
+  const d = (typeof node.data === 'object' && node.data !== null ? node.data : {}) as Record<string, unknown>;
+  return !isDecidedVerdict(String(d.callId ?? ''), nodes);
+}
+
+/** ONE turn's assembled nodes, in the assembler's order. dsh's process groups
+ * (read off each node, never recomputed) fold into one plate, drawn where the
+ * group's first member stands; a member assistant step contributes its
+ * reasoning to the plate and draws its reply at its own place, after it. */
 export function TurnNodes({ nodes, isStreaming, onContinue }: {
   nodes: TurnNodeLike[];
   isStreaming: boolean;
   onContinue?: () => void;
 }) {
+  // INVARIANT: a pending verdict ask and a halt card never fold into a group —
+  // they render at their own place, the rest of their group folds around them.
+  // Why: a pending decision or a halt must be seen (and answered) without
+  // opening anything; a settled verdict is a plain record and folds.
+  const outside = new Set(nodes.filter(n => staysOutOfGroup(n, nodes)).map(n => n.key));
+  const members = new Map<string, TurnNodeLike[]>();
+  for (const node of nodes) {
+    if (node.groupKey === undefined || outside.has(node.key)) continue;
+    const list = members.get(node.groupKey);
+    if (list) list.push(node); else members.set(node.groupKey, [node]);
+  }
+  const folded = (node: TurnNodeLike): TurnNodeLike[] | undefined => {
+    if (node.groupKey === undefined || !node.group || outside.has(node.key)) return undefined;
+    const list = members.get(node.groupKey);
+    return list && list.length >= MIN_GROUP_MEMBERS ? list : undefined;
+  };
+  const drawn = new Set<string>();
+  // Whether the answer's text already stands above the node being drawn.
+  let textAbove = false;
   return (
     <>
-      {nodes.map(node => (
-        <div key={node.key} className="my-0.5">
-          <TurnNode node={node} nodes={nodes} isStreaming={isStreaming} onContinue={onContinue} />
-        </div>
-      ))}
+      {nodes.map(node => {
+        const afterText = textAbove;
+        if (node.kind === 'assistant-step' && hasReplyText(node)) textAbove = true;
+        const group = folded(node);
+        if (!group) {
+          return (
+            <div key={node.key} className="my-0.5">
+              <TurnNode node={node} nodes={nodes} isStreaming={isStreaming} onContinue={onContinue} />
+            </div>
+          );
+        }
+        const plate = drawn.has(node.groupKey!) ? null : (
+          <ProcessGroupNode
+            key={node.groupKey}
+            info={node.group!}
+            members={group}
+            afterText={afterText}
+            nodes={nodes}
+            isStreaming={isStreaming}
+            onContinue={onContinue}
+          />
+        );
+        drawn.add(node.groupKey!);
+        // The reply of a member step renders outside the group, after it.
+        const reply = node.kind === 'assistant-step' && hasReplyText(node) && (
+          <div key={node.key} className="my-0.5">
+            <TurnNode node={node} nodes={nodes} isStreaming={isStreaming} onContinue={onContinue} only="text" />
+          </div>
+        );
+        return plate || reply ? <Fragment key={`${node.key}:g`}>{plate}{reply}</Fragment> : null;
+      })}
     </>
   );
 }

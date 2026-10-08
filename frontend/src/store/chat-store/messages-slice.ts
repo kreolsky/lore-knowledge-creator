@@ -9,7 +9,6 @@ import { refIsScope } from '../ui-store/documents-slice';
 import { t } from '../../i18n';
 import { resolveCompletionContext } from '../../chat/context';
 import { resolveRegion } from './pending-selection';
-import { recordHistoryLoad } from '../../telemetry/perf';
 import type { ChatState, Set, Get } from './types';
 
 /** Shape of an optimistic-insert request shared by all three send paths. */
@@ -108,8 +107,9 @@ function rollbackOptimisticUser(
 
 import { buildChildrenMap, resolveActivePath, resolveAncestorChain, ROOT_KEY, REWIND_KEY, withoutRewind } from './tree';
 import { appendDraft } from './misc-slice';
-import { streamCompletion, flushStreaming, emptyStreaming, adoptOpenTurn, hasOpenHarnessTurn } from './streaming';
-import { replaceWindowFromRows, rewindToLineage } from './conversation-feed';
+import { streamCompletion, flushStreaming, emptyStreaming, hasOpenHarnessTurn } from './streaming';
+import { rewindToLineage } from './conversation-feed';
+import { seatSessionRows, afterSessionRowsCommitted } from './session-rows';
 import { loadMessagesFor, patchMessageContent, deleteMessageById } from '../chat-message-crud';
 import { uuid } from '../../utils/uuid';
 
@@ -346,16 +346,7 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
       // are the scope discriminator here.
       await loadMessagesFor(sessionId, {
         activeSessionId: () => get().activeSessionId,
-        // The assembler's reload input: the rows' replayed frames replace the
-        // engine's whole window (SYSTEM: dsh-conversation) — BEFORE hydration,
-        // which drops the rows' `frames` key. The ADOPTION (adoptOpenTurn)
-        // rides the same raw rows: an
-        // open_turn row on a harness session re-seats the streaming slot and
-        // registers the sink, so a reload mid-turn CONTINUES streaming.
-        onRows: rows => {
-          replaceWindowFromRows(rows, sessionId, set);
-          adoptOpenTurn(get, set, sessionId, rows);
-        },
+        onRows: rows => seatSessionRows(get, set, sessionId, rows),
         onLoaded: messages => {
           // INVARIANT: a stale terminal must NEVER touch chatScopeLoading — the gate is
           // owned by whichever request still holds the current scope. Why: when leaving a
@@ -364,12 +355,7 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
           // gate here, the spinner turned off then the new load turned it on again →
           // double spinner (groovy-skipping-wozniak). The owning request clears it below.
           set({ messages, messagesLoading: false, chatScopeLoading: false, messagesError: false });
-          // Tripwire: flag when full-history load crosses the windowing-payoff threshold.
-          recordHistoryLoad(sessionId, messages.length);
-          // Reload re-render for mid-turn approval: a still-held call has no live
-          // card after a reload (the driver parks on the held POST), so the
-          // decision store restores the card onto its assistant message.
-          void get().fetchPendingVerdicts(sessionId);
+          afterSessionRowsCommitted(get, sessionId, messages.length);
         },
         onLoadError: () => {
           // INVARIANT: clear the gate only when THIS request still owns the scope. Why: a

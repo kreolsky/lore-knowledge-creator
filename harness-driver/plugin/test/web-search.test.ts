@@ -5,6 +5,7 @@ import { WebError } from '@deepseek-ai/dsh-web'
 import type { WebSearchProvider } from '@deepseek-ai/dsh-web'
 
 import { BraveSearchProvider } from '../src/web-search/brave.ts'
+import { PerplexitySearchProvider } from '../src/web-search/perplexity.ts'
 import { SearxngSearchProvider } from '../src/web-search/searxng.ts'
 import { TavilySearchProvider } from '../src/web-search/tavily.ts'
 import { WEB_SEARCH_KEY_REF } from '../src/web-search/key.ts'
@@ -71,6 +72,16 @@ const CASES: Case[] = [
       { title: 'Full row', url: 'https://a.example/1', content: 'The snippet', publishedDate: '2026-09-01T00:00:00' },
       { title: 'No url', content: 'dropped' },
       { url: 'https://a.example/2', title: '', content: null },
+    ] },
+  },
+  {
+    name: 'perplexity',
+    make: (resolveKey, f) => new PerplexitySearchProvider('fast', resolveKey, f),
+    config: 'pplx-key',
+    payload: { id: 'r1', results: [
+      { title: 'Full row', url: 'https://a.example/1', snippet: 'The snippet', date: '2026-09-01T00:00:00', last_updated: '2026-09-30' },
+      { title: 'No url', snippet: 'dropped' },
+      { url: 'https://a.example/2', title: '', snippet: null, date: null },
     ] },
   },
 ]
@@ -148,6 +159,10 @@ test('the empty-key error names the provider id and the SearXNG URL spelling', a
   assert.match(tavily, /lore-tavily: no API key/)
   const searxng = await new SearxngSearchProvider(keyStore('').resolveKey).search({ query: 'q' }).catch((e: unknown) => String((e as Error).message))
   assert.match(searxng, /lore-searxng: no API key \(URL for SearXNG\)/)
+  for (const mode of ['fast', 'web'] as const) {
+    const perplexity = await new PerplexitySearchProvider(mode, keyStore('').resolveKey).search({ query: 'q' }).catch((e: unknown) => String((e as Error).message))
+    assert.match(perplexity, new RegExp(`lore-perplexity-${mode}: no API key`))
+  }
 })
 
 test('brave: sends the key header, the query and a count capped at 20', async () => {
@@ -167,6 +182,25 @@ test('tavily: POSTs the query and max_results with a bearer key', async () => {
   assert.equal(calls[0].init?.method, 'POST')
   assert.equal((calls[0].init?.headers as Record<string, string>).authorization, 'Bearer tvly-key')
   assert.deepEqual(JSON.parse(calls[0].init?.body as string), { query: 'q', max_results: 8 })
+})
+
+test('perplexity: each mode is its own pinnable id and POSTs its search_type with max_results capped at 20', async () => {
+  for (const mode of ['fast', 'web'] as const) {
+    const { calls, fetchImpl } = fakeFetch(200, { results: [] })
+    const provider = new PerplexitySearchProvider(mode, keyStore('pplx-key').resolveKey, fetchImpl)
+    assert.equal(provider.id, `lore-perplexity-${mode}`)
+    await provider.search({ query: 'q', maxResults: 50 })
+    assert.equal(calls[0].url, 'https://api.perplexity.ai/search')
+    assert.equal(calls[0].init?.method, 'POST')
+    assert.equal((calls[0].init?.headers as Record<string, string>).authorization, 'Bearer pplx-key')
+    assert.deepEqual(JSON.parse(calls[0].init?.body as string), { query: 'q', search_type: mode, max_results: 20 })
+  }
+})
+
+test('perplexity: a row without a publication date carries last_updated', async () => {
+  const { fetchImpl } = fakeFetch(200, { results: [{ url: 'https://a.example/1', title: 't', snippet: 's', date: null, last_updated: '2026-09-30' }] })
+  const result = await new PerplexitySearchProvider('fast', keyStore('k').resolveKey, fetchImpl).search({ query: 'q' })
+  assert.equal(result.sources[0].publishedAt, '2026-09-30')
 })
 
 test('searxng: GETs {base}/search with format=json, trailing slash folded', async () => {

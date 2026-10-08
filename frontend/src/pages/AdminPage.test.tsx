@@ -34,6 +34,11 @@ import { act } from 'react';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+// WHY 15s: a full AdminPage render plus real-timer debounce sleeps runs ~0.9s
+// on an idle box and ~4× that on the CI runner — the 5s default left no margin,
+// and one timed-out test leaves its render running into the next ones.
+vi.setConfig({ testTimeout: 15_000 });
+
 let AdminPage: typeof import('./AdminPage').AdminPage;
 let useUIStore: (typeof import('../store/ui-store'))['useUIStore'];
 let container: HTMLDivElement;

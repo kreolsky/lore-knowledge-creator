@@ -612,6 +612,39 @@ async def test_note_author_edits_own_message(client, admin_user, regular_user, p
 
 
 @pytest.mark.asyncio
+async def test_note_author_edits_own_message_that_has_replies(
+    client, admin_user, regular_user, project_with_doc,
+):
+    """Replies block a non-owner author's DELETE (409), never their EDIT."""
+    pid, doc_id, _ = project_with_doc
+    _, admin_token = admin_user
+    other_uid, other_token = regular_user
+
+    pm_id = await _grant_access(pid, other_uid, "commentator")
+    try:
+        note_id = await _make_note(client, pid, doc_id, other_token)
+        msg = (await client.post(
+            f"/api/chat/sessions/{note_id}/messages",
+            json={"content": "original"}, cookies={"lore_session": other_token},
+        )).json()
+        reply = await client.post(
+            f"/api/chat/sessions/{note_id}/messages",
+            json={"content": "a reply", "parent_id": msg["message_id"]},
+            cookies={"lore_session": admin_token},
+        )
+        assert reply.status_code == 201, reply.text
+
+        resp = await client.patch(
+            f"/api/chat/messages/{msg['message_id']}",
+            json={"content": "edited"}, cookies={"lore_session": other_token},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["content"] == "edited"
+    finally:
+        await _revoke_access(pm_id)
+
+
+@pytest.mark.asyncio
 async def test_note_non_author_edit_forbidden(
     client, admin_user, regular_user, project_with_doc,
 ):

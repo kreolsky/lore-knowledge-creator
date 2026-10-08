@@ -9,7 +9,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useAppStore } from '../store/app-store';
-import { treeDragAdapter, dropAfterId } from './useSiblingDragReorder';
+import { treeDragAdapter, dropAfterId, createDropIndicator, placeDropIndicator } from './useSiblingDragReorder';
+import { refDragAdapter } from '../components/references/refDragAdapter';
 import type { Document } from '../types';
 
 function makeDoc(overrides: Partial<Document> = {}): Document {
@@ -54,5 +55,27 @@ describe('treeDragAdapter', () => {
     expect(dropAfterId(siblings, 'beta', false)).toBe('beta');
     // A row outside the sibling list is not a valid target (undefined = no commit).
     expect(dropAfterId(siblings, 'other', false)).toBeUndefined();
+  });
+});
+
+describe('drop indicator', () => {
+  const rect = { top: 100, bottom: 124, left: 20, width: 200 } as DOMRect;
+
+  it('puts the chevron on the panel edge: tree left, references right', () => {
+    expect(treeDragAdapter.indicatorSide).toBe('left');
+    expect(refDragAdapter.indicatorSide).toBe('right');
+    const svg = createDropIndicator('right').querySelector('svg')!;
+    expect(svg.style.right).not.toBe('');
+    expect(svg.style.left).toBe('');
+  });
+
+  it('straddles the top edge for a before-drop and the bottom edge otherwise', () => {
+    const el = createDropIndicator('left');
+    expect(el.style.display).toBe('none');
+    placeDropIndicator(el, rect, true);
+    expect(el.style.display).toBe('block');
+    expect(el.style.top).toBe('98px');
+    placeDropIndicator(el, rect, false);
+    expect(el.style.top).toBe('122px');
   });
 });

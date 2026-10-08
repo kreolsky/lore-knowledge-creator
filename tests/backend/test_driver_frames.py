@@ -95,10 +95,24 @@ async def test_assistant_message_text_accumulates_and_finalize_persists():
     whole step text per event, joined across the turn's steps) — the dead
     `assistant/chunk` kind no longer exists in the log."""
     turn = _turn()
-    await _relay(turn, _assistant_message(1, "Hello "))
+    await _relay(turn, _assistant_message(1, "Hello"))
     await _relay(turn, _assistant_message(2, "world"))
     await turn.finalize()
-    turn._persist_content.assert_awaited_once_with("m1", "Hello world")  # type: ignore[attr-defined]
+    turn._persist_content.assert_awaited_once_with("m1", "Hello\n\nworld")  # type: ignore[attr-defined]
+
+
+async def test_steps_join_as_separate_paragraphs():
+    """A step ending in a list item must not swallow the next step's text:
+    the tool run between them is dropped from the row, so the join is a
+    paragraph break, with the steps' own edge newlines and blank steps
+    folded away."""
+    turn = _turn()
+    await _relay(turn, _assistant_message(1, "Plan:\n\n1. one\n2. two\n"))
+    await _relay(turn, _assistant_message(2, "  \n"))
+    await _relay(turn, _assistant_message(3, "\nSaved to the doc."))
+    await turn.finalize()
+    turn._persist_content.assert_awaited_once_with(  # type: ignore[attr-defined]
+        "m1", "Plan:\n\n1. one\n2. two\n\nSaved to the doc.")
 
 
 async def test_non_text_message_blocks_accumulate_nothing():
@@ -220,13 +234,13 @@ async def test_turn_end_graceful_done_carries_the_joined_messages():
     An error turn/end mints NO done frame — the abnormal path owns its
     text and the error tail's sse_done("") stays as it was."""
     turn = _turn()
-    await _relay(turn, _assistant_message(1, "Hello "))
+    await _relay(turn, _assistant_message(1, "Hello"))
     await _relay(turn, _assistant_message(2, "world"))
     frames = await _relay(turn, _dsh(9, "turn/end", {"turn": 1, "reason": {"kind": "completed"}}))
     parsed = _parse(frames)
-    assert parsed[1] == {"type": "done", "content": "Hello world"}
+    assert parsed[1] == {"type": "done", "content": "Hello\n\nworld"}
     await turn.finalize()
-    turn._persist_content.assert_awaited_once_with("m1", "Hello world")  # type: ignore[attr-defined]
+    turn._persist_content.assert_awaited_once_with("m1", "Hello\n\nworld")  # type: ignore[attr-defined]
 
     errored = _turn()
     await _relay(errored, _assistant_message(1, "partial"))

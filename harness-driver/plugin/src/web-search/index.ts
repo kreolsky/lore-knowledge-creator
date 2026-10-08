@@ -1,5 +1,6 @@
 /**
- * Lore's web-search providers for dsh's `ctx.web` seam: Brave, Tavily, SearXNG.
+ * Lore's web-search providers for dsh's `ctx.web` seam: Brave, Tavily, SearXNG,
+ * Perplexity (one pinnable id per Search API `search_type`).
  *
  * # SYSTEM: web-search — the agent's one `web_search`, harness-served; provider picked in admin settings
  *
@@ -19,13 +20,14 @@ import type { Context } from '@deepseek-ai/cordis'
 
 import { BraveSearchProvider } from './brave.ts'
 import { WEB_SEARCH_KEY_REF } from './key.ts'
+import { PerplexitySearchProvider } from './perplexity.ts'
 import { SearxngSearchProvider } from './searxng.ts'
 import { TavilySearchProvider } from './tavily.ts'
 
 export const name = 'lore-web-search'
 export const inject = ['web']
 
-/** Register all three providers over the ONE per-turn credential ref. */
+/** Register every Lore provider over the ONE per-turn credential ref. */
 export function apply(ctx: Context): void {
   const credentials = ctx.get('credentials')
   const resolveKey = async (): Promise<string> => {
@@ -39,4 +41,6 @@ export function apply(ctx: Context): void {
   ctx.web.registerSearchProvider(new BraveSearchProvider(resolveKey))
   ctx.web.registerSearchProvider(new TavilySearchProvider(resolveKey))
   ctx.web.registerSearchProvider(new SearxngSearchProvider(resolveKey))
+  ctx.web.registerSearchProvider(new PerplexitySearchProvider('fast', resolveKey))
+  ctx.web.registerSearchProvider(new PerplexitySearchProvider('web', resolveKey))
 }

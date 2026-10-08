@@ -9,9 +9,8 @@ import logging
 
 from surrealdb.errors import SurrealError
 
-from db._patch import validate_record_id
 from db.pool import get_db
-from db.records import extract_id
+from db.records import extract_id, record_refs, validate_record_id
 
 logger = logging.getLogger("db")
 
@@ -141,20 +140,18 @@ async def fetch_doc_meta(doc_id: str) -> dict | None:
 async def fetch_many(table: str, uids: list[str]) -> dict[str, dict]:
     """Batch-fetch records by UUIDs. Returns {id: record} map, excluding soft-deleted.
 
-    SECURITY: Validates table name and all UIDs before embedding in query.
+    SECURITY: table and UIDs validated inside db.record_refs; ids bind as
+    params (the table name is the only value embedded in query text).
     """
     if not uids:
         return {}
-    # SECURITY: validate all inputs before f-string embedding
-    validate_record_id(table)
-    for uid in uids:
-        validate_record_id(uid)
     db = await get_db()
     # Build type::record() calls so SurrealDB matches RecordIDs correctly.
     # Plain strings like "notes:uuid" don't match — must use typed records.
-    record_exprs = ", ".join(f"type::record('{table}', '{uid}')" for uid in uids)
+    refs, params = record_refs(table, uids)
     rows = await db.query(
-        f"SELECT * FROM {table} WHERE id IN [{record_exprs}] AND deleted_at IS NONE",
+        f"SELECT * FROM {table} WHERE id IN [{refs}] AND deleted_at IS NONE",
+        params,
     )
     result: dict[str, dict] = {}
     for r in (rows or []):

@@ -257,7 +257,15 @@ def _assign_frames_by_stamp(
     for r in assistants:
         t = by_seq.get(r.get("driver_seq"))
         if t is not None and _row_mid(r) in chain:
-            r["frames"] = list(t.get("frames") or [])
+            # The replay of a NON-live session ends every closed turn with a
+            # seq-anchored `turn_closed` (plugin entries.ts `terminals`) —
+            # TRANSPORT state for the resync consumer (the channel's dispatch
+            # arm), never timeline content: the rows' frames are the
+            # assembler's input, so it is dropped here.
+            r["frames"] = [
+                f for f in t.get("frames") or []
+                if not (isinstance(f, dict) and f.get("type") == "turn_closed")
+            ]
 
 
 def _mark_open_turn(
@@ -274,13 +282,12 @@ def _mark_open_turn(
     turn never carries one (entries.ts attaches it to the open turn only).
 
     # INVARIANT(replay-split, corruption, read side): a row that carries `halt`
-    # never takes the open mark. Why: a turn that ended without a terminal event
-    # stays end_seq-less in the log FOREVER (the breach/disconnect wrote no
-    # turn/end), so the projection shows it "open" — but its one record is
-    # the halt card (`messages.halt`, minted by attach_reload_lore_mints).
-    # Attaching the open frames beside it would render TWO records for one
-    # turn. The row's halt column is the splitter, mirroring the plugin's
-    # emitting-branch INVARIANT (entries.ts).
+    # never takes the open mark. Why: the plugin's read closes a dead turn's
+    # log with dsh's closers, so a trailing open turn marks a REGISTERED turn —
+    # and the one dead shape left is the breach whose /stop failed while the
+    # plugin turn still runs (halt card written, session live). Beside that
+    # card the open frames would render TWO records for one turn; the halt
+    # column is the splitter, mirroring entries.ts's emitting branch.
     """
     if not turns or not isinstance(turns[-1], dict):
         return

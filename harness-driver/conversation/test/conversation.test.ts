@@ -93,3 +93,43 @@ test('a replayed window equals the streamed tail', () => {
     reloaded.nodes().map(node => JSON.stringify(node.data)),
   )
 })
+
+test('dsh groups the process blocks of a turn and leaves the reply outside', () => {
+  const conversation = createLoreConversation()
+  conversation.replaceWindow(loadFixture(), false)
+  const nodes = conversation.nodes()
+  const { byNode, data } = conversation.groups()
+
+  // The fixture turn: step 1 thinks and calls two tools, step 2 thinks and
+  // answers — one run of process blocks, closed by the reply.
+  assert.equal(data.size, 1, `expected one process group, got ${data.size}`)
+  const [groupKey, group] = [...data][0]
+  assert.equal(group.closed, true, 'a finished turn leaves its group open')
+
+  const tools = nodes.filter(node => node.kind === 'tool-call')
+  assert.equal(tools.length, 2)
+  for (const tool of tools) {
+    assert.deepEqual(byNode.get(tool.key), { groupKey }, `tool ${tool.id} is outside the group`)
+  }
+  const assistants = nodes.filter(node => node.kind === 'assistant-step')
+  for (const assistant of assistants) {
+    assert.deepEqual(byNode.get(assistant.key), { groupKey, part: 'reasoning' },
+      `the reasoning of step ${(assistant.data as any).step} is outside the group`)
+  }
+  assert.equal(group.members, tools.length + assistants.length)
+  // The reply is the RESPONSE part of the last step — never a group member.
+  for (const node of nodes) {
+    if (node.kind === 'user' || node.kind === 'turn-tail') assert.equal(byNode.get(node.key), undefined)
+  }
+  assert.ok(group.summary.counts.length > 0, 'a closed group with tool calls has no activity counts')
+})
+
+test('an unchanged process group reads as the same info object', () => {
+  const conversation = createLoreConversation()
+  conversation.replaceWindow(loadFixture(), false)
+  conversation.nodes()
+  const first = [...conversation.groups().data.values()][0]
+  conversation.nodes()
+  const second = [...conversation.groups().data.values()][0]
+  assert.ok(first !== undefined && first === second, 'a re-read minted a new info object for an unchanged group')
+})

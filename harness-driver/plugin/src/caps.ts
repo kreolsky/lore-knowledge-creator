@@ -2,13 +2,15 @@
  * The driver's model-capability resolution — the ONE source.
  *
  * # ARCH: the plugin owns the model-facing semantics. The gateway's /v1/models
- * metadata (`context_length`, `max_completion_tokens`, image input modalities)
- * plus the /v1/capabilities reasoning map (`effort_levels` per model) are
- * resolved HERE — TTL-cached, single-flight — and served two ways: the
- * /capability endpoint answers the backend's vision gate, and the turn handler
- * arms its own catalog upsert (ensureModelEntry) plus the context_usage
- * denominator. Python resolves nothing: no backend resolver re-reads this
- * same gateway payload — the gates this module feeds are its only readers.
+ * metadata (`context_length`, `max_completion_tokens`, image input
+ * modalities, `api`, `compat`) plus the /v1/capabilities reasoning map
+ * (`effort_levels` per model) are resolved HERE — TTL-cached,
+ * single-flight — and served two ways: the /capability endpoint answers the
+ * backend's vision gate, and the turn handler arms its own catalog upsert
+ * (ensureModelEntry: which ROUTE the model rides, the entry's compat, the
+ * context_usage denominator) plus the route choice itself. Python resolves
+ * nothing: no backend resolver re-reads this same gateway payload — the
+ * gates this module feeds are its only readers.
  *
  * Failure semantics: a gateway the plugin cannot read answers UNKNOWN
  * (vision false, no numbers, no levels) with a loud log — strip + warn,
@@ -20,6 +22,12 @@
  * numbers and nulls only the levels (feature absence, mirroring the backend
  * picker's own {} on a capabilities miss).
  */
+
+/** The wire protocol the router serves one model over — the roster entry's
+ * `api` field. This picks the pi-ai route name (ROUTE_BY_API in turn.ts):
+ * openai-completions → the hand-declared `lore` route, anthropic-messages →
+ * the `anthropic` catalog route. */
+export type ModelApi = 'openai-completions' | 'anthropic-messages'
 
 /** The capability answer for one model id. */
 export interface ModelCaps {
@@ -33,6 +41,15 @@ export interface ModelCaps {
    * plugin writes NO maxTokens into the catalog entry and dsh's own default
    * applies — never a floor guess. */
   maxOutputTokens: number | null
+  /** The entry's `api` — which route the model rides. Absent, an unknown
+   * value or an unserved id answers 'openai-completions' (the one route this
+   * composition served before the field existed). */
+  api: ModelApi
+  /** The entry's `compat` VERBATIM, or null when absent. The plugin does not
+   * filter keys: the router owns the allow-list, and dsh refuses a withheld
+   * or misspelled key loudly, naming it. Null means "write no compat key" —
+   * a committed entry's compat is rewritten away (the router's word wins). */
+  compat: Record<string, unknown> | null
   /** The gateway /capabilities `effort_levels` list in GATEWAY spellings, or
    * null when the model is absent from the map (unknown model, non-reasoning
    * by the gateway's own word, or an unreadable endpoint). [] and null both
@@ -43,6 +60,7 @@ export interface ModelCaps {
 
 const UNKNOWN: ModelCaps = {
   known: false, vision: false, contextWindow: null, maxOutputTokens: null,
+  api: 'openai-completions', compat: null,
   effortLevels: null,
 }
 
@@ -105,6 +123,19 @@ function _entryVision(entry: Record<string, unknown>): boolean {
   const modalities = (entry.architecture as Record<string, unknown> | undefined)
     ?.input_modalities
   return Array.isArray(modalities) && modalities.includes('image')
+}
+
+function _entryApi(entry: Record<string, unknown>): ModelApi {
+  // Only a protocol this composition routes is one; anything else is today's
+  // behaviour (the openai route), never a guess at a new protocol.
+  return entry.api === 'anthropic-messages' ? 'anthropic-messages' : 'openai-completions'
+}
+
+function _entryCompat(entry: Record<string, unknown>): Record<string, unknown> | null {
+  const compat = entry.compat
+  return compat !== null && typeof compat === 'object' && !Array.isArray(compat)
+    ? compat
+    : null
 }
 
 async function _gatewayEntries(io: CapsIo): Promise<unknown[]> {
@@ -212,6 +243,8 @@ export async function resolveModelCaps(
     vision: _entryVision(entry),
     contextWindow: _positiveInt(entry.context_length),
     maxOutputTokens: _positiveInt(entry.max_completion_tokens),
+    api: _entryApi(entry),
+    compat: _entryCompat(entry),
     effortLevels,
   }
 }

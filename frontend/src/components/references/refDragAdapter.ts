@@ -30,6 +30,8 @@ export const refDragAdapter: SiblingDragAdapter = {
     orderedRefSiblings(useAppStore.getState().references, groupId, selfId),
   // Don't hijack RefCard action buttons or the inline-rename input.
   ignoreTarget: (el) => !!(el.closest('button') || el.closest('input')),
+  // References sit in the right panel: the chevron marks the panel's outer edge.
+  indicatorSide: 'right',
   commit: (id, afterId) => {
     const refs = useAppStore.getState().references;
     const self = refs.find(r => r.reference_id === id);

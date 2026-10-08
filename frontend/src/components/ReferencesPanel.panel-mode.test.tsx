@@ -250,19 +250,25 @@ describe("ReferencesPanel — 'panel' open mode", () => {
     expect(q('[data-testid="refcard"]').length).toBe(2);
   });
 
-  it('goto-parent on the plaque: parent doc switched to panel mode, reference navigation emitted (keeps the ref open there)', async () => {
+  it('goto-parent on the plaque: the parent document OPENS, in panel mode, with the reference still open in its Refs tab', async () => {
+    // The real document-navigation owner stands in for useDocumentNavigation's bus
+    // handler (it needs a Router), so the assertion is the outcome, not an emitted event.
     const { on, off } = await import('../events');
-    const seen: unknown[] = [];
-    const handler = (p: { referenceId: string }) => { seen.push(p); };
-    on('navigate-to-reference', handler);
+    const { openDocument } = await import('../navigation/open-document');
+    const navigated: string[] = [];
+    const handler = ({ documentId }: { documentId: string }) => openDocument(documentId, { navigate: (url) => { navigated.push(String(url)); } });
+    on('navigate-to-document', handler);
     useAppStore.setState({ documents: [mkDoc('root', null), mkDoc('doc-1', 'root'), mkDoc('doc-2', 'root')], currentDocument: mkDoc('doc-2', 'root') });
     await mount('panel', REF, 'doc-2');
     const goto = container.querySelector('[data-testid="refs-panel-plaque"] [data-title-slot] button')!;
     await act(async () => { goto.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
-    off('navigate-to-reference', handler);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    off('navigate-to-document', handler);
+    expect(navigated.length).toBe(1);
+    expect(useAppStore.getState().currentDocument?.document_id).toBe('doc-1');
+    expect(useAppStore.getState().currentReference?.reference_id).toBe('ref-1');
     expect(useUIStore.getState().getRefOpenMode('doc-1')).toBe('panel');
     expect(useUIStore.getState().documents['doc-1'].rightPanelTab).toBe('refs');
     expect(useUIStore.getState().documents['doc-1'].rightPanelOpen).toBe(true);
-    expect(seen).toEqual([{ referenceId: 'ref-1', sourceDocId: null }]);
   });
 });

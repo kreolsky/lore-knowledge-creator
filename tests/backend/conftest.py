@@ -71,6 +71,27 @@ _hang_dump_file = open(_HANG_DUMP_PATH, "w", buffering=1)  # noqa: SIM115 — pr
 _pending_task_timer = None
 
 
+def _await_chain(coro) -> list:
+    """Frames of a suspended coroutine, outermost to innermost.
+
+    WHY: `Task.get_stack()` returns ONE frame for a suspended coroutine, so a task
+    wedged several awaits deep shows only its top line and hides the await that is
+    actually parked (e.g. the one that swallowed a cancel). Walking cr_await /
+    gi_yieldfrom / ag_await reaches it; the leaf Future is already in the task's
+    repr (`wait_for=`)."""
+    frames = []
+    node = coro
+    for _ in range(64):  # a cycle-proof bound; real chains are a handful deep
+        frame = next((getattr(node, a) for a in ("cr_frame", "gi_frame", "ag_frame")
+                      if getattr(node, a, None) is not None), None)
+        if frame is None:
+            break
+        frames.append(frame)
+        node = next((getattr(node, a) for a in ("cr_await", "gi_yieldfrom", "ag_await")
+                     if getattr(node, a, None) is not None), None)
+    return frames
+
+
 def _dump_pending_tasks() -> None:
     import gc
     import traceback
@@ -88,7 +109,7 @@ def _dump_pending_tasks() -> None:
             file=_hang_dump_file,
         )
         try:
-            for frame in obj.get_stack(limit=25):
+            for frame in _await_chain(obj.get_coro()):
                 traceback.print_stack(frame, limit=1, file=_hang_dump_file)
         except Exception as exc:  # noqa: BLE001 — diagnostic path, never fatal
             print(f"  <stack unavailable: {exc}>", file=_hang_dump_file)

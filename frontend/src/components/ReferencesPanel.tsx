@@ -558,12 +558,18 @@ export function ReferencesPanel() {
           onBack={() => setCurrentReference(null)}
           onExitPanel={() => { if (currentDocId) setRefOpenMode(currentDocId, 'center'); }}
           // Go to the parent AND keep the reference open in the right panel: the parent
-          // doc is switched to 'panel' mode first, then the cross-doc reference navigation
-          // (pendingReference → survives the doc commit) carries the reference across.
+          // doc is switched to 'panel' mode, the reference rides the document commit as
+          // pendingReference, and the jump itself is a document navigation (the chat
+          // header's path).
+          // WHY not navigate-to-reference: in 'panel' mode its resolver returns
+          // stay-in-context for every ref (resolveReferenceNav), so it never leaves the
+          // current document and the button did nothing.
           onGotoParent={documentId => {
             setRefOpenMode(documentId, 'panel');
             pinRightPanel(documentId, 'refs');
-            emit('navigate-to-reference', { referenceId: panelRef.reference_id, sourceDocId: null });
+            useAppStore.getState().setPendingReference(panelRef);
+            useAppStore.setState({ referenceSourceDocId: null });
+            emit('navigate-to-document', { documentId });
           }}
           onChangeParent={(r, rect) => setRefParentPicker({ reference: r, anchorRect: rect })}
           onArchive={handleArchive}
@@ -578,7 +584,7 @@ export function ReferencesPanel() {
         />
       )}
       {panelRef && (
-        <div className="flex-1 flex flex-col overflow-hidden min-h-0 bg-bg">
+        <div className="refs-panel-preview flex-1 flex flex-col overflow-hidden min-h-0 bg-bg">
           {/* Audio and file refs get their media bar here (the archive card carries
               its own file actions); images preview inside the secondary editor
               already, same guard as SplitEditorLayout. */}

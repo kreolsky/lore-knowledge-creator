@@ -125,10 +125,14 @@ function splitSegments(src: string): Segment[] {
 // text alone. Accepted, recorded: the literal inside inline code and
 // 4-space-indented code IS rewritten too (visible as the lore.local form
 // there).
-const INTERNAL_LINK_RE = /(!?)\[([^[\]]*)\]\((doc|ref|note):([^)\s]+)\)/g;
+// WHY: a scheme-less destination (`[t](id)`, `[t](<id>)`) is a document link — the
+// agent's bootstrap prompt spells document links as the bare id, and the editor's
+// docLink pattern (link-patterns.ts) reads `doc:` as optional. No ':' '/' '#' '?'
+// keeps http(s)/mailto/anchors/paths out of the bare arm.
+const INTERNAL_LINK_RE = /(!?)\[([^[\]]*)\]\((?:(doc|ref|note):([^)\s]+)|<?([^)\s<>:/#?]+)>?)\)/g;
 function rewriteInternalLinks(text: string): string {
-  return text.replace(INTERNAL_LINK_RE, (match, image: string, alt: string, type: string, id: string) =>
-    image ? match : `[${alt}](https://lore.local/l/${type}/${id})`);
+  return text.replace(INTERNAL_LINK_RE, (match, image: string, alt: string, type?: string, id?: string, bareId?: string) =>
+    image ? match : `[${alt}](https://lore.local/l/${type ?? 'doc'}/${id ?? bareId})`);
 }
 
 // ─── click delegation ───────────────────────────────────────────────────

@@ -6,7 +6,9 @@ intra-cell `\n` are where GFM serializers break.
 
 See `.kilo/plans/table-block-object.md` (Storage / Markdown export).
 """
-from table_serialize import parse_gfm_table, serialize_table
+from helpers import parse_gfm_table
+
+from table_serialize import serialize_table
 
 # ── serialize_table: model → GFM ──────────────────────────────────────────────
 

@@ -22,7 +22,7 @@ import { resolveContentPickerAnchor } from '../../chat/picker-anchor';
 import { useGhostChatContext } from '../../chat/use-ghost-context';
 import { canSend as computeCanSend } from '../../chat/send-gate';
 import { ghostPinTransfer } from '../../chat/ghost-pin-transfer';
-import { on, off } from '../../events';
+import { on, off, emit } from '../../events';
 import { clarifyBlock } from './clarify-format';
 import { totalAttachmentBytes, attachmentBudgetExceeded, formatAttachmentMb } from '../../utils/attachment-size';
 import { selectActivePath } from '../../store/chat-store/tree';
@@ -105,6 +105,16 @@ export function ChatInput() {
     on('chat-clarify-insert', handler);
     return () => off('chat-clarify-insert', handler);
   }, [t]);
+
+  // MessageList owns the scroll container; it reports when auto-follow is off and
+  // listens for the jump — see 'chat-scrolled-away' / 'chat-scroll-to-bottom'.
+  const [scrolledAway, setScrolledAway] = useState(false);
+  useEffect(() => {
+    const handler = ({ away }: { away: boolean }) => setScrolledAway(away);
+    on('chat-scrolled-away', handler);
+    return () => off('chat-scrolled-away', handler);
+  }, []);
+  const scrollToBottom = useCallback(() => emit('chat-scroll-to-bottom'), []);
   const models = useChatStore(s => s.models);
   // WHY: vision-capable model ids (backend-derived) drive the EyeOff badge (shown on models NOT in this set).
   const visionModels = useChatStore(s => s.visionModels);
@@ -676,6 +686,7 @@ export function ChatInput() {
       onRemoveImage={removePendingImage}
       queued={queued}
       onRemoveQueued={i => { if (activeSessionId) removeQueued(activeSessionId, i); }}
+      onScrollToBottom={scrolledAway ? scrollToBottom : undefined}
       topControls={topControls}
       leftControls={leftControls}
       warnings={warnings}

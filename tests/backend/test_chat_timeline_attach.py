@@ -131,6 +131,27 @@ async def test_no_stamps_no_turns_no_attachment():
     assert a1.get("frames") is None
 
 
+@pytest.mark.asyncio
+async def test_the_replayed_transport_terminal_never_rides_the_rows():
+    """The replay of a NON-live session ends every closed turn with a
+    seq-anchored `turn_closed` (plugin entries.ts `terminals`) — TRANSPORT
+    state for the resync consumer, not timeline content: the rows' frames are
+    the assembler's input, so the stamp pass drops it here. Riding it would
+    feed the browser's frame reducer a terminal inside a reload."""
+    a1 = row("a1", seq=5, created="1")
+    turns = [{"end_seq": 5, "frames": [
+        _dsh(1, "assistant/message"),
+        _dsh(5, "turn/end", {"turn": 1, "reason": {"kind": "completed"}}),
+        {"type": "turn_closed", "seq": 5.9},
+    ]}]
+    all_rows = [slim("u1"), slim("a1", "u1", "assistant", "1", seq=5)]
+    _assign_frames_by_stamp([a1], turns, all_rows)
+    assert a1["frames"] == [
+        _dsh(1, "assistant/message"),
+        _dsh(5, "turn/end", {"turn": 1, "reason": {"kind": "completed"}}),
+    ]
+
+
 class _FakeDB:
     async def query(self, _q, _p=None, **_kw):
         # The anchor projection: u1 → a1(stamped 5)

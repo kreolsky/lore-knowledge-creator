@@ -124,6 +124,42 @@ async def test_owner_mints_subtree_share(client, admin_user, project_with_doc):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["foreign_project", "deleted"])
+async def test_owner_cannot_mint_for_a_doc_outside_the_project(
+    client, admin_user, project_with_doc, case,
+):
+    """The owner of THIS project gets a uniform 404 for a doc of another project
+    or a deleted doc of its own, and no share row is written."""
+    from db import create_record, get_db
+
+    pid, _, _ = project_with_doc
+    _, admin_token = admin_user
+    doc_id = f"share-outside-{case}"
+    await create_record("documents", doc_id, {
+        "project_id": "some-other-project" if case == "foreign_project" else pid,
+        "parent_id": None, "title": "Outside", "content": "x", "is_index": False,
+        "path": f"/{doc_id}",
+    })
+    db = await get_db()
+    if case == "deleted":
+        await db.query(
+            "UPDATE type::record('documents', $id) SET deleted_at = time::now()",
+            {"id": doc_id},
+        )
+
+    resp = await client.post(
+        f"/api/projects/{pid}/documents/{doc_id}/shares",
+        json={"scope": "doc"}, cookies={"lore_session": admin_token},
+    )
+
+    assert resp.status_code == 404, resp.text
+    rows = await db.query(
+        "SELECT * FROM document_shares WHERE document_id = $did", {"did": doc_id},
+    )
+    assert rows == []
+
+
+@pytest.mark.asyncio
 async def test_non_owner_full_member_cannot_mint(client, admin_user, regular_user, project_with_doc):
     """INVARIANT: share writes stay owner-only (UI mirrors the API gate)."""
     pid, idx_id, _ = project_with_doc

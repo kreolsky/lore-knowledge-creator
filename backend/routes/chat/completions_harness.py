@@ -46,6 +46,7 @@ import driver.timeline as timeline
 import settings
 from driver.channel import get_driver_channel
 from driver.client import (
+    PERPLEXITY_SEARCH_PINS,
     WEB_SEARCH_PROVIDERS,
     DriverLineUnreachable,
     DriverSecretMismatch,
@@ -167,6 +168,8 @@ async def _turn_payload(turn: "_AgentTurn", plan, agent_key: str, driver_session
     # deletes a persisted pre-change `off`.
     provider = await settings.get("WEB_SEARCH_PROVIDER")
     pin, credential_key = WEB_SEARCH_PROVIDERS[provider]
+    if provider == "perplexity":
+        pin = PERPLEXITY_SEARCH_PINS[await settings.get("PERPLEXITY_SEARCH_TYPE")]
     config = await settings.get_all(
         ["CHAT_TITLE_MODEL", credential_key])
     return _build_turn_payload(

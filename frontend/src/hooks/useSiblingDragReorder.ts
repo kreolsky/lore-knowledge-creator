@@ -15,7 +15,8 @@
  *
  * Reuses the repo's PointerEvent drag pattern (see useResizer.ts): document-level
  * listeners, refs for transient state, visual feedback via imperative inline styles
- * (no new CSS classes), commit on pointerup.
+ * (no new CSS classes), commit on pointerup. The drop target is a fixed-position
+ * line in the gap between rows with a chevron on the adapter's side.
  */
 import { useEffect } from 'react';
 import { useAppStore } from '../store/app-store';
@@ -24,7 +25,10 @@ import { t } from '../i18n';
 import type { Document } from '../types';
 
 const DRAG_THRESHOLD = 5; // px before a press becomes a drag (vs a click)
-const DRAG_SHADOW = 'inset 0 2px 0 0 var(--accent)';
+const INDICATOR_LINE = 4; // px, thickness of the drop line
+const INDICATOR_CHEVRON = 10; // px, chevron box at the line's end
+
+export type IndicatorSide = 'left' | 'right';
 
 export interface DragSibling {
   id: string;
@@ -42,6 +46,39 @@ export interface SiblingDragAdapter {
   ignoreTarget(el: HTMLElement): boolean;
   /** Commit a drop: optimistic provisional key, PATCH, reconcile, rollback. */
   commit(id: string, afterId: string | null): void;
+  /** Edge the drop line's chevron sits on — the panel's outer edge. */
+  indicatorSide: IndicatorSide;
+}
+
+/** Detached drop-line element: a 4px accent line plus a chevron pointing into
+ * the list from `side`. Positioned by `placeDropIndicator`. */
+export function createDropIndicator(side: IndicatorSide): HTMLElement {
+  const el = document.createElement('div');
+  el.setAttribute('data-drop-indicator', side);
+  Object.assign(el.style, {
+    position: 'fixed', height: `${INDICATOR_LINE}px`, background: 'var(--accent)',
+    pointerEvents: 'none', zIndex: '10000', display: 'none',
+  });
+  const half = INDICATOR_CHEVRON / 2;
+  // Chevron tip points INTO the list: '>' on the left edge, '<' on the right.
+  const points = side === 'left' ? `1,1 ${half},${half} 1,${INDICATOR_CHEVRON - 1}` : `${INDICATOR_CHEVRON - 1},1 ${half},${half} ${INDICATOR_CHEVRON - 1},${INDICATOR_CHEVRON - 1}`;
+  el.innerHTML = `<svg width="${INDICATOR_CHEVRON}" height="${INDICATOR_CHEVRON}" viewBox="0 0 ${INDICATOR_CHEVRON} ${INDICATOR_CHEVRON}" `
+    + `style="position:absolute;top:${INDICATOR_LINE / 2 - half}px;${side}:${-half}px;overflow:visible">`
+    + `<polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="${INDICATOR_LINE}" stroke-linecap="square"/></svg>`;
+  return el;
+}
+
+/** Put the drop line on the row's top (`before`) or bottom edge, straddling
+ * the gap between rows; the chevron overhangs the row's `side` edge by half. */
+export function placeDropIndicator(el: HTMLElement, rect: DOMRect, before: boolean): void {
+  const edge = before ? rect.top : rect.bottom;
+  const inset = INDICATOR_CHEVRON / 2;
+  Object.assign(el.style, {
+    display: 'block',
+    top: `${edge - INDICATOR_LINE / 2}px`,
+    left: `${rect.left + inset}px`,
+    width: `${Math.max(rect.width - 2 * inset, 0)}px`,
+  });
 }
 
 /** after_id for a pending drop over `rowId`: string = after that sibling,
@@ -100,6 +137,8 @@ export const treeDragAdapter: SiblingDragAdapter = {
     orderedTreeSiblings(useAppStore.getState().documents, parentId, selfId),
   // Don't hijack action buttons, the rename input, or the gear menu.
   ignoreTarget: (el) => !!(el.closest('.doc-item-actions') || el.closest('input')),
+  // Tree sits in the left panel: the chevron marks the panel's outer edge.
+  indicatorSide: 'left',
   commit: (id, afterId) => {
     const docs = useAppStore.getState().documents;
     const self = docs.find(d => d.document_id === id);
@@ -131,7 +170,7 @@ export function useSiblingDragReorder(
     let candidate: { id: string; groupId: string | null; x: number; y: number } | null = null;
     let dragging = false;
     let draggedRow: HTMLElement | null = null;
-    let indicatorRow: HTMLElement | null = null;
+    let indicator: HTMLElement | null = null;
     // after_id for the pending drop: string = after that sibling, null = top, undefined = no valid target
     let pendingAfterId: string | null | undefined = undefined;
 
@@ -144,8 +183,12 @@ export function useSiblingDragReorder(
     };
 
     const clearIndicator = () => {
-      if (indicatorRow) indicatorRow.style.boxShadow = '';
-      indicatorRow = null;
+      if (indicator) indicator.style.display = 'none';
+    };
+
+    const removeIndicator = () => {
+      indicator?.remove();
+      indicator = null;
     };
 
     const onPointerDown = (e: PointerEvent) => {
@@ -176,10 +219,11 @@ export function useSiblingDragReorder(
       const siblings = adapter.orderedSiblings(candidate!.groupId, candidate!.id);
       pendingAfterId = dropAfterId(siblings, rowId, before);
       if (pendingAfterId === undefined) return;
-      row.style.boxShadow = before
-        ? 'inset 0 2px 0 0 var(--accent)'
-        : 'inset 0 -2px 0 0 var(--accent)';
-      indicatorRow = row;
+      if (!indicator) {
+        indicator = createDropIndicator(adapter.indicatorSide);
+        document.body.appendChild(indicator);
+      }
+      placeDropIndicator(indicator, rect, before);
     };
 
     const onPointerMove = (e: PointerEvent) => {
@@ -199,7 +243,7 @@ export function useSiblingDragReorder(
       const cand = candidate;
       const after = pendingAfterId;
       if (draggedRow) draggedRow.style.opacity = '';
-      clearIndicator();
+      removeIndicator();
       document.body.style.userSelect = '';
       candidate = null;
       dragging = false;
@@ -223,7 +267,7 @@ export function useSiblingDragReorder(
       container.removeEventListener('pointerdown', onPointerDown);
       document.removeEventListener('pointermove', onPointerMove);
       document.removeEventListener('pointerup', endDrag);
-      clearIndicator();
+      removeIndicator();
       document.body.style.userSelect = '';
     };
   }, [containerRef, enabled, adapter]);

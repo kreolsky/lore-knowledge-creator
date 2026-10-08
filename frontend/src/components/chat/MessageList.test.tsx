@@ -3,12 +3,20 @@
  * turn's per-row node slice (SYSTEM: dsh-conversation).
  */
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// WHY warm the bundle: MarkdownContent lazily import()s dsh's markdown renderer
+// and nothing here awaits it, so under the vmThreads pool the file can end with
+// the import in flight and vitest reports an unhandled rejection from its
+// closed module runner. Loading it up front settles the import before any test.
+beforeAll(async () => {
+  await Promise.all([import('../../dsh/lore-markdown'), import('../../dsh/lore-markdown.css')]);
+});
 
 // Streamable test state; each test mutates `streaming`/`activePath` before
 // mount so the component reads a realistic snapshot through the selector.
@@ -68,6 +76,7 @@ vi.mock('../../api/client', () => ({ apiClient: { get: vi.fn(), post: vi.fn(), p
 
 import { MessageList } from './MessageList';
 import { apiClient } from '../../api/client';
+import { on, emit } from '../../events';
 
 // jsdom lacks Element.scrollTo (the MessageList follow effect calls it on the
 // scroll container); polyfill like the ResizeObserver polyfill in
@@ -350,5 +359,76 @@ describe('MessageList — rewind plaque', () => {
     expect(list.className).toContain('overflow-y-auto');
     expect(list.childElementCount).toBe(1);
     cleanup(mounted);
+  });
+});
+
+describe('MessageList — scroll-to-bottom button bridge', () => {
+  beforeEach(() => {
+    vi.mocked(emit).mockClear();
+    vi.mocked(on).mockClear();
+  });
+
+  function awayEmits(): boolean[] {
+    return vi.mocked(emit).mock.calls
+      .filter(([name]) => name === 'chat-scrolled-away')
+      .map(([, payload]) => (payload as { away: boolean }).away);
+  }
+
+  it('reports away once when a scroll leaves the stick threshold, and back when it returns', () => {
+    chatState.activePath = [assistantMessage()];
+    chatState.streaming = null;
+    const { host, root } = mount();
+    const el = scrollContainer(host);
+    stubScrollMetrics(el, 2000, 400);
+    trackScrollTop(el);
+    el.scrollTop = 1600 - 81; // 81px from the bottom: past the 80px threshold
+    el.dispatchEvent(new Event('scroll'));
+    el.scrollTop = 1600 - 200;
+    el.dispatchEvent(new Event('scroll'));
+    el.scrollTop = 1600 - 79;
+    el.dispatchEvent(new Event('scroll'));
+    expect(awayEmits()).toEqual([true, false]);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('the jump command lands at the bottom and re-follows the stream', () => {
+    chatState.activePath = [assistantMessage()];
+    chatState.streaming = streamingState('abc');
+    const { host, root } = mount();
+    const el = scrollContainer(host);
+    stubScrollMetrics(el, 2000, 400);
+    trackScrollTop(el);
+    el.scrollTop = 300;
+    el.dispatchEvent(new Event('scroll'));
+    const jump = vi.mocked(on).mock.calls.find(([name]) => name === 'chat-scroll-to-bottom')?.[1] as () => void;
+    act(() => jump());
+    expect(el.scrollTop).toBe(2000);
+    expect(awayEmits()).toEqual([true, false]);
+    // Re-stuck: further growth snaps instead of holding the anchor.
+    stubScrollMetrics(el, 2500, 400);
+    chatState.streaming = streamingState('abcdef');
+    act(() => root.render(createElement(MessageList)));
+    expect(el.scrollTop).toBe(2500);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('hides the button when the list leaves for a state with no scroll container', () => {
+    chatState.activePath = [assistantMessage()];
+    chatState.streaming = null;
+    chatState.messagesError = null;
+    const { host, root } = mount();
+    const el = scrollContainer(host);
+    stubScrollMetrics(el, 2000, 400);
+    trackScrollTop(el);
+    el.scrollTop = 300;
+    el.dispatchEvent(new Event('scroll'));
+    chatState.messagesError = 'boom';
+    act(() => root.render(createElement(MessageList)));
+    expect(awayEmits()).toEqual([true, false]);
+    chatState.messagesError = null;
+    act(() => root.unmount());
+    host.remove();
   });
 });

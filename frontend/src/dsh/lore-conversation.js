@@ -8811,6 +8811,7 @@ function createLoreConversation() {
 	assembler.activateTarget("chat");
 	let tailSeq = Number.NEGATIVE_INFINITY;
 	let hasMoreHistory = false;
+	const groupInfo = /* @__PURE__ */ new WeakMap();
 	const feedTail = (input) => {
 		tailSeq = Math.max(tailSeq, input.event.seq);
 		return assembler.append(input);
@@ -8834,6 +8835,35 @@ function createLoreConversation() {
 				if (node !== void 0) ordered.push(node);
 			}
 			return ordered;
+		},
+		groups: () => {
+			const grouped = assembler.grouped("chat");
+			if (grouped === void 0) throw new Error("dsh chat process grouping is not registered");
+			const byNode = /* @__PURE__ */ new Map();
+			const data = /* @__PURE__ */ new Map();
+			for (const entry of grouped.entries) {
+				if (entry.kind !== "group") continue;
+				const group = grouped.groupSource(entry.key).getSnapshot();
+				if (group === void 0) continue;
+				let info = groupInfo.get(group);
+				if (info === void 0) {
+					info = {
+						members: group.members.length,
+						closed: group.data.closed,
+						summary: group.data.summary
+					};
+					groupInfo.set(group, info);
+				}
+				data.set(entry.key, info);
+				for (const member of group.members) byNode.set(member.key, member.groupPart === void 0 ? { groupKey: entry.key } : {
+					groupKey: entry.key,
+					part: member.groupPart
+				});
+			}
+			return {
+				byNode,
+				data
+			};
 		}
 	};
 }

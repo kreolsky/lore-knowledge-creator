@@ -213,14 +213,16 @@ async def test_sync_leaf_refuses_when_chain_cycles(monkeypatch):
 
 
 class _RecordingDriverClient:
-    """The `driver` pool client: records every POST body, answers 200."""
+    """The `driver` pool client: records every POST body, answers 200 with
+    `reply` (default: the live-tail no-op's `{ok: true}`)."""
 
-    def __init__(self):
+    def __init__(self, reply: dict | None = None):
         self.bodies: list[dict] = []
+        self.reply = reply or {"ok": True}
 
     async def post(self, url, json=None, headers=None, timeout=None):
         self.bodies.append(json)
-        return SimpleNamespace(status_code=200)
+        return SimpleNamespace(status_code=200, json=lambda: self.reply)
 
 
 async def _mk_rows(test_db, rows: dict[str, dict]) -> None:
@@ -264,6 +266,32 @@ async def test_sync_leaf_omits_source_for_a_legacy_row(test_db, http_pool):
         None, "chat-pair", "lore-chat", "legacy-a1", line=_LINE())
 
     assert driver_client.bodies == [{"session_id": "lore-chat", "seq": 5}]
+
+
+async def test_a_fork_answer_repoints_the_live_subscription(http_pool):
+    """The driver's re-ack rides the event socket, which a harness restart
+    leaves down for seconds; the fork's HTTP answer carries the same repoint
+    and seam A applies it to the process channel's subscription, so the
+    forked turn reaches its row either way."""
+    ch = driver.channel.get_driver_channel()
+    sub = driver.channel._Subscription(
+        lore_session_id="lore-chat", dsh_session_id="lore-chat", last_seq=100.0)
+    ch._subs["lore-chat"] = sub
+    try:
+        http_pool("driver", _RecordingDriverClient(
+            {"ok": True, "dsh_session_id": "lore-chat~f0000beef", "tail_seq": 9}))
+        await branch._driver_set_session_leaf("lore-chat", 9, line=_LINE())
+        assert (sub.dsh_session_id, sub.last_seq) == ("lore-chat~f0000beef", 9.0)
+        assert ch._dsh_index.get("lore-chat~f0000beef") is sub
+
+        # A no-op answer (no fork) leaves the subscription where it was.
+        sub.last_seq = 12.0
+        http_pool("driver", _RecordingDriverClient())
+        await branch._driver_set_session_leaf("lore-chat", 9, line=_LINE())
+        assert (sub.dsh_session_id, sub.last_seq) == ("lore-chat~f0000beef", 12.0)
+    finally:
+        ch._subs.pop("lore-chat", None)
+        ch._dsh_index.pop("lore-chat~f0000beef", None)
 
 
 # ─── Seam A placement: a real pre-response 422, not a dead-on-arrival turn ───

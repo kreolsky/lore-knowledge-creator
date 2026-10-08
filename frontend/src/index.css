@@ -778,6 +778,11 @@ body.is-resizing * { transition: none !important; }
   50% { opacity: 1; }
 }
 
+/* WHY: the chat scroll-to-bottom button is round by operator decision — the one
+   exception to the square rule outside Modal. A class, because --radius-full is 0
+   in @theme (so `rounded-full` is square) and the styling gate bars `rounded-[`. */
+.scroll-to-bottom-btn { border-radius: 50%; }
+
 .snapshot-preview-banner {
   display: flex;
   align-items: center;
@@ -882,6 +887,12 @@ body.is-resizing * { transition: none !important; }
 .editor-content--compact .cm-editor .cm-scroller {
   padding-left: 1rem;
   padding-right: 1rem;
+}
+/* WHY: the Refs-tab quick preview is a narrow side column; the theme's 2rem side
+   gutter is roughly halved there. Centre and split editors keep the full gutter. */
+.refs-panel-preview .editor-content .cm-editor .cm-scroller {
+  padding-left: 15px;
+  padding-right: 15px;
 }
 .editor-content .cm-editor .cm-content {
   padding: 0;

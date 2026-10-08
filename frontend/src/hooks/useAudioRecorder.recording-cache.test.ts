@@ -93,12 +93,12 @@ async function readAllRecords(): Promise<CachedRecord[]> {
  * wall-clock budget is tolerance, not masking: a real regression still surfaces
  * as this helper's descriptive "records never reached the expected state".
  */
-async function untilRecords(pred: (recs: CachedRecord[]) => boolean, ms = 12_000): Promise<CachedRecord[]> {
+async function untilRecords(pred: (recs: CachedRecord[]) => boolean, ms = 12_000, context = ''): Promise<CachedRecord[]> {
   const deadline = Date.now() + ms;
   for (;;) {
     const recs = await readAllRecords();
     if (pred(recs)) return recs;
-    if (Date.now() > deadline) throw new Error(`records never reached the expected state: ${JSON.stringify(recs)}`);
+    if (Date.now() > deadline) throw new Error(`records never reached the expected state${context}: ${JSON.stringify(recs)}`);
     await new Promise(r => setTimeout(r, 10));
   }
 }
@@ -223,8 +223,9 @@ describe('useAudioRecorder → recording cache', () => {
     // The ctx carries THIS take's cache session id — the idempotency key the
     // upload consumers append must be captured per take, never read from a
     // global (an await in the completion path would mis-key under a new take).
-    const recs = await readAllRecords();
-    expect(recs.some(r => r.id === ctx.sessionId)).toBe(true);
+    // WHY wait for the finalize: onstop fires it and forgets it — a test that
+    // ends before it lands lets it write into the NEXT test's freshly reset DB.
+    await untilRecords(recs => recs.find(r => r.id === ctx.sessionId)?.status === 'pending-upload');
   }, 15_000);
 
   it('Escape discards the cached session AND the consuming isVoiceCancelled() still reads true', async () => {
@@ -235,7 +236,12 @@ describe('useAudioRecorder → recording cache', () => {
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     });
-    await untilRecords(recs => recs.length === 0);
+    // WHY the own id in the failure: a leftover record is either THIS take
+    // finalized instead of discarded (a product bug) or a previous test's late
+    // fire-and-forget write landing after the DB reset (an isolation flake) —
+    // only the id tells them apart.
+    const ownSessionId = (onComplete.mock.calls[0]?.[1] as { sessionId?: string } | undefined)?.sessionId;
+    await untilRecords(recs => recs.length === 0, undefined, ` (this take's session: ${ownSessionId})`);
 
     // The peek in onstop must not have stolen the one consuming read that
     // belongs to handleVoiceRecording — losing it would resurrect the widget

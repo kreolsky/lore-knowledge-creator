@@ -1,15 +1,15 @@
-"""SurrealDB _recv_task/_connect monkeypatches + record-id validation (base layer of db).
+"""SurrealDB _recv_task/_connect monkeypatches (base layer of db).
 
 Imported FIRST by db.__init__ so the patches install as a side effect of `import db`
 and run before any get_db() can wedge the SDK reader. Split out of the former
-backend/db.py (behavior-preserving).
+backend/db.py (behavior-preserving). Holds only the SDK patches — record-id
+validation lives in db.records — so it is deletable on an SDK upgrade.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import re
 
 import websockets
 from surrealdb.connections.async_ws import AsyncWsSurrealConnection as _AsyncWsConn
@@ -243,6 +243,18 @@ async def _patched_use(self, namespace, database, session_id=None) -> None:
 #   Why deferred: upstream surrealdb-py has no hook for the missing `fut.done()` guard,
 #   dead-reader reconnect, or its session replay; drop these when the SDK fixes them
 #   (re-check on every SDK bump per the INVARIANTs above).
+#   WHY still here: surrealdb 2.0.0 IS
+#   the newest release (PyPI LATEST == the gray image's INSTALLED) — there is nothing
+#   to upgrade to, and 2.0.0 with only the four install lines below commented out
+#   fails the dead-reader/contract suites, 10 failed / 31 passed: test_db_recv_patch.py
+#   (test_patch_is_installed_on_class, test_connect_patch_is_installed_on_class,
+#   test_patched_connect_reconnects_after_reader_death, test_send_self_heals_after_reader_death,
+#   test_replay_runs_after_a_failed_dial, test_failed_replay_closes_the_socket,
+#   test_signin_stashes_credentials_only_on_success) and test_sdk_contract.py
+#   (test_contract_recv_task_accepts_patched_class, test_verify_sdk_contract_passes_on_conforming_sdk,
+#   test_verify_sdk_contract_retries_transient_transport_error). The remaining 31 pass
+#   because they drive _patched_* bodies in isolation, not the SDK — they say nothing
+#   about upstream. Re-check on the next upstream release, not before.
 # ARCH: monkeypatch AsyncWsSurrealConnection at import time — (1) _recv_task: skip
 #   set_result() on already-done futures AND hand pending queries a named
 #   SurrealReaderDiedError on reader exit (fixes the backend wedge + the
@@ -255,16 +267,3 @@ _AsyncWsConn._recv_task = _patched_recv_task
 _AsyncWsConn.connect = _patched_connect
 _AsyncWsConn.signin = _patched_signin
 _AsyncWsConn.use = _patched_use
-
-# SECURITY: Validate record IDs before embedding in RELATE queries.
-# SurrealDB RELATE doesn't support parameterized record IDs, so we
-# must ensure IDs contain only safe characters (UUID format).
-# M-4: ASCII-only to prevent Unicode homoglyph injection
-SAFE_ID_RE = re.compile(r'^[a-zA-Z0-9_\-]+$')
-
-
-def validate_record_id(rid: str) -> str:
-    """Raise ValueError if rid contains unsafe characters for SurrealDB queries."""
-    if not SAFE_ID_RE.match(rid):
-        raise ValueError(f"Invalid record ID: {rid!r}")
-    return rid

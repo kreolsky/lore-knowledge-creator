@@ -45,7 +45,7 @@ from sort_keys import key_between, n_keys_between
 
 import event_bus
 from config import STORAGE_PATH
-from db import get_db
+from db import get_db, record_refs
 from jobs import pool as jobs_pool
 from mentions import rebuild_doc_mentions
 from ydoc_store import set_content
@@ -138,11 +138,11 @@ def page_update(
 
 async def _stored_pages(db, project_id: str, slugs: list[str]) -> dict[str, dict]:
     """Every row (live or tombstoned, any project) holding a help id of this project."""
-    in_clause = ",".join(f"type::record('documents', $i{n})" for n in range(len(slugs)))
-    params = {f"i{n}": help_doc_id(project_id, s) for n, s in enumerate(slugs)}
+    ids = [help_doc_id(project_id, s) for s in slugs]
+    refs, params = record_refs("documents", ids)
     rows = await db.query(
         "SELECT meta::id(id) AS id, project_id, title, content, deleted_at FROM documents "
-        f"WHERE id IN [{in_clause}]",
+        f"WHERE id IN [{refs}]",
         params,
     )
     by_id = {r["id"]: r for r in (rows or [])}
@@ -283,9 +283,8 @@ async def _ensure_images(db, project_id: str, bundle: HelpBundle) -> None:
     names = [n for n in bundle.images if n in alts]
     if not names:
         return
-    in_clause = ",".join(f"type::record('documents', $i{n})" for n in range(len(names)))
-    params = {f"i{n}": help_image_id(project_id, name) for n, name in enumerate(names)}
-    existing = await db.query(f"SELECT VALUE meta::id(id) FROM documents WHERE id IN [{in_clause}]", params)
+    refs, params = record_refs("documents", [help_image_id(project_id, n) for n in names])
+    existing = await db.query(f"SELECT VALUE meta::id(id) FROM documents WHERE id IN [{refs}]", params)
     have = set(existing or [])
     stored = await _stored_pages(db, project_id, [p.slug for p in bundle.pages])
     pages = [r for r in stored.values() if r["project_id"] == project_id and r.get("deleted_at") is None]

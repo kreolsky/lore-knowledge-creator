@@ -48,19 +48,6 @@ async def _group_size(db: AsyncSurreal, moderator_uid: str) -> int:
     return int(rows[0]["n"]) if rows else 0
 
 
-async def group_member_ids(db: AsyncSurreal, moderator_uid: str) -> list[str]:
-    """Active member uids of the moderator's group (excluding the moderator).
-
-    The moderator's scoped admin surface: their project list = projects owned
-    by {me} ∪ this set (routes/projects.py, routes/projects_members.py).
-    """
-    rows = await db.query(
-        "SELECT VALUE meta::id(id) FROM users WHERE moderator_id = $mid AND deleted_at IS NONE",
-        {"mid": moderator_uid},
-    )
-    return list(rows or [])
-
-
 def _group_not_empty(moderator_uid: str, n: int) -> JSONResponse:
     return JSONResponse(
         status_code=409,

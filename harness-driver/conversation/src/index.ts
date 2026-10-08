@@ -41,7 +41,9 @@
 
 import { Context } from '@deepseek-ai/cordis'
 import type { ConversationPublication } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { ChatConversationViewNode, ChatSnapshot } from '@deepseek-ai/dsh-client-ui-chat/client'
+import type {
+  ChatConversationViewNode, ChatSnapshot, ProcessActivitySummary,
+} from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { SessionEventLikeEntry } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { LlmAttemptId } from '@deepseek-ai/dsh-llm/brand'
 // WHY: relative into the workspace. The packages' mapped specifiers reach their
@@ -70,6 +72,27 @@ export type {
   ChatConversationViewNode,
   SessionEventLikeEntry,
   ConversationPublication,
+  ProcessActivitySummary,
+}
+
+/** A node's place inside one dsh process group; `part` names the slice of the
+ * node the group holds (an assistant step's `'reasoning'`). */
+export interface ProcessGroupMembership {
+  readonly groupKey: string
+  readonly part?: string
+}
+
+/** One dsh process group, as Lore renders its header. */
+export interface ProcessGroupInfo {
+  readonly members: number
+  readonly closed: boolean
+  readonly summary: ProcessActivitySummary
+}
+
+/** dsh's process grouping of the chat target, keyed for a node-order walk. */
+export interface ProcessGroups {
+  readonly byNode: ReadonlyMap<string, ProcessGroupMembership>
+  readonly data: ReadonlyMap<string, ProcessGroupInfo>
 }
 
 export { expandAssistantStream }
@@ -95,6 +118,12 @@ export interface LoreConversation {
   settleAssistant(attemptId: unknown): ConversationPublication
   /** Materialize and read the chat target in render order. */
   nodes(): readonly ChatConversationViewNode[]
+  /**
+   * Read dsh's process groups over the chat target (registered by
+   * `registerConversationNodes`). Call after `nodes()` — it reads the state
+   * that call flushed.
+   */
+  groups(): ProcessGroups
 }
 
 /**
@@ -122,6 +151,11 @@ export function createLoreConversation(): LoreConversation {
   assembler.activateTarget('chat')
   let tailSeq = Number.NEGATIVE_INFINITY
   let hasMoreHistory = false
+  // INVARIANT: an unchanged dsh group publishes the SAME `ProcessGroupInfo`.
+  // Why: dsh keeps a group snapshot's identity while its data and members are
+  // unchanged, and Lore's per-row render reuse is an identity check — a fresh
+  // info object per read would re-render every grouped row on every token.
+  const groupInfo = new WeakMap<object, ProcessGroupInfo>()
 
   const feedTail = (input: SessionEventLikeEntry): ConversationPublication => {
     tailSeq = Math.max(tailSeq, input.event.seq)
@@ -151,6 +185,29 @@ export function createLoreConversation(): LoreConversation {
         if (node !== undefined) ordered.push(node)
       }
       return ordered
+    },
+    groups: () => {
+      const grouped = assembler.grouped('chat')
+      if (grouped === undefined) throw new Error('dsh chat process grouping is not registered')
+      const byNode = new Map<string, ProcessGroupMembership>()
+      const data = new Map<string, ProcessGroupInfo>()
+      for (const entry of grouped.entries) {
+        if (entry.kind !== 'group') continue
+        const group = grouped.groupSource(entry.key).getSnapshot()
+        if (group === undefined) continue
+        let info = groupInfo.get(group)
+        if (info === undefined) {
+          info = { members: group.members.length, closed: group.data.closed, summary: group.data.summary }
+          groupInfo.set(group, info)
+        }
+        data.set(entry.key, info)
+        for (const member of group.members) {
+          byNode.set(member.key, member.groupPart === undefined
+            ? { groupKey: entry.key }
+            : { groupKey: entry.key, part: member.groupPart })
+        }
+      }
+      return { byNode, data }
     },
   }
 }

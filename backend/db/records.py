@@ -1,10 +1,13 @@
 """Record serialization + record-id coercion helpers (pure, no DB connection).
 
-Split out of the former backend/db.py (behavior-preserving).
+Split out of the former backend/db.py (behavior-preserving). Record-id
+validation (validate_record_id / SAFE_ID_RE) lives here, not in db._patch, so
+_patch holds only the SDK monkeypatches and is deletable on an SDK upgrade.
 """
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 
@@ -27,6 +30,40 @@ def extract_id(record_id) -> str | None:
         raw = s.split(":", 1)[1]
         return raw.strip("⟨⟩`")
     return s.strip("⟨⟩`")
+
+
+# SECURITY: Validate record IDs before embedding in RELATE queries.
+# SurrealDB RELATE doesn't support parameterized record IDs, so we
+# must ensure IDs contain only safe characters (UUID format).
+# M-4: ASCII-only to prevent Unicode homoglyph injection
+SAFE_ID_RE = re.compile(r'^[a-zA-Z0-9_\-]+$')
+
+
+def validate_record_id(rid: str) -> str:
+    """Raise ValueError if rid contains unsafe characters for SurrealDB queries."""
+    if not SAFE_ID_RE.match(rid):
+        raise ValueError(f"Invalid record ID: {rid!r}")
+    return rid
+
+
+def record_refs(table: str, ids: list[str], prefix: str = "id") -> tuple[str, dict]:
+    """One param-bound `type::record()` IN list: returns (fragment, params).
+
+    SurrealDB matches a record row only through `type::record(table, $id)` — a
+    bare `id IN $ids` with string ids matches nothing (the id column is a
+    record ref), and a list-arg `type::record(table, $ids)` doesn't bulk-match
+    either; only per-id record refs work. This is the single builder for that
+    idiom. The table and every id pass validate_record_id, and the ids ride
+    query params — id bytes never reach query text.
+    """
+    validate_record_id(table)
+    params: dict[str, str] = {}
+    refs: list[str] = []
+    for n, rid in enumerate(ids):
+        validate_record_id(rid)
+        params[f"{prefix}{n}"] = rid
+        refs.append(f"type::record('{table}', ${prefix}{n})")
+    return ", ".join(refs), params
 
 
 def is_record_id(value) -> bool:

@@ -43,6 +43,7 @@ from db import (
     fetch_one,
     get_ancestor_ids,
     get_db,
+    record_refs,
     serialize_record,
     validate_record_id,
 )
@@ -370,28 +371,27 @@ async def resolve_references(
     are absent.
     """
     await require_project_read(body.project_id, user)
-    # `id` is a record ref, so bind per-id (mirrors documents.batch_read's
-    # _bind_batch_ids). A malformed id is DROPPED, not a 400 — for a probe it is
-    # just "missing" (the guard's real job is keeping injection out of the SQL).
-    params: dict[str, str] = {}
-    refs: list[str] = []
-    for i, raw in enumerate(body.ids):
+    # `id` is a record ref, so bind per-id (db.record_refs). A malformed id is
+    # DROPPED, not a 400 — for a probe it is just "missing" (the filter below
+    # keeps that posture; record_refs' own ValueError never escapes).
+    valid_ids: list[str] = []
+    for raw in body.ids:
         try:
             validate_record_id(raw)
         except ValueError:
             continue
-        params[f"id{i}"] = raw
-        refs.append(f"type::record('documents', $id{i})")
-    if not refs:
+        valid_ids.append(raw)
+    if not valid_ids:
         return []
     # INVARIANT(security): ids that are not live references of THIS project are ABSENT
     # from the response, never a 404. Why: "missing" is the probe's normal output and must
     # stay indistinguishable from a foreign-project id — `project_id = $pid` filters both
     # the same way, so no existence oracle leaks (documents batch_read's uniform 404 is
     # the CONTENT path's posture, not a probe's).
+    refs, params = record_refs("documents", valid_ids)
     rows = await db.query(
         f"SELECT {_REF_META_SELECT} FROM documents "
-        f"WHERE id IN [{', '.join(refs)}] AND project_id = $pid "
+        f"WHERE id IN [{refs}] AND project_id = $pid "
         "AND is_reference = true AND deleted_at IS NONE",
         {**params, "pid": body.project_id},
     )

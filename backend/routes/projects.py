@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from documents.service import last_doc_rule, live_doc_ids
 from fastapi import APIRouter, Depends, HTTPException, Query
+from project_members_service import group_member_ids
 from share_guard import system_root_id
 from sort_keys import key_between
 from surrealdb import AsyncSurreal
@@ -33,7 +34,6 @@ from models import (
     PatchProject,
     is_ref_row,
 )
-from routes.users import group_member_ids
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

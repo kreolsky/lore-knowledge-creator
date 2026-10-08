@@ -236,10 +236,13 @@ async def _driver_capability(line: DriverLine, model: str) -> dict:
 #   {"type":"turn_closed"}                                              # TERMINAL
 #       (a browser terminal): pushed by the plugin after the turn's last
 #       mapped frame — a driver-owned turn has no stream whose end closes
-#       it — and re-minted by the backend where the push cannot arrive: the
-#       deadline breach (driver.channel) and the resync close re-mint (a
-#       turn/end lost mid-gap, or a turn that ended live before the gap —
-#       the owed-close flag in driver.channel._resync_all).
+#       it — and carried by the REPLAY for a session with no registered
+#       driver-owned turn: a seq-anchored terminal per closed turn, delivered
+#       through the channel dispatch's terminal arm (a duplicate after a
+#       delivered live push is the browser's no-registration drop to cover).
+#       The backend mints it itself only where no replay can arrive: the
+#       deadline breach (driver.channel) and the setup-failure tail
+#       (completions_harness).
 #   {"type":"error","message":<str>,"halt_reason":<str>}                # TERMINAL,
 #       backend-minted (deadline breach, unreachable line, stream failure,
 #       the harness's own catch) — the relay mints the lore halt at the
@@ -282,6 +285,15 @@ WEB_SEARCH_PROVIDERS: dict[str, tuple[str, str]] = {
     "brave": ("lore-brave", "BRAVE_API_KEY"),
     "tavily": ("lore-tavily", "TAVILY_API_KEY"),
     "searxng": ("lore-searxng", "SEARXNG_URL"),
+    "perplexity": ("lore-perplexity-fast", "PERPLEXITY_API_KEY"),
+}
+
+#: PERPLEXITY_SEARCH_TYPE value → the dsh provider id the harness pins; the
+#: harness registers one Perplexity provider per search type, so the admin's
+#: mode rides the pin and overrides the perplexity row's pin above.
+PERPLEXITY_SEARCH_PINS: dict[str, str] = {
+    "fast": "lore-perplexity-fast",
+    "web": "lore-perplexity-web",
 }
 
 

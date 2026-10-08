@@ -1,8 +1,9 @@
 /**
  * GFM markdown → table-object import (the paste/import path).
  *
- * SYSTEM: table-block — the ONE sanctioned GFM→object conversion on the frontend (mirror
- * of backend `table_serialize.parse_gfm_table`). Typed/authored pipe tables stay plain
+ * SYSTEM: table-block — the ONE sanctioned GFM→object conversion on the frontend (the
+ * Python twin is the `parse_gfm_table` oracle in tests/backend/helpers.py — production
+ * serializes only). Typed/authored pipe tables stay plain
  * GFM; only an *imported* GFM table is upgraded into an editable table object so the user
  * can edit it. Detects a GFM table block in markdown, creates a `tables` model per block,
  * and splices an `![label](table:id)` anchor in its place.

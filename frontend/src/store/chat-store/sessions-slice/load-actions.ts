@@ -13,7 +13,8 @@ import { hydrateFromSessions } from '../../../chat/context';
 import { t } from '../../../i18n';
 import { createResourceCache } from '../../../api/swr-cache';
 import { registerLogoutHandler, getLogoutEpoch } from '../../logout-handlers';
-import { replaceWindowFromRows, stripFrames } from '../conversation-feed';
+import { stripFrames } from '../conversation-feed';
+import { seatSessionRows, afterSessionRowsCommitted } from '../session-rows';
 import type { ChatSession, ChatMessage } from '../../../types';
 import type { ChatState, Set, Get } from '../types';
 import { loadInFlight } from '../inflight';
@@ -183,20 +184,16 @@ export function createLoadActions(set: Set, get: Get): LoadActions {
                 // ORDER (timeline ownership): activate FIRST — the chat-store
                 // ownership watcher clears the PREVIOUS chat's published
                 // timeline on the activeSessionId transition — THEN
-                // replaceWindowFromRows publishes the fresh window. Both are
+                // seatSessionRows publishes the fresh window. Both are
                 // synchronous in one tick, so no render can land between them;
                 // the reverse order would let the watcher wipe the
                 // just-published window (pinned in stale-timeline-clear.test.ts).
                 const restored = activeMessages.messages.map(stripFrames);
                 get().setActiveSession(resolution.sessionId, restored);
-                replaceWindowFromRows(activeMessages.messages, resolution.sessionId, set);
-                // The piggyback branch skips loadMessages, and
-                // fetchPendingVerdicts lived ONLY on that path — a second tab /
-                // reload restoring via with_active_messages never discovered a
-                // still-held call and rendered no decision card until a manual
-                // session re-select. Fetch the verdicts here too (mirrors the
-                // loadMessages onLoaded hook in messages-slice).
-                void get().fetchPendingVerdicts(resolution.sessionId);
+                // This branch skips loadMessages, so it runs loadMessages's
+                // two load steps itself (see the INVARIANT in session-rows.ts).
+                seatSessionRows(get, set, resolution.sessionId, activeMessages.messages);
+                afterSessionRowsCommitted(get, resolution.sessionId, restored.length);
               } else {
                 get().setActiveSession(resolution.sessionId);
               }

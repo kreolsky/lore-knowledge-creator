@@ -36,6 +36,7 @@ import {
   type SessionEventLikeEntry,
   type ConversationPublication,
   type LoreConversation,
+  type ProcessGroupInfo,
 } from '../../dsh/lore-conversation.js';
 import { registerChatResetHandler } from './reset-registry';
 
@@ -48,6 +49,10 @@ export interface ConversationVM {
   kind: string;
   anchorSeq: number;
   data: unknown;
+  /** dsh's process group holding this node (an assistant step: its reasoning
+   * part) — read from the engine, never recomputed. Absent outside a group. */
+  groupKey?: string;
+  group?: ProcessGroupInfo;
 }
 
 /** One assistant row's turn window: every node anchored inside renders there. */
@@ -136,17 +141,25 @@ function publish(cadence: ConversationPublication, set: FeedSet): void {
  * slice a new array on every streamed token; comparing anything COARSER than
  * identity (a length, a key) would freeze the streaming row instead, because a
  * growing assistant step keeps both its length and its key while its `data`
- * changes.
+ * changes. A cached VM is reused only while its group is the same too — dsh
+ * can regroup (or close a group) without touching the node itself.
  */
 const vmCache = new WeakMap<object, ConversationVM>();
 
 function publishNow(set: FeedSet): void {
   if (!feed.engine) return;
   const conversation: ConversationVM[] = [];
-  for (const node of feed.engine.nodes()) {
+  const nodes = feed.engine.nodes();
+  const groups = feed.engine.groups();
+  for (const node of nodes) {
     if (node.visibility === 'hidden') continue;
+    const groupKey = groups.byNode.get(node.key)?.groupKey;
+    const group = groupKey === undefined ? undefined : groups.data.get(groupKey);
     const cached = vmCache.get(node);
-    if (cached) { conversation.push(cached); continue; }
+    if (cached && cached.groupKey === groupKey && cached.group === group) {
+      conversation.push(cached);
+      continue;
+    }
     const vm: ConversationVM = {
       key: node.key,
       kind: node.kind,
@@ -154,6 +167,7 @@ function publishNow(set: FeedSet): void {
       // Every kind publishes — what renders is the renderer's decision (an
       // unrendered kind is the fallback chip's business, never a filter's).
       data: node.data,
+      ...(groupKey !== undefined && group !== undefined ? { groupKey, group } : {}),
     };
     vmCache.set(node, vm);
     conversation.push(vm);

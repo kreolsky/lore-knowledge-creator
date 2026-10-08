@@ -8,7 +8,7 @@ interface IconButtonProps {
   size?: 'sm' | 'md';
   danger?: boolean;
   filled?: boolean;
-  color?: 'red' | 'green';
+  color?: 'red' | 'green' | 'accent';
   theme?: 'note';
   className?: string;
   onClick?: React.MouseEventHandler<HTMLButtonElement>;
@@ -38,6 +38,7 @@ const colors: Record<string, string> = {
 
 const filledColors: Record<string, string> = {
   red: 'bg-red text-white hover:bg-red hover:text-white',
+  accent: 'bg-accent text-white hover:bg-accent hover:text-white',
 };
 
 export function IconButton({ size = 'md', danger, filled, color, theme, className, children, ...rest }: IconButtonProps) {

@@ -1,8 +1,8 @@
 /**
  * Tests for the Lore driver plugin (run at image build:
  * `node --import tsx/esm --test`, mirroring the retired line-A driver's build-time tests).
- * No harness boot — the fork machinery and index.ts are the units under test
- * here; the dsh→frame relay contract lives in map.test.ts.
+ * No harness boot — the fork machinery and the split plugin sources are the
+ * units under test here; the dsh→frame relay contract lives in map.test.ts.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -23,17 +23,20 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 
-// index.ts captures the driver secret at MODULE LOAD (const SECRET), so the
-// leaf-handler drive below needs it set BEFORE that module evaluates — which
-// a static import cannot do (imports hoist above any env assignment). The
-// dynamic import runs after both env guards; every other test file keeps
-// plain imports because only index.ts reads this secret.
+// http.ts (in the entry graph index.ts pulls in) captures the driver secret
+// at MODULE LOAD (const SECRET), so the leaf-handler drive below needs it set
+// BEFORE that module evaluates — which a static import cannot do (imports
+// hoist above any env assignment). The dynamic import runs after both env
+// guards; every other test file keeps plain imports because only this graph
+// reads this secret.
 process.env.LORE_DRIVER_SECRET ||= 't3st-s3cr3t'
 const {
-  AGENT_KEY_REF, contextUsageFrame, ensureAgentKey, ensureTitleConfig,
-  ensureTitleEntry, ensureWebSearch, forkModel, loreRoute, PROVIDER,
+  AGENT_KEY_REF, anthropicRoute, contextUsageFrame, ensureAgentKey,
+  ensureModelEntry, ensureTitleConfig, ensureTitleEntry, ensureWebSearch,
+  followupTurns, forkModel, loreRoute, PROVIDER, ROUTE_BY_API, sessionEntries,
   sessionLeaf, turnConfigProblem,
 } = await import('../src/index.ts')
+import { reasoningEffortsDeclaration } from '../src/caps.ts'
 import { WEB_SEARCH_KEY_REF } from '../src/web-search/key.ts'
 
 function ev(seq: number, type: string, data?: any, surfaceOp?: any): any {
@@ -128,9 +131,11 @@ test('the turn setup registers the COMPLETE lore section and no other prompt tex
   // for a seeded session. A second prompt SOURCE (partial section,
   // plugin-authored prose, persona row, identity opener, runtime context) is
   // the two-prompts-drift failure the driver-contract plan fenced against —
-  // this fails on the source shape.
-  const src = (await import('node:fs')).readFileSync(
-    new URL('../src/index.ts', import.meta.url), 'utf8')
+  // this fails on the source shape. The sections live in turn.ts (the turn
+  // setup) and sessions.ts (the fork seed's setup) since the step-4 split;
+  // both are read.
+  const src = readFileSync(new URL('../src/turn.ts', import.meta.url), 'utf8')
+    + readFileSync(new URL('../src/sessions.ts', import.meta.url), 'utf8')
   const setups = src.match(/systemPrompt\.section\(\{[\s\S]*?\}\)/g) ?? []
   assert.ok(setups.length >= 1, 'the turn setup registers a prompt section')
   for (const s of setups) {
@@ -158,7 +163,8 @@ test('cordis.patch.yml routes line B through the llm-pi-ai lore route', () => {
   // `providers` field is volatile, and a `!!js` expression inside the
   // volatile subtree breaks every settings write — the route cannot live in
   // the patch layer), and the plugin's boot/turn upsert declares the `lore`
-  // route beside the model entries (loreRoute + ensureModelEntry in index.ts).
+  // route beside the model entries (loreRoute in turn.ts + ensureModelEntry
+  // in ensure.ts).
   const yml = readFileSync(
     join(process.env.DSH_HOME || '/app/home', 'cordis.patch.yml'), 'utf8')
   assert.ok(!yml.includes('lore-gateway'),
@@ -170,17 +176,18 @@ test('cordis.patch.yml routes line B through the llm-pi-ai lore route', () => {
     'the composition declares NO provider config — env-bound values ride the settings document, never the volatile patch layer')
   assert.ok(!/\n\s+maxTokens:/.test(routeBlock),
     'the lore route declares NO maxTokens (per-model catalog upsert owns the cap)')
-  // The route FACTS live in index.ts now — pinned by source shape, like the
-  // provider-route test below: apiKeyEnv (the Lore-internal credentials
-  // ref), the openai-completions api, the deepseek-mirroring compat trio
-  // (role system, max_tokens, bare reasoning_effort), no fallback (no gateway
-  // URL skips the scaffold and the turn is refused).
-  const index = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
-  assert.match(index, /apiKeyEnv: AGENT_KEY_REF,\n    api: 'openai-completions',\n    baseURL,/,
+  // The route FACTS live in the plugin source now (turn.ts, since the step-4
+  // split) — pinned by source shape, like the provider-route test below:
+  // apiKeyEnv (the Lore-internal credentials ref), the openai-completions
+  // api, the deepseek-mirroring compat trio (role system, max_tokens, bare
+  // reasoning_effort), no fallback (no gateway URL skips the scaffold and
+  // the turn is refused).
+  const routeSrc = readFileSync(new URL('../src/turn.ts', import.meta.url), 'utf8')
+  assert.match(routeSrc, /apiKeyEnv: AGENT_KEY_REF,\n    api: 'openai-completions',\n    baseURL,/,
     'loreRoute carries the route facts the dormant row cannot')
-  assert.match(index, /supportsDeveloperRole: false,\n      maxTokensField: 'max_tokens',\n      thinkingFormat: 'openai',/,
+  assert.match(routeSrc, /supportsDeveloperRole: false,\n      maxTokensField: 'max_tokens',\n      thinkingFormat: 'openai',/,
     'compat mirrors what the old route sent and the gateway accepts')
-  assert.match(index, /if \(!baseURL\) return null/,
+  assert.match(routeSrc, /if \(!baseURL\) return null/,
     'no baseURL fallback: the backend serves no /v1/chat/completions')
   assert.match(yml, /- id: llm-deepseek\n  disabled: true/,
     'the old native adapter is disabled loudly (its default endpoint is the PUBLIC DeepSeek API, and DEEPSEEK_API_KEY is in the env — a soft miss would bill another tenant)')
@@ -217,14 +224,15 @@ test('cordis.patch.yml routes line B through the llm-pi-ai lore route', () => {
 // ─── the provider route string: declared once, shared with the composition ──
 
 test('the provider route key is declared ONCE and matches the composition', () => {
-  // index.ts owns the constant. Pinned by source shape, like the persona test
-  // above: no harness boot needed to catch a rename that misses the route the
-  // composition configures (llm-pi-ai's `lore` provider route).
-  const index = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
-  assert.match(index, /export const PROVIDER = 'lore'/,
+  // ensure.ts owns the constant (since the step-4 split). Pinned by source
+  // shape, like the persona test above: no harness boot needed to catch a
+  // rename that misses the route the composition configures (llm-pi-ai's
+  // `lore` provider route).
+  const ensureSrc = readFileSync(new URL('../src/ensure.ts', import.meta.url), 'utf8')
+  assert.match(ensureSrc, /export const PROVIDER = 'lore'/,
     "the route key is the llm-pi-ai provider route ('lore')")
-  assert.ok(!index.includes("'deepseek-official'"), 'index.ts carries no old-route literal')
-  assert.ok(!index.includes("'lore-gateway'"), 'index.ts carries no older-route literal')
+  assert.ok(!ensureSrc.includes("'deepseek-official'"), 'ensure.ts carries no old-route literal')
+  assert.ok(!ensureSrc.includes("'lore-gateway'"), 'ensure.ts carries no older-route literal')
 })
 
 // ─── config gate ──────────────────────────────────────────────────────────────
@@ -233,10 +241,10 @@ test('a turn with no model is refused by name — there is no env fallback', () 
   // The model comes only from the turn: the backend resolves body.model →
   // session row → admin CHAT_MODEL and refuses a model-less turn itself
   // (completions.py), so the harness's named refusal is the second gate, and
-  // index.ts must carry no LORE_HARNESS_MODEL read at all — wiring, not
+  // turn.ts must carry no LORE_HARNESS_MODEL read at all — wiring, not
   // configuration (plan component-wiring-not-settings step 3).
-  const index = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
-  assert.ok(!index.includes('LORE_HARNESS_MODEL'),
+  const gateSrc = readFileSync(new URL('../src/turn.ts', import.meta.url), 'utf8')
+  assert.ok(!gateSrc.includes('LORE_HARNESS_MODEL'),
     'no env model read remains in the plugin')
   const gw = { base: 'http://gw/v1', key: 'k' }
   assert.equal(turnConfigProblem('m', gw), null)
@@ -266,9 +274,191 @@ test('the route default window is the constant 128000 — no env read', () => {
     if (saved === undefined) delete process.env.LORE_HARNESS_CONTEXT_WINDOW
     else process.env.LORE_HARNESS_CONTEXT_WINDOW = saved
   }
-  const index = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
-  assert.ok(!index.includes('LORE_HARNESS_CONTEXT_WINDOW'),
+  const routeSrc = readFileSync(new URL('../src/turn.ts', import.meta.url), 'utf8')
+  assert.ok(!routeSrc.includes('LORE_HARNESS_CONTEXT_WINDOW'),
     'no env window read remains in the plugin')
+})
+
+// ─── the second route: anthropic-messages through the same router ────────────
+// The router's /v1/models `api` field picks
+// the route per model; `anthropic` is the pi-ai INSTALLED-CATALOG provider id —
+// a configured model spreads the installed entry of the same id under it, which
+// is the only way the Claude flags dsh withholds from configuration reach a
+// model — so the NAME is load-bearing, never a synonym.
+
+test('anthropicRoute: /v1 stripped (the Anthropic SDK appends its own paths), no api, no compat', () => {
+  assert.equal(anthropicRoute('http://x/v1')!.baseURL, 'http://x')
+  assert.equal(anthropicRoute('http://x/v1/')!.baseURL, 'http://x')
+  assert.equal(anthropicRoute('http://x')!.baseURL, 'http://x', 'a base without /v1 passes unchanged')
+  assert.equal(anthropicRoute(''), null, 'no baseURL → no route (the same refusal path as loreRoute)')
+  const route = anthropicRoute('http://x/v1')!
+  assert.equal(route.apiKeyEnv, AGENT_KEY_REF)
+  assert.equal(route.defaultContextWindow, 128000,
+    'the router leaves this model bare — without the default, dsh\'s schema default 262144 applies')
+  assert.ok(!('api' in route),
+    'NO api: the route name IS the catalog provider id — the catalog\'s shared anthropic-messages applies')
+  assert.ok(!('compat' in route),
+    'NO route compat: compat is per model, the router\'s own (the installed entry supplies the catalog\'s)')
+})
+
+test('ROUTE_BY_API: one map — the caps api names the route', () => {
+  assert.equal(ROUTE_BY_API['anthropic-messages'], 'anthropic')
+  assert.equal(ROUTE_BY_API['openai-completions'], 'lore')
+})
+
+/** A duck-typed settings seam holding several provider routes; `update`
+ * records the patch verbatim and deep-merges like the real service. */
+function fakeMultiRouteSettings() {
+  const updates: Array<[unknown, Record<string, unknown>]> = []
+  const providers: Record<string, Record<string, unknown>> = {}
+  return {
+    updates, providers,
+    describe: () => [{ ns: 'llm-pi-ai', value: { providers } }],
+    update: async (ns: unknown, patch: Record<string, unknown>) => {
+      updates.push([ns, structuredClone(patch)])
+      for (const [name, section] of Object.entries(patch.providers as Record<string, Record<string, unknown>>)) {
+        providers[name] = { ...(providers[name] ?? {}), ...section }
+      }
+    },
+  }
+}
+
+test('an anthropic-api model lands under providers.anthropic with the scaffold and its compat', async () => {
+  const settings = fakeMultiRouteSettings()
+  await ensureModelEntry(settings as never, 'deepseek-a/flash', 524288, 131072, false,
+    ['low', 'high', 'max'], false, anthropicRoute('http://x/v1'),
+    { forceAdaptiveThinking: true }, 'anthropic')
+  assert.deepEqual(settings.updates[0]![1], {
+    providers: { anthropic: {
+      apiKeyEnv: 'LORE_AGENT_API_KEY',
+      baseURL: 'http://x',
+      defaultContextWindow: 128000,
+      models: [{
+        id: 'deepseek-a/flash',
+        reasoningEfforts: { low: 'low', high: 'high', max: 'max' },
+        compat: { forceAdaptiveThinking: true },
+        contextWindow: 524288, maxTokens: 131072,
+      }],
+    } },
+  }, 'no api and no route compat on the section — the catalog name carries the protocol; the compat rides the MODEL entry')
+})
+
+test('a compat the router adds later lands: a committed entry whose only difference is a new compat IS rewritten', async () => {
+  const settings = fakeMultiRouteSettings()
+  await ensureModelEntry(settings as never, 'deepseek-a/flash', 524288, 131072, false,
+    null, false, anthropicRoute('http://x/v1'), null, 'anthropic')
+  assert.equal(settings.updates.length, 1)
+  await ensureModelEntry(settings as never, 'deepseek-a/flash', 524288, 131072, false,
+    null, false, anthropicRoute('http://x/v1'), null, 'anthropic')
+  assert.equal(settings.updates.length, 1, 'identical values skip the write (today\'s rule, compat included)')
+  await ensureModelEntry(settings as never, 'deepseek-a/flash', 524288, 131072, false,
+    null, false, anthropicRoute('http://x/v1'), { forceAdaptiveThinking: true }, 'anthropic')
+  assert.equal(settings.updates.length, 2, 'the new compat alone is a difference')
+  assert.deepEqual(settings.providers.anthropic!.models, [{
+    id: 'deepseek-a/flash', contextWindow: 524288, maxTokens: 131072,
+    compat: { forceAdaptiveThinking: true },
+  }])
+  // And back: dropping the compat rewrites too (the router owns the say).
+  await ensureModelEntry(settings as never, 'deepseek-a/flash', 524288, 131072, false,
+    null, false, anthropicRoute('http://x/v1'), null, 'anthropic')
+  assert.deepEqual(settings.providers.anthropic!.models,
+    [{ id: 'deepseek-a/flash', contextWindow: 524288, maxTokens: 131072 }])
+})
+
+test('no cross-route removal: the same model already under lore stays there untouched', async () => {
+  const settings = fakeMultiRouteSettings()
+  await ensureModelEntry(settings as never, 'm/x', 128000, 65536, false, null,
+    false, loreRoute('http://gw/v1'))
+  // The router moves m/x to the anthropic protocol.
+  await ensureModelEntry(settings as never, 'm/x', 128000, 65536, false, null,
+    false, anthropicRoute('http://x/v1'), null, 'anthropic')
+  assert.deepEqual((settings.providers.lore!.models as any[]).map((m) => m.id), ['m/x'],
+    'the stale lore entry stays — a Lore selection always names the provider explicitly, and emptying a route dsh refuses (resolves no models) would fail the whole settings write')
+  assert.deepEqual((settings.providers.anthropic!.models as any[]).map((m) => m.id), ['m/x'])
+})
+
+test('an openai model on lore produces today\'s payload unchanged', async () => {
+  const settings = fakeMultiRouteSettings()
+  await ensureModelEntry(settings as never, 'm/x', 128000, 65536, true,
+    ['low'], false, loreRoute('http://gw/v1'))
+  assert.deepEqual(settings.updates[0]![1], {
+    providers: { lore: {
+      apiKeyEnv: 'LORE_AGENT_API_KEY',
+      api: 'openai-completions',
+      baseURL: 'http://gw/v1',
+      compat: { supportsDeveloperRole: false, maxTokensField: 'max_tokens', thinkingFormat: 'openai' },
+      defaultContextWindow: 128000,
+      models: [{
+        id: 'm/x', input: ['text', 'image'], reasoningEfforts: { low: 'low' },
+        contextWindow: 128000, maxTokens: 65536,
+      }],
+    } },
+  })
+})
+
+test('catalog binding: the route name anthropic resolves through the installed pi-ai catalog', async () => {
+  // Proves the load-bearing name against the REAL catalog resolver: a catalog
+  // id inherits the installed entry's compat (the withheld Claude flags), a
+  // non-catalog id still resolves via the catalog's shared route api. The
+  // scaffold is the production anthropicRoute; the two route defaults the
+  // settings schema would fill (resolveRouteModels takes a parsed request)
+  // are the only fields added here.
+  const { resolveRouteModels } = await import('../../packages/llm/llm-pi-ai/src/catalog.ts')
+  const scaffold = {
+    defaultMaxTokens: 131072, defaultInput: ['text'],
+    ...anthropicRoute('http://x/v1')!,
+  }
+  const efforts = reasoningEffortsDeclaration(['low', 'medium', 'high', 'xhigh', 'max'], 'claude-opus-5-5')!
+  const opus = resolveRouteModels({
+    provider: 'anthropic', ...scaffold,
+    models: [{ id: 'claude-opus-5-5', reasoningEfforts: efforts }],
+  }).models.find((m: any) => m.id === 'claude-opus-5-5')
+  assert.equal(opus.api, 'anthropic-messages')
+  assert.equal(opus.baseUrl, 'http://x', 'the route\'s baseURL overrides the catalog\'s own')
+  assert.equal(opus.compat.supportsMidConvoEffort, true,
+    'the withheld flag reaches the model only through the installed entry of the same id')
+  assert.equal(opus.compat.forceAdaptiveThinking, true)
+  // A withheld key written bare is refused loudly, naming it.
+  assert.throws(
+    () => resolveRouteModels({
+      provider: 'anthropic', ...scaffold,
+      models: [{ id: 'claude-opus-5-5', compat: { supportsMidConvoEffort: true } }],
+    }),
+    /not configurable here/,
+    'the router\'s compat allow-list is proven against the real gate')
+  const ds = resolveRouteModels({
+    provider: 'anthropic', ...scaffold,
+    models: [{ id: 'deepseek-a/flash', compat: { forceAdaptiveThinking: true } }],
+  }).models.find((m: any) => m.id === 'deepseek-a/flash')
+  assert.equal(ds.api, 'anthropic-messages',
+    'a non-catalog id takes the catalog\'s shared route api (routeApi)')
+  assert.equal(ds.contextWindow, 128000,
+    'no window anywhere else — the scaffold default applies')
+})
+
+test('a fork seeds agentOptions with the parent header\'s own provider', async () => {
+  const events = [
+    ev(0, 'turn/start', { turn: 1 }),
+    ev(1, 'request/header', { header: { config: { provider: 'anthropic', model: 'deepseek-a/flash' } } }),
+    userMsg(2, 'Q1'),
+    assistantMsg(3, 'A1', 'deepseek-a/flash'),
+    ev(4, 'turn/end', { reason: { kind: 'completed' } }),
+    ev(5, 'turn/start', { turn: 2 }),
+    userMsg(6, 'Q2'),
+    ev(7, 'assistant/chunk', { chunk: { type: 'text-delta', text: 'A2' } }),
+    ev(8, 'turn/end', { reason: { kind: 'completed' } }),
+  ]
+  const { ctx, created } = leafCtx(events)
+  const { map } = fakeMap()
+  const { channel } = fakeChannel()
+  const res = leafRes()
+  // Fork after turn 1 (seq 4 < the live tail 8) — a real fork, not the no-op.
+  await sessionLeaf(ctx, map, channel, createSessionStreamBaselines(),
+    leafReq({ session_id: 'lore-1', seq: 4 }), res)
+  assert.equal(res.status, 200)
+  assert.deepEqual(created[0].agentOptions,
+    { provider: 'anthropic', model: 'deepseek-a/flash' },
+    'the fork seeds the pair off the parent\'s request/header — the next turn re-selects its own')
 })
 
 // ─── the agent key: dsh credentials, written only on difference ──────────────
@@ -373,11 +563,18 @@ test('a title change edits session-title-llm with the pair; an empty title remov
   assert.deepEqual(editor.edits, [
     { id: 'session-title-llm', next: { ...TITLE_FIXED, provider: 'lore', model: 'local/orange/titler' } },
   ], 'one edit for a change, none for the same value')
+  // The provider param names the TITLE model's own route (an anthropic-api
+  // title model rides providers.anthropic).
+  await ensureTitleConfig(editor, 'deepseek-a/flash', 'anthropic')
+  assert.deepEqual(editor.edits.at(-1)!.next,
+    { ...TITLE_FIXED, provider: 'anthropic', model: 'deepseek-a/flash' })
+  await ensureTitleConfig(editor, 'deepseek-a/flash', 'anthropic')
+  assert.equal(editor.edits.length, 2, 'the same pair edits nothing')
   await ensureTitleConfig(editor, '')
   assert.deepEqual(editor.edits.at(-1)!.next, TITLE_FIXED,
     'an empty title_model removes the pair — the titler rides the session\'s own route')
   await ensureTitleConfig(editor, '')
-  assert.equal(editor.edits.length, 2, 'removing an absent pair edits nothing')
+  assert.equal(editor.edits.length, 3, 'removing an absent pair edits nothing')
   await assert.rejects(ensureTitleConfig(undefined, 'm'), /config editor is not composed/)
 })
 
@@ -401,23 +598,29 @@ test('the title model is catalogued once, a reasoner like any other', async () =
   // points the titler at the model — an uncatalogued title model fails titles.
   const route = { apiKeyEnv: 'LORE_AGENT_API_KEY', api: 'openai-completions', baseURL: 'http://gw/v1', compat: {} }
   const settings = fakeCatalogSettings()
-  await ensureTitleEntry(settings, 'titler/plain', route)
-  await ensureTitleEntry(settings, 'titler/plain', route)
+  await ensureTitleEntry(settings, 'titler/plain', 'lore', route)
+  await ensureTitleEntry(settings, 'titler/plain', 'lore', route)
   assert.equal(settings.updates.length, 1, 'the committed entry writes nothing')
-  await ensureTitleEntry(settings, 'titler/thinks', route)
+  await ensureTitleEntry(settings, 'titler/thinks', 'lore', route)
   assert.equal(settings.updates.length, 2)
 })
 
 // ─── the fork model: the parent's last requested route ────────────────────────
 
-test('a fork seeds with the model the parent last requested at the branch point', () => {
-  const header = (seq: number, model: string) =>
-    ev(seq, 'request/header', { header: { config: { provider: 'lore', model } } })
-  const events = [header(0, 'm/first'), ev(1, 'turn/end'), header(2, 'm/second'), ev(3, 'turn/end')]
-  assert.equal(forkModel(events, 1), 'm/first', 'a header past the branch point is not the parent\'s')
-  assert.equal(forkModel(events, 3), 'm/second')
-  assert.equal(forkModel([ev(0, 'turn/end')], 0), '',
-    'no header → no fallback (the value every fresh install already forks with; the next turn selects its own model)')
+test('a fork seeds with the pair the parent last requested at the branch point', () => {
+  const header = (seq: number, model: string, provider = 'lore') =>
+    ev(seq, 'request/header', { header: { config: { provider, model } } })
+  const events = [header(0, 'm/first'), ev(1, 'turn/end'), header(2, 'm/second', 'anthropic'), ev(3, 'turn/end')]
+  assert.deepEqual(forkModel(events, 1), { provider: 'lore', model: 'm/first' },
+    'a header past the branch point is not the parent\'s')
+  assert.deepEqual(forkModel(events, 3), { provider: 'anthropic', model: 'm/second' },
+    'the provider rides the same header (providerForOpenStep\'s fact) — a fork off an anthropic-protocol turn seeds its own route')
+  assert.deepEqual(forkModel([ev(0, 'turn/end')], 0), { provider: 'lore', model: '' },
+    'no header → today\'s value (the next turn selects its own model either way)')
+  assert.deepEqual(
+    forkModel([ev(0, 'request/header', { header: { config: { model: 'm/bare' } } })], 0),
+    { provider: 'lore', model: 'm/bare' },
+    'a header naming a model but no provider keeps the default route')
 })
 
 // ─── the timeout-policy split (step 9): reads declare a budget, mutations none ─
@@ -451,7 +654,10 @@ test('registerLoreTools declares the hang bound ONLY on read-only proxies', () =
 // deleted payload fields (context_window / max_output_tokens) stay deleted.
 
 test('the turn resolves its caps via caps.ts; the payload numbers are gone', async () => {
-  const src = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  // The caps read lives in turn.ts (prepareTurnDrive) and the /capability
+  // route in http.ts (handleRequest) since the step-4 split — both read.
+  const src = readFileSync(new URL('../src/turn.ts', import.meta.url), 'utf8')
+    + readFileSync(new URL('../src/http.ts', import.meta.url), 'utf8')
   assert.match(src, /const caps = await resolveModelCaps\(model, \{ gateway \}\)/,
     'the turn handler resolves the model capability off the ONE source')
   assert.ok(!src.includes('body.context_window'),
@@ -506,8 +712,9 @@ test('contextUsageFrame: absent pressure (or a missing service) emits nothing', 
 test('the leaf endpoint reads body.seq; the turn ordinal is gone', async () => {
   // Pinned by source shape, like the caps test above: the wire rename is the
   // step's whole contract — a re-grown `body.turn` read is the ordinal id
-  // space coming back.
-  const src = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  // space coming back. sessionLeaf lives in sessions.ts since the step-4
+  // split.
+  const src = readFileSync(new URL('../src/sessions.ts', import.meta.url), 'utf8')
   assert.match(src, /body\.seq === undefined/,
     'the leaf handler requires the seq field (null = root fork)')
   assert.ok(!src.includes('body.turn'),
@@ -640,6 +847,32 @@ test('the root fork repoints with a null tail', async () => {
     'root fork: repoint with tail null (the fresh log is empty)')
   assert.equal(baselines.snapshot('dsh-a'), undefined,
     'the root fork forgets the displaced id\'s fold too (same map move)')
+})
+
+test('a fork ANSWERS its repoint; the live-tail no-op answers none', async () => {
+  // The ws re-ack reaches only a subscriber whose socket is up at the fork
+  // (a harness restart leaves the backend reconnecting for seconds). The
+  // HTTP answer reaches the caller in every socket state, so it carries the
+  // same pair the re-ack would — the fresh dsh id and the dedup anchor.
+  const { ctx } = leafCtx(log()) // live tail: turn/end seq 9
+  const { sets, map } = fakeMap()
+  const { channel } = fakeChannel()
+  const baselines = createSessionStreamBaselines()
+
+  const forkRes = leafRes()
+  await sessionLeaf(ctx, map, channel, baselines, leafReq({ session_id: 'lore-1', seq: 5 }), forkRes)
+  assert.deepEqual(JSON.parse(forkRes.body),
+    { ok: true, dsh_session_id: sets[0][1], tail_seq: 5 })
+
+  const rootRes = leafRes()
+  await sessionLeaf(ctx, map, channel, baselines, leafReq({ session_id: 'lore-1', seq: null }), rootRes)
+  assert.deepEqual(JSON.parse(rootRes.body),
+    { ok: true, dsh_session_id: sets[1][1], tail_seq: null })
+
+  const noopRes = leafRes()
+  await sessionLeaf(ctx, map, channel, baselines, leafReq({ session_id: 'lore-1', seq: 9 }), noopRes)
+  assert.deepEqual(JSON.parse(noopRes.body), { ok: true },
+    'no fork, no repoint to answer')
 })
 
 test('a fork forgets the displaced id\'s stream fold; the live-tail no-op keeps it', async () => {
@@ -852,6 +1085,127 @@ test('the driver never deletes a dsh session log (abandoned branches stay contin
   }
 })
 
+// ─── /session-entries balances a crashed log with dsh's own closers ──────────
+// The regression this section pins: without dsh's interrupted-turn closers a
+// driver crash mid-turn replays as a turn open FOREVER — the halt card waits
+// for the backend's no-progress deadline. The read appends
+// `interruptedTurnClosers` for a NON-live session, in memory only — the same
+// deterministic closers dsh's cold read (readColdSessionLog) and its resume
+// repair produce. "Live" is the REGISTERED driver-owned turn: the dsh id is a
+// key of `followupTurns` — never "an agent might be running". The SAME
+// liveness gates the replayed transport terminal: a
+// non-live session's every closed turn ends with a seq-anchored turn_closed.
+
+/** log() with turn 2 left open: the last row is seq 8, no turn/end — a
+ * SIGKILL mid-turn leaves exactly this shape on disk. */
+function crashedLog(): any[] {
+  return log().slice(0, 9) // events 0..8: turn 1 closed at 5, turn 2 open
+}
+
+/** A POST /session-entries request (same req shape the leaf tests use). */
+function entriesReq(body: unknown): any {
+  const req = leafReq(body)
+  req.url = '/session-entries'
+  return req
+}
+
+async function readEntries(ctx: any, map: any): Promise<any> {
+  const res = leafRes()
+  await sessionEntries(ctx, map, createSessionStreamBaselines(),
+    entriesReq({ session_id: 'lore-1' }), res)
+  assert.equal(res.status, 200)
+  return JSON.parse(res.body)
+}
+
+test('a crashed log read for a NON-live session yields a CLOSED turn + the halt mint', async () => {
+  // No turn is registered for dsh-a in followupTurns — the driver is dead.
+  const { ctx } = leafCtx(crashedLog())
+  const { map } = fakeMap()
+  const reply = await readEntries(ctx, map)
+
+  assert.equal(reply.turns.length, 2)
+  assert.equal(reply.turns[0].end_seq, 5, 'the settled turn is untouched')
+  const crashed = reply.turns[1]
+  // The closer seq is deterministic: it continues the log (last seq 8 → 9),
+  // which is what makes the channel's stamp later match dsh's persisted repair.
+  assert.equal(crashed.end_seq, 9,
+    'the interrupted turn closes at the deterministic closer seq')
+  const end = crashed.frames.find(
+    (f: any) => f.type === 'dsh_event' && f.kind === 'turn/end')
+  assert.equal(end.data.reason.kind, 'interrupted')
+  const halt = crashed.frames.at(-2)
+  assert.equal(halt.type, 'lore/halt', 'mapEvent mints the halt beside the turn/end')
+  assert.equal(halt.seq, 9.7)
+  assert.equal(halt.data.reason, 'interrupted')
+  const terminal = crashed.frames.at(-1)
+  assert.equal(terminal.type, 'turn_closed',
+    'the non-live replay carries the transport terminal the dead push cannot')
+  assert.equal(terminal.seq, 9.9, 'anchored after the halt mint (9.7) — the terminal orders last')
+  assert.equal(reply.tail_seq, 9,
+    'the projection folds the closers like any row — the high-water mark is the synthetic turn/end')
+})
+
+test('the same log with the id in followupTurns stays OPEN — liveness is the REGISTERED turn', async () => {
+  const { ctx } = leafCtx(crashedLog())
+  const { map } = fakeMap()
+  followupTurns.set('dsh-a', { cancel: () => {} })
+  try {
+    const reply = await readEntries(ctx, map)
+    const live = reply.turns.at(-1)
+    assert.equal(live.end_seq, undefined,
+      'a registered driver-owned turn replays open — closers on it would close a RUNNING turn in every replay')
+    assert.ok(!live.frames.some((f: any) => f.type === 'lore/halt'),
+      'no halt card for a turn that is still streaming')
+    assert.ok(!reply.turns.some((t: any) =>
+      t.frames.some((f: any) => f.type === 'turn_closed')),
+      'a live session replays no terminals — the running turn closes live')
+  } finally {
+    followupTurns.delete('dsh-a')
+  }
+})
+
+test('a balanced log gains nothing: the closers of a settled log are empty', async () => {
+  const { ctx } = leafCtx(log()) // both turns ended
+  const { map } = fakeMap()
+  const reply = await readEntries(ctx, map)
+  assert.equal(reply.turns.length, 2)
+  assert.equal(reply.turns[1].end_seq, 9)
+  assert.ok(!reply.turns.some((t: any) =>
+    t.frames.some((f: any) => f.type === 'lore/halt')),
+    'completed turns mint no halt — and the read appended no synthetic rows')
+  assert.equal(reply.turns[1].frames.length, 5,
+    'turn 2 replays exactly its four mapped rows + the transport terminal')
+  assert.deepEqual(reply.turns[1].frames.at(-1), { type: 'turn_closed', seq: 9.9 })
+})
+
+test('a NON-live read replays the transport terminal on every closed turn', async () => {
+  // The browser's only terminal, carried by the replay for the same session
+  // class the closers balance: the plugin's live push is best-effort and a
+  // socket gap loses it, so a resync of a non-live session re-delivers each
+  // closed turn's terminal (seq-anchored after the turn's last mint).
+  const { ctx } = leafCtx(log())
+  const { map } = fakeMap()
+  const reply = await readEntries(ctx, map)
+  assert.deepEqual(reply.turns[0].frames.at(-1), { type: 'turn_closed', seq: 5.9 })
+  assert.deepEqual(reply.turns[1].frames.at(-1), { type: 'turn_closed', seq: 9.9 })
+})
+
+test('a LIVE session replays no terminals even for CLOSED turns', async () => {
+  // Liveness is the REGISTERED turn: while one runs, a previous turn's lost
+  // push is the NEWER turn's registration to supersede, never the replay's to
+  // deliver (the plugin's own push owns the live path).
+  const { ctx } = leafCtx(log())
+  const { map } = fakeMap()
+  followupTurns.set('dsh-a', { cancel: () => {} })
+  try {
+    const reply = await readEntries(ctx, map)
+    assert.ok(!reply.turns.some((t: any) =>
+      t.frames.some((f: any) => f.type === 'turn_closed')))
+  } finally {
+    followupTurns.delete('dsh-a')
+  }
+})
+
 test('a compacted source seeds its prefix with the checkpoint row verbatim', async () => {
   // v4 compaction is append-only: the checkpoint row REPLACES rows 1..4 on
   // the message surface (surfaceOp replace) but sits at its OWN seq — the
@@ -983,8 +1337,8 @@ test('reasoning effort: turn() wires the body effort through the selection, noth
   // completes before the first followup, so the value reaches the FIRST step
   // of the turn), and agentOptions keeps its {provider, model} shape. The
   // fork path carries no selection — a fork's next turn re-reads the effort
-  // off its own body.
-  const src = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  // off its own body. The turn drive lives in turn.ts since the step-4 split.
+  const src = readFileSync(new URL('../src/turn.ts', import.meta.url), 'utf8')
   assert.match(src,
     /const effort = typeof body\.reasoning_effort === 'string' && body\.reasoning_effort\s+\? body\.reasoning_effort\s+: null/,
     'the effort is read beside the model (null = Default)')
@@ -994,8 +1348,10 @@ test('reasoning effort: turn() wires the body effort through the selection, noth
     'the translated effort rides the selection ONLY when present (absent key = Default)')
   assert.match(src, /installModelSelection\(agentCtx, selection\)/,
     'the turn setup installs the selection')
-  assert.match(src, /const agentOptions = \{ provider: PROVIDER, model \}/,
-    'agentOptions keeps its {provider, model} runtime shape')
+  assert.match(src, /const provider = ROUTE_BY_API\[caps\.api\]/,
+    'the route name comes from the caps api — one map, two routes')
+  assert.match(src, /const agentOptions = \{ provider, model \}/,
+    'agentOptions keeps its {provider, model} runtime shape, provider off the map')
   assert.equal(src.match(/installModelSelection\(/g)?.length, 1,
     'exactly one install site — seedForkSession stays selection-free')
 })
@@ -1036,8 +1392,9 @@ test('the tool ctx splits: standing survives between turns, the request half doe
 })
 
 test('source shape: /stop routes into the ONE cancel arm; /followup is the driver-owned turn', () => {
-  // Pinned by source shape, like the leaf/effort tests above.
-  const src = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  // Pinned by source shape, like the leaf/effort tests above. The handlers
+  // live in turn.ts since the step-4 split.
+  const src = readFileSync(new URL('../src/turn.ts', import.meta.url), 'utf8')
   assert.equal(src.match(/agent\.cancel\(/g)?.length, 1,
     'exactly one cancel call site — cancelAgentTurn; POST /stop routes through it')
   assert.match(src, /entry\.cancel\(\)/, 'the /stop handler routes through the shared arm')
@@ -1051,13 +1408,15 @@ test('source shape: /stop routes into the ONE cancel arm; /followup is the drive
 test("source shape: the followup task pushes turn_closed in its finally (plan step 7)", () => {
   // The WS transport's terminal signal: a driver-owned turn has no stream whose
   // end signals its close, so the plugin announces the turn's full end AFTER
-  // every mapped frame (the halt mint included) — and the backend re-mints it
-  // on resync when this push died with the socket.
-  const src = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  // every mapped frame (the halt mint included) — and the replay carries it
+  // for a session with no registered turn when this push died with the socket
+  // (the backend's own mints stay on the breach and setup-failure paths). The
+  // followup task lives in turn.ts since the step-4 split.
+  const src = readFileSync(new URL('../src/turn.ts', import.meta.url), 'utf8')
   const finallyIdx = src.indexOf('} finally {\n      await finish()')
   const push = src.match(/try \{ channel\.push\(dshId, \{ type: 'turn_closed' \}\) \} catch/)
   assert.ok(finallyIdx !== -1, 'the followup task has a finally that finishes the turn')
-  assert.ok(push, 'the turn_closed push exists, best-effort (a closed channel is the resync\'s to cover)')
+  assert.ok(push, 'the turn_closed push exists, best-effort (a closed channel is the replay\'s to cover)')
   assert.ok(push!.index !== undefined && push!.index > finallyIdx,
     'turn_closed is pushed in the followup task\'s finally, after finish()')
 })

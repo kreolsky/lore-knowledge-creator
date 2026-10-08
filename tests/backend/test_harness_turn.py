@@ -279,16 +279,16 @@ async def test_turn_answers_json_and_feeds_followup(
         assert got[0]["frame"]["assistant_message_id"] == body["assistant_msg_id"]
         assert [g["frame"].get("type") for g in got[1:]] == [
             "model_update", "dsh_event", "dsh_event", "done"]
-        assert got[-1]["frame"]["content"] == "Hello "
+        assert got[-1]["frame"]["content"] == "Hello"
     finally:
         owner[0].__exit__(None, None, None)
 
     # The relay arms persisted the turn for real (reload-path parity).
-    await _until_async(lambda: _content_landed(client, user_token, sid, "Hello "))
+    await _until_async(lambda: _content_landed(client, user_token, sid, "Hello"))
     msgs = await _list_messages(client, user_token, sid)
     roles = [m["role"] for m in msgs]
     assert roles == ["user", "assistant"]
-    assert msgs[1]["content"] == "Hello "
+    assert msgs[1]["content"] == "Hello"
 
 
 @pytest.mark.asyncio

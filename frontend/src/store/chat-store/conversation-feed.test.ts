@@ -95,6 +95,43 @@ describe('feedFrame → the assembler', () => {
   });
 });
 
+describe('dsh process groups on the published nodes', () => {
+  const TOOL = (seq: number, callId: string) =>
+    DSH('tool/call', seq, { turn: 0, step: 0, callId, name: 'search', arguments: '{}' });
+  const RESULT = (seq: number, callId: string) =>
+    DSH('tool/result', seq, { turn: 0, step: 0, message: { content: [{ type: 'text', text: 'found', isError: false }], source: { callId } } });
+
+  it('two tool calls share one group; the reply stays outside; the group closes with the turn', () => {
+    const feed = (f: Record<string, unknown>) => feedFrame(f, 's1', vi.fn());
+    feed(DSH('turn/start', 2, { turn: 0 }));
+    feed(DSH('step/start', 3, { turn: 0, step: 0 }));
+    feed(TOOL(4, 'c1'));
+    feed(RESULT(5, 'c1'));
+    feed(TOOL(6, 'c2'));
+    feed(RESULT(7, 'c2'));
+    const open = last(drain()).conversation.filter(n => n.kind === 'tool-call');
+    expect(open).toHaveLength(2);
+    expect(open[0].groupKey).toBeDefined();
+    expect(open[1].groupKey).toBe(open[0].groupKey);
+    expect(open[0].group).toBe(open[1].group);
+    expect(open[0].group?.members).toBe(2);
+    expect(open[0].group?.closed).toBe(false);
+
+    feed(DSH('step/end', 8, { turn: 0, step: 0 }));
+    feed(DSH('step/start', 9, { turn: 0, step: 1 }));
+    feed(ASSISTANT(10, 'Done', { turn: 0, step: 1 }));
+    feed(DSH('step/end', 11, { turn: 0, step: 1 }));
+    feed(DSH('turn/end', 12, { turn: 0, reason: { kind: 'completed' } }));
+    const conv = last(drain()).conversation;
+    const tools = conv.filter(n => n.kind === 'tool-call');
+    // dsh closed the group: the tool VMs are re-minted to carry it.
+    expect(tools[0].group?.closed).toBe(true);
+    expect(tools[0]).not.toBe(open[0]);
+    const reply = conv.find(n => n.kind === 'assistant-step');
+    expect(reply?.groupKey).toBeUndefined();
+  });
+});
+
 describe('live turn placement', () => {
   it('beginTurn/endTurn bind the turn window to the assistant row', () => {
     const feed = (f: Record<string, unknown>) => feedFrame(f, 's1', vi.fn());

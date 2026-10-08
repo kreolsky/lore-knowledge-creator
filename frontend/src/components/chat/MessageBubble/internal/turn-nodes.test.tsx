@@ -10,7 +10,10 @@ import { act } from 'react';
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock('../../../../i18n', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  // Interpolation is spelled out so a composed title is assertable.
+  useTranslation: () => ({
+    t: (key: string, vars?: Record<string, string>) => vars ? `${key}(${Object.values(vars).join('|')})` : key,
+  }),
 }));
 
 import { TurnNodes, type TurnNodeLike } from './turn-nodes';
@@ -65,6 +68,25 @@ describe('TurnNodes', () => {
     })).textContent ?? '';
     expect(html).toContain('search_materials');
     expect(html).toContain('q: lore');
+  });
+
+  it('renders a settled tool result directly in the plate body, no inner bordered box', () => {
+    const html = render(createElement(TurnNodes, {
+      nodes: [node('tool-call', {
+        root: {
+          kind: 'tool-result', callId: 'c1',
+          call: { name: 'search_materials', argsRaw: '{"q":"lore"}' },
+          content: [{ type: 'text', text: 'hit one' }],
+        },
+      })],
+      isStreaming: false,
+    }));
+    act(() => { html.querySelector('button[aria-expanded]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    const pre = html.querySelector('pre');
+    expect(pre?.textContent).toBe('hit one');
+    expect(pre!.className).not.toMatch(/\bborder\b/);
+    expect(pre!.className).not.toContain('bg-surface2');
+    expect(pre!.className).not.toContain('max-h-');
   });
 
   it('renders the halt card with its reason (unknown reasons degrade visibly)', () => {
@@ -187,6 +209,9 @@ describe('TurnNodes', () => {
     // Not the settled look: no refine prompt plate, no thumbs.
     expect(text).not.toContain('refinePrompt');
     expect(text).not.toContain('generatedImage');
+    // A header-like row, not a bordered box.
+    expect(html.querySelector('.bg-surface2')).toBeNull();
+    expect(html.querySelector('.border-border-soft')).toBeNull();
 
     // No phase known (a running frame without one) — the bare label stands.
     const bare = render(createElement(TurnNodes, {
@@ -197,3 +222,159 @@ describe('TurnNodes', () => {
     expect(bare).not.toContain('genPhaseGenerating');
   });
 });
+
+describe('TurnNodes — dsh process groups', () => {
+  const closed = (counts: { kind: string; count: number }[] = [{ kind: 'tools', count: 2 }], members = 2) => ({
+    members, closed: true, summary: { counts, running: undefined, runningDetail: '' },
+  }) as unknown as TurnNodeLike['group'];
+  const tool = (seq: number, name: string, isError = false): TurnNodeLike => ({
+    ...node('tool-call', {
+      root: {
+        kind: 'tool-result', callId: `c${seq}`, isError,
+        call: { name, argsRaw: '{}' }, content: [{ type: 'text', text: `${name} result` }],
+      },
+    }, seq),
+  });
+  const inGroup = (n: TurnNodeLike, group: TurnNodeLike['group'], groupKey = 'g1'): TurnNodeLike => ({ ...n, groupKey, group });
+  const headers = (html: HTMLElement) => [...html.querySelectorAll('button[aria-expanded]')].map(b => b.textContent);
+  const press = (el: Element) => act(() => { el.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+
+  it('draws nothing for the turn-process control (Lore has no whole-turn fold)', () => {
+    const html = render(createElement(TurnNodes, {
+      nodes: [node('turn-process', { turn: 0, toolCallCount: 2, messageCount: 0 })],
+      isStreaming: false,
+    }));
+    expect(html.textContent).toBe('');
+    expect(headers(html)).toEqual([]);
+  });
+
+  it('a one-member group renders flat, exactly as without a group', () => {
+    const g = closed(undefined, 1);
+    const html = render(createElement(TurnNodes, { nodes: [inGroup(tool(1, 'search_materials'), g)], isStreaming: false }));
+    expect(headers(html)).toEqual(['search_materials']);
+  });
+
+  it('two members fold into ONE collapsed group plate holding both chips', () => {
+    const g = closed();
+    const html = render(createElement(TurnNodes, {
+      nodes: [inGroup(tool(1, 'search_materials'), g), inGroup(tool(2, 'read_document'), g)],
+      isStreaming: false,
+    }));
+    expect(headers(html)).toEqual(['processGroupDone_tools']);
+    press(html.querySelector('button[aria-expanded]')!);
+    expect(headers(html)).toEqual(['processGroupDone_tools', 'search_materials', 'read_document']);
+  });
+
+  it('a member step keeps its reasoning in the group and draws its reply after the plate', () => {
+    const g = closed();
+    const step = inGroup(node('assistant-step', {
+      blocks: [{ kind: 'reasoning', text: 'thinking it over' }, { kind: 'text', text: 'The answer' }],
+    }, 3), g);
+    const html = render(createElement(TurnNodes, { nodes: [inGroup(tool(1, 'search_materials'), g), step], isStreaming: false }));
+    const text = html.textContent ?? '';
+    // Collapsed group: the reasoning is hidden, the reply is not.
+    expect(text).toContain('The answer');
+    expect(text).not.toContain('reasoningLabel');
+    expect(text.indexOf('processGroupDone_tools')).toBeLessThan(text.indexOf('The answer'));
+    press(html.querySelector('button[aria-expanded]')!);
+    expect(headers(html)).toEqual(['processGroupDone_tools', 'search_materials', 'reasoningLabel']);
+    // The reply is drawn once, outside the group.
+    expect((html.textContent ?? '').split('The answer').length - 1).toBe(1);
+  });
+
+  it('spaces a group off the text above it, not a group opening the answer', () => {
+    const g = closed();
+    const plateBox = (html: HTMLElement) => html.querySelector('button[aria-expanded]')!.closest('.my-1')!.parentElement!;
+    const opening = render(createElement(TurnNodes, {
+      nodes: [inGroup(tool(1, 'a'), g), inGroup(tool(2, 'b'), g)],
+      isStreaming: false,
+    }));
+    expect(plateBox(opening).classList.contains('pt-5')).toBe(false);
+
+    const mid = render(createElement(TurnNodes, {
+      nodes: [
+        node('assistant-step', { blocks: [{ kind: 'text', text: 'Intro paragraph' }] }, 1),
+        inGroup(tool(2, 'a'), g), inGroup(tool(3, 'b'), g),
+      ],
+      isStreaming: false,
+    }));
+    expect(plateBox(mid).classList.contains('pt-5')).toBe(true);
+  });
+
+  it('a pending verdict ask stays outside the group; the rest folds', () => {
+    const g = closed();
+    const html = render(createElement(TurnNodes, {
+      nodes: [
+        inGroup(tool(1, 'search_materials'), g),
+        inGroup(tool(2, 'read_document'), g),
+        inGroup(node('verdict-ask', { callId: 'c9', toolName: 'edit_document' }, 3), g),
+      ],
+      isStreaming: false,
+    }));
+    // Folded plate + the pending ask's own card (its header button).
+    expect(headers(html)).toEqual(['processGroupDone_tools', 'edit_document']);
+    expect(html.textContent).toContain('verdictAllowOnce');
+  });
+
+  it('a settled verdict folds into the group like any record', () => {
+    const g = closed();
+    const html = render(createElement(TurnNodes, {
+      nodes: [
+        inGroup(tool(1, 'search_materials'), g),
+        inGroup(node('verdict-ask', { callId: 'c1', toolName: 'search_materials' }, 2), g),
+      ],
+      isStreaming: false,
+    }));
+    expect(headers(html)).toEqual(['processGroupDone_tools']);
+  });
+
+  it('a group left with one foldable member renders flat', () => {
+    const g = closed();
+    const html = render(createElement(TurnNodes, {
+      nodes: [
+        inGroup(tool(1, 'search_materials'), g),
+        inGroup(node('verdict-ask', { callId: 'c9', toolName: 'edit_document' }, 2), g),
+      ],
+      isStreaming: false,
+    }));
+    expect(headers(html)).toEqual(['search_materials', 'edit_document']);
+  });
+
+  it('a failed member tints the collapsed group header', () => {
+    const g = closed();
+    const html = render(createElement(TurnNodes, {
+      nodes: [inGroup(tool(1, 'search_materials'), g), inGroup(tool(2, 'read_document', true), g)],
+      isStreaming: false,
+    }));
+    const header = html.querySelector('button[aria-expanded]')!;
+    expect(header.textContent).toBe('processGroupDone_tools');
+    expect(header.querySelector('.text-amber-400')).not.toBeNull();
+  });
+
+  it('titles a closed group from its top categories, joined', () => {
+    const two = render(createElement(TurnNodes, {
+      nodes: [1, 2].map(i => inGroup(tool(i, 't'), closed([{ kind: 'webSearch', count: 2 }, { kind: 'tools', count: 1 }]))),
+      isStreaming: false,
+    }));
+    expect(headers(two)[0]).toBe('processGroupAnd(processGroupDone_webSearch|processGroupDone_tools)');
+
+    const four = render(createElement(TurnNodes, {
+      nodes: [1, 2].map(i => inGroup(tool(i, 't'), closed([
+        { kind: 'webSearch', count: 3 }, { kind: 'tools', count: 2 }, { kind: 'read', count: 1 }, { kind: 'edit', count: 1 },
+      ]))),
+      isStreaming: false,
+    }));
+    expect(headers(four)[0]).toBe(
+      'processGroupEtc(processGroupDone_webSearch, processGroupDone_tools, processGroupDone_read)');
+  });
+
+  it('a running group is open while it streams and titled by its live activity', () => {
+    const live = { members: 2, closed: false, summary: { counts: [], running: 'webSearch', runningDetail: '' } } as unknown as TurnNodeLike['group'];
+    const html = render(createElement(TurnNodes, {
+      nodes: [inGroup(tool(1, 'a'), live), inGroup(tool(2, 'b'), live)],
+      isStreaming: true,
+    }));
+    expect(headers(html)).toEqual(['processGroupRunning_webSearch', 'a', 'b']);
+  });
+});
+

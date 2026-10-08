@@ -1,9 +1,12 @@
-"""Table block object ↔ GFM (best-effort, lossy on layout) serializer.
+"""Table block object → GFM (best-effort, lossy on layout) serializer.
 
 SYSTEM: table-block — backend serializer entry point. The editable table block stores
-its model as a Yjs subtree (`ydoc.getMap('tables')`); this module converts the flat
-cell-body form (``rows = list[list[str]]``) to a GFM table and back. Used by
-``expand_tables`` (derived plaintext / export) and by markdown import.
+its model as a Yjs subtree (`ydoc.getMap('tables')`); this module serializes the flat
+cell-body form (``rows = list[list[str]]``) to a GFM table; ``expand_tables`` consumes
+it for the derived plaintext / export. The inverse GFM→model parse is NOT here: the
+import path is the frontend (``gfm-table-import.ts``) and the Python-side parser is
+the test oracle in ``tests/backend/helpers.py`` (no production
+caller).
 
 ARCH (three representations, one source of truth): an editable table exists in THREE
 places, by design — future table regressions land here.
@@ -35,9 +38,6 @@ from __future__ import annotations
 import json
 import re
 
-# Split a GFM row on column separators: a `|` NOT preceded by a backslash escape.
-_CELL_SPLIT = re.compile(r"(?<!\\)\|")
-
 # WHY (cross-producer default column width): the px width assigned to a column
 # when none is captured. MUST equal the frontend `DEFAULT_COLUMN_WIDTH`
 # (frontend/src/components/editor/live-preview/table-block-model.ts). Why: a table
@@ -51,15 +51,6 @@ DEFAULT_COLUMN_WIDTH = 160
 def _escape_cell(text: str) -> str:
     """Escape a cell body for the GFM wire: literal `|` and intra-cell newlines."""
     return text.replace("|", "\\|").replace("\n", "<br>")
-
-
-def _unescape_cell(wire: str) -> str:
-    """Reverse `_escape_cell`: `<br>` → newline, `\\|` → literal pipe.
-
-    Matches the frontend ``gfm-table-import.ts`` unescape: any ``<br>``/``<br/>``/``<br />``,
-    case-insensitive (GFM-spec lenient), so the two parsers agree byte-for-byte.
-    """
-    return re.sub(r"<br\s*/?>", "\n", wire, flags=re.IGNORECASE).replace("\\|", "|")
 
 
 def serialize_table(rows: list[list[str]]) -> str:
@@ -79,31 +70,6 @@ def serialize_table(rows: list[list[str]]) -> str:
     lines = [_row_line(rows[0]), "| " + " | ".join(["---"] * width) + " |"]
     lines.extend(_row_line(r) for r in rows[1:])
     return "\n".join(lines)
-
-
-def _is_separator(line: str) -> bool:
-    """True for a GFM header-separator row (`| --- | :--: | …`)."""
-    stripped = line.strip()
-    if not stripped.startswith("|"):
-        return False
-    cells = [c.strip() for c in _CELL_SPLIT.split(stripped[1:-1])]
-    # Require >=1 NON-EMPTY dash cell. Why: ``all([])`` is True, so without this an all-empty
-    # data row (``|   |   |``) is misclassified as the separator and silently dropped on import.
-    non_empty = [c for c in cells if c != ""]
-    return bool(non_empty) and all(re.fullmatch(r":?-+:?", c) for c in non_empty)
-
-
-def _parse_row(line: str) -> list[str]:
-    inner = line.strip()[1:-1]  # drop leading/trailing pipe
-    out: list[str] = []
-    for seg in _CELL_SPLIT.split(inner):
-        # Strip exactly the one padding space added on each side by serialize_table.
-        if seg.startswith(" "):
-            seg = seg[1:]
-        if seg.endswith(" "):
-            seg = seg[:-1]
-        out.append(_unescape_cell(seg))
-    return out
 
 
 def table_model_from_map(table) -> list[list[str]]:
@@ -132,21 +98,6 @@ def _table_columns_and_rows(table) -> tuple[list[int], list[list[str]]]:
     widths = [int(col["w"]) for col in cols_root]
     rows = [[str(cell["t"]) for cell in row] for row in rows_root]
     return widths, rows
-
-
-def read_table_grid(doc, table_id: str) -> dict | None:
-    """Read one table as `{columns, rows}` (widths + flat cell-body matrix).
-
-    Backend read primitive for the agent `read_table` tool. Returns ``None`` when
-    the table id is not present (caller decides 404 vs empty-array semantics).
-    """
-    from pycrdt import Map
-
-    tables = doc.get("tables", type=Map)
-    if tables is None or table_id not in tables:
-        return None
-    widths, rows = _table_columns_and_rows(tables[table_id])
-    return {"columns": widths, "rows": rows}
 
 
 def read_table_cell(doc, table_id: str, row: int, col: int) -> str | None:
@@ -445,19 +396,3 @@ def expand_tables(doc) -> str:
         return gfm if gfm else m.group(0)
 
     return _TABLE_ANCHOR.sub(_repl, text)
-
-
-def parse_gfm_table(md: str) -> list[list[str]]:
-    """Parse a GFM table string back into the cell-body model (inverse of serialize).
-
-    The separator row is dropped; every other non-empty `|`-delimited line is a data
-    row. `<br>` → newline; `\\|` → literal pipe.
-    """
-    rows: list[list[str]] = []
-    for line in md.splitlines():
-        if not line.strip().startswith("|"):
-            continue
-        if _is_separator(line):
-            continue
-        rows.append(_parse_row(line))
-    return rows

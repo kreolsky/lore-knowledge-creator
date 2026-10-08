@@ -15,6 +15,7 @@ import { useUIStore } from '../../store/ui-store';
 import { MicButton } from './shared/MicButton';
 import { AttachmentChips } from './shared/AttachmentChips';
 import { QueuedChips } from './shared/QueuedChips';
+import { ScrollToBottomButton } from './shared/ScrollToBottomButton';
 
 interface Props {
   variant: 'ai' | 'note';
@@ -42,6 +43,9 @@ interface Props {
   // chat only; notes pass nothing). Empty → not rendered.
   queued?: string[];
   onRemoveQueued?: (index: number) => void;
+  // Set only while the host's message list is scrolled up past its stick threshold;
+  // undefined hides the scroll-to-bottom button.
+  onScrollToBottom?: () => void;
   // AI-only slots (omitted by notes)
   topControls?: ReactNode;
   leftControls?: ReactNode;
@@ -70,6 +74,7 @@ export function ChatComposer({
   onRemoveImage,
   queued,
   onRemoveQueued,
+  onScrollToBottom,
   topControls,
   leftControls,
   warnings,
@@ -100,13 +105,22 @@ export function ChatComposer({
     <>
       {/* Queued follow-ups sit ABOVE the divider, in the message stream's column —
           they are pending user bubbles, not composer controls. */}
-      {queued && onRemoveQueued && (
+      {((queued && onRemoveQueued) || onScrollToBottom) && (
         // Zero-height anchor: the strip is absolutely positioned so it OVERLAYS the
         // message stream instead of pushing it up — the agent's answer shows through
         // the translucent plates.
+        // WHY: the scroll-to-bottom button and the queue share ONE flex column — the
+        // queue sits below and lifts the button, they never overlap (operator requirement).
+        // WHY: pointer-events-none on the column so its empty area does not swallow
+        // clicks/wheel meant for the messages underneath; controls opt back in.
         <div className="relative z-10 flex-shrink-0">
-          <div className="absolute bottom-0 left-0 right-0 px-3 pb-2">
-            <QueuedChips queued={queued} onRemove={onRemoveQueued} />
+          <div className="absolute bottom-0 left-0 right-0 px-3 pb-2 flex flex-col items-end gap-2 pointer-events-none">
+            {onScrollToBottom && <ScrollToBottomButton onClick={onScrollToBottom} />}
+            {queued && onRemoveQueued && (
+              <div className="self-stretch pointer-events-auto">
+                <QueuedChips queued={queued} onRemove={onRemoveQueued} />
+              </div>
+            )}
           </div>
         </div>
       )}

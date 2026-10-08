@@ -27,7 +27,7 @@ from fastapi import HTTPException
 from sort_keys import key_before, key_between
 
 import event_bus
-from db import create_record, extract_id, fetch_one, get_db, validate_record_id
+from db import create_record, extract_id, fetch_one, get_db, record_refs
 from models import is_ref_row
 from transclusion_grammar import NON_DOC_TARGET
 
@@ -282,11 +282,10 @@ async def live_doc_ids(db, doc_ids: set[str]) -> set[str]:
     ids = {d for d in doc_ids if d}
     if not ids:
         return set()
-    in_clause = ",".join(
-        f"type::record('documents','{validate_record_id(d)}')" for d in sorted(ids)
-    )
+    refs, params = record_refs("documents", sorted(ids))
     rows = await db.query(
-        f"SELECT id FROM documents WHERE id IN [{in_clause}] AND deleted_at IS NONE"
+        f"SELECT id FROM documents WHERE id IN [{refs}] AND deleted_at IS NONE",
+        params,
     )
     return {extract_id(r.get("id")) for r in (rows or []) if r.get("id")}
 

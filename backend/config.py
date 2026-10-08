@@ -1,4 +1,13 @@
-"""Lore backend configuration — all values from environment, no defaults."""
+"""Lore backend configuration.
+
+Boot-time contract: every admin-facing value is declared ONCE, via `setting(...)` —
+the call reads the env (unset OR empty counts as unset), parses/validates, registers
+the admin-settings spec and returns the boot value (env, else a `fallback` base
+declared above it, else `default`; `required` fails boot). Live changes ride the
+admin settings API, not a re-import. Raw `os.environ.get` reads are the NAMED
+exceptions — infra wiring, boot-only dials, test seams, the instance secret — each
+carrying its WHY at the declaration site below.
+"""
 # SYSTEM: config — environment configuration, prompts, and agent configs
 #
 # ARCH: every env-backed constant below is declared ONCE via setting(...) —
@@ -191,7 +200,12 @@ _section("models", "AI API")
 AI_API_URL = setting(
     "AI_API_URL", str, default="",
     label="AI API base URL",
-    help="The one OpenAI-compatible base URL STT and Chat both default to.",
+    help="The one OpenAI-compatible base URL STT and Chat both default to "
+         "(ends in /v1). The agent picks each model's wire protocol from this "
+         "router's /v1/models `api` field: anthropic-messages models run over "
+         "the native Messages API on the same URL and key, every other model "
+         "over chat completions. Protocol and per-model compat are router "
+         "config, not a setting here.",
 )
 AI_API_KEY = setting(
     "AI_API_KEY", "secret", default="",
@@ -201,15 +215,22 @@ AI_API_KEY = setting(
 CHAT_MODEL = setting(
     "CHAT_MODEL", str, default="",
     label="Default chat model",
-    help="The model a new session pins when nothing else selects one.",
+    help="The model a new session pins when nothing else selects one. Any "
+         "model the router serves works in chat, including anthropic-messages "
+         "ones. It is also the fallback for the prompt refinement model and "
+         "for extractor nodes without their own model, and those call chat "
+         "completions directly — if this is an anthropic-messages model, set "
+         "the prompt refinement model and every extractor model explicitly, "
+         "or they fail with the router's wrong_api error.",
 )
 CHAT_TITLE_MODEL = setting(
     "CHAT_TITLE_MODEL", str, fallback=("CHAT_MODEL",),
     label="Session title model",
     help="The model the agent names chat sessions with; empty = the default "
          "chat model. A reasoning model works but thinks on every title, so "
-         "a fast non-reasoning one names sessions sooner. Applies from the "
-         "next message.",
+         "a fast non-reasoning one names sessions sooner. Either wire "
+         "protocol works (the title rides the model's own route). Applies "
+         "from the next message.",
 )
 
 # The STT overrides keep their own admin sub-block (STT section) under this
@@ -806,7 +827,7 @@ _section("search", "Web search")
 # install's empty DeepSeek key fails loudly instead.
 WEB_SEARCH_PROVIDER = setting(
     "WEB_SEARCH_PROVIDER", str, default="deepseek",
-    choices=("deepseek", "brave", "tavily", "searxng"),
+    choices=("deepseek", "brave", "tavily", "searxng", "perplexity"),
     label="Search provider",
     help="The one provider behind the agent's web_search tool; it is always "
          "offered — a provider with an empty key/URL fails every search "
@@ -840,6 +861,24 @@ SEARXNG_URL = setting(
     label="SearXNG URL",
     help="Base URL of a SearXNG instance with the JSON format enabled; used "
          "when the provider is searxng. Applies from the next message.",
+)
+PERPLEXITY_API_KEY = setting(
+    "PERPLEXITY_API_KEY", "secret", default="",
+    visible_if=("WEB_SEARCH_PROVIDER", "perplexity"),
+    label="Perplexity API key",
+    help="Used when the provider is perplexity (the raw Search API, no Sonar "
+         "model). Applies from the next message.",
+)
+# WHY an admin choice and not the agent's: dsh's web_search tool has no mode
+# argument, and fast is 5x cheaper per request than web.
+PERPLEXITY_SEARCH_TYPE = setting(
+    "PERPLEXITY_SEARCH_TYPE", str, default="fast",
+    choices=("fast", "web"),
+    visible_if=("WEB_SEARCH_PROVIDER", "perplexity"),
+    label="Perplexity search mode",
+    help="fast: lower latency and cost ($1 per 1k requests) — right for agent "
+         "lookups. web: the full search ($5 per 1k) for hard or ambiguous "
+         "questions. Applies from the next message.",
 )
 
 
@@ -1144,7 +1183,9 @@ COMFYUI_PROMPT_MODEL = setting(
     "COMFYUI_PROMPT_MODEL", str, fallback=("CHAT_MODEL",),
     label="Prompt refinement model",
     help="Fast non-reasoning model that expands the scene description into "
-         "an SD prompt; empty = the default chat model.",
+         "an SD prompt; empty = the default chat model. Called over chat "
+         "completions directly, so it must NOT be an anthropic-messages model "
+         "(the router answers wrong_api).",
 )
 # 90, not the 30 copied from the ComfyUI
 # per-request read (that endpoint only enqueues + answers at once; the long wait

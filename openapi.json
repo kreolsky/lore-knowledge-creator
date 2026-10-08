@@ -4573,7 +4573,7 @@
     },
     "/api/admin/projects/{project_id}/members": {
       "get": {
-        "description": "Admin: list all members of a project with their access levels.\n\nModerator: only when the project's owner is in the moderator's scoped set\n({me} ∪ group members) — else 404, so a foreign project does not exist to\nthem (`_require_moderator_scope`).",
+        "description": "Admin: list all members of a project with their access levels.\n\nModerator: only when the project's owner is in the moderator's scoped set\n({me} ∪ group members) — else 404, so a foreign project does not exist to\nthem (`require_moderator_scope`).",
         "operationId": "list_project_members_api_admin_projects__project_id__members_get",
         "parameters": [
           {
@@ -4625,7 +4625,7 @@
         "summary": "List Project Members"
       },
       "post": {
-        "description": "Admin | moderator (scoped, `_require_moderator_scope`): set or update a\nuser's access level for a project.",
+        "description": "Admin | moderator (scoped, `require_moderator_scope`): set or update a\nuser's access level for a project.",
         "operationId": "set_project_member_api_admin_projects__project_id__members_post",
         "parameters": [
           {
@@ -4689,7 +4689,7 @@
     },
     "/api/admin/projects/{project_id}/members/{user_id}": {
       "delete": {
-        "description": "Admin | moderator (scoped, `_require_moderator_scope`): remove a user's\nexplicit access to a project.",
+        "description": "Admin | moderator (scoped, `require_moderator_scope`): remove a user's\nexplicit access to a project.",
         "operationId": "remove_project_member_api_admin_projects__project_id__members__user_id__delete",
         "parameters": [
           {
@@ -4752,7 +4752,7 @@
     },
     "/api/admin/projects/{project_id}/owner": {
       "post": {
-        "description": "Admin | moderator (scoped, `_require_moderator_scope`): transfer project\nownership to `body.user_id`; the previous owner becomes a `full` member.\nThe target need not already be a member (the admin UI only offers members,\nthe API does not require it).",
+        "description": "Admin | moderator (scoped, `require_moderator_scope`): transfer project\nownership to `body.user_id`; the previous owner becomes a `full` member.\nThe target need not already be a member (the admin UI only offers members,\nthe API does not require it).",
         "operationId": "transfer_project_owner_api_admin_projects__project_id__owner_post",
         "parameters": [
           {

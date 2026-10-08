@@ -105,19 +105,21 @@ surreal/dump-*
 # committing dead drafts would recreate the plan residue the shape gate removes.
 .kilo/plans/superseded/
 
-# dsh composes the profile's cordis.yml AT RUNTIME (bundles + cordis.patch.yml)
-# inside the tracked home dir that compose bind-mounts into the harness container
-# (harness-driver/home). The composed file is a build artifact — never commit it;
-# the SOURCES are the tracked package.json (bundles) + cordis.patch.yml beside it.
+# Runtime artifacts of the harness home. The tracked home dir is never
+# bind-mounted whole: runtime state lives in the container layer, prod-shaped.
+# The ignore lines cover the dev attachments bind (harness-driver/home/attachments)
+# and checkouts carrying drifted copies.
+# dsh composes the profile's cordis.yml AT RUNTIME (bundles + cordis.patch.yml);
+# the composed file is a build artifact — never commit it; the SOURCES are the
+# tracked package.json (bundles) + cordis.patch.yml beside it.
 harness-driver/home/profiles/*/cordis.yml
 
-# The harness writes two more runtime artifacts into the same tracked home:
 # settings.yaml (the llm section the image-capability upsert persists per-turn
 # model declarations into; boot-env retires a 0.1.5 one to
 # settings.yaml.retired-0.1.5, and dsh's legacy import renames it
-# settings.yaml.imported — every spelling is runtime state) and attachments/
-# (durable content-addressed image bytes, unbounded — measured in the plan's
-# Validation as a residual).
+# settings.yaml.imported — every spelling is runtime state); attachments/
+# (durable content-addressed image bytes, unbounded); storages/ and the
+# anonymous id (dsh session caches) — all runtime state, never committed.
 harness-driver/home/settings.yaml*
 harness-driver/home/attachments/
 harness-driver/home/storages/

@@ -4,7 +4,7 @@
 // INVARIANT: note-chat view never starts a completions turn  Why: note-chat reuses chat UI but has no AI features (no streaming/model/fork); it never posts a completion.
 // SYSTEM: note-chat — note-chat UI subsystem reusing chat components
 
-import { useEffect, useRef, useCallback, useLayoutEffect, useMemo } from 'react';
+import { useEffect, useRef, useCallback, useLayoutEffect, useMemo, useState } from 'react';
 import { ChatComposer } from './chat/ChatComposer';
 import { MessageBubble, type MessageBubbleActions } from './chat/MessageBubble';
 import { copyWithToast } from './chat/shared/copy';
@@ -162,14 +162,28 @@ export function NoteChatView() {
     }
   }, [readImageFile]);
 
+  // WHY: the scroll-to-bottom button shows exactly when auto-follow is off — one
+  // threshold for both, no separate button threshold (operator requirement).
+  const [scrolledAway, setScrolledAway] = useState(false);
+
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     stickToBottomRef.current = distance < STICK_EPSILON;
+    setScrolledAway(!stickToBottomRef.current);
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    stickToBottomRef.current = true;
+    setScrolledAway(false);
   }, []);
 
   useLayoutEffect(() => {
+    setScrolledAway(false);
     if (messagesLoading) return;
     const el = containerRef.current;
     if (!el) return;
@@ -228,6 +242,7 @@ export function NoteChatView() {
         onToggleRecording={toggleRecording}
         images={images}
         onRemoveImage={removePendingImage}
+        onScrollToBottom={scrolledAway ? scrollToBottom : undefined}
         textareaRef={textareaRef}
       />
     </div>

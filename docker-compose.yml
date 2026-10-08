@@ -139,7 +139,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 6
-      start_period: 60s
+      # WHY 300s: every boot re-applies schema.surql statement by statement; on a slow
+      # disk that alone outlasted a 60s window and `up` failed with harness and frontend
+      # never started, though the backend went healthy on its own minutes later. A
+      # start_period only forgives early failures, so a fast host is not slowed down.
+      start_period: 300s
 
   worker:
     <<: *app

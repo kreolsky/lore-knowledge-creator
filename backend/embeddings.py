@@ -455,6 +455,10 @@ def _chunk_write_stmts(
     `kind`/`model` ($kind/$model ride `params` from _build_reembed_txn) — a
     reused row is as much a corpus member as a fresh one, and a re-embed under a
     swapped model re-stamps its provenance without touching its vector.
+
+    WHY: not db.record_refs — these are per-row UPDATE/CREATE statements (one
+    type::record each), not an IN list; the ids already bind as params, which is
+    the property record_refs exists to guarantee.
     """
     stmts: list[str] = []
     for i, (chunk, h, emb, rid) in enumerate(store):

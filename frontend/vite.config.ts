@@ -4,6 +4,12 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import { defineConfig } from 'vite';
 
+const LOCATION_STUBBING_TESTS = [
+  'src/api/client.test.ts',
+  'src/components/Sidebar.move.test.tsx',
+  'src/hooks/useSessionRefresh.test.ts',
+];
+
 export default defineConfig({
   plugins: [
     tailwindcss(),
@@ -27,10 +33,31 @@ export default defineConfig({
   ],
   test: {
     environment: 'jsdom',
-    // Vitest owns src unit tests only; e2e/ specs run under Playwright (`npm run e2e`).
-    // Why: without an explicit include, Vitest globs every *.spec.ts and chokes on
-    // Playwright's test.describe() (different runner). See CI run #559.
-    include: ['src/**/*.test.{ts,tsx}'],
+    // WHY two projects: vmThreads keeps one jsdom per worker instead of one per
+    // file (the per-file environment setup was ~2/3 of the suite's wall time;
+    // module isolation per file is kept). A file that replaces window.location
+    // cannot run there — jsdom's location is non-configurable in a vm context
+    // ("Cannot redefine property: location") — so those run on plain threads.
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'vm',
+          pool: 'vmThreads',
+          // Vitest owns src unit tests only; e2e/ specs run under Playwright (`npm run e2e`).
+          // Why: without an explicit include, Vitest globs every *.spec.ts and chokes on
+          // Playwright's test.describe() (different runner). See CI run #559.
+          // Lives per project: with `extends: true` a root include is CONCATENATED
+          // into every project's, so the threads project would rerun the whole suite.
+          include: ['src/**/*.test.{ts,tsx}'],
+          exclude: LOCATION_STUBBING_TESTS,
+        },
+      },
+      {
+        extends: true,
+        test: { name: 'threads', pool: 'threads', include: LOCATION_STUBBING_TESTS },
+      },
+    ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'text-summary'],

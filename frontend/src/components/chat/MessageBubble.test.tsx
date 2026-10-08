@@ -2,12 +2,20 @@
  * author header, AI agent distinct style, and user-message width cap. */
 // @vitest-environment jsdom
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// WHY warm the bundle: MarkdownContent lazily import()s dsh's markdown renderer
+// and nothing here awaits it, so under the vmThreads pool the file can end with
+// the import in flight and vitest reports an unhandled rejection from its
+// closed module runner. Loading it up front settles the import before any test.
+beforeAll(async () => {
+  await Promise.all([import('../../dsh/lore-markdown'), import('../../dsh/lore-markdown.css')]);
+});
 
 // MarkdownContent pulls useAppStore + global t; mock both so render is pure.
 vi.mock('../../store/app-store', () => ({

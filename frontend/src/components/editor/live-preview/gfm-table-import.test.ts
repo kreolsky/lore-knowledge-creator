@@ -1,7 +1,7 @@
 /**
  * Unit tests for GFM-markdown → table-object import (Session E).
  *
- * Mirrors the backend `parse_gfm_table` contract (table_serialize.py). A pasted/imported
+ * Mirrors the `parse_gfm_table` oracle contract (tests/backend/helpers.py). A pasted/imported
  * markdown GFM table becomes an editable table object: a `tables` model + an
  * `![label](table:id)` anchor spliced into the text in place of the GFM block.
  */

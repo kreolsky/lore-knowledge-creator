@@ -1,10 +1,9 @@
 /**
  * Typed surface of the committed assembler bundle (lore-conversation.js, beside
  * this file). The bundle is BUILT inside the harness image from
- * `harness-driver/conversation/src/index.ts` and committed here (plan
- * lore-renders-dsh-conversation step 1); this hand-kept declaration pins the
- * ONE surface Lore consumes and keeps tsc out of the ~10k-line artifact. It is
- * a build-time coupling: the Vite build fails loudly when the .js is missing —
+ * `harness-driver/conversation/src/index.ts` and committed here; this
+ * hand-kept declaration pins the ONE surface Lore consumes and keeps tsc out
+ * of the ~10k-line artifact. It is a build-time coupling: the Vite build fails loudly when the .js is missing —
  * there is no stale-copy fallback.
  */
 
@@ -53,6 +52,36 @@ export declare function expandAssistantStream(
   stream: readonly unknown[],
 ): readonly TimedStreamChunk[]
 
+/** dsh's process-activity category of a tool call (ProcessActivity). */
+export type ProcessActivity = 'read' | 'readImage' | 'search' | 'write' | 'edit' | 'commands' | 'code'
+  | 'webSearch' | 'webFetch' | 'subagents' | 'plan' | 'questions' | 'tools'
+
+/** dsh's ProcessActivitySummary: categories ranked by distinct calls, and the
+ * live one while the group runs. */
+export interface ProcessActivitySummary {
+  readonly counts: readonly { readonly kind: ProcessActivity; readonly count: number }[]
+  readonly running: ProcessActivity | undefined
+  readonly runningDetail: string
+  readonly preparing?: true
+}
+
+export interface ProcessGroupMembership {
+  readonly groupKey: string
+  readonly part?: string
+}
+
+/** One dsh process group; the SAME object while the group is unchanged. */
+export interface ProcessGroupInfo {
+  readonly members: number
+  readonly closed: boolean
+  readonly summary: ProcessActivitySummary
+}
+
+export interface ProcessGroups {
+  readonly byNode: ReadonlyMap<string, ProcessGroupMembership>
+  readonly data: ReadonlyMap<string, ProcessGroupInfo>
+}
+
 export interface LoreConversation {
   replaceWindow(
     entries: readonly SessionEventLikeEntry[],
@@ -65,6 +94,8 @@ export interface LoreConversation {
    * separately as a normal dsh_event). */
   settleAssistant(attemptId: unknown): ConversationPublication
   nodes(): readonly ChatConversationViewNode[]
+  /** dsh's process groups over the chat target; call after `nodes()`. */
+  groups(): ProcessGroups
 }
 
 export declare function createLoreConversation(): LoreConversation

@@ -29,6 +29,13 @@ EXPECTED = {
     "brave": ("lore-brave", "BRAVE_API_KEY"),
     "tavily": ("lore-tavily", "TAVILY_API_KEY"),
     "searxng": ("lore-searxng", "SEARXNG_URL"),
+    "perplexity": ("lore-perplexity-fast", "PERPLEXITY_API_KEY"),
+}
+#: PERPLEXITY_SEARCH_TYPE value → the pinned id; the harness registers one
+#: Perplexity provider per search type (plugin web-search/perplexity.ts).
+EXPECTED_PERPLEXITY_PINS = {
+    "fast": "lore-perplexity-fast",
+    "web": "lore-perplexity-web",
 }
 CREDENTIAL_KEYS = [cred for _, cred in EXPECTED.values()]
 
@@ -55,11 +62,12 @@ async def _pinned_payload_flags(test_db, monkeypatch):
     """
     settings.drop_cache()
     await test_db.query("DELETE instance_settings")
-    for key in ("WEB_SEARCH_PROVIDER", "CHAT_TITLE_MODEL", "CHAT_MODEL", *CREDENTIAL_KEYS):
+    for key in ("WEB_SEARCH_PROVIDER", "PERPLEXITY_SEARCH_TYPE", "CHAT_TITLE_MODEL", "CHAT_MODEL", *CREDENTIAL_KEYS):
         monkeypatch.delenv(key, raising=False)
     _pin_config(
         monkeypatch,
         WEB_SEARCH_PROVIDER="deepseek",
+        PERPLEXITY_SEARCH_TYPE="fast",
         CHAT_TITLE_MODEL="env-titler",
         CHAT_MODEL="env-titler",
         **{key: f"env-{key.lower()}" for key in CREDENTIAL_KEYS},
@@ -90,6 +98,20 @@ def test_every_provider_choice_has_a_payload_mapping():
     spec = settings_registry.find("WEB_SEARCH_PROVIDER")
     assert spec is not None and spec.choices is not None
     assert set(spec.choices) == set(EXPECTED)
+
+
+def test_every_perplexity_search_type_has_a_pin_and_fast_is_the_default():
+    """Derived from the registry: a new search type without a pin fails here."""
+    spec = settings_registry.find("PERPLEXITY_SEARCH_TYPE")
+    assert spec is not None and spec.choices is not None
+    assert set(spec.choices) == set(EXPECTED_PERPLEXITY_PINS)
+    probe = subprocess.run(
+        [sys.executable, "-c", "import config; print(config.PERPLEXITY_SEARCH_TYPE)"],
+        env={k: v for k, v in os.environ.items() if k != "PERPLEXITY_SEARCH_TYPE"},
+        capture_output=True, text=True,
+    )
+    assert probe.returncode == 0, probe.stderr
+    assert probe.stdout.strip() == "fast"
 
 
 def test_off_is_gone_and_the_default_is_deepseek():
@@ -128,6 +150,28 @@ async def test_each_provider_turn_carries_its_pin_and_only_its_credential(
     ]
     assert all(value not in json.dumps(payload) for value in unselected)
     assert payload["title_model"] == "env-titler"
+
+
+@pytest.mark.asyncio
+async def test_perplexity_web_mode_set_in_admin_pins_the_web_provider(
+    client, collab_project, harness_env,
+):
+    """The operator picks perplexity + the web mode in the admin panel: the
+    next turn pins the web-mode provider with the Perplexity key."""
+    pid, doc_id, admin_token, _user_token, _a, _u = collab_project
+    for key, value in (
+        ("WEB_SEARCH_PROVIDER", "perplexity"),
+        ("PERPLEXITY_SEARCH_TYPE", "web"),
+        ("PERPLEXITY_API_KEY", "db-pplx-key"),
+    ):
+        resp = await client.put(
+            f"/api/admin/settings/{key}", json={"value": value},
+            cookies={"lore_session": admin_token},
+        )
+        assert resp.status_code == 200, resp.text
+    payload = await _turn_payload_of(client, collab_project, harness_env)
+    assert payload["web_search_provider"] == EXPECTED_PERPLEXITY_PINS["web"]
+    assert payload["web_search_credential"] == "db-pplx-key"
 
 
 @pytest.mark.asyncio

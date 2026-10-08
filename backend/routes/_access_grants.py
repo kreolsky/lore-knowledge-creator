@@ -15,7 +15,7 @@ from surrealdb import AsyncSurreal
 
 import event_bus
 from access import get_user_by_email
-from db import create_record, extract_id, get_db
+from db import create_record, extract_id, get_db, record_refs
 
 
 async def _delete_pending_by_scope(db, email: str, project_id: str) -> list[dict]:
@@ -40,15 +40,15 @@ async def _delete_pending_by_scope(db, email: str, project_id: str) -> list[dict
     ]
     deleted: list[dict] = []
     if target_ids:
-        # ARCH: param-bound per-id record refs in an IN list. A bare `id IN $ids`
-        # with string ids matches nothing (the id field is a record ref), and
-        # `type::record('pending_invites', $ids)` with a list doesn't bulk-delete
-        # either — only per-id record refs work. ids come from our own extract_id
-        # of our own rows, so this is param-safe (no f-string interpolation).
-        refs = [f"type::record('pending_invites', $id{i})" for i in range(len(target_ids))]
-        params = {f"id{i}": tid for i, tid in enumerate(target_ids)}
+        # ARCH: param-bound per-id record refs (db.record_refs) in an IN list. A
+        # bare `id IN $ids` with string ids matches nothing (the id field is a
+        # record ref), and `type::record('pending_invites', $ids)` with a list
+        # doesn't bulk-delete either — only per-id record refs work. ids come
+        # from our own extract_id of our own rows, so this is param-safe (no
+        # f-string interpolation).
+        refs, params = record_refs("pending_invites", target_ids)
         deleted = await db.query(
-            f"DELETE FROM pending_invites WHERE id IN [{', '.join(refs)}] RETURN BEFORE",
+            f"DELETE FROM pending_invites WHERE id IN [{refs}] RETURN BEFORE",
             params,
         )
     return deleted or []

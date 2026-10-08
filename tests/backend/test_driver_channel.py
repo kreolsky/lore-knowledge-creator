@@ -328,10 +328,10 @@ async def test_turn_flows_through_relay_arms_and_finalizes(channel):
         "context_usage", "dsh_event", "done",
     ]
     # The done frame carries the SAME join finalize persists (pump parity).
-    assert frames[-1]["content"] == "Hello world"
+    assert frames[-1]["content"] == "Hello\n\nworld"
 
     await _until(lambda: persists.turn_seq == [("m1", 10)])
-    assert persists.content == [("m1", "Hello world")]
+    assert persists.content == [("m1", "Hello\n\nworld")]
     assert persists.context_usage == [("lore-1", 5)]
     assert persists.extras == []  # no halt card on a graceful end
     assert persists.turn_errors == []
@@ -442,9 +442,9 @@ async def test_resync_replays_from_last_seq_and_continues_the_open_turn(channel)
     sock2.push(_env("dsh-9", _turn_end(12, "completed")))
     tail = [await _recv(queue) for _ in range(3)]
     assert [f.get("type") for f in tail] == ["dsh_event", "dsh_event", "done"]
-    assert tail[-1]["content"] == "A B C D"
+    assert tail[-1]["content"] == "A\n\nB\n\nC\n\nD"
     await _until(lambda: persists.turn_seq == [("m1", 12)])
-    assert persists.content == [("m1", "A B C D")]
+    assert persists.content == [("m1", "A\n\nB\n\nC\n\nD")]
 
 
 # ─── the repoint re-ack: a fork re-keys routing and re-anchors the dedup ──────
@@ -555,6 +555,74 @@ async def test_plain_reack_leaves_the_dedup_anchor_alone(channel):
     assert got["seq"] == 101
     assert await _drain(queue) == [], "the stale seq-100 frame stays dropped"
     assert ch._subs["lore-1"].last_seq == 101
+
+
+# ─── a fork while the socket is down: the leaf answer carries the repoint ─────
+# A harness restart drops the socket; the backend reconnects with backoff, and
+# a turn POSTed inside that window forks (/session-leaf) with no socket to
+# carry the re-ack. The fork's HTTP answer applies the same repoint, so the
+# reconnect's resync replays the FORKED log from the fork's anchor.
+
+
+async def _fork_while_down(channel, tail_seq, fork_frames):
+    """Subscribe lore-1 on dsh-9, deliver seq 100, drop the socket and keep
+    it down, apply the leaf answer's repoint, bind the turn, then let the
+    driver come back acking the forked id with the fork's log in the replay."""
+    ch, connector, replay, persists = channel
+    await ch.subscribe("lore-1")
+    queue, _ = ch.add_listener("lore-1")
+    connector.sockets[0].push(_env("dsh-9", _chunk(100, "pre-fork tail")))
+    await _recv(queue)
+
+    connector.refuse = True
+    connector.sockets[0].drop()
+    await _until(lambda: not ch._connected)
+
+    ch.repoint("lore-1", "lore-1~ffork0001", tail_seq)
+    ch.bind_turn("lore-1", assistant_msg_id="m1")
+    replay.reply("lore-1", {"turns": [{"frames": fork_frames, "end_seq": fork_frames[-1]["seq"]}],
+                            "tail_seq": fork_frames[-1]["seq"]})
+    connector._ack_map["lore-1"] = "lore-1~ffork0001"
+    connector.refuse = False
+    await _wait_for_socket(connector, 1)
+    return ch, replay, persists
+
+
+@pytest.mark.asyncio
+async def test_a_fork_while_the_socket_is_down_reaches_the_bound_row(channel):
+    # Seeded fork at boundary 40: the forked turn's seqs (41..43) sit BELOW
+    # the delivered 100 — without the answer's anchor the resync replays
+    # since 100 and the turn never reaches its row.
+    ch, replay, persists = await _fork_while_down(channel, 40, [
+        _dsh(41, "turn/start", {"turn": 3}), _chunk(42, "Красный", turn=3),
+        _turn_end(43, "completed", turn=3)])
+    await _until(lambda: persists.turn_seq == [("m1", 43)])
+    assert persists.content == [("m1", "Красный")]
+    assert {"session_id": "lore-1", "since_seq": 40} in replay.calls
+    assert ch._subs["lore-1"].dsh_session_id == "lore-1~ffork0001"
+
+
+@pytest.mark.asyncio
+async def test_a_root_fork_while_the_socket_is_down_replays_the_whole_fresh_log(channel):
+    # Root fork: the fresh log is empty at the fork, so the anchor is
+    # "nothing delivered" and the resync replays the whole log — a skip
+    # there leaves the bound row empty forever.
+    ch, replay, persists = await _fork_while_down(channel, None, [
+        _dsh(0, "turn/start", {"turn": 1}), _chunk(1, "Привет", turn=1),
+        _turn_end(2, "completed", turn=1)])
+    await _until(lambda: persists.turn_seq == [("m1", 2)])
+    assert persists.content == [("m1", "Привет")]
+    assert {"session_id": "lore-1", "since_seq": None} in replay.calls
+
+
+@pytest.mark.asyncio
+async def test_repoint_of_an_unsubscribed_session_registers_nothing(channel):
+    # No subscription yet: the later subscribe anchors at the fresh log's
+    # tail by itself (the plugin's ack resolves the forked id).
+    ch, *_ = channel
+    ch.repoint("lore-1", "lore-1~ffork0001", 5)
+    assert "lore-1" not in ch._subs
+    assert ch._dsh_index == {}
 
 
 # ─── the deadline: silence breach + holds ─────────────────────────────────────
@@ -890,12 +958,17 @@ async def test_emit_frames_on_unsubscribed_session_raises(channel):
 #
 # The SSE lifecycle's terminal signal is the STREAM END; a driver-owned turn
 # has no stream. The browser closes its streaming slot ONLY on `turn_closed`
-# (`done` is a content frame). The PLUGIN pushes turn_closed at its followup
-# task's end (after every mapped frame — the halt mint included); the channel
-# emits it itself only where the plugin CANNOT: a deadline breach (the driver
-# may be dead) and a close whose push is gone — a turn/end lost mid-gap
-# (replayed on reconnect) or a turn that ended LIVE before the gap (the
-# owed-close re-mint).
+# (`done` is a content frame). The PLUGIN pushes turn_closed live at its
+# followup task's end (after every mapped frame — the halt mint included), and
+# the REPLAY carries it for a session with no registered turn: a seq-anchored
+# turn_closed per closed turn (plugin entries.ts `terminals`), delivered
+# through the same dispatch. The channel mints the terminal itself only where
+# NO replay can: a deadline breach (the driver may be dead) and the
+# setup-failure tail (completions_harness). A gap spanning several closed
+# turns delivers several historical terminals — the browser's
+# no-registration drop is the duplicate's cover — and the dispatch arm's
+# guards (no open turn, no pending bind) keep a stale terminal from closing a
+# NEWER turn's registration.
 
 
 @pytest.mark.asyncio
@@ -933,13 +1006,15 @@ async def test_resync_close_of_replayed_turn_emits_turn_closed_after_the_mint(
         await _recv(queue)
 
     # The WS dies mid-turn; the log holds the rest of the turn INCLUDING the
-    # plugin's halt mint (the replay returns mapEvent's own output — the mint
-    # anchored at the turn/end's seq + the fractional halt offset).
+    # plugin's halt mint AND the replayed transport terminal (entries.ts
+    # appends turn_closed at turn/end + the terminal offset for a non-live
+    # session — the same liveness the crash closers balance).
     replay.reply("lore-1", {"turns": [{"frames": [
         _chunk(9, "B"),
         _turn_end(10, "aborted"),
         {"type": "lore/halt", "seq": 10.7, "data": {
             "turn": 1, "reason": "aborted"}, "ignorable": True},
+        {"type": "turn_closed", "seq": 10.9},
     ]}], "tail_seq": 10})
     sock1.drop()
     await _wait_for_socket(connector, 1)
@@ -949,18 +1024,23 @@ async def test_resync_close_of_replayed_turn_emits_turn_closed_after_the_mint(
         "dsh_event",        # the gap chunk, relayed into the open projection
         "dsh_event",        # the replayed turn/end — closes the turn
         "lore/halt",        # the replayed mint relays raw (turn already closed)
-        "turn_closed",      # the transport terminal, AFTER the turn's frames
+        "turn_closed",      # the replayed terminal, AFTER the turn's frames
     ]
+    assert frames[3] == {"type": "turn_closed"}, (
+        "the emitted terminal is wire-identical to the live push — the seq is"
+        " the channel's dedup bookkeeping, never browser payload"
+    )
 
 
 @pytest.mark.asyncio
-async def test_resync_remints_turn_closed_for_a_turn_that_ended_live_before_the_gap(
+async def test_resync_delivers_the_replayed_terminal_for_a_turn_that_ended_live_before_the_gap(
         channel):
-    # The lost-push window the replay CANNOT cover: the socket dies AFTER the
-    # live turn/end (the listener already saw `done`; _close_turn ran) and
+    # The lost-push window the live relay CANNOT cover: the socket dies AFTER
+    # the live turn/end (the listener already saw `done`; _close_turn ran) and
     # BEFORE the plugin's turn_closed push. The push is best-effort and NOT a
-    # log entry — the replay is empty, turn/end is deduped by seq. The resync
-    # must re-mint the terminal, else the browser hangs on an open turn.
+    # log entry — but the REPLAY carries the terminal (seq-anchored above the
+    # last delivered frame), so the resync delivers it: the browser's turn
+    # ends instead of hanging on an open registration.
     ch, connector, replay, _persists = channel
     await ch.subscribe("lore-1")
     ch.bind_turn("lore-1", assistant_msg_id="m1")
@@ -976,17 +1056,23 @@ async def test_resync_remints_turn_closed_for_a_turn_that_ended_live_before_the_
     assert frames[-1]["type"] == "done"
     await _until(lambda: ch._subs["lore-1"].turn is None)
 
-    # The log holds nothing past the delivered tail: the replay is EMPTY.
-    replay.reply("lore-1", {"turns": [], "tail_seq": 10})
+    # The log holds nothing past the delivered tail but the replayed terminal.
+    replay.reply("lore-1", {"turns": [{"frames": [
+        {"type": "turn_closed", "seq": 10.9}], "end_seq": 10}], "tail_seq": 10})
     sock1.drop()
     await _wait_for_socket(connector, 1)
 
-    closed = await _recv(queue)
-    assert closed == {"type": "turn_closed"}
+    assert (await _recv(queue)) == {"type": "turn_closed"}
 
 
 @pytest.mark.asyncio
-async def test_no_resync_remint_when_the_plugin_push_was_delivered(channel):
+async def test_a_delivered_live_push_does_not_dedup_the_replayed_terminal(channel):
+    # The live push is UNSEQUENCED, so it cannot advance the dedup anchor:
+    # after a delivered push a resync replays the seq-anchored terminal AGAIN
+    # — a duplicate the browser must no-op (no registration → dropped, pinned
+    # in the store tests). That is the price of the terminal riding the log's
+    # seq space in replay only; the guards below are what keep the duplicate
+    # from ever racing a NEW turn.
     ch, connector, replay, _persists = channel
     await ch.subscribe("lore-1")
     ch.bind_turn("lore-1", assistant_msg_id="m1")
@@ -1003,20 +1089,23 @@ async def test_no_resync_remint_when_the_plugin_push_was_delivered(channel):
     sock1.push(_env("dsh-9", {"type": "turn_closed"}))
     assert (await _recv(queue)) == {"type": "turn_closed"}
 
-    replay.reply("lore-1", {"turns": [], "tail_seq": 10})
+    replay.reply("lore-1", {"turns": [{"frames": [
+        {"type": "turn_closed", "seq": 10.9}], "end_seq": 10}], "tail_seq": 10})
     sock1.drop()
     await _wait_for_socket(connector, 1)
 
-    # No second terminal: the resync re-mints only an UNDELIVERED close.
-    with pytest.raises(asyncio.TimeoutError):
-        await _recv(queue, timeout=0.3)
+    # The replayed terminal is a duplicate by construction — delivered, and
+    # the browser's drop is the cover.
+    assert (await _recv(queue)) == {"type": "turn_closed"}
 
 
 @pytest.mark.asyncio
-async def test_no_resync_remint_while_a_followup_is_already_pending(channel):
+async def test_a_replayed_terminal_while_a_followup_is_pending_is_a_no_op(channel):
     # A followup for the NEXT turn is accepted (bind staked, no first frame
-    # yet): the previous turn's re-minted terminal must not close the new
-    # turn's browser registration — no mint while a turn is owed.
+    # yet): the PREVIOUS turn's replayed terminal must not close the new
+    # turn's browser registration — the dispatch arm drops it. (The guard
+    # moved from the deleted post-replay re-mint emit into the dispatch arm
+    # when the replay began carrying the terminal.)
     ch, connector, replay, _persists = channel
     await ch.subscribe("lore-1")
     fired: list[int] = []
@@ -1035,12 +1124,99 @@ async def test_no_resync_remint_while_a_followup_is_already_pending(channel):
     await _until(lambda: fired == [1])
 
     ch.bind_turn("lore-1", assistant_msg_id="m2")  # the next turn, staked
-    replay.reply("lore-1", {"turns": [], "tail_seq": 10})
+    replay.reply("lore-1", {"turns": [{"frames": [
+        {"type": "turn_closed", "seq": 10.9}], "end_seq": 10}], "tail_seq": 10})
     sock1.drop()
     await _wait_for_socket(connector, 1)
 
     with pytest.raises(asyncio.TimeoutError):
         await _recv(queue, timeout=0.3)
+
+
+@pytest.mark.asyncio
+async def test_a_replayed_terminal_while_a_newer_turn_runs_is_a_no_op(channel):
+    # Turn 1 ended live with its push lost; turn 2 OPENED (its first frame
+    # claimed the bind) before the resync runs: turn 1's replayed terminal is
+    # STALE — emitting it would close turn 2's browser registration
+    # mid-stream. The dispatch arm drops it: an open turn owns the session.
+    ch, connector, replay, _persists = channel
+    await ch.subscribe("lore-1")
+    ch.bind_turn("lore-1", assistant_msg_id="m1")
+    queue, _ = ch.add_listener("lore-1")
+    sock1 = connector.sockets[0]
+
+    for frame in ({"type": "model_update", "model": "x"}, _chunk(8, "A"),
+                  _turn_end(10, "completed")):
+        sock1.push(_env("dsh-9", frame))
+    for _ in range(4):
+        await _recv(queue)
+    await _until(lambda: ch._subs["lore-1"].turn is None)
+
+    # The next turn opens (bind + first frame) before the socket drops; the
+    # plugin's terminal push for turn 1 died with it.
+    ch.bind_turn("lore-1", assistant_msg_id="m2")
+    sock1.push(_env("dsh-9", {"type": "model_update", "model": "y"}))
+    await _recv(queue)  # turn 2's first frame, delivered live
+    await _until(lambda: ch._subs["lore-1"].turn is not None)
+
+    replay.reply("lore-1", {"turns": [{"frames": [
+        {"type": "turn_closed", "seq": 10.9}], "end_seq": 10}], "tail_seq": 10})
+    sock1.drop()
+    await _wait_for_socket(connector, 1)
+
+    # The stale terminal never reaches the listener; turn 2 keeps streaming.
+    with pytest.raises(asyncio.TimeoutError):
+        await _recv(queue, timeout=0.3)
+    assert ch._subs["lore-1"].turn is not None
+
+
+@pytest.mark.asyncio
+async def test_a_gap_spanning_two_closed_turns_delivers_both_terminals(channel):
+    # A long gap (the backend lost the driver through two whole turns): the
+    # resync replays both closed turns, each ending in its own terminal. The
+    # browser ends streaming on the first terminal and no-ops the second —
+    # what it must never receive is ZERO terminals (a hung registration) or
+    # an interleaving that puts a turn's terminal ahead of its frames.
+    ch, connector, replay, _persists = channel
+    await ch.subscribe("lore-1")
+    ch.bind_turn("lore-1", assistant_msg_id="m1")
+    queue, _ = ch.add_listener("lore-1")
+    sock1 = connector.sockets[0]
+
+    # Turn 1 streams live up to seq 8; the gap swallows its close and all of
+    # turn 2 (a non-live session by then — its push is replay-carried).
+    sock1.push(_env("dsh-9", {"type": "model_update", "model": "x"}))
+    sock1.push(_env("dsh-9", _chunk(8, "A ")))
+    for _ in range(2):
+        await _recv(queue)
+
+    replay.reply("lore-1", {"turns": [
+        {"frames": [
+            _chunk(9, "B"),
+            _turn_end(10, "completed"),
+            {"type": "turn_closed", "seq": 10.9},
+        ], "end_seq": 10},
+        {"frames": [
+            _chunk(20, "C"),
+            _turn_end(30, "completed"),
+            {"type": "turn_closed", "seq": 30.9},
+        ], "end_seq": 30},
+    ], "tail_seq": 30})
+    sock1.drop()
+    await _wait_for_socket(connector, 1)
+
+    frames = [(await _recv(queue)) for _ in range(7)]
+    assert [f.get("type") for f in frames] == [
+        "dsh_event",        # turn 1's gap chunk, relayed into the open projection
+        "dsh_event",        # turn 1's replayed turn/end — closes the turn
+        "done",             # its content fold
+        "turn_closed",      # turn 1's replayed terminal
+        "dsh_event",        # turn 2's chunk (unclaimed — raw relay)
+        "dsh_event",        # turn 2's turn/end
+        "turn_closed",      # turn 2's replayed terminal
+    ]
+    assert frames[3] == {"type": "turn_closed"}
+    assert frames[6] == {"type": "turn_closed"}
 
 
 # ─── _HoldPausedDeadline unit tests (progress-extension semantics) ──────────

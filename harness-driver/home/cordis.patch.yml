@@ -20,19 +20,30 @@
 - insert:
     - id: lore-driver
       name: '/dsh/lore-driver/src/index.ts'
-    # Brave / Tavily / SearXNG search providers for the `web` seam.
+    # Brave / Tavily / SearXNG / Perplexity search providers for the `web` seam.
     - id: lore-web-search
       name: '/dsh/lore-driver/src/web-search/index.ts'
 
 # The LLM route: llm-pi-ai, mounted DORMANT (upstream's own shape — zero
 # routes until a settings section supplies provider profiles; the web Models
 # page is the upstream writer, the lore-driver's turns are ours). Every TURN
-# declares the ONE `lore` provider route (ensureModelEntry): apiKeyEnv
+# declares the model's route beside its catalog entry (ensureModelEntry),
+# picked per model by the router's `/v1/models` `api` field (ROUTE_BY_API):
+# openai-completions → the hand-declared `lore` provider route (apiKeyEnv
 # LORE_AGENT_API_KEY, api openai-completions, the turn's gateway baseURL, the
-# compat trio and defaultContextWindow 128000 (the plugin's loreRoute
-# constant), plus the per-model catalog (contextWindow / maxTokens / image
-# input / reasoningEfforts).
-# WHY the route is NOT declared here as config: `providers` is the volatile
+# compat trio and defaultContextWindow 128000 — the plugin's loreRoute
+# constant), anthropic-messages → the `anthropic` route. That name is the
+# pi-ai INSTALLED-CATALOG provider id and is load-bearing: a configured model
+# spreads the installed entry of the same id under it, which is the only way
+# the Claude flags dsh withholds from configuration
+# (supportsMidConvoEffort/SystemMessages/ToolChanges) reach a model, and the
+# catalog's shared anthropic-messages protocol covers ids the catalog does
+# not describe. The anthropic scaffold (anthropicRoute) carries NO api and
+# NO route compat — the catalog owns the protocol, compat is per model (the
+# router's entry carries it verbatim) — strips the gateway's trailing /v1
+# (the Anthropic SDK appends its own request paths), and keeps
+# defaultContextWindow 128000 for a model the router leaves bare.
+# WHY the routes are NOT declared here as config: `providers` is the volatile
 # field of llm-pi-ai's Config, and every settings write clones the entry's
 # config through the volatile path — a `!!js` expression inside the volatile
 # subtree survives as a plain object and the write fails validation
@@ -45,11 +56,12 @@
 # UNSUPPORTED_REASONING_EFFORT on anything else); the plugin upserts each
 # model's advertised levels into its catalog entry (ensureModelEntry), so
 # what the UI offers is what the wire takes, spelled as the gateway spells
-# it. compat mirrors what the old route sent and the gateway accepts: system
-# messages keep `role: system`, the output cap is `max_tokens`, the effort is
-# a bare `reasoning_effort` (openai thinking format). defaultContextWindow
-# is kept from the old row: pi-ai's own fallback (262144) would silently
-# change the context_usage denominator for an id the gateway does not list.
+# it. The lore route's compat mirrors what the old route sent and the
+# gateway accepts: system messages keep `role: system`, the output cap is
+# `max_tokens`, the effort is a bare `reasoning_effort` (openai thinking
+# format). defaultContextWindow is kept from the old row: pi-ai's own
+# fallback (262144) would silently change the context_usage denominator for
+# an id the gateway does not list.
 # No env fallbacks: an unset LORE_AI_API_URL skips the route write and the
 # first request fails loud instead of pretending to have a route. No
 # `maxTokens`: the per-turn output cap is the router's per-model
@@ -116,19 +128,20 @@
 # config there REPLACES the base row's). It runs once per fresh non-fork
 # session on the first prompt and never retries on its own — acceptable
 # because the session-title service's deterministic first-words fallback
-# always lands before any model call. WHY `lore`: it is the
-# single provider route this composition declares (the llm-pi-ai `lore` route
-# above, pointing at OUR gateway — the same route agent-default-model rides).
+# always lands before any model call. The provider of the pair the plugin
+# applies per turn names the TITLE model's own route (ROUTE_BY_API — `lore`
+# or `anthropic`, both pointing at OUR gateway; the same route the model's
+# own catalog entry rides).
 # WHY the model must be non-reasoning on the gateway: the title call names no
-# effort, and on this openai-format route a request with no
-# `reasoning_effort` gets the PROVIDER's default — there is no per-purpose
-# way to say "don't think", so a reasoner would think on every title. The
-# plugin's turn gate warns loudly (assertNonReasoningTitleModel) and upserts
-# the model's id-only catalog entry per turn (ensureTitleEntry). The title's
-# byte budget: dsh-base caps a title at 80 UTF-8 bytes (40 Cyrillic
-# characters) and cuts it mid-word; the UI ellipsizes a long title itself
-# (ChatRow `truncate`), so the budgets here sit wide and the deterministic
-# first-words fallback keeps its 5-word cap.
+# effort, and on either route a request with no effort (no `reasoning_effort`
+# on `lore`, no `thinking` on `anthropic`) gets the PROVIDER's default — there
+# is no per-purpose way to say "don't think", so a reasoner would think on
+# every title. The plugin's turn gate warns loudly
+# (assertNonReasoningTitleModel) and upserts the model's id-only catalog entry
+# per turn (ensureTitleEntry). The title's byte budget: dsh-base caps a title
+# at 80 UTF-8 bytes (40 Cyrillic characters) and cuts it mid-word; the UI
+# ellipsizes a long title itself (ChatRow `truncate`), so the budgets here sit
+# wide and the deterministic first-words fallback keeps its 5-word cap.
 - id: session-title
   config:
     fallbackMaxWords: 5

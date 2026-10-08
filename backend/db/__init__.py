@@ -7,9 +7,10 @@ keeps resolving, and the surrealdb _recv_task monkeypatch remains a side effect 
 
 # SYSTEM: db-pool — SurrealDB connection singleton with auto-reconnect and record helpers
 # ARCH: this package re-exports the API that lived in the flat backend/db.py. The
-#       submodules are split by cohesion: _patch (recv-task patch + id validation),
-#       pool (DBPool + timed proxy), contract (SDK contract detectors + transactions),
-#       records (serialization), crud (CRUD + projections), tree (traversal).
+#       submodules are split by cohesion: _patch (recv-task patch), pool (DBPool +
+#       timed proxy), contract (SDK contract detectors + transactions), records
+#       (serialization + id validation + record_refs), crud (CRUD + projections),
+#       tree (traversal).
 # ARCH: import order is load-bearing — db._patch is imported FIRST so the
 #       _recv_task monkeypatch (fut.done() guard) is installed before any get_db()
 #       call can wedge the SDK reader. _patch also captures _ORIG_RECV_TASK (the
@@ -29,10 +30,8 @@ from db_schema import apply_schema, split_schema_statements  # noqa: F401
 # _assert_recv_task_patched default argument.
 from db._patch import (  # noqa: F401
     _ORIG_RECV_TASK,
-    SAFE_ID_RE,
     _AsyncWsConn,
     _patched_recv_task,
-    validate_record_id,
 )
 from db.contract import (  # noqa: F401
     SdkContractError,
@@ -66,10 +65,13 @@ from db.pool import (  # noqa: F401
     reset_db,
 )
 from db.records import (  # noqa: F401
+    SAFE_ID_RE,
     _fmt_datetime,
     coerce_record_ids,
     extract_id,
     is_record_id,
+    record_refs,
     serialize_record,
+    validate_record_id,
 )
 from db.tree import get_ancestor_ids, get_descendant_ids  # noqa: F401

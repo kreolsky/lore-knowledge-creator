@@ -97,6 +97,16 @@ class _TurnProjection:
         self._persist_extras = persist_extras
         self._persist_turn_seq = persist_turn_seq
 
+    def content(self) -> str:
+        """The row's content: the turn's step texts, one paragraph each.
+
+        # INVARIANT: steps join with a blank line, never back to back.
+        # Why: between two steps sat a tool run the copy drops; glued, the
+        # next step's first line merges into the previous step's last block
+        # (a list item swallows the following paragraph).
+        """
+        return "\n\n".join(p.lstrip("\n").rstrip() for p in self.content_acc if p.strip())
+
     async def _stamp_driver_seq(self) -> None:
         """Persist the row's driver-turn seq when the terminal frame carried
         one. Skipped for turns that ended without a `turn/end` (deadline
@@ -112,7 +122,7 @@ class _TurnProjection:
         Called by the façade only on normal turn end. Nothing else is written:
         the turn's timeline is read back from the driver's own log.
         """
-        content = "".join(self.content_acc)
+        content = self.content()
         await self._persist_content(self.assistant_msg_id, content)
         if self.sources_acc:
             await self._persist_sources(self.assistant_msg_id, self.sources_acc)
@@ -172,9 +182,9 @@ class _TurnProjection:
         error here must not mask the primary failure (logged — not silent).
         """
         try:
-            if not "".join(self.content_acc).strip():
+            if not self.content():
                 self.content_acc.append(note)
-            await self._persist_abnormal(reason, "".join(self.content_acc))
+            await self._persist_abnormal(reason, self.content())
         except Exception:
             logger.exception(
                 "abnormal persist failed msg=%s reason=%s",
@@ -190,7 +200,7 @@ class _TurnProjection:
         reached the client (it disconnected) and finalize() was skipped. We persist
         the streamed text + a `disconnected` halt card carrying how far the run got,
         so a reload says WHAT stopped and WHERE."""
-        await self._persist_abnormal("disconnected", "".join(self.content_acc))
+        await self._persist_abnormal("disconnected", self.content())
 
 
 def _lore_event_at(kind: str, seq, data: dict) -> dict:
@@ -348,7 +358,7 @@ async def _turn_end_arm(turn: _TurnProjection, ev: dict, data: dict) -> list[dic
         # ""): the store's done handler ignores an empty payload, and
         # suppressing it here would be a second rule to keep in sync with
         # the persist.
-        return [ev, {"type": "done", "content": "".join(turn.content_acc)}]
+        return [ev, {"type": "done", "content": turn.content()}]
     if rkind == "error":
         # No silent degradation — surface the failure explicitly. The product
         # accumulated before the error frame is persisted (abnormal_finalize):

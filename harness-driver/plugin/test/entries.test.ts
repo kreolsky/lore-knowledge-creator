@@ -1,6 +1,5 @@
 /**
- * The RELOAD half of the one projection (plan lore-renders-dsh-conversation
- * step 3): a session log replays through the SAME mapEvent the live listener
+ * The RELOAD half of the one projection: a session log replays through the SAME mapEvent the live listener
  * uses — verbatim `dsh_event` frames plus the `lore/verdict-ask` mint — so
  * reload and live agree by construction.
  */
@@ -268,4 +267,61 @@ test("a dead attempt's baseline never seats on a LATER open turn", () => {
 
 test('an empty log projects no turns and no tail', () => {
   assert.deepEqual(projectSessionEntries([]), { turns: [], tail_seq: null })
+})
+
+// ─── the replayed transport terminal ──────────────────────────────────────────
+//
+// The browser's ONLY turn terminal is `turn_closed`; the plugin pushes it live
+// (best-effort, unsequenced — turn.ts's followup task), and a socket gap could
+// always lose that push. The replay therefore CARRIES it: for a session with no
+// REGISTERED driver-owned turn (the same liveness the crash closers key on —
+// the handler passes the flag), every CLOSED turn's frames end with a
+// seq-anchored turn_closed at the LORE_SEQ_OFFSETS pattern's fractional offset,
+// above every mint anchored at the same turn/end so the terminal orders last.
+
+test('terminals: every closed turn ends with turn_closed at end_seq + 0.9, after the halt mint', () => {
+  const log = [
+    ev(1, 'turn/start', { turn: 1 }),
+    assistantMessage(2, 'hi'),
+    ev(3, 'turn/end', { turn: 1, reason: { kind: 'aborted' } }),
+    ev(4, 'turn/start', { turn: 2 }),
+    assistantMessage(5, 'again'),
+    ev(6, 'turn/end', { turn: 2, reason: { kind: 'completed' } }),
+  ]
+  const replay = projectSessionEntries(log, undefined, undefined, true)
+  assert.deepEqual(replay.turns[0].frames.map((f) => (f as any).type), [
+    'dsh_event', 'dsh_event', 'dsh_event', 'lore/halt', 'turn_closed',
+  ])
+  assert.equal(replay.turns[0].frames.at(-1)!.seq, 3.9,
+    'above the halt mint (3.7) — the terminal orders after the turn\'s last card')
+  assert.deepEqual(replay.turns[1].frames.map((f) => (f as any).type), [
+    'dsh_event', 'dsh_event', 'dsh_event', 'turn_closed',
+  ])
+  assert.equal(replay.turns[1].frames.at(-1)!.seq, 6.9)
+})
+
+test('terminals: the open turn never carries one', () => {
+  // A turn with no turn/end has no terminal to carry — the running turn
+  // closes live (the plugin's own push), never by replay.
+  const log = [ev(1, 'turn/start', { turn: 1 }), assistantMessage(2, 'mid')]
+  const replay = projectSessionEntries(log, undefined, undefined, true)
+  assert.equal(replay.turns[0].end_seq, undefined)
+  assert.ok(!replay.turns[0].frames.some((f) => (f as any).type === 'turn_closed'))
+})
+
+test('terminals: since_seq at the mint keeps the terminal alone; at the terminal the turn drops', () => {
+  // The lost-push window: the consumer holds everything through the halt mint
+  // (3.7) but the plugin's live push died with the socket — the terminal
+  // (3.9) is the ONE frame the resync must deliver, so it filters like any
+  // frame. Held through the terminal, the closed turn drops whole.
+  const log = [
+    ev(1, 'turn/start', { turn: 1 }),
+    assistantMessage(2, 'hi'),
+    ev(3, 'turn/end', { turn: 1, reason: { kind: 'aborted' } }),
+  ]
+  const atMint = projectSessionEntries(log, 3.7, undefined, true)
+  assert.deepEqual(atMint.turns[0].frames, [{ type: 'turn_closed', seq: 3.9 }])
+  assert.deepEqual(
+    projectSessionEntries(log, 3.9, undefined, true).turns, [],
+    'the consumer holds the turn closed — nothing to replay')
 })

@@ -14,6 +14,7 @@ import logging
 
 import http_clients
 import httpx
+from driver.channel import get_driver_channel
 from driver.client import DriverLine, resolve_driver_line
 from fastapi import HTTPException
 
@@ -194,3 +195,9 @@ async def _driver_set_session_leaf(
         raise HTTPException(status_code=422, detail="branch point not resolvable in driver session")
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail=f"agent driver leaf move failed: {resp.status_code}")
+    # A fork answers its repoint (the fresh dsh id + the dedup anchor) — the
+    # same pair the driver re-acks on the event socket, which a harness
+    # restart can leave down at the fork. See DriverChannel.repoint.
+    reply = resp.json()
+    if reply.get("dsh_session_id"):
+        get_driver_channel().repoint(session_id, reply["dsh_session_id"], reply.get("tail_seq"))

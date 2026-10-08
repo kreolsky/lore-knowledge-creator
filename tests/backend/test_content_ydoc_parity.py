@@ -104,7 +104,7 @@ async def test_document_patch_carries_ydoc_state(client, admin_user, project_wit
 
     row = await _row(test_db, doc_id)
     assert row["content"] == NEW
-    from ydoc_store import derive_content
+    from helpers import derive_content
 
     assert await derive_content(doc_id) == NEW, "ydoc_state still holds the OLD text"
     assert row["ydoc_state"]
@@ -136,7 +136,7 @@ async def test_reference_patch_carries_ydoc_state(client, admin_user, project_wi
 
     row = await _row(test_db, ref_id)
     assert row["content"] == NEW
-    from ydoc_store import derive_content
+    from helpers import derive_content
 
     assert await derive_content(ref_id) == NEW, "ydoc_state still holds the OLD text"
     assert row["ydoc_state"]
@@ -169,7 +169,7 @@ async def test_mcp_markdown_upload_carries_ydoc_state(
     row = await _row(test_db, ref_id)
     assert row["content"] == normalized
     assert row["ydoc_state"], "markdown backfill left ydoc_state NONE"
-    from ydoc_store import derive_content
+    from helpers import derive_content
 
     assert await derive_content(ref_id) == normalized
     assert await _ydoc_updates_count(test_db, ref_id) == 0
@@ -190,7 +190,9 @@ async def test_document_patch_converges_zero_client_session(
     _, token = admin_user
     cookies = {"lore_session": token}
     doc_id = await _make_doc(client, cookies, pid)
-    from ydoc_store import derive_content, set_content
+    from helpers import derive_content
+
+    from ydoc_store import set_content
 
     await set_content(doc_id, OLD, persist=True)
     from collab.registry import _get_or_create_session, get_active_session

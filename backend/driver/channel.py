@@ -256,13 +256,6 @@ class _Subscription:
     turn: _ChannelTurn | None = None
     ack: asyncio.Event = field(default_factory=asyncio.Event)
     listeners: set[asyncio.Queue] = field(default_factory=set)
-    #: A turn closed on this subscription while the plugin's turn_closed
-    #: push had not yet arrived. _close_turn arms it (the push is owed); a
-    #: relayed turn_closed clears it; a NEWER turn opening retires it. The
-    #: resync re-mint consumes it: a turn that ended LIVE before a socket
-    #: gap leaves the browser's terminal undeliverable — the push is
-    #: best-effort and not a log entry, so no replay can carry it.
-    close_owed: bool = False
 
 
 class DriverChannel:
@@ -604,18 +597,26 @@ class DriverChannel:
         connection itself must not die over one session's read.
 
         # WHY: a driver CRASH (SIGKILL mid-turn) is closed by THIS path, not
-        # by the 300s no-progress grace: dsh's cold inspect synthesizes the
-        # interrupted turn's closers (`turn/end reason:'interrupted'` + the
-        # plugin's halt mint) into the replay, so the turn/end arm persists
-        # the halt and releases the lock as soon as the channel reconnects
-        # (measured on gray: 6–11s after the kill, bounded by the container
-        # restart + reconnect backoff). The `[lore-skills] restore failed …
+        # by the 300s no-progress grace: the plugin's log read balances a
+        # non-live session with dsh's interrupted-turn closers, so the
+        # replayed turn/end + halt mint close the turn, persist the halt and
+        # free the lock as soon as the channel reconnects (measured on gray:
+        # 6–11s after the kill). The `[lore-skills] restore failed …
         # not found` line the driver logs on a session's FIRST turn is the
         # skill-activation restore, not a lost session.
+
+        The transport terminal rides the same replay: the plugin appends a
+        seq-anchored turn_closed per closed turn of a NON-live session, so a
+        turn that ended live before the gap (its best-effort push lost) and
+        a turn/end lost mid-gap both reach the browser through _dispatch_
+        frame's terminal arm — no post-replay re-mint exists.
         """
         for sub in list(self._subs.values()):
-            if not sub.anchored or sub.last_seq is None:
+            if not sub.anchored:
                 continue
+            # WHY: last_seq None means nothing of this log was delivered (an
+            # empty log at the anchor, or a root fork's fresh one), so the
+            # gap IS the whole log — since_seq omitted replays it all.
             try:
                 payload = await fetch_session_entries(
                     sub.lore_session_id, line=line, since_seq=sub.last_seq)
@@ -630,22 +631,6 @@ class DriverChannel:
                 for frame in turn.get("frames") or []:
                     if isinstance(frame, dict):
                         await self._dispatch_frame(sub, frame)
-            if sub.close_owed and sub.turn is None and sub.pending_bind is None:
-                # A turn CLOSED without its delivered terminal: either a
-                # REPLAYED frame just ended it (the plugin's push died with
-                # the lost socket) or it had already ended LIVE before the
-                # gap — the browser saw the turn's `done`, but the plugin's
-                # turn_closed push (best-effort, NOT a log entry) never
-                # arrived, and no replay can carry it. Re-mint the transport
-                # terminal — the browser ends a turn ONLY on turn_closed.
-                # pending_bind guard: a followup already accepted for the
-                # NEXT turn must not have its registration closed by the
-                # PREVIOUS turn's re-minted terminal. Emitted AFTER the whole
-                # replay, so the turn's trailing frames — the halt mint —
-                # reach the listener ahead of the terminal (the same ordering
-                # the plugin's own push guarantees live).
-                self._emit(sub, [{"type": "turn_closed"}])
-                sub.close_owed = False
 
     async def _send_new_subscribes(self, sock) -> None:
         """Subscriptions registered while connected: send their subscribe
@@ -671,12 +656,7 @@ class DriverChannel:
         sub = self._subs.get(session_id)
         if sub is None:
             return  # unsubscribed while the ack was in flight
-        dsh_id = msg.get("dsh_session_id")
-        if sub.dsh_session_id and sub.dsh_session_id in self._dsh_index:
-            self._dsh_index.pop(sub.dsh_session_id, None)
-        sub.dsh_session_id = str(dsh_id) if dsh_id else None
-        if sub.dsh_session_id:
-            self._dsh_index[sub.dsh_session_id] = sub
+        self._rekey(sub, msg.get("dsh_session_id"))
         # WHY(fork re-anchor): a REPOINT re-ack carries `tail_seq` — the
         # forked session's log tail (null on a root fork); a plain subscribe
         # ack never does. The fork's seed RETAINS the parent prefix seqs, so
@@ -686,14 +666,38 @@ class DriverChannel:
         # as "already delivered" while the driver completes it happily (the
         # driver repoints the subscription; this arm follows it).
         if "tail_seq" in msg:
-            tail = msg.get("tail_seq")
-            sub.last_seq = (
-                float(tail)
-                if isinstance(tail, (int, float)) and not isinstance(tail, bool)
-                else None
-            )
+            _reanchor(sub, msg.get("tail_seq"))
         sub.subscribed = True
         sub.ack.set()
+
+    def repoint(
+        self, lore_session_id: str, dsh_session_id: str, tail_seq: object,
+    ) -> None:
+        """Apply a fork's repoint from the driver's /session-leaf ANSWER —
+        the same re-key + re-anchor the re-ack applies (_handle_subscribed).
+        A session not subscribed yet is left alone: its later subscribe
+        anchors at the forked log's tail by itself.
+
+        # INVARIANT(data-loss): a fork re-anchors the subscription even when no socket
+        # carried the re-ack.
+        # Why: the driver re-acks only on a socket that is up at the fork; a
+        # harness restart leaves the channel reconnecting for seconds, and a
+        # turn forked in that window kept the OLD log's anchor — the
+        # reconnect's resync then dropped the whole forked turn as already
+        # delivered and its row stayed empty forever.
+        """
+        sub = self._subs.get(lore_session_id)
+        if sub is None:
+            return
+        self._rekey(sub, dsh_session_id)
+        _reanchor(sub, tail_seq)
+
+    def _rekey(self, sub: _Subscription, dsh_id: object) -> None:
+        if sub.dsh_session_id and sub.dsh_session_id in self._dsh_index:
+            self._dsh_index.pop(sub.dsh_session_id, None)
+        sub.dsh_session_id = str(dsh_id) if dsh_id else None
+        if sub.dsh_session_id:
+            self._dsh_index[sub.dsh_session_id] = sub
 
     async def _route(self, raw: str) -> None:
         msg = _loads(raw)
@@ -727,14 +731,17 @@ class DriverChannel:
         logger.warning("driver channel: unknown control frame dropped: %r", msg)
 
     async def _dispatch_frame(self, sub: _Subscription, frame: dict) -> None:
-        """One frame into the session's dispatch: dedup, open the turn on the
-        followup's first frame, then progress, holds, the relay arms, the
-        terminal close."""
+        """One frame into the session's dispatch: dedup, the replayed
+        transport terminal, open the turn on the followup's first frame,
+        then progress, holds, the relay arms, the terminal close."""
         seq = frame.get("seq")
         if isinstance(seq, (int, float)) and not isinstance(seq, bool):
             if sub.last_seq is not None and seq <= sub.last_seq:
                 return  # replay/live overlap — already delivered
             sub.last_seq = seq
+            if frame.get("type") == "turn_closed":
+                self._dispatch_replayed_terminal(sub)
+                return
         if sub.turn is None:
             etype = frame.get("type")
             if sub.pending_bind is not None and (
@@ -768,15 +775,33 @@ class DriverChannel:
         if turn.projection.finished:
             await self._close_turn(sub)
 
+    def _dispatch_replayed_terminal(self, sub: _Subscription) -> None:
+        """The REPLAYED transport terminal — the plugin appends it
+        seq-anchored after its turn's end for a non-live session; the LIVE
+        push carries no seq and takes the raw outside-turn relay. The
+        browser's ONLY terminal, delivered during the replay: a gap spanning
+        several closed turns delivers several — a browser that already ended
+        the turn drops them at its own door (no registration), and a
+        duplicate after a DELIVERED live push is the one shape the
+        unsequenced push cannot dedup — accepted, for that same browser-side
+        drop to cover.
+
+        GUARD (moved here from the deleted post-replay re-mint emit): a turn
+        still open, or a followup already bound for the NEXT turn, means this
+        terminal names an OLDER turn — emitting it would close the newer
+        turn's browser registration (the follow-up renders nothing), so it is
+        a no-op. The seq already advanced last_seq: the channel has consumed
+        this terminal either way."""
+        if sub.turn is None and sub.pending_bind is None:
+            self._emit(sub, [{"type": "turn_closed"}])
+
     async def _dispatch_outside_turn(self, sub: _Subscription, frame: dict) -> None:
-        """A frame no open turn claims: relayed raw, except the two kinds that
-        still settle state — the plugin's terminal push and a title revision."""
-        if frame.get("type") == "turn_closed":
-            # The plugin's own terminal push, delivered — the owed close
-            # (armed by _close_turn) is settled; a later resync must not
-            # re-mint it.
-            sub.close_owed = False
-        elif frame.get("type") == "dsh_event" and frame.get("kind") == "session/title":
+        """A frame no open turn claims: relayed raw, except the one kind that
+        still settles state — a title revision. The plugin's LIVE
+        turn_closed push (unsequenced) is one of these raw frames: the
+        replayed twin (sequenced) never gets here — the dispatch arm above
+        owns it, guards and all."""
+        if frame.get("type") == "dsh_event" and frame.get("kind") == "session/title":
             # WHY: the titler runs beside the turn — a short answer closes the
             # turn before a slow (reasoning) title model answers, and the LLM
             # title then arrives after turn/end; relayed raw, it never reached
@@ -788,10 +813,6 @@ class DriverChannel:
 
     async def _open_turn(self, sub: _Subscription) -> _ChannelTurn:
         bind, sub.pending_bind = sub.pending_bind, None
-        # A NEWER turn claimed its first frame: an older turn's owed terminal
-        # is moot (its browser registration is gone or superseded), and a
-        # later resync re-minting it could close THIS turn's registration.
-        sub.close_owed = False
         # The turn budgets resolve per turn through instance settings, so an
         # admin override reaches the next turn.
         budgets = await settings.get_all(["TURN_MAX_WALL_S", "TURN_HOLD_MAX_S"])
@@ -826,21 +847,18 @@ class DriverChannel:
         ENDED (graceful finalize + context stamp, telemetry on an errored
         turn; abnormal persists already ran inside the arms).
 
-        # ARCH: this emits NO turn_closed of its own — the turn
-        # was closed by a LIVE terminal frame, and the plugin's followup task
-        # pushes turn_closed after every mapped frame of that same event (the
-        # halt mint included). An emit here would race AHEAD of that mint and
-        # make the browser drop the card. The resync re-mint covers the pushes
-        # that are gone: a turn/end lost mid-gap (replayed close) AND a turn
-        # that ended live before the gap (the owed-close flag) — see
-        # _resync_all."""
+        # ARCH: this emits NO turn_closed of its own — the turn was closed by
+        # a LIVE terminal frame, and the plugin's followup task pushes
+        # turn_closed after every mapped frame of that same event (the halt
+        # mint included). An emit here would race AHEAD of that mint and make
+        # the browser drop the card. The gap cover is the REPLAY's: the
+        # plugin appends a seq-anchored terminal to every closed turn of a
+        # non-live session, so a resync delivers what the best-effort push
+        # lost (a turn that ended live before the gap, or a turn/end lost
+        # mid-gap) — see _dispatch_frame's terminal arm."""
         turn, sub.turn = sub.turn, None
         if turn is None:
             return
-        # The plugin's turn_closed push is now owed (see _Subscription.
-        # close_owed) — a delivered push clears it; a socket gap before it
-        # arrives leaves the resync re-mint as the browser's only terminal.
-        sub.close_owed = True
         projection = turn.projection
         if projection.finalize_pending:
             try:
@@ -994,6 +1012,15 @@ class DriverChannel:
                 continue
             for frame in frames:
                 queue.put_nowait(frame)
+
+
+def _reanchor(sub: _Subscription, tail: object) -> None:
+    """Move the dedup anchor to a fork's boundary (None = an empty log)."""
+    sub.last_seq = (
+        float(tail)
+        if isinstance(tail, (int, float)) and not isinstance(tail, bool)
+        else None
+    )
 
 
 def _loads(raw: str) -> object:

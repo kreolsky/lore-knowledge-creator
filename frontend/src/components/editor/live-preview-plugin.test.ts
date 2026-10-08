@@ -1,7 +1,7 @@
 /** Unit tests for live-preview-plugin — CM6 decorations in jsdom. */
 
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EditorState, type Extension, type StateField } from '@codemirror/state';
 import { Decoration, EditorView, type DecorationSet } from '@codemirror/view';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
@@ -10,6 +10,13 @@ import { livePreviewField, listLinePlugin, cursorLinePlugin, tableRenderField, m
 import { resolveTransclusion } from './live-preview';
 import { TransclusionWidget } from './live-preview/widgets';
 import { LIST_STEP, LIST_GUTTER, BASE_PADDING } from './live-preview/list-indent';
+
+// WHY mock mermaid: these tests assert the widget, not the diagram. A real
+// render starts mermaid's lazy import and nothing awaits it, so the file can end
+// with the import still in flight ("Vite module runner has been closed").
+vi.mock('mermaid', () => ({
+  default: { initialize: vi.fn(), render: vi.fn(async () => ({ svg: '<svg></svg>' })) },
+}));
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

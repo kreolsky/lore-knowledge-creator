@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from agent_config_seed import _REQUIRED_ROLES, help_doc_id
 
-from db import get_db
+from db import get_db, record_refs
 
 
 def _walk_subtree(
@@ -49,13 +49,10 @@ async def _fetch_content(db, ids: list[str]) -> dict[str, str]:
     so doc ids never reach query text. Returns {id: content}."""
     if not ids:
         return {}
-    in_clause = ",".join(
-        f"type::record('documents', $i{n})" for n in range(len(ids))
-    )
-    params = {f"i{n}": i for n, i in enumerate(ids)}
+    refs, params = record_refs("documents", ids)
     rows = await db.query(
         f"SELECT meta::id(id) AS id, content FROM documents "
-        f"WHERE id IN [{in_clause}] AND deleted_at IS NONE",
+        f"WHERE id IN [{refs}] AND deleted_at IS NONE",
         params,
     )
     return {r["id"]: (r.get("content") or "") for r in (rows or [])}

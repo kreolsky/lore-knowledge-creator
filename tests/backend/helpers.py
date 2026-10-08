@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -346,3 +347,88 @@ def pinned_tool_gates(
         for name, value in pins:
             stack.enter_context(patch.object(config, name, value))
         yield
+
+
+# ─── Round-trip oracles ──────────────────────────────────────────────────────
+# `parse_gfm_table` / `read_table_grid` / `derive_content` had no production
+# caller: the GFM→model parse direction
+# lives on the frontend (gfm-table-import.ts), production serializes only, and
+# content derivation happens inside the write paths. They stay as ORACLES —
+# tests read production-written state back through them to pin round-trips.
+
+
+_CELL_SPLIT = re.compile(r"(?<!\\)\|")
+
+
+def _unescape_cell(wire: str) -> str:
+    """Reverse `_escape_cell`: `<br>` → newline, `\\|` → literal pipe.
+
+    Matches the frontend ``gfm-table-import.ts`` unescape: any ``<br>``/``<br/>``/``<br />``,
+    case-insensitive (GFM-spec lenient), so the two parsers agree byte-for-byte.
+    """
+    return re.sub(r"<br\s*/?>", "\n", wire, flags=re.IGNORECASE).replace("\\|", "|")
+
+
+def _is_separator(line: str) -> bool:
+    """True for a GFM header-separator row (`| --- | :--: | …`)."""
+    stripped = line.strip()
+    if not stripped.startswith("|"):
+        return False
+    cells = [c.strip() for c in _CELL_SPLIT.split(stripped[1:-1])]
+    # Require >=1 NON-EMPTY dash cell. Why: ``all([])`` is True, so without this an all-empty
+    # data row (``|   |   |``) is misclassified as the separator and silently dropped on import.
+    non_empty = [c for c in cells if c != ""]
+    return bool(non_empty) and all(re.fullmatch(r":?-+:?", c) for c in non_empty)
+
+
+def _parse_row(line: str) -> list[str]:
+    inner = line.strip()[1:-1]  # drop leading/trailing pipe
+    out: list[str] = []
+    for seg in _CELL_SPLIT.split(inner):
+        # Strip exactly the one padding space added on each side by serialize_table.
+        if seg.startswith(" "):
+            seg = seg[1:]
+        if seg.endswith(" "):
+            seg = seg[:-1]
+        out.append(_unescape_cell(seg))
+    return out
+
+
+def parse_gfm_table(md: str) -> list[list[str]]:
+    """Test oracle: parse a GFM table string into the cell-body model (the inverse
+    of `serialize_table`). The separator row is dropped; every other non-empty
+    `|`-delimited line is a data row. `<br>` → newline; `\\|` → literal pipe.
+    """
+    rows: list[list[str]] = []
+    for line in md.splitlines():
+        if not line.strip().startswith("|"):
+            continue
+        if _is_separator(line):
+            continue
+        rows.append(_parse_row(line))
+    return rows
+
+
+def read_table_grid(doc, table_id: str) -> dict | None:
+    """Test oracle: read one table as `{columns, rows}` (widths + flat cell-body
+    matrix), ``None`` when the table id is absent. Reads through the SAME
+    primitive as `capture_tables_json` (`_table_columns_and_rows`), so the
+    oracle and the checkpoint capture cannot drift on shape.
+    """
+    from pycrdt import Map
+
+    from table_serialize import _table_columns_and_rows
+
+    tables = doc.get("tables", type=Map)
+    if tables is None or table_id not in tables:
+        return None
+    widths, rows = _table_columns_and_rows(tables[table_id])
+    return {"columns": widths, "rows": rows}
+
+
+async def derive_content(entity_id: str) -> str:
+    """Test oracle: plaintext content from the CRDT state (table anchors → GFM)."""
+    from ydoc_store import expand_tables, load
+
+    doc = await load(entity_id)
+    return expand_tables(doc)

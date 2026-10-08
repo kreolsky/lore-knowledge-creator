@@ -330,8 +330,9 @@ function createTurnSink(
 // sink, the same assembler, the same handlers. streamCompletion
 // for a harness session resolves only when the turn ENDS: the terminal frame
 // (`turn_closed` — the ONLY terminal; the plugin pushes it after the turn's
-// last mapped frame, the channel re-mints it on resync/deadline, the
-// setup-failure tail carries it after `error`) settles it, so
+// last mapped frame, the replay carries it for a session with no registered
+// turn, the channel mints it on a deadline breach, the setup-failure tail
+// carries it after `error`) settles it, so
 // runCompletion's catch/finally see the turn's lifecycle end (the
 // transport terminal), not the POST's return. `done` is a CONTENT frame — the
 // backend's text fold for the row, minted before finalize + lock release;
@@ -434,8 +435,12 @@ export function adoptOpenTurn(
 
 /** The frame type that ENDS a turn on the WS transport: `turn_closed` —
  * pushed by the plugin after the turn's last mapped frame (graceful and
- * errored ends), re-minted by the channel on a resync replay and a deadline
- * breach, and emitted as the setup-failure tail (error + turn_closed).
+ * errored ends), carried by the replay for a session with no registered
+ * driver-owned turn (a resync gap re-delivers it — a duplicate after a
+ * delivered live push reaches a registration that no longer exists and
+ * drops, see streaming.turn-terminal.test.ts), minted by the channel on a
+ * deadline breach, and emitted as the setup-failure tail (error +
+ * turn_closed).
  * `done` is NOT in the set: it is a content frame — the backend's text fold
  * for the row.
  * INVARIANT: on a GRACEFUL end `turn_closed` is the frame that follows the

@@ -11,31 +11,26 @@ from db import (
     DOC_TRANSCLUSION_COLUMNS,
     extract_id,
     get_db,
+    record_refs,
     serialize_record,
-    validate_record_id,
 )
 
 
-def _bind_batch_ids(ids: list[str]) -> tuple[dict[str, str], list[str]]:
-    """Param-bound per-id record refs.
+def _bind_batch_ids(ids: list[str]) -> tuple[dict[str, str], str]:
+    """Param-bound per-id record refs via db.record_refs.
 
     A bare `id IN $ids` with string ids matches nothing (the id column is a
-    record ref). validate_record_id guards against malformed/table-injection
-    ids before binding.
+    record ref). A malformed id fails validate_record_id inside record_refs
+    and maps to the 400 here.
     """
-    params: dict[str, str] = {}
-    refs: list[str] = []
-    for i, raw in enumerate(ids):
-        try:
-            validate_record_id(raw)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid document id")
-        params[f"id{i}"] = raw
-        refs.append(f"type::record('documents', $id{i})")
+    try:
+        refs, params = record_refs("documents", ids)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid document id")
     return params, refs
 
 
-async def _collect_batch_rows(params: dict[str, str], refs: list[str]) -> dict[str, dict]:
+async def _collect_batch_rows(params: dict[str, str], refs: str) -> dict[str, dict]:
     """Projected SELECT over the batch, keyed by record id.
 
     INVARIANT(schema-sync): this projected column list (DOC_TRANSCLUSION_COLUMNS) is
@@ -49,7 +44,7 @@ async def _collect_batch_rows(params: dict[str, str], refs: list[str]) -> dict[s
     db = await get_db()
     rows = await db.query(
         f"SELECT {', '.join(DOC_TRANSCLUSION_COLUMNS)} "
-        f"FROM documents WHERE id IN [{', '.join(refs)}] AND deleted_at IS NONE",
+        f"FROM documents WHERE id IN [{refs}] AND deleted_at IS NONE",
         params,
     )
     by_id: dict[str, dict] = {}
