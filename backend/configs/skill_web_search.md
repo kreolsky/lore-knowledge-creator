@@ -1,8 +1,9 @@
 ---
 name: web-search
-description: Use when the user asks to search the web, look something up online, research a topic, or read, summarize or quote a web page — including one whose link they pasted. Search returns snippets; full text is fetched in the sandbox console with curl. Activates web_search and sandbox_bash.
+description: Use when the user asks to search the web, look something up online, research a topic, or read, summarize or quote a web page — including one whose link they pasted. Search returns snippets; a page's full text comes from web_fetch (PDF through the sandbox console). Activates web_search, web_fetch and sandbox_bash.
 tools:
   - web_search
+  - web_fetch
   - sandbox_bash
 ---
 
@@ -17,35 +18,31 @@ the provider has one. A note "Showing the first N sources" means the list was cu
 When the link is already in front of you — the user pasted it, a document
 carries it, an earlier result returned it — searching for it is the wrong
 move: the search engine cannot give you the page, and its snippet is not what
-the user asked you to read. Go straight to the console:
+the user asked you to read. Read it with `web_fetch`, which returns the page
+as text, then answer from what came back. `web_search` is for finding a URL
+you do not have; `web_fetch` is for reading one you do. A summary of a link is
+always the second of those.
 
-    curl -sL '<url>' -o page.html
-
-Then extract and answer from what came back. `web_search` is for finding a
-URL you do not have; the sandbox is for reading one you do. A summary of a
-link is always the second of those.
-
-Check your tool list first, because this deploy may serve no console. If
-`sandbox_bash` is not among your tools, you cannot fetch the page: say so
-plainly ("I can't open that link — this deploy has no sandbox console"),
-and offer what you can still do — answer from what the user pastes in, or
-from search snippets about that page, labelled as snippets. Do NOT search
-for the link's topic and present the result as a summary of the page.
-
-## Full text of a page — the sandbox console
+## Full text of a page
 
 `web_search` returns snippets. When the task needs the whole page — an
-article, documentation, a thread — this skill also activates
-`sandbox_bash`: fetch the URL there and read it locally, exactly as above.
+article, documentation, a thread — call `web_fetch` on its URL. The citation
+habit does not change: the claim carries its source ("per <url>").
 
-Extract what you need in the console (it has Python — strip tags there,
-do not dump raw HTML into your context). The citation habit does not
-change: the claim carries its source ("per <url>").
+`web_fetch` does not read PDF and refuses some content types. For those, this
+skill also activates `sandbox_bash`: fetch the file in the console
+
+    curl -sL '<url>' -o doc.pdf
+
+and extract the text there in Python (`pip install pypdf` when no PDF
+library is installed) — never dump a raw file into your context. If
+`sandbox_bash` is not among your tools, this deploy serves no console: say
+plainly that the file could not be read.
 
 A page that will not come — JS-only rendering, a paywall, a 403 — is an
-answer to report, not to work around; say so instead of answering from
-the snippet. If this deploy serves no console, `sandbox_bash` will not
-appear among your tools — report that too and work from the snippet.
+answer to report, not to work around; say so instead of answering from the
+snippet, and never search for the link's topic and present the result as a
+summary of the page.
 
 ## Order of sources — the internet is the LAST one
 

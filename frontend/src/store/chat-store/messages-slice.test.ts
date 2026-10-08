@@ -18,6 +18,7 @@ vi.mock('./streaming', () => ({
   }),
   adoptOpenTurn: vi.fn(),
   hasOpenHarnessTurn: vi.fn(() => false),
+  markHarnessTurnAborted: vi.fn(),
 }));
 // Mutable app-store state so individual tests can set the open document
 // (currentReference / currentDocument) that runCompletion reads at send time.
@@ -164,7 +165,7 @@ describe('stopGeneration — cancel POST feedback', () => {
     const controller = { abort: vi.fn() } as unknown as AbortController;
     const store = buildStore([sess('active', null, '2026-01-01T00:00:00Z')], 'active');
     store.setState({
-      streaming: { messageId: 'm1', content: '', controller },
+      streaming: { sessionId: 'active', messageId: 'm1', content: '', controller },
     } as unknown as Partial<ChatState>);
     const toast = vi.fn();
     appStoreState.showToast = toast;
@@ -267,7 +268,7 @@ describe('rewindTo / cancelRewind — REWIND_KEY sentinel', () => {
 
   it('rewindTo while streaming changes nothing', () => {
     const store = rewindStore();
-    store.setState({ streaming: { messageId: 'live', content: '', controller: null } } as unknown as Partial<ChatState>);
+    store.setState({ streaming: { sessionId: 'active', messageId: 'live', content: '', controller: null } } as unknown as Partial<ChatState>);
     store.getState().rewindTo('b');
     expect(store.getState().selectedSiblings).toEqual({});
   });
@@ -345,7 +346,7 @@ describe('sendMessage — mid-turn send routes to the message queue', () => {
       messages: [],
       selectedSiblings: {},
       queued: {},
-      streaming: { messageId: 'm1', content: '', controller: null },
+      streaming: { sessionId: 'active', messageId: 'm1', content: '', controller: null },
     } as unknown as ChatState));
   }
 

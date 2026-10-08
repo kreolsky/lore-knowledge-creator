@@ -5,6 +5,7 @@ import logging
 from collections import deque
 from uuid import uuid4
 
+import turn_lock
 from chat_sessions.note_events import broadcast_doc_id, fire_note_emit
 from fastapi import Depends, HTTPException, Query
 from surrealdb import AsyncSurreal
@@ -268,8 +269,14 @@ def _assign_frames_by_stamp(
             ]
 
 
+def _log_shows_open_turn(turns: list[dict]) -> bool:
+    """Whether the projection's trailing turn is still open (no `end_seq`)."""
+    return bool(turns) and isinstance(turns[-1], dict) and turns[-1].get("end_seq") is None
+
+
 def _mark_open_turn(
     assistants: list[dict], turns: list[dict], chain: set[str] | None,
+    *, lock_held: bool,
 ) -> None:
     """Attach the OPEN turn (the projection's trailing turn with no `end_seq`)
     to the row that turn is writing, flagged
@@ -289,10 +296,10 @@ def _mark_open_turn(
     # card the open frames would render TWO records for one turn; the halt
     # column is the splitter, mirroring entries.ts's emitting branch.
     """
-    if not turns or not isinstance(turns[-1], dict):
+    if not _log_shows_open_turn(turns):
+        if lock_held:
+            _mark_lock_held_turn(assistants, chain)
         return
-    if turns[-1].get("end_seq") is not None:
-        return  # every turn ended — nothing is open
     open_frames = [
         f for f in turns[-1].get("frames") or [] if isinstance(f, dict)
     ]
@@ -316,6 +323,28 @@ def _mark_open_turn(
         newest["assistant_stream"] = baseline
 
 
+def _mark_lock_held_turn(assistants: list[dict], chain: set[str] | None) -> None:
+    """Mark the running turn the log cannot show yet: the NEWEST assistant row,
+    only if it is the open turn's shape (unstamped, no halt, no frames, on the
+    active line). No frames and no `assistant_stream` — nothing streamed is
+    logged yet."""
+    newest = max(assistants, key=lambda r: r.get("created_at") or "")
+    # INVARIANT(corruption): a held turn lock marks the open turn even when the
+    # driver log shows none. Why: between create_completion taking the lock and
+    # dsh logging `turn/start`, the timeline cannot show the turn, and an
+    # unmarked reload makes the browser close a live turn as 'lost'. The newest
+    # row only — an older abnormally-ended unstamped row is never marked; a
+    # `halt` row never is (the halt INVARIANT above keeps priority).
+    if (
+        newest.get("halt") is None
+        and newest.get("driver_seq") is None
+        and newest.get("frames") is None
+        and (chain is None or _row_mid(newest) in chain)
+    ):
+        newest["frames"] = []
+        newest["open_turn"] = True
+
+
 async def _fetch_session_turns(session: dict, session_id: str) -> dict:
     """The driver's replayed session for this thread's log — the plugin's
     ReplayedSession `{turns, tail_seq}`.
@@ -326,6 +355,9 @@ async def _fetch_session_turns(session: dict, session_id: str) -> dict:
     turn list for an id the driver has never seen, and the rows never get
     frames. The returned id is also the mint identity the reload lore mints
     key on (the compaction window's source side).
+
+    `lock_held` is read on the CHAT id, not the lineage: create_completion
+    takes the turn lock on the chat id.
     """
     from driver.timeline import DriverTimelineUnavailable, fetch_session_entries
     lineage = session.get("compacted_from") or session_id
@@ -339,7 +371,8 @@ async def _fetch_session_turns(session: dict, session_id: str) -> dict:
         raise HTTPException(
             status_code=502, detail="The agent timeline could not be read",
         ) from exc
-    return {"lineage": lineage, **(replay or {})}
+    lock_held = await turn_lock.turn_lock_held(session_id)
+    return {"lineage": lineage, **(replay or {}), "lock_held": lock_held}
 
 
 async def _lineage_rows(db, session_id: str) -> list[dict]:
@@ -386,21 +419,21 @@ async def _attach_timeline(
     replay = await _fetch_session_turns(session, session_id)
     turns = replay.get("turns") or []
     tail_seq = replay.get("tail_seq")
+    lock_held = replay["lock_held"]
     if not turns and tail_seq is None:
-        # Nothing the driver ever logged: a thread whose turns predate the
-        # harness (or whose line is gone). The rows carry no timeline and no
-        # mintable fact.
+        # Nothing the driver ever logged (a pre-harness thread, or a first turn
+        # dsh has not logged yet — the held lock marks that one); no chain.
+        _mark_open_turn(assistants, turns, None, lock_held=lock_held)
         return
     all_rows = await _lineage_rows(db, session_id)
     _assign_frames_by_stamp(assistants, turns, all_rows)
+    chain = _active_stamp_chain(all_rows, turns)
     # The open turn: AFTER the stamp pass — its row is by definition
     # unstamped, so the two never contend for one row.
-    _mark_open_turn(assistants, turns, _active_stamp_chain(all_rows, turns))
+    _mark_open_turn(assistants, turns, chain, lock_held=lock_held)
     from driver.frames import attach_reload_lore_mints
     await attach_reload_lore_mints(
-        assistants,
-        chain=_active_stamp_chain(all_rows, turns),
-        tail_seq=tail_seq,
+        assistants, chain=chain, tail_seq=tail_seq,
         session_id=replay.get("lineage") or session_id,
     )
 

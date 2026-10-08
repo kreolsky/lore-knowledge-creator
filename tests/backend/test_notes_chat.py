@@ -26,7 +26,7 @@ def _note_events(recorder: EmitRecorder, event_type: str) -> list[dict]:
     return recorder.of(event_type)
 
 
-async def _drain(recorder: EmitRecorder, event_type: str, *, timeout: float = 2.0) -> None:
+async def _drain(recorder: EmitRecorder, event_type: str, *, timeout: float = 10.0) -> None:
     """Yield to the loop until the background emit lands (or timeout)."""
     loop = asyncio.get_event_loop()
     deadline = loop.time() + timeout

@@ -35,23 +35,29 @@ export function ReferenceMediaBar({ reference, canEdit }: Props) {
   if (reference.media_type === 'image') {
     return (
       <div className="flex justify-center px-4">
-        {/* relative group — the actions plate is positioned over the picture and
-            shows on hover / focus-within, and always on devices without hover
-            (touch) so a tap never arms an invisible delete; bg-surface plate so the
-            icons read over any picture. No rounded corners (project rule).
+        {/* relative group — the actions plate sits over the picture's top-right
+            corner and shows on hover / focus-within, and always on devices without
+            hover (touch) so a tap never arms an invisible delete; bg-surface plate so
+            the icons read over any picture. No rounded corners (project rule).
             WHY: the width cap sits on the wrapper, not the <img> — a percentage
             cap on the img resolves against a wrapper sized BY the img, so a
             large file stretched the wrapper to the full row: the picture went
-            left and the plate floated past its right edge. */}
-        <div className="relative group max-w-[clamp(720px,100%,864px)]">
+            left and the plate floated past its right edge.
+            WHY: the plate rides a zero-height sticky row (not absolute) so it stays
+            pinned to the viewport's top while a tall picture scrolls under it, and
+            stops at the picture's bottom; overflow-clip (not hidden — hidden would
+            make the wrapper the sticky scroller) keeps it from spilling past. */}
+        <div className="relative group overflow-clip max-w-[clamp(720px,100%,864px)]">
+          <div className="sticky top-0 z-10 h-0 flex items-start justify-end">
+            <div className="mt-2 mr-2 flex items-center gap-1 p-1 bg-surface opacity-0 group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
+              <MediaFileActions reference={reference} canEdit={canEdit} size="md" />
+            </div>
+          </div>
           <img
             src={fileUrl}
             alt={reference.title}
             className="block object-contain max-w-full"
           />
-          <div className="absolute top-2 right-2 flex items-center gap-1 p-1 bg-surface border border-border opacity-0 group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
-            <MediaFileActions reference={reference} canEdit={canEdit} />
-          </div>
         </div>
       </div>
     );

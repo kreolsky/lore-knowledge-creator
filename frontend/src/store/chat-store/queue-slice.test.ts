@@ -77,6 +77,8 @@ vi.mock('../../i18n', () => ({ t: (k: string) => k }));
 import { useChatStore } from '../chat-store';
 import { dispatchChatFrame, adoptOpenTurn } from './streaming';
 import { clearChatCaches } from './reset-registry';
+import { scheduleTurnEndFlush, drainQueuedOnLoad } from './queue-slice';
+import type { ChatState } from './types';
 import { apiClient, HttpError } from '../../api/client';
 import { useAppStore } from '../app-store';
 import type { ChatMessage, ChatSession } from '../../types';
@@ -119,6 +121,11 @@ function openTurn(sid = 'A'): Promise<void> {
   return p;
 }
 
+// Captured before any test stubs it: 'flush is session-owned' replaces
+// loadMessages with a vi.fn on the module-level store — without this restore
+// the stub leaks into every later test (setActiveSession then no-ops its load).
+const realLoadMessages = useChatStore.getState().loadMessages;
+
 beforeEach(() => {
   clearChatCaches();
   post.mockReset();
@@ -132,6 +139,7 @@ beforeEach(() => {
     streaming: null,
     queued: {},
     draft: '',
+    loadMessages: realLoadMessages,
   });
 });
 
@@ -157,6 +165,20 @@ describe('sendMessage — routes to the queue while streaming', () => {
     useChatStore.getState().clearQueued('A');
     frame(TURN_CLOSED);
     await p;
+  });
+
+  it('a send with the chat registered but the slot null (the return window) still enqueues', async () => {
+    const p = openTurn();
+    // The return window: the slot is gone (setActiveSession cleared it) while
+    // the registration stands until the reload re-adopts — a POST here would
+    // hit the chat's own turn lock (409).
+    useChatStore.setState({ streaming: null });
+    await useChatStore.getState().sendMessage('window send');
+    expect(completionPosts()).toHaveLength(1);
+    expect(useChatStore.getState().queued['A']).toEqual(['window send']);
+    frame(TURN_CLOSED);
+    await p;
+    useChatStore.getState().clearQueued('A');
   });
 });
 
@@ -342,6 +364,57 @@ describe('flush is session-owned', () => {
     expect(useChatStore.getState().queued['A']).toBeUndefined();
     expect(showToast()).toHaveBeenCalledWith('chatQueueDropped', 'info');
     expect(completionPosts()).toHaveLength(0);
+  });
+});
+
+describe('a refused flush drains on the next load of its chat', () => {
+  it('chips of A left while B streams fire when A is opened with no open turn', async () => {
+    useChatStore.setState({ sessions: [sess('A'), sess('B')] });
+    // A streams; a chip queues in A.
+    const pA = openTurn('A');
+    await useChatStore.getState().sendMessage('late follow-up');
+    // The user switches to B (slot dropped) and B runs its own turn.
+    useChatStore.setState({ activeSessionId: 'B', streaming: null });
+    const pB = useChatStore.getState().sendMessage('b kickoff');
+    frame({ type: 'ids', user_message_id: 'umB', assistant_message_id: 'amB' }, 'B');
+
+    // A's turn ends clean while B is shown: the flush is refused (the shown
+    // chat has an open turn) — the chips stay as chips.
+    frame(TURN_CLOSED, 'A');
+    await pA;
+    await tick();
+    expect(useChatStore.getState().queued['A']).toEqual(['late follow-up']);
+    expect(completionPosts()).toHaveLength(2);
+
+    // Opening A loads its rows (no open turn) — the chips fire there.
+    (apiClient.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { message_id: 'am', chat_id: 'A', parent_id: 'um', role: 'assistant', content: 'answer', created_at: 't' },
+    ]);
+    useChatStore.getState().setActiveSession('A');
+    await vi.waitFor(() => { if (completionPosts().length < 3) throw new Error('drain not fired'); });
+    expect(lastUserContent()).toBe('late follow-up');
+    expect(useChatStore.getState().queued['A']).toBeUndefined();
+
+    frame(TURN_CLOSED, 'A');
+    frame(TURN_CLOSED, 'B');
+    await pB;
+  });
+});
+
+describe('a chat reset forgets how turns ended', () => {
+  it('a clean end recorded before the reset never fires chips after it', async () => {
+    const flushQueued = vi.fn(async () => {});
+    let state = { queued: {} as Record<string, string[]>, flushQueued, restoreQueued: vi.fn() };
+    const get = () => state as unknown as ChatState;
+    // A clean end of A is recorded (no chips at that moment).
+    scheduleTurnEndFlush(get, 'A', 'done');
+    // Logout / project switch: every module cache is cleared.
+    clearChatCaches();
+    // Chips of A exist on the next load (a new session of the same tab).
+    state = { ...state, queued: { A: ['stale'] } };
+    drainQueuedOnLoad(get, 'A');
+    await tick();
+    expect(flushQueued).not.toHaveBeenCalled();
   });
 });
 

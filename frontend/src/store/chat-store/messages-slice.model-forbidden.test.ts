@@ -14,6 +14,7 @@ vi.mock('./streaming', () => ({
   emptyStreaming: () => ({ messageId: null, content: '', controller: null }),
   adoptOpenTurn: vi.fn(),
   hasOpenHarnessTurn: vi.fn(() => false),
+  markHarnessTurnAborted: vi.fn(),
 }));
 const showToast = vi.fn();
 vi.mock('../app-store', () => ({

@@ -734,6 +734,8 @@ class DriverChannel:
         """One frame into the session's dispatch: dedup, the replayed
         transport terminal, open the turn on the followup's first frame,
         then progress, holds, the relay arms, the terminal close."""
+        if _consumed_as_child_activity(sub, frame):
+            return
         seq = frame.get("seq")
         if isinstance(seq, (int, float)) and not isinstance(seq, bool):
             if sub.last_seq is not None and seq <= sub.last_seq:
@@ -1012,6 +1014,23 @@ class DriverChannel:
                 continue
             for frame in frames:
                 queue.put_nowait(frame)
+
+
+def _consumed_as_child_activity(sub: _Subscription, frame: dict) -> bool:
+    """A descendant (subagent) session's heartbeat — the plugin's
+    `lore/child-activity`, addressed to the driving session: re-arms the open
+    turn's silence budget, so a parent waiting on a working child is not
+    killed at the grace while a hung child still is. True = consumed."""
+    if frame.get("type") != "lore/child-activity":
+        return False
+    # INVARIANT: the heartbeat only re-arms an open turn's deadline — it is
+    # never relayed and never opens a turn.
+    # Why: relayed, it would enter the browser's assembler as an unknown frame;
+    # opening a turn, it would bind the followup to a child's activity instead
+    # of the driving session's own turn/start.
+    if sub.turn is not None:
+        sub.turn.deadline.note_progress()
+    return True
 
 
 def _reanchor(sub: _Subscription, tail: object) -> None:

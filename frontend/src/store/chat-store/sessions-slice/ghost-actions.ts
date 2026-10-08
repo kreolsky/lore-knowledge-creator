@@ -38,7 +38,10 @@ export function createGhostActions(set: Set, get: Get): GhostActions {
       // ARCH: focus the composer when a zero/ghost chat opens — every "new chat"
       // entry point (the "+" button, the discard/reset, overflow-new) funnels here,
       // so the cursor lands in the textarea the instant the empty chat appears.
-      set({ activeSessionId: null, messages: [], pendingInputFocus: true });
+      // streaming: null — the slot shows the ACTIVE chat's turn and the ghost has
+      // none (the chat left behind keeps its registration; its frames keep
+      // arriving, its list row keeps updating).
+      set({ activeSessionId: null, messages: [], streaming: null, pendingInputFocus: true });
       // WHY: entering the ghost chat clears the project-level active pointer
       // Why: exiting to the zero chat must survive reload/navigation — restoring the pointer would auto-reopen the session the user just left.
       // (lastActiveChatSessionId → null). Why:

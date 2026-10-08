@@ -435,6 +435,17 @@ describe('unified MessageBubble — user attachment image lightbox (plan user-at
     expect(dialog().textContent).toContain('2 / 2');
   });
 
+  it('the open image carries a download link for the CURRENT image, following navigation', () => {
+    renderUserImages([A, 'data:image/jpeg;base64,BBBB']);
+    openAttachThumb(0);
+    const link = () => dialog().querySelector<HTMLAnchorElement>('a[aria-label="download"]');
+    expect(link()!.getAttribute('href')).toBe(A);
+    expect(link()!.getAttribute('download')).toBe('image-1.png');
+    pressKey('ArrowRight');
+    expect(link()!.getAttribute('href')).toBe('data:image/jpeg;base64,BBBB');
+    expect(link()!.getAttribute('download')).toBe('image-2.jpg');
+  });
+
   it('single attachment: no nav zones, no counter, ArrowRight is a no-op', () => {
     renderUserImages([A]);
     openAttachThumb(0);

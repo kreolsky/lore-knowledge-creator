@@ -757,7 +757,9 @@ async def test_build_prompt_and_skill_docs_wires_all_three_layers(
         "apply_memory_verdicts", "next_reference", "get_fact_history",
         "reopen_consolidation",
     }
-    assert _front(shipped["web-search"]["content"])["tools"] == ["web_search", "sandbox_bash"]
+    assert _front(shipped["web-search"]["content"])["tools"] == [
+        "web_search", "web_fetch", "sandbox_bash",
+    ]
     assert _front(shipped["image-generation"]["content"])["tools"] == ["generate_image"]
     for d in shipped.values():
         assert d["location"].startswith("shipped:")

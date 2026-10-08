@@ -370,6 +370,12 @@ class TestProjectWs:
             cookies={"lore_session": admin_token},
         )
         ref_id = resp.json()["reference_id"]
+        # With text the ref survives the file delete (a text-less one is deleted whole).
+        await client.patch(
+            f"/api/references/{ref_id}",
+            json={"content": "Caption"},
+            cookies={"lore_session": admin_token},
+        )
         with sync_app.websocket_connect(
             f"/ws/project/{pid}", cookies={"lore_session": user_token}
         ) as ws:

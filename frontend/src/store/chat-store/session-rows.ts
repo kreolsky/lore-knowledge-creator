@@ -3,6 +3,7 @@
 import { recordHistoryLoad } from '../../telemetry/perf';
 import { replaceWindowFromRows } from './conversation-feed';
 import { adoptOpenTurn } from './streaming';
+import { drainQueuedOnLoad } from './queue-slice';
 import type { ChatMessage } from '../../types';
 import type { Set, Get } from './types';
 
@@ -21,10 +22,13 @@ export function seatSessionRows(get: Get, set: Set, sessionId: string, rows: Cha
 }
 
 /** After the rows are the active session's messages: the history-size
- * tripwire, and the pending verdicts — a still-held call has no live card
+ * tripwire, the pending verdicts — a still-held call has no live card
  * after a reload (the driver parks on the held POST), so the decision store
- * restores the card onto its assistant message. */
+ * restores the card onto its assistant message — and the refused-flush
+ * drain (a load that finds the chat's turn no longer open fires the chips
+ * a busy shown chat had refused). */
 export function afterSessionRowsCommitted(get: Get, sessionId: string, count: number): void {
   recordHistoryLoad(sessionId, count);
   void get().fetchPendingVerdicts(sessionId);
+  drainQueuedOnLoad(get, sessionId);
 }

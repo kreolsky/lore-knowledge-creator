@@ -560,7 +560,8 @@ async def test_reload_halt_two_anchored_rows_at_one_seq_drop_the_later(caplog):
     assert "m-b" in caplog.text
 
 
-async def test_reload_image_gen_mints_at_the_dispatching_call():
+async def test_reload_image_gen_mints_at_the_dispatching_call(monkeypatch):
+    _stub_live_refs(monkeypatch)
     call = _dsh(3, "tool/call", {"turn": 1, "step": 2, "callId": "call-gen",
                                  "name": "generate_image",
                                  "arguments": json.dumps({"prompt": "a cat"})})
@@ -611,10 +612,11 @@ async def test_reload_image_gen_failed_run_carries_the_error():
                             "error": "comfy unreachable"}
 
 
-async def test_reload_image_gen_without_its_call_mints_nothing():
+async def test_reload_image_gen_without_its_call_mints_nothing(monkeypatch):
     """The run's dispatching call is not in the replayed turn (truncated log,
     cross-turn attach) — no honest anchor exists. The reference itself is on
     the document; the gap is logged, never silently fabricated."""
+    _stub_live_refs(monkeypatch)
     row = {
         "message_id": "m1", "created_at": "1",
         "frames": [_dsh(1, "turn/start", {"turn": 1})],
@@ -625,10 +627,11 @@ async def test_reload_image_gen_without_its_call_mints_nothing():
     assert not [f for f in row["frames"] if f.get("type") == "lore/image-gen"]
 
 
-async def test_reload_image_gen_step_without_call_id_mints_nothing(caplog):
+async def test_reload_image_gen_step_without_call_id_mints_nothing(monkeypatch, caplog):
     """A step persisted without the dispatching call id has no anchor — even
     when a call and a result naming its run id are both in the replay, the
     result body is never parsed for one."""
+    _stub_live_refs(monkeypatch)
     row = {
         "message_id": "m1", "created_at": "1",
         "frames": [
@@ -704,6 +707,20 @@ def _stub_replay(monkeypatch, replay=None, *, unavailable=False, forbidden=False
     monkeypatch.setattr(driver.frames, "fetch_session_entries", _fetch)
 
 
+def _stub_live_refs(monkeypatch, live=None, *, boom=False, seen=None):
+    """The ONE seam of the reload mint's deleted-image filter: the live-ref
+    query (`driver.frames._live_image_ref_ids`). Default (`live=None`) echoes
+    every id as live; `boom` simulates the query failing; `seen` records each
+    page's queried ids."""
+    async def _live(ids):
+        if seen is not None:
+            seen.append(list(ids))
+        if boom:
+            raise RuntimeError("db down")
+        return set(ids) if live is None else live
+    monkeypatch.setattr(driver.frames, "_live_image_ref_ids", _live)
+
+
 async def test_settled_frame_equals_the_reload_attach(monkeypatch):
     """The parity bound, by calling BOTH: the worker's settled frame over the
     payload anchor and the reload's attach over the same row must return
@@ -712,6 +729,7 @@ async def test_settled_frame_equals_the_reload_attach(monkeypatch):
     deliberately not used)."""
     _call, replay = _replay_with_call()
     seen: list[str] = []
+    _stub_live_refs(monkeypatch)
 
     async def _fetch(session_id, line=None, *, since_seq=None):
         seen.append(session_id)
@@ -733,6 +751,91 @@ async def test_settled_frame_equals_the_reload_attach(monkeypatch):
     reload_mint = next(f for f in row["frames"] if f["type"] == "lore/image-gen")
     live.pop("time"), reload_mint.pop("time")
     assert live == reload_mint
+
+
+def _row_with_image_run(ref_ids, *, call_id="call-gen"):
+    """One assistant row holding a settled image run over `ref_ids`, with the
+    dispatching call in its frames (the mint's anchor)."""
+    return {
+        "message_id": "m1", "created_at": "1",
+        "frames": [
+            _dsh(1, "turn/start", {"turn": 1}),
+            _dsh(3, "tool/call", {"turn": 1, "step": 2, "callId": call_id,
+                                  "name": "generate_image", "arguments": "{}"}),
+        ],
+        "gen_steps": [{"tool": "generate_image", "run_id": "run-1",
+                       "call_id": call_id, "image_ref_ids": list(ref_ids)}],
+    }
+
+
+async def test_reload_mint_drops_deleted_image_refs(monkeypatch):
+    """References are the truth: a deleted image reference (soft delete from
+    the chat or the References panel) never re-appears as a broken thumb after
+    a reload — the mint carries only the LIVE ids, in their original order."""
+    row = _row_with_image_run(["ref-1", "ref-2", "ref-3"])
+    seen: list[list[str]] = []
+    _stub_live_refs(monkeypatch, live={"ref-1", "ref-3"}, seen=seen)
+    await driver.frames.attach_reload_lore_mints([row], chain={"m1"}, tail_seq=9, session_id="c")
+    mint = next(f for f in row["frames"] if f["type"] == "lore/image-gen")
+    assert mint["data"]["imageRefIds"] == ["ref-1", "ref-3"]
+    assert "deletedByUser" not in mint["data"]
+    # ONE query carries the whole page's ids.
+    assert seen == [["ref-1", "ref-2", "ref-3"]]
+
+
+async def test_reload_mint_queries_once_per_page(monkeypatch):
+    """Two image runs on one page — still ONE live-ref query over the union of
+    their ids (the per-page cost bound)."""
+    row1 = _row_with_image_run(["ref-1", "ref-2"])
+    row2 = _row_with_image_run(["ref-3"], call_id="call-gen-2")
+    row2["gen_steps"][0]["run_id"] = "run-2"
+    seen: list[list[str]] = []
+    _stub_live_refs(monkeypatch, seen=seen)
+    await driver.frames.attach_reload_lore_mints(
+        [row1, row2], chain={"m1"}, tail_seq=9, session_id="c")
+    assert len(seen) == 1
+    assert sorted(seen[0]) == ["ref-1", "ref-2", "ref-3"]
+    mints = [f for f in row1["frames"] + row2["frames"] if f.get("type") == "lore/image-gen"]
+    assert len(mints) == 2
+
+
+async def test_reload_mint_marks_a_fully_deleted_run(monkeypatch):
+    """A run whose images were ALL deleted keeps its chip with the
+    deletedByUser note — never an empty plate or broken thumbs."""
+    row = _row_with_image_run(["ref-1", "ref-2"])
+    _stub_live_refs(monkeypatch, live=set())
+    await driver.frames.attach_reload_lore_mints([row], chain={"m1"}, tail_seq=9, session_id="c")
+    mint = next(f for f in row["frames"] if f["type"] == "lore/image-gen")
+    assert "imageRefIds" not in mint["data"]
+    assert mint["data"]["deletedByUser"] is True
+
+
+async def test_reload_mint_no_image_run_no_live_query(monkeypatch):
+    """A page without an image run never reaches the DB — the query is the
+    image-run path's cost alone. Asserted on the recorded calls: a raise
+    inside the seam would be swallowed by the attach's degrade path."""
+    seen: list[list[str]] = []
+    _stub_live_refs(monkeypatch, seen=seen)
+    row = {"message_id": "m1", "created_at": "1", "frames": [
+        _dsh(1, "turn/start", {"turn": 1}),
+        _dsh(9, "turn/end", {"turn": 1, "reason": {"kind": "completed"}}),
+    ]}
+    await driver.frames.attach_reload_lore_mints([row], chain={"m1"}, tail_seq=9, session_id="c")
+    assert seen == []
+    assert [f["type"] for f in row["frames"]] == ["dsh_event", "dsh_event"]
+
+
+async def test_reload_mint_live_query_failure_keeps_ids_verbatim(monkeypatch, caplog):
+    """The live-ref query failing must not blank the page's images — the mint
+    degrades to today's verbatim ids, and the miss is logged, never silent."""
+    row = _row_with_image_run(["ref-1", "ref-2"])
+    _stub_live_refs(monkeypatch, boom=True)
+    with caplog.at_level("WARNING"):
+        await driver.frames.attach_reload_lore_mints(
+            [row], chain={"m1"}, tail_seq=9, session_id="c")
+    mint = next(f for f in row["frames"] if f["type"] == "lore/image-gen")
+    assert mint["data"]["imageRefIds"] == ["ref-1", "ref-2"]
+    assert "deletedByUser" not in mint["data"]
 
 
 async def test_resolve_anchors_inside_the_open_trailing_turn(monkeypatch):
@@ -862,3 +965,28 @@ def test_result_call_id_reads_the_source_only():
     assert driver.frames._result_call_id(from_source) == "src-1"
     assert driver.frames._result_call_id(from_block) == ""
     assert driver.frames._result_call_id({}) == ""
+
+
+async def test_live_image_ref_ids_against_the_real_delete(client, collab_ref_project):
+    """The live-ref query itself, over a real database and the real delete
+    route: a reference deleted through DELETE /api/references/{id} drops out,
+    a live one stays, an id with no row is not live. Every other filter test
+    stubs this seam, so a wrong id shape here would turn every reloaded image
+    run into the all-deleted note while they all stayed green."""
+    import uuid
+
+    pid, doc_id, deleted_ref, admin_token, *_ = collab_ref_project
+    resp = await client.post(
+        "/api/documents",
+        json={"project_id": pid, "parent_id": doc_id, "title": "Kept Ref",
+              "media_type": "markdown", "is_reference": True, "content": "x"},
+        cookies={"lore_session": admin_token},
+    )
+    kept_ref = resp.json()["document_id"]
+    resp = await client.delete(f"/api/references/{deleted_ref}",
+                               cookies={"lore_session": admin_token})
+    assert resp.status_code == 200, resp.text
+
+    missing = str(uuid.uuid4())
+    live = await driver.frames._live_image_ref_ids([deleted_ref, kept_ref, missing])
+    assert live == {kept_ref}

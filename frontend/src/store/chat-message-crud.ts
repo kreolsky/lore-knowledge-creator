@@ -42,7 +42,8 @@ export interface MessageLoadScope {
   onLoadError: () => void;
   /** Raw rows BEFORE the timeline fold — the chat store hands them to the
    * assembler (replaceWindow; the note store passes nothing). Invoked before
-   * hydration because the fold drops the rows' `frames` key. */
+   * hydration because the fold drops the rows' `frames` key; only for a fetch
+   * that still owns the session. */
   onRows?: (rows: ChatMessage[]) => void;
 }
 
@@ -59,10 +60,12 @@ export async function loadMessagesFor(sessionId: string, scope: MessageLoadScope
     // (replaceWindow over the frames the backend replayed + minted), and the
     // rows enter the store without them. A frameless row renders from its own
     // fields, as it does live.
+    // Staleness guard: user may have switched sessions while fetch was in-flight.
+    // It covers the raw rows too — onRows seats the assembler window and the
+    // streaming slot, which belong to the shown session only.
+    if (scope.activeSessionId() !== sessionId) return;
     scope.onRows?.(raw);
     const messages = raw.map(stripFrames);
-    // Staleness guard: user may have switched sessions while fetch was in-flight.
-    if (scope.activeSessionId() !== sessionId) return;
     scope.onLoaded(messages);
   } catch {
     if (scope.activeSessionId() === sessionId) scope.onLoadError();

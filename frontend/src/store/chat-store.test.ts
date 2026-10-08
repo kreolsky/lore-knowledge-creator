@@ -431,7 +431,7 @@ describe('pendingImages', () => {
 describe('stopGeneration', () => {
   it('aborts the active controller', () => {
     const ctrl = new AbortController();
-    useChatStore.setState({ streaming: { messageId: null, content: '', controller: ctrl } });
+    useChatStore.setState({ streaming: { sessionId: 's1', messageId: null, content: '', controller: ctrl } });
     useChatStore.getState().stopGeneration();
     expect(ctrl.signal.aborted).toBe(true);
   });
@@ -476,7 +476,7 @@ describe('reset', () => {
       activeSessionId: 's1',
       messages: [makeMsg()],
       selectedSiblings: { a: 'b' },
-      streaming: { messageId: 'a1', content: 'partial', controller: null },
+      streaming: { sessionId: 's1', messageId: 'a1', content: 'partial', controller: null },
       pendingImages: ['data:x'],
     });
 
@@ -854,7 +854,7 @@ describe('sendMessage mid-turn send (routes to the message queue)', () => {
     // An open turn holds the streaming slot.
     useChatStore.setState({
       activeSessionId: 'sess-1',
-      streaming: { messageId: null, content: '', controller: null },
+      streaming: { sessionId: 'sess-1', messageId: null, content: '', controller: null },
       messages: makeLinearChain(2),
       sessions: [makeSession({ session_id: 'sess-1' })],
     });
@@ -1156,12 +1156,13 @@ describe('sendMessage — send failure surfacing (F1)', () => {
       .mockResolvedValue({ accepted: true });
 
     // A trailing `error` frame (the backend aborted the turn) arrives AFTER the
-    // user has already pressed Stop (the turn's controller is aborted) — the
-    // handler must treat it as part of the stop, not a failure (mirrors the
-    // AbortError guard in messages-slice.ts).
+    // user has already pressed Stop — the handler must treat it as part of the
+    // stop, not a failure (mirrors the AbortError guard in messages-slice.ts).
+    // Stop routes through stopGeneration, which stamps the registration's end
+    // facts before aborting.
     const p = useChatStore.getState().sendMessage('hello');
-    // runCompletion sets streaming.controller synchronously; abort it (user Stop).
-    useChatStore.getState().streaming?.controller?.abort();
+    // runCompletion sets streaming.controller synchronously; the user Stops.
+    useChatStore.getState().stopGeneration();
     wsFrame({ type: 'error', message: 'Request was aborted' });
     wsFrame(TURN_CLOSED);
     await p;

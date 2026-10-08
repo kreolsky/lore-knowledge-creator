@@ -11920,7 +11920,7 @@
     },
     "/api/references/{reference_id}/file": {
       "delete": {
-        "description": "Delete only the binary file from a reference-document, keeping the text content.",
+        "description": "Delete the binary file from a reference-document, keeping its text.\n\nA reference left with no text at all is deleted whole (`reference_deleted`\nin the response tells the caller which of the two happened).",
         "operationId": "delete_reference_file_api_references__reference_id__file_delete",
         "parameters": [
           {

@@ -21,9 +21,17 @@ interface Props {
   canEdit: boolean;
   /** The audio row keeps the player's OWN download link — render the delete alone there. */
   showDownload?: boolean;
+  /** The image overlay uses the larger hit target; inline rows keep the compact one. */
+  size?: 'sm' | 'md';
 }
 
-export function MediaFileActions({ reference, canEdit, showDownload = true }: Props) {
+const anchorSizes: Record<'sm' | 'md', string> = {
+  sm: 'w-[22px] h-[22px]',
+  md: 'w-[30px] h-[30px]',
+};
+const iconSizes: Record<'sm' | 'md', number> = { sm: 14, md: 16 };
+
+export function MediaFileActions({ reference, canEdit, showDownload = true, size = 'sm' }: Props) {
   const { t } = useTranslation();
   const { deleteFile } = useReferenceFileDelete();
   const deleteAction = useArmedAction();
@@ -43,16 +51,16 @@ export function MediaFileActions({ reference, canEdit, showDownload = true }: Pr
           download={originalName}
           title={t('download')}
           aria-label={t('download')}
-          className="flex items-center justify-center w-[22px] h-[22px] text-text-muted hover:text-text hover:bg-surface3"
+          className={`flex items-center justify-center ${anchorSizes[size]} text-text-muted hover:text-text hover:bg-surface3`}
         >
-          <Download size={14} />
+          <Download size={iconSizes[size]} />
         </a>
       )}
       {canEdit && !jobRunning && (
         // Stateful trash, same armed pattern as RefPanelPlaque: first click arms
         // (filled), second click executes, mouse-leave disarms.
         <IconButton
-          size="sm"
+          size={size}
           danger
           filled={deleteAction.armed}
           title={t('deleteFile')}
@@ -60,7 +68,7 @@ export function MediaFileActions({ reference, canEdit, showDownload = true }: Pr
           onClick={() => deleteAction.handleClick(() => deleteFile(reference))}
           onMouseLeave={deleteAction.disarm}
         >
-          <Trash2 size={14} />
+          <Trash2 size={iconSizes[size]} />
         </IconButton>
       )}
     </>

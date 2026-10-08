@@ -19,9 +19,12 @@ import { MarkdownContent } from '../../MarkdownContent';
 import { VerdictCard } from '../../VerdictCard';
 import { HaltCard } from './halt-card';
 import { AgentStepIcon, genPhaseLabel } from './agent-steps';
-import { GeneratedImageThumb, ImageLightbox } from './image-lightbox';
+import { GeneratedImageThumb, ImageLightbox, generatedImageUrl } from './image-lightbox';
 import { useTranslation } from '../../../../i18n';
-import { referenceFileUrl } from '../../../../utils/reference-url';
+import { apiClient } from '../../../../api/client';
+import { useAppStore } from '../../../../store/app-store';
+import { useUIStore } from '../../../../store/ui-store';
+import { useDeletedRefIds } from '../../../../store/deleted-ref-ids';
 import type { HaltReason } from '../../../../types';
 import type { ProcessGroupInfo } from '../../../../dsh/lore-conversation.js';
 
@@ -201,18 +204,32 @@ function HaltNode({ data, nodes, self, onContinue }: {
  * settled run renders TWO chips — the refined prompt plate and the images
  * plate; a single flat block would lose the prompt chip. The payload is the
  * same node data on BOTH paths (the live frames and the reload mint derive
- * from the same gen_steps dicts). */
+ * from the same gen_steps dicts).
+ *
+ * Deleting an image deletes its image reference; references are the truth,
+ * so the plate hides the ids in the page-wide deleted set (useDeletedRefIds:
+ * own optimistic deletes + every reference delete event, from any surface or
+ * tab). The reload path re-derives liveness server-side (`deletedByUser`). */
 function ImageGenNode({ data }: { data: unknown }) {
   const { t } = useTranslation();
   const d = (typeof data === 'object' && data !== null ? data : {}) as Record<string, unknown>;
   const [openIndex, setOpenIndex] = useState<number | null>(null);
+  // Hooks before the running/failed early returns (rules of hooks).
+  const removed = useDeletedRefIds(s => s.ids);
+  const accessLevel = useAppStore(s => s.accessLevel);
+  const isPublicShare = useUIStore(s => s.isPublicShare);
+  // The same gate as the References panel — the server stays the real gate.
+  const canDelete = !isPublicShare && accessLevel === 'full';
+
   if (d.status === 'running') {
     // The live phase chip (the run rides the chat channel), rendered from
     // the node's own data. Shown while the run streams; the
     // settled frame folds this node into its settled look.
     const phase = typeof d.phase === 'string' ? d.phase : '';
     return (
-      <div className="flex items-center gap-1 text-xs text-text-dim py-1 my-0.5">
+      // WHY: same geometry and type as a ToolPlate header row — the running chip
+      // differs from its siblings by color only.
+      <div className="flex items-center gap-1 min-w-0 py-1 my-1 font-medium text-text-dim">
         <span className="animate-pulse"><AgentStepIcon /></span>
         <span>{t('generatingImage')}</span>
         {phase && <span className="opacity-60">— {genPhaseLabel(phase, t)}</span>}
@@ -238,7 +255,26 @@ function ImageGenNode({ data }: { data: unknown }) {
       </ToolPlate>
     );
   }
-  const ids = Array.isArray(d.imageRefIds) ? d.imageRefIds.map(r => String(r)) : [];
+  const allIds = Array.isArray(d.imageRefIds) ? d.imageRefIds.map(r => String(r)) : [];
+  const ids = allIds.filter(id => !removed.has(id));
+  // The server-side all-deleted note (reload mint) OR this client's own
+  // deletes having emptied a run that HAD images — never the "nothing done"
+  // text, which states a run that produced nothing.
+  const allDeleted = d.deletedByUser === true || (allIds.length > 0 && ids.length === 0);
+  const remove = (id: string) => {
+    if (!canDelete) return;
+    // Optimistic: drop at once; on failure the thumb comes back and the error
+    // states itself (no-silent-degradation).
+    const deleted = useDeletedRefIds.getState();
+    deleted.add([id]);
+    // Deleting the last shown image closes the lightbox for good — a failed
+    // delete brings the thumb back, never a lightbox nobody reopened.
+    if (ids.length === 1 && ids[0] === id) setOpenIndex(null);
+    apiClient.delete(`/references/${id}`).catch(() => {
+      deleted.remove(id);
+      useAppStore.getState().showToast(t('imageDeleteFailed'), 'error');
+    });
+  };
   const refine = (typeof d.refine === 'object' && d.refine !== null ? d.refine : {}) as Record<string, unknown>;
   const refineOk = refine.ok === true;
   const refineFailed = refine.ok === false;
@@ -274,25 +310,37 @@ function ImageGenNode({ data }: { data: unknown }) {
           : <span>{t('generatedImage')}</span>}
       >
         <div className="space-y-1">
-          {ids.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {ids.map((id, i) => (
-                <GeneratedImageThumb key={id} imageRefId={id} onOpen={() => setOpenIndex(i)} />
-              ))}
-            </div>
-          )}
-          {ids.length === 0 && (
-            <div className="text-ui-sm text-text-dim">{t('agentStepNoop')}</div>
+          {allDeleted ? (
+            <div className="text-ui-sm text-text-dim">{t('imagesDeletedByUser')}</div>
+          ) : (
+            <>
+              {ids.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {ids.map((id, i) => (
+                    <GeneratedImageThumb key={id} imageRefId={id} onOpen={() => setOpenIndex(i)} />
+                  ))}
+                </div>
+              )}
+              {ids.length === 0 && (
+                <div className="text-ui-sm text-text-dim">{t('agentStepNoop')}</div>
+              )}
+            </>
           )}
         </div>
       </ToolPlate>
       {openIndex !== null && ids.length > 0 && (
         <ImageLightbox
-          srcs={ids.map(id => referenceFileUrl(id, 'full.png'))}
-          index={openIndex}
+          // The download number is the image's place in the original batch, so a
+          // delete never renames the survivors' files.
+          srcs={ids.map(id => generatedImageUrl(id, typeof d.title === 'string' ? d.title : '', allIds.indexOf(id) + 1))}
+          // Clamp to the shrunk list: after a delete the SAME index shows the
+          // next image (or the previous one when the last went); an empty
+          // list closes the lightbox via the condition above.
+          index={Math.min(openIndex, ids.length - 1)}
           onIndexChange={setOpenIndex}
           onClose={() => setOpenIndex(null)}
           title={t('generatedImage')}
+          onDelete={canDelete ? (i) => remove(ids[i]) : undefined}
         />
       )}
     </>
@@ -411,6 +459,16 @@ function isFailedToolCall(node: TurnNodeLike): boolean {
   return root?.kind === 'tool-result' && root.isError === true;
 }
 
+function isImageRun(node: TurnNodeLike): boolean {
+  if (node.kind === 'image-gen') return true;
+  if (node.kind !== 'tool-call') return false;
+  const d = (typeof node.data === 'object' && node.data !== null ? node.data : {}) as Record<string, unknown>;
+  // A settled call carries its name on `call`, a pending one on the block.
+  const block = d.root as Record<string, unknown> | undefined;
+  const call = block?.call as Record<string, unknown> | null | undefined;
+  return (call?.name ?? block?.name) === 'generate_image';
+}
+
 /** One dsh process group as one collapsible plate over its member chips. */
 function ProcessGroupNode({ info, members, nodes, isStreaming, onContinue, afterText }: {
   info: ProcessGroupInfo;
@@ -424,6 +482,11 @@ function ProcessGroupNode({ info, members, nodes, isStreaming, onContinue, after
   // A failure inside a collapsed group must still show on its header — the
   // no-silent-degradation rule.
   const failed = members.some(isFailedToolCall);
+  // WHY: an image run (generating, done or failed) keeps its group open — the
+  // images chip opens itself, and a folded group would hide it. The run is
+  // detached and its card lands after the turn closed the group, so the
+  // launching call already holds the group open (no fold-then-reopen blink).
+  const holdsImage = members.some(isImageRun);
   return (
     // WHY: a group between paragraphs of the answer gets a 24px gap above
     // (my-1's 4px + pt-5) so it does not run into the text; a group opening
@@ -437,6 +500,7 @@ function ProcessGroupNode({ info, members, nodes, isStreaming, onContinue, after
         defaultExpanded={isStreaming && !info.closed}
         autoCollapse
         collapseWhen={info.closed}
+        expandWhen={holdsImage}
         isStreaming={isStreaming}
       >
         {members.map(node => (

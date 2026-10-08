@@ -10,7 +10,8 @@
  *   backend's one socket subscribes to many sessions), PLUS the driver's
  *   turn-lifecycle frames (model_update, context_usage, error) pushed by the
  *   followup runner — addressed by session, unsequenced, never
- *   window-keyed. Turn lifecycle
+ *   window-keyed — and the descendant heartbeat (lore/child-activity, see
+ *   childActivityRoot), addressed to the ROOT session. Turn lifecycle
  *   frames are re-derivable from the turn's outcome and never replayed: a
  *   consumer that lost frames resyncs through POST /session-entries +
  *   since_seq (the extended projection), never through a second timeline
@@ -165,6 +166,53 @@ export function loadWs(home: string | undefined): WsCtor | null {
   return null
 }
 
+// ── The descendant heartbeat.
+
+/** At most one `lore/child-activity` per driving session per window — well
+ * inside the backend's 300s silence grace, and a busy child (dozens of
+ * searches and fetches) does not flood the socket. */
+export const CHILD_ACTIVITY_THROTTLE_MS = 30_000
+
+export interface ChildActivityState {
+  /** childId → parentId, filled from each descendant's `header.parentSession`. */
+  parents: Map<string, string>
+  /** root (driving) session id → when its last heartbeat was due. */
+  lastBeat: Map<string, number>
+}
+
+export function newChildActivityState(): ChildActivityState {
+  return { parents: new Map(), lastBeat: new Map() }
+}
+
+/**
+ * The driving (root) session a descendant's event should heartbeat, or null:
+ * null for a session with no `header.parentSession` (it is a driving session
+ * itself — its own frames are its progress) and for a root still inside its
+ * throttle window. Nesting resolves through the module-held parent map to the
+ * TOP session. Pure — the caller owns the state and the clock.
+ */
+export function childActivityRoot(
+  session: unknown, state: ChildActivityState, now: number,
+  throttleMs: number = CHILD_ACTIVITY_THROTTLE_MS,
+): string | null {
+  const s = session as { id?: unknown; header?: { parentSession?: unknown } } | null
+  const id = String(s?.id ?? '')
+  const parent = s?.header?.parentSession
+  if (!id || typeof parent !== 'string' || !parent) return null
+  state.parents.set(id, parent)
+  let root = parent
+  // Bounded walk: a cyclic parent map (never written by dsh) cannot hang the tap.
+  for (let hops = 0; hops < 64; hops += 1) {
+    const up = state.parents.get(root)
+    if (up === undefined) break
+    root = up
+  }
+  const last = state.lastBeat.get(root)
+  if (last !== undefined && now - last < throttleMs) return null
+  state.lastBeat.set(root, now)
+  return root
+}
+
 // ── The channel.
 
 /** The raw duplex socket the upgrade arrives on (only the refusal write
@@ -296,9 +344,23 @@ export function attachEventsChannel(opts: EventsChannelOpts): EventsChannel {
     })
   }
 
+  const childActivity = newChildActivityState()
+
   const offTap = tap.subscribe((session, ev) => {
     const sid = String((session as { id?: unknown })?.id ?? '')
     if (!sid) return
+    // WHY: dsh writes nothing to a parent's log while its subagents run, so
+    // the backend's silence budget would kill a parent whose children are
+    // working. A descendant's event heartbeats its ROOT's subscribers —
+    // unsequenced, no payload (the child's own frames still emit nothing,
+    // map.ts ARCH); a child that stops logging stops the heartbeat, so a hung
+    // child is still caught by the grace.
+    const root = childActivityRoot(session, childActivity, Date.now())
+    if (root !== null) {
+      for (const [client, subs] of clients) {
+        if (subs.has(root)) deliver(client, root, [{ type: 'lore/child-activity' }])
+      }
+    }
     // Deleting during iteration is this Map's own supported mutation.
     for (const [client, subs] of clients) {
       const state = subs.get(sid)

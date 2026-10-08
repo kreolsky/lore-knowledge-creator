@@ -265,10 +265,12 @@
   config:
     apiKeyEnv: LORE_WEB_SEARCH_KEY
 # A `config` here REPLACES the base bundle's, so the two values it set are
-# restated. `fetch: false` is upstream's deliberate choice and stays: the
-# `web-fetch-http` provider defers SSRF protection to the caller while the MODEL
-# picks the request target, and no fetch provider is mounted here — turning the
-# tool on without one served a `web_fetch` that failed every call.
+# restated. `fetch: true` serves `web_fetch` over the base bundle's
+# `web-fetch-http` (pinned as `fetchProvider: http` in profiles/lore): the
+# provider resolves every destination, accepts only public addresses and pins
+# the connection to the address it checked, so a model-picked URL cannot reach
+# the compose network. PDF is an unsupported content type there — the web
+# skills send it to the sandbox console.
 # `search: true`, STATIC: web_search is always offered to the model — there is
 # no off state; a provider without a key fails the call loudly, and to stop
 # searching an admin clears the key.
@@ -276,7 +278,7 @@
   disabled: false
   config:
     search: true
-    fetch: false
+    fetch: true
     searchTimeoutMs: 60000
     searchMaxResults: 8
     searchMaxQueries: 4

@@ -116,6 +116,19 @@ describe('startAgentChat — ghost attach (no row) + access gate', () => {
     expect(store.getState().ghostRegion).toEqual(REGION);
   });
 
+  it('a slot the left chat held is dropped with the pointer (the slot belongs to the active chat)', async () => {
+    const store = buildStore();
+    store.setState({
+      activeSessionId: 's-busy',
+      streaming: { sessionId: 's-busy', messageId: 'am', content: '', controller: new AbortController() },
+    } as unknown as Partial<ChatState>);
+    await store.getState().startAgentChat({
+      doc_id: 'doc-1', relFrom: REGION.relFrom, relTo: REGION.relTo, from_cp: 0, to_cp: 3, text: 'abc',
+    });
+    expect(store.getState().activeSessionId).toBeNull();
+    expect(store.getState().streaming).toBeNull();
+  });
+
   it('non-full access: no-op (no ghost region, toast shown)', async () => {
     accessLevel = 'viewer';
     const store = buildStore();

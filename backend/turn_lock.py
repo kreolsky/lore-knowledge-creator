@@ -119,6 +119,16 @@ async def acquire_turn_lock(
     return token if ok else None
 
 
+async def turn_lock_held(session_id: str) -> bool:
+    """Whether a turn currently holds this chat_session's lock (any holder).
+
+    A Redis error propagates — Redis is mandatory, and a read that cannot tell
+    whether a turn runs must not answer "idle".
+    """
+    r = await redis_pool.get_redis()
+    return bool(await r.exists(f"{_LOCK_KEY_PREFIX}{session_id}"))
+
+
 async def release_turn_lock(session_id: str, token: str | None) -> None:
     """Release the per-session turn lock via fencing-token compare-and-delete.
 

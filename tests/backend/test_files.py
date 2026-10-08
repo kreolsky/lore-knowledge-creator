@@ -230,11 +230,17 @@ async def test_delete_reference_file(client, admin_user, project_with_doc):
     )
     doc_id = resp.json()["document_id"]
     ref_id, _ = await _upload_image(client, token, pid, doc_id)
+    await client.patch(
+        f"/api/documents/{ref_id}",
+        json={"content": "Caption"},
+        cookies={"lore_session": token},
+    )
     resp = await client.delete(
         f"/api/documents/{ref_id}/file",
         cookies={"lore_session": token},
     )
     assert resp.status_code == 200
+    assert resp.json()["reference_deleted"] is False
     # Verify file is no longer servable
     resp = await client.get(
         f"/api/files/{ref_id}/test.png",
@@ -283,12 +289,13 @@ async def test_delete_file_keeps_content_as_markdown(client, admin_user, project
 
 
 @pytest.mark.asyncio
-async def test_delete_file_without_content_leaves_markdown_ref(client, admin_user, project_with_doc):
-    """Upload image with NO content → DELETE file → an EMPTY markdown ref.
+async def test_delete_file_without_content_deletes_the_reference(client, admin_user, project_with_doc):
+    """Upload image with NO text → DELETE file → the whole reference is deleted.
 
-    Pins the always-markdown rule: a file-less image/audio/file ref that kept its
-    media_type would render blank (no media surface, editor branch treats image as
-    non-editor), and the frontend's optimistic patch already assumes markdown."""
+    A reference left with neither file nor text is an empty shell nobody wants;
+    deleting the picture from the reference view must not leave one behind."""
+    from event_bus import off, on
+
     pid, _, _ = project_with_doc
     _, token = admin_user
     resp = await client.post(
@@ -298,19 +305,70 @@ async def test_delete_file_without_content_leaves_markdown_ref(client, admin_use
     )
     doc_id = resp.json()["document_id"]
     ref_id, _ = await _upload_image(client, token, pid, doc_id)
-    resp = await client.delete(
-        f"/api/documents/{ref_id}/file",
+    # Whitespace-only text counts as empty.
+    await client.patch(
+        f"/api/documents/{ref_id}",
+        json={"content": "  \n "},
         cookies={"lore_session": token},
     )
+
+    deleted = []
+    async def capture(**kw):
+        deleted.append(kw)
+
+    on("reference_deleted", capture)
+    try:
+        resp = await client.delete(
+            f"/api/documents/{ref_id}/file",
+            cookies={"lore_session": token},
+        )
+    finally:
+        off("reference_deleted", capture)
     assert resp.status_code == 200
+    assert resp.json()["reference_deleted"] is True
+    assert deleted == [{"project_id": pid, "reference_id": ref_id}]
+    resp = await client.get(
+        f"/api/documents/{ref_id}",
+        cookies={"lore_session": token},
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_file_reads_live_collab_text(client, admin_user, project_with_doc):
+    """Text typed into the open editor but not yet flushed keeps the reference."""
+    from collab.registry import _session_key, _sessions
+
+    pid, _, _ = project_with_doc
+    _, token = admin_user
+    resp = await client.post(
+        "/api/documents",
+        json={"project_id": pid, "title": "LiveDoc"},
+        cookies={"lore_session": token},
+    )
+    doc_id = resp.json()["document_id"]
+    ref_id, _ = await _upload_image(client, token, pid, doc_id)
+
+    class _Live:
+        content = "typed just now"
+
+    key = _session_key("doc", ref_id)
+    _sessions[key] = _Live()
+    try:
+        resp = await client.delete(
+            f"/api/documents/{ref_id}/file",
+            cookies={"lore_session": token},
+        )
+    finally:
+        _sessions.pop(key, None)
+    assert resp.status_code == 200
+    assert resp.json()["reference_deleted"] is False
     resp = await client.get(
         f"/api/documents/{ref_id}",
         cookies={"lore_session": token},
     )
     assert resp.status_code == 200
-    data = resp.json()
-    assert data["media_type"] == "markdown"
-    assert not data.get("file_path")
+    assert resp.json()["media_type"] == "markdown"
 
 
 @pytest.mark.asyncio
@@ -327,6 +385,11 @@ async def test_delete_reference_file_emits_reference_updated(client, admin_user,
     )
     doc_id = resp.json()["document_id"]
     ref_id, _ = await _upload_image(client, token, pid, doc_id)
+    await client.patch(
+        f"/api/documents/{ref_id}",
+        json={"content": "Caption"},
+        cookies={"lore_session": token},
+    )
 
     events = []
     async def capture(**kw):

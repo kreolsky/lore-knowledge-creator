@@ -2,12 +2,20 @@
  * over the dsh node data, the neutral fallback chip for an unrendered kind. */
 // @vitest-environment jsdom
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { createElement, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// WHY warm the bundle (MessageBubble.test.tsx precedent): MarkdownContent
+// lazily import()s dsh's markdown renderer and the assistant-step tests render
+// it; under the vmThreads pool the file can end with the import in flight and
+// vitest reports an unhandled rejection from its closed module runner.
+beforeAll(async () => {
+  await Promise.all([import('../../../../dsh/lore-markdown'), import('../../../../dsh/lore-markdown.css')]);
+});
 
 vi.mock('../../../../i18n', () => ({
   // Interpolation is spelled out so a composed title is assertable.
@@ -16,7 +24,35 @@ vi.mock('../../../../i18n', () => ({
   }),
 }));
 
+// The image-delete gate reads accessLevel/isPublicShare and calls the delete
+// API + toast through the stores' getState — mutable per-test state behind the
+// selector mocks (real modules otherwise; nothing else in this graph changes).
+const appState = vi.hoisted(() => ({ accessLevel: 'full' as string, showToast: vi.fn() }));
+vi.mock('../../../../store/app-store', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../store/app-store')>();
+  const useAppStore = Object.assign(
+    (selector: (s: typeof appState) => unknown) => selector(appState),
+    {
+      getState: () => appState,
+      // chat-store module-level store-to-store subscription needs a no-op.
+      subscribe: () => () => {},
+    },
+  );
+  return { ...actual, useAppStore };
+});
+const uiState = vi.hoisted(() => ({ isPublicShare: false }));
+vi.mock('../../../../store/ui-store', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../store/ui-store')>();
+  return { ...actual, useUIStore: (selector: (s: typeof uiState) => unknown) => selector(uiState) };
+});
+const apiMocks = vi.hoisted(() => ({ delete: vi.fn() }));
+vi.mock('../../../../api/client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../api/client')>();
+  return { ...actual, apiClient: { ...actual.apiClient, delete: apiMocks.delete } };
+});
+
 import { TurnNodes, type TurnNodeLike } from './turn-nodes';
+import { useDeletedRefIds } from '../../../../store/deleted-ref-ids';
 
 const node = (kind: string, data: unknown, anchorSeq = 1): TurnNodeLike => ({
   key: `${kind}:${anchorSeq}`, kind, anchorSeq, data,
@@ -29,6 +65,14 @@ beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
+  appState.accessLevel = 'full';
+  appState.showToast.mockReset();
+  uiState.isPublicShare = false;
+  apiMocks.delete.mockReset();
+  apiMocks.delete.mockResolvedValue({ success: true });
+  // The page-wide deleted set is a real module store — reset it, or one test's
+  // deletes hide the next test's images.
+  useDeletedRefIds.setState({ ids: new Set() });
 });
 
 afterEach(() => {
@@ -171,6 +215,30 @@ describe('TurnNodes', () => {
     const plates = html.querySelectorAll('button[aria-expanded]');
     expect(plates.length).toBe(2);
     expect(text).not.toContain('a better prompt');
+  });
+
+  it('names the full image after the document title, numbered, so a download is not "full.png"', () => {
+    const html = render(createElement(TurnNodes, {
+      nodes: [node('image-gen', {
+        turn: 0, runId: 'r1', status: 'done', imageRefIds: ['ref-1', 'ref-2'], title: 'Город: Арвен/2',
+      })],
+      isStreaming: false,
+    }));
+    const thumbs = html.querySelectorAll<HTMLButtonElement>('button[aria-label="viewGeneratedImage"]');
+    act(() => { thumbs[1].click(); });
+    const link = document.body.querySelector<HTMLAnchorElement>('[role="dialog"] a[aria-label="download"]')!;
+    expect(link.getAttribute('href')).toBe(`/api/files/ref-2/${encodeURIComponent('Город_ Арвен_2-2.png')}`);
+    expect(link.getAttribute('download')).toBe('Город_ Арвен_2-2.png');
+  });
+
+  it('a generated image with no title downloads as image-{n}.png', () => {
+    const html = render(createElement(TurnNodes, {
+      nodes: [node('image-gen', { turn: 0, runId: 'r1', status: 'done', imageRefIds: ['ref-1'] })],
+      isStreaming: false,
+    }));
+    act(() => { html.querySelector<HTMLButtonElement>('button[aria-label="viewGeneratedImage"]')!.click(); });
+    const link = document.body.querySelector<HTMLAnchorElement>('[role="dialog"] a[aria-label="download"]')!;
+    expect(link.getAttribute('download')).toBe('image-1.png');
   });
 
   it('renders a failed refine as the failed prompt chip and a failed run loudly', () => {
@@ -375,6 +443,266 @@ describe('TurnNodes — dsh process groups', () => {
       isStreaming: true,
     }));
     expect(headers(html)).toEqual(['processGroupRunning_webSearch', 'a', 'b']);
+  });
+
+  const image = (status: string, seq = 3): TurnNodeLike => node('image-gen', status === 'done'
+    ? { turn: 0, runId: 'r1', status, imageRefIds: ['ref-1'] }
+    : { turn: 0, runId: 'r1', status, error: 'queue full' }, seq);
+
+  it.each(['done', 'running', 'failed'])('a closed group holding a %s image run stays open', status => {
+    const g = closed();
+    const html = render(createElement(TurnNodes, {
+      nodes: [inGroup(tool(1, 'a'), g), inGroup(image(status), g)],
+      isStreaming: false,
+    }));
+    expect(html.querySelector('button[aria-expanded]')!.getAttribute('aria-expanded')).toBe('true');
+    expect(headers(html)).toContain('a');
+  });
+
+  it('a collapsed group opens when an image run joins it after the turn ended', () => {
+    const g = closed();
+    const html = render(createElement(TurnNodes, {
+      nodes: [inGroup(tool(1, 'a'), g), inGroup(tool(2, 'b'), g)],
+      isStreaming: false,
+    }));
+    expect(headers(html)).toEqual(['processGroupDone_tools']);
+    render(createElement(TurnNodes, {
+      nodes: [inGroup(tool(1, 'a'), g), inGroup(tool(2, 'b'), g), inGroup(image('running'), g)],
+      isStreaming: false,
+    }));
+    expect(headers(html).slice(0, 3)).toEqual(['processGroupDone_tools', 'a', 'b']);
+  });
+
+  it('the group with an image stays open when its streaming turn closes', () => {
+    const live = { members: 2, closed: false, summary: { counts: [], running: 'tools', runningDetail: '' } } as unknown as TurnNodeLike['group'];
+    const html = render(createElement(TurnNodes, {
+      nodes: [inGroup(tool(1, 'a'), live), inGroup(image('done'), live)],
+      isStreaming: true,
+    }));
+    const g = closed();
+    render(createElement(TurnNodes, {
+      nodes: [inGroup(tool(1, 'a'), g), inGroup(image('done'), g)],
+      isStreaming: false,
+    }));
+    expect(html.querySelector('button[aria-expanded]')!.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('the launching generate_image call holds a closed group open before the run card lands', () => {
+    const g = closed();
+    const html = render(createElement(TurnNodes, {
+      nodes: [inGroup(tool(1, 'a'), g), inGroup(tool(2, 'generate_image'), g)],
+      isStreaming: false,
+    }));
+    expect(headers(html)).toEqual(['processGroupDone_tools', 'a', 'generate_image']);
+  });
+
+  it('a user fold of an image group sticks', () => {
+    const g = closed();
+    const nodes = [inGroup(tool(1, 'a'), g), inGroup(image('done'), g)];
+    const html = render(createElement(TurnNodes, { nodes, isStreaming: false }));
+    press(html.querySelector('button[aria-expanded]')!);
+    render(createElement(TurnNodes, { nodes: [...nodes], isStreaming: false }));
+    expect(headers(html)).toEqual(['processGroupDone_tools']);
+  });
+});
+
+describe('TurnNodes — image delete (culling a batch)', () => {
+  const imageNode = (refIds: string[], extra: Record<string, unknown> = {}): TurnNodeLike =>
+    node('image-gen', { turn: 0, runId: 'r1', status: 'done', imageRefIds: refIds, ...extra });
+  const thumbs = (html: HTMLElement) => [...html.querySelectorAll('button[aria-label="viewGeneratedImage"]')];
+  const trashes = (html: HTMLElement) => [...html.querySelectorAll('button[aria-label="deleteImage"]')];
+  const dialog = () => document.body.querySelector('[role="dialog"]');
+  const dialogDownload = () => dialog()!.querySelector<HTMLAnchorElement>('a[aria-label="download"]')!;
+  const click = (el: Element) => act(() => { el.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+  const pressKey = (key: string) =>
+    act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key })); });
+  const flush = () => act(async () => {});
+
+  it('thumbs carry no trash; the lightbox trash arms on the first click and deletes on the second (optimistic)', async () => {
+    const html = render(createElement(TurnNodes, {
+      nodes: [imageNode(['ref-1', 'ref-2', 'ref-3'])], isStreaming: false,
+    }));
+    expect(thumbs(html).length).toBe(3);
+    expect(trashes(html).length).toBe(0); // delete lives only in the lightbox
+    click(thumbs(html)[1]);
+    const trash = () => dialog()!.querySelector('button[aria-label="deleteImage"]')!;
+    click(trash());
+    expect(thumbs(html).length).toBe(3); // armed, nothing deleted yet
+    expect(apiMocks.delete).not.toHaveBeenCalled();
+    click(trash());
+    expect(apiMocks.delete).toHaveBeenCalledWith('/references/ref-2');
+    expect(thumbs(html).length).toBe(2);
+    await flush();
+    expect(thumbs(html).length).toBe(2); // resolved delete keeps it gone
+  });
+
+  it('a lightbox delete stays open on the next image (clamped), then emptying the run closes it', async () => {
+    const html = render(createElement(TurnNodes, {
+      nodes: [imageNode(['ref-1', 'ref-2', 'ref-3'])], isStreaming: false,
+    }));
+    click(thumbs(html)[1]); // open at ref-2
+    expect(dialogDownload().getAttribute('href')).toContain('/api/files/ref-2/');
+    const trash = () => dialog()!.querySelector('button[aria-label="deleteImage"]')!;
+    click(trash());
+    click(trash());
+    expect(apiMocks.delete).toHaveBeenCalledWith('/references/ref-2');
+    // Same index, clamped to the shrunk list → the NEXT image (ref-3) stands.
+    expect(dialog()).not.toBeNull();
+    expect(dialogDownload().getAttribute('href')).toContain('/api/files/ref-3/');
+    expect(thumbs(html).length).toBe(2);
+    // Delete the rest from the lightbox: ref-3, then ref-1 — the dialog closes
+    // when nothing is left and the plate takes the note.
+    click(trash());
+    click(trash());
+    click(trash());
+    click(trash());
+    await flush();
+    expect(dialog()).toBeNull();
+    expect(html.textContent).toContain('imagesDeletedByUser');
+  });
+
+  it('the Delete key deletes the shown image on the second press (Backspace is the macOS spelling)', async () => {
+    const html = render(createElement(TurnNodes, {
+      nodes: [imageNode(['ref-1', 'ref-2'])], isStreaming: false,
+    }));
+    click(thumbs(html)[0]);
+    pressKey('Delete');
+    expect(apiMocks.delete).not.toHaveBeenCalled();
+    pressKey('Delete');
+    expect(apiMocks.delete).toHaveBeenCalledWith('/references/ref-1');
+    // Still open on the remaining image.
+    expect(dialogDownload().getAttribute('href')).toContain('/api/files/ref-2/');
+    // Backspace arms + deletes the same way.
+    pressKey('Backspace');
+    pressKey('Backspace');
+    await flush();
+    expect(apiMocks.delete).toHaveBeenCalledWith('/references/ref-2');
+    expect(dialog()).toBeNull();
+    expect(html.textContent).toContain('imagesDeletedByUser');
+  });
+
+  it('a failed delete brings the thumb back and states the error (no silent degradation)', async () => {
+    apiMocks.delete.mockRejectedValue(new Error('boom'));
+    const html = render(createElement(TurnNodes, {
+      nodes: [imageNode(['ref-1', 'ref-2'])], isStreaming: false,
+    }));
+    click(thumbs(html)[0]);
+    pressKey('Delete');
+    pressKey('Delete');
+    expect(thumbs(html).length).toBe(1); // optimistically gone
+    await flush();
+    expect(thumbs(html).length).toBe(2); // restored
+    expect(appState.showToast).toHaveBeenCalledWith('imageDeleteFailed', 'error');
+  });
+
+  it('a delete survives a tab switch: the remounted plate still hides it', async () => {
+    const nodes = [imageNode(['ref-1', 'ref-2', 'ref-3'])];
+    const html = render(createElement(TurnNodes, { nodes, isStreaming: false }));
+    click(thumbs(html)[0]);
+    pressKey('Delete');
+    pressKey('Delete');
+    pressKey('Delete');
+    pressKey('Delete'); // ref-1 and ref-2 gone
+    await flush();
+    act(() => { root.render(null); }); // leaving the chat tab unmounts the plate
+    act(() => { root.render(createElement(TurnNodes, { nodes, isStreaming: false })); });
+    expect(thumbs(container).length).toBe(1);
+    expect(container.querySelector('img')!.getAttribute('src')).toContain('ref-3');
+  });
+
+  it('a delete from another surface (the page-wide deleted set) hides the thumb', () => {
+    const html = render(createElement(TurnNodes, {
+      nodes: [imageNode(['ref-1', 'ref-2'])], isStreaming: false,
+    }));
+    act(() => { useDeletedRefIds.getState().add(['ref-1']); });
+    expect(thumbs(html).length).toBe(1);
+    // An id this plate does not show changes nothing.
+    act(() => { useDeletedRefIds.getState().add(['ref-9']); });
+    expect(thumbs(html).length).toBe(1);
+  });
+
+  it('the server-side deletedByUser flag renders the note without any local delete', () => {
+    const html = render(createElement(TurnNodes, {
+      nodes: [imageNode([], { deletedByUser: true })], isStreaming: false,
+    }));
+    expect(html.textContent).toContain('imagesDeletedByUser');
+    expect(thumbs(html).length).toBe(0);
+    expect(trashes(html).length).toBe(0);
+  });
+
+  it.each([
+    ['readonly access', () => { appState.accessLevel = 'readonly'; }],
+    ['a public share', () => { uiState.isPublicShare = true; appState.accessLevel = 'full'; }],
+  ])('no delete in the lightbox for %s — no trash, the Delete key is inert', (_label, arrange) => {
+    arrange();
+    const html = render(createElement(TurnNodes, {
+      nodes: [imageNode(['ref-1'])], isStreaming: false,
+    }));
+    click(thumbs(html)[0]);
+    expect(dialog()).not.toBeNull();
+    expect(dialog()!.querySelector('button[aria-label="deleteImage"]')).toBeNull();
+    pressKey('Delete');
+    pressKey('Delete');
+    expect(apiMocks.delete).not.toHaveBeenCalled();
+  });
+
+  it('a half-armed lightbox delete disarms on navigation (one press on the next image only arms)', () => {
+    const html = render(createElement(TurnNodes, {
+      nodes: [imageNode(['ref-1', 'ref-2'])], isStreaming: false,
+    }));
+    click(thumbs(html)[0]);
+    pressKey('Delete'); // armed on ref-1
+    pressKey('ArrowRight'); // navigate to ref-2 — the arm must not travel
+    pressKey('Delete');
+    expect(apiMocks.delete).not.toHaveBeenCalled();
+    pressKey('Delete'); // armed on ref-2 — now it fires
+    expect(apiMocks.delete).toHaveBeenCalledWith('/references/ref-2');
+  });
+
+  it('a failed delete of the last image brings the thumb back but never reopens the lightbox', async () => {
+    apiMocks.delete.mockRejectedValue(new Error('boom'));
+    const html = render(createElement(TurnNodes, {
+      nodes: [imageNode(['ref-1'])], isStreaming: false,
+    }));
+    click(thumbs(html)[0]);
+    pressKey('Delete');
+    pressKey('Delete');
+    expect(dialog()).toBeNull();
+    await flush();
+    expect(thumbs(html).length).toBe(1); // restored
+    expect(dialog()).toBeNull(); // nobody reopened it
+  });
+
+  it('a delete never renames the survivors: the download number is the place in the batch', () => {
+    const html = render(createElement(TurnNodes, {
+      nodes: [imageNode(['ref-1', 'ref-2', 'ref-3'])], isStreaming: false,
+    }));
+    click(thumbs(html)[0]);
+    pressKey('Delete');
+    pressKey('Delete'); // ref-1 gone — ref-2 now stands first
+    expect(dialogDownload().getAttribute('href')).toMatch(/\/api\/files\/ref-2\/image-2\.png$/);
+  });
+
+  it('an errored lightbox image still offers the trash, not the download', () => {
+    const html = render(createElement(TurnNodes, {
+      nodes: [imageNode(['ref-1', 'ref-2'])], isStreaming: false,
+    }));
+    click(thumbs(html)[0]);
+    act(() => { dialog()!.querySelector('img')!.dispatchEvent(new Event('error', { bubbles: true })); });
+    expect(dialog()!.textContent).toContain('failedToLoadImages');
+    expect(dialog()!.querySelector('a[aria-label="download"]')).toBeNull();
+    const trash = () => dialog()!.querySelector('button[aria-label="deleteImage"]')!;
+    click(trash());
+    click(trash());
+    expect(apiMocks.delete).toHaveBeenCalledWith('/references/ref-1');
+  });
+
+  it('a run that produced nothing keeps the nothing-done text (not the deleted note)', () => {
+    const html = render(createElement(TurnNodes, {
+      nodes: [imageNode([])], isStreaming: false,
+    })).textContent ?? '';
+    expect(html).toContain('agentStepNoop');
+    expect(html).not.toContain('imagesDeletedByUser');
   });
 });
 

@@ -1,108 +1,178 @@
 ---
 name: deep-research
-description: Use when the user wants a topic INVESTIGATED, not looked up — «проведи глубокий поиск», «исследуй тему», «собери аналитику», «разберись в теме», «сделай обзор», deep research, research this properly, comprehensive overview. Runs recon, then a research plan, then a dig per section, and lands one compiled document with sources. Activates web_search and sandbox_bash.
+description: Use ONLY when the user explicitly asks for deep research by name — «глубокое исследование», «проведи глубокое исследование», «deep research», in any form of these words. Any other research request — «исследуй тему», «разберись», «сделай обзор», «собери аналитику», a comparison, a pasted link — is the web-search skill, however big the topic. This run takes many minutes and dozens of searches. Recon first, then ONE message with a detailed research plan for the user to approve or edit, then the dig runs on its own — findings land as references of the open document, the report grows as its child document. Activates web_search, web_fetch and sandbox_bash.
 tools:
   - web_search
+  - web_fetch
   - sandbox_bash
 ---
 
 # Deep research
 
-A search answers a question. This answers a TOPIC: it comes back as a document
-the user can read to understand the subject well enough to decide where to dig
-next.
+A search answers a question. This answers a TOPIC: the user gets one report they
+can read to understand the subject in depth — enough to act on it, or to decide
+where to dig next.
+
+The user sees three things: their question, ONE message with the research plan,
+and the finished report. Everything between those is yours to run.
 
 ## When this is the wrong skill
 
-One question with one answer — a date, a version number, what a page says — is
-the `web-search` skill. Load that one instead. This one costs many searches and
-a document; spending it on a lookup is waste, and the user asked for a lookup.
+This skill runs only when the user asked for it by name: «глубокое
+исследование» or «deep research». Everything else — a lookup, «исследуй тему»,
+«разберись», «сделай обзор», a comparison of options, a large topic asked in
+other words — is the `web-search` skill. Load that one instead. This one costs
+many minutes, dozens of searches and several documents; the user decides when
+to spend that, not the size of the topic.
 
-The signal for THIS skill is that the answer has parts: several sub-questions,
-competing positions, a landscape to map.
+## Languages
+
+Search in Russian AND English by default, whatever language the user wrote in —
+much of any field exists only in English. When the user names more languages
+(Chinese and Japanese are common), search in those too. Write each query in
+that language and in the field's own terms there, not as a word-for-word
+translation of the Russian query. Report in the user's language; quote a
+foreign source in a translation that names the original.
 
 ## Phase 1 — Recon
 
-Do not plan the research before you know what is out there. Planning first
-produces an outline of what you already believed.
+Do not plan the research before you know what is out there. A plan written
+first is an outline of what you already believed.
 
-1. Decompose the request into 3–5 BROAD queries — the topic's obvious facets,
-   not your guesses at the answer.
-2. Run `search_materials` first. The project may already hold material on this,
-   and that material outranks anything the web says. Say what it holds.
-3. Run those queries through `web_search` — up to four per call in `queries`.
-   You are reading titles and snippets for the SHAPE of the field: what the recurring terms are, who
-   the named sources are, where the disagreements sit.
+1. Run `search_materials` first. The project may already hold material on this,
+   and that material outranks anything the web says. Note what it holds.
+2. Decompose the request into 4–6 BROAD queries — the topic's obvious facets,
+   not your guesses at the answer — and run them through `web_search` in every
+   search language, up to four queries per call.
+3. Read titles and snippets for the SHAPE of the field: the recurring terms,
+   the named players and sources, the numbers people argue about, where the
+   disagreements sit. Open a page with `web_fetch` only if one overview page
+   would teach you the map faster than ten snippets.
 
-Recon is cheap and shallow on purpose. Do not open pages yet.
+## Phase 2 — The plan: the one message the user answers
 
-## Phase 2 — The research plan
+Write ONE message and end your turn on it. The user approves or edits a plan;
+that is the only question you ask in the whole run.
 
-From the recon, write an outline: 4–8 sections, each one a QUESTION the final
-document must answer, with a line on what would answer it. An outline of nouns
-("History", "Tools") is not a plan; an outline of questions is.
+The plan carries:
 
-Print the outline in the chat so the user sees where the research is going, then
-KEEP WORKING in the same turn. Do not ask for approval — the user can redirect
-you after seeing it, and stopping to ask costs them a turn for nothing.
+- **What is already clear** — two or three sentences from recon, marked as recon
+  (it is not a finding and is never cited later).
+- **Directions** — 3–5 of them. Each is a QUESTION the report must answer, never
+  a noun ("History", "Tools"), and under it: 2–4 sub-questions, the kind of
+  sources that will answer it (regulator filings, vendor docs, benchmarks,
+  forums, press in which language), and what it buys the user. Two directions
+  that differ only in wording are one direction.
+- **The report outline** — the section headings the report will have.
+- **Assumptions** — time frame, geography, search languages, depth. The user
+  corrects these more often than anything else.
+- **Your recommendation** — which directions, if not all.
 
-Then create the report document immediately: `create_document`, titled after the
-topic, `parent_id` = the document this chat is working on (the project root when
-there is none), body = the outline as headings plus a one-line "in progress"
-note. This document is now where the research lives.
+End with one line: "Edit anything, or say go." If the topic turned out
+answerable from recon, give the answer instead in a few lines and ask "dig
+deeper?" — a thin topic answered short is a good outcome.
 
-## Phase 3 — The digs
+## Phase 3 — The run: no more questions to the user
 
-Take the sections in order. For each one:
+From the user's answer on, do not report progress, do not ask, do not check in.
 
-- 2–4 TARGETED queries in one `web_search` call — the section's question in the
-  field's own vocabulary, which recon just taught you. For anything that moves,
-  put the time frame in the query itself; there is no date filter.
-- A "Showing the first N sources" note means the topic is not exhausted: refine
-  before you conclude.
-- When a snippet is not enough — the claim matters, the source is primary, the
-  numbers are in the page — fetch it in the console:
+**Create the report first.** `create_document` with `parent_id` = the document
+this chat works on (the project root when there is none), `node_type`
+`"document"`, titled after the topic. Its body is the approved outline as `##`
+headings, each with the line `_In progress._`, plus a `## Summary` heading at
+the top. The structure exists before any finding does, and every later write
+fills a heading that is already there.
 
-      curl -sL '<url>' -o page.html
+**Dig each direction.** Where `subagent` is among your tools, give each direction
+to its own subagent in parallel: its prompt carries the direction, its
+sub-questions, the search languages, the assumptions and the digging rules
+below, and asks for the finding back as text in the finding format. A subagent
+does not write documents — you are the only writer. Without `subagent`, dig the
+directions one at a time yourself, and keep your context lean: from a fetched
+page take the facts, numbers and quotes you need into the finding and move on.
 
-  and strip it there with Python. Never dump raw HTML into your context. A page
-  that will not come (JS-only, paywall, 403) is a fact to record, not a wall to
-  work around; if `sandbox_bash` is not among your tools this deploy serves no
-  console — work from snippets and say so.
+How to dig a direction:
 
-- Write the section into the document with `append_to_document` BEFORE starting
-  the next one, each claim carrying its source ("per <url>").
+1. 2–4 TARGETED queries per sub-question, in the field's vocabulary that recon
+   taught you, in every search language. For anything that moves, put the time
+   frame in the query itself; there is no date filter. One `web_search` call
+   takes at most four queries — split a longer batch into several calls.
+2. Read the sources that carry the weight with `web_fetch`: primary sources
+   (the filing, the paper, the vendor's own page, the dataset), and any page
+   whose number or claim the report will rest on. A snippet is a pointer, not
+   evidence. Read at least three primary pages per direction when they exist.
+3. A gap round: list what the sub-questions still lack and search for exactly
+   that. Stop when new sources only repeat what you have.
+4. `web_fetch` refuses PDF and some sites. For a PDF, fetch it in the console
+   (`curl -sL '<url>' -o doc.pdf`, then Python with `pypdf` — `pip install
+   pypdf` when it is missing) and extract there — never
+   dump a raw file into your context. A page that will not come (JS-only,
+   paywall, 403) is a fact to record, not a wall to work around. If
+   `sandbox_bash` is not among your tools, say which PDFs went unread.
 
-Appending as you go is not tidiness. A turn has a tool-call ceiling and long
-research hits it: the document holds what is finished, so the next turn resumes
-at the first unwritten section instead of starting over. When you run out of
-room mid-research, say which sections are done and stop — do not rush the
-remaining ones into a paragraph each.
+**Save each finding as a reference of the open document** the moment the
+direction is done: `create_document` with `node_type` `"reference"`,
+`parent_id` = the document this chat works on (the report itself when there is
+none), titled `Research: <direction>`. Its body is the finding:
 
-## Phase 4 — Compile
+```markdown
+## <direction>
 
-With the sections written, go back to the top of the document (`edit_document`)
-and add:
+> **Short answer:** 3–7 sentences.
 
-- **A summary** — 5–10 sentences that answer the user's original request, for a
-  reader who will not read further.
-- **What is disputed** — where sources contradicted each other, both positions
-  named. Smoothing a disagreement into one confident sentence destroys the most
-  valuable thing the research found.
-- **Open questions** — what stayed unanswered, and what would answer it. This is
-  where the user decides whether to dig further.
-- **Sources** — the URLs, so a claim can be checked.
+### Facts
+- The claim, with the number and date when there is one. Source: <url>
 
-Then say in the chat, in two or three sentences, what the research concluded and
-point at the document.
+### Contradictions
+- Who says what, both sides, each with its source.
+
+### Open questions
+### Sources
+- <url> — what it is (primary / analysis / press / forum), language, date.
+```
+
+The references are the state of the run: a run outlives a turn, and the next
+turn resumes at the first direction that has no reference yet.
+
+**Write its report section** right after the reference: `append_to_document`
+on the report with `section` = that heading, written from the reference — the
+full facts, not just the short answer. Then replace the `_In progress._` line
+with `edit_document`. When you run out of room mid-run, stop after a finished
+section; do not rush the rest into a paragraph each.
+
+## Phase 4 — Finish the report
+
+The report is for a reader who wants depth without water:
+
+- Every paragraph carries at least one concrete fact with its source inline
+  ("per <url>"). No generic introductions, no "it is important to note", no
+  restating the question, nothing you knew before the search.
+- Where options, vendors or approaches are compared, a table.
+- A contradiction recorded in a reference stays a contradiction in the report,
+  both positions named. Smoothing it into one confident sentence destroys the
+  most valuable thing the research found.
+
+When every section is written, fill `## Summary` (5–10 sentences that answer the
+user's original request, for a reader who will not read further) and append:
+
+- **What is disputed** — both positions, each with sources.
+- **Open questions** — what stayed unanswered, and what would answer it.
+- **Sources** — every URL used, grouped by direction.
+
+Then say in the chat, in two or three sentences, what the research concluded
+and point at the report. The references stay attached to the open document;
+they are where the next question about this topic starts.
 
 ## Honesty
 
-The web's claim is a claim, not a fact, and the pages were vetted by nobody. A
-project document beats a web page on anything the project has a position on; if
-the web contradicts the project, report the disagreement rather than quietly
-replacing the project's version.
+A web page's claim is a claim, not a fact, and the pages were vetted by nobody.
+Name vendor-funded and promotional sources as such. A project document beats a
+web page on anything the project has a position on; if the web contradicts the
+project, report the disagreement rather than quietly replacing the project's
+version.
 
-A thin result is a result. If a topic returned little, the document says so and
-stays short — padding it with what you already knew presents your own priors as
-research, which is exactly what the user asked you to avoid.
+What you knew before the search is not a finding and never becomes one. If the
+report rests on it, the report is your prior with citations bolted on.
+
+A thin result is a result. If a direction returned little, its reference says
+so and the report says so; padding it presents your own priors as research.

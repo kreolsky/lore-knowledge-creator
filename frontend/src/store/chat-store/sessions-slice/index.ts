@@ -19,6 +19,7 @@ import { t } from '../../../i18n';
 import { clearContextForSession } from '../../../chat/context';
 import { markChatScopeLoaded } from '../../../chat/scope-tracker';
 import type { ChatState, Set, Get } from '../types';
+import { registeredTurnSlot } from '../streaming';
 import {
   getPendingSessionPatch,
   setPendingSessionPatch,
@@ -118,7 +119,10 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
       // Why: if the resolver restored a session, the ghost must inherit from it
       // rather than fall back to bare defaults.
       get().initGhostFromScope();
-      set({ activeSessionId: null, messages: [] });
+      // streaming: null — the slot shows the ACTIVE chat's turn, and a ghost
+      // has none (the INVARIANT in types.ts; the chat left behind keeps its
+      // registration and its frames keep arriving).
+      set({ activeSessionId: null, messages: [], streaming: null });
 
       // Mark the project's chat scope as loaded so the ChatPanel mount effect
       // (triggered by setRightPanelTab below) does NOT re-run loadSessions. That
@@ -138,7 +142,10 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
         // without the second round-trip. Absent → [] (loadMessages fills it).
         messages: preloadedMessages ?? [],
         selectedSiblings: {},
-        streaming: null,
+        // The slot follows the pointer: the opened chat's own open turn (if
+        // this tab holds one) seats at once, anything else is dropped (the
+        // INVARIANT in types.ts).
+        streaming: sessionId ? registeredTurnSlot(sessionId) : null,
       });
       const session = sessionId ? get().sessions.find(s => s.session_id === sessionId) : null;
       if (session) {
@@ -204,6 +211,9 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
           sessions,
           activeSessionId: wasActive ? null : s.activeSessionId,
           messages: wasActive ? [] : s.messages,
+          // The deleted chat was active: the ghost it lands on has no turn —
+          // drop the slot with the pointer (the INVARIANT in types.ts).
+          ...(wasActive ? { streaming: null } : {}),
         };
       });
 

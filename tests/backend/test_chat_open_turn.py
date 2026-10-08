@@ -278,3 +278,127 @@ async def test_breach_with_a_dead_driver_one_halt_card_no_open_mark(monkeypatch)
     assert halts[0]["seq"] == 8.7, "anchored inside the dead turn, never at the tail"
     assert halts[0]["data"]["reason"] == "turn_timeout"
     assert "open_turn" not in out[0], "the closers closed the turn — nothing is open"
+
+
+# ─── the driver-start window: a held turn lock marks the open turn ───────────
+# Between create_completion taking the turn lock and dsh logging `turn/start`,
+# the replay cannot show the turn; the held lock is what says it runs.
+# INVARIANT: every test above runs with the lock FREE — the autouse per-test
+# Redis FLUSHDB (conftest `_redis_isolation`) clears it, so they keep asserting
+# exactly today's lock-free read. Why: the lock state is a second input to the
+# open mark; a test that does not choose it must still measure one value.
+
+
+async def _hold_lock(session_id="chat-1"):
+    from turn_lock import acquire_turn_lock
+    assert await acquire_turn_lock(session_id)
+
+
+_EMPTY = {"turns": [], "tail_seq": None}
+
+
+def _closed_replay():
+    return {
+        "turns": [{"end_seq": 5, "frames": [_dsh(1, "assistant/message")]}],
+        "tail_seq": 5,
+    }
+
+
+@pytest.mark.asyncio
+async def test_lock_held_first_turn_marks_the_new_row(monkeypatch):
+    """A chat's FIRST turn, before dsh writes `turn/start`: the log is empty,
+    the lock says the turn runs — its row is marked open with no frames."""
+    await _hold_lock()
+    out = [row("u1", role="user", created="1"), row("a_new", created="2")]
+    await _attach(out, _EMPTY, monkeypatch)
+    assert out[1]["open_turn"] is True
+    assert out[1]["frames"] == []
+    assert "assistant_stream" not in out[1]
+
+
+@pytest.mark.asyncio
+async def test_lock_held_later_turn_marks_the_unstamped_newest_row(monkeypatch):
+    """A LATER turn before its `turn/start`: the trailing turn is the previous
+    closed one. The new unstamped row takes the mark; the stamped row keeps
+    its own frames and no mark."""
+    await _hold_lock()
+    out = [row("a1", seq=5, created="1"), row("a_open", created="2")]
+    await _attach(out, _closed_replay(), monkeypatch)
+    assert out[1]["open_turn"] is True
+    assert out[1]["frames"] == []
+    assert "open_turn" not in out[0]
+    assert out[0]["frames"] == [_dsh(1, "assistant/message")]
+
+
+@pytest.mark.asyncio
+async def test_lock_held_before_rows_exist_marks_nothing(monkeypatch):
+    """The lock is taken before the new rows are created: the newest assistant
+    row is the previous turn's STAMPED row — it never takes the mark."""
+    await _hold_lock()
+
+    class _OneTurnDB:
+        async def query(self, _q, _p=None, **_kw):
+            return [slim("u1"), slim("a1", "u1", "assistant", "1", seq=5)]
+
+    out = [row("a1", seq=5, created="1")]
+    await _attach(out, _closed_replay(), monkeypatch, db=_OneTurnDB())
+    assert "open_turn" not in out[0]
+
+
+@pytest.mark.asyncio
+async def test_lock_held_before_rows_exist_marks_an_abnormal_unstamped_row(monkeypatch):
+    """Accepted risk, pinned: the lock is held before the new rows exist and
+    the previous turn ended abnormally (unstamped, no halt). That old row is
+    the newest and takes the mark until the new turn's `ids` frame re-seats
+    the slot — cosmetic and sub-second."""
+    await _hold_lock()
+    out = [row("a_old", created="1")]
+    await _attach(out, _EMPTY, monkeypatch)
+    assert out[0]["open_turn"] is True
+
+
+@pytest.mark.asyncio
+async def test_lock_held_newest_row_halted_marks_nothing(monkeypatch):
+    """The halt INVARIANT outranks the lock: a halted row is a dead turn's one
+    record, and the older unstamped row is not the newest — nothing is marked."""
+    await _hold_lock()
+    out = [
+        row("a1", seq=5, created="1"),
+        row("a_older", created="2"),
+        {**row("a_halt", created="3"), "halt": {"reason": "turn_timeout"}},
+    ]
+
+    class _HaltDB:
+        async def query(self, _q, _p=None, **_kw):
+            return [
+                slim("u1"), slim("a1", "u1", "assistant", "1", seq=5),
+                slim("u2", "a1"), slim("a_older", "u2", "assistant", "2"),
+                slim("u3", "a_older"), slim("a_halt", "u3", "assistant", "3"),
+            ]
+
+    await _attach(out, _closed_replay(), monkeypatch, db=_HaltDB())
+    assert not any(r.get("open_turn") for r in out)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replay", [_EMPTY, _closed_replay()], ids=["empty", "closed"])
+async def test_lock_free_marks_nothing(monkeypatch, replay):
+    """Today's behaviour, pinned: no lock, no open turn in the log — no mark."""
+    out = [row("a1", seq=5, created="1"), row("a_new", created="2")]
+    await _attach(out, replay, monkeypatch)
+    assert not any(r.get("open_turn") for r in out)
+
+
+@pytest.mark.asyncio
+async def test_lock_held_with_a_genuine_open_turn_keeps_the_timeline(monkeypatch):
+    """Once dsh logged the turn, the timeline owns the mark: its frames and
+    `assistant_stream` ride the row, and the lock branch does not re-mark."""
+    await _hold_lock()
+    out = [row("a1", seq=5, created="1"), row("a_open", created="2")]
+    replay = _replay([_dsh(7, "assistant/message")])
+    replay["turns"][1]["assistant_stream"] = {"revision": 1}
+    await _attach(out, replay, monkeypatch)
+    assert out[1]["open_turn"] is True
+    assert out[1]["frames"] == [_dsh(7, "assistant/message")]
+    assert out[1]["assistant_stream"] == {"revision": 1}
+    assert "open_turn" not in out[0]

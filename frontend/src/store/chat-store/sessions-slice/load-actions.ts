@@ -165,8 +165,10 @@ export function createLoadActions(set: Set, get: Get): LoadActions {
               // null (ghost) and materialize a row on first send. The ghost context
               // is DERIVED from the open entity (useGhostChatContext +
               // useGhostContextWarm in ChatPanel) — nothing to attach here.
+              // streaming: null — the slot shows the ACTIVE chat's turn and a
+              // ghost has none (the INVARIANT in types.ts).
               get().initGhostFromScope();
-              set({ activeSessionId: null, messages: [], chatScopeLoading: false, pendingInputFocus: true });
+              set({ activeSessionId: null, messages: [], streaming: null, chatScopeLoading: false, pendingInputFocus: true });
               return;
             case 'restore_saved':
               // When the backend piggybacked the very session we resolved,

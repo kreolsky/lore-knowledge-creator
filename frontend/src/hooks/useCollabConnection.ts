@@ -19,6 +19,7 @@ import { clearCheckpointDedup } from '../editor/content-sync';
 import { clearLinkCache } from '../api/links';
 import { useAppStore } from '../store/app-store';
 import { useDocumentRoute } from './useDocumentRoute';
+import { closeDeletedReference } from './useReferenceFileDelete';
 import { userColor } from '../utils/user-color';
 import { emit } from '../events';
 import { t } from '../i18n';
@@ -131,7 +132,7 @@ export function useCollabConnection({
       onDocDeleted: () => {
         clearCheckpointDedup(entityId);
         if (isReference) {
-          useAppStore.getState().setCurrentReference(null);
+          closeDeletedReference(entityId);
         } else if (projectId) {
           navigate(`/projects/${projectId}`);
         }

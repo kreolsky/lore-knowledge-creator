@@ -107,7 +107,7 @@ function rollbackOptimisticUser(
 
 import { buildChildrenMap, resolveActivePath, resolveAncestorChain, ROOT_KEY, REWIND_KEY, withoutRewind } from './tree';
 import { appendDraft } from './misc-slice';
-import { streamCompletion, flushStreaming, emptyStreaming, hasOpenHarnessTurn } from './streaming';
+import { streamCompletion, flushStreaming, emptyStreaming, hasOpenHarnessTurn, markHarnessTurnAborted } from './streaming';
 import { rewindToLineage } from './conversation-feed';
 import { seatSessionRows, afterSessionRowsCommitted } from './session-rows';
 import { loadMessagesFor, patchMessageContent, deleteMessageById } from '../chat-message-crud';
@@ -194,7 +194,10 @@ export async function runCompletion(set: Set, get: Get, opts: RunCompletionOpts)
 
   const abortController = new AbortController();
   // The streaming state machine is one object; idle ⟺ streaming === null.
-  set({ streaming: { ...emptyStreaming(), controller: abortController } });
+  // The slot shows THIS chat's turn (streaming.sessionId — the INVARIANT in
+  // types.ts); the ownership check in the catch/finally below keeps this run's
+  // flush from wiping a slot a leave-and-return re-seated for the same chat.
+  set({ streaming: { ...emptyStreaming(activeSessionId), controller: abortController } });
 
   // Rewind the assembler to the lineage THIS turn extends, before the
   // boundary is seated in streamCompletion: a fork sends on an ancestor
@@ -227,13 +230,20 @@ export async function runCompletion(set: Set, get: Get, opts: RunCompletionOpts)
     });
   } catch (e) {
     const failed = handleSendError(e, opts.errorLabel, set, get);
-    if (failed) markStreamingFailed(set, get);
-    rollbackOptimisticUser(set, opts.optimisticUserId, opts.restoreRewind ?? false, opts.parentId);
+    // Slot ownership: this run owns the slot only while ITS controller sits in
+    // it — a leave-and-return re-seats a fresh controller (adoptOpenTurn), and
+    // whatever slot the shown chat then holds is never this run's to flush.
+    if (get().streaming?.controller === abortController) {
+      if (failed) markStreamingFailed(set, get);
+      rollbackOptimisticUser(set, opts.optimisticUserId, opts.restoreRewind ?? false, opts.parentId);
+    }
     if (failed && opts.restoreDraftOnFail && opts.userContent) {
       restoreFailedSend(get, activeSessionId, opts.userContent);
     }
   } finally {
-    set(flushStreaming);
+    if (get().streaming?.controller === abortController) {
+      set(flushStreaming);
+    }
   }
 }
 
@@ -385,12 +395,16 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
       // Zustand ever makes `set()` async, the streaming state machine breaks.
       const { activeSessionId, streaming } = get();
       if (!activeSessionId) return;
-      if (streaming) {
-        // A turn is in flight — route to the per-session
-        // queue instead of POSTing into the turn lock. The guard lives in the store
-        // (not the UI) so MicButton transcription + hotkeys can't bypass it; one
-        // ordinary sendMessage fires later on flush. Images stay in the composer
-        // (attachment-budget merge is a separate problem).
+      // INVARIANT(data-loss): a POST fires only for a chat with no open turn
+      // OF ITS OWN. Why: the backend locks per session (409), and the slot
+      // covers only the ACTIVE chat — another chat's turn must never queue
+      // this one (the queued text may never send). The registration clause
+      // covers the return window (the slot is null between setActiveSession
+      // and the reload's re-adoption). The guard lives in the store (not the
+      // UI) so MicButton transcription + hotkeys can't bypass it; one
+      // ordinary sendMessage fires later on flush. Images stay in the
+      // composer (attachment-budget merge is a separate problem).
+      if (streaming || hasOpenHarnessTurn(activeSessionId)) {
         get().enqueueMessage(activeSessionId, content);
         return;
       }
@@ -535,10 +549,16 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
     },
 
     stopGeneration() {
-      const controller = get().streaming?.controller ?? null;
+      const st = get().streaming;
+      const controller = st?.controller ?? null;
       if (controller) {
-        const sessionId = get().activeSessionId;
+        const sessionId = st?.sessionId ?? get().activeSessionId;
         if (sessionId) {
+          // Stamp the registration aborted BEFORE the abort (the end facts
+          // live on the registration — see TurnEndFacts): a trailing `error`
+          // frame of this deliberate stop must not surface as a failure, and
+          // the terminal must read the turn as 'aborted'.
+          markHarnessTurnAborted(sessionId);
           // A failed cancel leaves a zombie server-side turn; surface it rather
           // than swallow silently (no-silent-degradation; mirrors the send path).
           apiClient.post(`/chat/sessions/${sessionId}/completions/cancel`, {})

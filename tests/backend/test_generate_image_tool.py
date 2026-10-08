@@ -1155,6 +1155,10 @@ async def test_generate_image_done_frame_equals_the_reload_mint(
     # The reload attach over the same row: same anchor, same chips.
     row = {"message_id": "msg-1", "created_at": "1",
            "frames": [dict(call)], "gen_steps": params["steps"]}
+    # This test pins the anchor/chips parity, not the deleted-image filter
+    # (that one lives in test_driver_frames.py) — stub every ref live.
+    from test_driver_frames import _stub_live_refs
+    _stub_live_refs(monkeypatch)
     await driver.frames.attach_reload_lore_mints(
         [row], chain={"msg-1"}, tail_seq=3, session_id="sess-1")
     reload_mint = next(f for f in row["frames"] if f["type"] == "lore/image-gen")

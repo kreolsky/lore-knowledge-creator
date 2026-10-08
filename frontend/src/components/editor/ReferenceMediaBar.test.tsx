@@ -17,6 +17,7 @@ vi.mock('../../api/client', () => ({ apiClient: { delete: vi.fn(), get: vi.fn(),
 import { ReferenceMediaBar } from './ReferenceMediaBar';
 import { useAppStore } from '../../store/app-store';
 import { apiClient } from '../../api/client';
+import { closeDeletedReference } from '../../hooks/useReferenceFileDelete';
 
 const NOW = '2026-01-01T00:00:00Z';
 
@@ -128,12 +129,66 @@ describe('MediaFileActions delete flow (real store)', () => {
   it('first click arms, second click DELETEs /references/{id}/file', async () => {
     const ref = baseRef('image');
     useAppStore.setState({ references: [ref], currentReference: ref, currentDocument: null });
-    (apiClient.delete as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true });
+    (apiClient.delete as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, reference_deleted: false });
     renderBar(ref);
     click(deleteBtn()!);
     expect(apiClient.delete).not.toHaveBeenCalled();
     await act(async () => { click(deleteBtn()!); });
     expect(apiClient.delete).toHaveBeenCalledWith('/references/ref-1/file');
+  });
+
+  it('server deleted the text-less reference: it leaves the list and the viewer closes', async () => {
+    const ref = baseRef('image');
+    useAppStore.setState({ references: [ref], currentReference: ref, currentDocument: null });
+    (apiClient.delete as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, reference_deleted: true });
+    renderBar(ref);
+    click(deleteBtn()!);
+    await act(async () => { click(deleteBtn()!); });
+    const state = useAppStore.getState();
+    expect(state.references.find(r => r.reference_id === 'ref-1')).toBeUndefined();
+    expect(state.currentReference).toBeNull();
+  });
+
+  it('server deleted the open image while other images remain: the next image opens', async () => {
+    const ref = baseRef('image');
+    const other = { ...baseRef('image'), reference_id: 'ref-2' };
+    useAppStore.setState({ references: [ref, other], currentReference: ref, currentDocument: null });
+    (apiClient.delete as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, reference_deleted: true });
+    renderBar(ref);
+    click(deleteBtn()!);
+    await act(async () => { click(deleteBtn()!); });
+    const state = useAppStore.getState();
+    expect(state.references.map(r => r.reference_id)).toEqual(['ref-2']);
+    expect(state.currentReference?.reference_id).toBe('ref-2');
+  });
+
+  it('collab doc_deleted lands BEFORE the DELETE response (server order): the next image still opens', async () => {
+    const ref = baseRef('image');
+    const other = baseRef('image', { reference_id: 'ref-2' });
+    useAppStore.setState({ references: [ref, other], currentReference: ref, currentDocument: null });
+    (apiClient.delete as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      closeDeletedReference('ref-1'); // what useCollabConnection's onDocDeleted calls
+      return { success: true, reference_deleted: true };
+    });
+    renderBar(ref);
+    click(deleteBtn()!);
+    await act(async () => { click(deleteBtn()!); });
+    const state = useAppStore.getState();
+    expect(state.references.map(r => r.reference_id)).toEqual(['ref-2']);
+    expect(state.currentReference?.reference_id).toBe('ref-2');
+  });
+
+  it('server kept the reference (it has text): it stays open as markdown', async () => {
+    const ref = baseRef('image');
+    useAppStore.setState({ references: [ref], currentReference: ref, currentDocument: null });
+    (apiClient.delete as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, reference_deleted: false });
+    renderBar(ref);
+    click(deleteBtn()!);
+    await act(async () => { click(deleteBtn()!); });
+    const state = useAppStore.getState();
+    expect(state.references.find(r => r.reference_id === 'ref-1')?.media_type).toBe('markdown');
+    expect(state.currentReference?.reference_id).toBe('ref-1');
+    expect(state.currentReference?.media_type).toBe('markdown');
   });
 
   it('API failure: store rolled back and error toast shown (no silent degradation)', async () => {

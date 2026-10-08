@@ -44,6 +44,10 @@ export interface Props {
    *  stream end). The reasoning plate passes `hasContent` so it collapses as soon
    *  as the answer begins. */
   collapseWhen?: boolean;
+  /** Open signal: while true (and no manual toggle yet) the plate is expanded,
+   *  and it outranks the auto-collapse signal. Unlike `defaultExpanded` it
+   *  also opens a plate already mounted collapsed. */
+  expandWhen?: boolean;
   /** Optional tone for the failed/noop
    *  agent-step chip. `failed` ⇒ amber accent; `noop` ⇒ muted. Absent (or
    *  undefined) ⇒ neutral (the default surface). */
@@ -73,22 +77,25 @@ export function ToolPlate({
   autoCollapse = false,
   isStreaming = false,
   collapseWhen,
+  expandWhen = false,
   tone,
   ariaLabel,
   children,
   bare = false,
   footer,
 }: Props) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
-  // Once the user clicks, the auto-collapse effect no longer fires.
+  const [expanded, setExpanded] = useState(defaultExpanded || expandWhen);
+  // Once the user clicks, the auto-collapse/expand effect no longer fires.
   const manualRef = useRef(false);
 
   // The collapse signal: an explicit `collapseWhen` if provided, else `!isStreaming`.
   const trigger = collapseWhen !== undefined ? collapseWhen : !isStreaming;
 
   useEffect(() => {
-    if (autoCollapse && !manualRef.current && trigger) setExpanded(false);
-  }, [autoCollapse, trigger]);
+    if (manualRef.current) return;
+    if (expandWhen) setExpanded(true);
+    else if (autoCollapse && trigger) setExpanded(false);
+  }, [autoCollapse, trigger, expandWhen]);
 
   // Tone → Tailwind utilities (no new CSS class — utilities only, per styling.md).
   // failed: amber left-border on the BODY + amber header icon/title. noop: the

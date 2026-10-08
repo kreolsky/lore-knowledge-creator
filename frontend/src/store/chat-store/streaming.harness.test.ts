@@ -13,24 +13,80 @@
  * - a refused POST (no frames) rejects and unregisters — late frames drop;
  * - a POST rejection that arrives AFTER the failure frames settled is
  *   swallowed (the frames already told the story);
- * - chat reset settles a pending turn (no dangling await).
+ * - chat reset settles a pending turn (no dangling await);
+ * - a turn of a chat that is NOT shown keeps running: it updates only its
+ *   own row facts, never the shown chat's display state, and its terminal
+ *   deletes only its own registration.
  */
+// @vitest-environment jsdom
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const showToast = vi.fn();
-vi.mock('../app-store', () => ({
-  useAppStore: { getState: () => ({ currentUser: { user_id: 'u1', name: 'U' }, showToast }) },
-}));
-const postMock = vi.fn();
-vi.mock('../../api/client', () => ({
-  apiClient: { post: (...a: unknown[]) => postMock(...a) },
+vi.mock('../../api/client', () => {
+  class HttpError extends Error {
+    status: number;
+    constructor(s: number) { super(`HTTP ${s}`); this.name = 'HttpError'; this.status = s; }
+  }
+  class RequestTooLargeError extends Error {}
+  return {
+    apiClient: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
+    HttpError,
+    RequestTooLargeError,
+  };
+});
+vi.mock('../app-store', () => {
+  const state = {
+    currentDocument: null,
+    currentReference: null,
+    currentProject: null,
+    currentUser: { user_id: 'u1', name: 'U' },
+    maxAttachmentMb: 5,
+    setMaxAttachmentMb: () => {},
+    accessLevel: 'full',
+    showToast: vi.fn(),
+  };
+  return { useAppStore: { getState: vi.fn(() => state), subscribe: () => () => {} } };
+});
+vi.mock('../ui-store', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../ui-store')>();
+  return {
+    ...actual,
+    useUIStore: {
+      getState: vi.fn(() => ({
+        documents: {},
+        setLastActiveChatSession: vi.fn(),
+        getLastActiveChatSession: vi.fn(() => null),
+        getRefOpenMode: vi.fn(() => 'center'),
+      })),
+    },
+  };
+});
+vi.mock('../../chat/context', () => ({
+  setupChatContextBridge: vi.fn(),
+  GHOST_SESSION_ID: '__ghost__',
+  resolveCompletionContext: vi.fn(() => ({ document_ids: [], reference_ids: [] })),
+  getContextForSession: vi.fn(() => ({ documentIds: [], referenceIds: [] })),
+  setContextForSession: vi.fn(),
+  clearContextForSession: vi.fn(),
+  getDerivedGhostContext: vi.fn(() => ({ docIds: [], refIds: [] })),
+  ghostBaseTargets: vi.fn(() => ({ docs: [], refs: [] })),
+  resetGhostDeltas: vi.fn(),
+  hydrateFromSessions: vi.fn(),
+  pruneContext: vi.fn(),
+  clearPendingContextPatches: vi.fn(),
+  useChatContext: vi.fn(() => ({ documentIds: [], referenceIds: [] })),
+  addItemToContext: vi.fn(() => Promise.resolve()),
+  removeItemFromContext: vi.fn(() => Promise.resolve()),
 }));
 vi.mock('../../i18n', () => ({ t: (k: string) => k }));
 
 import { streamCompletion, dispatchChatFrame, hasOpenHarnessTurn } from './streaming';
 import { clearChatCaches } from './reset-registry';
+import { useChatStore } from '../chat-store';
+import { apiClient } from '../../api/client';
 import type { ChatState, Set } from './types';
+
+const postMock = apiClient.post as unknown as ReturnType<typeof vi.fn>;
 
 function makeStore(sessionId = 's1') {
   let state = {
@@ -46,6 +102,11 @@ function makeStore(sessionId = 's1') {
     conversation: [],
     turnRanges: {},
     turnStartSeq: null,
+    queued: {},
+    // scheduleTurnEndFlush's macrotask calls these off this raw state — stubs,
+    // so a turn that ends with chips queued in a sink-level test cannot crash.
+    flushQueued: vi.fn(async () => {}),
+    restoreQueued: vi.fn(),
   } as unknown as ChatState;
   const get = () => state;
   const set: Set = (u: unknown) => {
@@ -213,5 +274,114 @@ describe('the harness transport — a turn over the WS dispatch', () => {
       dispatchChatFrame(get, set, 's1', { ...f, time: 1007, ignorable: true });
     }
     expect(get().conversation).toEqual([]);
+  });
+});
+
+describe("a turn of a chat that is not shown — each chat's turn is independent", () => {
+  // The slot shows the ACTIVE chat's turn only. A turn in a chat that is not
+  // shown keeps running (never aborted by leaving), updates only its own row
+  // facts, and on return re-seats from the reload.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    postMock.mockResolvedValue({ accepted: true });
+    clearChatCaches();
+    useChatStore.setState({
+      sessions: [
+        { session_id: 'A', document_id: null, reference_id: null, user_id: 'u1',
+          title: 't-A', model: 'm', system_prompt_id: null, context_ids: [],
+          updated_at: '2026-01-01', created_at: '2026-01-01', last_message_at: null },
+        { session_id: 'B', document_id: null, reference_id: null, user_id: 'u1',
+          title: 't-B', model: 'm', system_prompt_id: null, context_ids: [],
+          updated_at: '2026-01-01', created_at: '2026-01-01', last_message_at: null },
+      ] as never,
+      activeSessionId: 'B',
+      messages: [],
+      selectedSiblings: {},
+      streaming: null,
+      queued: {},
+      draft: '',
+    } as never);
+  });
+
+  it("(a) a send in B while A's turn is registered POSTs for B and queues nothing", async () => {
+    // The ghost repro's core: A streams, the user opens the zero/ghost chat
+    // (B materializes on send) — the send must NOT queue behind A's turn.
+    const pA = streamCompletion(useChatStore.getState, useChatStore.setState, {
+      sessionId: 'A', body: {}, signal: new AbortController().signal,
+      userParentId: null, userContent: 'a',
+    });
+    expect(hasOpenHarnessTurn('A')).toBe(true);
+
+    const pSend = useChatStore.getState().sendMessage('ping');
+    expect(postMock).toHaveBeenCalledWith('/chat/sessions/B/completions', expect.anything(), expect.anything());
+    expect(useChatStore.getState().queued).toEqual({});
+
+    dispatchChatFrame(useChatStore.getState, useChatStore.setState, 'B', TURN_CLOSED);
+    await pSend;
+    dispatchChatFrame(useChatStore.getState, useChatStore.setState, 'A', TURN_CLOSED);
+    await pA;
+  });
+
+  it('(b) an A dsh_event leaves the shown chat B untouched', async () => {
+    const { get, set } = makeStore('B');
+    const pA = startHarness(get, set, 'A');
+    dispatchChatFrame(get, set, 'A', { type: 'dsh_event', kind: 'step/start', seq: 2, data: { turn: 0, step: 0 } });
+    // A's frame fed no engine, wrote no row, seated no slot for B.
+    expect(get().conversation).toEqual([]);
+    expect(get().messages).toEqual([]);
+    expect(get().streaming).toBeNull();
+    dispatchChatFrame(get, set, 'A', TURN_CLOSED);
+    await pA;
+  });
+
+  it("(c) an A session_title updates A's row in sessions only", async () => {
+    const { get, set } = makeStore('B');
+    set({ sessions: [...get().sessions, {
+      session_id: 'A', document_id: null, reference_id: null, user_id: 'u1',
+      title: 't-A', model: 'm', system_prompt_id: null, context_ids: [],
+      updated_at: '2026-01-01', created_at: '2026-01-01', last_message_at: null,
+    }] } as Partial<ChatState>);
+    const pA = startHarness(get, set, 'A');
+    dispatchChatFrame(get, set, 'A', { type: 'session_title', title: 'A titled live' });
+    expect(get().sessions.find(s => s.session_id === 'A')?.title).toBe('A titled live');
+    expect(get().sessions.find(s => s.session_id === 'B')?.title).toBe('t');
+    dispatchChatFrame(get, set, 'A', TURN_CLOSED);
+    await pA;
+  });
+
+  it("(d) A's turn_closed deletes only A's registration and never touches B's slot", async () => {
+    const { get, set } = makeStore('B');
+    const pA = startHarness(get, set, 'A');
+    // B's own turn: its slot is seated through its ids frame.
+    const pB = startHarness(get, set, 'B');
+    dispatchChatFrame(get, set, 'B', { type: 'ids', user_message_id: 'umB', assistant_message_id: 'amB' });
+    expect(get().streaming?.messageId).toBe('amB');
+    expect(get().streaming?.sessionId).toBe('B');
+
+    dispatchChatFrame(get, set, 'A', TURN_CLOSED);
+    await pA;
+    expect(hasOpenHarnessTurn('A')).toBe(false);
+    expect(hasOpenHarnessTurn('B')).toBe(true);
+    expect(get().streaming?.messageId).toBe('amB');
+    expect(get().messages.map(m => m.message_id)).toEqual(['umB', 'amB']);
+
+    dispatchChatFrame(get, set, 'B', TURN_CLOSED);
+    await pB;
+    expect(get().streaming).toBeNull();
+  });
+
+  it("(e) A's error then turn_closed with A chips queued — the chips do NOT auto-fire", async () => {
+    const { get, set } = makeStore('B');
+    const pA = startHarness(get, set, 'A');
+    set({ queued: { A: ['a chip'] } } as Partial<ChatState>);
+    dispatchChatFrame(get, set, 'A', { type: 'error', message: 'boom' });
+    dispatchChatFrame(get, set, 'A', TURN_CLOSED);
+    await pA;
+    await new Promise(r => setTimeout(r, 0));
+    // The errored turn restores, never fires — and B's buffer never saw the
+    // error notice either (display work is gated to the shown chat).
+    expect(get().flushQueued).not.toHaveBeenCalled();
+    expect(get().queued['A']).toEqual(['a chip']);
+    expect(get().messages).toEqual([]);
   });
 });

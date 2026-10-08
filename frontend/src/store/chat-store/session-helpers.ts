@@ -15,6 +15,9 @@ export function insertAndPinSession(
     activeSessionId: session.session_id,
     messages: [],
     selectedSiblings: {},
+    // The slot shows the ACTIVE chat's turn — a fresh chat has none (the chat
+    // left behind keeps its registration; see the INVARIANT in types.ts).
+    streaming: null,
     pendingInputFocus: opts.focus !== false,
   }));
   // ARCH: the active chat is PROJECT-SCOPED.

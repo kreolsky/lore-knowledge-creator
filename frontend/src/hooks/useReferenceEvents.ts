@@ -5,6 +5,7 @@
 import { useCallback } from 'react';
 import { useAppStore } from '../store/app-store';
 import { useChatStore } from '../store/chat-store';
+import { useDeletedRefIds } from '../store/deleted-ref-ids';
 import { apiClient } from '../api/client';
 import { useEvent } from './useEvent';
 import { useTranslation } from '../i18n';
@@ -15,6 +16,9 @@ import type { Reference } from '../types';
 
 function _cleanupReferenceDeletion(referenceId: string): void {
   useAppStore.getState().removeReference(referenceId);
+  // Both delete events (single and batch) land here, so the chat's image plates
+  // learn every delete, whichever surface or tab made it.
+  useDeletedRefIds.getState().add([referenceId]);
   // INVARIANT: evict the preview cache on delete.
   // Why: it is the shared content source for hover previews + transclusions, so a
   // surviving entry would re-serve a stale body for a deleted reference.

@@ -26,6 +26,7 @@ import { useAppStore } from '../store/app-store';
 import { useNoteChatStore } from '../store/note-chat-store';
 import { useEditorReferenceSync } from './useEditorReferenceSync';
 import { useReferenceEvents } from './useReferenceEvents';
+import { useDeletedRefIds } from '../store/deleted-ref-ids';
 import { transcludeMap, projectRefIds, missingRefIds } from '../components/editor/live-preview';
 import { apiClient } from '../api/client';
 import { clearPreviewCache } from './useDocumentPreview';
@@ -264,6 +265,16 @@ describe('useEditorReferenceSync — per-source ownership', () => {
     expect(projectRefIds.has('del1')).toBe(false);
     expect(transcludeMap.get('del1')).toBeUndefined();
     expect(missingRefIds.has('del1')).toBe(true);
+  });
+
+  it.each([
+    ['ws:reference_deleted', () => emit('ws:reference_deleted', { reference_id: 'img1' })],
+    ['ws:documents_deleted_batch', () => emit('ws:documents_deleted_batch', { document_ids: [], reference_ids: ['img1'] })],
+  ])('%s feeds the page-wide deleted set (the chat image plates read it)', (_label, fire) => {
+    useDeletedRefIds.setState({ ids: new Set() });
+    renderHook(undefined, true /* mount useReferenceEvents */);
+    act(() => { fire(); });
+    expect(useDeletedRefIds.getState().ids.has('img1')).toBe(true);
   });
 
   it('a project switch clears both Sets and project-ref entries', async () => {

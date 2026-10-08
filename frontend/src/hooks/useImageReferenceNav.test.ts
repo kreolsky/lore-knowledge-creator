@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
-import { useImageReferenceNav, nextImageIndex, isFocusInEditableZone } from './useImageReferenceNav';
+import { useImageReferenceNav, nextImageIndex, isFocusInEditableZone, imageAfterDelete, resetImageBrowseDirection } from './useImageReferenceNav';
 import { useAppStore } from '../store/app-store';
 import type { Reference } from '../types';
 
@@ -128,6 +128,7 @@ describe('useImageReferenceNav (integration)', () => {
     root = createRoot(container);
     setCurrentReference = vi.fn();
     useAppStore.setState({ setCurrentReference } as Partial<ReturnType<typeof useAppStore.getState>>);
+    resetImageBrowseDirection();
   });
 
   afterEach(() => {
@@ -270,5 +271,91 @@ describe('useImageReferenceNav (integration)', () => {
     renderHook();
     const ev = fireKey('ArrowRight');
     expect(ev.defaultPrevented).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// imageAfterDelete — which image the viewer opens after the open one is deleted
+// ---------------------------------------------------------------------------
+
+// The integration block above swaps setCurrentReference for a spy in the shared
+// store; these tests need the real action so the store actually switches.
+const realSetCurrentReference = useAppStore.getState().setCurrentReference;
+
+describe('imageAfterDelete', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  const md = mdRef('md');
+  const a = imageRef('a');
+  const b = imageRef('b');
+  const c = imageRef('c');
+
+  beforeEach(() => {
+    resetImageBrowseDirection();
+    useAppStore.setState({ setCurrentReference: realSetCurrentReference });
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    function Probe() {
+      useImageReferenceNav('primary');
+      return null;
+    }
+    act(() => root.render(createElement(Probe)));
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  function key(k: string) {
+    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true })); });
+  }
+
+  it('without browsing history steps backward, skipping non-images', () => {
+    expect(imageAfterDelete([a, md, b, c], 'b')).toBe(a);
+  });
+
+  it('without browsing history wraps round from the first to the last', () => {
+    expect(imageAfterDelete([a, b, c], 'a')).toBe(c);
+  });
+
+  it('after ArrowRight, continues forward and wraps round at the end', () => {
+    useAppStore.setState({ references: [a, b, c], currentReference: b });
+    key('ArrowRight');
+    expect(imageAfterDelete([a, b, c], 'c')).toBe(a);
+  });
+
+  it('null when the deleted image was the only one, or not an image', () => {
+    expect(imageAfterDelete([md, a], 'a')).toBeNull();
+    expect(imageAfterDelete([md, a, b], 'md')).toBeNull();
+  });
+
+  it('after ArrowLeft, continues backward', () => {
+    useAppStore.setState({ references: [a, b, c], currentReference: c });
+    key('ArrowLeft');
+    expect(useAppStore.getState().currentReference).toBe(b);
+    expect(imageAfterDelete([a, b, c], 'b')).toBe(a);
+  });
+
+  it('ArrowLeft across the wrap still counts as backward', () => {
+    useAppStore.setState({ references: [a, b, c], currentReference: a });
+    key('ArrowLeft'); // a → c (wrap): index grows, direction is still backward
+    expect(useAppStore.getState().currentReference).toBe(c);
+    expect(imageAfterDelete([a, b, c], 'c')).toBe(b);
+  });
+
+  it('backward wraps round from the first to the last', () => {
+    useAppStore.setState({ references: [a, b, c], currentReference: b });
+    key('ArrowLeft');
+    expect(imageAfterDelete([a, b, c], 'a')).toBe(c);
+  });
+
+  it('clicking an earlier image in the gallery sets backward; a later one, forward', () => {
+    useAppStore.setState({ references: [a, b, c], currentReference: c });
+    act(() => useAppStore.getState().setCurrentReference(b));
+    expect(imageAfterDelete([a, b, c], 'b')).toBe(a);
+    act(() => useAppStore.getState().setCurrentReference(c));
+    expect(imageAfterDelete([a, b, c], 'c')).toBe(a); // forward, wraps
   });
 });

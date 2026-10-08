@@ -1,9 +1,9 @@
 """deep-research skill — the pack it activates, and the core tools its prose commands.
 
 The body walks the agent through four phases and NAMES tools in every one of them:
-`search_materials` in recon, `create_document` after the outline, `append_to_document`
-per section, `edit_document` at compile. Only `web_search` and `sandbox_bash` are
-packed; the rest must be reachable WITHOUT a skill load, because the driver carves core
+`search_materials` in recon, `create_document` for the report and each finding's
+reference, `append_to_document` per section, `edit_document` to clear a section's
+placeholder. Only `web_search`, `web_fetch` and `sandbox_bash` are packed; the rest must be reachable WITHOUT a skill load, because the driver carves core
 out as served-minus-every-pack (harness-driver/plugin/src/skills.ts). A tool the prose
 commands that some other skill packs would be invisible when this skill runs — the
 model would be told to call something it cannot see.
@@ -20,9 +20,10 @@ from helpers import skill_frontmatter
 _CONTENT = (agent_skills.CONFIGS_DIR / "skill_deep_research.md").read_text(encoding="utf-8").strip()
 _SKILL = skill_frontmatter(_CONTENT)
 
-# The pack: find pages (web_search) and read the ones a snippet cannot answer
-# (sandbox_bash). Everything the four phases do to the PROJECT is core.
-_EXPECTED_PACK = {"web_search", "sandbox_bash"}
+# The pack: find pages (web_search), read the ones a snippet cannot answer
+# (web_fetch), and the PDFs web_fetch refuses (sandbox_bash). Everything the four
+# phases do to the PROJECT is core.
+_EXPECTED_PACK = {"web_search", "web_fetch", "sandbox_bash"}
 
 # Tools the body instructs the agent to call while this skill is loaded, which the
 # skill does NOT pack — so each one has to be core.
@@ -35,8 +36,8 @@ _COMMANDED_CORE = {
 
 
 # Served by the harness itself (dsh tool-web, harness-driver/home/cordis.patch.yml),
-# never by the backend — so it is absent from agent_toolset and added here.
-_HARNESS_SERVED = {"web_search"}
+# never by the backend — so they are absent from agent_toolset and added here.
+_HARNESS_SERVED = {"web_search", "web_fetch"}
 
 
 async def _served() -> set[str]:
@@ -60,7 +61,7 @@ def test_deep_research_parses_as_a_skill():
     assert _SKILL["name"] == "deep-research"
 
 
-def test_deep_research_carries_exactly_the_search_and_console_pair():
+def test_deep_research_carries_exactly_the_search_fetch_and_console_pack():
     assert set(_SKILL["tools"]) == _EXPECTED_PACK, (
         f"expected {sorted(_EXPECTED_PACK)}, got {sorted(_SKILL['tools'])}"
     )

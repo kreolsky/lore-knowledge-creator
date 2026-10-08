@@ -244,7 +244,11 @@ async def test_attach_mints_image_gen_from_gen_steps(monkeypatch):
     uses, derived from the SAME gen_steps the WS event carries."""
     import driver.timeline
     from routes.chat.messages import _attach_timeline
+    from test_driver_frames import _stub_live_refs
 
+    # The deleted-image filter's DB seam — all live (the filter has its own
+    # tests in test_driver_frames.py).
+    _stub_live_refs(monkeypatch)
     call = _dsh(3, "tool/call", {"turn": 1, "step": 1, "callId": "cg",
                                  "name": "generate_image", "arguments": "{}"})
     result = _dsh(4, "tool/result", {"message": {

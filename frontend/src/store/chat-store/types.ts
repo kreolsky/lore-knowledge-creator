@@ -3,11 +3,11 @@ import type { ChatUIMode, ChatSession, ChatMessage, Reference, PinnedRegion, Rea
 import type { ConversationVM, TurnRange } from './conversation-feed';
 
 /**
- * Why a turn ended — read at the turn's terminal, before the slot is flushed.
- * 'done' is the DEFAULT: nothing is stamped through a clean turn. 'error'/'halted'
- * are stamped on the slot by their frame handlers (`endReason`); 'aborted' is read
- * off the slot's controller (Stop aborted it); 'lost' is a turn whose terminal never
- * reached this tab (the WS-gap close). The queue
+ * Why a turn ended — read at the turn's terminal, off the harness
+ * REGISTRATION's end facts. 'done' is the DEFAULT: nothing is stamped
+ * through a clean turn. 'error'/'halted' are stamped by their frame handlers;
+ * 'aborted' is stamped by stopGeneration before it aborts; 'lost' is a turn
+ * whose terminal never reached this tab (the WS-gap close). The queue
  * flush decision hangs on this value: only 'done' auto-fires.
  */
 export type TurnEndReason = 'done' | 'aborted' | 'error' | 'halted' | 'lost';
@@ -21,16 +21,17 @@ export type TurnEndReason = 'done' | 'aborted' | 'error' | 'halted' | 'lost';
  * `streaming === null` ⟺ the former `isStreaming === false`.
  */
 export interface StreamingState {
+  // The chat whose turn this slot shows. The slot belongs to the ACTIVE
+  // chat only: a turn running in a chat that is not shown holds NO slot (its
+  // facts live on the harness registration), so leaving a streaming chat
+  // drops the slot and never the turn.
+  sessionId: string;
   /** The assistant message id deltas accumulate onto (former streamingMessageId). */
   messageId: string | null;
   /** Accumulated assistant text (former streamingContent). */
   content: string;
   /** The in-flight AbortController (former abortController). */
   controller: AbortController | null;
-  /** Why the turn is ending, stamped by the `error` and `lore/halt` frame handlers;
-   *  absent through a clean turn. Ephemeral + live-only — never persisted
-   *  (flushStreaming drops it along with the rest of the streaming object). */
-  endReason?: 'error' | 'halted';
 }
 
 /**
@@ -103,6 +104,11 @@ export interface ChatState {
   // `streaming === null` means "not streaming".
   // WHY: streaming.messageId + content + controller
   // are set together and cleared together; never partially.  Why: a partial clear leaves zombie streaming state (controller dropped while content lingers, or a stuck streaming flag), so they are set/cleared as one atomic unit.
+  // INVARIANT(corruption): streaming === null || streaming.sessionId === activeSessionId.
+  // Why: the slot renders the ACTIVE chat's turn; a slot owned by another chat
+  // would make the composer/Stop of the shown chat drive a turn it cannot see,
+  // and a turn left behind would clobber the next chat's slot at its terminal.
+  // Every write of activeSessionId clears the slot or seats one for the new id.
   streaming: StreamingState | null;
 
   // The dsh assembler's published nodes (SYSTEM: dsh-conversation) — the ONE

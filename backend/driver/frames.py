@@ -30,6 +30,7 @@ import time
 # succeed while inert), so tests string-patch the owner and both consumers
 # (this module and the channel) see the fake. Same for the compaction mint —
 # the reload/mint tests patch `driver.compaction.mint_compaction_chats`.
+from db import extract_id, get_db, record_refs
 from driver import compaction, persistence
 from driver.timeline import DriverTimelineUnavailable, fetch_session_entries
 
@@ -576,14 +577,33 @@ def _image_run_anchor_index(frames: list[dict], call_id: str) -> int | None:
     return None
 
 
-def _image_gen_frame(anchor_frame: dict, gen_steps: list, run_id: str) -> dict | None:
+def _image_ref_fields(ids: list[str], live_refs: set[str] | None) -> dict:
+    """The done-run's image fields per the live set (see _image_gen_frame):
+    no set → the ids verbatim (the worker's brand-new images); a set → the
+    live ids in order, or the all-deleted note when none survive."""
+    if live_refs is None:
+        return {"imageRefIds": ids}
+    live = [r for r in ids if r in live_refs]
+    return {"imageRefIds": live} if live else {"deletedByUser": True}
+
+
+def _image_gen_frame(anchor_frame: dict, gen_steps: list, run_id: str,
+                     live_refs: set[str] | None = None) -> dict | None:
     """One `lore/image-gen` frame minted at the run's dispatching call.
 
     The payload derives from the row's `gen_steps` step dicts — the SAME dicts
     the worker's settled frame passes (image_gen_settled_frame) and the row
     persists, so the live card and the reload card agree by construction.
     Returns None when the run has no chip in gen_steps (nothing honest to
-    render)."""
+    render).
+
+    # ARCH: references are the truth on delete. `gen_steps` is written once
+    # and never rewritten, so the RELOAD pass filters the ids through
+    # `live_refs` (the page's still-live reference set, one query — see
+    # attach_reload_lore_mints): a deleted reference drops out of the mint,
+    # and a run whose images were ALL deleted flips to `deletedByUser` (the
+    # chip keeps its plate with the note). `live_refs=None` — the worker's
+    # settled pass — keeps the ids verbatim: those images are brand new."""
     gen = None
     for step in gen_steps:
         if (isinstance(step, dict) and step.get("tool") == "generate_image"
@@ -602,7 +622,7 @@ def _image_gen_frame(anchor_frame: dict, gen_steps: list, run_id: str) -> dict |
         if gen.get("detail"):
             data["error"] = str(gen["detail"])
     elif isinstance(gen.get("image_ref_ids"), list) and gen["image_ref_ids"]:
-        data["imageRefIds"] = [str(r) for r in gen["image_ref_ids"]]
+        data.update(_image_ref_fields([str(r) for r in gen["image_ref_ids"]], live_refs))
     for step in gen_steps:
         if isinstance(step, dict) and step.get("tool") == "refine_prompt":
             ok = step.get("outcome") != "failed"
@@ -808,9 +828,25 @@ def _attach_halt_mints(
     newest["frames"] = [_lore_event("lore/halt", tail, _halt_mint_data(newest["halt"], None))]
 
 
-def _insert_image_gen_mints(out: list[dict], gen_steps) -> None:
+async def _live_image_ref_ids(ids: list[str]) -> set[str]:
+    """The LIVE subset of a page's image reference ids — ONE projected query
+    (`id` only, soft-deleted rows excluded). Raises on DB failure; the caller
+    (attach_reload_lore_mints) degrades to the ids verbatim."""
+    refs, params = record_refs("documents", ids)
+    db = await get_db()
+    rows = await db.query(
+        f"SELECT id FROM documents WHERE id IN [{refs}] AND deleted_at IS NONE",
+        params,
+    )
+    live = {extract_id(r.get("id")) for r in rows or []}
+    live.discard(None)
+    return live
+
+
+def _insert_image_gen_mints(out: list[dict], gen_steps, live_refs=None) -> None:
     """Insert one `lore/image-gen` card per detached run this turn dispatched,
-    each after its dispatching `tool/call` frame. Mutates `out`."""
+    each after its dispatching `tool/call` frame. Mutates `out`. `live_refs`
+    (the reload pass) filters deleted references — see _image_gen_frame."""
     if not isinstance(gen_steps, list) or not gen_steps:
         return
     runs: dict[str, str] = {}
@@ -830,9 +866,29 @@ def _insert_image_gen_mints(out: list[dict], gen_steps) -> None:
                 "is on the document)", rid, cid,
             )
             continue
-        mint = _image_gen_frame(out[idx], gen_steps, rid)
+        mint = _image_gen_frame(out[idx], gen_steps, rid, live_refs)
         if mint is not None:
             out.insert(idx + 1, mint)
+
+
+def _page_image_ref_ids(assistants: list[dict]) -> list[str]:
+    """Every image reference id the page's gen_steps carry, de-duplicated in
+    row order — the ONE id list the reload's live-ref query runs over."""
+    ids: list[str] = []
+    seen: set[str] = set()
+    for row in assistants:
+        steps = row.get("gen_steps")
+        if not isinstance(steps, list):
+            continue
+        for step in steps:
+            if (isinstance(step, dict) and step.get("tool") == "generate_image"
+                    and isinstance(step.get("image_ref_ids"), list)):
+                for ref in step["image_ref_ids"]:
+                    rid = str(ref)
+                    if rid not in seen:
+                        seen.add(rid)
+                        ids.append(rid)
+    return ids
 
 
 async def attach_reload_lore_mints(
@@ -858,12 +914,27 @@ async def attach_reload_lore_mints(
     """
     _attach_halt_mints(assistants, chain=chain, tail_seq=tail_seq)
 
+    # The page's deleted-image filter: references are the truth, gen_steps is
+    # not rewritten — ONE live-ref query per page (None while the page holds
+    # no image run, or when the query fails: the ids then stay verbatim).
+    live_refs: set[str] | None = None
+    page_ref_ids = _page_image_ref_ids(assistants)
+    if page_ref_ids:
+        try:
+            live_refs = await _live_image_ref_ids(page_ref_ids)
+        except Exception:
+            logger.warning(
+                "image-gen reload mint: live-ref query failed for %d ids — "
+                "gen_steps ids kept verbatim", len(page_ref_ids), exc_info=True,
+            )
+            live_refs = None
+
     for row in assistants:
         frames = row.get("frames")
         if not isinstance(frames, list) or not frames:
             continue
         out = list(frames)
-        _insert_image_gen_mints(out, row.get("gen_steps"))
+        _insert_image_gen_mints(out, row.get("gen_steps"), live_refs)
         # The compaction windows this turn closed: one outcome card each.
         for frame in [f for f in out if isinstance(f, dict) and f.get("kind") == "compaction/end"]:
             mint = await _reload_compaction_frame(session_id, frame)

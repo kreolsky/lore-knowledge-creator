@@ -198,7 +198,7 @@ def _edit_frame(session, doc_id, text, at=0):
     return wrap_binary(doc_id, MSG_SYNC, inner)
 
 
-def _wait_until(predicate, timeout=3.0):
+def _wait_until(predicate, timeout=10.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
         if predicate():

@@ -45,6 +45,9 @@ export function createRegionActions(set: Set, get: Get): RegionActions {
       set({
         activeSessionId: null,
         messages: [],
+        // The slot shows the ACTIVE chat's turn and the ghost has none (the
+        // INVARIANT in types.ts; the chat left behind keeps its registration).
+        streaming: null,
         ghostRegion: { doc_id: payload.doc_id, relFrom: payload.relFrom, relTo: payload.relTo },
         pendingInputFocus: true,
       });

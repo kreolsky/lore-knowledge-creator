@@ -10,7 +10,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  attachEventsChannel, createSessionEventTap, relayAssistantStream,
+  attachEventsChannel, childActivityRoot, CHILD_ACTIVITY_THROTTLE_MS,
+  createSessionEventTap, newChildActivityState, relayAssistantStream,
   wsUnresolvableMessage, type WsCtor, type WsSocketLike,
 } from '../src/ws-events.ts'
 import { createSessionStreamBaselines } from '../src/stream-baselines.ts'
@@ -194,6 +195,70 @@ test('one state per (socket, session): the turn coordinate tracks the open turn'
   // turn 5, not 2 — a state seeded once and never re-seeded per turn would
   // carry a stale coordinate into every later turn's mints.
   assert.equal(mint.frame.data.turn, 5)
+})
+
+// ── The descendant heartbeat: a child's events keep its ROOT's turn alive.
+
+/** A session object the way dsh hands it to the tap: a child carries its
+ * parent's id in `header.parentSession`; a driving session carries none. */
+function sessionOf(id: string, parentSession?: string): any {
+  return { id, header: parentSession === undefined ? {} : { parentSession } }
+}
+
+const HEARTBEAT = { type: 'session_frame', session_id: 'dsh-9', frame: { type: 'lore/child-activity' } }
+
+test("a child's event reaches the ROOT's subscriber as one lore/child-activity, never as its own frames", () => {
+  const { tap, server } = channelFixture()
+  const socket = accept(server, FakeWss.last!)
+  socket.receive({ type: 'subscribe', session_id: 'dsh-9' })
+  socket.sent.length = 0
+
+  tap.emit(sessionOf('child-1', 'dsh-9'), ev(1, 'turn/start', { turn: 1 }))
+  assert.deepEqual(socket.sent, [HEARTBEAT])
+})
+
+test('a grandchild resolves to the top driving session', () => {
+  const { tap, server } = channelFixture()
+  const socket = accept(server, FakeWss.last!)
+  socket.receive({ type: 'subscribe', session_id: 'dsh-9' })
+  socket.sent.length = 0
+
+  // The child's header registers child-1 → dsh-9; the grandchild resolves
+  // through it (throttled away here: one window per root).
+  tap.emit(sessionOf('child-1', 'dsh-9'), ev(1, 'turn/start', { turn: 1 }))
+  const state = newChildActivityState()
+  childActivityRoot(sessionOf('child-1', 'dsh-9'), state, 0)
+  assert.equal(
+    childActivityRoot(sessionOf('grand-1', 'child-1'), state, CHILD_ACTIVITY_THROTTLE_MS),
+    'dsh-9')
+  assert.deepEqual(socket.sent, [HEARTBEAT])
+})
+
+test('a second child event inside the window is throttled; past it, it beats again', () => {
+  const { tap, server } = channelFixture()
+  const socket = accept(server, FakeWss.last!)
+  socket.receive({ type: 'subscribe', session_id: 'dsh-9' })
+  socket.sent.length = 0
+
+  tap.emit(sessionOf('child-1', 'dsh-9'), ev(1, 'tool/call', {}))
+  tap.emit(sessionOf('child-2', 'dsh-9'), ev(1, 'tool/call', {}))
+  assert.deepEqual(socket.sent, [HEARTBEAT], 'one heartbeat per root per window')
+
+  const state = newChildActivityState()
+  assert.equal(childActivityRoot(sessionOf('c', 'dsh-9'), state, 1_000), 'dsh-9')
+  assert.equal(childActivityRoot(sessionOf('c', 'dsh-9'), state, 1_000 + CHILD_ACTIVITY_THROTTLE_MS - 1), null)
+  assert.equal(childActivityRoot(sessionOf('c', 'dsh-9'), state, 1_000 + CHILD_ACTIVITY_THROTTLE_MS), 'dsh-9')
+})
+
+test('a child of an unsubscribed root delivers nothing; a driving session is no child', () => {
+  const { tap, server } = channelFixture()
+  const socket = accept(server, FakeWss.last!)
+  socket.receive({ type: 'subscribe', session_id: 'dsh-9' })
+  socket.sent.length = 0
+
+  tap.emit(sessionOf('child-x', 'dsh-other'), ev(1, 'turn/start', { turn: 1 }))
+  assert.deepEqual(socket.sent, [])
+  assert.equal(childActivityRoot(sessionOf('dsh-9'), newChildActivityState(), 0), null)
 })
 
 test('an unauthorized upgrade is refused before the handshake', () => {

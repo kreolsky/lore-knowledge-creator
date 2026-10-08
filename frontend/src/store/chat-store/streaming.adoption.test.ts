@@ -22,11 +22,12 @@ vi.mock('../../api/client', () => ({
 }));
 vi.mock('../../i18n', () => ({ t: (k: string) => k }));
 
-import { streamCompletion, dispatchChatFrame, adoptOpenTurn } from './streaming';
+import { streamCompletion, dispatchChatFrame, adoptOpenTurn, hasOpenHarnessTurn } from './streaming';
 import { replaceWindowFromRows, stripFrames, __flushFeedPublishForTest } from './conversation-feed';
 import type { ChatState, Set } from './types';
 function makeStore(sessionId = 's1') {
   let state = {
+    activeSessionId: sessionId,
     sessions: [{
       session_id: sessionId, document_id: null, reference_id: null, user_id: 'u1',
       title: 't', model: 'm', system_prompt_id: null, context_ids: [],
@@ -38,6 +39,9 @@ function makeStore(sessionId = 's1') {
     conversation: [],
     turnRanges: {},
     turnStartSeq: null,
+    queued: {},
+    flushQueued: async () => {},
+    restoreQueued: () => {},
   } as unknown as ChatState;
   const get = () => state;
   const set: Set = (u: unknown) => {
@@ -107,6 +111,41 @@ describe('adoptOpenTurn — the reload seats the open turn', () => {
     replaceWindowFromRows(rows, 's1', set);
     adoptOpenTurn(get, set, 's1', rows);
     expect(get().streaming?.controller).toBeTruthy();
+  });
+
+  it('leave mid-turn and return: the slot re-seats for the chat and the turn settles', async () => {
+    const { get, set } = makeStore('s-back');
+    // The turn starts while the chat is shown.
+    const p = streamCompletion(get, set, {
+      sessionId: 's-back', body: {}, signal: new AbortController().signal,
+      userParentId: null, userContent: 'hi', optimisticUserId: 'temp-1',
+    });
+    dispatchChatFrame(get, set, 's-back', IDS);
+
+    // Leave (another chat shown): the slot drops, the registration stands.
+    set({ activeSessionId: 'other', streaming: null } as Partial<ChatState>);
+    expect(hasOpenHarnessTurn('s-back')).toBe(true);
+
+    // Return: setActiveSession + the reload's rows (one open row) re-seat.
+    set({ activeSessionId: 's-back' } as Partial<ChatState>);
+    const rows = openRows([chunk(4)]);
+    replaceWindowFromRows(rows, 's-back', set);
+    adoptOpenTurn(get, set, 's-back', rows);
+    set({ messages: rows.map(stripFrames) as ChatState['messages'] });
+
+    expect(get().streaming?.sessionId).toBe('s-back');
+    expect(get().streaming?.messageId).toBe('am');
+
+    // A following frame grows the conversation — replay + live, no node lost.
+    dispatchChatFrame(get, set, 's-back', chunk(7));
+    __flushFeedPublishForTest(set);
+    expect(get().conversation).toHaveLength(2);
+
+    dispatchChatFrame(get, set, 's-back', DONE);
+    dispatchChatFrame(get, set, 's-back', { type: 'turn_closed' });
+    await p;
+    expect(get().streaming).toBeNull();
+    expect(get().turnRanges['am']).toEqual({ min: 4, max: 7 });
   });
 });
 

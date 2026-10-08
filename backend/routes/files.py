@@ -12,6 +12,8 @@ from pathlib import Path
 from uuid import uuid4
 
 import settings
+from cascade import _cascade_delete_document
+from collab.events import merge_live_content
 from documents.service import (
     create_reference_row,
     find_reference_by_idempotency_key,
@@ -339,7 +341,11 @@ async def serve_mcp_download(token: str):
 @router.delete("/api/references/{reference_id}/file")
 @router.delete("/api/documents/{reference_id}/file", include_in_schema=False)
 async def delete_reference_file(reference_id: str, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
-    """Delete only the binary file from a reference-document, keeping the text content."""
+    """Delete the binary file from a reference-document, keeping its text.
+
+    A reference left with no text at all is deleted whole (`reference_deleted`
+    in the response tells the caller which of the two happened).
+    """
     ref = await fetch_one("documents", reference_id)
     if not ref or not is_ref_row(ref):
         raise HTTPException(status_code=404, detail="Reference not found")
@@ -357,20 +363,29 @@ async def delete_reference_file(reference_id: str, user: dict = Depends(get_curr
         if ref_dir.is_dir() and not any(ref_dir.iterdir()):
             ref_dir.rmdir()
 
-    # INVARIANT(persisted): the ref ALWAYS lands on markdown, with or without text. Why: a
+    pid = ref.get("project_id", "")
+    # INVARIANT(data-loss): a reference with neither file nor text is deleted whole;
+    # the text is read from the live collab session first.
+    # Why: user ruling — deleting the picture from the reference view must not leave
+    # an empty text reference behind; reading only the DB row would delete text
+    # typed in the open editor before its ~1s flush.
+    if not (merge_live_content(ref, reference_id).get("content") or "").strip():
+        await _cascade_delete_document(db, reference_id)
+        await emit("entity_deleted", entity_type="doc", entity_id=reference_id)
+        await emit("reference_deleted", project_id=pid, reference_id=reference_id)
+        return {"success": True, "reference_deleted": True}
+
+    # INVARIANT(persisted): a ref that keeps its text ALWAYS lands on markdown. Why: a
     # file-less image/audio/file ref that kept its media_type would render blank
-    # (no media surface left; the editor branch treats image as non-editor), the
-    # frontend's optimistic patch already assumes markdown, and deleting the file
-    # of a text-less ref must leave an empty text reference (one scheme for all
-    # types) that the viewer banner can then offer to delete.
+    # (no media surface left; the editor branch treats image as non-editor), and the
+    # frontend's optimistic patch already assumes markdown.
     await db.query(
         "UPDATE type::record('documents', $id) SET file_path = NONE, file_meta = NONE, "
         "processing_status = NONE, media_type = 'markdown', updated_at = time::now()",
         {"id": reference_id},
     )
-    await emit("reference_updated", project_id=ref.get("project_id", ""),
-               reference_id=reference_id)
-    return {"success": True}
+    await emit("reference_updated", project_id=pid, reference_id=reference_id)
+    return {"success": True, "reference_deleted": False}
 
 
 @router.get("/api/references/{reference_id}/status")

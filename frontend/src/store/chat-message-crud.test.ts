@@ -63,6 +63,26 @@ describe('loadMessagesFor', () => {
     expect(scope.onLoadError).not.toHaveBeenCalled();
   });
 
+  it('staleness guard covers the raw rows too: a superseded fetch never reaches onRows', async () => {
+    vi.mocked(apiClient.get).mockResolvedValueOnce(MESSAGES as never);
+    const scope = { ...makeScope('other-session'), onRows: vi.fn() };
+    await loadMessagesFor('s1', scope);
+    expect(scope.onRows).not.toHaveBeenCalled();
+  });
+
+  it('a live fetch hands the raw rows to onRows before onLoaded', async () => {
+    vi.mocked(apiClient.get).mockResolvedValueOnce(MESSAGES as never);
+    const order: string[] = [];
+    const scope: MessageLoadScope = {
+      activeSessionId: () => 's1',
+      onRows: vi.fn(() => { order.push('rows'); }),
+      onLoaded: vi.fn(() => { order.push('loaded'); }),
+      onLoadError: vi.fn(),
+    };
+    await loadMessagesFor('s1', scope);
+    expect(order).toEqual(['rows', 'loaded']);
+  });
+
   it('failure surfaces a toast and the error terminal only to the live scope', async () => {
     vi.mocked(apiClient.get).mockRejectedValueOnce(new Error('boom'));
     const live = makeScope('s1');

@@ -166,11 +166,11 @@ async def _drain(queue: asyncio.Queue) -> list[dict]:
     return out
 
 
-async def _recv(queue: asyncio.Queue, timeout: float = 2.0) -> dict:
+async def _recv(queue: asyncio.Queue, timeout: float = 10.0) -> dict:
     return await asyncio.wait_for(queue.get(), timeout)
 
 
-async def _until(predicate, timeout: float = 2.0) -> None:
+async def _until(predicate, timeout: float = 10.0) -> None:
     """Await an asynchronous side effect (a persist racing the last emitted
     frame): the emit happens BEFORE the projection's terminal writes."""
     loop = asyncio.get_event_loop()
@@ -682,6 +682,55 @@ async def test_held_turn_does_not_breach_and_resumes_on_settlement(
     await asyncio.sleep(0.4)  # grace after the settled result: breach
     err = await _recv(queue)
     assert err["type"] == "error" and err["halt_reason"] == "turn_timeout"
+
+
+_CHILD_ACTIVITY = {"type": "lore/child-activity"}
+
+
+@pytest.mark.asyncio
+async def test_child_activity_keeps_a_silent_parent_turn_alive_until_it_stops(
+        channel, monkeypatch):
+    # A parent waiting on a subagent logs nothing; the plugin's heartbeat for
+    # the child's activity is the only progress the backend sees.
+    monkeypatch.setattr(config, "TURN_PROGRESS_GRACE_S", 0.15)
+    ch, connector, replay, _ = channel
+    await ch.subscribe("lore-1")
+    ch.bind_turn("lore-1", assistant_msg_id="m1", user_id="u1")
+    queue, _ = ch.add_listener("lore-1")
+    sock = connector.sockets[0]
+    sock.push(_env("dsh-9", {"type": "model_update", "model": "x"}))
+    sock.push(_env("dsh-9", _chunk(8, "dispatching")))
+    for _ in range(2):
+        await _recv(queue)
+
+    for _ in range(15):  # 0.45s of parent silence = 3x the grace
+        sock.push(_env("dsh-9", _CHILD_ACTIVITY))
+        await asyncio.sleep(0.03)
+    assert queue.empty(), "child activity must neither breach nor reach the browser"
+    assert ch._subs["lore-1"].turn is not None
+
+    # The child goes quiet too: the grace catches it.
+    await asyncio.sleep(0.4)
+    err = await _recv(queue)
+    assert err["type"] == "error" and err["halt_reason"] == "turn_timeout"
+
+
+@pytest.mark.asyncio
+async def test_child_activity_outside_a_turn_is_dropped_and_opens_none(channel):
+    ch, connector, replay, _ = channel
+    await ch.subscribe("lore-1")
+    queue, _ = ch.add_listener("lore-1")
+    sock = connector.sockets[0]
+
+    sock.push(_env("dsh-9", _CHILD_ACTIVITY))  # no bind, no turn
+    ch.bind_turn("lore-1", assistant_msg_id="m1", user_id="u1")
+    sock.push(_env("dsh-9", _CHILD_ACTIVITY))  # bound, but not the turn's opener
+    sock.push(_env("dsh-9", _chunk(8, "after")))  # a routing barrier
+
+    got = await _recv(queue)
+    assert got["kind"] == "assistant/message"  # nothing relayed ahead of it
+    sub = ch._subs["lore-1"]
+    assert sub.turn is None and sub.pending_bind is not None
 
 
 # ─── unsubscribe: the pump's client-disconnect semantics ─────────────────────

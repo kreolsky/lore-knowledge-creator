@@ -66,7 +66,10 @@ async def _settle(seconds: float = 0.15) -> None:
     await asyncio.sleep(seconds)
 
 
-async def _until(predicate, timeout: float = 2.0) -> None:
+# WHY: a poll returns the moment its condition holds, so its budget only costs
+# time on failure. The CI runner is ~5x slower than gray with ~1s DB queries
+# under load; a 2s budget timed out a turn teardown that was merely slow.
+async def _until(predicate, timeout: float = 10.0) -> None:
     loop = asyncio.get_event_loop()
     deadline = loop.time() + timeout
     while not predicate():
@@ -75,7 +78,7 @@ async def _until(predicate, timeout: float = 2.0) -> None:
         await asyncio.sleep(0.01)
 
 
-async def _until_async(probe, timeout: float = 2.0) -> None:
+async def _until_async(probe, timeout: float = 10.0) -> None:
     """_until for awaited probes (DB reads, lock acquisition)."""
     loop = asyncio.get_event_loop()
     deadline = loop.time() + timeout

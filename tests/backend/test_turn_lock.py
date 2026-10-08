@@ -286,3 +286,21 @@ async def test_socket_timeout_on_acquire_raises_not_returns_none(monkeypatch):
 
     with pytest.raises(redis_exc.TimeoutError):
         await acquire_turn_lock("s1")
+
+
+# ─── turn_lock_held: the read side of the lock (real Redis) ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_turn_lock_held_follows_acquire_and_release():
+    """Against the real per-worker Redis: held after acquire, free after the
+    holder's release — the messages read marks the open turn on this answer."""
+    from turn_lock import acquire_turn_lock, release_turn_lock, turn_lock_held
+
+    assert await turn_lock_held("s-held") is False
+    token = await acquire_turn_lock("s-held")
+    assert token
+    assert await turn_lock_held("s-held") is True
+    assert await turn_lock_held("s-other") is False
+    await release_turn_lock("s-held", token)
+    assert await turn_lock_held("s-held") is False
