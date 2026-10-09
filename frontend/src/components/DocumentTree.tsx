@@ -32,6 +32,7 @@ import { useDocumentRoute } from '../hooks/useDocumentRoute';
 import { useHoverPreview } from '../hooks/useHoverPreview';
 import { useGearMenu } from '../hooks/useGearMenu';
 import { useSiblingDragReorder, treeDragAdapter } from '../hooks/useSiblingDragReorder';
+import { TREE_INDENT } from '../hooks/treeDropTarget';
 import { keyIconClassFromCapabilities } from '../utils/key-icon';
 import s from './Sidebar.module.css';
 
@@ -138,8 +139,9 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
         tabIndex={-1}
         data-doc-id={doc.document_id}
         data-parent-id={doc.parent_id ?? ''}
+        data-level={level}
         className={`doc-item ${isActive ? 'active' : ''} ${isRefSource ? 'active' : ''} ${isRefParent ? 'ref-parent' : ''} ${isSnapshotParent ? 'snapshot-parent' : ''} ${inboxMarks?.flagged.has(doc.document_id) ? 'inbox-unread' : ''} ${inboxMarks?.muted.has(doc.document_id) ? 'inbox-unread-muted' : ''} ${level > 0 ? 'doc-item-child' : ''}`}
-        style={level > 0 ? { paddingLeft: level * 12 + 4 } : undefined}
+        style={level > 0 ? { paddingLeft: level * TREE_INDENT + 4 } : undefined}
         onMouseEnter={() => {
           if (labelRef.current) onDocHover(doc.document_id, labelRef.current);
         }}
@@ -172,7 +174,7 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
             // CSS), level 0 falls back to .doc-item's base `padding: 7px 4px` (4px).  Why: any gap between rowLeftPad and the real row padding falls through to the row onClick (navigate) instead of toggling expand.
             // Why: a leftover gap there fell through to the row onClick (navigate) instead
             // of toggling — a narrow dead strip at the very left edge.
-            style={(() => { const rowLeftPad = level > 0 ? level * 12 + 4 : 4; return { marginLeft: -rowLeftPad, paddingLeft: rowLeftPad }; })()}
+            style={(() => { const rowLeftPad = level > 0 ? level * TREE_INDENT + 4 : 4; return { marginLeft: -rowLeftPad, paddingLeft: rowLeftPad }; })()}
           >
             {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
             <span className={`doc-icon ${keyIconClassFromCapabilities(doc.key_capabilities, doc.public_share)}`}>

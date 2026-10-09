@@ -458,7 +458,6 @@ export function buildStructuralDecorations(state: EditorState): DecorationSet {
       if (node.name === 'FencedCode') {
         codeRanges.push({ from: node.from, to: node.to });
         const cursorInside = isCursorIn(node.from, node.to);
-        if (cursorInside) return false;
 
         const cursor = node.node.cursor();
         let openLine: { from: number; to: number } | null = null;
@@ -488,6 +487,16 @@ export function buildStructuralDecorations(state: EditorState): DecorationSet {
         // monospace width swings the height-oracle estimate and re-triggers the
         // 2026-05-30 scroll-jump. Hiding the raw markers removes the sampleable
         // code-font line. See lessons/2026-05-30.
+        // WHY: with the cursor inside, the fence lines stay raw for editing, but the
+        // copy button is still offered — as a zero-width widget at the end of the
+        // opening line (absolutely positioned) — so copying never requires moving
+        // the cursor out of the block first.
+        if (cursorInside) {
+          if (openLine && codeText) {
+            replaceRanges.push({ from: openLine.to, to: openLine.to, widget: new CopyButtonWidget(codeText, language) });
+          }
+          return false;
+        }
         if (openLine) {
           replaceRanges.push({
             from: openLine.from,

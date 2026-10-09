@@ -1925,6 +1925,17 @@
               }
             ],
             "title": "After Id"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
           }
         },
         "title": "ReorderDocument",
@@ -8717,7 +8728,7 @@
     },
     "/api/documents/{document_id}/reorder": {
       "patch": {
-        "description": "Place a document or reference after `after_id` within its own sibling group\n(null = top).",
+        "description": "Place a document or reference after `after_id` within its own sibling group\n(null = top); with `parent_id` sent, place it under that parent instead.\n\n`parent_id` absent ⇒ today's path: `after_id` must be a same-kind sibling\n(same project_id, parent_id and is_reference) or null; a cross-level or\ncross-kind `after_id` is a 400. `parent_id` sent (even '' = project root)\n⇒ the ONE in-project move (documents.move.move_document_command) owns\nsystem/cycle/parent-validity checks and emits `document_moved`.",
         "operationId": "reorder_document_api_documents__document_id__reorder_patch",
         "parameters": [
           {

@@ -1,38 +1,60 @@
 /**
- * useSiblingDragReorder: pointer-driven manual reordering of rows WITHIN one
- * sibling group — tree documents or reference cards. Grab a row and drop it
- * among its siblings; the group never changes.
+ * useSiblingDragReorder: pointer-driven manual reordering of draggable rows —
+ * tree documents (anywhere across the visible tree levels) or reference cards
+ * (within their host).
  *
  * // ARCH: backend-authoritative ordering — on drop we send `after_id` (the sibling
  * // to land after, null = top) and the server computes the fractional sort_key,
  * // broadcasting it back. The optimistic update uses a provisional key purely for
  * // instant feedback and is reconciled by the PATCH response (rollback on error).
+ * // A tree drop that changes the parent also sends `parent_id` ('' = root) and the
+ * // route delegates to the ONE in-project move; the optimistic update re-buckets
+ * // the node (parent + provisional key in one store write) and
+ * // ws:document_moved reconciles peers.
  *
- * The KIND of rows is supplied by the adapter (row/group attributes, ordered
- * siblings, ignore-target predicate, commit) — the pointer mechanics are shared.
- * Two adapters = the real seam: tree docs and reference cards commit to the
- * same PATCH /documents/{id}/reorder but own different stores.
+ * The KIND of rows is supplied by the adapter (row/group attributes, drop
+ * RESOLUTION, ignore-target predicate, commit) — the pointer mechanics are
+ * shared. Two adapters = the real seam: tree docs and reference cards commit to
+ * the same PATCH /documents/{id}/reorder but own different resolutions and
+ * stores.
  *
  * Reuses the repo's PointerEvent drag pattern (see useResizer.ts): document-level
  * listeners, refs for transient state, visual feedback via imperative inline styles
  * (no new CSS classes), commit on pointerup. The drop target is a fixed-position
- * line in the gap between rows with a chevron on the adapter's side.
+ * line in the gap between rows with a chevron at BOTH ends pointing inward —
+ * identical for the tree (left panel) and reference cards (right panel). A tree
+ * drop INTO a row (its middle half) turns the same element vertical at the
+ * row's indent, chevrons top and bottom: horizontal = "between", vertical = "inside".
  */
 import { useEffect } from 'react';
 import { useAppStore } from '../store/app-store';
+import { useUIStore } from '../store/ui-store';
 import { apiClient } from '../api/client';
 import { t } from '../i18n';
-import type { Document } from '../types';
+import { resolveTreeDrop, resolveTreeNest, TREE_INDENT } from './treeDropTarget';
 
 const DRAG_THRESHOLD = 5; // px before a press becomes a drag (vs a click)
 const INDICATOR_LINE = 4; // px, thickness of the drop line
-const INDICATOR_CHEVRON = 10; // px, chevron box at the line's end
+const INDICATOR_CHEVRON = 10; // px, chevron box at each of the line's ends
+/** Fraction of a tree row's height at each edge that means "between"; the
+ * middle (1 - 2×EDGE) means "inside". */
+const TREE_EDGE_ZONE = 0.25;
+/** Base left padding of a tree row (DocumentTree pads rows `level*12 + 4`). */
+const TREE_BASE_PAD = 4;
 
-export type IndicatorSide = 'left' | 'right';
-
-export interface DragSibling {
-  id: string;
-  sortKey: string | undefined;
+/** A resolved drop: the commit payload plus the indicator line's geometry. */
+export interface DragDropTarget {
+  /** New parent (null = project root). For references: null — the host is the
+   * group and never changes (the adapter's resolution enforces it). */
+  parentId: string | null;
+  /** after_id for the commit: string = after that sibling, null = top. */
+  afterId: string | null;
+  lineLeft: number;
+  lineRight: number;
+  lineY: number;
+  /** Set for a drop INTO a row: the indicator becomes a vertical bar at
+   * `lineLeft` spanning `top`..`bottom` (lineRight/lineY unused). */
+  nest?: { top: number; bottom: number };
 }
 
 export interface SiblingDragAdapter {
@@ -40,53 +62,87 @@ export interface SiblingDragAdapter {
   rowIdAttr: string;
   /** Attribute marking the row's group; rows without it are neither draggable nor targets. */
   groupAttr: string;
-  /** Siblings of `groupId` (excluding `selfId`) in persisted order: sort_key, then id. */
-  orderedSiblings(groupId: string | null, selfId: string): DragSibling[];
   /** True when a pointerdown on `el` must not start a drag (action buttons, inputs). */
   ignoreTarget(el: HTMLElement): boolean;
+  /** Resolve a drop over `row` at the pointer position: the commit target plus
+   * the line geometry, or undefined when the position is not a valid drop. */
+  dropTarget(
+    row: HTMLElement,
+    e: { clientX: number; clientY: number },
+    candidate: { id: string; groupId: string | null },
+  ): DragDropTarget | undefined;
   /** Commit a drop: optimistic provisional key, PATCH, reconcile, rollback. */
-  commit(id: string, afterId: string | null): void;
-  /** Edge the drop line's chevron sits on — the panel's outer edge. */
-  indicatorSide: IndicatorSide;
+  commit(id: string, target: DragDropTarget): void;
 }
 
-/** Detached drop-line element: a 4px accent line plus a chevron pointing into
- * the list from `side`. Positioned by `placeDropIndicator`. */
-export function createDropIndicator(side: IndicatorSide): HTMLElement {
+/** Detached drop-line element: a 4px accent line plus TWO chevrons pointing
+ * inward (`>` at the left end, `<` at the right end), identical for both
+ * panels. It also carries the vertical pair (`v` at the top, `^` at the bottom)
+ * for the "inside" bar — `placeDropIndicator` shows one pair at a time. */
+export function createDropIndicator(): HTMLElement {
   const el = document.createElement('div');
-  el.setAttribute('data-drop-indicator', side);
+  el.setAttribute('data-drop-indicator', '');
   Object.assign(el.style, {
     position: 'fixed', height: `${INDICATOR_LINE}px`, background: 'var(--accent)',
     pointerEvents: 'none', zIndex: '10000', display: 'none',
   });
   const half = INDICATOR_CHEVRON / 2;
-  // Chevron tip points INTO the list: '>' on the left edge, '<' on the right.
-  const points = side === 'left' ? `1,1 ${half},${half} 1,${INDICATOR_CHEVRON - 1}` : `${INDICATOR_CHEVRON - 1},1 ${half},${half} ${INDICATOR_CHEVRON - 1},${INDICATOR_CHEVRON - 1}`;
-  el.innerHTML = `<svg width="${INDICATOR_CHEVRON}" height="${INDICATOR_CHEVRON}" viewBox="0 0 ${INDICATOR_CHEVRON} ${INDICATOR_CHEVRON}" `
-    + `style="position:absolute;top:${INDICATOR_LINE / 2 - half}px;${side}:${-half}px;overflow:visible">`
-    + `<polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="${INDICATOR_LINE}" stroke-linecap="square"/></svg>`;
+  const far = INDICATOR_CHEVRON - 1;
+  const across = INDICATOR_LINE / 2 - half; // centres the chevron on the stroke
+  const svg = (edge: 'left' | 'right' | 'top' | 'bottom', points: string) => {
+    const axis = edge === 'left' || edge === 'right' ? 'top' : 'left';
+    return `<svg data-chevron="${edge}" width="${INDICATOR_CHEVRON}" height="${INDICATOR_CHEVRON}" viewBox="0 0 ${INDICATOR_CHEVRON} ${INDICATOR_CHEVRON}" `
+      + `style="position:absolute;${axis}:${across}px;${edge}:${-half}px;overflow:visible">`
+      + `<polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="${INDICATOR_LINE}" stroke-linecap="square"/></svg>`;
+  };
+  // Chevron tips point INTO the stroke: '>' left, '<' right, 'v' top, '^' bottom.
+  el.innerHTML =
+    svg('left', `1,1 ${half},${half} 1,${far}`)
+    + svg('right', `${far},1 ${half},${half} ${far},${far}`)
+    + svg('top', `1,1 ${half},${half} ${far},1`)
+    + svg('bottom', `1,${far} ${half},${half} ${far},${far}`);
   return el;
 }
 
-/** Put the drop line on the row's top (`before`) or bottom edge, straddling
- * the gap between rows; the chevron overhangs the row's `side` edge by half. */
-export function placeDropIndicator(el: HTMLElement, rect: DOMRect, before: boolean): void {
-  const edge = before ? rect.top : rect.bottom;
-  const inset = INDICATOR_CHEVRON / 2;
-  Object.assign(el.style, {
-    display: 'block',
-    top: `${edge - INDICATOR_LINE / 2}px`,
-    left: `${rect.left + inset}px`,
-    width: `${Math.max(rect.width - 2 * inset, 0)}px`,
-  });
+/** Line geometry for a full-width row drop: the line spans the row's box with
+ * each chevron's tip on the row's outer edge. */
+export function rowDropLine(rect: DOMRect, before: boolean): Pick<DragDropTarget, 'lineLeft' | 'lineRight' | 'lineY'> {
+  const half = INDICATOR_CHEVRON / 2;
+  return {
+    lineLeft: rect.left + half,
+    lineRight: rect.right - half,
+    lineY: before ? rect.top : rect.bottom,
+  };
 }
 
-/** after_id for a pending drop over `rowId`: string = after that sibling,
- * null = top, undefined = `rowId` is not a sibling → no valid target. */
-export function dropAfterId(siblings: DragSibling[], rowId: string, before: boolean): string | null | undefined {
-  const idx = siblings.findIndex(s => s.id === rowId);
-  if (idx === -1) return undefined;
-  return before ? (idx > 0 ? siblings[idx - 1].id : null) : rowId;
+/** Put the drop line at `pos`, straddling the gap; each chevron overhangs the
+ * line's end by half. With `pos.nest` the element becomes the "inside" bar:
+ * the same stroke turned vertical at `lineLeft`, spanning `nest.top`..`nest.bottom`
+ * with the top/bottom chevron pair instead of the left/right one. */
+export function placeDropIndicator(
+  el: HTMLElement,
+  pos: Pick<DragDropTarget, 'lineLeft' | 'lineRight' | 'lineY' | 'nest'>,
+): void {
+  const { nest } = pos;
+  const vertical = new Set(['top', 'bottom']);
+  el.querySelectorAll<SVGElement>('svg[data-chevron]').forEach(svg => {
+    svg.style.display = vertical.has(svg.dataset.chevron!) === !!nest ? '' : 'none';
+  });
+  Object.assign(el.style, nest
+    ? {
+      display: 'block',
+      top: `${nest.top}px`,
+      left: `${pos.lineLeft}px`,
+      width: `${INDICATOR_LINE}px`,
+      height: `${Math.max(nest.bottom - nest.top, 0)}px`,
+    }
+    : {
+      display: 'block',
+      top: `${pos.lineY - INDICATOR_LINE / 2}px`,
+      left: `${pos.lineLeft}px`,
+      width: `${Math.max(pos.lineRight - pos.lineLeft, 0)}px`,
+      height: `${INDICATOR_LINE}px`,
+    });
 }
 
 /** Shared commit body: provisional optimistic key, PATCH /documents/{id}/reorder
@@ -115,45 +171,120 @@ export async function patchSiblingReorder(
   }
 }
 
-/** Siblings of `parentId` (excluding `selfId`) in persisted order: sort_key, then id. */
-function orderedTreeSiblings(docs: Document[], parentId: string | null, selfId: string): DragSibling[] {
-  return docs
-    .filter(d => !d.is_index && (d.parent_id ?? null) === parentId && d.document_id !== selfId)
-    .map(d => ({ id: d.document_id, sortKey: d.sort_key }))
-    .sort((a, b) => {
-      const ka = a.sortKey ?? '';
-      const kb = b.sortKey ?? '';
-      if (ka !== kb) return ka < kb ? -1 : 1;
-      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-    });
+/** Cross-level tree drop: PATCH reorder with {after_id, parent_id} ('' = root).
+ * Optimistic parent + provisional key land in ONE setDocuments (documentTree
+ * re-buckets in the same set — no flash of the old bucket), the server response
+ * reconciles both, and an error rolls BOTH back + toasts. ws:document_moved
+ * re-applies the authoritative values on every client (idempotent here). */
+export async function patchDocumentMove(
+  id: string,
+  parentId: string | null,
+  afterId: string | null,
+  oldParent: string | null,
+  oldKey: string | undefined,
+): Promise<void> {
+  const docs = useAppStore.getState().documents;
+  const anchor = afterId ? docs.find(d => d.document_id === afterId) : undefined;
+  const provisional = afterId ? `${anchor?.sort_key ?? ''}V` : '';
+  const apply = (parent: string | null, key: string | undefined) =>
+    useAppStore.getState().setDocuments(
+      useAppStore.getState().documents.map(d => (
+        d.document_id === id ? { ...d, parent_id: parent, sort_key: key } : d
+      )),
+    );
+  apply(parentId, provisional);
+  try {
+    const updated = await apiClient.patch(
+      `/documents/${id}/reorder`, { after_id: afterId, parent_id: parentId ?? '' },
+    );
+    apply(updated?.parent_id ?? parentId, updated?.sort_key ?? provisional);
+  } catch (err) {
+    console.error('Failed to move document', err);
+    apply(oldParent, oldKey); // rollback both
+    useAppStore.getState().showToast(t('failedToReorderDocument'), 'error');
+  }
 }
 
-// The tree adapter is the pre-seam useTreeDragReorder behaviour, moved verbatim
-// behind the adapter interface.
+// The tree adapter resolves drops against the VISIBLE tree read off the DOM:
+// any gap between rows, at any depth, the pointer's X picking the depth; the
+// row's middle half drops INTO it (first child).
 export const treeDragAdapter: SiblingDragAdapter = {
   rowIdAttr: 'data-doc-id',
   groupAttr: 'data-parent-id',
-  orderedSiblings: (parentId, selfId) =>
-    orderedTreeSiblings(useAppStore.getState().documents, parentId, selfId),
   // Don't hijack action buttons, the rename input, or the gear menu.
   ignoreTarget: (el) => !!(el.closest('.doc-item-actions') || el.closest('input')),
-  // Tree sits in the left panel: the chevron marks the panel's outer edge.
-  indicatorSide: 'left',
-  commit: (id, afterId) => {
+  dropTarget: (row, e, candidate) => {
+    const rowId = row.getAttribute('data-doc-id')!;
+    if (rowId === candidate.id) return undefined;
+    const tree = row.closest('[role="tree"]');
+    if (!tree) return undefined;
+    // Visible rows top→bottom: every tree row carries id + parent + level; the
+    // project-context row (no data-parent-id) is not a drop surface.
+    const rows = Array.from(
+      tree.querySelectorAll<HTMLElement>('[data-doc-id][data-parent-id]'),
+    ).map(el => ({
+      id: el.getAttribute('data-doc-id')!,
+      parentId: el.getAttribute('data-parent-id') || null,
+      depth: Number(el.getAttribute('data-level') || '0'),
+    }));
+    const idx = rows.findIndex(r => r.id === rowId);
+    if (idx === -1) return undefined;
+    const rect = row.getBoundingClientRect();
+    const edge = rect.height * TREE_EDGE_ZONE;
+    if (e.clientY >= rect.top + edge && e.clientY < rect.bottom - edge) {
+      const nest = resolveTreeNest(rows, idx, candidate.id);
+      if (!nest) return undefined;
+      // The bar sits at the TARGET row's own indent — the level being nested into;
+      // inset by half a chevron so each tip lands on the row's edge (as the line does).
+      const left = rect.left + TREE_BASE_PAD + rows[idx].depth * TREE_INDENT;
+      const half = INDICATOR_CHEVRON / 2;
+      return {
+        parentId: nest.parentId,
+        afterId: null,
+        lineLeft: left,
+        lineRight: left + INDICATOR_LINE,
+        lineY: rect.top,
+        nest: { top: rect.top + half, bottom: rect.bottom - half },
+      };
+    }
+    const before = e.clientY < rect.top + rect.height / 2;
+    const drop = resolveTreeDrop(
+      rows, idx + (before ? 0 : 1), Math.round((e.clientX - rect.left - TREE_BASE_PAD) / TREE_INDENT), candidate.id,
+    );
+    if (!drop) return undefined;
+    return {
+      parentId: drop.parentId,
+      afterId: drop.afterId,
+      // The line starts at the target depth's indent (where the dropped row's
+      // content will sit) and runs to the panel's right edge.
+      lineLeft: rect.left + TREE_BASE_PAD + drop.depth * TREE_INDENT,
+      lineRight: rect.right - INDICATOR_CHEVRON / 2,
+      lineY: before ? rect.top : rect.bottom,
+    };
+  },
+  commit: (id, target) => {
     const docs = useAppStore.getState().documents;
     const self = docs.find(d => d.document_id === id);
-    const anchor = afterId ? docs.find(d => d.document_id === afterId) : undefined;
-    void patchSiblingReorder(
-      id,
-      afterId,
-      self?.sort_key,
-      anchor?.sort_key,
-      (key) => useAppStore.getState().setDocuments(
-        useAppStore.getState().documents.map(d => d.document_id === id ? { ...d, sort_key: key } : d),
-      ),
-      'Failed to reorder document',
-      t('failedToReorderDocument'),
-    );
+    const currentParent = self?.parent_id ?? null;
+    if ((target.parentId ?? null) === currentParent) {
+      const anchor = target.afterId ? docs.find(d => d.document_id === target.afterId) : undefined;
+      void patchSiblingReorder(
+        id,
+        target.afterId,
+        self?.sort_key,
+        anchor?.sort_key,
+        (key) => useAppStore.getState().setDocuments(
+          useAppStore.getState().documents.map(d => d.document_id === id ? { ...d, sort_key: key } : d),
+        ),
+        'Failed to reorder document',
+        t('failedToReorderDocument'),
+      );
+      return;
+    }
+    // A drop into a collapsed doc or a leaf would vanish from view: expand the
+    // new parent so the moved doc stays visible (idempotent for an open one).
+    if (target.parentId) useUIStore.getState().expandDocs([target.parentId]);
+    void patchDocumentMove(id, target.parentId, target.afterId, currentParent, self?.sort_key);
   },
 };
 
@@ -171,8 +302,8 @@ export function useSiblingDragReorder(
     let dragging = false;
     let draggedRow: HTMLElement | null = null;
     let indicator: HTMLElement | null = null;
-    // after_id for the pending drop: string = after that sibling, null = top, undefined = no valid target
-    let pendingAfterId: string | null | undefined = undefined;
+    // The pending drop: undefined = no valid target under the pointer.
+    let pendingTarget: DragDropTarget | undefined = undefined;
 
     const reorderableRow = (target: EventTarget | null): HTMLElement | null => {
       const el = target as HTMLElement | null;
@@ -204,26 +335,16 @@ export function useSiblingDragReorder(
 
     const updateDropTarget = (e: PointerEvent) => {
       clearIndicator();
-      pendingAfterId = undefined;
+      pendingTarget = undefined;
       const row = reorderableRow(document.elementFromPoint(e.clientX, e.clientY));
-      if (!row) return;
-      const rowGroup = row.getAttribute(adapter.groupAttr) || null;
-      const rowId = row.getAttribute(adapter.rowIdAttr)!;
-      // INVARIANT: only same-group siblings are valid drop targets (the group
-      // never changes). Why: drag-reorder is constrained to one sibling group so
-      // reordering never re-hosts a node (tree level / reference host stay intact).
-      if (rowGroup !== candidate!.groupId || rowId === candidate!.id) return;
-
-      const rect = row.getBoundingClientRect();
-      const before = e.clientY < rect.top + rect.height / 2;
-      const siblings = adapter.orderedSiblings(candidate!.groupId, candidate!.id);
-      pendingAfterId = dropAfterId(siblings, rowId, before);
-      if (pendingAfterId === undefined) return;
+      if (!row || !candidate) return;
+      pendingTarget = adapter.dropTarget(row, e, candidate);
+      if (!pendingTarget) return;
       if (!indicator) {
-        indicator = createDropIndicator(adapter.indicatorSide);
+        indicator = createDropIndicator();
         document.body.appendChild(indicator);
       }
-      placeDropIndicator(indicator, rect, before);
+      placeDropIndicator(indicator, pendingTarget);
     };
 
     const onPointerMove = (e: PointerEvent) => {
@@ -241,15 +362,15 @@ export function useSiblingDragReorder(
     const endDrag = () => {
       const wasDragging = dragging;
       const cand = candidate;
-      const after = pendingAfterId;
+      const target = pendingTarget;
       if (draggedRow) draggedRow.style.opacity = '';
       removeIndicator();
       document.body.style.userSelect = '';
       candidate = null;
       dragging = false;
       draggedRow = null;
-      pendingAfterId = undefined;
-      if (!wasDragging || !cand || after === undefined) return;
+      pendingTarget = undefined;
+      if (!wasDragging || !cand || !target) return;
       // Suppress the click that may fire after pointerup so the row doesn't navigate.
       // Browsers usually suppress click after pointer movement; this is defensive and
       // self-removes after a short window so it can never swallow a later real click.
@@ -257,7 +378,7 @@ export function useSiblingDragReorder(
       container.addEventListener('click', swallow, { capture: true, once: true });
       setTimeout(() => container.removeEventListener('click', swallow, true), 250);
 
-      adapter.commit(cand.id, after);
+      adapter.commit(cand.id, target);
     };
 
     container.addEventListener('pointerdown', onPointerDown);

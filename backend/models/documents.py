@@ -33,6 +33,11 @@ class ReorderDocument(BaseModel):
     # after_id: the sibling to place this document after; None = top of the group.
     # Server computes the fractional sort_key — never sent by the client (thin-client).
     after_id: str | None = None
+    # parent_id: SENT (even '' / null = project root) ⇒ the reorder is a cross-level
+    # tree drop — the route delegates to move_document_command (the same validation
+    # as the parent picker). ABSENT ⇒ today's same-group reorder; the parent never
+    # changes on that path.
+    parent_id: str | None = None
 
 
 class MoveDocumentToProject(BaseModel):

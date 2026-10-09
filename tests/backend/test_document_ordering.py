@@ -6,8 +6,12 @@ backend-authoritative (the client sends `after_id`, the server computes the key)
 """
 
 
+from uuid import uuid4
+
 import pytest
 from emit_recorder import EmitRecorder
+
+from db import create_record
 
 
 async def _create(client, cookies, pid, title, parent_id=None):
@@ -185,3 +189,205 @@ async def test_reorder_emits_event(client, admin_user, project_with_doc):
     payload = events[0][1]
     assert payload["document_id"] == b["document_id"]
     assert payload.get("sort_key")
+
+
+# ─── Cross-level drag: reorder with parent_id (the tree drop contract) ────────
+
+
+async def _mk_ref(client, cookies, pid, host, title):
+    resp = await client.post(
+        "/api/references",
+        json={"project_id": pid, "document_id": host, "title": title,
+              "media_type": "markdown", "content": "body"},
+        cookies=cookies,
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["reference_id"]
+
+
+async def _add_member(uid, pid, level):
+    await create_record("project_members", str(uuid4()), {
+        "project_id": pid, "user_id": uid, "access_level": level,
+    })
+
+
+@pytest.mark.asyncio
+async def test_reorder_with_parent_moves_under_new_parent_after_after_id(
+    client, admin_user, project_with_doc,
+):
+    """parent_id present + after_id ⇒ the doc moves under that parent, right
+    after after_id (the cross-level tree drop)."""
+    pid, _, _ = project_with_doc
+    _, token = admin_user
+    cookies = {"lore_session": token}
+    parent = await _create(client, cookies, pid, "Parent")
+    c1 = await _create(client, cookies, pid, "C1", parent_id=parent["document_id"])
+    c2 = await _create(client, cookies, pid, "C2", parent_id=parent["document_id"])
+    mover = await _create(client, cookies, pid, "Mover")
+
+    resp = await client.patch(
+        f"/api/documents/{mover['document_id']}/reorder",
+        json={"parent_id": parent["document_id"], "after_id": c1["document_id"]},
+        cookies=cookies,
+    )
+    assert resp.status_code == 200, resp.text
+    # Newest-first under Parent: C2, C1 → mover lands after C1; root loses it.
+    order = await _sibling_order(client, cookies, pid, parent_id=parent["document_id"])
+    assert order == [c2["document_id"], c1["document_id"], mover["document_id"]]
+    assert mover["document_id"] not in await _sibling_order(client, cookies, pid)
+
+
+@pytest.mark.asyncio
+async def test_reorder_with_empty_parent_moves_to_root_at_position(
+    client, admin_user, project_with_doc,
+):
+    """parent_id='' + after_id ⇒ the doc lands at the project ROOT right after
+    after_id."""
+    pid, _, _ = project_with_doc
+    _, token = admin_user
+    cookies = {"lore_session": token}
+    r1 = await _create(client, cookies, pid, "R1")
+    r2 = await _create(client, cookies, pid, "R2")  # root order: R2, R1
+    parent = await _create(client, cookies, pid, "Parent")
+    child = await _create(client, cookies, pid, "Child", parent_id=parent["document_id"])
+
+    resp = await client.patch(
+        f"/api/documents/{child['document_id']}/reorder",
+        json={"parent_id": "", "after_id": r2["document_id"]},
+        cookies=cookies,
+    )
+    assert resp.status_code == 200, resp.text
+    # Root is the session-shared group (strays from other tests land there too) —
+    # pin the child's NEIGHBOURS, not the whole list.
+    order = await _sibling_order(client, cookies, pid)
+    i = order.index(child["document_id"])
+    assert order[i - 1] == r2["document_id"]
+    assert order[i + 1] == r1["document_id"]
+
+
+@pytest.mark.asyncio
+async def test_reorder_with_parent_own_descendant_rejected(
+    client, admin_user, project_with_doc,
+):
+    """parent_id naming the doc's own descendant is a cycle ⇒ 400."""
+    pid, _, _ = project_with_doc
+    _, token = admin_user
+    cookies = {"lore_session": token}
+    doc = await _create(client, cookies, pid, "D")
+    child = await _create(client, cookies, pid, "C", parent_id=doc["document_id"])
+
+    resp = await client.patch(
+        f"/api/documents/{doc['document_id']}/reorder",
+        json={"parent_id": child["document_id"]},
+        cookies=cookies,
+    )
+    assert resp.status_code == 400, resp.text
+
+
+@pytest.mark.asyncio
+async def test_reorder_with_parent_on_reference_rejected(
+    client, admin_user, project_with_doc,
+):
+    """A reference never changes host through reorder ⇒ 400."""
+    pid, _, _ = project_with_doc
+    _, token = admin_user
+    cookies = {"lore_session": token}
+    host = await _create(client, cookies, pid, "Host")
+    other = await _create(client, cookies, pid, "Other")
+    ref = await _mk_ref(client, cookies, pid, host["document_id"], "ref")
+
+    resp = await client.patch(
+        f"/api/documents/{ref}/reorder",
+        json={"parent_id": other["document_id"]},
+        cookies=cookies,
+    )
+    assert resp.status_code == 400, resp.text
+    assert "host" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_reorder_with_parent_system_doc_forbidden(
+    client, admin_user, project_with_doc, test_db,
+):
+    """A system document is unmovable ⇒ 403 (the move command's own gate)."""
+    pid, _, _ = project_with_doc
+    _, token = admin_user
+    cookies = {"lore_session": token}
+    doc = await _create(client, cookies, pid, "Sys")
+    other = await _create(client, cookies, pid, "Other")
+    await test_db.query(
+        "UPDATE type::record('documents', $id) SET is_system = true",
+        {"id": doc["document_id"]},
+    )
+
+    resp = await client.patch(
+        f"/api/documents/{doc['document_id']}/reorder",
+        json={"parent_id": other["document_id"]},
+        cookies=cookies,
+    )
+    assert resp.status_code == 403, resp.text
+
+
+@pytest.mark.asyncio
+async def test_reorder_with_parent_access_levels(
+    client, admin_user, regular_user, project_with_doc, test_db,
+):
+    """Non-full members may not move a doc across levels ⇒ 403 (same gate as
+    every document write)."""
+    pid, _, _ = project_with_doc
+    _, token = admin_user
+    cookies = {"lore_session": token}
+    uid, utoken = regular_user
+    parent = await _create(client, cookies, pid, "Parent")
+    doc = await _create(client, cookies, pid, "Doc")
+
+    for level in ("commentator", "readonly"):
+        await _add_member(uid, pid, level)
+        resp = await client.patch(
+            f"/api/documents/{doc['document_id']}/reorder",
+            json={"parent_id": parent["document_id"]},
+            cookies={"lore_session": utoken},
+        )
+        assert resp.status_code == 403, (level, resp.text)
+        await test_db.query(
+            "DELETE project_members WHERE project_id = $pid AND user_id = $uid",
+            {"pid": pid, "uid": uid},
+        )
+
+    # sanity: the admin move on the same fixture is a 200
+    resp = await client.patch(
+        f"/api/documents/{doc['document_id']}/reorder",
+        json={"parent_id": parent["document_id"]},
+        cookies=cookies,
+    )
+    assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.asyncio
+async def test_reorder_with_parent_emits_document_moved(
+    client, admin_user, project_with_doc,
+):
+    """The parent-carrying reorder emits document_moved (not document_reordered)
+    with both hosts named, so a second client re-buckets the node live."""
+    pid, _, _ = project_with_doc
+    _, token = admin_user
+    cookies = {"lore_session": token}
+    parent = await _create(client, cookies, pid, "Parent")
+    doc = await _create(client, cookies, pid, "Doc")
+
+    with EmitRecorder.active() as rec:
+        resp = await client.patch(
+            f"/api/documents/{doc['document_id']}/reorder",
+            json={"parent_id": parent["document_id"]},
+            cookies=cookies,
+        )
+    captured = rec.calls
+    assert resp.status_code == 200, resp.text
+    events = [e for e in captured if e[0] == "document_moved"]
+    assert events, f"document_moved not emitted; got {[e[0] for e in captured]}"
+    payload = events[0][1]
+    assert payload["document_id"] == doc["document_id"]
+    assert payload["parent_id"] == parent["document_id"]
+    assert payload.get("previous_parent_id") in (None, "")
+    assert payload.get("sort_key")
+    assert [e for e in captured if e[0] == "document_reordered"] == []

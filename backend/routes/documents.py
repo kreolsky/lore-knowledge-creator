@@ -8,7 +8,7 @@ See SYSTEM: documents (entry: backend/documents/__init__.py).
 from documents.batch_read import fetch_content_batch
 from documents.create import create_document_command
 from documents.delete import delete_document_command, delete_documents_batch_command
-from documents.move import move_document_to_project_command
+from documents.move import move_document_command, move_document_to_project_command
 from documents.service import export_document
 from documents.update import (
     record_doc_open,
@@ -228,15 +228,36 @@ async def reorder_document(
     document_id: str, body: ReorderDocument, user: dict = Depends(get_current_user)
 ):
     """Place a document or reference after `after_id` within its own sibling group
-    (null = top).
+    (null = top); with `parent_id` sent, place it under that parent instead.
 
-    INVARIANT: reorder never changes parent — `after_id` must be a same-kind
-    sibling of the moved row (same project_id, parent_id and is_reference) or
-    null. A cross-level or cross-kind `after_id` is rejected with 400. Why: user
-    spec — drag reorders within one level only; refs keep the rule (their own
-    group, same endpoint).
+    INVARIANT: reorder keeps the parent unless `parent_id` is sent; references
+    never change host here. Why: user spec 2026-10-09 — tree drag moves a doc
+    across visible tree levels; ref drag stays within its host.
+
+    `parent_id` absent ⇒ today's path: `after_id` must be a same-kind sibling
+    (same project_id, parent_id and is_reference) or null; a cross-level or
+    cross-kind `after_id` is a 400. `parent_id` sent (even '' = project root)
+    ⇒ the ONE in-project move (documents.move.move_document_command) owns
+    system/cycle/parent-validity checks and emits `document_moved`.
     """
     await require_document_full(document_id, user)
+    if "parent_id" in body.model_fields_set:
+        # ARCH: the tree drag's cross-level drop rides the same move the parent
+        # picker uses — no second parent-changing writer. References keep the
+        # same-group contract even when parent_id is sent: their host is their
+        # group (a re-host is a different gesture, not a reorder).
+        record = await fetch_one("documents", document_id)
+        if record and is_ref_row(record):
+            raise HTTPException(
+                status_code=400,
+                detail="references are reordered within their host",
+            )
+        return await move_document_command(
+            document_id=document_id,
+            parent_id=body.parent_id or None,
+            after_id=body.after_id,
+            project_id=record.get("project_id") if record else None,
+        )
     return await reorder_document_command(document_id, body.after_id)
 
 

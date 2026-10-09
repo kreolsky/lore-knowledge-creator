@@ -8,8 +8,13 @@
 
 import { useAppStore } from '../../store/app-store';
 import { t } from '../../i18n';
-import { patchSiblingReorder, type DragSibling, type SiblingDragAdapter } from '../../hooks/useSiblingDragReorder';
+import { patchSiblingReorder, rowDropLine, type DragDropTarget, type SiblingDragAdapter } from '../../hooks/useSiblingDragReorder';
 import type { Reference } from '../../types';
+
+interface DragSibling {
+  id: string;
+  sortKey: string | undefined;
+}
 
 function orderedRefSiblings(refs: Reference[], groupId: string | null, selfId: string): DragSibling[] {
   return refs
@@ -23,22 +28,40 @@ function orderedRefSiblings(refs: Reference[], groupId: string | null, selfId: s
     });
 }
 
+/** after_id for a pending drop over `rowId`: string = after that sibling,
+ * null = top, undefined = `rowId` is not a sibling → no valid target. */
+function dropAfterId(siblings: DragSibling[], rowId: string, before: boolean): string | null | undefined {
+  const idx = siblings.findIndex(s => s.id === rowId);
+  if (idx === -1) return undefined;
+  return before ? (idx > 0 ? siblings[idx - 1].id : null) : rowId;
+}
+
 export const refDragAdapter: SiblingDragAdapter = {
   rowIdAttr: 'data-ref-id',
   groupAttr: 'data-ref-group',
-  orderedSiblings: (groupId, selfId) =>
-    orderedRefSiblings(useAppStore.getState().references, groupId, selfId),
   // Don't hijack RefCard action buttons or the inline-rename input.
   ignoreTarget: (el) => !!(el.closest('button') || el.closest('input')),
-  // References sit in the right panel: the chevron marks the panel's outer edge.
-  indicatorSide: 'right',
-  commit: (id, afterId) => {
+  dropTarget: (row, e, candidate): DragDropTarget | undefined => {
+    const rowGroup = row.getAttribute('data-ref-group') || null;
+    const rowId = row.getAttribute('data-ref-id')!;
+    // INVARIANT: only same-group siblings are valid drop targets (the group
+    // never changes). Why: drag-reorder is constrained to one sibling group so
+    // reordering never re-hosts a reference (its host stays intact).
+    if (rowGroup !== candidate.groupId || rowId === candidate.id) return undefined;
+    const rect = row.getBoundingClientRect();
+    const before = e.clientY < rect.top + rect.height / 2;
+    const siblings = orderedRefSiblings(useAppStore.getState().references, candidate.groupId, candidate.id);
+    const afterId = dropAfterId(siblings, rowId, before);
+    if (afterId === undefined) return undefined;
+    return { parentId: null, afterId, ...rowDropLine(rect, before) };
+  },
+  commit: (id, target) => {
     const refs = useAppStore.getState().references;
     const self = refs.find(r => r.reference_id === id);
-    const anchor = afterId ? refs.find(r => r.reference_id === afterId) : undefined;
+    const anchor = target.afterId ? refs.find(r => r.reference_id === target.afterId) : undefined;
     void patchSiblingReorder(
       id,
-      afterId,
+      target.afterId,
       self?.sort_key ?? undefined,
       anchor?.sort_key ?? undefined,
       // placeReference (not updateReference): the optimistic key must re-place

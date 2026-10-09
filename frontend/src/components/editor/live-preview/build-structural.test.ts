@@ -137,9 +137,13 @@ describe('fenced code', () => {
     expect(decs.some((d) => doc.slice(d.from, d.to) === 'const a = 1;')).toBe(false);
   });
 
-  it('cursor inside the block keeps BOTH fence lines visible (edit affordance)', () => {
+  it('cursor inside the block keeps BOTH fence lines visible and still offers the copy button', () => {
     const decs = decsFor(doc, doc.indexOf('const'));
-    expect(decs.some((d) => d.widget?.constructor.name === 'CopyButtonWidget')).toBe(false);
+    const copy = decs.find((d) => d.widget?.constructor.name === 'CopyButtonWidget');
+    expect(copy, 'CopyButtonWidget while editing').toBeDefined();
+    // Zero-width at the end of the opening fence — the raw ```ts text is not replaced.
+    expect(copy!.from).toBe(doc.indexOf('\n'));
+    expect(copy!.to).toBe(copy!.from);
     expect(decs.filter((d) => !d.widget && !d.cls && doc.slice(d.from, d.to).startsWith('```')).length).toBe(0);
   });
 });
