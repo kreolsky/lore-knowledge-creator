@@ -126,6 +126,69 @@ async def post_stop(lore_session_id: str, line: DriverLine | None = None) -> dic
         raise DriverLineUnreachable(ln.name, str(exc)) from exc
 
 
+class DriverForkUnresolvable(RuntimeError):
+    """The driver refused to seed a branch log — the named (session, seq)
+    does not resolve to a `turn/end` boundary in the source log (a stale
+    stamp, a pruned log, a pre-harness chain).
+
+    Distinct from DriverLineUnreachable: the line ANSWERED — the branch point
+    is the problem. The caller answers the 422 wording family ("branch point
+    not resolvable"), never a 5xx.
+    """
+
+
+async def post_session_fork(
+    source_dsh_id: str, seq: int, new_lore_id: str,
+    line: DriverLine | None = None,
+) -> dict:
+    """POST /session-fork — seed a branch's own dsh log under its Lore id.
+
+    The lazy-seed half of the branch model: a session carved out of
+    a legacy tree (the migration) or forked via /branches carries
+    seed_source_session + seed_source_seq, and its FIRST completion calls
+    this BEFORE the turn — the plugin seeds a fresh dsh session under
+    new_lore_id from the source log's events up to seq (buildForkSeed; the
+    prefix keeps its seqs, so the copied rows' stamps resolve in the
+    branch's own log on reload). Idempotent driver-side: a log that already
+    exists answers 200 without re-seeding (the crash-window contract).
+    Reply `{ok: true[, existed: true]}`; a 422 raises
+    DriverForkUnresolvable, 401 DriverSecretMismatch, anything else
+    DriverLineUnreachable (the post_stop wrap).
+    """
+    ln = line if line is not None else await resolve_driver_line()
+    if ln is None or not ln.secret:
+        raise DriverLineUnreachable(
+            DRIVER_LINE_NAME, "driver line not configured; refusing to call driver service")
+    url = f"{ln.url}/session-fork"
+    headers = {"Content-Type": "application/json", "X-Driver-Secret": ln.secret}
+    try:
+        client = http_clients.get_http_client("driver", timeout=_SESSION_ENTRIES_TIMEOUT)
+        resp = await client.post(
+            url,
+            json={"source_dsh_id": source_dsh_id, "seq": seq,
+                  "new_lore_id": new_lore_id},
+            headers=headers, timeout=_SESSION_ENTRIES_TIMEOUT,
+        )
+        # 401 is the secret mismatch — named, never "unreachable".
+        if resp.status_code == 401:
+            raise DriverSecretMismatch(ln.name)
+        # 422 is the plugin's honest refusal (the boundary guard), never a
+        # transport failure.
+        if resp.status_code == 422:
+            raise DriverForkUnresolvable(f"session-fork refused: {resp.text}")
+        resp.raise_for_status()
+        reply = resp.json()
+        if not isinstance(reply, dict):
+            raise ValueError(f"malformed session-fork reply: {reply!r}")
+        return reply
+    except DriverSecretMismatch:
+        raise
+    except DriverForkUnresolvable:
+        raise
+    except Exception as exc:
+        raise DriverLineUnreachable(ln.name, str(exc)) from exc
+
+
 class DriverTurnBusy(RuntimeError):
     """The driver kept refusing /followup with 409 turn_in_progress past the
     retry budget (a followup racing the just-ended

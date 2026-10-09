@@ -19,7 +19,7 @@ from surrealdb import AsyncSurreal
 
 from access import get_document_access, get_project_access
 from auth import get_current_user
-from db import fetch_one, get_db
+from db import extract_id, fetch_one, get_db
 from models import SessionCreate, SessionUpdate
 from routes.chat._router import router
 
@@ -148,9 +148,9 @@ async def _guard_reasoning_effort(session: dict, body: SessionUpdate) -> None:
     # else the row's model). Why gate here instead of turn time: a stale level
     # under a non-reasoning model would pass the router untouched and die
     # upstream with an opaque error — the 400 names the constraint while the
-    # picker is still on screen. An absent map entry (gateway without
-    # /capabilities, unknown model) advertises nothing: non-null is rejected —
-    # honest, retryable, never a silent drop.
+    # picker is still on screen. An absent map entry (gateway without the
+    # /capabilities endpoint, unknown model) advertises nothing: non-null is
+    # rejected — honest, retryable, never a silent drop.
     # Note sessions never take an LLM turn; the field is silently ignored for
     # them (the context_ids precedent).
     if session.get("is_note") is True or "reasoning_effort" not in body.model_fields_set:
@@ -164,6 +164,37 @@ async def _guard_reasoning_effort(session: dict, body: SessionUpdate) -> None:
     await _validate_reasoning_effort(target_model, body.reasoning_effort)
 
 
+def _thread_of(session: dict, session_id: str) -> str:
+    """The row's thread id — its thread_id column, else its own id (a
+    pre-migration row IS its own thread)."""
+    return session.get("thread_id") or session_id
+
+
+async def _guard_active_branch(db, session: dict, session_id: str, body: SessionUpdate) -> None:
+    """400 unless a non-null active_branch_id names a LIVE AI session of the
+    SAME thread as the PATCHed row (root or branch — only the root's pointer
+    is ever read, but the validation is row-relative and needs no special
+    case). A dead/foreign id must be a hard refusal, never a silent write:
+    the chat list previews whatever this field names."""
+    if (
+        session.get("is_note") is True
+        or "active_branch_id" not in body.model_fields_set
+        or body.active_branch_id is None
+    ):
+        return
+    branch = await fetch_one("chat_sessions", body.active_branch_id)
+    if (
+        not branch
+        or branch.get("deleted_at")
+        or branch.get("is_note") is True
+        or _thread_of(branch, body.active_branch_id) != _thread_of(session, session_id)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="active_branch_id must name a live branch of this thread",
+        )
+
+
 @router.patch("/sessions/{session_id}")
 async def update_session(session_id: str, body: SessionUpdate, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
     """Update session title, model, context, agent_auto (confirm↔auto toggle), or parent document.
@@ -175,6 +206,7 @@ async def update_session(session_id: str, body: SessionUpdate, user: dict = Depe
     """
     session = await _require_session_access(session_id, user)
     await _guard_reasoning_effort(session, body)
+    await _guard_active_branch(db, session, session_id, body)
     return await update_session_command(db, session_id, session, body, user)
 
 
@@ -217,10 +249,43 @@ async def _teardown_harness(session_id: str, session: dict) -> None:
         )
 
 
+async def _thread_rows(db, thread_id: str) -> list[dict]:
+    """Every live row of a thread: the root itself (a pre-migration root has
+    thread_id IS NONE) plus its branches (thread_id = the root's id)."""
+    return await db.query(
+        "SELECT * FROM chat_sessions "
+        "WHERE (thread_id = $tid OR (thread_id IS NONE AND meta::id(id) = $tid)) "
+        "AND deleted_at IS NONE",
+        {"tid": thread_id},
+    ) or []
+
+
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
-    """Soft-delete a chat session and its messages, then tear down its harness side."""
+    """Soft-delete a chat session and its messages, then tear down its harness side.
+
+    # ARCH: an AI chat is a THREAD — the route
+    # accepts only the thread ROOT (a branch id ⇒ 400 "delete the
+    # conversation, not a branch") and runs the per-row delete + teardown for
+    # EVERY row of the thread, each under its own id (every branch owns its
+    # dsh session, its agent key and its fan-out). Note chats keep the
+    # single-row delete.
+    """
     session = await _require_session_access(session_id, user)
-    await delete_session_command(db, session_id, session)
-    await _teardown_harness(session_id, session)
+    if session.get("is_note") is not True:
+        own_id = str(extract_id(session.get("id")) or session_id)
+        if _thread_of(session, session_id) != own_id:
+            raise HTTPException(
+                status_code=400,
+                detail="This chat is a branch — delete the conversation, not a branch",
+            )
+        rows = await _thread_rows(db, own_id)
+    else:
+        rows = [session]
+    for row in rows:
+        rid = str(extract_id(row.get("id")) or "")
+        if not rid:
+            continue
+        await delete_session_command(db, rid, row)
+        await _teardown_harness(rid, row)
     return {"success": True}

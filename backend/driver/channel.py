@@ -615,8 +615,8 @@ class DriverChannel:
             if not sub.anchored:
                 continue
             # WHY: last_seq None means nothing of this log was delivered (an
-            # empty log at the anchor, or a root fork's fresh one), so the
-            # gap IS the whole log — since_seq omitted replays it all.
+            # empty log at the anchor), so the gap IS the whole log —
+            # since_seq omitted replays it all.
             try:
                 payload = await fetch_session_entries(
                     sub.lore_session_id, line=line, since_seq=sub.last_seq)
@@ -657,40 +657,8 @@ class DriverChannel:
         if sub is None:
             return  # unsubscribed while the ack was in flight
         self._rekey(sub, msg.get("dsh_session_id"))
-        # WHY(fork re-anchor): a REPOINT re-ack carries `tail_seq` — the
-        # forked session's log tail (null on a root fork); a plain subscribe
-        # ack never does. The fork's seed RETAINS the parent prefix seqs, so
-        # the forked turn's frames start BELOW the pre-fork tail whenever the
-        # branch point is not the last turn — without re-anchoring here, the
-        # seq-anchored dedup in _dispatch_frame drops the whole forked turn
-        # as "already delivered" while the driver completes it happily (the
-        # driver repoints the subscription; this arm follows it).
-        if "tail_seq" in msg:
-            _reanchor(sub, msg.get("tail_seq"))
         sub.subscribed = True
         sub.ack.set()
-
-    def repoint(
-        self, lore_session_id: str, dsh_session_id: str, tail_seq: object,
-    ) -> None:
-        """Apply a fork's repoint from the driver's /session-leaf ANSWER —
-        the same re-key + re-anchor the re-ack applies (_handle_subscribed).
-        A session not subscribed yet is left alone: its later subscribe
-        anchors at the forked log's tail by itself.
-
-        # INVARIANT(data-loss): a fork re-anchors the subscription even when no socket
-        # carried the re-ack.
-        # Why: the driver re-acks only on a socket that is up at the fork; a
-        # harness restart leaves the channel reconnecting for seconds, and a
-        # turn forked in that window kept the OLD log's anchor — the
-        # reconnect's resync then dropped the whole forked turn as already
-        # delivered and its row stayed empty forever.
-        """
-        sub = self._subs.get(lore_session_id)
-        if sub is None:
-            return
-        self._rekey(sub, dsh_session_id)
-        _reanchor(sub, tail_seq)
 
     def _rekey(self, sub: _Subscription, dsh_id: object) -> None:
         if sub.dsh_session_id and sub.dsh_session_id in self._dsh_index:
@@ -828,9 +796,8 @@ class DriverChannel:
                 persist_turn_seq=persistence._persist_turn_seq,
                 session_id=sub.lore_session_id,
                 # WHY: the turn opens on its first frame, which was routed here
-                # through _dsh_index by its dsh id — a fork's repoint re-ack
-                # rides the same socket ahead of it, so this is the session
-                # the turn runs in.
+                # through _dsh_index by its dsh id (the subscribe ack's
+                # re-key), so this is the session the turn runs in.
                 dsh_session_id=sub.dsh_session_id,
             ),
             deadline=_HoldPausedDeadline(
@@ -1031,15 +998,6 @@ def _consumed_as_child_activity(sub: _Subscription, frame: dict) -> bool:
     if sub.turn is not None:
         sub.turn.deadline.note_progress()
     return True
-
-
-def _reanchor(sub: _Subscription, tail: object) -> None:
-    """Move the dedup anchor to a fork's boundary (None = an empty log)."""
-    sub.last_seq = (
-        float(tail)
-        if isinstance(tail, (int, float)) and not isinstance(tail, bool)
-        else None
-    )
 
 
 def _loads(raw: str) -> object:

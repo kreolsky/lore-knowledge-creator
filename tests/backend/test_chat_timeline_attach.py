@@ -1,15 +1,17 @@
 """The reload timeline attaches by the driver's OWN id, not by position.
 
 # WHY: the positional zip (Nth assistant row ↔ Nth turn) predates step 5 of
-plan collapse-the-editor-harness-layer and breaks on every forked thread: the
-dsh log holds only the CURRENT lineage, so a mid-thread fork lands the fork
-turn's frames on the abandoned branch's row and leaves the fork row itself
-frameless — observed live on gray (row seq=98 carrying 11 foreign frames; the
-fork row seq=107 with none). Rows already stamp their own turn's boundary
-(messages.driver_seq, the same seq /session-leaf takes), and the projection
-now returns each turn's end_seq — so the read path keys rows to turns BY
-STAMP, anchored to the active line (a root fork renumbers seqs, so a bare
-seq dict would mis-assign old-branch rows whose stamps collide).
+plan collapse-the-editor-harness-layer and breaks on every forked thread.
+Rows stamp their own turn's boundary (messages.driver_seq), and the
+projection returns each turn's end_seq — the read path keys rows to turns BY
+STAMP. Since plan chat-branch-sessions a session's rows resolve only against
+the session's OWN log (dsh id = Lore id; a seeded branch's log carries the
+copied prefix under the SAME seqs), the per-session stamp map is the whole
+pairing — no lineage walk (the log can hold no other branch's turns, and a
+seq never restarts inside one log). A branch whose own log does not exist yet
+reads its seed source's log cut at the seed boundary instead. Rows whose
+stamp does not resolve (a pre-harness turn, an abnormally ended turn) keep no
+`frames` key.
 
 Step 3 (plan lore-renders-dsh-conversation) adds the reload LORE MINTS: the
 backend-product facts the verbatim replay cannot state — the halt column's
@@ -28,14 +30,6 @@ def row(mid, role="assistant", seq=None, created="t"):
     return {"message_id": mid, "role": role, "driver_seq": seq, "created_at": created}
 
 
-def slim(mid, parent=None, role="user", created="t", seq=None):
-    """The anchor projection _attach_timeline fetches (mid/parent/role/
-    driver_seq/created_at — the walk needs the stamp on the FULL set, not
-    just the page)."""
-    return {"mid": mid, "parent_id": parent, "role": role,
-            "driver_seq": seq, "created_at": created}
-
-
 def _dsh(seq, kind, data=None):
     return {"type": "dsh_event", "kind": kind, "seq": seq, "data": data}
 
@@ -47,56 +41,19 @@ async def test_linear_thread_each_row_gets_its_own_turn():
         {"end_seq": 5, "frames": [_dsh(1, "assistant/message")]},
         {"end_seq": 12, "frames": [_dsh(2, "assistant/message")]},
     ]
-    all_rows = [slim("u1"), slim("a1", "u1", "assistant", "1", seq=5),
-                slim("u2", "a1"), slim("a2", "u2", "assistant", "2", seq=12)]
-    _assign_frames_by_stamp([a1, a2], turns, all_rows)
+    _assign_frames_by_stamp([a1, a2], turns)
     assert a1["frames"] == [_dsh(1, "assistant/message")]
     assert a2["frames"] == [_dsh(2, "assistant/message")]
 
 
 @pytest.mark.asyncio
-async def test_fork_off_branch_row_keeps_no_foreign_frames():
-    """The observed gap: after a fork at A1 the abandoned row (seq=98) must
-    NOT receive the fork turn's frames, and the fork row must get its own."""
-    a1 = row("a1", seq=83, created="1")
-    a2 = row("a2", seq=98, created="2")       # abandoned branch
-    a2p = row("a2p", seq=107, created="3")    # the fork turn's row
-    turns = [
-        {"end_seq": 83, "frames": [_dsh(1, "assistant/message")]},
-        # seq 98's turn is GONE from the re-seeded lineage
-        {"end_seq": 107, "frames": [_dsh(2, "assistant/message")]},
-    ]
-    all_rows = [
-        slim("u1"), slim("a1", "u1", "assistant", "1", seq=83),
-        slim("u2", "a1"), slim("a2", "u2", "assistant", "2", seq=98),
-        slim("u3", "a1"), slim("a2p", "u3", "assistant", "3", seq=107),
-    ]
-    _assign_frames_by_stamp([a1, a2, a2p], turns, all_rows)
-    assert a1["frames"] == [_dsh(1, "assistant/message")]
-    assert a2.get("frames") is None       # honest: its turn no longer exists
-    assert a2p["frames"] == [_dsh(2, "assistant/message")]
-
-
-@pytest.mark.asyncio
-async def test_root_fork_seq_collision_resolved_by_the_active_line():
-    """A root fork RESETS to an empty log whose seqs restart low, so an
-    abandoned row's OLD stamp can equal an active turn's end_seq (here: both
-    5). Only the chain anchored at the NEWEST stamped row (the current
-    lineage's head) may receive frames."""
-    a1 = row("a1", seq=5, created="1")          # old prefix row, stamp collides
-    a_old = row("a_old", seq=12, created="2")   # old tail row, stamp unmatched
-    a_new = row("a_new", seq=5, created="4")    # the fresh lineage's head
-    turns = [{"end_seq": 5, "frames": [_dsh(1, "assistant/message")]}]
-    # old branch: u1→a1→u2→a_old; root fork: u3→a_new (parent null)
-    all_rows = [
-        slim("u1"), slim("a1", "u1", "assistant", "1", seq=5),
-        slim("u2", "a1"), slim("a_old", "u2", "assistant", "2", seq=12),
-        slim("u3"), slim("a_new", "u3", "assistant", "4", seq=5),
-    ]
-    _assign_frames_by_stamp([a1, a_old, a_new], turns, all_rows)
-    assert a1.get("frames") is None    # stamp matches, row is NOT on the line
-    assert a_old.get("frames") is None
-    assert a_new["frames"] == [_dsh(1, "assistant/message")]
+async def test_a_row_whose_turn_is_not_in_this_log_keeps_no_frames():
+    """A stamp the read log does not hold resolves against nothing — the row
+    stays text-only rather than borrowing another turn's frames."""
+    a1 = row("a1", seq=83, created="1")        # copied prefix row
+    turns = []                                  # the branch's log: no turns
+    _assign_frames_by_stamp([a1], turns)
+    assert a1.get("frames") is None
 
 
 @pytest.mark.asyncio
@@ -108,12 +65,7 @@ async def test_unstamped_row_mid_chain_gets_nothing_and_breaks_nothing():
         {"end_seq": 5, "frames": [_dsh(1, "assistant/message")]},
         {"end_seq": 12, "frames": [_dsh(2, "assistant/message")]},
     ]
-    all_rows = [
-        slim("u1"), slim("a1", "u1", "assistant", "1", seq=5),
-        slim("u2", "a1"), slim("ab", "u2", "assistant", "2"),
-        slim("u3", "ab"), slim("a3", "u3", "assistant", "3", seq=12),
-    ]
-    _assign_frames_by_stamp([a1, ab, a3], turns, all_rows)
+    _assign_frames_by_stamp([a1, ab, a3], turns)
     assert a1["frames"] == [_dsh(1, "assistant/message")]
     assert ab.get("frames") is None
     assert a3["frames"] == [_dsh(2, "assistant/message")]
@@ -124,10 +76,9 @@ async def test_no_stamps_no_turns_no_attachment():
     """A pre-harness thread (no stamps, no log) keeps its rows untouched —
     the client renders what the row carries."""
     a1 = row("a1")
-    _assign_frames_by_stamp([a1], [{"end_seq": 5, "frames": [_dsh(1, "x")]}],
-                            [slim("u1"), slim("a1", "u1", "assistant", "1", seq=5)])
+    _assign_frames_by_stamp([a1], [{"end_seq": 5, "frames": [_dsh(1, "x")]}])
     assert a1.get("frames") is None
-    _assign_frames_by_stamp([row("a1", seq=5)], [], [])
+    _assign_frames_by_stamp([row("a1", seq=5)], [])
     assert a1.get("frames") is None
 
 
@@ -144,18 +95,11 @@ async def test_the_replayed_transport_terminal_never_rides_the_rows():
         _dsh(5, "turn/end", {"turn": 1, "reason": {"kind": "completed"}}),
         {"type": "turn_closed", "seq": 5.9},
     ]}]
-    all_rows = [slim("u1"), slim("a1", "u1", "assistant", "1", seq=5)]
-    _assign_frames_by_stamp([a1], turns, all_rows)
+    _assign_frames_by_stamp([a1], turns)
     assert a1["frames"] == [
         _dsh(1, "assistant/message"),
         _dsh(5, "turn/end", {"turn": 1, "reason": {"kind": "completed"}}),
     ]
-
-
-class _FakeDB:
-    async def query(self, _q, _p=None, **_kw):
-        # The anchor projection: u1 → a1(stamped 5)
-        return [slim("u1"), slim("a1", "u1", "assistant", "1", seq=5)]
 
 
 @pytest.mark.asyncio
@@ -179,7 +123,7 @@ async def test_attach_reads_the_driver_session_the_turns_ran_under(monkeypatch):
     out = [row("a1", seq=5)]
     # _attach_timeline imports fetch_session_entries lazily from the module
     await _attach_timeline(
-        _FakeDB(), {"compacted_from": "source-session"}, "continuation-chat", out,
+        {"compacted_from": "source-session"}, "continuation-chat", out,
         offset=0,
     )
     assert asked == ["source-session"], (
@@ -203,9 +147,66 @@ async def test_attach_plain_chat_reads_its_own_id(monkeypatch):
 
     monkeypatch.setattr(driver.timeline, "fetch_session_entries", fake_fetch)
     out = [row("a1", seq=5)]
-    await _attach_timeline(_FakeDB(), {}, "plain-chat", out, offset=0)
+    await _attach_timeline({}, "plain-chat", out, offset=0)
     assert asked == ["plain-chat"]
     assert out[0]["frames"] == [_dsh(1, "assistant/message")]
+
+
+@pytest.mark.asyncio
+async def test_attach_unseeded_branch_reads_the_seed_source_cut_at_the_boundary(
+    monkeypatch,
+):
+    """A branch whose own log does not exist yet (seed stamp still set — a
+    rewind not followed by a send, or a first turn that failed) replays its
+    copied prefix from the SEED SOURCE log: the copies keep the source's seqs,
+    so the prefix rows get their frames (chips) back. Only closed turns at or
+    before the boundary count — the source's later turns and its live open
+    turn are never grafted onto the branch."""
+    import driver.timeline
+    from routes.chat.messages import _attach_timeline
+
+    asked: list[str] = []
+
+    async def fake_fetch(session_id):
+        asked.append(session_id)
+        return {"turns": [
+            {"end_seq": 5, "frames": [_dsh(1, "tool/call")]},
+            {"end_seq": 12, "frames": [_dsh(8, "tool/call")]},   # past the cut
+            {"end_seq": None, "frames": [_dsh(14, "assistant/message")]},  # source's open turn
+        ], "tail_seq": 14}
+
+    monkeypatch.setattr(driver.timeline, "fetch_session_entries", fake_fetch)
+    prefix = row("a1", seq=5, created="1")
+    pending = row("a2", created="2")   # the branch's own unstamped row
+    await _attach_timeline(
+        {"seed_source_session": "source-log", "seed_source_seq": 5},
+        "branch-chat", [prefix, pending], offset=0,
+    )
+    assert asked == ["source-log"]
+    assert prefix["frames"] == [_dsh(1, "tool/call")]
+    assert pending.get("frames") is None
+    assert pending.get("open_turn") is None
+
+
+@pytest.mark.asyncio
+async def test_attach_half_stamped_branch_reads_its_own_id(monkeypatch):
+    """The migration's 422 marker (seed source, no seq) names no boundary to
+    cut at — the read stays on the branch's own id, never an uncut source."""
+    import driver.timeline
+    from routes.chat.messages import _attach_timeline
+
+    asked: list[str] = []
+
+    async def fake_fetch(session_id):
+        asked.append(session_id)
+        return {"turns": [], "tail_seq": None}
+
+    monkeypatch.setattr(driver.timeline, "fetch_session_entries", fake_fetch)
+    await _attach_timeline(
+        {"seed_source_session": "source-log"}, "branch-chat",
+        [row("a1", seq=5)], offset=0,
+    )
+    assert asked == ["branch-chat"]
 
 
 # ─── the reload lore mints, through the attach ────────────────────────────────
@@ -224,13 +225,8 @@ async def test_attach_mints_the_halt_card_for_the_turnless_row(monkeypatch):
         return {"turns": [], "tail_seq": 30}
 
     monkeypatch.setattr(driver.timeline, "fetch_session_entries", fake_fetch)
-
-    class _OneRowDB:
-        async def query(self, _q, _p=None, **_kw):
-            return [slim("u1"), slim("a1", "u1", "assistant", "1")]
-
     out = [{**row("a1", created="1"), "halt": {"reason": "turn_timeout", "steps": 3}}]
-    await _attach_timeline(_OneRowDB(), {}, "chat-1", out, offset=0)
+    await _attach_timeline({}, "chat-1", out, offset=0)
     mint = out[0]["frames"][0]
     assert mint["type"] == "lore/halt"
     assert mint["seq"] == 30.7
@@ -262,15 +258,10 @@ async def test_attach_mints_image_gen_from_gen_steps(monkeypatch):
                 "tail_seq": 9}
 
     monkeypatch.setattr(driver.timeline, "fetch_session_entries", fake_fetch)
-
-    class _OneRowDB:
-        async def query(self, _q, _p=None, **_kw):
-            return [slim("u1"), slim("a1", "u1", "assistant", "1", seq=9)]
-
     out = [{**row("a1", seq=9), "gen_steps": [
         {"tool": "generate_image", "run_id": "r1", "call_id": "cg",
          "image_ref_ids": ["ref-1"], "title": "Мир"}]}]
-    await _attach_timeline(_OneRowDB(), {}, "chat-1", out, offset=0)
+    await _attach_timeline({}, "chat-1", out, offset=0)
     frames = out[0]["frames"]
     mint = next(f for f in frames if f.get("type") == "lore/image-gen")
     assert mint["seq"] == 3.6
@@ -290,11 +281,6 @@ async def test_attach_mints_nothing_for_a_pre_harness_thread(monkeypatch):
         return {"turns": [], "tail_seq": None}
 
     monkeypatch.setattr(driver.timeline, "fetch_session_entries", fake_fetch)
-
-    class _OneRowDB:
-        async def query(self, _q, _p=None, **_kw):
-            return [slim("u1"), slim("a1", "u1", "assistant", "1")]
-
     out = [{**row("a1"), "halt": {"reason": "disconnected"}}]
-    await _attach_timeline(_OneRowDB(), {}, "chat-1", out, offset=0)
+    await _attach_timeline({}, "chat-1", out, offset=0)
     assert out[0].get("frames") is None

@@ -144,8 +144,8 @@ export function ToolPlate({
         >
           <span className={`flex font-medium ${titleTone} min-w-0`}>{title}</span>
           {expanded
-            ? <ChevronDown size={13} className="shrink-0" />
-            : <ChevronRight size={13} className="shrink-0" />}
+            ? <ChevronDown size={13} className={`shrink-0 ${iconTone}`} />
+            : <ChevronRight size={13} className={`shrink-0 ${iconTone}`} />}
         </button>
       </div>
       {expanded && (bare

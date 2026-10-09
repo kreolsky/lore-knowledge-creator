@@ -758,9 +758,8 @@ async def _reload_compaction_frame(
 
 
 def _row_identity(row: dict) -> str:
-    """The message id of a raw or serialized row (the same extraction the
-    attach's chain walk uses — the slim projection carries `mid`, the
-    serialized page carries `message_id`)."""
+    """The message id of a raw or serialized row (the slim projection carries
+    `mid`, the serialized page carries `message_id`)."""
     mid = row.get("message_id") or row.get("mid")
     return str(mid or "")
 
@@ -780,17 +779,16 @@ def _int_or_none(value: object) -> int | None:
 
 
 def _attach_halt_mints(
-    assistants: list[dict], *, chain: set[str] | None, tail_seq: int | None,
+    assistants: list[dict], *, tail_seq: int | None,
 ) -> None:
     """Mint `lore/halt` onto the qualifying rows — see the placement INVARIANT
     in attach_reload_lore_mints."""
     # The qualifier: halt column present, no resolved turn (no frames were
-    # assigned — dsh's own turn-error node renders those), on the active line.
+    # assigned — dsh's own turn-error node renders those).
     halt_rows = [
         row for row in assistants
         if isinstance(row.get("halt"), dict)
         and row.get("frames") is None
-        and (chain is None or _row_identity(row) in chain)
     ]
     halt_rows.sort(key=lambda r: r.get("created_at") or "")
     taken: dict[int, str] = {}
@@ -893,14 +891,13 @@ def _page_image_ref_ids(assistants: list[dict]) -> list[str]:
 
 async def attach_reload_lore_mints(
     assistants: list[dict], *,
-    chain: set[str] | None, tail_seq: int | None, session_id: str,
+    tail_seq: int | None, session_id: str,
 ) -> None:
     """Mint the backend-product lore events onto the attached rows, in place.
 
     `assistants` are the SERIALIZED assistant rows of the page (carrying
     `halt`, `gen_steps` and — for turns the replay resolved — `frames`).
-    `chain` is the active stamp line (None = no anchor exists — all-abnormal
-    or pre-harness thread; no filter). Mutates the rows' `frames`.
+    Mutates the rows' `frames`.
 
     The halt placement: a row whose halt stored the live mint's anchor mints
     THERE, inside its own turn — so every such halted turn keeps its card. A
@@ -912,7 +909,7 @@ async def attach_reload_lore_mints(
     sentence (that is the row's `content`). See the seq-collision INVARIANT
     in _attach_halt_mints.
     """
-    _attach_halt_mints(assistants, chain=chain, tail_seq=tail_seq)
+    _attach_halt_mints(assistants, tail_seq=tail_seq)
 
     # The page's deleted-image filter: references are the truth, gen_steps is
     # not rewritten — ONE live-ref query per page (None while the page holds

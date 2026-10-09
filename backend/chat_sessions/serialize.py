@@ -112,6 +112,16 @@ def _stamp_wire_fields(out: dict) -> None:
     # row predates the column or the value was cleared (Default), exactly like
     # context_tokens_used. The composer's dropdown reads null as Default.
     out["reasoning_effort"] = out.get("reasoning_effort")
+    # ARCH: thread identity so the frontend can
+    # tell a branch from its thread — null on pre-migration rows (each is its
+    # own thread until the migration backfills). The lazy-seed stamp is
+    # INTERNAL (a completion-time mechanic) and never serializes.
+    out["thread_id"] = out.get("thread_id")
+    out["forked_from_session"] = out.get("forked_from_session")
+    out["forked_after_origin"] = out.get("forked_after_origin")
+    out["active_branch_id"] = out.get("active_branch_id")
+    out.pop("seed_source_session", None)
+    out.pop("seed_source_seq", None)
     out.pop("context_document_ids", None)
     # INVARIANT(security): anchor_rel_* never serialized to client (raw Yjs bytes, not
     # UTF-8). Why: FastAPI's jsonable_encoder runs bytes.decode() on any bytes

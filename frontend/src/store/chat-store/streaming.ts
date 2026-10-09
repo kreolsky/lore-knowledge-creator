@@ -8,7 +8,6 @@ import { apiClient } from '../../api/client';
 import { useAppStore } from '../app-store';
 import { t } from '../../i18n';
 import type { ChatState, Set, StreamingState, TurnEndReason } from './types';
-import { ROOT_KEY } from './tree';
 import { validateFrame, type Frame } from './frame-validate';
 import { registerChatResetHandler } from './reset-registry';
 import {
@@ -166,15 +165,11 @@ function createTurnSink(
         ? get().messages.map(m => m.message_id === opts.optimisticUserId ? userMsg : m)
         : [...get().messages, userMsg];
       const newMessages = [...baseMessages, assistantMsg];
-      const newSelected = { ...get().selectedSiblings };
-      if (hasOptimistic && opts.optimisticUserId) {
-        delete newSelected[opts.optimisticUserId];
-      }
-      newSelected[opts.userParentId ?? ROOT_KEY] = ev.user_message_id;
-      newSelected[ev.user_message_id] = ev.assistant_message_id;
+      // ARCH: no sibling selection is written —
+      // a branch's rows are a linear chain and the freshest-lineage walk
+      // picks the new pair on its own (they are the newest rows).
       set({
         messages: newMessages,
-        selectedSiblings: newSelected,
         streaming: {
           // Preserve the controller created at send time; reset the per-message
           // accumulators for the (possibly resumed) turn.

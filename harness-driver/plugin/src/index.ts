@@ -3,7 +3,7 @@
  *
  * # SYSTEM: harness-driver — the rented brain's driver: serves the HTTP
  *   endpoints the Lore backend speaks (`POST /followup` + `POST /stop` — the
- *   driver-owned turn, `POST /session-leaf`, `POST /session-entries`,
+ *   driver-owned turn, `POST /session-fork`, `POST /session-entries`,
  *   `GET/POST /approvals`, `POST /approvals/resolve`, `GET /capability`, `GET
  *   /health`) plus the standing event channel `/ws/events`
  *   (subscribe/unsubscribe by session id — ws-events.ts).
@@ -17,11 +17,14 @@
  *   conversation lives in the dsh session log (JSONL under $DSH_HOME/sessions
  *   — a HOST bind mount in compose).
  *
- * # ARCH: Lore session id → dsh session id. The FIRST turn uses the Lore id
- *   itself as the dsh session id; every leaf move (chat fork / root fork) seeds
- *   a NEW dsh session under `$DSH_HOME/lore-session-map.json` and repoints the
- *   mapping. Entry ids served to Lore (`e<seq>`) are stable across forks: a
- *   fork's seed RETAINS the parent prefix with the same seqs.
+ * # ARCH: Lore session id → dsh session id. A chat's dsh session id EQUALS
+ *   its Lore session id (a branch is its own
+ *   session, seeded under its own id by /session-fork before its first
+ *   turn); nothing is ever re-pointed. `lore-session-map.json` stays as a
+ *   READ-ONLY legacy resolution: chats that forked under the old leaf-move
+ *   scheme carry entries, and SessionMap.get defaults to identity for
+ *   everything else. Entry ids served to Lore (`e<seq>`) are stable across
+ *   forks: a fork's seed RETAINS the parent prefix with the same seqs.
  */
 
 import http from 'node:http'
@@ -51,7 +54,7 @@ export {
   anthropicRoute, contextUsageFrame, followupTurns, loreRoute, prepareUserContent,
   promptContent, ROUTE_BY_API, turnConfigProblem,
 } from './turn.ts'
-export { forkModel, sessionEntries, sessionLeaf } from './sessions.ts'
+export { forkModel, sessionEntries, sessionFork } from './sessions.ts'
 
 export function apply(ctx: Context): void {
   const map = new SessionMap(process.env.DSH_HOME)

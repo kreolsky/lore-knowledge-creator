@@ -19,7 +19,7 @@ import type { ChatState, Set } from './types';
 function makeStore() {
   let state = {
     activeSessionId: 's1',
-    sessions: [], messages: [], selectedSiblings: {}, streaming: null,
+    sessions: [], messages: [], streaming: null,
     conversation: [], turnRanges: {}, turnStartSeq: null,
   } as unknown as ChatState;
   const get = () => state;

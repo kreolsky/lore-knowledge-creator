@@ -1160,7 +1160,7 @@ async def test_generate_image_done_frame_equals_the_reload_mint(
     from test_driver_frames import _stub_live_refs
     _stub_live_refs(monkeypatch)
     await driver.frames.attach_reload_lore_mints(
-        [row], chain={"msg-1"}, tail_seq=3, session_id="sess-1")
+        [row], tail_seq=3, session_id="sess-1")
     reload_mint = next(f for f in row["frames"] if f["type"] == "lore/image-gen")
     live.pop("time"), reload_mint.pop("time")
     assert live == reload_mint

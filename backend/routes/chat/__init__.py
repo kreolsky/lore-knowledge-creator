@@ -12,7 +12,6 @@
 # client (which skips lifespans).
 import agent.keys  # noqa: F401
 
-import routes.chat.completions  # noqa: F401
 import routes.chat.context  # noqa: F401
 import routes.chat.messages  # noqa: F401
 import routes.chat.models_catalog  # noqa: F401 — binds GET /models (gateway catalog moved out of completions)
@@ -21,6 +20,11 @@ import routes.chat.sessions  # noqa: F401
 import routes.chat.sessions_list  # noqa: F401 — binds GET /sessions (list path moved out of sessions)
 import routes.chat.transcription  # noqa: F401
 import routes.chat.verdicts  # noqa: F401 — binds GET/POST /api/chat/verdicts
+
+# branches (POST /sessions/{id}/branches + GET /forks) rides the same line as
+# completions: one noqa keeps the __init__ at its import-shape budget
+# (import-shape-gate zero-net-growth).
+from routes.chat import branches, completions  # noqa: F401
 from routes.chat._router import router  # noqa: F401
 from routes.chat.models_catalog import gateway_model_ids
 

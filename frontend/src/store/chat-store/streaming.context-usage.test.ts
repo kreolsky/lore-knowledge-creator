@@ -22,7 +22,6 @@ function makeStore(sessions = [{ session_id: 's1', model: 'deepseek/flash' }] as
   let state = {
     sessions,
     messages: [],
-    selectedSiblings: {},
     streaming: null,
     conversation: [],
     turnRanges: {},

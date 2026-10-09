@@ -26,7 +26,7 @@ function makeStore(initial: Record<string, unknown> = {}) {
     // The turn's chat is the SHOWN one — display work (feed, rows, slot) is
     // gated on this pointer (see the isShown gate in streaming.ts).
     activeSessionId: 's1',
-    sessions: [], messages: [], selectedSiblings: {}, streaming: null,
+    sessions: [], messages: [], streaming: null,
     conversation: [], turnRanges: {}, turnStartSeq: null, ...initial,
   } as unknown as ChatState;
   const get = () => state;

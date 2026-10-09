@@ -20,6 +20,7 @@ import { clearContextForSession } from '../../../chat/context';
 import { markChatScopeLoaded } from '../../../chat/scope-tracker';
 import type { ChatState, Set, Get } from '../types';
 import { registeredTurnSlot } from '../streaming';
+import { threadRootOf } from '../branches-slice';
 import {
   getPendingSessionPatch,
   setPendingSessionPatch,
@@ -141,7 +142,9 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
         // Commit piggybacked messages immediately when provided, so the panel paints
         // without the second round-trip. Absent → [] (loadMessages fills it).
         messages: preloadedMessages ?? [],
-        selectedSiblings: {},
+        // The switcher projection is per-session: clear on the switch (the
+        // MessageList effect refills it via loadForks).
+        forks: [],
         // The slot follows the pointer: the opened chat's own open turn (if
         // this tab holds one) seats at once, anything else is dropped (the
         // INVARIANT in types.ts).
@@ -191,14 +194,22 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
     },
 
     async deleteSession(sessionId: string) {
+      // An AI chat is a THREAD and the server deletes it only by its ROOT (a
+      // branch id is refused 400) — "delete this chat" from an open branch,
+      // or from the list row previewing one, names the whole thread.
+      const rootId = threadRootOf(get, sessionId);
+      const inThread = (id: string) =>
+        id === sessionId || id === rootId || threadRootOf(get, id) === rootId;
       try {
-        await apiClient.delete(`/chat/sessions/${sessionId}`);
+        await apiClient.delete(`/chat/sessions/${rootId}`);
       } catch {
         useAppStore.getState().showToast(t('failedToDeleteChatSession'), 'error');
         return;
       }
       clearContextForSession(sessionId);
-      const wasActive = get().activeSessionId === sessionId;
+      if (rootId !== sessionId) clearContextForSession(rootId);
+      const activeId = get().activeSessionId;
+      const wasActive = !!activeId && inThread(activeId);
       if (wasActive) {
         get().initGhostFromScope();
         // Clear the project-level active pointer so a reload does not try to
@@ -206,7 +217,7 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
         useUIStore.getState().setLastActiveChatSession(null);
       }
       set(s => {
-        const sessions = s.sessions.filter(ss => ss.session_id !== sessionId);
+        const sessions = s.sessions.filter(ss => !inThread(ss.session_id));
         return {
           sessions,
           activeSessionId: wasActive ? null : s.activeSessionId,

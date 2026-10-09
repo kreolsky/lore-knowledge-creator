@@ -263,18 +263,15 @@ class TestApplyResolver:
         return await _resolve_apply_or_force(ctx, ui_preference=ui, is_system=system)
 
     @pytest.mark.asyncio
-    async def test_the_marker_refuses_a_system_doc(self):
-        # INVARIANT(security): a system-doc target refuses exactly like the MCP
-        # force-auto path, even for a marker that CLEARED attestation — the
-        # deleted verdict_approved flag was backend-held after a real verdict,
-        # so is_system stays as defence in depth behind driver_attested.
-        from fastapi import HTTPException
-
-        with pytest.raises(HTTPException) as exc:
-            await self._resolve(
-                {"verdict": "allowed-once"}, ui="confirm", system=True,
-            )
-        assert exc.value.status_code == 403
+    async def test_the_marker_applies_a_system_doc(self):
+        # The marker reaches ctx only on a driver-attested request, so it is
+        # the user's approval of THIS call — a system doc applies like any
+        # other (the self-edit path: the card asks, the user allows, it lands).
+        decision = await self._resolve(
+            {"verdict": "allowed-once"}, ui="confirm", system=True,
+        )
+        assert decision.mode == "auto"
+        assert decision.reason == "verdict_approved"
 
     @pytest.mark.asyncio
     async def test_the_marker_applies_a_non_system_doc(self):
@@ -360,6 +357,41 @@ class TestSystemDocRefusal:
         )
         assert resp.status_code == 409, resp.text
         assert resp.json()["detail"].get("code") == "confirmation_required"
+
+    @pytest.mark.asyncio
+    async def test_system_doc_applies_after_the_attested_approval(
+        self, bp, client, test_db, admin_user, project_with_doc, monkeypatch,
+    ):
+        """The self-edit path end to end (the Knowledge-doc case): the call
+        asks (409), an UNATTESTED marker still asks, and the driver's retry —
+        the marker plus the driver secret, sent only after the user allowed —
+        applies the edit to the system doc."""
+        import config
+
+        monkeypatch.setattr(config, "HARNESS_DRIVER_SECRET", "drv-s3cret", raising=False)
+        admin_uid, admin_token = admin_user
+        pid, _, _ = project_with_doc
+        agent_token = await _make_agent_key(test_db, admin_uid, pid)
+        doc_id = await _make_doc(client, admin_token, pid, "Knowledge", "alpha beta")
+        await test_db.query(
+            "UPDATE type::record('documents', $id) SET is_system = true", {"id": doc_id})
+        body = {"document_id": doc_id, "old_string": "beta", "new_string": "BETA"}
+        hdr = _hdr(agent_token, "sys-call-2", "sys-sess-2")
+
+        resp = await client.post("/api/tool/edit_document", json=body, headers=hdr)
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"].get("code") == "confirmation_required"
+
+        resp = await client.post("/api/tool/edit_document", json=body, headers={
+            **hdr, "X-Agent-Verdict": "allowed-once"})
+        assert resp.status_code == 409, resp.text
+
+        resp = await client.post("/api/tool/edit_document", json=body, headers={
+            **hdr, "X-Agent-Verdict": "allowed-once", "X-Driver-Secret": "drv-s3cret"})
+        assert resp.status_code == 200, resp.text
+        doc = await client.get(
+            f"/api/documents/{doc_id}", cookies={"lore_session": admin_token})
+        assert "alpha BETA" in doc.json()["content"]
 
 
 class TestVerdictAttestation:

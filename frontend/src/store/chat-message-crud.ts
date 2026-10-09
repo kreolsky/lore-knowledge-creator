@@ -14,8 +14,9 @@
  *
  * NOT shared, deliberately (do not "finish the merge" — the differences are
  * behavioral, not accidental):
- * - deleteMessage tail: chat runs a client-side BFS cascade over the message
- *   tree; note relies on the realtime `deleted` frame carrying `message_ids`
+ * - deleteMessage tail: the AI chat-store no longer deletes (an AI chat's
+ *   rows only append — the backend refuses with 400); the note store relies
+ *   on the realtime `deleted` frame carrying `message_ids`
  *   (see SYSTEM: note-realtime).
  * - deleteSession strategy: note is optimistic + snapshot-restore; chat is
  *   post-success + ghost landing + ui-store pointer clear.

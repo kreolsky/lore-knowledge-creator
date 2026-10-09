@@ -43,13 +43,11 @@ from models import ToolEditDocument, ToolEditTableCell
 # - WHY (the marker): dsh's user-approval service already asked the user for
 #   THIS call and the answer was allowed-once (the audit pair sits on the
 #   driver's session log) — the approved call must apply, not re-enter the
-#   confirm path.
-#   INVARIANT(security): a system-doc target is REFUSED (403) here even for a
-#   marker that cleared attestation, exactly like the MCP force-auto path.
-#   Why: the deleted verdict_approved flag was backend-held after a real
-#   verdict; the header replacing it is only attested to OUR driver
-#   (agent.context.driver_attested drops it otherwise), so is_system stays as the gate that
-#   does not depend on a caller-supplied claim at all.
+#   confirm path. A system-doc target applies too: the marker reaches ctx
+#   ONLY on a driver-attested request (agent.context.driver_attested drops it
+#   otherwise), so it is the user's own approval of this exact call. Refusing
+#   it made the agent self-edit path (Knowledge, rules, skills) a dead end —
+#   the card asked, the user allowed, the call still 403'd.
 # - WHY (MCP): the MCP surface has no decision card and no verdict flow; the
 #   subtree scope + read-write key IS the trust boundary and every write is
 #   reversible via History. A system-doc target is the one exception: REJECTED
@@ -84,14 +82,6 @@ async def _resolve_apply_or_force(
     )
 
     if ctx.get("verdict") == "allowed-once":
-        if is_system:
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "System documents are not editable by an agent call: the "
-                    "approval marker cannot be verified against a parked ask."
-                ),
-            )
         return ApplyDecision(AUTO, "verdict_approved")
     if ctx.get("force_auto_apply") is True:
         if is_system:

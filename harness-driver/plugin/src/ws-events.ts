@@ -25,14 +25,10 @@
  *
  * # ARCH: subscribe/unsubscribe by session id, resolved through the identity
  *   map AT SUBSCRIBE TIME (a lore id maps to its current dsh id; a dsh id
- *   passes through — SessionMap.get's own fallback). A fork REPOINTS live
- *   subscriptions: POST /session-leaf moves the map entry and calls
- *   repoint(), which re-keys every socket table to the fresh dsh id and
- *   re-acks on that socket carrying the fork tail's seq — the subscriber
- *   does nothing (and could not: only the plugin knows a fork happened).
- *   The re-ack's tail_seq re-anchors the subscriber's seq-anchored dedup,
- *   which would otherwise drop the forked turn's frames as "already
- *   delivered" (the seed retains the parent prefix seqs).
+ *   passes through — SessionMap.get's own fallback; the map is READ-ONLY
+ *   legacy resolution). Nothing is ever
+ *   re-pointed: a session's dsh id is fixed for its lifetime (dsh id =
+ *   Lore id), so a subscription's routing holds until unsubscribe.
  *
  * # ARCH: `ws` is not a dependency of the dsh workspace root — it ships in
  *   the DSH profile fallback ($DSH_HOME/profiles/node_modules, app-boot's
@@ -249,16 +245,6 @@ export interface EventsChannel {
    * replayed). Ordering contract: call from a 'watch'-phase sink to land the
    * frame BEFORE the same event's mapped frames (the wire order). */
   push(dshId: string, frame: Record<string, unknown>): void
-  /** A fork moved `loreId` from `fromDshId` to `toDshId` (the identity map
-   * is already repointed by the caller): every socket table holding the old
-   * id is re-keyed to the fresh one with a FRESH map state and re-acked on
-   * that socket — `{type:'subscribed', session_id:<lore id>,
-   * dsh_session_id:<fresh id>, tail_seq}` — so the subscriber's routing and
-   * dedup anchor follow the fork without re-subscribing (the module ARCH).
-   * `tailSeq` is the seed's boundary turn/end seq (null on a root fork). A
-   * socket that never held the old id is untouched: a later subscribe
-   * resolves the fresh id by itself. */
-  repoint(loreId: string, fromDshId: string, toDshId: string, tailSeq: number | null): void
 }
 
 /** Wire `/ws/events` onto the existing server — see the module doc. */
@@ -374,21 +360,6 @@ export function attachEventsChannel(opts: EventsChannelOpts): EventsChannel {
       for (const [client, subs] of clients) {
         if (!subs.has(dshId)) continue
         deliver(client, dshId, [frame])
-      }
-    },
-    repoint(loreId: string, fromDshId: string, toDshId: string, tailSeq: number | null) {
-      for (const [client, subs] of clients) {
-        if (!subs.has(fromDshId)) continue
-        // Re-key FIRST, ack SECOND: the table is this side's truth, and the
-        // re-ack rides the same socket the forked turn's frames will — a
-        // subscriber that reads the ack before the turn's first frame must
-        // already be routable by the fresh id (ws send order is send order).
-        subs.delete(fromDshId)
-        subs.set(toDshId, newTurnMapState())
-        client.send(JSON.stringify({
-          type: 'subscribed', session_id: loreId, dsh_session_id: toDshId,
-          tail_seq: tailSeq,
-        }))
       }
     },
     close() {

@@ -48,6 +48,12 @@ async def _drive_turn(client, token, sid, env, body, *, turn_end_seq=1):
     `turn_end_seq` must EXCEED every seq the session's channel already
     delivered — the channel's seq-anchored dedup silently drops a replayed
     seq, the turn (and its lock) would never close."""
+    # The linear-turn contract (plan chat-branch-sessions): a turn's parent
+    # names the session's live TAIL — read it off the message list the way
+    # the client does (an empty session posts the genuine first turn).
+    msgs = await _list_messages(client, token, sid)
+    if msgs:
+        body = {**body, "parent_id": msgs[-1]["message_id"]}
     resp = await client.post(
         f"/api/chat/sessions/{sid}/completions",
         json=body,

@@ -25,7 +25,7 @@ import { ghostPinTransfer } from '../../chat/ghost-pin-transfer';
 import { on, off, emit } from '../../events';
 import { clarifyBlock } from './clarify-format';
 import { totalAttachmentBytes, attachmentBudgetExceeded, formatAttachmentMb } from '../../utils/attachment-size';
-import { selectActivePath } from '../../store/chat-store/tree';
+import { selectBranchPath } from '../../store/chat-store/tree';
 import { effectiveCap } from '../../store/chat-store/misc-slice';
 import { useSystemPrompts, useAttachmentBudget } from './chat-input-hooks';
 
@@ -48,7 +48,7 @@ export function ChatInput() {
     const draft = useChatStore.getState().draft;
     useChatStore.getState().setDraft(draft + (draft ? ' ' : '') + transcribed);
   }, []);
-  const { recording, transcribing, toggleRecording } = useSimpleVoiceRecording(onTranscribed);
+  const { recording, transcribing, toggleRecording, cancelRecording } = useSimpleVoiceRecording(onTranscribed);
 
   const isStreaming = useChatStore(s => s.streaming !== null);
   const activeSessionId = useChatStore(s => s.activeSessionId);
@@ -278,7 +278,7 @@ export function ChatInput() {
   // Why: the middleware caps the full request body; every send builder ships all
   // non-deleted history images as LLM context, so they count against the cap too.
   // (Derived state lives in useAttachmentBudget.)
-  const historyMessages = useChatStore(selectActivePath);
+  const historyMessages = useChatStore(selectBranchPath);
   const {
     projectedAttachmentBytes,
     contextOverLimit,
@@ -372,14 +372,8 @@ export function ChatInput() {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
       handleSend();
-    } else if (e.key === 'Escape' && isStreaming) {
-      // Esc = stop, always — regardless of composer contents.
-      // Without this, the button rule (Send shown whenever text is present) would cost a
-      // one-click stop mid-turn. The send hotkey is Cmd/Ctrl+Enter, so Esc is free.
-      e.preventDefault();
-      stopGeneration();
     }
-  }, [handleSend, isStreaming, stopGeneration]);
+  }, [handleSend]);
 
   const readImageFile = useCallback((file: File) => {
     // WHY: enforce the shared attachment budget (sum of all images) at
@@ -682,6 +676,7 @@ export function ChatInput() {
       recording={recording}
       transcribing={transcribing}
       onToggleRecording={toggleRecording}
+      onCancelRecording={cancelRecording}
       images={images}
       onRemoveImage={removePendingImage}
       queued={queued}

@@ -48,7 +48,6 @@ function buildStore(sessions: ChatState['sessions']) {
     sessions,
     activeSessionId: 's1',
     messages: [],
-    selectedSiblings: {},
     streaming: null,
     queued: {},
   } as unknown as ChatState));

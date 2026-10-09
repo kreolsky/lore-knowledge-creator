@@ -45,17 +45,6 @@ export function MediaFileActions({ reference, canEdit, showDownload = true, size
 
   return (
     <>
-      {showDownload && (
-        <a
-          href={fileUrl}
-          download={originalName}
-          title={t('download')}
-          aria-label={t('download')}
-          className={`flex items-center justify-center ${anchorSizes[size]} text-text-muted hover:text-text hover:bg-surface3`}
-        >
-          <Download size={iconSizes[size]} />
-        </a>
-      )}
       {canEdit && !jobRunning && (
         // Stateful trash, same armed pattern as RefPanelPlaque: first click arms
         // (filled), second click executes, mouse-leave disarms.
@@ -70,6 +59,17 @@ export function MediaFileActions({ reference, canEdit, showDownload = true, size
         >
           <Trash2 size={iconSizes[size]} />
         </IconButton>
+      )}
+      {showDownload && (
+        <a
+          href={fileUrl}
+          download={originalName}
+          title={t('download')}
+          aria-label={t('download')}
+          className={`flex items-center justify-center ${anchorSizes[size]} text-text-muted hover:text-text hover:bg-surface3`}
+        >
+          <Download size={iconSizes[size]} />
+        </a>
       )}
     </>
   );

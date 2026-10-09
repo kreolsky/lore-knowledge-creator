@@ -14,13 +14,14 @@ import { setupChatContextBridge, hydrateFromSessions } from '../chat/context';
 import type { ChatState } from './chat-store/types';
 import { createSessionsSlice } from './chat-store/sessions-slice';
 import { createMessagesSlice } from './chat-store/messages-slice';
+import { createBranchesSlice } from './chat-store/branches-slice';
 import { createQueueSlice } from './chat-store/queue-slice';
 import { createAgentSlice } from './chat-store/agent-slice';
 import { createMiscSlice } from './chat-store/misc-slice';
 import { registerLogoutHandler } from './logout-handlers';
 import { publishTimelineReset } from './chat-store/conversation-feed';
 
-export { selectActivePath } from './chat-store/tree';
+export { selectBranchPath } from './chat-store/tree';
 
 // ARCH: context.ts PATCH response updates chat-store.sessions via bridge callback.
 // Module-level init to avoid circular dependency (context.ts does NOT import chat-store).
@@ -55,7 +56,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messagesLoading: false,
   messagesError: false,
   chatScopeLoading: false,
-  selectedSiblings: {},
+  // The ACTIVE session's switcher projection (branches-slice); cleared on
+  // every session switch and reset.
+  forks: [],
 
   streaming: null,
   // The dsh assembler's published timeline (SYSTEM: dsh-conversation) — see
@@ -101,6 +104,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   // — slices —
   ...createSessionsSlice(set, get),
   ...createMessagesSlice(set, get),
+  ...createBranchesSlice(set, get),
   ...createQueueSlice(set, get),
   ...createAgentSlice(set, get),
   ...createMiscSlice(set, get),

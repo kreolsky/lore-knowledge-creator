@@ -128,7 +128,7 @@ export function createMiscSlice(set: Set, get: Get): MiscSlice {
         messagesLoading: false,
         messagesError: false,
         chatScopeLoading: false,
-        selectedSiblings: {},
+        forks: [],
         streaming: null,
         // The assembler's published timeline — the registry handler above
         // cleared the engine/feed state itself (conversation-feed.ts).

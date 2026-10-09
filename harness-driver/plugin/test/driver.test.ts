@@ -10,7 +10,6 @@ import { EventEmitter } from 'node:events'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { lastTurnEndSeq } from '../src/leaf.ts'
 import { createSessionEventTap, type EventsChannel } from '../src/ws-events.ts'
 import { createSessionStreamBaselines } from '../src/stream-baselines.ts'
 import { newTurnMapState } from '../src/map.ts'
@@ -34,7 +33,7 @@ const {
   AGENT_KEY_REF, anthropicRoute, contextUsageFrame, ensureAgentKey,
   ensureModelEntry, ensureTitleConfig, ensureTitleEntry, ensureWebSearch,
   followupTurns, forkModel, loreRoute, PROVIDER, ROUTE_BY_API, sessionEntries,
-  sessionLeaf, turnConfigProblem,
+  sessionFork, turnConfigProblem,
 } = await import('../src/index.ts')
 import { reasoningEffortsDeclaration } from '../src/caps.ts'
 import { WEB_SEARCH_KEY_REF } from '../src/web-search/key.ts'
@@ -103,24 +102,6 @@ test('a real v4 session log is indexed by seq (the read contract the fork relies
     assert.equal(events[i].seq, i, `the event at index ${i} must carry seq ${i}`)
   }
 })
-
-test('a log-only tail after the last turn never moves the live tail', () => {
-  const events = log()
-  events.push(ev(10, 'session/end-seed', {}))
-  assert.equal(lastTurnEndSeq(events), 9)
-})
-
-test('the live tail is the LAST turn/end seq — the no-op comparison is seq equality', () => {
-  const events = log()
-  // Seam A names the parent turn's own seq on EVERY linear turn; equality
-  // with the last turn/end is what keeps the leaf a no-op there (an earlier
-  // boundary seq is a real fork). A log with no completed turn has none.
-  assert.equal(lastTurnEndSeq(events), 9)
-  assert.equal(lastTurnEndSeq([]), -1)
-  assert.equal(lastTurnEndSeq([ev(0, 'session/title', {})]), -1)
-})
-
-// ─── persona carry: ONE prompt source (plan part B step 4) ────────────────────
 
 test('the turn setup registers the COMPLETE lore section and no other prompt text', async () => {
   // Read the plugin source and pin the persona contract: every prompt
@@ -448,18 +429,19 @@ test('a fork seeds agentOptions with the parent header\'s own provider', async (
     ev(7, 'assistant/chunk', { chunk: { type: 'text-delta', text: 'A2' } }),
     ev(8, 'turn/end', { reason: { kind: 'completed' } }),
   ]
-  const { ctx, created } = leafCtx(events)
+  // leafCtxBy (not leafCtx): the existence probe OPENS new_lore_id — the
+  // one-log fake would answer "exists" and never seed.
+  const { ctx, created } = leafCtxBy({ 'dsh-a': events })
   const { map } = fakeMap()
-  const { channel } = fakeChannel()
   const res = leafRes()
-  // Fork after turn 1 (seq 4 < the live tail 8) — a real fork, not the no-op.
-  await sessionLeaf(ctx, map, channel, createSessionStreamBaselines(),
-    leafReq({ session_id: 'lore-1', seq: 4 }), res)
+  await sessionFork(ctx, map,
+    forkReq({ source_dsh_id: 'dsh-a', seq: 4, new_lore_id: 'lore-branch-2' }), res)
   assert.equal(res.status, 200)
   assert.deepEqual(created[0].agentOptions,
     { provider: 'anthropic', model: 'deepseek-a/flash' },
     'the fork seeds the pair off the parent\'s request/header — the next turn re-selects its own')
 })
+
 
 // ─── the agent key: dsh credentials, written only on difference ──────────────
 
@@ -706,28 +688,10 @@ test('contextUsageFrame: absent pressure (or a missing service) emits nothing', 
 })
 
 
-// ─── /session-leaf takes the dsh seq: one id space — the branch point is a
-// dsh log seq, never a turn ordinal.
-
-test('the leaf endpoint reads body.seq; the turn ordinal is gone', async () => {
-  // Pinned by source shape, like the caps test above: the wire rename is the
-  // step's whole contract — a re-grown `body.turn` read is the ordinal id
-  // space coming back. sessionLeaf lives in sessions.ts since the step-4
-  // split.
-  const src = readFileSync(new URL('../src/sessions.ts', import.meta.url), 'utf8')
-  assert.match(src, /body\.seq === undefined/,
-    'the leaf handler requires the seq field (null = root fork)')
-  assert.ok(!src.includes('body.turn'),
-    'the ordinal turn field is deleted from the leaf wire')
-})
-
-// ─── the leaf handler repoints the live subscription on a fork ────────────────
-// (plan fork-repoints-live-subscription: a fork's turn must stream to its
-// subscriber — the plugin owns the repoint because it owns both the identity
-// map and the channel's table). Driven against fakes: no harness boot, the
-// channel records repoint calls.
-
-/** A fake standing channel: records repoint calls, nothing else. */
+/** A fake standing channel: records repoint calls, nothing else. The
+ * EventsChannel interface has no repoint anymore (plan chat-branch-sessions
+ * step 4) — the recorder stays as a tripwire: nothing may ever re-grow a
+ * re-point on the fork paths. */
 function fakeChannel() {
   const repoints: Array<[string, string, string, number | null]> = []
   return {
@@ -752,13 +716,13 @@ function fakeMap() {
   }
 }
 
-/** A POST /session-leaf request over an EventEmitter standing in for the
+/** A POST driver-endpoint request over an EventEmitter standing in for the
  * IncomingMessage (readBody listens for data/end). */
 function leafReq(body: unknown): any {
   const req = new EventEmitter() as any
   req.headers = { 'x-driver-secret': process.env.LORE_DRIVER_SECRET }
   req.method = 'POST'
-  req.url = '/session-leaf'
+  req.url = '/session-entries'
   req.setEncoding = () => {}
   queueMicrotask(() => {
     req.emit('data', JSON.stringify(body))
@@ -797,145 +761,6 @@ function leafCtx(events: any[]) {
   }
   return { ctx, created }
 }
-
-test('the leaf handler repoints on a REAL fork (tail = the boundary seq) and NOT on the live-tail no-op', async () => {
-  const { ctx, created } = leafCtx(log()) // live tail: turn/end seq 9
-  const { sets, map } = fakeMap()
-  const { repoints, channel } = fakeChannel()
-  const baselines = createSessionStreamBaselines()
-
-  // Real fork: branch after turn 1 (seq 5 < the live tail 9).
-  const forkRes = leafRes()
-  await sessionLeaf(ctx, map, channel, baselines, leafReq({ session_id: 'lore-1', seq: 5 }), forkRes)
-  assert.equal(forkRes.status, 200)
-  assert.equal(created.length, 1, 'a fresh session was seeded')
-  assert.deepEqual(created[0].seed, forkSeed(log(), 5),
-    'the seed is dsh’s buildForkSeed: rows [0..5] plus one inherited-cut marker')
-  assert.equal(created[0].inheritedEventCount, 6,
-    'the inherited cut is the boundary seq + 1 (dsh SessionController.fork’s shape)')
-  assert.equal(sets.length, 1, 'the map repointed')
-  const [loreId, from, to, tail] = repoints[0]
-  assert.equal(loreId, 'lore-1')
-  assert.equal(from, 'dsh-a', 'repointed FROM the pre-fork dsh id')
-  assert.equal(to, sets[0][1], 'repointed TO the id the map took')
-  assert.match(to, /^lore-1~f/, 'the fresh id is the fork spelling')
-  assert.equal(tail, 5, 'the dedup anchor is the boundary seq, not the marker’s')
-
-  // Live-tail no-op (seq = the live tail 9): no seed, no map.set, no repoint.
-  const noopRes = leafRes()
-  await sessionLeaf(ctx, map, channel, baselines, leafReq({ session_id: 'lore-1', seq: 9 }), noopRes)
-  assert.equal(noopRes.status, 200)
-  assert.equal(created.length, 1, 'no second seed on the live-tail no-op')
-  assert.equal(sets.length, 1)
-  assert.equal(repoints.length, 1, 'the live-tail no-op does NOT repoint')
-})
-
-test('the root fork repoints with a null tail', async () => {
-  const { ctx } = leafCtx(log())
-  const { sets, map } = fakeMap()
-  const { repoints, channel } = fakeChannel()
-  const baselines = createSessionStreamBaselines()
-  baselines.observe('dsh-a', 4)
-  baselines.accept('dsh-a', { type: 'start', attemptId: 'a1', revision: 1, turn: 2, step: 0 })
-  assert.ok(baselines.snapshot('dsh-a')?.activeAttempt, 'the pre-fork id holds a live fold')
-
-  const res = leafRes()
-  await sessionLeaf(ctx, map, channel, baselines, leafReq({ session_id: 'lore-1', seq: null }), res)
-  assert.equal(res.status, 200)
-  assert.equal(sets.length, 1, 'the map repointed')
-  assert.deepEqual(repoints[0], ['lore-1', 'dsh-a', sets[0][1], null],
-    'root fork: repoint with tail null (the fresh log is empty)')
-  assert.equal(baselines.snapshot('dsh-a'), undefined,
-    'the root fork forgets the displaced id\'s fold too (same map move)')
-})
-
-test('a fork ANSWERS its repoint; the live-tail no-op answers none', async () => {
-  // The ws re-ack reaches only a subscriber whose socket is up at the fork
-  // (a harness restart leaves the backend reconnecting for seconds). The
-  // HTTP answer reaches the caller in every socket state, so it carries the
-  // same pair the re-ack would — the fresh dsh id and the dedup anchor.
-  const { ctx } = leafCtx(log()) // live tail: turn/end seq 9
-  const { sets, map } = fakeMap()
-  const { channel } = fakeChannel()
-  const baselines = createSessionStreamBaselines()
-
-  const forkRes = leafRes()
-  await sessionLeaf(ctx, map, channel, baselines, leafReq({ session_id: 'lore-1', seq: 5 }), forkRes)
-  assert.deepEqual(JSON.parse(forkRes.body),
-    { ok: true, dsh_session_id: sets[0][1], tail_seq: 5 })
-
-  const rootRes = leafRes()
-  await sessionLeaf(ctx, map, channel, baselines, leafReq({ session_id: 'lore-1', seq: null }), rootRes)
-  assert.deepEqual(JSON.parse(rootRes.body),
-    { ok: true, dsh_session_id: sets[1][1], tail_seq: null })
-
-  const noopRes = leafRes()
-  await sessionLeaf(ctx, map, channel, baselines, leafReq({ session_id: 'lore-1', seq: 9 }), noopRes)
-  assert.deepEqual(JSON.parse(noopRes.body), { ok: true },
-    'no fork, no repoint to answer')
-})
-
-test('a fork forgets the displaced id\'s stream fold; the live-tail no-op keeps it', async () => {
-  // The map's move orphans the pre-fork id's fold: nothing reads it (a
-  // snapshot keys by the CURRENT dsh id) and dsh's own consumer deletes a
-  // fold on agent/disposed, which a forked-away id never receives — without
-  // an explicit forget one fold leaks per fork for the process's lifetime.
-  // The live-tail no-op is the counter-case: the session keeps streaming, so
-  // its fold must survive (that path returns before any fork).
-  const { ctx } = leafCtx(log()) // live tail: turn/end seq 9
-  const { sets, map } = fakeMap()
-  const { channel } = fakeChannel()
-  const baselines = createSessionStreamBaselines()
-  const seedFold = (): void => {
-    baselines.observe('dsh-a', 4)
-    baselines.accept('dsh-a', { type: 'start', attemptId: 'a1', revision: 1, turn: 2, step: 0 })
-    baselines.accept('dsh-a', {
-      type: 'chunk', attemptId: 'a1', revision: 2, index: 0, time: 5,
-      chunk: { type: 'text-delta', index: 0, text: 'hi' },
-    })
-  }
-
-  seedFold()
-  assert.ok(baselines.snapshot('dsh-a')?.activeAttempt, 'the pre-fork id holds a live fold')
-  const forkRes = leafRes()
-  await sessionLeaf(ctx, map, channel, baselines, leafReq({ session_id: 'lore-1', seq: 5 }), forkRes)
-  assert.equal(forkRes.status, 200)
-  assert.equal(baselines.snapshot('dsh-a'), undefined,
-    'the displaced id\'s fold is gone')
-  assert.equal(baselines.snapshot(sets[0][1]), undefined,
-    'the fresh id carries no fold (it never streamed)')
-
-  // The live-tail no-op: the fold of the STILL-CURRENT session survives.
-  seedFold()
-  const noopRes = leafRes()
-  await sessionLeaf(ctx, map, channel, baselines, leafReq({ session_id: 'lore-1', seq: 9 }), noopRes)
-  assert.equal(noopRes.status, 200)
-  assert.ok(baselines.snapshot('dsh-a')?.activeAttempt,
-    'the live-tail no-op never drops the active fold')
-})
-
-test('a seq naming a non-turn/end row is refused (422), and so is a seq past the log', async () => {
-  const { ctx, created } = leafCtx(log())
-  const { map } = fakeMap()
-  const { repoints, channel } = fakeChannel()
-  const baselines = createSessionStreamBaselines()
-
-  const notBoundary = leafRes()
-  await sessionLeaf(ctx, map, channel, baselines, leafReq({ session_id: 'lore-1', seq: 4 }), notBoundary)
-  assert.equal(notBoundary.status, 422, 'seq 4 is an assistant/message row, not a forkable boundary')
-
-  const pastLog = leafRes()
-  await sessionLeaf(ctx, map, channel, baselines, leafReq({ session_id: 'lore-1', seq: 99 }), pastLog)
-  assert.equal(pastLog.status, 422, 'a seq beyond the last row never resolves')
-
-  assert.equal(created.length, 0, 'an unresolvable branch point never seeds')
-  assert.equal(repoints.length, 0)
-})
-
-// ─── /session-leaf `source`: the branch point is the pair (dsh session, seq) ──
-// A root fork restarts seqs at 0, so a seq alone is ambiguous across the
-// chat's sessions; the log it was stamped from is named beside it.
-
 /** A driver ctx serving one log per dsh session id; records every opened id.
  * An unknown id rejects the way dsh persistence does (`not found`). */
 function leafCtxBy(logs: Record<string, any[]>) {
@@ -959,118 +784,6 @@ function leafCtxBy(logs: Record<string, any[]>) {
   }
   return { ctx, created, opened }
 }
-
-/** The current session after a root fork: a fresh log whose seqs restart at 0. */
-function rootForkedLog(): any[] {
-  return [
-    ev(0, 'turn/start', { turn: 1 }),
-    userMsg(1, 'Q1-edited'),
-    assistantMsg(2, 'B1', 'm1'),
-    ev(3, 'turn/end', { reason: { kind: 'completed' } }),
-    ev(4, 'turn/start', { turn: 2 }),
-    userMsg(5, 'Q2-b'),
-    ev(6, 'turn/end', { reason: { kind: 'completed' } }),
-  ]
-}
-
-test('a seq plus its source seeds from THAT log, not the current one', async () => {
-  // dsh-a is current (the root-forked branch); lore-1 is the abandoned one.
-  const { ctx, created, opened } = leafCtxBy({ 'dsh-a': rootForkedLog(), 'lore-1': log() })
-  const { sets, map } = fakeMap()
-  const { repoints, channel } = fakeChannel()
-
-  const res = leafRes()
-  await sessionLeaf(ctx, map, channel, createSessionStreamBaselines(),
-    leafReq({ session_id: 'lore-1', seq: 5, source: 'lore-1' }), res)
-  assert.equal(res.status, 200)
-  assert.deepEqual(opened, ['lore-1'], 'only the source log is read')
-  assert.equal(created.length, 1)
-  assert.deepEqual(created[0].seed, forkSeed(log(), 5),
-    "the seed is the SOURCE's prefix through its seq-5 turn/end, plus the marker")
-  assert.equal(String(created[0].meta.parentSession), 'lore-1', 'the fork descends from the source')
-  assert.equal(created[0].inheritedEventCount, 6)
-  assert.deepEqual(repoints[0], ['lore-1', 'dsh-a', sets[0][1], 5],
-    'the live subscription still moves FROM the current session')
-})
-
-test('a seq without source resolves against current and 422s when absent there', async () => {
-  const { ctx, created, opened } = leafCtxBy({ 'dsh-a': rootForkedLog(), 'lore-1': log() })
-  const { sets, map } = fakeMap()
-  const { repoints, channel } = fakeChannel()
-
-  const res = leafRes()
-  await sessionLeaf(ctx, map, channel, createSessionStreamBaselines(), leafReq({ session_id: 'lore-1', seq: 9 }), res)
-  assert.equal(res.status, 422, 'seq 9 is a turn/end only in the abandoned log')
-  assert.deepEqual(opened, ['dsh-a'], 'legacy: the current log is the one read')
-  assert.equal(created.length, 0)
-  assert.equal(sets.length, 0)
-  assert.equal(repoints.length, 0)
-})
-
-test("a seq equal to current's live tail but from another source forks, never no-ops", async () => {
-  // Seq 6 is current's live tail AND a mid-log turn/end of the abandoned branch.
-  const abandoned = [
-    ev(0, 'turn/start', { turn: 1 }),
-    userMsg(1, 'Q1'),
-    assistantMsg(2, 'A1', 'm1'),
-    ev(3, 'turn/end', { reason: { kind: 'completed' } }),
-    ev(4, 'turn/start', { turn: 2 }),
-    userMsg(5, 'Q2'),
-    ev(6, 'turn/end', { reason: { kind: 'completed' } }),
-    ev(7, 'turn/start', { turn: 3 }),
-    userMsg(8, 'Q3'),
-    ev(9, 'turn/end', { reason: { kind: 'completed' } }),
-  ]
-  const { ctx, created } = leafCtxBy({ 'dsh-a': rootForkedLog(), 'lore-1~fold0001': abandoned })
-  const { sets, map } = fakeMap()
-  const { repoints, channel } = fakeChannel()
-
-  const res = leafRes()
-  await sessionLeaf(ctx, map, channel, createSessionStreamBaselines(),
-    leafReq({ session_id: 'lore-1', seq: 6, source: 'lore-1~fold0001' }), res)
-  assert.equal(res.status, 200)
-  assert.equal(created.length, 1, 'a real fork, not the live-tail no-op')
-  assert.deepEqual(created[0].seed, forkSeed(abandoned, 6))
-  assert.equal(sets.length, 1)
-  assert.equal(repoints.length, 1)
-})
-
-test('source equal to the current session keeps the live-tail no-op', async () => {
-  const { ctx, created } = leafCtxBy({ 'lore-1~fcur0001': rootForkedLog() })
-  const { sets } = fakeMap()
-  const map: any = { get: () => 'lore-1~fcur0001', set: (l: string, d: string) => { sets.push([l, d]) } }
-  const { repoints, channel } = fakeChannel()
-
-  const res = leafRes()
-  await sessionLeaf(ctx, map, channel, createSessionStreamBaselines(),
-    leafReq({ session_id: 'lore-1', seq: 6, source: 'lore-1~fcur0001' }), res)
-  assert.equal(res.status, 200)
-  assert.equal(created.length, 0, 'no seed at the live tail')
-  assert.equal(sets.length, 0)
-  assert.equal(repoints.length, 0)
-})
-
-test("a source outside this chat's sessions is refused, and so is a missing one", async () => {
-  const { ctx, created, opened } = leafCtxBy({ 'dsh-a': rootForkedLog(), 'lore-2': log() })
-  const { sets, map } = fakeMap()
-  const { repoints, channel } = fakeChannel()
-
-  for (const source of ['lore-2', 'lore-10', 'lore-2~fabc', 7]) {
-    const res = leafRes()
-    await sessionLeaf(ctx, map, channel, createSessionStreamBaselines(),
-      leafReq({ session_id: 'lore-1', seq: 5, source }), res)
-    assert.equal(res.status, 422, `source ${JSON.stringify(source)} must be refused`)
-  }
-  assert.deepEqual(opened, [], "a foreign source's log is never opened")
-
-  const missing = leafRes()
-  await sessionLeaf(ctx, map, channel, createSessionStreamBaselines(),
-    leafReq({ session_id: 'lore-1', seq: 5, source: 'lore-1~fgone000' }), missing)
-  assert.equal(missing.status, 422, 'a missing source log is unresolvable, not a 500')
-  assert.equal(created.length, 0)
-  assert.equal(sets.length, 0)
-  assert.equal(repoints.length, 0)
-})
 
 test('the driver never deletes a dsh session log (abandoned branches stay continuable)', () => {
   // A `source` names an abandoned session; the pair contract holds only while
@@ -1230,18 +943,18 @@ test('a compacted source seeds its prefix with the checkpoint row verbatim', asy
     assistantMsg(13, 'A3', 'm3'),
     ev(14, 'turn/end', { reason: { kind: 'completed' } }),
   ]
-  const { ctx, created } = leafCtxBy({ 'dsh-a': rootForkedLog(), 'lore-1~fcmp0001': compacted })
+  const { ctx, created } = leafCtxBy({ 'dsh-a': compacted })
   const { map } = fakeMap()
-  const { channel } = fakeChannel()
 
   const res = leafRes()
-  await sessionLeaf(ctx, map, channel, createSessionStreamBaselines(),
-    leafReq({ session_id: 'lore-1', seq: 14, source: 'lore-1~fcmp0001' }), res)
+  await sessionFork(ctx, map,
+    forkReq({ source_dsh_id: 'dsh-a', seq: 14, new_lore_id: 'lore-branch-2' }), res)
   assert.equal(res.status, 200)
   assert.deepEqual(created[0].seed, forkSeed(compacted, 14),
     'rows 0..14 in seq order — the checkpoint row and its replace window ride verbatim')
   assert.equal(created[0].inheritedEventCount, 15)
 })
+
 
 // ─── reasoning effort: dsh's own model-selection seam (plan ───────────────────
 // reasoning-effort-selector step 3). The turn builds a per-HTTP-turn selection
@@ -1353,7 +1066,7 @@ test('reasoning effort: turn() wires the body effort through the selection, noth
   assert.match(src, /const agentOptions = \{ provider, model \}/,
     'agentOptions keeps its {provider, model} runtime shape, provider off the map')
   assert.equal(src.match(/installModelSelection\(/g)?.length, 1,
-    'exactly one install site — seedForkSession stays selection-free')
+    'exactly one install site — the fork create half stays selection-free')
 })
 
 // ─── the tool-ctx split + the followup/stop routes: standing identity per
@@ -1420,3 +1133,98 @@ test("source shape: the followup task pushes turn_closed in its finally (plan st
   assert.ok(push!.index !== undefined && push!.index > finallyIdx,
     'turn_closed is pushed in the followup task\'s finally, after finish()')
 })
+
+// ─── /session-fork: the session-per-branch primitive (plan ───────────────────
+// chat-branch-sessions). A branch is its OWN dsh session whose id EQUALS the
+// Lore session id: the fork seeds under the CALLER-CHOSEN new_lore_id through
+// dsh's own buildForkSeed (seedForkSessionCreate) and touches NO map entry
+// and NO live subscription — nothing
+// is re-pointed, sessions only ever append. Idempotent: an existing
+// new_lore_id answers 200 without re-seeding (a crash between the fork and
+// the backend clearing the row's seed_source_* makes the next turn call
+// again; re-seeding would fork a second log under the same id).
+
+test('a fork under a NEW id seeds without touching the map or the subscription', async () => {
+  // leafCtxBy (not leafCtx): the existence probe OPENS new_lore_id — the
+  // one-log fake would answer "exists" and never seed.
+  const { ctx, created } = leafCtxBy({ 'dsh-a': log() })
+  const { sets, map } = fakeMap() // lore-1 → dsh-a
+  const { repoints, channel } = fakeChannel()
+
+  const res = leafRes()
+  await sessionFork(ctx, map,
+    forkReq({ source_dsh_id: 'dsh-a', seq: 5, new_lore_id: 'lore-branch-2' }), res)
+  assert.equal(res.status, 200)
+  assert.deepEqual(JSON.parse(res.body), { ok: true })
+  assert.equal(created.length, 1, 'the branch log was seeded')
+  assert.equal(String(created[0].sessionId), 'lore-branch-2',
+    'seeded under the CALLER-CHOSEN id — dsh id = Lore id')
+  assert.equal(String(created[0].meta.parentSession), 'dsh-a',
+    'the lineage names the source log')
+  assert.deepEqual(created[0].seed, forkSeed(log(), 5),
+    'the seed is the same buildForkSeed rows [0..5] + the inherited-cut marker')
+  assert.equal(created[0].inheritedEventCount, 6)
+  assert.deepEqual(sets, [], 'the map is untouched — no entry for the branch')
+  assert.deepEqual(repoints, [], 'no live subscription moves — nothing re-pointed')
+})
+
+test('/session-fork is idempotent: an existing new_lore_id answers 200 without re-seeding', async () => {
+  const { ctx, created, opened } = leafCtxBy({ 'dsh-a': log(), 'lore-branch-2': log() })
+  const { sets, map } = fakeMap()
+  const { repoints, channel } = fakeChannel()
+
+  const res = leafRes()
+  await sessionFork(ctx, map,
+    forkReq({ source_dsh_id: 'dsh-a', seq: 5, new_lore_id: 'lore-branch-2' }), res)
+  assert.equal(res.status, 200)
+  assert.match(res.body, /"existed":\s*true/, 'the answer says the log already exists')
+  assert.equal(created.length, 0, 'no re-seed under the same id')
+  assert.deepEqual(opened, ['lore-branch-2'],
+    'only the existence probe ran — the source log was not even read')
+  assert.deepEqual(sets, [])
+  assert.deepEqual(repoints, [])
+})
+
+test('/session-fork refuses a non-boundary seq and a missing source log (422, never a seed)', async () => {
+  const { ctx, created } = leafCtxBy({ 'dsh-a': log() })
+  const { map } = fakeMap()
+  const { channel } = fakeChannel()
+
+  const notBoundary = leafRes()
+  await sessionFork(ctx, map,
+    forkReq({ source_dsh_id: 'dsh-a', seq: 4, new_lore_id: 'lore-branch-2' }), notBoundary)
+  assert.equal(notBoundary.status, 422, 'seq 4 is an assistant/message row, not a boundary')
+
+  const missingSource = leafRes()
+  await sessionFork(ctx, map,
+    forkReq({ source_dsh_id: 'dsh-gone', seq: 5, new_lore_id: 'lore-branch-2' }), missingSource)
+  assert.equal(missingSource.status, 422, 'a missing source log is unresolvable, not a 500')
+
+  assert.equal(created.length, 0, 'an unresolvable branch point never seeds')
+  void channel
+})
+
+test('/session-fork maps a legacy source id through SessionMap.get', async () => {
+  // seed_source_session falls back to the chat's bare lore id when the
+  // stamped row predates the (seq, session) pair — SessionMap.get resolves
+  // it to the chat's CURRENT dsh id (identity default for ~f spellings).
+  const { ctx, created, opened } = leafCtxBy({ 'dsh-a': log() })
+  const { map } = fakeMap() // get: lore-1 → dsh-a
+  const { channel } = fakeChannel()
+
+  const res = leafRes()
+  await sessionFork(ctx, map,
+    forkReq({ source_dsh_id: 'lore-1', seq: 5, new_lore_id: 'lore-branch-2' }), res)
+  assert.equal(res.status, 200)
+  assert.deepEqual(opened, ['lore-branch-2', 'dsh-a'],
+    'the existence probe, then the legacy id resolved to the current dsh id')
+  assert.equal(String(created[0].meta.parentSession), 'dsh-a')
+  void channel
+})
+
+/** A POST /session-fork request (same req shape the leaf tests use). */
+function forkReq(body: unknown): any {
+  const req = leafReq(body)
+  req.url = '/session-fork'
+  return req
+}

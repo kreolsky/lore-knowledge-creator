@@ -36,6 +36,8 @@ interface Props {
   recording: boolean;
   transcribing: boolean;
   onToggleRecording: () => void;
+  // Escape while recording discards the take (no transcription).
+  onCancelRecording?: () => void;
   // Attachments
   images: string[];
   onRemoveImage: (index: number) => void;
@@ -70,6 +72,7 @@ export function ChatComposer({
   recording,
   transcribing,
   onToggleRecording,
+  onCancelRecording,
   images,
   onRemoveImage,
   queued,
@@ -101,6 +104,23 @@ export function ChatComposer({
       ? 'border-[var(--sticky-yellow-sep)]'
       : 'border-border';
 
+  // WHY: Escape lives on the composer wrapper, not the textarea, so it fires from
+  // any focused control inside it — after a click the mic button holds focus.
+  // One action per press: a recording is discarded first (the turn keeps
+  // streaming), the next press stops the turn.
+  // WHY Esc = stop, always — regardless of composer contents. Without this, the
+  // button rule (Send shown whenever text is present) would cost a one-click stop
+  // mid-turn. The send hotkey is Cmd/Ctrl+Enter, so Esc is free.
+  // WHY contains(target): React events bubble through portals, and Modal handles
+  // Escape without preventDefault — a portaled dialog's Escape must not stop the turn.
+  const handleEscape = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Escape' || e.defaultPrevented || !e.currentTarget.contains(e.target as Node)) return;
+    const cancel = recording ? onCancelRecording : isStreaming ? onStop : undefined;
+    if (!cancel) return;
+    e.preventDefault();
+    cancel();
+  };
+
   return (
     <>
       {/* Queued follow-ups sit ABOVE the divider, in the message stream's column —
@@ -128,6 +148,7 @@ export function ChatComposer({
       <div
         className={`flex-shrink-0 border-t pb-safe ${panelBg} ${panelBorderClass}`}
         style={{ minHeight: inputHeight }}
+        onKeyDown={handleEscape}
       >
         <div className="flex flex-col h-full">
           {/* Top area: AI controls + shared attachment chips + warnings */}
@@ -170,7 +191,7 @@ export function ChatComposer({
                   composer emptiness. Empty + streaming → red Stop; non-empty → Send,
                   which enqueues while a turn streams (the store guard routes it to the
                   queue). No modality — mouse and the Cmd/Ctrl+Enter hotkey do the same.
-                  Esc always Stops (see ChatInput.handleKeyDown) so a one-click stop is
+                  Esc always Stops (see handleEscape above) so a one-click stop is
                   still available whenever text is present.
                 */}
                 {isStreaming && onStop && value.trim().length === 0 ? (

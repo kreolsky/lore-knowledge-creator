@@ -447,55 +447,15 @@ async def test_resync_replays_from_last_seq_and_continues_the_open_turn(channel)
     assert persists.content == [("m1", "A\n\nB\n\nC\n\nD")]
 
 
-# ─── the repoint re-ack: a fork re-keys routing and re-anchors the dedup ──────
-# (plan fork-repoints-live-subscription: the driver's /session-leaf repoints
-# the live subscription and re-acks with the fork tail; these pin the backend
-# half — _handle_subscribed's tail_seq arm.)
-
-
-@pytest.mark.asyncio
-async def test_repoint_reack_rekeys_routing_and_reanchors_dedup(channel):
-    ch, connector, replay, _ = channel
-    await ch.subscribe("lore-1")
-    queue, _ = ch.add_listener("lore-1")
-    sock = connector.sockets[0]
-
-    # The pre-fork tail: a frame at seq 100 was delivered and anchored.
-    sock.push(_env("dsh-9", _chunk(100, "tail")))
-    got = await _recv(queue)
-    assert got["seq"] == 100
-
-    # The fork's re-ack: same lore id, FRESH dsh id, tail_seq = the fork's
-    # boundary (40 — BELOW the delivered 100: a fork's seed retains the
-    # parent prefix seqs). The re-ack rides the socket before the turn's
-    # frames (ws send order), and the inbox is FIFO — by the time the seq-41
-    # frame is delivered, the re-ack was routed.
-    sock.push({
-        "type": "subscribed", "session_id": "lore-1",
-        "dsh_session_id": "dsh-b", "tail_seq": 40,
-    })
-    sock.push(_env("dsh-b", _chunk(41, "forked")))
-    got = await _recv(queue)
-    assert got["seq"] == 41, (
-        "seq 41 delivers BELOW the old tail 100 — without the re-anchor the "
-        "dedup would drop the whole forked turn as already delivered")
-
-    sub = ch._subs["lore-1"]
-    assert sub.dsh_session_id == "dsh-b"
-    assert ch._dsh_index.get("dsh-b") is sub
-    assert "dsh-9" not in ch._dsh_index, "the pre-fork id no longer routes"
-    assert sub.ack.is_set(), (
-        "the re-ack re-sets an already-set event — a later ack-once guard "
-        "must not break the repoint")
-
-    sock.push(_env("dsh-9", _chunk(42, "orphan")))
-    assert await _drain(queue) == [], "a frame addressed by the old id drops"
-
-
 @pytest.mark.asyncio
 async def test_turn_stamps_the_dsh_session_it_ran_in(channel):
-    """The row's driver_session is the subscription's dsh id at turn open —
-    after a fork's re-ack that is the FRESH session, not the pre-fork one."""
+    """The row's driver_session is the id the subscribe ACK resolved, not the
+    lore id — a legacy chat's SessionMap resolution names a different dsh id
+    at the initial re-key, and the stamp must carry that resolved id. (The
+    mid-connection re-key to a FRESH id this test's second half used to push
+    was the fork repoint seam — deleted with plan chat-branch-sessions step
+    4; a session's resolved id is stable for its life now, so a plain re-ack
+    re-keys nothing — see the plain-reack test below.)"""
     ch, connector, replay, persists = channel
     await ch.subscribe("lore-1")
     queue, _ = ch.add_listener("lore-1")
@@ -507,34 +467,7 @@ async def test_turn_stamps_the_dsh_session_it_ran_in(channel):
         sock.push(_env("dsh-9", frame))
     await _until(lambda: persists.turn_session == [("m1", "dsh-9")])
     await _until(lambda: ch._subs["lore-1"].turn is None)
-
-    sock.push({"type": "subscribed", "session_id": "lore-1",
-               "dsh_session_id": "lore-1~ffork0001", "tail_seq": 5})
-    ch.bind_turn("lore-1", assistant_msg_id="m2")
-    for frame in ({"type": "model_update", "model": "x"}, _chunk(6, "b"),
-                  _turn_end(7, "completed")):
-        sock.push(_env("lore-1~ffork0001", frame))
-    await _until(lambda: persists.turn_session == [
-        ("m1", "dsh-9"), ("m2", "lore-1~ffork0001")])
-    assert persists.turn_seq == [("m1", 9), ("m2", 7)]
-
-
-@pytest.mark.asyncio
-async def test_repoint_reack_with_null_tail_reanchors_to_nothing(channel):
-    # Root fork: tail_seq null — the fresh log is EMPTY, so the dedup anchor
-    # resets to "nothing delivered" and the forked turn streams from seq 1.
-    ch, connector, replay, _ = channel
-    await ch.subscribe("lore-1")
-    queue, _ = ch.add_listener("lore-1")
-    sock = connector.sockets[0]
-    sock.push(_env("dsh-9", _chunk(100, "tail")))
-    await _recv(queue)
-
-    sock.push({"type": "subscribed", "session_id": "lore-1",
-               "dsh_session_id": "dsh-r", "tail_seq": None})
-    sock.push(_env("dsh-r", _chunk(1, "root")))
-    got = await _recv(queue)
-    assert got["seq"] == 1
+    assert persists.turn_seq == [("m1", 9)]
 
 
 @pytest.mark.asyncio
@@ -555,74 +488,6 @@ async def test_plain_reack_leaves_the_dedup_anchor_alone(channel):
     assert got["seq"] == 101
     assert await _drain(queue) == [], "the stale seq-100 frame stays dropped"
     assert ch._subs["lore-1"].last_seq == 101
-
-
-# ─── a fork while the socket is down: the leaf answer carries the repoint ─────
-# A harness restart drops the socket; the backend reconnects with backoff, and
-# a turn POSTed inside that window forks (/session-leaf) with no socket to
-# carry the re-ack. The fork's HTTP answer applies the same repoint, so the
-# reconnect's resync replays the FORKED log from the fork's anchor.
-
-
-async def _fork_while_down(channel, tail_seq, fork_frames):
-    """Subscribe lore-1 on dsh-9, deliver seq 100, drop the socket and keep
-    it down, apply the leaf answer's repoint, bind the turn, then let the
-    driver come back acking the forked id with the fork's log in the replay."""
-    ch, connector, replay, persists = channel
-    await ch.subscribe("lore-1")
-    queue, _ = ch.add_listener("lore-1")
-    connector.sockets[0].push(_env("dsh-9", _chunk(100, "pre-fork tail")))
-    await _recv(queue)
-
-    connector.refuse = True
-    connector.sockets[0].drop()
-    await _until(lambda: not ch._connected)
-
-    ch.repoint("lore-1", "lore-1~ffork0001", tail_seq)
-    ch.bind_turn("lore-1", assistant_msg_id="m1")
-    replay.reply("lore-1", {"turns": [{"frames": fork_frames, "end_seq": fork_frames[-1]["seq"]}],
-                            "tail_seq": fork_frames[-1]["seq"]})
-    connector._ack_map["lore-1"] = "lore-1~ffork0001"
-    connector.refuse = False
-    await _wait_for_socket(connector, 1)
-    return ch, replay, persists
-
-
-@pytest.mark.asyncio
-async def test_a_fork_while_the_socket_is_down_reaches_the_bound_row(channel):
-    # Seeded fork at boundary 40: the forked turn's seqs (41..43) sit BELOW
-    # the delivered 100 — without the answer's anchor the resync replays
-    # since 100 and the turn never reaches its row.
-    ch, replay, persists = await _fork_while_down(channel, 40, [
-        _dsh(41, "turn/start", {"turn": 3}), _chunk(42, "Красный", turn=3),
-        _turn_end(43, "completed", turn=3)])
-    await _until(lambda: persists.turn_seq == [("m1", 43)])
-    assert persists.content == [("m1", "Красный")]
-    assert {"session_id": "lore-1", "since_seq": 40} in replay.calls
-    assert ch._subs["lore-1"].dsh_session_id == "lore-1~ffork0001"
-
-
-@pytest.mark.asyncio
-async def test_a_root_fork_while_the_socket_is_down_replays_the_whole_fresh_log(channel):
-    # Root fork: the fresh log is empty at the fork, so the anchor is
-    # "nothing delivered" and the resync replays the whole log — a skip
-    # there leaves the bound row empty forever.
-    ch, replay, persists = await _fork_while_down(channel, None, [
-        _dsh(0, "turn/start", {"turn": 1}), _chunk(1, "Привет", turn=1),
-        _turn_end(2, "completed", turn=1)])
-    await _until(lambda: persists.turn_seq == [("m1", 2)])
-    assert persists.content == [("m1", "Привет")]
-    assert {"session_id": "lore-1", "since_seq": None} in replay.calls
-
-
-@pytest.mark.asyncio
-async def test_repoint_of_an_unsubscribed_session_registers_nothing(channel):
-    # No subscription yet: the later subscribe anchors at the fresh log's
-    # tail by itself (the plugin's ack resolves the forked id).
-    ch, *_ = channel
-    ch.repoint("lore-1", "lore-1~ffork0001", 5)
-    assert "lore-1" not in ch._subs
-    assert ch._dsh_index == {}
 
 
 # ─── the deadline: silence breach + holds ─────────────────────────────────────

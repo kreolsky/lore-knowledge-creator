@@ -515,6 +515,17 @@ export interface ChatSession {
   // revision skips pinned rows. Frontend never writes it; declared because
   // `SELECT *` ships the column to the client.
   title_user_set?: boolean;
+  // ARCH: thread identity — a branch is its own
+  // session row sharing thread_id with its siblings (= the ROOT session's
+  // id; null on pre-migration rows, each then its own thread).
+  // forked_from_session/forked_after_origin name a branch's provenance; the
+  // ROOT row's active_branch_id is the last-opened branch the chat list
+  // previews. Server-authored; the client reads them to tell a branch from
+  // its thread.
+  thread_id?: string | null;
+  forked_from_session?: string | null;
+  forked_after_origin?: string | null;
+  active_branch_id?: string | null;
   // ARCH: last-known context occupation for the token-usage gauge — the tokens
   // the active session's discussion occupies. Updated once per NORMAL turn from
   // the context_usage frame; null before the first turn / pre-migration. The
@@ -592,6 +603,12 @@ export interface ChatMessage {
   assistant_stream?: unknown;
   author_id?: string;
   author_name?: string;
+  // ARCH: the row's identity ACROSS branch
+  // copies — a prefix copy keeps the source row's origin (or the source's own
+  // id when it had none). The fork switcher compares origins, never row ids;
+  // `origin_id ?? message_id` is the row's effective origin. Absent on
+  // pre-migration rows (each is its own origin).
+  origin_id?: string | null;
   created_at: string;
   // Emitted by serialize_record for every `*_at` field (pre-formatted for display).
   // Undeclared here until the wire-contract test found it.

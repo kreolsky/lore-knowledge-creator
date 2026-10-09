@@ -2,6 +2,25 @@
 import type { ChatUIMode, ChatSession, ChatMessage, Reference, PinnedRegion, ReasoningCapability } from '../../types';
 import type { ConversationVM, TurnRange } from './conversation-feed';
 
+/** One switcher option: one DISTINCT continuation after the fork origin and
+ * the session that opens it (server-shaped, GET /sessions/{id}/forks). The
+ * server lists the active session's own continuation too (`current`) and
+ * orders the options identically for every branch of the thread. */
+export interface ForkOption {
+  session_id: string;
+  next_origin: string | null;
+  created_at: string | null;
+  current: boolean;
+}
+
+/** One fork point of the active branch: the origin P the options fork after
+ * (null = the virtual "before the first message" of a migrated legacy
+ * chat with several first messages). */
+export interface ForkEntry {
+  after_origin: string | null;
+  options: ForkOption[];
+}
+
 /**
  * Why a turn ended — read at the turn's terminal, off the harness
  * REGISTRATION's end facts. 'done' is the DEFAULT: nothing is stamped
@@ -95,8 +114,11 @@ export interface ChatState {
   // from loading state — deriving empty from messages.length===0 alone flashes.
   chatScopeLoading: boolean;
 
-  // WHY: selectedSiblings maps parentId -> chosen messageId for fork navigation  Why: for branched chats (siblings sharing a parentId), records which sibling the user navigated to so fork-nav shows the chosen branch, not an arbitrary one.
-  selectedSiblings: Record<string, string>;
+  // The switcher projection of the ACTIVE session (see SYSTEM:
+  // chat-branch-sessions — GET /sessions/{id}/forks): for every origin P on
+  // this branch, the thread's OTHER branches continuing differently after P.
+  // Empty for a session with no forks; cleared on every session switch.
+  forks: ForkEntry[];
 
   // Streaming: the tightly-coupled streaming state machine lives in ONE object so
   // it is manipulated as a unit — split across flat fields, a reset could clear
@@ -277,24 +299,24 @@ export interface ChatState {
   resyncOpenHarnessTurn: () => Promise<void>;
   sendMessage: (content: string, images?: string[]) => Promise<void>;
   editMessage: (messageId: string, content: string) => Promise<void>;
-  deleteMessage: (messageId: string) => Promise<void>;
   forkAndResend: (messageId: string, content: string, images?: string[]) => Promise<void>;
   regenerate: (messageId: string) => Promise<void>;
   stopGeneration: () => void;
 
-  // Actions — forks
-  selectSibling: (parentId: string, messageId: string) => void;
-  // Rewind-to-message (agent chats): cut the active path so the message and
-  // everything below it stop rendering, and the next send forks a SIBLING from
-  // the point before it (a REWIND_KEY sentinel in selectedSiblings — the
-  // branch is NOT deleted, the fork switcher offers it once the sibling
-  // exists). Refused while streaming. In-memory: a reload or session switch
-  // clears it with selectedSiblings and the full branch shows again.
-  rewindTo: (messageId: string) => void;
-  // Drop the rewind sentinel — the path falls back to its previous resolution
-  // and the hidden branch reappears.
-  cancelRewind: () => void;
-  getSiblings: (parentId: string | null) => ChatMessage[];
+  // Actions — forks (see SYSTEM: chat-branch-sessions): a branch is its own
+  // session; the switcher ("1/N ◄►") opens sessions instead of picking
+  // in-tree siblings.
+  /** Fetch + seat the active session's switcher projection (staleness-guarded). */
+  loadForks: (sessionId: string) => Promise<void>;
+  /** Open a branch: PATCH the thread root's active_branch_id (the chat list
+   * previews the last-opened branch) + setActiveSession on it. */
+  openBranch: (sessionId: string) => void;
+  // Rewind-to-message (agent chats): fork a branch after the message's
+  // PARENT and open it — the new branch's transcript ends right before the
+  // rewound message and the composer owns the next turn. The old branch
+  // stays in history (the switcher offers it at that fork point). Refused
+  // while streaming; a no-op on the first message (immutable).
+  rewindTo: (messageId: string) => Promise<void>;
 
   // Actions — message queue. Guard lives in the store, not
   // the UI: sendMessage itself routes here when streaming !== null, so the MicButton

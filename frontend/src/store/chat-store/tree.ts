@@ -1,41 +1,15 @@
-/** Pure tree helpers for the chat message tree and the activePath selector. */
+/** Pure tree helpers for the chat message tree and the branch-path selector. */
 import type { ChatMessage } from '../../types';
 import type { ChatState } from './types';
 import { registerChatResetHandler } from './reset-registry';
 
 /**
  * Sentinel key for root-level messages (those with `parent_id === null`) in the
- * children map + `selectedSiblings` index. Centralized so a typo in any one site
+ * children map. Centralized so a typo in any one site
  * cannot silently orphan root messages (a mismatched key would miss its bucket
  * and the message would never resolve onto the active path).
  */
 export const ROOT_KEY = '__root__';
-
-/**
- * Sentinel VALUE inside `selectedSiblings` (a map otherwise keyed by parent id
- * → chosen message id): marks the level whose active path is CUT — the
- * rewind-to-message feature. Keyed by the hidden message's parent (ROOT_KEY
- * for a first message); `resolveActivePath` stops there, so the hidden message
- * and everything below it drop off the rendered path and off sendMessage's
- * parent derivation. The branch itself is NOT deleted — once the next message
- * exists as a sibling, the fork switcher offers both. In-memory by design:
- * every reset site clears `selectedSiblings` wholesale and
- * `insertOptimisticUser` overwrites the entry with the temp id on send, so
- * session switch, reload and send end the rewind with zero extra code.
- */
-export const REWIND_KEY = '__rewind__';
-
-/** True when `path` ends at a REWIND_KEY cut — the rewind is what the user sees,
- *  not merely a sentinel parked somewhere in the map (an off-path one is inert). */
-export function isPathRewound(path: ChatMessage[], selectedSiblings: Record<string, string>): boolean {
-  const endKey = path.length > 0 ? path[path.length - 1].message_id : ROOT_KEY;
-  return selectedSiblings[endKey] === REWIND_KEY;
-}
-
-/** Copy of `selectedSiblings` with every REWIND_KEY entry dropped. */
-export function withoutRewind(selectedSiblings: Record<string, string>): Record<string, string> {
-  return Object.fromEntries(Object.entries(selectedSiblings).filter(([, v]) => v !== REWIND_KEY));
-}
 
 // ─── Children map cache ──────────────────────────────────────────────────────
 
@@ -70,7 +44,7 @@ function nodeTimestampMs(m: ChatMessage): number {
  * and all its descendants. Pure post-order DFS over the cached childrenMap,
  * O(n) for the whole forest, memoized per-id within the call. Chat trees are
  * small (sessions are paginated at 200 messages), so this needs no module-level
- * cache — `selectActivePath`'s reference-equality memo already bounds recompute.
+ * cache — `selectBranchPath`'s reference-equality memo already bounds recompute.
  */
 function computeSubtreeMax(
   childrenMap: Record<string, ChatMessage[]>,
@@ -115,39 +89,24 @@ function pickFreshestSubtree(
 }
 
 /**
- * Walk the tree from roots, following selectedSiblings, to produce the active path.
+ * Walk the tree from roots down the freshest lineage to produce the branch path.
  *
- * ARCH: the DEFAULT branch (no explicit `selectedSiblings[parentKey]`) is the
- * sibling whose subtree contains the message with the maximum created_at — NOT
- * "last sibling in array order". Why: messages arrive ORDER BY created_at ASC,
- * so "last sibling" is merely the latest FORK ROOT, which can be an old/short
- * branch while the freshest message lives in an earlier-forked subtree. Picking
- * the freshest subtree makes the shown branch the one the user most recently
- * extended, on both render (MessageList) and send (messages-slice parentId).
- * Explicit `selectedSiblings` still wins; during streaming it is always set
- * (streaming.ts), so this default never competes with an in-flight turn.
+ * ARCH: the branch shown is the sibling whose subtree contains the message
+ * with the maximum created_at — NOT "last sibling in array order". Why:
+ * messages arrive ORDER BY created_at ASC, so "last sibling" is merely the
+ * latest FORK ROOT, which can be an old/short branch while the freshest
+ * message lives in an earlier-forked subtree. For a branch session's linear
+ * chain (a branch is its own session, rows only append) this is simply the whole chain; a pre-migration tree shows its
+ * newest lineage.
  */
-export function resolveActivePath(
-  messages: ChatMessage[],
-  selectedSiblings: Record<string, string>,
-): ChatMessage[] {
+export function resolveActivePath(messages: ChatMessage[]): ChatMessage[] {
   const childrenMap = buildChildrenMap(messages);
   const subtreeMax = computeSubtreeMax(childrenMap);
   const path: ChatMessage[] = [];
   let currentChildren = childrenMap[ROOT_KEY] ?? [];
 
   while (currentChildren.length > 0) {
-    // Pick explicit selection, else the freshest-subtree sibling.
-    const parentKey = currentChildren[0].parent_id ?? ROOT_KEY;
-    const selectedId = selectedSiblings[parentKey];
-    // INVARIANT: a REWIND_KEY selection ends the active path at that level —
-    // no sibling is chosen and nothing below is pushed.
-    // Why: the next send must parent on the node BEFORE the hidden message so
-    // it forks a sibling of the hidden branch, and sendMessage derives its
-    // parent from this same path (activePath's last node).
-    if (selectedId === REWIND_KEY) break;
-    const chosen = currentChildren.find(m => m.message_id === selectedId)
-      ?? pickFreshestSubtree(currentChildren, subtreeMax);
+    const chosen = pickFreshestSubtree(currentChildren, subtreeMax);
     path.push(chosen);
     currentChildren = childrenMap[chosen.message_id] ?? [];
   }
@@ -159,9 +118,8 @@ export function resolveActivePath(
  *
  * ARCH: the single shared ancestor-walk used by forkAndResend and regenerate —
  * one implementation, not a `while (cursor)` backwards-walk per call site.
- * Unlike `resolveActivePath` (which follows the user's selectedSiblings from the
- * roots), this walks a SPECIFIC message's parents regardless of the active
- * selection — fork/regenerate branch off an explicit node, not the active path.
+ * This walks a SPECIFIC message's parents regardless of the rendered
+ * path — fork/regenerate branch off an explicit node, not the active path.
  * Returns [] when `leafId` is unknown.
  */
 export function resolveAncestorChain(messages: ChatMessage[], leafId: string): ChatMessage[] {
@@ -179,34 +137,32 @@ export function resolveAncestorChain(messages: ChatMessage[], leafId: string): C
 }
 
 // ─── Derived selector ───────────────────────────────────────────────────────
-// ARCH: activePath is derived state, never stored. Memoized by reference
-// equality on messages + selectedSiblings — returns the same array when inputs
-// haven't changed.  Streaming substitution is NOT done here; it belongs in the
-// component render (MessageList via useMemo) because useSyncExternalStore
+// ARCH: the branch path is derived state, never stored. Memoized by reference
+// equality on messages — returns the same array when inputs
+// haven't changed.  Streaming substitution is NOT done here; it belongs in
+// the component render (MessageList via useMemo) because useSyncExternalStore
 // requires getSnapshot to return a stable reference for the same store state.
 
-let _memoMessages: ChatMessage[] | null = null;
-let _memoSiblings: Record<string, string> | null = null;
-let _memoBasePath: ChatMessage[] = [];
+let _memoBranchMessages: ChatMessage[] | null = null;
+let _memoBranchPath: ChatMessage[] = [];
 
-export function selectActivePath(
-  s: Pick<ChatState, 'messages' | 'selectedSiblings'>,
+/** The chat's rendered/sent path — the freshest lineage of the session's rows. */
+export function selectBranchPath(
+  s: Pick<ChatState, 'messages'>,
 ): ChatMessage[] {
-  if (s.messages !== _memoMessages || s.selectedSiblings !== _memoSiblings) {
-    _memoMessages = s.messages;
-    _memoSiblings = s.selectedSiblings;
-    _memoBasePath = resolveActivePath(s.messages, s.selectedSiblings);
+  if (s.messages !== _memoBranchMessages) {
+    _memoBranchMessages = s.messages;
+    _memoBranchPath = resolveActivePath(s.messages);
   }
-  return _memoBasePath;
+  return _memoBranchPath;
 }
 
 /** Reset memoization caches — called from store reset(). */
 export function resetTreeCache(): void {
   _cachedMessages = null;
   _cachedChildrenMap = {};
-  _memoMessages = null;
-  _memoSiblings = null;
-  _memoBasePath = [];
+  _memoBranchMessages = null;
+  _memoBranchPath = [];
 }
 
 // self-register the cache clear on the chat-reset registry. misc-slice.reset

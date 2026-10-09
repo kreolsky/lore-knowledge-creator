@@ -29,8 +29,9 @@ async def driver_attested(driver_secret: str | None) -> bool:
     # any agent-capable key can reach (external brains included), and it turns
     # a confirm cell into an auto-apply — without this check the caller
     # asserting "the user approved" IS the only evidence they have. The
-    # driver secret is the one thing an external key holder does not have; the
-    # is_system refusal (routes/tool_api/_common.py) stays as defence in depth.
+    # driver secret is the one thing an external key holder does not have, so
+    # an attested marker is the user's approval of this call — on a system
+    # doc as well (routes/tool_api/_common.py).
     """
     if not isinstance(driver_secret, str) or not driver_secret:
         return False
@@ -61,8 +62,7 @@ async def _decode_correlation(
     driver_attested); an unattested marker is DROPPED, so the call falls back
     to the confirm cell and refuses with 409 as if it had never been marked.
     The marker only ever converts a confirm cell to auto (see
-    _resolve_apply_or_force); every RBAC / pin gate and the is_system refusal
-    still apply. Absent headers stay None — purely additive, no behavior
+    _resolve_apply_or_force); every RBAC / pin gate still applies. Absent headers stay None — purely additive, no behavior
     change for tools that never read them.
     """
     return {

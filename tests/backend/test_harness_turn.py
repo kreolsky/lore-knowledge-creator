@@ -17,6 +17,7 @@ import asyncio
 import json
 from dataclasses import dataclass, field
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 import routes.chat.completions as comp
@@ -52,6 +53,24 @@ class FollowupFake:
             "dsh_session_id": "dsh-1",
             "lore_session_id": payload.get("session_id"),
         }
+
+
+class SessionForkFake:
+    """`driver.timeline.post_session_fork` stand-in: records calls, accepts a
+    programmable error (the plugin's 422 / secret-mismatch arms)."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+        self.error: Exception | None = None
+
+    async def __call__(self, source_dsh_id, seq, new_lore_id, line=None):
+        self.calls.append({
+            "source_dsh_id": source_dsh_id, "seq": seq,
+            "new_lore_id": new_lore_id,
+        })
+        if self.error is not None:
+            raise self.error
+        return {"ok": True}
 
 
 def _reset_fanout() -> None:
@@ -113,6 +132,7 @@ async def harness_env(monkeypatch, driver_line_pinned):
     connector = FakeConnector()
     replay = FakeReplay()
     followups = FollowupFake()
+    forks = SessionForkFake()
     async def _fake_line():
         return _LINE()
 
@@ -138,6 +158,9 @@ async def harness_env(monkeypatch, driver_line_pinned):
     monkeypatch.setattr(driver.channel, "_WATCHDOG_TICK_S", 0.01)
     monkeypatch.setattr(driver.channel, "_SUBSCRIBE_ACK_TIMEOUT_S", 0.2)
     monkeypatch.setattr(driver.timeline, "post_followup", followups)
+    # The lazy branch seed's RPC (plan chat-branch-sessions): a stamped
+    # session's first turn must never reach the LIVE harness from a test.
+    monkeypatch.setattr(driver.timeline, "post_session_fork", forks)
     pin_chat_api(monkeypatch)
 
     async def _ok_rate(*_a, **_k):
@@ -149,14 +172,6 @@ async def harness_env(monkeypatch, driver_line_pinned):
 
     monkeypatch.setattr(comp, "resolve_driver_line", _fake_line)
 
-    async def _no_leaf_move(*_a, **_k):
-        # Seam A (the driver-side leaf move) is shared setup, covered by the
-        # branching tests — and its real RPC would hit the live harness with
-        # the fake line's secret (401). No-op here.
-        return None
-
-    monkeypatch.setattr(comp, "_sync_leaf_to_branch_point", _no_leaf_move)
-
     # The turns here run as a plain project member on model "test": it is public
     # (SYSTEM: model-access). The gate itself is pinned in test_model_access.py.
     from db import get_db
@@ -165,7 +180,7 @@ async def harness_env(monkeypatch, driver_line_pinned):
 
     driver.channel._channel = None
     yield SimpleNamespace(
-        connector=connector, replay=replay, followups=followups)
+        connector=connector, replay=replay, followups=followups, forks=forks)
     await driver.channel.get_driver_channel().aclose()
     driver.channel._channel = None
     _reset_fanout()
@@ -191,8 +206,14 @@ def _open_ws(sync_app, pid: str, token: str):
     return ws, ctx
 
 
-def _body(client_token: str, text: str = "hello") -> dict:
-    return {"messages": [{"role": "user", "content": text}]}
+def _body(client_token: str, text: str = "hello", parent_id: str | None = None) -> dict:
+    # parent_id: the turn contract's linear-append rule (plan
+    # chat-branch-sessions) — null only for a session's FIRST turn; every
+    # follow-up names the current tail row.
+    return {
+        "messages": [{"role": "user", "content": text}],
+        **({"parent_id": parent_id} if parent_id else {}),
+    }
 
 
 async def _list_messages(client, token: str, sid: str) -> list[dict]:
@@ -387,10 +408,14 @@ async def test_lock_held_until_turn_end_rejects_concurrent_send(
         cookies={"lore_session": user_token},
     )
     assert resp.status_code == 200, resp.text
+    first_assistant = resp.json()["assistant_msg_id"]
 
     # A concurrent send while the turn is open: rejected BEFORE message rows.
+    # parent = the current tail (turn 1's in-flight assistant row) — the real
+    # client's shape; the refusal must be the LOCK's, not the tail check's.
     resp = await client.post(
-        f"/api/chat/sessions/{sid}/completions", json=_body(user_token, "2nd"),
+        f"/api/chat/sessions/{sid}/completions",
+        json=_body(user_token, "2nd", parent_id=first_assistant),
         cookies={"lore_session": user_token},
     )
     assert resp.status_code == 409, resp.text
@@ -408,8 +433,10 @@ async def test_lock_held_until_turn_end_rejects_concurrent_send(
         sock.push(_env(sid, frame))
     await _until_async(lambda: _acquirable(sid))
 
+    # The follow-up turn appends linearly: parent = the ended turn's tail row.
     resp = await client.post(
-        f"/api/chat/sessions/{sid}/completions", json=_body(user_token, "3rd"),
+        f"/api/chat/sessions/{sid}/completions",
+        json=_body(user_token, "3rd", parent_id=first_assistant),
         cookies={"lore_session": user_token},
     )
     assert resp.status_code == 200, resp.text
@@ -735,3 +762,241 @@ async def test_post_stop_401_is_a_secret_mismatch(monkeypatch, driver_line_pinne
 
     with pytest.raises(DriverSecretMismatch):
         await driver.timeline.post_stop("s1")
+
+
+# ─── the lazy branch seed (plan chat-branch-sessions, step 3) ────────────────
+
+
+async def _stamped_branch_chat(
+    client, test_db, pid, doc_id, token, *, with_seq=True, source="dsh-old",
+):
+    """A branch session holding a copied prefix (u1 → a1 stamped into the OLD
+    log → u2 tail) and the lazy-seed stamp the migration / /branches wrote.
+    Returns (sid, tail_row_id)."""
+    sid = await _harness_chat(client, pid, doc_id, token)
+    u1, a1, u2 = str(uuid4()), str(uuid4()), str(uuid4())
+    for mid, fields in (
+        (u1, {"role": "user", "parent_id": None}),
+        (a1, {"role": "assistant", "parent_id": u1,
+              "driver_seq": 5, "driver_session": source}),
+        (u2, {"role": "user", "parent_id": a1}),
+    ):
+        await test_db.query(
+            "CREATE type::record('messages', $id) CONTENT $f",
+            {"id": mid, "f": {"chat_id": sid, "content": "c", **fields}},
+        )
+    await test_db.query(
+        "UPDATE type::record('chat_sessions', $id) SET "
+        "seed_source_session = $src" + (", seed_source_seq = 5" if with_seq else ""),
+        {"id": sid, "src": source},
+    )
+    return sid, u2
+
+
+async def _seed_row(test_db, sid):
+    return (await test_db.query(
+        "SELECT seed_source_session, seed_source_seq "
+        "FROM type::record('chat_sessions', $id)", {"id": sid}))[0]
+
+
+async def _close_turn(env, sid: str, seq: int = 10) -> None:
+    """End the open turn through the channel → the bind's on_end releases
+    the lock (the module ARCH's release seam). The model_update OPENS the
+    bound turn first — the channel's dispatch opens a turn only on its first
+    model_update/turn-start frame, so a bare turn/end would relay raw and
+    never close. `seq` must be NEW per closure — the channel's dedup drops
+    any frame at or below the session's last delivered seq."""
+    sock = env.connector.sockets[0]
+    for frame in (
+        {"type": "model_update", "model": "test"},
+        _turn_end(seq),
+    ):
+        sock.push(_env(sid, frame))
+    await _until_async(lambda: _acquirable(sid))
+
+
+@pytest.mark.asyncio
+async def test_a_stamped_branch_seeds_once_then_runs_linearly(
+    client, collab_project, harness_env, test_db,
+):
+    """The first completion in a session carrying the stamp swaps it for the
+    log itself: POST /session-fork with the stamped pair, clear both fields,
+    and the turn runs under the BRANCH's own id."""
+    pid, doc_id, _admin_token, user_token, _a, _u = collab_project
+    env = harness_env
+    sid, tail = await _stamped_branch_chat(
+        client, test_db, pid, doc_id, user_token)
+
+    resp = await client.post(
+        f"/api/chat/sessions/{sid}/completions",
+        json=_body(user_token, "branch turn", parent_id=tail),
+        cookies={"lore_session": user_token},
+    )
+    assert resp.status_code == 200, resp.text
+
+    assert env.forks.calls == [{
+        "source_dsh_id": "dsh-old", "seq": 5, "new_lore_id": sid}]
+    # The stamp is spent — a later turn never re-seeds.
+    row = await _seed_row(test_db, sid)
+    assert row.get("seed_source_session") is None
+    assert row.get("seed_source_seq") is None
+    # The turn ran in the branch's OWN log (dsh id = Lore id).
+    assert env.followups.payloads[0]["session_id"] == sid
+
+    await _close_turn(env, sid)
+
+
+@pytest.mark.asyncio
+async def test_a_crash_before_clearing_reposts_into_the_idempotency_guard(
+    client, collab_project, harness_env, test_db,
+):
+    """Fork ok, clear lost (the crash window): the next completion re-POSTs
+    the SAME pair — the plugin's already-exists arm answers without
+    re-seeding — and the turn still runs linearly."""
+    pid, doc_id, _admin_token, user_token, _a, _u = collab_project
+    env = harness_env
+    sid, tail = await _stamped_branch_chat(
+        client, test_db, pid, doc_id, user_token)
+
+    resp = await client.post(
+        f"/api/chat/sessions/{sid}/completions",
+        json=_body(user_token, "first", parent_id=tail),
+        cookies={"lore_session": user_token},
+    )
+    assert resp.status_code == 200, resp.text
+    first_assistant = resp.json()["assistant_msg_id"]
+    await _close_turn(env, sid, seq=10)
+
+    # The simulated crash: the seed landed, the field-clear never did.
+    await test_db.query(
+        "UPDATE type::record('chat_sessions', $id) "
+        "SET seed_source_session = 'dsh-old', seed_source_seq = 5",
+        {"id": sid},
+    )
+    resp = await client.post(
+        f"/api/chat/sessions/{sid}/completions",
+        json=_body(user_token, "second", parent_id=first_assistant),
+        cookies={"lore_session": user_token},
+    )
+    assert resp.status_code == 200, resp.text
+
+    assert len(env.forks.calls) == 2
+    assert env.forks.calls[1] == env.forks.calls[0]
+    row = await _seed_row(test_db, sid)
+    assert row.get("seed_source_session") is None
+    assert [p["session_id"] for p in env.followups.payloads] == [sid, sid]
+
+    await _close_turn(env, sid, seq=20)
+
+
+@pytest.mark.asyncio
+async def test_a_branch_without_a_seed_seq_answers_422(
+    client, collab_project, harness_env, test_db,
+):
+    """The migration's 422 marker (seed_source_session, no seq): a lineage
+    with model history no row could name a boundary for — today's honest
+    refusal, never a silently empty model history."""
+    pid, doc_id, _admin_token, user_token, _a, _u = collab_project
+    env = harness_env
+    sid, tail = await _stamped_branch_chat(
+        client, test_db, pid, doc_id, user_token, with_seq=False)
+
+    resp = await client.post(
+        f"/api/chat/sessions/{sid}/completions",
+        json=_body(user_token, "x", parent_id=tail),
+        cookies={"lore_session": user_token},
+    )
+    assert resp.status_code == 422, resp.text
+    assert "resolvable" in resp.json()["detail"]
+
+    # Nothing happened: no RPC, no turn, no rows, the stamp kept, the lock
+    # released (a refusal, not a wedged session).
+    assert env.forks.calls == []
+    assert env.followups.payloads == []
+    assert [m["role"] for m in await _list_messages(client, user_token, sid)] \
+        == ["user", "assistant", "user"]
+    row = await _seed_row(test_db, sid)
+    assert row.get("seed_source_session") == "dsh-old"
+    assert await _acquirable(sid)
+
+
+@pytest.mark.asyncio
+async def test_an_unresolvable_plugin_boundary_answers_422_and_keeps_the_stamp(
+    client, collab_project, harness_env, test_db,
+):
+    pid, doc_id, _admin_token, user_token, _a, _u = collab_project
+    env = harness_env
+    sid, tail = await _stamped_branch_chat(
+        client, test_db, pid, doc_id, user_token)
+    from driver.timeline import DriverForkUnresolvable
+
+    env.forks.error = DriverForkUnresolvable(
+        "branch point not resolvable in session")
+
+    resp = await client.post(
+        f"/api/chat/sessions/{sid}/completions",
+        json=_body(user_token, "x", parent_id=tail),
+        cookies={"lore_session": user_token},
+    )
+    assert resp.status_code == 422, resp.text
+    assert "resolvable" in resp.json()["detail"]
+    assert len(env.forks.calls) == 1  # the RPC was attempted, honestly refused
+    row = await _seed_row(test_db, sid)
+    assert row.get("seed_source_session") == "dsh-old"
+    assert env.followups.payloads == []
+    assert await _acquirable(sid)
+
+
+# ─── post_session_fork itself: the error mapping ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_post_session_fork_posts_the_triple(monkeypatch, driver_line_pinned, http_pool):
+    import driver.timeline
+
+    _FakePostClient.replies = [_FakeReply(200, {"ok": True})]
+    _FakePostClient.calls = []
+    http_pool("driver", _FakePostClient())
+
+    reply = await driver.timeline.post_session_fork("dsh-old", 5, "branch-1")
+    assert reply == {"ok": True}
+    assert len(_FakePostClient.calls) == 1
+    assert _FakePostClient.calls[0]["url"].endswith("/session-fork")
+    assert _FakePostClient.calls[0]["json"] == {
+        "source_dsh_id": "dsh-old", "seq": 5, "new_lore_id": "branch-1"}
+
+
+@pytest.mark.asyncio
+async def test_post_session_fork_422_is_unresolvable(monkeypatch, driver_line_pinned, http_pool):
+    import driver.timeline
+    from driver.timeline import DriverForkUnresolvable
+
+    _FakePostClient.replies = [
+        _FakeReply(422, {}, "branch point not resolvable in session")]
+    http_pool("driver", _FakePostClient())
+
+    with pytest.raises(DriverForkUnresolvable):
+        await driver.timeline.post_session_fork("dsh-old", 5, "branch-1")
+
+
+@pytest.mark.asyncio
+async def test_post_session_fork_401_is_a_secret_mismatch(monkeypatch, driver_line_pinned, http_pool):
+    import driver.timeline
+    from driver.client import DriverSecretMismatch
+
+    _FakePostClient.replies = [_FakeReply(401, {"detail": "Driver secret required"})]
+    http_pool("driver", _FakePostClient())
+
+    with pytest.raises(DriverSecretMismatch):
+        await driver.timeline.post_session_fork("dsh-old", 5, "branch-1")
+
+
+@pytest.mark.asyncio
+async def test_post_session_fork_error_status_is_line_unreachable(monkeypatch, http_pool):
+    import driver.timeline
+
+    _FakePostClient.replies = [_FakeReply(500, {})]
+    http_pool("driver", _FakePostClient())
+
+    with pytest.raises(DriverLineUnreachable):
+        await driver.timeline.post_session_fork("dsh-old", 5, "branch-1")

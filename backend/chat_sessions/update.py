@@ -51,7 +51,8 @@ def _llm_config_sets(body: SessionUpdate, sets: list[str], params: dict) -> None
 
 
 def _ai_only_sets(session: dict, body: SessionUpdate, sets: list[str], params: dict) -> None:
-    """reasoning_effort and context_ids; both are silently ignored for note sessions."""
+    """reasoning_effort, context_ids and the thread's active-branch pointer;
+    all silently ignored for note sessions."""
     if session.get("is_note") is True:
         return
     # WHY: a non-null reasoning_effort reaches this write only after the route's
@@ -67,6 +68,16 @@ def _ai_only_sets(session: dict, body: SessionUpdate, sets: list[str], params: d
     if "context_ids" in body.model_fields_set:
         sets.append("context_document_ids = $context_ids")
         params["context_ids"] = list(body.context_ids or [])
+    # ARCH: the ROOT row's last-opened branch
+    # pointer. The route guard (routes/chat/sessions.py) has already validated
+    # a non-null value names a live branch of this row's thread; null is always
+    # legal (clears the pointer back to nothing — the row previews itself).
+    if "active_branch_id" in body.model_fields_set:
+        if body.active_branch_id is None:
+            sets.append("active_branch_id = NONE")
+        else:
+            sets.append("active_branch_id = $active_branch_id")
+            params["active_branch_id"] = body.active_branch_id
 
 
 async def _agent_flag_sets(

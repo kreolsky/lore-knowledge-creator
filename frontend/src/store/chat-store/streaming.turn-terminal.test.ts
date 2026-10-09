@@ -38,7 +38,6 @@ function makeStore(sessionId = 's1') {
       updated_at: '2026-01-01', created_at: '2026-01-01', last_message_at: null,
     }],
     messages: [],
-    selectedSiblings: {},
     streaming: null,
     conversation: [],
     turnRanges: {},

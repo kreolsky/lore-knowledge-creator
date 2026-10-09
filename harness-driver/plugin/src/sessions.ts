@@ -1,22 +1,20 @@
 /**
  * Session identity + the dsh session log — the SessionMap (lore id → dsh
- * id), the fork/leaf seeding, the one balanced read path, resume-or-create
- * and the served-toolset activation restore.
+ * id, read-only legacy resolution), the fork seeding under the caller's own
+ * id, the one balanced read path, resume-or-create and the served-toolset
+ * activation restore.
  */
 
-import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { buildForkSeed, interruptedTurnClosers, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 
-import { lastTurnEndSeq } from './leaf.ts'
 import { projectSessionEntries } from './entries.ts'
 import { PROVIDER } from './ensure.ts'
 import { restoreActivatedSkills, type ResolvedSkill } from './skills.ts'
 import { authorized, readBody } from './http.ts'
 import { followupTurns } from './turn.ts'
-import type { EventsChannel } from './ws-events.ts'
 import type { SessionStreamBaselines } from './stream-baselines.ts'
 
 /** lore session id → current dsh session id (persisted beside the session
@@ -92,16 +90,14 @@ export function forkModel(
   return { provider: PROVIDER, model: '' }
 }
 
-/** Shared dsh session runner, fork half: build dsh's OWN fork seed for the
- * boundary and flush a NEW session seeded with it (the create→flush→dispose
- * lifecycle a fork ride shares with the turn runner's create path). `parent`
- * is the session the seed was read from; `current` is the session the map and
- * the live subscriptions point at now — they differ when an earlier branch is
- * continued. */
-async function seedForkSession(
-  ctx: Context, map: SessionMap, channel: EventsChannel | null,
-  baselines: SessionStreamBaselines,
-  loreId: string, freshId: string, current: string, parent: string,
+/** Shared dsh session runner, fork create half: build dsh's OWN fork seed for
+ * the boundary and flush a NEW session seeded with it (the create→flush→dispose
+ * lifecycle a fork ride shares with the turn runner's create path). The id is
+ * the CALLER's choice — /session-fork passes the branch's Lore session id and
+ * touches neither the map nor any subscription (dsh id = Lore id). `parent` is
+ * the session the seed was read from. */
+async function seedForkSessionCreate(
+  ctx: Context, freshId: string, parent: string,
   events: unknown[], seq: number,
 ): Promise<void> {
   // buildForkSeed (dsh-session — the builder dsh's own SessionController.fork
@@ -130,24 +126,6 @@ async function seedForkSession(
   } finally {
     await handle.dispose()
   }
-  // The displaced id's stream fold is unreachable the moment the map moves
-  // (a snapshot keys by the CURRENT dsh id) and nothing else deletes it —
-  // dsh's own consumer drops a fold on agent/disposed, which a forked-away
-  // id never reaches. Forget it with the move or one fold leaks per fork for
-  // the process's lifetime.
-  if (current !== freshId) baselines.forget(current)
-  map.set(loreId, freshId)
-  // The map moved; the live subscriptions follow it (the ws-events ARCH): the
-  // re-keyed table + re-ack let the forked turn's frames stream to the
-  // existing subscriber, whose dedup anchor re-hooks at the BOUNDARY seq —
-  // the seed retains the parent prefix seqs, so without the re-ack the
-  // subscriber would drop the whole forked turn as "already delivered". The
-  // anchor is the boundary, never the marker's seq: the marker and closers
-  // past the boundary are the child's own setup, and the fresh session's
-  // next live event continues after them.
-  // channel null (no ws) ⇒ no repoint: a later subscribe resolves the fresh
-  // id by itself.
-  channel?.repoint(loreId, current, freshId, seq)
 }
 
 /** The one read path over a dsh session log: open a read handle, take every
@@ -239,19 +217,35 @@ export async function sessionEntries(
   res.end(JSON.stringify(turns))
 }
 
-// ── POST /session-leaf — the fork-branch-point primitive.
-// `seq` (the dsh log seq of a `turn/end` row — the DRIVER's own id, read by
-// the backend off the parent row's stamp): seed a NEW dsh session through
-// that row via dsh's buildForkSeed (the prefix rows, the inherited-cut
-// marker, forked closers for an open tail) and repoint the mapping (a fork's
-// seed retains the parent seqs, so entry ids stay stable). `seq` null: root
-// fork — a fresh empty session under a new id (the next entry is a ROOT
-// sibling). `source` (optional, the dsh session id stamped beside the seq):
-// the log the seq belongs to. Absent ⇒ the current session's log (rows
-// stamped before the pair existed).
-export async function sessionLeaf(
-  ctx: Context, map: SessionMap, channel: EventsChannel | null,
-  baselines: SessionStreamBaselines,
+/** Does a dsh session log exist under this id? An open of a never-created
+ * session rejects the same way resumeOrCreate's resume does (`not found`);
+ * anything else is a real read failure and re-throws. */
+async function sessionExists(ctx: Context, dshId: string): Promise<boolean> {
+  const persistence = ctx.get('sessionPersistence')
+  if (!persistence) throw new Error('session persistence is not configured')
+  try {
+    const handle = await persistence.open(SessionId(dshId as never), 'read')
+    await handle.close()
+    return true
+  } catch (err) {
+    if (err instanceof Error && /not found/.test(err.message)) return false
+    throw err
+  }
+}
+
+// ── POST /session-fork — the session-per-branch fork primitive.
+// A branch is its OWN dsh session whose id EQUALS the
+// Lore session id: seed a NEW session under the CALLER-CHOSEN new_lore_id
+// through dsh's buildForkSeed (the create half seedForkSessionCreate) and
+// touch NO map entry and NO subscription — nothing
+// is re-pointed, sessions only ever append. `source_dsh_id` resolves through
+// SessionMap.get (identity default): a legacy chat's bare lore id maps to
+// its current dsh id. IDEMPOTENT: a dsh session new_lore_id that already
+// exists answers 200 without re-seeding — a crash between the fork and the
+// backend clearing the row's seed_source_* makes the next turn call this
+// again, and re-seeding would fork a second log under the same id.
+export async function sessionFork(
+  ctx: Context, map: SessionMap,
   req: http.IncomingMessage, res: http.ServerResponse,
 ): Promise<void> {
   if (!authorized(req)) {
@@ -259,107 +253,60 @@ export async function sessionLeaf(
     return
   }
   const body = JSON.parse(await readBody(req)) as {
-    session_id?: unknown; seq?: unknown; source?: unknown
+    source_dsh_id?: unknown; seq?: unknown; new_lore_id?: unknown
   }
-  const loreId = typeof body.session_id === 'string' ? body.session_id : ''
-  if (!loreId || body.seq === undefined) {
-    res.writeHead(422).end('session_id and seq are required')
-    return
-  }
-  // # INVARIANT(corruption): a `source` must be this chat's own dsh session —
-  // the lore id itself or a fork spelled `${loreId}~…`.
-  // Why: the seed becomes the model's history; a foreign log would hand one
-  // chat another chat's conversation.
-  const source = body.source === undefined || body.source === null ? null : body.source
-  if (source !== null
-    && (typeof source !== 'string' || (source !== loreId && !source.startsWith(`${loreId}~`)))) {
-    res.writeHead(422).end('source is not a session of this chat')
-    return
-  }
-  const current = map.get(loreId)
-  // # INVARIANT(corruption): the seq resolves in the log it was stamped from.
-  // Why: dsh seqs are per-session and a root fork restarts them at 0, so an
-  // abandoned branch's seq can equal a turn/end in the current log — resolving
-  // it there seeds the old branch's continuation with the NEW branch's history.
-  const parent = source ?? current
-  const freshId = `${loreId}~f${randomUUID().slice(0, 8)}`
-  if (process.env.LORE_DRIVER_DEBUG_EVENTS) {
-    console.error(`[lore-driver] session-leaf lore=${loreId} dsh=${current} ` +
-      `seq=${JSON.stringify(body.seq)}`)
-  }
-
-  if (body.seq === null) {
-    // The displaced id's fold goes with the map move — seedForkSession's own
-    // rule (the root fork moves the map without seeding).
-    if (current !== freshId) baselines.forget(current)
-    map.set(loreId, freshId)
-    // Root fork: same repoint, tail null — the fresh log is EMPTY (the
-    // subscriber's dedup anchor resets to "nothing delivered").
-    channel?.repoint(loreId, current, freshId, null)
-    res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ ok: true, dsh_session_id: freshId, tail_seq: null }))
+  const sourceRaw = typeof body.source_dsh_id === 'string' ? body.source_dsh_id : ''
+  const newLoreId = typeof body.new_lore_id === 'string' ? body.new_lore_id : ''
+  if (!sourceRaw || !newLoreId || body.seq === undefined) {
+    res.writeHead(422).end('source_dsh_id, seq and new_lore_id are required')
     return
   }
   const seq = Number(body.seq)
-  // Non-negative: -1 is lastTurnEndSeq's "no completed turn" sentinel, so an
-  // admitted negative could no-op against an empty log instead of refusing.
+  // Non-negative: a negative could never address a real row, and refusing is
+  // better than a coerced no-op. No null here — the primitive has no
+  // root-fork mode (a branch prefix with no completed turn is never seeded;
+  // its log starts fresh on the first turn).
   if (!Number.isInteger(seq) || seq < 0) {
-    res.writeHead(422).end('seq must be a non-negative integer or null')
+    res.writeHead(422).end('seq must be a non-negative integer')
     return
   }
-
+  // Idempotency first: an existing branch log answers 200 without reading
+  // the source or seeding — the crash-retry caller must not fork twice.
+  if (await sessionExists(ctx, newLoreId)) {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ ok: true, existed: true }))
+    return
+  }
+  const source = map.get(sourceRaw)
   let events: unknown[]
   try {
-    events = await readSessionEvents(ctx, parent)
+    events = await readSessionEvents(ctx, source)
   } catch (err) {
-    // A missing SOURCE log is an unresolvable branch point, not a server
-    // failure; a missing current log keeps its old path (it throws).
-    if (parent === current || !(err instanceof Error && /not found/.test(err.message))) throw err
-    console.error(`[lore-driver] leaf UNRESOLVABLE lore=${loreId} source=${parent} missing`)
+    // A missing source log is an unresolvable branch point, not a server
+    // failure.
+    if (!(err instanceof Error && /not found/.test(err.message))) throw err
+    console.error(`[lore-driver] fork UNRESOLVABLE source=${source} missing`)
     res.writeHead(422).end('branch point not resolvable in session')
     return
   }
-  // No-op at the live tail: the backend's seam A names the parent turn on
-  // EVERY turn, linear ones included — forking there would re-seed the
-  // session per turn and kill in-place history + pressure compaction (see
-  // lastTurnEndSeq's INVARIANT). Fork only on a REAL branch move — the live
-  // tail is the CURRENT session's, so another source always forks.
-  if (parent === current && seq === lastTurnEndSeq(events as unknown as any[])) {
-    if (process.env.LORE_DRIVER_DEBUG_EVENTS) {
-      console.error(`[lore-driver] leaf no-op (live tail) lore=${loreId} dsh=${current}`)
-    }
-    res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ ok: true }))
-    return
-  }
-  // A read v4 log is indexed by seq (the format's contiguity contract —
-  // "sequence numbers stay contiguous", dsh session types.ts — pinned on a
-  // real recorded log in test/driver.test.ts), so the boundary row is
-  // addressed BY SEQ: a forkable branch point is a row whose position IS its
-  // seq and whose kind is `turn/end` (the same guard shape as dsh's own
-  // SessionController.fork). Anything else — a stale stamp, a
-  // non-boundary row's seq, a seq past the log, garbage — is unresolvable,
-  // and a fork must never seed to a boundary it cannot prove.
+  // The boundary guard (the v4 contiguity contract —
+  // seq-addressed rows): a forkable branch point is a row whose position IS
+  // its seq and whose kind is `turn/end`. Anything else is unresolvable, and
+  // a fork must never seed to a boundary it cannot prove.
   const boundary = events[seq] as { seq?: number; type?: string } | undefined
   if (!boundary || boundary.seq !== seq || boundary.type !== 'turn/end') {
-    // Unconditional: an unresolvable branch point is the failure this
-    // endpoint exists to refuse — the numbers must be readable without a
-    // debug env flip.
-    console.error(`[lore-driver] leaf UNRESOLVABLE lore=${loreId} dsh=${parent} ` +
-      `seq=${seq} turnEnds=${(events as unknown as any[]).filter((e) => e.type === 'turn/end').length} events=${events.length}`)
+    console.error(`[lore-driver] fork UNRESOLVABLE new=${newLoreId} source=${source} ` +
+      `seq=${seq} events=${events.length}`)
     res.writeHead(422).end('branch point not resolvable in session')
     return
   }
   if (process.env.LORE_DRIVER_DEBUG_EVENTS) {
-    console.error(`[lore-driver] REAL FORK lore=${loreId} ${parent} -> ${freshId} ` +
+    console.error(`[lore-driver] session-fork ${source} -> ${newLoreId} ` +
       `seq=${seq} events=${events.length}`)
   }
-  await seedForkSession(ctx, map, channel, baselines, loreId, freshId, current, parent, events, seq)
-  // The answer carries the repoint the re-ack carries: the re-ack reaches
-  // only a socket that is up at the fork, the answer reaches the caller in
-  // every socket state (see DriverChannel.repoint, backend/driver/channel.py).
+  await seedForkSessionCreate(ctx, newLoreId, source, events, seq)
   res.writeHead(200, { 'Content-Type': 'application/json' })
-  res.end(JSON.stringify({ ok: true, dsh_session_id: freshId, tail_seq: seq }))
+  res.end(JSON.stringify({ ok: true }))
 }
 
 /** Shared dsh session runner, turn half: resume the persisted session or

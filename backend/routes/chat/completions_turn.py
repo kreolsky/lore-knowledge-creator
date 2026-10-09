@@ -266,12 +266,11 @@ def _turn_time_stamps(
     # the shared prefix. Written once at send, never re-rendered → zero cache
     # impact (~15 tokens/turn).
     # WHY the anchor renders from chat_sessions.created_at, never turn time:
-    # a root fork (forkAndResend of the first message) must re-send identical
-    # anchor bytes, and only the session row is stable across forks.
-    # Root condition mirrors the leaf logic in completions.py
-    # (_reset_leaf_for_root_fork): genuine first message AND post-reset root
-    # fork append a root sibling (anchor); a compaction continuation appends
-    # at the checkpoint and gets NO anchor.
+    # a session's first turn must re-send identical anchor bytes, and only
+    # the session row is stable. Root condition mirrors _require_tail_parent
+    # in completions.py: a genuine first turn (null parent, no continuation)
+    # appends a root entry (anchor); a compaction continuation appends at the
+    # checkpoint and gets NO anchor.
     """
     stamps: list[str] = []
     if body_parent_id_is_none and not session.get("compacted_from"):

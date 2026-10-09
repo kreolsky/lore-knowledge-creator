@@ -135,7 +135,6 @@ beforeEach(() => {
     sessions: [sess('A')],
     activeSessionId: 'A',
     messages: [] as ChatMessage[],
-    selectedSiblings: {},
     streaming: null,
     queued: {},
     draft: '',

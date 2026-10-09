@@ -33,18 +33,16 @@ const chatState: Record<string, unknown> = {
   chatScopeLoading: false,
   activeSessionId: 's1',
   sessions: [],
+  messages: [],
+  // The switcher projection + its actions (see SYSTEM: chat-branch-sessions).
+  forks: [],
+  loadForks: vi.fn(async () => {}),
+  openBranch: vi.fn(),
   loadMessages: vi.fn(),
   editMessage: vi.fn(),
-  deleteMessage: vi.fn(),
   forkAndResend: vi.fn(),
   regenerate: vi.fn(),
-  getSiblings: vi.fn(() => []),
-  selectSibling: vi.fn(),
-  // Rewind-to-message: the component reads the sentinel + the two actions
-  // from the store.
-  selectedSiblings: {},
   rewindTo: vi.fn(),
-  cancelRewind: vi.fn(),
   sendMessage: vi.fn(),
   decideVerdict: vi.fn(),
 };
@@ -52,7 +50,7 @@ vi.mock('../../store/chat-store', () => ({
   useChatStore: Object.assign((sel: (s: unknown) => unknown) => sel(chatState), {
     getState: () => chatState,
   }),
-  selectActivePath: (s: { activePath: unknown[] }) => s.activePath,
+  selectBranchPath: (s: { activePath: unknown[] }) => s.activePath,
 }));
 const appState: Record<string, unknown> = {
   currentProject: null,
@@ -302,16 +300,16 @@ describe('MessageList — empty-content guard (plan chat-message-content-empty-u
   });
 });
 
-describe('MessageList — rewind plaque', () => {
-  function userMessage(id: string) {
-    return { message_id: id, chat_id: 's1', parent_id: null, role: 'user', content: id, created_at: '2026-05-20T14:59:00Z' };
+describe('MessageList — the branch switcher', () => {
+  function userMessage(id: string, parent: string | null = null) {
+    return { message_id: id, chat_id: 's1', parent_id: parent, role: 'user', content: id, created_at: '2026-05-20T14:59:00Z' };
   }
 
-  function renderWith(activePath: unknown[], selectedSiblings: Record<string, string>) {
+  function renderWith(activePath: unknown[], forks: unknown[]) {
     chatState.activePath = activePath;
-    chatState.selectedSiblings = selectedSiblings;
+    chatState.forks = forks;
     chatState.streaming = null;
-    (chatState.cancelRewind as ReturnType<typeof vi.fn>).mockClear();
+    (chatState.openBranch as ReturnType<typeof vi.fn>).mockClear();
     return mount();
   }
 
@@ -333,31 +331,62 @@ describe('MessageList — rewind plaque', () => {
     act(() => root.unmount());
     host.remove();
     chatState.activePath = [];
-    chatState.selectedSiblings = {};
+    chatState.forks = [];
   }
 
-  it('a path ending at the cut shows the plaque; its cancel calls cancelRewind', () => {
-    const mounted = renderWith([userMessage('u1')], { u1: '__rewind__' });
-    expect(mounted.host.textContent).toContain('rewindActive');
-    const cancel = Array.from(mounted.host.querySelectorAll('button')).find(b => b.textContent === 'cancel')!;
-    act(() => cancel.click());
-    expect(chatState.cancelRewind).toHaveBeenCalledTimes(1);
+  it('loads the switcher projection for the active session on mount', () => {
+    const mounted = renderWith([userMessage('u1')], []);
+    expect(chatState.loadForks).toHaveBeenCalledWith('s1');
     cleanup(mounted);
   });
 
-  it('a sentinel off the rendered path shows no plaque', () => {
-    const mounted = renderWith([userMessage('u1')], { elsewhere: '__rewind__' });
-    expect(mounted.host.textContent).not.toContain('rewindActive');
+  it('renders "1/2" on the row after the fork origin and next opens the sibling branch', () => {
+    // Branch rows: c-a (copy of the assistant a1) then c-u (after it).
+    chatState.messages = [
+      { message_id: 'c-a', chat_id: 's1', parent_id: null, role: 'assistant', origin_id: 'a1', content: 'A', created_at: '2026-05-20T14:58:00Z' },
+      { message_id: 'c-u', chat_id: 's1', parent_id: 'c-a', role: 'user', origin_id: 'u9', content: 'next', created_at: '2026-05-20T14:59:00Z' },
+    ];
+    // The active branch has NO row in `sessions` (an unlisted sibling): the
+    // position comes from the server's order + `current`, never from a
+    // client-side creation time it may not have.
+    chatState.sessions = [];
+    const forks = [{
+      after_origin: 'a1',
+      options: [
+        { session_id: 's2', next_origin: 'x', created_at: '2026-05-20T14:59:30Z', current: false },
+        { session_id: 's1', next_origin: 'u9', created_at: '2026-05-20T15:00:00Z', current: true },
+      ],
+    }];
+    const mounted = renderWith([
+      { message_id: 'c-a', chat_id: 's1', parent_id: null, role: 'assistant', origin_id: 'a1', content: 'A', created_at: '2026-05-20T14:58:00Z' },
+      { message_id: 'c-u', chat_id: 's1', parent_id: 'c-a', role: 'user', origin_id: 'u9', content: 'next', created_at: '2026-05-20T14:59:00Z' },
+    ], forks);
+
+    // The indicator sits on the row whose PARENT's origin is the fork origin
+    // (c-u, the user row following c-a); the server ranks s2 first and flags
+    // this session current, so we are 2/2 — prev opens s2, next opens nothing.
+    expect(mounted.host.textContent).toContain('2/2');
+    const prev = Array.from(mounted.host.querySelectorAll('button[title="previous"]'))[0] as HTMLButtonElement;
+    act(() => prev.click());
+    expect(chatState.openBranch).toHaveBeenCalledWith('s2');
+    const next = Array.from(mounted.host.querySelectorAll('button[title="next"]'))[0] as HTMLButtonElement;
+    expect(next.disabled).toBe(true);
+
+    chatState.messages = [];
+    chatState.sessions = [];
     cleanup(mounted);
   });
 
-  it('a rewound first message renders an empty conversation with the plaque, not the chat picker', () => {
-    const mounted = renderWith([], { __root__: '__rewind__' });
-    expect(mounted.host.textContent).toContain('rewindActive');
-    // The conversation scroll container, holding only the plaque — no message rows.
-    const list = scrollContainer(mounted.host);
-    expect(list.className).toContain('overflow-y-auto');
-    expect(list.childElementCount).toBe(1);
+  it('no forks — no indicator', () => {
+    const mounted = renderWith([userMessage('u1')], []);
+    expect(mounted.host.querySelector('button[title="next"]')).toBeNull();
+    cleanup(mounted);
+  });
+
+  it('an empty conversation renders the chat picker (no rewind plaque anymore)', () => {
+    const mounted = renderWith([], []);
+    // The picker renders, not a scroll container with a plaque.
+    expect(mounted.host.querySelector('.overflow-y-auto')).toBeNull();
     cleanup(mounted);
   });
 });

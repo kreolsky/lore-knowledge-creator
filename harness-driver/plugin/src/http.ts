@@ -12,7 +12,7 @@ import {
   pendingHoldsFor, resolveSessionAsks, resolveVerdict,
 } from './approvals.ts'
 import { clearSessionToolCtx } from './tools.ts'
-import { sessionEntries, sessionLeaf, type SessionMap } from './sessions.ts'
+import { sessionEntries, sessionFork, type SessionMap } from './sessions.ts'
 import { followup, stop } from './turn.ts'
 import type { EventsChannel, SessionEventTap } from './ws-events.ts'
 import type { SessionStreamBaselines } from './stream-baselines.ts'
@@ -32,7 +32,7 @@ export function readBody(req: http.IncomingMessage): Promise<string> {
 
 // ── The driver endpoints. apply() keeps only the server lifecycle; each
 // endpoint is its own handler over the shared dsh session runner
-// (resumeOrCreate / seedForkSession below), and the turn's own phases —
+// (resumeOrCreate below), and the turn's own phases —
 // activation restore, the restriction lifecycle, the session listener, the
 // fault paths — are each their own unit. ──────────────────────────────────────
 
@@ -47,8 +47,8 @@ export async function handleRequest(
       await health(req, res)
     } else if (req.method === 'GET' && url.startsWith('/capability')) {
       await capability(req, res)
-    } else if (req.method === 'POST' && url.endsWith('/session-leaf')) {
-      await sessionLeaf(ctx, map, channel, baselines, req, res)
+    } else if (req.method === 'POST' && url.endsWith('/session-fork')) {
+      await sessionFork(ctx, map, req, res)
     } else if (req.method === 'POST' && url.endsWith('/session-entries')) {
       await sessionEntries(ctx, map, baselines, req, res)
     } else if (req.method === 'POST' && url.endsWith('/approvals/resolve')) {

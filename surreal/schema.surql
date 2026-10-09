@@ -566,8 +566,12 @@ DEFINE INDEX IF NOT EXISTS idx_chatsessions_user_document ON chat_sessions FIELD
 -- document delete. See cascade.py phase-1 reads.
 DEFINE INDEX IF NOT EXISTS idx_chatsessions_document ON chat_sessions FIELDS document_id, deleted_at;
 
--- ARCH: Tree via parent_id — fork = new message with same parent_id (siblings).
--- Active path computed client-side via selectedSiblings map.
+-- ARCH: an AI chat is ONE linear chain per
+-- session — turns only append (parent_id = the live tail; a non-tail parent
+-- is refused 409), and a fork is its OWN chat_sessions row holding a COPY of
+-- the shared prefix (origin_id keeps row identity across copies; the switcher
+-- reads it). Note chats keep their reply tree (parent_id = the replied-to
+-- note), which nothing forks.
 DEFINE TABLE IF NOT EXISTS messages SCHEMAFULL;
 DEFINE FIELD IF NOT EXISTS chat_id    ON messages TYPE string;
 DEFINE FIELD IF NOT EXISTS parent_id  ON messages TYPE option<string>;
@@ -979,6 +983,35 @@ DEFINE FIELD IF NOT EXISTS compacted_from ON chat_sessions TYPE option<string>;
 -- continuation (duplicated history).
 DEFINE FIELD IF NOT EXISTS compacted_at_leaf ON chat_sessions TYPE option<string>;
 
+-- ARCH: a branch is its OWN chat_sessions row
+-- bound for life to ONE dsh session whose id EQUALS the Lore session id (no
+-- SessionMap entry, no repoint — sessions only ever append). Branches of one
+-- conversation share thread_id (= the ROOT session's id); the root row is the
+-- permanent holder of active_branch_id (what the chat list previews).
+-- forked_from_session/forked_after_origin name the branch's provenance: the
+-- source session and the ORIGIN (messages.origin_id, never a row id — copies
+-- keep the source's origin) it diverged after. NONE on every row minted
+-- before this plan: the migration (runner) backfills thread_id/active_branch_id
+-- and carves old tree branches into rows; option<> keeps pre-migration rows
+-- reading NONE, which the list and /forks read as "own thread".
+DEFINE FIELD IF NOT EXISTS thread_id           ON chat_sessions TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS forked_from_session ON chat_sessions TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS forked_after_origin ON chat_sessions TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS active_branch_id    ON chat_sessions TYPE option<string>;
+-- The lazy-seed stamp (option pair, written ONLY by POST /sessions/{id}/branches
+-- and the migration): the (dsh session, dsh log seq) the branch's prefix rows
+-- came from. The branch's first completion calls the plugin's /session-fork
+-- with this pair BEFORE the turn and clears both fields — a branch carved by
+-- the migration has rows but no dsh log under its new id, and its first turn
+-- without the seed would start with an EMPTY model history. NONE = no seed
+-- owed (a fresh chat, a root branch with no completed turns, or already
+-- seeded). INVARIANT(corruption): the pair is written off ONE row — the seq
+-- and the session id come from the same stamped ancestor (a seq resolves only
+-- inside its own session's log).
+DEFINE FIELD IF NOT EXISTS seed_source_session ON chat_sessions TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS seed_source_seq     ON chat_sessions TYPE option<int>;
+DEFINE INDEX IF NOT EXISTS idx_chatsessions_thread ON chat_sessions FIELDS thread_id, deleted_at;
+
 -- Backfill pre-existing chat sessions (mode defaults to 'chat').
 UPDATE chat_sessions SET mode = 'chat' WHERE mode = NONE;
 UPDATE chat_sessions SET agent_auto = false WHERE agent_auto IS NONE;
@@ -1062,6 +1095,12 @@ DEFINE FIELD IF NOT EXISTS driver_seq ON messages TYPE option<int>;
 -- stamped before the pair existed (the leaf then resolves against the
 -- current session) and when the subscribe ack carried no dsh id.
 DEFINE FIELD IF NOT EXISTS driver_session ON messages TYPE option<string>;
+-- ARCH: identity across branch COPIES. A branch
+-- session holds a COPY of the shared prefix rows; origin_id names the row
+-- every copy descends from (NONE = the row is its own origin). The switcher
+-- and /forks compare ORIGINS, never row ids — two branches' copies of one
+-- message share an origin, so "same message" survives the copy.
+DEFINE FIELD IF NOT EXISTS origin_id ON messages TYPE option<string>;
 
 -- ─── CRDT: Y.Doc persistence (append-only update log + compacted snapshot) ──
 -- ARCH: content is now a derived read-model. The authoritative document state is the

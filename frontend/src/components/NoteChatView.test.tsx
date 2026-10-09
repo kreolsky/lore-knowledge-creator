@@ -50,7 +50,7 @@ vi.mock('../i18n', () => ({
   t: (k: string) => k,
 }));
 vi.mock('../hooks/useSimpleVoiceRecording', () => ({
-  useSimpleVoiceRecording: () => ({ recording: false, transcribing: false, toggleRecording: vi.fn() }),
+  useSimpleVoiceRecording: () => ({ recording: voice.recording, transcribing: false, toggleRecording: vi.fn(), cancelRecording: vi.fn() }),
 }));
 vi.mock('./chat/MessageBubble', () => ({ MessageBubble: () => null }));
 vi.mock('./chat/shared/copy', () => ({ copyWithToast: vi.fn() }));
@@ -60,10 +60,12 @@ vi.mock('./chat/ChatComposer', () => ({
     value: string;
     onChange: (e: { target: { value: string } }) => void;
     textareaRef: { current: HTMLTextAreaElement | null };
+    onKeyDown?: unknown;
   }) =>
     createElement('textarea', {
       value: props.value,
       onChange: props.onChange as never,
+      onKeyDown: props.onKeyDown as never,
       ref: props.textareaRef as never,
     }),
 }));
@@ -116,6 +118,8 @@ beforeEach(() => {
   seedOpenThread();
 });
 
+const voice = { recording: false };
+
 describe('NoteChatView draft round-trip (unmount on back/Esc/tab switch)', () => {
   it('text typed before unmount is restored after remount', () => {
     const first = render(createElement(NoteChatView));
@@ -129,5 +133,27 @@ describe('NoteChatView draft round-trip (unmount on back/Esc/tab switch)', () =>
     const second = render(createElement(NoteChatView));
     expect(textareaOf(second.container).value).toBe('note draft');
     unmount(second);
+  });
+});
+
+describe('NoteChatView Escape while dictating', () => {
+  const pressEscape = (ta: HTMLTextAreaElement) => {
+    act(() => { ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); });
+  };
+
+  it('a recording in progress keeps the thread open (the composer discards the take)', () => {
+    voice.recording = true;
+    const rig = render(createElement(NoteChatView));
+    pressEscape(textareaOf(rig.container));
+    expect(useNoteChatStore.getState().activeSessionId).toBe('ns1');
+    unmount(rig);
+    voice.recording = false;
+  });
+
+  it('without a recording Escape leaves the thread', () => {
+    const rig = render(createElement(NoteChatView));
+    pressEscape(textareaOf(rig.container));
+    expect(useNoteChatStore.getState().activeSessionId).toBeNull();
+    unmount(rig);
   });
 });

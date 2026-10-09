@@ -12,7 +12,9 @@ vi.mock('../../chat/context', () => ({
 }));
 vi.mock('./streaming', () => ({
   streamCompletion: vi.fn().mockResolvedValue(undefined),
-  flushStreaming: () => ({}),
+  // The REAL reducer returns { streaming: null } — the conflict-retry path
+  // re-reads the slot after this flush, so a no-op return would wedge it.
+  flushStreaming: () => ({ streaming: null }),
   emptyStreaming: () => ({
     messageId: null, content: '', controller: null,
   }),
@@ -37,14 +39,25 @@ vi.mock('../app-store', () => ({
 vi.mock('../../i18n', () => ({ t: (k: string) => k }));
 vi.mock('../../api/client', () => ({
   apiClient: { post: vi.fn() },
+  // detail-carrying like the real client: the tail-conflict detection keys on
+  // the status + detail pair.
+  HttpError: class extends Error {
+    status: number;
+    detail: string;
+    constructor(status: number, detail = '') {
+      super(`HTTP ${status}${detail ? `: ${detail}` : ''}`);
+      this.name = 'HttpError';
+      this.status = status;
+      this.detail = detail;
+    }
+  },
   RequestTooLargeError: class extends Error {},
 }));
 
 import { createMessagesSlice } from './messages-slice';
 import { createQueueSlice } from './queue-slice';
 import { streamCompletion } from './streaming';
-import { REWIND_KEY, ROOT_KEY, resolveActivePath, isPathRewound } from './tree';
-import { apiClient } from '../../api/client';
+import { apiClient, HttpError } from '../../api/client';
 import type { ChatMessage } from '../../types';
 import type { ChatState } from './types';
 
@@ -54,7 +67,7 @@ function buildStore(sessions: ChatState['sessions'], activeSessionId: string | n
     sessions,
     activeSessionId,
     messages: [],
-    selectedSiblings: {},
+   
     streaming: null,
     // runCompletion's restore-on-fail writes the composer (misc-slice in the
     // real store).
@@ -182,7 +195,7 @@ describe('stopGeneration — cancel POST feedback', () => {
   });
 });
 
-describe('rewindTo / cancelRewind — REWIND_KEY sentinel', () => {
+describe('rewindTo — fork a branch ending before the message and open it', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     appStoreState.currentReference = null;
@@ -199,133 +212,169 @@ describe('rewindTo / cancelRewind — REWIND_KEY sentinel', () => {
     return { message_id: id, chat_id: 'active', parent_id, role, content: id, created_at } as ChatMessage;
   }
 
-  /** Default fixture: a(null) → b(user) → bReply; c is b's fresher sibling. */
-  function rewindStore() {
-    const store = buildStore([sess('active', null, '2026-01-01T00:00:00Z')], 'active');
-    store.setState({
-      messages: [
-        msg('a', null, '2026-01-01T00:00:00Z'),
-        msg('b', 'a', '2026-01-01T00:01:00Z'),
-        msg('bReply', 'b', '2026-01-01T00:02:00Z', 'assistant'),
-        msg('c', 'a', '2026-01-01T00:03:00Z'),
-      ],
-    } as unknown as Partial<ChatState>);
-    return store;
+  /** A store with the branch-flow stubs (openBranch / loadMessages / forks). */
+  function branchStore(messages: ChatMessage[]) {
+    const opened: string[] = [];
+    const loads: string[] = [];
+    const store = create<ChatState>((set, get) => ({
+      ...createMessagesSlice(set, get),
+      ...createQueueSlice(set, get),
+      sessions: [sess('active', null, '2026-01-01T00:00:00Z')],
+      activeSessionId: 'active',
+      messages,
+     
+      forks: [],
+      streaming: null,
+      draft: '',
+      queued: {},
+      setDraft: (v: string) => set({ draft: v }),
+      openBranch: (sid: string) => { opened.push(sid); set({ activeSessionId: sid }); },
+      loadMessages: async (sid: string) => { loads.push(sid); },
+    } as unknown as ChatState));
+    return { store, opened, loads };
   }
 
-  it('resolveActivePath with a REWIND_KEY selection ends the path at that level, excluding every child', () => {
-    const { messages } = rewindStore().getState();
-    // Sentinel keyed at b's parent (a): the path renders up to and including a.
-    const path = resolveActivePath(messages, { a: REWIND_KEY });
-    expect(path.map(m => m.message_id)).toEqual(['a']);
+  /** a(user, root) → b(user) → bReply(assistant). */
+  const A = msg('a', null, '2026-01-01T00:00:00Z');
+  const B = msg('b', 'a', '2026-01-01T00:01:00Z');
+  const B_REPLY = msg('bReply', 'b', '2026-01-01T00:02:00Z', 'assistant');
+
+  it('POSTs /branches after the message\'s parent, opens the branch, focuses the composer', async () => {
+    const { store, opened } = branchStore([A, B, B_REPLY]);
+    (apiClient.post as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ session_id: 'branch-1', thread_id: 'active' });
+
+    await store.getState().rewindTo('b');
+
+    expect(apiClient.post).toHaveBeenCalledWith(
+      '/chat/sessions/active/branches', { after_message_id: 'a' });
+    expect(opened).toEqual(['branch-1']);
+    expect(store.getState().pendingInputFocus).toBe(true);
+    // The thread stays ONE list entry: the branch replaces the row that
+    // stood for its thread (the server previews the last-opened branch).
+    expect(store.getState().sessions.map(s => s.session_id)).toEqual(['branch-1']);
   });
 
-  it('resolveActivePath with the sentinel at ROOT_KEY returns an empty path', () => {
-    const { messages } = rewindStore().getState();
-    expect(resolveActivePath(messages, { [ROOT_KEY]: REWIND_KEY })).toEqual([]);
+  it('never rewinds the first message — it is immutable (no root fork)', async () => {
+    const { store } = branchStore([A]);
+    await store.getState().rewindTo('a');
+    expect(apiClient.post).not.toHaveBeenCalled();
+    expect(store.getState().pendingInputFocus).toBeUndefined();
   });
 
-  it('rewindTo(m) then sendMessage parents the new turn on m.parent_id and excludes the hidden branch', async () => {
-    const store = rewindStore();
-    store.getState().rewindTo('b');
-    await store.getState().sendMessage('x');
-    const body = lastBody();
-    expect(body.parent_id).toBe('a');
-    const contents = (body.messages as Array<{ role: string; content: string }>).map(m => m.content);
-    expect(contents).toEqual(['a', 'x']);
-    expect(contents).not.toContain('b');
-    expect(contents).not.toContain('bReply');
+  it('refuses while streaming (no branch mid-turn)', async () => {
+    const { store } = branchStore([A, B, B_REPLY]);
+    store.setState({
+      streaming: { sessionId: 'active', messageId: 'live', content: '', controller: null },
+    } as unknown as Partial<ChatState>);
+    await store.getState().rewindTo('b');
+    expect(apiClient.post).not.toHaveBeenCalled();
   });
 
-  it('after the post-rewind send the hidden branch survives as a sibling (fork switcher offers both)', async () => {
-    const store = rewindStore();
-    store.getState().rewindTo('b');
-    await store.getState().sendMessage('x');
-    const sib = store.getState().getSiblings('a').map(m => m.message_id);
-    expect(sib).toContain('b');
-    expect(sib).toContain('c');
-    // The optimistic user message is the third sibling at the same level.
-    expect(sib).toHaveLength(3);
+  it('surfaces a failed branch create with an explicit toast and changes nothing', async () => {
+    const { store, opened } = branchStore([A, B, B_REPLY]);
+    (apiClient.post as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('network'));
+    const toast = vi.fn();
+    appStoreState.showToast = toast;
+
+    await store.getState().rewindTo('b');
+
+    expect(toast).toHaveBeenCalledWith('chatBranchCreateFailed', 'error');
+    expect(opened).toEqual([]);
+    expect(store.getState().activeSessionId).toBe('active');
+  });
+});
+
+describe('sendMessage — the non-tail 409 contract: one re-read + one retry', () => {
+  /** The backend's stale-tail refusal (plan: the linear-turn contract). */
+  const conflictDetail = '{"detail":"parent_id is not the tail of this branch — re-read the branch and retry"}';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Drop any once-implementations a failed prior test left queued — they
+    // would leak into this describe's first call.
+    vi.mocked(streamCompletion).mockReset().mockResolvedValue(undefined);
+    appStoreState.currentReference = null;
+    appStoreState.currentDocument = null;
   });
 
-  it('rewindTo a first message → sendMessage posts parent_id: null (root sibling)', async () => {
-    const store = rewindStore();
-    store.setState({ messages: [msg('a', null, '2026-01-01T00:00:00Z')] } as unknown as Partial<ChatState>);
-    store.getState().rewindTo('a');
-    await store.getState().sendMessage('x');
-    expect(lastBody().parent_id).toBeNull();
-    expect(lastBody().messages).toEqual([{ role: 'user', content: 'x', images: undefined }]);
+  /** A store whose loadMessages seats `fresh` rows (the re-read's product). */
+  function conflictStore(fresh: ChatMessage[]) {
+    const loads: string[] = [];
+    const store = create<ChatState>((set, get) => ({
+      ...createMessagesSlice(set, get),
+      ...createQueueSlice(set, get),
+      sessions: [sess('active', null, '2026-01-01T00:00:00Z')],
+      activeSessionId: 'active',
+      messages: [],
+     
+      forks: [],
+      streaming: null,
+      draft: '',
+      queued: {},
+      setDraft: (v: string) => set({ draft: v }),
+      loadMessages: async (sid: string) => {
+        loads.push(sid);
+        set({ messages: fresh });
+      },
+    } as unknown as ChatState));
+    return { store, loads };
+  }
+
+  it('retries ONCE after re-reading; the retry parents on the fresh tail', async () => {
+    // A connected fresh chain (the re-read's product): fresh-user → fresh-tail.
+    const fresh = [
+      { message_id: 'fresh-user', chat_id: 'active', parent_id: null, role: 'user', content: 're-sent', created_at: '2026-01-02T00:00:00Z' },
+      { message_id: 'fresh-tail', chat_id: 'active', parent_id: 'fresh-user', role: 'assistant', content: 'x', created_at: '2026-01-02T00:01:00Z' },
+    ] as ChatMessage[];
+    const { store, loads } = conflictStore(fresh);
+    const toast = vi.fn();
+    appStoreState.showToast = toast;
+    vi.mocked(streamCompletion)
+      .mockRejectedValueOnce(new HttpError(409, conflictDetail))
+      .mockResolvedValueOnce(undefined);
+
+    await store.getState().sendMessage('hi');
+
+    // One conflict → one re-read → one retry, and no failure surfaced.
+    expect(streamCompletion).toHaveBeenCalledTimes(2);
+    expect(loads).toEqual(['active']);
+    expect(toast).not.toHaveBeenCalled();
+    // The retried turn appended onto the RE-READ branch's tail.
+    expect(lastBody().parent_id).toBe('fresh-tail');
+    // The failed attempt's optimistic bubble is gone; the retry's is the
+    // only temp row left.
+    expect(store.getState().messages.filter(m => m.message_id.startsWith('temp-'))).toHaveLength(1);
   });
 
-  it('a second rewindTo moves the single sentinel (exactly one REWIND_KEY entry)', () => {
-    const store = rewindStore();
-    store.getState().rewindTo('b');      // sentinel at 'a'
-    store.getState().rewindTo('bReply'); // sentinel moves to bReply's parent ('b')
-    const s = store.getState().selectedSiblings;
-    const sentinelKeys = Object.entries(s).filter(([, v]) => v === REWIND_KEY).map(([k]) => k);
-    expect(sentinelKeys).toEqual(['b']);
+  it('a SECOND conflict surfaces the explicit toast — never a third attempt', async () => {
+    const { store } = conflictStore([]);
+    const toast = vi.fn();
+    appStoreState.showToast = toast;
+    vi.mocked(streamCompletion)
+      .mockRejectedValueOnce(new HttpError(409, conflictDetail))
+      .mockRejectedValueOnce(new HttpError(409, conflictDetail));
+
+    await store.getState().sendMessage('hi');
+
+    expect(streamCompletion).toHaveBeenCalledTimes(2);
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith('chatBranchMovedOn', 'error');
+    // No phantom bubble after the final failure.
+    expect(store.getState().messages).toEqual([]);
   });
 
-  it('rewindTo while streaming changes nothing', () => {
-    const store = rewindStore();
-    store.setState({ streaming: { sessionId: 'active', messageId: 'live', content: '', controller: null } } as unknown as Partial<ChatState>);
-    store.getState().rewindTo('b');
-    expect(store.getState().selectedSiblings).toEqual({});
-  });
+  it('the turn-lock 409 (a turn is in progress) is NOT retried', async () => {
+    const { store } = conflictStore([]);
+    const toast = vi.fn();
+    appStoreState.showToast = toast;
+    vi.mocked(streamCompletion).mockRejectedValueOnce(
+      new HttpError(409, '{"detail":"A turn is already in progress on this chat."}'));
 
-  it('cancelRewind restores the pre-rewind path deep-equal', () => {
-    const store = rewindStore();
-    const { messages } = store.getState();
-    const before = resolveActivePath(messages, {});
-    store.getState().rewindTo('b');
-    expect(resolveActivePath(messages, store.getState().selectedSiblings).map(m => m.message_id)).toEqual(['a']);
-    store.getState().cancelRewind();
-    expect(resolveActivePath(messages, store.getState().selectedSiblings)).toEqual(before);
-  });
+    await store.getState().sendMessage('hi');
 
-  it('selectSibling above the cut drops the sentinel — switching back shows the full old branch', () => {
-    const store = rewindStore();
-    store.getState().rewindTo('bReply'); // sentinel at 'b' (inside b's branch)
-    store.getState().selectSibling('a', 'c'); // user switches to the c branch
-    store.getState().selectSibling('a', 'b'); // ...and back to b
-    const s = store.getState();
-    expect(Object.values(s.selectedSiblings).includes(REWIND_KEY)).toBe(false);
-    expect(resolveActivePath(s.messages, s.selectedSiblings).map(m => m.message_id)).toEqual(['a', 'b', 'bReply']);
-  });
-
-  it('isPathRewound is true only while the rendered path ends at the cut', () => {
-    const { messages } = rewindStore().getState();
-    const cut = { a: REWIND_KEY };
-    expect(isPathRewound(resolveActivePath(messages, cut), cut)).toBe(true);
-    // Sentinel parked inside a branch the path does not walk: inert, no plaque.
-    const offPath = { a: 'c', b: REWIND_KEY };
-    expect(isPathRewound(resolveActivePath(messages, offPath), offPath)).toBe(false);
-    const root = { [ROOT_KEY]: REWIND_KEY };
-    expect(isPathRewound(resolveActivePath(messages, root), root)).toBe(true);
-  });
-
-  it('a failed send from a rewound state keeps the rewind (sentinel back at the parent, branch still hidden)', async () => {
-    vi.mocked(streamCompletion).mockRejectedValueOnce(new Error('network'));
-    const store = rewindStore();
-    store.getState().rewindTo('b');
-    await store.getState().sendMessage('x');
-    const s = store.getState();
-    expect(s.selectedSiblings['a']).toBe(REWIND_KEY);
-    // Hidden branch still hidden: the path excludes b and everything below it.
-    expect(resolveActivePath(s.messages, s.selectedSiblings).map(m => m.message_id)).toEqual(['a']);
-    // The phantom optimistic bubble is gone (no-silent-degradation unchanged).
-    expect(s.messages.some(m => m.content === 'x')).toBe(false);
-  });
-
-  it('a failed send from a NON-rewound state plants no sentinel', async () => {
-    vi.mocked(streamCompletion).mockRejectedValueOnce(new Error('network'));
-    const store = rewindStore();
-    await store.getState().sendMessage('x');
-    const s = store.getState();
-    expect(Object.values(s.selectedSiblings).includes(REWIND_KEY)).toBe(false);
-    // The optimistic bubble is still rolled back — the restore flag must not
-    // turn a plain failure into a rewind.
-    expect(resolveActivePath(s.messages, s.selectedSiblings).map(m => m.message_id)).toEqual(['a', 'c']);
+    expect(streamCompletion).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith('chatSendFailed', 'error');
   });
 });
 
@@ -344,7 +393,7 @@ describe('sendMessage — mid-turn send routes to the message queue', () => {
       sessions: [sess('active', null, '2026-01-01T00:00:00Z')],
       activeSessionId: 'active',
       messages: [],
-      selectedSiblings: {},
+     
       queued: {},
       streaming: { sessionId: 'active', messageId: 'm1', content: '', controller: null },
     } as unknown as ChatState));

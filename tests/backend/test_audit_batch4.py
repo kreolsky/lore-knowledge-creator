@@ -188,12 +188,13 @@ async def test_delete_session_returns_success_key(client, admin_user, project_wi
 
 @pytest.mark.asyncio
 async def test_delete_message_branch_returns_success_key(client, admin_user, project_with_doc):
-    """DELETE /chat/.../messages/{id} must return {"success": true}, not {"ok": true}."""
+    """DELETE /chat/.../messages/{id} must return {"success": true}, not {"ok": true}
+    (a NOTE chat: AI chats have no message delete since branch sessions)."""
     pid, doc_id, _ = project_with_doc
     _, token = admin_user
     resp = await client.post(
         "/api/chat/sessions",
-        json={"project_id": pid, "document_id": doc_id},
+        json={"project_id": pid, "document_id": doc_id, "is_note": True},
         cookies={"lore_session": token},
     )
     sid = resp.json()["session_id"]

@@ -11,7 +11,7 @@
 # different timeout returns the SAME client unchanged.  Why: the six driver
 # sites share the "driver" name with different latency budgets
 # (/session-entries 30/10, /stop 10/5, /followup 15/5, /capability 10/5,
-# /session-leaf and the verdict forward 10s), so every driver request passes
+# /session-fork and the verdict forward 10s), so every driver request passes
 # its own `timeout=` per call; a pool that rebuilt or re-timed the shared
 # client per caller would make a forgotten per-request timeout silently apply
 # another site's budget instead of failing visibly.

@@ -1,11 +1,11 @@
 """The driver-owned turn path.
 
 Part of the chat-completions system — the SYSTEM marker stays in
-completions.py (the mechanical-split precedent: completions_branch,
-completions_turn). This module owns ONE transport arm.
+completions.py (the mechanical-split precedent: completions_turn). This
+module owns ONE transport arm.
 
 The driver owns every turn. This runs AFTER
-the shared setup (validation, turn lock, message rows, seam A, context —
+the shared setup (validation, turn lock, message rows, context —
 `_prepare_agent_turn_setup` in completions.py, untouched) and hands the turn
 over: ensure_fanout (the channel + the project-WS pump), the per-session
 STANDING agent key (agent.keys.get_or_create_session_agent_key), bind_turn
@@ -57,7 +57,6 @@ from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from turn_lock import _heartbeat_turn_lock, _teardown_turn_lock
 
-from routes.chat.completions_branch import _delete_empty_assistant
 from routes.chat.completions_turn import prepare_agent_turn
 from routes.chat.fanout import ensure_fanout
 
@@ -65,6 +64,21 @@ if TYPE_CHECKING:  # no runtime import — completions imports THIS module lazil
     from routes.chat.completions import _AgentTurn
 
 logger = logging.getLogger(__name__)
+
+
+async def _delete_empty_assistant(db, msg_id: str) -> None:
+    """Delete a placeholder assistant row that never received content.
+
+    Called on the terminal error paths (line-unavailable / setup-error) where the
+    completion ends before the turn hand-off (no frames have ridden the project
+    WS yet). Guarded by content = ''
+    so a row that did persist partial content is never removed. The USER message is
+    always kept — it is valid input the user may retry.
+    """
+    await db.query(
+        "DELETE type::record('messages', $id) WHERE content = '' OR content IS NONE",
+        {"id": msg_id},
+    )
 
 
 def _preamble_frames(turn) -> list[dict]:

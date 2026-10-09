@@ -1,7 +1,7 @@
-/** Messages slice — load, send, edit, delete, fork, regenerate, stop, sibling navigation. */
-import type { ChatMessage, RegionRef } from '../../types';
+/** Messages slice — load, send, edit, delete, fork, regenerate, stop. */
+import type { ChatMessage, ChatSession, RegionRef } from '../../types';
 import { deriveUIMode } from '../../types';
-import { apiClient, RequestTooLargeError } from '../../api/client';
+import { apiClient, HttpError, RequestTooLargeError } from '../../api/client';
 import type { ForbiddenError } from '../../api/client';
 import { useAppStore } from '../app-store';
 import { useUIStore } from '../ui-store';
@@ -25,8 +25,9 @@ interface OptimisticInsert {
  *
  * WHY: The temp id is prefixed `temp-` and reconciled to the server's real id
  * by the `ids` frame handler (streaming.ts) — it maps the message in place rather
- * than appending a duplicate. `selectedSiblings[parent]` is pointed at the temp
- * id so the optimistic message sits on the active path and renders immediately.
+ * than appending a duplicate. The freshest-lineage walk picks it up on its own
+ * (it is the newest row), so no sibling selection is written — a branch is its
+ * own session and the AI path holds no selections.
  */
 function insertOptimisticUser(set: Set, get: Get, req: OptimisticInsert): string {
   const tempId = `temp-${uuid()}`;
@@ -48,16 +49,15 @@ function insertOptimisticUser(set: Set, get: Get, req: OptimisticInsert): string
   };
   // WHY: bump the active session's
   // last_message_at in the SAME set() so the card date + list position refresh
-  // instantly on send. This is the single shared chokepoint for all three send
-  // paths (sendMessage / forkAndResend / regenerate), so one edit covers them.
-  // The user-message time IS the sort key: the server aggregate scans
-  // role='user' only, so this optimistic value matches the backend-recomputed
-  // value on reload (no flicker).
+  // instantly on send. This is the single shared chokepoint for the send paths
+  // (sendMessage — forkAndResend/regenerate route through it now), so one edit
+  // covers them. The user-message time IS the sort key: the server aggregate
+  // scans role='user' only, so this optimistic value matches the
+  // backend-recomputed value on reload (no flicker).
   set(s => {
     const activeSessionId = s.activeSessionId;
     return {
       messages: [...s.messages, optimisticMsg],
-      selectedSiblings: { ...s.selectedSiblings, [req.parentId ?? ROOT_KEY]: tempId },
       sessions: activeSessionId
         ? s.sessions.map(ss =>
           ss.session_id === activeSessionId ? { ...ss, last_message_at: nowIso } : ss,
@@ -74,43 +74,24 @@ function insertOptimisticUser(set: Set, get: Get, req: OptimisticInsert): string
  * continued presence in `messages` means the request failed before `ids`
  * arrived — the optimistic bubble must be pulled to avoid a phantom message.
  *
- * `restoreRewind`: when the send started from a rewound state, the optimistic
- * insert overwrote the REWIND_KEY sentinel with the temp id — a plain rollback
- * would silently re-show the branch the user just cut. Write the sentinel back
- * at the send's parent level instead.
- *
  * INVARIANT: no silent degradation — a failed send never leaves a phantom
  * optimistic bubble visible as if it succeeded. Why: showing an unsent message
  * as sent violates the "never show stale content as current" principle.
  */
-function rollbackOptimisticUser(
-  set: Set,
-  tempId: string,
-  restoreRewind = false,
-  rewindParentId: string | null = null,
-): void {
+function rollbackOptimisticUser(set: Set, tempId: string): void {
   set(s => {
     if (!s.messages.some(m => m.message_id === tempId)) return {};
-    const selectedSiblings = { ...s.selectedSiblings };
-    for (const [key, val] of Object.entries(selectedSiblings)) {
-      if (key === tempId || val === tempId) delete selectedSiblings[key];
-    }
-    if (restoreRewind) {
-      selectedSiblings[rewindParentId ?? ROOT_KEY] = REWIND_KEY;
-    }
-    return {
-      messages: s.messages.filter(m => m.message_id !== tempId),
-      selectedSiblings,
-    };
+    return { messages: s.messages.filter(m => m.message_id !== tempId) };
   });
 }
 
-import { buildChildrenMap, resolveActivePath, resolveAncestorChain, ROOT_KEY, REWIND_KEY, withoutRewind } from './tree';
+import { resolveActivePath, resolveAncestorChain } from './tree';
+import { withThreadRow } from './branches-slice';
 import { appendDraft } from './misc-slice';
 import { streamCompletion, flushStreaming, emptyStreaming, hasOpenHarnessTurn, markHarnessTurnAborted } from './streaming';
 import { rewindToLineage } from './conversation-feed';
 import { seatSessionRows, afterSessionRowsCommitted } from './session-rows';
-import { loadMessagesFor, patchMessageContent, deleteMessageById } from '../chat-message-crud';
+import { loadMessagesFor, patchMessageContent } from '../chat-message-crud';
 import { uuid } from '../../utils/uuid';
 
 /** Map a chain of stored messages to the wire api-message shape. */
@@ -135,15 +116,37 @@ interface RunCompletionOpts {
   userImages?: string[];
   optimisticUserId: string;
   errorLabel: string;
-  // sendMessage only: the send started from a rewound state (a REWIND_KEY
-  // sentinel sat at `parentId`'s level before the optimistic insert overwrote
-  // it) — the rollback must write the sentinel back, not drop it.
-  restoreRewind?: boolean;
+  // The turn's parent-tail contract: a 409 "not
+  // the tail" on the FIRST attempt is retriable — runCompletion rolls the
+  // optimistic bubble back and rethrows TailConflictSignal so sendMessage can
+  // re-read the branch and retry ONCE. On the retry (conflictFinal) the same
+  // 409 falls through to handleSendError's EXPLICIT toast (no silent
+  // degradation, no generic wording).
+  conflictFinal?: boolean;
   // sendMessage only (the queue flush rides sendMessage, so it shares this):
   // on a genuine failure the send's own text goes back to the composer.
   // forkAndResend/regenerate do not pass it — their text lives on in the
   // edit box / the existing message.
   restoreDraftOnFail?: boolean;
+}
+
+/** Whether the server refused the turn with the non-tail-parent 409 (a stale
+ * client view — the branch moved on), as opposed to the turn-lock 409 ("a
+ * turn is already in progress"). Keyed on the detail marker, not the bare
+ * status; the detail may be any text shape (or absent), so it is guarded. */
+function isTailConflict(e: unknown): boolean {
+  return (
+    e instanceof HttpError
+    && e.status === 409
+    && typeof e.detail === 'string'
+    && e.detail.includes('not the tail')
+  );
+}
+
+/** Internal sentinel: a retriable tail conflict already rolled back by
+ * runCompletion — sendMessage catches it, re-reads, retries once. */
+class TailConflictSignal extends Error {
+  constructor() { super('tail conflict'); this.name = 'TailConflictSignal'; }
 }
 
 export async function runCompletion(set: Set, get: Get, opts: RunCompletionOpts): Promise<void> {
@@ -229,13 +232,20 @@ export async function runCompletion(set: Set, get: Get, opts: RunCompletionOpts)
       optimisticUserId: opts.optimisticUserId,
     });
   } catch (e) {
+    if (isTailConflict(e) && !opts.conflictFinal) {
+      // Retriable: pull the optimistic bubble and hand the conflict to
+      // sendMessage's re-read + ONE retry (the plan's contract). The finally
+      // below releases the slot this run owns.
+      rollbackOptimisticUser(set, opts.optimisticUserId);
+      throw new TailConflictSignal();
+    }
     const failed = handleSendError(e, opts.errorLabel, set, get);
     // Slot ownership: this run owns the slot only while ITS controller sits in
     // it — a leave-and-return re-seats a fresh controller (adoptOpenTurn), and
     // whatever slot the shown chat then holds is never this run's to flush.
     if (get().streaming?.controller === abortController) {
       if (failed) markStreamingFailed(set, get);
-      rollbackOptimisticUser(set, opts.optimisticUserId, opts.restoreRewind ?? false, opts.parentId);
+      rollbackOptimisticUser(set, opts.optimisticUserId);
     }
     if (failed && opts.restoreDraftOnFail && opts.userContent) {
       restoreFailedSend(get, activeSessionId, opts.userContent);
@@ -279,6 +289,13 @@ function restoreFailedSend(get: Get, sessionId: string, text: string): void {
 function handleSendError(e: unknown, label: string, set: Set, get: Get): boolean {
   if (e instanceof RequestTooLargeError) {
     useAppStore.getState().showToast(t('chatRequestTooLarge'), 'error');
+    return true;
+  }
+  if (isTailConflict(e)) {
+    // The retried turn STILL conflicts — the branch keeps moving under this
+    // client. Explicit wording (not the generic failure toast): the view is
+    // refreshed, the send is in the composer's hands again.
+    useAppStore.getState().showToast(t('chatBranchMovedOn'), 'error');
     return true;
   }
   const refused = modelForbidden(e);
@@ -331,20 +348,69 @@ function markStreamingFailed(set: Set, get: Get): void {
   }));
 }
 
+/** One send attempt: guards → path derivation → optimistic insert → the
+ * shared completion run. All errors are handled inside runCompletion EXCEPT
+ * the retriable tail conflict, which surfaces here as 'tail-conflict' for
+ * sendMessage's single re-read + retry. */
+async function _sendOnce(
+  set: Set, get: Get, content: string, images: string[] | undefined,
+  conflictFinal: boolean,
+): Promise<'sent' | 'queued' | 'tail-conflict'> {
+  const { activeSessionId, streaming } = get();
+  if (!activeSessionId) return 'queued';
+  // INVARIANT(data-loss): a POST fires only for a chat with no open turn
+  // OF ITS OWN. Why: the backend locks per session (409), and the slot
+  // covers only the ACTIVE chat — another chat's turn must never queue
+  // this one (the queued text may never send). The registration clause
+  // covers the return window (the slot is null between setActiveSession
+  // and the reload's re-adoption). The guard lives in the store (not the
+  // UI) so MicButton transcription + hotkeys can't bypass it; one
+  // ordinary sendMessage fires later on flush. Images stay in the
+  // composer (attachment-budget merge is a separate problem).
+  if (streaming || hasOpenHarnessTurn(activeSessionId)) {
+    get().enqueueMessage(activeSessionId, content);
+    return 'queued';
+  }
+  // Fresh derivation per attempt: the RETRY must parent on the re-read
+  // branch's tail, not the stale view that conflicted. The walk takes the
+  // freshest lineage (a branch session's rows are a linear chain).
+  const activePath = resolveActivePath(get().messages);
+  const parentId = activePath.length > 0 ? activePath[activePath.length - 1].message_id : null;
+  const apiMessages = toApiMessages(activePath);
+  apiMessages.push({ role: 'user', content, images });
+
+  const optimisticUserId = insertOptimisticUser(set, get, { parentId, content, images });
+
+  try {
+    await runCompletion(set, get, {
+      apiMessages,
+      parentId,
+      userContent: content,
+      userImages: images,
+      optimisticUserId,
+      errorLabel: 'Chat send error:',
+      conflictFinal,
+      restoreDraftOnFail: true,
+    });
+    return 'sent';
+  } catch (e) {
+    if (e instanceof TailConflictSignal) return 'tail-conflict';
+    // Everything else is handled inside runCompletion (toast + rollback +
+    // draft restore); the attempt is done.
+    return 'sent';
+  }
+}
+
 type MessagesSlice = Pick<
   ChatState,
   | 'loadMessages'
   | 'resyncOpenHarnessTurn'
   | 'sendMessage'
   | 'editMessage'
-  | 'deleteMessage'
   | 'forkAndResend'
   | 'regenerate'
   | 'stopGeneration'
-  | 'selectSibling'
   | 'rewindTo'
-  | 'cancelRewind'
-  | 'getSiblings'
 >;
 
 export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
@@ -393,46 +459,19 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
       // sets the `streaming` object via `set()`. All downstream consumers (frame
       // handlers, UI components) assume the write is immediately visible. If
       // Zustand ever makes `set()` async, the streaming state machine breaks.
-      const { activeSessionId, streaming } = get();
+      //
+      // The linear-turn contract: the turn's
+      // parent must name the branch's live tail. A 409 "not the tail" means
+      // another turn landed first — re-read the branch and retry ONCE; a
+      // second conflict shows an explicit toast (runCompletion's
+      // conflictFinal arm).
+      const outcome = await _sendOnce(set, get, content, images, false);
+      if (outcome !== 'tail-conflict') return;
+      const { activeSessionId } = get();
       if (!activeSessionId) return;
-      // INVARIANT(data-loss): a POST fires only for a chat with no open turn
-      // OF ITS OWN. Why: the backend locks per session (409), and the slot
-      // covers only the ACTIVE chat — another chat's turn must never queue
-      // this one (the queued text may never send). The registration clause
-      // covers the return window (the slot is null between setActiveSession
-      // and the reload's re-adoption). The guard lives in the store (not the
-      // UI) so MicButton transcription + hotkeys can't bypass it; one
-      // ordinary sendMessage fires later on flush. Images stay in the
-      // composer (attachment-budget merge is a separate problem).
-      if (streaming || hasOpenHarnessTurn(activeSessionId)) {
-        get().enqueueMessage(activeSessionId, content);
-        return;
-      }
-      const { messages, selectedSiblings } = get();
-      // WHY: Need clean snapshot without streaming substitution — selectActivePath
-      // would inject partial streamingContent if called mid-stream.
-      const activePath = resolveActivePath(messages, selectedSiblings);
-      const parentId = activePath.length > 0 ? activePath[activePath.length - 1].message_id : null;
-      const apiMessages = toApiMessages(activePath);
-      apiMessages.push({ role: 'user', content, images });
-
-      // Read BEFORE insertOptimisticUser: it overwrites
-      // selectedSiblings[parentId ?? ROOT_KEY] with the temp id, erasing the
-      // sentinel this flag preserves across a failed send's rollback.
-      const restoreRewind = selectedSiblings[parentId ?? ROOT_KEY] === REWIND_KEY;
-
-      const optimisticUserId = insertOptimisticUser(set, get, { parentId, content, images });
-
-      await runCompletion(set, get, {
-        apiMessages,
-        parentId,
-        userContent: content,
-        userImages: images,
-        optimisticUserId,
-        errorLabel: 'Chat send error:',
-        restoreRewind,
-        restoreDraftOnFail: true,
-      });
+      await get().loadMessages(activeSessionId);
+      if (get().activeSessionId !== activeSessionId) return;
+      await _sendOnce(set, get, content, images, true);
     },
 
     async editMessage(messageId: string, content: string) {
@@ -444,59 +483,37 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
       });
     },
 
-    async deleteMessage(messageId: string) {
-      // Shared request layer (chat-message-crud) owns DELETE + error toast.
-      if (!(await deleteMessageById(messageId))) return;
-
-      // Client-side BFS to collect all descendant IDs
-      const toRemove = new Set<string>();
-      const queue = [messageId];
-      const childrenMap = buildChildrenMap(get().messages);
-      while (queue.length > 0) {
-        const id = queue.shift()!;
-        toRemove.add(id);
-        for (const child of (childrenMap[id] ?? [])) {
-          queue.push(child.message_id);
-        }
-      }
-
-      set(s => {
-        const messages = s.messages.filter(m => !toRemove.has(m.message_id));
-        const selectedSiblings = { ...s.selectedSiblings };
-        for (const [parentKey, selectedId] of Object.entries(selectedSiblings)) {
-          if (toRemove.has(selectedId) || toRemove.has(parentKey)) {
-            delete selectedSiblings[parentKey];
-          }
-        }
-        return { messages, selectedSiblings };
-      });
-    },
-
     async forkAndResend(messageId: string, content: string, images?: string[]) {
       if (get().streaming) return;
       const original = get().messages.find(m => m.message_id === messageId);
-      if (!original) return;
-
       const { activeSessionId } = get();
-      if (!activeSessionId) return;
+      if (!original || !activeSessionId) return;
+      // The first message of an AI chat is immutable (operator ruling): there
+      // is no root-level fork. The UI hides the edit button on it; the guard
+      // is defense-in-depth.
+      if (!original.parent_id) return;
 
-      // Build the ancestor chain up to (not including) the forked message — the
-      // fork branches off original.parent_id, via the shared resolveAncestorChain.
-      const parentId = original.parent_id;
-      const chain = parentId ? resolveAncestorChain(get().messages, parentId) : [];
-      const apiMessages = toApiMessages(chain);
-      apiMessages.push({ role: 'user', content, images });
-
-      const optimisticUserId = insertOptimisticUser(set, get, { parentId, content, images });
-
-      await runCompletion(set, get, {
-        apiMessages,
-        parentId,
-        userContent: content,
-        userImages: images,
-        optimisticUserId,
-        errorLabel: 'Fork error:',
-      });
+      // ARCH: edit-and-resend = create a branch
+      // after the message's parent ⇒ open it ⇒ send the edited text as an
+      // ordinary linear turn. The branch COPIES the shared prefix; the source
+      // session is never re-pointed.
+      let branch: ChatSession;
+      try {
+        branch = await apiClient.post(
+          `/chat/sessions/${activeSessionId}/branches`,
+          { after_message_id: original.parent_id },
+        );
+      } catch {
+        useAppStore.getState().showToast(t('chatBranchCreateFailed'), 'error');
+        return;
+      }
+      set(s => ({ sessions: withThreadRow(s.sessions, branch) }));
+      get().openBranch(branch.session_id);
+      // The send parents on the branch's TAIL (the copied prefix's end) —
+      // the rows must be seated first (the queue-flush switch+load pattern).
+      await get().loadMessages(branch.session_id);
+      if (get().activeSessionId !== branch.session_id) return;
+      await get().sendMessage(content, images);
     },
 
     async regenerate(messageId: string) {
@@ -568,41 +585,33 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
       }
     },
 
-    selectSibling(parentId: string, messageId: string) {
-      // WHY: switching a branch above the cut abandons the rewind — dropping the
-      // sentinel keeps it from re-truncating the old branch when the user
-      // switches back to it.
-      set(s => ({
-        selectedSiblings: { ...withoutRewind(s.selectedSiblings), [parentId]: messageId },
-      }));
-    },
-
-    rewindTo(messageId: string) {
+    async rewindTo(messageId: string) {
       if (get().streaming) return;
       const target = get().messages.find(m => m.message_id === messageId);
-      if (!target) return;
-      set(s => {
-        // INVARIANT: one rewind at a time — a stale sentinel deep in an
-        // abandoned branch would truncate that branch again when the user
-        // switches back to it via the fork switcher. Why: the sentinel's cut
-        // applies wherever the path walk crosses its key, not only on the
-        // branch it was armed on.
-        const selectedSiblings = withoutRewind(s.selectedSiblings);
-        selectedSiblings[target.parent_id ?? ROOT_KEY] = REWIND_KEY;
-        return { selectedSiblings };
-      });
-    },
+      const { activeSessionId } = get();
+      if (!target || !activeSessionId) return;
+      // The first message is immutable — no rewind before it (the UI hides
+      // the button; the guard is defense-in-depth).
+      if (!target.parent_id) return;
 
-    cancelRewind() {
-      // The path falls back to its previous resolution (explicit selection or
-      // freshest sibling), i.e. everything hidden by the rewind reappears.
-      set(s => ({ selectedSiblings: withoutRewind(s.selectedSiblings) }));
-    },
-
-    getSiblings(parentId: string | null): ChatMessage[] {
-      const key = parentId ?? ROOT_KEY;
-      const children = buildChildrenMap(get().messages)[key] ?? [];
-      return children;
+      // ARCH: rewind = fork a branch after the
+      // message's PARENT and open it. The new branch's transcript ends right
+      // before the rewound message and the composer owns the next turn; the
+      // old line stays in history (the switcher offers it at that fork
+      // point). No client-side cut sentinel — the branch IS the cut.
+      let branch: ChatSession;
+      try {
+        branch = await apiClient.post(
+          `/chat/sessions/${activeSessionId}/branches`,
+          { after_message_id: target.parent_id },
+        );
+      } catch {
+        useAppStore.getState().showToast(t('chatBranchCreateFailed'), 'error');
+        return;
+      }
+      set(s => ({ sessions: withThreadRow(s.sessions, branch) }));
+      get().openBranch(branch.session_id);
+      set({ pendingInputFocus: true });
     },
   };
 }

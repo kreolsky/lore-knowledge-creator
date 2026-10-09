@@ -129,6 +129,22 @@ class SessionUpdate(BaseModel):
     # sessions (the column holds the REFERENCE id); a non-null target requires
     # at least commentator access, else 403.
     document_id: str | None = None
+    # ARCH: the ROOT row's pointer to the
+    # last-opened branch — the chat list previews that branch. Opening any
+    # branch PATCHes the thread root with it; the route validates it names a
+    # live AI session of the same thread. Silently ignored for note sessions
+    # (like every AI-only field).
+    active_branch_id: str | None = None
+
+
+class BranchCreate(BaseModel):
+    # ARCH: fork a branch session after a message.
+    # after_message_id = the LAST row the branch copies (its parent chain to
+    # the root is copied with it). Deliberately nullable-then-refused (400 in
+    # the route, not a pydantic 422): the refusal is a PRODUCT rule — the
+    # first message of an AI chat is immutable, so there is no root-level
+    # fork — and it must read as one, with the route's detail text.
+    after_message_id: str | None = None
 
 
 class MessageCreate(BaseModel):

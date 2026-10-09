@@ -19,7 +19,6 @@ import { Sources } from './Sources';
 import { VerdictCard } from './VerdictCard';
 import { ChatMessage, HaltReason } from '../../types';
 import { useTranslation } from '../../i18n';
-import { ROOT_KEY } from '../../store/chat-store/tree';
 import { formatDate } from '../../utils/format';
 import { userColor } from '../../utils/user-color';
 import { useArmedAction } from '../../hooks/useArmedAction';
@@ -39,17 +38,26 @@ export interface MessageBubbleActions {
   onForkResend?: (messageId: string, text: string, images?: string[]) => void;
   onRegenerate?: (messageId: string) => void;
   onCreateDocument?: (content: string) => void;
-  getSiblings?: (parentId: string | null) => ChatMessage[];
-  selectSibling?: (parentKey: string, messageId: string) => void;
   /** The halt card's "Continue" — a visible user message
    *  through the existing sendMessage path (no new endpoint). Per-turn budgets
    *  reset naturally, and the transcript stays honest about why the agent
    *  restarted. Hidden when absent (the card renders read-only). */
   onContinue?: () => void;
-  /** Agent chats: rewind-to-message — hide this message and everything below
-   *  it; the next send forks a sibling from the point before it (the hidden
-   *  branch stays in history). Hidden when absent (button never renders). */
+  /** Agent chats: rewind-to-message — fork a branch ending right before this
+   *  message and open it (the old line stays in history, offered by the fork
+   *  switcher). Hidden when absent (button never renders). */
   onRewind?: (messageId: string) => void;
+}
+
+/** The "1/N ◄►" switcher data for one fork point:
+ * the rendered row's position among the thread's continuations after the same
+ * origin; prev/next open the NEIGHBOUR SESSIONS (a branch is its own session —
+ * the list-level computation lives in MessageList). */
+export interface ForkNav {
+  current: number;
+  total: number;
+  onPrev: () => void;
+  onNext: () => void;
 }
 
 interface Props {
@@ -77,6 +85,14 @@ interface Props {
   // ARCH: AI (non-note) chats have no branching — Edit/Delete/Fork/Regenerate are
   // hidden. Computed once by MessageList and passed in to avoid a per-bubble
   // sessions.find() on every render.
+  /** True when this bubble is the first entry in the active path. Agent chats
+   *  hide edit/rewind on it — the first message of an AI chat is immutable
+   *  (operator ruling): every branch shares it and there is no root fork. */
+  isFirst?: boolean;
+  /** The branch switcher's data when this row is a fork point (a sibling
+   *  continuation after the same origin exists in the thread). Absent ⇒ no
+   *  indicator. */
+  forkNav?: ForkNav;
   isAgent?: boolean;
   actions?: MessageBubbleActions;
 }
@@ -107,6 +123,8 @@ export const MessageBubble = memo(function MessageBubble({
   isStreaming = false,
   nodes = [],
   isLast = false,
+  isFirst = false,
+  forkNav,
   isAgent = false,
   actions,
 }: Props) {
@@ -128,11 +146,10 @@ export const MessageBubble = memo(function MessageBubble({
   const isNote = variant === 'note';
   const noteCanEdit = isOwn || isOwner;
   const noteCanDelete = isOwner || (isOwn && !hasChildren);
-  // Fork navigation is AI-only: getSiblings is undefined for notes, so the
-  // indicator never renders there. Agent chats fork too (edit→branch): the user
-  // message is the branch point, and the indicator switches between siblings.
-  const siblings = actions?.getSiblings ? actions.getSiblings(message.parent_id) : [message];
-  const hasForks = siblings.length > 1;
+  // The fork switcher is AI-only and data-driven (forkNav from /forks): the
+  // row sits at a fork point when another branch of the thread continues
+  // differently after the same origin.
+  const hasForks = forkNav !== undefined;
   const userFork = isUser && hasForks;
 
   // Measure the user bubble so the action row (ForkIndicator left / buttons
@@ -192,9 +209,6 @@ export const MessageBubble = memo(function MessageBubble({
     actions?.onCreateDocument?.(message.content);
   }, [actions, message.content]);
 
-  const currentIdx = siblings.findIndex(s => s.message_id === message.message_id);
-  const parentKey = message.parent_id ?? ROOT_KEY;
-
   // Alignment: user+own → right; user+other / agent → left.
   const alignClass = isUser ? (isOwn ? 'items-end' : 'items-start') : 'items-start';
 
@@ -226,19 +240,13 @@ export const MessageBubble = memo(function MessageBubble({
 
   return (
     <div className={`flex flex-col mb-3 ${alignClass}`}>
-      {!isUser && hasForks && (
+      {!isUser && hasForks && forkNav && (
         <ForkIndicator
           className="mb-1"
-          current={currentIdx + 1}
-          total={siblings.length}
-          onPrev={() => {
-            const prev = siblings[currentIdx - 1];
-            if (prev) actions?.selectSibling?.(parentKey, prev.message_id);
-          }}
-          onNext={() => {
-            const next = siblings[currentIdx + 1];
-            if (next) actions?.selectSibling?.(parentKey, next.message_id);
-          }}
+          current={forkNav.current}
+          total={forkNav.total}
+          onPrev={forkNav.onPrev}
+          onNext={forkNav.onNext}
         />
       )}
 
@@ -256,7 +264,8 @@ export const MessageBubble = memo(function MessageBubble({
       )}
       <div ref={bubbleRef} className={bubbleClass} style={noteBorder}>
         {editing ? (
-          <div className="flex flex-col gap-2">
+          // Escape anywhere in the edit block (textarea or its buttons) = the ✕ button.
+          <div className="flex flex-col gap-2" onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); setEditing(false); } }}>
             <FieldTextarea
               value={editText}
               onChange={e => setEditText(e.target.value)}
@@ -398,18 +407,12 @@ export const MessageBubble = memo(function MessageBubble({
           }`}
           style={userFork ? { width: bubbleW } : undefined}
         >
-          {userFork && (
+          {userFork && forkNav && (
             <ForkIndicator
-              current={currentIdx + 1}
-              total={siblings.length}
-              onPrev={() => {
-                const prev = siblings[currentIdx - 1];
-                if (prev) actions?.selectSibling?.(parentKey, prev.message_id);
-              }}
-              onNext={() => {
-                const next = siblings[currentIdx + 1];
-                if (next) actions?.selectSibling?.(parentKey, next.message_id);
-              }}
+              current={forkNav.current}
+              total={forkNav.total}
+              onPrev={forkNav.onPrev}
+              onNext={forkNav.onNext}
             />
           )}
           <div className="flex gap-0.5">
@@ -438,18 +441,24 @@ export const MessageBubble = memo(function MessageBubble({
             )}
             {/* Edit: agent chats edit→fork on save, USER messages only (editing an
              * agent reply is not supported — in-place edit would desync, and re-run
-             * is the separate, out-of-scope regenerate). Note chats edit in-place. */}
-            {(isAgent ? (isUser && actions?.onForkResend) : (actions?.onEdit && (!isNote || noteCanEdit))) && (
+             * is the separate, out-of-scope regenerate). The FIRST message of an
+             * agent chat is immutable (every branch shares it; there is no root
+             * fork) — no edit on it. Note chats edit in-place. */}
+            {(isAgent
+              ? (isUser && !isFirst && actions?.onForkResend)
+              : (actions?.onEdit && (!isNote || noteCanEdit))) && (
               <IconButton size="sm" theme={variant === 'note' ? 'note' : undefined} title={t('edit')} onClick={handleStartEdit}>
                 <Pencil size={12} />
               </IconButton>
             )}
-            {/* Rewind (agent user messages only): hide this message and
-             * everything below it — the next send forks a sibling before it.
+            {/* Rewind (agent user messages only): fork a branch ending right
+             * before this message and open it — the composer owns the next
+             * turn, the old line stays in history (the switcher offers it).
+             * Never on the first message (immutable — nothing precedes it).
              * Armed double-click like delete, and styled like it: IconButton's
              * `filled` armed state only shows with a colour, so without `danger`
              * the first click looked like it did nothing. */}
-            {isUser && isAgent && actions?.onRewind && (
+            {isUser && isAgent && !isFirst && actions?.onRewind && (
               <IconButton
                 size="sm"
                 danger

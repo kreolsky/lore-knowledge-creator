@@ -459,21 +459,11 @@ async def test_reload_halt_mints_from_the_row_column_at_the_tail(monkeypatch):
     log tail — the plan's "the window tail when none exists"."""
     row = {"message_id": "m-ab", "created_at": "2", "halt": {"reason": "turn_timeout", "steps": 3}}
     await driver.frames.attach_reload_lore_mints(
-        [row], chain={"m-ab"}, tail_seq=42, session_id="chat-1")
+        [row], tail_seq=42, session_id="chat-1")
     mint = row["frames"][0]
     assert mint["type"] == "lore/halt"
     assert mint["seq"] == 42.7
     assert mint["data"] == {"turn": None, "reason": "turn_timeout", "steps": 3}
-
-
-async def test_reload_halt_respects_the_active_line():
-    """A halt row off the current lineage (a fork re-seeded the log) must not
-    take the tail anchor — the tail belongs to the lineage the log holds."""
-    off_branch = {"message_id": "m-off", "created_at": "1",
-                  "halt": {"reason": "disconnected"}}
-    await driver.frames.attach_reload_lore_mints(
-        [off_branch], chain={"m-other"}, tail_seq=30, session_id="chat-1")
-    assert off_branch.get("frames") is None
 
 
 async def test_reload_halt_skips_rows_whose_turn_resolved():
@@ -483,14 +473,14 @@ async def test_reload_halt_skips_rows_whose_turn_resolved():
     row = {"message_id": "m-err", "created_at": "1",
            "halt": {"reason": "error"}, "frames": [_dsh(9, "turn/end", {"reason": {"kind": "error"}})]}
     await driver.frames.attach_reload_lore_mints(
-        [row], chain={"m-err"}, tail_seq=30, session_id="chat-1")
+        [row], tail_seq=30, session_id="chat-1")
     assert [f["type"] for f in row["frames"]] == ["dsh_event"]
 
 
 async def test_reload_halt_needs_a_numeric_tail():
     row = {"message_id": "m-ab", "created_at": "1", "halt": {"reason": "disconnected"}}
     await driver.frames.attach_reload_lore_mints(
-        [row], chain={"m-ab"}, tail_seq=None, session_id="chat-1")
+        [row], tail_seq=None, session_id="chat-1")
     assert row.get("frames") is None
 
 
@@ -500,7 +490,7 @@ async def test_reload_halt_mints_at_the_stored_anchor_with_its_turn():
     row = {"message_id": "m-ab", "created_at": "1",
            "halt": {"reason": "turn_timeout", "steps": 3, "anchor_seq": 7, "turn": 2}}
     await driver.frames.attach_reload_lore_mints(
-        [row], chain={"m-ab"}, tail_seq=42, session_id="chat-1")
+        [row], tail_seq=42, session_id="chat-1")
     mint = row["frames"][0]
     assert mint["type"] == "lore/halt"
     assert mint["seq"] == 7.7
@@ -515,7 +505,7 @@ async def test_reload_halt_mints_every_anchored_row():
     new = {"message_id": "m-new", "created_at": "2",
            "halt": {"reason": "turn_timeout", "anchor_seq": 9, "turn": 2}}
     await driver.frames.attach_reload_lore_mints(
-        [old, new], chain=None, tail_seq=30, session_id="chat-1")
+        [old, new], tail_seq=30, session_id="chat-1")
     assert old["frames"][0]["seq"] == 4.7
     assert old["frames"][0]["data"]["turn"] == 1
     assert new["frames"][0]["seq"] == 9.7
@@ -527,7 +517,7 @@ async def test_reload_halt_legacy_rows_keep_the_newest_only_tail():
     old = {"message_id": "m-old", "created_at": "1", "halt": {"reason": "disconnected"}}
     new = {"message_id": "m-new", "created_at": "2", "halt": {"reason": "turn_timeout"}}
     await driver.frames.attach_reload_lore_mints(
-        [old, new], chain=None, tail_seq=30, session_id="chat-1")
+        [old, new], tail_seq=30, session_id="chat-1")
     assert old.get("frames") is None
     assert new["frames"][0]["seq"] == 30.7
     assert new["frames"][0]["data"]["turn"] is None
@@ -541,7 +531,7 @@ async def test_reload_halt_anchor_collision_drops_one_and_warns(caplog):
     legacy = {"message_id": "m-leg", "created_at": "2", "halt": {"reason": "disconnected"}}
     with caplog.at_level("WARNING"):
         await driver.frames.attach_reload_lore_mints(
-            [anchored, legacy], chain=None, tail_seq=30, session_id="chat-1")
+            [anchored, legacy], tail_seq=30, session_id="chat-1")
     assert anchored["frames"][0]["seq"] == 30.7
     assert legacy.get("frames") is None
     assert "m-leg" in caplog.text and "m-anch" in caplog.text
@@ -554,7 +544,7 @@ async def test_reload_halt_two_anchored_rows_at_one_seq_drop_the_later(caplog):
             "halt": {"reason": "disconnected", "anchor_seq": 5, "turn": 2}}
     with caplog.at_level("WARNING"):
         await driver.frames.attach_reload_lore_mints(
-            [anchored, twin], chain=None, tail_seq=99, session_id="chat-1")
+            [anchored, twin], tail_seq=99, session_id="chat-1")
     assert anchored["frames"][0]["seq"] == 5.7
     assert twin.get("frames") is None
     assert "m-b" in caplog.text
@@ -579,7 +569,7 @@ async def test_reload_image_gen_mints_at_the_dispatching_call(monkeypatch):
              "run_id": "run-1", "call_id": "call-gen", "title": "Мир документа"},
         ],
     }
-    await driver.frames.attach_reload_lore_mints([row], chain={"m1"}, tail_seq=9, session_id="c")
+    await driver.frames.attach_reload_lore_mints([row], tail_seq=9, session_id="c")
     mints = [f for f in row["frames"] if f["type"] == "lore/image-gen"]
     assert len(mints) == 1
     mint = mints[0]
@@ -605,7 +595,7 @@ async def test_reload_image_gen_failed_run_carries_the_error():
             "outcome": "failed", "run_id": "run-f", "call_id": "call-gen",
         }],
     }
-    await driver.frames.attach_reload_lore_mints([row], chain={"m1"}, tail_seq=4, session_id="c")
+    await driver.frames.attach_reload_lore_mints([row], tail_seq=4, session_id="c")
     mint = next(f for f in row["frames"] if f["type"] == "lore/image-gen")
     assert mint["seq"] == 3.6
     assert mint["data"] == {"turn": 1, "runId": "run-f", "status": "failed",
@@ -623,7 +613,7 @@ async def test_reload_image_gen_without_its_call_mints_nothing(monkeypatch):
         "gen_steps": [{"tool": "generate_image", "run_id": "run-1",
                        "image_ref_ids": ["ref-1"]}],
     }
-    await driver.frames.attach_reload_lore_mints([row], chain={"m1"}, tail_seq=1, session_id="c")
+    await driver.frames.attach_reload_lore_mints([row], tail_seq=1, session_id="c")
     assert not [f for f in row["frames"] if f.get("type") == "lore/image-gen"]
 
 
@@ -642,7 +632,7 @@ async def test_reload_image_gen_step_without_call_id_mints_nothing(monkeypatch, 
         "gen_steps": [{"tool": "generate_image", "run_id": "run-1",
                        "image_ref_ids": ["ref-1"]}],
     }
-    await driver.frames.attach_reload_lore_mints([row], chain={"m1"}, tail_seq=4, session_id="c")
+    await driver.frames.attach_reload_lore_mints([row], tail_seq=4, session_id="c")
     assert not [f for f in row["frames"] if f.get("type") == "lore/image-gen"]
     assert "run-1" in caplog.text
 
@@ -747,7 +737,7 @@ async def test_settled_frame_equals_the_reload_attach(monkeypatch):
            "frames": list(replay["turns"][0]["frames"]),
            "gen_steps": _gen_steps()}
     await driver.frames.attach_reload_lore_mints(
-        [row], chain={"m1"}, tail_seq=9, session_id="c")
+        [row], tail_seq=9, session_id="c")
     reload_mint = next(f for f in row["frames"] if f["type"] == "lore/image-gen")
     live.pop("time"), reload_mint.pop("time")
     assert live == reload_mint
@@ -775,7 +765,7 @@ async def test_reload_mint_drops_deleted_image_refs(monkeypatch):
     row = _row_with_image_run(["ref-1", "ref-2", "ref-3"])
     seen: list[list[str]] = []
     _stub_live_refs(monkeypatch, live={"ref-1", "ref-3"}, seen=seen)
-    await driver.frames.attach_reload_lore_mints([row], chain={"m1"}, tail_seq=9, session_id="c")
+    await driver.frames.attach_reload_lore_mints([row], tail_seq=9, session_id="c")
     mint = next(f for f in row["frames"] if f["type"] == "lore/image-gen")
     assert mint["data"]["imageRefIds"] == ["ref-1", "ref-3"]
     assert "deletedByUser" not in mint["data"]
@@ -792,7 +782,7 @@ async def test_reload_mint_queries_once_per_page(monkeypatch):
     seen: list[list[str]] = []
     _stub_live_refs(monkeypatch, seen=seen)
     await driver.frames.attach_reload_lore_mints(
-        [row1, row2], chain={"m1"}, tail_seq=9, session_id="c")
+        [row1, row2], tail_seq=9, session_id="c")
     assert len(seen) == 1
     assert sorted(seen[0]) == ["ref-1", "ref-2", "ref-3"]
     mints = [f for f in row1["frames"] + row2["frames"] if f.get("type") == "lore/image-gen"]
@@ -804,7 +794,7 @@ async def test_reload_mint_marks_a_fully_deleted_run(monkeypatch):
     deletedByUser note — never an empty plate or broken thumbs."""
     row = _row_with_image_run(["ref-1", "ref-2"])
     _stub_live_refs(monkeypatch, live=set())
-    await driver.frames.attach_reload_lore_mints([row], chain={"m1"}, tail_seq=9, session_id="c")
+    await driver.frames.attach_reload_lore_mints([row], tail_seq=9, session_id="c")
     mint = next(f for f in row["frames"] if f["type"] == "lore/image-gen")
     assert "imageRefIds" not in mint["data"]
     assert mint["data"]["deletedByUser"] is True
@@ -820,7 +810,7 @@ async def test_reload_mint_no_image_run_no_live_query(monkeypatch):
         _dsh(1, "turn/start", {"turn": 1}),
         _dsh(9, "turn/end", {"turn": 1, "reason": {"kind": "completed"}}),
     ]}
-    await driver.frames.attach_reload_lore_mints([row], chain={"m1"}, tail_seq=9, session_id="c")
+    await driver.frames.attach_reload_lore_mints([row], tail_seq=9, session_id="c")
     assert seen == []
     assert [f["type"] for f in row["frames"]] == ["dsh_event", "dsh_event"]
 
@@ -832,7 +822,7 @@ async def test_reload_mint_live_query_failure_keeps_ids_verbatim(monkeypatch, ca
     _stub_live_refs(monkeypatch, boom=True)
     with caplog.at_level("WARNING"):
         await driver.frames.attach_reload_lore_mints(
-            [row], chain={"m1"}, tail_seq=9, session_id="c")
+            [row], tail_seq=9, session_id="c")
     mint = next(f for f in row["frames"] if f["type"] == "lore/image-gen")
     assert mint["data"]["imageRefIds"] == ["ref-1", "ref-2"]
     assert "deletedByUser" not in mint["data"]
@@ -921,7 +911,7 @@ async def test_reload_compaction_mint_rides_its_frame(monkeypatch):
     monkeypatch.setattr(driver.frames, "_compaction_mint_outcome", fake_outcome)
     cpt = _dsh(7, "compaction/end", {"compactionId": "cpt-9", "turn": 2})
     row = {"message_id": "m1", "created_at": "1", "frames": [cpt]}
-    await driver.frames.attach_reload_lore_mints([row], chain={"m1"}, tail_seq=9, session_id="src-1")
+    await driver.frames.attach_reload_lore_mints([row], tail_seq=9, session_id="src-1")
     mint = row["frames"][1]
     assert mint["type"] == "lore/compaction-mint"
     assert mint["seq"] == 7.8
@@ -935,7 +925,7 @@ async def test_reload_compaction_mint_failure_is_reported(monkeypatch):
     monkeypatch.setattr(driver.frames, "_compaction_mint_outcome", fake_outcome)
     cpt = _dsh(7, "compaction/end", {"compactionId": "cpt-9", "turn": 2})
     row = {"message_id": "m1", "created_at": "1", "frames": [cpt]}
-    await driver.frames.attach_reload_lore_mints([row], chain={"m1"}, tail_seq=9, session_id="src-1")
+    await driver.frames.attach_reload_lore_mints([row], tail_seq=9, session_id="src-1")
     assert row["frames"][1]["data"]["mintFailed"] is True
     assert row["frames"][1]["data"]["mintReason"] == "source_chat_missing"
 
@@ -951,7 +941,7 @@ async def test_reload_compaction_skips_failed_and_malformed_frames(monkeypatch):
         _dsh(9, "compaction/end", None),
         _dsh(None, "compaction/end", {"compactionId": "c2"}),
     ]}
-    await driver.frames.attach_reload_lore_mints([row], chain={"m1"}, tail_seq=9, session_id="s")
+    await driver.frames.attach_reload_lore_mints([row], tail_seq=9, session_id="s")
     assert not [f for f in row["frames"] if f.get("type") == "lore/compaction-mint"]
 
 

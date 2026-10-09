@@ -67,26 +67,18 @@ def test_only_one_auto_cell_in_full_table():
 async def test_verdict_approved_bypasses_the_resolver_cells():
     """The driver's approval marker (X-Agent-Verdict — dsh's user-approval
     service already asked and the user allowed) must NOT be downgraded back to
-    a second confirmation by the handler's own apply-mode re-resolution. The
-    marker is CALLER-SUPPLIED, so it applies on a NON-system target only; a
-    system-doc target refuses (403) exactly like the MCP force-auto path —
-    the is_system cell is the gate that survives the swap from the backend-held
-    verdict_approved flag."""
-    from fastapi import HTTPException
+    a second confirmation by the handler's own apply-mode re-resolution — on a
+    system doc too: the marker reaches ctx only on a driver-attested request
+    (agent.context.driver_attested), so it is the user's approval of the call."""
     from routes.tool_api._common import _resolve_apply_or_force
 
-    decision = await _resolve_apply_or_force(
-        {"verdict": "allowed-once"},
-        ui_preference="confirm", is_system=False,
-    )
-    assert decision.mode == "auto"
-    assert decision.reason == "verdict_approved"
-    with pytest.raises(HTTPException) as exc:
-        await _resolve_apply_or_force(
+    for is_system in (False, True):
+        decision = await _resolve_apply_or_force(
             {"verdict": "allowed-once"},
-            ui_preference="confirm", is_system=True,
+            ui_preference="confirm", is_system=is_system,
         )
-    assert exc.value.status_code == 403
+        assert decision.mode == "auto"
+        assert decision.reason == "verdict_approved"
     # the ordinary path (no verdict) still confirms on system docs
     decision2 = await _resolve_apply_or_force(
         {}, ui_preference="confirm", is_system=True,

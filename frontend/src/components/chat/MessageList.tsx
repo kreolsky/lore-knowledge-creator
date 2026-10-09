@@ -1,10 +1,11 @@
-/** Scrollable message list — renders active path from message tree. Chat-store slices: selectActivePath, streaming, messagesLoading, activeSessionId. */
+/** Scrollable message list — renders the branch path from the message tree. Chat-store slices: selectBranchPath, streaming, messagesLoading, activeSessionId. */
 
 import { useEffect, useRef, useMemo, useLayoutEffect, useCallback } from 'react';
 import { MessageBubble, type MessageBubbleActions } from './MessageBubble';
+import type { ForkNav } from './MessageBubble';
 import { ChatEmptyList } from './ChatEmptyList';
-import { useChatStore, selectActivePath } from '../../store/chat-store';
-import { isPathRewound } from '../../store/chat-store/tree';
+import { useChatStore, selectBranchPath } from '../../store/chat-store';
+import type { ChatMessage } from '../../types';
 import type { TurnNodeLike } from './MessageBubble/internal/turn-nodes';
 import { useAppStore } from '../../store/app-store';
 import { useTranslation, t as translate } from '../../i18n';
@@ -56,7 +57,9 @@ function pickAnchor(el: HTMLElement): HTMLElement | null {
 
 export function MessageList() {
   const { t } = useTranslation();
-  const basePath = useChatStore(selectActivePath);
+  // The branch path: the freshest lineage over the session's rows (a branch
+  // session's rows are a linear chain — the whole chain renders).
+  const basePath = useChatStore(selectBranchPath);
   const streaming = useChatStore(s => s.streaming);
   const isStreaming = streaming !== null;
   const streamingMessageId = streaming?.messageId ?? null;
@@ -82,6 +85,16 @@ export function MessageList() {
     !s.sessions.find(ss => ss.session_id === s.activeSessionId)?.is_note
   );
 
+  // SYSTEM: chat-branch-sessions — the switcher's projection for the ACTIVE
+  // session (its branches' fork points), reloaded on every session switch.
+  const forks = useChatStore(s => s.forks);
+  const loadForks = useChatStore(s => s.loadForks);
+  const openBranch = useChatStore(s => s.openBranch);
+  const messages = useChatStore(s => s.messages);
+  useEffect(() => {
+    if (activeSessionId) void loadForks(activeSessionId);
+  }, [activeSessionId, loadForks]);
+
   // ARCH: store-agnostic MessageBubble receives all mutations via `actions`.
   // The bundle is memoized so the memo'd bubble props stay stable across
   // streaming-delta re-renders (zustand action refs are stable). handleCopy must
@@ -89,18 +102,11 @@ export function MessageList() {
   // copyWithToast, else the whole list would re-render per streaming token.
   const showToast = useAppStore(s => s.showToast);
   const editMessage = useChatStore(s => s.editMessage);
-  const deleteMessage = useChatStore(s => s.deleteMessage);
   const forkAndResend = useChatStore(s => s.forkAndResend);
   const regenerate = useChatStore(s => s.regenerate);
-  const getSiblings = useChatStore(s => s.getSiblings);
-  const selectSibling = useChatStore(s => s.selectSibling);
-  // Rewind-to-message: the action arms the cut; `rewindActive` is true only
-  // while the RENDERED path ends at the cut (the plaque + cancel button render
-  // while it is) — a sentinel left off-path by a branch switch shows nothing.
+  // Rewind-to-message: forks a branch ending right before the message and
+  // opens it (the old line stays reachable through the switcher).
   const rewindTo = useChatStore(s => s.rewindTo);
-  const cancelRewind = useChatStore(s => s.cancelRewind);
-  const selectedSiblings = useChatStore(s => s.selectedSiblings);
-  const rewindActive = isPathRewound(basePath, selectedSiblings);
 
   const handleCopy = useCallback((text: string) => {
     // A settled agent row whose `done` frame never carried text (or a
@@ -148,15 +154,12 @@ export function MessageList() {
   const actions = useMemo<MessageBubbleActions>(() => ({
     onCopy: handleCopy,
     onEdit: editMessage,
-    onDelete: deleteMessage,
     onForkResend: forkAndResend,
     onRegenerate: regenerate,
     onCreateDocument: handleCreateDocument,
-    getSiblings,
-    selectSibling,
     onContinue: handleContinue,
-    onRewind: rewindTo,
-  }), [handleCopy, editMessage, deleteMessage, forkAndResend, regenerate, handleCreateDocument, getSiblings, selectSibling, handleContinue, rewindTo]);
+    onRewind: messageId => { void rewindTo(messageId); },
+  }), [handleCopy, editMessage, forkAndResend, regenerate, handleCreateDocument, handleContinue, rewindTo]);
 
   // ARCH: Streaming substitution lives here (not in the selector) because
   // useSyncExternalStore requires getSnapshot to return a stable reference.
@@ -170,6 +173,38 @@ export function MessageList() {
       return next;
     });
   }, [basePath, streaming]);
+
+  // Place the switcher (see SYSTEM: chat-branch-sessions): for every fork
+  // entry (origin P + the thread's distinct continuations after P, this
+  // session's own flagged `current`), the indicator sits on the row whose
+  // PARENT's origin is P. "k/N" is the server's order — the same for every
+  // branch of the thread.
+  const forkNavByRow = useMemo(() => {
+    const out = new Map<string, ForkNav>();
+    if (!activeSessionId || forks.length === 0) return out;
+    const byId = new Map(messages.map(m => [m.message_id, m] as const));
+    const originOf = (m: ChatMessage) => m.origin_id ?? m.message_id;
+    for (const entry of forks) {
+      const idx = entry.options.findIndex(o => o.current);
+      if (idx < 0) continue;
+      const row = messages.find(m => {
+        const parent = m.parent_id ? byId.get(m.parent_id) : undefined;
+        return (parent ? originOf(parent) : null) === entry.after_origin;
+      });
+      if (!row) continue;
+      const open = (i: number) => {
+        const target = entry.options[i];
+        if (target && !target.current) openBranch(target.session_id);
+      };
+      out.set(row.message_id, {
+        current: idx + 1,
+        total: entry.options.length,
+        onPrev: () => open(idx - 1),
+        onNext: () => open(idx + 1),
+      });
+    }
+    return out;
+  }, [forks, messages, activeSessionId, openBranch]);
 
   // Slice the published nodes per assistant row (see SYSTEM: dsh-conversation).
   // The live turn owns the nodes above `turnStartSeq`; a settled row owns the
@@ -357,20 +392,9 @@ export function MessageList() {
     );
   }
 
-  // The rewind plaque: shown while a REWIND_KEY sentinel is armed — the path
-  // is cut, and this is the only visible way back besides a reload. Square
-  // corners (project rule); ui/Button primitive (styling.md).
-  const rewindPlaque = rewindActive ? (
-    <div className="flex items-center justify-center gap-2 py-2 text-ui-2xs text-text-dim">
-      <span>{t('rewindActive')}</span>
-      <Button variant="primary" size="sm" onClick={cancelRewind}>{t('cancel')}</Button>
-    </div>
-  ) : null;
-
-  // WHY: a rewind of the very first message cuts the path to [] — that is an
-  // empty conversation with the plaque, not the chat picker (ChatEmptyList
-  // lists other chats; a click there would drop the rewind silently).
-  if (activePath.length === 0 && !rewindActive) {
+  // An empty conversation (fresh branch included) is the chat picker, not an
+  // error state.
+  if (activePath.length === 0) {
     return <ChatEmptyList />;
   }
 
@@ -390,11 +414,12 @@ export function MessageList() {
           isStreaming={isStreaming && msg.message_id === streamingMessageId}
           nodes={nodesByMessage.get(msg.message_id)}
           isLast={idx === activePath.length - 1}
+          isFirst={idx === 0}
+          forkNav={forkNavByRow.get(msg.message_id)}
           isAgent={isAgent}
           actions={actions}
         />
       ))}
-      {rewindPlaque}
     </div>
   );
 }

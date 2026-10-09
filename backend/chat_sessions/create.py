@@ -138,6 +138,7 @@ async def create_session_command(db, body: SessionCreate, user_id: str) -> dict:
     Note-chat semantics (body.is_note=true): LLM inheritance is skipped (notes
     never call the LLM) and anchor_offset_* are stored as-is in code points.
     """
+    uid = str(uuid4())
     data: dict = {
         "project_id": body.project_id,
         "user_id": user_id,
@@ -153,7 +154,14 @@ async def create_session_command(db, body: SessionCreate, user_id: str) -> dict:
         data.update(_note_fields(body))
     else:
         data.update(await _ai_chat_fields(db, body, user_id))
-    row = await create_record("chat_sessions", str(uuid4()), data)
+        # ARCH: every AI chat is a THREAD — the
+        # root row's own id is the thread id, and active_branch_id (the
+        # last-opened branch, what the chat list previews) starts at itself.
+        # Notes are out of scope: their reply tree is a different product and
+        # keeps no thread columns.
+        data["thread_id"] = uid
+        data["active_branch_id"] = uid
+    row = await create_record("chat_sessions", uid, data)
     out = serialize_session(row, await build_session_ref_map(db, data),
                             viewer_id=user_id)
     if body.is_note:

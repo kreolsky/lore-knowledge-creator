@@ -6,6 +6,8 @@
  *   deliver an empty/degraded stream → Whisper returns "" → onTranscribed("")
  *   silently no-ops. This divergence was the root cause of the chat/note
  *   voice-input regression (header REC used the other hook and kept working).
+ * cancelRecording discards the take (Escape in the composer): the recorder stops and
+ *   the mic is released, but nothing is transcribed and no toast is shown.
  * INVARIANT: every failure path surfaces a toast (no silent degradation per
  *   CLAUDE.md). Why: the original bug went undiagnosed because non-2xx responses,
  *   network errors, and empty transcriptions were swallowed by `catch {}`/`if (resp.ok)`
@@ -21,6 +23,7 @@ export function useSimpleVoiceRecording(onTranscribed: (text: string) => void) {
   const [transcribing, setTranscribing] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const cancelledRef = useRef(false);
   const { t } = useTranslation();
 
   const toggleRecording = useCallback(async () => {
@@ -38,6 +41,11 @@ export function useSimpleVoiceRecording(onTranscribed: (text: string) => void) {
       };
       recorder.onstop = async () => {
         stream.getTracks().forEach(tr => tr.stop());
+        if (cancelledRef.current) {
+          cancelledRef.current = false;
+          chunksRef.current = [];
+          return;
+        }
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
         chunksRef.current = [];
         if (blob.size === 0) {
@@ -76,5 +84,12 @@ export function useSimpleVoiceRecording(onTranscribed: (text: string) => void) {
     }
   }, [recording, onTranscribed, t]);
 
-  return { recording, transcribing, toggleRecording };
+  const cancelRecording = useCallback(() => {
+    if (!mediaRecorderRef.current || mediaRecorderRef.current.state === 'inactive') return;
+    cancelledRef.current = true;
+    mediaRecorderRef.current.stop();
+    setRecording(false);
+  }, []);
+
+  return { recording, transcribing, toggleRecording, cancelRecording };
 }

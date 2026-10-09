@@ -36,6 +36,9 @@ from migrations._shared import (
 from migrations.migrate_chat_apply_lock_fields_drop import (
     _migrate_chat_apply_lock_fields_drop,
 )
+from migrations.migrate_chat_branches_to_sessions import (
+    _migrate_chat_branches_to_sessions,
+)
 from migrations.migrate_chat_lifecycle_drop import _migrate_chat_lifecycle_drop
 from migrations.migrate_comfy_config_docs_drop import _migrate_comfy_config_docs_drop
 from migrations.migrate_document_access_drop import _migrate_document_access_drop
@@ -96,6 +99,11 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     # No dependency.
     ("web_search_off_drop", _migrate_web_search_off_drop),
     ("turn_timeout_override_fold", _migrate_turn_timeout_override_fold),
+    # Legacy chat trees → branch sessions: every
+    # AI chat self-threads; non-active leaf lineages are carved into their own
+    # sessions stamped for the lazy /session-fork seed. Reads and writes Lore
+    # rows only — never the driver, which may be down at boot. No dependency.
+    ("chat_branches_to_sessions", _migrate_chat_branches_to_sessions),
 ]
 
 

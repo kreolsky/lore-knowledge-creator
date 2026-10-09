@@ -371,6 +371,23 @@
         "title": "Body_widget_upload_api_widget_upload_post",
         "type": "object"
       },
+      "BranchCreate": {
+        "properties": {
+          "after_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After Message Id"
+          }
+        },
+        "title": "BranchCreate",
+        "type": "object"
+      },
       "ChatMessage": {
         "properties": {
           "content": {
@@ -2089,6 +2106,17 @@
       },
       "SessionUpdate": {
         "properties": {
+          "active_branch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Branch Id"
+          },
           "agent_auto": {
             "anyOf": [
               {
@@ -6340,7 +6368,7 @@
     },
     "/api/chat/messages/{message_id}": {
       "delete": {
-        "description": "Soft-delete a message and all its descendants (cascade via BFS on parent_id).\n\nFor note-chats: owner (root) may delete any message (cascade); a non-owner\nauthor may delete only their own LEAF message (single row, no cascade). See\nbackend/access.py:can_modify_note_message. AI chat (is_note=False) keeps the\nunconditional cascade.",
+        "description": "Soft-delete a message and all its descendants (cascade via BFS on parent_id).\n\nFor note-chats: owner (root) may delete any message (cascade); a non-owner\nauthor may delete only their own LEAF message (single row, no cascade). See\nbackend/access.py:can_modify_note_message. AI chat (is_note=False) is\nREFUSED (400): a branch session only appends — there is no branch surgery.",
         "operationId": "delete_message_branch_api_chat_messages__message_id__delete",
         "parameters": [
           {
@@ -6510,7 +6538,7 @@
     },
     "/api/chat/sessions": {
       "get": {
-        "description": "List chat sessions for current user in a project.\n\nVisibility:\n  - AI chats (is_note None/False): PROJECT-WIDE per (project, user). Every AI\n    chat the user owns in the project is visible from ANY document — the open\n    document/reference only affects ghost-attach + the resolver's active-chat\n    pick, never this list. Privacy holds automatically: AI chats carry\n    user_id = $uid + owner-only access. The candidate set is capped at\n    MAX_LISTED_SESSIONS newest-by-updated_at.\n  - Note-chats (is_note True): KEEP the branch scope (ancestor/sibling/\n    reference-children). Notes are shared document-anchored comment threads\n    with a different ACL profile (visible to any commentator+ member); they\n    stay scoped so a document sees its own + inherited notes only.\n\n`document_id` stays required — it gates access (get_document_access) and is the\nresolver's pick scope; it is not a visibility filter for AI chats.\n\nOrdering is by LAST-MESSAGE time (derived read-time), not chat_sessions.updated_at\n(see chat-sort-by-last-message). ORDER BY updated_at DESC here is only the\ncandidate selection key + a deterministic Python-sort tiebreak.",
+        "description": "List chat sessions for current user in a project.\n\nVisibility:\n  - AI chats (is_note None/False): PROJECT-WIDE per (project, user), listed\n    as THREADS — the candidates are root rows (a pre-migration row with no\n    thread_id is its own thread), each item carrying its active_branch_id\n    session's fields (the last-opened branch); limit/offset count THREADS.\n    Every AI thread the user owns in the project is visible from ANY\n    document — the open document/reference only affects ghost-attach + the\n    resolver's active-chat pick, never this list. Privacy holds\n    automatically: AI chats carry user_id = $uid + owner-only access. The\n    candidate set is capped at MAX_LISTED_SESSIONS newest-by-updated_at\n    BEFORE the branch swap, so branches never eat the cap.\n  - Note-chats (is_note True): KEEP the branch scope (ancestor/sibling/\n    reference-children). Notes are shared document-anchored comment threads\n    with a different ACL profile (visible to any commentator+ member); they\n    stay scoped so a document sees its own + inherited notes only.\n\n`document_id` stays required — it gates access (get_document_access) and is the\nresolver's pick scope; it is not a visibility filter for AI chats.\n\nOrdering is by LAST-MESSAGE time (derived read-time), not chat_sessions.updated_at\n(see chat-sort-by-last-message). ORDER BY updated_at DESC here is only the\ncandidate selection key + a deterministic Python-sort tiebreak.",
         "operationId": "list_sessions_api_chat_sessions_get",
         "parameters": [
           {
@@ -6817,6 +6845,73 @@
         ]
       }
     },
+    "/api/chat/sessions/{session_id}/branches": {
+      "post": {
+        "description": "Fork a branch session after a message: a new chat_sessions row of the\nsame thread holding a COPY of the shared prefix (rows up to and including\nafter_message_id along its parent chain).\n\nA prefix with no completed turn (the walk's root branch) has nothing to\nseed: no seed_source_* stamp is written and the branch's dsh log starts\nfresh under its own id on the first turn.",
+        "operationId": "create_branch_api_chat_sessions__session_id__branches_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BranchCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Branch",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
     "/api/chat/sessions/{session_id}/completions": {
       "post": {
         "description": "Start an LLM turn. Saves user + assistant messages to DB, hands the\nturn to the driver, answers JSON `{accepted, user_msg_id,\nassistant_msg_id, dsh_session_id}` — the frames ride the project WS.",
@@ -6936,6 +7031,63 @@
           }
         },
         "summary": "Cancel Completion",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/api/chat/sessions/{session_id}/forks": {
+      "get": {
+        "description": "List the fork options of this branch (the \"1/N ◄►\" switcher's data).",
+        "operationId": "list_forks_api_chat_sessions__session_id__forks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Forks",
         "tags": [
           "chat"
         ]

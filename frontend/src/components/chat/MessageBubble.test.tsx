@@ -340,6 +340,69 @@ describe('unified MessageBubble — agent edit→fork', () => {
   });
 });
 
+describe('unified MessageBubble — the first message is immutable', () => {
+  function titles() {
+    return Array.from(container.querySelectorAll('[title]')).map(b => b.getAttribute('title'));
+  }
+
+  it('hides edit AND rewind on the FIRST user row of an agent chat', () => {
+    act(() => {
+      root.render(createElement(MessageBubble, {
+        variant: 'ai', isAgent: true, isOwn: true, isFirst: true,
+        message: makeMsg({ role: 'user' }),
+        actions: { onCopy: vi.fn(), onForkResend: vi.fn(), onRewind: vi.fn() },
+      }));
+    });
+    const got = titles();
+    expect(got).not.toContain('edit');
+    expect(got).not.toContain('rewindHere');
+  });
+
+  it('shows edit + rewind on a NON-first user row of an agent chat', () => {
+    act(() => {
+      root.render(createElement(MessageBubble, {
+        variant: 'ai', isAgent: true, isOwn: true, isFirst: false,
+        message: makeMsg({ role: 'user', parent_id: 'a0' }),
+        actions: { onCopy: vi.fn(), onForkResend: vi.fn(), onRewind: vi.fn() },
+      }));
+    });
+    const got = titles();
+    expect(got).toContain('edit');
+    expect(got).toContain('rewindHere');
+  });
+
+  it('note chats ignore isFirst — the first note message still edits in place', () => {
+    act(() => {
+      root.render(createElement(MessageBubble, {
+        variant: 'note', isOwn: true, isFirst: true,
+        message: makeMsg({ role: 'user' }),
+        actions: { onCopy: vi.fn(), onEdit: vi.fn() },
+      }));
+    });
+    expect(titles()).toContain('edit');
+  });
+
+  it('renders the fork switcher from forkNav and routes prev/next', () => {
+    const onPrev = vi.fn();
+    const onNext = vi.fn();
+    act(() => {
+      root.render(createElement(MessageBubble, {
+        variant: 'ai', isAgent: true, isOwn: true,
+        message: makeMsg({ role: 'user', parent_id: 'a0' }),
+        forkNav: { current: 2, total: 3, onPrev, onNext },
+        actions: { onCopy: vi.fn() },
+      }));
+    });
+    expect(container.textContent).toContain('2/3');
+    const prevBtn = container.querySelector('button[title="previous"]') as HTMLButtonElement;
+    const nextBtn = container.querySelector('button[title="next"]') as HTMLButtonElement;
+    act(() => prevBtn.click());
+    expect(onPrev).toHaveBeenCalledTimes(1);
+    act(() => nextBtn.click());
+    expect(onNext).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('unified MessageBubble — user attachment image lightbox (plan user-attachment-image-lightbox)', () => {
   // Attachments are already-resolved data URIs (persisted path — no fetch), passed
   // directly via message.images. Clicking a thumb opens the SAME src-based lightbox
@@ -662,5 +725,44 @@ describe('unified MessageBubble — rewind button (agent user messages)', () => 
   it('a non-agent bubble shows no rewind button even with onRewind wired', () => {
     renderBubble({ isAgent: false, onRewind: vi.fn() });
     expect(titles()).not.toContain('rewindHere');
+  });
+});
+
+describe('unified MessageBubble — Escape cancels editing', () => {
+  const press = (target: Element) => {
+    act(() => { target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); });
+  };
+  const btn = (title: string) => container.querySelector(`[title="${title}"]`) as HTMLElement;
+
+  function openEditor(actions: Record<string, unknown>) {
+    act(() => {
+      root.render(createElement(MessageBubble, {
+        variant: 'note', isOwn: true,
+        message: makeMsg({ role: 'user', content: 'original' }),
+        actions: { onCopy: vi.fn(), ...actions },
+      }));
+    });
+    act(() => { btn('edit').click(); });
+    const ta = container.querySelector('textarea') as HTMLTextAreaElement;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!;
+    act(() => { setter.call(ta, 'changed'); ta.dispatchEvent(new Event('input', { bubbles: true })); });
+    return ta;
+  }
+
+  it('Escape in the edit textarea leaves edit mode without saving', () => {
+    const onEdit = vi.fn();
+    const ta = openEditor({ onEdit });
+    press(ta);
+    expect(container.querySelector('textarea')).toBeNull();
+    expect(container.textContent).toContain('original');
+    expect(onEdit).not.toHaveBeenCalled();
+  });
+
+  it('Escape with focus on a button of the edit block also cancels', () => {
+    const onEdit = vi.fn();
+    openEditor({ onEdit });
+    press(btn('cancel'));
+    expect(container.querySelector('textarea')).toBeNull();
+    expect(onEdit).not.toHaveBeenCalled();
   });
 });

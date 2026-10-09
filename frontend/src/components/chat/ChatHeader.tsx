@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { Plus, Trash2, Download, FileText, Network, Clock, FolderUp, Search } from 'lucide-react';
 import { Button, IconButton, FieldInput, Popover } from '../ui';
 import { ParentPickerPopup } from '../ParentPickerPopup';
-import { useChatStore, selectActivePath } from '../../store/chat-store';
+import { useChatStore, selectBranchPath } from '../../store/chat-store';
 import { useAppStore } from '../../store/app-store';
 import { useUIStore } from '../../store/ui-store';
 import { readRefOpenMode, refIsScope } from '../../store/ui-store/documents-slice';
@@ -73,7 +73,7 @@ export function ChatHeader() {
   }, [activeSessionId, startGhostChat]);
 
   const handleExportJson = useCallback(() => {
-    const messages = selectActivePath(useChatStore.getState());
+    const messages = selectBranchPath(useChatStore.getState());
     const data = {
       session: activeSession,
       messages: messages.map(m => ({
@@ -94,7 +94,7 @@ export function ChatHeader() {
   }, [activeSession]);
 
   const handleExportMarkdown = useCallback(() => {
-    const messages = selectActivePath(useChatStore.getState());
+    const messages = selectBranchPath(useChatStore.getState());
     const documents = useAppStore.getState().documents;
     const model = activeSession?.model || '';
     // ARCH: the persona label now derives from the

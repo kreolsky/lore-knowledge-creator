@@ -61,15 +61,6 @@ def schedule_note_message_changed(
     ))
 
 
-def _row_mid(row: dict) -> str:
-    """Extract a message's plain id from a raw or serialized row."""
-    from db import extract_id
-    mid = row.get("message_id") or row.get("mid")
-    if mid:
-        return str(mid)
-    return str(extract_id(row.get("id")) or "")
-
-
 async def _is_project_owner(session: dict, user: dict) -> bool:
     """Whether the current user is a project root (owner, or admin with a member
     row) of this session's project.
@@ -156,7 +147,7 @@ async def list_messages(
     """Return messages in a chat session with pagination."""
     session = await _require_session_access(session_id, user)
     out = await load_session_messages(db, session, session_id, limit=limit, offset=offset)
-    await _attach_timeline(db, session, session_id, out, offset=offset)
+    await _attach_timeline(session, session_id, out, offset=offset)
     return out
 
 
@@ -169,87 +160,17 @@ async def list_messages(
 # reducer, so a reloaded turn and the streamed turn agree by construction.
 #
 # INVARIANT(corruption): a row receives the frames of the turn its OWN
-# `driver_seq` names, never another turn's. Why: the dsh log holds only the
-# CURRENT lineage (a fork re-seeds it at the branch point), so any positional
-# pairing lands the
-# fork turn's frames on the abandoned branch's row and leaves the fork row
-# frameless — observed live. The stamp is the same id
-# the fork seam names, and the projection returns each
-# turn's `end_seq`; rows whose stamp does not resolve (abandoned branches,
-# pre-harness turns, abnormally ended turns) keep no `frames` key and the
+# `driver_seq` names, never another turn's. Why: a session's rows resolve
+# only against the session's OWN log (dsh id = Lore id; a seeded branch's
+# log carries the copied prefix under the SAME seqs), so the per-session stamp map below is the whole
+# pairing (an unseeded branch reads its seed source's log instead — see
+# _fetch_session_turns). Rows whose stamp does not resolve (a pre-harness
+# turn, an abnormally ended turn) keep no `frames` key and the
 # client renders what the row carries.
-def _active_stamp_chain(
-    all_rows: list[dict], turns: list[dict],
-) -> set[str] | None:
-    """The active line's message ids, anchored at the newest row whose stamp
-    resolves to a replayed turn — None when no stamp resolves.
-
-    The anchor matters: a root fork resets the fresh log's seqs from zero, so
-    an abandoned row's old stamp can numerically equal an active turn's
-    end_seq. The newest stamped row IS the current lineage's head (the turn
-    lock serializes turns, so completion order = row order), and the
-    parent-chain under it is the lineage the log holds — stamps are honored
-    only there. None (= no anchor anywhere: a pre-harness thread, or one
-    whose every turn ended abnormally) is the callers' 'no filter' safety
-    net — never silently empty.
-    """
-    by_seq: dict[int, dict] = {}
-    for t in turns:
-        s = t.get("end_seq")
-        if isinstance(s, int) and not isinstance(s, bool):
-            by_seq[s] = t
-    by_mid: dict[str, dict] = {}
-    for r in all_rows:
-        by_mid[_row_mid(r)] = r
-    head = None
-    for r in all_rows:
-        if (
-            r.get("role") == "assistant"
-            and r.get("driver_seq") in by_seq
-            and (head is None
-                 or (r.get("created_at") or "") >= (head.get("created_at") or ""))
-        ):
-            head = r
-    if head is None:
-        return None
-    return _lineage_around(_row_mid(head), by_mid)
-
-
-def _lineage_around(head_mid: str, by_mid: dict[str, dict]) -> set[str]:
-    """The head's ancestors plus the single forward chain under it (latest
-    child per node) — the lineage the log holds."""
-    chain: set[str] = set()
-    cursor: str | None = head_mid
-    while cursor and cursor in by_mid and cursor not in chain:
-        chain.add(cursor)
-        cursor = by_mid[cursor].get("parent_id")
-    # Descend a SINGLE forward chain from the head (latest child per node) —
-    # the trailing abnormal turn (no stamp of its own) sits here.
-    cursor = head_mid
-    while True:
-        kids = [
-            m for m, r in by_mid.items()
-            if r.get("parent_id") == cursor
-        ]
-        if not kids:
-            break
-        nxt = max(kids, key=lambda k: by_mid[k].get("created_at") or "")
-        if nxt in chain:
-            break
-        chain.add(nxt)
-        cursor = nxt
-    return chain
-
-
-def _assign_frames_by_stamp(
-    assistants: list[dict], turns: list[dict], all_rows: list[dict],
-) -> None:
+def _assign_frames_by_stamp(assistants: list[dict], turns: list[dict]) -> None:
     """Key each assistant row to its turn by the driver's own id — the row's
-    `driver_seq` over the projection's per-turn `end_seq`, anchored to the
-    ACTIVE LINE."""
-    chain = _active_stamp_chain(all_rows, turns)
-    if chain is None:
-        return
+    `driver_seq` over the projection's per-turn `end_seq`, within THIS
+    session's own log (the per-session stamp map)."""
     by_seq: dict[int, dict] = {}
     for t in turns:
         s = t.get("end_seq")
@@ -257,7 +178,7 @@ def _assign_frames_by_stamp(
             by_seq[s] = t
     for r in assistants:
         t = by_seq.get(r.get("driver_seq"))
-        if t is not None and _row_mid(r) in chain:
+        if t is not None:
             # The replay of a NON-live session ends every closed turn with a
             # seq-anchored `turn_closed` (plugin entries.ts `terminals`) —
             # TRANSPORT state for the resync consumer (the channel's dispatch
@@ -275,8 +196,7 @@ def _log_shows_open_turn(turns: list[dict]) -> bool:
 
 
 def _mark_open_turn(
-    assistants: list[dict], turns: list[dict], chain: set[str] | None,
-    *, lock_held: bool,
+    assistants: list[dict], turns: list[dict], *, lock_held: bool,
 ) -> None:
     """Attach the OPEN turn (the projection's trailing turn with no `end_seq`)
     to the row that turn is writing, flagged
@@ -298,7 +218,7 @@ def _mark_open_turn(
     """
     if not _log_shows_open_turn(turns):
         if lock_held:
-            _mark_lock_held_turn(assistants, chain)
+            _mark_lock_held_turn(assistants)
         return
     open_frames = [
         f for f in turns[-1].get("frames") or [] if isinstance(f, dict)
@@ -308,7 +228,6 @@ def _mark_open_turn(
         if r.get("halt") is None
         and r.get("driver_seq") is None
         and r.get("frames") is None
-        and (chain is None or _row_mid(r) in chain)
     ]
     if not candidates:
         # The trailing turn's row does not exist here (a stamped row already
@@ -323,10 +242,10 @@ def _mark_open_turn(
         newest["assistant_stream"] = baseline
 
 
-def _mark_lock_held_turn(assistants: list[dict], chain: set[str] | None) -> None:
+def _mark_lock_held_turn(assistants: list[dict]) -> None:
     """Mark the running turn the log cannot show yet: the NEWEST assistant row,
-    only if it is the open turn's shape (unstamped, no halt, no frames, on the
-    active line). No frames and no `assistant_stream` — nothing streamed is
+    only if it is the open turn's shape (unstamped, no halt, no frames).
+    No frames and no `assistant_stream` — nothing streamed is
     logged yet."""
     newest = max(assistants, key=lambda r: r.get("created_at") or "")
     # INVARIANT(corruption): a held turn lock marks the open turn even when the
@@ -339,7 +258,6 @@ def _mark_lock_held_turn(assistants: list[dict], chain: set[str] | None) -> None
         newest.get("halt") is None
         and newest.get("driver_seq") is None
         and newest.get("frames") is None
-        and (chain is None or _row_mid(newest) in chain)
     ):
         newest["frames"] = []
         newest["open_turn"] = True
@@ -361,6 +279,19 @@ async def _fetch_session_turns(session: dict, session_id: str) -> dict:
     """
     from driver.timeline import DriverTimelineUnavailable, fetch_session_entries
     lineage = session.get("compacted_from") or session_id
+    seed_seq = session.get("seed_source_seq")
+    seeded_from = (
+        session.get("seed_source_session")
+        if isinstance(seed_seq, int) and not isinstance(seed_seq, bool) else None
+    )
+    if seeded_from:
+        # INVARIANT(corruption): an unseeded branch reads its SEED SOURCE log.
+        # Why: the copies keep the source's seqs, so the source's turns up to
+        # the boundary ARE the prefix's frames; the branch's own (empty) log
+        # renders the prefix text-only — every chip gone until a first turn
+        # succeeds. The read is cut at the boundary (_cut_at_seed) so the
+        # source's later turns or live open turn never graft onto the branch.
+        lineage = seeded_from
     try:
         replay = await fetch_session_entries(lineage)
     except DriverTimelineUnavailable as exc:
@@ -371,32 +302,36 @@ async def _fetch_session_turns(session: dict, session_id: str) -> dict:
         raise HTTPException(
             status_code=502, detail="The agent timeline could not be read",
         ) from exc
+    if seeded_from:
+        replay = _cut_at_seed(replay or {}, seed_seq)
     lock_held = await turn_lock.turn_lock_held(session_id)
     return {"lineage": lineage, **(replay or {}), "lock_held": lock_held}
 
 
-async def _lineage_rows(db, session_id: str) -> list[dict]:
-    """The thread's FULL live row set (not the page): the active-line walk
-    needs it so the chain anchor is correct regardless of pagination — same
-    shape as the locked-session filter in load_session_messages."""
-    return await db.query(
-        "SELECT meta::id(id) AS mid, parent_id, role, driver_seq, created_at "
-        "FROM messages WHERE chat_id = $cid AND deleted_at IS NONE",
-        {"cid": session_id},
-        site="chat",
-    ) or []
+def _cut_at_seed(replay: dict, seed_seq: int) -> dict:
+    """The seed source's replay as the unseeded branch sees it: closed turns
+    ending at or before the boundary only (an open turn is the source's own
+    live turn, never this branch's), the tail capped at the boundary."""
+    turns = [
+        t for t in replay.get("turns") or []
+        if isinstance(t, dict) and isinstance(t.get("end_seq"), int)
+        and not isinstance(t.get("end_seq"), bool) and t["end_seq"] <= seed_seq
+    ]
+    tail = replay.get("tail_seq")
+    if isinstance(tail, int) and tail > seed_seq:
+        tail = seed_seq
+    return {**replay, "turns": turns, "tail_seq": tail}
 
 
 async def _attach_timeline(
-    db, session: dict, session_id: str, out: list[dict], *, offset: int,
+    session: dict, session_id: str, out: list[dict], *, offset: int,
 ) -> None:
     """Stamp each assistant row with the driver's frames for its turn, then
     mint the reload-side lore events onto the rows.
 
     A note thread and a thread with no assistant row never ran a turn — no
     driver read for either. Rows the log has no turn for (threads predating
-    the harness, an abnormally ended turn that never wrote `turn/end`,
-    abandoned fork branches) keep the Lore row exactly as it is: no `frames`
+    the harness, an abnormally ended turn that never wrote `turn/end`) keep the Lore row exactly as it is: no `frames`
     key from the replay — and the reload mints add exactly what the row owns
     (the `halt` column's card at the log tail; a gen_steps image run whose
     dispatching call the replay carries). The client feeds the rows' frames
@@ -409,7 +344,7 @@ async def _attach_timeline(
         return
     if offset:
         # The page starts mid-thread, so the page's rows alone cannot anchor
-        # the active line. Refusing is the honest answer — a silently
+        # the pairing. Refusing is the honest answer — a silently
         # mis-aligned timeline would show one turn's tool calls under
         # another's answer.
         raise HTTPException(
@@ -422,18 +357,16 @@ async def _attach_timeline(
     lock_held = replay["lock_held"]
     if not turns and tail_seq is None:
         # Nothing the driver ever logged (a pre-harness thread, or a first turn
-        # dsh has not logged yet — the held lock marks that one); no chain.
-        _mark_open_turn(assistants, turns, None, lock_held=lock_held)
+        # dsh has not logged yet — the held lock marks that one).
+        _mark_open_turn(assistants, turns, lock_held=lock_held)
         return
-    all_rows = await _lineage_rows(db, session_id)
-    _assign_frames_by_stamp(assistants, turns, all_rows)
-    chain = _active_stamp_chain(all_rows, turns)
+    _assign_frames_by_stamp(assistants, turns)
     # The open turn: AFTER the stamp pass — its row is by definition
     # unstamped, so the two never contend for one row.
-    _mark_open_turn(assistants, turns, chain, lock_held=lock_held)
+    _mark_open_turn(assistants, turns, lock_held=lock_held)
     from driver.frames import attach_reload_lore_mints
     await attach_reload_lore_mints(
-        assistants, chain=chain, tail_seq=tail_seq,
+        assistants, tail_seq=tail_seq,
         session_id=replay.get("lineage") or session_id,
     )
 
@@ -597,9 +530,9 @@ async def update_message(message_id: str, body: MessageUpdate, user: dict = Depe
 def _collect_subtree(children: dict[str, list[str]], root: str) -> list[str]:
     """BFS down parent_id from `root`, returning [root, ...descendants] in BFS order.
 
-    Shared by the owner-cascade (note-chat) and the unconditional AI-chat cascade so
-    the BFS contract lives in one place. SurrealQL lacks recursive parent_id traversal,
-    so the walk is in Python over the pre-loaded parent→children map."""
+    The note-chat cascade's walk. SurrealQL lacks recursive parent_id
+    traversal, so the walk is in Python over the pre-loaded parent→children
+    map."""
     ids: list[str] = []
     queue: deque[str] = deque([root])
     while queue:
@@ -644,49 +577,67 @@ async def _delete_branch(
     """Resolve the deletion scope + soft-delete the branch; return the deleted ids.
 
     Note-chat own-only ACL: owner → subtree cascade, non-owner author → guarded
-    single leaf (ACL resolved before soft-deleting); AI chat keeps the cascade.
-    Split out of delete_message_branch so
-    the route stays under the 50-line function cap.
+    single leaf (ACL resolved before soft-deleting). Split out of
+    delete_message_branch so the route stays under the 50-line function cap.
     """
-    skip_batch = False
-    if session.get("is_note") is True:
-        from access import can_modify_note_message
-        from models import resolve_message_author
-        is_owner = await _is_project_owner(session, user)
-        has_children = bool(children.get(message_id))
-        if not can_modify_note_message(
-            action="delete", user_id=user["user_id"],
-            is_owner=is_owner, has_children=has_children,
-            message=msg, session=session,
-        ):
-            # Distinguish "author of a non-leaf" (409, precise) from a plain
-            # permission denial (403). The owner never lands here.
-            is_author = resolve_message_author(msg, session) == user["user_id"]
-            if is_author and has_children:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Cannot delete a message that has replies",
-                )
-            raise HTTPException(status_code=403, detail="Cannot delete this note message")
-        # Owner → cascade over the subtree; non-owner author → single leaf row.
-        if is_owner:
-            ids_to_delete: list[str] = _collect_subtree(children, message_id)
-        else:
-            await _soft_delete_leaf_guarded(db, message_id)
-            ids_to_delete = [message_id]
-            skip_batch = True
-    else:
-        ids_to_delete = _collect_subtree(children, message_id)
-
-    # Batch soft-delete — skipped for the guarded single-row path, which already
-    # soft-deleted its row inside the transaction (owner-cascade + AI-cascade
-    # still reach here with the full BFS id list).
-    if not skip_batch:
+    from access import can_modify_note_message
+    from models import resolve_message_author
+    is_owner = await _is_project_owner(session, user)
+    has_children = bool(children.get(message_id))
+    if not can_modify_note_message(
+        action="delete", user_id=user["user_id"],
+        is_owner=is_owner, has_children=has_children,
+        message=msg, session=session,
+    ):
+        # Distinguish "author of a non-leaf" (409, precise) from a plain
+        # permission denial (403). The owner never lands here.
+        is_author = resolve_message_author(msg, session) == user["user_id"]
+        if is_author and has_children:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot delete a message that has replies",
+            )
+        raise HTTPException(status_code=403, detail="Cannot delete this note message")
+    # Owner → cascade over the subtree; non-owner author → single leaf row.
+    if is_owner:
+        ids_to_delete: list[str] = _collect_subtree(children, message_id)
         await db.query(
             "UPDATE messages SET deleted_at = time::now() WHERE meta::id(id) IN $ids AND deleted_at IS NONE",
             {"ids": ids_to_delete},
         )
+    else:
+        await _soft_delete_leaf_guarded(db, message_id)
+        ids_to_delete = [message_id]
     return ids_to_delete
+
+
+async def _note_cascade_delete(
+    db, session: dict, msg: dict, message_id: str, user: dict,
+) -> list[str]:
+    """The note-chat cascade (the only kind that gets here — the route refuses
+    AI chats first).
+
+    # WHY: Two-phase cascade delete. Phase 1: load parent-child map. Phase 2:
+    # BFS in memory + batch soft-delete (in _delete_branch). The SELECT doesn't
+    # mutate, so a crash between phases means no partial state — the user can
+    # retry. The UPDATE is a single SurrealDB statement (atomic). BFS is done in
+    # Python because SurrealQL lacks recursive traversal on the parent_id field.
+    """
+    all_rows = await db.query(
+        "SELECT meta::id(id) AS mid, parent_id FROM messages "
+        "WHERE chat_id = $cid AND deleted_at IS NONE",
+        {"cid": msg["chat_id"]},
+    )
+    children: dict[str, list[str]] = {}
+    for r in (all_rows or []):
+        pid = r.get("parent_id")
+        if pid:
+            children.setdefault(pid, []).append(r["mid"])
+
+    return await _delete_branch(
+        db=db, session=session, msg=msg, message_id=message_id,
+        children=children, user=user,
+    )
 
 
 @router.delete("/messages/{message_id}")
@@ -699,33 +650,26 @@ async def delete_message_branch(message_id: str, user: dict = Depends(get_curren
 
     For note-chats: owner (root) may delete any message (cascade); a non-owner
     author may delete only their own LEAF message (single row, no cascade). See
-    backend/access.py:can_modify_note_message. AI chat (is_note=False) keeps the
-    unconditional cascade.
+    backend/access.py:can_modify_note_message. AI chat (is_note=False) is
+    REFUSED (400): a branch session only appends — there is no branch surgery.
     """
     msg = await fetch_one("messages", message_id)
     if not msg:
         raise HTTPException(status_code=404, detail="Message not found")
     session = await _require_session_access(msg["chat_id"], user)
+    # ARCH: an AI chat's rows only ever APPEND —
+    # there is no message delete. A branch is abandoned by leaving it (the
+    # switcher still lists it), and the whole thread dies with its root via
+    # DELETE /sessions/{thread_root}. Note chats keep their delete untouched.
+    if session.get("is_note") is not True:
+        raise HTTPException(
+            status_code=400,
+            detail="AI chats have no message delete — delete the conversation, "
+                   "not a message",
+        )
 
-    # WHY: Two-phase cascade delete. Phase 1: load parent-child map. Phase 2:
-    # BFS in memory + batch soft-delete (in _delete_branch). The SELECT doesn't
-    # mutate, so a crash between phases means no partial state — the user can
-    # retry. The UPDATE is a single SurrealDB statement (atomic). BFS is done in
-    # Python because SurrealQL lacks recursive traversal on the parent_id field.
-    all_rows = await db.query(
-        "SELECT meta::id(id) AS mid, parent_id FROM messages "
-        "WHERE chat_id = $cid AND deleted_at IS NONE",
-        {"cid": msg["chat_id"]},
-    )
-    children: dict[str, list[str]] = {}
-    for r in (all_rows or []):
-        pid = r.get("parent_id")
-        if pid:
-            children.setdefault(pid, []).append(r["mid"])
-
-    ids_to_delete = await _delete_branch(
-        db=db, session=session, msg=msg, message_id=message_id,
-        children=children, user=user,
+    ids_to_delete = await _note_cascade_delete(
+        db=db, session=session, msg=msg, message_id=message_id, user=user,
     )
     schedule_note_message_changed(
         db, session, msg["chat_id"], action="deleted", message_ids=ids_to_delete,

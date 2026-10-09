@@ -65,7 +65,7 @@ async def _attach(out, replay, monkeypatch, db=None):
     # monkeypatch (NOT a bare assign + del): the module-level function must
     # survive this test for every later test in the worker.
     monkeypatch.setattr(driver.timeline, "fetch_session_entries", fake_fetch)
-    await _attach_timeline(db or _FakeDB(), {}, "chat-1", out, offset=0)
+    await _attach_timeline({}, "chat-1", out, offset=0)
 
 
 @pytest.mark.asyncio

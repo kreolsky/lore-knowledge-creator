@@ -359,49 +359,6 @@ test("a watch-phase sink's pushes land BEFORE the same event's mapped frames", (
     'context_usage precedes the terminal relay (and its halt mint)')
 })
 
-// ── repoint: a fork re-keys live subscriptions ──────────────────────────
-// The plugin owns the repoint because it owns both the identity map and
-// this table; the subscriber does nothing.
-
-test('repoint re-keys the table: the fresh id delivers, the old one no longer does, and the re-ack carries the tail', () => {
-  const { tap, server, channel } = channelFixture()
-  const socket = accept(server, FakeWss.last!)
-  socket.receive({ type: 'subscribe', session_id: 'lore-1' }) // table key: dsh-9
-  socket.sent.length = 0
-
-  channel.repoint('lore-1', 'dsh-9', 'dsh-b', 40)
-  assert.deepEqual(socket.sent, [{
-    type: 'subscribed', session_id: 'lore-1', dsh_session_id: 'dsh-b', tail_seq: 40,
-  }], 'the re-ack names the lore id, the FRESH dsh id, and the fork tail')
-  socket.sent.length = 0
-
-  // The pre-fork id no longer routes; the fresh one does — the forked turn
-  // streams to the subscriber that was already there.
-  tap.emit({ id: 'dsh-9' }, ev(50, 'turn/start', { turn: 2 }))
-  assert.deepEqual(socket.sent, [], 'the pre-fork dsh id no longer delivers')
-  tap.emit({ id: 'dsh-b' }, ev(41, 'turn/start', { turn: 2 }))
-  assert.equal(socket.sent.length, 1)
-  assert.equal(socket.sent[0].session_id, 'dsh-b')
-  assert.equal(socket.sent[0].frame.kind, 'turn/start')
-})
-
-test('repoint: a socket without the old id is untouched; a root fork re-acks with tail null', () => {
-  const { server, channel } = channelFixture()
-  const owner = accept(server, FakeWss.last!)
-  owner.receive({ type: 'subscribe', session_id: 'lore-1' }) // dsh-9
-  const other = accept(server, FakeWss.last!)
-  other.receive({ type: 'subscribe', session_id: 'dsh-other' })
-  owner.sent.length = 0
-  other.sent.length = 0
-
-  channel.repoint('lore-1', 'dsh-9', 'dsh-b', null)
-  assert.deepEqual(owner.sent, [{
-    type: 'subscribed', session_id: 'lore-1', dsh_session_id: 'dsh-b', tail_seq: null,
-  }], 'root fork: the tail is null (the fresh log is empty)')
-  assert.deepEqual(other.sent, [],
-    'no re-ack to a socket that never held the old id — a later subscribe resolves the fresh id by itself')
-})
-
 test('close() detaches the channel from the tap and the server', () => {
   const { tap, server, channel } = channelFixture()
   const socket = accept(server, FakeWss.last!)

@@ -62,9 +62,16 @@ async def _note_scope_ids(db, document_id: str, project_id: str) -> list[str]:
 async def _load_candidate_rows(
     db, *, project_id: str, user: dict, document_id: str, is_note: bool | None,
 ) -> list:
-    """The candidate session rows for the list. Note-scoped (branch walk) or AI
+    """The candidate THREAD rows for the list. Note-scoped (branch walk) or AI
     project-wide per (project, user), candidate-capped before the last-activity
-    aggregate. No document_id scope filter for AI chats."""
+    aggregate. No document_id scope filter for AI chats.
+
+    # ARCH: the AI list counts THREADS — the
+    # candidates are ROOT rows only (thread_id = own id, or IS NONE for a
+    # pre-migration row that is its own thread), so branches never eat the
+    # MAX_LISTED_SESSIONS cap; the displayed fields come from each thread's
+    # last-opened branch (_thread_display_rows).
+    """
     if is_note is True:
         scope = await _note_scope_ids(db, document_id, project_id)
         return await db.query(
@@ -78,9 +85,51 @@ async def _load_candidate_rows(
         "SELECT * FROM chat_sessions "
         "WHERE project_id = $pid AND user_id = $uid "
         "AND is_note = false AND deleted_at IS NONE "
+        "AND (thread_id IS NONE OR thread_id = meta::id(id)) "
         "ORDER BY updated_at DESC LIMIT $max",
         {"pid": project_id, "uid": user["user_id"], "max": MAX_LISTED_SESSIONS},
     )
+
+
+async def _thread_display_rows(db, roots: list) -> list[tuple[str, dict]]:
+    """Each listed AI THREAD renders its last-opened branch: the root's
+    active_branch_id row when it is live and of the same thread (else the root
+    itself). Returns (root_id, display_row) pairs — the root id keys thread
+    identity (a piggyback hint may name either side), the display row feeds
+    the serializer and the last-activity aggregate.
+
+    # INVARIANT(corruption): a branch whose thread_id does not match the root
+    # is IGNORED (the root previews itself). Why: active_branch_id is a bare
+    # pointer written by PATCH; a stale or corrupt pointer must never make the
+    # list preview ANOTHER user's thread.
+    """
+    wanted = {
+        str(r.get("active_branch_id"))
+        for r in (roots or []) if r.get("active_branch_id")
+    }
+    branch_map: dict[str, dict] = {}
+    if wanted:
+        rows = await db.query(
+            "SELECT * FROM chat_sessions "
+            "WHERE meta::id(id) IN $ids AND deleted_at IS NONE",
+            {"ids": list(wanted)},
+        )
+        for r in (rows or []):
+            branch_map[str(extract_id(r.get("id")))] = r
+    out: list[tuple[str, dict]] = []
+    for root in (roots or []):
+        rid = extract_id(root.get("id"))
+        ab = str(root.get("active_branch_id") or "")
+        branch = branch_map.get(ab)
+        if (
+            branch
+            and branch.get("is_note") is not True
+            and (branch.get("thread_id") or ab) == (root.get("thread_id") or rid)
+        ):
+            out.append((rid, branch))
+        else:
+            out.append((rid, root))
+    return out
 
 
 async def _document_titles(db, rows: list, ref_map: dict) -> dict[str, str]:
@@ -223,7 +272,7 @@ async def _piggyback_messages(db, target_row: dict) -> dict | None:
     # rendered the session text-only until a manual re-select (observed: the
     # same row frames=104 via GET /messages, ABSENT via the piggyback).
     try:
-        await _attach_timeline(db, target_row, tid, msgs, offset=0)
+        await _attach_timeline(target_row, tid, msgs, offset=0)
     except HTTPException as exc:
         # ONLY the timeline-unavailable 502 degrades to null. The other raise
         # reachable from there is the paginated-read 400, unreachable behind
@@ -250,12 +299,16 @@ async def list_sessions(
     """List chat sessions for current user in a project.
 
     Visibility:
-      - AI chats (is_note None/False): PROJECT-WIDE per (project, user). Every AI
-        chat the user owns in the project is visible from ANY document — the open
-        document/reference only affects ghost-attach + the resolver's active-chat
-        pick, never this list. Privacy holds automatically: AI chats carry
-        user_id = $uid + owner-only access. The candidate set is capped at
-        MAX_LISTED_SESSIONS newest-by-updated_at.
+      - AI chats (is_note None/False): PROJECT-WIDE per (project, user), listed
+        as THREADS — the candidates are root rows (a pre-migration row with no
+        thread_id is its own thread), each item carrying its active_branch_id
+        session's fields (the last-opened branch); limit/offset count THREADS.
+        Every AI thread the user owns in the project is visible from ANY
+        document — the open document/reference only affects ghost-attach + the
+        resolver's active-chat pick, never this list. Privacy holds
+        automatically: AI chats carry user_id = $uid + owner-only access. The
+        candidate set is capped at MAX_LISTED_SESSIONS newest-by-updated_at
+        BEFORE the branch swap, so branches never eat the cap.
       - Note-chats (is_note True): KEEP the branch scope (ancestor/sibling/
         reference-children). Notes are shared document-anchored comment threads
         with a different ACL profile (visible to any commentator+ member); they
@@ -276,11 +329,21 @@ async def list_sessions(
         db, project_id=project_id, user=user,
         document_id=document_id, is_note=is_note,
     )
+    # ARCH: notes have no threads — the display swap is the AI path's. The
+    # root id maps every display row back to its thread (the piggyback hint
+    # may name a pre-change saved ROOT id as well as the branch it previews).
+    if is_note is True:
+        display_rows = list(rows or [])
+        root_by_row = {extract_id(r.get("id")): extract_id(r.get("id")) for r in display_rows}
+    else:
+        pairs = await _thread_display_rows(db, rows)
+        display_rows = [r for _, r in pairs]
+        root_by_row = {extract_id(r.get("id")): root for root, r in pairs}
 
     # Build ref_map: which document_ids belong to reference-documents.
     # ARCH: Skip context_document_ids for note sessions (notes never use context).
     doc_ids: set[str] = set()
-    for r in (rows or []):
+    for r in display_rows:
         did = r.get("document_id")
         if did:
             doc_ids.add(str(did))
@@ -289,13 +352,13 @@ async def list_sessions(
                 doc_ids.add(str(cid))
     ref_map = await build_ref_map(db, *doc_ids)
 
-    document_titles = await _document_titles(db, rows, ref_map)
+    document_titles = await _document_titles(db, display_rows, ref_map)
 
-    note_ids = [extract_id(r.get("id")) for r in (rows or []) if r.get("is_note") is True]
+    note_ids = [extract_id(r.get("id")) for r in display_rows if r.get("is_note") is True]
     note_ids = [i for i in note_ids if i]
     previews_by_session_id = await _note_previews(db, note_ids)
 
-    ai_ids = [extract_id(r.get("id")) for r in (rows or []) if r.get("is_note") is not True]
+    ai_ids = [extract_id(r.get("id")) for r in display_rows if r.get("is_note") is not True]
     ai_ids = [i for i in ai_ids if i]
     last_at_by_session = await _last_activity_map(db, ai_ids, previews_by_session_id)
 
@@ -303,7 +366,7 @@ async def list_sessions(
     # created_at). Python's sorted is stable, so equal keys keep the SQL
     # ORDER BY updated_at DESC tiebreak order.
     sorted_rows = sorted(
-        (rows or []),
+        display_rows,
         key=lambda r: (
             last_at_by_session.get(extract_id(r.get("id")))
             or r.get("updated_at") or r.get("created_at")
@@ -330,11 +393,15 @@ async def list_sessions(
     # doc-owned pick_first, so piggybacking it would almost never match. A valid preferred id still
     # piggybacks; the cold/stale path (no id / id outside the capped page) yields
     # active_messages=NULL and the client does a normal second loadMessages.
+    # The hint matches the DISPLAY row (a thread's active branch) OR its root —
+    # a pre-change saved id still names the thread the display row previews.
     target_row = None
     if preferred_session_id:
-        target_row = next(
-            (r for r in page if extract_id(r.get("id")) == preferred_session_id), None,
-        )
+        for r in page:
+            rid = extract_id(r.get("id"))
+            if rid == preferred_session_id or root_by_row.get(rid) == preferred_session_id:
+                target_row = r
+                break
 
     active_messages = (
         None if target_row is None else await _piggyback_messages(db, target_row)

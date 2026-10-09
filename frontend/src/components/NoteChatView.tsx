@@ -84,7 +84,7 @@ export function NoteChatView() {
     const prev = drafts[sid] ?? '';
     set(sid, prev + (prev ? ' ' : '') + transcribed);
   }, []);
-  const { recording, transcribing, toggleRecording } = useSimpleVoiceRecording(onTranscribed);
+  const { recording, transcribing, toggleRecording, cancelRecording } = useSimpleVoiceRecording(onTranscribed);
 
   const handleSend = useCallback(() => {
     if (!text.trim()) return;
@@ -105,6 +105,9 @@ export function NoteChatView() {
       handleSend();
       return;
     }
+    // A recording is discarded first — the composer's Escape handler owns that;
+    // the next Escape leaves the thread.
+    if (e.key === 'Escape' && recording) return;
     if (e.key === 'Escape') {
       e.preventDefault();
       const { messages, activeSessionId } = useNoteChatStore.getState();
@@ -126,7 +129,7 @@ export function NoteChatView() {
         useUIStore.getState().setRightPanelTab(docId, previousTab);
       }
     }
-  }, [handleSend]);
+  }, [handleSend, recording]);
 
   const readImageFile = useCallback((file: File) => {
     // ARCH: note image budget reads the SHARED
@@ -240,6 +243,7 @@ export function NoteChatView() {
         recording={recording}
         transcribing={transcribing}
         onToggleRecording={toggleRecording}
+        onCancelRecording={cancelRecording}
         images={images}
         onRemoveImage={removePendingImage}
         onScrollToBottom={scrolledAway ? scrollToBottom : undefined}

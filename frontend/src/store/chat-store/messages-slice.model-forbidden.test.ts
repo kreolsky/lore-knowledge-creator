@@ -47,7 +47,6 @@ function buildStore() {
     }],
     activeSessionId: 's1',
     messages: [],
-    selectedSiblings: {},
     streaming: null,
     modelsLoaded: true,
     modelPickerOpen: false,

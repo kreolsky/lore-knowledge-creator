@@ -30,7 +30,7 @@ vi.mock('../../store/chat-store', () => ({
     getState: () => ({ ...chatState, ...chatActions, sessions: chatState.sessions }),
     setState: (fn: (s: unknown) => unknown) => { Object.assign(chatState, fn(chatState)); },
   }),
-  selectActivePath: () => [],
+  selectBranchPath: () => [],
 }));
 const appState: Record<string, unknown> = {
   currentProject: { project_id: 'p1' },

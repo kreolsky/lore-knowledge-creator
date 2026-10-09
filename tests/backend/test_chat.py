@@ -293,12 +293,13 @@ async def test_edit_message(client, admin_user, project_with_doc):
 
 
 async def test_delete_message_single(client, admin_user, project_with_doc):
-    """Delete a leaf message — only that message is soft-deleted."""
+    """Delete a leaf message — only that message is soft-deleted (a NOTE
+    chat: AI chats have no message delete since branch sessions)."""
     pid, doc_id, _ = project_with_doc
     _, token = admin_user
     resp = await client.post(
         "/api/chat/sessions",
-        json={"project_id": pid, "document_id": doc_id},
+        json={"project_id": pid, "document_id": doc_id, "is_note": True},
         cookies={"lore_session": token},
     )
     sid = resp.json()["session_id"]
@@ -325,12 +326,13 @@ async def test_delete_message_single(client, admin_user, project_with_doc):
 
 
 async def test_delete_message_cascade(client, admin_user, project_with_doc):
-    """Delete a root message — all descendants are cascade-deleted."""
+    """Delete a root message — all descendants are cascade-deleted (a NOTE
+    chat: AI chats have no message delete since branch sessions)."""
     pid, doc_id, _ = project_with_doc
     _, token = admin_user
     resp = await client.post(
         "/api/chat/sessions",
-        json={"project_id": pid, "document_id": doc_id},
+        json={"project_id": pid, "document_id": doc_id, "is_note": True},
         cookies={"lore_session": token},
     )
     sid = resp.json()["session_id"]
@@ -372,12 +374,13 @@ async def test_delete_message_cascade(client, admin_user, project_with_doc):
 
 
 async def test_delete_message_branch_preserves_siblings(client, admin_user, project_with_doc):
-    """Deleting one fork branch preserves the other sibling branch."""
+    """Deleting one fork branch preserves the other sibling branch (a NOTE
+    chat: AI chats have no message delete since branch sessions)."""
     pid, doc_id, _ = project_with_doc
     _, token = admin_user
     resp = await client.post(
         "/api/chat/sessions",
-        json={"project_id": pid, "document_id": doc_id},
+        json={"project_id": pid, "document_id": doc_id, "is_note": True},
         cookies={"lore_session": token},
     )
     sid = resp.json()["session_id"]
@@ -434,12 +437,13 @@ async def test_delete_message_branch_preserves_siblings(client, admin_user, proj
 
 
 async def test_delete_already_deleted_message(client, admin_user, project_with_doc):
-    """Deleting an already-deleted message returns 404."""
+    """Deleting an already-deleted message returns 404 (a NOTE chat: AI
+    chats have no message delete since branch sessions)."""
     pid, doc_id, _ = project_with_doc
     _, token = admin_user
     resp = await client.post(
         "/api/chat/sessions",
-        json={"project_id": pid, "document_id": doc_id},
+        json={"project_id": pid, "document_id": doc_id, "is_note": True},
         cookies={"lore_session": token},
     )
     sid = resp.json()["session_id"]
@@ -467,12 +471,13 @@ async def test_delete_nonexistent_message(client, admin_user, project_with_doc):
 
 
 async def test_edit_deleted_message_returns_404(client, admin_user, project_with_doc):
-    """Editing a soft-deleted message returns 404."""
+    """Editing a soft-deleted message returns 404 (a NOTE chat: AI chats
+    have no message delete since branch sessions)."""
     pid, doc_id, _ = project_with_doc
     _, token = admin_user
     resp = await client.post(
         "/api/chat/sessions",
-        json={"project_id": pid, "document_id": doc_id},
+        json={"project_id": pid, "document_id": doc_id, "is_note": True},
         cookies={"lore_session": token},
     )
     sid = resp.json()["session_id"]
@@ -666,11 +671,6 @@ async def _completion_ctx(captured: list, api_url: str = "http://fake"):
     async def _ok_rate(*_a, **_k):
         return True
 
-    async def _no_leaf_move(*_a, **_k):
-        # Seam A (the driver-side leaf move) would hit the live harness with
-        # the fake line's secret; the branching tests own it.
-        return None
-
     with ExitStack() as stack:
         async def _fake_line():
             return line
@@ -688,7 +688,6 @@ async def _completion_ctx(captured: list, api_url: str = "http://fake"):
         stack.enter_context(patch.object(comp, "resolve_driver_line", _fake_line))
         stack.enter_context(pinned_chat_api(url=api_url))
         stack.enter_context(patch.object(comp, "check_completion_rate_limit", _ok_rate))
-        stack.enter_context(patch.object(comp, "_sync_leaf_to_branch_point", _no_leaf_move))
         driver.channel._channel = None
         try:
             yield

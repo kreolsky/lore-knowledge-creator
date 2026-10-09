@@ -90,7 +90,7 @@ vi.mock('../chat/context', () => ({
   removeItemFromContext: vi.fn(() => Promise.resolve()),
 }));
 
-import { useChatStore, selectActivePath } from './chat-store';
+import { useChatStore, selectBranchPath } from './chat-store';
 import { dispatchChatFrame } from './chat-store/streaming';
 import { clearChatCaches } from './chat-store/reset-registry';
 import { HttpError } from '../api/client';
@@ -159,7 +159,6 @@ beforeEach(() => {
     messages: [],
     messagesLoading: false,
     chatScopeLoading: false,
-    selectedSiblings: {},
     streaming: null,    models: [],
     modelsLoaded: false,
     defaultModel: '',
@@ -190,36 +189,154 @@ describe('F3 — resolveAncestorChain (shared send-path helper)', () => {
     expect(typeof (mod as any).runCompletion).toBe('function');
   });
 
-  it('forkAndResend derives the body via the shared helper (regression)', async () => {
+  it('forkAndResend branches after the parent, opens the branch, and sends linearly in it (regression)', async () => {
     const root = makeMsg({ message_id: 'root', parent_id: null, role: 'user', content: 'root' });
     const a = makeMsg({ message_id: 'a', parent_id: 'root', role: 'assistant', content: 'A' });
     const u1 = makeMsg({ message_id: 'u1', parent_id: 'a', role: 'user', content: 'fork me' });
     const a1 = makeMsg({ message_id: 'a1', parent_id: 'u1', role: 'assistant', content: 'reply' });
+    // The branch's copied prefix, as the messages GET would return it.
+    const copies = [
+      makeMsg({ message_id: 'c-root', parent_id: null, role: 'user', origin_id: 'root', content: 'root' }),
+      makeMsg({ message_id: 'c-a', parent_id: 'c-root', role: 'assistant', origin_id: 'a', content: 'A' }),
+      makeMsg({ message_id: 'c-u1', parent_id: 'c-a', role: 'user', origin_id: 'u1', content: 'fork me' }),
+    ];
 
     const { apiClient } = await import('../api/client');
-    (apiClient.post as ReturnType<typeof vi.fn>).mockClear().mockResolvedValue({ accepted: true });
+    const post = apiClient.post as ReturnType<typeof vi.fn>;
+    const get = apiClient.get as ReturnType<typeof vi.fn>;
+    (apiClient.patch as ReturnType<typeof vi.fn>).mockClear().mockResolvedValue({});
+    post.mockClear().mockImplementation(async (url: string) => {
+      if (url.endsWith('/branches')) {
+        return makeSession({ session_id: 'branch-1', thread_id: 'sess-1' });
+      }
+      return { accepted: true };
+    });
+    get.mockClear().mockImplementation(async (url: string) =>
+      url.includes('/messages') ? copies : []);
 
     useChatStore.setState({
       activeSessionId: 'sess-1',
       streaming: null,
       messages: [root, a, u1, a1],
-      selectedSiblings: {},
-      // AI chats are gated out of fork/
-      // regenerate (the buttons are hidden; the handler blocks on !is_note). This
-      // regression targets the ancestor-chain body derivation in isolation, so the
-      // session is seeded is_note=true to bypass the gate (the gate itself is
-      // covered by the agentModeNoForkRegenerate toast tests below).
-      sessions: [makeSession({ session_id: 'sess-1', is_note: true })],
+      sessions: [makeSession({ session_id: 'sess-1' })],
     });
 
     const p = useChatStore.getState().forkAndResend('u1', 'replayed');
-    wsFrame(TURN_CLOSED);
+    // The branch POST + the switch's loads run before the turn registers —
+    // wait for the completions POST, then close the turn.
+    await vi.waitFor(() => {
+      expect(post.mock.calls.some(c => String(c[0]).endsWith('/completions'))).toBe(true);
+    });
+    wsFrame(TURN_CLOSED, 'branch-1');
     await p;
 
-    const body = (apiClient.post as ReturnType<typeof vi.fn>).mock.calls[0][1];
-    // Ancestor chain of u1's parent (a) = [root, a]; plus the new user content.
-    expect(body.messages.map((m: ChatMessage) => m.content)).toEqual(['root', 'A', 'replayed']);
-    expect(body.parent_id).toBe('a');
+    // 1. The branch was created AFTER the edited message's parent (a).
+    const branchCall = post.mock.calls.find(c => String(c[0]).endsWith('/branches'));
+    expect(branchCall?.[1]).toEqual({ after_message_id: 'a' });
+    // 2. Opening = switching: the branch became active and the thread ROOT
+    //    got the active_branch_id PATCH.
+    expect(useChatStore.getState().activeSessionId).toBe('branch-1');
+    expect(apiClient.patch).toHaveBeenCalledWith(
+      '/chat/sessions/sess-1', { active_branch_id: 'branch-1' });
+    // 3. The turn ran INSIDE the branch, appended linearly on its tail (the
+    //    copied prefix's end), with the edited text as the new user turn.
+    const turnCall = post.mock.calls.find(c => String(c[0]).endsWith('/completions'));
+    expect(turnCall?.[0]).toBe('/chat/sessions/branch-1/completions');
+    expect((turnCall?.[1] as Record<string, unknown>).parent_id).toBe('c-u1');
+    const contents = ((turnCall?.[1] as { messages: Array<{ content: string }> }).messages)
+      .map(m => m.content);
+    expect(contents).toEqual(['root', 'A', 'fork me', 'replayed']);
+  });
+
+  it('forkAndResend never forks the first message (immutable — no root fork)', async () => {
+    const first = makeMsg({ message_id: 'first', parent_id: null, role: 'user' });
+    const second = makeMsg({ message_id: 'a1', parent_id: 'first', role: 'assistant' });
+    const { apiClient } = await import('../api/client');
+    (apiClient.post as ReturnType<typeof vi.fn>).mockClear().mockResolvedValue({ accepted: true });
+
+    useChatStore.setState({
+      activeSessionId: 'sess-1', streaming: null,
+      messages: [first, second],
+      sessions: [makeSession({ session_id: 'sess-1' })],
+    });
+    await useChatStore.getState().forkAndResend('first', 'edited');
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('selectBranchPath — the branch path', () => {
+  // A branch session's rows are a LINEAR chain: the branch path renders them
+  // all. A pre-migration legacy tree shows its newest lineage (the walk's
+  // freshest-subtree default — there is no sibling selection anymore: a
+  // branch is its own session and the switcher opens sessions).
+  it('returns empty array for no messages', () => {
+    const path = selectBranchPath({ messages: [] });
+    expect(path).toEqual([]);
+  });
+
+  it('returns the whole linear chain of a branch session', () => {
+    const msgs = makeLinearChain(4);
+    const path = selectBranchPath({ messages: msgs });
+    expect(path.map(m => m.message_id)).toEqual(['msg-0', 'msg-1', 'msg-2', 'msg-3']);
+  });
+
+  it('shows only the newest lineage of a legacy tree', () => {
+    // Reported scenario: branch A has an older root but the newest message lives
+    // in its subtree; branch B was forked later (newer root) but has no tail.
+    const root = makeMsg({ message_id: 'root', parent_id: null, created_at: '2025-01-01T00:00:00Z' });
+    const a = makeMsg({ message_id: 'a', parent_id: 'root', created_at: '2025-01-01T01:00:00Z' });
+    const b = makeMsg({ message_id: 'b', parent_id: 'root', created_at: '2025-01-01T02:00:00Z' });
+    const aChild = makeMsg({ message_id: 'a-child', parent_id: 'a', created_at: '2025-01-01T03:00:00Z' });
+
+    const path = selectBranchPath({ messages: [root, a, b, aChild] });
+    expect(path.map(m => m.message_id)).toEqual(['root', 'a', 'a-child']);
+  });
+
+  it('a deep descendant (not the sibling root) can decide the freshest branch', () => {
+    const root = makeMsg({ message_id: 'root', parent_id: null, created_at: '2025-01-01T00:00:00Z' });
+    const a = makeMsg({ message_id: 'a', parent_id: 'root', created_at: '2025-01-01T01:00:00Z' });
+    const b = makeMsg({ message_id: 'b', parent_id: 'root', created_at: '2025-01-01T09:00:00Z' });
+    const a1 = makeMsg({ message_id: 'a1', parent_id: 'a', created_at: '2025-01-01T02:00:00Z' });
+    const a2 = makeMsg({ message_id: 'a2', parent_id: 'a1', created_at: '2025-01-01T10:00:00Z' });
+
+    const path = selectBranchPath({ messages: [root, a, b, a1, a2] });
+    // b's root (09:00) is newer than a's root (01:00), but a2 (10:00) is newest overall.
+    expect(path.map(m => m.message_id)).toEqual(['root', 'a', 'a1', 'a2']);
+  });
+
+  it('tie-breaks to the last sibling when max timestamps are equal', () => {
+    const root = makeMsg({ message_id: 'root', parent_id: null, created_at: '2025-01-01T00:00:00Z' });
+    const a = makeMsg({ message_id: 'a', parent_id: 'root', created_at: '2025-01-01T05:00:00Z' });
+    const b = makeMsg({ message_id: 'b', parent_id: 'root', created_at: '2025-01-01T05:00:00Z' });
+
+    const path = selectBranchPath({ messages: [root, a, b] });
+    expect(path.map(m => m.message_id)).toEqual(['root', 'b']);
+  });
+
+  it('tolerates missing created_at and never lets it win over a real timestamp', () => {
+    const root = makeMsg({ message_id: 'root', parent_id: null, created_at: '2025-01-01T00:00:00Z' });
+    // a (first in array) has a real timestamp; b (last in array) is missing one.
+    const a = makeMsg({ message_id: 'a', parent_id: 'root', created_at: '2025-01-01T05:00:00Z' });
+    const b = makeMsg({ message_id: 'b', parent_id: 'root', created_at: '' });
+
+    const path = selectBranchPath({ messages: [root, a, b] });
+    // Old last-in-array behavior would pick b; the real timestamp on a wins instead.
+    expect(path.map(m => m.message_id)).toEqual(['root', 'a']);
+  });
+
+  it('is memoized by messages reference — returns same reference for same inputs', () => {
+    const msgs = makeLinearChain(2);
+    expect(selectBranchPath({ messages: msgs })).toBe(selectBranchPath({ messages: msgs }));
+  });
+
+  it('recomputes when messages change', () => {
+    const msgs1 = makeLinearChain(2);
+    const path1 = selectBranchPath({ messages: msgs1 });
+
+    const msgs2 = makeLinearChain(3);
+    const path2 = selectBranchPath({ messages: msgs2 });
+    expect(path1).not.toBe(path2);
+    expect(path2).toHaveLength(3);
   });
 });
 
@@ -251,162 +368,6 @@ describe('F4 — single streaming object lifecycle', () => {
     wsFrame(TURN_CLOSED);
     await promise;
     expect(useChatStore.getState().streaming).toBeNull();
-  });
-});
-
-describe('selectActivePath', () => {
-  it('returns empty array for no messages', () => {
-    const path = selectActivePath({ messages: [], selectedSiblings: {} });
-    expect(path).toEqual([]);
-  });
-
-  it('returns full linear chain when no forks', () => {
-    const msgs = makeLinearChain(4);
-    const path = selectActivePath({ messages: msgs, selectedSiblings: {} });
-    expect(path.map(m => m.message_id)).toEqual(['msg-0', 'msg-1', 'msg-2', 'msg-3']);
-  });
-
-  it('follows selectedSiblings at fork points', () => {
-    const root = makeMsg({ message_id: 'root', parent_id: null, content: 'root' });
-    const a = makeMsg({ message_id: 'msg-a', parent_id: 'root', content: 'branch A' });
-    const b = makeMsg({ message_id: 'msg-b', parent_id: 'root', content: 'branch B' });
-    const aChild = makeMsg({ message_id: 'msg-ac', parent_id: 'msg-a', content: 'A child' });
-
-    const path = selectActivePath({
-      messages: [root, a, b, aChild],
-      selectedSiblings: { root: 'msg-a' },
-    });
-    expect(path.map(m => m.message_id)).toEqual(['root', 'msg-a', 'msg-ac']);
-  });
-
-  it('defaults to the branch with the freshest message (not the newest fork root)', () => {
-    // Reported scenario: branch A has an older root but the newest message lives
-    // in its subtree; branch B was forked later (newer root) but has no tail.
-    const root = makeMsg({ message_id: 'root', parent_id: null, created_at: '2025-01-01T00:00:00Z' });
-    const a = makeMsg({ message_id: 'a', parent_id: 'root', created_at: '2025-01-01T01:00:00Z' });
-    const b = makeMsg({ message_id: 'b', parent_id: 'root', created_at: '2025-01-01T02:00:00Z' });
-    const aChild = makeMsg({ message_id: 'a-child', parent_id: 'a', created_at: '2025-01-01T03:00:00Z' });
-
-    const path = selectActivePath({
-      messages: [root, a, b, aChild],
-      selectedSiblings: {},
-    });
-    expect(path.map(m => m.message_id)).toEqual(['root', 'a', 'a-child']);
-  });
-
-  it('a deep descendant (not the sibling root) can decide the freshest branch', () => {
-    const root = makeMsg({ message_id: 'root', parent_id: null, created_at: '2025-01-01T00:00:00Z' });
-    const a = makeMsg({ message_id: 'a', parent_id: 'root', created_at: '2025-01-01T01:00:00Z' });
-    const b = makeMsg({ message_id: 'b', parent_id: 'root', created_at: '2025-01-01T09:00:00Z' });
-    const a1 = makeMsg({ message_id: 'a1', parent_id: 'a', created_at: '2025-01-01T02:00:00Z' });
-    const a2 = makeMsg({ message_id: 'a2', parent_id: 'a1', created_at: '2025-01-01T10:00:00Z' });
-
-    const path = selectActivePath({
-      messages: [root, a, b, a1, a2],
-      selectedSiblings: {},
-    });
-    // b's root (09:00) is newer than a's root (01:00), but a2 (10:00) is newest overall.
-    expect(path.map(m => m.message_id)).toEqual(['root', 'a', 'a1', 'a2']);
-  });
-
-  it('tie-breaks to the last sibling when max timestamps are equal', () => {
-    const root = makeMsg({ message_id: 'root', parent_id: null, created_at: '2025-01-01T00:00:00Z' });
-    const a = makeMsg({ message_id: 'a', parent_id: 'root', created_at: '2025-01-01T05:00:00Z' });
-    const b = makeMsg({ message_id: 'b', parent_id: 'root', created_at: '2025-01-01T05:00:00Z' });
-
-    const path = selectActivePath({
-      messages: [root, a, b],
-      selectedSiblings: {},
-    });
-    expect(path.map(m => m.message_id)).toEqual(['root', 'b']);
-  });
-
-  it('tolerates missing created_at and never lets it win over a real timestamp', () => {
-    const root = makeMsg({ message_id: 'root', parent_id: null, created_at: '2025-01-01T00:00:00Z' });
-    // a (first in array) has a real timestamp; b (last in array) is missing one.
-    const a = makeMsg({ message_id: 'a', parent_id: 'root', created_at: '2025-01-01T05:00:00Z' });
-    const b = makeMsg({ message_id: 'b', parent_id: 'root', created_at: '' });
-
-    const path = selectActivePath({
-      messages: [root, a, b],
-      selectedSiblings: {},
-    });
-    // Old last-in-array behavior would pick b; the real timestamp on a wins instead.
-    expect(path.map(m => m.message_id)).toEqual(['root', 'a']);
-  });
-
-  it('explicit selectedSiblings still overrides the freshest default', () => {
-    const root = makeMsg({ message_id: 'root', parent_id: null, created_at: '2025-01-01T00:00:00Z' });
-    const a = makeMsg({ message_id: 'a', parent_id: 'root', created_at: '2025-01-01T01:00:00Z' });
-    const b = makeMsg({ message_id: 'b', parent_id: 'root', created_at: '2025-01-01T02:00:00Z' });
-    const aChild = makeMsg({ message_id: 'a-child', parent_id: 'a', created_at: '2025-01-01T03:00:00Z' });
-
-    const path = selectActivePath({
-      messages: [root, a, b, aChild],
-      // Freshest default would pick A, but explicit selection forces B.
-      selectedSiblings: { root: 'b' },
-    });
-    expect(path.map(m => m.message_id)).toEqual(['root', 'b']);
-  });
-
-  it('is memoized — returns same reference for same inputs', () => {
-    const msgs = makeLinearChain(2);
-    const siblings = {};
-    const state = { messages: msgs, selectedSiblings: siblings };
-    const path1 = selectActivePath(state);
-    const path2 = selectActivePath(state);
-    expect(path1).toBe(path2);
-  });
-
-  it('recomputes when messages change', () => {
-    const msgs1 = makeLinearChain(2);
-    const path1 = selectActivePath({ messages: msgs1, selectedSiblings: {} });
-
-    const msgs2 = makeLinearChain(3);
-    const path2 = selectActivePath({ messages: msgs2, selectedSiblings: {} });
-    expect(path1).not.toBe(path2);
-    expect(path2).toHaveLength(3);
-  });
-});
-
-describe('selectSibling', () => {
-  it('updates selectedSiblings map', () => {
-    useChatStore.getState().selectSibling('parent-1', 'msg-x');
-    expect(useChatStore.getState().selectedSiblings).toEqual({ 'parent-1': 'msg-x' });
-  });
-
-  it('overwrites previous selection for same parent', () => {
-    useChatStore.getState().selectSibling('p1', 'a');
-    useChatStore.getState().selectSibling('p1', 'b');
-    expect(useChatStore.getState().selectedSiblings.p1).toBe('b');
-  });
-});
-
-describe('getSiblings', () => {
-  it('returns children of given parent', () => {
-    const msgs = [
-      makeMsg({ message_id: 'a', parent_id: null }),
-      makeMsg({ message_id: 'b', parent_id: 'a' }),
-      makeMsg({ message_id: 'c', parent_id: 'a' }),
-    ];
-    useChatStore.setState({ messages: msgs });
-    const siblings = useChatStore.getState().getSiblings('a');
-    expect(siblings.map(m => m.message_id)).toEqual(['b', 'c']);
-  });
-
-  it('returns root-level messages for null parent', () => {
-    const msgs = [
-      makeMsg({ message_id: 'a', parent_id: null }),
-      makeMsg({ message_id: 'b', parent_id: null }),
-    ];
-    useChatStore.setState({ messages: msgs });
-    const siblings = useChatStore.getState().getSiblings(null);
-    expect(siblings).toHaveLength(2);
-  });
-
-  it('returns empty array for unknown parent', () => {
-    useChatStore.setState({ messages: [makeMsg()] });
-    expect(useChatStore.getState().getSiblings('nonexistent')).toEqual([]);
   });
 });
 
@@ -475,7 +436,6 @@ describe('reset', () => {
       sessions: [makeSession()],
       activeSessionId: 's1',
       messages: [makeMsg()],
-      selectedSiblings: { a: 'b' },
       streaming: { sessionId: 's1', messageId: 'a1', content: 'partial', controller: null },
       pendingImages: ['data:x'],
     });
@@ -485,7 +445,6 @@ describe('reset', () => {
     expect(s.sessions).toEqual([]);
     expect(s.activeSessionId).toBeNull();
     expect(s.messages).toEqual([]);
-    expect(s.selectedSiblings).toEqual({});
     expect(s.streaming).toBeNull();
     expect(s.pendingImages).toEqual([]);
   });
@@ -575,6 +534,43 @@ describe('deleteSession', () => {
 
     expect(useChatStore.getState().activeSessionId).toBeNull();
     expect(useChatStore.getState().ghostSystemPromptId).toBeNull();
+  });
+});
+
+describe('deleteSession — an AI chat is a thread', () => {
+  it('deleting from an open branch DELETEs the thread root and drops every row of the thread', async () => {
+    const { apiClient } = await import('../api/client');
+    (apiClient.delete as ReturnType<typeof vi.fn>).mockClear();
+    (apiClient.delete as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+    const { useAppStore } = await import('./app-store');
+    (useAppStore.getState as ReturnType<typeof vi.fn>).mockReturnValue({
+      currentProject: { project_id: 'p1' },
+      currentDocument: { document_id: 'd1' },
+      showToast: vi.fn(),
+    });
+
+    // The list previews the thread by its open branch (the server's display
+    // row); a stale root row and an unrelated chat sit beside it.
+    useChatStore.setState({
+      sessions: [
+        makeSession({ session_id: 'b1', thread_id: 'root' }),
+        makeSession({ session_id: 'root', thread_id: 'root' }),
+        makeSession({ session_id: 'other', thread_id: 'other' }),
+      ],
+      activeSessionId: 'b1',
+      documentId: 'd1',
+      models: ['m1'],
+      defaultModel: 'm1',
+    });
+
+    await useChatStore.getState().deleteSession('b1');
+
+    // A branch id would be refused 400 — the thread is deleted by its root.
+    expect(apiClient.delete).toHaveBeenCalledWith('/chat/sessions/root');
+    expect(apiClient.delete).not.toHaveBeenCalledWith('/chat/sessions/b1');
+    expect(useChatStore.getState().sessions.map(s => s.session_id)).toEqual(['other']);
+    expect(useChatStore.getState().activeSessionId).toBeNull();
   });
 });
 
@@ -868,7 +864,7 @@ describe('sendMessage mid-turn send (routes to the message queue)', () => {
 });
 
 describe('sendMessage — message building', () => {
-  it('builds apiMessages from active path using selectedSiblings', async () => {
+  it('builds apiMessages from the branch path — the freshest lineage of the session rows', async () => {
     const { useAppStore } = await import('./app-store');
     (useAppStore.getState as ReturnType<typeof vi.fn>).mockReturnValue({
       currentDocument: null,
@@ -877,10 +873,10 @@ describe('sendMessage — message building', () => {
       showToast: vi.fn(),
     });
 
-    const root = makeMsg({ message_id: 'root', parent_id: null, role: 'user', content: 'root' });
-    const msgA = makeMsg({ message_id: 'msg-a', parent_id: 'root', role: 'assistant', content: 'branch A' });
-    const msgB = makeMsg({ message_id: 'msg-b', parent_id: 'root', role: 'assistant', content: 'branch B' });
-    const msgAC = makeMsg({ message_id: 'msg-ac', parent_id: 'msg-a', role: 'user', content: 'A child' });
+    const root = makeMsg({ message_id: 'root', parent_id: null, role: 'user', content: 'root', created_at: '2025-01-01T00:00:00Z' });
+    const msgA = makeMsg({ message_id: 'msg-a', parent_id: 'root', role: 'assistant', content: 'branch A', created_at: '2025-01-01T01:00:00Z' });
+    const msgB = makeMsg({ message_id: 'msg-b', parent_id: 'root', role: 'assistant', content: 'branch B', created_at: '2025-01-01T02:00:00Z' });
+    const msgAC = makeMsg({ message_id: 'msg-ac', parent_id: 'msg-a', role: 'user', content: 'A child', created_at: '2025-01-01T03:00:00Z' });
 
     const { apiClient } = await import('../api/client');
     (apiClient.post as ReturnType<typeof vi.fn>).mockClear().mockResolvedValue({ accepted: true });
@@ -889,7 +885,6 @@ describe('sendMessage — message building', () => {
       activeSessionId: 'sess-1',
       streaming: null,
       messages: [root, msgA, msgB, msgAC],
-      selectedSiblings: { root: 'msg-a' },
       sessions: [makeSession({ session_id: 'sess-1' })],
     });
 
@@ -897,6 +892,9 @@ describe('sendMessage — message building', () => {
     wsFrame(TURN_CLOSED);
     await p;
 
+    // The freshest lineage is root → A → A-child (msg-ac is the newest row,
+    // even though branch B forked later than A) — the turn appends on its
+    // tail, with the whole lineage as the wire history.
     const callBody = (apiClient.post as ReturnType<typeof vi.fn>).mock.calls[0][1];
     expect(callBody.messages).toHaveLength(4);
     expect(callBody.messages[0].content).toBe('root');
@@ -1094,7 +1092,6 @@ describe('sendMessage — send failure surfacing (F1)', () => {
       activeSessionId: 'sess-1',
       streaming: null,
       messages: makeLinearChain(2),
-      selectedSiblings: {},
     });
   });
 
@@ -1193,7 +1190,6 @@ describe('flushStreaming (via sendMessage finally block)', () => {
       activeSessionId: 'sess-1',
       streaming: null,
       messages: [],
-      selectedSiblings: {},
       sessions: [makeSession({ session_id: 'sess-1' })],
     });
 
@@ -1229,7 +1225,6 @@ describe('streamCompletion — sources display', () => {
       activeSessionId: 'sess-1',
       streaming: null,
       messages: [],
-      selectedSiblings: {},
       sessions: [makeSession({ session_id: 'sess-1' })],
     });
 
@@ -1264,7 +1259,6 @@ describe('streamCompletion — sources display', () => {
       activeSessionId: 'sess-1',
       streaming: null,
       messages: [],
-      selectedSiblings: {},
       sessions: [makeSession({ session_id: 'sess-1' })],
     });
 
@@ -1301,7 +1295,6 @@ describe('streamCompletion — context_warning handling', () => {
       activeSessionId: 'sess-1',
       streaming: null,
       messages: [],
-      selectedSiblings: {},
       sessions: [makeSession({ session_id: 'sess-1' })],
     });
 
@@ -1331,7 +1324,6 @@ describe('streamCompletion — context_warning handling', () => {
       activeSessionId: 'sess-1',
       streaming: null,
       messages: [],
-      selectedSiblings: {},
       sessions: [makeSession({ session_id: 'sess-1' })],
     });
 
@@ -1349,7 +1341,7 @@ describe('streamCompletion — context_warning handling', () => {
 });
 
 describe('agent-mode fork/regenerate gate (ST1)', () => {
-  it('forkAndResend PROCEEDS in an agent session (edit→branch is now allowed)', async () => {
+  it('forkAndResend PROCEEDS in an agent session (edit→branch is allowed — it creates a branch session)', async () => {
     const { apiClient } = await import('../api/client');
     const { useAppStore } = await import('./app-store');
     const showToast = vi.fn();
@@ -1358,20 +1350,36 @@ describe('agent-mode fork/regenerate gate (ST1)', () => {
       currentReference: null,
       showToast,
     });
-    (apiClient.post as ReturnType<typeof vi.fn>).mockClear().mockResolvedValue({ accepted: true });
+    const post = apiClient.post as ReturnType<typeof vi.fn>;
+    (apiClient.patch as ReturnType<typeof vi.fn>).mockClear().mockResolvedValue({});
+    post.mockClear().mockImplementation(async (url: string) => {
+      if (url.endsWith('/branches')) {
+        return makeSession({ session_id: 's-branch', thread_id: 's-agent' });
+      }
+      return { accepted: true };
+    });
 
     useChatStore.setState({
       sessions: [makeSession({ session_id: 's-agent', mode: 'agent', target_doc_id: 'd1' } as Record<string, unknown>)],
       activeSessionId: 's-agent',
-      messages: [makeMsg({ message_id: 'u1', role: 'user' })],
+      messages: [
+        makeMsg({ message_id: 'u1', role: 'user' }),
+        makeMsg({ message_id: 'a1', role: 'assistant', parent_id: 'u1' }),
+        makeMsg({ message_id: 'u2', role: 'user', parent_id: 'a1' }),
+      ],
       streaming: null,
     });
 
-    const p = useChatStore.getState().forkAndResend('u1', 'replay');
-    wsFrame(TURN_CLOSED, 's-agent');
+    const p = useChatStore.getState().forkAndResend('u2', 'replay');
+    await vi.waitFor(() => {
+      expect(post.mock.calls.some(c => String(c[0]).endsWith('/completions'))).toBe(true);
+    });
+    wsFrame(TURN_CLOSED, 's-branch');
     await p;
 
-    expect(apiClient.post).toHaveBeenCalled();
+    // The fork branched after u2's parent (a1) and ran its turn in the branch.
+    expect(post.mock.calls.some(c => String(c[0]).endsWith('/branches'))).toBe(true);
+    expect(post.mock.calls.some(c => String(c[0]) === '/chat/sessions/s-branch/completions')).toBe(true);
     expect(showToast).not.toHaveBeenCalled();
   });
 

@@ -65,7 +65,7 @@ vi.mock('../../chat/use-ghost-context', () => ({
   useGhostChatContext: () => ({ documentIds: [], referenceIds: [] }),
 }));
 vi.mock('../../hooks/useSimpleVoiceRecording', () => ({
-  useSimpleVoiceRecording: () => ({ recording: false, transcribing: false, toggleRecording: vi.fn() }),
+  useSimpleVoiceRecording: () => ({ recording: false, transcribing: false, toggleRecording: vi.fn(), cancelRecording }),
 }));
 vi.mock('./chat-input-hooks', () => ({
   useSystemPrompts: () => ({ systemPrompts: [], activeSystemPromptTitle: null }),
@@ -100,20 +100,24 @@ vi.mock('./ChatComposer', () => ({
     onChange: (e: { target: { value: string } }) => void;
     textareaRef: { current: HTMLTextAreaElement | null };
     leftControls?: unknown;
-  }) =>
-    createElement('div', null,
+  }) => {
+    composerProps.current = props as unknown as Record<string, unknown>;
+    return createElement('div', null,
       props.leftControls as never,
       createElement('textarea', {
         value: props.value,
         onChange: props.onChange as never,
         ref: props.textareaRef as never,
       }),
-    ),
+    );
+  },
 }));
 
 import { ChatInput } from './ChatInput';
 import { useChatStore } from '../../store/chat-store';
 
+const cancelRecording = vi.fn();
+const composerProps: { current: Record<string, unknown> | null } = { current: null };
 const dropdownProps: { title?: string; value?: string; options?: { value: string }[] }[] = [];
 // The reasoning map the dropdown reads: m1 advertises low|high; a row pinned
 // to something else (here 'max') is the stale-foreign case under test.
@@ -163,6 +167,15 @@ describe('ChatInput draft round-trip (unmount on tab switch)', () => {
     const second = render(createElement(ChatInput));
     expect(textareaOf(second.container).value).toBe('hello draft');
     unmount(second);
+  });
+});
+
+describe('ChatInput Escape wiring', () => {
+  it('hands the composer the turn stop and the voice discard (it owns the Escape order)', () => {
+    const rig = render(createElement(ChatInput));
+    expect(composerProps.current?.onStop).toBe(useChatStore.getState().stopGeneration);
+    expect(composerProps.current?.onCancelRecording).toBe(cancelRecording);
+    unmount(rig);
   });
 });
 
