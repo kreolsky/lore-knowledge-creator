@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* Standalone design study: keep generated preview markup out of app utilities. */
+@source not "../theme-preview";
 
 /* WHY: plain @theme, never `@theme inline` — utilities must keep emitting
  * var(--text-ui-*) so a media query can redefine the sizes at runtime

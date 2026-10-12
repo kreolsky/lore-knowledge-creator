@@ -25,6 +25,7 @@
   "exclude": [
     "dist",
     "e2e",
+    "theme-preview",
     "playwright.config.ts",
     "src/dsh"
   ]
