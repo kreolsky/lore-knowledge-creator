@@ -1,5 +1,7 @@
 """Security audit tests — S-1 through S-4, C-2, C-4, C-5, H-2/H-5/H-6/H-7 from backend audit plan."""
 
+from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 
@@ -46,7 +48,7 @@ class TestChatMessageValidation:
 
     def test_valid_messages_accepted(self):
         from models import CompletionRequest
-        req = CompletionRequest(messages=[
+        req = CompletionRequest(user_msg_id=uuid4(), messages=[
             {"role": "user", "content": "Hello"},
             {"role": "assistant", "content": "Hi there"},
         ])
@@ -56,7 +58,7 @@ class TestChatMessageValidation:
         """Messages with invalid role values must be rejected."""
         from models import CompletionRequest
         with pytest.raises(ValidationError):
-            CompletionRequest(messages=[
+            CompletionRequest(user_msg_id=uuid4(), messages=[
                 {"role": "hacker", "content": "inject this"},
             ])
 
@@ -64,7 +66,7 @@ class TestChatMessageValidation:
         """Messages without content field must be rejected."""
         from models import CompletionRequest
         with pytest.raises(ValidationError):
-            CompletionRequest(messages=[
+            CompletionRequest(user_msg_id=uuid4(), messages=[
                 {"role": "user"},
             ])
 
@@ -72,14 +74,14 @@ class TestChatMessageValidation:
         """Messages without role field must be rejected."""
         from models import CompletionRequest
         with pytest.raises(ValidationError):
-            CompletionRequest(messages=[
+            CompletionRequest(user_msg_id=uuid4(), messages=[
                 {"content": "no role"},
             ])
 
     def test_arbitrary_extra_fields_stripped(self):
         """Extra fields in message dicts should not pass through to the API."""
         from models import CompletionRequest
-        req = CompletionRequest(messages=[
+        req = CompletionRequest(user_msg_id=uuid4(), messages=[
             {"role": "user", "content": "hi", "malicious_key": "payload"},
         ])
         msg = req.messages[0]
@@ -89,7 +91,7 @@ class TestChatMessageValidation:
     def test_system_role_accepted(self):
         """System role messages must be allowed."""
         from models import CompletionRequest
-        req = CompletionRequest(messages=[
+        req = CompletionRequest(user_msg_id=uuid4(), messages=[
             {"role": "system", "content": "You are a helpful assistant"},
             {"role": "user", "content": "Hello"},
         ])
@@ -98,7 +100,7 @@ class TestChatMessageValidation:
     def test_images_field_validated(self):
         """Images field must be a list of strings when present."""
         from models import CompletionRequest
-        req = CompletionRequest(messages=[
+        req = CompletionRequest(user_msg_id=uuid4(), messages=[
             {"role": "user", "content": "look at this", "images": ["data:image/png;base64,abc"]},
         ])
         assert len(req.messages) == 1

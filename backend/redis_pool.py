@@ -36,10 +36,10 @@ _SOCKET_TIMEOUT_S = 2.0
 # RedisTimeoutError (rate_limit retried both). Why: a ConnectionError means the
 # command never reached the server (the stale-socket case the retry rationale
 # above names), so a retry is safe; a TimeoutError may mean the server EXECUTED
-# and the reply was lost, and retrying `SET key token NX` (turn_lock acquire)
-# then returns None for a key we already hold — completions would answer 409
-# "turn in progress" against our own token and nobody releases it before the
-# TTL. Rate-limit tiers lose the retry on a timed-out command only; they still
+# and the reply was lost, and retrying `SET key token NX` (a lock acquire,
+# doc_edit_lock) then returns None for a key we already hold — the caller
+# would read the lock as busy against our own token and nobody releases it
+# before the TTL. Rate-limit tiers lose the retry on a timed-out command only; they still
 # fail closed.
 
 _redis = None

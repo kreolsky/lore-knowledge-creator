@@ -1,7 +1,7 @@
 /** Chat header — static title (double-click to rename) + new chat / goto-parent / export / delete. Chat-store slices: sessions, activeSessionId, modelsLoaded, createSession, setActiveSession, deleteSession, updateSession, loadModels. App-store slices: currentProject, currentDocument, currentReference. */
 
 import { useState, useCallback, useEffect } from 'react';
-import { Plus, Trash2, Download, FileText, Network, Clock, FolderUp, Search } from 'lucide-react';
+import { ArrowLeft, Trash2, Download, FileText, Network, Clock, FolderUp, Search } from 'lucide-react';
 import { Button, IconButton, FieldInput, Popover } from '../ui';
 import { ParentPickerPopup } from '../ParentPickerPopup';
 import { useChatStore, selectBranchPath } from '../../store/chat-store';
@@ -257,13 +257,13 @@ export function ChatHeader() {
   return (
     <div className="flex items-center gap-1 px-3 py-2 border-b border-border bg-surface min-h-[40px]">
       <Button variant="primary" size="sm" onClick={handleNewChat}>
-        <Plus size={13} />
+        <ArrowLeft size={13} />
         {t('chatNew')}
       </Button>
 
       {activeSessionId && (
         // WHY this 22×22 slot (IconButton size="sm" footprint) is ALWAYS rendered
-        // between the "+ New chat" button and the title with AT MOST one icon —
+        // between the "← New chat" button and the title with AT MOST one icon —
         // goto-parent / change-parent / empty: the title's left edge must not
         // shift across states (icon shown / hidden / renaming); a slot that
         // unmounts would make the rename input slide left into its place. The

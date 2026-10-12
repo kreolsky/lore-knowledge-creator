@@ -13,7 +13,7 @@ import {
 } from './approvals.ts'
 import { clearSessionToolCtx } from './tools.ts'
 import { sessionEntries, sessionFork, type SessionMap } from './sessions.ts'
-import { followup, stop } from './turn.ts'
+import { followup, inboxDiscard, sessionStatusRoute, stop } from './turn.ts'
 import type { EventsChannel, SessionEventTap } from './ws-events.ts'
 import type { SessionStreamBaselines } from './stream-baselines.ts'
 
@@ -31,10 +31,8 @@ export function readBody(req: http.IncomingMessage): Promise<string> {
 }
 
 // ── The driver endpoints. apply() keeps only the server lifecycle; each
-// endpoint is its own handler over the shared dsh session runner
-// (resumeOrCreate below), and the turn's own phases —
-// activation restore, the restriction lifecycle, the session listener, the
-// fault paths — are each their own unit. ──────────────────────────────────────
+// endpoint is its own handler over the session agents (session-agents.ts)
+// and the shared dsh session runner (sessions.ts resumeOrCreate). ───────────
 
 export async function handleRequest(
   ctx: Context, map: SessionMap, tap: SessionEventTap, channel: EventsChannel | null,
@@ -61,6 +59,10 @@ export async function handleRequest(
       await followup(ctx, map, tap, channel, req, res)
     } else if (req.method === 'POST' && url.endsWith('/stop')) {
       await stop(ctx, map, req, res)
+    } else if (req.method === 'POST' && url.endsWith('/inbox/discard')) {
+      await inboxDiscard(map, req, res)
+    } else if (req.method === 'GET' && url.startsWith('/session-status')) {
+      await sessionStatusRoute(map, req, res)
     } else {
       res.writeHead(404).end('not found')
     }

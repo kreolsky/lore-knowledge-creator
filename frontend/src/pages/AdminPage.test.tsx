@@ -41,6 +41,7 @@ vi.setConfig({ testTimeout: 15_000 });
 
 let AdminPage: typeof import('./AdminPage').AdminPage;
 let useUIStore: (typeof import('../store/ui-store'))['useUIStore'];
+let chatState: Record<string, unknown>;
 let container: HTMLDivElement;
 let root: Root;
 let appState: Record<string, unknown>;
@@ -184,6 +185,10 @@ beforeEach(async () => {
       },
     };
   });
+  chatState = { modelsLoaded: true };
+  vi.doMock('../store/chat-store', () => ({
+    useChatStore: { setState: (patch: Record<string, unknown>) => { chatState = { ...chatState, ...patch }; } },
+  }));
   vi.doMock('../store/app-store', () => {
     // Function + getState — AdminPage's fire-and-forget toasts go through
     // useAppStore.getState(), the hook reads via the selector.
@@ -332,14 +337,14 @@ async function openProjects() {
 }
 
 describe('AdminPage — sections (initial = Users)', () => {
-  it('aside lists all section rows (admin: Info on top, Groups + Model access under Users, settings tabs + Skills) with Users active; no top tabs; projects not fetched until opened', async () => {
+  it('aside lists all section rows (admin: Info + Models & APIs + Model access on top, Groups under Users, settings tabs + Skills) with Users active; no top tabs; projects not fetched until opened', async () => {
     await render();
     const rows = Array.from(aside()!.querySelectorAll('button.doc-item'));
     expect(rows.map(r => r.textContent)).toEqual([
-      'Info', 'Users', 'Groups', 'Model access', 'Projects',
-      'Models & APIs', 'Search', 'Agent', 'Tools', 'Storage & Jobs', 'Embeddings', 'Skills',
+      'Info', 'Models & APIs', 'Model access', 'Users', 'Groups', 'Projects',
+      'Search', 'Agent', 'Tools', 'Storage & Jobs', 'Embeddings', 'Skills',
     ]);
-    expect(rows[1].classList.contains('active')).toBe(true);
+    expect(rows[3].classList.contains('active')).toBe(true);
     expect(container.querySelector('.left-bar-tab')).toBeNull();
     expect(projectsCalls()).toEqual([]);
     expect(main()?.textContent).toContain('Add user');
@@ -553,6 +558,13 @@ describe('AdminPage — Users section', () => {
     expect(appState.sectionCrumb).toBe('Embeddings');
     act(() => root.unmount());
     expect(appState.sectionCrumb).toBeNull();
+  });
+
+  it('leaving the page marks the chat model roster stale', async () => {
+    await render();
+    expect(chatState.modelsLoaded).toBe(true);
+    act(() => root.unmount());
+    expect(chatState.modelsLoaded).toBe(false);
   });
 });
 
@@ -1044,5 +1056,80 @@ describe('AdminPage — admin-only surfaces', () => {
     clickButtonWithText(localCard('bob@x.test'), 'Save');
     await act(async () => {});
     expect(appState.showToast).toHaveBeenCalledWith('String should have at least 6 characters');
+  });
+});
+
+describe('AdminPage — Model access: Hidden · Private · Public selector', () => {
+  const MODELS = [
+    { id: 'deepseek/flash', in_gateway: true, is_default: true, subjects: [] },
+    { id: 'openai/luna', in_gateway: true, is_default: false, subjects: ['group:g1'] },
+  ];
+
+  function modelRow(id: string): HTMLElement {
+    const el = main()?.querySelector<HTMLElement>(`section[data-model-id="${id}"]`);
+    expect(el, `model row ${id}`).toBeTruthy();
+    return el!;
+  }
+
+  function stop(row: HTMLElement, label: string): HTMLButtonElement {
+    const btn = Array.from(row.querySelectorAll<HTMLButtonElement>('[role=radio]'))
+      .find(b => b.textContent === label);
+    expect(btn, `stop "${label}"`).toBeDefined();
+    return btn!;
+  }
+
+  async function openModels() {
+    const base = apiGet.getMockImplementation() as (url: string) => Promise<unknown>;
+    apiGet.mockImplementation((url: string) =>
+      url === '/admin/models' ? Promise.resolve(MODELS) : base(url));
+    await render();
+    clickSection('Model access');
+    await act(async () => {});
+  }
+
+  it('a row granted to a group shows Private active', async () => {
+    await openModels();
+    const checked = modelRow('openai/luna').querySelectorAll('[aria-checked="true"]');
+    expect(Array.from(checked).map(b => b.textContent)).toEqual(['adminModelPrivate']);
+  });
+
+  it('clicking Hidden PUTs the model\'s subjects as ["hidden"] alone', async () => {
+    // Routed by URL: the section click also PUTs the global prefs.
+    apiPut.mockImplementation((url: string) => Promise.resolve(
+      url === '/admin/models/openai/luna' ? { id: 'openai/luna', subjects: ['hidden'] } : {},
+    ));
+    await openModels();
+    await act(async () => { stop(modelRow('openai/luna'), 'adminModelHidden').click(); });
+    expect(apiPut).toHaveBeenCalledWith('/admin/models/openai/luna', { subjects: ['hidden'] });
+    expect(stop(modelRow('openai/luna'), 'adminModelHidden').getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('the clicked stop is active before the PUT answers', async () => {
+    let answer: (v: unknown) => void = () => {};
+    apiPut.mockImplementation((url: string) => (url === '/admin/models/openai/luna'
+      ? new Promise(r => { answer = r; })
+      : Promise.resolve({})));
+    await openModels();
+    await act(async () => { stop(modelRow('openai/luna'), 'adminModelPublic').click(); });
+    expect(stop(modelRow('openai/luna'), 'adminModelPublic').getAttribute('aria-checked')).toBe('true');
+    expect(stop(modelRow('openai/luna'), 'adminModelPrivate').disabled).toBe(false);
+    await act(async () => { answer({ id: 'openai/luna', subjects: ['group:g1', 'public'] }); });
+    expect(stop(modelRow('openai/luna'), 'adminModelPublic').getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('a refused PUT restores the previous stop and shows the error', async () => {
+    apiPut.mockImplementation((url: string) => (url === '/admin/models/openai/luna'
+      ? Promise.reject(new Error('boom'))
+      : Promise.resolve({})));
+    await openModels();
+    await act(async () => { stop(modelRow('openai/luna'), 'adminModelHidden').click(); });
+    expect(stop(modelRow('openai/luna'), 'adminModelPrivate').getAttribute('aria-checked')).toBe('true');
+    expect(modelRow('openai/luna').textContent).toContain('adminModelSaveFailed');
+  });
+
+  it('the default model\'s Hidden stop is disabled', async () => {
+    await openModels();
+    expect(stop(modelRow('deepseek/flash'), 'adminModelHidden').disabled).toBe(true);
+    expect(stop(modelRow('openai/luna'), 'adminModelHidden').disabled).toBe(false);
   });
 });

@@ -32,9 +32,21 @@ process.env.LORE_DRIVER_SECRET ||= 't3st-s3cr3t'
 const {
   AGENT_KEY_REF, anthropicRoute, contextUsageFrame, ensureAgentKey,
   ensureModelEntry, ensureTitleConfig, ensureTitleEntry, ensureWebSearch,
-  followupTurns, forkModel, loreRoute, PROVIDER, ROUTE_BY_API, sessionEntries,
+  forkModel, loreRoute, PROVIDER, ROUTE_BY_API, sessionEntries,
   sessionFork, turnConfigProblem,
 } = await import('../src/index.ts')
+const { sessionAgents } = await import('../src/session-agents.ts')
+
+/** Mark a dsh session as RUNNING a turn — the liveness the log read branches
+ * on (sessionAgentLive) — for the duration of `body`. */
+async function whileRunning(dshId: string, body: () => Promise<void>): Promise<void> {
+  sessionAgents.set(dshId, { agent: { status: 'running' } } as any)
+  try {
+    await body()
+  } finally {
+    sessionAgents.delete(dshId)
+  }
+}
 import { reasoningEffortsDeclaration } from '../src/caps.ts'
 import { WEB_SEARCH_KEY_REF } from '../src/web-search/key.ts'
 
@@ -112,10 +124,11 @@ test('the turn setup registers the COMPLETE lore section and no other prompt tex
   // for a seeded session. A second prompt SOURCE (partial section,
   // plugin-authored prose, persona row, identity opener, runtime context) is
   // the two-prompts-drift failure the driver-contract plan fenced against —
-  // this fails on the source shape. The sections live in turn.ts (the turn
-  // setup) and sessions.ts (the fork seed's setup) since the step-4 split;
-  // both are read.
+  // this fails on the source shape. The sections live in session-agents.ts
+  // (the session agent's setup, text off the current prep), turn.ts (the
+  // prep) and sessions.ts (the fork seed's setup); all are read.
   const src = readFileSync(new URL('../src/turn.ts', import.meta.url), 'utf8')
+    + readFileSync(new URL('../src/session-agents.ts', import.meta.url), 'utf8')
     + readFileSync(new URL('../src/sessions.ts', import.meta.url), 'utf8')
   const setups = src.match(/systemPrompt\.section\(\{[\s\S]*?\}\)/g) ?? []
   assert.ok(setups.length >= 1, 'the turn setup registers a prompt section')
@@ -123,8 +136,10 @@ test('the turn setup registers the COMPLETE lore section and no other prompt tex
     assert.match(s, /name: 'lore-turn'/, 'the only section name is lore-turn')
     assert.match(s, /complete: true/, 'the section is COMPLETE (no harness additions)')
   }
-  assert.match(src, /text: assembleTurnPrompt\(body\.system_prompt\)/,
-    'the turn section text is the handed-over prompt verbatim (dsh\'s tool-skill publishes the catalog), never plugin-authored prose')
+  assert.match(src, /systemPrompt: assembleTurnPrompt\(body\.system_prompt\)/,
+    'the prep carries the handed-over prompt verbatim (dsh\'s tool-skill publishes the catalog), never plugin-authored prose')
+  assert.match(src, /text: \(\) => entry\.current\?\.systemPrompt \?\? ''/,
+    'the section text is the CURRENT prep\'s prompt, read at each assembly')
   // No persona/identity hooks anywhere in the plugin.
   for (const banned of ['persona:', 'includeHarnessIdentity', 'includeRuntimeContext']) {
     assert.ok(!src.includes(banned), `plugin must not configure ${banned} (preset territory)`)
@@ -636,7 +651,7 @@ test('registerLoreTools declares the hang bound ONLY on read-only proxies', () =
 // deleted payload fields (context_window / max_output_tokens) stay deleted.
 
 test('the turn resolves its caps via caps.ts; the payload numbers are gone', async () => {
-  // The caps read lives in turn.ts (prepareTurnDrive) and the /capability
+  // The caps read lives in turn.ts (buildTurnPrep) and the /capability
   // route in http.ts (handleRequest) since the step-4 split — both read.
   const src = readFileSync(new URL('../src/turn.ts', import.meta.url), 'utf8')
     + readFileSync(new URL('../src/http.ts', import.meta.url), 'utf8')
@@ -804,8 +819,8 @@ test('the driver never deletes a dsh session log (abandoned branches stay contin
 // for the backend's no-progress deadline. The read appends
 // `interruptedTurnClosers` for a NON-live session, in memory only — the same
 // deterministic closers dsh's cold read (readColdSessionLog) and its resume
-// repair produce. "Live" is the REGISTERED driver-owned turn: the dsh id is a
-// key of `followupTurns` — never "an agent might be running". The SAME
+// repair produce. "Live" is the session agent RUNNING a turn
+// (sessionAgentLive) — never "an agent might exist". The SAME
 // liveness gates the replayed transport terminal: a
 // non-live session's every closed turn ends with a seq-anchored turn_closed.
 
@@ -831,7 +846,7 @@ async function readEntries(ctx: any, map: any): Promise<any> {
 }
 
 test('a crashed log read for a NON-live session yields a CLOSED turn + the halt mint', async () => {
-  // No turn is registered for dsh-a in followupTurns — the driver is dead.
+  // No agent runs dsh-a — the driver is dead.
   const { ctx } = leafCtx(crashedLog())
   const { map } = fakeMap()
   const reply = await readEntries(ctx, map)
@@ -858,11 +873,10 @@ test('a crashed log read for a NON-live session yields a CLOSED turn + the halt 
     'the projection folds the closers like any row — the high-water mark is the synthetic turn/end')
 })
 
-test('the same log with the id in followupTurns stays OPEN — liveness is the REGISTERED turn', async () => {
+test('the same log while its agent RUNS stays OPEN — liveness is the running turn', async () => {
   const { ctx } = leafCtx(crashedLog())
   const { map } = fakeMap()
-  followupTurns.set('dsh-a', { cancel: () => {} })
-  try {
+  await whileRunning('dsh-a', async () => {
     const reply = await readEntries(ctx, map)
     const live = reply.turns.at(-1)
     assert.equal(live.end_seq, undefined,
@@ -872,9 +886,7 @@ test('the same log with the id in followupTurns stays OPEN — liveness is the R
     assert.ok(!reply.turns.some((t: any) =>
       t.frames.some((f: any) => f.type === 'turn_closed')),
       'a live session replays no terminals — the running turn closes live')
-  } finally {
-    followupTurns.delete('dsh-a')
-  }
+  })
 })
 
 test('a balanced log gains nothing: the closers of a settled log are empty', async () => {
@@ -909,14 +921,11 @@ test('a LIVE session replays no terminals even for CLOSED turns', async () => {
   // deliver (the plugin's own push owns the live path).
   const { ctx } = leafCtx(log())
   const { map } = fakeMap()
-  followupTurns.set('dsh-a', { cancel: () => {} })
-  try {
+  await whileRunning('dsh-a', async () => {
     const reply = await readEntries(ctx, map)
     assert.ok(!reply.turns.some((t: any) =>
       t.frames.some((f: any) => f.type === 'turn_closed')))
-  } finally {
-    followupTurns.delete('dsh-a')
-  }
+  })
 })
 
 test('a compacted source seeds its prefix with the checkpoint row verbatim', async () => {
@@ -1040,32 +1049,36 @@ test('reasoning effort: a persisted explicit effort is cleared when the turn sel
     'a previously explicit effort never survives into a Default turn')
 })
 
-test('reasoning effort: turn() wires the body effort through the selection, nothing else', async () => {
-  // Pinned by source shape, like the caps/leaf tests above: the turn handler
-  // reads body.reasoning_effort beside the model with the same string guard,
+test('reasoning effort: the prep wires the body effort through the selection, nothing else', async () => {
+  // Pinned by source shape, like the caps/leaf tests above: the prep reads
+  // body.reasoning_effort beside the model with the same string guard,
   // TRANSLATES it to the pi-ai level key (identity for pi-ai's own names,
   // `none` → `off`; an untranslatable spelling goes out verbatim for the
   // adapter to refuse loudly — never a silent Default), brands it into the
-  // selection, installs installModelSelection in the agent setup (setup
-  // completes before the first followup, so the value reaches the FIRST step
-  // of the turn), and agentOptions keeps its {provider, model} shape. The
-  // fork path carries no selection — a fork's next turn re-reads the effort
-  // off its own body. The turn drive lives in turn.ts since the step-4 split.
-  const src = readFileSync(new URL('../src/turn.ts', import.meta.url), 'utf8')
-  assert.match(src,
+  // prep's selection; the session agent installs installModelSelection ONCE
+  // over a ref whose `current` each claim swaps (the per-claim tests in
+  // session-agents.test.ts drive it), and agentOptions keeps its {provider,
+  // model} shape. The fork path carries no selection — a fork's next turn
+  // re-reads the effort off its own body.
+  const turn = readFileSync(new URL('../src/turn.ts', import.meta.url), 'utf8')
+  const agents = readFileSync(new URL('../src/session-agents.ts', import.meta.url), 'utf8')
+  const sessions = readFileSync(new URL('../src/sessions.ts', import.meta.url), 'utf8')
+  assert.match(turn,
     /const effort = typeof body\.reasoning_effort === 'string' && body\.reasoning_effort\s+\? body\.reasoning_effort\s+: null/,
     'the effort is read beside the model (null = Default)')
-  assert.match(src, /piEffort = piAiEffortKey\(effort\)/,
+  assert.match(turn, /piEffort = piAiEffortKey\(effort\)/,
     'the gateway spelling is translated to the pi-ai level key')
-  assert.match(src, /\.\.\.\(piEffort \? \{ reasoningEffort: ReasoningEffortId\(piEffort\) \} : \{\}\)/,
+  assert.match(turn, /\.\.\.\(piEffort \? \{ reasoningEffort: ReasoningEffortId\(piEffort\) \} : \{\}\)/,
     'the translated effort rides the selection ONLY when present (absent key = Default)')
-  assert.match(src, /installModelSelection\(agentCtx, selection\)/,
-    'the turn setup installs the selection')
-  assert.match(src, /const provider = ROUTE_BY_API\[caps\.api\]/,
+  assert.match(agents, /installModelSelection\(agentCtx, entry\.selection\)/,
+    'the session agent setup installs the swappable selection ref')
+  assert.match(agents, /entry\.selection\.current = prep\.selection/,
+    'each claim swaps the claimed message\'s selection in')
+  assert.match(turn, /const provider = ROUTE_BY_API\[caps\.api\]/,
     'the route name comes from the caps api — one map, two routes')
-  assert.match(src, /const agentOptions = \{ provider, model \}/,
+  assert.match(turn, /const agentOptions = \{ provider, model \}/,
     'agentOptions keeps its {provider, model} runtime shape, provider off the map')
-  assert.equal(src.match(/installModelSelection\(/g)?.length, 1,
+  assert.equal((turn + agents + sessions).match(/installModelSelection\(/g)?.length, 1,
     'exactly one install site — the fork create half stays selection-free')
 })
 
@@ -1104,34 +1117,39 @@ test('the tool ctx splits: standing survives between turns, the request half doe
   assert.equal(loreTurnCtxFor('dsh-ctx'), undefined)
 })
 
-test('source shape: /stop routes into the ONE cancel arm; /followup is the driver-owned turn', () => {
-  // Pinned by source shape, like the leaf/effort tests above. The handlers
-  // live in turn.ts since the step-4 split.
-  const src = readFileSync(new URL('../src/turn.ts', import.meta.url), 'utf8')
-  assert.equal(src.match(/agent\.cancel\(/g)?.length, 1,
-    'exactly one cancel call site — cancelAgentTurn; POST /stop routes through it')
-  assert.match(src, /entry\.cancel\(\)/, 'the /stop handler routes through the shared arm')
-  assert.match(src, /turn_in_progress/,
-    'a second followup on one session is refused, never queued')
-  assert.match(src, /event channel unavailable/,
+test('source shape: one cancel arm keeps the queue; /followup queues, never 409', () => {
+  // Pinned by source shape, like the leaf/effort tests above; the behaviour
+  // is driven in session-agents.test.ts.
+  const turn = readFileSync(new URL('../src/turn.ts', import.meta.url), 'utf8')
+  const agents = readFileSync(new URL('../src/session-agents.ts', import.meta.url), 'utf8')
+  assert.equal((turn + agents).match(/agent\.cancel\(/g)?.length, 1,
+    'exactly one cancel call site — cancelKeepingQueue; POST /stop routes through it')
+  assert.match(agents, /agent\.cancel\(\{ kind: 'user' \}, \{ keepInbox: true \}\)/,
+    'the cancel arm parks the queue (keepInbox); the person\'s Stop takes it out first')
+  assert.ok(!turn.includes('turn_in_progress') && !/\b409\b/.test(turn),
+    'a send into a busy session queues in the dsh inbox — never refused')
+  assert.match(turn, /event channel unavailable/,
     'no standing channel → explicit 503, never silent frame loss')
-  assert.match(src, /buildUserContent/, 'both turn drivers share ONE user-content prep')
+  assert.match(turn, /json\(res, 422, \{ detail: err\.message \}\)/,
+    'a config refusal answers 422 with the reason and queues nothing')
 })
 
-test("source shape: the followup task pushes turn_closed in its finally (plan step 7)", () => {
-  // The WS transport's terminal signal: a driver-owned turn has no stream whose
-  // end signals its close, so the plugin announces the turn's full end AFTER
-  // every mapped frame (the halt mint included) — and the replay carries it
-  // for a session with no registered turn when this push died with the socket
-  // (the backend's own mints stay on the breach and setup-failure paths). The
-  // followup task lives in turn.ts since the step-4 split.
-  const src = readFileSync(new URL('../src/turn.ts', import.meta.url), 'utf8')
-  const finallyIdx = src.indexOf('} finally {\n      await finish()')
-  const push = src.match(/try \{ channel\.push\(dshId, \{ type: 'turn_closed' \}\) \} catch/)
-  assert.ok(finallyIdx !== -1, 'the followup task has a finally that finishes the turn')
-  assert.ok(push, 'the turn_closed push exists, best-effort (a closed channel is the replay\'s to cover)')
-  assert.ok(push!.index !== undefined && push!.index > finallyIdx,
-    'turn_closed is pushed in the followup task\'s finally, after finish()')
+test('source shape: turn_closed is pushed once per claimed turn, before the next claim', () => {
+  // The WS transport's terminal signal: the plugin announces a turn's full
+  // end AFTER every mapped frame (the halt mint included) — the turn/end
+  // watcher defers it past the synchronous fan-out — and a claim closes a
+  // still-open predecessor FIRST, so turn N's terminal never lands after turn
+  // N+1's claim. The replay carries it for a non-running session when the
+  // push died with the socket.
+  const src = readFileSync(new URL('../src/session-agents.ts', import.meta.url), 'utf8')
+  assert.match(src, /try \{ entry\.deps\.channel\.push\(entry\.dshId, \{ type: 'turn_closed' \}\) \} catch/,
+    'the turn_closed push exists, best-effort (a closed channel is the replay\'s to cover)')
+  assert.equal(src.match(/type: 'turn_closed'/g)?.length, 1, 'one push site — closeOpenTurn')
+  const claim = src.slice(src.indexOf('function onClaim('))
+  assert.ok(claim.indexOf('closeOpenTurn(entry)') < claim.indexOf("type: 'lore/claim'"),
+    'a claim closes the previous turn before pushing its own lore/claim')
+  assert.match(src, /queueMicrotask\(\(\) => closeOpenTurn\(entry\)\)/,
+    'the turn/end watcher defers the terminal past the event\'s mapped frames')
 })
 
 // ─── /session-fork: the session-per-branch primitive (plan ───────────────────

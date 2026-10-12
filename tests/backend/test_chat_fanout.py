@@ -38,6 +38,7 @@ from test_driver_channel import (
     FakeReplay,
     PersistSpy,
     _chunk,
+    _claim,
     _env,
     _turn_end,
     _verdict_ask,
@@ -164,13 +165,13 @@ class TestFanoutDelivery:
             ws_ctx[0].__exit__(None, None, None)
 
     @pytest.mark.asyncio
-    async def test_bound_turn_done_frame_reaches_the_wire(
+    async def test_claimed_turn_done_frame_reaches_the_wire(
         self, sync_app, client, collab_project, wired_channel, monkeypatch,
     ):
-        """A BOUND turn flows through the relay arms: the listener receives
-        the SSE wire order (model_update, dsh_event…, done) and the done
-        frame — the SAME join finalize persists — reaches the owner's socket
-        inside the chat_frame envelope."""
+        """A CLAIMED turn flows through the relay arms: the listener receives
+        the preamble then the wire order (model_update, dsh_event…, done) and
+        the done frame — the SAME join finalize persists — reaches the
+        owner's socket inside the chat_frame envelope."""
         pid, _doc, _admin_token, user_token, _admin_uid, _user_uid = collab_project
         sid = await _harness_chat(client, pid, _doc, user_token)
         ch, connector = wired_channel
@@ -179,9 +180,9 @@ class TestFanoutDelivery:
         owner = _open_ws(sync_app, pid, user_token)
         try:
             assert await ensure_fanout(sid) is True
-            ch.bind_turn(sid, assistant_msg_id="m1", user_id="u1")
             sock = connector.sockets[0]
             for frame in (
+                _claim("m1"),
                 {"type": "model_update", "model": "local/test"},
                 _chunk(8, "Hello "),
                 _turn_end(10, "completed"),
@@ -189,9 +190,9 @@ class TestFanoutDelivery:
                 sock.push(_env(sid, frame))
             await _settle()
 
-            got = [json.loads(owner[1].receive_text()) for _ in range(4)]
+            got = [json.loads(owner[1].receive_text()) for _ in range(5)]
             assert [g["frame"]["type"] for g in got] == [
-                "model_update", "dsh_event", "dsh_event", "done"]
+                "ids", "model_update", "dsh_event", "dsh_event", "done"]
             assert got[-1]["frame"]["content"] == "Hello"
             assert got[-1]["session_id"] == sid
         finally:

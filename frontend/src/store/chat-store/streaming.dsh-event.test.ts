@@ -44,7 +44,6 @@ async function drive(frames: Record<string, unknown>[], initial: Record<string, 
   const { get, set } = makeStore(initial);
   const p = streamCompletion(get, set, {
     sessionId: 's1', body: {}, signal: new AbortController().signal,
-    userParentId: null, userContent: 'hi',
   });
   dispatchChatFrame(get, set, 's1', IDS);
   for (const f of frames) dispatchChatFrame(get, set, 's1', f);

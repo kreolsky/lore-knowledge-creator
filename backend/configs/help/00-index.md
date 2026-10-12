@@ -1,48 +1,48 @@
-# Справка Lore
+# Lore Help
 
-Lore — редактор для совместной работы над документами проекта: мира, игры, продукта, исследования. В центре всегда документ, а чат, материалы, заметки и агент нужны, чтобы этот документ сделать.
+Lore is an editor for working together on a project's documents: a world, a game, a product, a piece of research. The document is always at the center; the chat, the materials, the notes and the agent exist to help you make that document.
 
-Эта справка лежит в вашем проекте как обычный документ с дочерними страницами. Её можно читать, править, переносить и удалять. Агент знает, где она, и открывает её, когда вы спрашиваете, как что-то сделать в Lore. С новыми версиями Lore страницы справки обновляются сами и заменяются целиком, даже если вы их правили. Свои заметки о работе в Lore держите в других документах.
+This guide lives in your project as an ordinary document with child pages. You can read it, edit it, move it and delete it. The agent knows where it is and opens it when you ask how to do something in Lore. With new versions of Lore the guide pages update themselves and are replaced entirely, even if you edited them. Keep your own notes about working in Lore in other documents.
 
-## Как работать в Lore
+## How to work in Lore
 
-1. **Соберите материалы.** К документу прикрепляются референсы: записи созвонов, голосовые заметки, файлы, картинки, выдержки из других документов. Это черновики из которых будет готовиться документ. См. [Референсы](help:references) и [Голосовые заметки](help:voice).
-2. **Разберите материалы с агентом.** Попросите агента собрать всё, что обсуждалось, отметить противоречия и то, как менялось мнение со временем. Регулярные разборы удобно оформлять [скиллами](help:skills). Из материалов можно извлечь факты в [память проекта](help:memory).
-3. **Зафиксируйте намерения.** Документ описывает, чего мы хотим добиться, и принимает решения по спорным и пограничным случаям. Он не расписывает то, что и так однозначно восстанавливается из контекста. Хороший документ — минимальный: всё остальное можно вывести из него и соседних документов.
-4. **Встройте документ в проект.** Документы образуют иерархию и граф ссылок. Каждый документ должен знать, к какой механике или системе он относится и на что опирается. См. [Документы и граф](help:documents-graph).
-5. **Проверьте.** Попросите агента провести ревью: критично пройтись по документу, найти подтверждения и опровержения в референсах, соседних механиках и системах.
+1. **Gather materials.** References are attached to a document: call recordings, voice notes, files, pictures, excerpts from other documents. These are the drafts the document will be built from. See [References](help:references) and [Voice notes](help:voice).
+2. **Go through the materials with the agent.** Ask the agent to collect everything that was discussed, and to point out contradictions and how opinions changed over time. Recurring reviews are convenient to package as [skills](help:skills). Facts from the materials can be extracted into [project memory](help:memory).
+3. **Pin down the intent.** A document describes what we want to achieve and makes the calls on disputed and borderline cases. It does not spell out what can already be unambiguously recovered from context. A good document is minimal: everything else can be derived from it and the documents around it.
+4. **Fit the document into the project.** Documents form a hierarchy and a graph of links. Every document should know which mechanic or system it belongs to and what it relies on. See [Documents and the graph](help:documents-graph).
+5. **Check it.** Ask the agent for a review: a critical pass over the document, looking for support and contradictions in the references and in neighbouring mechanics and systems.
 
-Повторяющиеся шаги этого цикла стоит оформлять скиллами.
+The recurring steps of this cycle are worth packaging as skills.
 
-## Разделы
+## Sections
 
-- [Интерфейс](help:interface) — что где находится на экране.
-- [Документы и граф](help:documents-graph) — дерево, ссылки, перемещение.
-- [Редактор](help:editor) — разметка, панель выделения, горячие клавиши.
-- [Таблицы](help:tables) — таблицы внутри документа, импорт CSV, редактирование.
-- [Картинки и встраивание](help:embeds) — картинки в тексте, встраивание документов и референсов.
-- [Заметки](help:notes) — обсуждения прямо в тексте.
-- [Снимки и история](help:history) — автоматические и ручные снимки, восстановление, экспорт.
-- [Референсы](help:references) — материалы к документу.
-- [Голосовые заметки](help:voice) — запись, куда она сохраняется, приложения.
-- [Чат и агент](help:chat-agent) — сквозные чаты, контекст, модели, подтверждение правок.
-- [Скиллы](help:skills) — как автоматизировать свою работу.
-- [Персоны, правила и знания](help:personas-rules-knowledge) — настройка поведения агента.
-- [Память](help:memory) — факты проекта и их консолидация.
-- [Пайплайны](help:pipelines) — автоматическая обработка материалов.
-- [Поиск](help:search) — по проекту, по смыслу, найти и заменить в документе.
-- [Доступ и публикация](help:access) — участники, публичные ссылки, ключи API, перенос между проектами.
-- [Блокировка экрана](help:pin-lock) — быстрый PIN.
+- [Interface](help:interface) — what is where on the screen.
+- [Documents and the graph](help:documents-graph) — the tree, links, moving documents.
+- [Editor](help:editor) — markup, the selection toolbar, keyboard shortcuts.
+- [Tables](help:tables) — tables inside a document, CSV import, editing.
+- [Images and embeds](help:embeds) — pictures in text, embedding documents and references.
+- [Notes](help:notes) — discussions right in the text.
+- [Snapshots and history](help:history) — automatic and manual snapshots, restoring, export.
+- [References](help:references) — materials for a document.
+- [Voice notes](help:voice) — recording, where it is saved, the apps.
+- [Chat and the agent](help:chat-agent) — project-wide chats, context, models, confirming edits.
+- [Skills](help:skills) — how to automate your own work.
+- [Personas, rules and knowledge](help:personas-rules-knowledge) — tuning how the agent behaves.
+- [Memory](help:memory) — project facts and their consolidation.
+- [Pipelines](help:pipelines) — automatic processing of materials.
+- [Search](help:search) — across the project, by meaning, find and replace in a document.
+- [Access and publishing](help:access) — members, public links, API keys, moving between projects.
+- [Screen lock](help:pin-lock) — a quick PIN.
 
-## В планах
+## Planned
 
-Эти возможности ещё не доступны в интерфейсе:
+These features are not available in the interface yet:
 
-- группы пользователей с разными правами;
-- настройка запуска пайплайнов по расписанию из интерфейса;
-- новые пайплайны (например, саммаризация) и пайплайны, которые агент собирает сам;
-- сравнение двух снимков документа с подсветкой различий.
+- user groups with different permissions;
+- setting up scheduled pipeline runs from the interface;
+- new pipelines (for example, summarization) and pipelines the agent assembles itself;
+- comparing two snapshots of a document with the differences highlighted.
 
-## Об этой справке
+## About this guide
 
-Если перенести справку в другой проект, она перестанет обновляться. Новый проект получает свою справку сам. Если справка не нужна, её можно просто удалить: удалённая справка не возвращается.
+If you move the guide to another project, it stops updating. A new project gets its own guide automatically. If you don't need the guide, you can simply delete it: a deleted guide does not come back.

@@ -5,7 +5,6 @@ import logging
 from collections import deque
 from uuid import uuid4
 
-import turn_lock
 from chat_sessions.note_events import broadcast_doc_id, fire_note_emit
 from fastapi import Depends, HTTPException, Query
 from surrealdb import AsyncSurreal
@@ -15,6 +14,7 @@ from auth import get_current_user
 from db import create_record, fetch_one, get_db, run_in_transaction
 from models import MessageCreate, MessageUpdate
 from routes.chat._router import router
+from routes.chat.fanout import ensure_fanout
 from routes.chat.serializers import (
     PREVIEW_CONTENT_MAX,
     _resolve_author_names,
@@ -134,8 +134,9 @@ async def load_session_messages(
     "/sessions/{session_id}/messages",
     responses={400: {"description": "A paginated read (offset>0) cannot anchor "
                                     "the agent timeline and is refused"},
-               502: {"description": "The agent transcript is unreadable — the "
-                                    "thread is never served without its timeline"}},
+               502: {"description": "The agent transcript or its status is "
+                                    "unreadable — the thread is never served "
+                                    "without its timeline"}},
 )
 async def list_messages(
     session_id: str,
@@ -144,11 +145,13 @@ async def list_messages(
     user: dict = Depends(get_current_user),
     db: AsyncSurreal = Depends(get_db),
 ):
-    """Return messages in a chat session with pagination."""
+    """Return a chat session's messages (paginated) and its queue —
+    `{messages, queue, queue_seq}`: the live dsh agent's next-turn inbox and
+    the seq that snapshot includes (empty/None for a note chat)."""
     session = await _require_session_access(session_id, user)
     out = await load_session_messages(db, session, session_id, limit=limit, offset=offset)
-    await _attach_timeline(session, session_id, out, offset=offset)
-    return out
+    queue = await _attach_timeline(session, session_id, out, offset=offset)
+    return {"messages": out, **queue}
 
 
 # ARCH: the TRANSCRIPT is the driver's session log, not a Lore column. The Lore row owns
@@ -196,7 +199,7 @@ def _log_shows_open_turn(turns: list[dict]) -> bool:
 
 
 def _mark_open_turn(
-    assistants: list[dict], turns: list[dict], *, lock_held: bool,
+    assistants: list[dict], turns: list[dict], *, running: bool,
 ) -> None:
     """Attach the OPEN turn (the projection's trailing turn with no `end_seq`)
     to the row that turn is writing, flagged
@@ -217,8 +220,8 @@ def _mark_open_turn(
     # column is the splitter, mirroring entries.ts's emitting branch.
     """
     if not _log_shows_open_turn(turns):
-        if lock_held:
-            _mark_lock_held_turn(assistants)
+        if running:
+            _mark_running_turn(assistants)
         return
     open_frames = [
         f for f in turns[-1].get("frames") or [] if isinstance(f, dict)
@@ -242,16 +245,16 @@ def _mark_open_turn(
         newest["assistant_stream"] = baseline
 
 
-def _mark_lock_held_turn(assistants: list[dict]) -> None:
+def _mark_running_turn(assistants: list[dict]) -> None:
     """Mark the running turn the log cannot show yet: the NEWEST assistant row,
     only if it is the open turn's shape (unstamped, no halt, no frames).
     No frames and no `assistant_stream` — nothing streamed is
     logged yet."""
     newest = max(assistants, key=lambda r: r.get("created_at") or "")
-    # INVARIANT(corruption): a held turn lock marks the open turn even when the
-    # driver log shows none. Why: between create_completion taking the lock and
-    # dsh logging `turn/start`, the timeline cannot show the turn, and an
-    # unmarked reload makes the browser close a live turn as 'lost'. The newest
+    # INVARIANT(corruption): a running dsh agent marks the open turn even when
+    # the driver log shows none. Why: between dsh's claim and its log flush
+    # the timeline cannot show the turn, and an unmarked reload makes the
+    # browser close a live turn as 'lost'. The newest
     # row only — an older abnormally-ended unstamped row is never marked; a
     # `halt` row never is (the halt INVARIANT above keeps priority).
     if (
@@ -273,9 +276,6 @@ async def _fetch_session_turns(session: dict, session_id: str) -> dict:
     turn list for an id the driver has never seen, and the rows never get
     frames. The returned id is also the mint identity the reload lore mints
     key on (the compaction window's source side).
-
-    `lock_held` is read on the CHAT id, not the lineage: create_completion
-    takes the turn lock on the chat id.
     """
     from driver.timeline import DriverTimelineUnavailable, fetch_session_entries
     lineage = session.get("compacted_from") or session_id
@@ -304,8 +304,39 @@ async def _fetch_session_turns(session: dict, session_id: str) -> dict:
         ) from exc
     if seeded_from:
         replay = _cut_at_seed(replay or {}, seed_seq)
-    lock_held = await turn_lock.turn_lock_held(session_id)
-    return {"lineage": lineage, **(replay or {}), "lock_held": lock_held}
+    return {"lineage": lineage, **(replay or {})}
+
+
+async def _read_session_status(session: dict, session_id: str) -> dict:
+    """The live dsh agent's `{status, queue, seq}` for this chat's DRIVER
+    session (compacted_from or the chat id — the session its sends queue in).
+    An unreadable status is a 502, the same arm as an unreadable timeline:
+    the reload's open-turn mark and queue derive from it."""
+    from driver.timeline import DriverTimelineUnavailable, fetch_session_status
+    driver_session_id = session.get("compacted_from") or session_id
+    try:
+        status = await fetch_session_status(driver_session_id)
+    except DriverTimelineUnavailable as exc:
+        logger.warning("agent status unavailable session=%s: %s", session_id, exc)
+        raise HTTPException(
+            status_code=502, detail="The agent timeline could not be read",
+        ) from exc
+    if status["status"] == "running" or status["queue"]:
+        await _ensure_fanout_quietly(session_id, driver_session_id)
+    return status
+
+
+async def _ensure_fanout_quietly(session_id: str, driver_session_id: str) -> None:
+    """Re-attach the fan-out for a session whose turns run or wait. WHY: the
+    subscription lives in memory and only a completion opened it, so after a
+    backend restart the queue's next claims would reach no listener and get
+    no rows. Best-effort: the read itself must not fail over it — the next
+    send opens it anyway."""
+    try:
+        await ensure_fanout(session_id, driver_session_id=driver_session_id)
+    except Exception:
+        logger.warning(
+            "fan-out re-attach failed session=%s", session_id, exc_info=True)
 
 
 def _cut_at_seed(replay: dict, seed_seq: int) -> dict:
@@ -325,12 +356,15 @@ def _cut_at_seed(replay: dict, seed_seq: int) -> dict:
 
 async def _attach_timeline(
     session: dict, session_id: str, out: list[dict], *, offset: int,
-) -> None:
+) -> dict:
     """Stamp each assistant row with the driver's frames for its turn, then
-    mint the reload-side lore events onto the rows.
+    mint the reload-side lore events onto the rows. Returns the chat's queue
+    — `{queue, queue_seq}` from the live dsh agent, read also for a chat with
+    no rows yet (a first message may be queued).
 
-    A note thread and a thread with no assistant row never ran a turn — no
-    driver read for either. Rows the log has no turn for (threads predating
+    A note thread never runs a turn — no driver read. A thread with no
+    assistant row reads only the status (its first message may be queued).
+    Rows the log has no turn for (threads predating
     the harness, an abnormally ended turn that never wrote `turn/end`) keep the Lore row exactly as it is: no `frames`
     key from the replay — and the reload mints add exactly what the row owns
     (the `halt` column's card at the log tail; a gen_steps image run whose
@@ -338,11 +372,9 @@ async def _attach_timeline(
     to the assembler, so the mints ride the same input as the replay.
     """
     if session.get("is_note") is True:
-        return
+        return {"queue": [], "queue_seq": None}
     assistants = [m for m in out if m.get("role") == "assistant"]
-    if not assistants:
-        return
-    if offset:
+    if assistants and offset:
         # The page starts mid-thread, so the page's rows alone cannot anchor
         # the pairing. Refusing is the honest answer — a silently
         # mis-aligned timeline would show one turn's tool calls under
@@ -351,24 +383,26 @@ async def _attach_timeline(
             status_code=400,
             detail="Paginated message reads cannot resolve the agent timeline; use offset=0",
         )
+    if not assistants:
+        status = await _read_session_status(session, session_id)
+        return {"queue": status["queue"], "queue_seq": status["seq"]}
     replay = await _fetch_session_turns(session, session_id)
     turns = replay.get("turns") or []
     tail_seq = replay.get("tail_seq")
-    lock_held = replay["lock_held"]
-    if not turns and tail_seq is None:
-        # Nothing the driver ever logged (a pre-harness thread, or a first turn
-        # dsh has not logged yet — the held lock marks that one).
-        _mark_open_turn(assistants, turns, lock_held=lock_held)
-        return
-    _assign_frames_by_stamp(assistants, turns)
+    logged = bool(turns) or tail_seq is not None
+    if logged:
+        _assign_frames_by_stamp(assistants, turns)
+    status = await _read_session_status(session, session_id)
     # The open turn: AFTER the stamp pass — its row is by definition
     # unstamped, so the two never contend for one row.
-    _mark_open_turn(assistants, turns, lock_held=lock_held)
-    from driver.frames import attach_reload_lore_mints
-    await attach_reload_lore_mints(
-        assistants, tail_seq=tail_seq,
-        session_id=replay.get("lineage") or session_id,
-    )
+    _mark_open_turn(assistants, turns, running=status["status"] == "running")
+    if logged:
+        from driver.frames import attach_reload_lore_mints
+        await attach_reload_lore_mints(
+            assistants, tail_seq=tail_seq,
+            session_id=replay.get("lineage") or session_id,
+        )
+    return {"queue": status["queue"], "queue_seq": status["seq"]}
 
 @router.get("/sessions/{session_id}/messages/{message_id}/images")
 async def get_message_images(

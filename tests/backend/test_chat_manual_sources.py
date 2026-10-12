@@ -3,16 +3,17 @@ documents/references appear on the assistant row's persisted sources with
 retrieved=False, are deduplicated against retrieval hits, and that
 system_prompt_id is excluded.
 
-The turn is driver-owned (plan agent-line-harness-lifecycle step 9 retired
-the SSE arm): every completion is driven through the standing channel (the
-harness_env recipe — fake connector/replay + post_followup at the module's
-own seams, the relay arms persisting to the REAL test DB). The sources the
-retired SSE preamble streamed are asserted where they live now: the assistant
-row (the preamble frame carries the same list on the project WS).
+The turn is driver-owned: every completion is driven through the standing
+channel (the harness_env recipe — fake connector/replay + post_followup at
+the module's own seams, the claim and the relay arms persisting to the REAL
+test DB). The sources are asserted where they live: the assistant row (the
+claim's preamble frame carries the same list on the project WS).
 """
+from uuid import uuid4
+
 import pytest
 from test_driver_channel import _env, _turn_end
-from test_harness_turn import _acquirable, _list_messages, _until_async
+from test_harness_turn import _claim_of, _list_messages, _row_stamped, _until_async
 
 
 @pytest.fixture(autouse=True)
@@ -38,36 +39,27 @@ def _stub_agent_timeline(monkeypatch):
 
 async def _drive_turn(client, token, sid, env, body, *, turn_end_seq=1):
     """Drive one driver-owned turn through the REAL relay arms (the harness
-    recipe): POST the completion (JSON accept), push the driver's frames
-    through the fake channel socket — model_update opens the bound turn,
-    turn/end closes it — and settle on the turn lock's release, which the
-    channel fires only AFTER the close's finalize persist ran. Manual context
-    sources ride the bound turn's projection onto the assistant row; the
-    tests assert the row.
+    recipe): POST the completion (JSON accept, the send is queued), push the
+    driver's frames through the fake channel socket — the claim mints the
+    pair and opens the turn, turn/end closes it — and settle on the row's
+    end stamp, written by the close's finalize persist. Manual context
+    sources ride the claim onto the assistant row; the tests assert the row.
 
     `turn_end_seq` must EXCEED every seq the session's channel already
     delivered — the channel's seq-anchored dedup silently drops a replayed
-    seq, the turn (and its lock) would never close."""
-    # The linear-turn contract (plan chat-branch-sessions): a turn's parent
-    # names the session's live TAIL — read it off the message list the way
-    # the client does (an empty session posts the genuine first turn).
-    msgs = await _list_messages(client, token, sid)
-    if msgs:
-        body = {**body, "parent_id": msgs[-1]["message_id"]}
+    seq, and the turn would never close."""
     resp = await client.post(
         f"/api/chat/sessions/{sid}/completions",
-        json=body,
+        json={"user_msg_id": str(uuid4()), **body},
         cookies={"lore_session": token},
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["accepted"] is True
+    payload = env.followups.payloads[-1]
     sock = env.connector.sockets[0]
-    for frame in (
-        {"type": "model_update", "model": "test"},
-        _turn_end(turn_end_seq, "completed"),
-    ):
+    for frame in (_claim_of(payload), _turn_end(turn_end_seq, "completed")):
         sock.push(_env(sid, frame))
-    await _until_async(lambda: _acquirable(sid))
+    await _until_async(lambda: _row_stamped(payload["assistant_msg_id"], turn_end_seq))
 
 
 async def _assistant_sources(client, token, sid) -> list[dict]:

@@ -64,6 +64,84 @@ def _coerce_table_edits(args: dict) -> list[dict]:
         for e in (edits or [])
     ]
 
+async def _resolve_head_chat(db, driver_session_id: str) -> dict | None:
+    """The chat a claimed turn of this driver session lands in: the newest live
+    continuation (`compacted_from` = the driver id), else the chat whose id IS
+    the driver id. None when neither row is live."""
+    # INVARIANT(persisted): a claimed turn's pair is minted into the HEAD chat
+    # of its driver session at claim time, never the chat it was sent from.
+    # Why: a message queued before a compaction answers in the continuation
+    # where the conversation now lives (a continuation runs its turns on its
+    # source's dsh session); an idle send's claim precedes any compaction of
+    # its own turn, so its optimistic row and the mint share one chat.
+    rows = await db.query(
+        "SELECT meta::id(id) AS cid, user_id, project_id, created_at FROM chat_sessions "
+        "WHERE compacted_from = $dsh AND deleted_at IS NONE "
+        "ORDER BY created_at DESC LIMIT 1",
+        {"dsh": driver_session_id},
+    ) or []
+    if rows:
+        return rows[0]
+    rows = await db.query(
+        "SELECT meta::id(id) AS cid, user_id, project_id FROM chat_sessions "
+        "WHERE id = type::record('chat_sessions', $dsh) AND deleted_at IS NONE",
+        {"dsh": driver_session_id},
+    ) or []
+    return rows[0] if rows else None
+
+
+async def _chat_tail(db, chat_id: str) -> str | None:
+    """The chat's live tail — the row no other live row points at, the newest
+    one when a legacy tree has several leaves; None for an empty chat."""
+    rows = await db.query(
+        "SELECT meta::id(id) AS mid, parent_id, created_at FROM messages "
+        "WHERE chat_id = $cid AND deleted_at IS NONE",
+        {"cid": chat_id},
+    ) or []
+    if not rows:
+        return None
+    parented = {r.get("parent_id") for r in rows}
+    leaves = [r for r in rows if r.get("mid") not in parented]
+    return max(leaves or rows, key=lambda r: r.get("created_at") or "").get("mid")
+
+
+async def _mint_claim_rows(driver_session_id: str, claim: dict) -> dict | None:
+    """Mint a claimed turn's user + placeholder-assistant rows from the claim's
+    prep facts, appended at the head chat's tail. Returns the head chat
+    (`cid`, `user_id`, `project_id`) or None when no live chat takes the turn.
+
+    # ARCH: the pair is written at CLAIM, not at POST — a queued message has
+    # no rows until dsh starts its turn, so one queued message = one turn = one
+    # pair, and dsh serializing the turns is what keeps the chain linear (the
+    # tail read here cannot race another claim of the same session).
+    """
+    db = await get_db()
+    head = await _resolve_head_chat(db, driver_session_id)
+    if head is None:
+        return None
+    chat_id = head["cid"]
+    images = claim.get("images") or []
+    result = await db.query(
+        "CREATE type::record('messages', $uid) SET chat_id = $cid, parent_id = $pid, role = 'user', content = $uc"
+        + (", images = $imgs" if images else "")
+        + ";"
+        "CREATE type::record('messages', $aid) SET chat_id = $cid, parent_id = $uid, role = 'assistant', content = '', model = $model;",
+        {
+            "uid": claim["user_msg_id"],
+            "aid": claim["assistant_msg_id"],
+            "cid": chat_id,
+            "pid": await _chat_tail(db, chat_id),
+            "uc": claim.get("user_text") or "",
+            **({"imgs": images} if images else {}),
+            "model": claim.get("model") or "",
+        },
+        site="chat",
+    )
+    if isinstance(result, str):
+        raise RuntimeError(f"claim row mint failed: {result}")
+    return head
+
+
 async def _persist_content(message_id: str, content: str) -> None:
     db = await get_db()
     await db.query(
@@ -204,15 +282,10 @@ async def _record_turn_error(
     *, assistant_msg_id: str, session_id: str, reason: str, source: str,
     user_id: str = "", project_id: str = "", kind: str = "turn_error",
 ) -> None:
-    """Telemetry: an Agent turn problem.
-
-    Two observables(lock rejections"):
-      - `turn_error` (default): an Agent turn terminated in an error. `source` is
-        `error_event` (the reducer saw an explicit dsh `error` event or the fetch
-        stream raised mid-turn) or `setup` (the completions path raised wiring it).
-      - `turn_lock_rejected`: a second turn contended for the same chat_session
- and was rejected.
-    Either is an observable signal for the prod observation window. Best-effort,
+    """Telemetry: an Agent turn terminated in an error (`turn_error`). `source`
+    is `error_event` (the reducer saw an explicit dsh `error` event or the fetch
+    stream raised mid-turn) or `setup` (the completions path raised wiring it).
+    An observable signal for the prod observation window. Best-effort,
     awaited (these are ERROR-only paths — never the hot turn path — so the one
     DB write does not add happy-path latency); a telemetry-store failure is
     swallowed so it never breaks the turn path that is already recovering.

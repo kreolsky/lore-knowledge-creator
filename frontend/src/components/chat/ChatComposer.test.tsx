@@ -53,7 +53,7 @@ describe('ChatComposer — scroll-to-bottom button', () => {
   });
 
   it('sits in the same column ABOVE the queued plates, so the queue lifts it', () => {
-    const { host, unmount } = mount({ onScrollToBottom: () => {}, queued: ['later'], onRemoveQueued: () => {} });
+    const { host, unmount } = mount({ onScrollToBottom: () => {}, queued: [{ id: 'm1', text: 'later', images: 0 }], onRemoveQueued: () => {} });
     const btn = button(host)!;
     const plate = host.querySelector('[title="queuedMessageTitle"]')!;
     const column = btn.parentElement!;

@@ -14,7 +14,7 @@ import { projectSessionEntries } from './entries.ts'
 import { PROVIDER } from './ensure.ts'
 import { restoreActivatedSkills, type ResolvedSkill } from './skills.ts'
 import { authorized, readBody } from './http.ts'
-import { followupTurns } from './turn.ts'
+import { sessionAgentLive } from './session-agents.ts'
 import type { SessionStreamBaselines } from './stream-baselines.ts'
 
 /** lore session id → current dsh session id (persisted beside the session
@@ -141,19 +141,19 @@ async function seedForkSessionCreate(
  * closers itself (same function, same seqs). Without the closers a driver
  * crash would stay open until the backend's no-progress deadline.
  *
- * "Live" is the REGISTERED driver-owned turn — the session's dsh id is a key
- * of `followupTurns` — never "an agent might be running": a read inside the
- * register window (after prepareTurnDrive, before the key lands) gets
- * in-memory closers for a log resume is about to repair with the same ones,
- * which is harmless. A live session's read stays verbatim: closers on a
- * running turn would close it in every replay while it streams. */
+ * "Live" is the session agent RUNNING a turn (sessionAgentLive) — never "an
+ * agent might exist": an idle live agent's log is balanced, so its closers
+ * are empty. A read before a just-woken agent registers gets in-memory
+ * closers for a log resume is about to repair with the same ones, which is
+ * harmless. A live session's read stays verbatim: closers on a running turn
+ * would close it in every replay while it streams. */
 async function readSessionEvents(ctx: Context, dshId: string): Promise<unknown[]> {
   const persistence = ctx.get('sessionPersistence')
   if (!persistence) throw new Error('session persistence is not configured')
   const handle = await persistence.open(SessionId(dshId as never), 'read')
   try {
     const { events } = await handle.read(0, undefined)
-    return followupTurns.has(dshId)
+    return sessionAgentLive(dshId)
       ? (events as unknown[])
       : [...(events as unknown[]), ...interruptedTurnClosers(events as never)]
   } finally {
@@ -203,11 +203,11 @@ export async function sessionEntries(
     if (!(err instanceof Error && /not found/.test(err.message))) throw err
   }
   // The transport terminal rides the replay for the SAME session class the
-  // crash closers balance — NON-live (`followupTurns`, the registered
-  // driver-owned turn). A live session's running turn is open (no terminal)
-  // and its previous turns' terminals stay the live push's to deliver: a
-  // replayed one would be the newer turn's registration to close.
-  const terminals = !followupTurns.has(dshId)
+  // crash closers balance — NON-live (sessionAgentLive, a running turn). A
+  // live session's running turn is open (no terminal) and its previous turns'
+  // terminals stay the live push's to deliver: a replayed one would be the
+  // newer turn's registration to close.
+  const terminals = !sessionAgentLive(dshId)
   // The open turn's streamed-text baseline: the live-stream fold of the
   // session's CURRENT dsh id (stream-baselines.ts) — attached to the open
   // turn only, and only while an attempt is active (entries.ts's gate).
@@ -309,8 +309,8 @@ export async function sessionFork(
   res.end(JSON.stringify({ ok: true }))
 }
 
-/** Shared dsh session runner, turn half: resume the persisted session or
- * create it on the first turn (resume-or-create from the plugin header). */
+/** Shared dsh session runner, agent half: resume the persisted session or
+ * create it on the first send (the session agent's open — session-agents.ts). */
 export async function resumeOrCreate(
   ctx: Context, dshId: string, agentOptions: Record<string, unknown>,
   setup: (agentCtx: Context) => void,

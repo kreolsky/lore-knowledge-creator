@@ -42,7 +42,7 @@ async def _list_messages(client, token, sid):
         cookies={"lore_session": token},
     )
     assert resp.status_code == 200, resp.text
-    return resp.json()
+    return resp.json()["messages"]
 
 
 async def test_list_omits_images_and_reports_count(client, admin_user, project_with_doc):

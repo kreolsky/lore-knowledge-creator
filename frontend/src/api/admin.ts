@@ -150,7 +150,8 @@ export async function getAdminStorageInfo(fresh = false): Promise<AdminStorageIn
 // ── Model access (SYSTEM: model-access) ────────────────────────────────────
 
 /** One model row: the gateway roster ∪ every id that carries a grant. A
- * subject is `public`, `mod:<moderator uid>` or `group:<admin group id>`;
+ * subject is `public`, `mod:<moderator uid>`, `group:<admin group id>` or
+ * `hidden` (never in the chat picker, for anyone; exclusive);
  * the default model is available to everyone without any subject. */
 export interface AdminModelAccess {
   id: string;
@@ -163,6 +164,9 @@ export interface AdminModelAccess {
 
 /** The subject that makes a model available to every user. */
 export const PUBLIC_SUBJECT = 'public';
+
+/** The subject that drops a model from every chat picker; calls stay served. */
+export const HIDDEN_SUBJECT = 'hidden';
 
 export async function listAdminModels(): Promise<AdminModelAccess[]> {
   return await apiClient.get('/admin/models') as AdminModelAccess[];

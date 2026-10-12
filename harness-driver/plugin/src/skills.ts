@@ -10,7 +10,7 @@
  *
  * # ONE PARSER: the backend
  *   ships the skill DOCUMENTS raw (the lookup — project heads, instance rows,
- *   the shipped files, the tombstoned off-switches) and parses NOTHING; the
+ *   the shipped files, the admin-disabled names) and parses NOTHING; the
  *   frontmatter parse + validation live HERE, against the pinned harness. The
  *   name grammar is the library's own `isSkillName` (@deepseek-ai/dsh-skill —
  *   the same grammar dsh-skill-filesystem enforces on disk skills); the
@@ -18,10 +18,10 @@
  *   there, so the ~15-line adapter repeats the FILE FORMAT, not the
  *   validation rules — the rules have exactly one source, the library
  *   import). Catalog assembly is also ours: the overlay (project > instance
- *   > shipped — a copy shadows the layer below by name), the off-switch (a
- *   tombstoned direct child, or a disabled instance row served as a NAME,
- *   suppresses the shipped skill it names) and the served-toolset gate (a
- *   skill whose whole pack is unserved is not advertised) all need parsed
+ *   > shipped — a copy shadows the layer below by name), the admin off-switch
+ *   (a disabled instance row served as a NAME suppresses the shipped skill it
+ *   names) and the served-toolset gate (a skill whose whole pack is unserved
+ *   is not advertised) all need parsed
  *   names, so they run here, post-parse.
  *
  * # The served-toolset filter survives on dsh's events: a skill's pack tools
@@ -58,7 +58,6 @@ export interface SkillCatalogWire {
   project: SkillDocWire[]
   instance?: SkillDocWire[]
   shipped: SkillDocWire[]
-  tombstones: string[]
   instance_tombstones?: string[]
 }
 
@@ -135,7 +134,7 @@ export function parseSkillDoc(
 /**
  * Parse one wire layer into resolved skills, skipping unparseable documents.
  * The layer loops (project, instance, shipped) were the same nine lines; the
- * shipped caller keeps ITS skip predicate (name already taken / tombstoned)
+ * shipped caller keeps ITS skip predicate (name already taken / admin-disabled)
  * at the call site — it filters the parsed result, not the parse.
  */
 function parseLayer(docs: SkillDocWire[] | undefined): ResolvedSkill[] {
@@ -155,33 +154,28 @@ function parseLayer(docs: SkillDocWire[] | undefined): ResolvedSkill[] {
 /**
  * The catalog: parse the payload's raw lookup, then apply — in this order —
  * the overlay (project > instance > shipped: a copy shadows the layer below
- * by name ENTIRELY — head + pack), the off-switch (a tombstoned direct
- * child's parsed name, or a disabled instance row's NAME, suppresses the
- * shipped skill it names; an unparseable project tombstone suppresses
- * nothing) and the served-toolset gate (a skill with a non-empty pack is
- * advertised only when at least one member is served — an EMPTY pack is a
+ * by name ENTIRELY — head + pack), the admin off-switch (a disabled instance
+ * row's NAME suppresses the shipped skill it names) and the served-toolset
+ * gate (a skill with a non-empty pack is advertised only when at least one
+ * member is served — an EMPTY pack is a
  * prose-only skill and is always relevant). Project skills first in subtree
  * order, then surviving instance skills in row order, then surviving shipped
  * skills in file order.
  *
- * INVARIANT(off-switch): a shipped skill whose project copy the user DELETED
- * stays gone. Why: deleting the document is how a user turns a shipped skill
- * off, so re-adding it from the shipped layer would leave no off-switch at
- * all. Machine-retired copies are detached from the folder by the seeded-
- * skills-overlay migration and never reach `tombstones`. The instance
- * tombstone (a disabled instance_skills row) is the ADMIN's half of the same
- * switch: served as a NAME list, not a body, so nothing can fail to parse.
+ * INVARIANT(off-switch): a shipped or admin skill cannot be turned off per
+ * project — it is off for everyone (the admin disabled it: a disabled
+ * instance_skills row, served as a NAME) or for no one. A skill none of whose
+ * tools is served is not advertised (the served gate below). A DELETED
+ * document in a project's Skills folder suppresses nothing; a LIVE one with
+ * the same name overrides the skill in that project (the overlay).
+ * Why: a deleted document is invisible — it sits in the project trash, no UI
+ * names it, and the admin page says the skill is enabled.
  */
 export function resolveSkillCatalog(
   wire: SkillCatalogWire, servedNames: Set<string>,
 ): ResolvedSkill[] {
   const project = parseLayer(wire.project)
   const instance = parseLayer(wire.instance)
-  const tombstoneNames = new Set<string>()
-  for (const raw of wire.tombstones ?? []) {
-    const parsed = parseSkillDoc(raw)
-    if (parsed) tombstoneNames.add(parsed.name)
-  }
   const instanceTombstoneNames = new Set<string>(
     (wire.instance_tombstones ?? [])
       .map((n) => String(n ?? ''))
@@ -197,7 +191,6 @@ export function resolveSkillCatalog(
   for (const skill of parseLayer(wire.shipped)) {
     if (
       takenNames.has(skill.name)
-      || tombstoneNames.has(skill.name)
       || instanceTombstoneNames.has(skill.name)
     ) continue
     out.push(skill)

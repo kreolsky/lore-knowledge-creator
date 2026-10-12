@@ -1,21 +1,21 @@
-# Скиллы
+# Skills
 
-Скилл — это сохранённое умение агента: знания и порядок действий, иногда с набором инструментов. Агент загружает скилл, когда задача подходит под его описание, или когда вы просите об этом прямо.
+A skill is a saved ability of the agent: knowledge and a sequence of steps, sometimes with a set of tools. The agent loads a skill when a task matches its description, or when you ask for it directly.
 
-Скиллы — главный способ автоматизировать свою работу. Если вы несколько раз объясняли агенту, как делать одну и ту же вещь, оформите это скиллом.
+Skills are the main way to automate your own work. If you have explained to the agent several times how to do the same thing, package it as a skill.
 
-## Как создать скилл
+## How to create a skill
 
-Поработайте с агентом над задачей, а когда результат устроит, попросите: «сохрани это как скилл». Агент сохранит скилл в папку Skills системного раздела агента (Agent System). Скилл — обычный документ: его можно открыть и поправить руками или попросить агента исправить, если инструкция оказалась неверной. Если у скилла много материала, его можно разложить по дочерним документам.
+Work on a task with the agent, and when you are happy with the result, ask: "save this as a skill". The agent saves the skill into the Skills folder of the agent's system section (Agent System). A skill is an ordinary document: you can open it and fix it by hand, or ask the agent to correct it if the instruction turned out wrong. If a skill has a lot of material, it can be split across child documents.
 
-## Примеры скиллов, которые стоит завести
+## Skills worth setting up
 
-**Разбор заметок и созвонов.** Аккуратно извлечь всю информацию из материалов, при необходимости в несколько проходов, чтобы ничего не потерялось. Структурировать. Пометить противоречия: если одна вещь обсуждалась по-разному, показать, где и что говорилось. Если мнение менялось, показать историю: «в заметке от такого-то числа было так, в такой-то — так».
+**Going through notes and calls.** Carefully extract all the information from the materials, in several passes if needed, so that nothing gets lost. Structure it. Flag contradictions: if one thing was discussed in different ways, show where and what was said. If an opinion changed, show the history: "the note from such-and-such date said this, the one from another date said that".
 
-**Ревью документа.** Критически пройтись по документу, затем искать подтверждения и опровержения в референсах, соседних механиках и системах. Отметить пробелы, несогласованности и нерешённые вопросы.
+**Document review.** Take a critical pass over the document, then look for support and contradictions in the references and in neighbouring mechanics and systems. Point out gaps, inconsistencies and open questions.
 
-**Сборка документа намерений.** Из разобранных материалов собрать минимальный документ: намерения и решения по пограничным случаям, без деталей, которые и так восстанавливаются из контекста.
+**Assembling an intent document.** From the processed materials, assemble a minimal document: the intent and the decisions on borderline cases, without the details that can already be recovered from context.
 
-## Встроенные скиллы
+## Built-in skills
 
-В Lore уже есть скиллы для веб-поиска, глубокого исследования, генерации картинок, работы в песочнице (консоль агента), консолидации памяти, настройки экстрактора и написания новых скиллов. Если создать в проекте скилл с тем же именем, он заменит встроенный.
+Lore already ships skills for web search, deep research, picture generation, working in the sandbox (the agent's console), memory consolidation, tuning the extractor and writing new skills. If you create a skill with the same name in a project, it replaces the built-in one.

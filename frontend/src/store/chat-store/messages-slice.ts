@@ -11,26 +11,28 @@ import { resolveCompletionContext } from '../../chat/context';
 import { resolveRegion } from './pending-selection';
 import type { ChatState, Set, Get } from './types';
 
-/** Shape of an optimistic-insert request shared by all three send paths. */
+/** Shape of an optimistic-insert request shared by the send paths. */
 interface OptimisticInsert {
+  /** The browser-minted user_msg_id the backend mints the row under. */
+  id: string;
   parentId: string | null;
   content: string;
   images?: string[];
 }
 
 /**
- * Insert a temp user message so the sender's bubble appears instantly, before
- * the upload completes. Returns the temp id to pass as `optimisticUserId` and to
- * roll back on failure.
+ * Insert the user message so the sender's bubble appears instantly, before
+ * the upload completes — only for an IDLE send (a send while the chat is busy
+ * queues in dsh and shows as a chip until its claim).
  *
- * WHY: The temp id is prefixed `temp-` and reconciled to the server's real id
- * by the `ids` frame handler (streaming.ts) — it maps the message in place rather
- * than appending a duplicate. The freshest-lineage walk picks it up on its own
+ * WHY: the bubble carries the user_msg_id the request sends, so the `ids`
+ * frame of its claim (streaming.ts) replaces it in place by id rather than
+ * appending a duplicate. The freshest-lineage walk picks it up on its own
  * (it is the newest row), so no sibling selection is written — a branch is its
  * own session and the AI path holds no selections.
  */
-function insertOptimisticUser(set: Set, get: Get, req: OptimisticInsert): string {
-  const tempId = `temp-${uuid()}`;
+function insertOptimisticUser(set: Set, get: Get, req: OptimisticInsert): void {
+  const id = req.id;
   // WHY: stamp the current user's id/name on the optimistic bubble so
   // the nickname renders immediately — not "unknown" until reload. Notes get this
   // for free (server-serialized message); AI chat built the bubble locally without
@@ -38,7 +40,7 @@ function insertOptimisticUser(set: Set, get: Get, req: OptimisticInsert): string
   const currentUser = useAppStore.getState().currentUser;
   const nowIso = new Date().toISOString();
   const optimisticMsg: ChatMessage = {
-    message_id: tempId,
+    message_id: id,
     chat_id: get().activeSessionId ?? '',
     parent_id: req.parentId,
     role: 'user',
@@ -65,14 +67,12 @@ function insertOptimisticUser(set: Set, get: Get, req: OptimisticInsert): string
         : s.sessions,
     };
   });
-  return tempId;
 }
 
 /**
- * Remove a temp user message if it was never acknowledged by the server.
- * Reconciliation in streaming.ts renames the temp id to the real id, so its
- * continued presence in `messages` means the request failed before `ids`
- * arrived — the optimistic bubble must be pulled to avoid a phantom message.
+ * Remove the optimistic user message of a send the server refused. A refused
+ * send queued nothing, so no `ids` will ever claim the row — the bubble must
+ * be pulled to avoid a phantom message.
  *
  * INVARIANT: no silent degradation — a failed send never leaves a phantom
  * optimistic bubble visible as if it succeeded. Why: showing an unsent message
@@ -88,7 +88,10 @@ function rollbackOptimisticUser(set: Set, tempId: string): void {
 import { resolveActivePath, resolveAncestorChain } from './tree';
 import { withThreadRow } from './branches-slice';
 import { appendDraft } from './misc-slice';
-import { streamCompletion, flushStreaming, emptyStreaming, hasOpenHarnessTurn, markHarnessTurnAborted } from './streaming';
+import {
+  streamCompletion, flushStreaming, emptyStreaming, hasOpenHarnessTurn, markHarnessTurnAborted,
+  rememberQueuedSend, forgetQueuedSend,
+} from './streaming';
 import { rewindToLineage } from './conversation-feed';
 import { seatSessionRows, afterSessionRowsCommitted } from './session-rows';
 import { loadMessagesFor, patchMessageContent } from '../chat-message-crud';
@@ -99,8 +102,17 @@ function toApiMessages(chain: ChatMessage[]): Array<{ role: string; content: str
   return chain.map(m => ({ role: m.role, content: m.content, images: m.images }));
 }
 
+/** The per-send wire inputs every send path computes: the history, the
+ * client's tail hint (`parent_id` — used ONLY for the root-turn time stamp,
+ * never validated), and the browser-minted id the user row is minted under. */
+interface SendWire {
+  apiMessages: Array<{ role: string; content: string; images?: string[] }>;
+  parentId: string | null;
+  userMsgId: string;
+}
+
 /**
- * Shared send/stream entry for all three send paths.
+ * Shared send/stream entry for the idle send paths.
  *
  * WHY: sendMessage / forkAndResend / regenerate each compute their `apiMessages`
  * + `parentId` (via resolveActivePath / resolveAncestorChain) and the optimistic
@@ -109,60 +121,25 @@ function toApiMessages(chain: ChatMessage[]): Array<{ role: string; content: str
  * surfacing, rollback, and flush. Collapses ~150 LOC of
  * copy-pasted streaming setup.
  */
-interface RunCompletionOpts {
-  apiMessages: Array<{ role: string; content: string; images?: string[] }>;
-  parentId: string | null;
+interface RunCompletionOpts extends SendWire {
   userContent: string;
-  userImages?: string[];
-  optimisticUserId: string;
   errorLabel: string;
-  // The turn's parent-tail contract: a 409 "not
-  // the tail" on the FIRST attempt is retriable — runCompletion rolls the
-  // optimistic bubble back and rethrows TailConflictSignal so sendMessage can
-  // re-read the branch and retry ONCE. On the retry (conflictFinal) the same
-  // 409 falls through to handleSendError's EXPLICIT toast (no silent
-  // degradation, no generic wording).
-  conflictFinal?: boolean;
-  // sendMessage only (the queue flush rides sendMessage, so it shares this):
-  // on a genuine failure the send's own text goes back to the composer.
-  // forkAndResend/regenerate do not pass it — their text lives on in the
-  // edit box / the existing message.
+  // sendMessage only: on a genuine failure the send's own text goes back to
+  // the composer. forkAndResend/regenerate do not pass it — their text lives
+  // on in the edit box / the existing message.
   restoreDraftOnFail?: boolean;
 }
 
-/** Whether the server refused the turn with the non-tail-parent 409 (a stale
- * client view — the branch moved on), as opposed to the turn-lock 409 ("a
- * turn is already in progress"). Keyed on the detail marker, not the bare
- * status; the detail may be any text shape (or absent), so it is guarded. */
-function isTailConflict(e: unknown): boolean {
-  return (
-    e instanceof HttpError
-    && e.status === 409
-    && typeof e.detail === 'string'
-    && e.detail.includes('not the tail')
-  );
-}
-
-/** Internal sentinel: a retriable tail conflict already rolled back by
- * runCompletion — sendMessage catches it, re-reads, retries once. */
-class TailConflictSignal extends Error {
-  constructor() { super('tail conflict'); this.name = 'TailConflictSignal'; }
-}
-
-export async function runCompletion(set: Set, get: Get, opts: RunCompletionOpts): Promise<void> {
-  const { activeSessionId } = get();
-  if (!activeSessionId) return;
-
+/** The /completions body for one send of the ACTIVE chat. Resolves the
+ * pinned region (warning or auto-unpinning when it cannot) and the open
+ * document at send time — the prep is frozen here, a queued send runs with
+ * the context its user had when sending. */
+function completionBody(get: Get, activeSessionId: string, wire: SendWire): Record<string, unknown> {
   const contentCtx = resolveCompletionContext();
   const activeSession = get().sessions.find(s => s.session_id === activeSessionId);
   const systemPromptId = activeSession?.system_prompt_id ?? undefined;
   const uiMode = deriveUIMode(activeSession);
   const autoApply = uiMode === 'agent_auto';
-  // ARCH: runCompletion only ever starts on an idle slot — sendMessage routes a
-  // mid-turn send to the per-session queue (SYSTEM: chat-message-queue), and
-  // forkAndResend/regenerate refuse while streaming. The turn's end is driven by
-  // the WS terminal frame, not the POST's return; the backend's turn lock (409)
-  // stays as the cross-tab serializer.
   // see SYSTEM: selection-region-agent — resolve the pinned region (frontend-owned) into
   // the wire shape for the prompt hint. has_region forces confirm server-side; the
   // region text is injected as a "# Pinned fragment" block. When the region can't be
@@ -194,6 +171,26 @@ export async function runCompletion(set: Set, get: Get, opts: RunCompletionOpts)
   const scopeRefId = refIsScope(sendMode) ? appState.currentReference?.reference_id : undefined;
   const openDocId =
     scopeRefId ?? appState.currentDocument?.document_id ?? null;
+  return {
+    messages: wire.apiMessages,
+    parent_id: wire.parentId,
+    user_msg_id: wire.userMsgId,
+    ...contentCtx,
+    ...(systemPromptId ? { system_prompt_id: systemPromptId } : {}),
+    ...(autoApply ? { auto_apply: true } : {}),
+    ...(region ? { region } : {}),
+    ...(openDocId ? { open_doc_id: openDocId } : {}),
+  };
+}
+
+export async function runCompletion(set: Set, get: Get, opts: RunCompletionOpts): Promise<void> {
+  const { activeSessionId } = get();
+  if (!activeSessionId) return;
+  // ARCH: runCompletion only ever starts on an idle chat — sendMessage sends a
+  // busy chat's message straight to dsh's inbox (queueSend), and
+  // forkAndResend/regenerate refuse while streaming. The turn's end is driven
+  // by the WS terminal frame, not the POST's return.
+  const body = completionBody(get, activeSessionId, opts);
 
   const abortController = new AbortController();
   // The streaming state machine is one object; idle ⟺ streaming === null.
@@ -213,39 +210,24 @@ export async function runCompletion(set: Set, get: Get, opts: RunCompletionOpts)
     : [];
   rewindToLineage(lineage, activeSessionId, set);
 
+  set({ liveSend: { userMsgId: opts.userMsgId, text: opts.userContent, messageId: null } });
   try {
     await streamCompletion(get, set, {
       sessionId: activeSessionId,
-      body: {
-        messages: opts.apiMessages,
-        parent_id: opts.parentId,
-        ...contentCtx,
-        ...(systemPromptId ? { system_prompt_id: systemPromptId } : {}),
-        ...(autoApply ? { auto_apply: true } : {}),
-        ...(region ? { region } : {}),
-        ...(openDocId ? { open_doc_id: openDocId } : {}),
-      },
+      body,
       signal: abortController.signal,
-      userParentId: opts.parentId,
-      userContent: opts.userContent,
-      userImages: opts.userImages,
-      optimisticUserId: opts.optimisticUserId,
+      onAccepted: messageId => set(s => (
+        s.liveSend?.userMsgId === opts.userMsgId ? { liveSend: { ...s.liveSend, messageId } } : {}
+      )),
     });
   } catch (e) {
-    if (isTailConflict(e) && !opts.conflictFinal) {
-      // Retriable: pull the optimistic bubble and hand the conflict to
-      // sendMessage's re-read + ONE retry (the plan's contract). The finally
-      // below releases the slot this run owns.
-      rollbackOptimisticUser(set, opts.optimisticUserId);
-      throw new TailConflictSignal();
-    }
     const failed = handleSendError(e, opts.errorLabel, set, get);
     // Slot ownership: this run owns the slot only while ITS controller sits in
     // it — a leave-and-return re-seats a fresh controller (adoptOpenTurn), and
     // whatever slot the shown chat then holds is never this run's to flush.
     if (get().streaming?.controller === abortController) {
       if (failed) markStreamingFailed(set, get);
-      rollbackOptimisticUser(set, opts.optimisticUserId);
+      rollbackOptimisticUser(set, opts.userMsgId);
     }
     if (failed && opts.restoreDraftOnFail && opts.userContent) {
       restoreFailedSend(get, activeSessionId, opts.userContent);
@@ -254,19 +236,36 @@ export async function runCompletion(set: Set, get: Get, opts: RunCompletionOpts)
     if (get().streaming?.controller === abortController) {
       set(flushStreaming);
     }
+    set(s => (s.liveSend?.userMsgId === opts.userMsgId ? { liveSend: null } : {}));
+  }
+}
+
+/** A send while the chat is busy: POST it like any other — dsh queues it in
+ * the session's inbox and its chip appears from the splice frame. No
+ * optimistic row, no registration: the `ids` of its claim opens both
+ * (streaming.ts), and the text/images wait for it in queuedSends. */
+async function queueSend(set: Set, get: Get, sessionId: string, content: string, wire: SendWire, images?: string[]): Promise<void> {
+  rememberQueuedSend(wire.userMsgId, content, images);
+  try {
+    await apiClient.post(`/chat/sessions/${sessionId}/completions`, completionBody(get, sessionId, wire));
+  } catch (e) {
+    forgetQueuedSend(wire.userMsgId);
+    if (handleSendError(e, 'Chat queue error:', set, get) && content) {
+      restoreFailedSend(get, sessionId, content);
+    }
   }
 }
 
 // INVARIANT(data-loss): a failed send's text goes back to its OWN chat.
-// Why: the bubble was rolled back and the composer/chips cleared at send
-// time, so without this the text exists nowhere; the draft is ONE shared
-// string, so writing it while another chat is shown sends it into the wrong
-// chat. Active chat → the composer, appended after anything typed meanwhile
-// (appendDraft — the shared restore rule); otherwise → a queued chip of
-// that chat.
+// Why: the bubble was rolled back and the composer cleared at send time, so
+// without this the text exists nowhere; the draft is ONE shared string, so
+// writing it while another chat is shown sends it into the wrong chat.
+// Active chat → the composer, appended after anything typed meanwhile
+// (appendDraft — the shared restore rule); otherwise → a toast carrying the
+// text itself.
 function restoreFailedSend(get: Get, sessionId: string, text: string): void {
   if (get().activeSessionId !== sessionId) {
-    get().enqueueMessage(sessionId, text);
+    useAppStore.getState().showToast(t('chatSendFailedElsewhere', { text }), 'error');
     return;
   }
   appendDraft(get, text);
@@ -291,11 +290,11 @@ function handleSendError(e: unknown, label: string, set: Set, get: Get): boolean
     useAppStore.getState().showToast(t('chatRequestTooLarge'), 'error');
     return true;
   }
-  if (isTailConflict(e)) {
-    // The retried turn STILL conflicts — the branch keeps moving under this
-    // client. Explicit wording (not the generic failure toast): the view is
-    // refreshed, the send is in the composer's hands again.
-    useAppStore.getState().showToast(t('chatBranchMovedOn'), 'error');
+  const reason = refusalReason(e);
+  if (reason !== null) {
+    // The agent line refused the send (no model, no gateway) and queued
+    // nothing: the reason is what the user can act on.
+    useAppStore.getState().showToast(reason, 'error');
     return true;
   }
   const refused = modelForbidden(e);
@@ -317,6 +316,41 @@ function handleSendError(e: unknown, label: string, set: Set, get: Get): boolean
   console.error(label, e);
   useAppStore.getState().showToast(t('chatSendFailed'), 'error');
   return true;
+}
+
+/** The queue a Stop took out of dsh's inbox, back where the person can edit
+ * or resend it: the texts after whatever is typed, the images as attachments.
+ *
+ * INVARIANT(data-loss): Stop never drops a queued message — it returns to the
+ * composer of ITS chat, or (another chat shown) to a toast carrying its text.
+ * Why: the operator chose Claude Code's Stop — the queue comes back to the
+ * input box instead of running or waiting unseen. */
+function returnQueuedToComposer(get: Get, sessionId: string, returned: unknown): void {
+  const sends = (Array.isArray(returned) ? returned : []) as Array<{ text?: unknown; images?: unknown }>;
+  const text = sends.map(m => (typeof m.text === 'string' ? m.text : '')).filter(Boolean).join('\n\n');
+  if (get().activeSessionId !== sessionId) {
+    if (text) useAppStore.getState().showToast(t('queueReturnedElsewhere', { text }), 'error');
+    return;
+  }
+  if (text) appendDraft(get, text);
+  for (const m of sends) {
+    for (const url of Array.isArray(m.images) ? m.images : []) {
+      if (typeof url === 'string') get().addPendingImage(url);
+    }
+  }
+}
+
+/** The plugin's reason of a 422 `{detail: "<reason>"}` refusal, else null
+ * (a request-validation 422 carries a list, not a reason). */
+function refusalReason(e: unknown): string | null {
+  if (!(e instanceof HttpError) || e.status !== 422) return null;
+  try {
+    const detail = (JSON.parse(e.detail) as { detail?: unknown } | null)?.detail;
+    return typeof detail === 'string' && detail ? detail : null;
+  } catch {
+    // WHY: a non-JSON body has no reason to show — the generic toast covers it.
+    return null;
+  }
 }
 
 /** The refused model id of a 403 `{code: 'model_forbidden', model}`, else null. */
@@ -348,57 +382,13 @@ function markStreamingFailed(set: Set, get: Get): void {
   }));
 }
 
-/** One send attempt: guards → path derivation → optimistic insert → the
- * shared completion run. All errors are handled inside runCompletion EXCEPT
- * the retriable tail conflict, which surfaces here as 'tail-conflict' for
- * sendMessage's single re-read + retry. */
-async function _sendOnce(
-  set: Set, get: Get, content: string, images: string[] | undefined,
-  conflictFinal: boolean,
-): Promise<'sent' | 'queued' | 'tail-conflict'> {
-  const { activeSessionId, streaming } = get();
-  if (!activeSessionId) return 'queued';
-  // INVARIANT(data-loss): a POST fires only for a chat with no open turn
-  // OF ITS OWN. Why: the backend locks per session (409), and the slot
-  // covers only the ACTIVE chat — another chat's turn must never queue
-  // this one (the queued text may never send). The registration clause
-  // covers the return window (the slot is null between setActiveSession
-  // and the reload's re-adoption). The guard lives in the store (not the
-  // UI) so MicButton transcription + hotkeys can't bypass it; one
-  // ordinary sendMessage fires later on flush. Images stay in the
-  // composer (attachment-budget merge is a separate problem).
-  if (streaming || hasOpenHarnessTurn(activeSessionId)) {
-    get().enqueueMessage(activeSessionId, content);
-    return 'queued';
-  }
-  // Fresh derivation per attempt: the RETRY must parent on the re-read
-  // branch's tail, not the stale view that conflicted. The walk takes the
-  // freshest lineage (a branch session's rows are a linear chain).
-  const activePath = resolveActivePath(get().messages);
-  const parentId = activePath.length > 0 ? activePath[activePath.length - 1].message_id : null;
-  const apiMessages = toApiMessages(activePath);
-  apiMessages.push({ role: 'user', content, images });
-
-  const optimisticUserId = insertOptimisticUser(set, get, { parentId, content, images });
-
-  try {
-    await runCompletion(set, get, {
-      apiMessages,
-      parentId,
-      userContent: content,
-      userImages: images,
-      optimisticUserId,
-      errorLabel: 'Chat send error:',
-      conflictFinal,
-      restoreDraftOnFail: true,
-    });
-    return 'sent';
-  } catch (e) {
-    if (e instanceof TailConflictSignal) return 'tail-conflict';
-    // Everything else is handled inside runCompletion (toast + rollback +
-    // draft restore); the attempt is done.
-    return 'sent';
-  }
+/** Whether a send into the active chat must queue in dsh: a turn of its
+ * own is open (the slot, or a registration in the return window), its dsh
+ * agent runs, or messages already wait — dsh then runs them first, so an
+ * optimistic row would sit above answers that precede it. */
+function chatIsBusy(get: Get, sessionId: string): boolean {
+  const s = get();
+  return !!s.streaming || hasOpenHarnessTurn(sessionId) || s.dshRunning || s.inboxQueue.length > 0;
 }
 
 type MessagesSlice = Pick<
@@ -422,7 +412,7 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
       // are the scope discriminator here.
       await loadMessagesFor(sessionId, {
         activeSessionId: () => get().activeSessionId,
-        onRows: rows => seatSessionRows(get, set, sessionId, rows),
+        onRows: (rows, inbox) => seatSessionRows(get, set, sessionId, rows, inbox),
         onLoaded: messages => {
           // INVARIANT: a stale terminal must NEVER touch chatScopeLoading — the gate is
           // owned by whichever request still holds the current scope. Why: when leaving a
@@ -459,19 +449,26 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
       // sets the `streaming` object via `set()`. All downstream consumers (frame
       // handlers, UI components) assume the write is immediately visible. If
       // Zustand ever makes `set()` async, the streaming state machine breaks.
-      //
-      // The linear-turn contract: the turn's
-      // parent must name the branch's live tail. A 409 "not the tail" means
-      // another turn landed first — re-read the branch and retry ONCE; a
-      // second conflict shows an explicit toast (runCompletion's
-      // conflictFinal arm).
-      const outcome = await _sendOnce(set, get, content, images, false);
-      if (outcome !== 'tail-conflict') return;
       const { activeSessionId } = get();
       if (!activeSessionId) return;
-      await get().loadMessages(activeSessionId);
-      if (get().activeSessionId !== activeSessionId) return;
-      await _sendOnce(set, get, content, images, true);
+      const activePath = resolveActivePath(get().messages);
+      const parentId = activePath.length > 0 ? activePath[activePath.length - 1].message_id : null;
+      const apiMessages = toApiMessages(activePath);
+      apiMessages.push({ role: 'user', content, images });
+      const wire: SendWire = { apiMessages, parentId, userMsgId: uuid() };
+      // The guard lives in the store (not the UI) so MicButton transcription
+      // and hotkeys take the same path.
+      if (chatIsBusy(get, activeSessionId)) {
+        await queueSend(set, get, activeSessionId, content, wire, images);
+        return;
+      }
+      insertOptimisticUser(set, get, { id: wire.userMsgId, parentId, content, images });
+      await runCompletion(set, get, {
+        ...wire,
+        userContent: content,
+        errorLabel: 'Chat send error:',
+        restoreDraftOnFail: true,
+      });
     },
 
     async editMessage(messageId: string, content: string) {
@@ -510,7 +507,7 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
       set(s => ({ sessions: withThreadRow(s.sessions, branch) }));
       get().openBranch(branch.session_id);
       // The send parents on the branch's TAIL (the copied prefix's end) —
-      // the rows must be seated first (the queue-flush switch+load pattern).
+      // the rows must be seated first.
       await get().loadMessages(branch.session_id);
       if (get().activeSessionId !== branch.session_id) return;
       await get().sendMessage(content, images);
@@ -551,16 +548,16 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
       const userParentId = userParent?.parent_id ?? null;
 
       const apiMessages = toApiMessages(chain);
-      const optimisticUserId = insertOptimisticUser(set, get, {
-        parentId: userParentId, content: userMsg.content, images: userMsg.images,
+      const newUserMsgId = uuid();
+      insertOptimisticUser(set, get, {
+        id: newUserMsgId, parentId: userParentId, content: userMsg.content, images: userMsg.images,
       });
 
       await runCompletion(set, get, {
         apiMessages,
         parentId: userParentId,
+        userMsgId: newUserMsgId,
         userContent: userMsg.content,
-        userImages: userMsg.images,
-        optimisticUserId,
         errorLabel: 'Regenerate error:',
       });
     },
@@ -568,21 +565,24 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
     stopGeneration() {
       const st = get().streaming;
       const controller = st?.controller ?? null;
-      if (controller) {
-        const sessionId = st?.sessionId ?? get().activeSessionId;
-        if (sessionId) {
-          // Stamp the registration aborted BEFORE the abort (the end facts
-          // live on the registration — see TurnEndFacts): a trailing `error`
-          // frame of this deliberate stop must not surface as a failure, and
-          // the terminal must read the turn as 'aborted'.
-          markHarnessTurnAborted(sessionId);
-          // A failed cancel leaves a zombie server-side turn; surface it rather
-          // than swallow silently (no-silent-degradation; mirrors the send path).
-          apiClient.post(`/chat/sessions/${sessionId}/completions/cancel`, {})
-            .catch(() => { useAppStore.getState().showToast(t('stopGenerationFailed'), 'error'); });
-        }
-        controller.abort();
+      // A turn this tab holds no slot for (another tab's, or between two
+      // queued turns) is still stoppable: dsh's status says it runs.
+      if (!controller && !get().dshRunning) return;
+      const sessionId = st?.sessionId ?? get().activeSessionId;
+      if (sessionId) {
+        // Stamp the registration aborted BEFORE the abort (the end facts
+        // live on the registration — see TurnEndFacts): a trailing `error`
+        // frame of this deliberate stop must not surface as a failure.
+        markHarnessTurnAborted(sessionId);
+        // Stop also takes the queue out of dsh's inbox and hands it back
+        // (returnQueuedToComposer). A failed cancel leaves a zombie
+        // server-side turn; surface it rather than swallow silently
+        // (no-silent-degradation; mirrors the send path).
+        apiClient.post(`/chat/sessions/${sessionId}/completions/cancel`, {})
+          .then((reply: { returned?: unknown } | undefined) => returnQueuedToComposer(get, sessionId, reply?.returned))
+          .catch(() => { useAppStore.getState().showToast(t('stopGenerationFailed'), 'error'); });
       }
+      controller?.abort();
     },
 
     async rewindTo(messageId: string) {

@@ -1,11 +1,10 @@
 """Loader for the agent-config reserved subtree — BFS walk + bulk content fetch.
 
-Split out of agent_config.py (now a façade). Resolves the skeleton folder ids,
-builds a parent→children map via a per-level parent_id BFS (O(config) rows, not
-O(project)), and fetches content only for the resolved config nodes. The assembled
+Resolves the skeleton folder ids, builds a parent→children map via a per-level
+parent_id BFS (O(config) rows, not O(project)), and fetches content only for the resolved config nodes. The assembled
 dict feeds build_agent_system_prompt; load_skills_subtree is the scoped walk
-behind the turn payload's raw skills wire (plan collapse-the-editor-harness-layer
-step 3) so the prompt build and the payload share one config-tree walk.
+behind the turn payload's raw skills wire so the prompt build and the payload
+share one config-tree walk.
 
 # ARCH (perf): payload is proportional to the config subtree. Step 1: skeleton
 # lookup keyed on is_system=true (idx_documents_system). Step 2: per-level
@@ -237,58 +236,14 @@ async def load_instance_skill_docs() -> list[dict]:
 
 async def load_instance_skill_tombstones() -> list[str]:
     """The wire's `instance_tombstones`: NAMES of disabled instance_skills
-    rows — a separate NAME list (not raw bodies like the project tombstones)
-    because the plugin derives project-tombstone names by PARSING bodies and
-    an unparseable entry must suppress nothing; a disabled instance row has no
-    body to parse, its name IS the key. Suppresses the shipped skill of that
-    name exactly as a project tombstone does."""
+    rows — the admin's off-switch, the only one: a disabled row suppresses the
+    shipped skill of that name for every project. A NAME list, not bodies — a
+    disabled row has no body to parse, its name IS the key."""
     db = await get_db()
     rows = await db.query(
         "SELECT name FROM instance_skills WHERE enabled = false ORDER BY name"
     ) or []
     return [str(row["name"]) for row in rows]
-
-
-async def load_suppressed_skill_contents(project_id: str) -> list[str]:
-    """The RAW contents of the TOMBSTONED direct children of the Skills folder.
-
-    Deleting a skill document is the off-switch for a shipped skill: the name
-    the tombstone's frontmatter declares is suppressed, so the plugin's catalog
-    does not serve the shipped file in its place (the plugin parses these raw
-    contents — plan collapse-the-editor-harness-layer step 3; see
-    resolveSkillCatalog's INVARIANT in harness-driver/plugin/src/skills.ts).
-
-    Scoped to DIRECT children of the folder on purpose — a tombstoned node deeper
-    in a folder-shaped skill is deleted MATERIAL, not a retired skill, and must
-    not suppress anything. Copies retired by the one-time seeded-skills
-    retirement are detached from the folder (parent_id cleared) and therefore
-    never match.
-    """
-    db = await get_db()
-    skel = await db.query(
-        "SELECT meta::id(id) AS id FROM documents "
-        "WHERE project_id = $pid AND is_system = true "
-        "AND system_role = 'skills_folder' AND deleted_at IS NONE",
-        {"pid": project_id},
-    )
-    if not skel:
-        return []
-    rows = await db.query(
-        "SELECT content, deleted_at FROM documents "
-        "WHERE project_id = $pid AND parent_id = $fid",
-        {"pid": project_id, "fid": skel[0]["id"]},
-    ) or []
-    return [
-        row.get("content") or ""
-        for row in rows
-        # WHY: the tombstone test is Python truthiness, not a SurrealQL
-        # `deleted_at IS NOT NONE` clause. Why: these columns hold NULL on some
-        # rows and NONE on others, and the clause does not answer the same
-        # question for both — a live drive had it count 66 rows as parented that
-        # carried no parent at all. A missed tombstone here silently un-deletes
-        # a skill the user turned off.
-        if row.get("deleted_at")
-    ]
 
 
 async def load_skills_subtree(project_id: str) -> list[dict]:

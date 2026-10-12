@@ -38,9 +38,6 @@ function makeStore(sessionId = 's1') {
     conversation: [],
     turnRanges: {},
     turnStartSeq: null,
-    queued: {},
-    flushQueued: async () => {},
-    restoreQueued: () => {},
   } as unknown as ChatState;
   const get = () => state;
   const set: Set = (u: unknown) => {
@@ -117,7 +114,6 @@ describe('adoptOpenTurn — the reload seats the open turn', () => {
     // The turn starts while the chat is shown.
     const p = streamCompletion(get, set, {
       sessionId: 's-back', body: {}, signal: new AbortController().signal,
-      userParentId: null, userContent: 'hi', optimisticUserId: 'temp-1',
     });
     dispatchChatFrame(get, set, 's-back', IDS);
 
@@ -233,7 +229,6 @@ describe('adoptOpenTurn — the browser-WS-gap resync', () => {
       get, set,
       o: {
         sessionId: 's-resync', body: { messages: [] }, signal: new AbortController().signal,
-        userParentId: null, userContent: 'hi', optimisticUserId: 'temp-1',
       },
     };
     const p = streamCompletion(o.get, o.set, o.o);
@@ -259,7 +254,6 @@ describe('adoptOpenTurn — the browser-WS-gap resync', () => {
       get, set,
       o: {
         sessionId: 's-ended', body: { messages: [] }, signal: new AbortController().signal,
-        userParentId: null, userContent: 'hi', optimisticUserId: 'temp-1',
       },
     };
     const p = streamCompletion(o.get, o.set, o.o);

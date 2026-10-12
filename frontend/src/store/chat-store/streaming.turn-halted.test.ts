@@ -37,7 +37,6 @@ async function drive(frames: Record<string, unknown>[]) {
   const { get, set } = makeStore();
   const p = streamCompletion(get, set, {
     sessionId: 's1', body: {}, signal: new AbortController().signal,
-    userParentId: null, userContent: 'hi',
   });
   dispatchChatFrame(get, set, 's1', IDS);
   for (const f of frames) dispatchChatFrame(get, set, 's1', f);
@@ -48,8 +47,7 @@ async function drive(frames: Record<string, unknown>[]) {
 
 /**
  * The halt CARD and the turn's timeline are the assembler's nodes; the live
- * arms beside the feed owe the error notice + toast, and the end-reason stamp
- * the message queue reads at the terminal (queue-slice.test.ts).
+ * arms beside the feed owe the error notice + toast.
  */
 describe('halt and error frames — what the live path still owes', () => {
   beforeEach(() => { vi.clearAllMocks(); postMock.mockResolvedValue({ accepted: true }); });

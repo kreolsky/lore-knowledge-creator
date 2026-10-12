@@ -19,7 +19,7 @@ import driver.client
 import http_clients
 import settings
 from fastapi import Depends, HTTPException
-from model_access import available_models
+from model_access import available_models, hidden_models
 
 import config
 from auth import get_current_user
@@ -27,6 +27,7 @@ from config import (
     CHAT_MAX_IMAGE_SIZE_MB,
     CHAT_MODELS_TIMEOUT_S,
 )
+from db import get_db
 from routes.chat._router import router
 
 logger = logging.getLogger(__name__)
@@ -357,13 +358,15 @@ async def list_models(user: dict = Depends(get_current_user)):
 
     The roster is FILTERED to the caller's available models (SYSTEM:
     model-access) — the picker only; the turn gate is require_model_access.
+    Hidden models leave `models` for every caller, admins included; their
+    capability fields stay, so a session pinned to one keeps working.
     """
     api_url = await settings.get("AI_API_URL")
     if not api_url:
         cap = await _capability_snapshot()
         return _models_payload([], cap)
     # Read before the try: a DB failure here is not "AI service unavailable".
-    allowed = await available_models(user)
+    allowed, hidden = await available_models(user), await hidden_models(await get_db())
     try:
         # Run the gateway fetches and the capability check concurrently — they're
         # independent. agent_capability is a config read (no probe, cannot
@@ -377,10 +380,11 @@ async def list_models(user: dict = Depends(get_current_user)):
         if allowed is not None:
             entries = [e for e in entries if e.get("id") in allowed]
             reasoning = {k: v for k, v in reasoning.items() if k in allowed}
-        return _models_payload(
+        body = _models_payload(
             entries, cap, reasoning=reasoning,
             default_model=await settings.get("CHAT_MODEL"),
         )
+        return {**body, "models": [m for m in body["models"] if m not in hidden]}
     except Exception as e:
         logger.warning("Failed to fetch models: %s", e)
         raise HTTPException(status_code=503, detail="AI service unavailable")

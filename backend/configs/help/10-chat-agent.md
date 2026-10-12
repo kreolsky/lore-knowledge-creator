@@ -1,43 +1,43 @@
-# Чат и агент
+# Chat and the agent
 
-Чат — это агент с инструментами. Он знает про ваш проект и может работать с документами: читать, искать, создавать, править, перемещать, переименовывать, делать таблицы. Кроме того, он умеет искать в интернете, генерировать картинки, работать со скиллами и памятью проекта.
+The chat is an agent with tools. It knows your project and can work with documents: read, search, create, edit, move, rename, build tables. Beyond that, it can search the internet, generate pictures, and work with skills and project memory.
 
-Агент действует от вашего имени: он видит и меняет только то, что можете видеть и менять вы.
+The agent acts on your behalf: it sees and changes only what you can see and change.
 
-## Чаты сквозные
+## Chats are project-wide
 
-Все ваши чаты в проекте видны из любого документа. Чаты личные: чужие чаты вам не видны, ваши — другим участникам. Формально у каждого чата есть родитель — документ или референс, из которого его начали, — но это ни в чём не ограничивает. Родителя чата можно поменять.
+All your chats in a project are visible from any document. Chats are personal: you don't see other people's chats, and they don't see yours. Formally every chat has a parent — the document or reference it was started from — but this restricts nothing. A chat's parent can be changed.
 
-- **Поиск чатов по названию** — фильтр над списком.
-- **Сортировка по времени** — сверху самый новый чат. Это вариант по умолчанию.
-- **Сортировка по близости** — сверху свежие чаты открытого документа, дальше чаты соседних по дереву документов.
+- **Search chats by title** — a filter above the list.
+- **Sort by recent activity** — the newest chat on top. This is the default.
+- **Sort by proximity to this document** — recent chats of the open document on top, then chats of documents near it in the tree.
 
-Чат можно переименовать двойным кликом, экспортировать в Markdown или JSON, удалить.
+A chat can be renamed with a double click, exported to Markdown or JSON, and deleted.
 
-## Контекст
+## Context
 
-Когда вы пишете в чат, агенту автоматически передаются ссылки на открытые документы и на документы, на которые они ссылаются напрямую. Передаются ссылки, а не содержимое: агент сам прочитает нужное, если вопрос касается этих документов.
+When you write in the chat, the agent automatically receives links to the open documents and to the documents they link to directly. Links are passed, not content: the agent reads what it needs itself if the question concerns those documents.
 
-Кнопка «Добавить контекст» позволяет вручную добавить или убрать документы и референсы. Если агент читает лишнее, отключите ненужный контекст.
+The "Add content" button lets you add or remove documents and references by hand. If the agent reads too much, switch off the context you don't need.
 
-## Модель и режим размышлений
+## Model and reasoning mode
 
-Рядом с полем ввода выбираются модель и режим размышлений. «По умолчанию» оставляет выбор модели. Более глубокие размышления дают более обдуманные ответы, но работают медленнее.
+The model and the reasoning mode are chosen next to the input field. "default" leaves the choice to the model. Deeper reasoning gives more considered answers but is slower.
 
-## Правки агента
+## The agent's edits
 
-- **Флажок «Авто» снят** (по умолчанию) — каждое изменение агент сначала показывает, и вы решаете: разрешить один раз, разрешить в этом чате или отклонить. Если отклоните с пояснением, агент попробует иначе.
-- **Флажок «Авто» стоит** — правки применяются сразу. Перед каждой правкой агента Lore делает снимок, так что её можно откатить (см. [Снимки и история](help:history)).
+- **"Auto" unchecked** (the default) — the agent shows every change first, and you decide: allow once, allow in this chat, or reject. If you reject with an explanation, the agent tries a different way.
+- **"Auto" checked** — edits are applied right away. Before each of the agent's edits Lore takes a snapshot, so it can be rolled back (see [Snapshots and history](help:history)).
 
-## Удобные приёмы
+## Handy moves
 
-- **Работать с выделением** (⌘/Ctrl + J) — выделите фрагмент в документе, и агент будет работать именно с ним.
-- **Уточнить** — выделите часть ответа агента и задайте уточняющий вопрос.
-- **Изменить своё сообщение** — карандаш у вашего сообщения. После сохранения разговор пойдёт новой веткой, а старая сохранится; между ветками переключаются стрелками у сообщения.
-- **Продолжить** — если ход агента прервался (лимит шагов, ошибка, обрыв связи), в чате появится карточка с причиной и кнопкой «Продолжить».
-- **Создать документ из ответа** — ответ агента становится новым документом.
-- **Голосовой ввод** — кнопка микрофона рядом с полем ввода.
-- **Картинки** — перетащите их в чат, если модель умеет видеть изображения.
-- **Системный промпт** — выбор персоны для этого чата (см. [Персоны, правила и знания](help:personas-rules-knowledge)).
+- **Work with selection** (⌘/Ctrl + J) — select a fragment in the document, and the agent works on exactly that.
+- **Clarify** — select part of the agent's answer and ask a follow-up question.
+- **Edit your message** — the pencil on your message. After saving, the conversation continues as a new branch and the old one is kept; switch between branches with the arrows on the message.
+- **Continue** — if the agent's turn was interrupted (step limit, error, lost connection), a card with the reason and a "Continue" button appears in the chat.
+- **Create document from response** — the agent's answer becomes a new document.
+- **Voice input** — the microphone button next to the input field.
+- **Pictures** — drag them into the chat if the model can see images.
+- **System prompt** — choose a persona for this chat (see [Personas, rules and knowledge](help:personas-rules-knowledge)).
 
-Индикатор рядом с полем показывает, насколько заполнено окно контекста. Когда оно переполняется, агент сжимает старую часть разговора. Если места всё равно не хватает, начните новый чат.
+The indicator next to the field shows how full the context window is. When it overflows, the agent compresses the older part of the conversation. If there is still not enough room, start a new chat.

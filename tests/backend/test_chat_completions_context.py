@@ -8,8 +8,7 @@ off the /followup payload — the driver-owned turn's one wire contract (the
 retired SSE arm exposed the same string as stream kwargs).
 """
 
-from test_driver_channel import _env, _turn_end
-from test_harness_turn import _acquirable, _until_async
+from uuid import uuid4
 
 
 async def _create_ref(client, token, pid, parent_id, *, content="Ref body", title="Ref title"):
@@ -49,22 +48,17 @@ async def _create_session(client, token, pid, document_id):
 
 
 async def _completions(client, token, sid, body, env):
-    """Start one driver-owned turn and return the composed `system_prompt` it
+    """Queue one driver-owned send and return the composed `system_prompt` it
     was sent with (context documents fold into it, not a messages[] history).
-    The string rides the /followup payload; the turn is then closed through
-    the fake channel socket so the lock releases before the next test."""
+    The string rides the /followup payload."""
     resp = await client.post(
         f"/api/chat/sessions/{sid}/completions",
-        json=body,
+        json={"user_msg_id": str(uuid4()), **body},
         cookies={"lore_session": token},
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["accepted"] is True
     assert len(env.followups.payloads) == 1
-    sock = env.connector.sockets[0]
-    for frame in ({"type": "model_update", "model": "test"}, _turn_end(1)):
-        sock.push(_env(sid, frame))
-    await _until_async(lambda: _acquirable(sid))
     return env.followups.payloads[0]["system_prompt"]
 
 

@@ -49,7 +49,6 @@ function buildStore(sessions: ChatState['sessions']) {
     activeSessionId: 's1',
     messages: [],
     streaming: null,
-    queued: {},
   } as unknown as ChatState));
 }
 
@@ -71,7 +70,6 @@ describe('the shown slot belongs to the active chat — leaving drops only the s
     seatSlotFor(store, 'other');
     void streamCompletion(store.getState, store.setState, {
       sessionId: 'other', body: {}, signal: new AbortController().signal,
-      userParentId: null, userContent: 'hi',
     });
     return store;
   }
@@ -124,7 +122,6 @@ describe('setActiveSession — returning to a chat whose turn still runs', () =>
     store.setState({ activeSessionId: 'other' } as Partial<ChatState>);
     void streamCompletion(store.getState, store.setState, {
       sessionId: 'other', body: {}, signal: new AbortController().signal,
-      userParentId: null, userContent: 'hi',
     });
     dispatchChatFrame(store.getState, store.setState, 'other',
       { type: 'ids', user_message_id: 'um', assistant_message_id: 'am' });

@@ -137,7 +137,7 @@ async def test_two_waiters_fifo_safety_after_release(fake_redis):
 @pytest.mark.asyncio
 async def test_release_is_fenced_against_reacquired_lock(fake_redis):
     """A holder that outlived its TTL must not delete the NEXT holder's lock
-    (compare-and-delete, not bare DEL — same INVARIANT as turn_lock)."""
+    (compare-and-delete, not bare DEL)."""
     from doc_edit_lock import edit_lock
 
     lock_a = edit_lock("d1", ttl=0.05)

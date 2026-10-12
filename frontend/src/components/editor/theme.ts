@@ -69,13 +69,15 @@ export const loreEditorTheme: Extension = [
   '.cm-header-5': { fontSize: '1rem', fontWeight: '600', color: 'var(--text)', textDecoration: 'none' },
   '.cm-header-6': { fontSize: '1rem', fontWeight: '500', color: 'var(--text-muted)', textDecoration: 'none' },
 
-  // Heading top spacing
-  '.cm-line:has(.cm-header-1)': { paddingTop: '1.35rem' },
-  '.cm-line:has(.cm-header-2)': { paddingTop: '1.05rem' },
-  '.cm-line:has(.cm-header-3)': { paddingTop: '0.825rem' },
-  '.cm-line:has(.cm-header-4)': { paddingTop: '0.64rem' },
-  '.cm-line:has(.cm-header-5)': { paddingTop: '0.49rem' },
-  '.cm-line:has(.cm-header-6)': { paddingTop: '0.49rem' },
+  // Heading top spacing + the heading's size/weight on the LINE.
+  // WHY: inline code in a heading is a sibling span of .cm-header-N, not its child, so its
+  // em-relative size and inherited weight resolve against the line — which must carry them.
+  '.cm-line:has(.cm-header-1)': { paddingTop: '1.35rem', fontSize: '1.875rem', fontWeight: '700', lineHeight: '1.25' },
+  '.cm-line:has(.cm-header-2)': { paddingTop: '1.05rem', fontSize: '1.5rem', fontWeight: '700', lineHeight: '1.25' },
+  '.cm-line:has(.cm-header-3)': { paddingTop: '0.825rem', fontSize: '1.25rem', fontWeight: '600', lineHeight: '1.3' },
+  '.cm-line:has(.cm-header-4)': { paddingTop: '0.64rem', fontSize: '1.1rem', fontWeight: '600', lineHeight: '1.3' },
+  '.cm-line:has(.cm-header-5)': { paddingTop: '0.49rem', fontSize: '1rem', fontWeight: '600' },
+  '.cm-line:has(.cm-header-6)': { paddingTop: '0.49rem', fontSize: '1rem', fontWeight: '500' },
 
   // FRAGILE: child combinator + :has() — depends on .cm-line being direct child of .cm-content.
   // Skip first line — no spacing above the document title.

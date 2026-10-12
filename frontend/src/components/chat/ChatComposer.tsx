@@ -16,6 +16,7 @@ import { MicButton } from './shared/MicButton';
 import { AttachmentChips } from './shared/AttachmentChips';
 import { QueuedChips } from './shared/QueuedChips';
 import { ScrollToBottomButton } from './shared/ScrollToBottomButton';
+import type { QueuedMessage } from '../../chat/inbox-queue';
 
 interface Props {
   variant: 'ai' | 'note';
@@ -41,10 +42,10 @@ interface Props {
   // Attachments
   images: string[];
   onRemoveImage: (index: number) => void;
-  // Plan chat-message-queue: optional follow-up chips typed while a turn streams (AI
-  // chat only; notes pass nothing). Empty → not rendered.
-  queued?: string[];
-  onRemoveQueued?: (index: number) => void;
+  // The chat's queue — dsh's inbox (AI chat only; notes pass nothing).
+  // Empty → not rendered.
+  queued?: QueuedMessage[];
+  onRemoveQueued?: (messageId: string) => void;
   // Set only while the host's message list is scrolled up past its stick threshold;
   // undefined hides the scroll-to-bottom button.
   onScrollToBottom?: () => void;
@@ -187,10 +188,10 @@ export function ChatComposer({
                   filled={variant !== 'note'}
                 />
                 {/*
-                  Plan chat-message-queue (kilocode model): one button, state derived from
-                  composer emptiness. Empty + streaming → red Stop; non-empty → Send,
-                  which enqueues while a turn streams (the store guard routes it to the
-                  queue). No modality — mouse and the Cmd/Ctrl+Enter hotkey do the same.
+                  One button, state derived from composer emptiness. Empty + streaming →
+                  red Stop; non-empty → Send, which while a turn streams lands in dsh's
+                  inbox (see SYSTEM: chat-message-queue). No modality — mouse and the
+                  Cmd/Ctrl+Enter hotkey do the same.
                   Esc always Stops (see handleEscape above) so a one-click stop is
                   still available whenever text is present.
                 */}

@@ -1,6 +1,7 @@
 /** ChatState interface and Set/Get aliases for slice creators. */
 import type { ChatUIMode, ChatSession, ChatMessage, Reference, PinnedRegion, ReasoningCapability } from '../../types';
 import type { ConversationVM, TurnRange } from './conversation-feed';
+import type { QueuedMessage } from '../../chat/inbox-queue';
 
 /** One switcher option: one DISTINCT continuation after the fork origin and
  * the session that opens it (server-shaped, GET /sessions/{id}/forks). The
@@ -20,16 +21,6 @@ export interface ForkEntry {
   after_origin: string | null;
   options: ForkOption[];
 }
-
-/**
- * Why a turn ended — read at the turn's terminal, off the harness
- * REGISTRATION's end facts. 'done' is the DEFAULT: nothing is stamped
- * through a clean turn. 'error'/'halted' are stamped by their frame handlers;
- * 'aborted' is stamped by stopGeneration before it aborts; 'lost' is a turn
- * whose terminal never reached this tab (the WS-gap close). The queue
- * flush decision hangs on this value: only 'done' auto-fires.
- */
-export type TurnEndReason = 'done' | 'aborted' | 'error' | 'halted' | 'lost';
 
 /**
  * The single streaming state machine object.
@@ -196,12 +187,19 @@ export interface ChatState {
   // PER-SESSION drafts (a note draft is thread-scoped).
   draft: string;
 
-  // SYSTEM: chat-message-queue — follow-up chips typed while a turn streams, keyed by
-  // session. Why keyed: the composer draft is ONE shared string that crosses a session
-  // switch; a flat queue would surface chat A's chips inside chat B. Not persisted (F5
-  // drops it — the user's call). The backend never learns the queue exists: one
-  // ordinary sendMessage fires on flush.
-  queued: Record<string, string[]>;
+  // The ACTIVE chat's queue — dsh's next-turn inbox as the browser folds it
+  // (see SYSTEM: chat-message-queue, inbox-slice.ts). Survives a reload (the
+  // messages GET seeds it) and shows in every tab of the owner.
+  inboxQueue: QueuedMessage[];
+  // The ACTIVE chat's dsh agent is running a turn (relayed `dsh_status`). A
+  // send while it is — or while the queue is non-empty — queues in dsh with
+  // no optimistic row; Stop and the busy composer read it beside `streaming`.
+  dshRunning: boolean;
+  // The idle send whose turn this tab is opening: its chip is hidden (dsh
+  // inserts the message into the inbox and claims it at once, and the
+  // optimistic bubble already shows it). `messageId` = dsh's id from the
+  // POST reply; until then the chip is matched by text. Null otherwise.
+  liveSend: { userMsgId: string; text: string; messageId: string | null } | null;
   // Chat-list title filter typed in the ghost header's search mode. null = search
   // mode OFF (the hint shows); '' … = search mode ON with that query. NEVER
   // persisted and NEVER survives leaving the ghost state — ChatHeader clears it on
@@ -318,18 +316,9 @@ export interface ChatState {
   // while streaming; a no-op on the first message (immutable).
   rewindTo: (messageId: string) => Promise<void>;
 
-  // Actions — message queue. Guard lives in the store, not
-  // the UI: sendMessage itself routes here when streaming !== null, so the MicButton
-  // transcription path and hotkeys can't bypass it.
-  enqueueMessage: (sessionId: string, text: string) => void;
-  removeQueued: (sessionId: string, index: number) => void;
-  clearQueued: (sessionId: string) => void;
-  // Auto-fire the coalesced queue for a session at a clean turn-end. Session-owned:
-  // brings the user to the owning session (single-session streaming model) then sends.
-  flushQueued: (sessionId: string) => Promise<void>;
-  // Restore the joined queue text into the composer (abort/error/halted/lost) instead
-  // of auto-firing a follow-up into a turn the user just killed.
-  restoreQueued: (sessionId: string) => void;
+  // Actions — queue. ✕ on a queued message of the active chat; the chip
+  // leaves with the splice frame (inbox-slice.ts).
+  discardQueued: (messageId: string) => Promise<void>;
 
   // Actions — models
   loadModels: () => Promise<void>;

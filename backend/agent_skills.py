@@ -1,14 +1,14 @@
 """Skill document LOOKUP — raw documents only; parse lives in the plugin.
 
-Split out of agent_config.py (now a façade). A skill is a document in the
-skills_folder subtree carrying YAML frontmatter (name / description / tools).
-Under plan collapse-the-editor-harness-layer step 3 the frontmatter parse +
-validation are the dsh harness's vocabulary: the PLUGIN parses the raw
-documents with the pinned library's grammar (harness-driver/plugin/src/
-skills.ts — the name grammar is its imported isSkillName). Python keeps the
+A skill is a document in the skills_folder subtree carrying YAML frontmatter
+(name / description / tools). The frontmatter parse + validation are the dsh
+harness's vocabulary: the PLUGIN parses the raw documents with the pinned
+library's grammar (harness-driver/plugin/src/skills.ts — the name grammar is
+its imported isSkillName). Python keeps the
 LOOKUP: which documents participate and their folder shape.
 
-Three layers ride the turn payload RAW (the `skills` wire):
+Two document layers ride the turn payload RAW (the `skills` wire; the
+instance layers come from agent_config_load):
 
 * `project`  — the live HEADS of the skills subtree (a head's descendants are
   MATERIAL, referenced by id and listed in `child_docs`, never separate
@@ -18,9 +18,9 @@ Three layers ride the turn payload RAW (the `skills` wire):
   skill_*.md`); shipped skills are indexed at turn time, never copied into
   projects, so adding one is adding a file. `location` is the stable marker
   "shipped:<file stem>" (no project row exists to name).
-* `tombstones` — the contents of the DELETED direct children of the Skills
-  folder (agent_config_load.load_suppressed_skill_contents): a tombstone's
-  parsed name is the user's off-switch for the shipped skill it names.
+
+A DELETED child of the Skills folder rides nowhere: it is trash, not an
+off-switch (see INVARIANT(off-switch) in harness-driver/plugin/src/skills.ts).
 
 This module imports NOTHING from the other agent-config submodules and no DB —
 that purity is what lets agent_config import it with no cycle.

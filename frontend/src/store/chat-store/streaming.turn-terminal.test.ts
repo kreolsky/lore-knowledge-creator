@@ -6,8 +6,7 @@
  * dedup re-delivers a terminal the browser already consumed. The backend's
  * dispatch guards keep a stale terminal from a NEWER turn's registration; what
  * reaches a browser that already ended the turn must be a NO-OP (no
- * registration → dropped), so streaming ends exactly ONCE and the queue flush
- * fires exactly once.
+ * registration → dropped), so streaming ends exactly ONCE.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -21,10 +20,6 @@ vi.mock('../../api/client', () => ({
   apiClient: { post: (...a: unknown[]) => postMock(...a) },
 }));
 vi.mock('../../i18n', () => ({ t: (k: string) => k }));
-const flushMock = vi.fn();
-vi.mock('./queue-slice', () => ({
-  scheduleTurnEndFlush: (...a: unknown[]) => flushMock(...a),
-}));
 
 import { streamCompletion, dispatchChatFrame, hasOpenHarnessTurn } from './streaming';
 import type { ChatState, Set } from './types';
@@ -63,12 +58,10 @@ describe('duplicate turn_closed frames (the replayed terminal)', () => {
 
   it('two terminals end streaming ONCE — the second finds no registration and no-ops', async () => {
     // A gap spanning two closed turns delivers a terminal per turn; the
-    // browser's turn is already over by the second. The queue flush (which
-    // POSTs the follow-up) must fire exactly once.
+    // browser's turn is already over by the second.
     const { get, set } = makeStore('s-term');
     const p = streamCompletion(get, set, {
       sessionId: 's-term', body: { messages: [] }, signal: new AbortController().signal,
-      userParentId: null, userContent: 'hi', optimisticUserId: 'temp-1',
     });
 
     dispatchChatFrame(get, set, 's-term', IDS);
@@ -82,14 +75,14 @@ describe('duplicate turn_closed frames (the replayed terminal)', () => {
 
     expect(get().streaming).toBeNull();
     expect(hasOpenHarnessTurn('s-term')).toBe(false);
-    expect(flushMock).toHaveBeenCalledTimes(1);
-    expect(flushMock).toHaveBeenCalledWith(expect.anything(), 's-term', 'done');
+    // The duplicates opened nothing either.
+    expect(get().messages.map(m => m.message_id)).toEqual(['um', 'am']);
   });
 
   it('a terminal before any registration is a no-op (another tab / reload owns the turn)', () => {
     const { get, set } = makeStore('s-none');
     dispatchChatFrame(get, set, 's-none', TURN_CLOSED);
     expect(get().streaming).toBeNull();
-    expect(flushMock).not.toHaveBeenCalled();
+    expect(hasOpenHarnessTurn('s-none')).toBe(false);
   });
 });

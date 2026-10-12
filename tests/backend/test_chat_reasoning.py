@@ -16,10 +16,12 @@ frames are read off the owner's project-WS chat_frame envelopes, the
 outbound contract off the followup payload, the product off the row.
 """
 import re
+from uuid import uuid4
 
 import pytest
 from test_driver_channel import _env, _turn_end
 from test_harness_turn import (
+    _claim_of,
     _content_landed,
     _list_messages,
     _open_ws,
@@ -93,7 +95,8 @@ async def test_reasoning_streamed_and_excluded_from_history(
     try:
         resp = await client.post(
             f"/api/chat/sessions/{sid}/completions",
-            json={"messages": [{"role": "user", "content": "Q?"}]},
+            json={"user_msg_id": str(uuid4()),
+                  "messages": [{"role": "user", "content": "Q?"}]},
             cookies={"lore_session": token},
         )
         assert resp.status_code == 200, resp.text
@@ -101,14 +104,15 @@ async def test_reasoning_streamed_and_excluded_from_history(
         assert body["accepted"] is True
 
         # Feed the driver's frames through the REAL relay arms (the standing
-        # channel's socket): model_update opens the bound turn, the settled
-        # message flows through the accumulation arm, turn/end closes it.
+        # channel's socket): the claim opens the turn, the settled message
+        # flows through the accumulation arm, turn/end closes it.
         # Reasoning rides the message's content verbatim (the browser's
         # assembler keeps the blocks); the arm accumulates content only —
         # reasoning is never written to the row (the reload trace is the
         # driver's log).
         sock = env.connector.sockets[0]
         for frame in (
+            _claim_of(env.followups.payloads[0]),
             {"type": "model_update", "model": "reasoner"},
             _reasoning_message(1, "First I think.\nThen more.", "The answer."),
             _turn_end(2),

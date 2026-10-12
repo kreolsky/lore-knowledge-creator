@@ -108,6 +108,26 @@ async def test_ensure_is_idempotent(client, test_db, project_with_doc):
 
 
 @pytest.mark.asyncio
+async def test_concurrent_first_ensures_both_succeed(client, test_db, project_with_doc):
+    """Two first turns of a fresh project arrive together (two quick sends):
+    both lazy-inits find no skeleton and both CREATE it — the loser must take
+    the winner's row, not fail the turn ("Agent setup failed")."""
+    import asyncio
+
+    pid, _idx, _admin = project_with_doc
+    first, second = await asyncio.gather(
+        ensure_agent_system_docs(pid), ensure_agent_system_docs(pid),
+    )
+    assert first == second
+    db = await get_db()
+    docs = await db.query(
+        "SELECT count() AS n FROM documents WHERE project_id = $pid AND is_system = true GROUP ALL",
+        {"pid": pid},
+    )
+    assert docs[0]["n"] == len(first)
+
+
+@pytest.mark.asyncio
 async def test_ensure_resurrects_soft_deleted_folder_preserving_content(
     client, test_db, project_with_doc,
 ):
@@ -799,11 +819,12 @@ async def test_project_override_head_rides_the_wire_raw(client, test_db, project
     assert heads[0]["child_docs"] == []
 
 
-async def test_deleted_copy_rides_the_tombstone_wire(client, test_db, project_with_doc):
-    """F2 (the off-switch), LOOKUP half: deleting a direct child of the Skills
-    folder puts its RAW content on the tombstones wire — the plugin parses the
-    name out of it and suppresses the shipped skill (the CATALOG half is
-    pinned in skills.test.ts)."""
+async def test_deleted_skill_copy_never_reaches_the_wire(client, test_db, project_with_doc):
+    """A deleted direct child of the Skills folder is plain trash: it leaves
+    the project layer and rides nowhere else, so nothing can turn the shipped
+    skill of that name off for this project (only the admin can, for all)."""
+    from agent_skills import frontmatter_name
+
     from db import create_record
 
     pid, _idx, _admin = project_with_doc
@@ -824,20 +845,17 @@ async def test_deleted_copy_rides_the_tombstone_wire(client, test_db, project_wi
         "title": "web-search", "content": copy,
         "path": f"{folder[0]['id']}/skill-off-ws",
     })
-    # Live, the copy is a project head; the shipped layer still rides.
-    _prompt, wire = await build_prompt_and_skill_docs(pid)
-    assert any(d["location"] == "skill-off-ws" for d in wire["project"])
-    assert wire["tombstones"] == []
-
-    # The user deletes it → the copy moves from the project layer to the
-    # tombstones, RAW.
     await db.query(
         "UPDATE type::record('documents', $id) SET deleted_at = time::now()",
         {"id": "skill-off-ws"},
     )
     _prompt, wire = await build_prompt_and_skill_docs(pid)
     assert not any(d["location"] == "skill-off-ws" for d in wire["project"])
-    assert copy in wire["tombstones"]
+    assert "tombstones" not in wire
+    assert not any(copy in str(layer) for layer in wire.values())
+    assert any(
+        frontmatter_name(d["content"]) == "web-search" for d in wire["shipped"]
+    ), "the shipped web-search keeps riding"
 
 
 async def test_folder_head_wires_its_material(client, test_db, project_with_doc):

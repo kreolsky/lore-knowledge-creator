@@ -29,15 +29,15 @@ async def test_chat_messages_pagination(client, admin_user, project_with_doc):
 
     # Default — all messages returned
     resp = await client.get(f"/api/chat/sessions/{sid}/messages", cookies=cookies)
-    assert len(resp.json()) == 5
+    assert len(resp.json()["messages"]) == 5
 
     # Limit to 2
     resp = await client.get(f"/api/chat/sessions/{sid}/messages?limit=2", cookies=cookies)
-    assert len(resp.json()) == 2
+    assert len(resp.json()["messages"]) == 2
 
     # Offset 3, limit 10 — should get 2 remaining
     resp = await client.get(f"/api/chat/sessions/{sid}/messages?offset=3&limit=10", cookies=cookies)
-    assert len(resp.json()) == 2
+    assert len(resp.json()["messages"]) == 2
 
 
 # Note: notes/ref-notes pagination tests removed — notes are now chat_sessions.

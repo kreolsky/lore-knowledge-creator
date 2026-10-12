@@ -13,6 +13,7 @@ the public surface so every existing import site keeps working.
 from __future__ import annotations
 
 from documents.service import create_document
+from surrealdb.errors import AlreadyExistsError
 
 from db import get_db
 
@@ -218,12 +219,21 @@ async def _upsert_system_doc(
              "role": role, "path": _role_path(role)},
         )
         return doc_id
-    await create_document(doc_id, {
-        "project_id": project_id, "parent_id": parent_id,
-        "title": title, "content": content,
-        "path": _role_path(role), "is_index": False,
-        "is_system": True, "system_role": role,
-    }, user_name="System")
+    try:
+        await create_document(doc_id, {
+            "project_id": project_id, "parent_id": parent_id,
+            "title": title, "content": content,
+            "path": _role_path(role), "is_index": False,
+            "is_system": True, "system_role": role,
+        }, user_name="System")
+    except RuntimeError as exc:
+        # INVARIANT: a concurrent ensure that created this deterministic row
+        # first is success, not a failure. Why: two first turns of a fresh
+        # project (two quick sends) both find no skeleton and both CREATE it;
+        # the loser failed its turn with "Agent setup failed". Same id = the
+        # same row, so the winner's write is exactly what this call wanted.
+        if not isinstance(exc.__cause__, AlreadyExistsError):
+            raise
     return doc_id
 
 

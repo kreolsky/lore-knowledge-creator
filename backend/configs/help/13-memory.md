@@ -1,29 +1,29 @@
-# Память
+# Memory
 
-Память проекта — это набор фактов, извлечённых из материалов. Каждый факт — отдельный документ в папке Memory системного раздела. У каждого факта записано, из каких референсов он взят. Когда факт уточняется, прежняя формулировка сохраняется в его истории, и агент сверяется с ней при следующих консолидациях.
+Project memory is a set of facts extracted from the materials. Each fact is a separate document in the Memory folder of the system section. Each fact records which references it was taken from. When a fact is refined, the previous wording is kept in its history, and the agent checks against it during later consolidations.
 
-## Зачем нужна память
+## Why memory
 
-Материалы копятся: созвоны, заметки, обсуждения. Память собирает из них принятые решения и установленные факты, чтобы потом можно было быстро спросить: «что мы решили про экономику?» — и получить ответ со ссылками на источники. Агент ищет по памяти, когда отвечает на вопросы о проекте.
+Materials pile up: calls, notes, discussions. Memory gathers the decisions made and the facts established in them, so that later you can quickly ask "what did we decide about the economy?" and get an answer with links to the sources. The agent searches memory when it answers questions about the project.
 
-## Консолидация
+## Consolidation
 
-Консолидация — процесс, в котором агент проходит по референсам документа и превращает их в факты памяти.
+Consolidation is the process in which the agent goes through a document's references and turns them into memory facts.
 
-Как запустить: откройте документ с материалами (например, документ с записями созвонов) и попросите агента: «сконсолидируй память по этому документу». По умолчанию агент обрабатывает документ и всё его поддерево.
+How to run it: open the document with the materials (for example, a document with call recordings) and ask the agent: "consolidate memory for this document". By default the agent processes the document and its whole subtree.
 
-Что происходит:
+What happens:
 
-1. Агент берёт референсы по одному. Длинные материалы он читает частями.
-2. Для каждой порции он решает, какие факты новые, какие повторяют уже известные, а какие уточняют или опровергают их.
-3. Уточнённый или опровергнутый факт переписывается на месте, а старая формулировка остаётся в его истории. Повторы сливаются с уже известным фактом.
-4. Агент переходит к следующей порции и так до конца.
+1. The agent takes the references one at a time. It reads long materials in parts.
+2. For each portion it decides which facts are new, which repeat ones already known, and which refine or contradict them.
+3. A refined or contradicted fact is rewritten in place, and the old wording stays in its history. Repeats are merged into the already known fact.
+4. The agent moves on to the next portion, and so on to the end.
 
-Вы в это время можете следить за процессом в чате, поправлять агента и отвечать на его вопросы.
+Meanwhile you can follow the process in the chat, correct the agent and answer its questions.
 
-## Советы
+## Tips
 
-- Сначала соберите материалы созвона или обсуждения под одним документом, потом консолидируйте. Память привязывается к источникам, и по фактам одного созвона легко работать.
-- Консолидацию можно запускать повторно, когда добавились новые референсы.
-- Чтобы искать только по памяти, во вкладке «Поиск» переключитесь в семантический режим и включите «Только память».
-- Чтобы проверить факт, попросите агента открыть его источники: у каждого факта есть ссылки на референсы, из которых он взят.
+- First gather a call's or a discussion's materials under one document, then consolidate. Memory is tied to its sources, and the facts of one call are easy to work with.
+- Consolidation can be run again when new references have been added.
+- To search memory only, switch the "Search" tab to semantic mode and turn on "Memory only".
+- To check a fact, ask the agent to open its sources: every fact links to the references it was taken from.

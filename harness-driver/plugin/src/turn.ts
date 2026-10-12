@@ -1,8 +1,9 @@
 /**
- * The driver-owned turn — the config gate (turnConfigProblem), the
- * multimodal prompt blocks, the catalog-backed user content, the turn
- * drive (prepareTurnDrive) and the POST /followup + POST /stop handlers.
- * index.ts re-exports the public surface.
+ * The send's prep and the session endpoints — the config gate
+ * (turnConfigProblem), the multimodal prompt blocks, the catalog-backed user
+ * content, the per-send prep (buildTurnPrep) and the POST /followup, POST
+ * /stop, POST /inbox/discard and GET /session-status handlers over the
+ * session agents (session-agents.ts). index.ts re-exports the public surface.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -10,41 +11,37 @@ import http from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
-import { installModelSelection } from '@deepseek-ai/dsh-agent'
-import type { ModelSelectionRef } from '@deepseek-ai/dsh-agent'
-import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
+import type { ModelSelection } from '@deepseek-ai/dsh-agent'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 
-import { newTurnMapState, turnFailureLine } from './map.ts'
 import {
   gatewayOf, piAiEffortKey,
   resolveModelCaps,
   type Gateway, type ModelApi,
 } from './caps.ts'
-import { parseTimeStamps, timeStampMessage } from './time-stamps.ts'
+import { parseTimeStamps } from './time-stamps.ts'
 import type { EventsChannel, SessionEventTap } from './ws-events.ts'
 import {
-  assembleTurnPrompt, catalogServedNames, computeCoreTools, computeActiveTools, loreSkillProvider,
-  resolveSkillCatalog, restrictDenyNames, skillLoadCallName,
-  skillLoadResultName, skillsDelta, type ResolvedSkill, type SkillCatalogWire,
+  assembleTurnPrompt, catalogServedNames, computeCoreTools, computeActiveTools,
+  resolveSkillCatalog, skillsDelta, type ResolvedSkill, type SkillCatalogWire,
 } from './skills.ts'
-import {
-  clearTurnRequestCtx, registerLoreTools,
-  registeredLoreToolNames, setSessionToolCtx,
-  stampTurnRequestCtx,
-} from './tools.ts'
+import { registerLoreTools } from './tools.ts'
 import {
   AGENT_KEY_REF, ROUTE_DEFAULT_CONTEXT_WINDOW, PROVIDER,
   ensureAgentKey, ensureModelEntry, ensureTitleConfig, ensureTitleEntry, ensureWebSearch,
   type ConfigEditorSeam, type CredentialsSeam, type LoreRouteScaffold, type SettingsSeam,
 } from './ensure.ts'
-import { resumeOrCreate, restoreActivation } from './sessions.ts'
+import { resumeOrCreate, restoreActivation, type SessionMap } from './sessions.ts'
 import { authorized, readBody } from './http.ts'
+import {
+  AGENT_IDLE_DISPOSE_MS, discardQueued, enqueueFollowup, sessionStatus, stopSession,
+  type SessionAgentDeps, type TurnPrep,
+} from './session-agents.ts'
 
-/** A turn the harness cannot run as configured (no model, no gateway URL or
- * key). The followup answers it as an accepted turn whose only frames are the
- * error naming the admin setting and the close — the backend has already bound
- * the turn, so the person reads the reason instead of "service unreachable". */
+/** A send the harness cannot run as configured (no model, no gateway URL or
+ * key). The followup answers 422 with the reason naming the admin setting and
+ * queues nothing — the person reads the reason instead of "service
+ * unreachable". */
 export class TurnConfigError extends Error {
   constructor(readonly dshId: string, message: string) {
     super(message)
@@ -241,48 +238,6 @@ export async function prepareUserContent(
   return blocks
 }
 
-/** The restriction lifecycle: attached in the agent-scoped setup (hide from
- * prompt AND reject execution — the SERVED half of the filter), re-applied
- * mid-turn on a successful `skill` load, disposed at turn end. `activated` is
- * held BY REFERENCE — the session listener adds to that same set and calls
- * apply() to lift the freshly activated pack. */
-function makeSkillRestriction(
-  servedNames: Set<string>, skills: ResolvedSkill[], activated: Set<string>,
-): { apply(): void; attach(agentCtx: Context): void; dispose(): void } {
-  let release: (() => void) | null = null
-  let agentToolsCtx: Context | null = null
-  const apply = (): void => {
-    release?.()
-    release = null
-    const deny = restrictDenyNames(
-      registeredLoreToolNames(), servedNames, skills, activated)
-    // The deny list is the filter's other observable — the exact complement
-    // of the active set in `registered`: the inactive packs AND every
-    // registered proxy this turn does not serve (`registered` is a
-    // process-lifetime union across sessions), and never a tool an activated
-    // skill freed — including one an inactive skill still lists.
-    console.error(`[lore-skills] deny ${deny.length}: ${deny.join(',') || '-'}`)
-    if (agentToolsCtx && deny.length) {
-      release = agentToolsCtx.tools.restrict({ deny })
-    }
-  }
-  return {
-    apply,
-    attach(agentCtx: Context) {
-      agentToolsCtx = agentCtx
-      apply()
-    },
-    dispose() {
-      try {
-        release?.()
-      } catch {
-        // best-effort — the agent scope may already be torn down
-      }
-      release = null
-    },
-  }
-}
-
 /** The session-projection seam the context-usage read needs (duck-typed: a
  * composition without the service passes undefined, and the tests fake it). */
 export interface SessionProjectionsSeam {
@@ -336,29 +291,15 @@ export function contextUsageFrame(
     : null
 }
 
-/** The ONE cancel arm: POST /stop cancels the live driver-owned turn HERE —
- * one semantics (`kind: 'user'`), one call site. Deferred into .then so a SYNC
- * throw from cancel cannot escape the event handler as an uncaughtException
- * (the trailing .catch then covers both sync and async rejections). */
-function cancelAgentTurn(handle: { agent: any }): void {
-  void Promise.resolve()
-    .then(() => handle.agent.cancel({ kind: 'user' } as never))
-    .catch(() => {})
-}
-
-/** dsh session id → the driver-owned turn in flight: one turn
- * per session — /followup refuses a busy session, /stop routes into the
- * cancel arm. Exported because it IS the liveness the log read branches on
- * (readSessionEvents): the crash-closer gate keys on exactly this registry,
- * and the tests name that semantics by setting a key directly. */
-export const followupTurns = new Map<string, { cancel(): void }>()
-
-/** Everything the driver-owned turn needs: payload parse, capability resolve,
- * model selection, the skills lifecycle, the restriction, tool registration,
- * the setup closure and the user-content prep. The /followup handler owns the
- * wire (channel pushes + the background turn); the prep stays separate from it
- * so the turn's identity/skills/tools setup is its own unit. */
-async function prepareTurnDrive(ctx: Context, map: SessionMap, body: Record<string, any>) {
+/** One send's prep: payload parse, capability resolve, model selection, the
+ * skills catalog, the tool-ctx halves and the user-content prep. Built at
+ * POST and frozen — the session agent applies it at this message's claim.
+ *
+ * WHY frozen at send time: a queued message runs with the system prompt,
+ * model and context the user had when sending, even if an earlier queued turn
+ * edited a document — it re-reads through its tools when it needs the newer
+ * state. */
+async function buildTurnPrep(ctx: Context, map: SessionMap, body: Record<string, any>) {
   const loreId = typeof body.session_id === 'string' && body.session_id
     ? body.session_id
     : `lore-${randomUUID()}`
@@ -378,7 +319,7 @@ async function prepareTurnDrive(ctx: Context, map: SessionMap, body: Record<stri
   const titleModel = (typeof body.title_model === 'string' ? body.title_model : '').trim()
   // The turn's time ground (backend-owned bytes: user timezone, `[chat started]`
   // root anchor, root-fork stability — completions_turn._turn_time_stamps).
-  // Kept per turn; the setup's pre-step listener emits them — see ARCH in
+  // Kept per send; the setup's pre-step listener emits them — see ARCH in
   // time-stamps.ts.
   const timeStamps = parseTimeStamps(body.time_stamps)
   // The per-turn reasoning effort, in the GATEWAY's spelling:
@@ -412,16 +353,13 @@ async function prepareTurnDrive(ctx: Context, map: SessionMap, body: Record<stri
   const dshId = map.get(loreId)
   const agentOptions = { provider, model }
 
-  // The per-turn model selection:
-  // dsh's own seam re-applies {provider, model, reasoningEffort} to every
-  // step's request config and CLEARS any inherited effort when the selection
-  // defines none — so Default sends no effort field (the provider default
-  // applies) and a previously explicit effort never leaks into a later
-  // Default turn (the agent handle is per-turn; the selection is rebuilt
-  // from the CURRENT body). Installed in setup: setup completes before the
-  // first followup, so the value reaches the FIRST step of the turn.
-  // `agentOptions` keeps its {provider, model} runtime shape — the effort
-  // rides the selection only.
+  // The per-send model selection: dsh's own seam re-applies {provider, model,
+  // reasoningEffort} to every step's request config and CLEARS any inherited
+  // effort when the selection defines none — so Default sends no effort field
+  // (the provider default applies) and a previously explicit effort never
+  // leaks into a later Default turn (the session agent swaps the selection in
+  // at each claim, from THIS send's body). `agentOptions` keeps its
+  // {provider, model} runtime shape — the effort rides the selection only.
   // An untranslatable spelling is sent VERBATIM with a loud log — the adapter
   // then refuses it (UNSUPPORTED_REASONING_EFFORT) rather than the turn
   // silently degrading to Default.
@@ -434,22 +372,19 @@ async function prepareTurnDrive(ctx: Context, map: SessionMap, body: Record<stri
       piEffort = effort
     }
   }
-  const selection: ModelSelectionRef = {
-    current: {
-      provider,
-      model,
-      ...(piEffort ? { reasoningEffort: ReasoningEffortId(piEffort) } : {}),
-    },
-    assembled: undefined,
+  const selection: ModelSelection = {
+    provider,
+    model,
+    ...(piEffort ? { reasoningEffort: ReasoningEffortId(piEffort) } : {}),
   }
 
   // ── The served-toolset filter (activation half: restoreActivation above).
   // The payload's skills field is the RAW lookup
   // (the backend parses NOTHING);
-  // parsing + overlay + off-switch + the served gate happen in
+  // parsing + overlay + admin off-switch + the served gate happen in
   // resolveSkillCatalog, against the pinned harness's grammar.
   const catalogWire: SkillCatalogWire = (body.skills && typeof body.skills === 'object'
-    && !Array.isArray(body.skills)) ? body.skills as SkillCatalogWire : { project: [], shipped: [], tombstones: [] }
+    && !Array.isArray(body.skills)) ? body.skills as SkillCatalogWire : { project: [], shipped: [] }
   const servedNames = new Set<string>(
     (Array.isArray(body.tools) ? body.tools : [])
       .map((e: any) => String(e?.function?.name ?? '')),
@@ -465,93 +400,47 @@ async function prepareTurnDrive(ctx: Context, map: SessionMap, body: Record<stri
     `[lore-skills] active tools resolved ${JSON.stringify(
       skillsDelta(servedNames, coreNames, activeNames))}`)
 
-  // The restriction lifecycle (makeSkillRestriction above): attached in the
-  // agent-scoped setup, re-applied mid-turn on a successful `skill` load,
-  // disposed at turn end.
-  const restriction = makeSkillRestriction(servedNames, skills, activated)
-
-  const state = newTurnMapState()
   // The tool-call identity bridge: everything the
   // proxies and the map frames need to speak Lore's session identity. The
   // derived sets come from the PAYLOAD (single backend source), and the
   // registration is read-only first.
   const mutating = new Set<string>(Array.isArray(body.mutating_tools) ? body.mutating_tools : [])
-  const turnToolCtx = {
+  // The split view: the standing half is registered per session; the
+  // per-request half is stamped at each claim and cleared at its turn's end.
+  const standingCtx = {
     loreSessionId: loreId,
-    messageId: String(body.assistant_msg_id ?? ''),
     agentKey: String(body.agent_key ?? ''),
-    applyMode: String(body.apply_mode ?? 'confirm'),
-    document_id: typeof body.document_id === 'string' && body.document_id
-      ? body.document_id : null,
     mutating,
     holdable: new Set<string>(Array.isArray(body.holdable_tools) ? body.holdable_tools : []),
     regionTools: new Set<string>(Array.isArray(body.region_tools) ? body.region_tools : []),
+  }
+  const requestCtx = {
+    messageId: String(body.assistant_msg_id ?? ''),
+    applyMode: String(body.apply_mode ?? 'confirm'),
+    document_id: typeof body.document_id === 'string' && body.document_id
+      ? body.document_id : null,
     region: (body.region && typeof body.region === 'object')
       ? body.region as Record<string, unknown> : null,
   }
-  // The split view: the standing half is registered once per
-  // session; the per-request half is stamped by each driver-owned turn.
-  const standingCtx = {
-    loreSessionId: turnToolCtx.loreSessionId,
-    agentKey: turnToolCtx.agentKey,
-    mutating: turnToolCtx.mutating,
-    holdable: turnToolCtx.holdable,
-    regionTools: turnToolCtx.regionTools,
-  }
-  const requestCtx = {
-    messageId: turnToolCtx.messageId,
-    applyMode: turnToolCtx.applyMode,
-    document_id: turnToolCtx.document_id,
-    region: turnToolCtx.region,
-  }
-
-  // The lore-skills provider: dsh's registry + tool-skill own the
-  // catalog and the model-facing `skill` loader; every resolved skill carries
-  // its body from the same payload snapshot that built the catalog — no
-  // Tool-API round trip on the load path, so no stale-index race and no
-  // error envelope to propagate.
-  const skillProvider = skills.length ? loreSkillProvider(skills) : null
-
-  const setup = (agentCtx: Context) => {
-    // The system prompt is built ONCE per turn by Lore's prep layer and
-    // handed over — a COMPLETE section is the exact whole prompt; nothing
-    // harness-side contributes (identity, persona, runtime contexts). The
-    // skills catalog is NOT concatenated here: dsh's tool-skill
-    // publishes it as its own durable session message.
-    agentCtx.systemPrompt.section({
-      name: 'lore-turn',
-      order: 0,
-      text: assembleTurnPrompt(body.system_prompt),
-      complete: true,
-    })
-    installModelSelection(agentCtx, selection)
-    // The time ground rides its own context message on the turn's FIRST step
-    // (see ARCH in time-stamps.ts). Scoped to THIS turn's agent, disposed with
-    // it in finish(): no per-session stamp state. DELEGATE first (context alone is not a veto),
-    // then append after the downstream decision's admitted messages.
-    agentCtx.on('agent/pre-step', async ({ step }, next): Promise<PreStepDecision> => {
-      const downstream = await next()
-      const ours = timeStampMessage(timeStamps, step)
-      if (ours === undefined || downstream.kind !== 'enter') return downstream
-      return { ...downstream, messages: [...downstream.messages, ours] }
-    })
-    restriction.attach(agentCtx)
-    if (skillProvider) {
-      // Scoped to THIS agent: the provider serves exactly this turn's payload
-      // skills and is disposed with the agent scope. The registration needs a
-      // context that DECLARES the skills inject — the agent scope itself does
-      // not inherit the plugin's inject list, so an injected sub-scope carries
-      // it (the same cordis shape ApprovalService uses for systemPrompt).
-      agentCtx.inject(['skills'], (scoped) => {
-        scoped.skills.registerProvider(() => skillProvider)
-      })
-    }
+  const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : [])
+  const prep: TurnPrep = {
+    loreId, model, cap, selection,
+    systemPrompt: assembleTurnPrompt(body.system_prompt),
+    timeStamps, servedNames, skills, activated, standingCtx, requestCtx,
+    claim: {
+      user_msg_id: String(body.user_msg_id ?? ''),
+      assistant_msg_id: requestCtx.messageId,
+      user_text: typeof body.user_text === 'string' ? body.user_text : '',
+      images: list(body.images),
+      sources: list(body.sources),
+      warnings: list(body.warnings),
+    },
   }
 
   registerLoreTools(ctx, body.tools, true, mutating)
 
-  // The multimodal turn prompt (shared by both drivers): dsh's saveImage
-  // normalizes pixels (decode→scale→encode, up to seconds per image).
+  // The multimodal turn prompt: dsh's saveImage normalizes pixels
+  // (decode→scale→encode, up to seconds per image).
   // Everything not deliverable degrades to a text block naming the loss
   // (promptContent) — never a silent drop.
   const saveImage: SaveImage = (input) => {
@@ -568,10 +457,10 @@ async function prepareTurnDrive(ctx: Context, map: SessionMap, body: Record<stri
   }
   const buildUserContent = async () => {
     await ensureAgentKey(ctx.get('credentials') as CredentialsSeam | undefined, gateway.key)
-    // The per-turn admin config (web search has no off state; the provider is
+    // The per-send admin config (web search has no off state; the provider is
     // always pinned and the credential rides even when empty — the loud
-    // no-key failure). Awaited before the agent runs, so an admin change
-    // reaches THIS turn's calls.
+    // no-key failure). Awaited before the followup, so an admin change
+    // reaches THIS send's calls.
     await ensureWebSearch(
       ctx.get('configEditor') as ConfigEditorSeam | undefined,
       ctx.get('credentials') as CredentialsSeam | undefined,
@@ -600,20 +489,30 @@ async function prepareTurnDrive(ctx: Context, map: SessionMap, body: Record<stri
     return blocks
   }
 
+  return { loreId, dshId, agentOptions, prep, buildUserContent }
+}
+
+/** The plugin's wiring of the session agents (session-agents.ts). */
+function agentDeps(ctx: Context, tap: SessionEventTap, channel: EventsChannel): SessionAgentDeps {
   return {
-    loreId, dshId, model, cap, caps, agentOptions,
-    skills, activated, restriction, state,
-    turnToolCtx, standingCtx, requestCtx,
-    setup, buildUserContent,
+    ctx, channel, tap,
+    open: (dshId, agentOptions, setup) => resumeOrCreate(ctx, dshId, agentOptions, setup),
+    idleMs: AGENT_IDLE_DISPOSE_MS,
+    contextUsage: (session, cap) => contextUsageFrame(
+      (ctx as any).get?.('sessionProjections'), session, cap),
   }
 }
 
-// ── POST /followup — the driver-owned turn: the request STARTS the turn and
-// returns `accepted`; frames flow on /ws/events (map.ts's mints through the
-// standing channel, the turn-lifecycle frames pushed below). Statelessness
-// between turns is unchanged (the header ARCH): resume-or-create → followup →
-// quiescence → flush → dispose, once per followup — the standing thing is the
-// consumer's SUBSCRIPTION, not an agent handle the driver keeps alive.
+function json(res: http.ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { 'Content-Type': 'application/json' })
+  res.end(JSON.stringify(body))
+}
+
+// ── POST /followup — queue one send into the session's dsh inbox: the
+// request returns `accepted` with the dsh message id; the turn runs when dsh
+// claims it, and its frames flow on /ws/events (map.ts's mints through the
+// standing channel, the claim and turn-lifecycle frames from
+// session-agents.ts). A busy session queues — it is never refused.
 export async function followup(
   ctx: Context, map: SessionMap, tap: SessionEventTap,
   channel: EventsChannel | null,
@@ -631,134 +530,41 @@ export async function followup(
     return
   }
   const body = JSON.parse(await readBody(req)) as Record<string, any>
-  let drive: Awaited<ReturnType<typeof prepareTurnDrive>>
+  let drive: Awaited<ReturnType<typeof buildTurnPrep>>
   try {
-    drive = await prepareTurnDrive(ctx, map, body)
+    drive = await buildTurnPrep(ctx, map, body)
   } catch (err) {
     if (!(err instanceof TurnConfigError)) throw err
-    // Accepted with only the refusal and the close: the backend already bound
-    // the turn, so the error frame reaches the person and finalizes the row.
-    // WHY model_update first: it is the frame that opens the bound turn on the
-    // backend channel (the normal path's first push) — without it the error
-    // relays live only, the row stays empty and the turn lock is never freed.
+    // Nothing is queued: the reason goes back to the caller, who toasts it.
     console.error(`[lore-driver] turn refused: ${err.message}`)
-    channel.push(err.dshId, { type: 'model_update', model: typeof body.model === 'string' ? body.model : '' })
-    channel.push(err.dshId, { type: 'error', message: err.message })
-    channel.push(err.dshId, { type: 'turn_closed' })
-    res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ accepted: true, dsh_session_id: err.dshId, lore_session_id: body.session_id }))
+    json(res, 422, { detail: err.message })
     return
   }
-  const { dshId, loreId, model, cap } = drive
-  // One turn per session — the driver-side serialize. A second followup
-  // while one runs is refused, never queued;
-  // the caller retries after the turn ends.
-  if (followupTurns.has(dshId)) {
-    res.writeHead(409, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ detail: 'turn_in_progress' }))
-    return
-  }
-  const handle = await resumeOrCreate(ctx, dshId, drive.agentOptions, drive.setup)
-  const agent = handle.agent
-  followupTurns.set(dshId, { cancel: () => cancelAgentTurn(handle) })
-  // The tool-ctx split: the standing half upserts per session;
-  // the request half is THIS turn's stamp, cleared at its end.
-  setSessionToolCtx(dshId, drive.standingCtx)
-  stampTurnRequestCtx(dshId, drive.requestCtx)
-  // The turn watcher ('watch' phase — runs BEFORE the channel's mapped
-  // frames): the turn-end context_usage must precede the terminal relay on
-  // the wire (the backend captures it at turn finalization; after the terminal
-  // frame it is too late).
-  // Mid-turn `skill` activation lifting the pack restriction live: a load
-  // that DELIVERED a body adds the skill to `activated` (held by reference
-  // by the restriction) and re-applies the deny list, so the pack's tools are
-  // callable in the SAME turn the model loaded the skill.
-  const pendingSkillCalls = new Map<string, string>()
-  const skillNames = new Set(drive.skills.map((s) => s.name))
-  const offWatch = tap.subscribe((session: any, ev: any) => {
-    if (String(session?.id ?? '') !== dshId) return
-    const skillCall = skillLoadCallName(ev)
-    if (skillCall) pendingSkillCalls.set(skillCall.callId, skillCall.name)
-    const activatedSkill = skillLoadResultName(ev, pendingSkillCalls)
-    if (activatedSkill && skillNames.has(activatedSkill)
-        && !drive.activated.has(activatedSkill)) {
-      drive.activated.add(activatedSkill)
-      console.error(`[lore-skills] activated ${activatedSkill} — lifting its pack restriction`)
-      drive.restriction.apply()
-    }
-    if (ev?.type !== 'turn/end') return
-    // The operator's one line for a failed turn (the chat blanks an AUTH
-    // message; the raw gateway reason survives only here and in the session
-    // JSONL). Per-turn tap, so a failure logs once — not once per browser.
-    const failed = turnFailureLine(ev, { loreId, dshId, model })
-    if (failed) console.error(failed)
-    drive.state.finished = true
-    const cu = contextUsageFrame(
-      (ctx as any).get?.('sessionProjections'), agent.session, cap)
-    if (cu) channel.push(dshId, cu)
-  }, 'watch')
-
-  const finish = async () => {
-    followupTurns.delete(dshId)
-    offWatch()
-    clearTurnRequestCtx(dshId)
-    drive.restriction.dispose()
-    try {
-      await handle.dispose()
-    } catch {
-      // best-effort teardown — the turn outcome is already on the channel
-    }
-  }
-
-  try {
-    // A resumed session settles before the prompt lands: whenIdle, THEN
-    // content, THEN followup.
-    await agent.whenIdle()
-    const content = await drive.buildUserContent()
-    channel.push(dshId, { type: 'model_update', model })
-    agent.followup(createUserMessage({
-      content,
-      source: { kind: 'user' },
-    }))
-    res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ accepted: true, dsh_session_id: dshId, lore_session_id: loreId }))
-  } catch (err) {
-    console.error('[lore-driver] followup failed:', err)
-    await finish()
-    throw err // → 502 via handleRequest, like every other start failure
-  }
-
-  // The driver-owned turn: nobody holds a request open — the turn runs to
-  // its end (or /stop's cancel), flushes, and cleans itself up.
-  void (async () => {
-    try {
-      await agent.whenIdle()
-      await ctx.sessions.flush(agent.session)
-      if (!drive.state.finished) {
-        channel.push(dshId, { type: 'error', message: 'The turn ended without a terminal event.' })
-      }
-    } catch (err) {
-      console.error('[lore-driver] followup turn failed:', err)
-      channel.push(dshId, { type: 'error', message: `Harness turn failed: ${String(err)}` })
-    } finally {
-      await finish()
-      // The transport terminal: a driver-owned turn has no stream whose end
-      // signals the turn's close, so THIS explicit push is that terminal —
-      // pushed after every mapped frame of the turn (the terminal relay and
-      // its halt mint included) and after the not-finished error above.
-      // Best-effort: a closed channel loses it, and the replay covers the
-      // loss — a resync of a NON-live session carries a seq-anchored
-      // turn_closed per closed turn (entries.ts's `terminals`); a live
-      // session's newer turn supersedes the lost push instead.
-      try { channel.push(dshId, { type: 'turn_closed' }) } catch { /* gone — the replay covers */ }
-    }
-  })()
+  const { dshId, loreId } = drive
+  const messageId = await enqueueFollowup(
+    agentDeps(ctx, tap, channel), dshId, drive.agentOptions, drive.prep, drive.buildUserContent)
+  json(res, 200, {
+    accepted: true, dsh_session_id: dshId, message_id: messageId, lore_session_id: loreId,
+  })
 }
 
-// ── POST /stop — cancel the session's driver-owned turn: routes into the ONE
-// cancel arm (cancelAgentTurn) — one cancel semantics, one call site, no
-// second cancel-key machinery. Idempotent: a session with no turn in flight
-// answers {stopped:false} — a turn that ended a moment ago is not an error.
+/** The request's `session_id` resolved to its dsh id, or null after a 422. */
+function sessionIdOf(
+  map: SessionMap, raw: unknown, res: http.ServerResponse,
+): string | null {
+  const loreId = typeof raw === 'string' ? raw : ''
+  if (!loreId) {
+    res.writeHead(422).end('session_id is required')
+    return null
+  }
+  return map.get(loreId)
+}
+
+// ── POST /stop — cancel the session's running turn through the ONE cancel
+// arm (stopSession). `return_queue: true` (the person's Stop) also empties
+// the inbox and answers its messages as `returned`; otherwise the queue stays
+// parked and the next send starts it. Idempotent: nothing running answers
+// {stopped:false}.
 export async function stop(
   ctx: Context, map: SessionMap,
   req: http.IncomingMessage, res: http.ServerResponse,
@@ -767,14 +573,45 @@ export async function stop(
     res.writeHead(401).end('unauthorized')
     return
   }
-  const body = JSON.parse(await readBody(req)) as { session_id?: unknown }
-  const loreId = typeof body.session_id === 'string' ? body.session_id : ''
-  if (!loreId) {
-    res.writeHead(422).end('session_id is required')
+  const body = JSON.parse(await readBody(req)) as { session_id?: unknown; return_queue?: unknown }
+  const dshId = sessionIdOf(map, body.session_id, res)
+  if (dshId === null) return
+  json(res, 200, { ...stopSession(dshId, body.return_queue === true), session_id: body.session_id })
+}
+
+// ── POST /inbox/discard — ✕ on a queued message. A message claimed in the
+// meantime answers {removed:false} (200, not an error): its claim splice and
+// its turn are the user's feedback.
+export async function inboxDiscard(
+  map: SessionMap, req: http.IncomingMessage, res: http.ServerResponse,
+): Promise<void> {
+  if (!authorized(req)) {
+    res.writeHead(401).end('unauthorized')
     return
   }
-  const entry = followupTurns.get(map.get(loreId))
-  if (entry) entry.cancel()
-  res.writeHead(200, { 'Content-Type': 'application/json' })
-  res.end(JSON.stringify({ stopped: Boolean(entry), session_id: loreId }))
+  const body = JSON.parse(await readBody(req)) as { session_id?: unknown; message_id?: unknown }
+  const dshId = sessionIdOf(map, body.session_id, res)
+  if (dshId === null) return
+  const messageId = typeof body.message_id === 'string' ? body.message_id : ''
+  if (!messageId) {
+    res.writeHead(422).end('message_id is required')
+    return
+  }
+  json(res, 200, { removed: await discardQueued(dshId, messageId) })
+}
+
+// ── GET /session-status?session_id= — the live agent's status and its
+// next-turn queue with the seq the snapshot includes (no agent ⇒ idle,
+// empty): the reload's open-turn mark and queue seed.
+export async function sessionStatusRoute(
+  map: SessionMap, req: http.IncomingMessage, res: http.ServerResponse,
+): Promise<void> {
+  if (!authorized(req)) {
+    res.writeHead(401).end('unauthorized')
+    return
+  }
+  const query = new URL(req.url ?? '/', 'http://lore-driver')
+  const dshId = sessionIdOf(map, query.searchParams.get('session_id'), res)
+  if (dshId === null) return
+  json(res, 200, sessionStatus(dshId))
 }

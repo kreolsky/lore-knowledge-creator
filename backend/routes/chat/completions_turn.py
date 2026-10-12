@@ -267,10 +267,10 @@ def _turn_time_stamps(
     # impact (~15 tokens/turn).
     # WHY the anchor renders from chat_sessions.created_at, never turn time:
     # a session's first turn must re-send identical anchor bytes, and only
-    # the session row is stable. Root condition mirrors _require_tail_parent
-    # in completions.py: a genuine first turn (null parent, no continuation)
-    # appends a root entry (anchor); a compaction continuation appends at the
-    # checkpoint and gets NO anchor.
+    # the session row is stable. Root condition: a genuine first turn (the
+    # client's null tail hint, no continuation) appends a root entry
+    # (anchor); a compaction continuation appends at the checkpoint and gets
+    # NO anchor.
     """
     stamps: list[str] = []
     if body_parent_id_is_none and not session.get("compacted_from"):
@@ -560,9 +560,9 @@ async def prepare_agent_turn(
         project_id, selected_persona_id=session.get("system_prompt_id"),
     )
     # The payload's skills field is the RAW lookup from the SAME load (no second
-    # subtree walk): {project, shipped, tombstones} documents. Parsing, the
-    # overlay, the off-switch and the served-toolset gate all run PLUGIN-side
-    # — Python parses nothing.
+    # subtree walk): {project, instance, shipped, instance_tombstones}. Parsing,
+    # the overlay, the admin off-switch and the served-toolset gate all run
+    # PLUGIN-side — Python parses nothing.
     system_prompt = await _assemble_system_prompt(
         base_prompt, session=session, body=body, ctx=ctx, project_id=project_id, user=user,
     )

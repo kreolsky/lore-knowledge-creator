@@ -3,7 +3,6 @@
 Subsystem overview and ARCH notes live in client.py.
 See SYSTEM: driver-client (entry: driver/client.py).
 """
-import asyncio
 import logging
 import math
 
@@ -20,7 +19,7 @@ from driver.client import (
 
 logger = logging.getLogger(__name__)
 
-# The three driver-RPC budgets. All six driver sites share ONE pool client
+# The three driver-RPC budgets. Every driver site shares ONE pool client
 # ("driver", SYSTEM: http-clients), so every request passes its own timeout=
 # PER CALL — the pool's build-time default is whichever site warmed it first
 # and must never become another site's budget.
@@ -90,10 +89,15 @@ async def fetch_session_entries(
         raise DriverTimelineUnavailable(str(exc)) from exc
 
 
-async def post_stop(lore_session_id: str, line: DriverLine | None = None) -> dict:
+async def post_stop(
+    lore_session_id: str, line: DriverLine | None = None, *, return_queue: bool = False,
+) -> dict:
     """POST /stop — cancel the session's driver-owned turn (the plugin's
     ONE `agent.cancel` arm). Idempotent
     driver-side: a session with no turn in flight answers {stopped: false}.
+    `return_queue` (the person's Stop only) also empties the session's inbox
+    and answers its messages as `returned` ({text, images} in send order);
+    without it the queue stays parked.
 
     The channel's deadline breach, unsubscribe, and the browser's Stop call
     this: a turn the backend has declared dead (or stopped listening to)
@@ -110,8 +114,8 @@ async def post_stop(lore_session_id: str, line: DriverLine | None = None) -> dic
     try:
         client = http_clients.get_http_client("driver", timeout=_STOP_TIMEOUT)
         resp = await client.post(
-            url, json={"session_id": lore_session_id}, headers=headers,
-            timeout=_STOP_TIMEOUT)
+            url, json={"session_id": lore_session_id, "return_queue": return_queue},
+            headers=headers, timeout=_STOP_TIMEOUT)
         # 401 is the secret mismatch — named, never "unreachable".
         if resp.status_code == 401:
             raise DriverSecretMismatch(ln.name)
@@ -189,32 +193,20 @@ async def post_session_fork(
         raise DriverLineUnreachable(ln.name, str(exc)) from exc
 
 
-class DriverTurnBusy(RuntimeError):
-    """The driver kept refusing /followup with 409 turn_in_progress past the
-    retry budget (a followup racing the just-ended
-    turn's cleanup gets 409 until finish()'s flush completes — RETRY with a
-    short backoff, this is the documented serialize contract, not a bug).
-
-    Distinct from DriverLineUnreachable: the line answered — the SESSION is
-    busy. The caller maps it to the lock-busy-shaped refusal (409), never to
-    a line-unavailable wording.
-    """
-
-
-#: Backoff (seconds) between 409 retries — the window being waited out is the
-#: driver-side finish() flush, sub-second to a few seconds. A module global so
-#: tests shrink it (the re-bindable-seams pattern the split modules use).
-_BUSY_RETRY_DELAYS_S = (0.5, 1.0, 2.0)
+class DriverTurnRefused(RuntimeError):
+    """The driver refused to queue a send — the turn's config is unusable (no
+    model, no gateway). Nothing was queued; the message is the reason the
+    person reads (the caller answers 422 with it)."""
 
 
 async def post_followup(payload: dict, line: DriverLine | None = None) -> dict:
-    """POST /followup — start a driver-owned turn.
+    """POST /followup — queue one send into the session's dsh inbox.
 
-    Same payload contract as /turn; the reply is `{accepted, dsh_session_id,
-    lore_session_id}` and the turn's frames flow on /ws/events (the standing
-    channel), not on this response. 409 turn_in_progress is RETRIED on the
-    _BUSY_RETRY_DELAYS_S backoff (the documented contract); a busy that
-    outlives the budget raises DriverTurnBusy, any other failure raises
+    The reply is `{accepted, dsh_session_id, message_id, lore_session_id}`;
+    the turn runs when dsh claims the message, and its frames flow on
+    /ws/events (the standing channel), not on this response. A busy session
+    queues — the driver never answers 409. A 422 is the config refusal
+    (DriverTurnRefused), 401 DriverSecretMismatch, any other failure
     DriverLineUnreachable (the post_stop wrap).
     """
     ln = line if line is not None else await resolve_driver_line()
@@ -223,31 +215,97 @@ async def post_followup(payload: dict, line: DriverLine | None = None) -> dict:
             DRIVER_LINE_NAME, "driver line not configured; refusing to call driver service")
     url = f"{ln.url}/followup"
     headers = {"Content-Type": "application/json", "X-Driver-Secret": ln.secret}
-    attempts = 1 + len(_BUSY_RETRY_DELAYS_S)
-    for attempt in range(attempts):
-        if attempt:
-            await asyncio.sleep(_BUSY_RETRY_DELAYS_S[attempt - 1])
-        try:
-            client = http_clients.get_http_client("driver", timeout=_FOLLOWUP_TIMEOUT)
-            resp = await client.post(
-                url, json=payload, headers=headers, timeout=_FOLLOWUP_TIMEOUT)
-        except Exception as exc:
-            raise DriverLineUnreachable(ln.name, str(exc)) from exc
-        if resp.status_code == 409:
-            continue  # the documented busy — retry on the backoff
+    try:
+        client = http_clients.get_http_client("driver", timeout=_FOLLOWUP_TIMEOUT)
+        resp = await client.post(
+            url, json=payload, headers=headers, timeout=_FOLLOWUP_TIMEOUT)
+    except Exception as exc:
+        raise DriverLineUnreachable(ln.name, str(exc)) from exc
+    if resp.status_code == 401:
+        raise DriverSecretMismatch(ln.name)
+    if resp.status_code == 422:
+        raise DriverTurnRefused(_reply_detail(resp))
+    if resp.status_code >= 400:
+        raise DriverLineUnreachable(
+            ln.name, f"followup HTTP {resp.status_code}: {resp.text[:200]}")
+    try:
+        reply = resp.json()
+    except Exception as exc:
+        raise DriverLineUnreachable(ln.name, f"malformed followup reply: {exc}") from exc
+    if not isinstance(reply, dict) or not reply.get("accepted"):
+        raise DriverLineUnreachable(ln.name, f"malformed followup reply: {reply!r}")
+    return reply
+
+
+def _reply_detail(resp: httpx.Response) -> str:
+    """A refusal's reason — the JSON `detail`, else the body text."""
+    try:
+        body = resp.json()
+    except ValueError:
+        return resp.text[:500]
+    if isinstance(body, dict) and isinstance(body.get("detail"), str):
+        return body["detail"]
+    return resp.text[:500]
+
+
+async def post_inbox_discard(
+    driver_session_id: str, message_id: str, line: DriverLine | None = None,
+) -> bool:
+    """POST /inbox/discard — remove a queued message from the session's dsh
+    inbox. False when it was claimed (or never queued) in the meantime — not
+    an error: its claim and its turn are the user's feedback. 401 raises
+    DriverSecretMismatch, anything else DriverLineUnreachable."""
+    ln = line if line is not None else await resolve_driver_line()
+    if ln is None or not ln.secret:
+        raise DriverLineUnreachable(
+            DRIVER_LINE_NAME, "driver line not configured; refusing to call driver service")
+    url = f"{ln.url}/inbox/discard"
+    headers = {"Content-Type": "application/json", "X-Driver-Secret": ln.secret}
+    try:
+        client = http_clients.get_http_client("driver", timeout=_STOP_TIMEOUT)
+        resp = await client.post(
+            url, json={"session_id": driver_session_id, "message_id": message_id},
+            headers=headers, timeout=_STOP_TIMEOUT)
         if resp.status_code == 401:
             raise DriverSecretMismatch(ln.name)
-        if resp.status_code >= 400:
-            raise DriverLineUnreachable(
-                ln.name, f"followup HTTP {resp.status_code}: {resp.text[:200]}")
-        try:
-            reply = resp.json()
-        except Exception as exc:
-            raise DriverLineUnreachable(ln.name, f"malformed followup reply: {exc}") from exc
-        if not isinstance(reply, dict) or not reply.get("accepted"):
-            raise DriverLineUnreachable(ln.name, f"malformed followup reply: {reply!r}")
-        return reply
-    raise DriverTurnBusy(
-        f"driver turn still in progress for session {payload.get('session_id')!r} "
-        f"after {attempts} attempts"
-    )
+        resp.raise_for_status()
+        reply = resp.json()
+        if not isinstance(reply, dict):
+            raise ValueError(f"malformed discard reply: {reply!r}")
+        return bool(reply.get("removed"))
+    except DriverSecretMismatch:
+        raise
+    except Exception as exc:
+        raise DriverLineUnreachable(ln.name, str(exc)) from exc
+
+
+async def fetch_session_status(
+    driver_session_id: str, line: DriverLine | None = None,
+) -> dict:
+    """GET /session-status — the live agent's `{status, queue, seq}`: dsh's
+    idle/running status, its next-turn queue (the inbox projection's wire
+    view) and the seq that snapshot includes. No live agent ⇒ idle, empty
+    queue. Any failure raises DriverTimelineUnavailable — the reload reads
+    status beside the timeline, and an unreadable status is the same
+    explicit failure as an unreadable timeline."""
+    ln = line if line is not None else await resolve_driver_line()
+    if ln is None or not ln.secret:
+        raise DriverTimelineUnavailable("agent driver line not configured")
+    url = f"{ln.url}/session-status"
+    headers = {"X-Driver-Secret": ln.secret}
+    try:
+        client = http_clients.get_http_client("driver", timeout=_STOP_TIMEOUT)
+        resp = await client.get(
+            url, params={"session_id": driver_session_id}, headers=headers,
+            timeout=_STOP_TIMEOUT)
+        resp.raise_for_status()
+        reply = resp.json()
+        if not isinstance(reply, dict):
+            raise ValueError(f"malformed session-status reply: {reply!r}")
+        return {
+            "status": str(reply.get("status") or "idle"),
+            "queue": list(reply.get("queue") or []),
+            "seq": reply.get("seq"),
+        }
+    except Exception as exc:
+        raise DriverTimelineUnavailable(str(exc)) from exc

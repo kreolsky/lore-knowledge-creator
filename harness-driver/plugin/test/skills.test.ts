@@ -4,7 +4,7 @@
  * step 3): dsh's skill/* owns the catalog and the model-facing `skill` loader;
  * this module parses the payload's raw skill documents (ONE parser — the name
  * grammar is the library's isSkillName), resolves the served catalog (overlay,
- * off-switch, served gate) and keeps the served-toolset filter (activation = a
+ * admin off-switch, served gate) and keeps the served-toolset filter (activation = a
  * `skill` load round-trip on the dsh session log). The <available_skills> index
  * rendering is GONE — dsh's tool-skill publishes the durable catalog.
  */
@@ -97,13 +97,13 @@ test('invalid YAML frontmatter is not a skill (tolerant, never a crash)', () => 
   assert.equal(parseSkillDoc('---\n- a list\n---\nbody'), null, 'a list is not frontmatter')
 })
 
-// ─── resolveSkillCatalog: overlay + off-switch + served gate ─────────────────
+// ─── resolveSkillCatalog: overlay + admin off-switch + served gate ───────────
 
 const WIRE = (
-  project: any[] = [], shipped: any[] = [], tombstones: string[] = [],
+  project: any[] = [], shipped: any[] = [],
   instance: any[] = [], instanceTombstones: string[] = [],
 ) =>
-  ({ project, shipped, tombstones, instance, instance_tombstones: instanceTombstones })
+  ({ project, shipped, instance, instance_tombstones: instanceTombstones })
 
 test('project skills first, then shipped; subtree and file order preserved', () => {
   const out = resolveSkillCatalog(WIRE(
@@ -140,7 +140,6 @@ test('the instance layer sits BETWEEN project and shipped (project > instance > 
       { location: 'shipped:shared', content: doc('name: shared\ndescription: shipped\n', 'Shipped body.') },
       { location: 'shipped:base', content: doc('name: base\ndescription: d\n') },
     ],
-    [],
     [
       { location: 'instance:shared', content: doc('name: shared\ndescription: instance\n', 'Instance body.') },
       { location: 'instance:extra', content: doc('name: extra\ndescription: d\n') },
@@ -155,7 +154,6 @@ test('an instance copy shadows the shipped skill of the same name (the admin ove
   const out = resolveSkillCatalog(WIRE(
     [],
     [{ location: 'shipped:ws', content: doc('name: web-search\ndescription: shipped\n', 'Shipped body.') }],
-    [],
     [{ location: 'instance:web-search', content: doc('name: web-search\ndescription: instance\n', 'Instance body.') }],
   ), new Set())
   assert.deepEqual(out.map((s) => s.name), ['web-search'])
@@ -171,7 +169,6 @@ test('an instance TOMBSTONE (a disabled instance row, served as a NAME list) tur
       { location: 'shipped:sb', content: doc('name: sandbox\ndescription: d\n') },
     ],
     [],
-    [],
     ['web-search'],
   ), new Set())
   assert.deepEqual(out.map((s) => s.name), ['sandbox'])
@@ -181,7 +178,6 @@ test('instance tombstones suppress SHIPPED skills only — never project or inst
   const out = resolveSkillCatalog(WIRE(
     [{ location: 'p', content: doc('name: web-search\ndescription: d\n') }],
     [{ location: 'shipped:ws', content: doc('name: web-search\ndescription: d\n') }],
-    [],
     [{ location: 'instance:hello', content: doc('name: hello\ndescription: d\n') }],
     ['web-search', 'hello'],
   ), new Set())
@@ -189,26 +185,17 @@ test('instance tombstones suppress SHIPPED skills only — never project or inst
   assert.equal(out[0]!.location, 'p', 'a project copy always wins')
 })
 
-test('a tombstoned direct child turns the shipped skill OFF (the off-switch)', () => {
-  const out = resolveSkillCatalog(WIRE(
-    [],
-    [
+test('a deleted project document never turns a shipped skill off — only the admin does', () => {
+  // A wire from an older backend still carrying deleted-copy bodies: they
+  // are ignored, the shipped skill keeps serving.
+  const out = resolveSkillCatalog({
+    ...WIRE([], [
       { location: 'shipped:ws', content: doc('name: web-search\ndescription: d\n') },
       { location: 'shipped:sb', content: doc('name: sandbox\ndescription: d\n') },
-    ],
-    [doc('name: web-search\ndescription: the deleted copy\n')],
-  ), new Set())
-  assert.deepEqual(out.map((s) => s.name), ['sandbox'])
-})
-
-test('an unparseable tombstone suppresses nothing; project skills are never suppressed', () => {
-  const out = resolveSkillCatalog(WIRE(
-    [{ location: 'p', content: doc('name: web-search\ndescription: d\n') }],
-    [{ location: 'shipped:ws', content: doc('name: web-search\ndescription: d\n') }],
-    ['prose only, no frontmatter'],
-  ), new Set())
-  assert.deepEqual(out.map((s) => s.name), ['web-search'])
-  assert.equal(out[0]!.location, 'p')
+    ]),
+    tombstones: [doc('name: web-search\ndescription: the deleted copy\n')],
+  } as Parameters<typeof resolveSkillCatalog>[0], new Set())
+  assert.deepEqual(out.map((s) => s.name), ['web-search', 'sandbox'])
 })
 
 test('unparseable documents (heads and shipped files) are skipped, never fatal', () => {

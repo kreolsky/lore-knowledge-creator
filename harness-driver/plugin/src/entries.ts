@@ -115,8 +115,8 @@ const TURN_CLOSED_OFFSET = 0.9
  * `terminals` (optional, default off): append the transport terminal
  * `turn_closed` (seq-anchored at each closed turn's `end_seq` +
  * TURN_CLOSED_OFFSET) after the turn's last frame. The caller gates it on
- * liveness — the session has NO registered driver-owned turn (the same
- * `followupTurns` key the crash closers branch on): a live session's running
+ * liveness — the session's agent is NOT running a turn (the same
+ * sessionAgentLive the crash closers branch on): a live session's running
  * turn is OPEN (no end_seq → no terminal) and its previous turns' terminals
  * are the LIVE push's to deliver, never the replay's. Why the replay carries
  * it at all: the plugin's live push is best-effort and NOT a log entry, so a

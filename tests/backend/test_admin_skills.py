@@ -358,4 +358,4 @@ async def test_wire_carries_instance_and_tombstones(
     # The pre-existing layers are untouched companions on the same wire.
     assert isinstance(wire["project"], list)
     assert wire["shipped"], "the shipped layer still rides (repo files)"
-    assert isinstance(wire["tombstones"], list)
+    assert "tombstones" not in wire, "a deleted project document suppresses nothing"

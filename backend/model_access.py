@@ -2,8 +2,9 @@
 
 # SYSTEM: model-access — per-user model availability (grants to public, moderator groups, admin groups) and the turn gate
 # ARCH: ONE table carries all access — model_grants(model_id, subject); a subject
-# is 'public', 'mod:<moderator uid>' or 'group:<admin group id>'. "Public" is a
-# grant to the subject 'public', not a flag. The moderator group is VIRTUAL:
+# is 'public', 'mod:<moderator uid>', 'group:<admin group id>' or 'hidden'.
+# "Public" is a grant to the subject 'public', not a flag. 'hidden' means never
+# in the chat picker, for anyone; grants nothing; the turn gate ignores it. The moderator group is VIRTUAL:
 # derived from users.moderator_id, never stored, so promotion, user creation,
 # invite registration and a moderator_id change run no code here.
 # ARCH: ONE enforcement point — require_model_access, called by the turn
@@ -25,6 +26,7 @@ from access import is_instance_admin
 from db import get_db
 
 PUBLIC_SUBJECT = "public"
+HIDDEN_SUBJECT = "hidden"
 MOD_PREFIX = "mod:"
 GROUP_PREFIX = "group:"
 
@@ -80,6 +82,14 @@ async def available_models(user: dict) -> set[str] | None:
     if default_model:
         allowed.add(default_model)
     return allowed
+
+
+async def hidden_models(db: AsyncSurreal) -> set[str]:
+    """Model ids marked hidden — dropped from every caller's picker list."""
+    rows = await db.query(
+        "SELECT VALUE model_id FROM model_grants WHERE subject = $s", {"s": HIDDEN_SUBJECT},
+    )
+    return set(rows or [])
 
 
 async def require_model_access(user: dict, model: str) -> None:

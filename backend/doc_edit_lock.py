@@ -17,7 +17,7 @@
 # handling then applies cleanly).
 #
 # Cross-replica this is now backed by Redis (SET NX EX + fencing token +
-# Lua compare-and-delete, mirroring turn_lock.py): two REST writes to one
+# Lua compare-and-delete): two REST writes to one
 # document on DIFFERENT replicas serialize through the same Redis key. The
 # previous in-process asyncio.Lock registry could not reach them — reproduced
 # live on the two-replica stack: concurrent distinct-anchor edits to one doc
@@ -89,8 +89,7 @@ logger = logging.getLogger(__name__)
 # (RBAC + resolve + checkpoint + write, a superset of the locked span) measured
 # max 0.071s over 20 sequential applies on the gray stack. 30s is a ~400x
 # margin — a replica dying mid-apply wedges the document for at most 30s, and
-# no realistic apply approaches the ceiling, so no heartbeat extend is wired
-# (turn_lock's compare-and-extend is the shape to copy if that ever changes).
+# no realistic apply approaches the ceiling, so no heartbeat extend is wired.
 # A bare constant, not a setting: nobody can meaningfully choose it.
 DOC_EDIT_LOCK_TTL_S = 30
 
@@ -116,7 +115,7 @@ class EditLockTimeout(TimeoutError):
 _LOCK_KEY_PREFIX = "editlock:"
 
 # Lua: delete only if the stored value equals THIS holder's token (fencing).
-# Atomic in Redis — no GET/DEL race. Same script as turn_lock's release.
+# Atomic in Redis — no GET/DEL race.
 _RELEASE_SCRIPT = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
     return redis.call('del', KEYS[1])

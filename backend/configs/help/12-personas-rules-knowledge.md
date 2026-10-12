@@ -1,24 +1,24 @@
-# Персоны, правила и знания
+# Personas, rules and knowledge
 
-Поведение агента в проекте настраивается документами в системном разделе дерева «Agent System». Это обычные документы: их можно читать и править, агент тоже может их дополнять.
+How the agent behaves in a project is set by documents in the system section of the tree, "Agent System". These are ordinary documents: you can read and edit them, and the agent can add to them too.
 
-## Персоны
+## Personas
 
-Персона — дополнительный системный промпт, который задаёт агенту роль и манеру: например, «критик», «редактор стиля», «гейм-дизайнер».
+A persona is an additional system prompt that gives the agent a role and a manner: for example, "critic", "style editor", "game designer".
 
-- Создайте документ внутри папки Personas. Он сразу станет персоной.
-- Выберите персону в чате, в списке «Системный промпт». По умолчанию персона не выбрана.
+- Create a document inside the Personas folder. It becomes a persona right away.
+- Choose the persona in the chat, in the "System prompt" list. By default no persona is selected.
 
-## Правила (Rules)
+## Rules
 
-Как в этом проекте принято работать: соглашения, ваши предпочтения, поправки к привычкам агента. Правила агент получает в каждом разговоре. Можно попросить: «запомни, что мы пишем названия механик с заглавной буквы» — и агент добавит правило.
+How work is done in this project: conventions, your preferences, corrections to the agent's habits. The agent receives the rules in every conversation. You can ask: "remember that we capitalize mechanic names" — and the agent adds a rule.
 
-## Знания (Knowledge)
+## Knowledge
 
-Что верно в этом проекте: предмет, люди, принятые решения. Знания агент тоже получает в каждом разговоре, поэтому держите их короткими. Большие объёмы фактов лучше хранить в [памяти](help:memory).
+What is true in this project: the subject, the people, the decisions made. The agent also receives knowledge in every conversation, so keep it short. Large volumes of facts are better kept in [memory](help:memory).
 
-## Скиллы (Skills)
+## Skills
 
-Папка скиллов проекта. См. [Скиллы](help:skills).
+The project's skills folder. See [Skills](help:skills).
 
-Правила и знания можно раскладывать по дочерним документам по темам. Агент получает весь раздел целиком.
+Rules and knowledge can be split by topic across child documents. The agent receives the whole section.

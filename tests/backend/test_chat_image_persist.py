@@ -7,12 +7,14 @@
 2b: /chat/models exposes the shared attachment budget so front/back agree.
 
 The drive goes through the driver-owned turn path (faked channel/followup);
-the user-message persistence under test happens in create_completion's prep,
-before the turn is handed off.
+the user-message persistence under test happens at dsh's claim, from the
+images the send's prep carried to the driver and back.
 """
+from uuid import uuid4
+
 import pytest
 from test_driver_channel import _env, _turn_end
-from test_harness_turn import _acquirable, _until_async
+from test_harness_turn import _claim_of, _row_stamped, _until_async
 
 
 @pytest.fixture(autouse=True)
@@ -29,7 +31,7 @@ def _stub_agent_timeline(monkeypatch):
     import driver.timeline
 
     async def no_turns(session_id):
-        return []
+        return {"turns": [], "tail_seq": None}
 
     monkeypatch.setattr(driver.timeline, "fetch_session_entries", no_turns)
 
@@ -44,20 +46,21 @@ async def _create_session(client, token, pid, doc_id):
 
 
 async def _completion(client, token, sid, body, env):
-    """Start one driver-owned turn and close it through the fake channel
-    socket — the user-message persistence under test happens in prep, before
-    the hand-off; the frames only release the session's lock."""
+    """Queue one driver-owned send, then run its turn through the fake
+    channel socket — the claim carries the send's images back and mints the
+    user row with them."""
     resp = await client.post(
         f"/api/chat/sessions/{sid}/completions",
-        json=body,
+        json={"user_msg_id": str(uuid4()), **body},
         cookies={"lore_session": token},
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["accepted"] is True
+    payload = env.followups.payloads[-1]
     sock = env.connector.sockets[0]
-    for frame in ({"type": "model_update", "model": "test"}, _turn_end(1)):
+    for frame in (_claim_of(payload), _turn_end(1)):
         sock.push(_env(sid, frame))
-    await _until_async(lambda: _acquirable(sid))
+    await _until_async(lambda: _row_stamped(payload["assistant_msg_id"], 1))
 
 
 async def _list_messages(client, token, sid):
@@ -66,7 +69,7 @@ async def _list_messages(client, token, sid):
         cookies={"lore_session": token},
     )
     assert resp.status_code == 200, resp.text
-    return resp.json()
+    return resp.json()["messages"]
 
 
 async def _fetch_images(client, token, sid, mid):

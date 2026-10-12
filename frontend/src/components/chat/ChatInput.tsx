@@ -1,4 +1,4 @@
-/** Chat input area — textarea with send, stop, mic buttons + model selector + apply-mode dropdown (confirm/auto, derived from PROJECT system-prompts folder) + multi-doc context picker. Chat-store slices: isStreaming, activeSessionId, pendingInputFocus, pendingImages, addPendingImage, removePendingImage, clearPendingImages, draft, setDraft, models, defaultModel, sessions, updateSession, createSession, sendMessage, stopGeneration, setSessionMode. App-store slices: currentProject, currentDocument, currentReference, documents, accessLevel. Context: useChatContext (reactive read), pruneContext. Picker writes directly via addItemToContext / removeItemFromContext. */
+/** Chat input area — textarea with send, stop, mic buttons + model selector + apply-mode dropdown (confirm/auto, derived from PROJECT system-prompts folder) + multi-doc context picker. Chat-store slices: streaming, dshRunning, inboxQueue, liveSend, discardQueued, activeSessionId, pendingInputFocus, pendingImages, addPendingImage, removePendingImage, clearPendingImages, draft, setDraft, models, defaultModel, sessions, updateSession, createSession, sendMessage, stopGeneration, setSessionMode. App-store slices: currentProject, currentDocument, currentReference, documents, accessLevel. Context: useChatContext (reactive read), pruneContext. Picker writes directly via addItemToContext / removeItemFromContext. */
 
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { BookPlus, EyeOff, ScrollText } from 'lucide-react';
@@ -29,15 +29,11 @@ import { selectBranchPath } from '../../store/chat-store/tree';
 import { effectiveCap } from '../../store/chat-store/misc-slice';
 import { useSystemPrompts, useAttachmentBudget } from './chat-input-hooks';
 
-// Stable empty-array reference for the `queued` selector's empty
-// branch (see the selector's INVARIANT — a fresh [] loops useSyncExternalStore).
-const NO_QUEUE: string[] = [];
-
 export function ChatInput() {
   // The composer text lives in chat-store (ONE shared draft), not local useState:
   // ChatPanel unmounts on right-panel tab switch and local state dies with it
-  // (see SYSTEM: chat-draft). String selector → value-stable, so no NO_QUEUE-style
-  // stable-reference invariant is needed. Cleared on send and on store reset().
+  // (see SYSTEM: chat-draft). String selector → value-stable. Cleared on send
+  // and on store reset().
   const text = useChatStore(s => s.draft);
   const setDraft = useChatStore(s => s.setDraft);
   const { t } = useTranslation();
@@ -50,7 +46,9 @@ export function ChatInput() {
   }, []);
   const { recording, transcribing, toggleRecording, cancelRecording } = useSimpleVoiceRecording(onTranscribed);
 
-  const isStreaming = useChatStore(s => s.streaming !== null);
+  // Busy = this tab's turn slot OR dsh running the chat (a turn of another
+  // tab, or the gap between two queued turns): Stop shows and stops either.
+  const isStreaming = useChatStore(s => s.streaming !== null || s.dshRunning);
   const activeSessionId = useChatStore(s => s.activeSessionId);
   // Last completed turn's prompt-cache share, off dsh's turn-tail node in the
   // published conversation (see SYSTEM: dsh-conversation) — the assembler
@@ -62,14 +60,16 @@ export function ChatInput() {
   const addPendingImage = useChatStore(s => s.addPendingImage);
   const removePendingImage = useChatStore(s => s.removePendingImage);
   const clearPendingImages = useChatStore(s => s.clearPendingImages);
-  // The active session's follow-up chips. Keyed by session so a
-  // switch never surfaces another chat's chips (ChatInput is mounted once, no key).
-  // INVARIANT: the empty branch returns a STABLE module-level reference, not a fresh [].
-  // Why: Zustand uses useSyncExternalStore, which compares the selector result by
-  // identity — a fresh [] each call reads as "the store changed during render" and loops
-  // (Maximum update depth exceeded). The constant is identical to "no chips".
-  const queued = useChatStore(s => (s.activeSessionId ? s.queued[s.activeSessionId] ?? NO_QUEUE : NO_QUEUE));
-  const removeQueued = useChatStore(s => s.removeQueued);
+  // The active chat's queue (dsh's inbox, see SYSTEM: chat-message-queue),
+  // minus the chip of the idle send this tab is opening — its optimistic
+  // bubble already shows it, so a stale-idle judgement never shows a message
+  // twice.
+  const inboxQueue = useChatStore(s => s.inboxQueue);
+  const liveSend = useChatStore(s => s.liveSend);
+  const queued = useMemo(() => (liveSend
+    ? inboxQueue.filter(m => (liveSend.messageId ? m.id !== liveSend.messageId : m.text !== liveSend.text))
+    : inboxQueue), [inboxQueue, liveSend]);
+  const discardQueued = useChatStore(s => s.discardQueued);
 
   useEffect(() => {
     if (pendingInputFocus) {
@@ -357,17 +357,13 @@ export function ChatInput() {
       if (pin) useChatStore.getState().clearGhostRegion();
     }
     const imgs = images.length > 0 ? images : undefined;
-    // When a turn is streaming, sendMessage enqueues the TEXT
-    // (images stay in the composer — attachment-budget merge is a separate problem, see
-    // plan Scope). Capture streaming BEFORE the call so the images are kept (not silently
-    // dropped) on the enqueue path; only a real send consumes them.
-    const wasStreaming = isStreaming;
+    // A busy chat queues the whole message in dsh, images included — the
+    // composer is consumed either way.
     sendMessage(text.trim(), imgs);
-    // Clear the store draft (also on the streaming-enqueue path — current behavior).
     setDraft('');
     hasClarificationsRef.current = false;
-    if (!wasStreaming) clearPendingImages();
-  }, [canSend, activeSessionId, projectId, currentDocId, currentReference, text, images, createSession, sendMessage, clearPendingImages, setDraft, isStreaming]);
+    clearPendingImages();
+  }, [canSend, activeSessionId, projectId, currentDocId, currentReference, text, images, createSession, sendMessage, clearPendingImages, setDraft]);
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
@@ -680,7 +676,7 @@ export function ChatInput() {
       images={images}
       onRemoveImage={removePendingImage}
       queued={queued}
-      onRemoveQueued={i => { if (activeSessionId) removeQueued(activeSessionId, i); }}
+      onRemoveQueued={id => { void discardQueued(id); }}
       onScrollToBottom={scrolledAway ? scrollToBottom : undefined}
       topControls={topControls}
       leftControls={leftControls}

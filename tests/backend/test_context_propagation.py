@@ -12,6 +12,8 @@ agent's on-demand search_materials tool, exercised in test_chat_unified_mode.py.
 """
 
 
+from uuid import uuid4
+
 from models import CompletionRequest
 
 
@@ -39,7 +41,7 @@ def _make_body(**overrides) -> CompletionRequest:
         "messages": [{"role": "user", "content": "hello"}],
     }
     defaults.update(overrides)
-    return CompletionRequest(**defaults)
+    return CompletionRequest(user_msg_id=uuid4(), **defaults)
 
 
 def _patch_common(monkeypatch, ctx_module, *, fetch_one_impl=None):

@@ -14,3 +14,4 @@ export { Dropdown } from './Dropdown';
 export { ListPill } from './ListPill';
 export { PillList } from './PillList';
 export { RowActions } from './RowActions';
+export { SegmentedControl } from './SegmentedControl';

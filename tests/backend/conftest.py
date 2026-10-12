@@ -254,6 +254,25 @@ def driver_line_unconfigured(monkeypatch):
 
     monkeypatch.setattr(config, "HARNESS_DRIVER_SECRET", "")
 
+
+@pytest.fixture(autouse=True)
+def _idle_agent_status(monkeypatch):
+    """Every test reads an IDLE dsh agent with an empty queue.
+
+    # INVARIANT: a test that reads a chat's messages sees `idle` and no queue
+    # unless it patches `driver.timeline.fetch_session_status` itself. Why:
+    # every messages GET of an AI chat reads the live agent's status — also
+    # for a chat with no rows — and the line is unconfigured by default
+    # (driver_line_unconfigured), so the real read would answer 502 and the
+    # test would measure the runner instead of its own subject.
+    """
+    import driver.timeline
+
+    async def idle(_driver_session_id, line=None):
+        return {"status": "idle", "queue": [], "seq": None}
+
+    monkeypatch.setattr(driver.timeline, "fetch_session_status", idle)
+
 # ARCH (perf): the constant test passwords are bcrypt-hashed ONCE per process and
 # reused by every admin_user/regular_user fixture. bcrypt is ~275ms/hash and those
 # fixtures are function-scoped (run per test), so recomputing per test was the

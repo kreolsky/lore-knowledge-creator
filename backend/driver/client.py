@@ -367,8 +367,8 @@ def _build_turn_payload(
         "ai_api_url": ai_api_url,
         "ai_api_key": ai_api_key,
         **_admin_config_fields(title_model, web_search_provider, web_search_credential),
-        # The RAW skills wire: {project, shipped, tombstones} documents — the
-        # plugin parses them.
+        # The RAW skills wire: {project, instance, shipped, instance_tombstones}
+        # — the plugin parses them.
         "skills": skills if skills else [],
         # Pinned-region containment: forwarded on edit/append tool calls.
         # WHY: model_dump — the payload is json.dumps'd, and passing the RegionRef

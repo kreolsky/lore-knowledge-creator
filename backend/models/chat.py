@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Literal
+from uuid import UUID
 
 from pydantic import (
     AliasChoices,
@@ -171,7 +172,15 @@ class ChatMessage(BaseModel):
 
 class CompletionRequest(BaseModel):
     messages: list[ChatMessage] = Field(min_length=1)
+    # ARCH: the send's user row id, minted by the browser — the optimistic row
+    # carries it, and the row minted at dsh's claim takes it, so the `ids`
+    # frame replaces exactly that row. A malformed id is a 422 (the type), an
+    # id that already has a row a 409 (create_completion).
+    user_msg_id: UUID
     model: str | None = None
+    # The client's tail hint — read ONLY for the root-turn time stamp; never
+    # validated and never written (the pair's parent is the head chat's tail
+    # at claim time).
     parent_id: str | None = None
     images: list[str] | None = None
     # ARCH: Unified context array (Spec §5). Backend splits doc vs ref via ref_map for prompt formatting.
@@ -206,6 +215,11 @@ class CompletionRequest(BaseModel):
     # only (access-gated title), so "save this to the open document" resolves to
     # the doc actually on screen instead of the frozen session pin.
     open_doc_id: str | None = None
+
+
+class InboxDiscardRequest(BaseModel):
+    #: The dsh inbox message id `POST /completions` answered as `message_id`.
+    message_id: str = Field(min_length=1)
 
 
 class AgentConfigCreate(BaseModel):

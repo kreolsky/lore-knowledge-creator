@@ -10,6 +10,7 @@ Covers:
 """
 
 import asyncio
+from uuid import uuid4
 
 import pytest
 from emit_recorder import EmitRecorder
@@ -292,7 +293,7 @@ async def test_note_session_rejects_completion(
     sid = sess_resp.json()["session_id"]
     resp = await client.post(
         f"/api/chat/sessions/{sid}/completions",
-        json={"messages": [{"role": "user", "content": "hi"}]},
+        json={"user_msg_id": str(uuid4()), "messages": [{"role": "user", "content": "hi"}]},
         cookies=cookies,
     )
     assert resp.status_code == 400
@@ -703,7 +704,7 @@ async def test_note_author_deletes_own_leaf(
         msgs = await client.get(
             f"/api/chat/sessions/{note_id}/messages", cookies={"lore_session": other_token},
         )
-        ids = [m["message_id"] for m in msgs.json()]
+        ids = [m["message_id"] for m in msgs.json()["messages"]]
         assert m1["message_id"] in ids
         assert m2["message_id"] not in ids
     finally:
@@ -858,7 +859,7 @@ async def test_note_owner_deletes_others_message_cascades(
         msgs = await client.get(
             f"/api/chat/sessions/{note_id}/messages", cookies={"lore_session": admin_token},
         )
-        ids = {m["message_id"] for m in msgs.json()}
+        ids = {m["message_id"] for m in msgs.json()["messages"]}
         assert m1["message_id"] not in ids
         assert m2["message_id"] not in ids
         assert m3["message_id"] not in ids

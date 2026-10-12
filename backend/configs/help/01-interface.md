@@ -1,30 +1,30 @@
-# Интерфейс
+# Interface
 
-Экран проекта разделён на три части: левую панель, центр и правую панель.
+The project screen is split into three parts: the left panel, the center and the right panel.
 
-## Левая панель
+## Left panel
 
-- **Документы** — дерево документов проекта. Перетаскиванием меняется порядок документов на одном уровне. Кнопки у документа добавляют подчинённый документ, переименовывают, меняют родителя (так документ вкладывается в другой) и удаляют.
-- **Оглавление** — заголовки открытого документа. Клик переводит к заголовку.
-- ⌘/Ctrl + \ скрывает и показывает левую панель.
+- **Documents** — the project's document tree. Dragging changes the order of documents on one level. The buttons on a document add a child document, rename it, change its parent (this is how a document is nested into another) and delete it.
+- **Table of Contents** — the headings of the open document. A click jumps to the heading.
+- ⌘/Ctrl + \ hides and shows the left panel.
 
-## Центр
+## Center
 
-Здесь открыт документ или референс, с которым вы работаете. В режиме разделения слева показывается документ, а справа референс (см. [Референсы](help:references)).
+This is where the document or reference you are working with is open. In split view the document is shown on the left and a reference on the right (see [References](help:references)).
 
-## Правая панель
+## Right panel
 
-Вкладки с тем, что помогает работать над документом. Набор вкладок зависит от роли: читателю, например, недоступны чат и заметки.
+Tabs with whatever helps you work on the document. Which tabs you get depends on your role: a viewer, for example, has no chat and no notes.
 
-- **Чат** — разговор с агентом (см. [Чат и агент](help:chat-agent)).
-- **Референсы** — материалы документа (см. [Референсы](help:references)).
-- **Заметки** — обсуждения, привязанные к тексту (см. [Заметки](help:notes)).
-- **Ссылки** — исходящие и входящие ссылки документа (см. [Документы и граф](help:documents-graph)).
-- **Бэкапы** — снимки и история документа (см. [Снимки и история](help:history)).
-- **Поиск** (см. [Поиск](help:search)). Вкладка **Найти и заменить** появляется по ⌘/Ctrl + F.
-- **Доступ** — публичные ссылки, ключи API, перенос в другой проект (см. [Доступ и публикация](help:access)).
-- **Настройки** — настройки проекта.
+- **Chat** — conversation with the agent (see [Chat and the agent](help:chat-agent)).
+- **References** — the document's materials (see [References](help:references)).
+- **Notes** — discussions attached to the text (see [Notes](help:notes)).
+- **Links** — the document's outgoing and incoming links (see [Documents and the graph](help:documents-graph)).
+- **Snapshots** — the document's snapshots and history (see [Snapshots and history](help:history)).
+- **Search** (see [Search](help:search)). The **Find & Replace** tab appears on ⌘/Ctrl + F.
+- **Access** — public links, API keys, moving to another project (see [Access and publishing](help:access)).
+- **Settings** — project settings.
 
-## Шапка
+## Header
 
-В шапке есть кнопка записи голоса для открытого документа, переключение темы и языка, настройки профиля и выход. Кнопка блокировки экрана появляется, когда задан PIN (см. [Блокировка экрана](help:pin-lock)).
+The header holds the voice recording button for the open document, the theme and language switches, profile settings and sign-out. The screen lock button appears once a PIN is set (see [Screen lock](help:pin-lock)).

@@ -1,76 +1,76 @@
-# Редактор
+# Editor
 
-Документ — это Markdown с живым отображением: разметка прячется, а заголовки, списки, таблицы, картинки, формулы и диаграммы показываются в готовом виде. Все правки сохраняются автоматически, несколько человек могут редактировать документ одновременно.
+A document is Markdown with live rendering: the markup hides, and headings, lists, tables, pictures, formulas and diagrams are shown in their finished form. Every edit is saved automatically, and several people can edit a document at the same time.
 
-## Панель выделения
+## Selection toolbar
 
-При выделении текста появляется всплывающая панель:
+When you select text, a pop-up toolbar appears:
 
-- стиль текста: обычный текст или заголовок 1–4;
-- жирный, курсив, зачёркнутый;
-- списки: маркированный, нумерованный, чекбоксы;
-- цитата, код, блок кода;
-- цвет выделения;
-- ссылка;
-- заметка (обсуждение, привязанное к выделенному тексту);
-- «Создать референс из выделения» — выделенный фрагмент становится референсом документа;
-- «Работать с выделением» — отдаёт выделенный фрагмент агенту в чат.
+- text style: plain text or heading 1–4;
+- bold, italic, strikethrough;
+- lists: bulleted, numbered, checkboxes;
+- quote, inline code, code block;
+- highlight color;
+- link;
+- note (a discussion attached to the selected text);
+- "Create reference from selection" — the selected fragment becomes a reference of the document;
+- "Work with selection" — hands the selected fragment to the agent in the chat.
 
-Почти всё из панели доступно и с клавиатуры.
+Almost everything on the toolbar is also available from the keyboard.
 
-## Горячие клавиши
+## Keyboard shortcuts
 
-⌘ на macOS, Ctrl на Windows и Linux.
+⌘ on macOS, Ctrl on Windows and Linux.
 
-| Действие | Клавиши |
+| Action | Keys |
 |---|---|
-| Жирный | ⌘ B |
-| Курсив | ⌘ I |
-| Зачёркнутый | ⇧ ⌘ X |
-| Код в строке | ⌘ E |
-| Блок кода | ⌥ ⌘ E |
-| Заголовок 1–4 | ⌥ ⌘ 1 … ⌥ ⌘ 4 |
-| Убрать форматирование | ⌥ ⌘ 0 |
-| Маркированный список | ⇧ ⌘ 0 |
-| Нумерованный список | ⇧ ⌘ 8 |
-| Чекбоксы | ⇧ ⌘ 9 |
-| Увеличить отступ | ⌘ ] или Tab |
-| Уменьшить отступ | ⌘ [ или ⇧ Tab |
-| Ссылка | ⌘ K |
-| Заметка | ⌘ M |
-| Цвет выделения | ⌘ O |
-| Вставить таблицу | ⇧ ⌘ T |
-| Найти и заменить | ⌘ F |
-| Работать с выделением (агент) | ⌘ J |
-| Голосовой ввод | ⌘ D |
-| Сохранить снимок | ⌘ S |
-| Показать разметку как есть или вернуть отображение | ⌘ / |
-| Скрыть или показать левую панель | ⌘ \ |
-| Отправить сообщение в чат | ⌘ Enter |
+| Bold | ⌘ B |
+| Italic | ⌘ I |
+| Strikethrough | ⇧ ⌘ X |
+| Inline code | ⌘ E |
+| Code block | ⌥ ⌘ E |
+| Heading 1–4 | ⌥ ⌘ 1 … ⌥ ⌘ 4 |
+| Clear formatting | ⌥ ⌘ 0 |
+| Bulleted list | ⇧ ⌘ 0 |
+| Numbered list | ⇧ ⌘ 8 |
+| Checkboxes | ⇧ ⌘ 9 |
+| Indent | ⌘ ] or Tab |
+| Outdent | ⌘ [ or ⇧ Tab |
+| Link | ⌘ K |
+| Note | ⌘ M |
+| Highlight color | ⌘ O |
+| Insert table | ⇧ ⌘ T |
+| Find and replace | ⌘ F |
+| Work with selection (agent) | ⌘ J |
+| Voice input | ⌘ D |
+| Save snapshot | ⌘ S |
+| Show raw markup or return to rendering | ⌘ / |
+| Hide or show the left panel | ⌘ \ |
+| Send a chat message | ⌘ Enter |
 
-## Выделение цветом
+## Highlight colors
 
-Цвет выделения помечает фрагменты текста: оранжевый, синий, зелёный, фиолетовый, жёлтый. Удобно размечать категории, например «решено», «под вопросом», «устарело». Агент понимает эти пометки и использует те же цвета.
+Highlight colors mark fragments of text: orange, blue, green, purple, yellow. They are handy for marking categories such as "decided", "open question", "outdated". The agent understands these marks and uses the same colors.
 
-## Разметка, которая показывается в готовом виде
+## Markup shown in finished form
 
-- Заголовки, списки, цитаты, чекбоксы (кликабельные), жирный, курсив, зачёркнутый.
-- Блоки кода с подсветкой синтаксиса и кнопкой копирования.
-- Формулы: `$...$` внутри строки, `$$...$$` отдельным блоком (LaTeX).
-- Диаграммы: блок кода с языком `mermaid`.
-- Таблицы — отдельные объекты, см. [Таблицы](help:tables).
-- Картинки и встроенные документы, см. [Картинки и встраивание](help:embeds).
+- Headings, lists, quotes, checkboxes (clickable), bold, italic, strikethrough.
+- Code blocks with syntax highlighting and a copy button.
+- Formulas: `$...$` inline, `$$...$$` as a separate block (LaTeX).
+- Diagrams: a code block with the `mermaid` language.
+- Tables are separate objects, see [Tables](help:tables).
+- Pictures and embedded documents, see [Images and embeds](help:embeds).
 
-Когда курсор стоит на строке, разметка этой строки становится видна и её можно править. ⌘/Ctrl + / показывает весь документ как исходный Markdown.
+When the cursor is on a line, that line's markup becomes visible and editable. ⌘/Ctrl + / shows the whole document as raw Markdown.
 
-## Ссылки в тексте
+## Links in the text
 
-Клик по ссылке открывает документ, референс или заметку, при наведении появляется превью. Ссылка ставится через ⌘/Ctrl + K по выделенному тексту (см. [Документы и граф](help:documents-graph)).
+A click on a link opens the document, reference or note; hovering shows a preview. A link is set with ⌘/Ctrl + K over selected text (see [Documents and the graph](help:documents-graph)).
 
-## Вставка из буфера
+## Pasting from the clipboard
 
-⌘/Ctrl + V переводит форматирование из Word, Google Docs или веб-страницы в Markdown, а скопированная таблица становится [таблицей Lore](help:tables). Текст, скопированный из самого Lore, вставляется без потерь, со всеми ссылками. ⌘/Ctrl + ⇧ + V вставляет чистый текст без форматирования.
+⌘/Ctrl + V converts formatting from Word, Google Docs or a web page into Markdown, and a copied table becomes a [Lore table](help:tables). Text copied from Lore itself pastes without loss, with all its links. ⌘/Ctrl + ⇧ + V pastes plain text without formatting.
 
-## Файлы в документе
+## Files in a document
 
-Текстовый файл или файл Word можно перетащить прямо в документ: Lore предложит вставить его содержимое под строкой, куда вы его бросили. Картинки, записи и PDF в текст не вставляются: их загружают во вкладке «Референсы» (см. [Референсы](help:references)).
+A text file or a Word file can be dragged straight into a document: Lore offers to insert its content below the line where you dropped it. Pictures, recordings and PDFs are not inserted into the text: they are uploaded in the "References" tab (see [References](help:references)).

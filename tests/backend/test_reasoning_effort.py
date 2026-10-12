@@ -25,13 +25,12 @@ model-change reset rides this).
 from __future__ import annotations
 
 import time
+from uuid import uuid4
 
 import driver.client
 import pytest
 import routes.chat.models_catalog as comp
 from helpers import pin_chat_api
-from test_driver_channel import _env, _turn_end
-from test_harness_turn import _settle
 
 # ─── fakes: one gateway client serving /models AND /capabilities ─────────────
 
@@ -566,7 +565,7 @@ async def test_completions_threads_session_reasoning_effort(
 
     resp = await client.post(
         f"/api/chat/sessions/{sid}/completions",
-        json={"messages": [{"role": "user", "content": "edit it"}],
+        json={"user_msg_id": str(uuid4()), "messages": [{"role": "user", "content": "edit it"}],
               "auto_apply": True},
         cookies={"lore_session": token},
     )
@@ -579,7 +578,7 @@ async def test_completions_threads_session_reasoning_effort(
     })).json()["session_id"]
     resp = await client.post(
         f"/api/chat/sessions/{sid_default}/completions",
-        json={"messages": [{"role": "user", "content": "edit it"}],
+        json={"user_msg_id": str(uuid4()), "messages": [{"role": "user", "content": "edit it"}],
               "auto_apply": True},
         cookies={"lore_session": token},
     )
@@ -587,10 +586,3 @@ async def test_completions_threads_session_reasoning_effort(
     # Default = the key is ABSENT from the wire (never a null placeholder).
     assert "reasoning_effort" not in harness_env.followups.payloads[1]
 
-    # Close both turns through the channel (lock + heartbeat teardown), as a
-    # live driver would — the fixture's teardown stops the channel itself.
-    sock = harness_env.connector.sockets[0]
-    for payload in harness_env.followups.payloads:
-        sock.push(_env(payload["session_id"], {"type": "model_update", "model": "x"}))
-        sock.push(_env(payload["session_id"], _turn_end(10)))
-    await _settle()

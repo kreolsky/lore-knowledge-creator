@@ -45,7 +45,8 @@ DEFINE INDEX IF NOT EXISTS idx_users_email ON users FIELDS email UNIQUE;
 -- ─── Model access (see SYSTEM: model-access, backend/model_access.py) ─────────
 -- model_grants: ONE table carries all model access. `subject` is 'public',
 -- 'mod:<moderator uid>' (the virtual moderator group, derived from
--- users.moderator_id — never stored) or 'group:<groups id>' (an admin group).
+-- users.moderator_id — never stored), 'group:<groups id>' (an admin group) or
+-- 'hidden' (never in the chat picker, for anyone; grants nothing; the turn gate ignores it).
 -- Keyed by the gateway model id string; a model gone from the gateway keeps its rows.
 DEFINE TABLE IF NOT EXISTS model_grants SCHEMAFULL;
 DEFINE FIELD IF NOT EXISTS model_id   ON model_grants TYPE string;

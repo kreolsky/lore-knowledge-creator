@@ -21,6 +21,8 @@ vi.mock('./streaming', () => ({
   adoptOpenTurn: vi.fn(),
   hasOpenHarnessTurn: vi.fn(() => false),
   markHarnessTurnAborted: vi.fn(),
+  rememberQueuedSend: vi.fn(),
+  forgetQueuedSend: vi.fn(),
 }));
 // Mutable app-store state so individual tests can set the open document
 // (currentReference / currentDocument) that runCompletion reads at send time.
@@ -39,8 +41,8 @@ vi.mock('../app-store', () => ({
 vi.mock('../../i18n', () => ({ t: (k: string) => k }));
 vi.mock('../../api/client', () => ({
   apiClient: { post: vi.fn() },
-  // detail-carrying like the real client: the tail-conflict detection keys on
-  // the status + detail pair.
+  // detail-carrying like the real client: the refusal toast reads the
+  // reason out of the detail body.
   HttpError: class extends Error {
     status: number;
     detail: string;
@@ -55,8 +57,7 @@ vi.mock('../../api/client', () => ({
 }));
 
 import { createMessagesSlice } from './messages-slice';
-import { createQueueSlice } from './queue-slice';
-import { streamCompletion } from './streaming';
+import { streamCompletion, rememberQueuedSend, forgetQueuedSend } from './streaming';
 import { apiClient, HttpError } from '../../api/client';
 import type { ChatMessage } from '../../types';
 import type { ChatState } from './types';
@@ -67,7 +68,9 @@ function buildStore(sessions: ChatState['sessions'], activeSessionId: string | n
     sessions,
     activeSessionId,
     messages: [],
-   
+    inboxQueue: [],
+    dshRunning: false,
+    liveSend: null,
     streaming: null,
     // runCompletion's restore-on-fail writes the composer (misc-slice in the
     // real store).
@@ -218,15 +221,14 @@ describe('rewindTo — fork a branch ending before the message and open it', () 
     const loads: string[] = [];
     const store = create<ChatState>((set, get) => ({
       ...createMessagesSlice(set, get),
-      ...createQueueSlice(set, get),
       sessions: [sess('active', null, '2026-01-01T00:00:00Z')],
       activeSessionId: 'active',
       messages,
-     
       forks: [],
       streaming: null,
       draft: '',
-      queued: {},
+      inboxQueue: [],
+      dshRunning: false,
       setDraft: (v: string) => set({ draft: v }),
       openBranch: (sid: string) => { opened.push(sid); set({ activeSessionId: sid }); },
       loadMessages: async (sid: string) => { loads.push(sid); },
@@ -285,130 +287,119 @@ describe('rewindTo — fork a branch ending before the message and open it', () 
   });
 });
 
-describe('sendMessage — the non-tail 409 contract: one re-read + one retry', () => {
-  /** The backend's stale-tail refusal (plan: the linear-turn contract). */
-  const conflictDetail = '{"detail":"parent_id is not the tail of this branch — re-read the branch and retry"}';
-
+describe('sendMessage — an idle send opens its turn, a busy one queues in dsh', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Drop any once-implementations a failed prior test left queued — they
-    // would leak into this describe's first call.
     vi.mocked(streamCompletion).mockReset().mockResolvedValue(undefined);
     appStoreState.currentReference = null;
     appStoreState.currentDocument = null;
   });
 
-  /** A store whose loadMessages seats `fresh` rows (the re-read's product). */
-  function conflictStore(fresh: ChatMessage[]) {
-    const loads: string[] = [];
-    const store = create<ChatState>((set, get) => ({
-      ...createMessagesSlice(set, get),
-      ...createQueueSlice(set, get),
-      sessions: [sess('active', null, '2026-01-01T00:00:00Z')],
-      activeSessionId: 'active',
-      messages: [],
-     
-      forks: [],
-      streaming: null,
-      draft: '',
-      queued: {},
-      setDraft: (v: string) => set({ draft: v }),
-      loadMessages: async (sid: string) => {
-        loads.push(sid);
-        set({ messages: fresh });
-      },
-    } as unknown as ChatState));
-    return { store, loads };
+  function store(patch: Partial<ChatState> = {}) {
+    const st = buildStore([sess('active', null, '2026-01-01T00:00:00Z')], 'active');
+    st.setState(patch);
+    return st;
   }
 
-  it('retries ONCE after re-reading; the retry parents on the fresh tail', async () => {
-    // A connected fresh chain (the re-read's product): fresh-user → fresh-tail.
-    const fresh = [
-      { message_id: 'fresh-user', chat_id: 'active', parent_id: null, role: 'user', content: 're-sent', created_at: '2026-01-02T00:00:00Z' },
-      { message_id: 'fresh-tail', chat_id: 'active', parent_id: 'fresh-user', role: 'assistant', content: 'x', created_at: '2026-01-02T00:01:00Z' },
-    ] as ChatMessage[];
-    const { store, loads } = conflictStore(fresh);
-    const toast = vi.fn();
-    appStoreState.showToast = toast;
-    vi.mocked(streamCompletion)
-      .mockRejectedValueOnce(new HttpError(409, conflictDetail))
-      .mockResolvedValueOnce(undefined);
+  const completionPosts = () => vi.mocked(apiClient.post).mock.calls
+    .filter(c => c[0] === '/chat/sessions/active/completions');
 
-    await store.getState().sendMessage('hi');
-
-    // One conflict → one re-read → one retry, and no failure surfaced.
-    expect(streamCompletion).toHaveBeenCalledTimes(2);
-    expect(loads).toEqual(['active']);
-    expect(toast).not.toHaveBeenCalled();
-    // The retried turn appended onto the RE-READ branch's tail.
-    expect(lastBody().parent_id).toBe('fresh-tail');
-    // The failed attempt's optimistic bubble is gone; the retry's is the
-    // only temp row left.
-    expect(store.getState().messages.filter(m => m.message_id.startsWith('temp-'))).toHaveLength(1);
+  it('idle: the optimistic bubble carries the user_msg_id the POST sends', async () => {
+    const st = store();
+    await st.getState().sendMessage('hi');
+    const id = lastBody().user_msg_id as string;
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(st.getState().messages.map(m => m.message_id)).toEqual([id]);
+    expect(completionPosts()).toHaveLength(0);
   });
 
-  it('a SECOND conflict surfaces the explicit toast — never a third attempt', async () => {
-    const { store } = conflictStore([]);
-    const toast = vi.fn();
-    appStoreState.showToast = toast;
-    vi.mocked(streamCompletion)
-      .mockRejectedValueOnce(new HttpError(409, conflictDetail))
-      .mockRejectedValueOnce(new HttpError(409, conflictDetail));
-
-    await store.getState().sendMessage('hi');
-
-    expect(streamCompletion).toHaveBeenCalledTimes(2);
-    expect(toast).toHaveBeenCalledTimes(1);
-    expect(toast).toHaveBeenCalledWith('chatBranchMovedOn', 'error');
-    // No phantom bubble after the final failure.
-    expect(store.getState().messages).toEqual([]);
+  it.each([
+    ['an open slot', { streaming: { sessionId: 'active', messageId: 'm1', content: '', controller: null } }],
+    ['dsh running', { dshRunning: true }],
+    ['messages already queued', { inboxQueue: [{ id: 'q1', text: 'earlier', images: 0 }] }],
+  ])('busy (%s): POSTs the message with no optimistic row and no turn of its own', async (_label, patch) => {
+    vi.mocked(apiClient.post).mockResolvedValueOnce({ accepted: true, message_id: 'dm-2' });
+    const st = store(patch as Partial<ChatState>);
+    await st.getState().sendMessage('follow-up', ['data:image/png;base64,AAA']);
+    expect(streamCompletion).not.toHaveBeenCalled();
+    expect(st.getState().messages).toEqual([]);
+    const body = completionPosts()[0][1] as Record<string, unknown>;
+    expect(body.user_msg_id).toMatch(/^[0-9a-f-]{36}$/);
+    // The user bubble's text and images wait for the claim's `ids`.
+    expect(rememberQueuedSend).toHaveBeenCalledWith(body.user_msg_id, 'follow-up', ['data:image/png;base64,AAA']);
   });
 
-  it('the turn-lock 409 (a turn is in progress) is NOT retried', async () => {
-    const { store } = conflictStore([]);
+  it('busy: an open turn keeps its streaming slot', async () => {
+    vi.mocked(apiClient.post).mockResolvedValueOnce({ accepted: true });
+    const st = store({ streaming: { sessionId: 'active', messageId: 'm1', content: '', controller: null } } as Partial<ChatState>);
+    await st.getState().sendMessage('follow-up');
+    expect(st.getState().streaming?.messageId).toBe('m1');
+  });
+
+  it('busy, refused (422 with a reason): toasts the reason, the text returns to the composer', async () => {
+    const toast = vi.fn();
+    appStoreState.showToast = toast;
+    vi.mocked(apiClient.post).mockRejectedValueOnce(
+      new HttpError(422, '{"detail":"No model is configured for this chat."}'));
+    const st = store({ dshRunning: true } as Partial<ChatState>);
+    await st.getState().sendMessage('follow-up');
+    expect(toast).toHaveBeenCalledWith('No model is configured for this chat.', 'error');
+    expect(forgetQueuedSend).toHaveBeenCalled();
+    expect(st.getState().draft).toBe('follow-up');
+  });
+
+  it('idle, refused (422 with a reason): the bubble is dropped and the reason toasted', async () => {
     const toast = vi.fn();
     appStoreState.showToast = toast;
     vi.mocked(streamCompletion).mockRejectedValueOnce(
-      new HttpError(409, '{"detail":"A turn is already in progress on this chat."}'));
+      new HttpError(422, '{"detail":"No model is configured for this chat."}'));
+    const st = store();
+    await st.getState().sendMessage('hi');
+    expect(toast).toHaveBeenCalledWith('No model is configured for this chat.', 'error');
+    expect(st.getState().messages).toEqual([]);
+    expect(st.getState().draft).toBe('hi');
+  });
 
-    await store.getState().sendMessage('hi');
-
-    expect(streamCompletion).toHaveBeenCalledTimes(1);
+  it('a request-validation 422 (a list detail) falls back to the generic toast', async () => {
+    const toast = vi.fn();
+    appStoreState.showToast = toast;
+    vi.mocked(streamCompletion).mockRejectedValueOnce(
+      new HttpError(422, '{"detail":[{"loc":["body","user_msg_id"],"msg":"bad"}]}'));
+    await store().getState().sendMessage('hi');
     expect(toast).toHaveBeenCalledWith('chatSendFailed', 'error');
   });
 });
 
-describe('sendMessage — mid-turn send routes to the message queue', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    appStoreState.currentReference = null;
-    appStoreState.currentDocument = null;
+describe('stopGeneration — a dsh-running chat with no slot of this tab', () => {
+  it('still POSTs the cancel', () => {
+    vi.mocked(apiClient.post).mockResolvedValueOnce({});
+    const st = buildStore([sess('active', null, '2026-01-01T00:00:00Z')], 'active');
+    st.setState({ dshRunning: true } as Partial<ChatState>);
+    st.getState().stopGeneration();
+    expect(apiClient.post).toHaveBeenCalledWith('/chat/sessions/active/completions/cancel', {});
   });
 
-  /** A store with a mid-turn streaming slot (an open turn owns it). */
-  function busyStore() {
-    return create<ChatState>((set, get) => ({
-      ...createMessagesSlice(set, get),
-      ...createQueueSlice(set, get),
-      sessions: [sess('active', null, '2026-01-01T00:00:00Z')],
-      activeSessionId: 'active',
-      messages: [],
-     
-      queued: {},
-      streaming: { sessionId: 'active', messageId: 'm1', content: '', controller: null },
-    } as unknown as ChatState));
-  }
-
-  it('a mid-turn send starts no turn — the text joins the session queue', async () => {
-    const store = busyStore();
-    await store.getState().sendMessage('follow-up');
-    expect(streamCompletion).not.toHaveBeenCalled();
-    expect(store.getState().queued['active']).toEqual(['follow-up']);
+  it("returns the queue Stop took out to the composer — text after any draft, images as attachments", async () => {
+    vi.mocked(apiClient.post).mockResolvedValueOnce({
+      cancelled: true,
+      returned: [{ text: 'B', images: ['data:image/png;base64,AAA'] }, { text: 'C', images: [] }],
+    });
+    const st = buildStore([sess('active', null, '2026-01-01T00:00:00Z')], 'active');
+    const added: string[] = [];
+    st.setState({
+      dshRunning: true, draft: 'typed',
+      addPendingImage: (url: string) => { added.push(url); },
+    } as unknown as Partial<ChatState>);
+    st.getState().stopGeneration();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(st.getState().draft).toBe('typed\n\nB\n\nC');
+    expect(added).toEqual(['data:image/png;base64,AAA']);
   });
 
-  it('the open turn keeps its streaming slot', async () => {
-    const store = busyStore();
-    await store.getState().sendMessage('follow-up');
-    expect(store.getState().streaming?.messageId).toBe('m1');
+  it('does nothing when the chat is idle', () => {
+    vi.mocked(apiClient.post).mockClear();
+    const st = buildStore([sess('active', null, '2026-01-01T00:00:00Z')], 'active');
+    st.getState().stopGeneration();
+    expect(apiClient.post).not.toHaveBeenCalled();
   });
 });

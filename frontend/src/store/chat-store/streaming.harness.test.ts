@@ -101,11 +101,8 @@ function makeStore(sessionId = 's1') {
     conversation: [],
     turnRanges: {},
     turnStartSeq: null,
-    queued: {},
-    // scheduleTurnEndFlush's macrotask calls these off this raw state — stubs,
-    // so a turn that ends with chips queued in a sink-level test cannot crash.
-    flushQueued: vi.fn(async () => {}),
-    restoreQueued: vi.fn(),
+    inboxQueue: [],
+    dshRunning: false,
   } as unknown as ChatState;
   const get = () => state;
   const set: Set = (u: unknown) => {
@@ -124,7 +121,6 @@ function opts(get: () => ChatState, set: Set, sessionId = 's1') {
     get, set,
     o: {
       sessionId, body: { messages: [] }, signal: new AbortController().signal,
-      userParentId: null, userContent: 'hi', optimisticUserId: 'temp-1',
     },
   };
 }
@@ -176,10 +172,13 @@ describe('the harness transport — a turn over the WS dispatch', () => {
   });
 
   it('a refused POST rejects and unregisters — late frames drop', async () => {
-    postMock.mockRejectedValue(new Error('409'));
+    // A refused send queued nothing, so no claim (`ids`) follows; any other
+    // late frame finds no registration.
+    postMock.mockRejectedValue(new Error('422'));
     const { get, set } = makeStore();
-    await expect(startHarness(get, set)).rejects.toThrow('409');
-    dispatchChatFrame(get, set, 's1', IDS);
+    await expect(startHarness(get, set)).rejects.toThrow('422');
+    expect(hasOpenHarnessTurn('s1')).toBe(false);
+    dispatchChatFrame(get, set, 's1', DONE);
     expect(get().messages).toEqual([]);
     expect(get().streaming).toBeNull();
   });
@@ -209,12 +208,15 @@ describe('the harness transport — a turn over the WS dispatch', () => {
     expect(get().streaming?.messageId).toBe('am');
   });
 
-  it('frames for a session with no open turn are ignored (another tab / reload)', () => {
+  it('frames of a turn whose opening ids this tab never saw are ignored (the reload brings it)', () => {
+    // Only a claim's `ids` opens a registration (streaming.inbox.test.ts);
+    // a turn joined mid-way is the reload's adoption, never a guess here.
     const { get, set } = makeStore();
-    dispatchChatFrame(get, set, 's1', IDS);
     dispatchChatFrame(get, set, 's1', DONE);
+    dispatchChatFrame(get, set, 's1', { type: 'sources', sources: [{ id: 'd1', title: 'D' }] });
     expect(get().messages).toEqual([]);
     expect(get().streaming).toBeNull();
+    expect(hasOpenHarnessTurn('s1')).toBe(false);
   });
 
   it('a lore/image-gen frame with no open turn feeds the timeline for the ACTIVE session (the detached image run)', () => {
@@ -252,10 +254,13 @@ describe('the harness transport — a turn over the WS dispatch', () => {
 
   it('a non-lore frame with no open turn stays ignored even for the active session', () => {
     // The no-registration arm feeds ONLY lore/image-gen frames — a dsh_event
-    // of another tab's turn must keep dropping (the reload owns it).
+    // of a turn joined mid-way must keep dropping (the reload owns it; only
+    // a claim's `ids` opens a registration).
     const { get, set } = makeStore('s1');
-    dispatchChatFrame(get, set, 's1', IDS);
+    dispatchChatFrame(get, set, 's1', { type: 'dsh_event', kind: 'step/start', seq: 2, data: { turn: 0, step: 0 } });
+    expect(get().conversation).toEqual([]);
     expect(get().messages).toEqual([]);
+    expect(hasOpenHarnessTurn('s1')).toBe(false);
   });
 
   it("another tab's turn-bound lore frames with no open turn stay ignored for the active session", () => {
@@ -296,23 +301,26 @@ describe("a turn of a chat that is not shown — each chat's turn is independent
       activeSessionId: 'B',
       messages: [],
       streaming: null,
-      queued: {},
+      inboxQueue: [],
+      dshRunning: false,
+      liveSend: null,
       draft: '',
     } as never);
   });
 
-  it("(a) a send in B while A's turn is registered POSTs for B and queues nothing", async () => {
+  it("(a) a send in B while A's turn is registered is B's own idle send", async () => {
     // The ghost repro's core: A streams, the user opens the zero/ghost chat
-    // (B materializes on send) — the send must NOT queue behind A's turn.
+    // (B materializes on send) — A's turn must not make B's send a queued one.
     const pA = streamCompletion(useChatStore.getState, useChatStore.setState, {
       sessionId: 'A', body: {}, signal: new AbortController().signal,
-      userParentId: null, userContent: 'a',
     });
     expect(hasOpenHarnessTurn('A')).toBe(true);
 
     const pSend = useChatStore.getState().sendMessage('ping');
     expect(postMock).toHaveBeenCalledWith('/chat/sessions/B/completions', expect.anything(), expect.anything());
-    expect(useChatStore.getState().queued).toEqual({});
+    // The idle send's optimistic bubble carries the user_msg_id it POSTed.
+    const body = postMock.mock.calls.find(c => c[0] === '/chat/sessions/B/completions')![1] as { user_msg_id: string };
+    expect(useChatStore.getState().messages.map(m => m.message_id)).toEqual([body.user_msg_id]);
 
     dispatchChatFrame(useChatStore.getState, useChatStore.setState, 'B', TURN_CLOSED);
     await pSend;
@@ -368,18 +376,13 @@ describe("a turn of a chat that is not shown — each chat's turn is independent
     expect(get().streaming).toBeNull();
   });
 
-  it("(e) A's error then turn_closed with A chips queued — the chips do NOT auto-fire", async () => {
+  it("(e) A's error then turn_closed never writes into B's buffer", async () => {
     const { get, set } = makeStore('B');
     const pA = startHarness(get, set, 'A');
-    set({ queued: { A: ['a chip'] } } as Partial<ChatState>);
     dispatchChatFrame(get, set, 'A', { type: 'error', message: 'boom' });
     dispatchChatFrame(get, set, 'A', TURN_CLOSED);
     await pA;
-    await new Promise(r => setTimeout(r, 0));
-    // The errored turn restores, never fires — and B's buffer never saw the
-    // error notice either (display work is gated to the shown chat).
-    expect(get().flushQueued).not.toHaveBeenCalled();
-    expect(get().queued['A']).toEqual(['a chip']);
+    // Display work is gated to the shown chat.
     expect(get().messages).toEqual([]);
   });
 });

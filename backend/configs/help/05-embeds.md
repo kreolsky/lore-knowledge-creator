@@ -1,47 +1,47 @@
-# Картинки и встраивание
+# Images and embeds
 
-Встраивание показывает внутри документа содержимое другого объекта: картинку, другой документ или референс. Записывается оно как ссылка с `!` в начале: `![подпись](адрес)`. Когда курсор стоит на такой строке, видна сама запись. Когда курсор уходит, на её месте появляется содержимое.
+An embed shows the content of another object inside a document: a picture, another document or a reference. It is written as a link starting with `!`: `![caption](address)`. When the cursor is on such a line, you see the entry itself. When the cursor leaves, the content appears in its place.
 
-## Картинки в тексте
+## Pictures in the text
 
-Картинка в тексте — это всегда [референс](help:references). Чтобы поставить картинку в документ:
+A picture in the text is always a [reference](help:references). To put a picture into a document:
 
-1. Загрузите её во вкладке «Референсы» или попросите агента сгенерировать картинку: сгенерированная картинка тоже сохраняется референсом документа.
-2. Поставьте курсор туда, где нужна картинка.
-3. На карточке картинки нажмите «Вставить вложение в позицию курсора».
+1. Upload it in the "References" tab, or ask the agent to generate a picture: a generated picture is also saved as a reference of the document.
+2. Put the cursor where the picture should go.
+3. On the picture's card, press "Insert embed at cursor".
 
-В текст попадёт запись `![Название](ref:…)`. Размер задаётся в подписи после вертикальной черты:
+The text gets an entry `![Title](ref:…)`. The size is set in the caption after a vertical bar:
 
-- `![Схема|300](ref:…)` — ширина 300 пикселей;
-- `![Схема|50%](ref:…)` — половина ширины страницы;
-- `![Схема|300x200](ref:…)` — ширина и высота.
+- `![Diagram|300](ref:…)` — 300 pixels wide;
+- `![Diagram|50%](ref:…)` — half the page width;
+- `![Diagram|300x200](ref:…)` — width and height.
 
-Эта картинка вставлена с шириной 300 пикселей, то есть `![Кошачий оркестр|300](ref:…)`:
+This picture is inserted 300 pixels wide, that is `![Cat orchestra|300](ref:…)`:
 
-![Кошачий оркестр|300](help-image:cat-orchestra)
+![Cat orchestra|300](help-image:cat-orchestra)
 
-А эта — на 40% ширины страницы, `![Кот после стирки|40%](ref:…)`:
+And this one at 40% of the page width, `![Cat after a wash|40%](ref:…)`:
 
-![Кот после стирки|40%](help-image:wet-cat)
+![Cat after a wash|40%](help-image:wet-cat)
 
-Обе картинки — референсы этой страницы: их видно во вкладке «Референсы», когда она открыта. Поставьте курсор на строку с картинкой, чтобы увидеть и поправить запись.
+Both pictures are references of this page: you can see them in the "References" tab while it is open. Put the cursor on a picture's line to see and adjust its entry.
 
-Картинка по ссылке из интернета в документе не показывается, останется только её подпись. Такую картинку сначала загрузите в «Референсы».
+A picture linked from the internet is not shown in a document; only its caption remains. Upload such a picture to "References" first.
 
-## Встраивание документа
+## Embedding a document
 
-`![подпись](документ)` показывает внутри страницы полный текст другого документа. Встроенный текст виден только для чтения: править его нужно в самом документе, и правки появятся везде, куда он встроен. Клик по заголовку встроенного блока открывает исходный документ.
+`![caption](document)` shows the full text of another document inside the page. The embedded text is read-only: edit it in the document itself, and the edits appear everywhere it is embedded. A click on the embedded block's heading opens the source document.
 
-Удобно встраивать общие фрагменты, которые нужны в нескольких местах: определения, таблицы характеристик, повторяющиеся правила.
+This is handy for shared fragments needed in several places: definitions, stat tables, recurring rules.
 
-Как вставить: наберите `!`, выделите подпись после него и нажмите ⌘/Ctrl + K, затем выберите документ. Получится `![подпись](…)`.
+How to insert: type `!`, select a caption after it and press ⌘/Ctrl + K, then pick the document. You get `![caption](…)`.
 
-## Встраивание референса
+## Embedding a reference
 
-`![подпись](ref:…)` работает так же для референса: текстовый референс или расшифровка записи показываются внутри страницы, картинка — картинкой, файл — карточкой для скачивания. Кнопка «Вставить вложение в позицию курсора» на карточке любого референса вставляет такую запись.
+`![caption](ref:…)` works the same way for a reference: a text reference or a recording's transcript is shown inside the page, a picture as a picture, a file as a download card. The "Insert embed at cursor" button on any reference's card inserts such an entry.
 
-## Ограничения
+## Limitations
 
-- Встраивание работает на один уровень. Если встроенный документ сам что-то встраивает, внутри вместо содержимого будет обычная ссылка. Так документ не может бесконечно встраивать сам себя.
-- Таблицы тоже вставлены в текст как встраивание `![Название](table:…)`, но принадлежат своему документу (см. [Таблицы](help:tables)).
-- Ссылка без `!` остаётся ссылкой: клик открывает документ, наведение показывает превью.
+- Embedding works one level deep. If an embedded document itself embeds something, you get a plain link there instead of the content. This way a document cannot endlessly embed itself.
+- Tables are also placed in the text as an embed `![Title](table:…)`, but they belong to their own document (see [Tables](help:tables)).
+- A link without `!` stays a link: a click opens the document, hovering shows a preview.

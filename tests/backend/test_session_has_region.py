@@ -9,6 +9,8 @@ backend-owned pieces: the model invariants, persistence on create, serialization
 PATCH (unpin), and the `region` field on CompletionRequest (prompt-hint carrier).
 """
 
+from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 
@@ -77,12 +79,13 @@ def test_session_create_has_region_defaults_target_doc():
 
 
 def test_completion_request_region_optional():
-    body = CompletionRequest(messages=[{"role": "user", "content": "hi"}])
+    body = CompletionRequest(user_msg_id=uuid4(), messages=[{"role": "user", "content": "hi"}])
     assert body.region is None
 
 
 def test_completion_request_carries_region():
     body = CompletionRequest(
+        user_msg_id=uuid4(),
         messages=[{"role": "user", "content": "edit this"}],
         region=RegionRef(doc_id="d-1", from_cp=0, to_cp=4, text="edit"),
     )

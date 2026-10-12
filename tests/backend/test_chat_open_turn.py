@@ -55,16 +55,20 @@ def _replay(open_frames):
     }
 
 
-async def _attach(out, replay, monkeypatch, db=None):
+async def _attach(out, replay, monkeypatch, db=None, running=False):
     import driver.timeline
     from routes.chat.messages import _attach_timeline
 
     async def fake_fetch(_session_id):
         return replay
 
+    async def fake_status(_session_id):
+        return {"status": "running" if running else "idle", "queue": [], "seq": None}
+
     # monkeypatch (NOT a bare assign + del): the module-level function must
     # survive this test for every later test in the worker.
     monkeypatch.setattr(driver.timeline, "fetch_session_entries", fake_fetch)
+    monkeypatch.setattr(driver.timeline, "fetch_session_status", fake_status)
     await _attach_timeline({}, "chat-1", out, offset=0)
 
 
@@ -280,18 +284,10 @@ async def test_breach_with_a_dead_driver_one_halt_card_no_open_mark(monkeypatch)
     assert "open_turn" not in out[0], "the closers closed the turn — nothing is open"
 
 
-# ─── the driver-start window: a held turn lock marks the open turn ───────────
-# Between create_completion taking the turn lock and dsh logging `turn/start`,
-# the replay cannot show the turn; the held lock is what says it runs.
-# INVARIANT: every test above runs with the lock FREE — the autouse per-test
-# Redis FLUSHDB (conftest `_redis_isolation`) clears it, so they keep asserting
-# exactly today's lock-free read. Why: the lock state is a second input to the
-# open mark; a test that does not choose it must still measure one value.
-
-
-async def _hold_lock(session_id="chat-1"):
-    from turn_lock import acquire_turn_lock
-    assert await acquire_turn_lock(session_id)
+# ─── the claim-to-log window: a running dsh agent marks the open turn ────────
+# Between dsh's claim and its log flush the replay cannot show the turn; the
+# agent's running status is what says it runs. Every test above reads an IDLE
+# status (`_attach`'s default), so they keep asserting the idle read.
 
 
 _EMPTY = {"turns": [], "tail_seq": None}
@@ -305,25 +301,23 @@ def _closed_replay():
 
 
 @pytest.mark.asyncio
-async def test_lock_held_first_turn_marks_the_new_row(monkeypatch):
+async def test_running_first_turn_marks_the_new_row(monkeypatch):
     """A chat's FIRST turn, before dsh writes `turn/start`: the log is empty,
-    the lock says the turn runs — its row is marked open with no frames."""
-    await _hold_lock()
+    the running status says the turn runs — its row is marked open with no frames."""
     out = [row("u1", role="user", created="1"), row("a_new", created="2")]
-    await _attach(out, _EMPTY, monkeypatch)
+    await _attach(out, _EMPTY, monkeypatch, running=True)
     assert out[1]["open_turn"] is True
     assert out[1]["frames"] == []
     assert "assistant_stream" not in out[1]
 
 
 @pytest.mark.asyncio
-async def test_lock_held_later_turn_marks_the_unstamped_newest_row(monkeypatch):
+async def test_running_later_turn_marks_the_unstamped_newest_row(monkeypatch):
     """A LATER turn before its `turn/start`: the trailing turn is the previous
     closed one. The new unstamped row takes the mark; the stamped row keeps
     its own frames and no mark."""
-    await _hold_lock()
     out = [row("a1", seq=5, created="1"), row("a_open", created="2")]
-    await _attach(out, _closed_replay(), monkeypatch)
+    await _attach(out, _closed_replay(), monkeypatch, running=True)
     assert out[1]["open_turn"] is True
     assert out[1]["frames"] == []
     assert "open_turn" not in out[0]
@@ -331,37 +325,35 @@ async def test_lock_held_later_turn_marks_the_unstamped_newest_row(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_lock_held_before_rows_exist_marks_nothing(monkeypatch):
-    """The lock is taken before the new rows are created: the newest assistant
-    row is the previous turn's STAMPED row — it never takes the mark."""
-    await _hold_lock()
+async def test_running_before_rows_exist_marks_nothing(monkeypatch):
+    """The agent runs before the claim's rows are minted: the newest
+    assistant row is the previous turn's STAMPED row — it never takes the
+    mark."""
 
     class _OneTurnDB:
         async def query(self, _q, _p=None, **_kw):
             return [slim("u1"), slim("a1", "u1", "assistant", "1", seq=5)]
 
     out = [row("a1", seq=5, created="1")]
-    await _attach(out, _closed_replay(), monkeypatch, db=_OneTurnDB())
+    await _attach(out, _closed_replay(), monkeypatch, db=_OneTurnDB(), running=True)
     assert "open_turn" not in out[0]
 
 
 @pytest.mark.asyncio
-async def test_lock_held_before_rows_exist_marks_an_abnormal_unstamped_row(monkeypatch):
-    """Accepted risk, pinned: the lock is held before the new rows exist and
+async def test_running_before_rows_exist_marks_an_abnormal_unstamped_row(monkeypatch):
+    """Accepted risk, pinned: the agent runs before the new rows exist and
     the previous turn ended abnormally (unstamped, no halt). That old row is
     the newest and takes the mark until the new turn's `ids` frame re-seats
     the slot — cosmetic and sub-second."""
-    await _hold_lock()
     out = [row("a_old", created="1")]
-    await _attach(out, _EMPTY, monkeypatch)
+    await _attach(out, _EMPTY, monkeypatch, running=True)
     assert out[0]["open_turn"] is True
 
 
 @pytest.mark.asyncio
-async def test_lock_held_newest_row_halted_marks_nothing(monkeypatch):
-    """The halt INVARIANT outranks the lock: a halted row is a dead turn's one
+async def test_running_newest_row_halted_marks_nothing(monkeypatch):
+    """The halt INVARIANT outranks the status: a halted row is a dead turn's one
     record, and the older unstamped row is not the newest — nothing is marked."""
-    await _hold_lock()
     out = [
         row("a1", seq=5, created="1"),
         row("a_older", created="2"),
@@ -376,28 +368,27 @@ async def test_lock_held_newest_row_halted_marks_nothing(monkeypatch):
                 slim("u3", "a_older"), slim("a_halt", "u3", "assistant", "3"),
             ]
 
-    await _attach(out, _closed_replay(), monkeypatch, db=_HaltDB())
+    await _attach(out, _closed_replay(), monkeypatch, db=_HaltDB(), running=True)
     assert not any(r.get("open_turn") for r in out)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("replay", [_EMPTY, _closed_replay()], ids=["empty", "closed"])
-async def test_lock_free_marks_nothing(monkeypatch, replay):
-    """Today's behaviour, pinned: no lock, no open turn in the log — no mark."""
+async def test_idle_marks_nothing(monkeypatch, replay):
+    """Idle agent, no open turn in the log — no mark."""
     out = [row("a1", seq=5, created="1"), row("a_new", created="2")]
     await _attach(out, replay, monkeypatch)
     assert not any(r.get("open_turn") for r in out)
 
 
 @pytest.mark.asyncio
-async def test_lock_held_with_a_genuine_open_turn_keeps_the_timeline(monkeypatch):
+async def test_running_with_a_genuine_open_turn_keeps_the_timeline(monkeypatch):
     """Once dsh logged the turn, the timeline owns the mark: its frames and
-    `assistant_stream` ride the row, and the lock branch does not re-mark."""
-    await _hold_lock()
+    `assistant_stream` ride the row, and the status branch does not re-mark."""
     out = [row("a1", seq=5, created="1"), row("a_open", created="2")]
     replay = _replay([_dsh(7, "assistant/message")])
     replay["turns"][1]["assistant_stream"] = {"revision": 1}
-    await _attach(out, replay, monkeypatch)
+    await _attach(out, replay, monkeypatch, running=True)
     assert out[1]["open_turn"] is True
     assert out[1]["frames"] == [_dsh(7, "assistant/message")]
     assert out[1]["assistant_stream"] == {"revision": 1}

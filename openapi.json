@@ -510,10 +510,16 @@
                 "type": "null"
               }
             ]
+          },
+          "user_msg_id": {
+            "format": "uuid",
+            "title": "User Msg Id",
+            "type": "string"
           }
         },
         "required": [
-          "messages"
+          "messages",
+          "user_msg_id"
         ],
         "title": "CompletionRequest",
         "type": "object"
@@ -999,6 +1005,20 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "InboxDiscardRequest": {
+        "properties": {
+          "message_id": {
+            "minLength": 1,
+            "title": "Message Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id"
+        ],
+        "title": "InboxDiscardRequest",
         "type": "object"
       },
       "InboxReadBody": {
@@ -6501,7 +6521,7 @@
     },
     "/api/chat/models": {
       "get": {
-        "description": "Proxy GET /v1/models from the AI API. Returns model ID list + capability flags.\n\nReports Agent-line availability and the vision-capable model set\nso the frontend picker can badge vision models instead of erroring at send time.\nBoth capability fields are merged into the success AND empty-AI_API_URL bodies.\nThe 503-on-gateway-down path stays: when the whole gateway is down the flags are\nirrelevant. Also returns `context_windows` (per-model real context length)\nfrom the same cached gateway fetch.\n\nFreshness: the served model list, default_model, and context_windows come from a\nCHAT_MODELS_CACHE_TTL_S (60s) TTL cache — a freshly-added gateway model (or a\nremoved one) can lag by up to that bound, and a chat-panel open reads the\ncached snapshot rather than a fresh gateway fetch. The set of served models\nchanges on the order of weeks, so the staleness is accepted over a per-open\ngateway RTT. The `reasoning` map rides its own cache with the same TTL and\nthe same accepted lag.\n\nThe roster is FILTERED to the caller's available models (SYSTEM:\nmodel-access) — the picker only; the turn gate is require_model_access.",
+        "description": "Proxy GET /v1/models from the AI API. Returns model ID list + capability flags.\n\nReports Agent-line availability and the vision-capable model set\nso the frontend picker can badge vision models instead of erroring at send time.\nBoth capability fields are merged into the success AND empty-AI_API_URL bodies.\nThe 503-on-gateway-down path stays: when the whole gateway is down the flags are\nirrelevant. Also returns `context_windows` (per-model real context length)\nfrom the same cached gateway fetch.\n\nFreshness: the served model list, default_model, and context_windows come from a\nCHAT_MODELS_CACHE_TTL_S (60s) TTL cache — a freshly-added gateway model (or a\nremoved one) can lag by up to that bound, and a chat-panel open reads the\ncached snapshot rather than a fresh gateway fetch. The set of served models\nchanges on the order of weeks, so the staleness is accepted over a per-open\ngateway RTT. The `reasoning` map rides its own cache with the same TTL and\nthe same accepted lag.\n\nThe roster is FILTERED to the caller's available models (SYSTEM:\nmodel-access) — the picker only; the turn gate is require_model_access.\nHidden models leave `models` for every caller, admins included; their\ncapability fields stay, so a session pinned to one keeps working.",
         "operationId": "list_models_api_chat_models_get",
         "parameters": [
           {
@@ -6925,7 +6945,7 @@
     },
     "/api/chat/sessions/{session_id}/completions": {
       "post": {
-        "description": "Start an LLM turn. Saves user + assistant messages to DB, hands the\nturn to the driver, answers JSON `{accepted, user_msg_id,\nassistant_msg_id, dsh_session_id}` — the frames ride the project WS.",
+        "description": "Queue an LLM turn: validate, assemble the context, hand the send to the\ndriver (dsh queues it behind a running turn). Answers JSON `{accepted,\nuser_msg_id, assistant_msg_id, dsh_session_id, message_id}` — `message_id`\nis the dsh inbox message; the rows and frames arrive at its claim, on the\nproject WS.",
         "operationId": "create_completion_api_chat_sessions__session_id__completions_post",
         "parameters": [
           {
@@ -7104,6 +7124,73 @@
         ]
       }
     },
+    "/api/chat/sessions/{session_id}/inbox/discard": {
+      "post": {
+        "description": "✕ on a queued send: remove the dsh inbox message before its claim.\n`{removed: false}` (200) when it was claimed in the meantime — its turn is\nthe user's feedback, not an error. Owner-only like every AI-chat route;\nnote chats are refused.",
+        "operationId": "discard_queued_api_chat_sessions__session_id__inbox_discard_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InboxDiscardRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Discard Queued",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
     "/api/chat/sessions/{session_id}/last-message-preview": {
       "get": {
         "description": "Lazy hover-preview source for the chat-list plaque: the newest non-deleted\nmessage content, truncated in SQL.\n\nWHY a dedicated endpoint (not list_sessions): materializing message content\nfor EVERY listed AI chat scales with total message volume (long threads) — the\nsession list deliberately carries only a content-free last-activity timestamp\nfor AI chats (see _last_activity_map in sessions.py). This fetches ONE row for\nONE hovered session on demand, so the list stays cheap under pagination.",
@@ -7163,7 +7250,7 @@
     },
     "/api/chat/sessions/{session_id}/messages": {
       "get": {
-        "description": "Return messages in a chat session with pagination.",
+        "description": "Return a chat session's messages (paginated) and its queue —\n`{messages, queue, queue_seq}`: the live dsh agent's next-turn inbox and\nthe seq that snapshot includes (empty/None for a note chat).",
         "operationId": "list_messages_api_chat_sessions__session_id__messages_get",
         "parameters": [
           {
@@ -7238,7 +7325,7 @@
             "description": "Validation Error"
           },
           "502": {
-            "description": "The agent transcript is unreadable — the thread is never served without its timeline"
+            "description": "The agent transcript or its status is unreadable — the thread is never served without its timeline"
           }
         },
         "summary": "List Messages",

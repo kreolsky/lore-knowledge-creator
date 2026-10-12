@@ -27,12 +27,11 @@ export function effectiveCap(
 
 /**
  * Append `text` to the composer draft — the ONE restore rule for text that
- * must not be lost (chips restored on an errored/stopped turn, a send that
- * cleared the composer and then failed).
+ * must not be lost (a send that cleared the composer and then failed).
  *
  * INVARIANT(data-loss): append, never overwrite. Why: the incoming text was
- * written BEFORE whatever the user may have typed since (chips queued before
- * the stop, a failed send's text versus typing that followed it) —
+ * written BEFORE whatever the user may have typed since (a failed send's
+ * text versus typing that followed it) —
  * overwriting would discard the newer text; a blank draft takes the text
  * bare.
  */
@@ -139,9 +138,10 @@ export function createMiscSlice(set: Set, get: Get): MiscSlice {
         // Shared composer draft — logout hygiene: the prior user's draft must
         // never render after a same-tab re-login.
         draft: '',
-        // Drop any queued follow-up chips (F5/project-switch
-        // drops them — the user's call; the queue is never persisted).
-        queued: {},
+        // The active chat's queue view — the queue itself lives in dsh.
+        inboxQueue: [],
+        dshRunning: false,
+        liveSend: null,
         ghostAgentAuto: false,
         ghostSystemPromptId: null,
         ghostModel: '',

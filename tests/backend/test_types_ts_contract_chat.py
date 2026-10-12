@@ -101,7 +101,7 @@ async def test_chat_message_response_keys_are_declared_in_types_ts(
 
     listed = await client.get(f"/api/chat/sessions/{sid}/messages", cookies=cookies)
     assert listed.status_code == 200, listed.text
-    messages = listed.json()
+    messages = listed.json()["messages"]
     assert messages, "no messages returned — the snapshot would assert nothing"
 
     # Union over BOTH surfaces that serialize a message: the create echo and the

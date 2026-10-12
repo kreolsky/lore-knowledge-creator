@@ -29,6 +29,13 @@ import { useAppStore } from './app-store';
 import { t } from '../i18n';
 import type { ChatMessage } from '../types';
 
+/** The messages GET's queue snapshot (the live dsh agent's next-turn inbox
+ * and the log seq it includes) — also carried by the sessions piggyback. */
+export interface InboxSnapshotWire {
+  queue?: unknown;
+  queue_seq?: unknown;
+}
+
 /**
  * Scope discriminator for loadMessagesFor — the live-session liveness guard
  * plus the two terminals. `activeSessionId()` is read AFTER the await, so a
@@ -42,10 +49,11 @@ export interface MessageLoadScope {
   /** Error terminal — invoked only when this fetch still owns the session. */
   onLoadError: () => void;
   /** Raw rows BEFORE the timeline fold — the chat store hands them to the
-   * assembler (replaceWindow; the note store passes nothing). Invoked before
-   * hydration because the fold drops the rows' `frames` key; only for a fetch
-   * that still owns the session. */
-  onRows?: (rows: ChatMessage[]) => void;
+   * assembler (replaceWindow; the note store passes nothing) together with
+   * the chat's queue snapshot. Invoked before hydration because the fold
+   * drops the rows' `frames` key; only for a fetch that still owns the
+   * session. */
+  onRows?: (rows: ChatMessage[], inbox: InboxSnapshotWire) => void;
 }
 
 /**
@@ -56,7 +64,8 @@ export interface MessageLoadScope {
  */
 export async function loadMessagesFor(sessionId: string, scope: MessageLoadScope): Promise<void> {
   try {
-    const raw: ChatMessage[] = await apiClient.get(`/chat/sessions/${sessionId}/messages`);
+    const { messages: raw, queue, queue_seq }: { messages: ChatMessage[] } & InboxSnapshotWire =
+      await apiClient.get(`/chat/sessions/${sessionId}/messages`);
     // The reload half of the ONE timeline: the raw rows go to the assembler
     // (replaceWindow over the frames the backend replayed + minted), and the
     // rows enter the store without them. A frameless row renders from its own
@@ -65,7 +74,7 @@ export async function loadMessagesFor(sessionId: string, scope: MessageLoadScope
     // It covers the raw rows too — onRows seats the assembler window and the
     // streaming slot, which belong to the shown session only.
     if (scope.activeSessionId() !== sessionId) return;
-    scope.onRows?.(raw);
+    scope.onRows?.(raw, { queue, queue_seq });
     const messages = raw.map(stripFrames);
     scope.onLoaded(messages);
   } catch {

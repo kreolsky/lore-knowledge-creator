@@ -91,9 +91,9 @@ test('a session turns over the project WS — JSON completions, chat_frame envel
   await expect(page.locator('.right-panel')).toContainText(MARKER, { timeout: 15_000 });
 
   // The row witness: SSE-turn parity — content + driver_seq on the assistant row.
-  const msgs = (await (
+  const { messages: msgs } = (await (
     await page.request.get(`/api/chat/sessions/${sessionId}/messages`)
-  ).json()) as Array<{ role: string; content?: string; driver_seq?: number }>;
+  ).json()) as { messages: Array<{ role: string; content?: string; driver_seq?: number }> };
   const assistant = msgs.find(m => m.role === 'assistant');
   expect(assistant?.content).toContain(MARKER);
   expect(assistant?.driver_seq).toBeTruthy();

@@ -26,6 +26,7 @@ import { apiClient } from '../api/client';
 import { listAdminProjects, listAdminUsers } from '../api/admin';
 import type { SettingsTabId } from '../api/admin';
 import { useAppStore } from '../store/app-store';
+import { useChatStore } from '../store/chat-store';
 import { useUIStore, type AdminSectionTab } from '../store/ui-store';
 import { useSectionAsideWidth } from '../hooks/useSectionAsideWidth';
 import { AccessLevel, Role, User, Project } from '../types';
@@ -63,9 +64,9 @@ const ADMIN_ONLY_SECTIONS: readonly {
   slot?: 'top' | 'users';
 }[] = [
   { tab: 'info', icon: <Gauge size={14} />, labelKey: 'adminInfo', slot: 'top' },
+  { tab: 'settings:models', icon: <Cpu size={14} />, labelKey: 'settingsModels', settingsTab: 'models', slot: 'top' },
+  { tab: 'model-access', icon: <KeyRound size={14} />, labelKey: 'adminModelAccess', slot: 'top' },
   { tab: 'groups', icon: <UsersRound size={14} />, labelKey: 'adminGroups', slot: 'users' },
-  { tab: 'model-access', icon: <KeyRound size={14} />, labelKey: 'adminModelAccess', slot: 'users' },
-  { tab: 'settings:models', icon: <Cpu size={14} />, labelKey: 'settingsModels', settingsTab: 'models' },
   { tab: 'settings:search', icon: <Search size={14} />, labelKey: 'settingsSearch', settingsTab: 'search' },
   { tab: 'settings:agent', icon: <Bot size={14} />, labelKey: 'settingsAgent', settingsTab: 'agent' },
   { tab: 'settings:tools', icon: <Wrench size={14} />, labelKey: 'settingsTools', settingsTab: 'tools' },
@@ -253,6 +254,11 @@ export function AdminPage() {
       });
     return () => { cancelled = true; };
   }, [currentUser, navigate, t]);
+
+  // WHY: the chat caches its model roster for the tab's life; model access and
+  // CHAT_MODEL are edited here, so leaving the page marks it stale and the
+  // chat refetches it on its next mount instead of after a reload.
+  useEffect(() => () => useChatStore.setState({ modelsLoaded: false }), []);
 
   // The projects pipeline starts on the FIRST Projects-section activation
   // (not on mount — Users opens first); later activations keep the

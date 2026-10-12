@@ -21,6 +21,7 @@ channel and are pinned there (breach, unsubscribe/disconnect).
 """
 
 import json
+from uuid import uuid4
 
 import pytest
 from agent.apply_policy import resolve_apply_mode
@@ -356,7 +357,7 @@ async def test_completions_passes_auto_apply_mode_to_driver(
     resp = await client.post(
         f"/api/chat/sessions/{sid}/completions",
         json={
-            "messages": [{"role": "user", "content": "edit it"}],
+            "user_msg_id": str(uuid4()), "messages": [{"role": "user", "content": "edit it"}],
             "selection": {"doc_id": target, "from_cp": 0, "to_cp": 5,
                           "original_text": "hello", "version": 1},
             "auto_apply": True,

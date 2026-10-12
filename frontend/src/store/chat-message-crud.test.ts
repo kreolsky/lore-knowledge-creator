@@ -47,7 +47,7 @@ describe('loadMessagesFor', () => {
   }
 
   it('commits messages to a live scope', async () => {
-    vi.mocked(apiClient.get).mockResolvedValueOnce(MESSAGES as never);
+    vi.mocked(apiClient.get).mockResolvedValueOnce({ messages: MESSAGES, queue: [], queue_seq: null } as never);
     const scope = makeScope('s1');
     await loadMessagesFor('s1', scope);
     expect(scope.onLoaded).toHaveBeenCalledWith(MESSAGES);
@@ -56,7 +56,7 @@ describe('loadMessagesFor', () => {
   });
 
   it('staleness guard: a superseded fetch never commits', async () => {
-    vi.mocked(apiClient.get).mockResolvedValueOnce(MESSAGES as never);
+    vi.mocked(apiClient.get).mockResolvedValueOnce({ messages: MESSAGES, queue: [], queue_seq: null } as never);
     const scope = makeScope('other-session'); // user switched while in flight
     await loadMessagesFor('s1', scope);
     expect(scope.onLoaded).not.toHaveBeenCalled();
@@ -64,14 +64,14 @@ describe('loadMessagesFor', () => {
   });
 
   it('staleness guard covers the raw rows too: a superseded fetch never reaches onRows', async () => {
-    vi.mocked(apiClient.get).mockResolvedValueOnce(MESSAGES as never);
+    vi.mocked(apiClient.get).mockResolvedValueOnce({ messages: MESSAGES, queue: [], queue_seq: null } as never);
     const scope = { ...makeScope('other-session'), onRows: vi.fn() };
     await loadMessagesFor('s1', scope);
     expect(scope.onRows).not.toHaveBeenCalled();
   });
 
   it('a live fetch hands the raw rows to onRows before onLoaded', async () => {
-    vi.mocked(apiClient.get).mockResolvedValueOnce(MESSAGES as never);
+    vi.mocked(apiClient.get).mockResolvedValueOnce({ messages: MESSAGES, queue: [], queue_seq: null } as never);
     const order: string[] = [];
     const scope: MessageLoadScope = {
       activeSessionId: () => 's1',

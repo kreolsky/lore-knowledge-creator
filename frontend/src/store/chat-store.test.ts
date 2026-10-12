@@ -212,7 +212,7 @@ describe('F3 — resolveAncestorChain (shared send-path helper)', () => {
       return { accepted: true };
     });
     get.mockClear().mockImplementation(async (url: string) =>
-      url.includes('/messages') ? copies : []);
+      url.includes('/messages') ? { messages: copies, queue: [], queue_seq: null } : []);
 
     useChatStore.setState({
       activeSessionId: 'sess-1',
@@ -421,7 +421,7 @@ describe('loadMessages — error surfacing (M3)', () => {
 
   it('clears messagesError on a successful load', async () => {
     const { apiClient } = await import('../api/client');
-    (apiClient.get as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (apiClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({ messages: [], queue: [], queue_seq: null });
 
     useChatStore.setState({ activeSessionId: 's1', messagesError: true, sessions: [makeSession({ session_id: 's1' })] });
     await useChatStore.getState().loadMessages('s1');
@@ -834,8 +834,8 @@ describe('createSession — ghost reasoning effort', () => {
   });
 });
 
-describe('sendMessage mid-turn send (routes to the message queue)', () => {
-  it('a send while a turn is streaming makes no POST — it queues', async () => {
+describe('sendMessage mid-turn send (queues in dsh)', () => {
+  it('a send while a turn is streaming POSTs with no optimistic row — dsh queues it', async () => {
     const { useAppStore } = await import('./app-store');
     (useAppStore.getState as ReturnType<typeof vi.fn>).mockReturnValue({
       currentDocument: null,
@@ -848,18 +848,20 @@ describe('sendMessage mid-turn send (routes to the message queue)', () => {
     (apiClient.post as ReturnType<typeof vi.fn>).mockClear().mockResolvedValue({ accepted: true });
 
     // An open turn holds the streaming slot.
+    const rows = makeLinearChain(2);
     useChatStore.setState({
       activeSessionId: 'sess-1',
       streaming: { sessionId: 'sess-1', messageId: null, content: '', controller: null },
-      messages: makeLinearChain(2),
+      messages: rows,
       sessions: [makeSession({ session_id: 'sess-1' })],
     });
 
     await useChatStore.getState().sendMessage('hello');
-    // The send joins the session's queue; the open turn's end drains it.
-    expect(apiClient.post).not.toHaveBeenCalled();
-    expect(useChatStore.getState().queued['sess-1']).toEqual(['hello']);
-    useChatStore.getState().clearQueued('sess-1');
+    expect(apiClient.post).toHaveBeenCalledWith(
+      '/chat/sessions/sess-1/completions', expect.objectContaining({ user_msg_id: expect.any(String) }));
+    // The chip comes from dsh's splice; the row from the claim's `ids`.
+    expect(useChatStore.getState().messages).toEqual(rows);
+    useChatStore.setState({ streaming: null });
   });
 });
 
@@ -1352,6 +1354,8 @@ describe('agent-mode fork/regenerate gate (ST1)', () => {
     });
     const post = apiClient.post as ReturnType<typeof vi.fn>;
     (apiClient.patch as ReturnType<typeof vi.fn>).mockClear().mockResolvedValue({});
+    (apiClient.get as ReturnType<typeof vi.fn>).mockClear().mockImplementation(async (url: string) =>
+      url.includes('/messages') ? { messages: [], queue: [], queue_seq: null } : []);
     post.mockClear().mockImplementation(async (url: string) => {
       if (url.endsWith('/branches')) {
         return makeSession({ session_id: 's-branch', thread_id: 's-agent' });
@@ -1521,7 +1525,7 @@ describe('loadSessions piggyback (Item 3: collapse sessions→messages waterfall
           active_messages: { session_id: 'sA', messages: piggybacked },
         });
       }
-      if (url.includes('/messages')) { messagesUrls.push(url); return Promise.resolve([]); }
+      if (url.includes('/messages')) { messagesUrls.push(url); return Promise.resolve({ messages: [], queue: [], queue_seq: null }); }
       return Promise.resolve([]);
     });
 
@@ -1588,7 +1592,7 @@ describe('loadSessions piggyback (Item 3: collapse sessions→messages waterfall
           active_messages: { session_id: 'sZ', messages: [] },
         });
       }
-      if (url.includes('/messages')) { messagesUrls.push(url); return Promise.resolve([]); }
+      if (url.includes('/messages')) { messagesUrls.push(url); return Promise.resolve({ messages: [], queue: [], queue_seq: null }); }
       return Promise.resolve([]);
     });
 
@@ -1626,7 +1630,7 @@ describe('loadSessions piggyback (Item 3: collapse sessions→messages waterfall
           holds: [{ call_id: 'c1', tool_name: 'create_document', message_id: 'm2' }],
         });
       }
-      if (url.includes('/messages')) { return Promise.resolve([]); }
+      if (url.includes('/messages')) { return Promise.resolve({ messages: [], queue: [], queue_seq: null }); }
       return Promise.resolve([]);
     });
 
@@ -1931,7 +1935,7 @@ describe('chatScopeLoading lifecycle (right-panel flicker guard)', () => {
 
     const sessions = [makeSession({ session_id: 'chatB', document_id: 'docB-load' })];
     (apiClient.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
-      if (url.includes('/messages')) return Promise.resolve([]);
+      if (url.includes('/messages')) return Promise.resolve({ messages: [], queue: [], queue_seq: null });
       return Promise.resolve(sessions);
     });
 

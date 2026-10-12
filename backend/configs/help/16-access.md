@@ -1,41 +1,41 @@
-# Доступ и публикация
+# Access and publishing
 
-## Участники проекта
+## Project members
 
-Владелец проекта приглашает соавторов по email во вкладке «Настройки», раздел «Доступ». Этот раздел видит только владелец. Письмо не отправляется: если у человека уже есть аккаунт с этим email, проект сразу появится у него в списке, а если аккаунта ещё нет, приглашение ждёт со статусом «ожидает» и сработает при регистрации. Роли:
+The project owner invites co-authors by email in the "Settings" tab, "Access" section. Only the owner sees this section. No email is sent: if the person already has an account with that email, the project appears in their list right away; if there is no account yet, the invitation waits with the "pending" status and takes effect on sign-up. Roles:
 
-- **Редактор** — полный доступ: правит документы, работает с агентом.
-- **Комментатор** — читает и оставляет заметки, но не правит документы.
-- **Читатель** — только чтение.
+- **Editor** — full access: edits documents, works with the agent.
+- **Commentator** — reads and leaves notes, but does not edit documents.
+- **Viewer** — read-only.
 
-Владелец может открыть проект для всех пользователей Lore: во вкладке «Настройки» включите «Открыт для залогиненных (только чтение)». Любой пользователь с аккаунтом сможет читать проект.
+The owner can open the project to all Lore users: in the "Settings" tab turn on "Public to logged-in users (read-only)". Any user with an account will be able to read the project.
 
-## Публичная ссылка
+## Public link
 
-Во вкладке «Доступ», раздел «Общий доступ», можно опубликовать документ по анонимной ссылке: её сможет прочитать любой, даже без аккаунта. Опция «Включить поддерево» публикует и все вложенные документы. Если документ уже опубликован через родителя, это будет видно.
+In the "Access" tab, "General access" section, you can publish a document by an anonymous link: anyone can read it, even without an account. The "Include subtree" option publishes all nested documents too. If a document is already published through its parent, you will see that.
 
-## Ключи API
+## API keys
 
-Во вкладке «Доступ», раздел «API-доступ», создаются ключи к документу. У ключа две возможности, их можно отметить вместе:
+In the "Access" tab, "API access" section, you create keys to a document. A key has two capabilities, and both can be ticked together:
 
-- **Виджет** — для приложений записи на Android и macOS: записи попадают в этот документ (см. [Голосовые заметки](help:voice)).
-- **Агент** — доступ по MCP для внешнего агента (например, Claude или другого ассистента). Внешний агент видит только этот документ и его поддерево. Запись разрешается отдельной галочкой; правки применяются сразу и откатываются через снимки.
+- **widget** — for the recording apps on Android and macOS: recordings land in this document (see [Voice notes](help:voice)).
+- **agent** — MCP access for an external agent (for example, Claude or another assistant). The external agent sees only this document and its subtree. Writing is allowed by a separate checkbox; edits are applied right away and rolled back through snapshots.
 
-Токен показывается один раз — скопируйте его сразу.
+The token is shown once — copy it right away.
 
-## Перенос в другой проект
+## Moving to another project
 
-Во вкладке «Доступ», раздел «Перенести в другой проект», документ вместе со всем поддеревом переносится в другой проект, где у вас есть право записи. Можно выбрать нового родителя в проекте назначения.
+In the "Access" tab, "Move to another project" section, a document with its whole subtree moves to another project where you have write access. You can choose a new parent in the destination project.
 
-## Настройки проекта
+## Project settings
 
-Во вкладке «Настройки»:
+In the "Settings" tab:
 
-- **Голосовые записи** — куда сохранять новые записи: в текущий документ или в указанный.
-- **Превью картинок** — показывать ли изображения в панели референсов галереей превью.
-- **Открыт для залогиненных** — чтение проекта всеми пользователями Lore (только владелец).
-- **Доступ** — участники и приглашения (только владелец).
+- **Voice Recording** — where to save new recordings: into the current document or a specific one.
+- **Image previews** — whether to show images in the references panel as a gallery of previews.
+- **Public to logged-in users** — all Lore users can read the project (owner only).
+- **Access** — members and invitations (owner only).
 
-## В планах
+## Planned
 
-Группы пользователей с разными правами.
+User groups with different permissions.

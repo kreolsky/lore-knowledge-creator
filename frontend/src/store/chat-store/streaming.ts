@@ -7,13 +7,14 @@ import type { ChatMessage, ChatSource } from '../../types';
 import { apiClient } from '../../api/client';
 import { useAppStore } from '../app-store';
 import { t } from '../../i18n';
-import type { ChatState, Set, StreamingState, TurnEndReason } from './types';
+import type { ChatState, Set, StreamingState } from './types';
 import { validateFrame, type Frame } from './frame-validate';
 import { registerChatResetHandler } from './reset-registry';
 import {
   isFeedFrame, feedFrame, beginTurn, endTurn, adoptStreamBaseline,
 } from './conversation-feed';
-import { scheduleTurnEndFlush } from './queue-slice';
+import { applyInboxFrame } from './inbox-slice';
+import { resolveActivePath } from './tree';
 
 /** A wire field is usable as display text only when it is a non-empty string —
  * the unguarded terminal frames render a fallback otherwise (see `error` /
@@ -76,24 +77,42 @@ export function flushStreaming(s: ChatState): Partial<ChatState> {
 
 /** The per-turn end facts, held on the harness REGISTRATION (not the slot):
  * a turn that ends while its chat is not shown has no slot to read them
- * from, and the queue rule (scheduleTurnEndFlush) hangs on the reason.
- * `reason` is stamped by the `error` / `lore/halt` arms; `aborted` by
- * stopGeneration before it aborts. */
+ * from. `aborted` is stamped by stopGeneration before it aborts. */
 export interface TurnEndFacts {
-  reason?: TurnEndReason;
   aborted: boolean;
 }
 
-/** The per-turn facts the frame handlers close over — the turn's opts
- * and the harness registration's context are the same shape. */
+/** The per-turn facts the frame handlers close over. */
 export interface TurnFramesCtx {
   sessionId: string;
-  userContent: string;
-  userParentId: string | null;
-  optimisticUserId?: string;
-  userImages?: string[];
   /** The registration's end facts (see TurnEndFacts). */
   end: TurnEndFacts;
+}
+
+/** The user bubble of a send that queued in dsh (no optimistic row): its
+ * text and images, keyed by the browser-minted `user_msg_id`, taken by the
+ * `ids` frame of its claim. In-memory — after a reload `ids` carries the
+ * text and the row read brings the images. */
+const queuedSends = new Map<string, { content: string; images?: string[] }>();
+registerChatResetHandler(() => queuedSends.clear());
+
+export function rememberQueuedSend(userMsgId: string, content: string, images?: string[]): void {
+  queuedSends.set(userMsgId, { content, images });
+}
+
+export function forgetQueuedSend(userMsgId: string): void {
+  queuedSends.delete(userMsgId);
+}
+
+/** The parent of a claimed user row: the chat's tail at claim — the last
+ * assistant on the active path, the row itself left out (dsh serializes the
+ * turns, and the backend mints the pair onto that same tail). */
+function claimParent(messages: ChatMessage[]): string | null {
+  const path = resolveActivePath(messages);
+  for (let i = path.length - 1; i >= 0; i--) {
+    if (path[i].role === 'assistant') return path[i].message_id;
+  }
+  return null;
 }
 
 function createTurnSink(
@@ -135,18 +154,30 @@ function createTurnSink(
       // whose chat is not shown keeps running without rows here — the reload
       // replays them on return.
       if (!isShown()) return;
-      // ARCH: the `ids` event carries only message ids, not author info,
-      // so the reconciled user message would show "unknown" until reload. Stamp the
-      // current user's id/name here too (mirrors insertOptimisticUser).
+      const userId: string = ev.user_message_id;
+      // INVARIANT: the user row is matched by the browser-minted user_msg_id,
+      // never by "the send this registration was opened for". Why: dsh runs
+      // the queue in order, so the claim a registration sees may be another
+      // send's (a queued message of another tab ahead of an idle send judged
+      // idle) — matching by id replaces only the row that IS this claim.
+      const existing = get().messages.find(m => m.message_id === userId);
+      const queued = queuedSends.get(userId);
+      queuedSends.delete(userId);
+      // ARCH: the `ids` event carries no author info, so the reconciled user
+      // message would show "unknown" until reload. Stamp the current user's
+      // id/name here too (mirrors insertOptimisticUser) — every claim in an
+      // owner-only chat is the owner's.
       const currentUser = useAppStore.getState().currentUser;
       const userMsg: ChatMessage = {
-        message_id: ev.user_message_id,
+        message_id: userId,
         chat_id: opts.sessionId,
-        parent_id: opts.userParentId,
+        // The tail at claim, exactly as the backend mints it — also for an
+        // optimistic row that a claim of another send overtook.
+        parent_id: claimParent(get().messages.filter(m => m.message_id !== userId)),
         role: 'user',
-        content: opts.userContent,
-        images: opts.userImages,
-        created_at: new Date().toISOString(),
+        content: existing?.content ?? queued?.content ?? (isNonEmptyStr(ev.user_text) ? ev.user_text : ''),
+        images: existing?.images ?? queued?.images,
+        created_at: existing?.created_at ?? new Date().toISOString(),
         ...(currentUser ? { author_id: currentUser.user_id, author_name: currentUser.name } : {}),
       };
       const assistantMsg: ChatMessage = {
@@ -159,10 +190,8 @@ function createTurnSink(
         // Seed from any `sources` events that arrived before `ids`.
         ...(sourcesForMsg.length > 0 ? { sources: sourcesForMsg } : {}),
       };
-      const hasOptimistic = !!opts.optimisticUserId
-        && get().messages.some(m => m.message_id === opts.optimisticUserId);
-      const baseMessages = hasOptimistic
-        ? get().messages.map(m => m.message_id === opts.optimisticUserId ? userMsg : m)
+      const baseMessages = existing
+        ? get().messages.map(m => m.message_id === userId ? userMsg : m)
         : [...get().messages, userMsg];
       const newMessages = [...baseMessages, assistantMsg];
       // ARCH: no sibling selection is written —
@@ -191,8 +220,6 @@ function createTurnSink(
       // frame as the aborted turn winds down, and surfacing it would falsely report a
       // failure for an action the user chose.
       if (ctx.end.aborted) return;
-      // The turn is ending in failure — the queue restores instead of auto-firing.
-      ctx.end.reason = 'error';
       // APPEND the error notice to the row's content rather than replacing it.
       // Why: an empty-completion error still has the partial work the agent did,
       // and a frameless row (and a reload, where content is the row's own)
@@ -279,13 +306,6 @@ function createTurnSink(
         messages: s.messages.map(m => (m.message_id === mid ? { ...m, content } : m)),
       }));
     },
-    // The halt CARD is the assembler's node; the end REASON is stamped on the
-    // registration's end facts so the turn's terminal does not auto-fire the
-    // queue (see scheduleTurnEndFlush's INVARIANT on 'halted') — the stamp
-    // survives even when the chat is not shown.
-    'lore/halt'() {
-      ctx.end.reason = 'halted';
-    },
     // The compaction mint OUTCOME rides the timeline as `lore/compaction-mint`
     // (the frame is ALSO fed to the assembler — the dispatch below does both).
     // The toast is LIVE-only beside the feed (a reload shows the minted card,
@@ -365,16 +385,15 @@ function createTurnSink(
 // carries it after `error`) settles it, so
 // runCompletion's catch/finally see the turn's lifecycle end (the
 // transport terminal), not the POST's return. `done` is a CONTENT frame — the
-// backend's text fold for the row, minted before finalize + lock release;
-// treating it as a terminal made the queue flush POST into the held turn
-// lock.
+// backend's text fold for the row.
 //
 // The registration is per CHAT session id (the WS envelope's session_id — the
-// fan-out keys it by the chat id even for continuation chats). Frames for a
-// session with NO registration are ignored: another tab's turn, or a turn this
-// tab never sent. A reload mid-turn is NOT that case — adoptOpenTurn seats the
-// open turn's assistant_stream baseline and registers the sink, so the next
-// live chunk continues the band.
+// fan-out keys it by the chat id even for continuation chats). It is opened by
+// an idle send (before its POST), by the reload's adoption of an open turn,
+// and by an `ids` frame of the ACTIVE chat that finds none — the claim of a
+// queued message (dsh runs the queue turn after turn; each claim opens with
+// `ids`). Other frames for a session with NO registration are ignored
+// (another chat's turn returns through the reload).
 
 interface _HarnessTurn {
   sink: ReturnType<typeof createTurnSink>;
@@ -394,15 +413,15 @@ const harnessTurns = new Map<string, _HarnessTurn>();
 /** Whether THIS tab holds an open harness turn registration for the session —
  * the browser-WS-gap resync's trigger (a reconnect reloads the session when
  * this is true: frames lost in the socket gap recover through the reload's
- * replay + re-adoption), and the sendMessage queue guard's second clause
- * (the return window: the slot is null, the registration still open). */
+ * replay + re-adoption), and one clause of sendMessage's busy test (the
+ * return window: the slot is null, the registration still open). */
 export function hasOpenHarnessTurn(sessionId: string): boolean {
   return harnessTurns.has(sessionId);
 }
 
 /** The slot for a chat being opened: seated at once from its open
  * registration (Stop and the busy composer show before the reload lands —
- * a send in that window queues, see sendMessage's guard), null when the chat
+ * a send in that window queues in dsh, see sendMessage), null when the chat
  * has no open turn in this tab. The reload's adoption re-seats it on the
  * open row. */
 export function registeredTurnSlot(sessionId: string): StreamingState | null {
@@ -459,8 +478,6 @@ export function adoptOpenTurn(
       harnessTurns.delete(sessionId);
       reg.settled = true;
       reg.settle();
-      // How it ended died with the socket — never auto-fire the queue on a guess.
-      scheduleTurnEndFlush(get, sessionId, 'lost');
     }
     return;
   }
@@ -477,23 +494,33 @@ export function adoptOpenTurn(
   if (open.assistant_stream !== undefined) {
     adoptStreamBaseline(open.assistant_stream, sessionId, set);
   }
-  if (!reg) {
-    let resolveEnd!: () => void;
-    const turnEnded = new Promise<void>(r => { resolveEnd = r; });
-    const end: TurnEndFacts = { aborted: false };
-    harnessTurns.set(sessionId, {
-      sink: createTurnSink(get, set, {
-        sessionId, userContent: '', userParentId: null, end,
-      }),
-      settled: false,
-      settle: () => resolveEnd(),
-      end,
-      messageId: open.message_id,
-    });
-    // Nobody awaits an adopted turn's promise — but the registration MUST
-    // carry one so the terminal path (dispatchChatFrame) stays uniform.
-    void turnEnded;
+  if (!reg) registerUnawaitedTurn(get, set, sessionId, open.message_id);
+}
+
+/** A registration nobody awaits — an adopted open turn, or a claimed queued
+ * message. It still carries a settle so the terminal path stays uniform. */
+function registerUnawaitedTurn(get: () => ChatState, set: Set, sessionId: string, messageId: string | null): _HarnessTurn {
+  const end: TurnEndFacts = { aborted: false };
+  const turn: _HarnessTurn = {
+    sink: createTurnSink(get, set, { sessionId, end }),
+    settled: false,
+    settle: () => {},
+    end,
+    messageId,
+  };
+  harnessTurns.set(sessionId, turn);
+  return turn;
+}
+
+/** The claim of a queued message in the ACTIVE chat — its `ids` found no
+ * registration: seat the slot (Stop, the busy composer, the streaming row)
+ * and the assembler boundary exactly as a send does, then register. */
+function openClaimedTurn(get: () => ChatState, set: Set, sessionId: string): _HarnessTurn {
+  if (!get().streaming) {
+    set({ streaming: { ...emptyStreaming(sessionId), controller: new AbortController() } });
   }
+  beginTurn(sessionId, set);
+  return registerUnawaitedTurn(get, set, sessionId, null);
 }
 
 /** The frame type that ENDS a turn on the WS transport: `turn_closed` —
@@ -506,28 +533,12 @@ export function adoptOpenTurn(
  * turn_closed).
  * `done` is NOT in the set: it is a content frame — the backend's text fold
  * for the row.
- * INVARIANT: on a GRACEFUL end `turn_closed` is the frame that follows the
- * backend's turn-lock release. Why: the queue flush (which fires only on a
- * clean end) POSTs into a free lock and no later terminal of the same turn
- * can reach the follow-up's registration — whereas `done` is emitted BEFORE
- * finalize + lock release, so flushing on it hits the held lock (409; the
- * chips already cleared, so the text is lost) or has the follow-up's fresh
- * registration closed by the previous turn's late `turn_closed` (the
- * follow-up renders nothing). NOT claimed: that `turn_closed` always
- * arrives after the release — on the setup-failure and refused paths the
- * frames are emitted before `_teardown_turn_lock`, and the plugin pushes
- * the refusal's `turn_closed` independently of the backend teardown;
- * harmless there, because an error end restores the queue instead of
- * flushing it. */
+ * INVARIANT: `turn_closed` closes the registration, and the NEXT turn's
+ * `ids` opens a fresh one. Why: the plugin pushes `turn_closed` per claimed
+ * turn before dsh claims the next queued message, so a queue of N renders as
+ * N consecutive registrations — a `done`-terminal would close the turn while
+ * its last frames still stream. */
 const TERMINAL_FRAME_TYPES: ReadonlySet<string> = new Set(['turn_closed']);
-
-/** The end reason of the registered turn: a stamped error/halt wins, a Stop
- * shows as the aborted stamp, anything else is a clean end. Read off the
- * REGISTRATION — a turn that ends while its chat is not shown has no slot. */
-function turnEndReason(turn: _HarnessTurn): TurnEndReason {
-  if (turn.end.reason) return turn.end.reason;
-  return turn.end.aborted ? 'aborted' : 'done';
-}
 
 /** One project-WS chat_frame envelope, dispatched into the open harness turn.
  * Project-connection stays transport-dumb: this is the store-side sink. */
@@ -537,7 +548,17 @@ export function dispatchChatFrame(
   sessionId: string,
   frame: unknown,
 ): void {
-  const turn = harnessTurns.get(sessionId);
+  const raw = frame as { type?: unknown; assistant_message_id?: unknown; chat_id?: unknown } | null;
+  // The queue and the status are the ACTIVE chat's (inbox-slice.ts) — folded
+  // whether or not a turn is registered (a splice lands between turns too).
+  if (sessionId === get().activeSessionId) applyInboxFrame(set, frame);
+  let turn = harnessTurns.get(sessionId);
+  // WHY chat_id: every chat on one driver session (a compaction source and
+  // its continuation) receives that session's frames, but a claim's pair is
+  // minted into ONE chat — only that chat renders the claimed turn.
+  if (!turn && raw?.type === 'ids' && sessionId === get().activeSessionId && raw.chat_id === sessionId) {
+    turn = openClaimedTurn(get, set, sessionId);
+  }
   if (!turn) {
     // No registration: another tab's turn, a reload that adopted nothing —
     // or a DETACHED RUN. Its facts ride the chat channel as lore/image-gen
@@ -558,7 +579,6 @@ export function dispatchChatFrame(
     feedFrame(validated, sessionId, set);
     return;
   }
-  const raw = frame as { type?: unknown; assistant_message_id?: unknown } | null;
   if (raw?.type === 'ids' && isNonEmptyStr(raw.assistant_message_id)) {
     turn.messageId = raw.assistant_message_id;
   }
@@ -572,8 +592,6 @@ export function dispatchChatFrame(
     console.error('Chat frame handler failed:', e);
   }
   if (event && TERMINAL_FRAME_TYPES.has(event.type)) {
-    // Why the turn ended is read off the registration BEFORE anything else.
-    const reason = turnEndReason(turn);
     // The turn's transport end. The DISPLAY half — binding the fed nodes to
     // the streaming row, flushing the slot — belongs to the SHOWN chat only:
     // endTurn's ensureEngine would reset the module engine off whichever chat
@@ -587,22 +605,23 @@ export function dispatchChatFrame(
     harnessTurns.delete(sessionId);
     turn.settled = true;
     turn.settle();
-    scheduleTurnEndFlush(get, sessionId, reason);
   }
+}
+
+/** The send's turn options: the POST body, the abort signal, and the
+ * reply's dsh message id handed back (the chip of an idle send is hidden by
+ * it — QueuedChips). */
+interface CompletionOpts {
+  sessionId: string;
+  body: Record<string, unknown>;
+  signal: AbortSignal;
+  onAccepted?: (messageId: string) => void;
 }
 
 async function _harnessCompletion(
   get: () => ChatState,
   set: Set,
-  opts: {
-    sessionId: string;
-    body: Record<string, unknown>;
-    signal: AbortSignal;
-    userParentId: string | null;
-    userContent: string;
-    userImages?: string[];
-    optimisticUserId?: string;
-  },
+  opts: CompletionOpts,
 ): Promise<void> {
   const { sessionId } = opts;
   const endpoint = `/chat/sessions/${sessionId}/completions`;
@@ -610,41 +629,33 @@ async function _harnessCompletion(
   const turnEnded = new Promise<void>(r => { resolveEnd = r; });
   const end: TurnEndFacts = { aborted: false };
   const turn: _HarnessTurn = {
-    sink: createTurnSink(get, set, {
-      sessionId,
-      userContent: opts.userContent,
-      userParentId: opts.userParentId,
-      optimisticUserId: opts.optimisticUserId,
-      userImages: opts.userImages,
-      end,
-    }),
+    sink: createTurnSink(get, set, { sessionId, end }),
     settled: false,
     settle: () => resolveEnd(),
     end,
     messageId: null,
   };
-  // Seat the assembler BEFORE the POST: the preamble (ids/sources) is emitted
-  // server-side BEFORE the followup is even called, so WS frames can beat the
-  // HTTP response — the registration and the boundary must both stand first.
-  // The streaming slot itself was claimed by runCompletion before this call,
-  // so the ids handler finds the controller waiting.
+  // Seat the assembler BEFORE the POST: dsh claims an idle send at once, so
+  // its `ids` can beat the HTTP response — the registration and the boundary
+  // must both stand first. The streaming slot itself was claimed by
+  // runCompletion before this call, so the ids handler finds the controller
+  // waiting.
   beginTurn(sessionId, set);
   harnessTurns.set(sessionId, turn);
   try {
-    await apiClient.post(endpoint, opts.body, { signal: opts.signal });
+    const reply = await apiClient.post(endpoint, opts.body, { signal: opts.signal });
+    if (isNonEmptyStr(reply?.message_id)) opts.onAccepted?.(reply.message_id);
   } catch (e) {
     if (turn.settled) return;
-    // No transport ever opened for this attempt (an unconfigured line emits
-    // no frames at all — the HTTP status is the signal): un-register, and let
-    // runCompletion's catch surface it. The assembler window binds only for
-    // the chat it renders — endTurn for a chat that is not shown would reset
-    // the module engine off the displayed timeline.
-    harnessTurns.delete(sessionId);
+    // Nothing was queued (a refused send emits no frames — the HTTP status
+    // is the signal): un-register, and let runCompletion's catch surface it.
+    // The assembler window binds only for the chat it renders — endTurn for
+    // a chat that is not shown would reset the module engine off the
+    // displayed timeline.
+    if (harnessTurns.get(sessionId) === turn) harnessTurns.delete(sessionId);
     if (get().activeSessionId === sessionId) {
       endTurn(sessionId, get().streaming?.messageId ?? null, set);
     }
-    // A turn that never opened is no clean end: the queue goes back to the composer.
-    scheduleTurnEndFlush(get, sessionId, opts.signal.aborted ? 'aborted' : 'error');
     throw e;
   }
   await turnEnded;
@@ -656,15 +667,7 @@ async function _harnessCompletion(
 export async function streamCompletion(
   get: () => ChatState,
   set: Set,
-  opts: {
-    sessionId: string;
-    body: Record<string, unknown>;
-    signal: AbortSignal;
-    userParentId: string | null;
-    userContent: string;
-    userImages?: string[];
-    optimisticUserId?: string;
-  },
+  opts: CompletionOpts,
 ): Promise<void> {
   await _harnessCompletion(get, set, opts);
 }

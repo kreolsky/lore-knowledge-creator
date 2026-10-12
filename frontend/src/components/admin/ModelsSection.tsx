@@ -1,27 +1,47 @@
 /** Admin: who may run which model (SYSTEM: model-access).
  *
  * One card per model of GET /api/admin/models (gateway roster ∪ granted ids):
- * chevron · id · default / "not in gateway" marks · Public checkbox. A
- * gateway outage (in_gateway null) is one line above the list, never a
- * "not in gateway" mark on every row. The
- * Public checkbox is the `public` subject; expanding a card lists every group
- * (admin groups, then the read-only moderator groups) as a checkbox — each
- * one is that group's subject. Every toggle PUTs the model's FULL subject
- * list at once and replaces the row with the server's answer; a refusal
- * (a moderator demoted meanwhile → 422) renders under the row.
+ * chevron · id · default / "not in gateway" marks · Hidden · Private · Public
+ * selector. A gateway outage (in_gateway null) is one line above the list,
+ * never a "not in gateway" mark on every row. The tier is derived from the
+ * subjects: `hidden` → Hidden (exclusive, drops every grant; disabled on the
+ * default model), `public` → Public, else Private. Expanding a card lists
+ * every group (admin groups, then the read-only moderator groups) as a
+ * checkbox — each one is that group's subject — greyed out while Hidden.
+ * Every change shows at once, PUTs the model's FULL subject list and replaces
+ * the row with the server's answer; a refusal (a moderator demoted meanwhile →
+ * 422) restores the old subjects and renders under the row.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { CenterHeading, FieldCheckbox, IconButton } from '../ui';
+import { CenterHeading, FieldCheckbox, IconButton, SegmentedControl } from '../ui';
 import {
-  listAdminGroups, listAdminModels, putAdminModelSubjects, PUBLIC_SUBJECT,
+  HIDDEN_SUBJECT, listAdminGroups, listAdminModels, putAdminModelSubjects, PUBLIC_SUBJECT,
   type AdminGroup, type AdminModelAccess,
 } from '../../api/admin';
 import { useAppStore } from '../../store/app-store';
 import { useTranslation } from '../../i18n';
 import { serverRefusalDetail } from '../../utils/server-refusal-detail';
 import { groupLabel } from './GroupsSection';
+
+type Tier = 'hidden' | 'private' | 'public';
+
+function tierOf(subjects: string[]): Tier {
+  if (subjects.includes(HIDDEN_SUBJECT)) return 'hidden';
+  return subjects.includes(PUBLIC_SUBJECT) ? 'public' : 'private';
+}
+
+/** The full subject list a tier change PUTs: Hidden drops every grant. */
+function subjectsForTier(subjects: string[], tier: Tier): string[] {
+  const grants = subjects.filter(s => s !== PUBLIC_SUBJECT && s !== HIDDEN_SUBJECT);
+  const byTier: Record<Tier, string[]> = {
+    hidden: [HIDDEN_SUBJECT],
+    private: grants,
+    public: [...grants, PUBLIC_SUBJECT],
+  };
+  return byTier[tier];
+}
 
 export function ModelsSection() {
   const { t } = useTranslation();
@@ -48,21 +68,31 @@ export function ModelsSection() {
 
   useEffect(() => { void reload(); }, [reload]);
 
-  const toggleSubject = async (model: AdminModelAccess, subject: string, on: boolean) => {
-    const subjects = on
-      ? [...model.subjects, subject]
-      : model.subjects.filter(s => s !== subject);
+  const setRowSubjects = (id: string, subjects: string[]) =>
+    setModels(prev => prev?.map(m => (m.id === id ? { ...m, subjects } : m)) ?? prev);
+
+  // WHY: optimistic — the new state shows on click and the server's answer
+  // replaces it; a refusal restores the old subjects and renders under the row.
+  // A busy row ignores clicks instead of dimming, so the control does not blink.
+  const saveSubjects = async (model: AdminModelAccess, subjects: string[]) => {
+    if (busy) return;
     setBusy(model.id);
     setMsg(null);
+    setRowSubjects(model.id, subjects);
     try {
       const saved = await putAdminModelSubjects(model.id, subjects);
-      setModels(prev => prev?.map(m => (m.id === model.id ? { ...m, subjects: saved.subjects } : m)) ?? prev);
+      setRowSubjects(model.id, saved.subjects);
     } catch (err: unknown) {
+      setRowSubjects(model.id, model.subjects);
       setMsg({ id: model.id, text: serverRefusalDetail(err) ?? t('adminModelSaveFailed') });
     } finally {
       setBusy(null);
     }
   };
+
+  const toggleSubject = (model: AdminModelAccess, subject: string, on: boolean) => saveSubjects(
+    model, on ? [...model.subjects, subject] : model.subjects.filter(s => s !== subject),
+  );
 
   return (
     <>
@@ -76,7 +106,8 @@ export function ModelsSection() {
       <div className="flex flex-col gap-0.5">
         {(models ?? []).map(model => {
           const open = expanded === model.id;
-          const groupCount = model.subjects.filter(s => s !== PUBLIC_SUBJECT).length;
+          const tier = tierOf(model.subjects);
+          const groupCount = model.subjects.filter(s => s !== PUBLIC_SUBJECT && s !== HIDDEN_SUBJECT).length;
           return (
             <section
               key={model.id}
@@ -100,11 +131,15 @@ export function ModelsSection() {
                 {groupCount > 0 && (
                   <span className="text-xs text-text-dim whitespace-nowrap">{t('adminModelGroupCount', { count: groupCount })}</span>
                 )}
-                <FieldCheckbox
-                  checked={model.subjects.includes(PUBLIC_SUBJECT)}
-                  onChange={on => void toggleSubject(model, PUBLIC_SUBJECT, on)}
-                  label={t('adminModelPublic')}
-                  disabled={busy === model.id}
+                <SegmentedControl
+                  ariaLabel={t('adminModelTier')}
+                  value={tier}
+                  onChange={next => void saveSubjects(model, subjectsForTier(model.subjects, next as Tier))}
+                  options={[
+                    { value: 'hidden', label: t('adminModelHidden'), disabled: model.is_default },
+                    { value: 'private', label: t('adminModelPrivate') },
+                    { value: 'public', label: t('adminModelPublic') },
+                  ]}
                 />
               </div>
               {open && (
@@ -116,7 +151,7 @@ export function ModelsSection() {
                       checked={model.subjects.includes(g.subject)}
                       onChange={on => void toggleSubject(model, g.subject, on)}
                       label={groupLabel(g, t)}
-                      disabled={busy === model.id}
+                      disabled={busy === model.id || tier === 'hidden'}
                     />
                   ))}
                 </div>

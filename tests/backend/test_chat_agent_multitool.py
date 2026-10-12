@@ -11,6 +11,7 @@ the auto apply path, and the per-doc edit lock).
 
 import asyncio
 import json
+from uuid import uuid4
 
 import pytest
 
@@ -72,6 +73,7 @@ async def test_context_no_longer_injects_system_prompt_id(client, test_db, proje
         {"id": persona_id, "pid": pid, "c": "DBL-INJECT-MARKER-f0a1"},
     )
     body = CompletionRequest(
+        user_msg_id=uuid4(),
         messages=[{"role": "user", "content": "hi"}],
         system_prompt_id=persona_id,
     )

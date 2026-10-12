@@ -16,6 +16,7 @@ import settings
 from fastapi import APIRouter, Depends, HTTPException
 from model_access import (
     GROUP_PREFIX,
+    HIDDEN_SUBJECT,
     MOD_PREFIX,
     PUBLIC_SUBJECT,
     group_subject,
@@ -55,12 +56,16 @@ async def _grants_by_model(db: AsyncSurreal) -> dict[str, list[str]]:
 
 async def _validate_subjects(db: AsyncSurreal, subjects: list[str]) -> None:
     """422 for a malformed subject, a `mod:` uid that is not a live moderator,
-    or a `group:` id that does not exist."""
+    a `group:` id that does not exist, or `hidden` beside any other subject."""
+    # WHY: a public/group grant on a hidden model would let users run a model
+    # they cannot pick — hidden is exclusive.
+    if HIDDEN_SUBJECT in subjects and len(subjects) > 1:
+        raise HTTPException(status_code=422, detail={"code": "hidden_exclusive"})
     mod_uids = [s.removeprefix(MOD_PREFIX) for s in subjects if s.startswith(MOD_PREFIX)]
     group_ids = [s.removeprefix(GROUP_PREFIX) for s in subjects if s.startswith(GROUP_PREFIX)]
     malformed = [
         s for s in subjects
-        if s != PUBLIC_SUBJECT and not s.startswith((MOD_PREFIX, GROUP_PREFIX))
+        if s not in (PUBLIC_SUBJECT, HIDDEN_SUBJECT) and not s.startswith((MOD_PREFIX, GROUP_PREFIX))
     ]
     live_mods = await db.query(
         "SELECT VALUE meta::id(id) FROM users WHERE meta::id(id) IN $ids "
@@ -112,6 +117,10 @@ async def put_model_grants(
     revoked one is deleted, so granting it again creates a fresh row."""
     subjects = list(dict.fromkeys(body.subjects))
     await _validate_subjects(db, subjects)
+    # WHY: every fresh chat is created on CHAT_MODEL, so a hidden default would
+    # put a model in the composer that the picker does not list.
+    if HIDDEN_SUBJECT in subjects and model_id == await settings.get("CHAT_MODEL"):
+        raise HTTPException(status_code=422, detail={"code": "default_model_hidden"})
     current = await db.query(
         "SELECT VALUE subject FROM model_grants WHERE model_id = $m", {"m": model_id},
     ) or []

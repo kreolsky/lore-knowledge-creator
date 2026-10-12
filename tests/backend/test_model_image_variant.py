@@ -8,6 +8,7 @@ Covers the decisions in .kilo/plans/model-bound-image-downscale.md:
 """
 import base64
 import io
+from uuid import uuid4
 
 from PIL import Image
 
@@ -284,6 +285,7 @@ async def test_non_vision_model_strips_image_and_warns(monkeypatch, tmp_path):
     _patch_vision(monkeypatch, False)
 
     body = CompletionRequest(
+        user_msg_id=uuid4(),
         messages=[{"role": "user", "content": "hi"}],
         context_ids=["ref-strip"], model="deepseek/pro",
     )
@@ -305,6 +307,7 @@ async def test_vision_model_delivers_normalized_variant(monkeypatch, tmp_path):
     _patch_vision(monkeypatch, True)
 
     body = CompletionRequest(
+        user_msg_id=uuid4(),
         messages=[{"role": "user", "content": "hi"}],
         context_ids=["ref-deliver"], model="local/orange/chat",
     )
@@ -342,6 +345,7 @@ async def test_webp_reference_is_transcoded_end_to_end(monkeypatch, tmp_path):
     _patch_vision(monkeypatch, True)
 
     body = CompletionRequest(
+        user_msg_id=uuid4(),
         messages=[{"role": "user", "content": "hi"}],
         context_ids=["ref-webp"], model="local/orange/chat",
     )

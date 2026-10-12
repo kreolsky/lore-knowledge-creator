@@ -1,16 +1,16 @@
-# Заметки
+# Notes
 
-Заметка — обсуждение, привязанное к месту в тексте. Каждая заметка — отдельная ветка разговора: в неё можно писать комментарии, отвечать, возвращаться к ней позже.
+A note is a discussion attached to a place in the text. Each note is its own thread of conversation: you can write comments in it, reply, and come back to it later.
 
-## Как оставить заметку
+## How to leave a note
 
-- Выделите текст и нажмите ⌘/Ctrl + M или кнопку «Заметка» на панели выделения. Заметка закрепится за этим фрагментом: он подсветится жёлтым с пунктирным подчёркиванием.
-- Во вкладке «Заметки» правой панели нажмите «+», чтобы создать заметку без привязки к тексту.
+- Select text and press ⌘/Ctrl + M or the "Note" button on the selection toolbar. The note is pinned to that fragment: it is highlighted in yellow with a dashed underline.
+- In the "Notes" tab of the right panel, press "+" to create a note not tied to the text.
 
-## Работа с заметками
+## Working with notes
 
-Все заметки документа видны во вкладке «Заметки». Открытая заметка показывает весь разговор. На заметку можно сослаться из текста (при вставке ссылки через ⌘/Ctrl + K введите `note:`).
+All of a document's notes are visible in the "Notes" tab. An open note shows the whole conversation. A note can be linked from the text (when inserting a link with ⌘/Ctrl + K, type `note:`).
 
-Участник с ролью «Комментатор» не может править документ, но может оставлять заметки. Так удобно собирать замечания от тех, кто только читает.
+A member with the "Commentator" role cannot edit the document but can leave notes. This is a convenient way to collect remarks from people who only read.
 
-Системные сообщения тоже приходят в заметки. Например, если пайплайн или действие агента завершились ошибкой, подробности появятся в новой системной заметке документа.
+System messages also arrive as notes. For example, if a pipeline or an agent action fails, the details appear in a new system note of the document.

@@ -1,33 +1,33 @@
-# Снимки и история
+# Snapshots and history
 
-Снимок — сохранённое состояние документа на определённый момент. Снимки позволяют вернуться к прошлой версии и зафиксировать важные этапы с комментарием. Они живут во вкладке «Бэкапы» правой панели.
+A snapshot is the saved state of a document at a given moment. Snapshots let you go back to a past version and mark important milestones with a comment. They live in the "Snapshots" tab of the right panel.
 
-## Автоматические снимки
+## Automatic snapshots
 
-Lore делает снимки сам, чтобы ничего не потерялось:
+Lore takes snapshots on its own so that nothing gets lost:
 
-- перед каждой правкой агента;
-- при большом удалении или замене текста;
-- когда вы открываете документ, если он изменился с последнего снимка;
-- когда документ начинает править другой человек;
-- в конце вашей сессии редактирования;
-- перед восстановлением старого снимка — чтобы восстановление можно было отменить.
+- before every edit by the agent;
+- on a large deletion or replacement of text;
+- when you open a document, if it changed since the last snapshot;
+- when another person starts editing the document;
+- at the end of your editing session;
+- before restoring an old snapshot, so that the restore can be undone.
 
-Если документ не изменился с прошлого снимка, новый автоматический снимок не сохраняется (снимки перед правками агента делаются всегда). Старые автоматические снимки постепенно прореживаются.
+If the document has not changed since the previous snapshot, no new automatic snapshot is saved (snapshots before the agent's edits are always taken). Old automatic snapshots are gradually thinned out.
 
-## Ручной снимок
+## Manual snapshot
 
-Нажмите ⌘/Ctrl + S или «Сохранить снимок» во вкладке «Бэкапы». Добавьте комментарий: что изменилось, какое решение принято.
+Press ⌘/Ctrl + S or "Save snapshot" in the "Snapshots" tab. Add a comment: what changed, what decision was made.
 
-## Просмотр, восстановление, экспорт
+## Viewing, restoring, export
 
-- Клик по снимку открывает его для просмотра, наведение показывает отрывок.
-- Снимок можно восстановить. Перед этим Lore сохранит текущее состояние, так что ничего не пропадёт.
-- Комментарий снимка можно изменить.
-- Из вкладки «Бэкапы» документ можно экспортировать в PDF или DOCX.
+- A click on a snapshot opens it for viewing; hovering shows an excerpt.
+- A snapshot can be restored. Before that, Lore saves the current state, so nothing is lost.
+- A snapshot's comment can be changed.
+- From the "Snapshots" tab the document can be exported to PDF or DOCX.
 
-Во вкладке также видна история документа: кто создал документ и кто его редактировал.
+The tab also shows the document's history: who created the document and who edited it.
 
-## В планах
+## Planned
 
-Сравнение двух снимков с подсветкой различий. Пока сравнивать можно, открывая снимки по очереди.
+Comparing two snapshots with the differences highlighted. For now you can compare by opening the snapshots one after another.

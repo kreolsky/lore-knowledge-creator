@@ -2,6 +2,7 @@
 
 from contextlib import ExitStack, asynccontextmanager
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 from helpers import pin_chat_api, pinned_chat_api
@@ -213,7 +214,7 @@ async def test_create_and_list_messages(client, admin_user, project_with_doc):
         cookies={"lore_session": token},
     )
     assert resp.status_code == 200
-    messages = resp.json()
+    messages = resp.json()["messages"]
     assert len(messages) == 2
 
 
@@ -257,7 +258,7 @@ async def test_message_tree_fork(client, admin_user, project_with_doc):
         f"/api/chat/sessions/{sid}/messages",
         cookies={"lore_session": token},
     )
-    messages = resp.json()
+    messages = resp.json()["messages"]
     assert len(messages) == 3
     # Both children are siblings under root.
     children = [m for m in messages if m["message_id"] in child_ids]
@@ -322,7 +323,7 @@ async def test_delete_message_single(client, admin_user, project_with_doc):
         f"/api/chat/sessions/{sid}/messages",
         cookies={"lore_session": token},
     )
-    assert len(resp.json()) == 0
+    assert len(resp.json()["messages"]) == 0
 
 
 async def test_delete_message_cascade(client, admin_user, project_with_doc):
@@ -370,7 +371,7 @@ async def test_delete_message_cascade(client, admin_user, project_with_doc):
         f"/api/chat/sessions/{sid}/messages",
         cookies={"lore_session": token},
     )
-    assert len(resp.json()) == 0
+    assert len(resp.json()["messages"]) == 0
 
 
 async def test_delete_message_branch_preserves_siblings(client, admin_user, project_with_doc):
@@ -429,7 +430,7 @@ async def test_delete_message_branch_preserves_siblings(client, admin_user, proj
         f"/api/chat/sessions/{sid}/messages",
         cookies={"lore_session": token},
     )
-    remaining = resp.json()
+    remaining = resp.json()["messages"]
     assert len(remaining) == 3
     remaining_ids = {m["message_id"] for m in remaining}
     assert root_id in remaining_ids
@@ -624,7 +625,7 @@ async def test_completions_requires_session_owner(client, admin_user, regular_us
 
     resp = await client.post(
         f"/api/chat/sessions/{sid}/completions",
-        json={"messages": [{"role": "user", "content": "hi"}]},
+        json={"user_msg_id": str(uuid4()), "messages": [{"role": "user", "content": "hi"}]},
         cookies={"lore_session": user_token},
     )
     assert resp.status_code == 404
@@ -641,28 +642,15 @@ async def _completion_ctx(captured: list, api_url: str = "http://fake"):
     a POSTed completion runs the real route + prep and hands off to a fake
     driver: the /followup payload carries the composed system_prompt + last
     user turn (what the retired capture fake of the SSE arm saw). On exit the
-    payload(s) land in `captured` and each driven turn is closed through the
-    channel (lock + heartbeat released), as a live driver would. `api_url`
-    pins the AI API links (empty = the unconfigured-gateway shape)."""
+    payload(s) land in `captured`; the sends were only queued, so no turn
+    needs closing. `api_url` pins the AI API links (empty = the
+    unconfigured-gateway shape)."""
     import driver.channel
     import driver.timeline as tl
     import routes.chat.completions as comp
     from driver.client import DriverLine
-    from test_driver_channel import FakeConnector, FakeReplay, _env, _turn_end
-    from test_harness_turn import (
-        FollowupFake,
-        _reset_fanout,
-        _settle,
-        _until_async,
-    )
-    from turn_lock import acquire_turn_lock, release_turn_lock
-
-    async def _lock_free(session_id: str) -> bool:
-        token = await acquire_turn_lock(session_id)
-        if token is None:
-            return False
-        await release_turn_lock(session_id, token)
-        return True
+    from test_driver_channel import FakeConnector, FakeReplay
+    from test_harness_turn import FollowupFake, _reset_fanout, _settle
 
     line = DriverLine(name="pi", url="http://pi.test", secret="s")
     connector = FakeConnector()
@@ -693,19 +681,6 @@ async def _completion_ctx(captured: list, api_url: str = "http://fake"):
             yield
         finally:
             captured.extend(followups.payloads)
-            # Close each driven turn through the channel (the lock + heartbeat
-            # teardown ride on_end), then stop the channel + fan-out pumps.
-            for payload in followups.payloads:
-                if connector.sockets:
-                    sock = connector.sockets[0]
-                    sock.push(_env(payload["session_id"],
-                                   {"type": "model_update", "model": "test"}))
-                    sock.push(_env(payload["session_id"], _turn_end(10)))
-            # A fixed sleep raced the turn-end teardown on a slow runner; wait
-            # until each driven turn's lock is released (on_end has run).
-            for payload in followups.payloads:
-                await _until_async(
-                    lambda sid=payload["session_id"]: _lock_free(sid), timeout=5.0)
             await _settle()
             await driver.channel.get_driver_channel().aclose()
             driver.channel._channel = None
@@ -763,7 +738,7 @@ async def test_completion_without_ai_api_url_reaches_the_driver_gate(
     async with _completion_ctx(captured, api_url=""):
         resp = await client.post(
             f"/api/chat/sessions/{sid}/completions",
-            json={"messages": [{"role": "user", "content": "Hi"}]},
+            json={"user_msg_id": str(uuid4()), "messages": [{"role": "user", "content": "Hi"}]},
             cookies={"lore_session": token},
         )
         assert resp.status_code == 200
@@ -784,7 +759,7 @@ async def test_completions_system_prompt_injected(client, admin_user, project_wi
         resp = await client.post(
             f"/api/chat/sessions/{sid}/completions",
             json={
-                "messages": [{"role": "user", "content": "Ahoy!"}],
+                "user_msg_id": str(uuid4()), "messages": [{"role": "user", "content": "Ahoy!"}],
             },
             cookies={"lore_session": token},
         )
@@ -822,7 +797,7 @@ async def test_completions_system_prompt_plus_document_context(client, admin_use
         resp = await client.post(
             f"/api/chat/sessions/{sid}/completions",
             json={
-                "messages": [{"role": "user", "content": "Tell me about the kingdom"}],
+                "user_msg_id": str(uuid4()), "messages": [{"role": "user", "content": "Tell me about the kingdom"}],
                 "context_ids": [doc_id],
             },
             cookies={"lore_session": token},
@@ -870,7 +845,7 @@ async def test_completions_only_document_context(client, admin_user, project_wit
         resp = await client.post(
             f"/api/chat/sessions/{sid}/completions",
             json={
-                "messages": [{"role": "user", "content": "Tell me about dragons"}],
+                "user_msg_id": str(uuid4()), "messages": [{"role": "user", "content": "Tell me about dragons"}],
                 "context_ids": [doc_id],
             },
             cookies={"lore_session": token},
@@ -905,7 +880,7 @@ async def test_completions_no_system_messages(client, admin_user, project_with_d
     async with _completion_ctx(captured):
         resp = await client.post(
             f"/api/chat/sessions/{sid}/completions",
-            json={"messages": [{"role": "user", "content": "Hello"}]},
+            json={"user_msg_id": str(uuid4()), "messages": [{"role": "user", "content": "Hello"}]},
             cookies={"lore_session": token},
         )
         assert resp.status_code == 200
@@ -943,7 +918,7 @@ async def test_completions_system_prompt_wrong_project(client, admin_user, proje
         resp = await client.post(
             f"/api/chat/sessions/{sid}/completions",
             json={
-                "messages": [{"role": "user", "content": "Hi"}],
+                "user_msg_id": str(uuid4()), "messages": [{"role": "user", "content": "Hi"}],
                 "system_prompt_id": alien_doc_id,
             },
             cookies={"lore_session": token},
@@ -972,7 +947,7 @@ async def test_completions_system_prompt_deleted_doc(client, admin_user, project
         resp = await client.post(
             f"/api/chat/sessions/{sid}/completions",
             json={
-                "messages": [{"role": "user", "content": "Hi"}],
+                "user_msg_id": str(uuid4()), "messages": [{"role": "user", "content": "Hi"}],
             },
             cookies={"lore_session": token},
         )
@@ -998,7 +973,7 @@ async def test_completions_system_prompt_empty_content(client, admin_user, proje
         resp = await client.post(
             f"/api/chat/sessions/{sid}/completions",
             json={
-                "messages": [{"role": "user", "content": "Hi"}],
+                "user_msg_id": str(uuid4()), "messages": [{"role": "user", "content": "Hi"}],
             },
             cookies={"lore_session": token},
         )
@@ -1029,7 +1004,7 @@ async def test_completions_system_prompt_nonexistent(client, admin_user, project
         resp = await client.post(
             f"/api/chat/sessions/{sid}/completions",
             json={
-                "messages": [{"role": "user", "content": "Hi"}],
+                "user_msg_id": str(uuid4()), "messages": [{"role": "user", "content": "Hi"}],
             },
             cookies={"lore_session": token},
         )
@@ -1057,7 +1032,7 @@ async def test_completions_system_prompt_respects_session_ownership(client, admi
     resp = await client.post(
         f"/api/chat/sessions/{sid}/completions",
         json={
-            "messages": [{"role": "user", "content": "hi"}],
+            "user_msg_id": str(uuid4()), "messages": [{"role": "user", "content": "hi"}],
         },
         cookies={"lore_session": user_token},
     )

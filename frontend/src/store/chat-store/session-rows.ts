@@ -3,7 +3,8 @@
 import { recordHistoryLoad } from '../../telemetry/perf';
 import { replaceWindowFromRows } from './conversation-feed';
 import { adoptOpenTurn } from './streaming';
-import { drainQueuedOnLoad } from './queue-slice';
+import { seedInbox } from './inbox-slice';
+import type { InboxSnapshotWire } from '../chat-message-crud';
 import type { ChatMessage } from '../../types';
 import type { Set, Get } from './types';
 
@@ -15,20 +16,21 @@ import type { Set, Get } from './types';
 /** The raw rows' half — BEFORE hydration drops `frames`: the assembler window
  * (SYSTEM: dsh-conversation), then the ADOPTION — an open_turn row re-seats
  * the streaming slot at the boundary the window just published and registers
- * the sink, so a reload mid-turn CONTINUES streaming. */
-export function seatSessionRows(get: Get, set: Set, sessionId: string, rows: ChatMessage[]): void {
+ * the sink, so a reload mid-turn CONTINUES streaming — then the queue
+ * snapshot the same response carried. */
+export function seatSessionRows(
+  get: Get, set: Set, sessionId: string, rows: ChatMessage[], inbox: InboxSnapshotWire,
+): void {
   replaceWindowFromRows(rows, sessionId, set);
   adoptOpenTurn(get, set, sessionId, rows);
+  seedInbox(set, inbox.queue, inbox.queue_seq);
 }
 
 /** After the rows are the active session's messages: the history-size
- * tripwire, the pending verdicts — a still-held call has no live card
+ * tripwire and the pending verdicts — a still-held call has no live card
  * after a reload (the driver parks on the held POST), so the decision store
- * restores the card onto its assistant message — and the refused-flush
- * drain (a load that finds the chat's turn no longer open fires the chips
- * a busy shown chat had refused). */
+ * restores the card onto its assistant message. */
 export function afterSessionRowsCommitted(get: Get, sessionId: string, count: number): void {
   recordHistoryLoad(sessionId, count);
   void get().fetchPendingVerdicts(sessionId);
-  drainQueuedOnLoad(get, sessionId);
 }

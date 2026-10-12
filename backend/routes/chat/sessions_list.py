@@ -253,7 +253,7 @@ async def _last_activity_map(db, ai_ids: list[str], previews: dict) -> dict:
 
 async def _piggyback_messages(db, target_row: dict) -> dict | None:
     """The active session's rows for the sessions index — the SAME payload
-    `GET /sessions/{id}/messages` serves, timeline included.
+    `GET /sessions/{id}/messages` serves, timeline and queue included.
 
     Returns None when the transcript is unreadable: the client's null-branch
     falls back to `loadMessages`, which surfaces the named 502. Degrading the
@@ -272,7 +272,7 @@ async def _piggyback_messages(db, target_row: dict) -> dict | None:
     # rendered the session text-only until a manual re-select (observed: the
     # same row frames=104 via GET /messages, ABSENT via the piggyback).
     try:
-        await _attach_timeline(target_row, tid, msgs, offset=0)
+        queue = await _attach_timeline(target_row, tid, msgs, offset=0)
     except HTTPException as exc:
         # ONLY the timeline-unavailable 502 degrades to null. The other raise
         # reachable from there is the paginated-read 400, unreachable behind
@@ -281,7 +281,7 @@ async def _piggyback_messages(db, target_row: dict) -> dict | None:
         if exc.status_code != 502:
             raise
         return None
-    return {"session_id": tid, "messages": msgs}
+    return {"session_id": tid, "messages": msgs, **queue}
 
 
 @router.get("/sessions")

@@ -88,7 +88,6 @@ from agent_config_load import (
     load_instance_skill_docs,
     load_instance_skill_tombstones,
     load_skills_subtree,
-    load_suppressed_skill_contents,
 )
 from agent_config_seed import (
     _DEFAULT_KNOWLEDGE,
@@ -309,12 +308,11 @@ async def build_prompt_and_skill_docs(
     rules/knowledge/skills_children; the payload's skills wire is a pure
     function of skills_children already in memory).
 
-    The wire carries RAW documents (plan collapse-the-editor-harness-layer
-    step 3): {project: heads with child_docs, instance: enabled instance rows
-    with content, shipped: repo files, tombstones: the deleted off-switch
-    copies, instance_tombstones: NAMES of disabled instance rows} — the plugin
-    parses them with the pinned harness's grammar and assembles the catalog
-    (overlay project > instance > shipped + off-switch + served gate). Python
+    The wire carries RAW documents: {project: heads with child_docs, instance:
+    enabled instance rows with content, shipped: repo files,
+    instance_tombstones: NAMES of disabled instance rows} — the plugin parses
+    them with the pinned harness's grammar and assembles the catalog (overlay
+    project > instance > shipped + admin off-switch + served gate). Python
     parses NOTHING here.
 
     `selected_persona_id` is the persona to inject this turn, sourced from the
@@ -332,12 +330,11 @@ async def build_prompt_and_skill_docs(
     # shadow shipped ones; shipped skills are indexed from backend/configs/ at
     # turn time (never copied into projects, so there is no propagation
     # ledger). The overlay itself runs PLUGIN-side post-parse, together with
-    # the served gate and the off-switch.
+    # the served gate and the admin off-switch.
     return prompt, {
         "project": build_skill_docs(docs.get("skills_children", [])),
         "instance": await load_instance_skill_docs(),
         "shipped": shipped_skill_docs(),
-        "tombstones": await load_suppressed_skill_contents(project_id),
         "instance_tombstones": await load_instance_skill_tombstones(),
     }
 
@@ -354,7 +351,6 @@ __all__ = [
     "ensure_agent_system_docs", "load_agent_system_docs",
     "load_instance_skill_docs", "load_instance_skill_tombstones",
     "load_skills_subtree",
-    "load_suppressed_skill_contents",
     "build_agent_system_prompt",
     "build_prompt_and_skill_docs", "render_subtree_section",
 ]

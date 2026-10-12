@@ -6,8 +6,7 @@ the prefix rows are COPIED along the parent chain, and the lazy-seed stamp
 (seed_source_session/seed_source_seq) names the (dsh session, seq) pair the
 plugin's /session-fork seeds the branch's log from on its first turn.
 
-Step 2 — the SWITCH: completions append linearly (non-tail parent ⇒ 409, no
-leaf move), AI-chat message delete ⇒ 400, PATCH active_branch_id, thread
+Step 2 — the SWITCH: no leaf move before a turn, AI-chat message delete ⇒ 400, PATCH active_branch_id, thread
 listing, and DELETE = the whole thread from its root.
 """
 from uuid import uuid4
@@ -453,80 +452,6 @@ async def test_forks_refuses_a_note_session(client, admin_user, project_with_doc
         cookies={"lore_session": token},
     )
     assert resp.status_code == 400, resp.text
-
-
-# ─── Step 2: the linear-turn contract (completions) ──────────────────────────
-
-
-async def _linear_chat(test_db, client, token, pid, doc_id):
-    """u1 → a1(stamped) → u2 — a live linear chain; u2 is the tail."""
-    sid = (await _mk_chat(client, token, pid, doc_id))["session_id"]
-    await _mk_msgs(test_db, sid, {
-        "u1": {"role": "user", "parent_id": None},
-        "a1": {"role": "assistant", "parent_id": "u1",
-               "driver_seq": 5, "driver_session": f"lore-{sid}"},
-        "u2": {"role": "user", "parent_id": "a1"},
-    })
-    return sid
-
-
-async def test_completion_refuses_a_non_tail_parent_with_409(
-    client, admin_user, project_with_doc, test_db,
-):
-    """A turn's parent must name the session's live TAIL — a live-but-stale
-    parent is a conflict (409: re-read and retry), never a silent fork."""
-    pid, doc_id, _ = project_with_doc
-    _, token = admin_user
-    sid = await _linear_chat(test_db, client, token, pid, doc_id)
-
-    resp = await client.post(
-        f"/api/chat/sessions/{sid}/completions",
-        json={"messages": [{"role": "user", "content": "x"}], "parent_id": "u1"},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 409, resp.text
-    assert "not the tail" in resp.json()["detail"]
-    # The check runs under the turn lock, and a refusal releases it — a
-    # stale client never wedges the chat until the lock TTL.
-    import turn_lock
-    assert not await turn_lock.turn_lock_held(sid)
-
-
-async def test_completion_refuses_a_null_parent_on_a_non_empty_session(
-    client, admin_user, project_with_doc, test_db,
-):
-    """The first message is immutable — a null parent on a session with rows
-    is a stale client (the old root-fork reset is gone), answered 409."""
-    pid, doc_id, _ = project_with_doc
-    _, token = admin_user
-    sid = await _linear_chat(test_db, client, token, pid, doc_id)
-
-    resp = await client.post(
-        f"/api/chat/sessions/{sid}/completions",
-        json={"messages": [{"role": "user", "content": "x"}]},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 409, resp.text
-    assert "not the tail" in resp.json()["detail"]
-
-
-async def test_completion_refuses_a_foreign_parent_with_422(
-    client, admin_user, project_with_doc, test_db,
-):
-    """A parent that is not a live row of THIS session is a corrupt chain —
-    the same honest 422 the old seam-A walk gave."""
-    pid, doc_id, _ = project_with_doc
-    _, token = admin_user
-    sid = await _linear_chat(test_db, client, token, pid, doc_id)
-
-    resp = await client.post(
-        f"/api/chat/sessions/{sid}/completions",
-        json={"messages": [{"role": "user", "content": "x"}],
-              "parent_id": str(uuid4())},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 422, resp.text
-    assert "resolvable" in resp.text.lower()
 
 
 # ─── Step 2: AI-chat message delete is refused ────────────────────────────────

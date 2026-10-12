@@ -2,12 +2,14 @@
 
 Every case drives the REFUSED principal through the real interface: the picker
 (GET /api/chat/models), the turn (POST …/completions) and the admin routes.
-A turn that PASSES the gate is observed as the 409 of a turn lock the test holds
-itself — the lock is acquired after the gate, so 409 proves the gate let it by
-and 403 model_forbidden proves it refused, with no harness involved.
+A turn that PASSES the gate is observed as the 409 of a user row id the test
+already wrote — that check runs after the gate, so 409 proves the gate let it
+by and 403 model_forbidden proves it refused, with no harness involved.
 """
 
 from __future__ import annotations
+
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -15,10 +17,9 @@ import pytest_asyncio
 from helpers import make_token, pin_chat_api
 from password import hash_secret
 from routes.admin_model_access import router as admin_access_router
-from turn_lock import acquire_turn_lock, release_turn_lock
 
 import config
-from db import create_record
+from db import create_record, get_db
 
 # The roster is the conftest autouse gateway pin (_pin_gateway_models); the ids
 # below are its members, so the picker and the admin list read the real cache.
@@ -108,18 +109,21 @@ async def _grant(client, world, model: str, subjects: list[str]):
 
 
 async def _turn(client, world, who: str, model: str | None, resolved: str | None = None) -> int:
-    """POST a turn while holding the session's lock: 409 = gate passed, 403 = refused.
-    `resolved` = the model the 403 must name when `model` is None (session-pinned)."""
+    """POST a turn whose user row id already has a row: 409 = gate passed,
+    403 = refused. `resolved` = the model the 403 must name when `model` is
+    None (session-pinned)."""
     sid = world["sessions"][who]
-    lock = await acquire_turn_lock(sid)
-    try:
-        resp = await client.post(
-            f"/api/chat/sessions/{sid}/completions",
-            json={"messages": [{"role": "user", "content": "hi"}], "model": model},
-            cookies=_c(world["tokens"][who]),
-        )
-    finally:
-        await release_turn_lock(sid, lock)
+    sent = str(uuid4())
+    await (await get_db()).query(
+        "CREATE type::record('messages', $id) SET chat_id = $cid, role = 'user', content = 'hi'",
+        {"id": sent, "cid": sid},
+    )
+    resp = await client.post(
+        f"/api/chat/sessions/{sid}/completions",
+        json={"messages": [{"role": "user", "content": "hi"}], "model": model,
+              "user_msg_id": sent},
+        cookies=_c(world["tokens"][who]),
+    )
     if resp.status_code == 403:
         assert resp.json()["detail"] == {"code": "model_forbidden", "model": resolved or model}
     return resp.status_code
@@ -311,3 +315,88 @@ async def test_admin_models_list_survives_a_gateway_outage(client, monkeypatch, 
     assert resp.json() == [
         {"id": PUBLIC, "in_gateway": None, "is_default": False, "subjects": ["public"]},
     ]
+
+
+# ─── Hidden tier ──────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_hidden_model_is_absent_from_every_picker(client, world, gateway):
+    await _grant(client, world, PRIVATE, ["hidden"])
+    assert await _picker(client, world["tokens"]["admin"]) == sorted(
+        m for m in SERVED if m != PRIVATE
+    )
+    assert PRIVATE not in await _picker(client, world["tokens"]["blue"])
+    await _grant(client, world, PRIVATE, [])
+    assert PRIVATE in await _picker(client, world["tokens"]["admin"])
+
+
+class _Capabilities:
+    """The gateway client for /capabilities: every served model reasons."""
+
+    is_closed = False
+
+    async def get(self, url: str, headers: dict | None = None):  # noqa: ARG002
+        class _Resp:
+            def json(self) -> dict:
+                return {m: {"supported": True, "effort_levels": ["low", "high"]} for m in SERVED}
+
+            def raise_for_status(self) -> None:
+                return None
+        return _Resp()
+
+
+@pytest.mark.asyncio
+async def test_hidden_model_keeps_its_capability_fields(
+    client, world, gateway, monkeypatch, http_pool,
+):
+    """Hidden leaves the picker list only: a session pinned to the model keeps
+    its vision badge, context cap and effort dropdown."""
+    import routes.chat.models_catalog as comp
+
+    monkeypatch.setattr(comp, "_gateway_reasoning_cache", None)
+    http_pool("models_catalog", _Capabilities())
+    await _grant(client, world, PRIVATE, ["hidden"])
+    body = (await client.get("/api/chat/models", cookies=_c(world["tokens"]["admin"]))).json()
+    assert PRIVATE not in body["models"]
+    assert PRIVATE in body["context_windows"]
+    assert PRIVATE in body["vision_models"]
+    assert PRIVATE in body["reasoning"]
+
+
+@pytest.mark.asyncio
+async def test_turn_on_hidden_model_runs_for_admin_and_is_refused_for_user(
+    client, world, gateway, admin_user, project_with_doc,
+):
+    pid, idx, admin_uid = project_with_doc
+    await create_record("chat_sessions", "sess-ma-admin", {
+        "project_id": pid, "user_id": admin_uid, "document_id": idx, "title": "",
+    })
+    world["sessions"]["admin"] = "sess-ma-admin"
+    await _grant(client, world, PRIVATE, ["hidden"])
+    assert await _turn(client, world, "admin", PRIVATE) == 409
+    assert await _turn(client, world, "blue", PRIVATE) == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("other", ["public", "group:"])
+async def test_hidden_with_another_subject_is_422(client, world, other):
+    admin = _c(world["tokens"]["admin"])
+    if other == "group:":
+        gid = (await client.post("/api/admin/groups", json={"name": "G"}, cookies=admin)).json()["id"]
+        other = f"group:{gid}"
+    resp = await client.put(
+        f"/api/admin/models/{PRIVATE}", json={"subjects": ["hidden", other]}, cookies=admin,
+    )
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == {"code": "hidden_exclusive"}
+
+
+@pytest.mark.asyncio
+async def test_default_model_cannot_be_hidden(client, world, gateway):
+    resp = await client.put(
+        f"/api/admin/models/{DEFAULT}", json={"subjects": ["hidden"]},
+        cookies=_c(world["tokens"]["admin"]),
+    )
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == {"code": "default_model_hidden"}

@@ -564,26 +564,6 @@ HARNESS_DRIVER_SECRET = (
 # Availability signal: Redis-cached probe of the driver /health
 # endpoint. Positive TTL (ok) and negative TTL (down) decouple frontend Agent-mode
 # gating from per-request probing — the capability flag is served from cache.
-# Decision 11 — per-session turn lock. A real Redis SET NX EX (NOT selection_conflict.py,
-# which is a best-effort UX pre-check for cursor-region edits) guards one active
-# turn per chat_session.
-# WHY: the TTL is SHORT and a heartbeat
-# (TURN_LOCK_HEARTBEAT_S) refreshes it while the turn streams, so a leaked lock
-# (a cancelled release / a process kill mid-turn) costs one heartbeat interval
-# instead of minutes. This REPLACES the old "TTL slightly above TURN_PROGRESS_GRACE_S"
-# reasoning: a legit-but-slow turn is kept alive by the heartbeat (compare-and-
-# extend on each beat), NOT by a long TTL — so the TTL can be small (fast
-# self-heal) without evicting slow turns. The release is ALSO shielded in
-# completions (defence in depth); this short TTL is the backstop for the
-# process-kill case where even the shield cannot run.
-# A bare constant, not a setting: the TTL is sized
-# against TURN_LOCK_HEARTBEAT_S (>= 2 beats inside it), not chosen live.
-TURN_LOCK_TTL_S = 30
-# Heartbeat cadence: the relay/stream task refreshes the holder's lock TTL on this
-# interval, independent of frame emission (a turn can emit no frames for tens of
-# seconds during a single tool call). Sized so >=2 beats land inside the TTL.
-# A bare constant with the TTL above.
-TURN_LOCK_HEARTBEAT_S = 10.0
 # Agent emergency stop, enforced as a HOLD-PAUSED, progress-extended deadline
 # in the channel (driver.channel._HoldPausedDeadline): every real driver frame
 # re-arms the no-progress window to now + TURN_PROGRESS_GRACE_S, clamped at the

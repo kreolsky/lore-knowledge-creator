@@ -8,6 +8,7 @@ fragment" instruction. Absent a region, the block is omitted (regression).
 """
 
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from agent.apply_policy import CONFIRM, ApplyDecision
@@ -41,6 +42,7 @@ async def _run(body_region):
     from models import CompletionRequest
 
     body = CompletionRequest(
+        user_msg_id=uuid4(),
         messages=[{"role": "user", "content": "polish this"}],
         region=body_region,
     )

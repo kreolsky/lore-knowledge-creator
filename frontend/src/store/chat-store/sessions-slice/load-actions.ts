@@ -16,6 +16,7 @@ import { registerLogoutHandler, getLogoutEpoch } from '../../logout-handlers';
 import { stripFrames } from '../conversation-feed';
 import { seatSessionRows, afterSessionRowsCommitted } from '../session-rows';
 import type { ChatSession, ChatMessage } from '../../../types';
+import type { InboxSnapshotWire } from '../../chat-message-crud';
 import type { ChatState, Set, Get } from '../types';
 import { loadInFlight } from '../inflight';
 
@@ -107,7 +108,7 @@ export function createLoadActions(set: Set, get: Get): LoadActions {
           if (lastActiveId) params.set('preferred_session_id', lastActiveId);
           type SessionsResponse =
             | ChatSession[]
-            | { sessions: ChatSession[]; active_messages: { session_id: string; messages: ChatMessage[] } | null };
+            | { sessions: ChatSession[]; active_messages: ({ session_id: string; messages: ChatMessage[] } & InboxSnapshotWire) | null };
           const resp: SessionsResponse = await apiClient.get(`/chat/sessions?${params}`);
           // Tolerate both shapes: the object when with_active_messages piggybacks
           // messages, and the plain list the endpoint still returns without the flag.
@@ -194,7 +195,7 @@ export function createLoadActions(set: Set, get: Get): LoadActions {
                 get().setActiveSession(resolution.sessionId, restored);
                 // This branch skips loadMessages, so it runs loadMessages's
                 // two load steps itself (see the INVARIANT in session-rows.ts).
-                seatSessionRows(get, set, resolution.sessionId, activeMessages.messages);
+                seatSessionRows(get, set, resolution.sessionId, activeMessages.messages, activeMessages);
                 afterSessionRowsCommitted(get, resolution.sessionId, restored.length);
               } else {
                 get().setActiveSession(resolution.sessionId);

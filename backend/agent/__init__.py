@@ -3,7 +3,7 @@ apply policy, tool surface, edit-resolution + splice, read-only executors, and
 the standalone CRDT apply path.
 
 Packages that ARE routes (routes/chat, routes/tool_api) and the non-route
-consumers (memory, scope, doc_edit_lock, turn_lock, driver.client, mcp_gateway)
+consumers (memory, scope, doc_edit_lock, driver.client, mcp_gateway)
 share these primitives; none of them is a route, which is the boundary this
 package exists to state.
 

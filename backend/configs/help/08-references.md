@@ -1,37 +1,37 @@
-# Референсы
+# References
 
-Референсы — материалы, прикреплённые к документу: записи, расшифровки, файлы, картинки, выдержки. Это черновики из которых будет готовиться документ.
+References are materials attached to a document: recordings, transcripts, files, pictures, excerpts. They are the drafts the document will be built from.
 
-## Как добавить референс
+## How to add a reference
 
-- Кнопка «Загрузить» во вкладке «Референсы» или перетаскивание файлов в панель.
-- «Создать референс из выделения» на панели выделения в редакторе.
-- Голосовая заметка (см. [Голосовые заметки](help:voice)).
+- The "Upload" button in the "References" tab, or drag files into the panel.
+- "Create reference from selection" on the editor's selection toolbar.
+- A voice note (see [Voice notes](help:voice)).
 
-Что можно загружать:
+What you can upload:
 
-- **Аудио и видео** (mp3, wav, m4a, ogg, webm, mp4) — запись автоматически расшифровывается в текст. Расшифровку можно запустить заново.
-- **Word (DOCX)** — автоматически превращается в текст с разметкой.
-- **PDF** — поддерживается, но качество извлечения текста часто плохое. По возможности загружайте DOCX или текст.
-- **Текст** (md, txt, json, yaml и другие) и **картинки** (jpg, png, gif, webp).
-- **CSV и TSV** — становятся не референсом, а таблицей открытого документа (см. [Таблицы](help:tables)). Таблицы документа тоже показаны в этой вкладке.
+- **Audio and video** (mp3, wav, m4a, ogg, webm, mp4) — the recording is transcribed to text automatically. Transcription can be run again.
+- **Word (DOCX)** — turned into text with markup automatically.
+- **PDF** — supported, but the quality of text extraction is often poor. Upload DOCX or text when you can.
+- **Text** (md, txt, json, yaml and others) and **pictures** (jpg, png, gif, webp).
+- **CSV and TSV** — become not a reference but a table of the open document (see [Tables](help:tables)). The document's tables are also shown in this tab.
 
-## Кто видит референсы
+## Who sees references
 
-Документ видит свои референсы и референсы всех родителей вверх по дереву. Референсы, прикреплённые к «Контексту проекта», видны из любого документа. Поэтому общий материал стоит класть выше, а частный — к конкретному документу.
+A document sees its own references and those of all its parents up the tree. References attached to "Project Context" are visible from any document. So shared material is best placed higher up, and specific material on the particular document.
 
-Референс можно перенести к другому документу: «Изменить родительский документ» в карточке референса. Референс можно переименовать (карандаш или двойной клик по названию), а перетаскиванием в списке — поменять порядок.
+A reference can be moved to another document: "Change parent document" on the reference's card. A reference can be renamed (the pencil or a double click on its title), and dragging in the list changes the order.
 
-## Как смотреть референсы
+## How to view references
 
-- **Быстрый просмотр** — референс открывается прямо во вкладке «Референсы», а документ остаётся открытым в центре.
-- **Разделение** — документ и референс показываются рядом: документ слева, референс справа.
-- Референс можно открыть и в центре, как документ.
+- **Quick view** — the reference opens right in the "References" tab, while the document stays open in the center.
+- **Split** — the document and the reference are shown side by side: the document on the left, the reference on the right.
+- A reference can also be opened in the center, like a document.
 
-Из карточки референса можно начать «Чат с референсом» и вставить референс в документ в позиции курсора (см. [Картинки и встраивание](help:embeds)). В открытом референсе есть кнопки «Создать документ» и «Скачать».
+From a reference's card you can start a "Chat with Reference" and insert the reference into the document at the cursor (see [Images and embeds](help:embeds)). An open reference has "Create document" and "Download" buttons.
 
-## Архив
+## Archive
 
-Ненужный референс можно отправить в архив. Он пропадёт из списка, но его можно вернуть через «Показать архив». Из архива референс удаляется безвозвратно.
+A reference you no longer need can be archived. It disappears from the list, but you can bring it back with "Show archived". From the archive a reference is deleted permanently.
 
-Как показывать картинки в панели референсов (галереей превью или списком), задаётся в настройках проекта.
+How pictures are shown in the references panel (as a gallery of previews or as a list) is set in the project settings.

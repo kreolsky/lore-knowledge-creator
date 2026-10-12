@@ -1,28 +1,28 @@
-# Голосовые заметки
+# Voice notes
 
-Голосом удобно наговаривать мысли, пересказывать созвоны и надиктовывать черновики. Запись автоматически расшифровывается в текст.
+Voice is a convenient way to talk through ideas, retell calls and dictate drafts. A recording is transcribed to text automatically.
 
-## Голосовая заметка к документу
+## A voice note for a document
 
-Кнопка записи в шапке или ⌘/Ctrl + D, когда курсор не в тексте. Запись сохраняется как референс документа, а её расшифровка появляется в панели «Референсы».
+The record button in the header, or ⌘/Ctrl + D when the cursor is not in the text. The recording is saved as a reference of the document, and its transcript appears in the "References" panel.
 
-Куда сохраняются записи, задаётся в настройках проекта, раздел «Голосовые записи»:
+Where recordings are saved is set in the project settings, in the "Voice Recording" section:
 
-- **Текущий документ** — запись прикрепляется к открытому документу. Это вариант по умолчанию.
-- **Указанный документ** — все записи складываются в один выбранный документ, какой бы документ ни был открыт. Удобно, если вы хотите собирать все заметки во «входящие» и разбирать их позже.
+- **Current document** — the recording is attached to the open document. This is the default.
+- **Specific document** — all recordings go into one chosen document, whatever document is open. Handy if you want to collect all notes into an "inbox" and sort them out later.
 
-Если связь пропала во время записи, запись сохранится в браузере и отправится при следующем открытии проекта.
+If the connection drops during recording, the recording is kept in the browser and sent the next time you open the project.
 
-## Голосовой ввод в текст
+## Voice input into the text
 
-Если курсор стоит в тексте документа, ⌘/Ctrl + D вставляет расшифровку прямо в текст. В чате для этого есть кнопка микрофона рядом с полем ввода.
+If the cursor is in the document's text, ⌘/Ctrl + D inserts the transcript right into the text. In the chat there is a microphone button next to the input field for this.
 
-## Приложения для Android и macOS
+## Apps for Android and macOS
 
-Для быстрой записи есть приложения для Android и macOS. Они умеют работать как диктофон и записывать системный звук, например созвоны. Записи из приложения попадают в выбранный документ как референсы.
+For quick recording there are apps for Android and macOS. They work as a voice recorder and can record system audio, for example calls. Recordings from the app land in the chosen document as references.
 
-Как подключить приложение:
+How to connect the app:
 
-1. Откройте документ, куда должны попадать записи.
-2. Во вкладке «Доступ», раздел «API-доступ», создайте ключ с отмеченной галочкой «Виджет».
-3. Скопируйте ключ и вставьте его в приложение.
+1. Open the document where recordings should land.
+2. In the "Access" tab, "API access" section, create a key with the "widget" checkbox ticked.
+3. Copy the key and paste it into the app.

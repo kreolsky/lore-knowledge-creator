@@ -90,7 +90,7 @@ async def test_list_still_carries_the_halt_card(
         f"/api/chat/sessions/{sid}/messages", cookies={"lore_session": token},
     )
     assert resp.status_code == 200, resp.text
-    by_id = {m["message_id"]: m for m in resp.json()}
+    by_id = {m["message_id"]: m for m in resp.json()["messages"]}
     shipped = by_id[msg["message_id"]]
 
     assert shipped["halt"]["reason"] == "disconnected"

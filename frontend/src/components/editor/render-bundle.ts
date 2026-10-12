@@ -143,6 +143,8 @@ const cellThemeOverride = EditorView.theme({
   },
   '.cm-line:has(.cm-header-1), .cm-line:has(.cm-header-2), .cm-line:has(.cm-header-3), .cm-line:has(.cm-header-4), .cm-line:has(.cm-header-5), .cm-line:has(.cm-header-6)': {
     paddingTop: '0 !important',
+    fontSize: 'inherit !important',
+    lineHeight: 'inherit !important',
   },
 });
 

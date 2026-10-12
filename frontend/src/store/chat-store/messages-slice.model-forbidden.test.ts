@@ -15,6 +15,8 @@ vi.mock('./streaming', () => ({
   adoptOpenTurn: vi.fn(),
   hasOpenHarnessTurn: vi.fn(() => false),
   markHarnessTurnAborted: vi.fn(),
+  rememberQueuedSend: vi.fn(),
+  forgetQueuedSend: vi.fn(),
 }));
 const showToast = vi.fn();
 vi.mock('../app-store', () => ({
@@ -48,6 +50,9 @@ function buildStore() {
     activeSessionId: 's1',
     messages: [],
     streaming: null,
+    inboxQueue: [],
+    dshRunning: false,
+    liveSend: null,
     modelsLoaded: true,
     modelPickerOpen: false,
     loadModels,

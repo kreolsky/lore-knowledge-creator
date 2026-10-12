@@ -1,26 +1,26 @@
-# Документы и граф
+# Documents and the graph
 
-## Иерархия
+## Hierarchy
 
-Документы вкладываются друг в друга и образуют дерево; документы верхнего уровня лежат в корне проекта. Дерево задаёт структуру: механика лежит внутри системы, система внутри раздела. От положения в дереве зависит, какие референсы видит документ: он видит свои референсы и референсы всех родителей (см. [Референсы](help:references)).
+Documents nest inside each other and form a tree; top-level documents sit at the project root. The tree sets the structure: a mechanic lives inside a system, a system inside a section. A document's place in the tree decides which references it sees: its own references and those of all its parents (see [References](help:references)).
 
-Документ перемещается кнопкой «Изменить родителя» у документа в дереве. Вместе с документом переезжает всё его поддерево. Перетаскивание в дереве меняет только порядок документов на одном уровне. Перенос в другой проект описан в разделе [Доступ и публикация](help:access).
+A document is moved with the "Change parent" button on the document in the tree. Its whole subtree moves with it. Dragging in the tree only changes the order of documents on one level. Moving to another project is described in [Access and publishing](help:access).
 
-Над деревом есть особый документ «Контекст проекта». Референсы, прикреплённые к нему, видны из любого документа.
+Above the tree there is a special document, "Project Context". References attached to it are visible from any document.
 
-## Удаление
+## Deleting
 
-Документ удаляется кнопкой корзины в дереве. Для подтверждения нужно ввести название документа. Если у документа есть вложенные документы или референсы, флажок «Удалить всё поддерево» (по умолчанию включён) удаляет их вместе с ним. Если снять флажок, вложенные документы поднимутся на уровень выше. Удаление нельзя отменить.
+A document is deleted with the trash button in the tree. To confirm, you type the document's title. If the document has nested documents or references, the "Delete the whole subtree" checkbox (on by default) deletes them along with it. If you clear the checkbox, the nested documents move up one level. Deletion cannot be undone.
 
-## Ссылки и граф
+## Links and the graph
 
-Любой документ может ссылаться на любой другой. Ссылки вместе с иерархией образуют граф проекта. Каждый документ должен ссылаться на механики, в которых он используется, и на решения, на которые он опирается.
+Any document can link to any other. Links together with the hierarchy form the project graph. Every document should link to the mechanics it is used in and to the decisions it relies on.
 
-- Вставить ссылку: выделите текст, нажмите ⌘/Ctrl + K или кнопку «Ссылка» на панели выделения и выберите документ. Чтобы выбрать референс, начните ввод с `ref:`, заметку — с `note:`, внешний адрес — с `http://`. Без выделенного текста ⌘/Ctrl + K не срабатывает.
-- Ссылка на заголовок: во вкладке «Оглавление» у заголовка есть кнопка «Скопировать ссылку на заголовок».
-- Ссылка с `!` в начале (`![текст](документ)`) встраивает содержимое целевого документа прямо в страницу (см. [Картинки и встраивание](help:embeds)).
-- Клик по ссылке открывает цель, наведение показывает превью.
+- Insert a link: select text, press ⌘/Ctrl + K or the "Link" button on the selection toolbar, and pick a document. To pick a reference, start typing with `ref:`, a note with `note:`, an external address with `http://`. With no text selected, ⌘/Ctrl + K does nothing.
+- Link to a heading: in the "Table of Contents" tab each heading has a "Copy link to heading" button.
+- A link starting with `!` (`![text](document)`) embeds the content of the target document right into the page (see [Images and embeds](help:embeds)).
+- A click on a link opens the target; hovering shows a preview.
 
-## Вкладка «Ссылки»
+## The "Links" tab
 
-Во вкладке «Ссылки» правой панели показаны исходящие ссылки документа (на документы и внешние адреса) и входящие — документы, которые ссылаются на этот. Так удобно проверять, что документ встроен в проект, и находить всё, что зависит от него.
+The "Links" tab of the right panel shows the document's outgoing links (to documents and external addresses) and incoming ones — the documents that link to this one. It is a handy way to check that a document is fitted into the project and to find everything that depends on it.

@@ -2,8 +2,9 @@
  * Lore driver plugin — the RENTED agent loop behind Lore's driver contract.
  *
  * # SYSTEM: harness-driver — the rented brain's driver: serves the HTTP
- *   endpoints the Lore backend speaks (`POST /followup` + `POST /stop` — the
- *   driver-owned turn, `POST /session-fork`, `POST /session-entries`,
+ *   endpoints the Lore backend speaks (`POST /followup`, `POST /stop`, `POST
+ *   /inbox/discard`, `GET /session-status` — the session's dsh inbox and its
+ *   turns, `POST /session-fork`, `POST /session-entries`,
  *   `GET/POST /approvals`, `POST /approvals/resolve`, `GET /capability`, `GET
  *   /health`) plus the standing event channel `/ws/events`
  *   (subscribe/unsubscribe by session id — ws-events.ts).
@@ -11,11 +12,11 @@
  *   and its tools — they arrive as payload
  *   proxies (tools.ts) with the skills pack split (skills.ts), per-turn system
  *   prompt handed over by Lore's own prep layer (registered as the agent's
- *   COMPLETE prompt section — no second copy grows here). The turn pipeline
- *   drives the dsh Agent per turn (resume-or-create → followup → quiescence →
- *   flush → dispose): stateless on our side between turns, the canonical
- *   conversation lives in the dsh session log (JSONL under $DSH_HOME/sessions
- *   — a HOST bind mount in compose).
+ *   COMPLETE prompt section — no second copy grows here). ONE dsh Agent per
+ *   session (session-agents.ts): kept while active, its inbox IS the chat
+ *   queue, disposed after an idle period; the canonical conversation lives
+ *   in the dsh session log (JSONL under $DSH_HOME/sessions — a HOST bind
+ *   mount in compose).
  *
  * # ARCH: Lore session id → dsh session id. A chat's dsh session id EQUALS
  *   its Lore session id (a branch is its own
@@ -37,6 +38,7 @@ import { attachEventsChannel, createSessionEventTap, loadWs, relayAssistantStrea
 import { createSessionStreamBaselines } from './stream-baselines.ts'
 import { registerLoreApprovalBridge } from './approvals.ts'
 import { disposeLoreTools, loreTurnCtxFor } from './tools.ts'
+import { disposeSessionAgents } from './session-agents.ts'
 import { SessionMap } from './sessions.ts'
 import { handleRequest, authorized, PORT } from './http.ts'
 
@@ -51,7 +53,7 @@ export {
   ensureTitleEntry, ensureWebSearch,
 } from './ensure.ts'
 export {
-  anthropicRoute, contextUsageFrame, followupTurns, loreRoute, prepareUserContent,
+  anthropicRoute, contextUsageFrame, loreRoute, prepareUserContent,
   promptContent, ROUTE_BY_API, turnConfigProblem,
 } from './turn.ts'
 export { forkModel, sessionEntries, sessionFork } from './sessions.ts'
@@ -114,6 +116,7 @@ export function apply(ctx: Context): void {
     offStream?.()
     channel?.close()
     server.close()
+    disposeSessionAgents()
     disposeLoreTools()
   })
 }

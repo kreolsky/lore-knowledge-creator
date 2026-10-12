@@ -1,6 +1,7 @@
 /** Shared helpers for chat-session insertion and pinning. */
 import type { ChatSession } from '../../types';
 import { useUIStore } from '../ui-store';
+import { seedInbox } from './inbox-slice';
 import type { Set } from './types';
 
 export function insertAndPinSession(
@@ -20,6 +21,10 @@ export function insertAndPinSession(
     streaming: null,
     pendingInputFocus: opts.focus !== false,
   }));
+  // WHY: a created chat is activated without a messages GET, so no load seeds
+  // its queue snapshot — and the fold places no splice without one. A chat
+  // that was never sent to has no dsh agent: its inbox is known empty.
+  seedInbox(set, [], null);
   // ARCH: the active chat is PROJECT-SCOPED.
   // A newly created chat becomes the project's last-active (survives document
   // navigation + reload). No per-document memory.

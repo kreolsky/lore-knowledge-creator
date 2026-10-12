@@ -1,36 +1,36 @@
-# Поиск
+# Search
 
-## Поиск по проекту
+## Searching the project
 
-Вкладка «Поиск» ищет по документам и референсам проекта. Режимов два:
+The "Search" tab searches the project's documents and references. There are two modes:
 
-- **Полнотекстовый** — поиск по словам. Заголовки ищутся по началу слова, текст — по целым словам с учётом словоформ («миром» найдёт «мира»). Флажок «Подстрока» включает буквальный поиск фрагмента в заголовках и тексте, без словоформ.
-- **Семантический** — поиск по смыслу: найдёт нужное, даже если слова другие. Удобен, когда вы помните, о чём речь, но не помните формулировку. Флажок «Только память» оставляет в выдаче только факты [памяти](help:memory).
+- **Full-text** — search by words. Titles match by the start of a word, text by whole words. Word forms are taken into account for Russian text only (for example, «миром» finds «мира»); in other languages a word must match as written. The "Substring" checkbox switches on a literal search for a fragment in titles and text, without word forms.
+- **Semantic** — search by meaning: it finds what you need even if the words are different. Handy when you remember what it was about but not the wording. The "Memory only" checkbox keeps only [memory](help:memory) facts in the results.
 
-В обоих режимах флажок «В этом документе» ограничивает поиск открытым документом и его поддеревом.
+In both modes the "In this document" checkbox limits the search to the open document and its subtree.
 
-## Найти и заменить
+## Find and replace
 
-Поиск и замена внутри открытого документа. Нажмите ⌘/Ctrl + F, когда курсор стоит в тексте: в правой панели откроется вкладка «Найти и заменить». Это временная вкладка: она исчезает, когда вы переключаетесь на другую, и появляется снова по ⌘/Ctrl + F. Если перед этим был выделен текст, он сразу подставится в поле поиска; повторное ⌘/Ctrl + F заменяет содержимое поля новым выделением.
+Search and replace inside the open document. Press ⌘/Ctrl + F while the cursor is in the text: the "Find & Replace" tab opens in the right panel. It is a temporary tab: it disappears when you switch to another one and comes back on ⌘/Ctrl + F. If text was selected beforehand, it goes straight into the search field; pressing ⌘/Ctrl + F again replaces the field's content with the new selection.
 
-Раздел **Найти**:
+The **Find** section:
 
-- поле поиска; все совпадения подсвечиваются в тексте;
-- счётчик «текущее / всего». «1000+» означает, что совпадений больше тысячи и подсвечены не все;
-- «Назад» и «Далее» переходят к предыдущему и следующему совпадению. Enter в поле ищет вперёд, ⇧ + Enter — назад, дальше Enter продолжает листать;
-- «Все» выделяет все совпадения сразу, и их можно править одновременно, как несколькими курсорами;
-- **Aa** — учитывать регистр;
-- **.\*** — искать по регулярному выражению;
-- **Слово целиком** — не находить слово внутри другого слова.
+- the search field; all matches are highlighted in the text;
+- the "current / total" counter. "1000+" means there are more than a thousand matches and not all are highlighted;
+- "Previous" and "Next" go to the previous and next match. Enter in the field searches forward, ⇧ + Enter backward, and further Enter presses keep stepping;
+- "All" selects every match at once, and they can be edited together, like with multiple cursors;
+- **Aa** — match case;
+- **.\*** — search by regular expression;
+- **Whole word** — don't find a word inside another word.
 
-Раздел **Заменить** виден только тем, кто может править документ:
+The **Replace** section is visible only to those who can edit the document:
 
-- поле замены;
-- «Заменить» заменяет текущее совпадение и переходит к следующему;
-- «Заменить все» заменяет все совпадения сразу.
+- the replace field;
+- "Replace" replaces the current match and moves to the next one;
+- "Replace all" replaces every match at once.
 
-В режиме регулярного выражения в замене можно ссылаться на найденные группы: `$1`, `$2`. В режиме разделения поиск работает в той колонке, где стоит курсор: в документе или в референсе. Замена — обычная правка, её отменяет ⌘/Ctrl + Z.
+In regular-expression mode the replacement can refer to the captured groups: `$1`, `$2`. In split view the search works in the column where the cursor is: in the document or in the reference. A replacement is an ordinary edit; ⌘/Ctrl + Z undoes it.
 
-## Поиск через агента
+## Searching through the agent
 
-Агент тоже умеет искать по проекту. Спросите его «что у нас есть про …» — он сам найдёт и прочитает нужные документы и материалы.
+The agent can search the project too. Ask it "what do we have on …" — it finds and reads the relevant documents and materials itself.

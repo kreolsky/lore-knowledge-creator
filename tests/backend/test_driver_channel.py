@@ -21,7 +21,9 @@ What is pinned, in plan language:
   (verdict-ask) pauses the same way the pump pauses it;
 - unsubscribe mid-turn = the pump's client-disconnect semantics (partial +
   `disconnected` halt) + /stop;
-- frames for a turn nobody bound relay WITHOUT persistence.
+- a turn opens at its `lore/claim`: the row pair is minted, the preamble
+  emitted, the held `turn/start` replayed into the projection;
+- frames for a turn nobody claimed relay WITHOUT persistence.
 """
 
 import asyncio
@@ -65,6 +67,26 @@ def _tool_result(seq, call_id="c1", turn=1):
     return _dsh(seq, "tool/result", {"turn": turn, "step": 1, "message": {
         "role": "tool", "source": {"kind": "tool", "callId": call_id},
         "toolCallId": call_id, "content": [{"type": "text", "text": "ok"}]}})
+
+
+def _claim(assistant_msg_id, user_msg_id="u-msg", **facts):
+    """The plugin's `lore/claim` push — the send's prep facts, verbatim."""
+    return {
+        "type": "lore/claim", "message_id": f"dm-{assistant_msg_id}",
+        "user_msg_id": user_msg_id, "assistant_msg_id": assistant_msg_id,
+        "user_text": "hi", "images": [], "model": "local/test",
+        "sources": [], "warnings": [], **facts,
+    }
+
+
+async def _claim_turn(ch, connector, assistant_msg_id, lore="lore-1",
+                      dsh="dsh-9", **facts):
+    """dsh claims a queued send: push its claim over the socket and wait for
+    the channel to open the turn on it."""
+    connector.sockets[-1].push(_env(dsh, _claim(assistant_msg_id, **facts)))
+    await _until(lambda: (
+        ch._subs[lore].turn is not None
+        and ch._subs[lore].turn.projection.assistant_msg_id == assistant_msg_id))
 
 
 def _env(dsh_id, frame):
@@ -145,6 +167,8 @@ class FakeReplay:
     def __init__(self):
         self.calls: list[dict] = []
         self.replies: dict[str, dict] = {}
+        #: Seconds the fetch takes — a real one is an HTTP call that yields.
+        self.delay = 0.0
 
     def reply(self, session_id: str, payload: dict) -> None:
         self.replies[session_id] = payload
@@ -153,6 +177,8 @@ class FakeReplay:
         self.calls.append({
             "session_id": session_id, "since_seq": since_seq,
         })
+        if self.delay:
+            await asyncio.sleep(self.delay)
         payload = self.replies.get(session_id)
         if payload is None:
             return {"turns": [], "tail_seq": None}
@@ -199,6 +225,9 @@ class PersistSpy:
         self.turn_errors: list[dict] = []
         self.titles: list[tuple] = []
         self.stops: list[str] = []
+        self.mints: list[tuple] = []
+        #: What the mint answers — the head chat, or None (no live chat).
+        self.head: dict | None = {"cid": "lore-1", "user_id": "u1", "project_id": "p1"}
 
         async def content(mid, content):
             self.content.append((mid, content))
@@ -226,6 +255,10 @@ class PersistSpy:
             self.titles.append((sid, text))
             return True
 
+        async def mint(dsh_session, claim):
+            self.mints.append((dsh_session, claim))
+            return self.head
+
         monkeypatch.setattr(driver.persistence, "_persist_content", content)
         monkeypatch.setattr(driver.persistence, "_persist_sources", sources)
         monkeypatch.setattr(driver.persistence, "_persist_projection_extras", extras)
@@ -233,6 +266,7 @@ class PersistSpy:
         monkeypatch.setattr(driver.persistence, "_persist_context_usage", context_usage)
         monkeypatch.setattr(driver.persistence, "_record_turn_error", turn_error)
         monkeypatch.setattr(driver.persistence, "_persist_session_title", title)
+        monkeypatch.setattr(driver.persistence, "_mint_claim_rows", mint)
         monkeypatch.setattr(driver.channel, "post_stop", stop)
 
 
@@ -287,6 +321,26 @@ async def test_fresh_subscribe_anchors_at_log_tail_and_dedups(channel):
 
 
 @pytest.mark.asyncio
+async def test_concurrent_subscribes_share_one_and_keep_it_live(channel):
+    """Two concurrent subscribes of one session: both succeed on ONE
+    subscription, and it stays registered (frames keep routing)."""
+    ch, connector, replay, _ = channel
+    # The real anchor fetch is an HTTP call — it yields, so the two
+    # subscribes interleave exactly as two concurrent requests do.
+    replay.delay = 0.02
+
+    await asyncio.gather(ch.subscribe("lore-1"), ch.subscribe("lore-1"))
+
+    sock = connector.sockets[0]
+    assert [m for m in sock.sent if m.get("type") == "subscribe"] == [
+        {"type": "subscribe", "session_id": "lore-1"}]
+    queue, _drop = ch.add_listener("lore-1")
+    sock.push(_env("dsh-9", _chunk(8, "live")))
+    got = await _recv(queue)
+    assert got["seq"] == 8
+
+
+@pytest.mark.asyncio
 async def test_subscribe_routes_by_envelope_session_id(channel):
     ch, connector, replay, _ = channel
     await ch.subscribe("lore-1")
@@ -310,7 +364,7 @@ async def test_subscribe_routes_by_envelope_session_id(channel):
 async def test_turn_flows_through_relay_arms_and_finalizes(channel):
     ch, connector, replay, persists = channel
     await ch.subscribe("lore-1")
-    ch.bind_turn("lore-1", assistant_msg_id="m1", user_id="u1")
+    await _claim_turn(ch, connector, "m1")
     queue, _ = ch.add_listener("lore-1")
     sock = connector.sockets[0]
 
@@ -346,7 +400,7 @@ async def test_a_title_arriving_after_the_turn_closed_still_names_the_chat(chann
     # client — otherwise the chat keeps the deterministic fallback forever.
     ch, connector, replay, persists = channel
     await ch.subscribe("lore-1")
-    ch.bind_turn("lore-1", assistant_msg_id="m1", user_id="u1")
+    await _claim_turn(ch, connector, "m1")
     queue, _ = ch.add_listener("lore-1")
     sock = connector.sockets[0]
     for frame in ({"type": "model_update", "model": "x"}, _chunk(8, "Pong"),
@@ -363,7 +417,7 @@ async def test_a_title_arriving_after_the_turn_closed_still_names_the_chat(chann
 
 
 @pytest.mark.asyncio
-async def test_unbound_turn_frames_relay_without_persistence(channel):
+async def test_unclaimed_turn_frames_relay_without_persistence(channel):
     ch, connector, replay, persists = channel
     await ch.subscribe("lore-1")
     queue, _ = ch.add_listener("lore-1")
@@ -378,14 +432,140 @@ async def test_unbound_turn_frames_relay_without_persistence(channel):
     assert persists.content == [] and persists.extras == []
     assert persists.turn_seq == [] and persists.turn_errors == []
 
-    # The channel survives the unbound burst: the NEXT bound turn persists.
-    ch.bind_turn("lore-1", assistant_msg_id="m2")
+    # The channel survives the unclaimed burst: the NEXT claimed turn persists.
+    await _claim_turn(ch, connector, "m2")
     for frame in ({"type": "model_update", "model": "x"}, _chunk(11, "bound"),
                   _turn_end(12, "completed")):
         sock.push(_env("dsh-9", frame))
     for _ in range(3):
         await _recv(queue)
     await _until(lambda: persists.content == [("m2", "bound")])
+
+
+@pytest.mark.asyncio
+async def test_claim_mints_the_pair_emits_the_preamble_then_the_held_start(channel):
+    """dsh starts the turn, then claims: `turn/start` precedes `lore/claim`
+    on the wire. The browser must still see the preamble first, the claim
+    itself never reaches it, and the projection gets the turn number."""
+    ch, connector, replay, persists = channel
+    await ch.subscribe("lore-1")
+    queue, _ = ch.add_listener("lore-1")
+    sock = connector.sockets[0]
+    warning = {"code": "image_not_delivered", "id": None, "detail": "1 dropped"}
+    source = {"id": "d1", "title": "Doc"}
+    claim = _claim("m1", user_msg_id="u1", images=["data:image/png;base64,AAA"],
+                   sources=[source], warnings=[warning])
+
+    sock.push(_env("dsh-9", _dsh(8, "turn/start", {"turn": 3})))
+    sock.push(_env("dsh-9", _dsh(9, "agent/inbox/spliced", {"target": "next-turn"})))
+    sock.push(_env("dsh-9", claim))
+    sock.push(_env("dsh-9", _chunk(10, "answer", turn=3)))
+    sock.push(_env("dsh-9", _turn_end(11, "completed", turn=3)))
+
+    frames = [await _recv(queue) for _ in range(8)]
+    assert [(f["type"], f.get("kind")) for f in frames] == [
+        ("dsh_event", "agent/inbox/spliced"),  # relayed raw, before the claim
+        ("ids", None), ("sources", None), ("context_warning", None),
+        ("dsh_event", "turn/start"),  # the held start, AFTER the preamble
+        ("dsh_event", "assistant/message"), ("dsh_event", "turn/end"),
+        ("done", None),
+    ]
+    assert frames[1] == {"type": "ids", "user_message_id": "u1",
+                         "assistant_message_id": "m1", "user_text": "hi",
+                         "chat_id": "lore-1"}
+    assert frames[2] == {"type": "sources", "sources": [source]}
+    assert frames[3] == {"type": "context_warning", **warning}
+    assert persists.mints == [("lore-1", claim)]
+    await _until(lambda: persists.turn_seq == [("m1", 11)])
+    assert persists.content == [("m1", "answer")]
+    assert persists.sources == [("m1", [source])]
+
+
+@pytest.mark.asyncio
+async def test_two_claims_open_two_turns_in_order(channel):
+    """A drained queue: each claim opens its own turn on its own row."""
+    ch, connector, replay, persists = channel
+    await ch.subscribe("lore-1")
+    queue, _ = ch.add_listener("lore-1")
+    sock = connector.sockets[0]
+    for n, (start, chunk, end) in enumerate(((8, 9, 10), (11, 12, 13)), start=1):
+        sock.push(_env("dsh-9", _dsh(start, "turn/start", {"turn": n})))
+        sock.push(_env("dsh-9", _claim(f"m{n}", user_msg_id=f"u{n}")))
+        sock.push(_env("dsh-9", _chunk(chunk, f"reply {n}", turn=n)))
+        sock.push(_env("dsh-9", _turn_end(end, "completed", turn=n)))
+        sock.push(_env("dsh-9", {"type": "turn_closed"}))
+
+    await _until(lambda: persists.turn_seq == [("m1", 10), ("m2", 13)])
+    assert persists.content == [("m1", "reply 1"), ("m2", "reply 2")]
+    assert [c["user_msg_id"] for _, c in persists.mints] == ["u1", "u2"]
+    ids = [f for f in await _drain(queue) if f["type"] == "ids"]
+    assert [f["assistant_message_id"] for f in ids] == ["m1", "m2"]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_ends_unclaimed_relays_raw_and_persists_nothing(channel):
+    """A message ✕'d between wake and claim: dsh runs an empty turn with no
+    claim. Its held start is released before its end; nothing is minted."""
+    ch, connector, replay, persists = channel
+    await ch.subscribe("lore-1")
+    queue, _ = ch.add_listener("lore-1")
+    sock = connector.sockets[0]
+    sock.push(_env("dsh-9", _dsh(8, "turn/start", {"turn": 2})))
+    sock.push(_env("dsh-9", _turn_end(9, "completed", turn=2)))
+
+    frames = [await _recv(queue) for _ in range(2)]
+    assert [f["kind"] for f in frames] == ["turn/start", "turn/end"]
+    assert persists.mints == [] and persists.turn_seq == []
+    assert ch._subs["lore-1"].held_start is None
+
+
+@pytest.mark.asyncio
+async def test_a_claim_whose_mint_fails_still_opens_the_turn(channel, monkeypatch):
+    """The rows could not be written: the turn still relays and is bounded by
+    its deadline — the browser is never left without the turn's frames — and
+    the person is TOLD the turn will not be kept (a reload shows no row)."""
+    ch, connector, replay, persists = channel
+
+    async def broken_mint(dsh_session, claim):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(driver.persistence, "_mint_claim_rows", broken_mint)
+    await ch.subscribe("lore-1")
+    queue, _ = ch.add_listener("lore-1")
+    await _claim_turn(ch, connector, "m1")
+    assert (await _recv(queue))["type"] == "ids"
+    failure = await _recv(queue)
+    assert failure["type"] == "error"
+    assert "could not be saved" in failure["message"]
+
+
+@pytest.mark.asyncio
+async def test_a_claim_with_no_live_chat_warns_nothing(channel):
+    """A chat deleted while its message waited: no row is owed, so the turn
+    relays without a failure notice."""
+    ch, connector, replay, persists = channel
+    persists.head = None
+    await ch.subscribe("lore-1")
+    queue, _ = ch.add_listener("lore-1")
+    await _claim_turn(ch, connector, "m1")
+    assert (await _recv(queue))["type"] == "ids"
+    assert all(f["type"] != "error" for f in await _drain(queue))
+
+
+@pytest.mark.asyncio
+async def test_status_and_claim_frames_relay_and_drop_as_designed(channel):
+    """`dsh_status` relays raw (the browser's busy state); `lore/claim` never
+    reaches the browser (it carries the user's image data URLs)."""
+    ch, connector, replay, persists = channel
+    await ch.subscribe("lore-1")
+    queue, _ = ch.add_listener("lore-1")
+    sock = connector.sockets[0]
+    sock.push(_env("dsh-9", {"type": "dsh_status", "status": "running"}))
+    sock.push(_env("dsh-9", _claim("m1")))
+    sock.push(_env("dsh-9", {"type": "dsh_status", "status": "idle"}))
+
+    frames = [await _recv(queue) for _ in range(3)]
+    assert [f["type"] for f in frames] == ["dsh_status", "ids", "dsh_status"]
 
 
 @pytest.mark.asyncio
@@ -409,7 +589,7 @@ async def test_error_frame_without_open_turn_relays_raw(channel):
 async def test_resync_replays_from_last_seq_and_continues_the_open_turn(channel):
     ch, connector, replay, persists = channel
     await ch.subscribe("lore-1")  # anchor fetch (tail 7)
-    ch.bind_turn("lore-1", assistant_msg_id="m1")
+    await _claim_turn(ch, connector, "m1")
     queue, _ = ch.add_listener("lore-1")
     sock1 = connector.sockets[0]
 
@@ -461,7 +641,7 @@ async def test_turn_stamps_the_dsh_session_it_ran_in(channel):
     queue, _ = ch.add_listener("lore-1")
     sock = connector.sockets[0]
 
-    ch.bind_turn("lore-1", assistant_msg_id="m1")
+    await _claim_turn(ch, connector, "m1")
     for frame in ({"type": "model_update", "model": "x"}, _chunk(8, "a"),
                   _turn_end(9, "completed")):
         sock.push(_env("dsh-9", frame))
@@ -500,7 +680,7 @@ async def test_silence_breach_halts_persists_and_stops(channel, monkeypatch):
     monkeypatch.setattr(config, "TURN_HOLD_MAX_S", 1.0)
     ch, connector, replay, persists = channel
     await ch.subscribe("lore-1")
-    ch.bind_turn("lore-1", assistant_msg_id="m1", user_id="u1")
+    await _claim_turn(ch, connector, "m1")
     queue, _ = ch.add_listener("lore-1")
     connector.sockets[0].push(_env("dsh-9", {"type": "model_update", "model": "x"}))
     connector.sockets[0].push(_env("dsh-9", _chunk(8, "partial")))
@@ -530,7 +710,7 @@ async def test_held_turn_does_not_breach_and_resumes_on_settlement(
     monkeypatch.setattr(config, "TURN_HOLD_MAX_S", 5.0)
     ch, connector, replay, _ = channel
     await ch.subscribe("lore-1")
-    ch.bind_turn("lore-1", assistant_msg_id="m1")
+    await _claim_turn(ch, connector, "m1")
     queue, _ = ch.add_listener("lore-1")
     sock = connector.sockets[0]
     sock.push(_env("dsh-9", {"type": "model_update", "model": "x"}))
@@ -560,7 +740,7 @@ async def test_child_activity_keeps_a_silent_parent_turn_alive_until_it_stops(
     monkeypatch.setattr(config, "TURN_PROGRESS_GRACE_S", 0.15)
     ch, connector, replay, _ = channel
     await ch.subscribe("lore-1")
-    ch.bind_turn("lore-1", assistant_msg_id="m1", user_id="u1")
+    await _claim_turn(ch, connector, "m1")
     queue, _ = ch.add_listener("lore-1")
     sock = connector.sockets[0]
     sock.push(_env("dsh-9", {"type": "model_update", "model": "x"}))
@@ -587,15 +767,12 @@ async def test_child_activity_outside_a_turn_is_dropped_and_opens_none(channel):
     queue, _ = ch.add_listener("lore-1")
     sock = connector.sockets[0]
 
-    sock.push(_env("dsh-9", _CHILD_ACTIVITY))  # no bind, no turn
-    ch.bind_turn("lore-1", assistant_msg_id="m1", user_id="u1")
-    sock.push(_env("dsh-9", _CHILD_ACTIVITY))  # bound, but not the turn's opener
+    sock.push(_env("dsh-9", _CHILD_ACTIVITY))  # no claim, no turn
     sock.push(_env("dsh-9", _chunk(8, "after")))  # a routing barrier
 
     got = await _recv(queue)
     assert got["kind"] == "assistant/message"  # nothing relayed ahead of it
-    sub = ch._subs["lore-1"]
-    assert sub.turn is None and sub.pending_bind is not None
+    assert ch._subs["lore-1"].turn is None
 
 
 # ─── unsubscribe: the pump's client-disconnect semantics ─────────────────────
@@ -605,7 +782,7 @@ async def test_child_activity_outside_a_turn_is_dropped_and_opens_none(channel):
 async def test_unsubscribe_mid_turn_persists_disconnected_and_stops(channel):
     ch, connector, replay, persists = channel
     await ch.subscribe("lore-1")
-    ch.bind_turn("lore-1", assistant_msg_id="m1")
+    await _claim_turn(ch, connector, "m1")
     queue, _ = ch.add_listener("lore-1")
     sock = connector.sockets[0]
     sock.push(_env("dsh-9", {"type": "model_update", "model": "x"}))
@@ -761,113 +938,6 @@ async def _wait_for_socket(connector: FakeConnector, index: int,
     return connector.sockets[index]
 
 
-# ─── step 6: the turn-end callback (the turn lock's release seam) ─────────────
-
-
-@pytest.mark.asyncio
-async def test_graceful_close_fires_on_end(channel):
-    ch, connector, replay, _persists = channel
-    await ch.subscribe("lore-1")
-    fired: list[int] = []
-
-    async def on_end():
-        fired.append(1)
-
-    ch.bind_turn("lore-1", assistant_msg_id="m1", on_end=on_end)
-    sock = connector.sockets[0]
-    for frame in (
-        {"type": "model_update", "model": "local/test"},
-        _chunk(8, "Hello "),
-        _turn_end(10, "completed"),
-    ):
-        sock.push(_env("dsh-9", frame))
-
-    await _until(lambda: fired == [1])
-
-
-@pytest.mark.asyncio
-async def test_breach_fires_on_end(channel, monkeypatch):
-    ch, connector, replay, _persists = channel
-    monkeypatch.setattr(config, "TURN_PROGRESS_GRACE_S", 0.05)
-    await ch.subscribe("lore-1")
-    fired: list[int] = []
-
-    async def on_end():
-        fired.append(1)
-
-    ch.bind_turn("lore-1", assistant_msg_id="m1", on_end=on_end)
-    sock = connector.sockets[0]
-    sock.push(_env("dsh-9", {"type": "model_update", "model": "local/test"}))
-    sock.push(_env("dsh-9", _chunk(8, "Hello ")))
-
-    await _until(lambda: fired == [1])
-
-
-@pytest.mark.asyncio
-async def test_unsubscribe_mid_turn_fires_on_end(channel):
-    ch, connector, replay, _persists = channel
-    await ch.subscribe("lore-1")
-    fired: list[int] = []
-
-    async def on_end():
-        fired.append(1)
-
-    ch.bind_turn("lore-1", assistant_msg_id="m1", on_end=on_end)
-    sock = connector.sockets[0]
-    sock.push(_env("dsh-9", {"type": "model_update", "model": "local/test"}))
-    sock.push(_env("dsh-9", _chunk(8, "Hello ")))
-    await _until(lambda: ch._subs["lore-1"].turn is not None)
-
-    await ch.unsubscribe("lore-1")
-    await _until(lambda: fired == [1])
-
-
-@pytest.mark.asyncio
-async def test_bind_overwrite_fires_the_unclaimed_on_end(channel):
-    ch, connector, replay, _persists = channel
-    await ch.subscribe("lore-1")
-    old_fired: list[int] = []
-    new_fired: list[int] = []
-
-    async def old_end():
-        old_fired.append(1)
-
-    async def new_end():
-        new_fired.append(1)
-
-    ch.bind_turn("lore-1", assistant_msg_id="m1", on_end=old_end)
-    ch.bind_turn("lore-1", assistant_msg_id="m2", on_end=new_end)
-
-    await _until(lambda: old_fired == [1])
-    assert new_fired == []  # the NEW bind's callback waits for ITS turn
-
-
-# ─── step 6: emit_frames — the preamble's path into the one writer ────────────
-
-
-@pytest.mark.asyncio
-async def test_emit_frames_reaches_listeners_in_order(channel):
-    ch, connector, replay, _persists = channel
-    await ch.subscribe("lore-1")
-    queue, _ = ch.add_listener("lore-1")
-
-    preamble = [
-        {"type": "ids", "user_message_id": "u1", "assistant_message_id": "a1"},
-        {"type": "sources", "sources": []},
-    ]
-    ch.emit_frames("lore-1", preamble)
-
-    got = [await _recv(queue) for _ in range(2)]
-    assert got == preamble
-
-
-@pytest.mark.asyncio
-async def test_emit_frames_on_unsubscribed_session_raises(channel):
-    ch, _connector, _replay, _persists = channel
-    with pytest.raises(RuntimeError):
-        ch.emit_frames("lore-none", [{"type": "ids"}])
-
-
 # ─── step 7: turn_closed — the WS transport's terminal signal ─────────────────
 #
 # The SSE lifecycle's terminal signal is the STREAM END; a driver-owned turn
@@ -878,10 +948,9 @@ async def test_emit_frames_on_unsubscribed_session_raises(channel):
 # turn_closed per closed turn (plugin entries.ts `terminals`), delivered
 # through the same dispatch. The channel mints the terminal itself only where
 # NO replay can: a deadline breach (the driver may be dead) and the
-# setup-failure tail (completions_harness). A gap spanning several closed
-# turns delivers several historical terminals — the browser's
-# no-registration drop is the duplicate's cover — and the dispatch arm's
-# guards (no open turn, no pending bind) keep a stale terminal from closing a
+# A gap spanning several closed turns delivers several historical terminals —
+# the browser's no-registration drop is the duplicate's cover — and the
+# dispatch arm's guard (no open turn) keeps a stale terminal from closing a
 # NEWER turn's registration.
 
 
@@ -892,7 +961,7 @@ async def test_breach_emits_turn_closed_after_the_error(channel, monkeypatch):
     monkeypatch.setattr(config, "TURN_HOLD_MAX_S", 1.0)
     ch, connector, replay, _persists = channel
     await ch.subscribe("lore-1")
-    ch.bind_turn("lore-1", assistant_msg_id="m1", user_id="u1")
+    await _claim_turn(ch, connector, "m1")
     queue, _ = ch.add_listener("lore-1")
     connector.sockets[0].push(_env("dsh-9", {"type": "model_update", "model": "x"}))
     await _recv(queue)
@@ -910,7 +979,7 @@ async def test_resync_close_of_replayed_turn_emits_turn_closed_after_the_mint(
         channel):
     ch, connector, replay, _persists = channel
     await ch.subscribe("lore-1")
-    ch.bind_turn("lore-1", assistant_msg_id="m1")
+    await _claim_turn(ch, connector, "m1")
     queue, _ = ch.add_listener("lore-1")
     sock1 = connector.sockets[0]
 
@@ -957,7 +1026,7 @@ async def test_resync_delivers_the_replayed_terminal_for_a_turn_that_ended_live_
     # ends instead of hanging on an open registration.
     ch, connector, replay, _persists = channel
     await ch.subscribe("lore-1")
-    ch.bind_turn("lore-1", assistant_msg_id="m1")
+    await _claim_turn(ch, connector, "m1")
     queue, _ = ch.add_listener("lore-1")
     sock1 = connector.sockets[0]
 
@@ -989,7 +1058,7 @@ async def test_a_delivered_live_push_does_not_dedup_the_replayed_terminal(channe
     # from ever racing a NEW turn.
     ch, connector, replay, _persists = channel
     await ch.subscribe("lore-1")
-    ch.bind_turn("lore-1", assistant_msg_id="m1")
+    await _claim_turn(ch, connector, "m1")
     queue, _ = ch.add_listener("lore-1")
     sock1 = connector.sockets[0]
 
@@ -1014,48 +1083,14 @@ async def test_a_delivered_live_push_does_not_dedup_the_replayed_terminal(channe
 
 
 @pytest.mark.asyncio
-async def test_a_replayed_terminal_while_a_followup_is_pending_is_a_no_op(channel):
-    # A followup for the NEXT turn is accepted (bind staked, no first frame
-    # yet): the PREVIOUS turn's replayed terminal must not close the new
-    # turn's browser registration — the dispatch arm drops it. (The guard
-    # moved from the deleted post-replay re-mint emit into the dispatch arm
-    # when the replay began carrying the terminal.)
-    ch, connector, replay, _persists = channel
-    await ch.subscribe("lore-1")
-    fired: list[int] = []
-
-    async def on_end():
-        fired.append(1)
-
-    ch.bind_turn("lore-1", assistant_msg_id="m1", on_end=on_end)
-    queue, _ = ch.add_listener("lore-1")
-    sock1 = connector.sockets[0]
-    for frame in ({"type": "model_update", "model": "x"}, _chunk(8, "A"),
-                  _turn_end(10, "completed")):
-        sock1.push(_env("dsh-9", frame))
-    for _ in range(4):
-        await _recv(queue)
-    await _until(lambda: fired == [1])
-
-    ch.bind_turn("lore-1", assistant_msg_id="m2")  # the next turn, staked
-    replay.reply("lore-1", {"turns": [{"frames": [
-        {"type": "turn_closed", "seq": 10.9}], "end_seq": 10}], "tail_seq": 10})
-    sock1.drop()
-    await _wait_for_socket(connector, 1)
-
-    with pytest.raises(asyncio.TimeoutError):
-        await _recv(queue, timeout=0.3)
-
-
-@pytest.mark.asyncio
 async def test_a_replayed_terminal_while_a_newer_turn_runs_is_a_no_op(channel):
-    # Turn 1 ended live with its push lost; turn 2 OPENED (its first frame
-    # claimed the bind) before the resync runs: turn 1's replayed terminal is
+    # Turn 1 ended live with its push lost; turn 2 OPENED (its claim) before
+    # the resync runs: turn 1's replayed terminal is
     # STALE — emitting it would close turn 2's browser registration
     # mid-stream. The dispatch arm drops it: an open turn owns the session.
     ch, connector, replay, _persists = channel
     await ch.subscribe("lore-1")
-    ch.bind_turn("lore-1", assistant_msg_id="m1")
+    await _claim_turn(ch, connector, "m1")
     queue, _ = ch.add_listener("lore-1")
     sock1 = connector.sockets[0]
 
@@ -1066,12 +1101,10 @@ async def test_a_replayed_terminal_while_a_newer_turn_runs_is_a_no_op(channel):
         await _recv(queue)
     await _until(lambda: ch._subs["lore-1"].turn is None)
 
-    # The next turn opens (bind + first frame) before the socket drops; the
-    # plugin's terminal push for turn 1 died with it.
-    ch.bind_turn("lore-1", assistant_msg_id="m2")
-    sock1.push(_env("dsh-9", {"type": "model_update", "model": "y"}))
-    await _recv(queue)  # turn 2's first frame, delivered live
-    await _until(lambda: ch._subs["lore-1"].turn is not None)
+    # The next turn opens (its claim) before the socket drops; the plugin's
+    # terminal push for turn 1 died with it.
+    await _claim_turn(ch, connector, "m2")
+    assert (await _recv(queue))["type"] == "ids"  # turn 2's preamble, live
 
     replay.reply("lore-1", {"turns": [{"frames": [
         {"type": "turn_closed", "seq": 10.9}], "end_seq": 10}], "tail_seq": 10})
@@ -1093,7 +1126,7 @@ async def test_a_gap_spanning_two_closed_turns_delivers_both_terminals(channel):
     # an interleaving that puts a turn's terminal ahead of its frames.
     ch, connector, replay, _persists = channel
     await ch.subscribe("lore-1")
-    ch.bind_turn("lore-1", assistant_msg_id="m1")
+    await _claim_turn(ch, connector, "m1")
     queue, _ = ch.add_listener("lore-1")
     sock1 = connector.sockets[0]
 
@@ -1245,3 +1278,27 @@ def test_deadline_pause_cap_is_aggregate_per_turn(monkeypatch):
     # Mid-hold past an exhausted cap: remaining() keeps ticking down.
     d.pause(); clock.advance(10.0)
     assert d.remaining() <= -10.0
+
+
+@pytest.mark.asyncio
+async def test_real_transport_receives_a_frame_over_one_mebibyte():
+    """A queued send's `lore/claim` carries the user's text and image data URLs
+    (up to the 5 MB attachment budget). The real transport must take such a
+    frame: a size refusal drops the whole channel, and the live claim — never
+    replayed — is lost with it, so that turn gets no rows."""
+    import websockets
+
+    payload = json.dumps({"type": "lore/claim", "user_text": "x" * (2 * 1024 * 1024)})
+
+    async def serve(ws):
+        await ws.send(payload)
+        await ws.wait_closed()
+
+    async with websockets.serve(serve, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        sock = await driver.channel._ws_connect(f"ws://127.0.0.1:{port}", {})
+        try:
+            got = await asyncio.wait_for(sock.recv(), 5)
+        finally:
+            await sock.close()
+    assert len(got) == len(payload)

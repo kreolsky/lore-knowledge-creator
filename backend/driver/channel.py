@@ -14,9 +14,11 @@ per-turn HTTP — the accumulation, the persistence and the done/error products
 live there.
 
 # ARCH: the channel is the driver-owned lifecycle's backend half. A turn is:
-# the turn path POSTs /followup and BINDS the assistant row it created
-# (bind_turn); the driver pushes the turn's frames here; the channel's
-# per-turn projection persists them. Live/reload parity is by construction —
+# the turn path POSTs /followup (dsh queues it in the session's inbox); when
+# dsh claims it the plugin pushes `lore/claim` carrying the send's prep facts,
+# and HERE the row pair is minted, the preamble emitted and the turn's
+# projection opened; the driver pushes the turn's frames; the projection
+# persists them. Live/reload parity is by construction —
 # the channel relays the same mints, and a reconnect resyncs through the SAME
 # projection the reload reads (POST /session-entries with since_seq = the last
 # delivered seq; the projection replays the open turn as a ReplayedTurn with
@@ -47,16 +49,17 @@ live there.
 
 Scope boundary (deliberate): the channel keeps its per-session state IN
 MEMORY. A backend restart mid-turn loses the open turn's projection — its
-frames survive in the driver's log and the row stays empty until the turn is
-re-bound by a later followup; the browser adopts an orphaned open turn from
-the messages GET's open_turn mark, never from this channel.
+frames survive in the driver's log; `lore/claim` is a live push, never
+replayed, so a turn claimed while no backend listened gets no rows; the
+browser adopts an orphaned open turn from the messages GET's open_turn mark,
+never from this channel.
 """
 
 import asyncio
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import settings
@@ -102,7 +105,12 @@ async def _ws_connect(url: str, headers: dict):
     """
     import websockets
 
-    return await websockets.connect(url, additional_headers=headers)
+    # WHY: no frame-size cap — the peer is our own driver, and a `lore/claim`
+    # carries the user's text plus image data URLs (the whole attachment
+    # budget). The library's 1 MiB default refused such a frame by dropping
+    # the channel, and the live claim, never replayed, took its turn's rows
+    # with it.
+    return await websockets.connect(url, additional_headers=headers, max_size=None)
 
 
 def _events_url(line: DriverLine) -> str:
@@ -204,44 +212,23 @@ class _HoldPausedDeadline:
 
 
 @dataclass
-class _TurnBind:
-    """What completions_turn registers before POSTing /followup: the
-    assistant row THIS turn writes (the tool ctx's per-request half),
-    the facts its projection persists against, and the turn-END callback.
-
-    # ARCH: on_end is the turn lock's release seam — the caller
-    # (routes.chat.completions_harness) holds the per-session lock for the
-    # WHOLE driver-owned turn and releases it when the channel closes the
-    # turn (graceful end, deadline breach, unsubscribe). The channel knows
-    # nothing about locks; it just promises the callback fires ONCE per bind
-    # that claimed a turn — and on overwrite of a bind that never claimed one
-    # (its followup never produced a first frame; releasing there is correct:
-    # the turn it was holding the lock for never started).
-    """
-
-    assistant_msg_id: str
-    sources: list | None = None
-    user_id: str = ""
-    on_end: Callable[[], Awaitable[None]] | None = None
-
-
-@dataclass
 class _ChannelTurn:
     """One driver-owned turn's channel state: the relay projection (the same
-    _TurnProjection the relay arms advance) plus its deadline machinery, the
-    verdict-hold call ids, and the bind's on_end callback."""
+    _TurnProjection the relay arms advance) plus its deadline machinery and
+    the verdict-hold call ids."""
 
     projection: _TurnProjection
     deadline: _HoldPausedDeadline
     user_id: str = ""
+    project_id: str = ""
     held_calls: set[str] = field(default_factory=set)
-    on_end: Callable[[], Awaitable[None]] | None = None
 
 
 @dataclass
 class _Subscription:
     """Per lore session: the driver-side identity, the resync anchor, the
-    bound-but-not-started turn, the open turn, and the fan-out listeners."""
+    started-but-unclaimed turn's held `turn/start`, the open turn, and the
+    fan-out listeners."""
 
     lore_session_id: str
     dsh_session_id: str | None = None
@@ -252,10 +239,56 @@ class _Subscription:
     #: The anchor/replay bookkeeping ran once (fresh subscribe anchored at
     #: the log tail); a reconnect replays since last_seq.
     anchored: bool = False
-    pending_bind: _TurnBind | None = None
+    #: dsh's `turn/start` precedes the claim on the wire; it is held here
+    #: and replayed into the projection after the claim's preamble.
+    held_start: dict | None = None
     turn: _ChannelTurn | None = None
     ack: asyncio.Event = field(default_factory=asyncio.Event)
     listeners: set[asyncio.Queue] = field(default_factory=set)
+
+
+def _claim_preamble(claim: dict, sources: list, chat_id: str | None) -> list[dict]:
+    """The browser's opening frames of a claimed turn: `ids` first, then the
+    context sources and warnings the send's prep carried. `ids` names the
+    chat the pair was minted into (None: no live chat took it)."""
+    preamble: list[dict] = [{
+        "type": "ids",
+        "user_message_id": claim.get("user_msg_id"),
+        "assistant_message_id": claim.get("assistant_msg_id"),
+        "user_text": claim.get("user_text") or "",
+        "chat_id": chat_id,
+    }]
+    if sources:
+        preamble.append({"type": "sources", "sources": sources})
+    for warning in claim.get("warnings") or []:
+        if isinstance(warning, dict):
+            preamble.append({"type": "context_warning", **warning})
+    return preamble
+
+
+async def _mint_claim(lore_session_id: str, claim: dict) -> tuple[dict | None, list[dict]]:
+    """Mint a claim's row pair; return the head chat (None: no live chat took
+    it, or the mint failed) and the frames that open the turn in the browser."""
+    sources = claim.get("sources") or []
+    try:
+        head = await persistence._mint_claim_rows(lore_session_id, claim)
+    except Exception:
+        logger.exception(
+            "driver channel: claim row mint failed session=%s msg=%s",
+            lore_session_id, claim.get("assistant_msg_id"))
+        # WHY: the turn still runs and streams, but with no rows a reload
+        # shows nothing of it — say so instead of letting it vanish. Raw (not
+        # through the projection): there is no row to stamp a halt on.
+        return None, [*_claim_preamble(claim, sources, None), {
+            "type": "error",
+            "message": "This turn could not be saved — it will not be "
+                       "in the chat after a reload.",
+        }]
+    if head is None:
+        logger.warning(
+            "driver channel: claim without a live head chat session=%s",
+            lore_session_id)
+    return head, _claim_preamble(claim, sources, (head or {}).get("cid"))
 
 
 class DriverChannel:
@@ -264,15 +297,16 @@ class DriverChannel:
 
     Lifecycle: `subscribe()` registers a session and anchors its dedup at the
     driver's log tail; the background worker connects (lazily, on the first
-    subscription), subscribes, replays any gap, and reads. `bind_turn()`
-    binds the next turn's assistant row; `model_update` (the followup's first
-    frame) opens the projection; the terminal frames close it (graceful
-    finalize + context stamp). Listeners (the fan-out) receive the
+    subscription), subscribes, replays any gap, and reads. `lore/claim`
+    mints the turn's rows and opens the projection; the terminal frames close
+    it (graceful finalize + context stamp). Listeners (the fan-out) receive the
     relay arms' output frames in delivery order.
     """
 
     def __init__(self) -> None:
         self._subs: dict[str, _Subscription] = {}
+        #: In-flight subscribes — concurrent callers for one session share it.
+        self._subscribing: dict[str, asyncio.Future[None]] = {}
         self._dsh_index: dict[str, _Subscription] = {}
         self._run_task: asyncio.Task | None = None
         self._watchdog_task: asyncio.Task | None = None
@@ -301,8 +335,31 @@ class DriverChannel:
         # are not pushed — which any later resync recovers through the same
         # projection (they live in the log).
         """
-        if lore_session_id in self._subs:
-            return
+        # INVARIANT(data-loss): one subscribe per session at a time — a concurrent caller
+        # awaits the in-flight one. Why: two concurrent subscribes of one
+        # session both passed the `in self._subs` check before either
+        # registered; the second sub replaced the first, the first's ack
+        # never came, and its timeout popped the LIVE subscription — a failed
+        # request and a session left with no frames (its turn's content is
+        # never persisted).
+        pending = self._subscribing.get(lore_session_id)
+        if pending is None:
+            if lore_session_id in self._subs:
+                return
+            pending = asyncio.ensure_future(self._subscribe_once(lore_session_id))
+            self._subscribing[lore_session_id] = pending
+
+            def _forget(done: asyncio.Future[None]) -> None:
+                if self._subscribing.get(lore_session_id) is done:
+                    self._subscribing.pop(lore_session_id, None)
+
+            pending.add_done_callback(_forget)
+        # WHY shield: one caller's cancellation (its request went away) must
+        # not cancel the subscribe the other callers wait on.
+        await asyncio.shield(pending)
+
+    async def _subscribe_once(self, lore_session_id: str) -> None:
+        """subscribe()'s body — anchor, register, await the driver's ack."""
         payload = await fetch_session_entries(lore_session_id)
         sub = _Subscription(lore_session_id=lore_session_id)
         sub.last_seq = payload.get("tail_seq")
@@ -314,7 +371,8 @@ class DriverChannel:
             await asyncio.wait_for(
                 sub.ack.wait(), timeout=_SUBSCRIBE_ACK_TIMEOUT_S)
         except asyncio.TimeoutError as exc:
-            self._subs.pop(lore_session_id, None)
+            if self._subs.get(lore_session_id) is sub:
+                self._subs.pop(lore_session_id, None)
             raise RuntimeError(
                 f"driver channel: no subscribe ack for {lore_session_id} "
                 f"within {_SUBSCRIBE_ACK_TIMEOUT_S:g}s"
@@ -332,6 +390,7 @@ class DriverChannel:
         sub = self._subs.pop(lore_session_id, None)
         if sub is None:
             return
+        sub.held_start = None
         # Close the listeners FIRST (the None sentinel — see add_listener):
         # the fan-out pumps below may block in queue.get() while the disconnect
         # finalize below runs its own awaits.
@@ -360,35 +419,6 @@ class DriverChannel:
                     lore_session_id,
                 )
             await self._stop_quietly(lore_session_id)
-            if turn.on_end is not None:
-                await self._quiet_on_end(turn.on_end)
-
-    def bind_turn(
-        self, lore_session_id: str, *, assistant_msg_id: str,
-        sources: list | None = None, user_id: str = "",
-        on_end: Callable[[], Awaitable[None]] | None = None,
-    ) -> None:
-        """Bind the NEXT turn on this session to the assistant row it writes.
-
-        Called by the turn path just before POSTing /followup.
-        The bind waits unclaimed until the followup's first frame
-        (`model_update`) opens the projection; a second bind overwrites an
-        unclaimed one (the driver's 409 turn_in_progress serializes turns,
-        so an overwrite can only be a retry's newer facts) — and fires the
-        overwritten bind's on_end: the turn it was bound to never started, so
-        whatever it held (the turn lock) must be released, not leaked to TTL.
-        """
-        sub = self._subs.get(lore_session_id)
-        if sub is None:
-            raise RuntimeError(
-                f"driver channel: bind_turn on unsubscribed session {lore_session_id}")
-        old = sub.pending_bind
-        if old is not None and old.on_end is not None:
-            asyncio.ensure_future(self._quiet_on_end(old.on_end))
-        sub.pending_bind = _TurnBind(
-            assistant_msg_id=assistant_msg_id, sources=sources, user_id=user_id,
-            on_end=on_end,
-        )
 
     def add_listener(
         self, lore_session_id: str,
@@ -417,40 +447,6 @@ class DriverChannel:
             sub.listeners.discard(queue)
 
         return queue, remove
-
-    def emit_frames(self, lore_session_id: str, frames: list[dict]) -> None:
-        """Inject backend-minted frames into the session's listener queues —
-        the SAME single writer, in delivery order, as the driver's frames.
-
-        # ARCH: the turn path emits the preamble (ids/sources/context_warning)
-        # and the pre-followup failure frames
-        # (error/done) HERE, BEFORE POSTing /followup — the listener queue is
-        # the one ordering point, so the browser can never see a driver frame
-        # ahead of the preamble it belongs after. The dict shapes are the WS
-        # frame vocabulary the relay arms speak.
-        #
-        # Raises RuntimeError on an unsubscribed session: losing a preamble
-        # silently would leave the browser's turn unrendered — a caller bug,
-        # not a drop condition.
-        """
-        sub = self._subs.get(lore_session_id)
-        if sub is None:
-            raise RuntimeError(
-                f"driver channel: emit_frames on unsubscribed session "
-                f"{lore_session_id}"
-            )
-        self._emit(sub, list(frames))
-
-    async def _quiet_on_end(
-        self, on_end: Callable[[], Awaitable[None]],
-    ) -> None:
-        """Await a turn-end callback, logging instead of raising — the
-        callback releases a lock and must never break the channel's own
-        close path."""
-        try:
-            await on_end()
-        except Exception:
-            logger.exception("driver channel: turn on_end callback failed")
 
     async def aclose(self) -> None:
         """Tear the channel down (tests, process shutdown)."""
@@ -599,8 +595,8 @@ class DriverChannel:
         # WHY: a driver CRASH (SIGKILL mid-turn) is closed by THIS path, not
         # by the 300s no-progress grace: the plugin's log read balances a
         # non-live session with dsh's interrupted-turn closers, so the
-        # replayed turn/end + halt mint close the turn, persist the halt and
-        # free the lock as soon as the channel reconnects (measured on gray:
+        # replayed turn/end + halt mint close the turn and persist the halt
+        # as soon as the channel reconnects (measured on gray:
         # 6–11s after the kill). The `[lore-skills] restore failed …
         # not found` line the driver logs on a session's FIRST turn is the
         # skill-activation restore, not a lost session.
@@ -700,8 +696,8 @@ class DriverChannel:
 
     async def _dispatch_frame(self, sub: _Subscription, frame: dict) -> None:
         """One frame into the session's dispatch: dedup, the replayed
-        transport terminal, open the turn on the followup's first frame,
-        then progress, holds, the relay arms, the terminal close."""
+        transport terminal, the claim that opens a turn, then progress, holds,
+        the relay arms, the terminal close."""
         if _consumed_as_child_activity(sub, frame):
             return
         seq = frame.get("seq")
@@ -712,24 +708,21 @@ class DriverChannel:
             if frame.get("type") == "turn_closed":
                 self._dispatch_replayed_terminal(sub)
                 return
+        if frame.get("type") == "lore/claim":
+            await self._on_claim(sub, frame)
+            return
         if sub.turn is None:
-            etype = frame.get("type")
-            if sub.pending_bind is not None and (
-                    etype == "model_update"
-                    or (etype == "dsh_event" and frame.get("kind") == "turn/start")):
-                sub.turn = await self._open_turn(sub)
-            elif etype == "dsh_event" and frame.get("kind") == "turn/start":
-                # A turn nobody bound (backend restarted mid-turn, or a turn
-                # that started inside a resync gap before any bind): relay
-                # without persistence — the row binding does not exist, and
-                # inventing one would write to a message that is not ours.
-                logger.warning(
-                    "driver channel: unclaimed turn/start session=%s — "
-                    "frames relay without persistence", sub.lore_session_id)
-        if sub.turn is None:
+            if await self._held_outside_turn(sub, frame):
+                return
             await self._dispatch_outside_turn(sub, frame)
             return
+        await self._dispatch_in_turn(sub, frame)
+
+    async def _dispatch_in_turn(self, sub: _Subscription, frame: dict) -> None:
+        """A frame of the open turn: progress, holds, the relay arms, the
+        terminal close."""
         turn = sub.turn
+        assert turn is not None
         turn.deadline.note_progress()
         etype = frame.get("type")
         if etype == "lore/verdict-ask":
@@ -756,14 +749,72 @@ class DriverChannel:
         unsequenced push cannot dedup — accepted, for that same browser-side
         drop to cover.
 
-        GUARD (moved here from the deleted post-replay re-mint emit): a turn
-        still open, or a followup already bound for the NEXT turn, means this
-        terminal names an OLDER turn — emitting it would close the newer
-        turn's browser registration (the follow-up renders nothing), so it is
-        a no-op. The seq already advanced last_seq: the channel has consumed
-        this terminal either way."""
-        if sub.turn is None and sub.pending_bind is None:
+        GUARD: a turn still open means this terminal names an OLDER turn —
+        emitting it would close the newer turn's browser registration (the
+        follow-up renders nothing), so it is a no-op. The seq already
+        advanced last_seq: the channel has consumed this terminal either way."""
+        if sub.turn is None:
             self._emit(sub, [{"type": "turn_closed"}])
+
+    async def _held_outside_turn(self, sub: _Subscription, frame: dict) -> bool:
+        """Hold a `turn/start` until its claim; release a held one raw when
+        its turn ends unclaimed. True = the frame was consumed here.
+
+        dsh starts the turn, then claims the inbox message — so `turn/start`
+        precedes `lore/claim` on the wire. Held, it is replayed into the
+        projection right after the claim's preamble: the browser keeps
+        seeing `ids` first, and the projection gets its turn number. A turn
+        whose message was discarded between wake and claim ends with NO claim:
+        its held start and its `turn/end` relay raw, without persistence (a
+        turn nobody claimed has no row, and inventing one would write to a
+        message that is not ours)."""
+        if frame.get("type") != "dsh_event":
+            return False
+        kind = frame.get("kind")
+        if kind == "turn/start":
+            if sub.held_start is not None:
+                self._emit(sub, [sub.held_start])
+            sub.held_start = frame
+            return True
+        if kind == "turn/end" and sub.held_start is not None:
+            held, sub.held_start = sub.held_start, None
+            logger.warning(
+                "driver channel: unclaimed turn session=%s — frames relay "
+                "without persistence", sub.lore_session_id)
+            self._emit(sub, [held])
+        return False
+
+    async def _on_claim(self, sub: _Subscription, claim: dict) -> None:
+        """dsh claimed a queued send: mint its row pair into the head chat,
+        emit the preamble (ids/sources/context_warning), open the turn, then
+        replay the held `turn/start` into it. The claim itself is not relayed
+        — the browser learns the turn from `ids`, which carries the user's
+        text (a queued message has no optimistic row to take it from) but not
+        the image data URLs (the sending tab holds them; a reload reads them
+        from the row).
+
+        # ARCH: the claim is the turn's ONE opening edge — dsh serializes the
+        # turns of a session, so the pair, the preamble and the projection
+        # are created in claim order and the chain stays linear by
+        # construction. A claim with no live head chat (the chat was deleted
+        # while its message waited) still opens the turn: the frames relay,
+        # nothing persists into a row that does not exist."""
+        if sub.turn is not None:
+            logger.warning(
+                "driver channel: claim over an open turn session=%s — closing it",
+                sub.lore_session_id)
+            await self._close_turn(sub)
+        head, preamble = await _mint_claim(sub.lore_session_id, claim)
+        self._emit(sub, preamble)
+        sources = claim.get("sources") or []
+        sub.turn = await self._open_turn(
+            sub, assistant_msg_id=str(claim.get("assistant_msg_id") or ""),
+            sources=sources, user_id=str((head or {}).get("user_id") or ""),
+            project_id=str((head or {}).get("project_id") or ""),
+        )
+        held, sub.held_start = sub.held_start, None
+        if held is not None:
+            await self._dispatch_in_turn(sub, held)
 
     async def _dispatch_outside_turn(self, sub: _Subscription, frame: dict) -> None:
         """A frame no open turn claims: relayed raw, except the one kind that
@@ -781,21 +832,23 @@ class DriverChannel:
             return
         self._emit(sub, [frame])
 
-    async def _open_turn(self, sub: _Subscription) -> _ChannelTurn:
-        bind, sub.pending_bind = sub.pending_bind, None
+    async def _open_turn(
+        self, sub: _Subscription, *, assistant_msg_id: str, sources: list,
+        user_id: str, project_id: str,
+    ) -> _ChannelTurn:
         # The turn budgets resolve per turn through instance settings, so an
         # admin override reaches the next turn.
         budgets = await settings.get_all(["TURN_MAX_WALL_S", "TURN_HOLD_MAX_S"])
         turn = _ChannelTurn(
             projection=_TurnProjection(
-                assistant_msg_id=bind.assistant_msg_id,
-                sources=bind.sources,
+                assistant_msg_id=assistant_msg_id,
+                sources=sources,
                 persist_content=persistence._persist_content,
                 persist_sources=persistence._persist_sources,
                 persist_extras=persistence._persist_projection_extras,
                 persist_turn_seq=persistence._persist_turn_seq,
                 session_id=sub.lore_session_id,
-                # WHY: the turn opens on its first frame, which was routed here
+                # WHY: the turn opens on its claim, which was routed here
                 # through _dsh_index by its dsh id (the subscribe ack's
                 # re-key), so this is the session the turn runs in.
                 dsh_session_id=sub.dsh_session_id,
@@ -805,8 +858,8 @@ class DriverChannel:
                 wall_s=budgets["TURN_MAX_WALL_S"],
                 pause_cap_s=budgets["TURN_HOLD_MAX_S"],
             ),
-            user_id=bind.user_id,
-            on_end=bind.on_end,
+            user_id=user_id,
+            project_id=project_id,
         )
         self._update_deadline_pause(sub)
         return turn
@@ -850,8 +903,6 @@ class DriverChannel:
                     )
         if projection.errored:
             await self._record_error_quietly(turn, "error_event", "error_event")
-        if turn.on_end is not None:
-            await self._quiet_on_end(turn.on_end)
 
     # ── the deadline watchdog ───────────────────────────────────────────────
 
@@ -900,8 +951,6 @@ class DriverChannel:
             )
         await self._record_error_quietly(turn, "turn_timeout", "turn_timeout")
         await self._stop_quietly(sub.lore_session_id)
-        if turn.on_end is not None:
-            await self._quiet_on_end(turn.on_end)
         # The transport terminal: a breach ends the turn
         # BACKEND-side and the driver may be exactly what is dead — the
         # plugin's own turn_closed push cannot be relied on here. The browser
@@ -917,7 +966,7 @@ class DriverChannel:
                 assistant_msg_id=turn.projection.assistant_msg_id,
                 session_id=turn.projection.session_id,
                 reason=reason, source=source,
-                user_id=turn.user_id, project_id="",
+                user_id=turn.user_id, project_id=turn.project_id,
             )
         except Exception:
             logger.warning(

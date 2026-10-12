@@ -15,7 +15,7 @@ import type { ChatState } from './chat-store/types';
 import { createSessionsSlice } from './chat-store/sessions-slice';
 import { createMessagesSlice } from './chat-store/messages-slice';
 import { createBranchesSlice } from './chat-store/branches-slice';
-import { createQueueSlice } from './chat-store/queue-slice';
+import { createInboxSlice, resetInbox } from './chat-store/inbox-slice';
 import { createAgentSlice } from './chat-store/agent-slice';
 import { createMiscSlice } from './chat-store/misc-slice';
 import { registerLogoutHandler } from './logout-handlers';
@@ -90,8 +90,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   draft: '',
   listFilter: null,
 
-  // per-session follow-up chips (not persisted). See queue-slice.
-  queued: {},
+  // The active chat's dsh inbox + status (inbox-slice).
+  inboxQueue: [],
+  dshRunning: false,
+  liveSend: null,
 
   // Ghost overrides: defaults match createSession's no-opts path.
   // There is no ghost mode: every AI chat is an agent chat.
@@ -105,7 +107,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   ...createSessionsSlice(set, get),
   ...createMessagesSlice(set, get),
   ...createBranchesSlice(set, get),
-  ...createQueueSlice(set, get),
+  ...createInboxSlice(set, get),
   ...createAgentSlice(set, get),
   ...createMiscSlice(set, get),
 }));
@@ -160,4 +162,9 @@ useAppStore.subscribe((state, prevState) => {
 useChatStore.subscribe((state, prevState) => {
   if (state.activeSessionId === prevState.activeSessionId) return;
   publishTimelineReset(patch => useChatStore.setState(patch));
+  // The queue and status are the active chat's too — the same transition
+  // drops them (the INVARIANT in inbox-slice.ts); the load that follows
+  // seeds the new chat's own. Same ordering contract as the timeline: the
+  // piggyback activates first, seeds second.
+  resetInbox(patch => useChatStore.setState(patch));
 });
