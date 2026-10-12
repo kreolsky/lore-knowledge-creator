@@ -45,7 +45,7 @@ export const Sources = memo(function Sources({ sources }: Props) {
                 tabIndex={0}
                 onClick={() => handleDocClick(s)}
                 onKeyDown={e => { if (e.key === 'Enter') handleDocClick(s); }}
-                className="chat-source inline-flex items-center gap-1 text-accent hover:underline cursor-pointer text-left"
+                className="chat-source inline-flex items-center gap-1 text-accent-text hover:underline cursor-pointer text-left"
                 data-link-type="doc"
                 data-link-id={encodeLinkId('doc', s.id)}
               >
@@ -59,7 +59,7 @@ export const Sources = memo(function Sources({ sources }: Props) {
                 tabIndex={0}
                 onClick={() => handleRefClick(s)}
                 onKeyDown={e => { if (e.key === 'Enter') handleRefClick(s); }}
-                className="chat-source inline-flex items-center gap-1 text-accent hover:underline cursor-pointer text-left"
+                className="chat-source inline-flex items-center gap-1 text-accent-text hover:underline cursor-pointer text-left"
                 data-link-type="ref"
                 data-link-id={encodeLinkId('ref', s.id)}
               >

@@ -35,7 +35,7 @@ const variants: Record<string, string> = {
   yellow: 'bg-[var(--sticky-yellow-light)] text-text-muted hover:bg-[var(--sticky-yellow-dark)] hover:text-text',
   danger:
     'bg-red text-white hover:brightness-108',
-  subtle: 'bg-surface2 text-text-muted hover:bg-[var(--sticky-yellow-light)] hover:text-text',
+  subtle: 'bg-surface2 text-text-muted hover:bg-[var(--subtle-hover-bg)] hover:text-text',
   // SYSTEM: ui-primitives — composer selectors (model / mode / system-prompt).
   // ARCH: darker-than-field in BOTH themes via --composer-control-bg (index.css):
   // light uses surface2 (#dbd8d2 < surface), dark uses bg (#1e1e1e < surface).
@@ -46,7 +46,7 @@ const variants: Record<string, string> = {
     // text-ui-base = the document-row font (13px, index.css .doc-item): the
     // dashed button is a tree row action ("Add document", section-shell back
     // button) and must match. Token, not a px literal (styling gate).
-    'flex items-center gap-1.5 w-full mb-1 py-2 px-2.5 border border-dashed border-border bg-transparent text-text-muted text-ui-base hover:border-accent hover:text-accent hover:bg-accent-soft',
+    'flex items-center gap-1.5 w-full mb-1 py-2 px-2.5 border border-dashed border-border bg-transparent text-text-muted text-ui-base hover:border-accent hover:text-accent-text hover:bg-accent-soft',
 };
 
 const sizes: Record<string, string> = {

@@ -144,7 +144,7 @@ export function StatusBadge({ item }: { item: Reference }) {
   if (!item.processing_status) return null;
 
   const styles: Record<string, { color: string; bg: string; label: string }> = {
-    uploading:  { color: 'var(--accent)',  bg: 'var(--accent-soft)',                       label: t('statusUploading') },
+    uploading:  { color: 'var(--accent-text)',  bg: 'var(--accent-soft)',                       label: t('statusUploading') },
     queued:     { color: 'var(--text-dim)', bg: 'var(--surface3)',                          label: t('statusQueued') },
     processing: { color: 'var(--amber)',   bg: 'var(--amber-soft, rgba(245,158,11,0.12))', label: t('statusProcessing') },
     ready:      { color: 'var(--green)',   bg: 'var(--green-soft, rgba(34,197,94,0.12))',  label: item.file_meta?.duration_sec ? formatDuration(item.file_meta.duration_sec) : '' },

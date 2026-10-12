@@ -171,7 +171,7 @@ export const ChatRow = memo(function ChatRow({ session, isActive, onSelect, onDe
                 <span
                   role="button"
                   tabIndex={0}
-                  className="text-text-muted hover:text-accent underline-offset-2 hover:underline cursor-pointer"
+                  className="text-text-muted hover:text-accent-text underline-offset-2 hover:underline cursor-pointer"
                   title={t('gotoParentDoc', { title: parentLabel })}
                   onClick={handleParentClick}
                   onKeyDown={handleParentKeyDown}

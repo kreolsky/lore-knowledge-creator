@@ -233,7 +233,7 @@ export function ChatHeader() {
         <IconButton
           size="sm"
           theme="note"
-          className={`ml-auto ${searching ? 'text-accent' : 'text-sticky-ink'}`}
+          className={`ml-auto ${searching ? 'text-accent-text' : 'text-sticky-ink'}`}
           title={t('chatSearchTitles')}
           onClick={() => setListFilter(searching ? null : '')}
         >
@@ -243,7 +243,7 @@ export function ChatHeader() {
           <IconButton
             size="sm"
             theme="note"
-            className={chatSortByProximity ? 'text-accent' : 'text-sticky-ink'}
+            className={chatSortByProximity ? 'text-accent-text' : 'text-sticky-ink'}
             title={chatSortByProximity ? t('chatSortByRecency') : t('chatSortByProximity')}
             onClick={() => setChatSortByProximity(currentDocumentId, !chatSortByProximity)}
           >

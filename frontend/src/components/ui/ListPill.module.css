@@ -43,7 +43,7 @@
 /* plain active — chat purple accent */
 .plain.activeAccent {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 /* plain active — reference blue (functional: marks the OPEN reference) */

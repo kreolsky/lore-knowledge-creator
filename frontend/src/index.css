@@ -19,6 +19,7 @@
   --color-accent: var(--accent);
   --color-accent-glow: var(--accent-glow);
   --color-accent-soft: var(--accent-soft);
+  --color-accent-text: var(--accent-text);
   --color-green: var(--green);
   --color-amber: var(--amber);
   --color-red: var(--red);
@@ -93,6 +94,10 @@
   --accent: #6255e0;
   --accent-glow: rgba(98, 85, 224, 0.20);
   --accent-soft: rgba(98, 85, 224, 0.07);
+  /* Accent as TEXT/icon ink. Light: the fill itself reads fine on light surfaces. */
+  --accent-text: var(--accent);
+  /* Subtle button hover fill (sticky-light in light theme). */
+  --subtle-hover-bg: var(--sticky-yellow-light);
   --green: #1aab4f;
   --amber: #d97706;
   --red: #ef4444;
@@ -174,9 +179,15 @@ html.dark {
   --text: #dadada;
   --text-muted: #b3b3b3;
   --text-dim: #555555;
-  --accent: #8b7cf8;
-  --accent-glow: rgba(139, 124, 248, 0.30);
-  --accent-soft: rgba(139, 124, 248, 0.07);
+  --accent: #5847d1;
+  --accent-glow: rgba(88, 71, 209, 0.30);
+  --accent-soft: rgba(88, 71, 209, 0.07);
+  /* WHY: the deep fill (#5847d1) is too dark as text on dark surfaces; links
+     and active icons use this lighter tint of the same hue. */
+  --accent-text: #8f84f5;
+  /* WHY: dark sticky-light IS --surface, darker than the subtle idle fill
+     (surface2) — hover must go lighter. */
+  --subtle-hover-bg: var(--surface3);
   --green: #4ade80;
   --amber: #f59e0b;
   --red: #f87171;
@@ -187,15 +198,15 @@ html.dark {
   /* Diff "removed" fill — matches anchorless note default (ListPill.module.css). */
   --diff-removed-bg: rgba(200, 50, 50, 0.16);
   --handle-bg: #363636;
-  --handle-bg-hover: #8b7cf8;
-  --sticky-yellow-light: #26241C;
-  --sticky-yellow-dark: #383322;
-  --sticky-yellow-mid: #302C22;
-  --sticky-yellow-sep: #3E3A28;
-  /* Dark sticky ink — confirmed by the 2026-09-16 human browser smoke
-     (plan frontend-styling-standardization, Validation); readable warm
-     light on the dark-olive sticky family. */
-  --sticky-yellow-ink: #d8ce9e;
+  --handle-bg-hover: #5847d1;
+  --sticky-yellow-light: var(--surface);
+  --sticky-yellow-dark: var(--surface2);
+  --sticky-yellow-mid: var(--surface2);
+  --sticky-yellow-sep: var(--border);
+  /* Dark sticky ink —
+     plain text on the plain surfaces: the dark theme's "sticky note"
+     is the neutral surface pair, not yellow (token names are shared with the light theme). */
+  --sticky-yellow-ink: var(--text);
   --sticky-blue-light: rgba(80, 160, 255, 0.18);
   /* WHY: the -dark/-darkest fills are OPAQUE (the rgba tints composited over
      --surface). They double as the hover-reveal action plate drawn OVER a pill
@@ -216,6 +227,18 @@ html.dark {
   --code-keyword: #569cd6;
   --code-comment: #6a9955;
   --code-type: #4ec9b0;
+
+  /* Dark fill + light ink for the five palette highlights (HIGHLIGHT_COLORS). */
+  --highlight-fill-1: #563820;
+  --highlight-ink-1: #ffdcb6;
+  --highlight-fill-2: #283f61;
+  --highlight-ink-2: #cde1ff;
+  --highlight-fill-3: #354829;
+  --highlight-ink-3: #deedbc;
+  --highlight-fill-4: #49365d;
+  --highlight-ink-4: #eddaff;
+  --highlight-fill-5: #514623;
+  --highlight-ink-5: #f8e8ae;
 }
 
 /* ─── dsh MARKDOWN TOKENS — frontend/src/dsh/lore-markdown.js ──────────── */
@@ -630,7 +653,7 @@ body.is-resizing * { transition: none !important; }
 .doc-action-btn.delete:hover { color: var(--red); background: transparent; }
 .doc-action-btn.add-child { align-self: stretch; width: 22px; height: auto; }
 .doc-action-btn.add-child svg { stroke-width: 3; }
-.doc-action-btn.add-child:hover { background: var(--accent-soft); color: var(--accent); }
+.doc-action-btn.add-child:hover { background: var(--accent-soft); color: var(--accent-text); }
 
 /* ─── GEAR ZONE: expand-on-hover ────────── */
 .doc-gear-zone {
@@ -935,7 +958,7 @@ body.is-resizing * { transition: none !important; }
   color: var(--text-muted);
 }
 .left-bar-tab.active {
-  color: var(--accent);
+  color: var(--accent-text);
   background: var(--surface);
 }
 
@@ -1003,7 +1026,7 @@ html.dark .resizer:not(:hover):not(.dragging)::before {
 }
 .right-tab.active {
   background: var(--surface);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 /* An active (or tinted) right tab bleeds over .right-panel-header's bottom
@@ -1404,12 +1427,12 @@ html.dark .right-panel--notes-thread textarea {
   color: var(--text);
 }
 .sel-toolbar-btn.active {
-  color: var(--accent);
+  color: var(--accent-text);
   background: var(--accent-soft);
 }
 .sel-toolbar-btn.active:hover {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .sel-toolbar-dropdown {
   position: absolute;
@@ -1455,6 +1478,18 @@ html.dark .right-panel--notes-thread textarea {
 }
 
 /* ─── CODEMIRROR (widgets only — theme styles in editor/theme.ts) ── */
+/* Dark-mode palette highlights. WHY attribute selectors + !important: the
+ * document stores the plain hex (see HIGHLIGHT_COLORS in markdown-actions.ts),
+ * build-structural.ts emits it as an inline style, and CM6 applies it through
+ * style.cssText — so the DOM attribute is the browser's serialization,
+ * `background-color: rgb(r, g, b);`, never the hex. Matching that rgb()
+ * recolours only the five palette colours; a custom hex renders as written. */
+html.dark .cm-color-swatch[style*="rgb(236, 136, 60)"] { background-color: var(--highlight-fill-1) !important; color: var(--highlight-ink-1); }
+html.dark .cm-color-swatch[style*="rgb(138, 180, 255)"] { background-color: var(--highlight-fill-2) !important; color: var(--highlight-ink-2); }
+html.dark .cm-color-swatch[style*="rgb(138, 180, 64)"] { background-color: var(--highlight-fill-3) !important; color: var(--highlight-ink-3); }
+html.dark .cm-color-swatch[style*="rgb(169, 120, 214)"] { background-color: var(--highlight-fill-4) !important; color: var(--highlight-ink-4); }
+html.dark .cm-color-swatch[style*="rgb(253, 214, 99)"] { background-color: var(--highlight-fill-5) !important; color: var(--highlight-ink-5); }
+
 /* → scrollbar: ::-webkit-scrollbar not supported in EditorView.theme() */
 /* → copy button: see live-preview/widgets.ts → CopyButtonWidget */
 /* → task checkbox: see live-preview/widgets.ts → CheckboxWidget */
@@ -1728,7 +1763,7 @@ html.dark .right-panel--notes-thread textarea {
 .chat-markdown > h3:first-child,
 .chat-markdown > h4:first-child { margin-top: 0; }
 .chat-markdown strong { font-weight: 600; }
-.chat-markdown a { color: var(--accent); text-decoration: underline; }
+.chat-markdown a { color: var(--accent-text); text-decoration: underline; }
 /* WHY: dsh leads external links with an inline svg globe (LinkIcon in
    lore-markdown.js) sized/aligned as an inline glyph; Tailwind preflight makes
    every svg display:block, which broke the link onto three lines. */

@@ -162,12 +162,12 @@ export function SearchPanel() {
     <div className="flex flex-col h-full" data-testid="search-panel-root">
       <div className="flex items-center gap-1 px-3 py-2 border-b border-border bg-surface min-h-[40px]">
         <Button variant="ghost" size="sm" onClick={() => switchMode('fulltext')}>
-          <Search size={13} className={mode === 'fulltext' ? 'text-accent' : undefined} />
-          <span className={mode === 'fulltext' ? 'text-accent' : undefined}>{t('searchModeFulltext')}</span>
+          <Search size={13} className={mode === 'fulltext' ? 'text-accent-text' : undefined} />
+          <span className={mode === 'fulltext' ? 'text-accent-text' : undefined}>{t('searchModeFulltext')}</span>
         </Button>
         <Button variant="ghost" size="sm" onClick={() => switchMode('semantic')}>
-          <Sparkles size={13} className={mode === 'semantic' ? 'text-accent' : undefined} />
-          <span className={mode === 'semantic' ? 'text-accent' : undefined}>{t('searchModeSemantic')}</span>
+          <Sparkles size={13} className={mode === 'semantic' ? 'text-accent-text' : undefined} />
+          <span className={mode === 'semantic' ? 'text-accent-text' : undefined}>{t('searchModeSemantic')}</span>
         </Button>
       </div>
 

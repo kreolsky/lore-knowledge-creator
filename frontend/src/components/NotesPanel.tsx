@@ -492,7 +492,7 @@ export function NotesPanel() {
               <div key={group.referenceId ?? '__doc__'} className="flex flex-col gap-[var(--pill-gap)]">
                 {group.referenceId && !isRefMode && (
                   <div
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-surface2/60 text-ui-sm text-accent cursor-pointer border-b border-border"
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-surface2/60 text-ui-sm text-accent-text cursor-pointer border-b border-border"
                     onClick={() => emit('navigate-to-reference', { referenceId: group.referenceId! })}
                     onMouseEnter={(e) => handleRefHeaderHover(group.referenceId!, e.currentTarget)}
                     onMouseLeave={handleHoverLeaveAll}

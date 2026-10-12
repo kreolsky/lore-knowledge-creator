@@ -115,7 +115,7 @@ export function Breadcrumb({ projectName, ancestors, documentTitle, isReference,
               <span className={b.crumbActive}>
                 {documentTitle}
                 {isReference && (
-                  <span className="bg-[rgba(60,130,246,0.18)] text-accent pl-0.5 select-none"> {t('refBadge')}</span>
+                  <span className="bg-[rgba(60,130,246,0.18)] text-accent-text pl-0.5 select-none"> {t('refBadge')}</span>
                 )}
               </span>
             )}

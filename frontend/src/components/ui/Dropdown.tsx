@@ -130,7 +130,7 @@ export function Dropdown({
             if (isActive) {
               cls = `${base} bg-surface2 ${opt.disabled ? 'text-text-dim cursor-not-allowed' : 'text-text cursor-pointer'}`;
             } else if (isCursor) {
-              cls = `${base} bg-accent-soft ${opt.disabled ? 'text-accent/40 cursor-not-allowed' : 'text-accent cursor-pointer'}`;
+              cls = `${base} bg-accent-soft ${opt.disabled ? 'text-accent-text/40 cursor-not-allowed' : 'text-accent-text cursor-pointer'}`;
             } else {
               cls = `${base} ${opt.disabled ? 'text-text-dim cursor-not-allowed' : 'text-text-muted hover:bg-surface2 cursor-pointer'}`;
             }

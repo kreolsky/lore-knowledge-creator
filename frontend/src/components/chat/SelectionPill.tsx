@@ -54,7 +54,7 @@ export function SelectionPill() {
 
   return (
     <div className="flex items-center gap-1.5 px-2.5 py-1 mb-1 text-xs bg-accent/15 border border-accent/40 text-text">
-      <span className="font-semibold text-accent shrink-0">{t('selectionPillLabel')}:</span>
+      <span className="font-semibold text-accent-text shrink-0">{t('selectionPillLabel')}:</span>
       <span className="truncate opacity-80">{display ?? '…'}</span>
       <IconButton
         size="sm"
