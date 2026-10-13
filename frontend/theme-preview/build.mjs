@@ -3,6 +3,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { families, makeCSS, tokens } from './palettes.mjs';
+import { chatPaletteCSS } from './chat-palettes.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -32,4 +33,10 @@ const html = `<!doctype html>\n<html lang="ru" data-lore-palette="porcelain"><he
 await writeFile(path.join(root, 'index.html'), html);
 await writeFile(path.join(root, 'themes.css'), skin);
 await writeFile(path.join(root, 'tokens.json'), JSON.stringify(Object.fromEntries(families.flatMap(f => ['light','dark'].map(mode => [`${f.id}-${mode}`, tokens(f, mode)]))), null, 2) + '\n');
-console.log('Built index.html, themes.css, tokens.json from Lore source and UI components.');
+await esbuild.build({ entryPoints: [path.join(root, 'chat-preview.tsx')], outfile: path.join(root, '.build/chat-render.cjs'), bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic', nodePaths: [process.env.LORE_NODE_MODULES || path.join(root, 'node_modules')], logLevel: 'warning' });
+const { renderChatPreview } = await import(pathToFileURL(path.join(root, '.build/chat-render.cjs')));
+const chatShell = await readFile(path.join(root, 'chat-preview.css'), 'utf8');
+const chatBehavior = await readFile(path.join(root, 'chat-preview.js'), 'utf8');
+const chatHTML = `<!doctype html>\n<html lang="ru" class="dark"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lore — четыре цвета для чата</title><style>${source}\n${shell}\n${chatShell}\n${chatPaletteCSS()}</style></head><body>${renderChatPreview()}<script>${chatBehavior}</script></body></html>\n`;
+await writeFile(path.join(root, 'chat.html'), chatHTML);
+console.log('Built index.html, chat.html, themes.css, tokens.json from Lore source and UI components.');

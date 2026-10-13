@@ -12,6 +12,16 @@ Open **`index.html`** directly in a browser. It is self-contained and requires n
 
 This is a visual study with a static document and chat fixture, not an authenticated application or a working editor. The composer does not send messages. The main application does not load these palettes automatically.
 
+## Additional chat colour variants
+
+Open **`chat.html`** for four additional dark chat palettes: Lavender, Sage, Ice and Amber. Each shows the empty chat and active conversation from the supplied screenshots side by side. Select one palette or “Все варианты” to view all four; `?chat=sage` preserves a selection and `?chat=all` shows the full comparison. The HTML is self-contained.
+
+These variants keep Lore's neutral dark surfaces and change the selected tab, empty-chat banner/input, primary buttons, links and user message together. Light accents have dark button labels. Active-chat inputs remain neutral. Chat roles are scoped to `[data-chat-palette]`; shared sticky-note tokens are not overridden. This is a preview, not a production chat skin.
+
+Edit `chat-palettes.mjs` for colours and `chat-preview.tsx`, `chat-preview.css`, `chat-preview.js` for fixtures, layout and switching. The regular build also generates `chat.html` using Lore's actual UI primitives. The sample reply is static content from the reference, not a current weather forecast.
+
+The chat study passed 36 calculated text-contrast checks (minimum 5.31:1) and DOM checks for four palette switches, all eight screens, URL selection/fallback, local-file switching and field labels, with no script or CSS parse errors. The six-theme checks still pass. Browser rendering remains unverified: no browser was available. JSDOM does not resolve inherited CSS custom properties, so its checks cover token declarations and interaction, not painted colours or layout.
+
 ## Relationship to the application
 
 - The build reads `src/index.css`, `Sidebar.module.css`, `Breadcrumb.module.css` and `ui/ListPill.module.css` from the frontend.
