@@ -74,6 +74,32 @@ class ToolSearch(BaseModel):
     k: int = Field(default=5, ge=1, le=20)
 
 
+class ToolSearchMyChats(BaseModel):
+    """`search_my_chats` body — two named modes, exactly one per call.
+
+    `query` searches the caller's other chats of the project; `message_id` (a hit's
+    id) reads the turns around it, paged within an over-budget message by `offset`.
+    """
+
+    query: str | None = Field(default=None, min_length=1, max_length=500)
+    message_id: str | None = Field(default=None, min_length=1)
+    offset: int = Field(default=0, ge=0)
+    scope: Literal["project", "siblings", "subtree"] = "project"
+    under_document_id: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def _exactly_one_mode(self) -> "ToolSearchMyChats":
+        if (self.query is None) == (self.message_id is None):
+            raise ValueError("pass exactly one of `query` (search) or `message_id` (read)")
+        # WHY model_fields_set, not the value: `scope` has a default, so a value
+        # check would refuse every window read.
+        if self.message_id is not None and {"scope", "under_document_id"} & self.model_fields_set:
+            raise ValueError("`scope` / `under_document_id` apply to `query` only")
+        if (self.scope == "subtree") != (self.under_document_id is not None):
+            raise ValueError("`under_document_id` is required with scope=subtree, and only there")
+        return self
+
+
 class ToolSandboxBash(BaseModel):
     """Args for `sandbox_bash`.
 

@@ -30,6 +30,7 @@ import { createGhostActions } from './ghost-actions';
 import { createRegionActions } from './region-actions';
 import { createLoadActions } from './load-actions';
 import { createCreateActions } from './create-actions';
+import { createUnindexedActions } from './unindexed-actions';
 
 export { clearSessionsCache } from './load-actions';
 
@@ -50,6 +51,7 @@ type SessionsSlice = Pick<
   | 'regionLost'
   | 'setGhostRegion'
   | 'clearGhostRegion'
+  | 'setChatUnindexed'
 >;
 
 export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
@@ -58,6 +60,7 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
     ...createRegionActions(set, get),
     ...createLoadActions(set, get),
     ...createCreateActions(set, get),
+    ...createUnindexedActions(set, get),
 
     // ARCH: Composite "Chat with Reference" action. Owns the sequence end-to-end:
     //   1. Open the ref (hydrateReference) — commits it as currentReference, which

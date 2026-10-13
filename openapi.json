@@ -2127,6 +2127,11 @@
               }
             ],
             "title": "Target Doc Id"
+          },
+          "unindexed": {
+            "default": false,
+            "title": "Unindexed",
+            "type": "boolean"
           }
         },
         "required": [
@@ -2238,6 +2243,17 @@
               }
             ],
             "title": "Title"
+          },
+          "unindexed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unindexed"
           }
         },
         "title": "SessionUpdate",
@@ -3489,6 +3505,66 @@
           "query"
         ],
         "title": "ToolSearch",
+        "type": "object"
+      },
+      "ToolSearchMyChats": {
+        "description": "`search_my_chats` body — two named modes, exactly one per call.\n\n`query` searches the caller's other chats of the project; `message_id` (a hit's\nid) reads the turns around it, paged within an over-budget message by `offset`.",
+        "properties": {
+          "message_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "offset": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query"
+          },
+          "scope": {
+            "default": "project",
+            "enum": [
+              "project",
+              "siblings",
+              "subtree"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "under_document_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Under Document Id"
+          }
+        },
+        "title": "ToolSearchMyChats",
         "type": "object"
       },
       "ToolTableCellEdit": {
@@ -9907,6 +9983,123 @@
         "summary": "Patch Project"
       }
     },
+    "/api/projects/{project_id}/chat-search": {
+      "get": {
+        "description": "Semantic search over the caller's own visible chats of the project.\n\n`anchor_document_id` (the document open in the editor) turns the sibling\ntier on in `project` scope and is the narrow of `siblings`; `subtree` needs\n`under_document_id`. Refused while the admin disabled the `chat-recall`\nskill — the index is not fed then, so results would be silently stale.",
+        "operationId": "chat_search_api_projects__project_id__chat_search_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "default": "project",
+              "enum": [
+                "project",
+                "siblings",
+                "subtree"
+              ],
+              "title": "Scope",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "under_document_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Under Document Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "anchor_document_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Anchor Document Id"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Chat Search",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
     "/api/projects/{project_id}/documents/{document_id}/shares": {
       "get": {
         "description": "Full-access: list active shares for this document, INCLUDING the token.\n\nARCH (plan \"iridescent-wibbling-heron\"): LIST is readable by any `full`\nmember (non-owner full sees the Access tab sub-sections read-only); only\nmint (POST) and revoke (DELETE) are owner-only. The token is included in\nthe response so the UI can render a copyable link plaque (DECISION-PIN: the\ntoken IS the public URL, not a secret — re-sending it is the intended UX).\n\n`inherited_from` names the nearest ancestor whose subtree share publishes this\ndocument when it has NO own row. Computed by the SAME `_find_share_row` walk\nthe anonymous resolve funnel runs (routes/public_share.py) — one ancestor-walk,\nnever forked, so the owner's read and the anonymous read cannot drift. Null when\nthe doc has its own row (own row wins) or no covering share anywhere. The Access\nsummary needs it so it never says \"Not shared\" for a document anonymously\nreadable via a parent.",
@@ -16034,6 +16227,136 @@
           }
         },
         "summary": "Tool Search Materials",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
+    "/api/tool/search_my_chats": {
+      "post": {
+        "description": "Search the caller's other chats of the key's project, or read the turns\naround one hit. Refused while the admin disabled the `chat-recall` skill —\nthe route is reachable by a key directly, so the skill tombstone alone does\nnot stop it.",
+        "operationId": "tool_search_my_chats_api_tool_search_my_chats_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolSearchMyChats"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Search My Chats",
         "tags": [
           "tool-api"
         ]

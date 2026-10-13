@@ -3,6 +3,8 @@
 from fastapi import HTTPException
 
 from access import get_document_access, get_project_access
+from chat_sessions.conversation import conversation_session_ids
+from chat_sessions.recall import schedule_chat_index
 from chat_sessions.serialize import (
     build_ref_map,
     build_session_ref_map,
@@ -147,6 +149,32 @@ async def _reparent_sets(
     params["document_id"] = body.document_id
 
 
+def _unindexed_sets(session: dict, body: SessionUpdate, sets: list[str], params: dict) -> None:
+    """The recall-index opt-out on this row; 400 on a note, null is a no-op."""
+    if "unindexed" not in body.model_fields_set or body.unindexed is None:
+        return
+    # WHY: defense-in-depth like agent_auto — a note is never indexed, so the
+    # flag on one is a client defect, refused rather than stored.
+    if session.get("is_note") is True:
+        raise HTTPException(status_code=400, detail="unindexed does not apply to a note session")
+    sets.append("unindexed = $unindexed")
+    params["unindexed"] = body.unindexed
+
+
+async def _propagate_unindexed(db, session_id: str, session: dict, value: bool) -> None:
+    """Write the flag to every OTHER row of the conversation."""
+    # INVARIANT(security): the flag is one value per conversation — a toggle on
+    # one branch writes every branch and compaction continuation.
+    # Why: a sibling left unflagged keeps the same transcript searchable.
+    ids = await conversation_session_ids(db, session_id, session)
+    await db.query(
+        "UPDATE chat_sessions SET unindexed = $v "
+        "WHERE user_id = $uid AND project_id = $pid AND meta::id(id) IN $ids",
+        {"v": value, "uid": session["user_id"], "pid": session["project_id"],
+         "ids": sorted(ids - {session_id})},
+    )
+
+
 async def update_session_command(
     db, session_id: str, session: dict, body: SessionUpdate, user: dict,
 ) -> dict:
@@ -154,7 +182,8 @@ async def update_session_command(
 
     Fields are handled in a fixed order, so the first refused field decides the
     error: reasoning_effort (validated by the route before this runs), then
-    agent_auto (clamped, never refused), then the reparent (400 / 403).
+    agent_auto (clamped, never refused), then the reparent (400 / 403), then
+    unindexed (400 on a note). Every refusal lands before the first write.
     """
     sets: list[str] = ["updated_at = time::now()"]
     params: dict = {"id": session_id}
@@ -162,9 +191,14 @@ async def update_session_command(
     _ai_only_sets(session, body, sets, params)
     await _agent_flag_sets(session, body, user, sets, params)
     await _reparent_sets(db, session, body, user, sets, params)
+    _unindexed_sets(session, body, sets, params)
+    if "unindexed" in params:
+        await _propagate_unindexed(db, session_id, session, params["unindexed"])
     rows = await db.query(
         f"UPDATE type::record('chat_sessions', $id) SET {', '.join(sets)} RETURN AFTER",
         params,
     )
+    if "unindexed" in params:
+        await schedule_chat_index(session["user_id"], session["project_id"])
     return serialize_session(rows[0], await build_session_ref_map(db, rows[0]),
                              viewer_id=user["user_id"])

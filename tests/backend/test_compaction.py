@@ -127,6 +127,19 @@ async def test_mint_is_idempotent_on_replay(mint_env):
     assert mint_env["created"] == first
 
 
+@pytest.mark.parametrize("flag", [True, False])
+@pytest.mark.asyncio
+async def test_continuation_inherits_unindexed(mint_env, flag):
+    """A continuation of an unindexed chat stays out of the recall index."""
+    import driver.compaction as mod
+
+    mint_env["chats"]["s1"] = {"project_id": "p1", "user_id": "u1", "unindexed": flag}
+    out = await mod.mint_compaction_chats(_event())
+
+    by_id = {rid: data for _t, rid, data in mint_env["created"]}
+    assert by_id[out["continuation_chat_id"]]["unindexed"] is flag
+
+
 @pytest.mark.asyncio
 async def test_second_window_mints_its_own_rows(mint_env):
     """A LATER compaction (different checkpoint) is a new window — its own

@@ -344,7 +344,7 @@ def pytest_collection_modifyitems(config, items):  # noqa: ARG001
 # Tables to clean between tests (order matters for edges first)
 _EDGE_TABLES = ["doc_mentions"]
 _DATA_TABLES = [
-    "agent_configs", "api_keys", "doc_chunks", "messages", "chat_sessions",
+    "agent_configs", "api_keys", "doc_chunks", "chat_chunks", "messages", "chat_sessions",
     "user_preferences", "cp_blobs", "checkpoints", "document_history",
     "document_shares", "pending_invites",
     "registration_invites",

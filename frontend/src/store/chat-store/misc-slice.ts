@@ -46,7 +46,6 @@ type MiscSlice = Pick<
   | 'removePendingImage'
   | 'clearPendingImages'
   | 'setDraft'
-  | 'setListFilter'
   | 'loadModels'
   | 'setModelPickerOpen'
   | 'reset'
@@ -67,9 +66,6 @@ export function createMiscSlice(set: Set, get: Get): MiscSlice {
     // store so the text survives ChatPanel unmount on right-panel tab switches.
     setDraft(v: string) {
       set({ draft: v });
-    },
-    setListFilter(v: string | null) {
-      set({ listFilter: v });
     },
 
     async loadModels() {
@@ -123,11 +119,11 @@ export function createMiscSlice(set: Set, get: Get): MiscSlice {
         activeSessionId: null,
         documentId: null,
         messages: [],
-        listFilter: null,
         messagesLoading: false,
         messagesError: false,
         chatScopeLoading: false,
         forks: [],
+        pendingScroll: null,
         streaming: null,
         // The assembler's published timeline — the registry handler above
         // cleared the engine/feed state itself (conversation-feed.ts).
@@ -143,6 +139,7 @@ export function createMiscSlice(set: Set, get: Get): MiscSlice {
         dshRunning: false,
         liveSend: null,
         ghostAgentAuto: false,
+        ghostUnindexed: false,
         ghostSystemPromptId: null,
         ghostModel: '',
         ghostReasoningEffort: null,

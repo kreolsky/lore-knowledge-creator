@@ -139,6 +139,8 @@ export function ChatInput() {
   const setSessionUIMode = useChatStore(s => s.setSessionUIMode);
   // Ghost overrides: pre-send config held client-side.
   const ghostAgentAuto = useChatStore(s => s.ghostAgentAuto);
+  const ghostUnindexed = useChatStore(s => s.ghostUnindexed);
+  const setChatUnindexed = useChatStore(s => s.setChatUnindexed);
   const ghostSystemPromptId = useChatStore(s => s.ghostSystemPromptId);
   const ghostModel = useChatStore(s => s.ghostModel);
   const ghostReasoningEffort = useChatStore(s => s.ghostReasoningEffort);
@@ -345,6 +347,7 @@ export function ChatInput() {
         systemPromptId: ghost.ghostSystemPromptId,
         referenceId: currentReference?.reference_id,
         agentAuto: ghost.ghostAgentAuto,
+        unindexed: ghost.ghostUnindexed,
         // The agent target is ALWAYS the open entity
         // (currentReference ?? currentDocument), never the source chat's
         // target_doc_id.
@@ -614,6 +617,7 @@ export function ChatInput() {
           onSelect={handleModelSelect}
           disabled={isStreaming}
           placement="top"
+          size="md"
           open={modelPickerOpen}
           onOpenChange={setModelPickerOpen}
         />
@@ -641,17 +645,29 @@ export function ChatInput() {
           disabled={isStreaming}
           title={t('chatReasoningTitle')}
           placement="top"
+          size="md"
         />
       )}
       <FieldCheckbox
         checked={autoApply}
         onChange={handleAutoApplyToggle}
         label={t('chatAutoApply')}
+        className="text-text-muted"
         disabled={!canAgent || isStreaming}
         title={!canAgent && accessLevel === 'full' && !agentAvailable
           ? (agentUnavailableReason ?? t('chatAgentDisabledReason'))
           : t('chatAutoApplyHint')}
       />
+      {/* Create-time opt-out of chat recall; an existing chat toggles it in the header. */}
+      {!activeSessionId && (
+        <FieldCheckbox
+          checked={ghostUnindexed}
+          onChange={checked => { void setChatUnindexed(checked); }}
+          label={t('chatUnindexed')}
+          className="text-text-muted"
+          title={t('chatUnindexedHint')}
+        />
+      )}
     </>
   );
 

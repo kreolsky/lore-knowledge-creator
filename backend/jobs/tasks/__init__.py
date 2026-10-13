@@ -26,6 +26,7 @@ from jobs.tasks.backup import (
     auto_backup_loss_task,
     auto_backup_open_task,
 )
+from jobs.tasks.chat_index import chat_index_sweep_task, index_chat_messages
 from jobs.tasks.comfy import COMFY_TASK_NAMES, generate_image_task
 from jobs.tasks.cp_migrations import backfill_cp_blobs_task, nullout_inline_content_task
 from jobs.tasks.embed import EMBED_MAX_TRIES, embed_document_task, embed_sweep_task
@@ -57,6 +58,9 @@ __all__ = [
     "embed_document_task",
     "embed_sweep_task",
     "EMBED_MAX_TRIES",
+    # chat-recall index
+    "index_chat_messages",
+    "chat_index_sweep_task",
     # thumbnails
     "thumbnail_task",
     # Lore guide

@@ -40,9 +40,10 @@ export interface DropdownProps {
   variant?: 'composer' | 'highlight' | 'ghost';
   align?: 'left' | 'right';
   placement?: 'top' | 'bottom';
-  /** Trigger height: `sm` (composer rows) or `lg` = FieldInput's 37px, for a
-   * selector sitting in the same row as inputs (admin forms). */
-  size?: 'sm' | 'lg';
+  /** Trigger height: `sm` (compact rows), `md` = the md Button's height, for a
+   * selector sharing a row with md buttons (chat composer: send), or `lg` =
+   * FieldInput's 37px, for a selector sitting in the same row as inputs (admin forms). */
+  size?: 'sm' | 'md' | 'lg';
   /** Controlled open state, passed through to Popover; omit for uncontrolled. */
   open?: boolean;
   onOpenChange?: (v: boolean) => void;

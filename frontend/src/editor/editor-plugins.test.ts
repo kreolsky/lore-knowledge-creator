@@ -60,6 +60,7 @@ function click(
     alt?: boolean;
     x?: number;
     y?: number;
+    detail?: number;
     press?: { x?: number; y?: number };
   } = {},
 ): void {
@@ -69,6 +70,7 @@ function click(
     new MouseEvent('click', {
       bubbles: true,
       cancelable: true,
+      detail: opts.detail ?? 0,
       clientX: opts.x ?? 0,
       clientY: opts.y ?? 0,
       metaKey: !!opts.meta,
@@ -212,6 +214,46 @@ describe('linkClickExtension — gesture gate (a drag/selection gesture is not a
     view.dispatch({ selection: { anchor: 2 } }); // the reveal placed the cursor inside the label
     click(view, 2, { x: 4, press: { x: 4 } }); // second plain click: expanded → navigate
     expect(emit).toHaveBeenCalledTimes(1);
+    view.destroy();
+  });
+
+  it('double-click whose first click revealed the link: navigates despite the word selection', () => {
+    const view = makeView('[Doc](doc:abc)');
+    view.dispatch({ selection: { anchor: 2 } }); // first click revealed: cursor inside the label
+    press(view, { x: 0 });
+    view.dispatch({ selection: { anchor: 1, head: 4 } }); // CM6 selects the word on the 2nd mousedown
+    click(view, 2, { x: 0, detail: 2 });
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith('navigate-to-document', { documentId: 'abc' });
+    view.destroy();
+  });
+
+  it('double-click on a collapsed link (cursor elsewhere): no navigate', () => {
+    const view = makeView('[Doc](doc:abc) trailing');
+    view.dispatch({ selection: { anchor: 20 } });
+    press(view, { x: 0 });
+    view.dispatch({ selection: { anchor: 1, head: 4 } });
+    click(view, 2, { x: 0, detail: 2 });
+    expect(emit).not.toHaveBeenCalled();
+    view.destroy();
+  });
+
+  it('double-click in read-only: no second navigate (the first click already navigated)', () => {
+    const view = makeView('[Doc](doc:abc)', [revealAtCursor.of(false)]);
+    press(view, { x: 0 });
+    view.dispatch({ selection: { anchor: 1, head: 4 } });
+    click(view, 2, { x: 0, detail: 2 });
+    expect(emit).not.toHaveBeenCalled();
+    view.destroy();
+  });
+
+  it('triple-click selection inside an expanded link: no action', () => {
+    const view = makeView('[Doc](doc:abc)');
+    view.dispatch({ selection: { anchor: 2 } });
+    press(view, { x: 0 });
+    view.dispatch({ selection: { anchor: 0, head: 14 } });
+    click(view, 2, { x: 0, detail: 3 });
+    expect(emit).not.toHaveBeenCalled();
     view.destroy();
   });
 

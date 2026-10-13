@@ -1,7 +1,7 @@
 /** Shared two-line chat session row — rendered in the empty-screen list. Labels the row with its parent entity: a document-session shows its document title (backend document_title); a reference-scoped chat shows `ref: <reference title>` (its parent IS the reference). The label is clickable → navigates to that document/reference; the row body click → opens the chat. */
 
 import { memo, useMemo, useState } from 'react';
-import { Pencil, Trash2 } from 'lucide-react';
+import { Pencil, Trash2, VenetianMask } from 'lucide-react';
 import type { ChatSession } from '../../types';
 import { useAppStore } from '../../store/app-store';
 import { useUIStore } from '../../store/ui-store';
@@ -163,6 +163,9 @@ export const ChatRow = memo(function ChatRow({ session, isActive, onSelect, onDe
           />
         ) : undefined}
         onBodyDoubleClick={onRename ? startRename : undefined}
+        metaIcon={session.unindexed
+          ? <span title={t('chatUnindexedMark')}><VenetianMask size={11} aria-label={t('chatUnindexedMark')} /></span>
+          : undefined}
         meta={
           parentLabel ? (
             <>

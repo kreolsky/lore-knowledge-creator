@@ -27,6 +27,7 @@ import { ProjectShell, type ProjectShellHandle, type RightTabEntry, type LeftTab
 import { useAppStore } from '../store/app-store';
 import { useUIStore, useDocState, ORPHAN_KEY, type RightTab } from '../store/ui-store';
 import { readRefOpenMode, refIsScope } from '../store/ui-store/documents-slice';
+import { searchModeOnOpen } from '../store/ui-store/search-slice';
 import { useNoteStore } from '../store/note-store';
 import { useChatStore } from '../store/chat-store';
 import { useEvent } from '../hooks/useEvent';
@@ -294,11 +295,19 @@ export function ProjectPage() {
   // notes/refs tab tints here; the tree reads the same store slice.
   const inboxCounts = useInboxSummary(currentProject?.project_id, currentDocId);
 
-  // Side effect of a right-tab click: exit snapshot preview unless the user is
-  // actively opening the checkpoint tab. (Snapshot preview is the only authed-mode
-  // state tied to right-tab clicks; lives here, not in the Shell.)
-  const handleRightTabClick = useCallback((tab: RightTab) => {
+  // Side effects of a right-tab click: exit snapshot preview unless the user is
+  // actively opening the checkpoint tab, and pick the Search tab's starting mode
+  // from the tab it is opened FROM (the one visible before the click; null while
+  // the panel was closed). The click's tab write re-renders after this handler,
+  // and SearchPanel (sharing the right panel with chat) mounts after that,
+  // reading the mode set here.
+  const handleRightTabClick = useCallback((tab: RightTab, fromTab: RightTab | null) => {
     if (tab !== 'checkpoint') setSnapshotPreview(null);
+    if (tab === 'search') {
+      const ui = useUIStore.getState();
+      const next = searchModeOnOpen(fromTab, ui.searchMode, ui.searchDocMode);
+      if (next) ui.setSearchMode(next);
+    }
   }, [setSnapshotPreview]);
 
   // In 'panel' mode the open reference renders inside the Refs tab; the tab is

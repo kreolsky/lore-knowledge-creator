@@ -239,7 +239,7 @@ export const MessageBubble = memo(function MessageBubble({
     : 'w-full py-2 text-sm leading-relaxed text-text px-0';
 
   return (
-    <div className={`flex flex-col mb-3 ${alignClass}`}>
+    <div className={`flex flex-col mb-3 ${alignClass}`} data-message-id={message.message_id}>
       {!isUser && hasForks && forkNav && (
         <ForkIndicator
           className="mb-1"

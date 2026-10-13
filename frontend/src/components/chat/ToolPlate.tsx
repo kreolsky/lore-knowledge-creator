@@ -104,8 +104,9 @@ export function ToolPlate({
   const bodyTone = tone === 'failed' ? 'border-l-2 border-amber-500' : '';
   const iconTone = tone === 'failed' ? 'text-amber-400' : '';
   // A group plate is closed by a full-width rule: under its header while
-  // collapsed, under its last member while expanded. A failed group: amber.
-  const groupRule = `border-b ${tone === 'failed' ? 'border-amber-500' : 'border-border'}`;
+  // collapsed, under its last member while expanded. WHY: the rule stays
+  // neutral even for a failed group — the amber icon + title already carry it.
+  const groupRule = 'border-b border-border';
   const titleTone = tone === 'failed'
     ? 'text-amber-400'
     : tone === 'noop'

@@ -2,12 +2,14 @@
  * ARCH: Closed props — no className/style passthrough.
  * size="sm" (22px) for note cards, "md" (28px, default) elsewhere.
  * filled — solid background with white text (e.g. armed-delete confirmation).
+ * pressed — a toggle in its ON state: held at the hover background, aria-pressed set.
  */
 
 interface IconButtonProps {
   size?: 'sm' | 'md';
   danger?: boolean;
   filled?: boolean;
+  pressed?: boolean;
   color?: 'red' | 'green' | 'accent';
   theme?: 'note';
   className?: string;
@@ -26,6 +28,10 @@ const baseIdle = 'bg-transparent text-text-muted hover:bg-surface3 hover:text-te
 // matching the sticky-note bg instead of the app-wide gray hover.
 const baseIdleNote = 'bg-transparent text-text-muted hover:bg-[var(--sticky-yellow-dark)] hover:text-text';
 
+// A pressed toggle holds the hover look so ON reads apart from OFF at rest.
+const pressedIdle = 'bg-surface3 text-text hover:bg-surface3 hover:text-text';
+const pressedIdleNote = 'bg-[var(--sticky-yellow-dark)] text-text hover:bg-[var(--sticky-yellow-dark)] hover:text-text';
+
 const sizes: Record<string, string> = {
   md: 'w-[30px] h-[30px]',
   sm: 'w-[22px] h-[22px]',
@@ -41,13 +47,15 @@ const filledColors: Record<string, string> = {
   accent: 'bg-accent text-white hover:bg-accent hover:text-white',
 };
 
-export function IconButton({ size = 'md', danger, filled, color, theme, className, children, ...rest }: IconButtonProps) {
-  const idle = theme === 'note' ? baseIdleNote : baseIdle;
+export function IconButton({ size = 'md', danger, filled, pressed, color, theme, className, children, ...rest }: IconButtonProps) {
+  const idle = pressed
+    ? (theme === 'note' ? pressedIdleNote : pressedIdle)
+    : (theme === 'note' ? baseIdleNote : baseIdle);
   const resolvedColor = color ?? (danger ? 'red' : '');
   const variant = filled && resolvedColor ? filledColors[resolvedColor] ?? idle : resolvedColor ? colors[resolvedColor] + ' ' + idle : idle;
   const cls = [baseLayout, sizes[size], variant, className].filter(Boolean).join(' ');
   return (
-    <button type="button" className={cls} {...rest}>
+    <button type="button" className={cls} aria-pressed={pressed} {...rest}>
       {children}
     </button>
   );

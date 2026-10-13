@@ -16,10 +16,8 @@ const chatState: Record<string, unknown> = {
   sessions: [],
   activeSessionId: null,
   modelsLoaded: true,
-  listFilter: null,
 };
 const chatActions = {
-  setListFilter: vi.fn((v: string | null) => { chatState.listFilter = v; }),
   deleteSession: vi.fn(),
   updateSession: vi.fn().mockResolvedValue(undefined),
   loadModels: vi.fn(),
@@ -81,7 +79,6 @@ beforeEach(() => {
   emitted.length = 0;
   chatState.sessions = [];
   chatState.activeSessionId = null;
-  chatState.listFilter = null;
   appState.currentDocument = { document_id: 'doc-1' };
   appState.currentReference = null;
 });
@@ -94,59 +91,11 @@ describe('ChatHeader', () => {
     unmount();
   });
 
-  it('ghost plaque: search icon enters title-search mode; Escape leaves it', () => {
+  it('ghost plaque offers no chat search — it lives in the Search tab', () => {
     const host = mount();
+    expect(host.querySelector('svg.lucide-search')).toBeNull();
     expect(host.querySelector('[data-chat-search-input]')).toBeNull();
-    const btn = host.querySelector<HTMLButtonElement>('[title="chatSearchTitles"]');
-    expect(btn, 'search icon in the ghost plaque').toBeTruthy();
-    act(() => btn!.click());
-    expect(chatActions.setListFilter).toHaveBeenCalledWith('');
     unmount();
-    // Re-mount in search mode (the mocked store is not reactive; the unmount
-    // cleanup above legitimately reset it to null, so seed the mode by hand).
-    chatState.listFilter = '';
-    const host2 = mount();
-    const input = host2.querySelector<HTMLInputElement>('[data-chat-search-input]');
-    expect(input, 'input replaces the hint').toBeTruthy();
-    expect(host2.textContent).not.toContain('chatEmptyHint');
-    act(() => { input!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
-    expect(chatActions.setListFilter).toHaveBeenLastCalledWith(null);
-    unmount();
-  });
-
-  it('ghost plaque: blur with an empty query leaves search mode; a typed query stays', () => {
-    chatState.listFilter = '';
-    let host = mount();
-    let input = host.querySelector<HTMLInputElement>('[data-chat-search-input]')!;
-    act(() => { input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); });
-    expect(chatActions.setListFilter).toHaveBeenLastCalledWith(null);
-    unmount();
-    chatActions.setListFilter.mockClear();
-    chatState.listFilter = 'abc';
-    host = mount();
-    input = host.querySelector<HTMLInputElement>('[data-chat-search-input]')!;
-    act(() => { input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); });
-    expect(chatActions.setListFilter).not.toHaveBeenCalled();
-    unmount();
-  });
-
-  it('search is not offered once a chat is open, and opening one clears the filter', () => {
-    chatState.listFilter = 'abc';
-    chatState.activeSessionId = 's1';
-    chatState.sessions = [{ session_id: 's1', document_id: 'doc-1', reference_id: null }];
-    const host = mount();
-    expect(host.querySelector('[title="chatSearchTitles"]')).toBeNull();
-    expect(host.querySelector('[data-chat-search-input]')).toBeNull();
-    expect(chatActions.setListFilter).toHaveBeenCalledWith(null);
-    unmount();
-  });
-
-  it('unmount (tab switch) clears the filter', () => {
-    chatState.listFilter = 'abc';
-    mount();
-    chatActions.setListFilter.mockClear();
-    unmount();
-    expect(chatActions.setListFilter).toHaveBeenCalledWith(null);
   });
 
   it('doc session whose parent is the OPEN doc shows no goto-parent button', () => {

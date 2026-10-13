@@ -1,4 +1,4 @@
-/** filterSessionsByTitle — title-only, case-insensitive substring filter, inactive below 3 chars. */
+/** filterSessionsByTitle — title-only, case-insensitive substring filter; the length gate is the caller's. */
 import { describe, it, expect } from 'vitest';
 import { filterSessionsByTitle } from './useSortedSessions';
 import type { ChatSession } from '../../types';
@@ -7,14 +7,10 @@ const s = (id: string, title: string) => ({ session_id: id, title } as ChatSessi
 const list = [s('1', 'Dragon lore'), s('2', 'Kingdom map'), s('3', 'dragons of the north')];
 
 describe('filterSessionsByTitle', () => {
-  it('null query (search off) returns the SAME array', () => {
-    expect(filterSessionsByTitle(list, null)).toBe(list);
+  it('a blank query matches nothing', () => {
+    expect(filterSessionsByTitle(list, '   ')).toEqual([]);
   });
-  it('a query shorter than 3 chars is inactive — same array', () => {
-    expect(filterSessionsByTitle(list, 'dr')).toBe(list);
-    expect(filterSessionsByTitle(list, '  dr ')).toBe(list);
-  });
-  it('3+ chars: case-insensitive substring anywhere in the title', () => {
+  it('case-insensitive substring anywhere in the title', () => {
     expect(filterSessionsByTitle(list, 'DRAG').map(x => x.session_id)).toEqual(['1', '3']);
     expect(filterSessionsByTitle(list, 'north').map(x => x.session_id)).toEqual(['3']);
   });

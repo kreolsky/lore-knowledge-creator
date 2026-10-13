@@ -63,6 +63,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import settings
+from chat_sessions import recall as chat_recall
 
 # The persistence writes are read through the OWNING module's attribute at
 # call time (never a top-level `from persistence import _persist_content` —
@@ -890,6 +891,8 @@ class DriverChannel:
                     "driver channel: turn finalize failed session=%s msg=%s",
                     sub.lore_session_id, projection.assistant_msg_id,
                 )
+            else:
+                await chat_recall.schedule_chat_index(turn.user_id, turn.project_id)
             if projection.context_usage:
                 try:
                     await persistence._persist_context_usage(

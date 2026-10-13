@@ -16,7 +16,7 @@
 // SYSTEM: ui-store — panel state, theme, language, preferences persistence
 
 import { create } from 'zustand';
-import { Language, SearchResult } from '../types';
+import { Language, SearchDocMode, SearchMode, SearchResult } from '../types';
 import { apiClient } from '../api/client';
 import type { EditorPosition } from '../editor/position-cache';
 import { createPublicShareSlice } from './ui-store/public-share-slice';
@@ -45,7 +45,8 @@ interface PersistedUIState {
   // Last target chosen in the Access tab's "move to another project" section.
   lastMoveTargetProjectId?: string | null;
   searchQuery?: string;
-  searchMode?: 'fulltext' | 'semantic';
+  searchMode?: SearchMode;
+  searchDocMode?: SearchDocMode;
 }
 
 // WHY: phones in both orientations and portrait tablets; landscape tablets keep desktop.
@@ -122,6 +123,7 @@ function buildUIBlob(uiState: UIState, appCtx: AppContext): PersistedUIState | n
     // Intentionally dropped from the UI-prefs blob so the server-side row is the single
     // source of truth and stale prefs entries get overwritten.
     searchMode: uiState.searchMode,
+    searchDocMode: uiState.searchDocMode,
   };
 }
 
@@ -247,7 +249,10 @@ export interface UIState {
   searchTabDocId: string | null;
   searchQuery: string;
   searchResults: SearchResult[];
-  searchMode: 'fulltext' | 'semantic';
+  searchMode: SearchMode;
+  // The last document-search mode (never 'chats'): the Search tab opened from a
+  // non-chat tab returns to it after a chats round. Written by setSearchMode.
+  searchDocMode: SearchDocMode;
   documentPositions: Record<string, EditorPosition>;
   selectionEmpty: boolean;
   // Project-level active AI chat id.
@@ -292,7 +297,7 @@ export interface UIState {
   getSplitRatio: () => number;
   setShowArchived: (showArchived: boolean) => void;
   setAdminSectionTab: (tab: AdminSectionTab) => void;
-  setSearchMode: (mode: 'fulltext' | 'semantic') => void;
+  setSearchMode: (mode: SearchMode) => void;
   setTheme: (theme: 'light' | 'dark') => void;
   setLanguage: (language: Language) => void;
   setPanelWidth: (side: 'left' | 'right', width: number) => void;
@@ -398,7 +403,8 @@ export const useUIStore = create<UIState>((set, get) => ({
       lastActiveChatSessionId: merged.lastActiveChatSessionId ?? null,
       lastMoveTargetProjectId: merged.lastMoveTargetProjectId ?? null,
       searchQuery: merged.searchQuery ?? '',
-      searchMode: (merged.searchMode as 'fulltext' | 'semantic') ?? 'fulltext',
+      searchMode: (merged.searchMode as SearchMode) ?? 'fulltext',
+      searchDocMode: (merged.searchDocMode as SearchDocMode) ?? 'fulltext',
       documentPositions: serverDocPositions,
     });
   },
@@ -460,6 +466,7 @@ export const useUIStore = create<UIState>((set, get) => ({
       searchQuery: '',
       searchResults: [],
       searchMode: 'fulltext' as const,
+      searchDocMode: 'fulltext' as const,
       documentPositions: {},
     });
   },

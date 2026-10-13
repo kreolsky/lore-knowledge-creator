@@ -144,7 +144,7 @@ async def test_agent_toolset_full_order_with_gates_on(monkeypatch):
         "consolidate_memory", "next_reference",
         "get_memory_facts", "get_fact_history",
         "apply_memory_verdicts", "reopen_consolidation",
-        "save_skill",
+        "save_skill", "search_my_chats",
     ]
 
 

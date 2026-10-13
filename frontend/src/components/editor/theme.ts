@@ -15,7 +15,7 @@ import { type Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 
 const MONO = "'JetBrains Mono', ui-monospace, SFMono-Regular, monospace";
-const CODE_BG = 'var(--surface2)';
+const CODE_BG = 'var(--code-bg)';
 const CODE_FONT_SIZE = '0.875em';
 
 // Find-match highlight tokens (searchHighlight plugin — find-matches.ts). WHY amber,
@@ -62,11 +62,11 @@ export const loreEditorTheme: Extension = [
 
   // ── Headers ──
 
-  '.cm-header-1': { fontSize: '1.875rem', fontWeight: '700', lineHeight: '1.25', color: 'var(--text)', textDecoration: 'none' },
-  '.cm-header-2': { fontSize: '1.5rem', fontWeight: '700', lineHeight: '1.25', color: 'var(--text)', textDecoration: 'none' },
-  '.cm-header-3': { fontSize: '1.25rem', fontWeight: '600', lineHeight: '1.3', color: 'var(--text)', textDecoration: 'none' },
-  '.cm-header-4': { fontSize: '1.1rem', fontWeight: '600', lineHeight: '1.3', color: 'var(--text)', textDecoration: 'none' },
-  '.cm-header-5': { fontSize: '1rem', fontWeight: '600', color: 'var(--text)', textDecoration: 'none' },
+  '.cm-header-1': { fontSize: '1.875rem', fontWeight: '700', lineHeight: '1.25', color: 'var(--text-strong)', textDecoration: 'none' },
+  '.cm-header-2': { fontSize: '1.5rem', fontWeight: '700', lineHeight: '1.25', color: 'var(--text-strong)', textDecoration: 'none' },
+  '.cm-header-3': { fontSize: '1.25rem', fontWeight: '600', lineHeight: '1.3', color: 'var(--text-strong)', textDecoration: 'none' },
+  '.cm-header-4': { fontSize: '1.1rem', fontWeight: '600', lineHeight: '1.3', color: 'var(--text-strong)', textDecoration: 'none' },
+  '.cm-header-5': { fontSize: '1rem', fontWeight: '600', color: 'var(--text-strong)', textDecoration: 'none' },
   '.cm-header-6': { fontSize: '1rem', fontWeight: '500', color: 'var(--text-muted)', textDecoration: 'none' },
 
   // Heading top spacing + the heading's size/weight on the LINE.
@@ -87,7 +87,7 @@ export const loreEditorTheme: Extension = [
 
   // ── Text formatting ──
 
-  '.cm-strong': { fontWeight: '600' },
+  '.cm-strong': { fontWeight: '600', color: 'var(--text-strong)' },
   '.cm-em': { fontStyle: 'italic' },
   '.cm-strikethrough': { textDecoration: 'line-through', opacity: '0.45' },
 
@@ -201,7 +201,7 @@ export const loreEditorTheme: Extension = [
     fontWeight: 'inherit',
     textDecoration: 'inherit',
   },
-  '.cm-fenced-code .cm-strong': { fontWeight: 'inherit' },
+  '.cm-fenced-code .cm-strong': { fontWeight: 'inherit', color: 'inherit' },
   '.cm-fenced-code .cm-em': { fontStyle: 'inherit' },
   '.cm-fenced-code .cm-strikethrough': { textDecoration: 'inherit', opacity: '1' },
   '.cm-fenced-code .cm-inline-code': { background: 'none', padding: '0' },

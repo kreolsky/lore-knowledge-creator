@@ -84,6 +84,10 @@ async def _create_continuation_chat(
     for field in _INHERITABLE_CHAT_FIELDS:
         if source_chat.get(field) is not None:
             chat_data[field] = source_chat[field]
+    # INVARIANT(security): a continuation inherits the source's recall-index
+    # opt-out. Why: the continuation carries the same conversation, and an
+    # unflagged one would silently make an anonymous chat searchable.
+    chat_data["unindexed"] = bool(source_chat.get("unindexed"))
     await create_record("chat_sessions", cont_id, chat_data)
 
 

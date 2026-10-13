@@ -36,6 +36,7 @@ from jobs.tasks import (
     auto_backup_loss_task,
     auto_backup_open_task,
     backfill_cp_blobs_task,
+    chat_index_sweep_task,
     convert_docx_task,
     convert_pdf_task,
     embed_document_task,
@@ -44,6 +45,7 @@ from jobs.tasks import (
     generate_image_task,
     help_seed_task,
     help_sweep_task,
+    index_chat_messages,
     nullout_inline_content_task,
     pipeline_schedule_tick_task,
     telemetry_retention_task,
@@ -226,6 +228,11 @@ class WorkerSettings:
         # path). max_tries=1: idempotent — a failed run is re-run by the next
         # cron slot; a retry storm adds nothing.
         func(embed_sweep_task, max_tries=1),
+        # chat-recall index: the pair reconcile and its hourly catch-up sweep.
+        # max_tries=1 on both — idempotent diffs; a failed run is re-run by the
+        # next trigger or the next sweep, a retry adds nothing.
+        func(index_chat_messages, max_tries=1),
+        func(chat_index_sweep_task, max_tries=1),
         func(thumbnail_task, max_tries=4),
         # Lore guide: idempotent (deterministic ids), so a retry is safe.
         func(help_seed_task, max_tries=3),
@@ -298,6 +305,9 @@ class WorkerSettings:
         # cron is a singleton across replicas (arq Redis lock), so scaling the
         # worker will not double-sweep.
         cron(embed_sweep_task, minute=10, max_tries=1),
+        # chat-recall catch-up, hourly at :20 (offset from the :10 embed sweep):
+        # posts the pair reconcile for every (user, project) whose index lags.
+        cron(chat_index_sweep_task, minute=20, max_tries=1),
         cron(nullout_inline_content_task, hour=config.THIN_CRON_HOUR, minute=15, max_tries=1),
         # The ONE schedule tick — project-data
         # schedules are claimed + dispatched here, so a new scheduled pipeline is

@@ -58,13 +58,9 @@ export function useSortedSessions() {
   }, [sessions, sortByProximity, currentDocId, documents]);
 }
 
-// Minimum query length before the ghost-header search narrows the list.
-export const CHAT_LIST_FILTER_MIN = 3;
-
 /**
- * Title-only, case-insensitive substring filter for the chat list. Returns the
- * SAME array when the query is inactive (null or shorter than the minimum) so
- * callers can tell "filtered to nothing" from "no chats" by identity.
+ * Title-only, case-insensitive substring filter over chat sessions. A blank query
+ * matches nothing; the minimum length is the caller's gate.
  */
 // WHY fold both sides to a diacritic-free lowercase form: a typed "Ё" can arrive
 // decomposed (Е + U+0308) while the stored title holds the precomposed U+0401,
@@ -75,9 +71,8 @@ export const CHAT_LIST_FILTER_MIN = 3;
 const fold = (v: string): string =>
   v.replace(/[\u00cb\u00eb]/g, 'ё').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
-export function filterSessionsByTitle(sessions: ChatSession[], query: string | null): ChatSession[] {
-  if (!query) return sessions;
+export function filterSessionsByTitle(sessions: ChatSession[], query: string): ChatSession[] {
   const q = fold(query.trim());
-  if (q.length < CHAT_LIST_FILTER_MIN) return sessions;
+  if (!q) return [];
   return sessions.filter(s => fold(s.title).includes(q));
 }

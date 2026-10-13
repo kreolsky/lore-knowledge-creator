@@ -103,6 +103,8 @@ def _stamp_wire_fields(out: dict) -> None:
     # render the SelectionPill + disable the auto-apply toggle. Default false for
     # pre-field rows.
     out["has_region"] = bool(out.get("has_region"))
+    # The recall-index opt-out; false for a row that predates the column.
+    out["unindexed"] = bool(out.get("unindexed"))
     # ARCH: last-known context occupation for the token-usage gauge — the tokens
     # the active session occupies at the turn it was last written. Emitted verbatim
     # (null when absent / pre-migration). The client resolves the LIVE cap from

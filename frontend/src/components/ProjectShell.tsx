@@ -104,8 +104,9 @@ interface ProjectShellProps {
   /** Optional drag-enter handler on the right panel container (authed: refs drag-drop). */
   onPanelDragEnter?: (e: React.DragEvent) => void;
   /** Optional callback fired AFTER a right-tab click — lets the parent clear snapshot
-   *  preview / take any tab-specific side effect (authed-only). */
-  onRightTabClick?: (tab: RightTab) => void;
+   *  preview / take any tab-specific side effect (authed-only). `fromTab` is the tab
+   *  that was VISIBLE before the click (null while the right panel was closed). */
+  onRightTabClick?: (tab: RightTab, fromTab: RightTab | null) => void;
   /** Optional overlays rendered at the shell root (SnapshotModal, SelectionToolbar, ...). */
   overlays?: React.ReactNode;
   /** Optional header slot — defaults to <Header/>. */
@@ -260,8 +261,8 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
     } else {
       setRightPanelTab(rightPanelDocId, tab);
     }
-    onRightTabClick?.(tab);
-  }, [compact, rightPanelResizer, effectiveRightTab, setRightPanelTab, rightPanelDocId, onRightTabClick]);
+    onRightTabClick?.(tab, rightIsOpen ? effectiveRightTab : null);
+  }, [compact, rightPanelResizer, rightIsOpen, effectiveRightTab, setRightPanelTab, rightPanelDocId, onRightTabClick]);
 
   // ── Imperative handle for parent's event handlers ───────────────────────
   useImperativeHandle(ref, () => ({

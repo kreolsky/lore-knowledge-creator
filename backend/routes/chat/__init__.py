@@ -21,10 +21,11 @@ import routes.chat.sessions_list  # noqa: F401 — binds GET /sessions (list pat
 import routes.chat.transcription  # noqa: F401
 import routes.chat.verdicts  # noqa: F401 — binds GET/POST /api/chat/verdicts
 
-# branches (POST /sessions/{id}/branches + GET /forks) rides the same line as
-# completions: one noqa keeps the __init__ at its import-shape budget
-# (import-shape-gate zero-net-growth).
-from routes.chat import branches, completions  # noqa: F401
+# branches (POST /sessions/{id}/branches + GET /forks) and search (its own
+# project-scoped router, mounted by main.py) ride the same line as completions:
+# one noqa keeps the __init__ at its import-shape budget (import-shape-gate
+# zero-net-growth).
+from routes.chat import branches, completions, search  # noqa: F401
 from routes.chat._router import router  # noqa: F401
 from routes.chat.models_catalog import gateway_model_ids
 

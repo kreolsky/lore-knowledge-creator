@@ -199,6 +199,14 @@ export const ru: Record<TranslationKey, string> = {
   searchFailed: 'Поиск не удался.',
   searchScopeThisDoc: 'В этом документе',
   searchMemoryOnly: 'Только память',
+  searchModeChats: 'Чаты',
+  searchPlaceholderChats: 'Поиск по моим чатам\u2026',
+  chatSearchScopeTip: 'Только чаты, прикреплённые к этому документу или к документам под ним.',
+  chatSearchSibling: 'здесь',
+  chatSearchSiblingTip: 'Прикреплён к открытому документу или к документу под ним',
+  chatSearchDisabled: 'Поиск по чатам отключён администратором.',
+  chatSearchTitleBadge: 'название',
+  chatSearchOpenFailed: 'Не удалось открыть чат',
   searchExactMatch: 'Подстрока',
   searchExactMatchTip: 'Выкл: заголовки — по подстроке (префикс «аспи» найдёт «Аспирин…»), текст — только по целым словам с словоформами («миром» найдёт «мира», но «аспи» в «аспирин» — нет).\nВкл: буквальная подстрока без учёта регистра в заголовках и текстах, включая референсы — но без словоформ.',
 
@@ -355,7 +363,6 @@ export const ru: Record<TranslationKey, string> = {
   chatEmptyHint: 'Начните диалог, введя сообщение ниже.',
   chatSortByProximity: 'Сортировать по близости к документу',
   chatSortByRecency: 'Сортировать по времени',
-  chatSearchTitles: 'Поиск чатов по названию',
   chatContextImagesFull: 'В этой переписке уже слишком много изображений ({used} МБ из {limit} МБ) — начните новый чат, чтобы продолжить',
   chatContextFullNewChat: 'Новый чат',
   chatContextFullPlaceholder: 'Контекст переполнен — начните новый чат, чтобы продолжить',
@@ -478,6 +485,13 @@ export const ru: Record<TranslationKey, string> = {
   // reasoning-effort-selector); the hint keeps the full sentence.
   chatAutoApply: 'Авто',
   chatAutoApplyHint: 'Применять изменения без запроса; снимите галочку, чтобы подтверждать каждый вызов',
+  // Per-chat opt-out of the agent's search across the user's other chats.
+  chatUnindexed: 'Вне поиска',
+  chatUnindexedHint: 'Ассистент не будет находить этот чат при поиске по вашим чатам',
+  chatUnindexedOn: 'Вне поиска: ассистент не находит этот чат из других ваших чатов. Нажмите, чтобы вернуть в поиск',
+  chatUnindexedOff: 'Скрыть этот чат от поиска ассистента по вашим чатам',
+  chatUnindexedMark: 'Вне поиска — не находится из других чатов',
+  chatUnindexedFailed: 'Не удалось изменить видимость чата для поиска',
 
   // Reasoning-effort dropdown (plan reasoning-effort-selector) — default sends
   // no effort and the provider's default applies; the rest are the model's

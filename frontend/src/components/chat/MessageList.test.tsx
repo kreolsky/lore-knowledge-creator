@@ -44,6 +44,9 @@ const chatState: Record<string, unknown> = {
   regenerate: vi.fn(),
   rewindTo: vi.fn(),
   sendMessage: vi.fn(),
+  // One-shot scroll target (a chat search hit) + its consumer's clear.
+  pendingScroll: null,
+  clearPendingScroll: vi.fn(() => { chatState.pendingScroll = null; }),
   decideVerdict: vi.fn(),
 };
 vi.mock('../../store/chat-store', () => ({
@@ -457,6 +460,88 @@ describe('MessageList — scroll-to-bottom button bridge', () => {
     act(() => root.render(createElement(MessageList)));
     expect(awayEmits()).toEqual([true, false]);
     chatState.messagesError = null;
+    act(() => root.unmount());
+    host.remove();
+  });
+});
+
+describe('MessageList — the one-shot scroll target (a chat search hit)', () => {
+  function row(id: string) {
+    return { ...assistantMessage(), message_id: id, content: `text ${id}` };
+  }
+
+  function mountWithRows() {
+    chatState.activePath = [row('m1'), row('m2'), row('m3')];
+    chatState.streaming = null;
+    chatState.pendingScroll = null;
+    chatState.activeSessionId = 's1';
+    chatState.messagesLoading = false;
+    vi.mocked(chatState.clearPendingScroll as ReturnType<typeof vi.fn>).mockClear();
+    const { host, root } = mount();
+    const el = scrollContainer(host);
+    stubScrollMetrics(el, 2000, 400);
+    trackScrollTop(el);
+    stubBox(el, { top: 0, bottom: 400 });
+    const target = el.querySelector('[data-message-id="m2"]') as HTMLElement;
+    return { host, root, el, target };
+  }
+
+  it('every bubble carries its message id on the root', () => {
+    const { host, root, el } = mountWithRows();
+    expect(el.querySelectorAll('[data-message-id]').length).toBe(3);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('scrolls the target message to the top, stops following, and consumes the target once', () => {
+    const { host, root, el, target } = mountWithRows();
+    stubBox(target, { top: 500, bottom: 600 });
+    chatState.pendingScroll = { sessionId: 's1', messageId: 'm2' };
+    act(() => root.render(createElement(MessageList)));
+    // Content-space top of m2: rect delta (500) + the bottom snap the stuck
+    // layout pass made first (2000).
+    expect(el.scrollTop).toBe(2500);
+    expect(chatState.clearPendingScroll).toHaveBeenCalledTimes(1);
+    // The next commit must not snap back to the bottom.
+    act(() => root.render(createElement(MessageList)));
+    expect(el.scrollTop).toBe(2500);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('waits while the messages load, then scrolls', () => {
+    const { host, root, el, target } = mountWithRows();
+    stubBox(target, { top: 500, bottom: 600 });
+    chatState.pendingScroll = { sessionId: 's1', messageId: 'm2' };
+    chatState.messagesLoading = true;
+    act(() => root.render(createElement(MessageList)));
+    expect(chatState.clearPendingScroll).not.toHaveBeenCalled();
+    chatState.messagesLoading = false;
+    act(() => root.render(createElement(MessageList)));
+    const el2 = scrollContainer(host);
+    expect(chatState.clearPendingScroll).toHaveBeenCalledTimes(1);
+    expect(el2).not.toBe(el); // the spinner replaced the list in between
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('a message no longer in the chat opens it without a scroll and drops the target', () => {
+    const { host, root, el } = mountWithRows();
+    chatState.pendingScroll = { sessionId: 's1', messageId: 'gone' };
+    act(() => root.render(createElement(MessageList)));
+    expect(el.scrollTop).toBe(2000);
+    expect(chatState.clearPendingScroll).toHaveBeenCalledTimes(1);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('a target for another chat than the open one is dropped, never applied here', () => {
+    const { host, root, el, target } = mountWithRows();
+    stubBox(target, { top: 500, bottom: 600 });
+    chatState.pendingScroll = { sessionId: 'other', messageId: 'm2' };
+    act(() => root.render(createElement(MessageList)));
+    expect(el.scrollTop).toBe(2000);
+    expect(chatState.clearPendingScroll).toHaveBeenCalledTimes(1);
     act(() => root.unmount());
     host.remove();
   });

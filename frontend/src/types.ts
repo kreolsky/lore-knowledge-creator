@@ -510,6 +510,9 @@ export interface ChatSession {
   // agent to a frontend-tracked text span. Server-authoritative (forces confirm +
   // the containment gate); the RelativePosition pair is frontend-owned (localStorage).
   has_region?: boolean;
+  // Kept out of the agent's chat-recall search index (server-authoritative,
+  // one value per conversation).
+  unindexed?: boolean;
   // ARCH (plan session-title-from-the-harness): the title pin — a PATCH title
   // (user rename) sets it backend-side, and the harness titler's relayed
   // revision skips pinned rows. Frontend never writes it; declared because
@@ -636,6 +639,29 @@ export interface SemanticSearchHit {
   offset_start: number | null;
   offset_end: number | null;
   score: number;
+}
+
+/** The project search panel's corpus: documents by text, documents by meaning,
+ * or the person's own chats by meaning. */
+export type SearchMode = 'fulltext' | 'semantic' | 'chats';
+export type SearchDocMode = Exclude<SearchMode, 'chats'>;
+
+/** One hit of GET /projects/{id}/chat-search — a message of the person's own
+ * chat. `thread_id` is the thread ROOT (the row carrying active_branch_id);
+ * `document_id` is the root's document (null = a project-level chat);
+ * `sibling` = that document lies under the anchor document. */
+export interface ChatSearchHit {
+  chat_id: string;
+  thread_id: string;
+  chat_title: string;
+  document_id: string | null;
+  message_id: string;
+  role: 'user' | 'assistant';
+  created_at: string | null;
+  snippet: string;
+  question?: string;
+  score: number;
+  sibling: boolean;
 }
 
 export interface SemanticSearchResult {

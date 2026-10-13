@@ -244,6 +244,17 @@ def pin_embedding_api(
     monkeypatch.setattr(config, "AI_API_KEY", key)
 
 
+def fake_embedding_provider(monkeypatch, vector_of):
+    """Replace the embedding provider at its boundary: `vector_of(text)` per
+    input, every call recorded on the returned AsyncMock."""
+    from unittest.mock import AsyncMock
+
+    fake = AsyncMock(side_effect=lambda texts, **_: [vector_of(t) for t in texts])
+    monkeypatch.setattr("embeddings.embed_texts", fake)
+    monkeypatch.setattr("embeddings._ensure_config", AsyncMock(return_value="http://e"))
+    return fake
+
+
 @contextlib.contextmanager
 def pinned_embedding_api(
     url: str = "http://embedding.test", key: str = "test-key",

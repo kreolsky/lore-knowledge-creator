@@ -18,12 +18,14 @@ import logging
 from datetime import datetime
 from uuid import uuid4
 
+from chat_sessions.conversation import origin_of
+from chat_sessions.recall import schedule_chat_index
 from chat_sessions.serialize import build_session_ref_map, serialize_session
 from fastapi import Depends, HTTPException
 from surrealdb import AsyncSurreal
 
 from auth import get_current_user
-from db import create_record, extract_id, fetch_one, get_db
+from db import create_record, fetch_one, get_db
 from models import BranchCreate
 from routes.chat._router import router
 from routes.chat.sessions import _require_session_access
@@ -93,11 +95,6 @@ async def _prefix_chain(session_id: str, after_message_id: str) -> list[dict]:
     return chain
 
 
-def _origin_of(row: dict) -> str:
-    """The row's origin — its source row's identity across every copy."""
-    return row.get("origin_id") or str(extract_id(row.get("id")) or "")
-
-
 # The content-bearing columns a prefix copy preserves verbatim — driver_seq
 # included: the seed retains the parent prefix seqs, so the branch's log
 # addresses its copied turns by the SAME seqs (the switcher and any later
@@ -126,12 +123,16 @@ def _branch_session_data(session: dict, session_id: str, chain: list[dict],
         "target_doc_id": session.get("target_doc_id"),
         "agent_auto": bool(session.get("agent_auto")),
         "has_region": bool(session.get("has_region")),
+        # INVARIANT(security): a branch inherits the source's recall-index
+        # opt-out. Why: a branch of an anonymous chat would otherwise silently
+        # become searchable.
+        "unindexed": bool(session.get("unindexed")),
         # Thread identity: the branch joins the source's thread (a
         # pre-migration source IS its own thread) and self-anchors its
         # active_branch_id — only the ROOT row's field is ever read.
         "thread_id": session.get("thread_id") or session_id,
         "forked_from_session": session_id,
-        "forked_after_origin": _origin_of(chain[-1]),
+        "forked_after_origin": origin_of(chain[-1]),
         "active_branch_id": new_id,
     }
     for optional in ("document_id", "system_prompt_id", "reasoning_effort",
@@ -178,7 +179,7 @@ async def _copy_prefix(new_id: str, chain: list[dict]) -> None:
         copy["chat_id"] = new_id
         copy["parent_id"] = prev
         copy["driver_session"] = new_id
-        copy["origin_id"] = _origin_of(src)
+        copy["origin_id"] = origin_of(src)
         prev = str(uuid4())
         await create_record("messages", prev, copy)
 
@@ -218,6 +219,7 @@ async def create_branch(
     data = _branch_session_data(session, session_id, chain, new_id, seq, source)
     row = await create_record("chat_sessions", new_id, data)
     await _copy_prefix(new_id, chain)
+    await schedule_chat_index(data["user_id"], data["project_id"])
 
     return serialize_session(
         row, await build_session_ref_map(db, data), viewer_id=user["user_id"],

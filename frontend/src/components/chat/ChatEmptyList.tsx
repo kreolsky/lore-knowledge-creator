@@ -5,7 +5,7 @@ import { useChatStore } from '../../store/chat-store';
 import { useAppStore } from '../../store/app-store';
 import { PillList } from '../ui';
 import { ChatRow } from './ChatRow';
-import { useSortedSessions, filterSessionsByTitle } from './useSortedSessions';
+import { useSortedSessions } from './useSortedSessions';
 import { useTranslation } from '../../i18n';
 import { HoverPreviewPopup } from '../HoverPreviewPopup';
 import { useDocumentPreview } from '../../hooks/useDocumentPreview';
@@ -17,9 +17,7 @@ import { useChatUnavailable } from './ChatUnavailableNotice';
 
 export function ChatEmptyList() {
   // Pure last-activity sort of ALL sessions.
-  const allSorted = useSortedSessions();
-  const listFilter = useChatStore(s => s.listFilter);
-  const sorted = filterSessionsByTitle(allSorted, listFilter);
+  const sorted = useSortedSessions();
   const { t } = useTranslation();
   const activeSessionId = useChatStore(s => s.activeSessionId);
   const setActiveSession = useChatStore(s => s.setActiveSession);
@@ -82,7 +80,7 @@ export function ChatEmptyList() {
   const hoverImageUrl = hoverKind === 'ref' ? refPreview?.imageUrl : undefined;
   // The pill's session owns the parent label being hovered, so its served titles back the
   // store lookups (a parent outside the loaded tree still gets a name).
-  const hoverSession = allSorted.find(s => s.session_id === hoverSessionId);
+  const hoverSession = sorted.find(s => s.session_id === hoverSessionId);
   const hoverDocTitle = useDocumentTitle(hoverKind === 'doc' ? hoverDocId : null);
   const hoverTitle = hoverKind === 'doc'
     ? hoverDocTitle ?? hoverSession?.document_title ?? undefined
@@ -120,16 +118,6 @@ export function ChatEmptyList() {
   // No chats: render nothing — just an empty area, no controls.
   // The hint lives in ChatHeader's ghost-state panel; avoid duplicating it.
   if (sorted.length === 0) {
-    // A live filter that matched nothing says so — an empty list must not read
-    // as "no chats" (empty state ≠ filtered-out state).
-    if (sorted !== allSorted && allSorted.length > 0) {
-      return (
-        // Same typography/placement as SearchPanel's empty state.
-        <div className="flex-1">
-          <p className="text-ui-base text-text-dim text-center py-4 px-2">{t('noMatchesFound')}</p>
-        </div>
-      );
-    }
     // No chats yet: the same dashed placeholder as the empty References tab. Without
     // a model the composer's notice is the only message — no "start a chat" invite.
     if (chatUnavailable) return <div className="flex-1" />;

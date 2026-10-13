@@ -103,6 +103,7 @@ from models.tools import (
     ToolSandboxRunStatus,
     ToolSaveSkill,
     ToolSearch,
+    ToolSearchMyChats,
     ToolTableCellEdit,
 )
 
@@ -179,6 +180,7 @@ __all__ = [
     "ToolSandboxFetchSkill",
     "ToolSandboxRunStatus",
     "ToolSearch",
+    "ToolSearchMyChats",
     "ToolTableCellEdit",
     "UpdateProfileEmail",
     "UpdateProfileName",

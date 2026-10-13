@@ -59,6 +59,8 @@ class SessionCreate(BaseModel):
     # frontend-owned (localStorage); the backend persists only this server-
     # authoritative flag so confirm-forcing survives cross-device reload.
     has_region: bool = False
+    # Opt-out from the chat-recall search index; AI chats only (refused on a note).
+    unindexed: bool = False
 
     @model_validator(mode="after")
     def _check_invariants(self) -> "SessionCreate":
@@ -98,6 +100,10 @@ class SessionCreate(BaseModel):
         # neither of which applies to note sessions.
         if self.is_note and self.has_region:
             raise ValueError("has_region is incompatible with note sessions")
+        # WHY: a note is never indexed (is_note already excludes it), so the
+        # flag on a note is a client defect, refused rather than stored.
+        if self.is_note and self.unindexed:
+            raise ValueError("unindexed is incompatible with note sessions")
         return self
 
 
@@ -136,6 +142,9 @@ class SessionUpdate(BaseModel):
     # live AI session of the same thread. Silently ignored for note sessions
     # (like every AI-only field).
     active_branch_id: str | None = None
+    # Toggles the recall-index opt-out for the WHOLE conversation (every branch
+    # and compaction continuation); 400 on a note session; null is a no-op.
+    unindexed: bool | None = None
 
 
 class BranchCreate(BaseModel):

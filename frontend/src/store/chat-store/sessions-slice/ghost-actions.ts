@@ -55,7 +55,7 @@ export function createGhostActions(set: Set, get: Get): GhostActions {
     },
 
     resetGhostOverrides() {
-      set({ ghostAgentAuto: false, ghostSystemPromptId: null, ghostModel: '', ghostReasoningEffort: null });
+      set({ ghostAgentAuto: false, ghostUnindexed: false, ghostSystemPromptId: null, ghostModel: '', ghostReasoningEffort: null });
     },
 
     // ARCH: single inheritance resolver.
@@ -85,6 +85,7 @@ export function createGhostActions(set: Set, get: Get): GhostActions {
       if (!source) {
         set({
           ghostAgentAuto: false,
+          ghostUnindexed: false,
           ghostSystemPromptId: null,
           ghostModel: '',
           ghostReasoningEffort: null,
@@ -93,6 +94,7 @@ export function createGhostActions(set: Set, get: Get): GhostActions {
       }
       set({
         ghostAgentAuto: !!source.agent_auto,
+        ghostUnindexed: false,
         ghostSystemPromptId: source.system_prompt_id ?? null,
         ghostModel: source.model ?? '',
         // ARCH: reasoning_effort is inherited

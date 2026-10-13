@@ -64,6 +64,8 @@ export interface CreateSessionParams {
   parentSessionId?: string | null;
   focus?: boolean;
   agentAuto?: boolean;
+  // Created already out of the chat-recall search index.
+  unindexed?: boolean;
   targetDocId?: string;
   hasRegion?: boolean;
   // The ghost's explicit reasoning effort.
@@ -110,6 +112,12 @@ export interface ChatState {
   // this branch, the thread's OTHER branches continuing differently after P.
   // Empty for a session with no forks; cleared on every session switch.
   forks: ForkEntry[];
+
+  // One-shot scroll target set by opening a chat search hit: MessageList
+  // scrolls `messageId` into view once `sessionId` is the shown chat and its
+  // messages have landed, then clears it. A target for any other chat is
+  // dropped, never applied to the one shown.
+  pendingScroll: { sessionId: string; messageId: string } | null;
 
   // Streaming: the tightly-coupled streaming state machine lives in ONE object so
   // it is manipulated as a unit — split across flat fields, a reset could clear
@@ -200,12 +208,6 @@ export interface ChatState {
   // optimistic bubble already shows it). `messageId` = dsh's id from the
   // POST reply; until then the chip is matched by text. Null otherwise.
   liveSend: { userMsgId: string; text: string; messageId: string | null } | null;
-  // Chat-list title filter typed in the ghost header's search mode. null = search
-  // mode OFF (the hint shows); '' … = search mode ON with that query. NEVER
-  // persisted and NEVER survives leaving the ghost state — ChatHeader clears it on
-  // its own unmount and when a chat opens. Why: the user asked for a stateless
-  // search (a tab switch / opening a chat drops it).
-  listFilter: string | null;
 
   // SYSTEM: ghost-chat overrides. A ghost
   // (activeSessionId === null) is fully configurable pre-send: the agent_auto
@@ -224,6 +226,9 @@ export interface ChatState {
   // There is no ghost mode axis; ghostAgentAuto is the only pre-send apply-mode
   // override.
   ghostAgentAuto: boolean;
+  // The ghost's pre-send "unindexed" choice. Never inherited from a donor chat:
+  // every new chat starts searchable unless the user opts it out.
+  ghostUnindexed: boolean;
   ghostSystemPromptId: string | null;
   ghostModel: string;
   // ARCH: the pre-send reasoning-effort
@@ -250,6 +255,9 @@ export interface ChatState {
   // choice survives reload because it is a backend column (mirrors
   // model/system_prompt_id).
   setSessionUIMode: (mode: ChatUIMode) => void;
+  // Toggle the active chat (or the ghost) in/out of the chat-recall index;
+  // optimistic, rolled back with an error toast on a failed PATCH.
+  setChatUnindexed: (value: boolean) => Promise<void>;
 
   // Actions — images (pending attachments before send)
   addPendingImage: (dataUrl: string) => void;
@@ -258,7 +266,6 @@ export interface ChatState {
 
   // Actions — draft (see the `draft` field by pendingImages)
   setDraft: (v: string) => void;
-  setListFilter: (v: string | null) => void;
 
   // Actions — sessions
   loadSessions: (projectId: string, documentId?: string) => Promise<void>;
@@ -307,8 +314,12 @@ export interface ChatState {
   /** Fetch + seat the active session's switcher projection (staleness-guarded). */
   loadForks: (sessionId: string) => Promise<void>;
   /** Open a branch: PATCH the thread root's active_branch_id (the chat list
-   * previews the last-opened branch) + setActiveSession on it. */
-  openBranch: (sessionId: string) => void;
+   * previews the last-opened branch) + setActiveSession on it. `rootId`, when
+   * the caller knows it (a chat search hit), wins over every lookup. */
+  openBranch: (sessionId: string, rootId?: string) => void;
+  /** Arm / consume the one-shot scroll target (see `pendingScroll`). */
+  setPendingScroll: (sessionId: string, messageId: string) => void;
+  clearPendingScroll: () => void;
   // Rewind-to-message (agent chats): fork a branch after the message's
   // PARENT and open it — the new branch's transcript ends right before the
   // rewound message and the composer owns the next turn. The old branch

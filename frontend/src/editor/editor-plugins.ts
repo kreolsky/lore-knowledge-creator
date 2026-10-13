@@ -146,14 +146,19 @@ export const linkClickExtension = EditorView.domEventHandlers({
   click: (event, view) => {
     // INVARIANT: a drag/selection gesture is not a click — gate BEFORE any link matching (and before posAtCoords), returning false without preventDefault so CM6's native selection behavior keeps running.
     // Why: a drag returning to its start point ends with an empty selection (only the px
-    // threshold catches it); a double/triple-click or shift+extend ends with a non-empty
+    // threshold catches it); a triple-click or shift+extend ends with a non-empty
     // selection (only the selection check catches it). Cmd/Ctrl remain navigate-intent
     // modifiers but do not bypass the gate.
     const gesture = preclickGesture.get(view) ?? null;
     if (event.button !== 0 || event.shiftKey || event.altKey) return false;
     if (gesture !== null && Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) > DRAG_THRESHOLD_PX) return false;
+    // INVARIANT: a double-click whose first click revealed a link navigates; the word
+    // selection CM6 made on its second mousedown does not count as a selection gesture.
+    // Why: an already-expanded link navigates on the first click, so a double-click on a
+    // link only ever means "reveal, then open" — rejecting it forced a slow third click.
+    const isDoubleClick = event.detail === 2;
     const selection = view.state.selection;
-    if (!selection.main.empty || selection.ranges.length > 1) return false;
+    if (selection.ranges.length > 1 || (!selection.main.empty && !isDoubleClick)) return false;
 
     let pos: number | null;
     try { pos = view.posAtCoords({ x: event.clientX, y: event.clientY }); }
@@ -177,6 +182,8 @@ export const linkClickExtension = EditorView.domEventHandlers({
 
     const tryLink = (start: number, end: number, action: () => void): boolean => {
       if (!revealOn) {
+        // The first click of the double-click already navigated.
+        if (isDoubleClick) return false;
         if (!(offset >= start && offset < end)) return false;
         action();
         event.preventDefault();
@@ -187,7 +194,8 @@ export const linkClickExtension = EditorView.domEventHandlers({
         ? (offset > start && offset < end)
         : (offset >= start && offset < end);
       if (!inClickZone) return false;
-      if (!event.metaKey && !event.ctrlKey && !isExpanded) return false;
+      const navigateIntent = isDoubleClick ? isExpanded : (isExpanded || event.metaKey || event.ctrlKey);
+      if (!navigateIntent) return false;
       action();
       event.preventDefault();
       return true;

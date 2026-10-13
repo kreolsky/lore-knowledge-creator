@@ -59,6 +59,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   // The ACTIVE session's switcher projection (branches-slice); cleared on
   // every session switch and reset.
   forks: [],
+  pendingScroll: null,
 
   streaming: null,
   // The dsh assembler's published timeline (SYSTEM: dsh-conversation) — see
@@ -88,7 +89,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   pendingImages: [],
   // SYSTEM: chat-draft — composer text held in-store (survives tab-switch unmount).
   draft: '',
-  listFilter: null,
 
   // The active chat's dsh inbox + status (inbox-slice).
   inboxQueue: [],
@@ -98,6 +98,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   // Ghost overrides: defaults match createSession's no-opts path.
   // There is no ghost mode: every AI chat is an agent chat.
   ghostAgentAuto: false,
+  ghostUnindexed: false,
   ghostSystemPromptId: null,
   ghostModel: '',
   ghostReasoningEffort: null,

@@ -37,6 +37,7 @@ export function createCreateActions(set: Set, _get: Get): CreateActions {
       parentSessionId,
       focus,
       agentAuto,
+      unindexed,
       targetDocId,
       hasRegion,
       region,
@@ -93,6 +94,7 @@ export function createCreateActions(set: Set, _get: Get): CreateActions {
           })(),
           agent_auto: !!agentAuto,
           has_region: !!hasRegion,
+          unindexed: !!unindexed,
           // ARCH: present ONLY when the ghost
           // carried an explicit effort — omitted means Default (column absent).
           // Create trusts the caller like `model` does; the PATCH guard is the

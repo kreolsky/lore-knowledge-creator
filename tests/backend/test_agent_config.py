@@ -769,7 +769,7 @@ async def test_build_prompt_and_skill_docs_wires_all_three_layers(
     shipped = {(_front(d["content"]) or {}).get("name"): d for d in wire["shipped"]}
     assert set(shipped) == {
         "memory-consolidation", "web-search", "image-generation", "sandbox",
-        "deep-research", "skill-authoring", "extractor-config",
+        "deep-research", "skill-authoring", "extractor-config", "chat-recall",
     }
     meta = _front(shipped["memory-consolidation"]["content"])
     assert set(meta["tools"]) == {

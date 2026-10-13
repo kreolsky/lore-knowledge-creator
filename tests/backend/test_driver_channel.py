@@ -226,6 +226,7 @@ class PersistSpy:
         self.titles: list[tuple] = []
         self.stops: list[str] = []
         self.mints: list[tuple] = []
+        self.indexed: list[tuple] = []
         #: What the mint answers — the head chat, or None (no live chat).
         self.head: dict | None = {"cid": "lore-1", "user_id": "u1", "project_id": "p1"}
 
@@ -259,6 +260,9 @@ class PersistSpy:
             self.mints.append((dsh_session, claim))
             return self.head
 
+        async def index(user_id, project_id):
+            self.indexed.append((user_id, project_id))
+
         monkeypatch.setattr(driver.persistence, "_persist_content", content)
         monkeypatch.setattr(driver.persistence, "_persist_sources", sources)
         monkeypatch.setattr(driver.persistence, "_persist_projection_extras", extras)
@@ -268,6 +272,7 @@ class PersistSpy:
         monkeypatch.setattr(driver.persistence, "_persist_session_title", title)
         monkeypatch.setattr(driver.persistence, "_mint_claim_rows", mint)
         monkeypatch.setattr(driver.channel, "post_stop", stop)
+        monkeypatch.setattr(driver.channel.chat_recall, "schedule_chat_index", index)
 
 
 @pytest.fixture
@@ -390,6 +395,8 @@ async def test_turn_flows_through_relay_arms_and_finalizes(channel):
     assert persists.extras == []  # no halt card on a graceful end
     assert persists.turn_errors == []
     await _until(lambda: ch._subs["lore-1"].turn is None)  # the turn closed
+    # The finalized reply posts the chat-recall reconcile for the turn's pair.
+    assert persists.indexed == [("u1", "p1")]
 
 
 @pytest.mark.asyncio

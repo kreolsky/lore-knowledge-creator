@@ -358,6 +358,30 @@ export function MessageList() {
     anchorTopRef.current = anchorContentTop(el, anchor);
   });
 
+  // One-shot scroll target (a chat search hit, see ChatState.pendingScroll).
+  // WHY declared after the two layout effects above: same commit, later run —
+  // it overrides their bottom snap, and un-sticking keeps the next pass (and
+  // the glide below) from pulling the view back down.
+  const pendingScroll = useChatStore(s => s.pendingScroll);
+  useLayoutEffect(() => {
+    if (!pendingScroll || chatScopeLoading || messagesLoading) return;
+    const clear = useChatStore.getState().clearPendingScroll;
+    const el = containerRef.current;
+    if (pendingScroll.sessionId !== activeSessionId || !el) { clear(); return; }
+    const target = Array.from(el.querySelectorAll<HTMLElement>('[data-message-id]'))
+      .find(node => node.dataset.messageId === pendingScroll.messageId);
+    // A message gone by click time opens the chat unscrolled — the chat
+    // itself is the content, so no error.
+    if (target) {
+      el.scrollTop = anchorContentTop(el, target);
+      stickToBottomRef.current = false;
+      anchorElRef.current = null;
+      anchorTopRef.current = null;
+      setAway(true);
+    }
+    clear();
+  }, [pendingScroll, activeSessionId, chatScopeLoading, messagesLoading, setAway]);
+
   // Smooth glide on a message boundary only (new entry in the active path — new
   // message, user turn). Intra-message stream growth is instant via the layout
   // effect above; only this per-boundary transition stays animated.

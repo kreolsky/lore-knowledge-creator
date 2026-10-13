@@ -70,11 +70,13 @@ async def embed_texts(
     format, shared by giga/480m and Qwen3: `Instruct: …\\nQuery: …`); documents are embedded PLAIN.
 
     INVARIANT: `instruction` is opt-in per call site, never a default. A blanket prefix
-    here would poison every stored document vector.  Why: the embedding model is asymmetric — documents embed PLAIN, only queries take the prefix; defaulting it here corrupts every stored vector. The four callers:
+    here would poison every stored document vector.  Why: the embedding model is asymmetric — documents embed PLAIN, only queries take the prefix; defaulting it here corrupts every stored vector. The callers:
       _reembed (documents)            -> no instruction
       retrieval.py (the user query)   -> instruction=RETRIEVAL_QUERY_INSTRUCTION
       memory/_candidates.py (a body)  -> no instruction (it is a document, not a question)
       memory/dedup.py (fact vs fact)  -> no instruction (symmetric comparison)
+      jobs/tasks/chat_index.py (chat-recall chunks) -> no instruction (a document)
+      routes/tool_api/chat_recall.py (the recall query) -> instruction=RETRIEVAL_QUERY_INSTRUCTION
     """
     if not texts:
         return []

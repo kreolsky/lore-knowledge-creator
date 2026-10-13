@@ -5,6 +5,7 @@ import logging
 from collections import deque
 from uuid import uuid4
 
+from chat_sessions import recall as chat_recall
 from chat_sessions.note_events import broadcast_doc_id, fire_note_emit
 from fastapi import Depends, HTTPException, Query
 from surrealdb import AsyncSurreal
@@ -558,6 +559,8 @@ async def update_message(message_id: str, body: MessageUpdate, user: dict = Depe
     schedule_note_message_changed(
         db, session, msg["chat_id"], action="edited", message=out,
     )
+    if session.get("is_note") is not True:
+        await chat_recall.schedule_chat_index(session["user_id"], session["project_id"])
     return out
 
 

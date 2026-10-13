@@ -9,13 +9,11 @@ call time, so one patch at the owner reaches them all. No `# SYSTEM:` marker
 here (driver/client.py keeps the single driver-client entry;
 structure-gates).
 
-The proposal bridge (`_build_message_proposal` / `_persist_proposal`) was DELETED with
-the proposal cluster — the mid-turn approval hold replaced the proposed status, so
-a mutating result is either `applied` or `rejected`, never `proposed`.
+A mutating result is either `applied` or `rejected`, never `proposed`.
 """
 import logging
 
-from db import get_db
+from db import get_db, run_in_transaction
 
 logger = logging.getLogger(__name__)
 
@@ -121,11 +119,16 @@ async def _mint_claim_rows(driver_session_id: str, claim: dict) -> dict | None:
         return None
     chat_id = head["cid"]
     images = claim.get("images") or []
-    result = await db.query(
-        "CREATE type::record('messages', $uid) SET chat_id = $cid, parent_id = $pid, role = 'user', content = $uc"
-        + (", images = $imgs" if images else "")
-        + ";"
-        "CREATE type::record('messages', $aid) SET chat_id = $cid, parent_id = $uid, role = 'assistant', content = '', model = $model;",
+    # WHY: the user row and its assistant placeholder commit together —
+    # a statement-per-commit write lets a reload read the user row alone,
+    # and a turn marked running then has no assistant row to carry `open_turn`.
+    await run_in_transaction(
+        db,
+        [
+            "CREATE type::record('messages', $uid) SET chat_id = $cid, parent_id = $pid, role = 'user', content = $uc"
+            + (", images = $imgs" if images else ""),
+            "CREATE type::record('messages', $aid) SET chat_id = $cid, parent_id = $uid, role = 'assistant', content = '', model = $model",
+        ],
         {
             "uid": claim["user_msg_id"],
             "aid": claim["assistant_msg_id"],
@@ -135,10 +138,7 @@ async def _mint_claim_rows(driver_session_id: str, claim: dict) -> dict | None:
             **({"imgs": images} if images else {}),
             "model": claim.get("model") or "",
         },
-        site="chat",
     )
-    if isinstance(result, str):
-        raise RuntimeError(f"claim row mint failed: {result}")
     return head
 
 

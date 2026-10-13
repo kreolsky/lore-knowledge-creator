@@ -1018,6 +1018,41 @@ UPDATE chat_sessions SET mode = 'chat' WHERE mode = NONE;
 UPDATE chat_sessions SET agent_auto = false WHERE agent_auto IS NONE;
 UPDATE chat_sessions SET title_user_set = false WHERE title_user_set IS NONE;
 
+-- ARCH: the per-chat opt-out from the chat-recall search index. It ONLY means
+-- "not in the search index": the chat lists, titles and deletes as usual. One
+-- value per conversation — the PATCH writes every row of the conversation and
+-- every minting site of a derived row (branch, compaction continuation)
+-- copies it from its source. Non-option bool + the backfill below so a read
+-- predicate `unindexed = false` never meets NONE.
+DEFINE FIELD IF NOT EXISTS unindexed ON chat_sessions TYPE bool DEFAULT false;
+UPDATE chat_sessions SET unindexed = false WHERE unindexed IS NONE;
+
+-- ARCH: the chat-recall search index — a disposable cache rebuilt from
+-- `messages` by reconciliation (jobs/tasks/chat_index.py), never written by a
+-- message writer. A table of its own, NOT doc_chunks: doc_chunks is searched
+-- project-wide by search_materials, and one forgotten filter there would leak
+-- private chats into it. Visibility is decided at READ time against the live
+-- messages / chat_sessions rows; a row here proves nothing about visibility.
+-- content_hash = sha256 of the WHOLE message content (every chunk of a message
+-- carries it), so "this message is indexed under the current model" is one
+-- equality; vector reuse keys on (content_hash, model), never the hash alone.
+DEFINE TABLE IF NOT EXISTS chat_chunks SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS user_id      ON chat_chunks TYPE string;
+DEFINE FIELD IF NOT EXISTS project_id   ON chat_chunks TYPE string;
+DEFINE FIELD IF NOT EXISTS chat_id      ON chat_chunks TYPE string;
+DEFINE FIELD IF NOT EXISTS message_id   ON chat_chunks TYPE string;
+DEFINE FIELD IF NOT EXISTS origin_key   ON chat_chunks TYPE string;
+DEFINE FIELD IF NOT EXISTS role         ON chat_chunks TYPE string;
+DEFINE FIELD IF NOT EXISTS created_at   ON chat_chunks TYPE datetime;
+DEFINE FIELD IF NOT EXISTS ord          ON chat_chunks TYPE int;
+DEFINE FIELD IF NOT EXISTS content      ON chat_chunks TYPE string;
+DEFINE FIELD IF NOT EXISTS content_hash ON chat_chunks TYPE string;
+DEFINE FIELD IF NOT EXISTS model        ON chat_chunks TYPE string;
+DEFINE FIELD IF NOT EXISTS embedding    ON chat_chunks TYPE array<float>;
+DEFINE INDEX IF NOT EXISTS idx_chat_chunks_user_project ON chat_chunks FIELDS user_id, project_id;
+DEFINE INDEX IF NOT EXISTS idx_chat_chunks_message ON chat_chunks FIELDS message_id;
+DEFINE INDEX IF NOT EXISTS idx_chat_chunks_hash_model ON chat_chunks FIELDS content_hash, model;
+
 -- ARCH: the embedded `proposal` (singular) and `proposals` (plural array)
 -- fields + their nested sub-field definitions USED to live here. They are
 -- GONE by design, and the `tool_proposals` rows table is DROPPED with them

@@ -581,6 +581,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(chat.router)
+app.include_router(chat.search.router)
 # The per-entity collab WS route is deleted (plan fewer-layers): no client ever
 # opened it — the frontend speaks only the multiplexed project
 # channel below. There is no second /ws/collab/* matcher left to order against.

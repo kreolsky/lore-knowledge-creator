@@ -1,7 +1,7 @@
-/** Chat header — static title (double-click to rename) + new chat / goto-parent / export / delete. Chat-store slices: sessions, activeSessionId, modelsLoaded, createSession, setActiveSession, deleteSession, updateSession, loadModels. App-store slices: currentProject, currentDocument, currentReference. */
+/** Chat header — static title (double-click to rename) + new chat / goto-parent / unindexed toggle / export / delete. Chat-store slices: sessions, activeSessionId, modelsLoaded, createSession, setActiveSession, deleteSession, updateSession, setChatUnindexed, loadModels. App-store slices: currentProject, currentDocument, currentReference. */
 
 import { useState, useCallback, useEffect } from 'react';
-import { ArrowLeft, Trash2, Download, FileText, Network, Clock, FolderUp, Search } from 'lucide-react';
+import { ArrowLeft, Trash2, Download, FileText, Network, Clock, FolderUp, VenetianMask } from 'lucide-react';
 import { Button, IconButton, FieldInput, Popover } from '../ui';
 import { ParentPickerPopup } from '../ParentPickerPopup';
 import { useChatStore, selectBranchPath } from '../../store/chat-store';
@@ -12,7 +12,6 @@ import { navigateToDocKeepingChat } from '../../chat/navigate';
 import { emit } from '../../events';
 import { useTranslation } from '../../i18n';
 import { useArmedAction } from '../../hooks/useArmedAction';
-import { CHAT_LIST_FILTER_MIN } from './useSortedSessions';
 
 export function ChatHeader() {
   const sessions = useChatStore(s => s.sessions);
@@ -23,8 +22,7 @@ export function ChatHeader() {
   const updateSession = useChatStore(s => s.updateSession);
   const loadModels = useChatStore(s => s.loadModels);
   const startGhostChat = useChatStore(s => s.startGhostChat);
-  const listFilter = useChatStore(s => s.listFilter);
-  const setListFilter = useChatStore(s => s.setListFilter);
+  const setChatUnindexed = useChatStore(s => s.setChatUnindexed);
 
   const activeSession = sessions.find(s => s.session_id === activeSessionId);
   const documents = useAppStore(s => s.documents);
@@ -51,13 +49,6 @@ export function ChatHeader() {
   useEffect(() => {
     if (!modelsLoaded) loadModels();
   }, [modelsLoaded, loadModels]);
-
-  // The list search is stateless: opening a chat or leaving the panel (tab
-  // switch unmounts ChatHeader) drops it. See ChatState.listFilter.
-  useEffect(() => {
-    if (activeSessionId) setListFilter(null);
-  }, [activeSessionId, setListFilter]);
-  useEffect(() => () => setListFilter(null), [setListFilter]);
 
   const handleNewChat = useCallback(() => {
     // ARCH: "Add chat" opens a fresh client-only
@@ -203,42 +194,15 @@ export function ChatHeader() {
 
   // Ghost (no session yet): a NEW-CHAT plaque. Yellowed to signal "you are
   // composing a fresh chat" — mirrors the notes-thread tint. Left-aligned
-  // hint … [search] [sort-toggle]. Search flips the hint into a title-filter
-  // input IN PLACE (same row height, controls stay put). The sort toggle is
-  // hidden when no document is open (proximity is meaningless without an
-  // anchor); the list stays neutral either way.
+  // hint … [sort-toggle]. The sort toggle is hidden when no document is open
+  // (proximity is meaningless without an anchor); the list stays neutral
+  // either way.
   if (!activeSessionId) {
-    const searching = listFilter !== null;
     return (
       <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--sticky-yellow-sep)] bg-[var(--sticky-yellow-light)] min-h-[40px]">
         <div className="flex-1 min-w-0">
-          {searching ? (
-            <FieldInput
-              className="doc-rename-input chat-rename-input chat-search-input w-full"
-              data-chat-search-input
-              value={listFilter}
-              placeholder={t('typeAtLeastN', { n: CHAT_LIST_FILTER_MIN })}
-              onChange={e => setListFilter(e.target.value)}
-              autoFocus
-              onKeyDown={e => {
-                if (e.key === 'Escape') { e.preventDefault(); setListFilter(null); }
-              }}
-              // An empty query on blur means the mode was abandoned, not paused.
-              onBlur={() => { if (listFilter === '') setListFilter(null); }}
-            />
-          ) : (
-            <span className="block text-sm font-medium text-sticky-ink truncate">{t('chatEmptyHint')}</span>
-          )}
+          <span className="block text-sm font-medium text-sticky-ink truncate">{t('chatEmptyHint')}</span>
         </div>
-        <IconButton
-          size="sm"
-          theme="note"
-          className={`ml-auto ${searching ? 'text-accent-text' : 'text-sticky-ink'}`}
-          title={t('chatSearchTitles')}
-          onClick={() => setListFilter(searching ? null : '')}
-        >
-          <Search size={14} />
-        </IconButton>
         {currentDocumentId && (
           <IconButton
             size="sm"
@@ -341,6 +305,14 @@ export function ChatHeader() {
 
       {activeSessionId && (
         <>
+          <IconButton
+            size="sm"
+            pressed={!!activeSession?.unindexed}
+            title={activeSession?.unindexed ? t('chatUnindexedOn') : t('chatUnindexedOff')}
+            onClick={() => { void setChatUnindexed(!activeSession?.unindexed); }}
+          >
+            <VenetianMask size={14} />
+          </IconButton>
           <Popover
             align="right"
             placement="bottom"

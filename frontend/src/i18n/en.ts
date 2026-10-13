@@ -197,6 +197,14 @@ export const en = {
   searchFailed: 'Search failed.',
   searchScopeThisDoc: 'In this document',
   searchMemoryOnly: 'Memory only',
+  searchModeChats: 'Chats',
+  searchPlaceholderChats: 'Search my chats\u2026',
+  chatSearchScopeTip: 'Only chats attached to this document or to documents under it.',
+  chatSearchSibling: 'here',
+  chatSearchSiblingTip: 'Attached to the open document or a document under it',
+  chatSearchDisabled: 'Chat search is disabled by the administrator.',
+  chatSearchTitleBadge: 'title',
+  chatSearchOpenFailed: 'Failed to open the chat',
   searchExactMatch: 'Substring',
   searchExactMatchTip: 'Off: titles match by substring (prefix "asp" finds "Aspirin…"), body text only by whole words with morphology ("castle" finds "castles", but "asp" inside "aspirin" — no).\nOn: case-insensitive literal substring in titles and bodies, references included — but no word forms.',
 
@@ -353,7 +361,6 @@ export const en = {
   chatEmptyHint: 'Start a conversation by typing a message below.',
   chatSortByProximity: 'Sort by proximity to this document',
   chatSortByRecency: 'Sort by recent activity',
-  chatSearchTitles: 'Search chats by title',
   chatContextImagesFull: 'This conversation already holds too many images ({used}MB of {limit}MB) — start a new chat to continue',
   chatContextFullNewChat: 'New chat',
   chatContextFullPlaceholder: 'Context is full — start a new chat to continue',
@@ -477,6 +484,13 @@ export const en = {
   // reasoning-effort-selector); the hint keeps the full sentence.
   chatAutoApply: 'Auto',
   chatAutoApplyHint: 'Apply every mutating tool call without asking; uncheck to confirm each edit',
+  // Per-chat opt-out of the agent's search across the user's other chats.
+  chatUnindexed: 'Unindexed',
+  chatUnindexedHint: 'Keep this chat out of the assistant\'s search across your chats',
+  chatUnindexedOn: 'Unindexed: the assistant does not find this chat from your other chats. Click to make it searchable',
+  chatUnindexedOff: 'Hide this chat from the assistant\'s search across your chats',
+  chatUnindexedMark: 'Unindexed — not found from your other chats',
+  chatUnindexedFailed: 'Failed to change the chat\'s search visibility',
 
   // Reasoning-effort dropdown (plan reasoning-effort-selector) — default sends
   // no effort and the provider's default applies; the rest are the model's

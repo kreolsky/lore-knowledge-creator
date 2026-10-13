@@ -122,6 +122,7 @@ async def _ai_chat_fields(db, body: SessionCreate, user_id: str) -> dict:
     data["target_doc_id"] = body.target_doc_id
     data["agent_auto"] = bool(body.agent_auto)
     data["has_region"] = bool(body.has_region)
+    data["unindexed"] = bool(body.unindexed)
     # ARCH: stored when explicitly set at
     # create; omitted → column absent (reads as null = Default). Validated
     # at PATCH time only — create trusts the caller exactly like `model`

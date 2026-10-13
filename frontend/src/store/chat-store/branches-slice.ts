@@ -13,7 +13,10 @@ import { useAppStore } from '../app-store';
 import { t } from '../../i18n';
 import type { ChatState, Set, Get } from './types';
 
-type BranchesSlice = Pick<ChatState, 'loadForks' | 'openBranch'>;
+type BranchesSlice = Pick<
+  ChatState,
+  'loadForks' | 'openBranch' | 'setPendingScroll' | 'clearPendingScroll'
+>;
 
 // A branch is bound to its thread for life, so
 // branch → root is an immutable server FACT, not cacheable UI state — it
@@ -68,8 +71,11 @@ export function createBranchesSlice(set: Set, get: Get): BranchesSlice {
       set({ forks: Array.isArray(entries) ? entries : [] });
     },
 
-    openBranch(sessionId: string) {
-      // The thread ROOT carries the pointer. Switcher targets are always
+    openBranch(sessionId: string, explicitRootId?: string) {
+      // The thread ROOT carries the pointer. A caller that knows it (a chat
+      // search hit carries its thread root) passes it: the hit's chat is
+      // unrelated to the active one, so the active-row lookup below would
+      // name the wrong thread. Switcher targets are always
       // threadmates of the ACTIVE session, so the root resolves from the
       // ACTIVE row first — the target itself may be an unlisted sibling with
       // no row in `sessions`, and reading the target's row first made this
@@ -83,7 +89,8 @@ export function createBranchesSlice(set: Set, get: Get): BranchesSlice {
       const activeRow = activeId ? get().sessions.find(s => s.session_id === activeId) : undefined;
       const row = get().sessions.find(s => s.session_id === sessionId);
       const rootId =
-        activeRow?.thread_id
+        explicitRootId
+        || activeRow?.thread_id
         || row?.thread_id
         || threadRootByBranch.get(sessionId)
         || (activeId ? threadRootByBranch.get(activeId) : undefined)
@@ -107,6 +114,14 @@ export function createBranchesSlice(set: Set, get: Get): BranchesSlice {
       if (get().activeSessionId !== sessionId) {
         get().setActiveSession(sessionId);
       }
+    },
+
+    setPendingScroll(sessionId: string, messageId: string) {
+      set({ pendingScroll: { sessionId, messageId } });
+    },
+
+    clearPendingScroll() {
+      set({ pendingScroll: null });
     },
   };
 }
