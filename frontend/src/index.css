@@ -1064,10 +1064,7 @@ html.dark .resizer:not(:hover):not(.dragging)::before {
   align-self: flex-start;
 }
 
-/* Yellow tab tint — shared by the notes tab with an open thread and the chat tab
- * in the new-chat/ghost state (plan: chat-list-ux-and-sort-fixes, F1). The chat
- * tab deliberately has NO .inactive variant: a collapsed/background chat tab
- * stays neutral so it does not mimic the "a note thread is open" signal.
+/* Yellow tab tint — the notes tab with an open thread.
  * SYSTEM: inbox — the *-tab-unread classes (a flagged external note/reference
  * arrived for this user, see useInboxSummary) join the SAME selector groups:
  * one yellow, one meaning. The values ARE --inbox-mark's tokens (the alias in
@@ -1075,15 +1072,13 @@ html.dark .resizer:not(:hover):not(.dragging)::before {
  * the row cannot drift apart. */
 .right-tab.notes-tab-thread.active,
 .right-tab.notes-tab-unread.active,
-.right-tab.refs-tab-unread.active,
-.right-tab.chat-tab-new.active {
+.right-tab.refs-tab-unread.active {
   background: var(--sticky-yellow-light);
   color: #6b5e10;
 }
 html.dark .right-tab.notes-tab-thread.active,
 html.dark .right-tab.notes-tab-unread.active,
-html.dark .right-tab.refs-tab-unread.active,
-html.dark .right-tab.chat-tab-new.active {
+html.dark .right-tab.refs-tab-unread.active {
   background: var(--sticky-yellow-light);
   color: #c8b840;
 }

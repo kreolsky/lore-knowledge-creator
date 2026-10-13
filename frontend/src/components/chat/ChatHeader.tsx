@@ -192,22 +192,20 @@ export function ChatHeader() {
     ? activeSession?.reference_title
     : activeSession?.document_title ?? documents.find(d => d.document_id === parentDocId)?.title) ?? '';
 
-  // Ghost (no session yet): a NEW-CHAT plaque. Yellowed to signal "you are
-  // composing a fresh chat" — mirrors the notes-thread tint. Left-aligned
-  // hint … [sort-toggle]. The sort toggle is hidden when no document is open
+  // Ghost (no session yet): a NEW-CHAT plaque on the neutral surface.
+  // Left-aligned hint … [sort-toggle]. The sort toggle is hidden when no document is open
   // (proximity is meaningless without an anchor); the list stays neutral
   // either way.
   if (!activeSessionId) {
     return (
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--sticky-yellow-sep)] bg-[var(--sticky-yellow-light)] min-h-[40px]">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-surface min-h-[40px]">
         <div className="flex-1 min-w-0">
-          <span className="block text-sm font-medium text-sticky-ink truncate">{t('chatEmptyHint')}</span>
+          <span className="block text-sm font-medium text-text-muted truncate">{t('chatEmptyHint')}</span>
         </div>
         {currentDocumentId && (
           <IconButton
             size="sm"
-            theme="note"
-            className={chatSortByProximity ? 'text-accent-text' : 'text-sticky-ink'}
+            className={chatSortByProximity ? 'text-accent-text' : 'text-text-muted'}
             title={chatSortByProximity ? t('chatSortByRecency') : t('chatSortByProximity')}
             onClick={() => setChatSortByProximity(currentDocumentId, !chatSortByProximity)}
           >

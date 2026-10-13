@@ -88,13 +88,6 @@ export function ProjectPage() {
   const setRightPanelTab = useUIStore(s => s.setRightPanelTab);
   const setFindSeed = useUIStore(s => s.setFindSeed);
   const activeNoteThreadId = useNoteStore(s => s.activeNoteThreadId);
-  // Yellow the chat TAB while the panel
-  // is in its new-chat/ghost state (activeSessionId === null). Mirrors the
-  // activeNoteThreadId tab-tint subscription — same reactive cost, no new perf
-  // class. CSS defines only the .active variant so a collapsed/background chat
-  // tab stays neutral (avoiding the false "a note is open" signal).
-  const isGhostChat = useChatStore(s => s.activeSessionId) === null;
-
   const currentDocId = useAppStore(s => s.currentDocument?.document_id ?? null);
   const docState = useDocState(currentDocId);
   const rightPanelTab = docState.rightPanelTab;
@@ -344,7 +337,6 @@ export function ProjectPage() {
       icon: <MessagesSquare size={15} />,
       title: t('tabChat'),
       renderPanel: () => <ChatPanel />,
-      className: isGhostChat ? 'chat-tab-new' : undefined,
     });
   }
   rightTabs.push({
