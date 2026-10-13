@@ -209,12 +209,21 @@ async def _purge_unindexable(db, user_id: str, project_id: str) -> int:
     return len(gone)
 
 
+async def indexing_state(db) -> tuple[str, str | None]:
+    """`(state, model)`: `("on", model)`, or `("skill_disabled" |
+    "embeddings_unconfigured", None)` while indexing is off."""
+    if await chat_recall_disabled(db):
+        return "skill_disabled", None
+    model = await _embedding_model()
+    if model is None:
+        return "embeddings_unconfigured", None
+    return "on", model
+
+
 async def _indexing_model(db) -> str | None:
     """The model to index under, or None while indexing is off (skill disabled
     or embeddings unconfigured)."""
-    if await chat_recall_disabled(db):
-        return None
-    return await _embedding_model()
+    return (await indexing_state(db))[1]
 
 
 async def index_chat_messages(ctx, user_id: str, project_id: str) -> None:
@@ -252,6 +261,18 @@ async def _index_pairs(db) -> set[tuple[str, str]]:
     return {(r["user_id"], r["project_id"]) for r in rows}
 
 
+async def pairs_with_work(db, model: str) -> list[tuple[str, str, int, int]]:
+    """`(user_id, project_id, pending messages, stale chunks)` for every pair
+    whose plan has work — the population the sweep posts and the admin stats
+    count, so a number shown is always one a pair task will drain."""
+    out = []
+    for user_id, project_id in sorted(await _index_pairs(db)):
+        pending, stale = await plan_chat_index(db, user_id, project_id, model)
+        if pending or stale:
+            out.append((user_id, project_id, len(pending), len(stale)))
+    return out
+
+
 async def chat_index_sweep_task(ctx) -> None:
     """Hourly catch-up root: post the pair task for every pair whose plan has
     work (pending messages or stale chunks). While indexing is off it posts
@@ -260,12 +281,11 @@ async def chat_index_sweep_task(ctx) -> None:
     db = await get_db()
     model = await _indexing_model(db)
     posted = purged = 0
-    for user_id, project_id in sorted(await _index_pairs(db)):
-        if model is None:
+    if model is None:
+        for user_id, project_id in sorted(await _index_pairs(db)):
             purged += await _purge_unindexable(db, user_id, project_id)
-            continue
-        pending, stale = await plan_chat_index(db, user_id, project_id, model)
-        if pending or stale:
+    else:
+        for user_id, project_id, _, _ in await pairs_with_work(db, model):
             await schedule_chat_index(user_id, project_id)
             posted += 1
     if posted or purged:

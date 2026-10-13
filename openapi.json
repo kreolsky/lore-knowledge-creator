@@ -4017,6 +4017,54 @@
         ]
       }
     },
+    "/api/admin/embeddings/index-chats": {
+      "post": {
+        "description": "Post the chat-index pair task for every pair with work — what the hourly\nsweep would post. A press during a running reconcile collapses onto it\n(stable job_id in schedule_chat_index).",
+        "operationId": "index_chats_api_admin_embeddings_index_chats_post",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Index Chats",
+        "tags": [
+          "admin-embeddings"
+        ]
+      }
+    },
     "/api/admin/embeddings/reset-docs": {
       "post": {
         "operationId": "reset_docs_api_admin_embeddings_reset_docs_post",

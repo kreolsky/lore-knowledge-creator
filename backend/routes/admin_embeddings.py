@@ -1,4 +1,4 @@
-"""Admin embeddings routes — stats, status, embed-missing, reset."""
+"""Admin embeddings routes — stats, status, embed-missing, index-chats, reset."""
 # ARCH: embed-missing enqueues per-doc jobs via arq. reset uses inline background task.
 
 from __future__ import annotations
@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from chat_sessions.recall import schedule_chat_index
 from embedding_coverage import LIVE_PROJECTS_SQL, chunkable_candidates
 from fastapi import APIRouter, Body, Depends
 from pydantic import BaseModel
@@ -14,6 +15,7 @@ from surrealdb import AsyncSurreal
 from auth import require_admin
 from db import get_db, validate_record_id
 from jobs import pool as jobs_pool
+from jobs.tasks.chat_index import indexing_state, pairs_with_work
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,28 @@ async def get_stats(_: dict = Depends(require_admin), db: AsyncSurreal = Depends
         ),
         # The number the operator watches drain after an EMBEDDING_MODEL swap.
         "stale_model_count": sum(1 for c in candidates if c["stale"]),
+        "chat": await _chat_stats(db),
+    }
+
+
+async def _chat_stats(db) -> dict:
+    """The chat-recall index in aggregate numbers — no per-user/project split.
+
+    # WHY: pending/stale derive from pairs_with_work, the population the hourly
+    # sweep and /index-chats post — the ARCH above get_stats, applied to chats.
+    # While indexing is off they are None, never 0: 0 reads as "all indexed"
+    # while nothing is indexing. After an EMBEDDING_MODEL swap every message is
+    # pending (an other-model chunk re-queues its whole message), so pending
+    # is the number that drains.
+    """
+    chunks = await db.query("SELECT count() AS c FROM chat_chunks GROUP ALL")
+    state, model = await indexing_state(db)
+    pairs = await pairs_with_work(db, model) if model else None
+    return {
+        "state": state,
+        "chunks": chunks[0]["c"] if chunks else 0,
+        "pending_messages": sum(p[2] for p in pairs) if pairs is not None else None,
+        "stale_chunks": sum(p[3] for p in pairs) if pairs is not None else None,
     }
 
 
@@ -145,6 +169,20 @@ async def embed_missing(
         count += 1
 
     return {"started": True, "count": count}
+
+
+@router.post("/index-chats")
+async def index_chats(_: dict = Depends(require_admin), db: AsyncSurreal = Depends(get_db)):
+    """Post the chat-index pair task for every pair with work — what the hourly
+    sweep would post. A press during a running reconcile collapses onto it
+    (stable job_id in schedule_chat_index)."""
+    state, model = await indexing_state(db)
+    if model is None:
+        return {"started": False, "error": state}
+    pairs = await pairs_with_work(db, model)
+    for user_id, project_id, _, _ in pairs:
+        await schedule_chat_index(user_id, project_id)
+    return {"started": True, "count": len(pairs)}
 
 
 _RESET_BATCH_SIZE = 50

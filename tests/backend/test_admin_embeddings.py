@@ -530,3 +530,167 @@ async def test_stats_requires_admin(client, regular_user, project_with_doc):
         cookies={"lore_session": token},
     )
     assert resp.status_code == 403
+
+
+# ─── chat-recall index ───────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def chat_embed(monkeypatch):
+    """Embeddings configured, the provider faked at its boundary."""
+    from helpers import fake_embedding_provider
+    return fake_embedding_provider(monkeypatch, lambda _: [0.5] * 8)
+
+
+@pytest_asyncio.fixture
+async def chat_corpus(test_db):
+    """Seeds chat sessions/messages; deletes every chat row again on teardown.
+
+    # INVARIANT: a test that seeds chat rows MUST delete them again.
+    # Why: `chat.chunks` and the pending sums are corpus-wide, like doc_chunks.
+    """
+    async def _seed(sid, uid, pid, messages, **fields):
+        await test_db.query(
+            "CREATE type::record('chat_sessions', $id) CONTENT $f",
+            {"id": sid, "f": {"user_id": uid, "project_id": pid, "title": sid,
+                              "model": "m", **fields}},
+        )
+        for mid, content in messages:
+            await test_db.query(
+                "CREATE type::record('messages', $id) CONTENT $f",
+                {"id": mid, "f": {"chat_id": sid, "role": "user", "content": content}},
+            )
+    yield _seed
+    await test_db.query(
+        "DELETE chat_chunks; DELETE messages; DELETE chat_sessions; DELETE instance_skills")
+
+
+async def _chat_stats(client, token) -> dict:
+    resp = await client.get("/api/admin/embeddings/stats", cookies={"lore_session": token})
+    assert resp.status_code == 200, resp.text
+    return resp.json()["chat"]
+
+
+async def _index_chats(client, token):
+    with EnqueueRecorder.active() as enq:
+        resp = await client.post(
+            "/api/admin/embeddings/index-chats", cookies={"lore_session": token})
+    assert resp.status_code == 200, resp.text
+    return resp.json(), enq.of("index_chat_messages")
+
+
+@pytest.mark.asyncio
+async def test_chat_stats_drain_after_the_pair_task(client, admin_user, chat_embed, chat_corpus):
+    """Two unindexed messages read pending 2; the pair task drains them to 0."""
+    from jobs.tasks.chat_index import index_chat_messages
+    _, token = admin_user
+    await chat_corpus("cs1", "u1", "p1", [("cm1", "the gate"), ("cm2", "the tower")])
+    before = await _chat_stats(client, token)
+    assert before == {"state": "on", "chunks": 0, "pending_messages": 2, "stale_chunks": 0}
+    await index_chat_messages({}, "u1", "p1")
+    after = await _chat_stats(client, token)
+    assert after["pending_messages"] == 0 and after["stale_chunks"] == 0
+    assert after["chunks"] > 0
+
+
+@pytest.mark.asyncio
+async def test_chat_stats_equal_what_index_chats_posts(
+    client, admin_user, chat_embed, chat_corpus,
+):
+    """pending is summed over exactly the pairs /index-chats posts; an indexed
+    pair is posted for nothing and running the posted pairs drains it to 0."""
+    from jobs.tasks.chat_index import index_chat_messages
+    _, token = admin_user
+    await chat_corpus("done", "u-done", "p1", [("d1", "already indexed")])
+    await index_chat_messages({}, "u-done", "p1")
+    await chat_corpus("lag1", "u-a", "p1", [("a1", "one"), ("a2", "two")])
+    await chat_corpus("lag2", "u-b", "p2", [("b1", "three")])
+
+    stats = await _chat_stats(client, token)
+    body, posts = await _index_chats(client, token)
+    assert body == {"started": True, "count": len(posts)}
+    assert {(c.args, c.kwargs["job_id"]) for c in posts} == {
+        (("u-a", "p1"), "chat_index:u-a:p1"), (("u-b", "p2"), "chat_index:u-b:p2"),
+    }
+    assert stats["pending_messages"] == 3
+
+    for c in posts:
+        await index_chat_messages({}, *c.args)
+    drained = await _chat_stats(client, token)
+    assert (drained["pending_messages"], drained["stale_chunks"]) == (0, 0)
+    assert (await _index_chats(client, token))[0] == {"started": True, "count": 0}
+
+
+@pytest.mark.asyncio
+async def test_chat_stats_other_model_chunk_is_pending_and_stale(
+    client, admin_user, chat_embed, chat_corpus, test_db,
+):
+    from jobs.tasks.chat_index import index_chat_messages
+    _, token = admin_user
+    await chat_corpus("cs1", "u1", "p1", [("cm1", "old geometry")])
+    await index_chat_messages({}, "u1", "p1")
+    chunks = (await _chat_stats(client, token))["chunks"]
+    assert chunks > 0
+    await test_db.query("UPDATE chat_chunks SET model = 'retired/model'")
+    stats = await _chat_stats(client, token)
+    assert (stats["pending_messages"], stats["stale_chunks"]) == (1, chunks)
+
+
+@pytest.mark.parametrize("fields", [
+    {"is_note": True}, {"unindexed": True}, {"deleted_at": "now"},
+], ids=["note", "unindexed", "deleted"])
+@pytest.mark.asyncio
+async def test_chat_stats_skip_unindexable_chats(
+    client, admin_user, chat_embed, chat_corpus, test_db, fields,
+):
+    _, token = admin_user
+    await chat_corpus("cs1", "u1", "p1", [("cm1", "not for the index")])
+    # False-green check: the same chat counts while it is indexable.
+    assert (await _chat_stats(client, token))["pending_messages"] == 1
+    if "deleted_at" in fields:
+        await test_db.query(
+            "UPDATE type::record('chat_sessions', 'cs1') SET deleted_at = time::now()")
+    else:
+        await test_db.query(
+            "UPDATE type::record('chat_sessions', 'cs1') MERGE $f", {"f": fields})
+    assert (await _chat_stats(client, token))["pending_messages"] == 0
+
+
+@pytest.mark.asyncio
+async def test_chat_stats_skill_disabled(client, admin_user, chat_embed, chat_corpus, test_db):
+    """Disabled skill: numbers are None (never 0) and /index-chats posts nothing."""
+    _, token = admin_user
+    await chat_corpus("cs1", "u1", "p1", [("cm1", "pending while disabled")])
+    await test_db.query(
+        "CREATE instance_skills CONTENT {name: 'chat-recall', enabled: false, updated_by: 'admin'}")
+    stats = await _chat_stats(client, token)
+    assert stats == {"state": "skill_disabled", "chunks": 0,
+                     "pending_messages": None, "stale_chunks": None}
+    body, posts = await _index_chats(client, token)
+    assert body == {"started": False, "error": "skill_disabled"}
+    assert posts == []
+
+
+@pytest.mark.asyncio
+async def test_chat_stats_embeddings_unconfigured(client, admin_user, chat_embed, chat_corpus):
+    import embeddings
+    _, token = admin_user
+    await chat_corpus("cs1", "u1", "p1", [("cm1", "pending, no provider")])
+    embeddings._ensure_config.side_effect = embeddings.EmbeddingConfigError("no url")
+    stats = await _chat_stats(client, token)
+    assert stats["state"] == "embeddings_unconfigured"
+    assert (stats["pending_messages"], stats["stale_chunks"]) == (None, None)
+    body, posts = await _index_chats(client, token)
+    assert body == {"started": False, "error": "embeddings_unconfigured"}
+    assert posts == []
+
+
+@pytest.mark.asyncio
+async def test_index_chats_requires_admin(client, regular_user, chat_corpus):
+    _, token = regular_user
+    await chat_corpus("cs1", "u1", "p1", [("cm1", "someone's chat")])
+    with EnqueueRecorder.active() as enq:
+        resp = await client.post(
+            "/api/admin/embeddings/index-chats", cookies={"lore_session": token})
+    assert resp.status_code == 403
+    assert enq.calls == []

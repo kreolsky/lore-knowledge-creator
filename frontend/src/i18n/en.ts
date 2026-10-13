@@ -809,6 +809,16 @@ export const en = {
   failedToLoadEmbeddingStatus: 'Failed to load embedding status',
   failedToStartEmbedding: 'Failed to start embedding',
   failedToRebuildIndex: 'Failed to start index rebuild',
+  chatIndex: 'Chats',
+  chatChunksInIndex: 'Chat chunks in index',
+  chatPendingMessages: 'Messages pending indexing',
+  chatStaleChunks: 'Chunks waiting for purge',
+  chatIndexOffSkill: 'Chat indexing is off: the chat-recall skill is disabled',
+  chatIndexOffEmbeddings: 'Chat indexing is off: embeddings are not configured',
+  indexChatsNow: 'Index chats now',
+  indexChatsNowHint: 'Chats are also caught up automatically every hour',
+  chatIndexEnqueued: 'Chat index runs enqueued: {count}',
+  failedToStartChatIndex: 'Failed to start chat indexing',
   confirm: 'Confirm',
 
   // info admin (storage panel)

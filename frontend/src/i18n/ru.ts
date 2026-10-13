@@ -807,6 +807,16 @@ export const ru: Record<TranslationKey, string> = {
   failedToLoadEmbeddingStatus: 'Не удалось загрузить статус эмбеддинга',
   failedToStartEmbedding: 'Не удалось запустить эмбеддинг',
   failedToRebuildIndex: 'Не удалось запустить пересборку индекса',
+  chatIndex: 'Чаты',
+  chatChunksInIndex: 'Чанков чатов в индексе',
+  chatPendingMessages: 'Сообщений ждут индексации',
+  chatStaleChunks: 'Чанков ждут удаления',
+  chatIndexOffSkill: 'Индексация чатов выключена: скилл chat-recall отключён',
+  chatIndexOffEmbeddings: 'Индексация чатов выключена: эмбеддинги не настроены',
+  indexChatsNow: 'Проиндексировать чаты',
+  indexChatsNowHint: 'Чаты также догоняются автоматически раз в час',
+  chatIndexEnqueued: 'Поставлено прогонов индекса чатов: {count}',
+  failedToStartChatIndex: 'Не удалось запустить индексацию чатов',
   confirm: 'Подтвердить',
 
   // info admin (storage panel)

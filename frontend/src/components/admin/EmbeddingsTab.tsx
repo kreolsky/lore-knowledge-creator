@@ -1,4 +1,4 @@
-/** Admin embeddings tab — coverage bullets, embed-now, rebuild-index. */
+/** Admin embeddings tab — doc + chat-index coverage bullets, embed-now, index-chats, rebuild-index. */
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { Button, CenterHeading, FieldInput } from '../ui';
@@ -12,7 +12,23 @@ interface EmbeddingStats {
   refs_without_embeddings: number;
   pending_reembed_count: number;
   stale_model_count: number;
+  chat: ChatIndexStats;
 }
+
+type ChatIndexState = 'on' | 'skill_disabled' | 'embeddings_unconfigured';
+
+/** pending/stale are null while indexing is off — never 0, which would read as "all indexed". */
+interface ChatIndexStats {
+  state: ChatIndexState;
+  chunks: number;
+  pending_messages: number | null;
+  stale_chunks: number | null;
+}
+
+const CHAT_OFF_KEY = {
+  skill_disabled: 'chatIndexOffSkill',
+  embeddings_unconfigured: 'chatIndexOffEmbeddings',
+} as const;
 
 interface EmbedStatus {
   running: boolean;
@@ -96,6 +112,22 @@ export function EmbeddingsTab() {
     }
   };
 
+  const handleIndexChats = async () => {
+    try {
+      const data = await apiClient.post('/admin/embeddings/index-chats', {});
+      if (data.started === false) {
+        // WHY: the backend refuses with the index state token, not prose.
+        const offKey = CHAT_OFF_KEY[data.error as keyof typeof CHAT_OFF_KEY];
+        showToast(t(offKey ?? 'failedToStartChatIndex'), 'error');
+        return;
+      }
+      showToast(t('chatIndexEnqueued', { count: data.count }), 'info');
+      loadStats();
+    } catch {
+      showToast(t('failedToStartChatIndex'), 'error');
+    }
+  };
+
   const cancelRebuild = () => {
     setConfirmRebuild(false);
     setConfirmInput('');
@@ -120,6 +152,8 @@ export function EmbeddingsTab() {
   const missing = stats
     ? stats.docs_without_embeddings + stats.refs_without_embeddings + stats.pending_reembed_count + stats.stale_model_count
     : 0;
+  const chat = stats?.chat;
+  const chatWork = chat?.state === 'on' ? (chat.pending_messages ?? 0) + (chat.stale_chunks ?? 0) : 0;
 
   return (
     <div className="space-y-6">
@@ -133,6 +167,23 @@ export function EmbeddingsTab() {
           <StatItem label={t('embeddingFailed')} value={stats.pending_reembed_count} alert={stats.pending_reembed_count > 0} />
           <StatItem label={t('embeddingStaleModel')} value={stats.stale_model_count} alert={stats.stale_model_count > 0} />
         </ul>
+      )}
+
+      {chat && (
+        <div className="space-y-1">
+          <div className="text-xs text-text-dim">{t('chatIndex')}</div>
+          <ul className="list-disc pl-5 space-y-1 text-sm text-text">
+            <StatItem label={t('chatChunksInIndex')} value={chat.chunks} />
+            {chat.state === 'on' ? (
+              <>
+                <StatItem label={t('chatPendingMessages')} value={chat.pending_messages ?? 0} alert={(chat.pending_messages ?? 0) > 0} />
+                <StatItem label={t('chatStaleChunks')} value={chat.stale_chunks ?? 0} alert={(chat.stale_chunks ?? 0) > 0} />
+              </>
+            ) : (
+              <li className="text-text-dim" data-chat-index-off>{t(CHAT_OFF_KEY[chat.state])}</li>
+            )}
+          </ul>
+        </div>
       )}
 
       {status.running && (
@@ -158,6 +209,11 @@ export function EmbeddingsTab() {
           {status.running ? t('embeddingRunning') : t('embedNow')}
         </Button>
         <span className="text-xs text-text-dim">{t('embedNowHint')}</span>
+
+        <Button size="lg" onClick={handleIndexChats} disabled={chatWork === 0}>
+          {t('indexChatsNow')}
+        </Button>
+        <span className="text-xs text-text-dim">{t('indexChatsNowHint')}</span>
 
         {!confirmRebuild ? (
           <>
