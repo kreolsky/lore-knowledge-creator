@@ -81,7 +81,7 @@ describe('TableFocusView — entity-scoped binding (slot null)', () => {
 
     const tableEl = container.querySelector('table.cm-table-block');
     expect(tableEl).not.toBeNull();
-    const cells = container.querySelectorAll('.cm-table-block-cell-static');
+    const cells = container.querySelectorAll('.cm-table-block-cell-lazy');
     expect([...cells].map((c) => c.textContent)).toEqual(['h1', 'h2', 'a', 'b']);
     ydoc.destroy();
   });

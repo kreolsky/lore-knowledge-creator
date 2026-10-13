@@ -428,7 +428,7 @@ export function MessageList() {
   // it on, the stuck bottom pin drifted ~1px/frame and the not-stuck manual
   // anchor double-corrected by ~62px per pass).
   return (
-    <div ref={containerRef} onScroll={handleScroll} className="[overflow-anchor:none] flex-1 overflow-y-auto px-3 py-3">
+    <div ref={containerRef} onScroll={handleScroll} className="chat-selection [overflow-anchor:none] flex-1 overflow-y-auto px-3 py-3">
       {activePath.map((msg, idx) => (
         <MessageBubble
           key={msg.message_id}

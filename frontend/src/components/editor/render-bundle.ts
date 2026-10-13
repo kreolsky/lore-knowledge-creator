@@ -26,7 +26,7 @@ import { indentUnit } from '@codemirror/language';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
 import { markdownExtensions } from '../../editor/markdown-config';
-import { headingHighlight, bareUrlPlugin } from '../../editor/editor-plugins';
+import { headingHighlight, bareUrlPlugin, linkClickExtension } from '../../editor/editor-plugins';
 import { copyHandlerExtension } from '../../editor/copy-handler';
 import { codeHighlightStyle } from '../../editor/code-highlight';
 import { ligaturePlugin } from './ligature-plugin';
@@ -131,7 +131,11 @@ const cellThemeOverride = EditorView.theme({
   },
   '.cm-content': {
     padding: '4px 8px !important',
-    fontSize: '0.875em',
+    // WHY inherit + !important: the table (.cm-table-block, index.css) owns cell font size,
+    // and the lazy static placeholder inherits it. Without !important loreEditorTheme's
+    // `.cm-content { 1rem }` wins at equal specificity (CM6 mounts higher-precedence theme
+    // modules last), so a cell's text grew the moment its editor mounted on first click.
+    fontSize: 'inherit !important',
     lineHeight: '1.4',
     caretColor: 'transparent', // cell uses the thick-layer caret (loreEditorTheme parity)
   },
@@ -205,6 +209,18 @@ export function editorExperience(opts: {
     return ext;
   }
 
+  if (mode === 'cell' && !editable) {
+    // The lazy cell placeholder renderer (cell-static-render): the cell's exact render and
+    // skin, with no editing stack.
+    ext.push(
+      EditorView.editable.of(false),
+      EditorState.readOnly.of(true),
+      liveFields({ tableBlock: false }),
+      cellThemeOverride,
+    );
+    return ext;
+  }
+
   if (mode === 'cell') {
     ext.push(
       // Same inline experience as the document: smart quotes, auto-surround/pairs,
@@ -214,6 +230,9 @@ export function editorExperience(opts: {
       buildKeymapExtension(CELL_HOTKEYS),
       liveFields({ tableBlock: false }),
       thickCursorLayer,
+      // A link in a cell navigates exactly like one in the document (the document wires
+      // its own copy in editor-extension-bundle).
+      linkClickExtension,
       cellThemeOverride,
     );
     return ext;
@@ -244,4 +263,9 @@ export function editableCellExtensions(): Extension {
  */
 export function nestedRenderExtensions(depth: number): Extension {
   return editorExperience({ mode: 'nested', depth, editable: false });
+}
+
+/** Read-only extension set rendering a table cell exactly as its editor does (lazy placeholder). */
+export function staticCellExtensions(): Extension {
+  return editorExperience({ mode: 'cell', editable: false });
 }

@@ -147,7 +147,7 @@ export function ChatComposer({
       )}
       <div ref={dragHandleRef} className="resizer-v" />
       <div
-        className={`flex-shrink-0 border-t pb-safe ${panelBg} ${panelBorderClass}`}
+        className={`chat-selection flex-shrink-0 border-t pb-safe ${panelBg} ${panelBorderClass}`}
         style={{ minHeight: inputHeight }}
         onKeyDown={handleEscape}
       >
@@ -185,7 +185,7 @@ export function ChatComposer({
                   recording={recording}
                   transcribing={transcribing}
                   onToggleRecording={onToggleRecording}
-                  filled={variant !== 'note'}
+                  filled
                 />
                 {/*
                   One button, state derived from composer emptiness. Empty + streaming →

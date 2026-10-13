@@ -410,7 +410,7 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
           style={{ width: !compact && rightIsOpen ? rightPanelResizer.width : undefined }}
           onDragEnter={onPanelDragEnter}
         >
-          <div ref={rightTabBarRef} className={`right-panel-header ${compact ? 'overflow-x-auto' : ''} ${!rightIsOpen ? 'pointer-events-auto bg-transparent' : ''}`}>
+          <div ref={rightTabBarRef} className={`right-panel-header ${compact ? 'overflow-x-auto' : ''} ${!rightIsOpen ? 'right-panel-header--closed pointer-events-auto bg-transparent' : ''}`}>
             {compact && (
               <div className={COMPACT_CELL_CLS}>
                 <IconButton title={t('close')} onClick={closeCompactRight}>

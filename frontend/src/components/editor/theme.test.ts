@@ -175,6 +175,6 @@ describe('loreEditorTheme (rendered css)', () => {
   });
 
   it('selection renders through the native ::selection overlay', () => {
-    expect(/::selection\{[^}]*background-color:var\(--accent-glow\)/.test(css())).toBe(true);
+    expect(/::selection\{[^}]*background-color:var\(--selection-bg\)/.test(css())).toBe(true);
   });
 });

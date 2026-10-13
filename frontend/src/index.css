@@ -94,6 +94,7 @@
   --text-strong: var(--text);
   --accent: #6255e0;
   --accent-glow: rgba(98, 85, 224, 0.20);
+  --selection-bg: rgba(98, 85, 224, 0.32);
   --accent-soft: rgba(98, 85, 224, 0.07);
   /* Accent as TEXT/icon ink. Light: the fill itself reads fine on light surfaces. */
   --accent-text: var(--accent);
@@ -192,6 +193,8 @@ html.dark {
   --text-dim: #696969;
   --accent: #5847d1;
   --accent-glow: rgba(88, 71, 209, 0.30);
+  /* WHY: --accent-glow barely separates from the dark canvas; selection needs a brighter, denser tint. */
+  --selection-bg: rgba(118, 102, 245, 0.55);
   --accent-soft: rgba(88, 71, 209, 0.07);
   /* WHY: the deep fill (#5847d1) is too dark as text on dark surfaces; links
      and active icons use this lighter tint of the same hue. */
@@ -859,6 +862,15 @@ body.is-resizing * { transition: none !important; }
   color: #fff;
 }
 
+/* WHY: muted grey on the tinted banners reads too dim in dark — one step up,
+   to the body-text tone the reference title uses. */
+html.dark .reference-viewer-banner button:not(:hover),
+html.dark .snapshot-viewer-banner button:not(:hover),
+html.dark .download-menu[data-theme="green"] > button:not(:hover),
+html.dark .download-menu[data-theme="blue"] > button:not(:hover) { color: var(--text); }
+
+.chat-selection ::selection { background: var(--selection-bg); }
+
 /* DownloadMenu theming — green when a snapshot is open (mirrors the green
    SnapshotPreviewBanner for through-indication), blue panel for references.
    Default theme keeps the standard gray trigger + surface panel. */
@@ -1047,19 +1059,21 @@ html.dark .resizer:not(:hover):not(.dragging)::before {
   color: var(--accent-text);
 }
 
-/* An active (or tinted) right tab bleeds over .right-panel-header's bottom
- * border so it merges with the panel below instead of showing a grey seam.
+/* The active right tab — or, while the panel is closed, a tinted one — bleeds
+ * over .right-panel-header's bottom border so it merges with what is below
+ * instead of showing a grey seam. A tinted inactive tab must NOT bleed while a
+ * panel is open: it would poke 1px into the other tab's panel.
  * INVARIANT: the +1px MUST equal .right-panel-header's border-bottom width.
  * Why: the previous idiom (border-bottom: 2px <own colour> + margin-bottom:-1px)
  * did NOT extend the box — under the header's align-items:center the negative
  * margin only re-centered it, leaving half the border visible as a line. */
 .right-tab.active,
-.right-tab.notes-tab-thread.inactive,
-.right-tab.notes-tab-unread.inactive,
-.right-tab.refs-tab-unread.inactive,
-.right-tab.access-tab--red.inactive,
-.right-tab.access-tab--yellow.inactive,
-.right-tab.access-tab--blue.inactive {
+.right-panel-header--closed .right-tab.notes-tab-thread,
+.right-panel-header--closed .right-tab.notes-tab-unread,
+.right-panel-header--closed .right-tab.refs-tab-unread,
+.right-panel-header--closed .right-tab.access-tab--red,
+.right-panel-header--closed .right-tab.access-tab--yellow,
+.right-panel-header--closed .right-tab.access-tab--blue {
   height: calc(100% + 1px);
   align-self: flex-start;
 }
@@ -1326,6 +1340,9 @@ html.dark .right-panel--notes-thread textarea {
     top: -12px;
     height: 24px;
   }
+  /* WHY: the narrow chat input row would wrap the token/cache meters onto a second
+     line; they are diagnostic, not needed on a phone. */
+  .chat-usage-meters { display: none; }
 }
 
 /* Lift bottom-edge controls above the device's home indicator / system bar. */
@@ -1645,13 +1662,22 @@ html.dark .cm-color-swatch[style*="rgb(253, 214, 99)"] { background-color: var(-
 .cm-table-block-cell-editor {
   min-height: 1.5em;
 }
-/* Static (read-only snapshot-preview) cell: no nested editor, so it carries the cell
-   content padding the live cell's .cm-content normally provides. pre-wrap preserves
-   intra-cell line breaks captured in tables_json. */
-.cm-table-block-cell-static {
+/* Static (read-only snapshot-preview) cell and lazy placeholder (an editable cell before its
+   editor mounts): no nested editor, so they carry the cell content padding the live cell's
+   .cm-content normally provides. pre-wrap preserves intra-cell line breaks. */
+.cm-table-block-cell-static,
+.cm-table-block-cell-lazy {
   padding: 4px 8px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+/* A lazy placeholder's marks are styled by the host document's theme, whose heading scale
+   is document-sized; a cell keeps headings at text size (as cellThemeOverride does for the
+   mounted cell editor). !important: the theme rule ties on specificity and its StyleModule
+   is mounted after this stylesheet. */
+.cm-table-block-cell-lazy :is(.cm-header-1, .cm-header-2, .cm-header-3, .cm-header-4, .cm-header-5, .cm-header-6) {
+  font-size: 1em !important;
+  line-height: inherit !important;
 }
 .cm-table-block th {
   font-weight: 600;

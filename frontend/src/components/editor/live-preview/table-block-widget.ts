@@ -45,7 +45,7 @@ import { createYjsExtension } from '../../../collab/yjs-binding';
 import { editableCellExtensions } from '../render-bundle';
 import { revealAtCursor } from './effects';
 import { tableDocSource, tableHostEntity } from './table-doc-source';
-import { renderInlineMarkdown } from './inline-markdown';
+import { renderCellStatic, isPlainCellText } from './cell-static-render';
 import { useUIStore } from '../../../store/ui-store';
 import { t } from '../../../i18n';
 import {
@@ -92,6 +92,17 @@ const BTN_ARMED = `${BTN_BASE} bg-red text-white hover:bg-red hover:text-white`;
 const ACT_DELETE_ROW = 'delete-row';
 const ACT_DELETE_COL = 'delete-col';
 
+/**
+ * Markdown cells rendered synchronously when a table is built; the rest are upgraded from
+ * raw text in time slices after the table is on screen. Plain-text cells never count (they
+ * cost a text node). WHY a budget: a markdown placeholder costs a CM6 dispatch (~0.3ms), so a
+ * large imported table rendered all at once delayed opening the document by seconds; the
+ * top of the table (what is on screen first) is formatted immediately.
+ */
+export const EAGER_MARKDOWN_RENDERS = 200;
+/** Time slice for one deferred-render pass; the main thread is yielded between slices. */
+const DEFERRED_RENDER_SLICE_MS = 12;
+
 /** tableId queued by `insertTable` to receive focus when its widget first mounts. */
 let pendingFocusTableId: string | null = null;
 export function requestTableFocus(tableId: string): void {
@@ -113,6 +124,12 @@ export class TableBlockWidget extends WidgetType {
   private cellViews = new Map<string, EditorView>();
   /** Static placeholder host per cell, keyed by `"row:col"` — swapped for a live editor on focus. */
   private cellHosts = new Map<string, HTMLElement>();
+  /** Markdown cells still showing raw text, keyed `"row:col"`, in table order. */
+  private deferredRenders: string[] = [];
+  private deferredCursor = 0;
+  private deferredTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Remaining synchronous markdown renders for the table being built. */
+  private eagerRendersLeft = 0;
   /** Last focused cell — target for delete-row / delete-column controls. */
   private activeCell = { row: 0, col: 0 };
   /** Last rendered row count (for `estimatedHeight`, which CM6 calls on every measure pass). */
@@ -233,6 +250,7 @@ export class TableBlockWidget extends WidgetType {
     const model = readTableModel(this.doc, this.tableId);
     if (!model) return; // shape said it exists; lost a race — next observe tick retries.
     this.teardownCells();
+    this.eagerRendersLeft = EAGER_MARKDOWN_RENDERS;
     this.tableEl = this.buildTable(model);
     this.renderedRowCount = shape.rows;
     this.lastColCount = shape.cols;
@@ -244,6 +262,7 @@ export class TableBlockWidget extends WidgetType {
       this.toolbarEl = this.buildToolbar();
       wrap.replaceChildren(this.tableEl, this.toolbarEl);
     }
+    this.scheduleDeferredRenders();
     // New cell editors mount and lay out over the next frame — re-measure so CM6 reserves
     // the table's real height (see the cellActiveViewListener INVARIANT on overflow/clicks).
     requestAnimationFrame(() => {
@@ -361,17 +380,21 @@ export class TableBlockWidget extends WidgetType {
       v.dispatch({ selection: { anchor: pos } });
     });
 
-    // ARCH (lazy editors): a cell is built as a CHEAP formatted placeholder (one
-    // renderInlineMarkdown, no EditorView); the full nested CM6 editor — yCollab binding,
+    // ARCH (lazy editors): a cell is built as a CHEAP formatted placeholder (cell-static-render,
+    // no EditorView of its own); the full nested CM6 editor — yCollab binding,
     // cell-nav keymap, reveal-at-caret — mounts ONLY on first focus (see ensureCellEditor).
     // Why: building N×M EditorViews upfront is the dominant cost of opening a table (each is
     // a CM6 state + compiled extensions + DOM); a viewed-but-unedited dataset (imported CSV)
     // mounts ~1 editor instead of N×M. The placeholder shows formatted markdown (matching the
     // "unfocused cell renders formatted" invariant), refreshed on any structural rebuild.
     const ytext = this.doc ? getCellText(this.doc, this.tableId, row, col) : null;
+    const text = ytext?.toString() ?? '';
     const editorHost = document.createElement('div');
-    editorHost.className = 'cm-table-block-cell-editor cm-table-block-cell-static';
-    editorHost.appendChild(renderInlineMarkdown(ytext?.toString() ?? ''));
+    editorHost.className = 'cm-table-block-cell-editor cm-table-block-cell-lazy';
+    // Past the eager budget a markdown cell shows its raw text until its deferred render.
+    const deferred = !isPlainCellText(text) && this.eagerRendersLeft-- <= 0;
+    editorHost.append(deferred ? text : renderCellStatic(text));
+    if (deferred) this.deferredRenders.push(`${row}:${col}`);
     cell.appendChild(editorHost);
     this.cellHosts.set(`${row}:${col}`, editorHost);
 
@@ -402,7 +425,7 @@ export class TableBlockWidget extends WidgetType {
     if (!ytext) return null;
     const host = this.cellHosts.get(key);
     if (!host) return null; // host dropped by a structural rebuild; render() will rebuild.
-    host.classList.remove('cm-table-block-cell-static');
+    host.classList.remove('cm-table-block-cell-lazy');
     host.replaceChildren(); // drop the static markdown snapshot
     // INVARIANT: a cell reveals raw markdown at the caret ONLY while focused; on blur it
     // renders fully formatted (like a static table cell). Why: an unfocused cell left with
@@ -544,6 +567,39 @@ export class TableBlockWidget extends WidgetType {
     for (const view of this.cellViews.values()) view.destroy();
     this.cellViews.clear();
     this.cellHosts.clear();
+    if (this.deferredTimer !== null) clearTimeout(this.deferredTimer);
+    this.deferredTimer = null;
+    this.deferredRenders = [];
+    this.deferredCursor = 0;
+  }
+
+  private scheduleDeferredRenders(): void {
+    if (this.deferredTimer !== null || this.deferredCursor >= this.deferredRenders.length) return;
+    this.deferredTimer = setTimeout(() => {
+      this.deferredTimer = null;
+      this.runDeferredRenders();
+    }, 0);
+  }
+
+  /**
+   * Upgrade raw-text markdown placeholders for one time slice, then yield. A cell whose live
+   * editor mounted meanwhile is skipped (the editor owns it now); the text is re-read from the
+   * Y.Text so a peer edit since the build is not reverted to a stale snapshot.
+   */
+  private runDeferredRenders(): void {
+    const doc = this.doc;
+    if (!doc) return;
+    const until = performance.now() + DEFERRED_RENDER_SLICE_MS;
+    while (this.deferredCursor < this.deferredRenders.length && performance.now() < until) {
+      const key = this.deferredRenders[this.deferredCursor++];
+      const host = this.cellHosts.get(key);
+      if (!host || this.cellViews.has(key)) continue;
+      const [row, col] = key.split(':').map(Number);
+      host.replaceChildren(renderCellStatic(getCellText(doc, this.tableId, row, col)?.toString() ?? ''));
+    }
+    // Collapsed links change row heights — let CM6 re-measure the widget.
+    this.view?.requestMeasure();
+    this.scheduleDeferredRenders();
   }
 
   /** Drag a header-cell border to set the column width (writes `w` to the model). */

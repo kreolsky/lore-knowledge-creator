@@ -54,10 +54,7 @@ export const loreEditorTheme: Extension = [
   // WHY: native browser selection (no drawSelection()) — renders ON TOP of text,
   // visible regardless of element backgrounds (code blocks, inline code).
   '& .cm-content ::selection': {
-    backgroundColor: 'var(--accent-glow) !important',
-  },
-  'html.dark & .cm-content ::selection': {
-    backgroundColor: 'var(--accent-glow) !important',
+    backgroundColor: 'var(--selection-bg) !important',
   },
 
   // ── Headers ──

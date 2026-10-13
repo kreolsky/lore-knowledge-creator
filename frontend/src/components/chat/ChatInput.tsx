@@ -506,9 +506,9 @@ export function ChatInput() {
               The cap prefers the session's context_window — the LAST
               context_usage frame's cap (the model's real window per the
               harness projection) — with effectiveCap(...) as the
-              pre-first-frame fallback. */}
+              pre-first-frame fallback. Hidden on touch devices (.chat-usage-meters). */}
           {activeSessionId && (
-            <div className="flex items-center gap-3">
+            <div className="chat-usage-meters flex items-center gap-3">
               <TokenUsageGauge
                 used={activeSession?.context_tokens_used ?? 0}
                 cap={activeSession?.context_window ?? effectiveCap(
