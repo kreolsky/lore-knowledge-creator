@@ -3,6 +3,7 @@
  * size="sm" (22px) for note cards, "md" (28px, default) elsewhere.
  * filled — solid background with white text (e.g. armed-delete confirmation).
  * pressed — a toggle in its ON state: held at the hover background, aria-pressed set.
+ * pressed + color — the ON state takes that color's tint instead (amber = privacy mode; OFF stays plain).
  */
 
 interface IconButtonProps {
@@ -10,7 +11,7 @@ interface IconButtonProps {
   danger?: boolean;
   filled?: boolean;
   pressed?: boolean;
-  color?: 'red' | 'green' | 'accent';
+  color?: 'red' | 'green' | 'accent' | 'amber';
   theme?: 'note';
   className?: string;
   onClick?: React.MouseEventHandler<HTMLButtonElement>;
@@ -32,6 +33,11 @@ const baseIdleNote = 'bg-transparent text-text-muted hover:bg-[var(--sticky-yell
 const pressedIdle = 'bg-surface3 text-text hover:bg-surface3 hover:text-text';
 const pressedIdleNote = 'bg-[var(--sticky-yellow-dark)] text-text hover:bg-[var(--sticky-yellow-dark)] hover:text-text';
 
+// A colored pressed toggle replaces the gray hold entirely, so the two text colors never compete.
+const pressedColors: Record<string, string> = {
+  amber: 'bg-amber/15 text-amber hover:bg-amber/25 hover:text-amber',
+};
+
 const sizes: Record<string, string> = {
   md: 'w-[30px] h-[30px]',
   sm: 'w-[22px] h-[22px]',
@@ -48,11 +54,12 @@ const filledColors: Record<string, string> = {
 };
 
 export function IconButton({ size = 'md', danger, filled, pressed, color, theme, className, children, ...rest }: IconButtonProps) {
-  const idle = pressed
+  const pressedTint = pressed && color ? pressedColors[color] : undefined;
+  const idle = pressedTint ?? (pressed
     ? (theme === 'note' ? pressedIdleNote : pressedIdle)
-    : (theme === 'note' ? baseIdleNote : baseIdle);
-  const resolvedColor = color ?? (danger ? 'red' : '');
-  const variant = filled && resolvedColor ? filledColors[resolvedColor] ?? idle : resolvedColor ? colors[resolvedColor] + ' ' + idle : idle;
+    : (theme === 'note' ? baseIdleNote : baseIdle));
+  const resolvedColor = pressedTint ? '' : color ?? (danger ? 'red' : '');
+  const variant = filled && resolvedColor ? filledColors[resolvedColor] ?? idle : colors[resolvedColor] ? colors[resolvedColor] + ' ' + idle : idle;
   const cls = [baseLayout, sizes[size], variant, className].filter(Boolean).join(' ');
   return (
     <button type="button" className={cls} aria-pressed={pressed} {...rest}>

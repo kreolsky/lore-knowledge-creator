@@ -83,6 +83,8 @@ export function createMiscSlice(set: Set, get: Get): MiscSlice {
           // ARCH: vision set projected server-side off the gateway metadata;
           // [] on miss.
           visionModels: data.vision_models ?? [],
+          toolModels: data.tool_models ?? [],
+          structuredOutputModels: data.structured_output_models ?? [],
           // Per-model real context window (gateway context_length). The gauge's
           // primary cap source; {} on miss → fallback.
           contextWindows: data.context_windows ?? {},

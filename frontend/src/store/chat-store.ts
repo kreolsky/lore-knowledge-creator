@@ -70,6 +70,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   models: [],
   visionModels: [],
+  toolModels: [],
+  structuredOutputModels: [],
   // Per-model real context window (gateway context_length); populated by loadModels.
   // {} until /models resolves (effectiveCap falls back).
   contextWindows: {},

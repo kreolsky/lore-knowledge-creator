@@ -6,7 +6,7 @@
 # project the key's project — neither ever comes from a tool argument.
 """
 from datetime import datetime
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import settings
 from content_hash import hash_content
@@ -30,6 +30,13 @@ CHAT_RECALL_SNIPPET_CHARS = 400
 CHAT_RECALL_QUESTION_CHARS = 200
 
 MESSAGE_FIELDS = "meta::id(id) AS id, chat_id, role, content, created_at, parent_id"
+
+
+class Window(NamedTuple):
+    """A message time window `(since, until]`; None leaves that side open."""
+
+    since: datetime | None = None
+    until: datetime | None = None
 
 
 def iso(value: object) -> str:
@@ -120,6 +127,7 @@ async def _embed_query(query: str) -> list[float]:
 
 async def _score_chunks(
     db, user_id: str, project_id: str, sessions: dict, qvec: list[float],
+    window: Window,
 ) -> list[dict]:
     """Top chunks by cosine over the visible sessions, above the similarity floor.
 
@@ -134,10 +142,12 @@ async def _score_chunks(
         "vector::similarity::cosine(embedding, $q) AS score FROM chat_chunks "
         "WHERE user_id = $uid AND project_id = $pid AND chat_id IN $sids "
         "AND model = $model AND array::len(embedding) = $dim "
+        "AND ($since IS NONE OR created_at > $since) "
+        "AND ($until IS NONE OR created_at <= $until) "
         "ORDER BY score DESC LIMIT $n",
         {"q": qvec, "uid": user_id, "pid": project_id, "sids": sorted(sessions),
          "model": await settings.get("EMBEDDING_MODEL"), "dim": len(qvec),
-         "n": CHAT_RECALL_FETCH},
+         "since": window.since, "until": window.until, "n": CHAT_RECALL_FETCH},
     ) or []
     floor = await settings.get("RETRIEVAL_MIN_SCORE")
     return [r for r in rows if r["score"] >= floor]
@@ -166,15 +176,16 @@ def _collapse(
 
 async def _pool_hits(
     db, user_id: str, project_id: str, pool: dict, qvec: list[float], seen: set[str],
+    window: Window,
 ) -> list[dict]:
-    chunks = await _score_chunks(db, user_id, project_id, pool, qvec)
+    chunks = await _score_chunks(db, user_id, project_id, pool, qvec, window)
     live = await live_rows(db, {c["message_id"] for c in chunks}, pool)
     return _collapse(chunks, live, None, seen)
 
 
 async def _ranked(
     db, user_id: str, project_id: str, sessions: dict, siblings: set[str] | None,
-    tiered: bool, qvec: list[float],
+    tiered: bool, qvec: list[float], window: Window,
 ) -> list[dict]:
     """The picked chunks. Tiered: the anchor's subtree and the rest are scored as
     two pools, siblings first.
@@ -185,14 +196,14 @@ async def _ranked(
     as a sibling is never repeated as an other.
     """
     if not tiered:
-        chunks = await _score_chunks(db, user_id, project_id, sessions, qvec)
+        chunks = await _score_chunks(db, user_id, project_id, sessions, qvec, window)
         live = await live_rows(db, {c["message_id"] for c in chunks}, sessions)
         return _collapse(chunks, live, CHAT_RECALL_MAX_HITS)
     near = {sid: s for sid, s in sessions.items() if s["document_id"] in siblings}
     far = {sid: s for sid, s in sessions.items() if sid not in near}
     seen: set[str] = set()
-    near_hits = await _pool_hits(db, user_id, project_id, near, qvec, seen)
-    far_hits = await _pool_hits(db, user_id, project_id, far, qvec, seen)
+    near_hits = await _pool_hits(db, user_id, project_id, near, qvec, seen, window)
+    far_hits = await _pool_hits(db, user_id, project_id, far, qvec, seen, window)
     take_near = max(CHAT_RECALL_SIBLING_SLOTS, CHAT_RECALL_MAX_HITS - len(far_hits))
     near_hits = near_hits[:take_near]
     return near_hits + far_hits[:CHAT_RECALL_MAX_HITS - len(near_hits)]
@@ -218,6 +229,7 @@ async def _scoped_sessions(
 async def search_chats(
     db, user_id: str, project_id: str, query: str, *, exclude: set[str],
     scope: ChatScope, anchor_doc_id: str | None, under_document_id: str | None,
+    window: Window = Window(),
 ) -> dict:
     """Semantic search over the user's own visible chats of the project.
 
@@ -225,6 +237,7 @@ async def search_chats(
     only the anchor document and its subtree (400 without an anchor — a narrow
     the caller cannot get is an error, never a wider search); `subtree` only
     under `under_document_id` (404 when it is not a live document of the project).
+    `window` keeps only messages created inside it.
     """
     siblings = (set(await subtree_doc_ids(anchor_doc_id, project_id))
                 if anchor_doc_id else None)
@@ -232,7 +245,7 @@ async def search_chats(
         db, user_id, project_id, exclude, scope, siblings, under_document_id)
     qvec = await _embed_query(query)
     tiered = scope == "project" and siblings is not None
-    picked = await _ranked(db, user_id, project_id, sessions, siblings, tiered, qvec)
+    picked = await _ranked(db, user_id, project_id, sessions, siblings, tiered, qvec, window)
     parents = await live_rows(db, {
         p["message"]["parent_id"] for p in picked
         if p["message"]["role"] == "assistant" and p["message"].get("parent_id")

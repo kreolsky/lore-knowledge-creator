@@ -664,8 +664,9 @@ async def test_retry_non_audio_rejected(client, admin_user, project_with_doc):
 
 
 @pytest.mark.asyncio
-async def test_retry_non_retryable_state(client, admin_user, project_with_doc):
-    """Audio ref in 'queued' state → retry → 400."""
+async def test_retry_transcription_from_stuck_queued(client, admin_user, project_with_doc):
+    """Audio ref stuck in 'queued' (its job was refused before the first status write,
+    e.g. by a stale-code worker) → POST /retry re-queues it instead of refusing."""
     pid, _, _ = project_with_doc
     _, token = admin_user
     resp = await client.post(
@@ -680,8 +681,9 @@ async def test_retry_non_retryable_state(client, admin_user, project_with_doc):
         f"/api/documents/{ref_id}/retry",
         cookies={"lore_session": token},
     )
-    assert resp.status_code == 400
-    assert "not in a retryable state" in resp.json()["detail"]
+    assert resp.status_code == 200, resp.text
+    resp = await client.get(f"/api/documents/{ref_id}/status", cookies={"lore_session": token})
+    assert resp.json()["processing_status"] == "queued"
 
 
 # ─── POST /api/documents/upload-and-transcribe ──────────────────────────────

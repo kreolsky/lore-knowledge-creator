@@ -1,6 +1,6 @@
-/** RowActions burger: opens on click/tap (touch has no hover), closes on a press outside. */
-import { describe, it, expect } from 'vitest';
-import { render, fireEvent } from '@testing-library/react';
+/** RowActions burger: opens on click/tap (touch has no hover) or a held hover, closes on a press outside. */
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { render, fireEvent, act } from '@testing-library/react';
 import { RowActions } from './RowActions';
 
 function renderRow() {
@@ -29,5 +29,40 @@ describe('RowActions burger', () => {
     fireEvent.click(container.querySelector('svg')!.closest('span')!);
     fireEvent.mouseDown(container.querySelector('[data-testid="outside"]')!);
     expect(zone.className).not.toMatch(/gearOpen/);
+  });
+});
+
+describe('RowActions burger hover', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  function renderWithPrimary() {
+    vi.useFakeTimers();
+    const { container } = render(
+      <RowActions primary={<button data-primary>Run</button>} menu={<button>Delete</button>} />,
+    );
+    return { zone: menuOf(container), primary: container.querySelector<HTMLElement>('[data-primary]')! };
+  }
+
+  it('opens after the cursor rests on the burger for the hover delay', () => {
+    const { zone } = renderWithPrimary();
+    fireEvent.mouseEnter(zone);
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(zone.className).toMatch(/gearOpen/);
+  });
+
+  it('does not open when the cursor only passed over the burger onto a primary button', () => {
+    const { zone, primary } = renderWithPrimary();
+    fireEvent.mouseEnter(zone);
+    fireEvent.mouseLeave(zone, { relatedTarget: primary });
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(zone.className).not.toMatch(/gearOpen/);
+  });
+
+  it('keeps an open menu open while the cursor moves to a primary button', () => {
+    const { zone, primary } = renderWithPrimary();
+    fireEvent.mouseEnter(zone);
+    act(() => { vi.advanceTimersByTime(400); });
+    fireEvent.mouseLeave(zone, { relatedTarget: primary });
+    expect(zone.className).toMatch(/gearOpen/);
   });
 });

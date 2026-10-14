@@ -45,8 +45,9 @@ DEFINE INDEX IF NOT EXISTS idx_users_email ON users FIELDS email UNIQUE;
 -- ─── Model access (see SYSTEM: model-access, backend/model_access.py) ─────────
 -- model_grants: ONE table carries all model access. `subject` is 'public',
 -- 'mod:<moderator uid>' (the virtual moderator group, derived from
--- users.moderator_id — never stored), 'group:<groups id>' (an admin group) or
--- 'hidden' (never in the chat picker, for anyone; grants nothing; the turn gate ignores it).
+-- users.moderator_id — never stored), 'group:<groups id>' (an admin group),
+-- 'tools' (every user's utility pickers, never the chat picker; grants nothing) or
+-- 'hidden' (in no picker, for anyone; grants nothing; the turn gate ignores it).
 -- Keyed by the gateway model id string; a model gone from the gateway keeps its rows.
 DEFINE TABLE IF NOT EXISTS model_grants SCHEMAFULL;
 DEFINE FIELD IF NOT EXISTS model_id   ON model_grants TYPE string;
@@ -390,6 +391,12 @@ DEFINE FIELD IF NOT EXISTS mem_consolidated_run ON documents TYPE option<string>
 -- the stamp; a value on a non-reference is meaningless. Resumed by absence: NONE means
 -- window 0 is next, identical to a freshly-seeded reference.
 DEFINE FIELD IF NOT EXISTS mem_window_done    ON documents TYPE option<int>;
+-- A digest report names the binding that wrote it and the instant its material ends.
+-- The next run's lower bound is the max `digest_covered_until` over live children of
+-- the binding's target with that `digest_config_id` — no separate cursor state, so
+-- deleting a report re-covers its window. NONE on every non-report document.
+DEFINE FIELD IF NOT EXISTS digest_config_id     ON documents TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS digest_covered_until ON documents TYPE option<datetime>;
 
 DEFINE INDEX IF NOT EXISTS idx_documents_path ON documents FIELDS project_id, path UNIQUE;
 DEFINE INDEX IF NOT EXISTS idx_documents_project_deleted ON documents FIELDS project_id, deleted_at;
@@ -607,10 +614,17 @@ DEFINE FIELD IF NOT EXISTS project_id     ON agent_configs TYPE string;
 -- here, and a non-option string traps them in the row-wide coerce on any UPDATE
 -- (e.g. _migrate_agent_configs_kind_backfill). Same trap as agent_auto.
 DEFINE FIELD OVERWRITE trigger_event  ON agent_configs TYPE option<string> DEFAULT "transcription_complete";
--- kind discriminates the two coexisting config families (GAP-7): "extractor"
--- (event-driven extractor jobs, the original use) vs "conversational" (the home
--- agent / Pi). Defaults to extractor so existing rows are never repurposed.
+-- kind discriminates the coexisting config families: "extractor" (event-driven
+-- extractor jobs, the original use), "digest" (theme delta reports) and
+-- "conversational" (the home agent). Defaults to extractor so existing rows are
+-- never repurposed; a row predating the field reads NONE and counts as extractor.
 DEFINE FIELD IF NOT EXISTS kind          ON agent_configs TYPE option<string> DEFAULT "extractor";
+-- The user who created the binding, stamped server-side at create and never changed
+-- by an update. NONE on rows predating it. A digest reads only this user's chats
+-- unless they are a project root (see access.resolve_digest_subjects).
+DEFINE FIELD IF NOT EXISTS created_by       ON agent_configs TYPE option<string>;
+-- Whose chats a digest reads. NONE on every non-digest row.
+DEFINE FIELD IF NOT EXISTS subject_user_ids ON agent_configs TYPE option<array<string>>;
 -- role names a conversational config's doc role (e.g. system_prompt/rules/skill).
 DEFINE FIELD IF NOT EXISTS role          ON agent_configs TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS title_template ON agent_configs TYPE option<string>;

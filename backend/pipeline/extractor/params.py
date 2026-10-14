@@ -2,12 +2,11 @@
 
 # SYSTEM: extractor — shared resolver (reference → parent source → agent_configs).
 
-Extracted from the inline lookup that lived in routes.extractor.run_agent so the
-editor's `POST /agent-config/run` and the MCP `run_extractor` tool resolve params
-identically. Duplicating the lookup is how the two paths drift (different model /
-config subtree / source doc with no visible signal).
+The editor's `POST /agent-config/run` and the MCP `run_extractor` tool resolve
+params here, identically. Duplicating the lookup is how the two paths drift
+(different model / config subtree / source doc with no visible signal).
 
-Resolution (must match the old inline lookup verbatim):
+Resolution:
     reference_id → documents row (must be a reference) →
         parent_id (source doc) → agent_configs rows on that source →
         {config_doc_id, target_doc_id, project_id, title_template, model}
@@ -38,6 +37,11 @@ from fastapi import HTTPException
 from access import require_project_full
 from db import extract_id, fetch_one, get_db
 from models import is_ref_row
+
+# WHY: every agent_configs read that dispatches to extract_task carries this filter.
+# A digest (or conversational) row on the same document is not an extractor
+# config — dispatched as one, it fails on its config. NONE = a row predating `kind`.
+EXTRACTOR_ROWS = "(kind IS NONE OR kind = 'extractor')"
 
 
 @dataclass(frozen=True)
@@ -88,7 +92,7 @@ async def resolve_extractor_params(reference_id: str, user: dict) -> list[Extrac
 
     db = await get_db()
     rows = await db.query(
-        "SELECT * FROM agent_configs WHERE document_id = $did AND deleted_at IS NONE",
+        f"SELECT * FROM agent_configs WHERE document_id = $did AND {EXTRACTOR_ROWS} AND deleted_at IS NONE",
         {"did": doc_id},
     )
     if not rows:
@@ -108,4 +112,4 @@ async def resolve_extractor_params(reference_id: str, user: dict) -> list[Extrac
     ]
 
 
-__all__ = ["ExtractorParams", "resolve_extractor_params"]
+__all__ = ["EXTRACTOR_ROWS", "ExtractorParams", "resolve_extractor_params"]

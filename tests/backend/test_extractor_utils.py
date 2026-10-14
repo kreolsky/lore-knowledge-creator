@@ -3,6 +3,7 @@ import json
 import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from pipeline.core.config import (
     _extract_template_from_code_block,
@@ -1038,6 +1039,30 @@ async def test_call_llm_structured_hardcoded_response_format():
     rf = captured["payload"]["response_format"]["json_schema"]
     assert rf["name"] == "extraction"
     assert rf["strict"] is True
+
+
+@pytest.mark.asyncio
+async def test_call_llm_structured_error_carries_provider_body():
+    body = '{"error":{"message":"This response_format type is unavailable now"}}'
+    error_resp = httpx.Response(400, text=body, request=httpx.Request("POST", "http://llm/chat/completions"))
+
+    async def mock_post(url, json, headers):
+        return error_resp
+
+    mock_client = AsyncMock()
+    mock_client.post = mock_post
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_cm.__aexit__ = AsyncMock(return_value=False)
+    with patch("pipeline.extractor.utils.httpx.AsyncClient", return_value=mock_cm):
+        with pytest.raises(RuntimeError) as exc_info:
+            await call_llm_structured(
+                user_prompt="p", json_schema={"type": "object"}, model="deepseek/flash",
+            )
+    message = str(exc_info.value)
+    assert "400" in message
+    assert "deepseek/flash" in message
+    assert "response_format type is unavailable now" in message
 
 
 # ── Nodes: instructions flow ───────────────────────────────────────────────

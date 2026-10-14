@@ -156,7 +156,7 @@ export const RefCard = memo(function RefCard({
       >
         <FileInput size={13} />
       </IconButton>
-      {reference.media_type === 'audio' && (reference.processing_status === 'error' || reference.processing_status === 'ready' || reference.processing_status === 'processing') && (
+      {reference.media_type === 'audio' && (['error', 'ready', 'processing', 'queued'] as const).some(s => s === reference.processing_status) && (
         <IconButton
           size="sm"
           title={t('retryTranscription')}

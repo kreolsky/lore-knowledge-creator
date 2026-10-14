@@ -23,6 +23,8 @@
 from dataclasses import dataclass
 from typing import Callable
 
+from db import extract_id, fetch_many
+from jobs.tasks.digest import digest_job_id, digest_task
 from jobs.tasks.extract import extract_task
 from jobs.tasks.widget_extract import widget_extract_task
 
@@ -52,6 +54,11 @@ class PipelineSpec:
                     per-call access checks the interactive triggers have; without
                     this declaration a frozen-params schedule is the one extractor
                     entry point that can read/write across project walls.
+                    An id-param is a document id unless SCOPED_PARAM_TABLES says
+                    otherwise.
+    job_id:         the arq job id a scheduled run posts under, from its params.
+                    None → a per-claim id. Set it when the task's other triggers
+                    collapse on a stable id, so a scheduled run collapses with them.
     """
 
     name: str
@@ -60,6 +67,7 @@ class PipelineSpec:
     params_source: str
     result_target: str
     project_scoped_params: tuple[str, ...] = ()
+    job_id: Callable[[dict], str] | None = None
 
 
 PIPELINES: tuple[PipelineSpec, ...] = (
@@ -103,7 +111,42 @@ PIPELINES: tuple[PipelineSpec, ...] = (
             "config_doc_id", "target_doc_id",
         ),
     ),
+    PipelineSpec(
+        name="digest",
+        entry=digest_task,
+        queue="default",
+        params_source=(
+            "a digest agent_configs row (config_id) — the task loads it and "
+            "re-checks its subjects against project access at run time"
+        ),
+        result_target=(
+            "a child document under the binding's target_doc_id carrying "
+            "digest_config_id + digest_covered_until (the next run's cursor); "
+            "nothing when there is no new material; failures dead-letter as a "
+            "Pipeline Error note on the theme document"
+        ),
+        project_scoped_params=("project_id", "config_id"),
+        job_id=lambda params: digest_job_id(params["config_id"]),
+    ),
 )
+
+# The scoped id-params that name a record of a table other than `documents`.
+SCOPED_PARAM_TABLES = {"config_id": "agent_configs"}
+
+
+async def foreign_scoped_param(spec: PipelineSpec, params: dict, project_id: str) -> str | None:
+    """The first declared id-param of `params` that does not resolve to a live
+    record of `project_id` (each in its own table), or None when all do."""
+    keys = [k for k in spec.project_scoped_params if k != "project_id" and params.get(k)]
+    ids_by_table: dict[str, list[str]] = {}
+    for key in keys:
+        ids_by_table.setdefault(SCOPED_PARAM_TABLES.get(key, "documents"), []).append(str(params[key]))
+    rows = {table: await fetch_many(table, ids) for table, ids in ids_by_table.items()}
+    for key in keys:
+        row = rows[SCOPED_PARAM_TABLES.get(key, "documents")].get(str(params[key]))
+        if row is None or extract_id(row.get("project_id")) != project_id:
+            return key
+    return None
 
 
 def pipeline_names() -> list[str]:
@@ -163,6 +206,8 @@ __all__ = [
     "PIPELINES",
     "PipelineSpec",
     "KNOWN_QUEUES",
+    "SCOPED_PARAM_TABLES",
+    "foreign_scoped_param",
     "pipeline_names",
     "get_pipeline",
     "validate_registry",

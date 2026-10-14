@@ -1,28 +1,30 @@
 # Voice notes
 
-Voice is a convenient way to talk through ideas, retell calls and dictate drafts. A recording is transcribed to text automatically.
+A recording is transcribed to text automatically and saved as a reference.
 
 ## A voice note for a document
 
-The record button in the header, or ⌘/Ctrl + D when the cursor is not in the text. The recording is saved as a reference of the document, and its transcript appears in the "References" panel.
+The record button in the header, or ⌘/Ctrl + D when the cursor is not in the text. The recording becomes a reference, and its transcript appears in the "References" tab.
 
-Where recordings are saved is set in the project settings, in the "Voice Recording" section:
+Where recordings land is set in project settings, "Voice Recording" section:
 
-- **Current document** — the recording is attached to the open document. This is the default.
-- **Specific document** — all recordings go into one chosen document, whatever document is open. Handy if you want to collect all notes into an "inbox" and sort them out later.
+- **Current document** (default) — the open document.
+- **Specific document** — one chosen document regardless of what is open; an "inbox" to sort later.
 
-If the connection drops during recording, the recording is kept in the browser and sent the next time you open the project.
+If the connection drops during recording, the recording is kept in the browser and sent the next time the project is opened.
 
-## Voice input into the text
+## Voice input into text
 
-If the cursor is in the document's text, ⌘/Ctrl + D inserts the transcript right into the text. In the chat there is a microphone button next to the input field for this.
+With the cursor in the document's text, ⌘/Ctrl + D inserts the transcript at the cursor. The chat and notes have a microphone button next to the input field; Escape discards the take without transcribing it.
 
 ## Apps for Android and macOS
 
-For quick recording there are apps for Android and macOS. They work as a voice recorder and can record system audio, for example calls. Recordings from the app land in the chosen document as references.
+Voice recorders that can also record system audio (calls). Recordings from an app land as references of the document its key belongs to. The Android APK, when the administrator has published it, is downloadable from `/downloads/` on the Lore site.
 
-How to connect the app:
+Connecting an app:
 
-1. Open the document where recordings should land.
-2. In the "Access" tab, "API access" section, create a key with the "widget" checkbox ticked.
-3. Copy the key and paste it into the app.
+1. Open the target document.
+2. "Access" tab → "API access" → create a key with "widget" ticked.
+3. Copy the key (it is shown once) into the app.
+
+Arrivals from the app are marked unread for the key's owner (see [Interface](help:interface)).

@@ -1,8 +1,8 @@
-"""Agent config CRUD + manual extractor trigger routes.
+"""Agent config CRUD + manual extractor / digest trigger routes.
 
 CRUD for agent_configs table. Multiple configs per document allowed
-(distinguished by trigger_event). Manual trigger enqueues extract_task,
-returns 202 Accepted.
+(distinguished by trigger_event and kind). Manual trigger enqueues extract_task
+per reference, or digest_task per digest binding.
 """
 # ARCH: Multiple agent configs per source document (index on document_id + trigger_event).
 # ARCH: Pipeline runs as arq job — 200 accepted returned immediately.
@@ -10,10 +10,11 @@ returns 202 Accepted.
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
-from pipeline.extractor.params import resolve_extractor_params
+from pipeline.digest.triggers import enqueue_digest
+from pipeline.extractor.params import EXTRACTOR_ROWS, resolve_extractor_params
 from surrealdb import AsyncSurreal
 
-from access import require_project_full
+from access import require_digest_editor, require_project_full, resolve_digest_subjects
 from auth import get_current_user
 from db import (
     create_record,
@@ -53,8 +54,11 @@ async def get_agent_config(
     user=Depends(get_current_user),
     db: AsyncSurreal = Depends(get_db),
 ):
+    # WHY: this read gates the per-reference "send to agent" (extractor) button, so a
+    # digest binding alone must read as "no extractor configured".
     rows = await db.query(
-        "SELECT * FROM agent_configs WHERE document_id = $did AND trigger_event = $evt AND deleted_at IS NONE LIMIT 1",
+        f"SELECT * FROM agent_configs WHERE document_id = $did AND trigger_event = $evt AND {EXTRACTOR_ROWS} "
+        "AND deleted_at IS NONE LIMIT 1",
         {"did": document_id, "evt": trigger_event},
     )
     if not rows:
@@ -86,62 +90,55 @@ async def upsert_agent_config(
         raise HTTPException(status_code=400, detail="Config and target documents must be in the same project as source")
 
     await require_project_full(project_id, user)
+    if body.kind != "digest" and body.subject_user_ids is not None:
+        raise HTTPException(status_code=400, detail="subject_user_ids applies only to a digest binding")
 
     # WHY: `trigger_event IS NONE` matches legacy rows created before the field
     # was added — without this, upsert wouldn't find them and would create duplicates.
-    existing = await db.query(
-        "SELECT * FROM agent_configs WHERE document_id = $did "
+    # `kind IS NONE` is the same for rows predating `kind`: they are extractor rows.
+    # Kind is part of the key, so a digest and an extractor coexist on one document.
+    binding_key = (
+        "document_id = $did "
         "AND (trigger_event = $evt OR (trigger_event IS NONE AND $evt = 'transcription_complete')) "
-        "AND deleted_at IS NONE LIMIT 1",
-        {"did": body.document_id, "evt": body.trigger_event},
+        "AND (kind = $kind OR (kind IS NONE AND $kind = 'extractor'))"
+    )
+    key_vars = {"did": body.document_id, "evt": body.trigger_event, "kind": body.kind}
+    live = await db.query(
+        f"SELECT * FROM agent_configs WHERE {binding_key} AND deleted_at IS NONE LIMIT 1", key_vars,
+    )
+    revived = [] if live else await db.query(
+        f"SELECT * FROM agent_configs WHERE {binding_key} AND deleted_at IS NOT NONE LIMIT 1", key_vars,
     )
 
+    # created_by is stamped once and never changed by an update; a revived
+    # soft-deleted row is a new binding, so its caller becomes the creator.
+    previous = live[0] if live else {}
+    created_by = previous.get("created_by") or user["user_id"]
+    subjects = None
+    if body.kind == "digest":
+        if live:
+            await require_digest_editor(project_id, user, previous.get("created_by"))
+        requested = body.subject_user_ids if body.subject_user_ids is not None else previous.get("subject_user_ids")
+        subjects = await resolve_digest_subjects(project_id, user, created_by, requested)
+
+    fields = {
+        "config_doc_id": body.config_doc_id, "target_doc_id": body.target_doc_id,
+        "project_id": project_id, "title_template": body.title_template, "model": body.model,
+        "trigger_event": body.trigger_event, "kind": body.kind,
+        "created_by": created_by, "subject_user_ids": subjects,
+    }
+    existing = live or revived
     if existing:
         config_id = extract_id(existing[0].get("id"))
+        assignments = ", ".join(f"{name} = ${name}" for name in fields)
         await db.query(
-            "UPDATE type::record('agent_configs', $id) SET "
-            "config_doc_id = $cid, target_doc_id = $tid, project_id = $pid, "
-            "title_template = $tt, model = $mdl, trigger_event = $evt",
-            {
-                "id": config_id, "cid": body.config_doc_id, "tid": body.target_doc_id,
-                "pid": project_id, "tt": body.title_template, "mdl": body.model,
-                "evt": body.trigger_event,
-            },
+            f"UPDATE type::record('agent_configs', $id) SET {assignments}, deleted_at = NONE",
+            {"id": config_id, **fields},
         )
         updated = await fetch_one("agent_configs", config_id)
         return serialize_record(updated, "config_id")
 
-    soft_deleted = await db.query(
-        "SELECT * FROM agent_configs WHERE document_id = $did "
-        "AND (trigger_event = $evt OR (trigger_event IS NONE AND $evt = 'transcription_complete')) "
-        "AND deleted_at IS NOT NONE LIMIT 1",
-        {"did": body.document_id, "evt": body.trigger_event},
-    )
-    if soft_deleted:
-        config_id = extract_id(soft_deleted[0].get("id"))
-        await db.query(
-            "UPDATE type::record('agent_configs', $id) SET "
-            "config_doc_id = $cid, target_doc_id = $tid, project_id = $pid, "
-            "title_template = $tt, model = $mdl, trigger_event = $evt, deleted_at = NONE",
-            {
-                "id": config_id, "cid": body.config_doc_id, "tid": body.target_doc_id,
-                "pid": project_id, "tt": body.title_template, "mdl": body.model,
-                "evt": body.trigger_event,
-            },
-        )
-        updated = await fetch_one("agent_configs", config_id)
-        return serialize_record(updated, "config_id")
-
-    uid = str(uuid4())
-    record = await create_record("agent_configs", uid, {
-        "document_id": body.document_id,
-        "config_doc_id": body.config_doc_id,
-        "target_doc_id": body.target_doc_id,
-        "project_id": project_id,
-        "trigger_event": body.trigger_event,
-        "title_template": body.title_template,
-        "model": body.model,
-    })
+    record = await create_record("agent_configs", str(uuid4()), {"document_id": body.document_id, **fields})
     return serialize_record(record, "config_id")
 
 
@@ -163,6 +160,8 @@ async def run_agent(
     body: AgentRunRequest,
     user=Depends(get_current_user),
 ):
+    if body.config_id:
+        return await _run_digest_binding(body.config_id, user)
     # ARCH: param resolution is shared with the MCP `run_extractor` tool via
     # resolve_extractor_params — the editor and the benchmark resolve the SAME way
     # (reference → parent source → agent_configs), so the two paths cannot drift.
@@ -184,4 +183,18 @@ async def run_agent(
             job_id=job_id,
         )
 
+    return {"status": "accepted"}
+
+
+async def _run_digest_binding(config_id: str, user: dict) -> dict:
+    config = await fetch_one("agent_configs", config_id)
+    if not config or config.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="Agent config not found")
+    project_id = extract_id(config.get("project_id", ""))
+    # Launch consent, as for the extractor above: the digest then writes its own report.
+    await require_project_full(project_id, user)
+    if config.get("kind") != "digest":
+        raise HTTPException(status_code=400, detail="An extractor runs per reference: pass its document_id")
+    await require_digest_editor(project_id, user, config.get("created_by"))
+    await enqueue_digest(config_id, project_id)
     return {"status": "accepted"}

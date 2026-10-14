@@ -1,6 +1,6 @@
 # Pipelines
 
-PocketFlow-based pipelines that consume project documents and emit derived documents. Today only one pipeline ships — `extractor` — but the layout is designed for additional pipeline types under `pipeline/<name>/`.
+PocketFlow-based pipelines that consume project documents and emit derived documents. Two pipelines ship — `extractor` and `digest` (theme delta reports, entry `digest/__init__.py`) — each under `pipeline/<name>/`.
 
 ## Layout
 

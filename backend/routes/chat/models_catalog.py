@@ -19,7 +19,12 @@ import driver.client
 import http_clients
 import settings
 from fastapi import Depends, HTTPException
-from model_access import available_models, hidden_models
+from model_access import (
+    HIDDEN_SUBJECT,
+    TOOLS_SUBJECT,
+    available_models,
+    models_with_subject,
+)
 
 import config
 from auth import get_current_user
@@ -255,6 +260,19 @@ def _entry_supports_vision(entry: dict) -> bool:
     return "image" in modalities
 
 
+def _entry_supports_structured_outputs(entry: dict) -> bool:
+    """True when a gateway /v1/models entry declares `structured_outputs` — the
+    json_schema strict mode the extractor always sends (pipeline/extractor/utils.py
+    call_llm_structured).
+
+    INVARIANT: explicit declaration only — `response_format` alone (json_object)
+    or an absent `supported_parameters` is NOT structured-output. Why: such a model
+    refuses json_schema with a 400 and the extractor run fails; the gateway declares
+    the capability per model in its config.
+    """
+    return "structured_outputs" in (entry.get("supported_parameters") or [])
+
+
 def _context_windows_map(entries: list[dict]) -> dict[str, int]:
     """Build the {model_id: context_length} map for models the gateway reported a
     numeric window for. Models that omit it are ABSENT (the client falls back rather
@@ -314,8 +332,12 @@ def _models_payload(
     models = [m["id"] for m in entries if m.get("id")]
     body = {
         "models": sorted(models),
+        "tool_models": sorted(models),
         "vision_models": sorted(
             m["id"] for m in entries if m.get("id") and _entry_supports_vision(m)
+        ),
+        "structured_output_models": sorted(
+            m["id"] for m in entries if m.get("id") and _entry_supports_structured_outputs(m)
         ),
         "max_attachment_mb": CHAT_MAX_IMAGE_SIZE_MB,
         "agent_available": cap["available"],
@@ -326,6 +348,29 @@ def _models_payload(
     if default_model is not None:
         body["default_model"] = default_model
     return body
+
+
+async def _caller_tiers(user: dict) -> tuple[set[str] | None, set[str], set[str]]:
+    """(visible ids — None for an admin, hidden ids, tools-tier ids).
+
+    Visible = the caller's grants ∪ the tools tier: every user sees a tools-tier
+    model, in the utility roster only (_split_rosters)."""
+    db = await get_db()
+    allowed = await available_models(user)
+    hidden = await models_with_subject(db, HIDDEN_SUBJECT)
+    tools = await models_with_subject(db, TOOLS_SUBJECT)
+    return (None if allowed is None else allowed | tools), hidden, tools
+
+
+def _split_rosters(body: dict, hidden: set[str], tools: set[str]) -> dict:
+    """`models` (chat picker) drops hidden and tools-tier models; `tool_models`
+    (utility pickers, e.g. the extractor model) drops hidden ones only, so it is
+    `models` plus the tools tier (SYSTEM: model-access tier ladder)."""
+    return {
+        **body,
+        "models": [m for m in body["models"] if m not in hidden and m not in tools],
+        "tool_models": [m for m in body["tool_models"] if m not in hidden],
+    }
 
 
 async def _capability_snapshot() -> dict:
@@ -359,14 +404,14 @@ async def list_models(user: dict = Depends(get_current_user)):
     The roster is FILTERED to the caller's available models (SYSTEM:
     model-access) — the picker only; the turn gate is require_model_access.
     Hidden models leave `models` for every caller, admins included; their
-    capability fields stay, so a session pinned to one keeps working.
+    capability fields stay, so a pinned session keeps working. `tool_models`: _split_rosters.
     """
     api_url = await settings.get("AI_API_URL")
     if not api_url:
         cap = await _capability_snapshot()
         return _models_payload([], cap)
     # Read before the try: a DB failure here is not "AI service unavailable".
-    allowed, hidden = await available_models(user), await hidden_models(await get_db())
+    visible, hidden, tools = await _caller_tiers(user)
     try:
         # Run the gateway fetches and the capability check concurrently — they're
         # independent. agent_capability is a config read (no probe, cannot
@@ -377,14 +422,14 @@ async def list_models(user: dict = Depends(get_current_user)):
             _capability_snapshot(),
             gateway_reasoning_map(),
         )
-        if allowed is not None:
-            entries = [e for e in entries if e.get("id") in allowed]
-            reasoning = {k: v for k, v in reasoning.items() if k in allowed}
+        if visible is not None:
+            entries = [e for e in entries if e.get("id") in visible]
+            reasoning = {k: v for k, v in reasoning.items() if k in visible}
         body = _models_payload(
             entries, cap, reasoning=reasoning,
             default_model=await settings.get("CHAT_MODEL"),
         )
-        return {**body, "models": [m for m in body["models"] if m not in hidden]}
+        return _split_rosters(body, hidden, tools)
     except Exception as e:
         logger.warning("Failed to fetch models: %s", e)
         raise HTTPException(status_code=503, detail="AI service unavailable")

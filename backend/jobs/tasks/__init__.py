@@ -29,6 +29,7 @@ from jobs.tasks.backup import (
 from jobs.tasks.chat_index import chat_index_sweep_task, index_chat_messages
 from jobs.tasks.comfy import COMFY_TASK_NAMES, generate_image_task
 from jobs.tasks.cp_migrations import backfill_cp_blobs_task, nullout_inline_content_task
+from jobs.tasks.digest import digest_task
 from jobs.tasks.embed import EMBED_MAX_TRIES, embed_document_task, embed_sweep_task
 from jobs.tasks.extract import extract_task
 from jobs.tasks.help import help_seed_task, help_sweep_task
@@ -54,6 +55,8 @@ __all__ = [
     "_read_docx_bytes",
     # extractor
     "extract_task",
+    # theme digest
+    "digest_task",
     # embeddings
     "embed_document_task",
     "embed_sweep_task",

@@ -29,6 +29,12 @@ export function useGearMenu<T extends HTMLElement = HTMLDivElement>() {
     timerRef.current = setTimeout(() => setOpen(true), HOVER_OPEN_DELAY_MS);
   }, [clearTimer]);
 
+  // INVARIANT: leaving the burger cancels a pending hover-open; only a cursor that RESTS
+  // on the burger for the delay opens the menu.
+  // Why: a pass over the burger toward a neighbour button opened the menu 400ms later
+  // and shifted it under the cursor, turning a click aimed at "run pipeline" into archive.
+  const handleLeave = clearTimer;
+
   const close = useCallback(() => {
     clearTimer();
     setOpen(false);
@@ -45,5 +51,5 @@ export function useGearMenu<T extends HTMLElement = HTMLDivElement>() {
   // WHY: a touch device may never fire mouseleave — a press elsewhere is the close gesture.
   useClickOutside(ref, close, open);
 
-  return { open, ref, handleEnter, close, handleIconClick } as const;
+  return { open, ref, handleEnter, handleLeave, close, handleIconClick } as const;
 }

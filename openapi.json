@@ -11,6 +11,15 @@
             "title": "Document Id",
             "type": "string"
           },
+          "kind": {
+            "default": "extractor",
+            "enum": [
+              "extractor",
+              "digest"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
           "model": {
             "anyOf": [
               {
@@ -21,6 +30,20 @@
               }
             ],
             "title": "Model"
+          },
+          "subject_user_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject User Ids"
           },
           "target_doc_id": {
             "title": "Target Doc Id",
@@ -53,14 +76,29 @@
       },
       "AgentRunRequest": {
         "properties": {
+          "config_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config Id"
+          },
           "document_id": {
-            "title": "Document Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
           }
         },
-        "required": [
-          "document_id"
-        ],
         "title": "AgentRunRequest",
         "type": "object"
       },
@@ -6645,7 +6683,7 @@
     },
     "/api/chat/models": {
       "get": {
-        "description": "Proxy GET /v1/models from the AI API. Returns model ID list + capability flags.\n\nReports Agent-line availability and the vision-capable model set\nso the frontend picker can badge vision models instead of erroring at send time.\nBoth capability fields are merged into the success AND empty-AI_API_URL bodies.\nThe 503-on-gateway-down path stays: when the whole gateway is down the flags are\nirrelevant. Also returns `context_windows` (per-model real context length)\nfrom the same cached gateway fetch.\n\nFreshness: the served model list, default_model, and context_windows come from a\nCHAT_MODELS_CACHE_TTL_S (60s) TTL cache — a freshly-added gateway model (or a\nremoved one) can lag by up to that bound, and a chat-panel open reads the\ncached snapshot rather than a fresh gateway fetch. The set of served models\nchanges on the order of weeks, so the staleness is accepted over a per-open\ngateway RTT. The `reasoning` map rides its own cache with the same TTL and\nthe same accepted lag.\n\nThe roster is FILTERED to the caller's available models (SYSTEM:\nmodel-access) — the picker only; the turn gate is require_model_access.\nHidden models leave `models` for every caller, admins included; their\ncapability fields stay, so a session pinned to one keeps working.",
+        "description": "Proxy GET /v1/models from the AI API. Returns model ID list + capability flags.\n\nReports Agent-line availability and the vision-capable model set\nso the frontend picker can badge vision models instead of erroring at send time.\nBoth capability fields are merged into the success AND empty-AI_API_URL bodies.\nThe 503-on-gateway-down path stays: when the whole gateway is down the flags are\nirrelevant. Also returns `context_windows` (per-model real context length)\nfrom the same cached gateway fetch.\n\nFreshness: the served model list, default_model, and context_windows come from a\nCHAT_MODELS_CACHE_TTL_S (60s) TTL cache — a freshly-added gateway model (or a\nremoved one) can lag by up to that bound, and a chat-panel open reads the\ncached snapshot rather than a fresh gateway fetch. The set of served models\nchanges on the order of weeks, so the staleness is accepted over a per-open\ngateway RTT. The `reasoning` map rides its own cache with the same TTL and\nthe same accepted lag.\n\nThe roster is FILTERED to the caller's available models (SYSTEM:\nmodel-access) — the picker only; the turn gate is require_model_access.\nHidden models leave `models` for every caller, admins included; their\ncapability fields stay, so a pinned session keeps working. `tool_models`: _split_rosters.",
         "operationId": "list_models_api_chat_models_get",
         "parameters": [
           {

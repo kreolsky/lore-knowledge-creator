@@ -25,6 +25,9 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from http_clients import close_all as _close_http_clients
 from mcp_gateway.upload import MCP_UPLOAD_ROUTE_PREFIX
+from pipeline.digest.triggers import (
+    on_transcription_complete as digest_on_transcription_complete,
+)
 from pipeline.extractor.runner import on_transcription_complete
 from redis_pool import close_redis
 from security_log import log_security
@@ -346,6 +349,7 @@ async def lifespan(_: FastAPI):
     from files_util import sweep_tmp_uploads
     await sweep_tmp_uploads()
     _bus_on("transcription_complete", on_transcription_complete)
+    _bus_on("transcription_complete", digest_on_transcription_complete)
     from auth import on_token_version_bumped
     _bus_on("token_version_bumped", on_token_version_bumped)
     mark_startup_complete()

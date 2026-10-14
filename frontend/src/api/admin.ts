@@ -165,8 +165,11 @@ export interface AdminModelAccess {
 /** The subject that makes a model available to every user. */
 export const PUBLIC_SUBJECT = 'public';
 
-/** The subject that drops a model from every chat picker; calls stay served. */
+/** The subject that drops a model from every picker; calls stay served. */
 export const HIDDEN_SUBJECT = 'hidden';
+
+/** The subject that offers a model to every user's utility pickers, never the chat picker. */
+export const TOOLS_SUBJECT = 'tools';
 
 export async function listAdminModels(): Promise<AdminModelAccess[]> {
   return await apiClient.get('/admin/models') as AdminModelAccess[];

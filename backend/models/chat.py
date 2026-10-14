@@ -1,4 +1,4 @@
-"""Pydantic models: chat domain (split out of models.py)."""
+"""Pydantic models: chat domain."""
 from __future__ import annotations
 
 from typing import Literal
@@ -238,6 +238,9 @@ class AgentConfigCreate(BaseModel):
     trigger_event: str = "transcription_complete"
     title_template: str | None = None
     model: str | None = None
+    kind: Literal["extractor", "digest"] = "extractor"
+    # Digest only: whose chats are read. None reads only the binding's creator.
+    subject_user_ids: list[str] | None = None
 
 
 class AgentConfigResponse(BaseModel):
@@ -257,7 +260,15 @@ class AgentRunRequest(BaseModel):
     # new clients use `document_id`. The migration runner already maps refs->documents,
     # so either id is valid for the new shape. Drop the alias one release after the
     # frontend migration ships.
-    document_id: str = Field(validation_alias=AliasChoices("document_id", "reference_id"))
+    document_id: str | None = Field(default=None, validation_alias=AliasChoices("document_id", "reference_id"))
+    # A digest binding to run now. An extractor runs per reference (document_id).
+    config_id: str | None = None
+
+    @model_validator(mode="after")
+    def _one_target(self) -> "AgentRunRequest":
+        if bool(self.document_id) == bool(self.config_id):
+            raise ValueError("Exactly one of document_id / config_id is required")
+        return self
 
 
 # ─── Author resolution helper (single source of truth) ─────────────────────

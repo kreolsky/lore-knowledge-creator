@@ -19,6 +19,7 @@ from model_access import (
     HIDDEN_SUBJECT,
     MOD_PREFIX,
     PUBLIC_SUBJECT,
+    TOOLS_SUBJECT,
     group_subject,
     moderator_subject,
 )
@@ -56,16 +57,18 @@ async def _grants_by_model(db: AsyncSurreal) -> dict[str, list[str]]:
 
 async def _validate_subjects(db: AsyncSurreal, subjects: list[str]) -> None:
     """422 for a malformed subject, a `mod:` uid that is not a live moderator,
-    a `group:` id that does not exist, or `hidden` beside any other subject."""
+    a `group:` id that does not exist, or `hidden` / `tools` beside any other subject."""
     # WHY: a public/group grant on a hidden model would let users run a model
-    # they cannot pick — hidden is exclusive.
-    if HIDDEN_SUBJECT in subjects and len(subjects) > 1:
-        raise HTTPException(status_code=422, detail={"code": "hidden_exclusive"})
+    # they cannot pick — hidden is exclusive. A tools tier beside a grant is just
+    # that grant's tier, so tools is exclusive too; hidden is checked first.
+    for tier_subject, code in ((HIDDEN_SUBJECT, "hidden_exclusive"), (TOOLS_SUBJECT, "tools_exclusive")):
+        if tier_subject in subjects and len(subjects) > 1:
+            raise HTTPException(status_code=422, detail={"code": code})
     mod_uids = [s.removeprefix(MOD_PREFIX) for s in subjects if s.startswith(MOD_PREFIX)]
     group_ids = [s.removeprefix(GROUP_PREFIX) for s in subjects if s.startswith(GROUP_PREFIX)]
     malformed = [
         s for s in subjects
-        if s not in (PUBLIC_SUBJECT, HIDDEN_SUBJECT) and not s.startswith((MOD_PREFIX, GROUP_PREFIX))
+        if s not in (PUBLIC_SUBJECT, HIDDEN_SUBJECT, TOOLS_SUBJECT) and not s.startswith((MOD_PREFIX, GROUP_PREFIX))
     ]
     live_mods = await db.query(
         "SELECT VALUE meta::id(id) FROM users WHERE meta::id(id) IN $ids "
@@ -119,8 +122,11 @@ async def put_model_grants(
     await _validate_subjects(db, subjects)
     # WHY: every fresh chat is created on CHAT_MODEL, so a hidden default would
     # put a model in the composer that the picker does not list.
-    if HIDDEN_SUBJECT in subjects and model_id == await settings.get("CHAT_MODEL"):
-        raise HTTPException(status_code=422, detail={"code": "default_model_hidden"})
+    # The same holds for tools: a tools-tier model is never in the chat picker.
+    if model_id == await settings.get("CHAT_MODEL"):
+        for tier_subject, code in ((HIDDEN_SUBJECT, "default_model_hidden"), (TOOLS_SUBJECT, "default_model_tools")):
+            if tier_subject in subjects:
+                raise HTTPException(status_code=422, detail={"code": code})
     current = await db.query(
         "SELECT VALUE subject FROM model_grants WHERE model_id = $m", {"m": model_id},
     ) or []

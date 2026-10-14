@@ -1,16 +1,18 @@
 # References
 
-References are materials attached to a document: recordings, transcripts, files, pictures, excerpts. They are the drafts the document will be built from.
+References are materials attached to a document: recordings, transcripts, files, pictures, excerpts — the raw material a document is built from.
 
 ## How to add a reference
 
-- The "Upload" button in the "References" tab, or drag files into the panel.
+- "Upload" in the "References" tab, or drag files into the panel.
 - "Create reference from selection" on the editor's selection toolbar.
 - A voice note (see [Voice notes](help:voice)).
+- From outside: the recording apps (widget key) or an external agent (MCP key). Such references can be marked unread (see [Interface](help:interface)).
+- The agent: generated pictures and deep-research findings are saved as references of the open document.
 
 What you can upload:
 
-- **Audio and video** (mp3, wav, m4a, ogg, webm, mp4) — the recording is transcribed to text automatically. Transcription can be run again.
+- **Audio and video** (mp3, wav, m4a, ogg, webm, mp4) — transcribed to text automatically. The retry button on the card runs transcription again, including for a recording stuck in "Queued".
 - **Word (DOCX)** — turned into text with markup automatically.
 - **PDF** — supported, but the quality of text extraction is often poor. Upload DOCX or text when you can.
 - **Text** (md, txt, json, yaml and others) and **pictures** (jpg, png, gif, webp).
@@ -18,7 +20,7 @@ What you can upload:
 
 ## Who sees references
 
-A document sees its own references and those of all its parents up the tree. References attached to "Project Context" are visible from any document. So shared material is best placed higher up, and specific material on the particular document.
+A document sees its own references and those of all its parents up the tree; references of "Project Context" are visible from any document. Put shared material higher up, specific material on the specific document.
 
 A reference can be moved to another document: "Change parent document" on the reference's card. A reference can be renamed (the pencil or a double click on its title), and dragging in the list changes the order.
 

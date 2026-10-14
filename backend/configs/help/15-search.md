@@ -5,9 +5,10 @@
 The "Search" tab searches the project's documents and references. There are two modes:
 
 - **Full-text** — search by words. Titles match by the start of a word, text by whole words. Word forms are taken into account for Russian text only (for example, «миром» finds «мира»); in other languages a word must match as written. The "Substring" checkbox switches on a literal search for a fragment in titles and text, without word forms.
-- **Semantic** — search by meaning: it finds what you need even if the words are different. Handy when you remember what it was about but not the wording. The "Memory only" checkbox keeps only [memory](help:memory) facts in the results.
+- **Semantic** — search by meaning, for when the wording is not remembered. "Memory only" keeps only [memory](help:memory) facts.
+- **Chats** — your own chats in this project. Title matches come first (marked "title") and open the chat; content matches open the chat scrolled to the message. Without "In this document", chats of the open document's subtree come first. Chats marked "Unindexed" are found by title only. Opening the Search tab from the Chat tab starts in this mode.
 
-In both modes the "In this document" checkbox limits the search to the open document and its subtree.
+"In this document" limits any mode to the open document and its subtree.
 
 ## Find and replace
 
@@ -33,4 +34,4 @@ In regular-expression mode the replacement can refer to the captured groups: `$1
 
 ## Searching through the agent
 
-The agent can search the project too. Ask it "what do we have on …" — it finds and reads the relevant documents and materials itself.
+The agent searches documents, references and memory itself; with the chat-recall [skill](help:skills) it also searches your other chats.

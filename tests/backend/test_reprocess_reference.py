@@ -198,16 +198,16 @@ async def test_core_ready_state_accepted_under_gate(test_db):
 
 @pytest.mark.asyncio
 async def test_core_non_retryable_status_refused(test_db):
-    """Only error/ready/processing are retryable (the retry INVARIANT — 'processing'
-    is included so a user can self-unstick a frozen ref). A 'queued' ref is refused,
-    and its content is NOT wiped."""
+    """Only error/ready/processing/queued are retryable (the retry INVARIANT —
+    'processing' and 'queued' are included so a user can self-unstick a frozen ref).
+    A ref with no processing status is refused, and its content is NOT wiped."""
     from fastapi import HTTPException
     from files_service import reprocess_reference
 
     pid = "rp-core-status"
     ref_id = "rp-ref-status"
     await _seed_ref(test_db, pid, ref_id, media_type="audio",
-                    file_path=f"{pid}/{ref_id}/clip.mp3", processing_status="queued")
+                    file_path=f"{pid}/{ref_id}/clip.mp3", processing_status=None)
     ref = await _fetch_ref(ref_id)
 
     with pytest.raises(HTTPException) as ei:

@@ -164,7 +164,7 @@ export const ChatRow = memo(function ChatRow({ session, isActive, onSelect, onDe
         ) : undefined}
         onBodyDoubleClick={onRename ? startRename : undefined}
         metaIcon={session.unindexed
-          ? <span title={t('chatUnindexedMark')}><VenetianMask size={11} aria-label={t('chatUnindexedMark')} /></span>
+          ? <span className="text-amber" title={t('chatUnindexedMark')}><VenetianMask size={11} aria-label={t('chatUnindexedMark')} /></span>
           : undefined}
         meta={
           parentLabel ? (

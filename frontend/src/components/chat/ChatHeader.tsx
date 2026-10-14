@@ -306,6 +306,7 @@ export function ChatHeader() {
           <IconButton
             size="sm"
             pressed={!!activeSession?.unindexed}
+            color="amber"
             title={activeSession?.unindexed ? t('chatUnindexedOn') : t('chatUnindexedOff')}
             onClick={() => { void setChatUnindexed(!activeSession?.unindexed); }}
           >

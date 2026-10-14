@@ -59,8 +59,9 @@ async def _dispatch_claimed_schedule(db, schedule_id: str, row: dict, claimed_at
             spec.entry.__name__,
             # Per-claim job_id: enqueue-level idempotency — a replayed claim
             # (crash between claim and enqueue) is a NEW claim anyway; a
-            # duplicated tick dispatch is stopped by the claim itself.
-            job_id=f"psched:{schedule_id}:{claimed_at}",
+            # duplicated tick dispatch is stopped by the claim itself. A row
+            # with its own job_id collapses with that task's other triggers.
+            job_id=spec.job_id(params) if spec.job_id else f"psched:{schedule_id}:{claimed_at}",
             queue=None if spec.queue == "default" else jobs_pool.TRANSCRIPTION_QUEUE,
             **params,
         )
@@ -89,7 +90,7 @@ async def _rebind_scoped_params(db, spec, params: dict, project_id: str) -> None
     # per-call access checks; without re-binding, a frozen-params schedule is the
     # one extractor entry point that can read and write across project walls.
     """
-    from db import fetch_many
+    from pipeline.core.registry import foreign_scoped_param
 
     scoped = spec.project_scoped_params
     if not scoped:
@@ -98,17 +99,12 @@ async def _rebind_scoped_params(db, spec, params: dict, project_id: str) -> None
         raise ValueError("schedule row has no project_id")
     if "project_id" in scoped:
         params["project_id"] = project_id
-    id_params = [str(params[k]) for k in scoped if k != "project_id" and params.get(k)]
-    docs = await fetch_many("documents", id_params) if id_params else {}
-    for key in scoped:
-        if key == "project_id" or not params.get(key):
-            continue
-        doc = docs.get(str(params[key]))
-        if doc is None or doc.get("project_id") != project_id:
-            raise ValueError(
-                f"params['{key}'] does not resolve to a document in the "
-                f"schedule's project"
-            )
+    foreign = await foreign_scoped_param(spec, params, project_id)
+    if foreign:
+        raise ValueError(
+            f"params['{foreign}'] does not resolve to a record in the "
+            f"schedule's project"
+        )
 
 
 async def pipeline_schedule_tick_task(ctx) -> None:

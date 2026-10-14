@@ -18,6 +18,7 @@ from event_bus import emit
 from jobs import pool as jobs_pool
 from models import is_ref_row
 from pipeline.extractor.flow import create_extractor_flow
+from pipeline.extractor.params import EXTRACTOR_ROWS
 from pipeline.extractor.utils import render_title_template
 
 logger = logging.getLogger(__name__)
@@ -214,7 +215,8 @@ async def on_transcription_complete(reference_id: str, project_id: str, user_id:
 
         db = await get_db()
         rows = await db.query(
-            "SELECT * FROM agent_configs WHERE document_id = $did AND trigger_event = $evt AND deleted_at IS NONE",
+            "SELECT * FROM agent_configs WHERE document_id = $did AND trigger_event = $evt "
+            f"AND {EXTRACTOR_ROWS} AND deleted_at IS NONE",
             {"did": doc_id, "evt": "transcription_complete"},
         )
         if not rows:

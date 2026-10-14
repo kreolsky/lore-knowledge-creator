@@ -39,6 +39,7 @@ from jobs.tasks import (
     chat_index_sweep_task,
     convert_docx_task,
     convert_pdf_task,
+    digest_task,
     embed_document_task,
     embed_sweep_task,
     extract_task,
@@ -280,6 +281,10 @@ class WorkerSettings:
         # regardless (dead-letter on first failure); every status write is
         # idempotent, so the retry re-runs from the top.
         func(widget_extract_task, max_tries=2),
+        # Theme digest: one LLM call per run. max_tries=2 so a worker killed
+        # mid-run re-runs instead of aborting silently; a re-run after the report
+        # was written finds the cursor advanced and writes nothing new.
+        func(digest_task, max_tries=2),
     ])
 
     # ARCH: GFS checkpoint thinning runs once daily off the web process. cron is a

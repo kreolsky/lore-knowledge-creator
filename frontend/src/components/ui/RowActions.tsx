@@ -44,7 +44,7 @@ export function RowActions({ primary, menu, active = false, activeBackdrop }: Ro
     >
       {primary}
       {menu && (
-        <div className={`${styles.gearZone} ${gear.open ? styles.gearOpen : ''}`} onMouseEnter={gear.handleEnter}>
+        <div className={`${styles.gearZone} ${gear.open ? styles.gearOpen : ''}`} onMouseEnter={gear.handleEnter} onMouseLeave={gear.handleLeave}>
           <span className={styles.gearIcon} onClick={gear.handleIconClick}>
             <Menu size={13} />
           </span>

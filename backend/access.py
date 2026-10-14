@@ -183,6 +183,45 @@ async def require_document_full(document_id: str, user: dict) -> None:
         raise HTTPException(status_code=403, detail="Write access required")
 
 
+# ─── Digest subjects (whose chats a digest reads) ───────────────────────────
+
+async def resolve_digest_subjects(
+    project_id: str, caller: dict, creator_id: str, requested: list[str] | None,
+) -> list[str]:
+    """Validated `subject_user_ids` for a digest binding written by `caller`.
+
+    `creator_id` is the binding's `created_by` (the caller on create). `requested`
+    None reads only the creator. Raises 403 when anyone beyond the creator is named
+    by someone other than a root creator, 400 when a named user has no access.
+    """
+    subjects = list(dict.fromkeys(requested or [creator_id]))
+    if subjects == [creator_id]:
+        return subjects
+    project = await fetch_one("projects", project_id)
+    # INVARIANT(security): only a project root chooses whose chats a digest reads; everyone else reads only their own.
+    # Why: a digest copies chat content into a document every project member can read.
+    # The root must also be the binding's creator — the run re-checks that the creator
+    # is still root, so a root widening someone else's binding would fail every run.
+    if caller["user_id"] != creator_id or not await is_project_root(project, caller):
+        raise HTTPException(status_code=403, detail="Only a project root may choose whose chats a digest reads")
+    for uid in subjects:
+        subject = await fetch_one("users", uid)
+        access = await get_project_access(project_id, {"user_id": uid, "role": subject.get("role")}) if subject else None
+        if access is None:
+            raise HTTPException(status_code=400, detail=f"User {uid} has no access to this project")
+    return subjects
+
+
+async def require_digest_editor(project_id: str, user: dict, created_by: str | None) -> None:
+    """403 unless `user` may change, run or schedule a digest binding: its creator or a project root."""
+    if created_by and user["user_id"] == created_by:
+        return
+    # INVARIANT(security): only the digest's author or a project root changes, runs or schedules it; any full member may delete it.
+    # Why: the binding reads its author's chats, so whoever steers or launches it decides which of them land in a shared document.
+    if not await is_project_root(await fetch_one("projects", project_id), user):
+        raise HTTPException(status_code=403, detail="Only the digest's author or a project root may change or run it")
+
+
 # ─── Ownership gate (manages membership) ────────────────────────────────────
 
 async def require_project_owner(project: dict, user: dict) -> None:

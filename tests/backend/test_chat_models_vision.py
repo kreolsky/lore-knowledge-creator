@@ -158,3 +158,45 @@ async def test_models_bare_entry_is_not_vision(client, admin_user, monkeypatch, 
     resp = await client.get("/api/chat/models", cookies={"lore_session": token})
     assert resp.status_code == 200, resp.text
     assert resp.json()["vision_models"] == []
+
+
+@pytest.mark.asyncio
+async def test_models_structured_output_set_is_explicit_declaration_only(
+    client, admin_user, monkeypatch, http_pool
+):
+    """`structured_output_models` lists exactly the served models whose gateway
+    entry declares `structured_outputs` in `supported_parameters`. `response_format`
+    alone (json_object only) and an absent field both mean NOT supported — the
+    extractor sends json_schema strict, which such a model refuses with a 400."""
+    pin_chat_api(monkeypatch, url="http://gateway.example")
+    monkeypatch.setattr(driver.client, "agent_capability", _ok_capability)
+    monkeypatch.setattr(comp, "_gateway_models_cache", None)
+    served = [
+        {"id": "a/schema", "supported_parameters": ["tools", "response_format", "structured_outputs"]},
+        {"id": "b/json-object", "supported_parameters": ["tools", "response_format"]},
+        {"id": "c/plain", "supported_parameters": ["tools", "temperature"]},
+        {"id": "d/bare"},
+    ]
+    http_pool("models_catalog", _FakeClient({"data": served}))
+
+    _uid, token = admin_user
+    resp = await client.get("/api/chat/models", cookies={"lore_session": token})
+    assert resp.status_code == 200, resp.text
+    expected = sorted(
+        e["id"] for e in served if "structured_outputs" in e.get("supported_parameters", [])
+    )
+    assert resp.json()["structured_output_models"] == expected == ["a/schema"]
+
+
+@pytest.mark.asyncio
+async def test_models_empty_chat_api_url_returns_empty_tool_fields(client, admin_user, monkeypatch):
+    """The empty-AI_API_URL branch keeps the same shape: both new lists present, empty."""
+    pin_chat_api(monkeypatch, url="")
+    monkeypatch.setattr(driver.client, "agent_capability", _ok_capability)
+
+    _uid, token = admin_user
+    resp = await client.get("/api/chat/models", cookies={"lore_session": token})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["tool_models"] == []
+    assert body["structured_output_models"] == []

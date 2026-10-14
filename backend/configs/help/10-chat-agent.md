@@ -1,43 +1,54 @@
 # Chat and the agent
 
-The chat is an agent with tools. It knows your project and can work with documents: read, search, create, edit, move, rename, build tables. Beyond that, it can search the internet, generate pictures, and work with skills and project memory.
+The chat is an agent with tools. It reads, searches, creates, edits, moves and renames documents and builds tables. Through [skills](help:skills) it also searches the web, runs deep research, generates pictures, runs code in a sandbox console, works with [memory](help:memory) and pipeline configs, and recalls your other chats.
 
 The agent acts on your behalf: it sees and changes only what you can see and change.
 
-## Chats are project-wide
+## Chats are project-wide and personal
 
-All your chats in a project are visible from any document. Chats are personal: you don't see other people's chats, and they don't see yours. Formally every chat has a parent — the document or reference it was started from — but this restricts nothing. A chat's parent can be changed.
+All your chats in a project are visible from any document; other members never see them, and you never see theirs. Every chat has a parent — the document or reference it was started from — which only affects sorting and can be changed.
 
-- **Search chats by title** — a filter above the list.
-- **Sort by recent activity** — the newest chat on top. This is the default.
-- **Sort by proximity to this document** — recent chats of the open document on top, then chats of documents near it in the tree.
-
-A chat can be renamed with a double click, exported to Markdown or JSON, and deleted.
+- **Sort**: by recent activity (default) or by proximity to the open document (its recent chats first, then chats of nearby documents in the tree).
+- **Find a chat**: the "Search" tab in "Chats" mode, by title or by content (see [Search](help:search)).
+- Rename (double click), export to Markdown or JSON, delete.
 
 ## Context
 
-When you write in the chat, the agent automatically receives links to the open documents and to the documents they link to directly. Links are passed, not content: the agent reads what it needs itself if the question concerns those documents.
+With every message the agent receives links (not content) to the open documents and to the documents they link to directly, and reads what it needs itself. "Add content" adds or removes documents and references by hand; switch off what is not needed if the agent reads too much.
 
-The "Add content" button lets you add or remove documents and references by hand. If the agent reads too much, switch off the context you don't need.
+The indicator next to the input shows how full the context window is. On overflow the older part of the conversation is compressed; if that is not enough, start a new chat.
 
-## Model and reasoning mode
+## Model and reasoning
 
-The model and the reasoning mode are chosen next to the input field. "default" leaves the choice to the model. Deeper reasoning gives more considered answers but is slower.
+Model and reasoning mode are picked next to the input. "default" leaves the reasoning depth to the model. The administrator decides which models each user can pick; a model that is not available to you is refused and the picker opens.
 
-## The agent's edits
+## Confirming the agent's edits
 
-- **"Auto" unchecked** (the default) — the agent shows every change first, and you decide: allow once, allow in this chat, or reject. If you reject with an explanation, the agent tries a different way.
-- **"Auto" checked** — edits are applied right away. Before each of the agent's edits Lore takes a snapshot, so it can be rolled back (see [Snapshots and history](help:history)).
+- **"Auto" unchecked** (default) — every change is shown first: allow once, allow for this chat, or reject. A rejection with an explanation makes the agent try another way.
+- **"Auto" checked** — changes apply at once. A snapshot is taken before every agent edit, so it can be rolled back (see [Snapshots and history](help:history)).
 
-## Handy moves
+## Branches
 
-- **Work with selection** (⌘/Ctrl + J) — select a fragment in the document, and the agent works on exactly that.
-- **Clarify** — select part of the agent's answer and ask a follow-up question.
-- **Edit your message** — the pencil on your message. After saving, the conversation continues as a new branch and the old one is kept; switch between branches with the arrows on the message.
-- **Continue** — if the agent's turn was interrupted (step limit, error, lost connection), a card with the reason and a "Continue" button appears in the chat.
-- **Create document from response** — the agent's answer becomes a new document.
-- **Voice input** — the microphone button next to the input field.
-- **Pictures** — drag them into the chat if the model can see images.
-- **System prompt** — choose a persona for this chat (see [Personas, rules and knowledge](help:personas-rules-knowledge)).
+- **Edit a message** — the pencil on your message, then "Save" (✓): the conversation continues from the edited message as a new branch, the old one is kept. Escape cancels the edit.
+- **Continue from before a message** — the trash icon on your message (press twice): hides that message and everything below; your next message starts a new branch from that point. Nothing is deleted. Use it when a message cannot be fixed by editing, for example an attached image that now fails.
+- Branches are switched with the "◄ 1/2 ►" arrows on the message where they split.
+- The first message of a chat cannot be edited or rewound; start a new chat instead.
 
-The indicator next to the field shows how full the context window is. When it overflows, the agent compresses the older part of the conversation. If there is still not enough room, start a new chat.
+## Sending while the agent works
+
+A message sent while the agent is busy is queued: it shows as a chip with ✕ (removes it) and runs as its own turn after the ones before it. The queue survives a page reload and is visible in every tab. Images can be queued too.
+
+## Chat privacy: "Unindexed"
+
+The mask button in the chat header marks the chat unindexed (the chat list shows it tinted). An unindexed chat is not found by the agent's recall from your other chats and never gets into a [digest](help:pipelines). The flag covers all branches of the chat and can be switched off any time.
+
+## Other actions
+
+- **Work with selection** (⌘/Ctrl + J) — the agent works on the selected fragment of the document.
+- **Clarify** — select part of the agent's answer and ask a follow-up about it.
+- **Continue** — an interrupted turn (step limit, error, lost connection) leaves a card with the reason and a "Continue" button.
+- **Create document from response** — the answer becomes a new document.
+- **Voice input** — the microphone next to the input.
+- **Pictures** — drag them into the chat, if the model can see images. A generated picture opens in a preview with "Download" and "Delete image".
+- **System prompt** — the persona for this chat (see [Personas, rules and knowledge](help:personas-rules-knowledge)).
+- **Scroll to bottom** — the arrow button that appears when the chat is scrolled up.

@@ -1,13 +1,13 @@
 /** Admin: who may run which model (SYSTEM: model-access).
  *
  * One card per model of GET /api/admin/models (gateway roster ∪ granted ids):
- * chevron · id · default / "not in gateway" marks · Hidden · Private · Public
- * selector. A gateway outage (in_gateway null) is one line above the list,
+ * chevron · id · default / "not in gateway" marks · Hidden · Tools · Private ·
+ * Public selector. A gateway outage (in_gateway null) is one line above the list,
  * never a "not in gateway" mark on every row. The tier is derived from the
- * subjects: `hidden` → Hidden (exclusive, drops every grant; disabled on the
- * default model), `public` → Public, else Private. Expanding a card lists
+ * subjects: `hidden` → Hidden and `tools` → Tools (each exclusive, drops every
+ * grant; disabled on the default model), `public` → Public, else Private. Expanding a card lists
  * every group (admin groups, then the read-only moderator groups) as a
- * checkbox — each one is that group's subject — greyed out while Hidden.
+ * checkbox — each one is that group's subject — greyed out while Hidden or Tools.
  * Every change shows at once, PUTs the model's FULL subject list and replaces
  * the row with the server's answer; a refusal (a moderator demoted meanwhile →
  * 422) restores the old subjects and renders under the row.
@@ -18,25 +18,32 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import { CenterHeading, FieldCheckbox, IconButton, SegmentedControl } from '../ui';
 import {
   HIDDEN_SUBJECT, listAdminGroups, listAdminModels, putAdminModelSubjects, PUBLIC_SUBJECT,
-  type AdminGroup, type AdminModelAccess,
+  TOOLS_SUBJECT, type AdminGroup, type AdminModelAccess,
 } from '../../api/admin';
 import { useAppStore } from '../../store/app-store';
 import { useTranslation } from '../../i18n';
 import { serverRefusalDetail } from '../../utils/server-refusal-detail';
 import { groupLabel } from './GroupsSection';
 
-type Tier = 'hidden' | 'private' | 'public';
+type Tier = 'hidden' | 'tools' | 'private' | 'public';
 
-function tierOf(subjects: string[]): Tier {
+const TIER_SUBJECTS = [PUBLIC_SUBJECT, HIDDEN_SUBJECT, TOOLS_SUBJECT];
+
+/** A subject that is a group grant, not a tier marker. */
+const isGroupGrant = (s: string) => !TIER_SUBJECTS.includes(s);
+
+export function tierOf(subjects: string[]): Tier {
   if (subjects.includes(HIDDEN_SUBJECT)) return 'hidden';
+  if (subjects.includes(TOOLS_SUBJECT)) return 'tools';
   return subjects.includes(PUBLIC_SUBJECT) ? 'public' : 'private';
 }
 
-/** The full subject list a tier change PUTs: Hidden drops every grant. */
-function subjectsForTier(subjects: string[], tier: Tier): string[] {
-  const grants = subjects.filter(s => s !== PUBLIC_SUBJECT && s !== HIDDEN_SUBJECT);
+/** The full subject list a tier change PUTs: Hidden and Tools drop every grant. */
+export function subjectsForTier(subjects: string[], tier: Tier): string[] {
+  const grants = subjects.filter(isGroupGrant);
   const byTier: Record<Tier, string[]> = {
     hidden: [HIDDEN_SUBJECT],
+    tools: [TOOLS_SUBJECT],
     private: grants,
     public: [...grants, PUBLIC_SUBJECT],
   };
@@ -107,7 +114,7 @@ export function ModelsSection() {
         {(models ?? []).map(model => {
           const open = expanded === model.id;
           const tier = tierOf(model.subjects);
-          const groupCount = model.subjects.filter(s => s !== PUBLIC_SUBJECT && s !== HIDDEN_SUBJECT).length;
+          const groupCount = model.subjects.filter(isGroupGrant).length;
           return (
             <section
               key={model.id}
@@ -137,6 +144,7 @@ export function ModelsSection() {
                   onChange={next => void saveSubjects(model, subjectsForTier(model.subjects, next as Tier))}
                   options={[
                     { value: 'hidden', label: t('adminModelHidden'), disabled: model.is_default },
+                    { value: 'tools', label: t('adminModelTools'), disabled: model.is_default },
                     { value: 'private', label: t('adminModelPrivate') },
                     { value: 'public', label: t('adminModelPublic') },
                   ]}
@@ -151,7 +159,7 @@ export function ModelsSection() {
                       checked={model.subjects.includes(g.subject)}
                       onChange={on => void toggleSubject(model, g.subject, on)}
                       label={groupLabel(g, t)}
-                      disabled={busy === model.id || tier === 'hidden'}
+                      disabled={busy === model.id || tier === 'hidden' || tier === 'tools'}
                     />
                   ))}
                 </div>

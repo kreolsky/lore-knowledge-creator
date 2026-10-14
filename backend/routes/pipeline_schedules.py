@@ -17,10 +17,10 @@ import json
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
-from pipeline.core.registry import pipeline_names
+from pipeline.core.registry import foreign_scoped_param, pipeline_names
 from surrealdb import AsyncSurreal
 
-from access import require_project_full
+from access import require_digest_editor, require_project_full
 from auth import get_current_user
 from db import create_record, fetch_one, get_db, serialize_record, soft_delete
 from models import PipelineScheduleCreate, PipelineSchedulePatch
@@ -95,20 +95,12 @@ async def _validate_schedule_params(spec, params: dict, project_id: str) -> None
             status_code=400,
             detail=f"params['project_id'] must be this schedule's project ({project_id})",
         )
-    from db import fetch_many
-
-    id_params = [str(params[k]) for k in scoped if k != "project_id" and params.get(k)]
-    if id_params:
-        docs = await fetch_many("documents", id_params)
-        for key in scoped:
-            if key == "project_id" or not params.get(key):
-                continue
-            doc = docs.get(str(params[key]))
-            if doc is None or doc.get("project_id") != project_id:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"params['{key}'] does not resolve to a document in this project",
-                )
+    foreign = await foreign_scoped_param(spec, params, project_id)
+    if foreign:
+        raise HTTPException(
+            status_code=400,
+            detail=f"params['{foreign}'] does not resolve to a record in this project",
+        )
 
 
 @router.post("/pipeline-schedules")
@@ -128,6 +120,9 @@ async def create_schedule(
     spec = get_pipeline(body.pipeline)
     assert spec is not None  # pipeline_names() validated membership above
     await _validate_schedule_params(spec, body.params, body.project_id)
+    if spec.name == "digest":
+        binding = await fetch_one("agent_configs", str(body.params["config_id"]))
+        await require_digest_editor(body.project_id, user, binding.get("created_by"))
     schedule_id = str(uuid4())
     record = await create_record("pipeline_schedules", schedule_id, {
         "project_id": body.project_id,

@@ -262,6 +262,12 @@ export interface AgentConfig {
   trigger_event: string;
   title_template: string | null;
   model: string | null;
+  /** NONE on rows predating the field = extractor. */
+  kind?: 'extractor' | 'digest' | null;
+  /** Who created the binding; a digest reads this user's chats by default. */
+  created_by?: string | null;
+  /** Digest only: whose chats are read. */
+  subject_user_ids?: string[] | null;
   created_at: string;
 }
 

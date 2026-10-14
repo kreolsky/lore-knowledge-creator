@@ -71,7 +71,13 @@ async def call_llm_structured(
             json=payload,
             headers=headers,
         )
-        resp.raise_for_status()
+        # WHY: raise_for_status()'s __str__ drops response.text, so the error note
+        # showed a bare "400 Bad Request" while the provider's body named the cause
+        # (e.g. "This response_format type is unavailable now").
+        if resp.status_code >= 400:
+            detail = f"HTTP {resp.status_code} from model {effective_model}: {resp.text[:500]}"
+            logger.error("[call_llm_structured] %s", detail)
+            raise RuntimeError(f"LLM request failed — {detail}")
         data = resp.json()
 
     import json

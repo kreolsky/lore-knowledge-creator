@@ -1,6 +1,6 @@
 # Screen lock
 
-If you need to step away from the computer and don't want to sign out, you can lock the screen with a PIN.
+Locks the screen without signing out.
 
 1. In the profile settings, "Quick Lock PIN" section, set a 4-digit PIN.
 2. Press "Lock screen" in the header.

@@ -134,7 +134,10 @@ async def validate_reprocessable(ref: dict) -> None:
     # worker mid-run is indistinguishable from a dead one), so manual retry is the
     # escape hatch. Accepted trade-off: retrying a still-live job costs one extra
     # sequential pass, not corruption (per-user FIFO worker, not parallel).
-    if ref.get("processing_status") not in ("error", "ready", "processing"):
+    # 'queued' is retryable on the same ground: a job refused before its first status
+    # write (a stale-code worker, a lost Redis job) leaves the ref queued forever. A
+    # retry of a job still waiting collapses onto it (job_id transcribe:{ref}).
+    if ref.get("processing_status") not in ("error", "ready", "processing", "queued"):
         raise HTTPException(status_code=400, detail="Reference is not in a retryable state")
     if not ref.get("file_path"):
         raise HTTPException(status_code=400, detail="No file attached")

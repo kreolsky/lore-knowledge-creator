@@ -400,3 +400,71 @@ async def test_default_model_cannot_be_hidden(client, world, gateway):
     )
     assert resp.status_code == 422, resp.text
     assert resp.json()["detail"] == {"code": "default_model_hidden"}
+
+
+# ─── Tools tier ───────────────────────────────────────────────────────────────
+
+
+async def _roster(client, token: str) -> dict:
+    resp = await client.get("/api/chat/models", cookies=_c(token))
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+@pytest.mark.asyncio
+async def test_tools_model_is_in_every_tool_picker_and_no_chat_picker(client, world, gateway):
+    await _grant(client, world, PRIVATE, ["tools"])
+    for who in ("blue", "red", "admin"):
+        body = await _roster(client, world["tokens"][who])
+        assert PRIVATE not in body["models"], who
+        assert PRIVATE in body["tool_models"], who
+        # The chat roster is a subset of the tool roster: utilities see every chat model too.
+        assert set(body["models"]) <= set(body["tool_models"]), who
+
+
+@pytest.mark.asyncio
+async def test_hidden_model_is_in_no_tool_picker(client, world, gateway):
+    await _grant(client, world, PRIVATE, ["hidden"])
+    for who in ("blue", "admin"):
+        assert PRIVATE not in (await _roster(client, world["tokens"][who]))["tool_models"], who
+
+
+@pytest.mark.asyncio
+async def test_private_ungranted_model_is_in_no_tool_picker_for_outsider(client, world, gateway):
+    body = await _roster(client, world["tokens"]["blue"])
+    assert PRIVATE not in body["tool_models"]
+    assert body["tool_models"] == body["models"]
+
+
+@pytest.mark.asyncio
+async def test_turn_on_tools_model_is_refused_for_user(client, world, gateway):
+    await _grant(client, world, PRIVATE, ["tools"])
+    assert await _turn(client, world, "blue", PRIVATE) == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("other", "code"), [
+    ("public", "tools_exclusive"), ("group:", "tools_exclusive"),
+    # hidden is checked first: it is the stronger exclusion.
+    ("hidden", "hidden_exclusive"),
+])
+async def test_tools_with_another_subject_is_422(client, world, other, code):
+    admin = _c(world["tokens"]["admin"])
+    if other == "group:":
+        gid = (await client.post("/api/admin/groups", json={"name": "G"}, cookies=admin)).json()["id"]
+        other = f"group:{gid}"
+    resp = await client.put(
+        f"/api/admin/models/{PRIVATE}", json={"subjects": ["tools", other]}, cookies=admin,
+    )
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == {"code": code}
+
+
+@pytest.mark.asyncio
+async def test_default_model_cannot_be_tools(client, world, gateway):
+    resp = await client.put(
+        f"/api/admin/models/{DEFAULT}", json={"subjects": ["tools"]},
+        cookies=_c(world["tokens"]["admin"]),
+    )
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == {"code": "default_model_tools"}

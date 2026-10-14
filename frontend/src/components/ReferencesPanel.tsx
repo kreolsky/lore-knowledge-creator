@@ -9,7 +9,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { Plus, Upload, ArrowLeft, Bot, Columns2, Eye, Archive } from 'lucide-react';
+import { Plus, Upload, ArrowLeft, Workflow, Columns2, Eye, Archive } from 'lucide-react';
 import { useAppStore } from '../store/app-store';
 import { useChatStore } from '../store/chat-store';
 import { claimAutoOpen, openInboxObject } from '../store/inbox-store';
@@ -646,7 +646,7 @@ export function ReferencesPanel() {
               )}
               <div className="flex-1" />
               <Button variant="ghost" size="sm" onClick={() => setShowAgentConfig(true)}>
-                <Bot size={13} />
+                <Workflow size={13} />
                 {t('agentConfig')}
               </Button>
             </>

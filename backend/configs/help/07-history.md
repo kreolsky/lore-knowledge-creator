@@ -1,10 +1,10 @@
 # Snapshots and history
 
-A snapshot is the saved state of a document at a given moment. Snapshots let you go back to a past version and mark important milestones with a comment. They live in the "Snapshots" tab of the right panel.
+A snapshot is the saved state of a document (with its tables) at a moment. Snapshots live in the "Snapshots" tab of the right panel.
 
 ## Automatic snapshots
 
-Lore takes snapshots on its own so that nothing gets lost:
+Lore takes snapshots:
 
 - before every edit by the agent;
 - on a large deletion or replacement of text;
@@ -27,7 +27,3 @@ Press ⌘/Ctrl + S or "Save snapshot" in the "Snapshots" tab. Add a comment: wha
 - From the "Snapshots" tab the document can be exported to PDF or DOCX.
 
 The tab also shows the document's history: who created the document and who edited it.
-
-## Planned
-
-Comparing two snapshots with the differences highlighted. For now you can compare by opening the snapshots one after another.

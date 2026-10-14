@@ -2,9 +2,12 @@
 
 # SYSTEM: model-access — per-user model availability (grants to public, moderator groups, admin groups) and the turn gate
 # ARCH: ONE table carries all access — model_grants(model_id, subject); a subject
-# is 'public', 'mod:<moderator uid>', 'group:<admin group id>' or 'hidden'.
-# "Public" is a grant to the subject 'public', not a flag. 'hidden' means never
-# in the chat picker, for anyone; grants nothing; the turn gate ignores it. The moderator group is VIRTUAL:
+# is 'public', 'mod:<moderator uid>', 'group:<admin group id>', 'tools' or 'hidden'.
+# "Public" is a grant to the subject 'public', not a flag. Visibility is a ladder:
+# 'hidden' = in no picker, for anyone; 'tools' = in every user's utility pickers
+# (extractor model) but never in the chat picker; a group grant = chat + utilities
+# for that group; 'public' = chat + utilities for everyone. 'hidden' and 'tools'
+# grant nothing, so the turn gate refuses them to non-admins. The moderator group is VIRTUAL:
 # derived from users.moderator_id, never stored, so promotion, user creation,
 # invite registration and a moderator_id change run no code here.
 # ARCH: ONE enforcement point — require_model_access, called by the turn
@@ -27,6 +30,10 @@ from db import get_db
 
 PUBLIC_SUBJECT = "public"
 HIDDEN_SUBJECT = "hidden"
+# INVARIANT(security): a tools-tier model is never runnable in chat — user_subjects never
+# yields TOOLS_SUBJECT, so require_model_access refuses it to every non-admin.
+# Why: the operator offers it to utilities only.
+TOOLS_SUBJECT = "tools"
 MOD_PREFIX = "mod:"
 GROUP_PREFIX = "group:"
 
@@ -84,10 +91,10 @@ async def available_models(user: dict) -> set[str] | None:
     return allowed
 
 
-async def hidden_models(db: AsyncSurreal) -> set[str]:
-    """Model ids marked hidden — dropped from every caller's picker list."""
+async def models_with_subject(db: AsyncSurreal, subject: str) -> set[str]:
+    """Model ids carrying `subject` — HIDDEN_SUBJECT / TOOLS_SUBJECT tier lookups."""
     rows = await db.query(
-        "SELECT VALUE model_id FROM model_grants WHERE subject = $s", {"s": HIDDEN_SUBJECT},
+        "SELECT VALUE model_id FROM model_grants WHERE subject = $s", {"s": subject},
     )
     return set(rows or [])
 

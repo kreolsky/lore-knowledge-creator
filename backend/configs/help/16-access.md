@@ -18,10 +18,14 @@ In the "Access" tab, "General access" section, you can publish a document by an 
 
 In the "Access" tab, "API access" section, you create keys to a document. A key has two capabilities, and both can be ticked together:
 
-- **widget** — for the recording apps on Android and macOS: recordings land in this document (see [Voice notes](help:voice)).
+- **widget** — sends notes and files into this document: the recording apps for Android and macOS (see [Voice notes](help:voice)), or any client of the widget API.
 - **agent** — MCP access for an external agent (for example, Claude or another assistant). The external agent sees only this document and its subtree. Writing is allowed by a separate checkbox; edits are applied right away and rolled back through snapshots.
 
 The token is shown once — copy it right away.
+
+## Arrival notifications
+
+In the "Access" tab, "Arrival notifications" section, per document and per person: "Flag external notes" (on by default) and "Flag external references" (off by default). When on, a note or reference that arrives in this document through a key you own is marked unread for you (see [Interface](help:interface)). Arrivals while a toggle is off are never marked later.
 
 ## Moving to another project
 
@@ -35,7 +39,3 @@ In the "Settings" tab:
 - **Image previews** — whether to show images in the references panel as a gallery of previews.
 - **Public to logged-in users** — all Lore users can read the project (owner only).
 - **Access** — members and invitations (owner only).
-
-## Planned
-
-User groups with different permissions.

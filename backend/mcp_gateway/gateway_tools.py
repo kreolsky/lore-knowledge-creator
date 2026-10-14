@@ -259,7 +259,7 @@ async def _dispatch_get_file(args: dict, ctx: dict) -> dict:
 async def _dispatch_reprocess_file(args: dict, ctx: dict) -> dict:
     """Re-run a node's conversion, gated to the stuck/failed state.
 
-    The shared `_validate_reprocessable` accepts error|ready|processing and is shared
+    The shared `_validate_reprocessable` accepts error|ready|processing|queued and is shared
     with the app's REST retry endpoint (an escape hatch). The MCP gate subtracts
     `ready` AND the non-empty-text case: MCP is force-auto with no confirmation tier,
     so an ungated call could destroy a human-corrected transcript irreversibly (binary

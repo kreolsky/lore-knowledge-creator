@@ -155,6 +155,14 @@ export interface ChatState {
   // Drives the Eye badge in the model picker. Capability flag, not session
   // state → NOT cleared by reset() (mirrors models/agentAvailable).
   visionModels: string[];
+  // Utility-picker roster (GET /chat/models `tool_models`): `models` plus the
+  // tools-tier models every user may pick for utilities but never in chat.
+  // Capability list → NOT cleared by reset() (mirrors visionModels).
+  toolModels: string[];
+  // Model ids whose gateway entry declares `structured_outputs` (GET /chat/models
+  // `structured_output_models`) — the extractor sends json_schema strict, so its
+  // model picker offers only these. NOT cleared by reset().
+  structuredOutputModels: string[];
   // Per-model real context window (sourced from GET /chat/models `context_windows`,
   // the gateway's `context_length`). The PRIMARY cap source for the gauge
   // (effectiveCap). Capability map, not session state → NOT cleared by reset()
