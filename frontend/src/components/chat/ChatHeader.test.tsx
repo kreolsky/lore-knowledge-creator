@@ -129,17 +129,26 @@ describe('ChatHeader', () => {
     unmount();
   });
 
-  it('ref session NEVER gets the change-parent icon (even with its ref open, slot empty)', () => {
+  it('ref session whose reference is OPEN shows the change-parent icon in the slot', () => {
     chatState.activeSessionId = 's2';
     chatState.sessions = [{ session_id: 's2', document_id: 'doc-1', reference_id: 'ref-9', reference_title: 'R' }];
     appState.currentReference = { reference_id: 'ref-9' };
     const host = mount();
     const slot = host.querySelector('[data-title-slot]');
     expect(slot, 'reserved slot rendered').toBeTruthy();
-    // A ref-scoped chat's parent is the reference; with it open neither icon
-    // renders — the guard is on isRefSession explicitly, not !showGotoParent.
-    expect(slot!.querySelector('[title="changeChatParent"]'), 'no change-parent for ref session').toBeNull();
+    expect(slot!.querySelector('[title="changeChatParent"]'), 'change-parent for ref session').toBeTruthy();
     expect(slot!.querySelector('[title^="gotoParentDoc"]'), 'no goto-parent (ref is open)').toBeNull();
+    unmount();
+  });
+
+  it('ref session under a DIFFERENT open reference shows goto-parent, not change-parent', () => {
+    chatState.activeSessionId = 's2';
+    chatState.sessions = [{ session_id: 's2', document_id: 'doc-1', reference_id: 'ref-9', reference_title: 'R' }];
+    appState.currentReference = { reference_id: 'ref-other' };
+    const host = mount();
+    const slot = host.querySelector('[data-title-slot]');
+    expect(slot!.querySelector('[title^="gotoParentDoc"]'), 'goto-parent').toBeTruthy();
+    expect(slot!.querySelector('[title="changeChatParent"]'), 'no change-parent').toBeNull();
     unmount();
   });
 

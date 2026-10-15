@@ -165,14 +165,15 @@ export function ChatHeader() {
   const showGotoParent = isRefSession
     ? !!activeSession?.reference_id && activeSession.reference_id !== currentReferenceId
     : !!parentDocId && parentDocId !== currentDocumentId;
-  // INVARIANT: the change-parent affordance is guarded on isRefSession
-  // EXPLICITLY, never on the negation of showGotoParent. Why: a reference-scoped
-  // chat's parent is the reference (the rule above); even in its "empty slot"
-  // state (ref open) it must never offer a document reparent — that write is a
-  // 400 for ref-scoped rows and the header is not the place to surface it.
-  // Shown only when the parent IS the open document — the exact state where the
-  // goto-parent branch renders the slot empty.
-  const showChangeParent = !isRefSession && !!parentDocId && parentDocId === currentDocumentId;
+  // INVARIANT: a chat can be moved to any document, never onto a reference —
+  // a reference chat included. Why: operator ruling, "чат можно передать на
+  // любой документ, на референс не надо". Shown only when the chat's own parent
+  // entity (its reference, else its document) IS the open one — the exact state
+  // where the goto-parent branch renders the slot empty. The picker lists
+  // documents only; the server refuses a reference target.
+  const showChangeParent = isRefSession
+    ? activeSession!.reference_id === currentReferenceId
+    : !!parentDocId && parentDocId === currentDocumentId;
 
   const handleReparent = useCallback((newDocumentId: string | null) => {
     // updateSession reconciles the server row into the store (title/doc flip on
@@ -231,7 +232,7 @@ export function ChatHeader() {
         // unmounts would make the rename input slide left into its place. The
         // two icon branches are mutually exclusive by construction (goto-parent
         // requires parent ≠ open entity, change-parent requires parent == open
-        // document), so the slot never holds two icons.
+        // entity), so the slot never holds two icons.
         <div data-title-slot className="flex items-center justify-center w-[22px] h-[22px] shrink-0">
           {showGotoParent && (
             <IconButton

@@ -2,7 +2,7 @@
 
 ## Searching the project
 
-The "Search" tab searches the project's documents and references. There are two modes:
+The "Search" tab searches the project's documents, references and your chats:
 
 - **Full-text** — search by words. Titles match by the start of a word, text by whole words. Word forms are taken into account for Russian text only (for example, «миром» finds «мира»); in other languages a word must match as written. The "Substring" checkbox switches on a literal search for a fragment in titles and text, without word forms.
 - **Semantic** — search by meaning, for when the wording is not remembered. "Memory only" keeps only [memory](help:memory) facts.

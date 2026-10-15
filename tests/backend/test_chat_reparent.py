@@ -3,9 +3,10 @@
 The header's change-parent icon writes chat_sessions.document_id (the column
 the proximity sort and build_ref_map read; reparenting and re-anchoring are
 the same write). Guards under test: 400 on note sessions (anchored by a note:
-link inside the owning document's content), 400 on reference-scoped sessions
-(the column holds the REFERENCE id), 403 when the caller lacks at least
-commentator access on the target, and explicit null clearing to project-level.
+link inside the owning document's content), 400 on a reference TARGET for any
+chat, 403 when the caller lacks at least commentator access on the target, and
+explicit null clearing to project-level. A reference chat moves to a document
+and becomes a plain document chat.
 """
 
 
@@ -101,10 +102,9 @@ async def test_reparent_note_session_rejected(client, admin_user, project_with_d
     assert "note" in resp.json()["detail"].lower()
 
 
-async def test_reparent_reference_scoped_session_rejected(client, admin_user, project_with_doc):
-    """A ref-scoped session's document_id column holds the REFERENCE id —
-    re-pointing it at a document is a different question, so the write is a
-    400 (reference_id is a read-only derivation)."""
+async def test_reparent_reference_session_to_document(client, admin_user, project_with_doc):
+    """A reference chat moves to any document and becomes a plain doc chat —
+    the column now holds the document id, so reference_id derives to None."""
     pid, doc_id, _ = project_with_doc
     _, token = admin_user
     doc_b = await _create_doc(client, token, pid, title="Doc B")
@@ -112,8 +112,61 @@ async def test_reparent_reference_scoped_session_rejected(client, admin_user, pr
     sid = (await _post_session(client, token, {"project_id": pid, "reference_id": r1})).json()["session_id"]
 
     resp = await _patch_session(client, token, sid, {"document_id": doc_b})
-    assert resp.status_code == 400
-    assert "reference" in resp.json()["detail"].lower()
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["document_id"] == doc_b
+    assert data["reference_id"] is None
+
+    rows = (
+        await client.get(
+            "/api/chat/sessions",
+            params={"project_id": pid, "document_id": doc_b},
+            cookies={"lore_session": token},
+        )
+    ).json()
+    by_id = {s["session_id"]: s for s in rows}
+    assert by_id[sid]["reference_id"] is None
+
+
+async def test_reparent_reference_session_to_project_level(client, admin_user, project_with_doc):
+    """Explicit null detaches a reference chat to project level, like a doc chat."""
+    pid, doc_id, _ = project_with_doc
+    _, token = admin_user
+    r1 = await _create_ref(client, token, pid, doc_id)
+    sid = (await _post_session(client, token, {"project_id": pid, "reference_id": r1})).json()["session_id"]
+
+    resp = await _patch_session(client, token, sid, {"document_id": None})
+    assert resp.status_code == 200, resp.text
+    assert resp.json().get("document_id") is None
+    assert resp.json().get("reference_id") is None
+
+
+async def test_reparent_onto_reference_rejected(client, admin_user, project_with_doc):
+    """No chat — document or reference one — is ever moved onto a reference:
+    400 and the row keeps its parent."""
+    pid, doc_id, _ = project_with_doc
+    _, token = admin_user
+    r1 = await _create_ref(client, token, pid, doc_id)
+    r2 = await _create_ref(client, token, pid, doc_id)
+    doc_sid = (await _post_session(client, token, {"project_id": pid, "document_id": doc_id})).json()["session_id"]
+    ref_sid = (await _post_session(client, token, {"project_id": pid, "reference_id": r1})).json()["session_id"]
+
+    for sid in (doc_sid, ref_sid):
+        resp = await _patch_session(client, token, sid, {"document_id": r2})
+        assert resp.status_code == 400, resp.text
+        assert "reference" in resp.json()["detail"].lower()
+
+    rows = (
+        await client.get(
+            "/api/chat/sessions",
+            params={"project_id": pid, "document_id": doc_id},
+            cookies={"lore_session": token},
+        )
+    ).json()
+    by_id = {s["session_id"]: s for s in rows}
+    assert by_id[doc_sid]["document_id"] == doc_id
+    assert by_id[doc_sid]["reference_id"] is None
+    assert by_id[ref_sid]["reference_id"] == r1
 
 
 async def test_reparent_inaccessible_target_403_and_row_unchanged(

@@ -17,3 +17,7 @@ A note is a discussion thread attached to a document, optionally to a fragment o
 
 - **System notes.** A failed pipeline or agent action posts its details as a new system note of the document.
 - **Notes from a widget key.** A text sent over the widget-key API (`POST /api/widget/note`) lands as a note of the key's document, titled with the key's name, and is marked unread for the key's owner (see [Interface](help:interface)). The recording apps do not send notes yet; they upload files.
+
+## Sending a note through a widget key
+
+The copied widget key is base64 of `{"url": …, "token": …}`. Decode it and send `POST <url>/api/widget/note` with the header `Authorization: Bearer <token>` and the JSON body `{"title": "optional", "body": "text"}`. The note's title is the key's name, plus ` — <title>` when a title is given. An empty body is refused (400), and the body is capped at 100,000 characters (413). The reply is `{"session_id": …}`. `GET <url>/api/widget/info` with the same header shows which project and document the key is bound to.

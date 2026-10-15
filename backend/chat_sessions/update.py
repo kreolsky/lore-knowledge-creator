@@ -115,16 +115,17 @@ async def _agent_flag_sets(
 
 # ARCH: reparent = re-anchor. The write is
 # chat_sessions.document_id — the column the proximity sort and build_ref_map
-# read; there is no separate "chat context doc" field. Refused on two row
-# shapes (400): note sessions (a note is anchored by a note: link inside its
-# owning document's content — moving the row would strand the anchor) and
-# reference-scoped sessions (the column holds the REFERENCE id; re-pointing at
-# another reference is a different picker, not this write). A non-null target
-# needs at least commentator access — reparenting into a document the user
-# cannot see would hide their own chat from them and leak a title into that
-# branch's proximity ranking. The agent's target_doc_id pin is NOT moved: the
-# turn guard only trusts a target that is a descendant of the (new)
-# document_id, so a stale pin is inert outside the new scope.
+# read; there is no separate "chat context doc" field. A reference-scoped
+# session holds the REFERENCE id in that column, so moving it to a document is
+# the same write and the row becomes a plain document chat (reference_id is a
+# read-only derivation). Refused (400) for note sessions — a note is anchored by
+# a note: link inside its owning document's content, moving the row would
+# strand the anchor. A non-null target needs at least commentator access —
+# reparenting into a document the user cannot see would hide their own chat
+# from them and leak a title into that branch's proximity ranking. The agent's
+# target_doc_id pin is NOT moved: the turn guard only trusts a target that is a
+# descendant of the (new) document_id, so a stale pin is inert outside the new
+# scope.
 async def _reparent_sets(
     db, session: dict, body: SessionUpdate, user: dict, sets: list[str], params: dict,
 ) -> None:
@@ -132,14 +133,13 @@ async def _reparent_sets(
         return
     if session.get("is_note") is True:
         raise HTTPException(status_code=400, detail="Cannot change parent of a note session")
-    current_ref_map = await build_ref_map(db, session.get("document_id"))
-    if session.get("document_id") in current_ref_map:
-        raise HTTPException(
-            status_code=400, detail="Cannot change parent of a reference-scoped session",
-        )
     if body.document_id is None:
         sets.append("document_id = NONE")
         return
+    # INVARIANT: a chat can be moved to any document, never onto a reference.
+    # Why: operator ruling — "чат можно передать на любой документ, на референс не надо".
+    if body.document_id in await build_ref_map(db, body.document_id):
+        raise HTTPException(status_code=400, detail="Cannot move a chat onto a reference")
     target_access = await get_document_access(body.document_id, user)
     if target_access is None or target_access == "readonly":
         raise HTTPException(

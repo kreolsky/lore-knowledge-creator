@@ -23,6 +23,16 @@ In the "Access" tab, "API access" section, you create keys to a document. A key 
 
 The token is shown once — copy it right away.
 
+## Connecting an external agent
+
+An external agent needs two things: the address `<Lore address>/mcp` (the address of this site plus `/mcp`) and the key's token — "Copy token", not "Copy widget key".
+
+An MCP-capable client takes them as a server of type http with the header `Authorization: Bearer <token>`. For Claude Code: `claude mcp add --transport http lore <Lore address>/mcp --header "Authorization: Bearer <token>"`.
+
+Without an MCP client, send `POST <Lore address>/mcp` — stateless JSON-RPC 2.0, one request per call — with the headers `Authorization: Bearer <token>`, `Content-Type: application/json` and `Accept: application/json`, and the body `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"init","arguments":{}}}`. The result is a JSON string in `result.content[0].text`.
+
+Tell the agent to call `init` once, first: it returns the agent's rights, its scope and the rules of work. The tools and their parameters come from the `tools/list` method.
+
 ## Arrival notifications
 
 In the "Access" tab, "Arrival notifications" section, per document and per person: "Flag external notes" (on by default) and "Flag external references" (off by default). When on, a note or reference that arrives in this document through a key you own is marked unread for you (see [Interface](help:interface)). Arrivals while a toggle is off are never marked later.

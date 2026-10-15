@@ -129,12 +129,12 @@ class SessionUpdate(BaseModel):
     # pin itself is set at create; a PATCH only ever clears it (has_region=false) to
     # re-enable auto-apply and drop the containment constraint.
     has_region: bool | None = None
-    # ARCH (plan chat-reparent-from-header): PATCH-able like system_prompt_id
+    # ARCH: PATCH-able like system_prompt_id
     # (model_fields_set semantics — explicit null clears to project-level).
     # update_session guards the write: 400 for note sessions (anchored by a
-    # note: link inside the owning document's content) and reference-scoped
-    # sessions (the column holds the REFERENCE id); a non-null target requires
-    # at least commentator access, else 403.
+    # note: link inside the owning document's content) and for a reference
+    # TARGET; a reference-scoped session may move to any document or to project
+    # level. A non-null target requires at least commentator access, else 403.
     document_id: str | None = None
     # ARCH: the ROOT row's pointer to the
     # last-opened branch — the chat list previews that branch. Opening any

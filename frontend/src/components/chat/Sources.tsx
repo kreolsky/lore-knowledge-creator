@@ -1,4 +1,4 @@
-/** Sources panel — numbered list of clickable retrieval hits under assistant messages. */
+/** Sources panel — list of clickable retrieval hits under assistant messages. */
 
 import { memo, useCallback } from 'react';
 import { FileText, BookOpen, Link2 } from 'lucide-react';
@@ -35,10 +35,9 @@ export const Sources = memo(function Sources({ sources }: Props) {
 
   return (
     <div className="chat-sources mt-1.5 text-xs text-text-dim">
-      <ol className="space-y-0.5">
+      <ul className="space-y-0.5">
         {sources.map((s, i) => (
           <li key={i} className="flex items-start gap-1">
-            <span className="text-text-muted shrink-0">{i + 1}.</span>
             {s.kind === 'document' ? (
               <span
                 role="button"
@@ -70,7 +69,7 @@ export const Sources = memo(function Sources({ sources }: Props) {
             )}
           </li>
         ))}
-      </ol>
+      </ul>
     </div>
   );
 });
