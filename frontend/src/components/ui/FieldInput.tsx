@@ -28,7 +28,7 @@ interface FieldInputProps {
 
 interface FieldTextareaProps {
   className?: string;
-  // Swaps the locked neutral surface for sticky-yellow (AI zero-chat experiment).
+  // Swaps the locked neutral surface for warm (AI zero-chat experiment).
   highlight?: boolean;
   // Monospace, smaller text — for code-like values (a pasted JSON workflow).
   mono?: boolean;
@@ -63,7 +63,7 @@ export const FieldInput = forwardRef<HTMLInputElement, FieldInputProps>(
 export const FieldTextarea = forwardRef<HTMLTextAreaElement, FieldTextareaProps>(
   function FieldTextarea({ className, highlight, mono, ...props }, ref) {
     const bg = highlight
-      ? ' !bg-[var(--sticky-yellow-light)] !border-[var(--sticky-yellow-sep)]'
+      ? ' !bg-[var(--zero-chat-field-bg)] !border-[var(--warm-sep)]'
       : '';
     const font = mono ? ' font-mono !text-xs' : '';
     return <textarea ref={ref} className={`${textareaCls}${bg}${font}${className ? ` ${className}` : ' w-full'}`} {...props} />;

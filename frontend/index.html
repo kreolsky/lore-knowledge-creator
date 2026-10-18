@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Lore – Knowledge Creator</title>
+    <script src="/theme-boot.js"></script>
+    <!-- WHY: index.css arrives with the JS bundle; this paints the dark canvas before it. Keep in sync with html.dark --bg. -->
+    <style>html.dark { color-scheme: dark; background: #1e1e1e; }</style>
   </head>
   <body>
     <div id="root"></div>

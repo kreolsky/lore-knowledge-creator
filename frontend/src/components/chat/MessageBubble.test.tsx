@@ -102,7 +102,7 @@ function bubbleBody() {
 }
 
 describe('unified MessageBubble — note variant', () => {
-  it('right-aligns (items-end) and uses sticky-yellow for own messages', () => {
+  it('right-aligns (items-end) and uses warm-strong for own messages', () => {
     act(() => {
       root.render(createElement(MessageBubble, {
         variant: 'note',
@@ -112,7 +112,7 @@ describe('unified MessageBubble — note variant', () => {
       }));
     });
     expect(wrapper().className).toContain('items-end');
-    expect(bubbleBody().className).toContain('sticky-yellow-dark');
+    expect(bubbleBody().className).toContain('warm-strong');
   });
 
   it('left-aligns (items-start) and renders a transparent bubble with the author-color left border for other-user messages', () => {
@@ -126,9 +126,9 @@ describe('unified MessageBubble — note variant', () => {
       }));
     });
     expect(wrapper().className).toContain('items-start');
-    // Fully transparent plaque: no surface fill (sticky-yellow is own-only).
+    // Fully transparent plaque: no surface fill (warm is own-only).
     expect(bubbleBody().className).not.toContain('bg-surface2');
-    expect(bubbleBody().className).not.toContain('sticky-yellow-dark');
+    expect(bubbleBody().className).not.toContain('warm-strong');
     // 4px author-colored left border at 80% transparency; no rounding (project rule).
     const color = `${userColor(authorId)}33`;
     expect(bubbleBody().style.borderLeftWidth).toBe('4px');
@@ -137,7 +137,7 @@ describe('unified MessageBubble — note variant', () => {
     expect(bubbleBody().style.borderRadius).toBe('');
   });
 
-  it('keeps the sticky-yellow plaque and has no colored border for own note messages', () => {
+  it('keeps the warm plaque and has no colored border for own note messages', () => {
     act(() => {
       root.render(createElement(MessageBubble, {
         variant: 'note',
@@ -146,7 +146,7 @@ describe('unified MessageBubble — note variant', () => {
         actions: { onCopy: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn() },
       }));
     });
-    expect(bubbleBody().className).toContain('sticky-yellow-dark');
+    expect(bubbleBody().className).toContain('warm-strong');
     expect(bubbleBody().style.borderLeft).toBe('');
   });
 

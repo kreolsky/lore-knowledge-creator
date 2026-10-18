@@ -20,9 +20,6 @@ from scope import subtree_doc_ids
 ChatScope = Literal["project", "siblings", "subtree"]
 
 CHAT_RECALL_MAX_HITS = 8
-# Hit slots reserved for the anchor's subtree in `project` scope; a short pool
-# yields its slots to the other.
-CHAT_RECALL_SIBLING_SLOTS = 5
 # Chunk rows scored before collapsing to messages and origins — headroom for
 # branch copies and multi-chunk messages competing for the same hit slots.
 CHAT_RECALL_FETCH = 40
@@ -153,16 +150,12 @@ async def _score_chunks(
     return [r for r in rows if r["score"] >= floor]
 
 
-def _collapse(
-    chunks: list[dict], live: dict[str, dict], limit: int | None,
-    seen: set[str] | None = None,
-) -> list[dict]:
+def _collapse(chunks: list[dict], live: dict[str, dict]) -> list[dict]:
     """Best chunk per message, then per origin (a branch copy is the same row),
-    capped at `limit` (None = uncapped). A chunk whose message changed since it
-    was indexed is dropped — its text is no longer what the message says.
-    `seen` is shared across pools so an origin is never served twice."""
+    capped at CHAT_RECALL_MAX_HITS. A chunk whose message changed since it was
+    indexed is dropped — its text is no longer what the message says."""
     picked: list[dict] = []
-    seen = set() if seen is None else seen
+    seen: set[str] = set()
     for chunk in chunks:
         message = live.get(chunk["message_id"])
         if not message or chunk["content_hash"] != hash_content(message["content"]):
@@ -171,42 +164,21 @@ def _collapse(
             continue
         seen.add(chunk["origin_key"])
         picked.append({**chunk, "message": message})
-    return picked if limit is None else picked[:limit]
-
-
-async def _pool_hits(
-    db, user_id: str, project_id: str, pool: dict, qvec: list[float], seen: set[str],
-    window: Window,
-) -> list[dict]:
-    chunks = await _score_chunks(db, user_id, project_id, pool, qvec, window)
-    live = await live_rows(db, {c["message_id"] for c in chunks}, pool)
-    return _collapse(chunks, live, None, seen)
+    return picked[:CHAT_RECALL_MAX_HITS]
 
 
 async def _ranked(
-    db, user_id: str, project_id: str, sessions: dict, siblings: set[str] | None,
-    tiered: bool, qvec: list[float], window: Window,
+    db, user_id: str, project_id: str, sessions: dict, qvec: list[float], window: Window,
 ) -> list[dict]:
-    """The picked chunks. Tiered: the anchor's subtree and the rest are scored as
-    two pools, siblings first.
+    """The picked chunks, by similarity alone.
 
-    WHY two pools: one global `ORDER BY score LIMIT CHAT_RECALL_FETCH` can cut
-    every sibling before a boost could apply, so each pool gets its own fetch;
-    the sibling pool collapses first with the shared `seen`, so an origin seen
-    as a sibling is never repeated as an other.
+    WHY no boost for the anchor's subtree: a chat on the open document is MARKED
+    (`sibling`), never ranked above a more relevant one — the narrow to that
+    subtree is the explicit `siblings` scope.
     """
-    if not tiered:
-        chunks = await _score_chunks(db, user_id, project_id, sessions, qvec, window)
-        live = await live_rows(db, {c["message_id"] for c in chunks}, sessions)
-        return _collapse(chunks, live, CHAT_RECALL_MAX_HITS)
-    near = {sid: s for sid, s in sessions.items() if s["document_id"] in siblings}
-    far = {sid: s for sid, s in sessions.items() if sid not in near}
-    seen: set[str] = set()
-    near_hits = await _pool_hits(db, user_id, project_id, near, qvec, seen, window)
-    far_hits = await _pool_hits(db, user_id, project_id, far, qvec, seen, window)
-    take_near = max(CHAT_RECALL_SIBLING_SLOTS, CHAT_RECALL_MAX_HITS - len(far_hits))
-    near_hits = near_hits[:take_near]
-    return near_hits + far_hits[:CHAT_RECALL_MAX_HITS - len(near_hits)]
+    chunks = await _score_chunks(db, user_id, project_id, sessions, qvec, window)
+    live = await live_rows(db, {c["message_id"] for c in chunks}, sessions)
+    return _collapse(chunks, live)
 
 
 async def _scoped_sessions(
@@ -233,7 +205,7 @@ async def search_chats(
 ) -> dict:
     """Semantic search over the user's own visible chats of the project.
 
-    `project` searches everything, the anchor's subtree ranked first; `siblings`
+    `project` searches everything (hits under the anchor are marked `sibling`); `siblings`
     only the anchor document and its subtree (400 without an anchor — a narrow
     the caller cannot get is an error, never a wider search); `subtree` only
     under `under_document_id` (404 when it is not a live document of the project).
@@ -244,8 +216,7 @@ async def search_chats(
     sessions = await _scoped_sessions(
         db, user_id, project_id, exclude, scope, siblings, under_document_id)
     qvec = await _embed_query(query)
-    tiered = scope == "project" and siblings is not None
-    picked = await _ranked(db, user_id, project_id, sessions, siblings, tiered, qvec, window)
+    picked = await _ranked(db, user_id, project_id, sessions, qvec, window)
     parents = await live_rows(db, {
         p["message"]["parent_id"] for p in picked
         if p["message"]["role"] == "assistant" and p["message"].get("parent_id")

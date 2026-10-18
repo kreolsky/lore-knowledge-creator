@@ -41,6 +41,8 @@ export interface ClaimFacts {
   assistant_msg_id: string
   user_text: string
   images: unknown[]
+  /** Files dropped on the chat, already in the sender's sandbox workspace. */
+  files: unknown[]
   sources: unknown[]
   warnings: unknown[]
 }
@@ -418,11 +420,11 @@ function cancelKeepingQueue(entry: SessionAgent): void {
 }
 
 /** One queued message handed back to the composer by the person's Stop. */
-export interface ReturnedSend { text: string; images: unknown[] }
+export interface ReturnedSend { text: string; images: unknown[]; files: unknown[] }
 
 /** POST /stop: `stopped` when a turn was running and is now being cancelled.
  * `returnQueue` (the person's Stop) also takes every queued message out of
- * the inbox and returns its text and images in send order, for the composer;
+ * the inbox and returns its text, images and files in send order, for the composer;
  * without it (the backend's deadline breach) the queue stays parked. */
 export function stopSession(
   dshId: string, returnQueue = false,
@@ -447,7 +449,9 @@ function takeQueue(entry: SessionAgent): ReturnedSend[] {
     const id = String(message.id)
     const prep = entry.preps.get(id)
     entry.preps.delete(id)
-    return prep ? [{ text: prep.claim.user_text, images: prep.claim.images }] : []
+    return prep
+      ? [{ text: prep.claim.user_text, images: prep.claim.images, files: prep.claim.files }]
+      : []
   })
 }
 

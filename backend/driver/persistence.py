@@ -119,6 +119,7 @@ async def _mint_claim_rows(driver_session_id: str, claim: dict) -> dict | None:
         return None
     chat_id = head["cid"]
     images = claim.get("images") or []
+    files = claim.get("files") or []
     # WHY: the user row and its assistant placeholder commit together —
     # a statement-per-commit write lets a reload read the user row alone,
     # and a turn marked running then has no assistant row to carry `open_turn`.
@@ -126,7 +127,8 @@ async def _mint_claim_rows(driver_session_id: str, claim: dict) -> dict | None:
         db,
         [
             "CREATE type::record('messages', $uid) SET chat_id = $cid, parent_id = $pid, role = 'user', content = $uc"
-            + (", images = $imgs" if images else ""),
+            + (", images = $imgs" if images else "")
+            + (", files = $files" if files else ""),
             "CREATE type::record('messages', $aid) SET chat_id = $cid, parent_id = $uid, role = 'assistant', content = '', model = $model",
         ],
         {
@@ -136,6 +138,7 @@ async def _mint_claim_rows(driver_session_id: str, claim: dict) -> dict | None:
             "pid": await _chat_tail(db, chat_id),
             "uc": claim.get("user_text") or "",
             **({"imgs": images} if images else {}),
+            **({"files": files} if files else {}),
             "model": claim.get("model") or "",
         },
     )

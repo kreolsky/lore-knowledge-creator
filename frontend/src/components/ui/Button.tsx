@@ -29,10 +29,10 @@ const variants: Record<string, string> = {
     'bg-accent text-white hover:brightness-108',
   ghost: 'bg-transparent text-text-muted hover:bg-surface3 hover:text-text',
   // see SYSTEM: note-chat — darker-yellow hover for controls inside a note thread.
-  'ghost-note': 'bg-transparent text-text-muted hover:bg-[var(--sticky-yellow-dark)] hover:text-text',
-  // see SYSTEM: note-chat — sticky-yellow pair (idle light → hover dark), same
+  'ghost-note': 'bg-transparent text-text-muted hover:bg-[var(--warm-strong)] hover:text-text',
+  // see SYSTEM: note-chat — warm pair (idle tint → hover strong), same
   // tokens as anchored note pills / note links; theme-aware text like ghost-note.
-  yellow: 'bg-[var(--sticky-yellow-light)] text-text-muted hover:bg-[var(--sticky-yellow-dark)] hover:text-text',
+  yellow: 'bg-[var(--warm-tint)] text-text-muted hover:bg-[var(--warm-strong)] hover:text-text',
   danger:
     'bg-red text-white hover:brightness-108',
   subtle: 'bg-surface2 text-text-muted hover:bg-[var(--subtle-hover-bg)] hover:text-text',

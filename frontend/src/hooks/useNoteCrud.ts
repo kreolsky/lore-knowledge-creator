@@ -31,6 +31,9 @@ export function selectSplitNoteItems(items: ChatSession[], openRefId: string): C
   return items.filter(s => s.reference_id == null || s.reference_id === openRefId);
 }
 
+// Mounted thread hosts (NotesPanel instances). Read only by the departure check below.
+let mountedNoteHosts = 0;
+
 export function useNoteCrud({ highlightNote }: UseNoteCrudParams) {
   const currentDocument = useAppStore(s => s.currentDocument);
   const rawReference = useAppStore(s => s.currentReference);
@@ -159,9 +162,7 @@ export function useNoteCrud({ highlightNote }: UseNoteCrudParams) {
     // delete; no client emit here.
     const store = useNoteChatStore.getState();
     const sessionId = store.activeSessionId;
-    if (sessionId && store.messages.length === 0) {
-      void store.deleteSession(sessionId);
-    }
+    if (sessionId) store.discardIfEmpty(sessionId);
     // INVARIANT: exit stays on the notes tab. previousRightTab is only restored
     // when non-null — set only by editor-initiated note creation
     // (markdown-actions.createNote). Why: anchorless notes are created from
@@ -176,6 +177,33 @@ export function useNoteCrud({ highlightNote }: UseNoteCrudParams) {
       useUIStore.getState().setRightPanelTab(docId, previousTab);
     }
   }, [setActiveNoteThreadId, currentDocument?.document_id]);
+
+  useEffect(() => {
+    mountedNoteHosts += 1;
+    return () => { mountedNoteHosts -= 1; };
+  }, []);
+
+  // WHY: leaving a NEW note's thread by any route — switching the right-panel tab,
+  // closing the panel, switching document — cancels it while it is untouched, the
+  // same as back/Esc. An abandoned empty note kept the notes tab tinted as
+  // "a thread is open" and later surfaced as an untitled empty card in the list.
+  // WHY microtask: StrictMode's dev double-invoke runs this cleanup and re-runs the
+  // effects synchronously; the deferred check sees the panel still showing the same
+  // thread and leaves it alone.
+  useEffect(() => {
+    const sessionId = activeNoteThreadId;
+    if (!sessionId) return;
+    return () => {
+      queueMicrotask(() => {
+        const stillShown = mountedNoteHosts > 0
+          && useNoteStore.getState().activeNoteThreadId === sessionId;
+        if (stillShown) return;
+        if (useNoteChatStore.getState().discardIfFresh(sessionId)) {
+          useNoteStore.getState().clearNoteThread(sessionId);
+        }
+      });
+    };
+  }, [activeNoteThreadId]);
 
   // WHY: the split-mode filter ignores document
   // content, so gate the content dependency — without this, doc typing (collab content

@@ -8,7 +8,7 @@
 // INVARIANT: no rounded corners (project rule) — square backdrop, never rounded-full.
 // Why: project-wide `border-radius: 0` rule (CLAUDE.md).
 // INVARIANT: geometry mirrors the user bubble in MessageBubble.tsx, background is one
-// tone lighter (--sticky-yellow-light vs -dark).
+// tone lighter (--warm-tint vs -strong).
 // Why: a queued message is the same message not yet sent — it must read as a pale
 // preview of the bubble it becomes, not as a separate chip type.
 
@@ -32,7 +32,7 @@ export function QueuedChips({ queued, onRemove }: Props) {
           key={m.id}
           className="group relative max-w-[85%] min-w-[200px] text-text px-3 py-2 pr-7 text-sm leading-relaxed text-right whitespace-pre-wrap break-words cursor-default"
           // Translucent so the agent's streaming answer stays readable underneath.
-          style={{ backgroundColor: 'color-mix(in srgb, var(--sticky-yellow-light) 80%, transparent)' }}
+          style={{ backgroundColor: 'color-mix(in srgb, var(--warm-tint) 80%, transparent)' }}
           title={t('queuedMessageTitle')}
         >
           {m.text.trim() || (m.images > 0 ? null : t('queuedEmpty'))}
@@ -41,8 +41,8 @@ export function QueuedChips({ queued, onRemove }: Props) {
               <Image size={12} />{m.images}
             </span>
           )}
-          {/* INVARIANT: the ✕ on a yellow chip hovers dark sticky-yellow (theme="note"), never the app-wide gray.
-              Why: the operator corrected this gray plate several times — a control on a sticky-yellow surface takes that surface's hover. */}
+          {/* INVARIANT: the ✕ on a yellow chip hovers warm-strong (theme="note"), never the app-wide gray.
+              Why: the operator corrected this gray plate several times — a control on a warm surface takes that surface's hover. */}
           <IconButton
             size="sm"
             theme="note"

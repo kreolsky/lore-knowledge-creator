@@ -36,10 +36,10 @@
 }
 /* Blue backdrop for the open/active reference (functional: marks which ref is open). */
 .activeBlue {
-  background: linear-gradient(to right, transparent 0px, var(--sticky-blue-dark) 16px);
+  background: linear-gradient(to right, transparent 0px, var(--ref-strong) 16px);
 }
 .activeBlue button:hover {
-  background: var(--sticky-blue-darkest);
+  background: var(--ref-solid);
   color: #fff;
 }
 .activeBlue button:global(.bg-red):hover {

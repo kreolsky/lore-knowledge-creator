@@ -172,11 +172,22 @@ class MessageUpdate(BaseModel):
     sources: list[dict] | None = None
 
 
+class ChatFile(BaseModel):
+    """A file the person dropped on the chat, already in their sandbox workspace
+    (POST /api/projects/{id}/sandbox/attachments returns exactly this)."""
+    id: str
+    name: str
+    size: int
+    mime: str
+    path: str
+
+
 class ChatMessage(BaseModel):
     # WHY: Typed model prevents arbitrary dicts from reaching the LLM API.
     role: Literal["system", "user", "assistant"]
     content: str
     images: list[str] | None = None
+    files: list[ChatFile] | None = None
 
 
 class CompletionRequest(BaseModel):

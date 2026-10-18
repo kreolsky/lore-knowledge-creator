@@ -176,15 +176,18 @@ async def test_non_member_is_403(client, world, stranger):
     assert resp.status_code == 403, resp.text
 
 
-async def test_anchor_turns_the_sibling_tier_on(client, tree):
+async def test_anchor_marks_siblings_without_reordering(client, tree):
     without = (await _call(client, tree, "route", "a", "comet")).json()
     assert len(without["hits"]) == 6 and not any(h["sibling"] for h in without["hits"])
     resp = await _call(client, tree, "route", "a", "comet", anchor="dA1")
     assert resp.status_code == 200, resp.text
     result = resp.json()
     assert result["query"] == "comet"
-    tiers = [h["sibling"] for h in result["hits"]]
-    assert tiers == [True] * 2 + [False] * 4
+    # The fixture's hits tie on score, so "no reordering" is: the same hits, by score.
+    assert sorted(h["message_id"] for h in result["hits"]) == sorted(
+        h["message_id"] for h in without["hits"])
+    scores = [h["score"] for h in result["hits"]]
+    assert scores == sorted(scores, reverse=True)
     assert {h["chat_id"] for h in result["hits"] if h["sibling"]} == {"sA1", "sA1a"}
 
 

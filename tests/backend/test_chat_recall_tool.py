@@ -373,37 +373,31 @@ async def _pool(db, a, pid, prefix, count, doc, text):
         await _msg(db, f"{sid}m", sid, text)
 
 
-async def test_lower_scoring_sibling_is_ranked_first(client, test_db, tree):
+async def test_a_sibling_is_marked_not_boosted(client, test_db, tree):
+    """A chat under the anchor ranks by relevance alone; the narrow is `siblings`."""
     pid, a = tree["pid"], tree["a"]
     await _pool(test_db, a, pid, "far", 8, "dB", "dragon by the lighthouse")
     await _pool(test_db, a, pid, "near", 1, "dA1", "a dragon")
     await index_chat_messages({}, a, pid)
-    result = await _scoped(client, tree["ka"], {"query": "dragon lighthouse"}, "anchorA")
-    hits = result["hits"]
+    hits = (await _scoped(client, tree["ka"], {"query": "dragon lighthouse"}, "anchorA"))["hits"]
     assert len(hits) == 8
-    assert hits[0]["message_id"] == "near0m" and hits[0]["sibling"] is True
-    assert hits[0]["score"] < hits[1]["score"]
-    assert not any(h["sibling"] for h in hits[1:])
+    assert not any(h["sibling"] for h in hits)
+    assert "near0m" not in _hit_ids({"hits": hits})
 
 
-async def test_sibling_slots_are_capped_and_the_rest_fill_from_others(client, test_db, tree):
+async def test_project_hits_are_ordered_by_score_with_siblings_marked(client, test_db, tree):
     pid, a = tree["pid"], tree["a"]
-    await _pool(test_db, a, pid, "far", 8, "dB", "ember harbor")
-    await _pool(test_db, a, pid, "near", 8, "dA1", "ember harbor")
+    await _pool(test_db, a, pid, "far", 3, "dB", "dragon by the lighthouse")
+    await _pool(test_db, a, pid, "near", 1, "dA1", "a dragon")
     await index_chat_messages({}, a, pid)
-    hits = (await _scoped(client, tree["ka"], {"query": "ember harbor"}, "anchorA"))["hits"]
-    assert [h["sibling"] for h in hits] == [True] * 5 + [False] * 3
+    hits = (await _scoped(client, tree["ka"], {"query": "dragon lighthouse"}, "anchorA"))["hits"]
+    scores = [h["score"] for h in hits]
+    assert scores == sorted(scores, reverse=True)
+    assert hits[-1]["message_id"] == "near0m" and hits[-1]["sibling"] is True
+    assert not any(h["sibling"] for h in hits[:-1])
 
 
-async def test_no_sibling_hits_gives_every_slot_to_others(client, test_db, tree):
-    pid, a = tree["pid"], tree["a"]
-    await _pool(test_db, a, pid, "far", 9, "dB", "orchard glacier")
-    await index_chat_messages({}, a, pid)
-    hits = (await _scoped(client, tree["ka"], {"query": "orchard glacier"}, "anchorA"))["hits"]
-    assert len(hits) == 8 and not any(h["sibling"] for h in hits)
-
-
-async def test_one_origin_across_both_pools_is_one_sibling_hit(client, test_db, tree):
+async def test_one_origin_across_a_continuation_is_one_hit(client, test_db, tree):
     pid, a = tree["pid"], tree["a"]
     await _session(test_db, "orig", a, pid, document_id="dA1")
     await _session(test_db, "cont", a, pid, compacted_from="orig")
@@ -411,7 +405,7 @@ async def test_one_origin_across_both_pools_is_one_sibling_hit(client, test_db, 
     await _msg(test_db, "contm", "cont", "harbor lighthouse", origin_id="origm")
     await index_chat_messages({}, a, pid)
     hits = (await _scoped(client, tree["ka"], {"query": "harbor lighthouse"}, "anchorA"))["hits"]
-    assert len(hits) == 1 and hits[0]["sibling"] is True
+    assert len(hits) == 1
 
 
 async def test_coverage_counts_only_the_searched_sessions(client, test_db, tree):

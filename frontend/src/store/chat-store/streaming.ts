@@ -3,7 +3,7 @@
  * ONE transport: the turn is DRIVER-owned — POST /completions answers JSON
  * and the frames arrive as project-WS chat_frame envelopes, dispatched
  * through createTurnSink into the frame handlers + the assembler feed. */
-import type { ChatMessage, ChatSource } from '../../types';
+import type { ChatFile, ChatMessage, ChatSource } from '../../types';
 import { apiClient } from '../../api/client';
 import { useAppStore } from '../app-store';
 import { t } from '../../i18n';
@@ -90,14 +90,16 @@ export interface TurnFramesCtx {
 }
 
 /** The user bubble of a send that queued in dsh (no optimistic row): its
- * text and images, keyed by the browser-minted `user_msg_id`, taken by the
- * `ids` frame of its claim. In-memory — after a reload `ids` carries the
- * text and the row read brings the images. */
-const queuedSends = new Map<string, { content: string; images?: string[] }>();
+ * text, images and files, keyed by the browser-minted `user_msg_id`, taken by
+ * the `ids` frame of its claim. In-memory — after a reload `ids` carries the
+ * text and the row read brings the images and files. */
+const queuedSends = new Map<string, { content: string; images?: string[]; files?: ChatFile[] }>();
 registerChatResetHandler(() => queuedSends.clear());
 
-export function rememberQueuedSend(userMsgId: string, content: string, images?: string[]): void {
-  queuedSends.set(userMsgId, { content, images });
+export function rememberQueuedSend(
+  userMsgId: string, content: string, images?: string[], files?: ChatFile[],
+): void {
+  queuedSends.set(userMsgId, { content, images, files });
 }
 
 export function forgetQueuedSend(userMsgId: string): void {
@@ -177,6 +179,7 @@ function createTurnSink(
         role: 'user',
         content: existing?.content ?? queued?.content ?? (isNonEmptyStr(ev.user_text) ? ev.user_text : ''),
         images: existing?.images ?? queued?.images,
+        ...((existing?.files ?? queued?.files) ? { files: existing?.files ?? queued?.files } : {}),
         created_at: existing?.created_at ?? new Date().toISOString(),
         ...(currentUser ? { author_id: currentUser.user_id, author_name: currentUser.name } : {}),
       };

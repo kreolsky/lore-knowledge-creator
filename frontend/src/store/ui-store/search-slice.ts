@@ -4,7 +4,7 @@
 # get().saveUIStateNow() — NOT the module-level triggerSaveUI — so the slice closes
 # over only set/get (no import of the persistence core ⇒ no circular dep, and the
 # incident-sensitive triggerSaveUI/buildUIBlob machinery stays untouched in ui-store.ts).
-# Persisted fields: searchQuery + searchMode + searchDocMode (buildUIBlob); searchResults is transient.
+# Persisted fields: searchQuery + searchMode + searchDocMode (buildUIBlob); searchResults and searchSnapshot are transient.
 */
 import type { UIState } from '../ui-store';
 import type { SearchDocMode, SearchMode } from '../../types';
@@ -12,7 +12,7 @@ import type { RightTab } from './documents-slice';
 
 export type SearchSlice = Pick<
   UIState,
-  'searchQuery' | 'searchResults' | 'searchMode' | 'searchDocMode' | 'setSearchCache' | 'setSearchMode'
+  'searchQuery' | 'searchResults' | 'searchMode' | 'searchDocMode' | 'searchSnapshot' | 'setSearchCache' | 'setSearchMode'
 >;
 
 type UISet = (
@@ -26,6 +26,7 @@ export function createSearchSlice(set: UISet, get: UIGet): SearchSlice {
     searchResults: [],
     searchMode: 'fulltext' as const,
     searchDocMode: 'fulltext' as const,
+    searchSnapshot: null,
     setSearchCache: (query, results) => {
       set({ searchQuery: query, searchResults: results });
       get().saveUIStateNow();

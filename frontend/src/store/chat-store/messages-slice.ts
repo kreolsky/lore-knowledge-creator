@@ -1,5 +1,5 @@
 /** Messages slice — load, send, edit, delete, fork, regenerate, stop. */
-import type { ChatMessage, ChatSession, RegionRef } from '../../types';
+import type { ChatFile, ChatMessage, ChatSession, RegionRef } from '../../types';
 import { deriveUIMode } from '../../types';
 import { apiClient, HttpError, RequestTooLargeError } from '../../api/client';
 import type { ForbiddenError } from '../../api/client';
@@ -18,6 +18,7 @@ interface OptimisticInsert {
   parentId: string | null;
   content: string;
   images?: string[];
+  files?: ChatFile[];
 }
 
 /**
@@ -46,6 +47,7 @@ function insertOptimisticUser(set: Set, get: Get, req: OptimisticInsert): void {
     role: 'user',
     content: req.content,
     images: req.images,
+    ...(req.files ? { files: req.files } : {}),
     created_at: nowIso,
     ...(currentUser ? { author_id: currentUser.user_id, author_name: currentUser.name } : {}),
   };
@@ -106,7 +108,7 @@ function toApiMessages(chain: ChatMessage[]): Array<{ role: string; content: str
  * client's tail hint (`parent_id` — used ONLY for the root-turn time stamp,
  * never validated), and the browser-minted id the user row is minted under. */
 interface SendWire {
-  apiMessages: Array<{ role: string; content: string; images?: string[] }>;
+  apiMessages: Array<{ role: string; content: string; images?: string[]; files?: ChatFile[] }>;
   parentId: string | null;
   userMsgId: string;
 }
@@ -244,8 +246,11 @@ export async function runCompletion(set: Set, get: Get, opts: RunCompletionOpts)
  * the session's inbox and its chip appears from the splice frame. No
  * optimistic row, no registration: the `ids` of its claim opens both
  * (streaming.ts), and the text/images wait for it in queuedSends. */
-async function queueSend(set: Set, get: Get, sessionId: string, content: string, wire: SendWire, images?: string[]): Promise<void> {
-  rememberQueuedSend(wire.userMsgId, content, images);
+async function queueSend(
+  set: Set, get: Get, sessionId: string, content: string, wire: SendWire,
+  images?: string[], files?: ChatFile[],
+): Promise<void> {
+  rememberQueuedSend(wire.userMsgId, content, images, files);
   try {
     await apiClient.post(`/chat/sessions/${sessionId}/completions`, completionBody(get, sessionId, wire));
   } catch (e) {
@@ -319,24 +324,34 @@ function handleSendError(e: unknown, label: string, set: Set, get: Get): boolean
 }
 
 /** The queue a Stop took out of dsh's inbox, back where the person can edit
- * or resend it: the texts after whatever is typed, the images as attachments.
+ * or resend it: the texts after whatever is typed, the images and files as
+ * attachments.
  *
  * INVARIANT(data-loss): Stop never drops a queued message — it returns to the
  * composer of ITS chat, or (another chat shown) to a toast carrying its text.
  * Why: the operator chose Claude Code's Stop — the queue comes back to the
  * input box instead of running or waiting unseen. */
 function returnQueuedToComposer(get: Get, sessionId: string, returned: unknown): void {
-  const sends = (Array.isArray(returned) ? returned : []) as Array<{ text?: unknown; images?: unknown }>;
+  const sends = (Array.isArray(returned) ? returned : []) as Array<{ text?: unknown; images?: unknown; files?: unknown }>;
   const text = sends.map(m => (typeof m.text === 'string' ? m.text : '')).filter(Boolean).join('\n\n');
   if (get().activeSessionId !== sessionId) {
-    if (text) useAppStore.getState().showToast(t('queueReturnedElsewhere', { text }), 'error');
+    // The attachments cannot follow the text into a toast — say how many stayed behind.
+    const attached = sends.reduce((n, m) => n
+      + (Array.isArray(m.images) ? m.images.length : 0)
+      + (Array.isArray(m.files) ? m.files.length : 0), 0);
+    if (!text && !attached) return;
+    const lost = attached ? ` ${t('queueReturnedAttachmentsLost', { count: attached })}` : '';
+    useAppStore.getState().showToast(`${t('queueReturnedElsewhere', { text: text || t('queuedEmpty') })}${lost}`, 'error');
     return;
   }
   if (text) appendDraft(get, text);
+  const projectId = get().sessions.find(s => s.session_id === sessionId)?.project_id;
   for (const m of sends) {
     for (const url of Array.isArray(m.images) ? m.images : []) {
       if (typeof url === 'string') get().addPendingImage(url);
     }
+    const files = (Array.isArray(m.files) ? m.files : []) as ChatFile[];
+    if (projectId && files.length > 0) get().restorePendingFiles(projectId, files);
   }
 }
 
@@ -443,7 +458,7 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
       await get().loadMessages(sessionId);
     },
 
-    async sendMessage(content: string, images?: string[]) {
+    async sendMessage(content: string, images?: string[], files?: ChatFile[]) {
       // INVARIANT: This function relies on Zustand's synchronous `set()` — it reads  Why: sendMessage reads activeSessionId+messages via get() then sets streaming via set() in the same microtask; downstream frame consumers rely on that synchronous handoff.
       // `activeSessionId` and `messages` via `get()` in the same microtask, then
       // sets the `streaming` object via `set()`. All downstream consumers (frame
@@ -454,15 +469,15 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
       const activePath = resolveActivePath(get().messages);
       const parentId = activePath.length > 0 ? activePath[activePath.length - 1].message_id : null;
       const apiMessages = toApiMessages(activePath);
-      apiMessages.push({ role: 'user', content, images });
+      apiMessages.push({ role: 'user', content, images, ...(files ? { files } : {}) });
       const wire: SendWire = { apiMessages, parentId, userMsgId: uuid() };
       // The guard lives in the store (not the UI) so MicButton transcription
       // and hotkeys take the same path.
       if (chatIsBusy(get, activeSessionId)) {
-        await queueSend(set, get, activeSessionId, content, wire, images);
+        await queueSend(set, get, activeSessionId, content, wire, images, files);
         return;
       }
-      insertOptimisticUser(set, get, { id: wire.userMsgId, parentId, content, images });
+      insertOptimisticUser(set, get, { id: wire.userMsgId, parentId, content, images, files });
       await runCompletion(set, get, {
         ...wire,
         userContent: content,
@@ -510,7 +525,9 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
       // the rows must be seated first.
       await get().loadMessages(branch.session_id);
       if (get().activeSessionId !== branch.session_id) return;
-      await get().sendMessage(content, images);
+      // The original's files are still in the sender's workspace: the fork
+      // re-sends their paths with the edited text.
+      await get().sendMessage(content, images, original.files);
     },
 
     async regenerate(messageId: string) {

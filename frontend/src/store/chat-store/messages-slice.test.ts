@@ -326,7 +326,25 @@ describe('sendMessage — an idle send opens its turn, a busy one queues in dsh'
     const body = completionPosts()[0][1] as Record<string, unknown>;
     expect(body.user_msg_id).toMatch(/^[0-9a-f-]{36}$/);
     // The user bubble's text and images wait for the claim's `ids`.
-    expect(rememberQueuedSend).toHaveBeenCalledWith(body.user_msg_id, 'follow-up', ['data:image/png;base64,AAA']);
+    expect(rememberQueuedSend).toHaveBeenCalledWith(body.user_msg_id, 'follow-up', ['data:image/png;base64,AAA'], undefined);
+  });
+
+  const FILE = { id: 'f1', name: 'a.zip', size: 3, mime: 'application/zip', path: '/workspace/x/inbox/chat/f1/a.zip' };
+
+  it('idle with files: the last api message and the optimistic bubble carry them', async () => {
+    const st = store();
+    await st.getState().sendMessage('unzip it', undefined, [FILE]);
+    const messages = lastBody().messages as Array<Record<string, unknown>>;
+    expect(messages[messages.length - 1]).toEqual({ role: 'user', content: 'unzip it', images: undefined, files: [FILE] });
+    expect(st.getState().messages[0].files).toEqual([FILE]);
+  });
+
+  it('busy with files: the files wait for the claim with the text', async () => {
+    vi.mocked(apiClient.post).mockResolvedValueOnce({ accepted: true });
+    const st = store({ dshRunning: true } as Partial<ChatState>);
+    await st.getState().sendMessage('unzip it', undefined, [FILE]);
+    const body = completionPosts()[0][1] as Record<string, unknown>;
+    expect(rememberQueuedSend).toHaveBeenCalledWith(body.user_msg_id, 'unzip it', undefined, [FILE]);
   });
 
   it('busy: an open turn keeps its streaming slot', async () => {
@@ -394,6 +412,38 @@ describe('stopGeneration — a dsh-running chat with no slot of this tab', () =>
     await new Promise((r) => setTimeout(r, 0));
     expect(st.getState().draft).toBe('typed\n\nB\n\nC');
     expect(added).toEqual(['data:image/png;base64,AAA']);
+  });
+
+  it('returns the queued files to the composer as uploaded chips of the chat\'s project', async () => {
+    const file = { id: 'f1', name: 'a.zip', size: 3, mime: 'application/zip', path: '/w/a.zip' };
+    vi.mocked(apiClient.post).mockResolvedValueOnce({
+      cancelled: true, returned: [{ text: 'B', images: [], files: [file] }],
+    });
+    const st = buildStore([{ ...sess('active', null, '2026-01-01T00:00:00Z'), project_id: 'p1' }], 'active');
+    const restored: Array<[string, unknown]> = [];
+    st.setState({
+      dshRunning: true,
+      addPendingImage: () => {},
+      restorePendingFiles: (pid: string, files: unknown) => { restored.push([pid, files]); },
+    } as unknown as Partial<ChatState>);
+    st.getState().stopGeneration();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(restored).toEqual([['p1', [file]]]);
+  });
+
+  it('another chat shown: the toast names how many attachments stayed behind', async () => {
+    const toast = vi.fn();
+    appStoreState.showToast = toast;
+    const file = { id: 'f1', name: 'a.zip', size: 3, mime: 'application/zip', path: '/w/a.zip' };
+    vi.mocked(apiClient.post).mockResolvedValueOnce({
+      cancelled: true, returned: [{ text: '', images: ['data:image/png;base64,AAA'], files: [file] }],
+    });
+    const st = buildStore([sess('active', null, '2026-01-01T00:00:00Z')], 'active');
+    st.setState({ dshRunning: true } as Partial<ChatState>);
+    st.getState().stopGeneration();
+    st.setState({ activeSessionId: 'other' } as Partial<ChatState>);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(toast).toHaveBeenCalledWith('queueReturnedElsewhere queueReturnedAttachmentsLost', 'error');
   });
 
   it('does nothing when the chat is idle', () => {

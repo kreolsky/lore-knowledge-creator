@@ -108,7 +108,7 @@ describe('Dashboard own / shared sections', () => {
       ['readonly', 'roAccess'],
     ]);
     expect(badges.map(b => b.className.includes('text-green'))).toEqual([true, false, false]);
-    expect(badges[1].className).toContain('sticky-yellow-dark');
+    expect(badges[1].className).toContain('warm-strong');
     expect(badges[2].className).toContain('text-red');
   });
 

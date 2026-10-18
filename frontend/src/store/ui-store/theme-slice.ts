@@ -75,19 +75,41 @@ const GLOBAL_DEFAULTS: GlobalPrefs = {
   adminSectionTab: null,
 };
 
+// WHY: per-device mirror of the server theme, read by public/theme-boot.js before first
+// paint so a dark reload does not flash light. Server prefs remain the source of truth.
+const THEME_CACHE_KEY = 'lore.theme';
+
+function readCachedTheme(): GlobalPrefs['theme'] {
+  try {
+    return localStorage.getItem(THEME_CACHE_KEY) === 'dark' ? 'dark' : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
+function cacheTheme(theme: GlobalPrefs['theme']): void {
+  try {
+    localStorage.setItem(THEME_CACHE_KEY, theme);
+  } catch {
+    // Storage blocked: only the pre-paint shortcut is lost, the theme itself still applies.
+  }
+}
+
 // In-flight loadGlobalPrefs promise — dedup gate (AuthGuard's mount effect runs twice
 // under StrictMode, doubling GET /api/preferences/_global).
 let _globalPrefsPromise: Promise<void> | null = null;
 
 export function createThemeSlice(set: UISet, get: UIGet): ThemeSlice {
   return {
-    theme: 'light',
+    // WHY: start from the cache so useTheme's mount effect does not strip the class
+    // theme-boot.js already applied while server prefs are still loading.
+    theme: readCachedTheme(),
     language: 'en',
     panelWidths: { left: null, right: null },
     splitRatio: SPLIT_RATIO_DEFAULT,
     showArchived: false,
     adminSectionTab: null,
-    globalPrefsLoaded: false,    setTheme: (theme) => { set({ theme }); get().saveGlobalPrefsNow(); },
+    globalPrefsLoaded: false,    setTheme: (theme) => { set({ theme }); cacheTheme(theme); get().saveGlobalPrefsNow(); },
     setLanguage: (language) => { set({ language }); get().saveGlobalPrefsNow(); },
     setPanelWidth: (side, width) => {
       set(prev => ({ panelWidths: { ...prev.panelWidths, [side]: width } }));
@@ -112,8 +134,10 @@ export function createThemeSlice(set: UISet, get: UIGet): ThemeSlice {
             set({ globalPrefsLoaded: true });
             return;
           }
+          const theme = data.theme ?? GLOBAL_DEFAULTS.theme;
+          cacheTheme(theme);
           set({
-            theme: data.theme ?? GLOBAL_DEFAULTS.theme,
+            theme,
             panelWidths: {
               left: data.panelWidths?.left ?? GLOBAL_DEFAULTS.panelWidths.left,
               right: data.panelWidths?.right ?? GLOBAL_DEFAULTS.panelWidths.right,

@@ -336,15 +336,15 @@ export const loreEditorTheme: Extension = [
   },
 
   // Per-type backgrounds
-  '.cm-note-link': { backgroundColor: 'var(--sticky-yellow-light)', borderBottom: '2px dashed var(--sticky-yellow-dark)' },
-  '.cm-note-link:hover': { backgroundColor: 'var(--sticky-yellow-dark)' },
-  'html.dark & .cm-note-link': { backgroundColor: 'var(--sticky-yellow-light)', borderBottom: '2px dashed var(--sticky-yellow-dark)' },
-  'html.dark & .cm-note-link:hover': { backgroundColor: 'var(--sticky-yellow-dark)' },
+  '.cm-note-link': { backgroundColor: 'var(--warm-tint)', borderBottom: '2px dashed var(--warm-strong)' },
+  '.cm-note-link:hover': { backgroundColor: 'var(--warm-strong)' },
+  'html.dark & .cm-note-link': { backgroundColor: 'var(--warm-tint)', borderBottom: '2px dashed var(--warm-strong)' },
+  'html.dark & .cm-note-link:hover': { backgroundColor: 'var(--warm-strong)' },
 
-  '.cm-ref-link': { backgroundColor: 'var(--sticky-blue-light)', borderBottom: '2px dashed var(--sticky-blue-dark)' },
-  '.cm-ref-link:hover': { backgroundColor: 'var(--sticky-blue-dark)' },
-  'html.dark & .cm-ref-link': { backgroundColor: 'var(--sticky-blue-light)', borderBottom: '2px dashed var(--sticky-blue-dark)' },
-  'html.dark & .cm-ref-link:hover': { backgroundColor: 'var(--sticky-blue-dark)' },
+  '.cm-ref-link': { backgroundColor: 'var(--ref-tint)', borderBottom: '2px dashed var(--ref-strong)' },
+  '.cm-ref-link:hover': { backgroundColor: 'var(--ref-strong)' },
+  'html.dark & .cm-ref-link': { backgroundColor: 'var(--ref-tint)', borderBottom: '2px dashed var(--ref-strong)' },
+  'html.dark & .cm-ref-link:hover': { backgroundColor: 'var(--ref-strong)' },
 
   '.cm-doc-link': { backgroundColor: 'var(--surface3)' },
   '.cm-doc-link:hover': { backgroundColor: 'var(--border)' },

@@ -29,6 +29,13 @@ export function clearNoteSessionsCache(): void {
 // registry so setCurrentUser(null) drops it (bridge mirrors registerAppBridge).
 registerLogoutHandler(clearNoteSessionsCache);
 
+// INVARIANT(data-loss): only a note CREATED by this client that never received a
+// message is "fresh"; discardIfFresh deletes nothing else. Why: leaving a thread
+// must cancel an abandoned new note, but an existing note whose messages are still
+// loading (or failed to load) also shows zero messages — deleting on that signal
+// would destroy a real note.
+const freshNoteIds = new Set<string>();
+
 // SYSTEM: note-realtime upsert — race-safe dedup helper shared by the optimistic
 // create/send paths and the realtime apply helpers. The actor's own mutation AND
 // the realtime frame it also receives can land in either order; both must converge
@@ -98,6 +105,12 @@ interface NoteChatState {
   }) => Promise<ChatSession>;
   setActiveSession: (sessionId: string | null) => void;
   deleteSession: (sessionId: string) => Promise<void>;
+  /** Delete a note this client created if it is still untouched (no message, no
+   * draft, no queued image). Returns true when the delete was issued. */
+  discardIfFresh: (sessionId: string) => boolean;
+  /** Explicit exit (back/Esc): delete the thread only when it is PROVABLY empty.
+   * Returns true when the delete was issued. */
+  discardIfEmpty: (sessionId: string) => boolean;
   loadMessages: (sessionId: string) => Promise<void>;
   sendMessage: (content: string, images?: string[]) => Promise<void>;
   editMessage: (messageId: string, content: string) => Promise<void>;
@@ -263,6 +276,7 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
       messages: [],
       messagesLoading: false,
     }));
+    freshNoteIds.add(session.session_id);
     return session;
   },
 
@@ -291,6 +305,7 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
       drafts: get().drafts,
     };
     const wasActive = snapshot.activeSessionId === sessionId;
+    const wasFresh = freshNoteIds.delete(sessionId);
     set(s => ({
       sessions: s.sessions.filter(ss => ss.session_id !== sessionId),
       activeSessionId: wasActive ? null : s.activeSessionId,
@@ -301,8 +316,32 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
       await apiClient.delete(`/chat/sessions/${sessionId}`);
     } catch {
       set(snapshot);
+      if (wasFresh) freshNoteIds.add(sessionId);
       useAppStore.getState().showToast(t('failedToDeleteNote'), 'error');
     }
+  },
+
+  discardIfFresh(sessionId: string) {
+    if (!freshNoteIds.has(sessionId)) return false;
+    const s = get();
+    if (s.drafts[sessionId]?.trim()) return false;
+    if (s.activeSessionId === sessionId && (s.messages.length > 0 || s.pendingImages.length > 0)) return false;
+    void get().deleteSession(sessionId);
+    return true;
+  },
+
+  discardIfEmpty(sessionId: string) {
+    const s = get();
+    if (s.activeSessionId !== sessionId || s.messages.length > 0) return false;
+    // INVARIANT(data-loss): an empty-LOOKING thread is deleted only on proof: created
+    // here and untouched, or the server's own count is 0 and the load finished.
+    // Why: messages are [] while the thread is still loading and after a failed
+    // load — deleting on that alone destroyed a real note with its content.
+    const row = s.sessions.find(ss => ss.session_id === sessionId);
+    const serverEmpty = !s.messagesLoading && row?.message_count === 0;
+    if (!freshNoteIds.has(sessionId) && !serverEmpty) return false;
+    void get().deleteSession(sessionId);
+    return true;
   },
 
   async loadMessages(sessionId: string) {
@@ -319,6 +358,9 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
   async sendMessage(content: string, images?: string[]) {
     const { activeSessionId } = get();
     if (!activeSessionId || !content.trim()) return;
+    // Leaves "fresh" BEFORE the POST: a departure while the send is in flight must
+    // not delete the note the message is landing in.
+    freshNoteIds.delete(activeSessionId);
 
     const activePath = get().messages;
     const parentId = activePath.length > 0 ? activePath[activePath.length - 1].message_id : null;
@@ -443,6 +485,7 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
   },
 
   removeSession(sessionId: string) {
+    freshNoteIds.delete(sessionId);
     set(s => {
       const wasActive = s.activeSessionId === sessionId;
       return {
@@ -457,6 +500,7 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
 
   applyMessageChange(payload) {
     const { action, session_id, message, message_ids, preview } = payload;
+    if (action === 'added') freshNoteIds.delete(session_id);
     set(s => {
       let messages = s.messages;
       // Only mutate the open thread's messages when it IS the changed session.
@@ -486,6 +530,7 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
   },
 
   reset() {
+    freshNoteIds.clear();
     set({
       sessions: [],
       sessionsScope: null,

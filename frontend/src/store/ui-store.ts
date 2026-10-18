@@ -16,7 +16,7 @@
 // SYSTEM: ui-store — panel state, theme, language, preferences persistence
 
 import { create } from 'zustand';
-import { Language, SearchDocMode, SearchMode, SearchResult } from '../types';
+import { Language, SearchDocMode, SearchMode, SearchResult, SearchSnapshot } from '../types';
 import { apiClient } from '../api/client';
 import type { EditorPosition } from '../editor/position-cache';
 import { createPublicShareSlice } from './ui-store/public-share-slice';
@@ -253,6 +253,8 @@ export interface UIState {
   // The last document-search mode (never 'chats'): the Search tab opened from a
   // non-chat tab returns to it after a chats round. Written by setSearchMode.
   searchDocMode: SearchDocMode;
+  // Transient (never in the blob): see SearchSnapshot.
+  searchSnapshot: SearchSnapshot | null;
   documentPositions: Record<string, EditorPosition>;
   selectionEmpty: boolean;
   // Project-level active AI chat id.
@@ -467,6 +469,7 @@ export const useUIStore = create<UIState>((set, get) => ({
       searchResults: [],
       searchMode: 'fulltext' as const,
       searchDocMode: 'fulltext' as const,
+      searchSnapshot: null,
       documentPositions: {},
     });
   },

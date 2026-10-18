@@ -23,6 +23,7 @@ import { formatDate } from '../../utils/format';
 import { userColor } from '../../utils/user-color';
 import { useArmedAction } from '../../hooks/useArmedAction';
 import { useLazyMessageImages } from './useLazyMessageImages';
+import { FileChip } from './shared/AttachmentChips';
 // The bubble's internal helpers live in ./MessageBubble/internal/ (file + same-name
 // dir convention, same as store/chat-store/sessions-slice.ts + sessions-slice/).
 // Pure extraction — no behavioral change. NOTE: the dir is `internal/`, not `parts/`
@@ -222,9 +223,9 @@ export const MessageBubble = memo(function MessageBubble({
   // 7f93fe5 deliberately dropped the outer plate); the unified bubble must keep it.
   const userBg = variant === 'note'
     ? isOwn
-      ? 'bg-[var(--sticky-yellow-dark)] text-text'
+      ? 'bg-[var(--warm-strong)] text-text'
       : 'text-text'
-    : 'bg-[var(--sticky-yellow-dark)] text-text';
+    : 'bg-[var(--warm-strong)] text-text';
   // Other-user note messages get a transparent plaque marked with a 4px left
   // border in the author's deterministic presence color (matches their gutter
   // bar / chip across clients). The border is 80% transparent so it reads as a
@@ -318,6 +319,17 @@ export const MessageBubble = memo(function MessageBubble({
                   ))}
                 </div>
               )
+            )}
+            {/* The files sent with the message: a record that they were
+                attached, not a link — the workspace may since have been reset. */}
+            {message.files && message.files.length > 0 && (
+              <div className="flex gap-2 mb-2 flex-wrap" data-testid="message-file-chips">
+                {message.files.map(f => (
+                  <div key={f.id} title={f.name}>
+                    <FileChip name={f.name} mime={f.mime} />
+                  </div>
+                ))}
+              </div>
             )}
             {/* Plan user-attachment-image-lightbox: the SAME src-based lightbox as
                 generated images. Mounted only while an attachment is open, and only

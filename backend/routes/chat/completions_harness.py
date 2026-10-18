@@ -140,6 +140,8 @@ def _claim_facts(turn: "_AgentTurn") -> dict:
         "user_msg_id": turn.user_msg_id,
         "user_text": last.content,
         "images": last.images or [],
+        # getattr: see _prompt_text — stubs of a message predate `files`.
+        "files": [f.model_dump() for f in getattr(last, "files", None) or []],
         "sources": turn.ctx.sources or [],
         "warnings": list(turn.ctx.warnings),
     }

@@ -48,24 +48,24 @@
 
 /* plain active — reference blue (functional: marks the OPEN reference) */
 .plain.activeBlue {
-  background: var(--sticky-blue-dark);
+  background: var(--ref-strong);
   color: var(--text);
 }
 
 /* ── Anchored steady — yellow. Borderless fill in every state. ── */
 .anchored {
-  background: var(--sticky-yellow-light);
+  background: var(--warm-tint);
 }
 :global(html.dark) .anchored {
-  background: var(--sticky-yellow-light);
+  background: var(--warm-tint);
 }
 
 /* Highlight — transient scroll/blink state layered on the yellow base. */
 .highlight {
-  background: var(--sticky-yellow-dark);
+  background: var(--warm-strong);
 }
 :global(html.dark) .highlight {
-  background: var(--sticky-yellow-dark);
+  background: var(--warm-strong);
 }
 
 /* Anchorless — flat neutral, blends with the panel background. NOT red. */
@@ -86,7 +86,7 @@
 
 /* ── Inbox unread mark (SYSTEM: inbox) ── */
 /* An externally arrived (widget/MCP) note or reference flagged for the viewer.
- * --inbox-mark (index.css :root) is the same sticky-yellow dark shade the tab
+ * --inbox-mark (index.css :root) is the same warm-strong shade the tab
  * and the tree row paint, layered over the variant fill by specificity
  * (.pill.unread = 0,2,0 beats every single-class variant). Active+unread can
  * only appear when the read call failed (open clears the flag), so no active
@@ -114,7 +114,7 @@
     background: var(--accent-soft);
   }
   .plain.activeBlue:hover {
-    background: var(--sticky-blue-dark);
+    background: var(--ref-strong);
   }
   /* Keep the inbox mark while hovering — the plain/anchorless hover fills
    * (surface2) are same-specificity and later, so without this the flag
@@ -123,16 +123,16 @@
     background: var(--inbox-mark);
   }
   .anchored:hover {
-    background: var(--sticky-yellow-dark);
+    background: var(--warm-strong);
   }
   :global(html.dark) .anchored:hover {
-    background: var(--sticky-yellow-dark);
+    background: var(--warm-strong);
   }
   .highlight:hover {
-    background: var(--sticky-yellow-dark);
+    background: var(--warm-strong);
   }
   :global(html.dark) .highlight:hover {
-    background: var(--sticky-yellow-dark);
+    background: var(--warm-strong);
   }
   .anchorless:hover {
     background: var(--surface2);
@@ -156,11 +156,11 @@
    * as red, not the variant fill. */
   .anchored:hover :global(.note-delete-btn:not(.note-delete-armed)),
   .highlight:hover :global(.note-delete-btn:not(.note-delete-armed)) {
-    background: var(--sticky-yellow-dark);
+    background: var(--warm-strong);
   }
   :global(html.dark) .anchored:hover :global(.note-delete-btn:not(.note-delete-armed)),
   :global(html.dark) .highlight:hover :global(.note-delete-btn:not(.note-delete-armed)) {
-    background: var(--sticky-yellow-dark);
+    background: var(--warm-strong);
   }
   .anchorless:hover :global(.note-delete-btn:not(.note-delete-armed)) {
     background: var(--surface2);

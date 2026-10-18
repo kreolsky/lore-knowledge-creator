@@ -14,13 +14,14 @@ import { useTranslation } from '../../i18n';
 import { useUIStore } from '../../store/ui-store';
 import { MicButton } from './shared/MicButton';
 import { AttachmentChips } from './shared/AttachmentChips';
+import type { PendingFile } from '../../store/chat-store/types';
 import { QueuedChips } from './shared/QueuedChips';
 import { ScrollToBottomButton } from './shared/ScrollToBottomButton';
 import type { QueuedMessage } from '../../chat/inbox-queue';
 
 interface Props {
   variant: 'ai' | 'note';
-  // Experimental: paint the text-input field itself sticky-yellow — used for the
+  // Experimental: paint the text-input field itself warm — used for the
   // AI zero/ghost chat (no active session). Only the textarea, not the panel.
   highlight?: boolean;
   value: string;
@@ -42,6 +43,9 @@ interface Props {
   // Attachments
   images: string[];
   onRemoveImage: (index: number) => void;
+  /** AI composer only: dropped files on their way into the sandbox workspace. */
+  files?: PendingFile[];
+  onRemoveFile?: (key: string) => void;
   // The chat's queue — dsh's inbox (AI chat only; notes pass nothing).
   // Empty → not rendered.
   queued?: QueuedMessage[];
@@ -76,6 +80,8 @@ export function ChatComposer({
   onCancelRecording,
   images,
   onRemoveImage,
+  files,
+  onRemoveFile,
   queued,
   onRemoveQueued,
   onScrollToBottom,
@@ -95,14 +101,14 @@ export function ChatComposer({
     maxHeight: 600,
   });
 
-  // Variant theming: notes use sticky-yellow surfaces; AI uses the neutral surface.
+  // Variant theming: notes use warm surfaces; AI uses the neutral surface.
   const panelBg =
     variant === 'note'
-      ? 'bg-[var(--sticky-yellow-light)]'
+      ? 'bg-[var(--warm-tint)]'
       : 'bg-surface';
   const panelBorderClass =
     variant === 'note'
-      ? 'border-[var(--sticky-yellow-sep)]'
+      ? 'border-[var(--warm-sep)]'
       : 'border-border';
 
   // WHY: Escape lives on the composer wrapper, not the textarea, so it fires from
@@ -155,7 +161,7 @@ export function ChatComposer({
           {/* Top area: AI controls + shared attachment chips + warnings */}
           <div className="px-3 pt-3">
             {topControls}
-            <AttachmentChips images={images} onRemove={onRemoveImage} />
+            <AttachmentChips images={images} onRemove={onRemoveImage} files={files} onRemoveFile={onRemoveFile} />
             {warnings}
           </div>
 

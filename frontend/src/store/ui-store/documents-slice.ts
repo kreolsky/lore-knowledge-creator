@@ -196,7 +196,11 @@ export function createDocumentsSlice(set: UISet, get: UIGet): DocumentsSlice {
     // The panel state is per-document (ProjectShell reads `documents[id].rightPanelTab /
     // rightPanelOpen`), so a "go to parent, keep X open" jump must write the TARGET doc's
     // entry before the switch — otherwise the target's remembered tab wins and X is gone.
+    // WHY: a pin reveals `tab`, so it drops a live search overlay exactly as
+    // setRightPanelTab does — otherwise a same-doc pin (panel-mode ref open from a
+    // search hit) stored Refs underneath while search kept rendering on top.
     pinRightPanel: (docId, tab) => {
+      set({ searchTabDocId: null });
       _patchDoc(get, set, docId, { rightPanelTab: tab, rightPanelOpen: true });
     },
     setChatSortByProximity: (docId, value) => {

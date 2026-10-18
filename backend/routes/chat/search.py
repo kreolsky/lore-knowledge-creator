@@ -34,9 +34,9 @@ async def chat_search(
 ):
     """Semantic search over the caller's own visible chats of the project.
 
-    `anchor_document_id` (the document open in the editor) turns the sibling
-    tier on in `project` scope and is the narrow of `siblings`; `subtree` needs
-    `under_document_id`. Refused while the admin disabled the `chat-recall`
+    `anchor_document_id` (the document open in the editor) marks the hits under
+    it `sibling` in `project` scope, without reordering, and is the narrow of
+    `siblings`; `subtree` needs `under_document_id`. Refused while the admin disabled the `chat-recall`
     skill — the index is not fed then, so results would be silently stale.
     """
     if not await get_project_access(project_id, user):

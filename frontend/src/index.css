@@ -25,7 +25,7 @@
   --color-red: var(--red);
   --color-handle-bg: var(--handle-bg);
   --color-handle-bg-hover: var(--handle-bg-hover);
-  --color-sticky-ink: var(--sticky-yellow-ink);
+  --color-warm-ink: var(--warm-ink);
 
   --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
@@ -98,8 +98,8 @@
   --accent-soft: rgba(98, 85, 224, 0.07);
   /* Accent as TEXT/icon ink. Light: the fill itself reads fine on light surfaces. */
   --accent-text: var(--accent);
-  /* Subtle button hover fill (sticky-light in light theme). */
-  --subtle-hover-bg: var(--sticky-yellow-light);
+  /* Subtle button hover fill (warm-tint in light theme). */
+  --subtle-hover-bg: var(--warm-tint);
   --green: #1aab4f;
   --amber: #d97706;
   --red: #ef4444;
@@ -112,30 +112,32 @@
   --diff-removed-bg: rgba(255, 70, 70, 0.14);
   --handle-bg: #bcbab4;
   --handle-bg-hover: #6255e0;
-  --sticky-yellow-light: #F0E7C2;
-  --sticky-yellow-dark: #F2DE9D;
-  --sticky-yellow-mid: #F1E2AD;
-  --sticky-yellow-sep: #D7CEAD;
+  --warm-tint: #F0E7C2;
+  --warm-strong: #F2DE9D;
+  --warm-mid: #F1E2AD;
+  --warm-sep: #D7CEAD;
+  /* Zero/ghost AI chat field: warm in light; dark overrides it. */
+  --zero-chat-field-bg: var(--warm-tint);
   /* Sticky-yellow "ink": header/toolbar text on the yellow family
-     (text-sticky-ink, ChatHeader). */
-  --sticky-yellow-ink: #6b5e10;
-  --sticky-blue-light: #C7DBEF;
-  --sticky-blue-dark: #A9CDF4;
-  --sticky-blue-darkest: #5A8ECC;
-  --sticky-green-light: #C7FFC7;
-  --sticky-green-dark: #91D89C;
-  --sticky-green-darkest: #53A166;
-  --sticky-purple-light: #DAD6F2;
+     (text-warm-ink, ChatHeader). */
+  --warm-ink: #6b5e10;
+  --ref-tint: #C7DBEF;
+  --ref-strong: #A9CDF4;
+  --ref-solid: #5A8ECC;
+  --snapshot-tint: #C7FFC7;
+  --snapshot-strong: #91D89C;
+  --snapshot-solid: #53A166;
+  --purple-tint: #DAD6F2;
 
   /* SYSTEM: inbox — the unread-arrival mark.
    * ONE token pair for every inbox tint surface: the flagged list item
    * (ListPill.module.css .pill.unread), the notes/refs right-tab and
-   * the .doc-item row. Alias, not a new colour — the sticky-yellow family owns
+   * the .doc-item row. Alias, not a new colour — the warm family owns
    * the yellows; the token exists so "inbox mark" greps to one definition.
    * --inbox-mark = the flagged surface itself; --inbox-mark-muted = a collapsed
    * tree ANCESTOR of a flagged doc (reads as "something inside", not "this"). */
-  --inbox-mark: var(--sticky-yellow-dark);
-  --inbox-mark-muted: var(--sticky-yellow-mid);
+  --inbox-mark: var(--warm-strong);
+  --inbox-mark-muted: var(--warm-mid);
 
   /* Code background: inline code + fenced blocks (editor) and chat code blocks. */
   --code-bg: var(--surface2);
@@ -199,7 +201,7 @@ html.dark {
   /* WHY: the deep fill (#5847d1) is too dark as text on dark surfaces; links
      and active icons use this lighter tint of the same hue. */
   --accent-text: #8f84f5;
-  /* WHY: dark sticky-light IS --surface, darker than the subtle idle fill
+  /* WHY: dark warm-tint IS --surface, darker than the subtle idle fill
      (surface2) — hover must go lighter. */
   --subtle-hover-bg: var(--surface3);
   --green: #4ade80;
@@ -213,28 +215,32 @@ html.dark {
   --diff-removed-bg: rgba(200, 50, 50, 0.16);
   --handle-bg: #363636;
   --handle-bg-hover: #5847d1;
-  --sticky-yellow-light: var(--surface);
-  /* WHY: the one warm step in the dark sticky family — the "amber" chat bubble
+  /* WHY: the warm accent is neutral in dark — a warm tint on dark surfaces was
+     rejected; only -strong keeps a warm hue. */
+  --warm-tint: var(--surface);
+  /* WHY: the one warm step in the dark warm family — the "amber" chat bubble
      tone; opaque so the hover-reveal action plate does not stack with itself. */
-  --sticky-yellow-dark: #44392A;
-  --sticky-yellow-mid: var(--surface2);
-  --sticky-yellow-sep: var(--border);
-  /* Dark sticky ink —
-     plain text: the dark theme's "sticky note" is the neutral surface plus one
-     warm -dark step, not yellow (token names are shared with the light theme). */
-  --sticky-yellow-ink: var(--text);
-  --sticky-blue-light: rgba(80, 160, 255, 0.18);
+  --warm-strong: #44392A;
+  --warm-mid: var(--surface2);
+  --warm-sep: var(--border);
+  /* WHY: dark warm-tint IS --surface, the composer panel itself — the zero-chat
+     field would vanish into it; it keeps the regular field fill instead. */
+  --zero-chat-field-bg: var(--surface2);
+  /* Dark warm ink — plain text: the dark warm family is the neutral surface plus
+     one warm -strong step, not yellow. */
+  --warm-ink: var(--text);
+  --ref-tint: rgba(80, 160, 255, 0.18);
   /* WHY: the -dark/-darkest fills are OPAQUE (the rgba tints composited over
      --surface). They double as the hover-reveal action plate drawn OVER a pill
      that already carries the same fill (RowActions, .doc-item-actions); a
      translucent value stacks with itself there and the plate shows as a darker
      strip under the buttons. Light theme's fills are opaque for the same reason. */
-  --sticky-blue-dark: #334d6b;
-  --sticky-blue-darkest: #3d699d;
-  --sticky-green-light: rgba(60, 179, 113, 0.18);
-  --sticky-green-dark: #2d533e;
-  --sticky-green-darkest: #32744f;
-  --sticky-purple-light: #2A2740;
+  --ref-strong: #334d6b;
+  --ref-solid: #3d699d;
+  --snapshot-tint: rgba(60, 179, 113, 0.18);
+  --snapshot-strong: #2d533e;
+  --snapshot-solid: #32744f;
+  --purple-tint: #2A2740;
 
   /* WHY: surface2 barely separates from --bg/--surface in dark — code needs
      a clearer step up to read as a block. */
@@ -528,15 +534,15 @@ body.is-resizing * { transition: none !important; }
 .doc-item.active { background: var(--surface3); color: var(--text); border-radius: 0; box-shadow: -6px 0 0 0 var(--surface3); }
 .doc-item.active .doc-icon { color: var(--text); }
 .doc-item.ref-parent {
-  background: var(--sticky-blue-dark);
+  background: var(--ref-strong);
   color: var(--text);
   border-radius: 0;
-  box-shadow: -6px 0 0 0 var(--sticky-blue-dark);
+  box-shadow: -6px 0 0 0 var(--ref-strong);
 }
 .doc-item.ref-parent .doc-icon { color: var(--text); }
 .doc-item.ref-parent .doc-item-actions {
   opacity: 1;
-  background: linear-gradient(to right, transparent 0px, var(--sticky-blue-dark) 16px);
+  background: linear-gradient(to right, transparent 0px, var(--ref-strong) 16px);
 }
 .doc-item--right-panel.active { box-shadow: 6px 0 0 0 var(--surface3); }
 .doc-item-context { margin-bottom: 4px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
@@ -568,7 +574,7 @@ body.is-resizing * { transition: none !important; }
     background: linear-gradient(to right, transparent 0px, var(--surface3) 16px);
   }
   .doc-item.ref-parent:hover .doc-item-actions {
-    background: linear-gradient(to right, transparent 0px, var(--sticky-blue-dark) 16px);
+    background: linear-gradient(to right, transparent 0px, var(--ref-strong) 16px);
   }
 }
 /* WHY: touch has no hover to reveal row actions — keep the burger always visible. */
@@ -598,27 +604,27 @@ body.is-resizing * { transition: none !important; }
 .doc-item.ref-parent .doc-gear-icon,
 .doc-item.snapshot-parent .doc-action-btn,
 .doc-item.snapshot-parent .doc-gear-icon { color: var(--text-muted); }
-.doc-item.ref-parent .doc-action-btn:hover { background: var(--sticky-blue-darkest); color: #fff; }
+.doc-item.ref-parent .doc-action-btn:hover { background: var(--ref-solid); color: #fff; }
 .doc-item.snapshot-parent {
-  background: var(--sticky-green-dark);
+  background: var(--snapshot-strong);
   color: var(--text);
   border-radius: 0;
-  box-shadow: -6px 0 0 0 var(--sticky-green-dark);
+  box-shadow: -6px 0 0 0 var(--snapshot-strong);
 }
 .doc-item.snapshot-parent .doc-icon { color: var(--text); }
 .doc-item.snapshot-parent .doc-item-actions {
   opacity: 1;
-  background: linear-gradient(to right, transparent 0px, var(--sticky-green-dark) 16px);
+  background: linear-gradient(to right, transparent 0px, var(--snapshot-strong) 16px);
 }
 .doc-item.snapshot-parent:hover .doc-item-actions {
-  background: linear-gradient(to right, transparent 0px, var(--sticky-green-dark) 16px);
+  background: linear-gradient(to right, transparent 0px, var(--snapshot-strong) 16px);
 }
-.doc-item.snapshot-parent .doc-action-btn:hover { background: var(--sticky-green-darkest); color: #fff; }
+.doc-item.snapshot-parent .doc-action-btn:hover { background: var(--snapshot-solid); color: #fff; }
 
 .doc-item.selected-snap,
-.doc-item.selected-snap:hover { background: var(--sticky-green-dark) !important; box-shadow: 6px 0 0 0 var(--sticky-green-dark); }
+.doc-item.selected-snap:hover { background: var(--snapshot-strong) !important; box-shadow: 6px 0 0 0 var(--snapshot-strong); }
 .doc-item.selected-snap .note-time,
-.doc-item.selected-snap .doc-icon { color: var(--sticky-green-darkest); }
+.doc-item.selected-snap .doc-icon { color: var(--snapshot-solid); }
 
 /* ─── SYSTEM: inbox — unread-arrival mark on tree rows ──────────────────── */
 /* Full-row paint, the same shape as .ref-parent: row fill, the -6px gutter
@@ -639,7 +645,7 @@ body.is-resizing * { transition: none !important; }
 .doc-item.inbox-unread-muted:not(.ref-parent):not(.snapshot-parent) {
   --inbox-row: var(--inbox-mark);
   background: var(--inbox-row);
-  color: var(--sticky-yellow-ink);
+  color: var(--warm-ink);
   box-shadow: -6px 0 0 0 var(--inbox-row);
 }
 .doc-item.inbox-unread-muted:not(.ref-parent):not(.snapshot-parent) {
@@ -649,7 +655,7 @@ body.is-resizing * { transition: none !important; }
 .doc-item.inbox-unread-muted:not(.ref-parent):not(.snapshot-parent) .doc-icon,
 .doc-item.inbox-unread:not(.ref-parent):not(.snapshot-parent) .doc-action-btn,
 .doc-item.inbox-unread-muted:not(.ref-parent):not(.snapshot-parent) .doc-action-btn {
-  color: var(--sticky-yellow-ink);
+  color: var(--warm-ink);
 }
 .doc-item.inbox-unread:not(.ref-parent):not(.snapshot-parent) .doc-item-actions,
 .doc-item.inbox-unread-muted:not(.ref-parent):not(.snapshot-parent) .doc-item-actions {
@@ -823,7 +829,7 @@ body.is-resizing * { transition: none !important; }
 .scroll-to-bottom-btn { border-radius: 50%; }
 /* WHY: doubled class outranks IconButton's accent fill; colour matches the own-message bubble. */
 .scroll-to-bottom-btn.scroll-to-bottom-btn {
-  background-color: var(--sticky-yellow-dark);
+  background-color: var(--warm-strong);
   color: var(--text);
 }
 
@@ -843,22 +849,22 @@ body.is-resizing * { transition: none !important; }
 }
 
 .reference-viewer-banner {
-  background: var(--sticky-blue-dark);
-  border-bottom-color: var(--sticky-blue-dark);
+  background: var(--ref-strong);
+  border-bottom-color: var(--ref-strong);
 }
 .reference-viewer-banner button { background: transparent; }
 .reference-viewer-banner button:hover {
-  background: var(--sticky-blue-darkest);
+  background: var(--ref-solid);
   color: #fff;
 }
 
 .snapshot-viewer-banner {
-  background: var(--sticky-green-dark);
-  border-bottom-color: var(--sticky-green-dark);
+  background: var(--snapshot-strong);
+  border-bottom-color: var(--snapshot-strong);
 }
 .snapshot-viewer-banner button { background: transparent; }
 .snapshot-viewer-banner button:hover {
-  background: var(--sticky-green-darkest);
+  background: var(--snapshot-solid);
   color: #fff;
 }
 
@@ -875,25 +881,25 @@ html.dark .download-menu[data-theme="blue"] > button:not(:hover) { color: var(--
    SnapshotPreviewBanner for through-indication), blue panel for references.
    Default theme keeps the standard gray trigger + surface panel. */
 .download-menu[data-theme="green"] > button {
-  background: var(--sticky-green-dark);
+  background: var(--snapshot-strong);
   color: var(--text-muted);
 }
 .download-menu[data-theme="green"] > button:hover {
-  background: var(--sticky-green-darkest);
+  background: var(--snapshot-solid);
   color: #fff;
 }
 .download-menu[data-theme="green"] .download-menu__panel {
-  background: var(--sticky-green-dark);
+  background: var(--snapshot-strong);
 }
 .download-menu[data-theme="green"] .download-menu__item:hover {
-  background: var(--sticky-green-darkest);
+  background: var(--snapshot-solid);
   color: #fff;
 }
 .download-menu[data-theme="blue"] .download-menu__panel {
-  background: var(--sticky-blue-dark);
+  background: var(--ref-strong);
 }
 .download-menu[data-theme="blue"] .download-menu__item:hover {
-  background: var(--sticky-blue-darkest);
+  background: var(--ref-solid);
   color: #fff;
 }
 
@@ -1087,37 +1093,37 @@ html.dark .resizer:not(:hover):not(.dragging)::before {
 .right-tab.notes-tab-thread.active,
 .right-tab.notes-tab-unread.active,
 .right-tab.refs-tab-unread.active {
-  background: var(--sticky-yellow-light);
+  background: var(--warm-tint);
   color: #6b5e10;
 }
 html.dark .right-tab.notes-tab-thread.active,
 html.dark .right-tab.notes-tab-unread.active,
 html.dark .right-tab.refs-tab-unread.active {
-  background: var(--sticky-yellow-light);
+  background: var(--warm-tint);
   color: #c8b840;
 }
 .right-tab.notes-tab-thread.inactive,
 .right-tab.notes-tab-unread.inactive,
 .right-tab.refs-tab-unread.inactive {
-  background: var(--sticky-yellow-dark);
+  background: var(--warm-strong);
   color: #6b5e10;
 }
 .right-tab.notes-tab-thread.inactive:hover,
 .right-tab.notes-tab-unread.inactive:hover,
 .right-tab.refs-tab-unread.inactive:hover {
-  background: var(--sticky-yellow-light);
+  background: var(--warm-tint);
   color: #504810;
 }
 html.dark .right-tab.notes-tab-thread.inactive,
 html.dark .right-tab.notes-tab-unread.inactive,
 html.dark .right-tab.refs-tab-unread.inactive {
-  background: var(--sticky-yellow-dark);
+  background: var(--warm-strong);
   color: #c8b840;
 }
 html.dark .right-tab.notes-tab-thread.inactive:hover,
 html.dark .right-tab.notes-tab-unread.inactive:hover,
 html.dark .right-tab.refs-tab-unread.inactive:hover {
-  background: var(--sticky-yellow-light);
+  background: var(--warm-tint);
   color: #d4c84a;
 }
 
@@ -1134,11 +1140,11 @@ html.dark .right-tab.refs-tab-unread.inactive:hover {
   color: #fff;
 }
 .right-tab.access-tab--yellow.inactive {
-  background: var(--sticky-yellow-dark);
+  background: var(--warm-strong);
   color: #6b5e10;
 }
 .right-tab.access-tab--yellow.active {
-  background: var(--sticky-yellow-mid);
+  background: var(--warm-mid);
   color: #504810;
 }
 .right-tab.access-tab--blue.inactive {
@@ -1150,11 +1156,11 @@ html.dark .right-tab.refs-tab-unread.inactive:hover {
   color: #fff;
 }
 html.dark .right-tab.access-tab--yellow.inactive {
-  background: var(--sticky-yellow-dark);
+  background: var(--warm-strong);
   color: #c8b840;
 }
 html.dark .right-tab.access-tab--yellow.active {
-  background: var(--sticky-yellow-light);
+  background: var(--warm-tint);
   color: #c8b840;
 }
 
@@ -1173,20 +1179,20 @@ html.dark .right-tab.access-tab--yellow.active {
 
 /* Notes panel with active thread — opaque warm yellow background */
 .right-panel--notes-thread {
-  background: var(--sticky-yellow-light);
+  background: var(--warm-tint);
 }
 html.dark .right-panel--notes-thread {
-  background: var(--sticky-yellow-light);
+  background: var(--warm-tint);
 }
 
 /* Note chat input: yellow-dark bg + yellow-sep border */
 .right-panel--notes-thread textarea {
-  background: var(--sticky-yellow-mid);
-  border-color: var(--sticky-yellow-sep);
+  background: var(--warm-mid);
+  border-color: var(--warm-sep);
 }
 html.dark .right-panel--notes-thread textarea {
-  background: var(--sticky-yellow-mid);
-  border-color: var(--sticky-yellow-sep);
+  background: var(--warm-mid);
+  border-color: var(--warm-sep);
 }
 
 .panel-header {

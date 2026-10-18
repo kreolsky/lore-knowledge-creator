@@ -37,7 +37,7 @@ const FALLBACK_CAPACITY = 7;
 function SnapshotActions({ onEdit, isSelected }: { onEdit: () => void; isSelected: boolean }) {
   const { t } = useTranslation();
   // Selected snapshot keeps the green selection tint behind the edit icon; unselected stays gray.
-  const fadeColor = isSelected ? 'var(--sticky-green-dark)' : 'var(--surface3)';
+  const fadeColor = isSelected ? 'var(--snapshot-strong)' : 'var(--surface3)';
   return (
     <div className="absolute right-0 top-0 bottom-0 flex items-center gap-0.5 pl-4 pr-1 opacity-0 group-hover/row:opacity-100" style={{ background: `linear-gradient(to right, transparent 0px, ${fadeColor} 16px)` }} onClick={e => e.stopPropagation()}>
       <IconButton size="sm" title={t('editComment')} onClick={e => { e.stopPropagation(); onEdit(); }}>
@@ -415,7 +415,7 @@ export function HistoryPanel() {
 
           return (
             <div key={`snap-${snap.checkpoint_id}`}
-              className={`doc-item doc-item--right-panel group/row cursor-pointer${isSelected ? ' selected-snap bg-[var(--sticky-green-dark)]' : ''}`}
+              className={`doc-item doc-item--right-panel group/row cursor-pointer${isSelected ? ' selected-snap bg-[var(--snapshot-strong)]' : ''}`}
               onClick={() => handleSelectSnapshot(snap)}
               onMouseEnter={e => handleRowHover(e.currentTarget, snap)}
               onMouseLeave={handleRowHoverLeave}
@@ -423,11 +423,11 @@ export function HistoryPanel() {
               <span className="w-3" />
               <span className="doc-icon"><History size={14} /></span>
               {/* doc-label owns the truncation ellipsis; its color must match the comment text so the ellipsis tints green when selected, gray otherwise. */}
-              <span className={`doc-label${isSelected ? ' text-[var(--sticky-green-darkest)]' : ' text-text-dim'}`}>
+              <span className={`doc-label${isSelected ? ' text-[var(--snapshot-solid)]' : ' text-text-dim'}`}>
                 <span className="note-time">{formatDate(snap.created_at)}</span>
                 {' — '}
                 <span className="text-text font-medium">{userName}</span>
-                <span className={`ml-1${isSelected ? ' text-[var(--sticky-green-darkest)]' : ' text-text-dim'}${snap.comment || isLastSession ? '' : ' italic'}`}>
+                <span className={`ml-1${isSelected ? ' text-[var(--snapshot-solid)]' : ' text-text-dim'}${snap.comment || isLastSession ? '' : ' italic'}`}>
                   {displayComment}
                 </span>
               </span>

@@ -2,11 +2,11 @@
  * plus the person's own chats ("Chats" mode: a client-side "By title" group over the loaded
  * chat list above the semantic hits).
  * Store slices: currentProject, currentDocument, searchQuery, searchResults, setSearchCache,
- * searchMode, setRightPanelTab; chat-store sessions, loadSessions, setActiveSession,
+ * searchMode, searchSnapshot, setRightPanelTab; chat-store sessions, loadSessions, setActiveSession,
  * openBranch, setPendingScroll.
  * Events emitted: navigate-to-reference, navigate-to-document, open-right-panel. */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { Search, Sparkles, MessagesSquare } from 'lucide-react';
 import { useAppStore } from '../store/app-store';
 import { useUIStore } from '../store/ui-store';
@@ -15,7 +15,7 @@ import { isChatScopeLoaded, markChatScopeLoaded } from '../chat/scope-tracker';
 import { apiClient, ForbiddenError } from '../api/client';
 import { emit } from '../events';
 import { formatDate } from '../utils/format';
-import { ChatSearchHit, ChatSession, SearchMode, SearchResult, SemanticSearchHit } from '../types';
+import { ChatSearchHit, ChatSession, SearchMode, SearchResult, SearchSnapshot, SemanticSearchHit } from '../types';
 import { FieldInput, FieldCheckbox, Button, ListPill, PillList } from './ui';
 import { useTranslation } from '../i18n';
 import { filterSessionsByTitle } from './chat/useSortedSessions';
@@ -27,6 +27,27 @@ const isChatRecallDisabled = (err: unknown) =>
   err instanceof ForbiddenError && err.detail === CHAT_RECALL_DISABLED_DETAIL;
 
 const MIN_CHARS: Record<SearchMode, number> = { fulltext: 3, semantic: 2, chats: 2 };
+
+// Everything a request is made from: the open document is the narrow's root and
+// the chats anchor, so it is part of the key in every mode.
+const searchKey = (mode: SearchMode, query: string, scope: boolean, memory: boolean, exact: boolean) =>
+  JSON.stringify([
+    useAppStore.getState().currentProject?.project_id ?? null,
+    useAppStore.getState().currentDocument?.document_id ?? null,
+    mode, query, scope, memory, exact,
+  ]);
+
+/** What this mount may reuse of the last search: its toggles only on the
+ * document it was made on (the narrow means "the document I have open"), its
+ * hits only when nothing else changed either. */
+function readSnapshot(): { snap: SearchSnapshot | null; fresh: boolean } {
+  const { searchSnapshot: snap, searchMode, searchQuery } = useUIStore.getState();
+  if (!snap || snap.docId !== (useAppStore.getState().currentDocument?.document_id ?? null)) {
+    return { snap: null, fresh: false };
+  }
+  const key = searchKey(searchMode, searchQuery, snap.scopeThisDoc, snap.memoryOnly, snap.exactMatch);
+  return { snap, fresh: snap.key === key };
+}
 const PLACEHOLDER_KEY = {
   fulltext: 'searchPlaceholder', semantic: 'searchPlaceholderSemantic', chats: 'searchPlaceholderChats',
 } as const satisfies Record<SearchMode, string>;
@@ -42,8 +63,12 @@ export function SearchPanel() {
   const chatSessions = useChatStore(s => s.sessions);
 
   const { t } = useTranslation();
-  const [semanticHits, setSemanticHits] = useState<SemanticSearchHit[]>([]);
-  const [chatHits, setChatHits] = useState<ChatSearchHit[]>([]);
+  // WHY a snapshot: opening a chat hit swaps the right panel to the chat tab,
+  // which unmounts this panel; the way back must land on the same list.
+  const [{ snap: restored, fresh }] = useState(readSnapshot);
+  const reused = fresh ? restored : null;
+  const [semanticHits, setSemanticHits] = useState<SemanticSearchHit[]>(reused?.semanticHits ?? []);
+  const [chatHits, setChatHits] = useState<ChatSearchHit[]>(reused?.chatHits ?? []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   // Read only beside `error` in chats mode: each chats failure sets it afresh.
@@ -51,13 +76,14 @@ export function SearchPanel() {
   // Semantic scope controls — component-local by design: a narrow persisted
   // across sessions is a silent filter. The row stays visible while active, so
   // the narrow is always one glance away.
-  const [scopeThisDoc, setScopeThisDoc] = useState(false);
-  const [memoryOnly, setMemoryOnly] = useState(false);
+  const [scopeThisDoc, setScopeThisDoc] = useState(restored?.scopeThisDoc ?? false);
+  const [memoryOnly, setMemoryOnly] = useState(restored?.memoryOnly ?? false);
   // Fulltext exact toggle — component-local, not persisted (same rationale:
   // a survived "exact only" is a silent recall cut on the next session).
-  const [exactMatch, setExactMatch] = useState(false);
+  const [exactMatch, setExactMatch] = useState(restored?.exactMatch ?? false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollTopRef = useRef(reused?.scrollTop ?? 0);
 
   const getMinChars = (m: SearchMode) => MIN_CHARS[m];
   const minChars = getMinChars(mode);
@@ -66,6 +92,17 @@ export function SearchPanel() {
     const currentMode = useUIStore.getState().searchMode;
     const mc = getMinChars(currentMode);
     if (!projectId || value.length < mc) return;
+    // Bound at request time, like the narrow itself: only a COMPLETED search is
+    // remembered, so a failed or abandoned one searches again on the way back.
+    const key = searchKey(currentMode, value, scopeThisDoc, memoryOnly, exactMatch);
+    const docId = useAppStore.getState().currentDocument?.document_id ?? null;
+    const remember = (hits: Partial<Pick<SearchSnapshot, 'semanticHits' | 'chatHits'>>) => {
+      scrollTopRef.current = 0;
+      useUIStore.setState({ searchSnapshot: {
+        key, docId, scopeThisDoc, memoryOnly, exactMatch,
+        semanticHits: [], chatHits: [], scrollTop: 0, ...hits,
+      } });
+    };
 
     if (currentMode === 'semantic') {
       const params = new URLSearchParams({ q: value });
@@ -79,20 +116,20 @@ export function SearchPanel() {
       }
       apiClient
         .get(`/projects/${projectId}/semantic-search?${params}`)
-        .then((data: { hits: SemanticSearchHit[] }) => setSemanticHits(data.hits))
+        .then((data: { hits: SemanticSearchHit[] }) => { setSemanticHits(data.hits); remember({ semanticHits: data.hits }); })
         .catch(() => { setError(true); })
         .finally(() => setLoading(false));
     } else if (currentMode === 'chats') {
       const params = new URLSearchParams({ q: value });
       // The anchor is the document open at request time. Unchecked: the whole
-      // project, chats under the anchor first (marked). Checked: only chats
+      // project by relevance, chats under the anchor marked. Checked: only chats
       // attached to the anchor or its subtree.
       const anchorId = useAppStore.getState().currentDocument?.document_id;
       params.set('scope', scopeThisDoc && anchorId ? 'siblings' : 'project');
       if (anchorId) params.set('anchor_document_id', anchorId);
       apiClient
         .get(`/projects/${projectId}/chat-search?${params}`)
-        .then((data: { hits: ChatSearchHit[] }) => setChatHits(data.hits))
+        .then((data: { hits: ChatSearchHit[] }) => { setChatHits(data.hits); remember({ chatHits: data.hits }); })
         .catch((err: unknown) => { setChatsDisabled(isChatRecallDisabled(err)); setError(true); })
         .finally(() => setLoading(false));
     } else {
@@ -103,7 +140,7 @@ export function SearchPanel() {
       if (exactMatch) params.set('exact', 'true');
       apiClient
         .get(`/projects/${projectId}/search?${params}`)
-        .then((data: { results: SearchResult[] }) => setSearchCache(value, data.results))
+        .then((data: { results: SearchResult[] }) => { setSearchCache(value, data.results); remember({}); })
         .catch(() => { setError(true); })
         .finally(() => setLoading(false));
     }
@@ -111,7 +148,13 @@ export function SearchPanel() {
 
   // Re-anchor: the toggle means "the document I have open" — navigating to a
   // different document opts the new one out instead of silently narrowing by it.
-  useEffect(() => { setScopeThisDoc(false); }, [currentDocument?.document_id]);
+  // The mount is not a navigation: a restored narrow was made on this document.
+  const anchoredDocRef = useRef(currentDocument?.document_id);
+  useEffect(() => {
+    if (anchoredDocRef.current === currentDocument?.document_id) return;
+    anchoredDocRef.current = currentDocument?.document_id;
+    setScopeThisDoc(false);
+  }, [currentDocument?.document_id]);
 
   // Latest doSearch for deferred (debounced) calls — the timeout must see the
   // committed toggle state, not the closure of the render that scheduled it.
@@ -147,6 +190,7 @@ export function SearchPanel() {
   };
 
   useEffect(() => {
+    if (fresh) return;
     const mc = getMinChars(mode);
     if (projectId && query.length >= mc) {
       setLoading(true);
@@ -190,6 +234,21 @@ export function SearchPanel() {
 
   useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
 
+  // The list's scroll rides the snapshot: restored before paint, recorded on
+  // every scroll, written back when the panel unmounts.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = scrollTopRef.current;
+    const onScroll = () => { scrollTopRef.current = el.scrollTop; };
+    el.addEventListener('scroll', onScroll);
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      const snap = useUIStore.getState().searchSnapshot;
+      if (snap) useUIStore.setState({ searchSnapshot: { ...snap, scrollTop: scrollTopRef.current } });
+    };
+  }, []);
+
   // WHY load first: a chat panel that never mounted in this tab would, on
   // the reveal below, run its own first load — and its resolver restores the
   // last-active chat over the one opened here. Marking the scope loaded
@@ -221,7 +280,7 @@ export function SearchPanel() {
     if (!(await ensureChatScope())) return;
     const chat = useChatStore.getState();
     chat.openBranch(h.chat_id, h.thread_id);
-    chat.setPendingScroll(h.chat_id, h.message_id);
+    chat.setPendingScroll(h.chat_id, h.message_id, h.snippet);
     revealChat();
   };
 

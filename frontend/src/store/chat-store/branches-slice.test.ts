@@ -16,12 +16,13 @@ import { create } from 'zustand';
 const showToast = vi.fn();
 vi.mock('../../api/client', () => ({
   apiClient: {
-    get: vi.fn(),
+    // The list re-read an unlisted open triggers (see the last describe).
+    get: vi.fn().mockResolvedValue([]),
     patch: vi.fn(),
   },
 }));
 vi.mock('../app-store', () => ({
-  useAppStore: { getState: () => ({ showToast }) },
+  useAppStore: { getState: () => ({ showToast, currentProject: { project_id: 'p1' } }) },
 }));
 vi.mock('../../i18n', () => ({ t: (k: string) => k }));
 
@@ -43,6 +44,7 @@ function buildStore(sessions: ChatState['sessions'], activeSessionId: string | n
     ...createBranchesSlice(set, get),
     sessions,
     activeSessionId,
+    documentId: 'doc1',
     forks: [],
     setActiveSession: (sid: string | null) => {
       switched.push(sid);
@@ -175,5 +177,70 @@ describe('openBranch — an explicit thread root (a chat search hit)', () => {
     await settled();
 
     expect(lastPatch()).toEqual(['/chat/sessions/rootH', { active_branch_id: 'b3' }]);
+  });
+});
+
+describe('openBranch — an unlisted branch gets the thread\'s list row', () => {
+  // The chat list carries ONE row per thread — its last-opened branch. A
+  // branch opened from a search hit or the switcher has no row, so the chat
+  // header (which names the chat from that list) showed "Untitled Chat".
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(apiClient.patch).mockReset().mockResolvedValue({ session_id: 'rootH', active_branch_id: 'b2' });
+    vi.mocked(apiClient.get).mockReset();
+  });
+
+  const titled = (id: string, threadId: string, title: string) =>
+    ({ ...sess(id, threadId), title }) as ChatState['sessions'][number];
+
+  it('re-reads the list after the switch and seats the branch in place of the thread\'s row', async () => {
+    vi.mocked(apiClient.get).mockResolvedValue([titled('b2', 'rootH', 'Plague notes'), titled('x1', 'x1', 'Other')]);
+    const { store } = buildStore([titled('rootH', 'rootH', 'Plague notes'), titled('a1', 'rootA', 'Mine')], 'a1');
+
+    store.getState().openBranch('b2', 'rootH');
+    await settled();
+    await settled();
+
+    expect(vi.mocked(apiClient.get).mock.calls[0][0]).toBe('/chat/sessions?project_id=p1&document_id=doc1');
+    const ids = store.getState().sessions.map(s => s.session_id);
+    expect(ids).toContain('b2');
+    expect(ids).not.toContain('rootH');
+    expect(ids).toContain('a1');
+    expect(store.getState().sessions.find(s => s.session_id === 'b2')?.title).toBe('Plague notes');
+  });
+
+  it('a late list answer for a branch the person already left is dropped', async () => {
+    let answer: (rows: unknown) => void = () => {};
+    vi.mocked(apiClient.get).mockReturnValue(new Promise(r => { answer = r; }));
+    const { store } = buildStore([titled('rootH', 'rootH', 'Plague notes')], 'a1');
+
+    store.getState().openBranch('b2', 'rootH');
+    await settled();
+    store.setState({ activeSessionId: 'b3' });
+    answer([titled('b2', 'rootH', 'Plague notes')]);
+    await settled();
+
+    expect(store.getState().sessions.map(s => s.session_id)).toEqual(['rootH']);
+  });
+
+  it('a listed target needs no re-read', async () => {
+    const { store } = buildStore([titled('b2', 'rootH', 'Plague notes')], 'a1');
+
+    store.getState().openBranch('b2', 'rootH');
+    await settled();
+
+    expect(apiClient.get).not.toHaveBeenCalled();
+  });
+
+  it('a failed re-read keeps the list and says so', async () => {
+    vi.mocked(apiClient.get).mockRejectedValue(new Error('network'));
+    const { store } = buildStore([titled('rootH', 'rootH', 'Plague notes')], 'a1');
+
+    store.getState().openBranch('b2', 'rootH');
+    await settled();
+    await settled();
+
+    expect(store.getState().sessions.map(s => s.session_id)).toEqual(['rootH']);
+    expect(showToast).toHaveBeenCalledWith('chatBranchSwitchFailed', 'warning');
   });
 });

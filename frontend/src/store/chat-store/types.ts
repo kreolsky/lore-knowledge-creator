@@ -1,7 +1,23 @@
 /** ChatState interface and Set/Get aliases for slice creators. */
-import type { ChatUIMode, ChatSession, ChatMessage, Reference, PinnedRegion, ReasoningCapability } from '../../types';
+import type { ChatUIMode, ChatSession, ChatMessage, ChatFile, Reference, PinnedRegion, ReasoningCapability } from '../../types';
 import type { ConversationVM, TurnRange } from './conversation-feed';
 import type { QueuedMessage } from '../../chat/inbox-queue';
+
+/** A composer file chip: a dropped file on its way into the sandbox
+ * workspace (`uploading`), there (`done`, with the server's record), or
+ * refused (`error` — shown, never sent). */
+export interface PendingFile {
+  /** Client-local id (the server's id exists only once uploaded). */
+  key: string;
+  projectId: string;
+  name: string;
+  size: number;
+  mime: string;
+  status: 'uploading' | 'done' | 'error';
+  /** 0..1 while uploading. */
+  progress: number;
+  uploaded?: ChatFile;
+}
 
 /** One switcher option: one DISTINCT continuation after the fork origin and
  * the session that opens it (server-shaped, GET /sessions/{id}/forks). The
@@ -116,8 +132,9 @@ export interface ChatState {
   // One-shot scroll target set by opening a chat search hit: MessageList
   // scrolls `messageId` into view once `sessionId` is the shown chat and its
   // messages have landed, then clears it. A target for any other chat is
-  // dropped, never applied to the one shown.
-  pendingScroll: { sessionId: string; messageId: string } | null;
+  // dropped, never applied to the one shown. `snippet` (the hit's raw text)
+  // narrows the landing to the passage inside the message.
+  pendingScroll: { sessionId: string; messageId: string; snippet?: string } | null;
 
   // Streaming: the tightly-coupled streaming state machine lives in ONE object so
   // it is manipulated as a unit — split across flat fields, a reset could clear
@@ -195,6 +212,9 @@ export interface ChatState {
   // controls the Dropdown with it).
   modelPickerOpen: boolean;
   pendingImages: string[];
+  // Files dropped on the AI chat (full access only), uploaded on drop. The
+  // send carries the `done` ones; in-memory like pendingImages.
+  pendingFiles: PendingFile[];
   // SYSTEM: chat-draft — the composer text held in the store (ONE shared string,
   // session-agnostic) so it survives ChatPanel unmount on right-panel tab switches.
   // Mirrors the prior in-mount useState semantics (text already crossed session
@@ -271,6 +291,14 @@ export interface ChatState {
   addPendingImage: (dataUrl: string) => void;
   removePendingImage: (index: number) => void;
   clearPendingImages: () => void;
+  // Actions — files (uploaded into the sender's sandbox workspace on drop)
+  addPendingFile: (projectId: string, file: File) => void;
+  // Removing a chip before the send takes the file back out of the workspace.
+  removePendingFile: (key: string) => void;
+  // After a send: the files stay in the workspace (the agent's material).
+  clearPendingFiles: () => void;
+  // Already-uploaded files back as chips (a Stop's returned queue).
+  restorePendingFiles: (projectId: string, files: ChatFile[]) => void;
 
   // Actions — draft (see the `draft` field by pendingImages)
   setDraft: (v: string) => void;
@@ -310,7 +338,7 @@ export interface ChatState {
   // turn is open in this tab (the adoption path re-seats the window; frames
   // lost in the socket gap recover through the reload's replay).
   resyncOpenHarnessTurn: () => Promise<void>;
-  sendMessage: (content: string, images?: string[]) => Promise<void>;
+  sendMessage: (content: string, images?: string[], files?: ChatFile[]) => Promise<void>;
   editMessage: (messageId: string, content: string) => Promise<void>;
   forkAndResend: (messageId: string, content: string, images?: string[]) => Promise<void>;
   regenerate: (messageId: string) => Promise<void>;
@@ -326,7 +354,7 @@ export interface ChatState {
    * the caller knows it (a chat search hit), wins over every lookup. */
   openBranch: (sessionId: string, rootId?: string) => void;
   /** Arm / consume the one-shot scroll target (see `pendingScroll`). */
-  setPendingScroll: (sessionId: string, messageId: string) => void;
+  setPendingScroll: (sessionId: string, messageId: string, snippet?: string) => void;
   clearPendingScroll: () => void;
   // Rewind-to-message (agent chats): fork a branch after the message's
   // PARENT and open it — the new branch's transcript ends right before the

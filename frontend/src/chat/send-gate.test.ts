@@ -36,4 +36,10 @@ describe('canSend', () => {
   it('history alone over budget → false even with text', () => {
     expect(canSend({ text: 'hi', imagesCount: 0, systemPromptId: null, overLimit: false, contextOverLimit: true })).toBe(false);
   });
+  it('an uploaded file alone permits an empty send', () => {
+    expect(canSend({ text: '', imagesCount: 0, filesCount: 1, systemPromptId: null, overLimit: false, contextOverLimit: false })).toBe(true);
+  });
+  it('a file still uploading holds the send, even with text', () => {
+    expect(canSend({ text: 'hi', imagesCount: 0, filesCount: 1, filesUploading: true, systemPromptId: null, overLimit: false, contextOverLimit: false })).toBe(false);
+  });
 });

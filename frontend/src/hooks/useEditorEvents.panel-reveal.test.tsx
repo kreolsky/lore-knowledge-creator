@@ -63,6 +63,23 @@ describe('navigate-to-reference — panel-mode Refs reveal', () => {
     expect(useUIStore.getState().getDocState('doc-1').rightPanelOpen).toBe(true);
   });
 
+  it('panel mode: opening a reference from the search tab drops the search overlay', async () => {
+    useUIStore.getState().setRefOpenMode('doc-1', 'panel');
+    useUIStore.getState().setRightPanelTab('doc-1', 'search');
+    await act(async () => { emit('navigate-to-reference', { referenceId: 'ref-1' }); });
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(useUIStore.getState().searchTabDocId).toBeNull();
+    expect(tab()).toBe('refs');
+  });
+
+  it('center mode: opening a reference from the search tab keeps the results visible', async () => {
+    useUIStore.getState().setRefOpenMode('doc-1', 'center');
+    useUIStore.getState().setRightPanelTab('doc-1', 'search');
+    await act(async () => { emit('navigate-to-reference', { referenceId: 'ref-1' }); });
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(useUIStore.getState().searchTabDocId).toBe('doc-1');
+  });
+
   it('center mode: opening a reference leaves the saved tab alone', async () => {
     useUIStore.getState().setRefOpenMode('doc-1', 'center');
     await act(async () => { emit('navigate-to-reference', { referenceId: 'ref-1' }); });

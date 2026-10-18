@@ -22,13 +22,17 @@ export function canSendWithoutText(
 export interface CanSendInput {
   text: string;
   imagesCount: number;
+  /** Uploaded file chips — they permit an empty send like images do. */
+  filesCount?: number;
+  /** A file chip still uploading holds the send: its path does not exist yet. */
+  filesUploading?: boolean;
   systemPromptId: string | null;
   overLimit: boolean;
   contextOverLimit: boolean;
 }
 
 export function canSend(input: CanSendInput): boolean {
-  const { text, imagesCount, systemPromptId, overLimit, contextOverLimit } = input;
-  const withoutText = canSendWithoutText(imagesCount, systemPromptId);
-  return (text.trim().length > 0 || withoutText) && !overLimit && !contextOverLimit;
+  const { text, imagesCount, filesCount = 0, filesUploading = false, systemPromptId, overLimit, contextOverLimit } = input;
+  const withoutText = canSendWithoutText(imagesCount + filesCount, systemPromptId);
+  return (text.trim().length > 0 || withoutText) && !overLimit && !contextOverLimit && !filesUploading;
 }

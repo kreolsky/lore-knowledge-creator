@@ -133,6 +133,7 @@ export function createMiscSlice(set: Set, get: Get): MiscSlice {
         turnRanges: {},
         turnStartSeq: null,
         pendingImages: [],
+        pendingFiles: [],
         // Shared composer draft — logout hygiene: the prior user's draft must
         // never render after a same-tab re-login.
         draft: '',

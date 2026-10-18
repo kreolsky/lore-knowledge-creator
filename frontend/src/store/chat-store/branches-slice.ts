@@ -51,6 +51,29 @@ export function withThreadRow(sessions: ChatSession[], branch: ChatSession): Cha
   ];
 }
 
+/** Seat an opened branch that has no list row. The chat header names the
+ * chat from the list, so an unlisted branch (a search hit, a switcher hop)
+ * read as "Untitled Chat"; once the root points at it the server lists it as
+ * its thread's row, so the list is re-read for that row. */
+async function seatOpenedBranch(set: Set, get: Get, sessionId: string): Promise<void> {
+  const projectId = useAppStore.getState().currentProject?.project_id;
+  if (!projectId) return;
+  const params = new URLSearchParams({ project_id: projectId, document_id: get().documentId ?? '' });
+  let rows: ChatSession[];
+  try {
+    rows = await apiClient.get(`/chat/sessions?${params}`);
+  } catch {
+    useAppStore.getState().showToast(t('chatBranchSwitchFailed'), 'warning');
+    return;
+  }
+  // A late answer is dropped: once the person opened another chat or project,
+  // seating this row would push out the thread row that is current now.
+  if (get().activeSessionId !== sessionId
+    || useAppStore.getState().currentProject?.project_id !== projectId) return;
+  const row = rows.find(s => s.session_id === sessionId);
+  if (row) set(s => ({ sessions: withThreadRow(s.sessions, row) }));
+}
+
 export function createBranchesSlice(set: Set, get: Get): BranchesSlice {
   return {
     async loadForks(sessionId: string) {
@@ -105,6 +128,9 @@ export function createBranchesSlice(set: Set, get: Get): BranchesSlice {
                 : ss,
             ),
           }));
+          if (!get().sessions.some(s => s.session_id === sessionId)) {
+            void seatOpenedBranch(set, get, sessionId);
+          }
         })
         .catch(() => {
           // The open itself proceeds (it is local); only the list preview
@@ -116,8 +142,8 @@ export function createBranchesSlice(set: Set, get: Get): BranchesSlice {
       }
     },
 
-    setPendingScroll(sessionId: string, messageId: string) {
-      set({ pendingScroll: { sessionId, messageId } });
+    setPendingScroll(sessionId: string, messageId: string, snippet?: string) {
+      set({ pendingScroll: { sessionId, messageId, snippet } });
     },
 
     clearPendingScroll() {

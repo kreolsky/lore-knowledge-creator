@@ -201,6 +201,20 @@
         "title": "Body_upload_and_transcribe_api_references_upload_and_transcribe_post",
         "type": "object"
       },
+      "Body_upload_chat_attachment_api_projects__project_id__sandbox_attachments_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_chat_attachment_api_projects__project_id__sandbox_attachments_post",
+        "type": "object"
+      },
       "Body_upload_docx_reference_api_references_upload_docx_post": {
         "properties": {
           "document_id": {
@@ -426,11 +440,59 @@
         "title": "BranchCreate",
         "type": "object"
       },
+      "ChatFile": {
+        "description": "A file the person dropped on the chat, already in their sandbox workspace\n(POST /api/projects/{id}/sandbox/attachments returns exactly this).",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "mime": {
+            "title": "Mime",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "size",
+          "mime",
+          "path"
+        ],
+        "title": "ChatFile",
+        "type": "object"
+      },
       "ChatMessage": {
         "properties": {
           "content": {
             "title": "Content",
             "type": "string"
+          },
+          "files": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ChatFile"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Files"
           },
           "images": {
             "anyOf": [
@@ -10071,7 +10133,7 @@
     },
     "/api/projects/{project_id}/chat-search": {
       "get": {
-        "description": "Semantic search over the caller's own visible chats of the project.\n\n`anchor_document_id` (the document open in the editor) turns the sibling\ntier on in `project` scope and is the narrow of `siblings`; `subtree` needs\n`under_document_id`. Refused while the admin disabled the `chat-recall`\nskill — the index is not fed then, so results would be silently stale.",
+        "description": "Semantic search over the caller's own visible chats of the project.\n\n`anchor_document_id` (the document open in the editor) marks the hits under\nit `sibling` in `project` scope, without reordering, and is the narrow of\n`siblings`; `subtree` needs `under_document_id`. Refused while the admin disabled the `chat-recall`\nskill — the index is not fed then, so results would be silently stale.",
         "operationId": "chat_search_api_projects__project_id__chat_search_get",
         "parameters": [
           {
@@ -10874,6 +10936,134 @@
           }
         },
         "summary": "Get Sandbox Status"
+      }
+    },
+    "/api/projects/{project_id}/sandbox/attachments": {
+      "post": {
+        "description": "Put a file dropped on the AI chat into the caller's sandbox workspace.\n\nStreams to a temp file and from there over SFTP — never the whole file in\nmemory. Lands at `inbox/chat/{uuid}/{name}`; the uuid is minted here, so two\ndrops of the same name never collide. Returns {id, name, size, mime, path}.",
+        "operationId": "upload_chat_attachment_api_projects__project_id__sandbox_attachments_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_chat_attachment_api_projects__project_id__sandbox_attachments_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload Chat Attachment"
+      }
+    },
+    "/api/projects/{project_id}/sandbox/attachments/{upload_id}": {
+      "delete": {
+        "description": "Remove an attachment dropped and then taken back before the send.",
+        "operationId": "delete_chat_attachment_api_projects__project_id__sandbox_attachments__upload_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Upload Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Chat Attachment"
       }
     },
     "/api/projects/{project_id}/sandbox/destroy": {

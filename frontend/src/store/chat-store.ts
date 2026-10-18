@@ -18,6 +18,7 @@ import { createBranchesSlice } from './chat-store/branches-slice';
 import { createInboxSlice, resetInbox } from './chat-store/inbox-slice';
 import { createAgentSlice } from './chat-store/agent-slice';
 import { createMiscSlice } from './chat-store/misc-slice';
+import { createFilesSlice } from './chat-store/files-slice';
 import { registerLogoutHandler } from './logout-handlers';
 import { publishTimelineReset } from './chat-store/conversation-feed';
 
@@ -89,6 +90,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   pendingInputFocus: false,
   modelPickerOpen: false,
   pendingImages: [],
+  pendingFiles: [],
   // SYSTEM: chat-draft — composer text held in-store (survives tab-switch unmount).
   draft: '',
 
@@ -113,6 +115,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   ...createInboxSlice(set, get),
   ...createAgentSlice(set, get),
   ...createMiscSlice(set, get),
+  ...createFilesSlice(set, get),
 }));
 
 // One-shot cleanup: the pinned-selection feature was removed; clear any

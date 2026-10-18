@@ -24,7 +24,7 @@ interface ListPillProps {
   /** Active fill color when variant is 'plain': chat purple 'accent' or reference 'blue'. */
   activeColor?: ListPillActiveColor;
   /** see SYSTEM: inbox — this object arrived from OUTSIDE flagged for the viewer.
-   * Paints the sticky-yellow inbox mark OVER the variant fill (the anchored
+   * Paints the warm inbox mark OVER the variant fill (the anchored
    * yellow family; the mark is the dark shade, matching the tab tint). Clearing
    * happens on open, so an active+unread overlap is a transient failure state. */
   unread?: boolean;

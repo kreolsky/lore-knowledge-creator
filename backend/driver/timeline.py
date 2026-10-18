@@ -96,7 +96,7 @@ async def post_stop(
     ONE `agent.cancel` arm). Idempotent
     driver-side: a session with no turn in flight answers {stopped: false}.
     `return_queue` (the person's Stop only) also empties the session's inbox
-    and answers its messages as `returned` ({text, images} in send order);
+    and answers its messages as `returned` ({text, images, files} in send order);
     without it the queue stays parked.
 
     The channel's deadline breach, unsubscribe, and the browser's Stop call

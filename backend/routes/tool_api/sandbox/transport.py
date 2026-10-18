@@ -272,22 +272,31 @@ async def _sftp_read_checked(ws_path: str, max_bytes: int) -> tuple[str, bytes]:
         return real, data
 
 
+async def _sftp_makedirs(sftp, ws_path: str) -> None:
+    """mkdir -p the parent dirs of ws_path; SFTP has no -p flag, so walk one level."""
+    cur = ""
+    for part in posixpath.dirname(ws_path).split("/"):
+        if not part:
+            continue
+        cur = f"{cur}/{part}"
+        try:
+            await sftp.mkdir(cur)
+        except Exception:
+            # already exists (or a race) — not an error for mkdir -p semantics.
+            pass
+
+
 async def _sftp_write(ws_path: str, data: bytes) -> None:
     """mkdir -p the parent dirs, then write the file. The WRITE-side seam."""
     async with _sandbox_sftp() as sftp:
-        parent = posixpath.dirname(ws_path)
-        if parent:
-            # mkdir -p (ignore exists); SFTP has no -p flag, so walk one level.
-            parts = parent.split("/")
-            cur = ""
-            for part in parts:
-                if not part:
-                    continue
-                cur = f"{cur}/{part}"
-                try:
-                    await sftp.mkdir(cur)
-                except Exception:
-                    # already exists (or a race) — not an error for mkdir -p semantics.
-                    pass
+        await _sftp_makedirs(sftp, ws_path)
         async with sftp.open(ws_path, "wb") as f:
             await f.write(data)
+
+
+async def _sftp_put(local_path: str, ws_path: str) -> None:
+    """mkdir -p the parent dirs, then stream a LOCAL file to ws_path. The seam for
+    uploads too large to hold in memory (a chat attachment is up to 100 MB)."""
+    async with _sandbox_sftp() as sftp:
+        await _sftp_makedirs(sftp, ws_path)
+        await sftp.put(local_path, ws_path)

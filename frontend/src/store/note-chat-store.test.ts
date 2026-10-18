@@ -705,3 +705,102 @@ describe('sessions scope reconciliation', () => {
     expect(s.sessions).toEqual([]);
   });
 });
+
+describe('discardIfFresh (abandoned new note)', () => {
+  const created = {
+    session_id: 'fresh1', project_id: 'p1', document_id: 'd1', reference_id: null,
+    is_note: true, title: '', created_at: '2026-10-18T00:00:00Z', updated_at: '2026-10-18T00:00:00Z',
+  };
+
+  beforeEach(async () => {
+    useNoteChatStore.getState().reset();
+    (apiClient.delete as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue({});
+    (apiClient.post as ReturnType<typeof vi.fn>).mockResolvedValueOnce(created);
+    await useNoteChatStore.getState().createNoteSession({ projectId: 'p1', documentId: 'd1' });
+  });
+
+  it('deletes a note created here that received nothing', () => {
+    expect(useNoteChatStore.getState().discardIfFresh('fresh1')).toBe(true);
+    expect(apiClient.delete).toHaveBeenCalledWith('/chat/sessions/fresh1');
+    expect(useNoteChatStore.getState().sessions).toEqual([]);
+  });
+
+  it('keeps it once a message was sent', async () => {
+    (apiClient.post as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ message_id: 'm1', content: 'hi', created_at: 'x' });
+    await useNoteChatStore.getState().sendMessage('hi');
+    expect(useNoteChatStore.getState().discardIfFresh('fresh1')).toBe(false);
+    expect(apiClient.delete).not.toHaveBeenCalled();
+  });
+
+  it('keeps it while a send is still in flight', () => {
+    (apiClient.post as ReturnType<typeof vi.fn>).mockReturnValueOnce(new Promise(() => {}));
+    void useNoteChatStore.getState().sendMessage('hi');
+    expect(useNoteChatStore.getState().discardIfFresh('fresh1')).toBe(false);
+  });
+
+  it('keeps it when a message arrived over realtime', () => {
+    useNoteChatStore.getState().applyMessageChange({ action: 'added', session_id: 'fresh1' });
+    expect(useNoteChatStore.getState().discardIfFresh('fresh1')).toBe(false);
+  });
+
+  it('keeps it when the composer holds a draft', () => {
+    useNoteChatStore.getState().setDraftForSession('fresh1', 'unsent text');
+    expect(useNoteChatStore.getState().discardIfFresh('fresh1')).toBe(false);
+  });
+
+  it('keeps it when an image is queued', () => {
+    useNoteChatStore.getState().addPendingImage('data:image/png;base64,AA==');
+    expect(useNoteChatStore.getState().discardIfFresh('fresh1')).toBe(false);
+  });
+
+  it('never deletes a note this client did not create, even if it shows zero messages', () => {
+    useNoteChatStore.setState({ sessions: [{ ...created, session_id: 'old1' } as never] });
+    useNoteChatStore.getState().setActiveSession('old1');
+    useNoteChatStore.setState({ messages: [], messagesLoading: false });
+    expect(useNoteChatStore.getState().discardIfFresh('old1')).toBe(false);
+    expect(apiClient.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe('discardIfEmpty (explicit back/Esc)', () => {
+  const row = (count: number | undefined) => ({
+    session_id: 'old1', project_id: 'p1', document_id: 'd1', reference_id: null,
+    is_note: true, title: '', created_at: 'x', updated_at: 'x', message_count: count,
+  });
+
+  beforeEach(() => {
+    useNoteChatStore.getState().reset();
+    (apiClient.delete as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue({});
+  });
+
+  it('does NOT delete an existing note while its messages are still loading', () => {
+    useNoteChatStore.setState({ sessions: [row(3) as never], activeSessionId: 'old1', messages: [], messagesLoading: true });
+    expect(useNoteChatStore.getState().discardIfEmpty('old1')).toBe(false);
+    expect(apiClient.delete).not.toHaveBeenCalled();
+  });
+
+  it('does NOT delete an existing note whose message load failed (server count > 0)', () => {
+    useNoteChatStore.setState({ sessions: [row(3) as never], activeSessionId: 'old1', messages: [], messagesLoading: false });
+    expect(useNoteChatStore.getState().discardIfEmpty('old1')).toBe(false);
+    expect(apiClient.delete).not.toHaveBeenCalled();
+  });
+
+  it('does NOT delete when the server count is unknown', () => {
+    useNoteChatStore.setState({ sessions: [row(undefined) as never], activeSessionId: 'old1', messages: [], messagesLoading: false });
+    expect(useNoteChatStore.getState().discardIfEmpty('old1')).toBe(false);
+  });
+
+  it('deletes an existing note the server reports empty once loaded', () => {
+    useNoteChatStore.setState({ sessions: [row(0) as never], activeSessionId: 'old1', messages: [], messagesLoading: false });
+    expect(useNoteChatStore.getState().discardIfEmpty('old1')).toBe(true);
+    expect(apiClient.delete).toHaveBeenCalledWith('/chat/sessions/old1');
+  });
+
+  it('deletes a note created here even with a draft (explicit cancel of creation)', async () => {
+    (apiClient.post as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...row(undefined), session_id: 'new1' });
+    await useNoteChatStore.getState().createNoteSession({ projectId: 'p1', documentId: 'd1' });
+    useNoteChatStore.getState().setDraftForSession('new1', 'typed');
+    expect(useNoteChatStore.getState().discardIfEmpty('new1')).toBe(true);
+    expect(apiClient.delete).toHaveBeenCalledWith('/chat/sessions/new1');
+  });
+});

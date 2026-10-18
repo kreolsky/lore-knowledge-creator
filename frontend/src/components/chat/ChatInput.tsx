@@ -1,4 +1,4 @@
-/** Chat input area — textarea with send, stop, mic buttons + model selector + apply-mode dropdown (confirm/auto, derived from PROJECT system-prompts folder) + multi-doc context picker. Chat-store slices: streaming, dshRunning, inboxQueue, liveSend, discardQueued, activeSessionId, pendingInputFocus, pendingImages, addPendingImage, removePendingImage, clearPendingImages, draft, setDraft, models, defaultModel, sessions, updateSession, createSession, sendMessage, stopGeneration, setSessionMode. App-store slices: currentProject, currentDocument, currentReference, documents, accessLevel. Context: useChatContext (reactive read), pruneContext. Picker writes directly via addItemToContext / removeItemFromContext. */
+/** Chat input area — textarea with send, stop, mic buttons + model selector + apply-mode dropdown (confirm/auto, derived from PROJECT system-prompts folder) + multi-doc context picker. Chat-store slices: streaming, dshRunning, inboxQueue, liveSend, discardQueued, activeSessionId, pendingInputFocus, pendingImages, addPendingImage, removePendingImage, clearPendingImages, pendingFiles, removePendingFile, clearPendingFiles, draft, setDraft, models, defaultModel, sessions, updateSession, createSession, sendMessage, stopGeneration, setSessionMode. App-store slices: currentProject, currentDocument, currentReference, documents, accessLevel. Context: useChatContext (reactive read), pruneContext. Picker writes directly via addItemToContext / removeItemFromContext. */
 
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { BookPlus, EyeOff, ScrollText } from 'lucide-react';
@@ -60,6 +60,14 @@ export function ChatInput() {
   const addPendingImage = useChatStore(s => s.addPendingImage);
   const removePendingImage = useChatStore(s => s.removePendingImage);
   const clearPendingImages = useChatStore(s => s.clearPendingImages);
+  const pendingFiles = useChatStore(s => s.pendingFiles);
+  const removePendingFile = useChatStore(s => s.removePendingFile);
+  const clearPendingFiles = useChatStore(s => s.clearPendingFiles);
+  const uploadedFiles = useMemo(
+    () => pendingFiles.flatMap(f => (f.status === 'done' && f.uploaded ? [f.uploaded] : [])),
+    [pendingFiles],
+  );
+  const filesUploading = pendingFiles.some(f => f.status === 'uploading');
   // The active chat's queue (dsh's inbox, see SYSTEM: chat-message-queue),
   // minus the chip of the idle send this tab is opening — its optimistic
   // bubble already shows it, so a stale-idle judgement never shows a message
@@ -297,6 +305,8 @@ export function ChatInput() {
   const canSend = computeCanSend({
     text,
     imagesCount: images.length,
+    filesCount: uploadedFiles.length,
+    filesUploading,
     systemPromptId: effectiveSystemPromptId,
     overLimit: attachmentsOverLimit,
     contextOverLimit,
@@ -360,13 +370,16 @@ export function ChatInput() {
       if (pin) useChatStore.getState().clearGhostRegion();
     }
     const imgs = images.length > 0 ? images : undefined;
-    // A busy chat queues the whole message in dsh, images included — the
-    // composer is consumed either way.
-    sendMessage(text.trim(), imgs);
+    // Only uploaded files ride the send; a failed chip leaves with the clear.
+    const files = uploadedFiles.length > 0 ? uploadedFiles : undefined;
+    // A busy chat queues the whole message in dsh, images and files included —
+    // the composer is consumed either way.
+    sendMessage(text.trim(), imgs, files);
     setDraft('');
     hasClarificationsRef.current = false;
     clearPendingImages();
-  }, [canSend, activeSessionId, projectId, currentDocId, currentReference, text, images, createSession, sendMessage, clearPendingImages, setDraft]);
+    clearPendingFiles();
+  }, [canSend, activeSessionId, projectId, currentDocId, currentReference, text, images, uploadedFiles, createSession, sendMessage, clearPendingImages, clearPendingFiles, setDraft]);
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
@@ -691,6 +704,8 @@ export function ChatInput() {
       onCancelRecording={cancelRecording}
       images={images}
       onRemoveImage={removePendingImage}
+      files={pendingFiles}
+      onRemoveFile={removePendingFile}
       queued={queued}
       onRemoveQueued={id => { void discardQueued(id); }}
       onScrollToBottom={scrolledAway ? scrollToBottom : undefined}

@@ -27,11 +27,11 @@ const baseLayout =
 const baseIdle = 'bg-transparent text-text-muted hover:bg-surface3 hover:text-text';
 // see SYSTEM: note-chat — darker-yellow hover for controls inside a note thread,
 // matching the sticky-note bg instead of the app-wide gray hover.
-const baseIdleNote = 'bg-transparent text-text-muted hover:bg-[var(--sticky-yellow-dark)] hover:text-text';
+const baseIdleNote = 'bg-transparent text-text-muted hover:bg-[var(--warm-strong)] hover:text-text';
 
 // A pressed toggle holds the hover look so ON reads apart from OFF at rest.
 const pressedIdle = 'bg-surface3 text-text hover:bg-surface3 hover:text-text';
-const pressedIdleNote = 'bg-[var(--sticky-yellow-dark)] text-text hover:bg-[var(--sticky-yellow-dark)] hover:text-text';
+const pressedIdleNote = 'bg-[var(--warm-strong)] text-text hover:bg-[var(--warm-strong)] hover:text-text';
 
 // A colored pressed toggle replaces the gray hold entirely, so the two text colors never compete.
 const pressedColors: Record<string, string> = {

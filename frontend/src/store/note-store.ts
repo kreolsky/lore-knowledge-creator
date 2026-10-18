@@ -14,6 +14,8 @@ interface NoteState {
   previousRightTab: RightTab | null;
 
   setActiveNoteThreadId: (id: string | null, docId?: string | null) => void;
+  /** Forget a deleted thread everywhere: the open thread and every per-doc memory of it. */
+  clearNoteThread: (id: string) => void;
   setPendingNoteNavigation: (nav: { noteId: string; parentNoteId?: string | null } | null) => void;
   setConnectedNoteId: (id: string | null) => void;
   setPreviousRightTab: (tab: RightTab | null) => void;
@@ -32,6 +34,12 @@ export const useNoteStore = create<NoteState>((set) => ({
   setActiveNoteThreadId: (id, docId) => set((prev) => ({
     activeNoteThreadId: id,
     documentNoteThreads: docId ? { ...prev.documentNoteThreads, [docId]: id } : prev.documentNoteThreads,
+  })),
+  clearNoteThread: (id) => set((prev) => ({
+    activeNoteThreadId: prev.activeNoteThreadId === id ? null : prev.activeNoteThreadId,
+    documentNoteThreads: Object.fromEntries(
+      Object.entries(prev.documentNoteThreads).map(([doc, tid]) => [doc, tid === id ? null : tid]),
+    ),
   })),
   setPendingNoteNavigation: (nav) => set({ pendingNoteNavigation: nav }),
   setConnectedNoteId: (id) => set({ connectedNoteId: id }),

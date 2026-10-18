@@ -539,6 +539,9 @@ _UPLOAD_PATHS = (
     # enforced while streaming in save_audio_upload, not by buffering the body.
     MCP_UPLOAD_ROUTE_PREFIX,
 )
+# Streaming uploads whose path carries an id, matched by suffix. Its own cap is
+# routes/sandbox.CHAT_ATTACHMENT_MAX_MB, enforced while streaming.
+_UPLOAD_PATH_SUFFIXES = ("/sandbox/attachments",)
 # WHY: every path that carries base64 chat attachments shares the SAME cap.
 # Why: a chat completion carries the images of the turn it sends; the 1MB default
 # 413s any image ≳0.7MB raw.
@@ -550,7 +553,8 @@ async def json_body_size_limit(request: Request, call_next):
     """Reject oversized JSON payloads on non-upload endpoints."""
     if request.method in ("POST", "PATCH", "PUT"):
         path = request.url.path
-        if not any(path.startswith(p) for p in _UPLOAD_PATHS):
+        if not (any(path.startswith(p) for p in _UPLOAD_PATHS)
+                or path.endswith(_UPLOAD_PATH_SUFFIXES)):
             length = request.headers.get("content-length")
             if length:
                 # H-6: Malformed content-length header must not crash the server

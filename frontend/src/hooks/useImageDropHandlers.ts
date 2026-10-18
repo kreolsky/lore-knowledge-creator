@@ -12,23 +12,30 @@
  * chat/note tab never falls through to the references upload path or the
  * browser's open-file default. Images are only enqueued when `enabled` is true
  * (AI chat: always; note chat: only when a thread is open).
+ *
+ * Any other file goes to `addFile` when the surface takes files (the AI chat,
+ * full access — it uploads into the sandbox workspace); everywhere else it is
+ * refused with a toast, never skipped silently.
  */
 import { useState, useRef, useCallback } from 'react';
 import type React from 'react';
 import { useTranslation } from '../i18n';
 import { useAppStore } from '../store/app-store';
 import { totalAttachmentBytes, attachmentBudgetExceeded, formatAttachmentMb } from '../utils/attachment-size';
+import { CHAT_FILE_MAX_MB, fileRefusal } from '../chat/file-attachment-policy';
 
 interface UseImageDropHandlersOptions {
   /** Returns the currently-queued pending image data URLs (budget baseline). */
   getPending: () => string[];
   /** Enqueues one accepted image (data URL). */
   addImage: (dataUrl: string) => void;
+  /** Takes one accepted non-image file; absent = this surface takes images only. */
+  addFile?: (file: File) => void;
   /** When false, drops are still swallowed but no images are enqueued. */
   enabled: boolean;
 }
 
-export function useImageDropHandlers({ getPending, addImage, enabled }: UseImageDropHandlersOptions) {
+export function useImageDropHandlers({ getPending, addImage, addFile, enabled }: UseImageDropHandlersOptions) {
   const { t } = useTranslation();
   const [isDragging, setIsDragging] = useState(false);
   const dragCounter = useRef(0);
@@ -57,12 +64,23 @@ export function useImageDropHandlers({ getPending, addImage, enabled }: UseImage
     dragCounter.current = 0;
     setIsDragging(false);
     if (!enabled) return;
-    const maxMb = useAppStore.getState().maxAttachmentMb;
+    const { maxAttachmentMb: maxMb, showToast } = useAppStore.getState();
     let projected = totalAttachmentBytes(getPending());
+    let imagesOnlyRefused = false;
     for (const file of e.dataTransfer.files) {
-      if (!file.type.startsWith('image/')) continue;
+      if (!file.type.startsWith('image/')) {
+        if (!addFile) {
+          imagesOnlyRefused = true;
+          continue;
+        }
+        const refusal = fileRefusal(file);
+        if (refusal === 'size') showToast(t('chatFileTooLarge', { name: file.name, limit: CHAT_FILE_MAX_MB }), 'error');
+        else if (refusal === 'type') showToast(t('chatFileTypeRefused', { name: file.name }), 'error');
+        else addFile(file);
+        continue;
+      }
       if (attachmentBudgetExceeded(projected, file.size, maxMb)) {
-        useAppStore.getState().showToast(
+        showToast(
           t('attachmentsExceedLimit', { used: formatAttachmentMb(projected + file.size), limit: maxMb }),
           'error',
         );
@@ -75,7 +93,8 @@ export function useImageDropHandlers({ getPending, addImage, enabled }: UseImage
       };
       reader.readAsDataURL(file);
     }
-  }, [enabled, getPending, addImage, t]);
+    if (imagesOnlyRefused) showToast(t('chatFileImagesOnly'), 'error');
+  }, [enabled, getPending, addImage, addFile, t]);
 
   return {
     isDragging,

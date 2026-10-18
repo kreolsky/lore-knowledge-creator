@@ -153,8 +153,8 @@ describe('loreEditorTheme (rendered css)', () => {
     const c = css();
     // Shared base covers all four types in ONE selector.
     expect(/\.cm-note-link,[^{]*\.cm-ref-link,[^{]*\.cm-doc-link,[^{]*\.cm-ext-link\{/.test(c), 'shared base covers all four link types').toBe(true);
-    expect(c.includes('var(--sticky-yellow-light)'), 'note link background').toBe(true);
-    expect(c.includes('var(--sticky-blue-light)'), 'ref link background').toBe(true);
+    expect(c.includes('var(--warm-tint)'), 'note link background').toBe(true);
+    expect(c.includes('var(--ref-tint)'), 'ref link background').toBe(true);
     expect(c.includes('var(--surface3)'), 'doc link background').toBe(true);
     // Broken variants render struck-through with a help cursor.
     expect(c.includes('.cm-doc-link-broken,.cm-note-link-broken,.cm-ref-link-broken')).toBe(true);

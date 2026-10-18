@@ -430,7 +430,7 @@ export function NotesPanel() {
       {...dragHandlers}
     >
       {isThreadView ? (
-        <div className="flex items-center justify-between gap-1 px-3 py-2 border-b border-[var(--sticky-yellow-sep)] bg-[var(--sticky-yellow-light)] min-h-[40px]">
+        <div className="flex items-center justify-between gap-1 px-3 py-2 border-b border-[var(--warm-sep)] bg-[var(--warm-tint)] min-h-[40px]">
           <Button variant="ghost-note" size="sm" onClick={crud.exitThread}>
             <ArrowLeft size={13} />
             {t('backToAllNotes')}

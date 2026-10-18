@@ -287,7 +287,7 @@ async def _build_last_user_prompt(
     body_messages: list, vision_ok: bool = True,
 ) -> str | list:
     """Build the LAST user turn's content in its multimodal shape — RAW user
-    text, no decorations.
+    text, plus only the attached files' workspace paths (_prompt_text).
 
     The full history is never replayed to dsh (history is canonical in the agent
     session tree). Only the last user message travels as `prompt` —
@@ -307,7 +307,34 @@ async def _build_last_user_prompt(
     last = body_messages[-1]
     if last.images and vision_ok:
         return await _multimodal_parts(last)
-    return last.content
+    return _prompt_text(last)
+
+
+def _human_size(size: int) -> str:
+    """Bytes as the model reads them best: `812 B`, `4.2 KB`, `37.5 MB`."""
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
+def _prompt_text(last) -> str:
+    """The last user turn's text part: the raw text, then the attached files'
+    workspace paths when the person dropped any.
+
+    # WHY here and not in the stored row: `user_text` (the bubble) stays what the
+    # person typed; only the model needs the paths, and it needs them on the turn
+    # they were sent with — the files are working material for THAT request.
+    """
+    # WHY getattr: bare SimpleNamespace test stubs of a message predate `files`
+    # (same defence as the vision_ok getattr below); ChatMessage always has it.
+    files = getattr(last, "files", None)
+    if not files:
+        return last.content
+    lines = [f"- {f.path} ({f.name}, {f.mime}, {_human_size(f.size)})" for f in files]
+    block = "Attached files (in your sandbox workspace):\n" + "\n".join(lines)
+    return f"{last.content}\n\n{block}" if last.content else block
 
 
 async def _multimodal_parts(last) -> list[dict]:
@@ -322,7 +349,7 @@ async def _multimodal_parts(last) -> list[dict]:
     # against — this path just does two orders of magnitude more work.
     """
     parts: list[dict] = [
-        {"type": "text", "text": last.content}
+        {"type": "text", "text": _prompt_text(last)}
     ]
     n_imgs = 0
     # Settings resolve BEFORE the thread hop — the thread has no loop to await on

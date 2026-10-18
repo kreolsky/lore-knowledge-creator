@@ -1,4 +1,4 @@
-/** QueuedChips — the ✕ on a yellow queued chip takes the sticky-yellow hover. */
+/** QueuedChips — the ✕ on a yellow queued chip takes the warm hover. */
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from 'vitest';
 import { createElement } from 'react';
@@ -12,7 +12,7 @@ vi.mock('../../../i18n', () => ({ useTranslation: () => ({ t: (k: string) => k }
 import { QueuedChips } from './QueuedChips';
 
 describe('QueuedChips', () => {
-  it('the ✕ hovers dark sticky-yellow, not the app-wide gray', () => {
+  it('the ✕ hovers warm-strong, not the app-wide gray', () => {
     const host = document.createElement('div');
     document.body.appendChild(host);
     const root = createRoot(host);
@@ -21,7 +21,7 @@ describe('QueuedChips', () => {
       onRemove: () => {},
     })));
     const button = host.querySelector('button[aria-label="removeQueued"]')!;
-    expect(button.className).toContain('hover:bg-[var(--sticky-yellow-dark)]');
+    expect(button.className).toContain('hover:bg-[var(--warm-strong)]');
     expect(button.className).not.toContain('hover:bg-surface3');
     act(() => root.unmount());
     host.remove();

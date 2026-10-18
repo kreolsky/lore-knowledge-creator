@@ -285,7 +285,7 @@ export function ParentPickerPopup({ doc, currentDocumentId, onMoved, anchorRect,
             >
               {!item.id && <span className="opacity-50 text-ui-xs mr-1.5">↑</span>}
               {item.label}
-              {item.id === currentParentId && <span className="ml-auto text-ui-2xs px-1.5 py-0.5 bg-[var(--sticky-yellow-light)] text-text-muted">{t('current')}</span>}
+              {item.id === currentParentId && <span className="ml-auto text-ui-2xs px-1.5 py-0.5 bg-[var(--warm-tint)] text-text-muted">{t('current')}</span>}
             </button>
           ))}
           {items.length === 0 && (

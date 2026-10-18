@@ -554,6 +554,17 @@ export interface ChatSession {
   updated_at_fmt?: string;
 }
 
+/** A file dropped on the AI chat, already in the sender's sandbox workspace —
+ * the POST /projects/{id}/sandbox/attachments reply, carried on the message as
+ * a record that it was attached (the workspace may since have been reset). */
+export interface ChatFile {
+  id: string;
+  name: string;
+  size: number;
+  mime: string;
+  path: string;
+}
+
 export interface ChatMessage {
   message_id: string;
   chat_id: string;
@@ -565,6 +576,7 @@ export interface ChatMessage {
   // hydrated) on the create echo / optimistic sends.
   images?: string[];
   image_count?: number;
+  files?: ChatFile[];
   model?: string;
   sources?: ChatSource[];
   unsaved?: boolean;
@@ -668,6 +680,21 @@ export interface ChatSearchHit {
   question?: string;
   score: number;
   sibling: boolean;
+}
+
+/** The Search panel's last COMPLETED search, kept so a return to the panel (it
+ * unmounts while the chat tab shows a hit) shows the same list at the same
+ * scroll instead of searching again. `key` names everything the request was
+ * made from; a mismatch searches again. Fulltext hits live in `searchResults`. */
+export interface SearchSnapshot {
+  key: string;
+  docId: string | null;
+  scopeThisDoc: boolean;
+  memoryOnly: boolean;
+  exactMatch: boolean;
+  semanticHits: SemanticSearchHit[];
+  chatHits: ChatSearchHit[];
+  scrollTop: number;
 }
 
 export interface SemanticSearchResult {

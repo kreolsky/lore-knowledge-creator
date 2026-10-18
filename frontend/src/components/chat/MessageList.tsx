@@ -14,6 +14,7 @@ import { apiClient } from '../../api/client';
 import { emit, on, off } from '../../events';
 import type { Document } from '../../types';
 import { copyWithToast } from './shared/copy';
+import { locateSnippet } from './locate-snippet';
 
 // Distance from bottom (px) below which we consider the user "at bottom" and keep
 // auto-scrolling. Must be large enough to tolerate temporary scroll-height spikes
@@ -29,6 +30,60 @@ const STICK_EPSILON = 80;
 // not depend on which ancestor happens to be the anchor's offsetParent.
 function anchorContentTop(el: HTMLElement, anchor: HTMLElement): number {
   return anchor.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
+}
+
+// WHY the Web Animations API, not a class: a one-off fade on the landed
+// passage needs no stylesheet rule (jsdom has no `animate`, hence the guard).
+function flashPassage(node: HTMLElement): void {
+  const glow = getComputedStyle(document.documentElement).getPropertyValue('--accent-glow').trim();
+  node.animate?.(
+    [{ backgroundColor: glow || 'transparent' }, { backgroundColor: 'transparent' }],
+    { duration: 2000, easing: 'ease-out' },
+  );
+}
+
+const LANDING_WINDOW_MS = 3000;
+const LANDING_STOPPERS = ['wheel', 'touchstart', 'pointerdown'] as const;
+
+/** Land a search hit on the passage holding `snippet` inside `target`, and
+ * keep it there while the message settles. Returns the stop function.
+ *
+ * WHY an observer, not one scroll: the markdown renderer loads lazily, so on
+ * a chat's first show the passage does not exist yet when the row lands, and
+ * the rendering that follows moves everything below the message top. The
+ * passage is (re)located on every change for a short window, which ends as
+ * soon as the person scrolls by hand. A passage never found leaves the view
+ * on the message top. */
+function landOnPassage(el: HTMLElement, target: HTMLElement, snippet: string): () => void {
+  let passage: HTMLElement | null = null;
+  const observers: Array<{ disconnect: () => void }> = [];
+  const timer = setTimeout(() => stop(), LANDING_WINDOW_MS);
+  const stop = () => {
+    observers.forEach(o => o.disconnect());
+    clearTimeout(timer);
+    LANDING_STOPPERS.forEach(type => el.removeEventListener(type, stop));
+  };
+  const land = () => {
+    if (!target.isConnected) { stop(); return; }
+    if (!passage?.isConnected) {
+      passage = locateSnippet(target, snippet);
+      if (passage) flashPassage(passage);
+    }
+    if (passage) el.scrollTop = anchorContentTop(el, passage);
+  };
+  if (typeof MutationObserver !== 'undefined') {
+    const mo = new MutationObserver(land);
+    mo.observe(target, { childList: true, subtree: true, characterData: true });
+    observers.push(mo);
+  }
+  if (typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver(land);
+    ro.observe(target);
+    observers.push(ro);
+  }
+  LANDING_STOPPERS.forEach(type => el.addEventListener(type, stop, { passive: true }));
+  land();
+  return stop;
 }
 
 // Bottom-most visible element: descend the LAST child chain, skipping children
@@ -363,6 +418,8 @@ export function MessageList() {
   // it overrides their bottom snap, and un-sticking keeps the next pass (and
   // the glide below) from pulling the view back down.
   const pendingScroll = useChatStore(s => s.pendingScroll);
+  const stopLandingRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => stopLandingRef.current?.(), []);
   useLayoutEffect(() => {
     if (!pendingScroll || chatScopeLoading || messagesLoading) return;
     const clear = useChatStore.getState().clearPendingScroll;
@@ -374,6 +431,11 @@ export function MessageList() {
     // itself is the content, so no error.
     if (target) {
       el.scrollTop = anchorContentTop(el, target);
+      // A hit names a passage, not only a message (see landOnPassage).
+      stopLandingRef.current?.();
+      stopLandingRef.current = pendingScroll.snippet
+        ? landOnPassage(el, target, pendingScroll.snippet)
+        : null;
       stickToBottomRef.current = false;
       anchorElRef.current = null;
       anchorTopRef.current = null;

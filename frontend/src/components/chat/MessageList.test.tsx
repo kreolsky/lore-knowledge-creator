@@ -128,6 +128,15 @@ function trackScrollTop(el: HTMLElement) {
 
 // Reads the box object at CALL time, so mutating it between renders simulates
 // layout growth for the NEXT pass.
+/** A box that moves with the container's scroll, as a real rect does:
+ * `contentTop` is the node's top inside the scrolled content. */
+function stubContentBox(container: HTMLElement, node: HTMLElement, contentTop: number) {
+  vi.spyOn(node, 'getBoundingClientRect').mockImplementation(() => {
+    const top = contentTop - container.scrollTop;
+    return { top, bottom: top + 20, left: 0, right: 0, width: 0, height: 20, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+  });
+}
+
 function stubBox(el: HTMLElement, box: { top: number; bottom: number }) {
   vi.spyOn(el, 'getBoundingClientRect').mockImplementation(() => ({
     top: box.top,
@@ -531,6 +540,69 @@ describe('MessageList — the one-shot scroll target (a chat search hit)', () =>
     act(() => root.render(createElement(MessageList)));
     expect(el.scrollTop).toBe(2000);
     expect(chatState.clearPendingScroll).toHaveBeenCalledTimes(1);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('a snippet lands on the paragraph holding it, not on the message top', async () => {
+    const { host, root, el } = mountWithRows();
+    chatState.activePath = [row('m1'),
+      { ...row('m2'), content: 'opening paragraph alpha\n\nsecond paragraph with **bold** beta words' }, row('m3')];
+    act(() => root.render(createElement(MessageList)));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    const para = Array.from(el.querySelectorAll('[data-message-id="m2"] p'))
+      .find(p => p.textContent?.includes('second paragraph')) as HTMLElement;
+    expect(para).toBeTruthy();
+    stubContentBox(el, el.querySelector('[data-message-id="m2"]') as HTMLElement, 2500);
+    stubContentBox(el, para, 2700);
+    chatState.pendingScroll = { sessionId: 's1', messageId: 'm2', snippet: 'second paragraph with **bold** beta' };
+    act(() => root.render(createElement(MessageList)));
+    expect(el.scrollTop).toBe(2700);
+    expect(chatState.clearPendingScroll).toHaveBeenCalledTimes(1);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('a passage rendered after the landing is still landed on', async () => {
+    const { host, root, el, target } = mountWithRows();
+    stubBox(target, { top: 500, bottom: 600 });
+    chatState.pendingScroll = { sessionId: 's1', messageId: 'm2', snippet: 'late passage words here' };
+    act(() => root.render(createElement(MessageList)));
+    expect(el.scrollTop).toBe(2500);
+    // The lazy renderer fills the message in after the landing.
+    const late = document.createElement('p');
+    late.textContent = 'late passage words here and more';
+    stubContentBox(el, late, 2800);
+    target.appendChild(late);
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(el.scrollTop).toBe(2800);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('a hand scroll ends the landing window', async () => {
+    const { host, root, el, target } = mountWithRows();
+    stubBox(target, { top: 500, bottom: 600 });
+    chatState.pendingScroll = { sessionId: 's1', messageId: 'm2', snippet: 'late passage words here' };
+    act(() => root.render(createElement(MessageList)));
+    el.dispatchEvent(new Event('wheel'));
+    el.scrollTop = 100;
+    const late = document.createElement('p');
+    late.textContent = 'late passage words here and more';
+    stubContentBox(el, late, 2800);
+    target.appendChild(late);
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(el.scrollTop).toBe(100);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('a snippet not found in the message falls back to the message top', () => {
+    const { host, root, el, target } = mountWithRows();
+    stubBox(target, { top: 500, bottom: 600 });
+    chatState.pendingScroll = { sessionId: 's1', messageId: 'm2', snippet: 'words that are nowhere in it' };
+    act(() => root.render(createElement(MessageList)));
+    expect(el.scrollTop).toBe(2500);
     act(() => root.unmount());
     host.remove();
   });

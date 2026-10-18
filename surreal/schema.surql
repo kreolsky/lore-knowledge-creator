@@ -586,6 +586,14 @@ DEFINE FIELD IF NOT EXISTS parent_id  ON messages TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS role       ON messages TYPE string ASSERT $value IN ['user', 'assistant'];
 DEFINE FIELD IF NOT EXISTS content    ON messages TYPE string DEFAULT '';
 DEFINE FIELD IF NOT EXISTS images     ON messages TYPE option<array>;
+-- Files the person dropped on the AI chat: a RECORD that they were attached
+-- (they live in the sender's sandbox workspace, never in Lore storage).
+DEFINE FIELD IF NOT EXISTS files      ON messages TYPE option<array>;
+DEFINE FIELD IF NOT EXISTS files[*].id   ON messages TYPE string;
+DEFINE FIELD IF NOT EXISTS files[*].name ON messages TYPE string;
+DEFINE FIELD IF NOT EXISTS files[*].size ON messages TYPE int;
+DEFINE FIELD IF NOT EXISTS files[*].mime ON messages TYPE string;
+DEFINE FIELD IF NOT EXISTS files[*].path ON messages TYPE string;
 DEFINE FIELD IF NOT EXISTS model      ON messages TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS created_at ON messages TYPE datetime DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS deleted_at ON messages TYPE option<datetime>;

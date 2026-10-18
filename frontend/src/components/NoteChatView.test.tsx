@@ -157,3 +157,21 @@ describe('NoteChatView Escape while dictating', () => {
     unmount(rig);
   });
 });
+
+describe('NoteChatView Escape never deletes a note on an unproven empty', () => {
+  const pressEscape = (ta: HTMLTextAreaElement) => {
+    act(() => { ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); });
+  };
+
+  it('Escape after an existing note failed to load its messages leaves it in place', async () => {
+    const { apiClient } = await import('../api/client');
+    (apiClient.delete as ReturnType<typeof vi.fn>).mockClear();
+    // Failed load: messages stay [], loading cleared — the server row still says 4.
+    useNoteChatStore.setState(s => ({ sessions: s.sessions.map(r => ({ ...r, message_count: 4 })) }));
+    const rig = render(createElement(NoteChatView));
+    pressEscape(textareaOf(rig.container));
+    expect(apiClient.delete).not.toHaveBeenCalled();
+    expect(useNoteChatStore.getState().sessions.map(r => r.session_id)).toEqual(['ns1']);
+    unmount(rig);
+  });
+});

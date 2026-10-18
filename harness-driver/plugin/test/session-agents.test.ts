@@ -133,13 +133,14 @@ function prep(text: string, over: Partial<TurnPrep> = {}): TurnPrep {
     requestCtx: { messageId: `a-${text}`, applyMode: 'confirm', document_id: null, region: null },
     claim: {
       user_msg_id: `u-${text}`, assistant_msg_id: `a-${text}`, user_text: text,
-      images: [], sources: [], warnings: [],
+      images: [], files: [], sources: [], warnings: [],
     },
     ...over,
   }
 }
 
 const OPTS = { provider: 'mock', model: 'm1' }
+const FILE = { id: 'f1', name: 'a.zip', size: 3, mime: 'application/zip', path: '/workspace/x/inbox/chat/f1/a.zip' }
 
 function send(h: Awaited<ReturnType<typeof harness>>, id: string, text: string, p = prep(text)) {
   return enqueueFollowup(h.deps as any, id, OPTS, p,
@@ -222,7 +223,8 @@ test('the claim frame carries the prep facts the backend mints the pair from', a
   const h = await harness([{ text: 'R' }])
   const facts = {
     user_msg_id: 'u-1', assistant_msg_id: 'a-1', user_text: 'hello',
-    images: ['data:image/png;base64,AAAA'], sources: [{ id: 'doc' }], warnings: [{ code: 'image_not_delivered' }],
+    images: ['data:image/png;base64,AAAA'], files: [FILE], sources: [{ id: 'doc' }],
+    warnings: [{ code: 'image_not_delivered' }],
   }
   const messageId = await send(h, 's-claim', 'hello', prep('hello', { model: 'm-claim', claim: facts }))
   await until(settled('s-claim'), 'the turn')
@@ -270,19 +272,20 @@ test('an errored turn HOLDS the queue; the next send runs all of it in send orde
   assert.deepEqual(h.adapter.requests.map((r) => sentTexts(r).at(-1)), ['A', 'B', 'C', 'D'])
 })
 
-test("the person's Stop takes the queue out and returns its text and images, in send order", async () => {
+test("the person's Stop takes the queue out and returns its text, images and files, in send order", async () => {
   const h = await harness([{ gate: new Promise(() => {}) }, { text: 'D1' }])
   await send(h, 's-back', 'A')
   await until(() => h.adapter.requests.length === 1, 'the first model call')
   await send(h, 's-back', 'B', prep('B', { claim: {
     user_msg_id: 'u-B', assistant_msg_id: 'a-B', user_text: 'B',
-    images: ['data:image/png;base64,AAA'], sources: [], warnings: [],
+    images: ['data:image/png;base64,AAA'], files: [FILE], sources: [], warnings: [],
   } }))
   await send(h, 's-back', 'C')
   const reply = stopSession('s-back', true)
   assert.equal(reply.stopped, true)
   assert.deepEqual(reply.returned, [
-    { text: 'B', images: ['data:image/png;base64,AAA'] }, { text: 'C', images: [] },
+    { text: 'B', images: ['data:image/png;base64,AAA'], files: [FILE] },
+    { text: 'C', images: [], files: [] },
   ])
   assert.equal(sessionStatus('s-back').queue.length, 0, 'the inbox is empty at once')
   await until(() => sessionStatus('s-back').status === 'idle', 'the cancelled turn to end')

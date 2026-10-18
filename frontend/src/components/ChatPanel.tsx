@@ -4,11 +4,12 @@
  * Composes ChatHeader (session/model selectors), MessageList (message tree),
  * and ChatInput (send/stop/mic). Uses separate chat-store (not app-store).
  *
- * The entire panel is a drop zone for images — drops anywhere add to pending
- * images in chat-store, displayed in ChatInput's preview strip.
+ * The entire panel is a drop zone — images add to pending images, any other
+ * file (full access) uploads into the sender's sandbox workspace as a pending
+ * file; both show in ChatInput's chip strip.
  */
 
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import { ChatHeader } from './chat/ChatHeader';
 import { MessageList } from './chat/MessageList';
 import { ChatInput } from './chat/ChatInput';
@@ -42,10 +43,18 @@ export function ChatPanel() {
   const documentId = useAppStore(s => s.currentDocument?.document_id);
   const loadSessions = useChatStore(s => s.loadSessions);
   const addPendingImage = useChatStore(s => s.addPendingImage);
+  const addPendingFile = useChatStore(s => s.addPendingFile);
+  // Files land in the sender's sandbox workspace — a full-access privilege
+  // (the upload route refuses everyone else the same way).
+  const takesFiles = useAppStore(s => s.accessLevel === 'full');
+  const addFile = useCallback((file: File) => {
+    if (projectId && takesFiles) addPendingFile(projectId, file);
+  }, [projectId, takesFiles, addPendingFile]);
   const chatUnavailable = useChatUnavailable();
   const { isDragging, dragHandlers } = useImageDropHandlers({
     getPending: () => useChatStore.getState().pendingImages,
     addImage: addPendingImage,
+    addFile: takesFiles ? addFile : undefined,
     enabled: !chatUnavailable,
   });
 

@@ -110,6 +110,18 @@ async def _validate_chat_turn(session: dict, user: dict) -> None:
         )
 
 
+def _require_own_attachments(body: CompletionRequest, user: dict) -> None:
+    """422 when a file on the sent message is not the caller's own upload
+    (see is_own_chat_attachment)."""
+    from routes.tool_api.sandbox.lifecycle import is_own_chat_attachment
+
+    for f in body.messages[-1].files or []:
+        if not is_own_chat_attachment(user["user_id"], f.id, f.name, f.path):
+            raise HTTPException(
+                status_code=422, detail=f"Attachment {f.name!r} is not in your sandbox workspace",
+            )
+
+
 def _warn_image_drop(ctx, body: CompletionRequest) -> None:
     """A non-vision model cannot take the user's attached images (a text-only
     model rejects any image_url part and fails the whole turn with an opaque
@@ -211,6 +223,7 @@ async def _validate_turn_and_model(
     model + reasoning-effort resolution.
     Raises on refusal; returns the resolved (model, reasoning_effort)."""
     await _validate_chat_turn(session, user)
+    _require_own_attachments(body, user)
     model = body.model or session.get("model") or await settings.get("CHAT_MODEL")
     if not model:
         raise HTTPException(
@@ -339,7 +352,7 @@ async def cancel_completion(
     # ARCH: the turn is DRIVER-owned — Stop routes into the plugin's ONE
     # cancel arm (POST /stop), on the DRIVER session id (compacted_from for
     # continuation chats). The person's Stop takes the queue back: the
-    # inbox is emptied and its messages answer as `returned` ({text, images}
+    # inbox is emptied and its messages answer as `returned` ({text, images, files}
     # in send order) for the composer. There is no backend-side stop signal.
     """
     session = await _require_session_access(session_id, user)

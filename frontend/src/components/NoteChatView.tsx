@@ -110,12 +110,10 @@ export function NoteChatView() {
     if (e.key === 'Escape' && recording) return;
     if (e.key === 'Escape') {
       e.preventDefault();
-      const { messages, activeSessionId } = useNoteChatStore.getState();
-      if (activeSessionId && messages.length === 0) {
-        // ARCH: link strip is backend-authoritative
-        // on delete; no client emit here.
-        void useNoteChatStore.getState().deleteSession(activeSessionId);
-      }
+      const { activeSessionId } = useNoteChatStore.getState();
+      // ARCH: link strip is backend-authoritative
+      // on delete; no client emit here.
+      if (activeSessionId) useNoteChatStore.getState().discardIfEmpty(activeSessionId);
       // INVARIANT: Esc stays on the notes tab unless previousRightTab is
       // explicitly set (editor-initiated note creation only). Why: anchorless
       // notes created from the panel itself have no previous tab to restore;

@@ -406,7 +406,7 @@ describe('SearchPanel chats mode', () => {
     await act(async () => { row.click(); });
     await wait(0);
     expect(chatState.openBranch).toHaveBeenCalledWith('b2', 'r1');
-    expect(chatState.setPendingScroll).toHaveBeenCalledWith('b2', 'm9');
+    expect(chatState.setPendingScroll).toHaveBeenCalledWith('b2', 'm9', 'the plague reached the port');
     expect(chatState.loadSessions).not.toHaveBeenCalled();
     expect(uiState.setRightPanelTab).toHaveBeenCalledWith('doc-1', 'chat');
     const events = emitSpy.mock.calls.map((c: unknown[]) => c[0]);
@@ -489,5 +489,86 @@ describe('SearchPanel chats mode', () => {
       await wait(0);
       expect(container.querySelector('[data-chat-title-hit]')).toBeNull();
     });
+  });
+});
+
+describe('SearchPanel return trip', () => {
+  // The panel unmounts while the chat tab shows a hit; coming back is a remount.
+  async function remount() {
+    act(() => root.unmount());
+    root = createRoot(container);
+    act(() => root.render(createElement(SearchPanel)));
+    await wait(0);
+  }
+  const chatCalls = () => apiGet.mock.calls.filter((c: unknown[]) => String(c[0]).includes('/chat-search?')).length;
+  const listEl = () => container.querySelector('[data-chat-hit]')!.parentElement as HTMLElement;
+
+  beforeEach(() => {
+    uiState.searchMode = 'chats';
+    appState.currentDocument = { document_id: 'doc-1' };
+    apiGet.mockResolvedValue({ hits: [chatHit()] });
+  });
+
+  it('an unchanged search comes back with its hits and makes no request', async () => {
+    await renderPanel();
+    await wait(0);
+    expect(chatCalls()).toBe(1);
+    await remount();
+    expect(chatCalls()).toBe(1);
+    expect(container.querySelector('[data-chat-hit]')).toBeTruthy();
+    expect(panelText()).not.toContain('noMatchesFound');
+  });
+
+  it('a changed query searches again', async () => {
+    await renderPanel();
+    await wait(0);
+    uiState.searchQuery = 'plague';
+    await remount();
+    expect(chatCalls()).toBe(2);
+    expect(lastChatParams().get('q')).toBe('plague');
+  });
+
+  it('another open document searches again, without the old narrow', async () => {
+    await renderPanel();
+    await wait(0);
+    await act(async () => { scopeToggle()!.click(); });
+    await wait(350);
+    expect(lastChatParams().get('scope')).toBe('siblings');
+    appState.currentDocument = { document_id: 'doc-2' };
+    await remount();
+    expect(lastChatParams().get('anchor_document_id')).toBe('doc-2');
+    expect(lastChatParams().get('scope')).toBe('project');
+    expect(scopeToggle()!.checked).toBe(false);
+  });
+
+  it('the this-document narrow survives the round trip', async () => {
+    await renderPanel();
+    await wait(0);
+    await act(async () => { scopeToggle()!.click(); });
+    await wait(350);
+    const calls = chatCalls();
+    await remount();
+    expect(scopeToggle()!.checked).toBe(true);
+    expect(chatCalls()).toBe(calls);
+  });
+
+  it('the list scroll position is restored', async () => {
+    await renderPanel();
+    await wait(0);
+    const list = listEl();
+    list.scrollTop = 240;
+    list.dispatchEvent(new Event('scroll'));
+    await remount();
+    expect(listEl().scrollTop).toBe(240);
+  });
+
+  it('a failed search is not remembered — the return trip searches again', async () => {
+    apiGet.mockRejectedValue(new Error('boom'));
+    await renderPanel();
+    await wait(0);
+    apiGet.mockResolvedValue({ hits: [chatHit()] });
+    await remount();
+    expect(chatCalls()).toBe(2);
+    expect(container.querySelector('[data-chat-hit]')).toBeTruthy();
   });
 });
