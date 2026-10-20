@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from chat_sessions.authors import author_display, is_user_author
 from chat_sessions.conversation import origin_of
 from chat_sessions.recall_search import (
     Window,
@@ -14,6 +15,7 @@ from chat_sessions.recall_search import (
 
 from db import fetch_many, get_db
 from jobs.tasks.chat_index import indexing_state, plan_chat_index
+from models import resolve_message_author
 
 # Char budgets per material section, in prompt order; a section stops at its budget.
 REFERENCE_CHARS = 24_000
@@ -29,7 +31,8 @@ CHAT_INDEX_HOLD = timedelta(hours=1)
 ASSISTANT_LABEL = "Assistant"
 
 _MESSAGE_FIELDS = (
-    "meta::id(id) AS id, chat_id, role, content, created_at, parent_id, author_id, origin_id"
+    "meta::id(id) AS id, chat_id, role, content, created_at, parent_id, author_id, "
+    "author_name, origin_id"
 )
 
 
@@ -145,6 +148,7 @@ def _iso_date(value: object) -> str:
 
 
 async def _author_names(user_ids: set[str]) -> dict[str, str]:
+    user_ids = {u for u in user_ids if is_user_author(u)}
     users = await fetch_many("users", sorted(user_ids)) if user_ids else {}
     return {uid: (u or {}).get("name") or uid for uid, u in users.items()}
 
@@ -153,8 +157,8 @@ def _line(message: dict, owner_of: dict[str, str], names: dict[str, str]) -> str
     if message["role"] == "assistant":
         label = ASSISTANT_LABEL
     else:
-        uid = message.get("author_id") or owner_of[message["chat_id"]]
-        label = names.get(uid, uid)
+        session = {"user_id": owner_of[message["chat_id"]]}
+        label = author_display(message, session, names) or resolve_message_author(message, session)
     return f"**{label}:** {message['content'].strip()}"
 
 

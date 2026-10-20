@@ -1,30 +1,32 @@
-"""Public share router — anonymous, read-only, single-funnel.
+"""Public share router — anonymous, read-only (notes aside), single-funnel.
 
-# SYSTEM: public-share — anonymous read-only surface for a published doc/subtree.
+# SYSTEM: public-share — anonymous surface for a published doc/subtree: read-only text, notes when the share allows comments.
 
-# ARCH (plan "public-document-ids"): the funnel is keyed on the document's own
+# ARCH: the funnel is keyed on the document's own
 # uuid, NOT the share token. `resolve_share(document_id)` finds the live share —
 # a direct row on the doc, or the nearest ancestor with scope='subtree' — and
 # derives doc_ids from the share ROOT. The token column in document_shares is
 # retained as a LEGACY lookup key only: the /api/public/{token}/* routes are thin
 # shims that resolve token→root document_id, then delegate to the canonical
-# /api/public/documents/{document_id}/* handlers (HTTP 200 alias — the plan's
-# "301/alias shims"; alias chosen so the existing token-keyed suite stays green
-# without redirect-following). Knowing a document_id never grants access on its
+# /api/public/documents/{document_id}/* handlers (HTTP 200 alias, not a 301, so
+# token-keyed callers need no redirect-following). Knowing a document_id never grants access on its
 # own: a live document_shares row is still required, and the agent-config
 # subtree is unshareable by ANCESTRY.
 
 NO `get_current_user` — this is the anonymous surface. NO write/upload/WS
-endpoints live on this router; the write surface is absent by construction.
+endpoints live on this router; the only anonymous write — notes on a share with
+comments on — lives in routes/public_notes.py and enters through `_require_doc`.
 
 # INVARIANT(security): the ONLY funnel is `resolve_share` + `doc ∈ doc_ids`.
 # Why: a one-line perimeter is auditable; spreading the check across handlers
 # invites drift. Every handler calls `_require_doc` (which calls resolve_share
 # AND asserts membership) — there is no other read path on this router.
 #
-# INVARIANT(security): every non-`user` principal is readonly. Why: "доступ для
-# всех только чтение" — enforced at the write boundary (no writes exist here),
-# never trusted from the UI.
+# INVARIANT(security): every non-`user` principal is readonly unless the covering
+# share has `allow_comments`, and then it may write notes ONLY, through
+# access.can_write_note. Why: "доступ для всех только чтение" — the document text
+# is never writable from here; comments are the owner's explicit opt-in per share,
+# enforced at the write boundary, never trusted from the UI.
 #
 # WHY(security, ancestry): the agent-config subtree (system root +
 # descendants) is UNPUBLISHABLE, guarded by ANCESTRY not the is_system flag.
@@ -48,6 +50,9 @@ endpoints live on this router; the write surface is absent by construction.
 # is the edge (CDN/reverse-proxy), not the app. Why pin this: a reflexive
 # "anonymous endpoint ⇒ must rate-limit" PR would re-introduce the 429-on-honest-
 # readers UX harm for no security gain. The actual abuse-flow is owner-revocation.
+# Comment writes (routes/public_notes.py) are unbounded BY DESIGN too: the owner
+# opted in per share, and the abuse response is the owner deleting the notes and
+# turning comments off — never a throttle on honest guests.
 #
 # Perf: subtree_doc_ids is a full-project scan per request — TTL-cached per share
 # root with a short TTL so a browsing session (multiple endpoint hits on the same
@@ -58,6 +63,7 @@ endpoints live on this router; the write surface is absent by construction.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from datetime import datetime
@@ -138,7 +144,7 @@ async def _find_share_row(document_id: str, project_id: str) -> dict | None:
     db = await get_db()
     chain = await get_ancestor_ids(document_id, project_id)  # nearest-first
     rows = await db.query(
-        "SELECT document_id, scope FROM document_shares "
+        "SELECT document_id, scope, allow_comments, created_by FROM document_shares "
         "WHERE document_id IN $ids AND deleted_at IS NONE",
         {"ids": chain},
     )
@@ -162,7 +168,9 @@ async def resolve_share(document_id: str) -> dict:
     # doc MUST 404 here. Rejects missing/deleted docs with a uniform 404 (no
     # existence oracle for anonymous callers), then derives doc_ids.
 
-    Returns {project_id, document_id (share ROOT), scope, doc_ids}.
+    Returns {project_id, document_id (share ROOT), scope, doc_ids, allow_comments,
+    created_by} — the last two read from the COVERING row (an ancestor's for a
+    document under a subtree share).
     """
     doc = await fetch_one("documents", document_id)
     if not doc or doc.get("deleted_at"):
@@ -189,6 +197,8 @@ async def resolve_share(document_id: str) -> dict:
         "document_id": root,
         "scope": scope,
         "doc_ids": doc_ids,
+        "allow_comments": bool(chosen.get("allow_comments")),
+        "created_by": chosen.get("created_by"),
     }
 
 
@@ -346,6 +356,11 @@ async def _capture_public_content(document_id: str, db_content: str) -> tuple[st
         ) from e
 
 
+def content_sha256(text: str) -> str:
+    """The public payload's content fingerprint: sha256 over its UTF-8 bytes."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 async def _handle_document(document_id: str) -> dict:
     """Document content + server-derived headings (TOC source) + tables_json.
 
@@ -370,6 +385,10 @@ async def _handle_document(document_id: str) -> dict:
         "document_id": document_id,
         "title": row.get("title") or "",
         "content": content,
+        # The guest echoes this back when anchoring a note (routes/public_notes.py):
+        # it binds the offsets to exactly the text served here. Minted server-side
+        # because crypto.subtle exists only in secure browser contexts.
+        "content_sha256": content_sha256(content),
         "tables_json": tables_json,
         "headings": extract_headings(content),
     }

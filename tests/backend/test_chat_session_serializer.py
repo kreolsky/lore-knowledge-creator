@@ -1,9 +1,9 @@
 """Regression tests for chat session serialization.
 
-Pins Bug 1 fix: anchor_rel_start / anchor_rel_end (raw Yjs RelativePosition
-bytes, NOT valid UTF-8) must never reach the API surface. FastAPI's
-jsonable_encoder runs bytes.decode() on them and crashes the whole list
-response with a 500 (UnicodeDecodeError) on docs whose notes carry a Yjs
+Pins: anchor_rel_start / anchor_rel_end (raw Yjs RelativePosition bytes, NOT
+valid UTF-8) reach the API surface only as base64 strings — never as bytes.
+FastAPI's jsonable_encoder runs bytes.decode() on them and crashes the whole
+list response with a 500 (UnicodeDecodeError) on docs whose notes carry a Yjs
 anchor.
 """
 from chat_sessions.serialize import serialize_session
@@ -21,19 +21,26 @@ def _note_row(is_note: bool = True, session_id: str = "chat_sessions:abc") -> di
         "mode": "chat",
         "is_note": is_note,
         "context_document_ids": [],
-        "anchor_offset_start": 10,
-        "anchor_offset_end": 20,
         "anchor_rel_start": b"\x80\x01\x02",  # NOT valid UTF-8 (0x80)
         "anchor_rel_end": b"\x80\x03\x04",
         "created_at": None,
     }
 
 
-def test_serialize_session_strips_anchor_rel_bytes_keys():
-    """anchor_rel_start/end must be absent from the serialized output."""
+def test_serialize_session_drops_undecodable_anchor_bytes():
+    """Bytes that are not a v1 RelativePosition serialize as null, never as bytes."""
     out = serialize_session(_note_row())
-    assert "anchor_rel_start" not in out
-    assert "anchor_rel_end" not in out
+    assert out["anchor_rel_start"] is None
+    assert out["anchor_rel_end"] is None
+
+
+def test_serialize_session_sends_a_v1_anchor_as_base64():
+    row = _note_row()
+    row["anchor_rel_start"] = b"\x00\x07\x80\x01\x00"   # item (7, 128), assoc AFTER
+    row["anchor_rel_end"] = b"\x00\x07\x83\x01\x41"     # item (7, 131), assoc BEFORE
+    out = serialize_session(row)
+    assert out["anchor_rel_start"] == "AAeAAQA="
+    assert out["anchor_rel_end"] == "AAeDAUE="
 
 
 def test_serialize_session_output_is_json_serializable():

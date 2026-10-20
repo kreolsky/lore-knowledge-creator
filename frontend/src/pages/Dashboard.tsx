@@ -16,10 +16,9 @@ import { CenterHeading } from '../components/ui/CenterHeading';
 import { ProjectForm } from './ProjectForm';
 import { useTranslation } from '../i18n';
 
-/** Access badge on a shared project card: full = green, commentator =
- * warm-strong, readonly = red. */
-const ACCESS_BADGE: Record<AccessLevel, { label: 'fullAccessTag' | 'notesAccess' | 'roAccess'; className: string }> = {
-  full: { label: 'fullAccessTag', className: 'bg-green/15 text-green' },
+/** Access badge on a shared project card: commentator = warm-strong,
+ * readonly = red; full access carries no badge, like an own project. */
+const ACCESS_BADGE: Partial<Record<AccessLevel, { label: 'notesAccess' | 'roAccess'; className: string }>> = {
   commentator: { label: 'notesAccess', className: 'bg-[var(--warm-strong)] text-warm-ink' },
   readonly: { label: 'roAccess', className: 'bg-[rgba(220,60,60,0.18)] text-red' },
 };

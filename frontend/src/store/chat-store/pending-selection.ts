@@ -78,28 +78,49 @@ export function clearPendingRegion(sessionId: string): void {
 }
 
 /**
+ * Resolve a Yjs RelativePosition pair to a UTF-16 [from, to] range against `ydoc`.
+ * Null when either half does not resolve (its item is not in the store yet, or was
+ * GC'd). The single RelativePosition→absolute implementation: pinned regions reach it
+ * through resolveRegionRange below, note anchors through collab/note-anchor-wire.ts.
+ * `followUndoneDeletions` is Yjs's flag — regions keep its default (true); note
+ * anchors pass false so an undo does not revive them (see the INVARIANT there).
+ */
+export function resolveRelPosRange(
+  from: Y.RelativePosition,
+  to: Y.RelativePosition,
+  ydoc: Y.Doc,
+  followUndoneDeletions: boolean,
+): RegionRange | null {
+  try {
+    const fromAbs = Y.createAbsolutePositionFromRelativePosition(from, ydoc, followUndoneDeletions);
+    const toAbs = Y.createAbsolutePositionFromRelativePosition(to, ydoc, followUndoneDeletions);
+    if (!fromAbs || !toAbs) return null;
+    return { from: fromAbs.index, to: toAbs.index };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Resolve a PinnedRegion's Yjs RelativePosition pair to a UTF-16 [from, to] range
  * against the FOCUSED editor's live ydoc. Returns null when there is no live ydoc
  * (offline / not-yet-bound) OR the anchor does not resolve (lost after a wholesale
- * restore/import). The single region→range resolver: consumed by the editor highlight
+ * restore/import). The region→range resolver: consumed by the editor highlight
  * (Editor.regionResolver), the SelectionPill preview, and resolveRegion below (which
- * layers the offline-vs-lost distinction + code-point conversion on top). Extracting
- * it keeps one RelativePosition→absolute implementation (normalize the class, not the
- * symptom) instead of four drifting copies.
+ * layers the offline-vs-lost distinction + code-point conversion on top). The
+ * RelativePosition math itself is resolveRelPosRange.
  */
 export function resolveRegionRange(region: PinnedRegion): RegionRange | null {
   if (!region.relFrom || !region.relTo) return null;
   const ydoc = getActiveHandle()?.ydoc;
   if (!ydoc) return null;
   try {
-    const fromAbs = Y.createAbsolutePositionFromRelativePosition(
-      Y.createRelativePositionFromJSON(region.relFrom as object), ydoc,
+    return resolveRelPosRange(
+      Y.createRelativePositionFromJSON(region.relFrom as object),
+      Y.createRelativePositionFromJSON(region.relTo as object),
+      ydoc,
+      true,
     );
-    const toAbs = Y.createAbsolutePositionFromRelativePosition(
-      Y.createRelativePositionFromJSON(region.relTo as object), ydoc,
-    );
-    if (!fromAbs || !toAbs) return null; // anchor gone (wholesale restore/import)
-    return { from: fromAbs.index, to: toAbs.index };
   } catch {
     return null;
   }

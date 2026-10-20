@@ -1,0 +1,31 @@
+{
+  "update": "AgUMAMQLAQsCAtCWwQwACwICxAwCCwIBeMQLBAsIAtCkxAsJCwUE8J+YgAQLAAQBB2NvbnRlbnQE0LDQsYQLAQbQsvCfmICECwQG0LPQtNC1xAsECwUE0K/QrwEMAQEC",
+  "text": "абЖxв😀ФЯЯ😀где",
+  "anchors": [
+    {
+      "start": "AAsAAA==",
+      "end": "AAwAQQ==",
+      "quote": "абЖ"
+    },
+    {
+      "start": "AAwBAA==",
+      "end": "AAwCQQ==",
+      "quote": null
+    },
+    {
+      "start": "AAsIAA==",
+      "end": "AAsJQQ==",
+      "quote": "ЯЯ"
+    },
+    {
+      "start": "AAwAAA==",
+      "end": "AAsCQQ==",
+      "quote": "Жxв"
+    },
+    {
+      "start": "AAsIAA==",
+      "end": "AAsHQQ==",
+      "quote": "ЯЯ😀где"
+    }
+  ]
+}

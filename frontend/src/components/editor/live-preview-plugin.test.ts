@@ -6,7 +6,7 @@ import { EditorState, type Extension, type StateField } from '@codemirror/state'
 import { Decoration, EditorView, type DecorationSet } from '@codemirror/view';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { ensureSyntaxTree } from '@codemirror/language';
-import { livePreviewField, listLinePlugin, cursorLinePlugin, tableRenderField, mathBlockRenderField, mermaidBlockRenderField, transcludeMap, parseSizeFromAlt, validDocIds, validNoteThreadIds, validRefIds, transclusionDepth, revealAtCursor } from './live-preview';
+import { livePreviewField, listLinePlugin, cursorLinePlugin, tableRenderField, mathBlockRenderField, mermaidBlockRenderField, transcludeMap, parseSizeFromAlt, validDocIds, validRefIds, transclusionDepth, revealAtCursor } from './live-preview';
 import { resolveTransclusion } from './live-preview';
 import { TransclusionWidget } from './live-preview/widgets';
 import { LIST_STEP, LIST_GUTTER, BASE_PADDING } from './live-preview/list-indent';
@@ -91,7 +91,6 @@ function markDecorations(view: EditorView, cls: string) {
 beforeEach(() => {
   transcludeMap.clear();
   validDocIds.clear();
-  validNoteThreadIds.clear();
   validRefIds.clear();
 });
 
@@ -649,9 +648,6 @@ describe('resolveTransclusion', () => {
   });
   it('returns null for an http URL', () => {
     expect(resolveTransclusion('https://example.com/x.png')).toBeNull();
-  });
-  it('returns null for note: scheme', () => {
-    expect(resolveTransclusion('note:thread1')).toBeNull();
   });
   it('returns null for an unknown ref id', () => {
     expect(resolveTransclusion('ref:missing')).toBeNull();

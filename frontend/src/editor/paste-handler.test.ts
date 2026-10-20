@@ -87,8 +87,8 @@ describe('Lore-origin paste (lossless source path)', () => {
   });
   afterEach(() => releaseHandle());
 
-  it('inserts ref:/note: links and underscores without Turndown escaping', () => {
-    const source = '[src](ref:abc) and my_var [n](note:n1)';
+  it('inserts ref:/doc: links and underscores without Turndown escaping', () => {
+    const source = '[src](ref:abc) and my_var [n](doc:d1)';
     const view = makeView();
     view.contentDOM.dispatchEvent(
       makePasteEvent({ html: '<!--lore-clipboard--><p>ignored</p>', plain: source }),
@@ -97,7 +97,7 @@ describe('Lore-origin paste (lossless source path)', () => {
     expect(doc).toContain('[src](ref:abc)');
     expect(doc).toContain('my_var');
     expect(doc).not.toContain('\\_');
-    expect(doc).toContain('[n](note:n1)');
+    expect(doc).toContain('[n](doc:d1)');
     view.destroy();
   });
 

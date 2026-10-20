@@ -61,11 +61,23 @@ export interface MessageLoadScope {
  * surfacing. The toast on failure is UNCONDITIONAL (a failed load is worth
  * surfacing even when superseded); the error terminal is liveness-gated so a
  * stale rejection cannot clobber the new session's loading state.
+ *
+ * `query` carries optional limit/offset params verbatim (the note store's
+ * load-older pages pass offset; AI-chat callers omit it and keep the backend
+ * defaults — the AI path still refuses offset>0 server-side).
  */
-export async function loadMessagesFor(sessionId: string, scope: MessageLoadScope): Promise<void> {
+export async function loadMessagesFor(
+  sessionId: string,
+  scope: MessageLoadScope,
+  query: { limit?: number; offset?: number } = {},
+): Promise<void> {
+  const params = new URLSearchParams();
+  if (query.limit != null) params.set('limit', String(query.limit));
+  if (query.offset != null) params.set('offset', String(query.offset));
+  const suffix = params.toString() ? `?${params.toString()}` : '';
   try {
     const { messages: raw, queue, queue_seq }: { messages: ChatMessage[] } & InboxSnapshotWire =
-      await apiClient.get(`/chat/sessions/${sessionId}/messages`);
+      await apiClient.get(`/chat/sessions/${sessionId}/messages${suffix}`);
     // The reload half of the ONE timeline: the raw rows go to the assembler
     // (replaceWindow over the frames the backend replayed + minted), and the
     // rows enter the store without them. A frameless row renders from its own

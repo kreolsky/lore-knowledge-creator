@@ -1,8 +1,8 @@
 /**
- * Floating popup for inserting document/reference/note/URL links.
+ * Floating popup for inserting document/reference/URL links.
  *
  * Triggered by Cmd+K hotkey via 'show-link-suggestions' custom event.
- * Supports mode switching (docs / ref: / note: / http://) via Cmd+Arrow.
+ * Supports mode switching (docs / ref: / http://) via Cmd+Arrow.
  * Rendered via createPortal to document.body.
  */
 
@@ -11,7 +11,6 @@ import { createPortal } from 'react-dom';
 import { EditorView } from '@codemirror/view';
 import { undo } from '@codemirror/commands';
 import { useAppStore } from '../../store/app-store';
-import { useNoteChatStore } from '../../store/note-chat-store';
 import { useEvent } from '../../hooks/useEvent';
 import { useNavMode } from '../../hooks/useNavMode';
 import { useDocumentPreview } from '../../hooks/useDocumentPreview';
@@ -34,7 +33,6 @@ const POPUP_WIDTH = 340;
 export function LinkSuggestionsPopup() {
   const { t } = useTranslation();
   const getEditorView = useEditorView();
-  const noteChatSessions = useNoteChatStore(s => s.sessions);
   const documents = useAppStore(s => s.documents);
   const currentDocument = useAppStore(s => s.currentDocument);
   const currentProject = useAppStore(s => s.currentProject);
@@ -75,23 +73,19 @@ export function LinkSuggestionsPopup() {
   // Mode derived from query
   const isExternalMode = /^https?:\/\//i.test(searchQuery);
   const isRefMode = !isExternalMode && /^ref/i.test(searchQuery);
-  const isNoteMode = !isExternalMode && !isRefMode && /^note/i.test(searchQuery);
   const refSearch = isRefMode ? searchQuery.replace(/^ref\s*:?\s*/i, '') : '';
-  const noteSearch = isNoteMode ? searchQuery.replace(/^note\s*:?\s*/i, '') : '';
-  const isDocMode = !isExternalMode && !isRefMode && !isNoteMode;
+  const isDocMode = !isExternalMode && !isRefMode;
 
-  type Mode = 'doc' | 'ref' | 'note' | 'url';
-  const currentMode: Mode = isExternalMode ? 'url' : isRefMode ? 'ref' : isNoteMode ? 'note' : 'doc';
+  type Mode = 'doc' | 'ref' | 'url';
+  const currentMode: Mode = isExternalMode ? 'url' : isRefMode ? 'ref' : 'doc';
   const setMode = (mode: Mode) => {
-    const userText = searchQuery.replace(/^(ref\s*:?\s*|note\s*:?\s*|https?:\/\/)/i, '');
-    const prefix = { doc: '', ref: 'ref: ', note: 'note: ', url: 'http://' }[mode];
+    const userText = searchQuery.replace(/^(ref\s*:?\s*|https?:\/\/)/i, '');
+    const prefix = { doc: '', ref: 'ref: ', url: 'http://' }[mode];
     setSearchQuery(prefix + userText);
     setSelectedIndex(0);
     setPreviewDocId(null);
     setPreviewRefId(null);
   };
-
-  const anchorlessNotes = noteChatSessions.filter(s => s.is_note && s.anchor_offset_start == null);
 
   const parentMap = useMemo(() => buildParentMap(documents), [documents]);
 
@@ -104,19 +98,13 @@ export function LinkSuggestionsPopup() {
       projectReferences.filter(r => r.title.toLowerCase().includes(refSearch.toLowerCase())),
       refSearch,
     ).map(r => ({ id: `ref:${r.reference_id}`, label: r.title, prefix: 'ref' }));
-    if (isNoteMode) return anchorlessNotes
-      .filter(s => (s.title ?? '').toLowerCase().includes(noteSearch.toLowerCase()))
-      .map(s => {
-        const label = s.title ?? '';
-        return { id: `note:${s.session_id}`, label: label.slice(0, 60) + (label.length > 60 ? '\u2026' : ''), prefix: 'note' };
-      });
     return sortDocumentsForChat(
       documents.filter(d => !d.is_index).filter(d => d.title.toLowerCase().includes(searchQuery.toLowerCase())),
       currentDocument?.document_id ?? null,
       parentMap,
       searchQuery,
     ).map(d => ({ id: d.document_id, label: d.title, prefix: '' }));
-  }, [isExternalMode, isRefMode, isNoteMode, searchQuery, refSearch, noteSearch, projectReferences, anchorlessNotes, documents, currentDocument, parentMap, t]);
+  }, [isExternalMode, isRefMode, searchQuery, refSearch, projectReferences, documents, currentDocument, parentMap, t]);
 
   // ARCH: Preview sync uses firstItemId (primitive) instead of linkItems (reference) in deps,
   // because t() from useTranslation is unstable — linkItems gets a new reference every render,
@@ -277,7 +265,6 @@ export function LinkSuggestionsPopup() {
           {([
             { id: 'doc', label: t('documents') },
             { id: 'ref', label: t('references') },
-            { id: 'note', label: t('notes') },
             { id: 'url', label: t('url') },
           ] as { id: Mode; label: string }[]).map(tab => (
             <div
@@ -316,7 +303,7 @@ export function LinkSuggestionsPopup() {
               }
               if ((e.metaKey || e.ctrlKey) && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
                 e.preventDefault();
-                const modes: Mode[] = ['doc', 'ref', 'note', 'url'];
+                const modes: Mode[] = ['doc', 'ref', 'url'];
                 const dir = e.key === 'ArrowRight' ? 1 : -1;
                 const idx = modes.indexOf(currentMode);
                 setMode(modes[(idx + dir + modes.length) % modes.length]);
@@ -351,7 +338,7 @@ export function LinkSuggestionsPopup() {
           ))}
           {linkItems.length === 0 && (
             <div className="link-suggest-empty">
-              {isRefMode ? t('noReferencesHint') : isNoteMode ? t('noNotesFound') : t('noDocumentsFound')}
+              {isRefMode ? t('noReferencesHint') : t('noDocumentsFound')}
             </div>
           )}
         </div>

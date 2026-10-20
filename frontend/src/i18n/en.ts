@@ -78,7 +78,6 @@ export const en = {
   projectDescriptionPlaceholder: 'Description (optional)',
   editProject: 'Edit project',
   noProjectsYet: 'No projects yet. Create your first project to get started.',
-  fullAccessTag: ':full',
   roAccess: ':ro',
   notesAccess: ':notes',
 
@@ -380,6 +379,7 @@ export const en = {
   chatFileImagesOnly: 'Only images can be attached here',
   queuedMessageTitle: 'Queued — runs as its own turn after the ones before it',
   scrollToBottom: 'Scroll to bottom',
+  scrollToPrevUserMessage: 'Previous message of yours',
   queuedEmpty: '(empty)',
   queuedImages: '{count} image(s)',
   queueDiscardFailed: 'Could not remove the queued message',
@@ -536,21 +536,28 @@ export const en = {
   // current agent — same banner shell, different explanation.
 
   // link suggestions
-  linkSuggestionsPlaceholder: 'docs \u00B7 ref: refs \u00B7 note: notes \u00B7 http:// url',
+  linkSuggestionsPlaceholder: 'docs \u00B7 ref: refs \u00B7 http:// url',
   notes: 'Notes',
   url: 'Url',
   insertExternalLink: '\u2191 Insert external link',
   noReferencesHint: 'No references \u2014 open Refs panel first',
-  noNotesFound: 'No notes found',
   noDocumentsFound: 'No documents found',
   noReferencesFound: 'No references found',
   noContent: 'No content',
   previewLoadError: 'Failed to load preview',
   failedToCreateNote: 'Failed to create note',
+  noteFragmentDeleted: 'fragment deleted',
+  publicNoteDocChanged: 'The document has changed — reload the page',
+  publicNoteMessageHasReplies: 'This message already has replies — it cannot be deleted',
+  publicNoteFragmentGone: 'The selected text was deleted — the note will be on the whole document.',
+  publicNotesRefreshFailed: 'Could not refresh the notes — showing the last loaded list.',
+  publicNotesStale: 'The document has changed since you opened it — reload the page to see notes in place.',
+  publicNotesEmpty: 'No notes yet. Select text to leave a note on a fragment.',
+  publicNoteNamePlaceholder: 'Your name',
+  publicNoteNameRequired: 'Enter a name — it is shown next to your note',
   failedToCreateReference: 'Failed to create reference',
   unknownAuthor: 'unknown',
   pipelineExtractionFailed: 'Pipeline extraction failed — see the new system note for details',
-  agentApplyFailed: 'Agent action failed — see the new system note for details',
   embeddingsIndexFailed: 'Document indexing is failing. Search results may be incomplete.',
   embeddingsIndexRecovered: 'Document indexing has recovered.',
   failedToCreateDocumentFromReference: 'Failed to create document from reference',
@@ -724,6 +731,7 @@ export const en = {
 
   // chat messages
   loadingMessages: 'Loading messages…',
+  loadOlderMessages: 'Load older messages',
   prevPage: '‹ Previous',
   nextPage: 'Next ›',
   pageOf: 'Page {n}/{total}',
@@ -807,7 +815,6 @@ export const en = {
 
   // broken link toast messages
   linkBrokenDocument: 'Document not found or no access',
-  linkBrokenNote: 'Note not found',
   linkBrokenReference: 'Reference not found',
 
   // embeddings admin
@@ -966,6 +973,9 @@ export const en = {
   accessSummaryInherited: 'Published via «{title}» — anyone with the link can read it.',
   accessClickToCopy: 'Click to copy the public link',
   accessShareDepthWarning: 'A subtree deeper than 50 levels is silently truncated by the descendant walk.',
+  accessAllowComments: 'Allow comments',
+  accessAllowCommentsHint: 'Anyone with the link can leave notes under a name of their choice and sees every note on the document with its author name. The text stays read-only.',
+  accessShareCommentsError: 'Could not change comments on the link',
   accessApiTitle: 'API access',
   accessApiDesc: 'Widget and agent keys for this document',
 

@@ -14,10 +14,12 @@ import { emit } from '../../events';
 import { useAppStore } from '../../store/app-store';
 import { useNoteChatStore } from '../../store/note-chat-store';
 import { useNoteStore } from '../../store/note-store';
+import { publicCanNote, usePublicNotesStore } from '../../store/public-notes-store';
 import { useUIStore } from '../../store/ui-store';
-import { getActiveHandle, getFocusedIsReference } from '../../editor/active-editor';
+import { getActiveHandle, getViewEntity } from '../../editor/active-editor';
+import { getEntityHandle } from '../../collab/active-handle-registry';
 import { refIsScope } from '../../store/ui-store/documents-slice';
-import * as Y from 'yjs';
+import { buildNoteAnchor } from '../../collab/note-anchor-wire';
 import { voiceWidgetField, voiceWidgetStart, voiceWidgetRecognizing } from './voice-widget';
 import { preserveCursorFromLineEnd, snapSelectionToLineEnd } from './cursor-preserve';
 import { createTable, tableAnchor } from './live-preview/table-block-model';
@@ -350,91 +352,95 @@ function createLink(view: EditorView): boolean {
   return true;
 }
 
-/** Create a note-chat session from selected text and insert link. */
+/**
+ * The public page's half of createNote. That page holds no Y.Doc: the selection's
+ * UTF-16 offsets go to the server with the served payload's fingerprint, the server
+ * builds the anchor (routes/public_notes.py), and the note exists once its first
+ * message is sent — here it only opens the composer.
+ */
+function startPublicNote(view: EditorView, from: number, to: number): boolean {
+  // INVARIANT(security): a guest notes only while the covering share has comments on,
+  // and only on the document itself. Why: the backend refuses anything else too; this
+  // is the trigger half of the guard.
+  if (!publicCanNote()) return false;
+  const { servedSha } = usePublicNotesStore.getState();
+  // The editor's positions are payload offsets only while it shows the payload verbatim.
+  if (!servedSha || useAppStore.getState().currentDocument?.content !== view.state.doc.toString()) {
+    useAppStore.getState().showToast(t('publicNoteDocChanged'), 'error');
+    return false;
+  }
+  usePublicNotesStore.getState().startNote({
+    selection: { start: from, end: to, content_sha256: servedSha },
+    quote: view.state.sliceDoc(from, to),
+  });
+  emit('open-notes', {});
+  return true;
+}
+
+/**
+ * Create a note-chat session anchored to the selected text. The anchor is a Yjs
+ * RelativePosition pair over the focused editor's ytext; the text itself is untouched,
+ * so anyone who may note but not edit (commentator) can anchor one.
+ */
 function createNote(view: EditorView): boolean {
   const { from, to, empty } = view.state.selection.main;
   if (empty) return false;
+  if (useUIStore.getState().isPublicShare) return startPublicNote(view, from, to);
 
-  const { currentProject, currentDocument, currentReference } = useAppStore.getState();
+  const { currentProject, currentDocument, currentReference, accessLevel } = useAppStore.getState();
   if (!currentProject || !currentDocument) return false;
+  // INVARIANT(security): a readonly member creates no notes — the backend refuses it too;
+  // this is the trigger half of the guard.
+  // Why: notes are open to `full` and `commentator`, never to `readonly`.
+  if (accessLevel === 'readonly') return false;
 
   // Panel quick preview (decision A): the focused editor renders the previewed
-  // reference and notes are document-scoped there — refuse BEFORE inserting the
-  // note: link, with a toast (no silent degradation). Split/center keep notes on
-  // the reference: the mode projection, not the column role, decides.
-  if (getFocusedIsReference() && !refIsScope(useUIStore.getState().getRefOpenMode(currentDocument.document_id))) {
+  // reference and notes are document-scoped there — refuse with a toast (no silent
+  // degradation). Split/center keep notes on the reference: the mode projection, not
+  // the column role, decides.
+  // WHY: parent and anchor both derive from the entity THIS view renders, not from the
+  // focused column — a view the user cannot type into never takes focus, so the focus
+  // slots may describe the other column in split view.
+  const entityId = getViewEntity(view);
+  const isReference = !!entityId && entityId === currentReference?.reference_id;
+  if (isReference && !refIsScope(useUIStore.getState().getRefOpenMode(currentDocument.document_id))) {
     useAppStore.getState().showToast(t('noteUnavailableInPreview'), 'info');
     return false;
   }
 
-  const selectedText = view.state.sliceDoc(from, to);
-  const tempId = `temp:${Date.now()}`;
-  const linkText = `[${selectedText}](note:${tempId})`;
-
-  let anchorRelStart: string | undefined;
-  let anchorRelEnd: string | undefined;
-  const handle = getActiveHandle();
-  if (handle?.ytext) {
-    const relStart = Y.createRelativePositionFromTypeIndex(handle.ytext, from);
-    const relEnd = Y.createRelativePositionFromTypeIndex(handle.ytext, to);
-    anchorRelStart = JSON.stringify(relStart);
-    anchorRelEnd = JSON.stringify(relEnd);
+  const handle = entityId ? getEntityHandle(entityId) : null;
+  if (!handle?.ytext) {
+    useAppStore.getState().showToast(t('failedToCreateNote'), 'error');
+    return false;
   }
-
-  view.dispatch({
-    changes: { from, to, insert: linkText },
-    selection: { anchor: from + linkText.length },
-  });
+  const selectedText = view.state.sliceDoc(from, to);
+  const relAnchor = buildNoteAnchor(handle.ytext, from, to);
 
   const currentTab = useUIStore.getState().getActiveDocState().rightPanelTab;
   useNoteStore.getState().setPreviousRightTab(currentTab);
 
   emit('open-notes', {});
 
-  // WHY: note parent follows the focused editor's CONTENT TYPE (reference vs document),
+  // WHY: note parent follows the editor's CONTENT TYPE (reference vs document),
   // not the column role. Role describes column geometry and cannot distinguish
   // split-primary (document) from single-editor-primary-rendering-a-reference, which
   // caused notes created in a single editor showing a reference (stayInContext) to parent
-  // to the document while their link + anchor pointed into reference text. The correct
+  // to the document while their anchor pointed into reference text. The correct
   // matrix has four cases — split: doc/ref, single: doc, single-ref-in-center — all
-  // resolved by getFocusedIsReference(). The anchor itself already follows the same
-  // focused editor via getActiveHandle → claimFocus, so parent id and anchor
-  // now derive from one signal, making the mismatch impossible by construction.
-  const refId = getFocusedIsReference()
-    ? currentReference?.reference_id
-    : undefined;
+  // resolved by the view's entity, the same signal the anchor's ytext comes from, so
+  // parent id and anchor cannot disagree by construction.
+  const refId = isReference ? currentReference?.reference_id : undefined;
   useNoteChatStore.getState().createNoteSession({
     projectId: currentProject.project_id,
     documentId: currentDocument.document_id,
     referenceId: refId,
-    anchor: { offsetStart: from, offsetEnd: to, relStart: anchorRelStart, relEnd: anchorRelEnd },
+    anchor: { ...relAnchor, quote: selectedText },
   }).then(session => {
-    const doc = view.state.doc.toString();
-    const oldLink = `note:${tempId}`;
-    const newLink = `note:${session.session_id}`;
-    const pos = doc.indexOf(oldLink);
-    if (pos !== -1) {
-      view.dispatch({
-        changes: { from: pos, to: pos + oldLink.length, insert: newLink },
-      });
-    }
     useNoteStore.getState().setActiveNoteThreadId(session.session_id, currentDocument.document_id);
     useNoteStore.getState().setConnectedNoteId(session.session_id);
     useNoteChatStore.getState().setPendingInputFocus(true);
   }).catch(() => {
-    useAppStore.getState().showToast('Failed to create note', 'error');
-    const doc = view.state.doc.toString();
-    const linkIndex = doc.indexOf(`(note:${tempId})`);
-    if (linkIndex !== -1) {
-      const start = doc.lastIndexOf('[', linkIndex);
-      if (start !== -1) {
-        const end = linkIndex + `(note:${tempId})`.length;
-        const originalText = doc.slice(start + 1, doc.indexOf(']', start));
-        view.dispatch({
-          changes: { from: start, to: end + 1, insert: originalText },
-        });
-      }
-    }
+    useAppStore.getState().showToast(t('failedToCreateNote'), 'error');
   });
   return true;
 }

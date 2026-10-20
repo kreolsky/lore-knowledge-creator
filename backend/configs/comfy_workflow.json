@@ -126,7 +126,7 @@
   },
   "9": {
     "inputs": {
-      "unet_name": "krea2/finepornV4TURBOFP8INT8_v4.safetensors",
+      "unet_name": "krea2/fineporn_v4_nvfp4.safetensors",
       "weight_dtype": "default"
     },
     "class_type": "UNETLoader",

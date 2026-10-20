@@ -6,7 +6,9 @@
  * project surface via <ProjectShell>: same Header (trimmed), same left tab bar
  * (toc only for doc-scope; docs+toc for subtree), same Editor render path
  * (CM6 + render-bundle — see <PublicEditor>), same ReferencesPanel (readonly).
- * No NotesPanel (notes dropped from the public surface). No WS / collab.
+ * Notes tab (<PublicNotesPanel>) only while the covering share has comments on.
+ * No WS / collab: the notes list is refetched on open, on tab focus and after the
+ * guest's own write.
  *
  * ARCH (plan "public-document-ids"): the page is now keyed on the document's own
  * uuid (a `documentId` prop), NOT a share token. The funnel is re-keyed:
@@ -25,9 +27,12 @@
  * publicTree + the document bundle and commits them to the existing store slices
  * (documents, currentDocument, references).
  *
- * INVARIANT(security): no write affordances exist on this page — there is no  Why: no mutating API path exists from this page; the document_id in the URL is not a credential — access requires a live document_shares row, so knowing the id grants nothing.
- * API client path to a mutating endpoint from here. The document_id in the URL
- * is NOT a credential: knowing it never grants access (a live document_shares
+ * INVARIANT(security): this page is read-only unless the covering share has
+ * `allow_comments`, and then its only write is a note — through the public notes
+ * routes, which check access.can_write_note. Why: "доступ для всех только чтение" —
+ * the text is never writable from here; comments are the owner's explicit opt-in per
+ * share, enforced by the backend, never trusted from this UI. The document_id in the
+ * URL is NOT a credential: knowing it never grants access (a live document_shares
  * row is still required). Referrer-Policy:no-referrer is injected on mount.
  *
  * ARCH (plan "public-share-reuse-readonly-layout"): deleted the parallel
@@ -38,7 +43,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, FileText, List, Paperclip } from 'lucide-react';
+import { AlertCircle, FileText, List, MessageSquare, Paperclip } from 'lucide-react';
 import {
   publicTreeByDoc, publicDocumentByDoc, publicReferencesByDoc,
   type PublicTreeNode,
@@ -49,8 +54,12 @@ import { EditorLinkPreview } from '../components/editor/EditorLinkPreview';
 import { Sidebar } from '../components/Sidebar';
 import { TableOfContents } from '../components/TableOfContents';
 import { ReferencesPanel } from '../components/ReferencesPanel';
+import { PublicNotesPanel } from '../components/PublicNotesPanel';
+import SelectionToolbar from '../components/editor/SelectionToolbar';
+import { usePublicNotesStore, PUBLIC_DRAFT_NOTE_ID, publicDocIsBehind } from '../store/public-notes-store';
+import { PublicNoteConnector } from '../components/PublicNoteConnector';
 import { useAppStore } from '../store/app-store';
-import { useUIStore } from '../store/ui-store';
+import { useUIStore, ORPHAN_KEY, type RightTab } from '../store/ui-store';
 import { setPublicFileContext } from '../utils/reference-url';
 import { docUrl } from '../utils/routing';
 import { useTranslation } from '../i18n';
@@ -59,6 +68,9 @@ import { useEvent } from '../hooks/useEvent';
 import type { Document } from '../types';
 
 type Phase = 'loading' | 'ready' | 'error';
+
+/** How often the open public page re-reads the notes list (it holds no socket). */
+const PUBLIC_NOTES_POLL_MS = 5000;
 
 /** Map a flat public-tree payload to the store's Document[] shape (metadata only —
  *  content is loaded per-doc via publicDocumentByDoc). */
@@ -128,6 +140,7 @@ export function PublicSharePage(
       setPublicShare(false);
       setPublicProjectName(null);
       setPublicFileContext(null);
+      usePublicNotesStore.getState().reset();
       document.head.removeChild(meta);
     };
   }, [setPublicShare, setAccessLevel, setPublicProjectName]);
@@ -157,6 +170,10 @@ export function PublicSharePage(
     };
     setCurrentDocument(merged);
     setReferences(refs);
+    // The notes list is read against the text just committed: its anchors are
+    // painted only while both carry the same content fingerprint.
+    usePublicNotesStore.getState().setServed(docId, docResp.content_sha256);
+    void usePublicNotesStore.getState().load(docId);
   }, [setCurrentDocument, setReferences]);
 
   // INVARIANT: the tree is fetched once per SHARE, not once per document. Why:
@@ -213,6 +230,8 @@ export function PublicSharePage(
         // attachments beside the error — stale-as-current by another route.
         setCurrentDocument(null);
         setReferences([]);
+        // The notes go with the document too — never the previous document's list.
+        usePublicNotesStore.getState().reset();
         // The card shows the localized message; the raw detail (an English backend
         // string a reader can do nothing with) goes to the console for diagnosis.
         console.warn('public document load failed', documentId, e);
@@ -240,6 +259,54 @@ export function PublicSharePage(
   useEvent('navigate-to-reference', useCallback(({ referenceId }) => {
     void hydrateReference(referenceId);
   }, [hydrateReference]));
+
+  // ── Notes: the toolbar / Mod-m / a highlight click open the notes tab ────
+  useEvent('open-notes', useCallback(({ threadId }: { threadId?: string }) => {
+    // A click on the draft's own highlight just brings the composer back into view.
+    if (threadId && threadId !== PUBLIC_DRAFT_NOTE_ID) usePublicNotesStore.getState().openNote(threadId);
+    shellRef.current?.openRightPanel('notes');
+  }, []));
+
+  // No socket on this page: while it is visible and comments are on, the list is
+  // re-read every few seconds (and at once when the tab returns), so members' and
+  // other guests' notes and replies arrive without a reload.
+  const allowComments = usePublicNotesStore(s => s.allowComments);
+  useEffect(() => {
+    if (!allowComments) return;
+    const refetch = async () => {
+      if (document.visibilityState !== 'visible') return;
+      const docId = usePublicNotesStore.getState().documentId;
+      if (!docId) return;
+      await usePublicNotesStore.getState().load(docId);
+      // The list came back resolved against newer text (a member edited): re-read the
+      // text in place, so the highlights — and a draft's selection — land on the right
+      // words without a reload. Read AFTER the list: with no edit in between, both
+      // carry the same hash.
+      if (publicDocIsBehind()) await usePublicNotesStore.getState().refreshText(docId);
+    };
+    const tick = () => { void refetch(); };
+    const timer = window.setInterval(tick, PUBLIC_NOTES_POLL_MS);
+    window.addEventListener('focus', tick);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', tick);
+      document.removeEventListener('visibilitychange', tick);
+    };
+  }, [allowComments]);
+
+  const storedRightTab = useUIStore(s => s.documents[ORPHAN_KEY]?.rightPanelTab);
+  const noteThreadOpen = usePublicNotesStore(s => !!s.activeNoteId || !!s.draft);
+
+  // A document that already has notes opens on the Notes tab — once per document,
+  // so the reader's own switch back to References is not overridden by a refetch.
+  const notesDocId = usePublicNotesStore(s => (s.notes.length > 0 ? s.documentId : null));
+  const autoNotesDocRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!notesDocId || autoNotesDocRef.current === notesDocId) return;
+    autoNotesDocRef.current = notesDocId;
+    useUIStore.getState().setRightPanelTab(null, 'notes');
+  }, [notesDocId]);
 
   // ── Render gates ─────────────────────────────────────────────────────────
   if (phase === 'loading') {
@@ -277,7 +344,17 @@ export function PublicSharePage(
 
   const rightTabs: RightTabEntry[] = [
     { tab: 'refs', icon: <Paperclip size={15} />, title: t('tabReferences'), renderPanel: () => <ReferencesPanel /> },
+    ...(allowComments ? [{
+      tab: 'notes' as const,
+      icon: <MessageSquare size={15} />,
+      title: t('tabNotes'),
+      renderPanel: () => <PublicNotesPanel />,
+      // Same chrome as the member surface: the tab turns yellow while a note is open.
+      className: noteThreadOpen ? 'notes-tab-thread' : undefined,
+    }] : []),
   ];
+  const effectiveRightTab: RightTab =
+    rightTabs.some(e => e.tab === storedRightTab) ? storedRightTab as RightTab : 'refs';
 
   return (
     <ProjectShell
@@ -295,7 +372,8 @@ export function PublicSharePage(
       userControlsVariant="minimal"
       rightPanelDocId={null}
       rightPanelReady={true}
-      effectiveRightTab="refs"
+      effectiveRightTab={effectiveRightTab}
+      notesThreadOpen={noteThreadOpen}
       initialSidebarOpen={true}
       initialRightOpen={true}
       overlays={
@@ -306,7 +384,13 @@ export function PublicSharePage(
         // is document-keyed + public-aware (routes through /public/documents/{id}).
         // Ref content + image URLs come from the store (publicReferencesByDoc
         // SELECT * carries bodies; referenceFileUrl switches to the public file surface).
-        <EditorLinkPreview />
+        // SelectionToolbar: the note-only bar for a guest while comments are on (it
+        // renders nothing otherwise — the page is readonly).
+        <>
+          <EditorLinkPreview />
+          <SelectionToolbar />
+          <PublicNoteConnector open={effectiveRightTab === 'notes'} />
+        </>
       }
     />
   );

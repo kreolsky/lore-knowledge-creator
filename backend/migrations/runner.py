@@ -45,6 +45,9 @@ from migrations.migrate_document_access_drop import _migrate_document_access_dro
 from migrations.migrate_messages_schemafull_converge import (
     _migrate_messages_schemafull_converge,
 )
+from migrations.migrate_note_links_to_anchors import (
+    _migrate_note_links_to_anchors,
+)
 from migrations.migrate_reference_sort_keys_backfill import (
     _migrate_reference_sort_keys_backfill,
 )
@@ -104,6 +107,11 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     # sessions stamped for the lazy /session-fork seed. Reads and writes Lore
     # rows only — never the driver, which may be down at boot. No dependency.
     ("chat_branches_to_sessions", _migrate_chat_branches_to_sessions),
+    # `[label](note:ID)` body links → anchor_rel_* on the note row, the link removed
+    # through the backplane; then drops the retired anchor_offset_* columns
+    # (schema.surql carries the same REMOVEs for fresh DBs). Idempotent; no
+    # dependency.
+    ("note_links_to_anchors", _migrate_note_links_to_anchors),
 ]
 
 

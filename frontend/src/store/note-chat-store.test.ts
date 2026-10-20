@@ -43,8 +43,6 @@ describe('editMessage', () => {
       document_id: 'd1',
       reference_id: null,
       is_note: true,
-      anchor_offset_start: null,
-      anchor_offset_end: null,
       title: '',
       mode: 'chat',
       model: '',
@@ -153,8 +151,6 @@ describe('createNoteSession', () => {
       document_id: 'd1',
       reference_id: null,
       is_note: true,
-      anchor_offset_start: null,
-      anchor_offset_end: null,
       title: '',
       mode: 'chat',
       model: '',
@@ -190,7 +186,7 @@ describe('createNoteSession', () => {
   it('anchorless WITH reference — document_id === referenceId', async () => {
     (apiClient.post as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       session_id: 'ns1', project_id: 'p1', document_id: 'ref1', reference_id: 'ref1',
-      is_note: true, anchor_offset_start: null, anchor_offset_end: null,
+      is_note: true,
       title: '', mode: 'chat', model: '', updated_at: '', created_at: '',
     });
     await useNoteChatStore.getState().createNoteSession({
@@ -208,36 +204,36 @@ describe('createNoteSession', () => {
   it('anchored with reference + rel positions — body includes anchor_* and document_id === referenceId', async () => {
     (apiClient.post as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       session_id: 'ns1', project_id: 'p1', document_id: 'ref1', reference_id: 'ref1',
-      is_note: true, anchor_offset_start: 10, anchor_offset_end: 20,
+      is_note: true, anchor_rel_start: 'AAcDAA==', anchor_rel_end: 'AAcFfw==',
       title: '', mode: 'chat', model: '', updated_at: '', created_at: '',
     });
     await useNoteChatStore.getState().createNoteSession({
       projectId: 'p1',
       documentId: 'd1',
       referenceId: 'ref1',
-      anchor: { offsetStart: 10, offsetEnd: 20, relStart: '{"r":1}', relEnd: '{"r":2}' },
+      anchor: { relStart: 'AAcDAA==', relEnd: 'AAcFfw==', quote: 'фраза 😀' },
     });
     expect(apiClient.post).toHaveBeenCalledWith('/chat/sessions', {
       project_id: 'p1',
       document_id: 'ref1',
       is_note: true,
-      anchor_offset_start: 10,
-      anchor_offset_end: 20,
-      anchor_rel_start: '{"r":1}',
-      anchor_rel_end: '{"r":2}',
+      anchor_rel_start: 'AAcDAA==',
+      anchor_rel_end: 'AAcFfw==',
+      anchor_quote: 'фраза 😀',
     });
   });
 
-  it('anchorless body has no anchor_offset_* fields', async () => {
+  it('anchorless body has no anchor_* fields', async () => {
     (apiClient.post as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       session_id: 'ns1', project_id: 'p1', document_id: 'd1', reference_id: null,
-      is_note: true, anchor_offset_start: null, anchor_offset_end: null,
+      is_note: true,
       title: '', mode: 'chat', model: '', updated_at: '', created_at: '',
     });
     await useNoteChatStore.getState().createNoteSession({ projectId: 'p1', documentId: 'd1' });
     const body = (apiClient.post as ReturnType<typeof vi.fn>).mock.calls[0][1] as Record<string, unknown>;
-    expect(body).not.toHaveProperty('anchor_offset_start');
-    expect(body).not.toHaveProperty('anchor_offset_end');
+    expect(body).not.toHaveProperty('anchor_rel_start');
+    expect(body).not.toHaveProperty('anchor_rel_end');
+    expect(body).not.toHaveProperty('anchor_quote');
   });
 
   it('dedups when the realtime frame already added the session (race-safe)', async () => {
@@ -247,7 +243,7 @@ describe('createNoteSession', () => {
     // REPLACE — not prepend a second copy with the same session_id.
     const session = {
       session_id: 'ns1', project_id: 'p1', document_id: 'd1', reference_id: null,
-      is_note: true, anchor_offset_start: null, anchor_offset_end: null,
+      is_note: true,
       title: '', mode: 'chat', model: '', updated_at: '2026-07-01T10:00:00Z', created_at: '2026-07-01T10:00:00Z',
     };
     (apiClient.post as ReturnType<typeof vi.fn>).mockResolvedValueOnce(session);
@@ -802,5 +798,96 @@ describe('discardIfEmpty (explicit back/Esc)', () => {
     useNoteChatStore.getState().setDraftForSession('new1', 'typed');
     expect(useNoteChatStore.getState().discardIfEmpty('new1')).toBe(true);
     expect(apiClient.delete).toHaveBeenCalledWith('/chat/sessions/new1');
+  });
+});
+
+// ── messagesTruncated + loadOlderMessages (tail-anchored note pagination) ────
+// The messages GET caps at limit=200 tail-anchored: a full page means older rows
+// exist, a short page means the thread's head is loaded. loadOlderMessages GETs
+// offset = messages.length and PREPENDS with message_id dedup (the tail window
+// shifts when a live reply lands between pages — the boundary row returns twice).
+describe('messagesTruncated + loadOlderMessages', () => {
+  const msg = (id: string, at: string) =>
+    ({ message_id: id, session_id: 'ns1', role: 'user', content: `c-${id}`, created_at: at }) as never;
+  const page = (n: number, startNo: number) =>
+    Array.from({ length: n }, (_, i) => msg(`m${startNo + i}`, `2026-10-20T00:${String(startNo + i).padStart(2, '0')}:00Z`));
+
+  beforeEach(() => {
+    useNoteChatStore.getState().reset();
+    (apiClient.get as ReturnType<typeof vi.fn>).mockReset();
+    (apiClient.post as ReturnType<typeof vi.fn>).mockReset();
+  });
+
+  it('a committed page of exactly 200 sets messagesTruncated; setActiveSession clears it', async () => {
+    (apiClient.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ messages: page(200, 1) });
+    useNoteChatStore.setState({ activeSessionId: 'ns1' });
+    await useNoteChatStore.getState().loadMessages('ns1');
+    expect(useNoteChatStore.getState().messagesTruncated).toBe(true);
+    // Switching the thread drops the flag with the rows.
+    (apiClient.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ messages: [msg('x', '2026-10-20T01:00:00Z')] });
+    useNoteChatStore.getState().setActiveSession('ns1');
+    await Promise.resolve();
+    expect(useNoteChatStore.getState().messagesTruncated).toBe(false);
+  });
+
+  it('a page under 200 leaves the flag clear', async () => {
+    (apiClient.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ messages: page(199, 1) });
+    useNoteChatStore.setState({ activeSessionId: 'ns1' });
+    await useNoteChatStore.getState().loadMessages('ns1');
+    expect(useNoteChatStore.getState().messagesTruncated).toBe(false);
+  });
+
+  it('loadOlderMessages GETs offset=messages.length, prepends once, and a sub-200 older page clears the flag', async () => {
+    (apiClient.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ messages: page(3, 4) }); // m4..m6
+    useNoteChatStore.setState({ activeSessionId: 'ns1' });
+    await useNoteChatStore.getState().loadMessages('ns1');
+    useNoteChatStore.setState({ messagesTruncated: true });
+
+    // Older page over the shifted window: returns m1..m3 PLUS m4 again (the
+    // boundary row a live reply pushed into the older window).
+    (apiClient.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ messages: [...page(3, 1), msg('m4', '2026-10-20T00:04:00Z')] });
+    await useNoteChatStore.getState().loadOlderMessages();
+
+    expect(apiClient.get).toHaveBeenLastCalledWith('/chat/sessions/ns1/messages?limit=200&offset=3');
+    const ids = useNoteChatStore.getState().messages.map(m => m.message_id);
+    expect(ids).toEqual(['m1', 'm2', 'm3', 'm4', 'm5', 'm6']); // m4 once, order kept
+    expect(useNoteChatStore.getState().messagesTruncated).toBe(false); // 4-row page < 200
+  });
+
+  // The list card's headline is the note's FIRST message. A truncated tail window
+  // does not hold it, so send/edit/delete must keep the card's head preview and
+  // move the count by the delta instead of re-deriving both from the window.
+  it('a truncated window keeps the card head preview and counts by delta on send / edit / delete', async () => {
+    useNoteChatStore.setState({
+      sessions: [{
+        session_id: 'ns1', project_id: 'p1', document_id: 'd1', reference_id: null,
+        is_note: true, title: '', mode: 'chat', model: '',
+        updated_at: '2026-10-20T00:00:00Z', created_at: '2026-10-20T00:00:00Z',
+        first_message_preview: '#1', last_message_preview: 'c-m7',
+        message_count: 205, last_message_at: '2026-10-20T00:07:00Z',
+      } as never],
+      activeSessionId: 'ns1',
+      messages: page(2, 6), // m6, m7 — the tail of a longer thread
+      messagesTruncated: true,
+    });
+
+    (apiClient.post as ReturnType<typeof vi.fn>).mockResolvedValueOnce(msg('m8', '2026-10-20T00:08:00Z'));
+    await useNoteChatStore.getState().sendMessage('c-m8');
+    let card = useNoteChatStore.getState().sessions[0];
+    expect(card.first_message_preview).toBe('#1');
+    expect(card.message_count).toBe(206);
+    expect(card.last_message_preview).toBe('c-m8');
+
+    (apiClient.patch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...(msg('m6', '2026-10-20T00:06:00Z') as ChatMessage), content: 'EDITED' });
+    await useNoteChatStore.getState().editMessage('m6', 'EDITED');
+    card = useNoteChatStore.getState().sessions[0];
+    expect(card.first_message_preview).toBe('#1');
+
+    (apiClient.delete as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ success: true });
+    await useNoteChatStore.getState().deleteMessage('m8');
+    card = useNoteChatStore.getState().sessions[0];
+    expect(card.first_message_preview).toBe('#1');
+    expect(card.message_count).toBe(205);
+    expect(card.last_message_preview).toBe('c-m7');
   });
 });

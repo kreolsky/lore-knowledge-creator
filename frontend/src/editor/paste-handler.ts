@@ -254,7 +254,7 @@ export const pasteHandlerExtension = EditorView.domEventHandlers({
 
     // INVARIANT(data-loss): Lore→Lore paste uses the lossless `text/plain` source, never Turndown.
     // Why: Turndown backslash-escapes markdown metacharacters and collapses internal
-    // ref:/note: links to visible text, corrupting the copied content. The marker is an HTML
+    // ref: links to visible text, corrupting the copied content. The marker is an HTML
     // comment, invisible to external editors, surviving the standard text/html channel without
     // custom MIME flavors.
     //

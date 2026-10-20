@@ -112,6 +112,7 @@ _MESSAGE_LIST_SELECT = (
 
 async def load_session_messages(
     db, session: dict, session_id: str, *, limit: int = 200, offset: int = 0,
+    tail: bool = False,
 ) -> list[dict]:
     """Fetch + serialize a session's messages: the images-omitting projection
     and author-name resolution.
@@ -119,13 +120,26 @@ async def load_session_messages(
     Shared by list_messages and the sessions-list piggyback (which collapses the
     sessions→messages waterfall) so both paths agree on projection + shape. Pure
     read: the projection is written only by the live reducer (see list_messages).
+
+    tail=True (notes) anchors the window at the NEWEST row: the query flips to
+    DESC and the rows are reversed back to ASC before serialization, so
+    offset=0 serves the newest `limit` rows and a growing offset pages
+    BACKWARD toward the head. Why: a front-anchored window on a thread longer
+    than `limit` silently hides the newest rows — and everything that parents
+    onto "the last loaded row" (note replies) would parent onto the wrong tail.
+    Notes have no agent timeline, so the offset>0 refusal in _attach_timeline
+    never applies to them (the is_note early-return precedes it); AI chats keep
+    the front anchor.
     """
+    order = "DESC" if tail else "ASC"
     rows = await db.query(
         _MESSAGE_LIST_SELECT + " WHERE chat_id = $cid AND deleted_at IS NONE "
-        "ORDER BY created_at ASC LIMIT $limit START $offset",
+        f"ORDER BY created_at {order} LIMIT $limit START $offset",
         {"cid": session_id, "limit": limit, "offset": offset},
         site="chat",
     ) or []
+    if tail:
+        rows.reverse()
     author_names = await _resolve_author_names(db, session, rows)
     out = [_serialize_message(r, session, author_names) for r in rows]
     return out
@@ -134,7 +148,9 @@ async def load_session_messages(
 @router.get(
     "/sessions/{session_id}/messages",
     responses={400: {"description": "A paginated read (offset>0) cannot anchor "
-                                    "the agent timeline and is refused"},
+                                    "the agent timeline and is refused (AI "
+                                    "chats only — note threads paginate "
+                                    "tail-anchored and accept offset)"},
                502: {"description": "The agent transcript or its status is "
                                     "unreadable — the thread is never served "
                                     "without its timeline"}},
@@ -148,9 +164,17 @@ async def list_messages(
 ):
     """Return a chat session's messages (paginated) and its queue —
     `{messages, queue, queue_seq}`: the live dsh agent's next-turn inbox and
-    the seq that snapshot includes (empty/None for a note chat)."""
+    the seq that snapshot includes (empty/None for a note chat).
+
+    Pagination anchors differ by kind: AI chats are front-anchored (oldest
+    first, offset>0 refused — the timeline cannot resolve mid-thread); note
+    threads are TAIL-anchored (offset=0 serves the newest page, offset pages
+    toward the head) so a long note never hides its newest rows."""
     session = await _require_session_access(session_id, user)
-    out = await load_session_messages(db, session, session_id, limit=limit, offset=offset)
+    out = await load_session_messages(
+        db, session, session_id, limit=limit, offset=offset,
+        tail=session.get("is_note") is True,
+    )
     queue = await _attach_timeline(session, session_id, out, offset=offset)
     return {"messages": out, **queue}
 
@@ -460,48 +484,49 @@ async def last_message_preview(session_id: str, user: dict = Depends(get_current
     return {"preview": preview}
 
 
-@router.post("/sessions/{session_id}/messages", status_code=201)
-async def create_message(session_id: str, body: MessageCreate, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
-    """Create a single message (user or assistant).
-
-    For note-chats: the message author_id is stamped to the current user. The
-    role is forced to 'user' (notes do not have assistant turns). Body author_id
-    is ignored -- callers cannot impersonate other users.
-    """
-    session = await _require_session_access(session_id, user)
-    uid = str(uuid4())
-    author_id: str | None = body.author_id
-    # INVARIANT(security): this endpoint only ever creates USER messages. Why: for AI
-    # chats, body.role accepted verbatim let a client inject fabricated assistant/system
-    # content into its own transcript, which then feeds the agent transcript on later
-    # turns. Assistant rows are created ONLY by the completion stream. Note-chats
-    # already forced 'user' (notes have no assistant turns); this extends it to AI chats.
-    role = "user"
-    if session.get("is_note") is True:
-        author_id = user["user_id"]
-    if body.parent_id:
+async def _validate_message_refs(
+    session_id: str, parent_id: str | None, images: list[str] | None,
+) -> None:
+    """422 on a parent outside the session, 400 on an image URL that is not allowed."""
+    if parent_id:
         # INVARIANT(security): parent_id must belong to THIS session. Why: an
         # unvalidated parent let a caller splice a message under a different chat's tree.
-        parent = await fetch_one("messages", body.parent_id)
+        parent = await fetch_one("messages", parent_id)
         if not parent or parent.get("chat_id") != session_id:
             raise HTTPException(status_code=422, detail="parent_id must belong to this session")
-    if body.images:
+    if images:
         # SSRF guard — the completion path validates images; this endpoint did not,
         # so arbitrary http:// / file:// / internal-IP URLs got persisted. Reuse the
         # shared helper (contract: raises 400 on the first invalid URL).
-        for url in body.images:
+        for url in images:
             _validate_image_url(url)
+
+
+async def insert_user_message(
+    db, session: dict, session_id: str, *, content: str, author_id: str | None = None,
+    author_name: str | None = None, parent_id: str | None = None,
+    images: list[str] | None = None,
+) -> dict:
+    """Write one user message under an already-gated session and return it serialized.
+
+    The one writer of user message rows for the authed and the public note surface:
+    it validates the parent, touches the session and fires the note realtime nudge,
+    so a member's panel hears a guest's reply exactly like a member's.
+    """
+    await _validate_message_refs(session_id, parent_id, images)
     data: dict = {
         "chat_id": session_id,
-        "parent_id": body.parent_id,
-        "role": role,
-        "content": body.content,
+        "parent_id": parent_id,
+        "role": "user",
+        "content": content,
     }
     if author_id:
         data["author_id"] = author_id
-    if body.images:
-        data["images"] = body.images
-    row = await create_record("messages", uid, data)
+    if author_name:
+        data["author_name"] = author_name
+    if images:
+        data["images"] = images
+    row = await create_record("messages", str(uuid4()), data)
     # Touch session updated_at
     await db.query(
         "UPDATE type::record('chat_sessions', $id) SET updated_at = time::now()",
@@ -518,6 +543,29 @@ async def create_message(session_id: str, body: MessageCreate, user: dict = Depe
 
     schedule_note_message_changed(db, session, session_id, action="added", message=out)
     return out
+
+
+@router.post("/sessions/{session_id}/messages", status_code=201)
+async def create_message(session_id: str, body: MessageCreate, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
+    """Create a single message (user or assistant).
+
+    For note-chats: the message author_id is stamped to the current user. The
+    role is forced to 'user' (notes do not have assistant turns). Body author_id
+    is ignored -- callers cannot impersonate other users.
+    """
+    session = await _require_session_access(session_id, user)
+    author_id: str | None = body.author_id
+    # INVARIANT(security): this endpoint only ever creates USER messages. Why: for AI
+    # chats, body.role accepted verbatim let a client inject fabricated assistant/system
+    # content into its own transcript, which then feeds the agent transcript on later
+    # turns. Assistant rows are created ONLY by the completion stream. Note-chats
+    # already forced 'user' (notes have no assistant turns); this extends it to AI chats.
+    if session.get("is_note") is True:
+        author_id = user["user_id"]
+    return await insert_user_message(
+        db, session, session_id, content=body.content, author_id=author_id,
+        parent_id=body.parent_id, images=body.images,
+    )
 
 
 @router.patch("/messages/{message_id}")
@@ -609,7 +657,7 @@ async def _soft_delete_leaf_guarded(db, message_id: str) -> None:
 
 async def _delete_branch(
     *, db, session: dict, msg: dict, message_id: str,
-    children: dict[str, list[str]], user: dict,
+    children: dict[str, list[str]], actor_id: str, is_owner: bool,
 ) -> list[str]:
     """Resolve the deletion scope + soft-delete the branch; return the deleted ids.
 
@@ -619,16 +667,15 @@ async def _delete_branch(
     """
     from access import can_modify_note_message
     from models import resolve_message_author
-    is_owner = await _is_project_owner(session, user)
     has_children = bool(children.get(message_id))
     if not can_modify_note_message(
-        action="delete", user_id=user["user_id"],
+        action="delete", user_id=actor_id,
         is_owner=is_owner, has_children=has_children,
         message=msg, session=session,
     ):
         # Distinguish "author of a non-leaf" (409, precise) from a plain
         # permission denial (403). The owner never lands here.
-        is_author = resolve_message_author(msg, session) == user["user_id"]
+        is_author = resolve_message_author(msg, session) == actor_id
         if is_author and has_children:
             raise HTTPException(
                 status_code=409,
@@ -648,11 +695,11 @@ async def _delete_branch(
     return ids_to_delete
 
 
-async def _note_cascade_delete(
-    db, session: dict, msg: dict, message_id: str, user: dict,
+async def delete_note_message(
+    db, session: dict, msg: dict, message_id: str, *, actor_id: str, is_owner: bool,
 ) -> list[str]:
-    """The note-chat cascade (the only kind that gets here — the route refuses
-    AI chats first).
+    """Delete a note message as `actor_id` (root → cascade, author → own leaf) and
+    nudge note listeners; returns the deleted ids. The caller has gated the session.
 
     # WHY: Two-phase cascade delete. Phase 1: load parent-child map. Phase 2:
     # BFS in memory + batch soft-delete (in _delete_branch). The SELECT doesn't
@@ -671,10 +718,14 @@ async def _note_cascade_delete(
         if pid:
             children.setdefault(pid, []).append(r["mid"])
 
-    return await _delete_branch(
+    ids_to_delete = await _delete_branch(
         db=db, session=session, msg=msg, message_id=message_id,
-        children=children, user=user,
+        children=children, actor_id=actor_id, is_owner=is_owner,
     )
+    schedule_note_message_changed(
+        db, session, msg["chat_id"], action="deleted", message_ids=ids_to_delete,
+    )
+    return ids_to_delete
 
 
 @router.delete("/messages/{message_id}")
@@ -705,10 +756,8 @@ async def delete_message_branch(message_id: str, user: dict = Depends(get_curren
                    "not a message",
         )
 
-    ids_to_delete = await _note_cascade_delete(
-        db=db, session=session, msg=msg, message_id=message_id, user=user,
-    )
-    schedule_note_message_changed(
-        db, session, msg["chat_id"], action="deleted", message_ids=ids_to_delete,
+    ids_to_delete = await delete_note_message(
+        db, session, msg, message_id,
+        actor_id=user["user_id"], is_owner=await _is_project_owner(session, user),
     )
     return {"success": True, "deleted_count": len(ids_to_delete)}

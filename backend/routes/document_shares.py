@@ -3,20 +3,21 @@
 # SYSTEM: document-shares — owner-gated CRUD for anonymous read-only links.
 
 A `document_shares` row publishes ONE document (scope='doc') or its whole
-subtree (scope='subtree') as an anonymous, read-only link. The plaintext token
+subtree (scope='subtree') as an anonymous, read-only link; `allow_comments`
+additionally lets link holders leave notes (routes/public_notes.py). The plaintext token
 IS the URL segment of the public page (/s/:token) and is stored VERBATIM (see
 the DECISION-PIN in surreal/schema.surql for why it is not hashed: a public link
 is not a secret credential — the content is readable by anyone holding the URL,
 and a DB leak exposes the content directly, so hashing protects nothing real
 while breaking the "re-send the link anytime" UX).
 
-# ARCH (plan "iridescent-wibbling-heron"): shares are a SEPARATE table, NOT an
+# ARCH: shares are a SEPARATE table, NOT an
 # extension of `api_keys` or a nullable-user_id ACL. Why: api_keys are
 # identity-bound (a principal) — a public link has NO user; collapsing the three
 # existing owner-guards into one ambiguous ACL table trades clarity for a wider
 # security surface. The contract + UI unify; storage stays purpose-built.
 #
-# INVARIANT(security): share writes (mint/revoke) are OWNER-ONLY; LIST is
+# INVARIANT(security): share writes (mint/revoke/scope/comments) are OWNER-ONLY; LIST is
 # full-access (non-owner `full` sees the Access tab sub-sections read-only).
 # Why: "Доступ для всех только чтение" is a project-wide broadcast — only the
 # owner decides who can mint/revoke a public link. The token itself is not a
@@ -56,7 +57,9 @@ class CreateShareBody(BaseModel):
 
 
 class UpdateShareBody(BaseModel):
-    scope: str  # 'doc' | 'subtree' — validated in the handler
+    scope: str | None = None  # 'doc' | 'subtree' — validated in the handler
+    # Comments on the public link (notes only — the text stays read-only).
+    allow_comments: bool | None = None
 
 
 async def _ensure_full_for_doc(project_id: str, document_id: str, user: dict) -> None:
@@ -108,6 +111,7 @@ async def create_share(
         "scope": body.scope,
         "token": token,
         "created_by": user["user_id"],
+        "allow_comments": False,
     })
     # ARCH(plan "public-document-ids"): the canonical public URL is the
     # document's own uuid under /docs/. The token is retained as a legacy lookup
@@ -144,12 +148,14 @@ async def list_shares(
     """
     await _ensure_full_for_doc(project_id, document_id, user)
     rows = await db.query(
-        "SELECT id, scope, token, created_at, created_by FROM document_shares "
+        "SELECT id, scope, token, allow_comments, created_at, created_by FROM document_shares "
         "WHERE document_id = $did AND project_id = $pid AND deleted_at IS NONE "
         "ORDER BY created_at DESC",
         {"did": document_id, "pid": project_id},
     )
     shares = [serialize_record(r, "share_id") for r in (rows or [])]
+    for share in shares:
+        share["allow_comments"] = bool(share.get("allow_comments"))
 
     # INVARIANT(security): the summary never reads "Not shared" while a live share
     # resolves.
@@ -172,12 +178,13 @@ async def list_shares(
 
 
 @router.patch("/api/shares/{share_id}")
-async def update_share_scope(
+async def update_share(
     share_id: str, body: UpdateShareBody,
     user: dict = Depends(get_current_user),
     db: AsyncSurreal = Depends(get_db),
 ):
-    """Owner-only: atomically change a share's scope (doc ↔ subtree).
+    """Owner-only: atomically change a share's scope (doc ↔ subtree) and/or
+    its allow_comments flag; an omitted field is left as it is.
 
     WHY one UPDATE, not revoke-then-create: revoke+create is non-atomic — a
     failure between them leaves the document silently unshared while the owner
@@ -189,7 +196,11 @@ async def update_share_scope(
     Why: the UI hides the control for non-owners too, but hiding is not
     enforcement — the API is the authority (CLAUDE.md).
     """
-    if body.scope not in ("doc", "subtree"):
+    sets = {k: v for k, v in (("scope", body.scope), ("allow_comments", body.allow_comments))
+            if v is not None}
+    if not sets:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    if "scope" in sets and body.scope not in ("doc", "subtree"):
         raise HTTPException(status_code=400, detail="scope must be 'doc' or 'subtree'")
     rows = await db.query(
         "SELECT project_id, deleted_at FROM document_shares "
@@ -203,10 +214,11 @@ async def update_share_scope(
     if not project:
         raise HTTPException(status_code=404, detail="Share not found")
     await require_project_owner(project, user)
+    assignments = ", ".join(f"{k} = ${k}" for k in sets)
     await db.query(
-        "UPDATE type::record('document_shares', $id) SET scope = $scope "
+        f"UPDATE type::record('document_shares', $id) SET {assignments} "
         "WHERE deleted_at IS NONE",
-        {"id": share_id, "scope": body.scope},
+        {"id": share_id, **sets},
     )
     return {"success": True}
 

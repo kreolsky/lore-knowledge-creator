@@ -43,6 +43,7 @@ interface FieldTextareaProps {
   rows?: number;
   autoFocus?: boolean;
   name?: string;
+  maxLength?: number;
 }
 
 const inputCls =

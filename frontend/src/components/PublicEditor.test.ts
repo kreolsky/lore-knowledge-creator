@@ -15,6 +15,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { ensureSyntaxTree } from '@codemirror/language';
 import { livePreviewField, revealAtCursor } from './editor/live-preview';
 import { buildPublicEditorExtensions } from './PublicEditor';
+import { differingSpan } from '../utils/differing-span';
 
 function createPublicView(doc: string, selection: { anchor: number; head?: number }): EditorView {
   const state = EditorState.create({
@@ -63,3 +64,25 @@ describe('public viewer extension stack — revealAtCursor', () => {
     expect(closesAsterisksCovered).toBe(true);
   });
 });
+
+describe('differingSpan — the in-place text refresh', () => {
+  it('replaces only the differing middle, and a readonly public view applies it', () => {
+    const before = 'Ж😀 начало — старое — конец 😀';
+    const after = 'Ж😀 начало — новое слово — конец 😀';
+    const change = differingSpan(before, after)!;
+    expect(before.slice(0, change.from)).toBe('Ж😀 начало — ');
+    expect(before.slice(change.to)).toBe(' — конец 😀');
+    const view = createPublicView(before, { anchor: 0 });
+    view.dispatch({ changes: change });
+    expect(view.state.doc.toString()).toBe(after);
+    view.destroy();
+  });
+
+  it('is null for equal text and handles pure insert / delete at either end', () => {
+    expect(differingSpan('abc', 'abc')).toBeNull();
+    expect(differingSpan('abc', 'abcd')).toEqual({ from: 3, to: 3, insert: 'd' });
+    expect(differingSpan('xabc', 'abc')).toEqual({ from: 0, to: 1, insert: '' });
+    expect(differingSpan('aaa', 'aa')).toEqual({ from: 2, to: 3, insert: '' });
+  });
+});
+

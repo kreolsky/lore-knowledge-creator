@@ -112,15 +112,13 @@ describe('cleanMarkdownToHtml — links & images (portable)', () => {
     expect(html).toContain('<a href="https://example.com" target="_blank" rel="noopener">example</a>');
   });
 
-  it('collapses internal-scheme links (ref:/doc:/note:) to visible text only', () => {
-    const html = cleanMarkdownToHtml('[see](ref:abc) [d](doc:def) [n](note:ghi)');
+  it('collapses internal-scheme links (ref:/doc:) to visible text only', () => {
+    const html = cleanMarkdownToHtml('[see](ref:abc) [d](doc:def)');
     expect(html).not.toContain('href="ref:');
     expect(html).not.toContain('href="doc:');
-    expect(html).not.toContain('href="note:');
     expect(html).not.toContain('<a ');
     expect(html).toContain('see');
     expect(html).toContain('d');
-    expect(html).toContain('n');
   });
 
   it('renders an external http image as <img>', () => {

@@ -1,7 +1,7 @@
 """Integration tests for note-chat sessions (Stage 2).
 
 Covers:
-- Note sessions require anchor_offset_start/end at create.
+- An anchored note carries both relative positions or neither.
 - Note sessions reject the completions (SSE) endpoint.
 - list_sessions ?is_note=true drops the user_id predicate (visible to other
   project members with commentator+ access).
@@ -16,6 +16,9 @@ import pytest
 from emit_recorder import EmitRecorder
 
 from db import create_record, get_db
+
+# A v1 Yjs RelativePosition (item scope, client 7, clock 3, assoc 0), base64.
+RELPOS = "AAcDAA=="
 
 # ─── Realtime emit capture (plan: notes-realtime-debt-fixes) ─────────────────
 #
@@ -240,7 +243,7 @@ async def test_create_anchorless_note_succeeds(client, admin_user, project_with_
 
 
 @pytest.mark.asyncio
-async def test_create_note_inverted_anchor_rejected(
+async def test_create_note_lone_anchor_position_rejected(
     client, admin_user, project_with_doc,
 ):
     pid, doc_id, _ = project_with_doc
@@ -249,7 +252,7 @@ async def test_create_note_inverted_anchor_rejected(
         "/api/chat/sessions",
         json={
             "project_id": pid, "document_id": doc_id, "is_note": True,
-            "anchor_offset_start": 50, "anchor_offset_end": 10,
+            "anchor_rel_start": RELPOS,
         },
         cookies={"lore_session": token},
     )
@@ -264,7 +267,7 @@ async def test_create_note_session(client, admin_user, project_with_doc):
         "/api/chat/sessions",
         json={
             "project_id": pid, "document_id": doc_id, "is_note": True,
-            "anchor_offset_start": 10, "anchor_offset_end": 20,
+            "anchor_rel_start": RELPOS, "anchor_rel_end": RELPOS,
         },
         cookies={"lore_session": token},
     )
@@ -286,7 +289,7 @@ async def test_note_session_rejects_completion(
         "/api/chat/sessions",
         json={
             "project_id": pid, "document_id": doc_id, "is_note": True,
-            "anchor_offset_start": 0, "anchor_offset_end": 5,
+            "anchor_rel_start": RELPOS, "anchor_rel_end": RELPOS,
         },
         cookies=cookies,
     )
@@ -321,7 +324,7 @@ async def test_note_visible_to_other_member(
             "/api/chat/sessions",
             json={
                 "project_id": pid, "document_id": doc_id, "is_note": True,
-                "anchor_offset_start": 0, "anchor_offset_end": 5,
+                "anchor_rel_start": RELPOS, "anchor_rel_end": RELPOS,
             },
             cookies={"lore_session": admin_token},
         )
@@ -440,7 +443,7 @@ async def test_note_on_reference_returns_reference_id(
         "/api/chat/sessions",
         json={
             "project_id": pid, "document_id": ref_id, "is_note": True,
-            "anchor_offset_start": 0, "anchor_offset_end": 5,
+            "anchor_rel_start": RELPOS, "anchor_rel_end": RELPOS,
         },
         cookies=cookies,
     )
@@ -487,7 +490,7 @@ async def test_list_notes_derives_previews_from_messages(
         "/api/chat/sessions",
         json={
             "project_id": pid, "document_id": doc_id, "is_note": True,
-            "anchor_offset_start": 0, "anchor_offset_end": 5,
+            "anchor_rel_start": RELPOS, "anchor_rel_end": RELPOS,
         },
         cookies=cookies,
     )
@@ -533,7 +536,7 @@ async def test_list_notes_single_message_equal_first_last(
         "/api/chat/sessions",
         json={
             "project_id": pid, "document_id": doc_id, "is_note": True,
-            "anchor_offset_start": 0, "anchor_offset_end": 5,
+            "anchor_rel_start": RELPOS, "anchor_rel_end": RELPOS,
         },
         cookies=cookies,
     )
@@ -865,3 +868,85 @@ async def test_note_owner_deletes_others_message_cascades(
         assert m3["message_id"] not in ids
     finally:
         await _revoke_access(pm_id)
+
+
+# ── Tail-anchored pagination (plan: notes-audit-followups, n2) ────────────────
+#
+# The messages GET is TAIL-anchored for notes: the default page serves the
+# NEWEST 200 rows ASC (a 205-message note shows #6–#205), and offset counts
+# from the TAIL so offset=messages.length pages backward toward the head.
+# AI chats keep the front anchor + the offset>0 refusal (their timeline cannot
+# resolve mid-thread); notes have no agent timeline, so the early-return for
+# is_note at _attach_timeline legalizes offset reads.
+
+async def _seed_numbered_note(client, pid, doc_id, token, count: int) -> str:
+    """A note with `count` messages whose bodies are ordinal markers #1..#N."""
+    note_id = await _make_note(client, pid, doc_id, token)
+    for i in range(1, count + 1):
+        resp = await client.post(
+            f"/api/chat/sessions/{note_id}/messages",
+            json={"content": f"#{i}"}, cookies={"lore_session": token},
+        )
+        assert resp.status_code == 201
+    return note_id
+
+
+@pytest.mark.asyncio
+async def test_note_messages_tail_anchored_window(
+    client, admin_user, project_with_doc,
+):
+    """A 205-message note serves the NEWEST 200 ASC at offset=0, and offset=200
+    returns the oldest five — paging backward from the tail, not forward."""
+    pid, doc_id, _ = project_with_doc
+    _, token = admin_user
+    cookies = {"lore_session": token}
+    note_id = await _seed_numbered_note(client, pid, doc_id, token, 205)
+
+    page1 = await client.get(
+        f"/api/chat/sessions/{note_id}/messages", cookies=cookies,
+    )
+    assert page1.status_code == 200
+    bodies1 = [m["content"] for m in page1.json()["messages"]]
+    assert len(bodies1) == 200
+    assert bodies1[0] == "#6", "offset=0 must start at the tail window's oldest"
+    assert bodies1[-1] == "#205", "the newest row is the last loaded row"
+    assert bodies1 == [f"#{i}" for i in range(6, 206)], "page serves ASC"
+
+    page2 = await client.get(
+        f"/api/chat/sessions/{note_id}/messages",
+        params={"offset": 200}, cookies=cookies,
+    )
+    assert page2.status_code == 200
+    bodies2 = [m["content"] for m in page2.json()["messages"]]
+    assert bodies2 == [f"#{i}" for i in range(1, 6)], "the older page is the head, ASC"
+
+
+@pytest.mark.asyncio
+async def test_note_piggyback_carries_tail_window(
+    client, admin_user, project_with_doc,
+):
+    """The sessions-index piggyback (the reload-restore path) must serve the
+    note's rows through the SAME tail window as the messages GET — parity
+    INVARIANT at sessions_list.py: flipping only one path would serve the
+    oldest page again on F5."""
+    pid, doc_id, _ = project_with_doc
+    _, token = admin_user
+    cookies = {"lore_session": token}
+    note_id = await _seed_numbered_note(client, pid, doc_id, token, 205)
+
+    resp = await client.get(
+        "/api/chat/sessions",
+        params={
+            "project_id": pid, "document_id": doc_id, "is_note": "true",
+            "with_active_messages": "true", "preferred_session_id": note_id,
+        },
+        cookies=cookies,
+    )
+    assert resp.status_code == 200
+    active = resp.json()["active_messages"]
+    assert active is not None and active["session_id"] == note_id
+    bodies = [m["content"] for m in active["messages"]]
+    assert len(bodies) == 200
+    assert bodies[0] == "#6"
+    assert bodies[-1] == "#205"
+    assert bodies == [f"#{i}" for i in range(6, 206)]

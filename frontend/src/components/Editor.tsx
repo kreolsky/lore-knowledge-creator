@@ -52,6 +52,7 @@ import { useEditorFileDrop } from './editor/useEditorFileDrop';
 import { FileDropImportModal } from './editor/FileDropImportModal';
 import { buildEditorExtensions } from './editor/editor-extension-bundle';
 import { makeRegionResolver, useRegionChangedDispatch } from './editor/region-agent-wiring';
+import { useNotesChangedDispatch } from './editor/note-anchor-wiring';
 import { buildPreviewExtensions } from './editor/preview-editor-extensions';
 import { EditorReferenceBar } from './editor/EditorReferenceBar';
 import { useEntitySwitchPhase } from '../editor/entity-switch-phase';
@@ -224,9 +225,9 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
   checkpointRef.current = checkpoint;
 
   useEditorReferenceSync({ editorViewRef });
-  // WHY: global editor events (TOC scroll, navigate-to-reference, note-link
-  // removal) target the document column only. Disabled on the secondary (reference)
-  // instance so they don't fire twice / mutate the reference content.  Why: the secondary reference instance must not double-fire events or mutate reference content
+  // WHY: global editor events (TOC scroll, navigate-to-reference, scroll-to-note)
+  // target the document column only. Disabled on the secondary (reference)
+  // instance so they don't fire twice.
   useEditorEvents({ editorViewRef, currentDocument, enabled: role !== 'secondary' });
   // URL-hash anchor (#slug) → scroll to heading; primary editor only, same reason.
   useAnchorScroll({ editorViewRef, currentDocument, enabled: role !== 'secondary' });
@@ -314,6 +315,9 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
   // pin/clear): subscribes and dispatches the regionChanged-annotated no-op.
   // Selectors + the WHY on the annotation live in region-agent-wiring.
   useRegionChangedDispatch(editorViewRef);
+  // Note highlight refresh on note-list changes (no CM6 transaction of their own) and
+  // once the collab binding is live for this entity, whatever the role.
+  useNotesChangedDispatch(editorViewRef, collabStatus === 'connected' && liveForCurrent);
 
   // WHY: the CM6 container mounts as .editor-cm--pending (visibility:hidden) until
   // onReady. The scroll target is set at creation (below) so the parser settles over

@@ -4,7 +4,7 @@
 // Drift gate: .gitea/workflows/ci.yml → structure-gates → --check.
 
 /** Targets that are NEVER a transclusion (projected from SCHEME_TABLE). */
-export const NON_TRANSCLUSION_RE = /^(http:|https:|mailto:|#|note:|data:)/;
+export const NON_TRANSCLUSION_RE = /^(http:|https:|mailto:|#|data:)/;
 
 /** Transclusion scheme names (projected from SCHEME_TABLE). */
 export type TransclusionScheme = 'ref' | 'doc' | 'table' | 'bare-doc';

@@ -1704,6 +1704,86 @@
         "title": "PipelineSchedulePatch",
         "type": "object"
       },
+      "PublicNoteCreate": {
+        "properties": {
+          "author_name": {
+            "title": "Author Name",
+            "type": "string"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "content_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Sha256"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start"
+          }
+        },
+        "required": [
+          "author_name",
+          "content"
+        ],
+        "title": "PublicNoteCreate",
+        "type": "object"
+      },
+      "PublicReply": {
+        "properties": {
+          "author_name": {
+            "title": "Author Name",
+            "type": "string"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          }
+        },
+        "required": [
+          "author_name",
+          "content"
+        ],
+        "title": "PublicReply",
+        "type": "object"
+      },
       "ReferenceMetaResponse": {
         "properties": {
           "archived": {
@@ -2091,29 +2171,16 @@
             "title": "Agent Auto",
             "type": "boolean"
           },
-          "anchor_offset_end": {
+          "anchor_quote": {
             "anyOf": [
               {
-                "minimum": 0.0,
-                "type": "integer"
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Anchor Offset End"
-          },
-          "anchor_offset_start": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Anchor Offset Start"
+            "title": "Anchor Quote"
           },
           "anchor_rel_end": {
             "anyOf": [
@@ -3802,14 +3869,29 @@
       },
       "UpdateShareBody": {
         "properties": {
+          "allow_comments": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Comments"
+          },
           "scope": {
-            "title": "Scope",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
           }
         },
-        "required": [
-          "scope"
-        ],
         "title": "UpdateShareBody",
         "type": "object"
       },
@@ -7474,7 +7556,7 @@
     },
     "/api/chat/sessions/{session_id}/messages": {
       "get": {
-        "description": "Return a chat session's messages (paginated) and its queue —\n`{messages, queue, queue_seq}`: the live dsh agent's next-turn inbox and\nthe seq that snapshot includes (empty/None for a note chat).",
+        "description": "Return a chat session's messages (paginated) and its queue —\n`{messages, queue, queue_seq}`: the live dsh agent's next-turn inbox and\nthe seq that snapshot includes (empty/None for a note chat).\n\nPagination anchors differ by kind: AI chats are front-anchored (oldest\nfirst, offset>0 refused — the timeline cannot resolve mid-thread); note\nthreads are TAIL-anchored (offset=0 serves the newest page, offset pages\ntoward the head) so a long note never hides its newest rows.",
         "operationId": "list_messages_api_chat_sessions__session_id__messages_get",
         "parameters": [
           {
@@ -7536,7 +7618,7 @@
             "description": "Successful Response"
           },
           "400": {
-            "description": "A paginated read (offset>0) cannot anchor the agent timeline and is refused"
+            "description": "A paginated read (offset>0) cannot anchor the agent timeline and is refused (AI chats only — note threads paginate tail-anchored and accept offset)"
           },
           "422": {
             "content": {
@@ -11576,6 +11658,250 @@
         "summary": "Public File"
       }
     },
+    "/api/public/documents/{document_id}/notes": {
+      "get": {
+        "description": "Every note on the document, with author names — only while comments are on.",
+        "operationId": "list_public_notes_api_public_documents__document_id__notes_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Public Notes"
+      },
+      "post": {
+        "description": "A guest's new note: the session, its first message, and the owner's inbox flag.",
+        "operationId": "create_public_note_api_public_documents__document_id__notes_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicNoteCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Public Note"
+      }
+    },
+    "/api/public/documents/{document_id}/notes/{session_id}": {
+      "delete": {
+        "description": "A guest deletes their OWN note — only while every live message in it is theirs.",
+        "operationId": "delete_public_note_api_public_documents__document_id__notes__session_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Public Note"
+      }
+    },
+    "/api/public/documents/{document_id}/notes/{session_id}/messages": {
+      "post": {
+        "description": "A guest's reply in an existing note on this document.",
+        "operationId": "reply_public_note_api_public_documents__document_id__notes__session_id__messages_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicReply"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reply Public Note"
+      }
+    },
+    "/api/public/documents/{document_id}/notes/{session_id}/messages/{message_id}": {
+      "delete": {
+        "description": "A guest deletes their OWN leaf message (access.can_modify_note_message).",
+        "operationId": "delete_public_message_api_public_documents__document_id__notes__session_id__messages__message_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "title": "Message Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Public Message"
+      }
+    },
     "/api/public/documents/{document_id}/references": {
       "get": {
         "operationId": "public_references_api_public_documents__document_id__references_get",
@@ -12991,8 +13317,8 @@
         "summary": "Delete Share"
       },
       "patch": {
-        "description": "Owner-only: atomically change a share's scope (doc ↔ subtree).\n\nWHY one UPDATE, not revoke-then-create: revoke+create is non-atomic — a\nfailure between them leaves the document silently unshared while the owner\nbelieves they only widened the scope. A single owner-gated UPDATE keeps the\nrow's created_at / created_by audit trail and the canonical /docs/<id> URL\n(the link people already hold never changes on a scope change).",
-        "operationId": "update_share_scope_api_shares__share_id__patch",
+        "description": "Owner-only: atomically change a share's scope (doc ↔ subtree) and/or\nits allow_comments flag; an omitted field is left as it is.\n\nWHY one UPDATE, not revoke-then-create: revoke+create is non-atomic — a\nfailure between them leaves the document silently unshared while the owner\nbelieves they only widened the scope. A single owner-gated UPDATE keeps the\nrow's created_at / created_by audit trail and the canonical /docs/<id> URL\n(the link people already hold never changes on a scope change).",
+        "operationId": "update_share_api_shares__share_id__patch",
         "parameters": [
           {
             "in": "path",
@@ -13050,7 +13376,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Update Share Scope"
+        "summary": "Update Share"
       }
     },
     "/api/telemetry": {

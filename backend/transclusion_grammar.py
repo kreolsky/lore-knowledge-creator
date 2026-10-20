@@ -10,7 +10,6 @@ Mirrors the frontend ``frontend/.../transclusion-grammar.ts``:
 
 ARCH: the reject set MUST be identical on both sides, or a bare ``data:`` / ``http``
 target resolves inconsistently between the editor preview and the export pipeline.
-``note:`` is a note-link, NOT a transclusion — there is no ``"note"`` scheme here.
 """
 
 from __future__ import annotations
@@ -40,7 +39,6 @@ SCHEME_TABLE: list[tuple[str, bool, bool]] = [
     ("https:", False, False),
     ("mailto:", False, False),
     ("#", False, False),
-    ("note:", False, False),
     ("data:", False, False),
     ("ref:", True, False),
     ("doc:", True, True),
@@ -114,7 +112,7 @@ def parse_target(raw: str) -> ParsedTarget | None:
     """Pure parser: canonical scheme detection for a raw embed target string.
 
     Returns ``{"scheme": "ref"|"doc"|"bare-doc"|"table", "id": str}``, or ``None`` for
-    every non-transclusion target (``http(s)``, ``mailto:``, ``#``, ``note:``, ``data:``).
+    every non-transclusion target (``http(s)``, ``mailto:``, ``#``, ``data:``).
     The shape mirrors the frontend ``parseTarget`` union so mirrored tests stay aligned.
 
     INVARIANT: ``table:`` is a DOC-LOCAL transclusion target — the id is a key in the

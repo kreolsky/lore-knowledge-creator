@@ -29,6 +29,9 @@ beforeEach(async () => {
   vi.doMock('../components/Sidebar', () => ({ Sidebar: stub }));
   vi.doMock('../components/TableOfContents', () => ({ TableOfContents: stub }));
   vi.doMock('../components/ReferencesPanel', () => ({ ReferencesPanel: stub }));
+  vi.doMock('../components/PublicNotesPanel', () => ({ PublicNotesPanel: stub }));
+  vi.doMock('../components/PublicNoteConnector', () => ({ PublicNoteConnector: stub }));
+  vi.doMock('../components/editor/SelectionToolbar', () => ({ default: stub }));
 
   vi.doMock('../hooks/useEvent', () => ({ useEvent: () => () => {} }));
   vi.doMock('../utils/reference-url', () => ({ setPublicFileContext: vi.fn() }));
@@ -46,7 +49,7 @@ beforeEach(async () => {
   const stableT = (k: string) => k;
   vi.doMock('../i18n', () => ({ useTranslation: () => ({ t: stableT }) }));
   const icon = () => null;
-  vi.doMock('lucide-react', () => ({ AlertCircle: icon, FileText: icon, List: icon, Paperclip: icon }));
+  vi.doMock('lucide-react', () => ({ AlertCircle: icon, FileText: icon, List: icon, Paperclip: icon, MessageSquare: icon }));
   vi.doMock('react-router-dom', () => ({ useNavigate: () => () => {} }));
 
   // The page fetches the shared doc via apiClient.get; stub it so it resolves
@@ -71,7 +74,8 @@ beforeEach(async () => {
     return s;
   };
   vi.doMock('../store/app-store', () => ({ useAppStore: mkStore({ documents: [] }) }));
-  vi.doMock('../store/ui-store', () => ({ useUIStore: mkStore({}) }));
+  vi.doMock('../store/ui-store', () => ({ useUIStore: mkStore({}), ORPHAN_KEY: '__orphan__' }));
+  vi.doMock('../store/public-notes-store', () => ({ usePublicNotesStore: mkStore({ allowComments: false }), PUBLIC_DRAFT_NOTE_ID: '__public-draft__' }));
 
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -89,6 +93,10 @@ afterEach(() => {
   vi.doUnmock('../api/client');
   vi.doUnmock('../store/app-store');
   vi.doUnmock('../store/ui-store');
+  vi.doUnmock('../store/public-notes-store');
+  vi.doUnmock('../components/PublicNotesPanel');
+  vi.doUnmock('../components/PublicNoteConnector');
+  vi.doUnmock('../components/editor/SelectionToolbar');
 });
 
 describe('PublicSharePage smoke', () => {

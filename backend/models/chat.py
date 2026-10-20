@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Literal
 from uuid import UUID
 
+from note_anchors import relpos_from_wire
 from pydantic import (
     AliasChoices,
     BaseModel,
@@ -34,13 +35,13 @@ class SessionCreate(BaseModel):
     # inheritance fields are taken from THAT session instead of "latest of scope".  Why: forking from a specific parent inherits its model/system_prompt rather than the default latest-of-scope walk; the own / non-deleted / same-project checks prevent a cross-user, cross-project, or tombstoned parent reference.
     parent_session_id: str | None = None
     # Note-chat semantics: is_note=true binds the session to an anchored selection
-    # in document_id; anchors are stored in Unicode code points and converted to
-    # UTF-16 only at the API boundary in client.ts.
+    # in document_id (the anchor_rel_* pair below) or to the whole document.
     is_note: bool = False
-    anchor_offset_start: int | None = Field(default=None, ge=0)
-    anchor_offset_end: int | None = Field(default=None, ge=0)
+    # base64 v1 Yjs RelativePositions (note_anchors.py); decoded in the validator.
     anchor_rel_start: str | None = None
     anchor_rel_end: str | None = None
+    # The anchored fragment as the author saw it; capped at create.
+    anchor_quote: str | None = None
     # ARCH: the agent-only create fields are
     # now UNCONDITIONAL for non-note sessions (every AI chat is an agent chat).
     # target_doc_id pins the agent to a specific document (the only document it
@@ -67,22 +68,15 @@ class SessionCreate(BaseModel):
         # INVARIANT: at least one of document_id / reference_id must be provided  Why: a chat session needs a document context to scope against (the doc it's about, or one of its references); without either there is no anchor and no retrieval/inherit target.
         if not self.document_id and not self.reference_id:
             raise ValueError("Either document_id or reference_id is required")
-        # INVARIANT: note sessions can be anchored (selection-bound) OR anchorless
-        # (document-wide / pipeline-error). Both anchor offsets must be set together
-        # or both omitted — never one without the other.  Why: anchorless notes are first-class (document-wide / pipeline-error), so the two offsets set together or both omit — a lone offset is a half-specified range.
-        # Why: anchorless notes are a first-class feature (57b1366) used by the
-        # "Add Note" button in NotesPanel; a previous fix (134c8cd) required
-        # anchors unconditionally and broke anchorless creation with a 422.
+        # INVARIANT: a note is anchored (both positions) or anchorless (neither).
+        # Why: anchorless notes are first-class (document-wide / pipeline-error, the
+        # "Add Note" button in NotesPanel); a lone position is a half-specified range.
         if self.is_note:
-            start_set = self.anchor_offset_start is not None
-            end_set = self.anchor_offset_end is not None
-            if start_set != end_set:
-                raise ValueError("anchor_offset_start and anchor_offset_end must be set together")
-            if start_set and end_set:
-                if self.anchor_offset_end < self.anchor_offset_start:
-                    raise ValueError("anchor_offset_end must be >= anchor_offset_start")
-                if not self.document_id:
-                    raise ValueError("Note sessions must specify document_id (not reference_id)")
+            if (self.anchor_rel_start is None) != (self.anchor_rel_end is None):
+                raise ValueError("anchor_rel_start and anchor_rel_end must be set together")
+            if self.anchor_rel_start is not None:
+                relpos_from_wire(self.anchor_rel_start)
+                relpos_from_wire(self.anchor_rel_end)
         # ARCH: there is no mode gate here — with one AI line every non-note
         # session is an agent session, so both rules key on the non-note axis:
         #
@@ -131,8 +125,8 @@ class SessionUpdate(BaseModel):
     has_region: bool | None = None
     # ARCH: PATCH-able like system_prompt_id
     # (model_fields_set semantics — explicit null clears to project-level).
-    # update_session guards the write: 400 for note sessions (anchored by a
-    # note: link inside the owning document's content) and for a reference
+    # update_session guards the write: 400 for note sessions (anchored to the
+    # owning document's text) and for a reference
     # TARGET; a reference-scoped session may move to any document or to project
     # level. A non-null target requires at least commentator access, else 403.
     document_id: str | None = None

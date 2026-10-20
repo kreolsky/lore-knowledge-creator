@@ -1,4 +1,9 @@
-"""Note-session realtime nudges: the broadcast target and fire-and-forget scheduling."""
+"""Note-session realtime nudges: the broadcast target and fire-and-forget scheduling.
+
+# SYSTEM: note-realtime — the backend emit half: broadcast target + scheduling
+(the consumer half is the WS frame → app EventBus dispatch typed in
+frontend/src/events/event-types.ts).
+"""
 
 import asyncio
 

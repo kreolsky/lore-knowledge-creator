@@ -41,11 +41,6 @@ def test_rejects_fragment():
     assert parse_target("#anchor") is None
 
 
-def test_rejects_note_scheme():
-    # note: is a note-link (handled by resolveLinkCls), NOT a transclusion.
-    assert parse_target("note:thread1") is None
-
-
 def test_reject_regex_includes_data():
     # Guard the shared reject-set invariant directly.
     assert NON_DOC_TARGET.match("data:image/gif;base64,R0lGODlh=")

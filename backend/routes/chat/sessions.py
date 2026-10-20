@@ -2,8 +2,8 @@
 # SYSTEM: chat-sessions — session CRUD, access gating, LLM config inheritance, title pin
 # The list-sessions read path (candidate load, ref/title/preview/last-activity
 # aggregates, last-message sort, piggyback) lives in `sessions_list`. The CRUD
-# handlers here are guard + command: the bodies (inheritance, the note-link
-# strip, the wire shape) live in `backend/chat_sessions/`. Access gates and the
+# handlers here are guard + command: the bodies (inheritance, the wire
+# shape) live in `backend/chat_sessions/`. Access gates and the
 # harness teardown on delete stay here. Session TITLES are minted by the harness
 # titler and relayed as `session/title` (driver.client → driver.persistence
 # ._persist_session_title); a PATCH only pins user renames.
@@ -17,7 +17,7 @@ from chat_sessions.update import update_session_command
 from fastapi import Depends, HTTPException
 from surrealdb import AsyncSurreal
 
-from access import get_document_access, get_project_access
+from access import can_write_note, get_document_access, get_project_access
 from auth import get_current_user
 from db import extract_id, fetch_one, get_db
 from models import SessionCreate, SessionUpdate
@@ -113,7 +113,7 @@ async def _guard_create_access(body: SessionCreate, user: dict) -> None:
     )
     if access is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    if body.is_note and access == "readonly":
+    if body.is_note and not await can_write_note({"kind": "user", "user": user}, target_did):
         raise HTTPException(status_code=403, detail="Commentator access required for note-chats")
     # INVARIANT(security): every AI chat is an agent chat — there is no second AI
     # Why: there is no Ask/read-only line. Full access is required at create, not

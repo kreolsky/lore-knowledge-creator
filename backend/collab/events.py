@@ -11,7 +11,7 @@ import asyncio
 import json
 import logging
 
-from textmatch import surgical_splice_text
+from textmatch import minimal_splice_text, surgical_splice_text
 
 from collab import registry
 from collab.registry import _session_key, _sessions
@@ -71,11 +71,12 @@ async def apply_external_content_change(
 
     Two mutation modes:
 
-    **Wholesale** (default — `new_content` supplied): delete all + insert as one
-    transaction. Used by restore/checkpoint. CRDT merges always converge — no
-    ConflictError. Destroys every Yjs RelativePosition anchor (the whole text is
-    deleted and re-created), so it MUST NOT be used for agent edits under a pinned
-    region (see surgical mode).
+    **Wholesale** (default — `new_content` supplied): replace the whole text by
+    splicing only the changed spans (``textmatch.minimal_splice_text``) in one
+    transaction. Used by restore/checkpoint, re-upload, transcription. CRDT merges
+    always converge — no ConflictError. Yjs RelativePosition anchors on unchanged
+    text survive; anchors inside a changed span are lost, so agent edits under a
+    pinned region still use surgical mode.
 
     **Surgical** (`from_cp`/`to_cp`/`new_text` supplied): delete the code-point slice
     [from_cp:to_cp) and insert `new_text` at from_cp. Used by the agent edit path
@@ -83,9 +84,8 @@ async def apply_external_content_change(
     unchanged prefix/suffix so the frontend's pinned-region anchor survives the
     agent's own edits and the user's edits around it.
 
-    # ARCH (B1 RISK — verified): pycrdt `Text` indexes in UTF-8 BYTES, not code
-    # points. The wholesale `del text[0:len(text)]` was accidentally unit-agnostic;
-    # the surgical `del text[fb:tb]` is NOT, so from_cp/to_cp (code points from
+    # ARCH: pycrdt `Text` indexes in UTF-8 BYTES, not code
+    # points, so from_cp/to_cp (code points from
     # `resolve_edit_range`) are converted to UTF-8 byte offsets via the shared
     # `surgical_splice_text` helper, re-reading the live text inside `_write_lock`.
 
@@ -117,7 +117,7 @@ async def apply_external_content_change(
         text = session._get_text()
 
         if surgical:
-            # B1 surgical edit: the cp→byte del+insert + the
+            # Surgical edit: the cp→byte del+insert + the
             # original_text TOCTOU guard live in the shared `surgical_splice_text`
             # helper (textmatch) so the live and no-session paths share ONE
             # primitive. Re-reads the live text inside `_write_lock`.
@@ -141,11 +141,7 @@ async def apply_external_content_change(
                     session._last_flushed_content = new_content
                 return True
 
-            old_len = len(text)
-            if old_len > 0:
-                del text[0:old_len]
-            if new_content:
-                text += new_content
+            minimal_splice_text(text, new_content)
 
             if tables_json is not None:
                 apply_tables_json(session.ydoc, tables_json)

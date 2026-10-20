@@ -1,28 +1,7 @@
 /** Tests for link regex pattern factories. */
 
 import { describe, it, expect } from 'vitest';
-import { noteLink, refLink, docLink, extLink } from './link-patterns';
-
-describe('noteLink', () => {
-  it('matches [text](note:id)', () => {
-    const m = noteLink().exec('see [my note](note:abc123) here');
-    expect(m).not.toBeNull();
-    expect(m![1]).toBe('my note');
-    expect(m![2]).toBe('note:abc123');
-  });
-
-  it('does not match ref: links', () => {
-    const m = noteLink().exec('[text](ref:abc)');
-    expect(m).toBeNull();
-  });
-
-  it('matches [[text]](note:id) double brackets', () => {
-    const m = noteLink().exec('see [[my note]](note:abc123) here');
-    expect(m).not.toBeNull();
-    expect(m![1]).toBe('my note');
-    expect(m![2]).toBe('note:abc123');
-  });
-});
+import { refLink, docLink, extLink } from './link-patterns';
 
 describe('refLink', () => {
   it('matches ![alt](ref:id) (embedded image)', () => {
@@ -37,11 +16,6 @@ describe('refLink', () => {
     const m = refLink().exec('[source](ref:doc1)');
     expect(m).not.toBeNull();
     expect(m![1]).toBe('source');
-  });
-
-  it('does not match note: links', () => {
-    const m = refLink().exec('[text](note:abc)');
-    expect(m).toBeNull();
   });
 
   it('matches [[text]](ref:id) double brackets', () => {
@@ -62,10 +36,6 @@ describe('docLink', () => {
 
   it('does not match http links', () => {
     expect(docLink().exec('[x](http://a.com)')).toBeNull();
-  });
-
-  it('does not match note: links', () => {
-    expect(docLink().exec('[x](note:abc)')).toBeNull();
   });
 
   it('does not match ref: links', () => {
@@ -146,10 +116,10 @@ describe('extLink', () => {
 });
 
 describe('each factory returns a fresh regex', () => {
-  it('noteLink resets lastIndex', () => {
-    const r1 = noteLink();
-    const r2 = noteLink();
-    r1.exec('[a](note:1) [b](note:2)');
+  it('refLink resets lastIndex', () => {
+    const r1 = refLink();
+    const r2 = refLink();
+    r1.exec('[a](ref:1) [b](ref:2)');
     expect(r2.lastIndex).toBe(0);
   });
 });

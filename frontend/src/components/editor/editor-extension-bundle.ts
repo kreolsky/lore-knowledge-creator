@@ -27,11 +27,13 @@ import { voiceWidgetExtension } from './voice-widget';
 import { createObserverExtension } from '../../editor/editor-observer';
 import { paddingClickFocus } from '../../editor/padding-click-focus';
 import { linkClickExtension, editableCompartment } from '../../editor/editor-plugins';
-import { buildKeymapExtension } from './hotkey-keymap';
+import { buildKeymapExtension, readonlyNoteHotkeys } from './hotkey-keymap';
 import { listContinuationExtension } from './list-continuation';
 import { listNavExtension } from './list-nav';
 import { liveHeadingsExtension } from '../../editor/live-headings-extension';
 import { regionHighlightExtension, type RegionRange } from '../../editor/region-highlight';
+import { noteHighlightExtension } from '../../editor/note-highlight';
+import { makeNoteAnchorResolver } from './note-anchor-wiring';
 import { claimFocus, type FocusClaim } from '../../editor/active-editor';
 import { regionLostListener } from './region-agent-wiring';
 
@@ -135,11 +137,16 @@ export function buildEditorExtensions(deps: EditorExtensionDeps): Extension[] {
     paddingClickFocus,
     voiceWidgetExtension,
     buildKeymapExtension(),
+    // Mod-m for a member who may note but not edit (the view is not focusable then).
+    readonlyNoteHotkeys,
     // see SYSTEM: selection-region-agent — live pinned-region highlight (re-resolves the
     // RelativePosition on every transaction via the facet resolver) + reactive
     // auto-unpin when the anchor is lost. See region-agent-wiring.
     regionHighlightExtension(deps.regionResolver),
     regionLostListener(() => deps.activeItemIdRef.current),
+    // Note anchors: each note's fragment is resolved from its Yjs RelativePosition pair
+    // against this editor's own entity ydoc — the text carries no note syntax.
+    noteHighlightExtension(makeNoteAnchorResolver(() => deps.activeItemIdRef.current)),
     // Mod-/ toggles plain-text mode by detaching/reattaching all visual
     // extensions through this view's per-instance renderCompartment.
     Prec.highest(keymap.of([{

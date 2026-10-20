@@ -80,7 +80,6 @@ export const ru: Record<TranslationKey, string> = {
   projectDescriptionPlaceholder: 'Описание (необязательно)',
   editProject: 'Редактировать проект',
   noProjectsYet: 'Проектов пока нет. Создайте первый проект.',
-  fullAccessTag: ':full',
   roAccess: ':ro',
   notesAccess: ':note',
 
@@ -382,6 +381,7 @@ export const ru: Record<TranslationKey, string> = {
   chatFileImagesOnly: 'Сюда можно прикрепить только изображения',
   queuedMessageTitle: 'В очереди — выполнится отдельным ходом после предыдущих',
   scrollToBottom: 'Прокрутить вниз',
+  scrollToPrevUserMessage: 'К предыдущему своему сообщению',
   queuedEmpty: '(пусто)',
   queuedImages: 'Изображений: {count}',
   queueDiscardFailed: 'Не удалось убрать сообщение из очереди',
@@ -535,21 +535,28 @@ export const ru: Record<TranslationKey, string> = {
   // current agent — same banner shell, different explanation.
 
   // link suggestions
-  linkSuggestionsPlaceholder: 'docs \u00B7 ref: референсы \u00B7 note: заметки \u00B7 http:// url',
+  linkSuggestionsPlaceholder: 'docs \u00B7 ref: референсы \u00B7 http:// url',
   insertExternalLink: '\u2191 Вставить внешнюю ссылку',
   notes: 'Заметки',
   url: 'Url',
   noReferencesHint: 'Нет референсов — откройте панель референсов',
-  noNotesFound: 'Заметки не найдены',
   noDocumentsFound: 'Документы не найдены',
   noReferencesFound: 'Референсы не найдены',
   noContent: 'Нет содержимого',
   previewLoadError: 'Не удалось загрузить превью',
   failedToCreateNote: 'Не удалось создать заметку',
+  noteFragmentDeleted: 'фрагмент удалён',
+  publicNoteDocChanged: 'Документ изменился — обновите страницу',
+  publicNoteMessageHasReplies: 'На это сообщение уже ответили — удалить его нельзя',
+  publicNoteFragmentGone: 'Выделенный фрагмент удалён — заметка будет ко всему документу.',
+  publicNotesRefreshFailed: 'Не удалось обновить заметки — показан последний загруженный список.',
+  publicNotesStale: 'Документ изменился с момента открытия — обновите страницу, чтобы увидеть заметки на своих местах.',
+  publicNotesEmpty: 'Заметок пока нет. Выделите текст, чтобы оставить заметку к фрагменту.',
+  publicNoteNamePlaceholder: 'Ваше имя',
+  publicNoteNameRequired: 'Укажите имя — оно будет видно рядом с заметкой',
   failedToCreateReference: 'Не удалось создать референс',
   unknownAuthor: 'неизвестен',
   pipelineExtractionFailed: 'Сбой обработки в пайплайне — детали в новой системной заметке',
-  agentApplyFailed: 'Действие агента не удалось — детали в новой системной заметке',
   embeddingsIndexFailed: 'Индексация документов сбоит. Результаты поиска могут быть неполными.',
   embeddingsIndexRecovered: 'Индексация документов восстановлена.',
   failedToCreateDocumentFromReference: 'Не удалось создать документ из референса',
@@ -722,6 +729,7 @@ export const ru: Record<TranslationKey, string> = {
 
   // chat messages
   loadingMessages: 'Загрузка сообщений…',
+  loadOlderMessages: 'Загрузить более старые сообщения',
   prevPage: '‹ Назад',
   nextPage: 'Вперёд ›',
   pageOf: 'Стр. {n}/{total}',
@@ -805,7 +813,6 @@ export const ru: Record<TranslationKey, string> = {
 
   // broken link toast messages
   linkBrokenDocument: 'Документ не найден или нет доступа',
-  linkBrokenNote: 'Заметка не найдена',
   linkBrokenReference: 'Референс не найден',
 
   // embeddings admin
@@ -964,6 +971,9 @@ export const ru: Record<TranslationKey, string> = {
   accessSummaryInherited: 'Опубликовано через «{title}» — читать может любой по ссылке.',
   accessClickToCopy: 'Нажмите, чтобы скопировать публичную ссылку',
   accessShareDepthWarning: 'Поддерево глубже 50 уровней тихо обрезается обходом потомков.',
+  accessAllowComments: 'Разрешить комментарии',
+  accessAllowCommentsHint: 'Любой, у кого есть ссылка, сможет оставлять заметки под своим именем и увидит все заметки документа с именами авторов. Текст остаётся только для чтения.',
+  accessShareCommentsError: 'Не удалось изменить комментарии ссылки',
   accessApiTitle: 'API-доступ',
   accessApiDesc: 'Ключи виджетов и агентов для этого документа',
 

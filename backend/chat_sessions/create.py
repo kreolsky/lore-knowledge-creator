@@ -4,6 +4,7 @@ import logging
 from uuid import uuid4
 
 import settings
+from note_anchors import relpos_from_wire
 
 import event_bus
 from chat_sessions.note_events import broadcast_doc_id, fire_note_emit
@@ -84,22 +85,28 @@ async def _resolve_inherited(db, body: SessionCreate, user_id: str) -> dict:
     return out
 
 
+# The stored quote is a reminder of the fragment, not a copy of it.
+ANCHOR_QUOTE_MAX = 500
+
+
+def cap_anchor_quote(quote: str) -> str:
+    """The anchored fragment as stored: at most ANCHOR_QUOTE_MAX chars, then «…»."""
+    return quote if len(quote) <= ANCHOR_QUOTE_MAX else quote[:ANCHOR_QUOTE_MAX] + "…"
+
+
 def _note_fields(body: SessionCreate) -> dict:
     """The note-only columns: the flag and the stored anchor."""
     data: dict = {"is_note": True}
-    if body.anchor_offset_start is not None and body.anchor_offset_end is not None:
-        data["anchor_offset_start"] = body.anchor_offset_start
-        data["anchor_offset_end"] = body.anchor_offset_end
-        # INVARIANT: anchor_rel_* is a presence-only hint today — it marks a note
-        # as "anchored" but is NOT decoded back into a position anywhere yet (the
-        # [text](note:ID) link in the body is the source of truth for the highlight). Why:
-        # live note creation stores a Yjs RelativePosition JSON string (from the
-        # frontend), while the one-shot migration backfills a pycrdt StickyIndex
-        # (binary). The two encodings are NOT byte-comparable — reconcile them before
-        # any code tries to resolve anchor_rel_* into an offset.
-        if body.anchor_rel_start and body.anchor_rel_end:
-            data["anchor_rel_start"] = body.anchor_rel_start.encode("utf-8")
-            data["anchor_rel_end"] = body.anchor_rel_end.encode("utf-8")
+    if body.anchor_rel_start and body.anchor_rel_end:
+        # INVARIANT(persisted): anchor_rel_* hold v1-encoded Yjs RelativePositions
+        # (start bound AFTER, end bound BEFORE) — the bytes Yjs encodeRelativePosition
+        # and note_anchors.build_anchor both write. Why: the anchor is resolved by the
+        # browser AND the server; any other encoding (the retired JSON form) resolves
+        # on neither, so the validator decodes before it is stored.
+        data["anchor_rel_start"] = relpos_from_wire(body.anchor_rel_start)
+        data["anchor_rel_end"] = relpos_from_wire(body.anchor_rel_end)
+    if body.anchor_quote:
+        data["anchor_quote"] = cap_anchor_quote(body.anchor_quote)
     return data
 
 
@@ -137,7 +144,7 @@ async def create_session_command(db, body: SessionCreate, user_id: str) -> dict:
     """Write the session row and return it serialized; the caller has gated access.
 
     Note-chat semantics (body.is_note=true): LLM inheritance is skipped (notes
-    never call the LLM) and anchor_offset_* are stored as-is in code points.
+    never call the LLM); the anchor is stored as given (see _note_fields).
     """
     uid = str(uuid4())
     data: dict = {

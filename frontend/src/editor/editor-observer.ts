@@ -13,6 +13,7 @@
 import type React from 'react';
 import type { Extension } from '@codemirror/state';
 import { ViewPlugin, type ViewUpdate } from '@codemirror/view';
+import { takesNotesWithoutFocus } from './note-surface';
 import { useUIStore } from '../store/ui-store';
 import { firstVisibleLine, positionCacheSet } from './position-cache';
 import { emit } from '../events';
@@ -31,6 +32,27 @@ function getItemId(item: ActiveItem): string | undefined {
     ? item.reference_id
     : (item as { document_id?: string } | null)?.document_id;
 }
+
+/**
+ * Feed the selection toolbar: whether this view holds a live, non-empty selection.
+ *
+ * WHY the note-surface split: a view the user cannot type into (a commentator's
+ * editor, the public page) is not focusable — `contenteditable=false` takes no focus,
+ * so `hasFocus` stays false while the user selects in it with the mouse. Requiring
+ * focus there kept the note-only toolbar from ever appearing.
+ */
+function publishSelection(update: ViewUpdate): void {
+  if (!update.selectionSet && !update.focusChanged) return;
+  const { view } = update;
+  const { from, to } = view.state.selection.main;
+  const live = view.hasFocus || takesNotesWithoutFocus(view.state);
+  const empty = from === to || !live;
+  useUIStore.getState().setSelectionEmpty(empty);
+  if (update.selectionSet && !empty) emit('editor-selection-change', { empty: false });
+}
+
+/** The selection feed alone — for a viewer with no position cache or doc scan (public page). */
+export const selectionFeedExtension: Extension = ViewPlugin.define(() => ({ update: publishSelection }));
 
 export function createObserverExtension(deps: ObserverDeps): Extension {
   return ViewPlugin.define((view) => {
@@ -64,19 +86,8 @@ export function createObserverExtension(deps: ObserverDeps): Extension {
             positionCacheSet(id, { cursor, scroll: from, scrollOffset: offset });
           }, 500);
 
-          const { from, to } = update.view.state.selection.main;
-          const empty = from === to || !update.view.hasFocus;
-          useUIStore.getState().setSelectionEmpty(empty);
-          if (!empty) {
-            emit('editor-selection-change', { empty: false });
-          }
         }
-
-        if (update.focusChanged && !update.selectionSet) {
-          const { from, to } = update.view.state.selection.main;
-          const empty = from === to || !update.view.hasFocus;
-          useUIStore.getState().setSelectionEmpty(empty);
-        }
+        publishSelection(update);
 
         if (update.docChanged) {
           const item = deps.activeItemRef.current;
@@ -98,7 +109,7 @@ export function createObserverExtension(deps: ObserverDeps): Extension {
             let m;
             while ((m = regex.exec(text)) !== null) {
               const parsed = parseTarget(m[1]);
-              if (!parsed) continue; // non-transclusion target (http/data/note:…)
+              if (!parsed) continue; // non-transclusion target (http/data/…)
               if (!transcludeMap.has(parsed.id)) {
                 emit('unresolved-image-ref');
                 break;

@@ -4,11 +4,12 @@
 
 import logging
 import re
+from datetime import datetime
 
+from chat_sessions.authors import author_display, user_names
 from fastapi import HTTPException
-from pipeline.extractor.runner import PIPELINE_AUTHOR_ID
 
-from db import extract_id, serialize_record, validate_record_id
+from db import serialize_record
 from models import resolve_message_author
 
 logger = logging.getLogger(__name__)
@@ -58,11 +59,16 @@ async def _session_preview(db, session_id: str) -> dict:
     )
     first = (first_row[0] if first_row else {}) or {}
     last = (last_row[0] if last_row else {}) or {}
+    last_at = last.get("created_at")
     return {
         "first": (first.get("content") or "").strip()[:PREVIEW_CONTENT_MAX] or None,
         "last": (last.get("content") or "").strip()[:PREVIEW_CONTENT_MAX] or None,
         "count": count,
-        "last_at": last.get("created_at"),
+        # INVARIANT(persisted): an ISO string, never a datetime. Why: this preview rides
+        # the note_message_changed frame that CollabSession.broadcast json.dumps; a raw
+        # datetime made every reply frame fail inside the event-bus subscriber, so
+        # members saw replies only after a reload (see serialize_record's INVARIANT).
+        "last_at": last_at.isoformat() if isinstance(last_at, datetime) else last_at,
     }
 
 
@@ -84,40 +90,22 @@ def _serialize_message(
     session: dict | None = None,
     author_names: dict[str, str] | None = None,
 ) -> dict:
-    """Serialize a message row. When session is provided, resolves and stamps
-    author_name using author_names map (fall back to session owner via
-    resolve_message_author). PIPELINE_AUTHOR_ID → "system notes" sentinel.
+    """Serialize a message row. When session is provided, stamps author_name via
+    chat_sessions.authors.author_display (member name, anonymous author's own
+    name, or the system label).
     """
     out = serialize_record(row, "message_id")
     if session is None:
         # never serialized to the frontend (parent_id + tree.ts drive rendering).
         return out
-    effective_id = resolve_message_author(row, session)
-    if effective_id == PIPELINE_AUTHOR_ID:
-        out["author_name"] = "system notes"
-    elif author_names:
-        name = author_names.get(effective_id)
-        if name:
-            out["author_name"] = name
+    name = author_display(row, session, author_names or {})
+    if name:
+        out["author_name"] = name
+    else:
+        out.pop("author_name", None)
     return out
 
 
 async def _resolve_author_names(db, session: dict, rows: list[dict]) -> dict[str, str]:
-    """Build author_id → user_name map for a batch of messages.
-
-    Skips PIPELINE_AUTHOR_ID (serializer maps it to "system notes" directly).
-    """
-    author_ids: set[str] = set()
-    for r in rows:
-        aid = resolve_message_author(r, session)
-        if aid and aid != PIPELINE_AUTHOR_ID:
-            author_ids.add(aid)
-    if not author_ids:
-        return {}
-    placeholders = ", ".join(
-        f"type::record('users', '{validate_record_id(aid)}')" for aid in author_ids
-    )
-    users = await db.query(
-        f"SELECT id, name FROM users WHERE id IN [{placeholders}]"
-    )
-    return {extract_id(u["id"]): u.get("name", "") for u in (users or [])}
+    """Build author_id → user_name map for a batch of messages (members only)."""
+    return await user_names(db, {resolve_message_author(r, session) for r in rows})

@@ -29,7 +29,6 @@ export const WS_EVENT_TYPES = [
   'content_flushed',
   'agent_extraction_started',
   'extraction_error',
-  'agent_error_note',
   'inbox_changed',
   'embedding_degraded',
   'embedding_recovered',
@@ -107,7 +106,6 @@ export interface EventMap {
   // owner-filtered chat channel (chat_frame envelopes) — so no
   // ws:generate_image_* types exist.
   'ws:extraction_error': { reference_id: string; note_id: string; document_id: string };
-  'ws:agent_error_note': { note_id: string; document_id: string };
   // see SYSTEM: inbox — the CALLER's unread pool changed (owner-filtered send, the
   // user_id never rides the wire). document_id is the doc whose pool moved; the
   // client refetches GET /api/projects/{id}/inbox.
@@ -192,8 +190,11 @@ export interface EventMap {
   // as a markdown blockquote + question.
   'chat-clarify-insert': { quote: string; question: string };
   // MessageList → ChatInput: the stream stopped following because the user scrolled
-  // up past the stick threshold (away=true), or came back (away=false).
-  'chat-scrolled-away': { away: boolean };
+  // up past the stick threshold (away=true), or came back (away=false); userAbove =
+  // a user message lies above the view (the up button shows only then).
+  'chat-scrolled-away': { away: boolean; userAbove: boolean };
   // ChatInput's scroll-to-bottom button → MessageList: jump to the end and re-follow.
   'chat-scroll-to-bottom': void;
+  // ChatInput's up button → MessageList: jump to the nearest user message above.
+  'chat-scroll-to-prev-user': void;
 }

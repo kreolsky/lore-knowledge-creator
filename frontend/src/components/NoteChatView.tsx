@@ -5,6 +5,7 @@
 // SYSTEM: note-chat — note-chat UI subsystem reusing chat components
 
 import { useEffect, useRef, useCallback, useLayoutEffect, useMemo, useState } from 'react';
+import { Button } from './ui';
 import { ChatComposer } from './chat/ChatComposer';
 import { MessageBubble, type MessageBubbleActions } from './chat/MessageBubble';
 import { copyWithToast } from './chat/shared/copy';
@@ -23,6 +24,11 @@ export function NoteChatView() {
   const { t } = useTranslation();
   const messages = useNoteChatStore(s => s.messages);
   const messagesLoading = useNoteChatStore(s => s.messagesLoading);
+  // WHY: the button shows ONLY while a committed page hit the backend's 200-row
+  // cap — a full tail window means older rows exist behind the anchor. A page
+  // under the cap is the thread's head and the button disappears.
+  const messagesTruncated = useNoteChatStore(s => s.messagesTruncated);
+  const loadOlderMessages = useNoteChatStore(s => s.loadOlderMessages);
   const sendMessage = useNoteChatStore(s => s.sendMessage);
   const pendingInputFocus = useNoteChatStore(s => s.pendingInputFocus);
   const setPendingInputFocus = useNoteChatStore(s => s.setPendingInputFocus);
@@ -212,6 +218,17 @@ export function NoteChatView() {
   return (
     <div className="flex flex-col flex-1 min-h-0">
       <div ref={containerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-3 py-2">
+        {messagesTruncated && (
+          <div className="flex justify-center mb-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => { void loadOlderMessages(); }}
+            >
+              {t('loadOlderMessages')}
+            </Button>
+          </div>
+        )}
         {messages.map((msg) => (
           <MessageBubble
             key={msg.message_id}

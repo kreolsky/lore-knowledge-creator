@@ -53,10 +53,9 @@ function _upsertSession(sessions: ChatSession[], session: ChatSession): ChatSess
 }
 
 export interface NoteAnchor {
-  offsetStart: number;
-  offsetEnd: number;
-  relStart?: string;
-  relEnd?: string;
+  relStart: string;
+  relEnd: string;
+  quote: string;
 }
 
 interface NoteChatState {
@@ -79,6 +78,13 @@ interface NoteChatState {
   activeSessionId: string | null;
   messages: ChatMessage[];
   messagesLoading: boolean;
+  // WHY: a committed page of exactly NOTE_PAGE_SIZE rows means older rows
+  // exist BEHIND the tail anchor — NoteChatView shows its "load older" button
+  // only while this is true, and the session card's head preview/count are not
+  // re-derived from a window that lacks the head. Set by a committed GET page at
+  // exactly the cap; cleared by setActiveSession, reset, and any page under it
+  // (the thread's head is loaded).
+  messagesTruncated: boolean;
   // WHY: true while the note-session list for the current scope is in flight.
   // Gates the NotesPanel empty state so "no notes yet" never flashes before the
   // /chat/sessions?is_note fetch lands. Empty state ≠ loading state. Why: flashing "no notes" during load violates no-silent-degradation.
@@ -112,6 +118,9 @@ interface NoteChatState {
    * Returns true when the delete was issued. */
   discardIfEmpty: (sessionId: string) => boolean;
   loadMessages: (sessionId: string) => Promise<void>;
+  /** Page backward from the tail anchor: GET offset = messages.length and
+   * PREPEND the older rows with message_id dedup. */
+  loadOlderMessages: () => Promise<void>;
   sendMessage: (content: string, images?: string[]) => Promise<void>;
   editMessage: (messageId: string, content: string) => Promise<void>;
   deleteMessage: (messageId: string) => Promise<void>;
@@ -137,6 +146,32 @@ interface NoteChatState {
   reset: () => void;
 }
 
+// WHY: every note GET passes this as `limit` explicitly — the truncation flag
+// compares a page against it, so it must not ride the backend's default.
+const NOTE_PAGE_SIZE = 200;
+
+// Prepend an older page in front of the loaded window, deduped by message_id.
+// WHY: the tail-anchored window SHIFTS when a reply lands between pages —
+// loaded #6–205, reply #206 arrives, then offset=200 over 206 rows returns
+// #1–6, so the boundary row (#6) comes back in the older page too. Dedup on
+// prepend converges instead of duplicating the seam row. The cursor
+// (offset = messages.length) assumes every loaded row exists on the server: a
+// local-only row would make the next page skip one older message, which dedup
+// cannot recover.
+function _prependOlder(older: ChatMessage[], current: ChatMessage[]): ChatMessage[] {
+  const seen = new Set(current.map(m => m.message_id));
+  return [...older.filter(m => !seen.has(m.message_id)), ...current];
+}
+
+// WHY: the session card's headline is the note's FIRST message, and a truncated
+// tail window does not hold it — re-deriving the card from the window would
+// retitle it with a middle message and cap its count at the window. While
+// truncated, local writes keep the card's head and move the count by the
+// window's delta (0 when the realtime frame already applied the change).
+function _countAfter(ss: ChatSession, messages: ChatMessage[], prevLen: number, truncated: boolean): number {
+  return truncated ? (ss.message_count ?? 0) + messages.length - prevLen : messages.length;
+}
+
 export const useNoteChatStore = create<NoteChatState>((set, get) => ({
   sessions: [],
   sessionsScope: null,
@@ -144,6 +179,7 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
   activeSessionId: null,
   messages: [],
   messagesLoading: false,
+  messagesTruncated: false,
   sessionsLoading: false,
   pendingInputFocus: false,
   pendingImages: [],
@@ -245,10 +281,9 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
       is_note: true,
     };
     if (opts.anchor) {
-      body.anchor_offset_start = opts.anchor.offsetStart;
-      body.anchor_offset_end = opts.anchor.offsetEnd;
-      if (opts.anchor.relStart) body.anchor_rel_start = opts.anchor.relStart;
-      if (opts.anchor.relEnd) body.anchor_rel_end = opts.anchor.relEnd;
+      body.anchor_rel_start = opts.anchor.relStart;
+      body.anchor_rel_end = opts.anchor.relEnd;
+      body.anchor_quote = opts.anchor.quote;
     }
     // TOCTOU: capture the logout generation before the POST — a soft logout while
     // it is in flight resets the store, and the resolving POST must not write the prior
@@ -258,10 +293,10 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
     if (getLogoutEpoch() !== startEpoch) {
       // INVARIANT: on a logout-epoch mismatch createNoteSession SKIPS the store insert
       // but still RETURNS the session (unlike chat-store's createSession, whose null is
-      // the established lazy-create no-op signal). Why: markdown-actions must finalize
-      // the persisted `note:tempId` link in the document text via session_id — a null
-      // here would leave the temp link in user content. The row exists server-side
-      // under the prior user's id; the next user's loadSessions never returns it.
+      // the established lazy-create no-op signal). Why: the row exists server-side, and
+      // createNote reads a resolve as "created" and a rejection as a failure toast — a
+      // null would be neither. The row is under the prior user's id; the next user's
+      // loadSessions never returns it.
       return session;
     }
     set(s => ({
@@ -285,6 +320,7 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
       activeSessionId: sessionId,
       messages: [],
       messagesLoading: false,
+      messagesTruncated: false,
     });
     if (sessionId) {
       get().loadMessages(sessionId);
@@ -350,9 +386,25 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
     // live there, once, for both stores; the terminals here are note-simple.
     await loadMessagesFor(sessionId, {
       activeSessionId: () => get().activeSessionId,
-      onLoaded: messages => set({ messages, messagesLoading: false }),
+      onLoaded: messages => set({ messages, messagesLoading: false, messagesTruncated: messages.length >= NOTE_PAGE_SIZE }),
       onLoadError: () => set({ messagesLoading: false }),
-    });
+    }, { limit: NOTE_PAGE_SIZE });
+  },
+
+  async loadOlderMessages() {
+    const { activeSessionId, messages } = get();
+    if (!activeSessionId) return;
+    // No messagesLoading flip: the loaded window stays rendered (the button is
+    // the only affordance in flight); the shared layer's toast surfaces a
+    // failure and the dedup prepend makes a double-click idempotent.
+    await loadMessagesFor(activeSessionId, {
+      activeSessionId: () => get().activeSessionId,
+      onLoaded: older => set(s => ({
+        messages: _prependOlder(older, s.messages),
+        messagesTruncated: older.length >= NOTE_PAGE_SIZE,
+      })),
+      onLoadError: () => {},
+    }, { limit: NOTE_PAGE_SIZE, offset: messages.length });
   },
 
   async sendMessage(content: string, images?: string[]) {
@@ -386,9 +438,11 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
           const last = messages[messages.length - 1];
           return {
             ...ss,
-            first_message_preview: first ? (first.content ?? ss.first_message_preview) : (ss.first_message_preview ?? trimmed),
+            first_message_preview: s.messagesTruncated || !first
+              ? (ss.first_message_preview ?? trimmed)
+              : (first.content ?? ss.first_message_preview),
             last_message_preview: last ? (last.content ?? trimmed) : trimmed,
-            message_count: messages.length,
+            message_count: _countAfter(ss, messages, s.messages.length, s.messagesTruncated),
             last_message_at: last ? (last.created_at ?? nowIso) : nowIso,
             updated_at: nowIso,
           };
@@ -419,7 +473,9 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
             const last = messages[messages.length - 1];
             return {
               ...ss,
-              first_message_preview: first ? (first.content ?? ss.first_message_preview) : ss.first_message_preview,
+              first_message_preview: !s.messagesTruncated && first
+                ? (first.content ?? ss.first_message_preview)
+                : ss.first_message_preview,
               last_message_preview: last ? (last.content ?? ss.last_message_preview) : ss.last_message_preview,
             };
           })
@@ -446,9 +502,11 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
             const last = messages[messages.length - 1];
             return {
               ...ss,
-              first_message_preview: first ? (first.content ?? null) : null,
+              first_message_preview: s.messagesTruncated
+                ? ss.first_message_preview
+                : (first?.content ?? null),
               last_message_preview: last ? (last.content ?? null) : null,
-              message_count: messages.length,
+              message_count: _countAfter(ss, messages, s.messages.length, s.messagesTruncated),
               last_message_at: last ? (last.created_at ?? null) : null,
             };
           })
@@ -538,6 +596,7 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
       activeSessionId: null,
       messages: [],
       messagesLoading: false,
+      messagesTruncated: false,
       sessionsLoading: false,
       pendingInputFocus: false,
       pendingImages: [],

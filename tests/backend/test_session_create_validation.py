@@ -2,15 +2,17 @@
 
 # SYSTEM: session-create-validation-tests — guards anchored/anchorless notes contract
 
-Regression coverage for commit 134c8cd, which made anchor_offset_*
-unconditionally required on note sessions and broke the "Add Note"
-button (anchorless notes).
+Anchorless notes are first-class (the "Add Note" button); an anchored note carries
+both relative positions or neither.
 """
 
 import pytest
 from pydantic import ValidationError
 
 from models import SessionCreate
+
+# A v1 Yjs RelativePosition (item scope, client 7, clock 3, assoc 0), base64.
+RELPOS = "AAcDAA=="
 
 
 def test_note_without_anchors_is_valid():
@@ -22,8 +24,8 @@ def test_note_without_anchors_is_valid():
         is_note=True,
     )
     assert session.is_note is True
-    assert session.anchor_offset_start is None
-    assert session.anchor_offset_end is None
+    assert session.anchor_rel_start is None
+    assert session.anchor_rel_end is None
 
 
 def test_note_with_both_anchors_is_valid():
@@ -31,11 +33,11 @@ def test_note_with_both_anchors_is_valid():
         project_id="proj_1",
         document_id="doc_1",
         is_note=True,
-        anchor_offset_start=10,
-        anchor_offset_end=20,
+        anchor_rel_start=RELPOS,
+        anchor_rel_end=RELPOS,
     )
-    assert session.anchor_offset_start == 10
-    assert session.anchor_offset_end == 20
+    assert session.anchor_rel_start == RELPOS
+    assert session.anchor_rel_end == RELPOS
 
 
 def test_note_with_only_start_anchor_is_rejected():
@@ -44,7 +46,7 @@ def test_note_with_only_start_anchor_is_rejected():
             project_id="proj_1",
             document_id="doc_1",
             is_note=True,
-            anchor_offset_start=10,
+            anchor_rel_start=RELPOS,
         )
 
 
@@ -54,16 +56,6 @@ def test_note_with_only_end_anchor_is_rejected():
             project_id="proj_1",
             document_id="doc_1",
             is_note=True,
-            anchor_offset_end=20,
+            anchor_rel_end=RELPOS,
         )
 
-
-def test_note_with_inverted_anchors_is_rejected():
-    with pytest.raises(ValidationError, match=">= anchor_offset_start"):
-        SessionCreate(
-            project_id="proj_1",
-            document_id="doc_1",
-            is_note=True,
-            anchor_offset_start=20,
-            anchor_offset_end=10,
-        )

@@ -53,12 +53,6 @@ describe('parseOutgoingLinks', () => {
     ]);
   });
 
-  it('excludes note links', () => {
-    const content = 'Check [this note](note:note-001) and [another](note:note-002).';
-    const links = parseOutgoingLinks(content);
-    expect(links).toEqual([]);
-  });
-
   it('excludes anchor links', () => {
     const content = 'Jump to [Section](#heading-1).';
     expect(parseOutgoingLinks(content)).toEqual([]);
@@ -102,13 +96,12 @@ describe('parseOutgoingLinks', () => {
     expect(links).toHaveLength(2);
   });
 
-  it('handles mixed content with notes excluded', () => {
+  it('handles mixed content', () => {
     const content = [
       '# World Overview',
       '',
       'See [Geography](doc-geo) for the map.',
       'The [ancient scroll](ref:scroll-1) describes the lands.',
-      'A [discussion](note:n1) was started.',
       'More at [wiki](https://wiki.example.com).',
       'Also see [History](doc-hist) and [another scroll](ref:scroll-1).',
     ].join('\n');
@@ -120,11 +113,6 @@ describe('parseOutgoingLinks', () => {
       { label: 'ancient scroll', target: 'ref:scroll-1', type: 'ref' },
       { label: 'wiki', target: 'https://wiki.example.com', type: 'ext' },
     ]);
-  });
-
-  it('handles content with only notes (returns empty)', () => {
-    const content = '[note A](note:a)\n[note B](note:b)';
-    expect(parseOutgoingLinks(content)).toEqual([]);
   });
 
   it('extracts doc: prefixed links as doc type', () => {

@@ -224,22 +224,6 @@ export function DocumentPage() {
     });
   }, [currentProject?.project_id, currentDocument?.document_id]));
 
-  // ARCH: an agent proposal apply failed and the backend pinned a system note to
-  // this document. Refresh the notes panel + open the new error note thread so the
-  // user sees the explanation (mirrors the extraction-error handler above).
-  useEvent('ws:agent_error_note', useCallback(({ note_id: noteId, document_id: documentId }) => {
-    if (!currentProject || !currentDocument) return;
-    if (documentId !== currentDocument.document_id) return;
-    useNoteChatStore.getState().loadSessions(
-      currentProject.project_id,
-      currentDocument.document_id,
-    ).then(() => {
-      useNoteStore.getState().setActiveNoteThreadId(noteId, currentDocument.document_id);
-      useNoteChatStore.getState().setActiveSession(noteId);
-      useNoteChatStore.getState().setPendingInputFocus(true);
-    });
-  }, [currentProject?.project_id, currentDocument?.document_id]));
-
   const currentReference = useAppStore(s => s.currentReference);
   const currentTable = useAppStore(s => s.currentTable);
   const previewDocument = useAppStore(s => s.previewDocument);

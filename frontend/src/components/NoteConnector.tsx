@@ -6,6 +6,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import type { EditorView } from '@codemirror/view';
+import { findNoteAnchorRange } from '../editor/note-highlight';
 import { useEditorView, getRoleView, subscribeRoleView, type EditorRole } from '../editor/active-editor';
 import { useNoteStore } from '../store/note-store';
 import { useAppStore } from '../store/app-store';
@@ -13,41 +15,45 @@ import { useNoteChatStore } from '../store/note-chat-store';
 import { useDocState, useUIStore } from '../store/ui-store';
 import { readRefOpenMode, showsBothPanes, refIsScope } from '../store/ui-store/documents-slice';
 
-interface Coords { x1: number; y1: number; x2: number; y2: number }
+export interface Coords { x1: number; y1: number; x2: number; y2: number }
 
 
-function findAnchorCoords(noteId: string, getView: () => import('@codemirror/view').EditorView | null): { x: number; y: number } | null {
-  const view = getView();
-  if (!view) return null;
-  const docText = view.state.doc.toString();
-  const needle = `note:${noteId})`;
-  const urlIdx = docText.indexOf(needle);
-  if (urlIdx === -1) return null;
-
-  let labelStart = urlIdx - 1;
-  while (labelStart > 0 && docText[labelStart - 1] !== '[') labelStart--;
-  if (labelStart <= 0) return null;
-
-  const bracketPos = labelStart - 1;
-  if (docText[bracketPos] !== '[') return null;
-
-  const startCoords = view.coordsAtPos(labelStart);
-  if (!startCoords) return null;
-
-  let rightEdge = startCoords.right;
-  let prevTop = startCoords.top;
-  for (let pos = labelStart + 1; pos < urlIdx; pos++) {
-    const c = view.coordsAtPos(pos);
-    if (!c) break;
-    if (Math.abs(c.top - prevTop) > 2) break;
-    rightEdge = c.right;
-    prevTop = c.top;
-  }
-
-  return { x: rightEdge, y: (startCoords.top + startCoords.bottom) / 2 };
+/**
+ * Where an anchor outside the rendered viewport sits, from the editor's height map.
+ *
+ * WHY: CM6 renders only the lines near the visible area, and coordsAtPos returns null
+ * for every other position — an anchor scrolled far away would drop the connector,
+ * which must keep pointing off-screen toward it. The line's vertical middle is exact;
+ * the horizontal position is estimated by character width (no glyphs to measure).
+ */
+function offscreenCoords(view: EditorView, pos: number): { x: number; y: number } {
+  const block = view.lineBlockAt(pos);
+  const content = view.contentDOM.getBoundingClientRect();
+  const x = Math.min(content.left + (pos - block.from) * view.defaultCharacterWidth, content.right);
+  return { x, y: view.documentTop + block.top + block.height / 2 };
 }
 
-function findPanelCoords(): { x: number; y: number } | null {
+/** Right edge of the first visual line of an anchored range — where the spline starts. */
+function rangeEndCoords(view: EditorView, range: { from: number; to: number } | null): { x: number; y: number } | null {
+  if (!range) return null;
+  const start = view.coordsAtPos(range.from, 1);
+  if (!start) return offscreenCoords(view, range.from);
+  let rightEdge = start.right;
+  for (let pos = range.from + 1; pos <= range.to; pos++) {
+    const c = view.coordsAtPos(pos, -1);
+    if (!c || Math.abs(c.top - start.top) > 2) break;
+    rightEdge = c.right;
+  }
+  return { x: rightEdge, y: (start.top + start.bottom) / 2 };
+}
+
+export function findAnchorCoords(noteId: string, getView: () => EditorView | null): { x: number; y: number } | null {
+  const view = getView();
+  if (!view) return null;
+  return rangeEndCoords(view, findNoteAnchorRange(view.state, noteId));
+}
+
+export function findPanelCoords(): { x: number; y: number } | null {
   const el = document.querySelector('aside.right-panel');
   if (!el) return null;
   const rect = el.getBoundingClientRect();
@@ -153,19 +159,31 @@ export function NoteConnector() {
   }, [currentDocument?.document_id, connectedNoteId, activeNoteThreadId, rightPanelTab]);
 
   if (!visible || !coords) return null;
+  return <ConnectorSvg coords={coords} />;
+}
 
+/** The connector drawing itself — shared by the member and the public notes surfaces.
+ *
+ * WHY two layers: the panel-side dot sits exactly on the right panel's resizer line
+ * (.resizer, z-index 14) and must read above it, while the spline stays under the
+ * header and tab bars (z-index 13) it may cross. */
+export function ConnectorSvg({ coords }: { coords: Coords }) {
   return createPortal(
-    <svg className="fixed inset-0 w-full h-full pointer-events-none z-[12]">
-      <path
-        d={buildPath(coords)}
-        fill="none"
-        stroke="rgba(200, 160, 20, 0.85)"
-        strokeWidth={2}
-        strokeDasharray="6 4"
-      />
-      <circle cx={coords.x1} cy={coords.y1} r={4} fill="rgba(200, 160, 20, 1)" />
-      <circle cx={coords.x2} cy={coords.y2} r={4} fill="rgba(200, 160, 20, 1)" />
-    </svg>,
+    <>
+      <svg className="fixed inset-0 w-full h-full pointer-events-none z-[12]">
+        <path
+          d={buildPath(coords)}
+          fill="none"
+          stroke="rgba(200, 160, 20, 0.85)"
+          strokeWidth={2}
+          strokeDasharray="6 4"
+        />
+        <circle cx={coords.x1} cy={coords.y1} r={4} fill="rgba(200, 160, 20, 1)" />
+      </svg>
+      <svg className="fixed inset-0 w-full h-full pointer-events-none z-[15]">
+        <circle cx={coords.x2} cy={coords.y2} r={4} fill="rgba(200, 160, 20, 1)" />
+      </svg>
+    </>,
     document.body,
   );
 }

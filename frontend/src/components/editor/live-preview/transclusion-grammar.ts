@@ -29,7 +29,7 @@ import { transcludeMap, type TransclusionEntry } from './effects';
 
 /**
  * Pure parser. Given a raw target string, decide its scheme + id.
- * Returns null for every non-transclusion target (URL, mailto, #, note:, data:).
+ * Returns null for every non-transclusion target (URL, mailto, #, data:).
  *
  * INVARIANT: `table:` is a DOC-LOCAL target — the id is a key in the HOST document's own
  * `tables` Y.Map, NOT a shared entity in `transcludeMap`. Why: a table belongs to one

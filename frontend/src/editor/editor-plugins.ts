@@ -1,6 +1,6 @@
 /** CM6 plugins for Editor: heading highlight, bare URL marks, link click handler. */
 // SYSTEM: editor-plugins — CM6 plugin collection (heading highlight, bare URL marks, link click handler)
-// ARCH: Link-type marks (cm-note-link, cm-ref-link, cm-doc-link, cm-ext-link) are added
+// ARCH: Link-type marks (cm-ref-link, cm-doc-link, cm-ext-link) are added
 // inside livePreviewField's buildStructuralDecorations — same decoration set as the
 // Decoration.replace that hides markdown syntax. This ensures marks compose correctly
 // with replaces (ViewPlugin marks don't compose across decoration sources).
@@ -23,7 +23,7 @@ import { t } from '../i18n';
 /**
  * Is this EditorView the panel-mode quick-preview editor (the reference rendered
  * inside the Refs tab)? The ONE view-identity check behind the note gating: a
- * 'note:' link click and the toolbar note button are suppressed there (notes are
+ * note-anchor click and the toolbar note button are suppressed there (notes are
  * document-scoped in preview — decision A of the panel quick-preview plan). Split
  * mode's secondary column answers false: showsBothPanes it may be, but the
  * reference IS the scope there, so notes on it stay allowed.
@@ -206,14 +206,7 @@ export const linkClickExtension = EditorView.domEventHandlers({
       for (const m of entry.match(lineText)) {
         const handled = tryLink(m.start, m.end, () => {
           if (entry.validate(m.id)) {
-            // Note links in the panel quick preview: 'open-notes' would swap the
-            // Refs tab away and hide the anchor — decision A has no notes on the
-            // preview, so toast instead of acting. Every other kind acts normally.
-            if (entry.kind === 'note' && isPanelPreviewView(view)) {
-              noteUnavailableInPreviewToast();
-            } else {
-              entry.action(m.id);
-            }
+            entry.action(m.id);
           } else {
             onBrokenLinkClick(entry, m.id);
           }

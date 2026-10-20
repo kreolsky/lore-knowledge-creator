@@ -19,6 +19,11 @@
  * text/doc refs embed via `ref-text`/`doc` entries (lazy-fetched for sibling
  * docs via publicDocumentByDoc).
  *
+ * Notes: while the covering share has comments on, the viewer paints each note's
+ * fragment from the offsets the public notes list resolved (no Y.Doc here), and a
+ * selection offers the note-only bar + Mod-m (see SYSTEM: public-share's notes in
+ * PublicSharePage). Taking a note never touches the text.
+ *
  * INVARIANT(security): no write affordance — `EditorState.readOnly.of(true)` +
  *   `EditorView.editable.of(false)`. The CM6 state cannot be mutated from the UI.  Why: the public editor is read-only at the CM6 layer (readOnly + editable=false), so the document can't be mutated from the UI regardless of what the server allows.
  *
@@ -30,7 +35,7 @@
 //       (the plan's highest-risk task); the snapshot-preview branch already
 //       proves this render path works without a live collab handle.
 
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { EditorState, Prec, type Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import * as Y from 'yjs';
@@ -49,6 +54,13 @@ import { useImageReferenceNav } from '../hooks/useImageReferenceNav';
 import { usePublicTransclusionSync } from '../hooks/usePublicTransclusionSync';
 import { useScrollToLine } from '../hooks/useScrollToLine';
 import { useTranslation } from '../i18n';
+import { mountView, unmountView } from '../editor/active-editor';
+import { selectionFeedExtension } from '../editor/editor-observer';
+import { noteHighlightExtension, notesChanged } from '../editor/note-highlight';
+import { publicNoteSurface } from '../editor/note-surface';
+import { buildKeymapExtension, readonlyNoteHotkeys } from './editor/hotkey-keymap';
+import { paintablePublicNoteRanges, usePublicNotesStore } from '../store/public-notes-store';
+import { differingSpan } from '../utils/differing-span';
 
 /** Build a throwaway Y.Doc seeded with a doc's captured `tables_json` (mirrors
  *  Editor.tsx::seedPreviewTablesDoc). Null → empty tables map (readonly
@@ -63,7 +75,9 @@ function seedPublicTablesDoc(tablesJson: string | null | undefined): Y.Doc {
  *  the component so the reveal-on-cursor wiring can be asserted in isolation
  *  (PublicEditor.test.ts). Mirrors the snapshot-preview render branch of
  *  Editor.tsx but with no collab/autosave/file-drop. */
-export function buildPublicEditorExtensions({ tablesJson }: { tablesJson: string | null | undefined }): Extension[] {
+export function buildPublicEditorExtensions(
+  { tablesJson, showsDocument = true }: { tablesJson: string | null | undefined; showsDocument?: boolean },
+): Extension[] {
   const renderExt = renderExtensions();
   return [
     editorExperience({ mode: 'document' }),
@@ -89,6 +103,16 @@ export function buildPublicEditorExtensions({ tablesJson }: { tablesJson: string
     // see SYSTEM: table-block — render the captured table state, not a live
     // handle. The public viewer has no collab Yjs doc; seed from tables_json.
     tableDocSource.of(seedPublicTablesDoc(tablesJson)),
+    // Notes (comments on a public link). The state stays readOnly; this facet only
+    // says the text shown IS the live payload, so a selection may take a note.
+    publicNoteSurface.of(true),
+    selectionFeedExtension,
+    // Only the `note` scope ever runs here (readonlyNoteHotkeys): the view is not
+    // focusable, so the editor-scope bindings never see a key.
+    buildKeymapExtension(),
+    readonlyNoteHotkeys,
+    // An open reference shows its own text — the document's note offsets mean nothing there.
+    noteHighlightExtension(() => (showsDocument ? paintablePublicNoteRanges() : [])),
   ];
 }
 
@@ -123,6 +147,35 @@ export function PublicEditor() {
   // see the hook for the lazy-doc fetch and clear-on-unmount.
   usePublicTransclusionSync({ editorViewRef: viewRef });
 
+  // The document's text re-read in place (PublicSharePage, after a member's edit): the
+  // view is created once per item, so the new text is spliced in as ONE change over
+  // the differing middle — the reader's scroll stays where it was. Runs before the
+  // repaint below, so the highlight is rebuilt over the new text.
+  const docContent = currentReference ? null : (currentDocument?.content ?? null);
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || docContent === null) return;
+    const change = differingSpan(view.state.doc.toString(), docContent);
+    if (change) view.dispatch({ changes: change });
+  }, [docContent]);
+
+  // Repaint the note highlight when the list (or the text it was resolved against)
+  // changes — those changes carry no CM6 transaction of their own.
+  const notes = usePublicNotesStore(s => s.notes);
+  const notesSha = usePublicNotesStore(s => s.notesSha);
+  const servedSha = usePublicNotesStore(s => s.servedSha);
+  const draft = usePublicNotesStore(s => s.draft);
+  useEffect(() => {
+    viewRef.current?.dispatch({ annotations: notesChanged.of(true) });
+  }, [notes, notesSha, servedSha, draft]);
+
+  // The selection toolbar and createNote find the editor through the active-editor
+  // registry; the public viewer is the page's only editor.
+  useEffect(() => {
+    const ref = viewRef;
+    return () => unmountView(ref.current ?? undefined);
+  }, []);
+
   // Active item: an open reference takes precedence over the doc (mirrors the
   // authed Editor). Its content seeds the CM6 viewer; `key` forces a remount on
   // switch. Refs carry no tables — seed the empty tables map for them.
@@ -133,7 +186,7 @@ export function PublicEditor() {
   const isImageRef = activeRef?.media_type === 'image';
 
   const extensions = useMemo<Extension[]>(
-    () => buildPublicEditorExtensions({ tablesJson }),
+    () => buildPublicEditorExtensions({ tablesJson, showsDocument: !activeRef }),
     // Re-seed only when the active item switches (tablesJson is captured per-doc).
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [activeId],
@@ -177,7 +230,11 @@ export function PublicEditor() {
               key={activeId}
               doc={content}
               extensions={extensions}
-              onCreateView={(v) => { viewRef.current = v; }}
+              onCreateView={(v) => {
+                if (viewRef.current) unmountView(viewRef.current);
+                viewRef.current = v;
+                mountView(v);
+              }}
               className="editor-cm"
             />
           </div>

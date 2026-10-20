@@ -1,7 +1,8 @@
 /**
  * Dashboard sections: own projects under "My projects" (with the create
  * button in that heading row), every other visible project under "Shared
- * with me" with an access badge per level; the shared section is absent
+ * with me" with an access badge for restricted levels only (full access
+ * carries none, like an own project); the shared section is absent
  * when nothing is shared. Card anatomy: description under the title
  * (line-clamped) and the one meta line (owner | members for others'
  * projects, members only for own, nothing at 0 members).
@@ -83,7 +84,7 @@ const section = (name: string) => container.querySelector(`[data-section="${name
 const cardNames = (el: Element | null) => Array.from(el?.querySelectorAll('h3') ?? []).map(h => h.firstChild?.textContent);
 
 describe('Dashboard own / shared sections', () => {
-  it('splits by owner, puts the create button in the own heading, badges every shared level', () => {
+  it('splits by owner, puts the create button in the own heading, badges only restricted shared levels', () => {
     appState.projects = [
       makeProject('a', 'me', 'full'),
       makeProject('b', 'other', 'full'),
@@ -103,13 +104,11 @@ describe('Dashboard own / shared sections', () => {
     expect(cardNames(shared)).toEqual(['Project b', 'Project c', 'Project d']);
     const badges = Array.from(shared?.querySelectorAll('[data-access-badge]') ?? []);
     expect(badges.map(b => [b.getAttribute('data-access-badge'), b.textContent?.trim()])).toEqual([
-      ['full', 'fullAccessTag'],
       ['commentator', 'notesAccess'],
       ['readonly', 'roAccess'],
     ]);
-    expect(badges.map(b => b.className.includes('text-green'))).toEqual([true, false, false]);
-    expect(badges[1].className).toContain('warm-strong');
-    expect(badges[2].className).toContain('text-red');
+    expect(badges[0].className).toContain('warm-strong');
+    expect(badges[1].className).toContain('text-red');
   });
 
   it('renders no shared section when nothing is shared, and the empty hint under own', () => {

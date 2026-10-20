@@ -151,6 +151,8 @@ async def test_create_note_chat_commentator_still_allowed(monkeypatch):
         return {}
 
     monkeypatch.setattr(sessions_module, "get_document_access", fake_access)
+    # The note gate (access.can_write_note) resolves the level from the access module.
+    monkeypatch.setattr("access.get_document_access", fake_access)
     monkeypatch.setattr("chat_sessions.create.create_record", fake_create_record)
     monkeypatch.setattr(sessions_module, "get_db", fake_get_db)
     monkeypatch.setattr("chat_sessions.serialize.build_ref_map", fake_build_ref_map)

@@ -109,8 +109,8 @@ async def test_note_session_clears_context_preserves_reference_id(client, admin_
         "project_id": pid,
         "reference_id": ref_id,
         "is_note": True,
-        "anchor_offset_start": 0,
-        "anchor_offset_end": 1,
+        "anchor_rel_start": "AAcDAA==",
+        "anchor_rel_end": "AAcDAA==",
         "document_id": doc_id,
     })
     assert resp.status_code == 201, resp.text

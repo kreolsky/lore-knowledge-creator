@@ -1185,12 +1185,15 @@ html.dark .right-panel--notes-thread {
   background: var(--warm-tint);
 }
 
-/* Note chat input: yellow-dark bg + yellow-sep border */
-.right-panel--notes-thread textarea {
+/* Note chat input: yellow-dark bg + yellow-sep border. The text input is the public
+   guest's name field above the composer — same chrome as the textarea under it. */
+.right-panel--notes-thread textarea,
+.right-panel--notes-thread input:not([type=checkbox]):not([type=radio]) {
   background: var(--warm-mid);
   border-color: var(--warm-sep);
 }
-html.dark .right-panel--notes-thread textarea {
+html.dark .right-panel--notes-thread textarea,
+html.dark .right-panel--notes-thread input:not([type=checkbox]):not([type=radio]) {
   background: var(--warm-mid);
   border-color: var(--warm-sep);
 }
@@ -1852,6 +1855,8 @@ html.dark .cm-color-swatch[style*="rgb(253, 214, 99)"] { background-color: var(-
 /* Voice mic button — consistent with header recording button */
 /* AI-chat composer: idle fill one tone darker than the bg-surface panel. */
 .mic-btn-wrap > button.mic-filled { background: var(--surface2); }
+/* Dark: match the composer selectors' hover fill (Button variant 'composer'). */
+html.dark .mic-btn-wrap > button.mic-filled { background: var(--surface3); }
 .mic-btn-wrap > button:hover:not(:disabled):not(.mic-recording):not(.mic-transcribing) {
   background: var(--accent-green, #22c55e);
   color: white;

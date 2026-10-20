@@ -1,16 +1,16 @@
 /**
  * Single source of link-type knowledge for the editor.
  *
- * ARCH: every link type (note, ref, doc, ext, bare) is described once here as a
+ * ARCH: every link type (ref, doc, ext, bare) is described once here as a
  * registry entry: how to MATCH it in a line of text (with group-index knowledge
  * kept INSIDE the entry), how to VALIDATE its id, what ACTION to dispatch on
  * click, its DECORATION class, and its BROKEN tooltip. Both consumers read only
  * the registry:
- *   - editor-plugins.ts click handler iterates LINK_TYPES instead of 5 inline loops.
+ *   - editor-plugins.ts click handler iterates LINK_TYPES instead of inline loops.
  *   - build-structural.ts resolveLinkClass / brokenTooltip delegate here.
  *
- * Capture-group contract (PINNED): the 5 source
- * regexes have heterogeneous group structures (note/ref use match[2] + prefix-strip,
+ * Capture-group contract (PINNED): the 4 source
+ * regexes have heterogeneous group structures (ref uses match[2] + prefix-strip,
  * doc/ext use match[2], bare uses match[0]). To keep `resolve`/`action` uniform,
  * each entry's `match(lineText)` returns a NORMALIZED `{ start, end, raw, id }` —
  * `start`/`end` are line-relative offsets, `raw` is the full matched text, `id` is
@@ -23,8 +23,8 @@
  */
 // SYSTEM: link-types — registry of link types (single source for match/resolve/validate/action/class/tooltip)
 
-import { noteLink, refLink, docLink, extLink, bareUrl } from '../link-patterns';
-import { validDocIds, validNoteThreadIds, validRefIds, projectRefIds } from './link-validity';
+import { refLink, docLink, extLink, bareUrl } from '../link-patterns';
+import { validDocIds, validRefIds, projectRefIds } from './link-validity';
 import { useAppStore } from '../../../store/app-store';
 import { useUIStore } from '../../../store/ui-store';
 import { emit } from '../../../events';
@@ -32,7 +32,7 @@ import { t } from '../../../i18n';
 import { isAccessRefusal } from '../../../api/client';
 import { fetchRefPreview } from '../../../hooks/useReferencePreview';
 
-export type LinkKind = 'note' | 'ref' | 'doc' | 'ext' | 'bare';
+export type LinkKind = 'ref' | 'doc' | 'ext' | 'bare';
 
 /** Normalized link match — line-relative offsets + stripped id. */
 export interface LinkMatch {
@@ -44,7 +44,7 @@ export interface LinkMatch {
 
 export interface LinkTypeEntry {
   kind: LinkKind;
-  /** Scheme prefix stripped to obtain the id ('note:' / 'ref:' / undefined). */
+  /** Scheme prefix stripped to obtain the id ('ref:' / undefined). */
   prefix?: string;
   /** Find all matches in a line of text, normalized to { start, end, raw, id }. */
   match(lineText: string): LinkMatch[];
@@ -70,28 +70,12 @@ export interface LinkTypeEntry {
   recheck?(id: string): Promise<boolean | null>;
 }
 
-const NOTE: LinkTypeEntry = {
-  kind: 'note',
-  prefix: 'note:',
-  match(lineText) {
-    const out: LinkMatch[] = [];
-    const re = noteLink();
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(lineText)) !== null) {
-      out.push({ start: m.index, end: m.index + m[0].length, raw: m[0], id: m[2].replace('note:', '') });
-    }
-    return out;
-  },
-  extractId(urlText) { return urlText.replace('note:', ''); },
-  validate(id) { return validNoteThreadIds.has(id); },
-  action(id) {
-    emit('open-notes', { threadId: id });
-    setTimeout(() => emit('highlight-note', { noteId: id }), 100);
-    setTimeout(() => emit('connect-note', { noteId: id }), 200);
-  },
-  decorationClass: 'cm-note-link',
-  brokenTooltip: () => t('linkBrokenNote'),
-};
+/** Open a note's thread from the editor: notes tab, card highlight, connector line. */
+export function openNoteThread(id: string): void {
+  emit('open-notes', { threadId: id });
+  setTimeout(() => emit('highlight-note', { noteId: id }), 100);
+  setTimeout(() => emit('connect-note', { noteId: id }), 200);
+}
 
 const REF: LinkTypeEntry = {
   kind: 'ref',
@@ -184,7 +168,7 @@ const BARE: LinkTypeEntry = {
 };
 
 /** Ordered registry consumed by the click router. */
-export const LINK_TYPES: LinkTypeEntry[] = [NOTE, REF, DOC, EXT, BARE];
+export const LINK_TYPES: LinkTypeEntry[] = [REF, DOC, EXT, BARE];
 
 const ENTRY_BY_CLASS = new Map<string, LinkTypeEntry>(
   LINK_TYPES.map((e) => [e.decorationClass, e]),
@@ -215,7 +199,7 @@ export function linkBrokenTooltip(cls: string): string {
 
 /**
  * Show a broken-link toast for a base decoration class (as carried by a registry
- * entry, e.g. 'cm-note-link'). No-op for types with no tooltip (ext/bare) or
+ * entry, e.g. 'cm-ref-link'). No-op for types with no tooltip (ext/bare) or
  * unknown classes. Used by the click router.
  */
 export function showBrokenToast(cls: string): void {

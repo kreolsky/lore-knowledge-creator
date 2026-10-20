@@ -45,11 +45,6 @@ describe('parseTarget', () => {
   it('returns null for # fragments', () => {
     expect(parseTarget('#anchor')).toBeNull();
   });
-  // note: is a note-link handled elsewhere (resolveLinkCls → cm-note-link); it is NOT a
-  // transclusion and must resolve to null.
-  it('returns null for note: scheme', () => {
-    expect(parseTarget('note:thread1')).toBeNull();
-  });
 });
 
 // ── resolveTransclusionTarget (parseTarget + map lookup) ─────────────────────
@@ -83,7 +78,6 @@ describe('resolveTransclusionTarget', () => {
   it('returns null for a non-transclusion target', () => {
     expect(resolveTransclusionTarget('data:image/gif;base64,R0lGODlh=')).toBeNull();
     expect(resolveTransclusionTarget('https://x.com')).toBeNull();
-    expect(resolveTransclusionTarget('note:t')).toBeNull();
   });
   // table: is parsed as a transclusion but resolved doc-locally by the widget dispatch,
   // never via transcludeMap — so the generic resolver returns null.

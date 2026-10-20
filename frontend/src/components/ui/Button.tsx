@@ -6,7 +6,7 @@
 import { forwardRef } from 'react';
 
 interface ButtonProps {
-  variant?: 'primary' | 'ghost' | 'ghost-note' | 'yellow' | 'dashed' | 'danger' | 'subtle' | 'highlight' | 'composer';
+  variant?: 'primary' | 'ghost' | 'ghost-note' | 'yellow' | 'yellow-strong' | 'dashed' | 'danger' | 'subtle' | 'highlight' | 'composer';
   size?: 'sm' | 'md' | 'md-square' | 'lg' | 'lg-square';
   danger?: boolean;
   fullWidth?: boolean;
@@ -33,6 +33,9 @@ const variants: Record<string, string> = {
   // see SYSTEM: note-chat — warm pair (idle tint → hover strong), same
   // tokens as anchored note pills / note links; theme-aware text like ghost-note.
   yellow: 'bg-[var(--warm-tint)] text-text-muted hover:bg-[var(--warm-strong)] hover:text-text',
+  // see SYSTEM: note-chat — the strong warm fill at rest: a lone note action that must
+  // stand out (the public guest's "Add note" bar under the pointer).
+  'yellow-strong': 'bg-[var(--warm-strong)] text-[var(--warm-ink)] hover:brightness-95',
   danger:
     'bg-red text-white hover:brightness-108',
   subtle: 'bg-surface2 text-text-muted hover:bg-[var(--subtle-hover-bg)] hover:text-text',

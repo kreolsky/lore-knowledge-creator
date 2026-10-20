@@ -21,8 +21,7 @@ import pytest
 from mentions import extract_doc_mentions
 from transclusion_grammar import parse_target
 
-# Corpus spans every reject class the two copies share (http(s), mailto, #, note,
-# data) plus the positive doc/bare-doc schemes, the ref:/table: schemes (transclusions
+# Corpus spans every reject class the two copies share (http(s), mailto, #, data) plus the positive doc/bare-doc schemes, the ref:/table: schemes (transclusions
 # that are intentionally NOT doc mentions), and the httpfoo bare-id edge case that the
 # colon-form projection gets right.
 TARGETS = [
@@ -31,7 +30,6 @@ TARGETS = [
     "https://example.com",
     "mailto:user@example.com",
     "#section-anchor",
-    "note:abc123",
     "ref:refid7",
     "table:tuuid9",
     "doc:docid9",

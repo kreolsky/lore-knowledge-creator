@@ -123,11 +123,9 @@ async def route_document_content(
 
     # The remote-image guard is
     # deliberately NOT here. Why removed: route_document_content converges a WHOLE
-    # buffer, so the scan validated text the caller did NOT author — the note-link
-    # strip (sessions.delete_session) rewrites an existing buffer, and a document a
-    # human had already filled with ![](https://…) made the strip raise 400 inside
-    # its best-effort except, so the note link silently stayed (the exact
-    # silent-degradation class this project forbids). The guard now runs at the
+    # buffer, so the scan validated text the caller did NOT author — a caller that
+    # rewrites an existing buffer would raise 400 on a document a human had already
+    # filled with ![](https://…). The guard runs at the
     # AUTHORED-input boundary only: create_document_via_collab (authored content),
     # route_document_edits (scoped to each edit's new_text), and the two append
     # entry points (append_text). Do NOT restore it here — a buffer may legitimately

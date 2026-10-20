@@ -318,8 +318,8 @@ export const loreEditorTheme: Extension = [
   // ── Inline document links ──
 
   // ── Shared link base (dashed underline, pointer, no underline on hover) ──
-  // WHY: all link types share identical text style; only backgroundColor differs.  Why: link types differ only by background highlight (note/ref/doc/ext); sharing the text style keeps inline links visually consistent.
-  '.cm-note-link, .cm-ref-link, .cm-doc-link, .cm-ext-link': {
+  // WHY: all link types share identical text style; only backgroundColor differs.  Why: link types differ only by background highlight (ref/doc/ext); sharing the text style keeps inline links visually consistent.
+  '.cm-ref-link, .cm-doc-link, .cm-ext-link': {
     color: 'var(--text)',
     cursor: 'pointer',
     padding: '0 2px',
@@ -328,19 +328,14 @@ export const loreEditorTheme: Extension = [
     borderBottom: '2px dashed var(--text)',
   },
   // Kill .cm-link border inside inline links (nested spans → double underline otherwise)
-  '.cm-note-link .cm-link, .cm-ref-link .cm-link, .cm-doc-link .cm-link, .cm-ext-link .cm-link': {
+  '.cm-ref-link .cm-link, .cm-doc-link .cm-link, .cm-ext-link .cm-link': {
     borderBottom: 'none',
   },
-  '.cm-note-link:hover, .cm-ref-link:hover, .cm-doc-link:hover, .cm-ext-link:hover': {
+  '.cm-ref-link:hover, .cm-doc-link:hover, .cm-ext-link:hover': {
     borderBottomColor: 'transparent',
   },
 
   // Per-type backgrounds
-  '.cm-note-link': { backgroundColor: 'var(--warm-tint)', borderBottom: '2px dashed var(--warm-strong)' },
-  '.cm-note-link:hover': { backgroundColor: 'var(--warm-strong)' },
-  'html.dark & .cm-note-link': { backgroundColor: 'var(--warm-tint)', borderBottom: '2px dashed var(--warm-strong)' },
-  'html.dark & .cm-note-link:hover': { backgroundColor: 'var(--warm-strong)' },
-
   '.cm-ref-link': { backgroundColor: 'var(--ref-tint)', borderBottom: '2px dashed var(--ref-strong)' },
   '.cm-ref-link:hover': { backgroundColor: 'var(--ref-strong)' },
   'html.dark & .cm-ref-link': { backgroundColor: 'var(--ref-tint)', borderBottom: '2px dashed var(--ref-strong)' },
@@ -350,7 +345,7 @@ export const loreEditorTheme: Extension = [
   '.cm-doc-link:hover': { backgroundColor: 'var(--border)' },
 
   // Broken link styles — applied when link target ID is not found in store
-  '.cm-doc-link-broken, .cm-note-link-broken, .cm-ref-link-broken': {
+  '.cm-doc-link-broken, .cm-ref-link-broken': {
     color: 'var(--text-muted)',
     cursor: 'help',
     padding: '0 2px',
@@ -358,7 +353,7 @@ export const loreEditorTheme: Extension = [
     textDecoration: 'line-through',
     borderBottom: '2px dashed var(--text-muted)',
   },
-  '.cm-doc-link-broken:hover, .cm-note-link-broken:hover, .cm-ref-link-broken:hover': {
+  '.cm-doc-link-broken:hover, .cm-ref-link-broken:hover': {
     borderBottomColor: 'transparent',
   },
 }),

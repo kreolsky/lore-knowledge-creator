@@ -21,6 +21,7 @@ import weakref
 
 from backplane import YDOC_CHANNEL_PREFIX, get_backplane
 from pycrdt import Doc, Text
+from textmatch import minimal_splice_text
 
 from db import get_db, run_in_transaction
 from table_serialize import capture_tables_json, expand_tables
@@ -143,8 +144,8 @@ async def publish_doc_update(entity_id: str, update_bytes: bytes, *, append: boo
     # publish — appending would re-add a row to the just-cleared log.
     #
     # INVARIANT(corruption): the worker / REST replace-whole-document paths (set_content,
-    # apply_external_content_change) publish a "delete-all + insert" update computed against
-    # the snapshot they loaded.  Why: the deletes target items present in that loaded snapshot, so a concurrent peer's just-typed text (absent from it) is not covered and survives the merge — the known residual of replace-path concurrency. Under a CONCURRENT live editor on another replica, the CRDT
+    # apply_external_content_change) publish an update that splices the changed spans
+    # (textmatch.minimal_splice_text), computed against the snapshot they loaded.  Why: the deletes target items present in that loaded snapshot, so a concurrent peer's just-typed text (absent from it) is not covered and survives the merge — the known residual of replace-path concurrency. Under a CONCURRENT live editor on another replica, the CRDT
     # merge may NOT delete that peer's just-typed text (the delete ops don't cover items the
     # publisher never saw). This is inherent to "replace the whole document" against live
     # edits and is deliberately NOT fixed here — _write_lock + the rarity of the overlap
@@ -273,7 +274,8 @@ async def capture_live_state(document_id: str) -> tuple[str, str]:
 
 
 async def set_content(entity_id: str, new_content: str, *, persist: bool = False, extra_sets: dict | None = None, tables_json: str | None = None) -> bytes:
-    """Replace document content by mutating the Y.Doc (delete all + insert).
+    """Replace document content by splicing only the changed spans into the Y.Doc
+    (``textmatch.minimal_splice_text``), so anchors on unchanged text survive.
 
     Returns the resulting Yjs update bytes for broadcast.
     When persist=True, also writes ydoc_state + content to DB and prunes the
@@ -295,12 +297,7 @@ async def set_content(entity_id: str, new_content: str, *, persist: bool = False
     from table_serialize import apply_tables_json
 
     doc = await load(entity_id)
-    text = get_text(doc)
-    old_len = len(text)
-    if old_len > 0:
-        del text[0:old_len]
-    if new_content:
-        text += new_content
+    minimal_splice_text(get_text(doc), new_content)
     if tables_json is not None:
         apply_tables_json(doc, tables_json)
     snapshot = doc.get_update()

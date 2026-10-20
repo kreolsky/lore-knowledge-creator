@@ -1,0 +1,36 @@
+{
+  "update": "AwIVAMQHBAcLAtCkxAcMBwUE8J+YgAMJAMQHAQcCAtCWwQkABwICxAkCBwIBeAcHAAQBB2NvbnRlbnQE0LDQsYQHAQbQsvCfmICEBwQG0LPQtNC1JwEGdGFibGVzAnQxASgABwgEcm93cwF1AXUFfQF3AtC2fnxAIAAAeCgABwgBbgF3AXjEBwQHBQTQr9CvAQkBAQI=",
+  "text": "абЖxв😀ФЯЯ😀где",
+  "anchors": [
+    {
+      "start": "AAcAAA==",
+      "end": "AAkAQQ==",
+      "quote": "абЖ"
+    },
+    {
+      "start": "AAkAAA==",
+      "end": "AAcCQQ==",
+      "quote": "Жxв"
+    },
+    {
+      "start": "AAkBAA==",
+      "end": "AAkCQQ==",
+      "quote": null
+    },
+    {
+      "start": "AAcLAA==",
+      "end": "AAcMQQ==",
+      "quote": "ЯЯ"
+    },
+    {
+      "start": "AAcFAA==",
+      "end": "AAcHQQ==",
+      "quote": "где"
+    },
+    {
+      "start": "AAcBAA==",
+      "end": "AAcHQQ==",
+      "quote": "бЖxв😀ФЯЯ😀где"
+    }
+  ]
+}

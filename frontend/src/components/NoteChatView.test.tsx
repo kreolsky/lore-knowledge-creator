@@ -175,3 +175,29 @@ describe('NoteChatView Escape never deletes a note on an unproven empty', () => 
     unmount(rig);
   });
 });
+
+// ── load-older button (tail-anchored note pagination) ────────────────────────
+// The button is the ONLY pagination affordance: it renders at the top of the
+// thread while messagesTruncated (a committed full page) and disappears once
+// the head of the thread is loaded.
+describe('NoteChatView load-older button', () => {
+  it('renders only while messagesTruncated and fires loadOlderMessages on click', () => {
+    useNoteChatStore.setState({
+      messages: [{ message_id: 'm1', session_id: 'ns1', role: 'user', content: 'tail row', created_at: 'x' } as never],
+      messagesTruncated: true,
+    });
+    const spy = vi.spyOn(useNoteChatStore.getState(), 'loadOlderMessages').mockImplementation(() => Promise.resolve());
+    const rig = render(createElement(NoteChatView));
+    const btn = rig.container.querySelector('button');
+    expect(btn?.textContent).toContain('loadOlderMessages');
+    act(() => { btn!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(spy).toHaveBeenCalledTimes(1);
+    unmount(rig);
+    spy.mockRestore();
+
+    useNoteChatStore.setState({ messagesTruncated: false });
+    const rig2 = render(createElement(NoteChatView));
+    expect(rig2.container.querySelector('button')).toBeNull();
+    unmount(rig2);
+  });
+});

@@ -3,16 +3,18 @@
 import type React from 'react';
 import { useState, useEffect, useCallback, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import type { EditorView } from '@codemirror/view';
+import { EditorView } from '@codemirror/view';
 import { Bold, Italic, Strikethrough, TextQuote, Code, FileCode2, Link2, StickyNote, FileText, ChevronDown, List, ListOrdered, ListChecks, Bot } from 'lucide-react';
 import { markdownActionRegistry, applyColorHighlight, getLastHighlightColor, createReference, HIGHLIGHT_COLORS } from './markdown-actions';
 import { isPanelPreviewView } from '../../editor/editor-plugins';
 import { agentAction } from './markdown-actions-agent';
 import { useUIStore } from '../../store/ui-store';
 import { useAppStore } from '../../store/app-store';
+import { usePublicCanNote } from '../../store/public-notes-store';
 import { on, off } from '../../events';
 import { useEditorView } from '../../editor/active-editor';
 import { useTranslation } from '../../i18n';
+import { Button } from '../ui';
 
 interface ActiveStyles {
   headingLevel: number;
@@ -108,15 +110,26 @@ function computeAnchor(view: EditorView): ToolbarAnchor | null {
   return { centerX, belowTop: toCoords.bottom + 6, aboveBottom: fromCoords.top - 6 };
 }
 
+// Gap between the pointer tip and the guest bar's top edge (the chat Clarify button's).
+const CURSOR_GAP = 14;
+
 export default function SelectionToolbar() {
   const { t } = useTranslation();
   const getEditorView = useEditorView();
   const selectionEmpty = useUIStore(s => s.selectionEmpty);
   const accessLevel = useAppStore(s => s.accessLevel);
   // ARCH: full-access users get the formatting toolbar AND the Agent button.
-  // Non-full users (commentator / viewer) see nothing — Agent is hidden too
-  // per role walkthrough (cannot apply proposals anyway: backend returns 403).
-  const canEdit = accessLevel === 'full';
+  // A commentator may note but not edit: formatting and Agent stay hidden (Agent
+  // cannot apply proposals anyway: backend returns 403) and the bar shows ONE wide
+  // labeled «Add note» button — so does a guest on a public link with comments on.
+  // Readonly sees nothing.
+  // Why the label: a lone icon is too small to notice when it is the only action.
+  const isPublicShare = useUIStore(s => s.isPublicShare);
+  const publicCanNote = usePublicCanNote();
+  const canEdit = accessLevel === 'full' && !isPublicShare;
+  const canNoteOnly = accessLevel === 'commentator' || (isPublicShare && publicCanNote);
+  // The public guest's bar: one strong-yellow "Add note" button under the pointer.
+  const guestBar = isPublicShare && !canEdit;
   const [visible, setVisible] = useState(false);
   const [anchor, setAnchor] = useState<ToolbarAnchor>({ centerX: 0, belowTop: 0, aboveBottom: 0 });
   const [styles, setStyles] = useState<ActiveStyles>({ headingLevel: 0, bold: false, italic: false, strikethrough: false, inlineCode: false, quote: false, bullet: false, numbered: false, checkbox: false });
@@ -125,6 +138,10 @@ export default function SelectionToolbar() {
   const [lastColor, setLastColor] = useState(() => getLastHighlightColor());
   const toolbarRef = useRef<HTMLDivElement>(null);
   const mouseDownRef = useRef(false);
+  // Where the pointer released the selection; null after a keyboard selection. State,
+  // not a ref: the release can land after the bar is already shown (the listeners
+  // attach on the first selection, mid-drag), and it must move the bar then.
+  const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
   const hasPendingRef = useRef(false);
 
   const hide = useCallback(() => {
@@ -153,9 +170,10 @@ export default function SelectionToolbar() {
   const attachMouseRef = useRef<() => void>(() => {});
 
   useEffect(() => {
-    const onEditorMouseDown = () => { mouseDownRef.current = true; };
-    const onEditorMouseUp = () => {
+    const onEditorMouseDown = () => { mouseDownRef.current = true; setPointer(null); };
+    const onEditorMouseUp = (e: MouseEvent) => {
       mouseDownRef.current = false;
+      setPointer({ x: e.clientX, y: e.clientY });
       if (hasPendingRef.current) {
         hasPendingRef.current = false;
         showToolbar();
@@ -239,6 +257,16 @@ export default function SelectionToolbar() {
     const w = el.offsetWidth;
     const h = el.offsetHeight;
 
+    // WHY: the guest's bar sits under the pointer, like the chat's Clarify button — a
+    // selection dragged bottom-up leaves the pointer at its top edge, and a bar under
+    // the selection rect would sit a whole selection away from it.
+    if (guestBar && pointer) {
+      const half = w / 2;
+      el.style.left = `${Math.max(half + 8, Math.min(pointer.x, window.innerWidth - 8 - half))}px`;
+      el.style.top = `${Math.max(8, Math.min(pointer.y + CURSOR_GAP, window.innerHeight - h - 8))}px`;
+      return;
+    }
+
     let top = anchor.belowTop;
     const spaceBelow = window.innerHeight - anchor.belowTop;
     if (spaceBelow < h + 8 && anchor.aboveBottom - h >= 8) {
@@ -253,10 +281,47 @@ export default function SelectionToolbar() {
 
     el.style.left = `${center}px`;
     el.style.top = `${top}px`;
-  }, [visible, anchor, dropdownOpen, colorPickerOpen]);
+  }, [visible, anchor, dropdownOpen, colorPickerOpen, guestBar, pointer]);
 
   const view = getEditorView();
-  if (!visible || !view || !canEdit) return null;
+  if (!visible || !view || !(canEdit || canNoteOnly)) return null;
+
+  // WHY: formatting writes through the view, so it is offered only on a view that takes
+  // input — a full member's editor that is not editable yet (collab joining) or any more
+  // (disconnected) gets the note-only bar, which never touches the text.
+  if (!canEdit || !view.state.facet(EditorView.editable)) {
+    // Panel quick preview: no notes on the previewed reference (decision A).
+    if (isPanelPreviewView(view)) return null;
+    if (guestBar) {
+      return createPortal(
+        <div
+          ref={toolbarRef}
+          data-testid="guest-note-bar"
+          onMouseDown={(e: React.MouseEvent) => e.preventDefault()}
+          className="fixed left-0 top-0 -translate-x-1/2 z-[45] shadow-lg"
+        >
+          <Button variant="yellow-strong" onClick={() => { markdownActionRegistry.createNote(view); hide(); }} title={t('noteTitle')}>
+            <StickyNote size={ICON_SIZE} />
+            {t('addNote')}
+          </Button>
+        </div>,
+        document.body
+      );
+    }
+    return createPortal(
+      <div
+        ref={toolbarRef}
+        onMouseDown={(e: React.MouseEvent) => e.preventDefault()}
+        className="selection-toolbar left-0 top-0 -translate-x-1/2"
+      >
+        <button className="sel-toolbar-btn gap-1.5 px-3" onClick={() => { markdownActionRegistry.createNote(view); hide(); }} title={t('noteTitle')}>
+          <StickyNote size={ICON_SIZE} />
+          <span>{t('addNote')}</span>
+        </button>
+      </div>,
+      document.body
+    );
+  }
 
   /** Execute a formatting action, then refresh styles/position or hide if selection collapsed. */
   const executeAction = (action: keyof typeof markdownActionRegistry, closeDropdown = false) => {

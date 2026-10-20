@@ -1,5 +1,7 @@
 """Chat-session wire shape: the session serializer and the reference map it reads."""
 
+from note_anchors import relpos_to_wire
+
 from db import serialize_record
 from models import is_ref_row
 
@@ -125,15 +127,14 @@ def _stamp_wire_fields(out: dict) -> None:
     out.pop("seed_source_session", None)
     out.pop("seed_source_seq", None)
     out.pop("context_document_ids", None)
-    # INVARIANT(security): anchor_rel_* never serialized to client (raw Yjs bytes, not
-    # UTF-8). Why: FastAPI's jsonable_encoder runs bytes.decode() on any bytes
-    # value; Yjs RelativePosition bytes (e.g. 0x80) raise UnicodeDecodeError and
-    # crash the WHOLE session list response with a 500. These fields are
-    # presence-only hints today (see the writer-side INVARIANT in
-    # chat_sessions/create.py) — dropped here at the single outbound
-    # boundary, never sent to the client.
-    out.pop("anchor_rel_start", None)
-    out.pop("anchor_rel_end", None)
+    # INVARIANT(security): anchor_rel_* leave the server ONLY as base64 strings, and
+    # only when they decode as v1 RelativePositions (a legacy JSON-text row → null).
+    # Why: FastAPI's jsonable_encoder runs bytes.decode() on any bytes value; Yjs
+    # RelativePosition bytes (e.g. 0x80) raise UnicodeDecodeError and crash the
+    # WHOLE session list response with a 500. This is the single outbound boundary.
+    out["anchor_rel_start"] = relpos_to_wire(out.get("anchor_rel_start"))
+    out["anchor_rel_end"] = relpos_to_wire(out.get("anchor_rel_end"))
+    out["anchor_quote"] = out.get("anchor_quote")
 
 
 def _stamp_reference_identity(

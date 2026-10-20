@@ -143,6 +143,30 @@ def can_modify_note_message(
     return is_author and not has_children
 
 
+# Access levels whose holders may leave notes (comment) without editing the text.
+_NOTE_WRITER_LEVELS = frozenset({"full", "commentator"})
+
+
+async def can_write_note(principal: dict, document_id: str) -> bool:
+    """Whether `principal` may create a note or reply on `document_id`.
+
+    A principal is `{"kind": "user", "user": <user>}` or `{"kind": "anonymous",
+    "share": <resolve_share context>}` — the guest tier plugs in as another kind.
+
+    # INVARIANT(security): one check for every note writer (member: full or commentator; anonymous: allow_comments on the covering share).
+    # Why: notes are the one write a non-editor makes; a second, per-surface
+    # check would drift, and readonly members and comments-off links must stay
+    # read-only on every surface. Any other principal kind is refused.
+    """
+    kind = principal.get("kind")
+    if kind == "user":
+        return await get_document_access(document_id, principal["user"]) in _NOTE_WRITER_LEVELS
+    if kind == "anonymous":
+        share = principal["share"]
+        return bool(share.get("allow_comments")) and document_id in share.get("doc_ids", ())
+    return False
+
+
 async def require_admin_or_project_full(project_id: str, user: dict) -> None:
     """Raise 403/404 unless user is admin or has full project access."""
     if not is_instance_admin(user):

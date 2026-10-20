@@ -20,7 +20,7 @@ const WHITESPACE_ONLY_RE = /^\s+$/;
 
 // see SYSTEM: transclusion — resolves an image-node URL to either a widget kind or null.
 // Delegates to the shared `resolveTransclusionTarget` resolver (transclusion-grammar.ts),
-// the single source of truth for target → kind. The reject set (`data:`/`http`/`note:`…)
+// the single source of truth for target → kind. The reject set (`data:`/`http`…)
 // lives there once, mirrored by the backend `transclusion_grammar.py`. Image entries
 // live in the unified `transcludeMap` (kind:'ref-image', carries imageUrl).
 export function resolveTransclusion(urlText: string): {
@@ -255,8 +255,7 @@ export function buildStructuralDecorations(state: EditorState): DecorationSet {
               const fullEnd = node.to + 2 + urlText.length + 1;
 
               let cls: string | null = null;
-              if (urlText.startsWith('note:')) { cls = 'cm-note-link'; }
-              else if (urlText.startsWith('ref:')) { cls = 'cm-ref-link'; }
+              if (urlText.startsWith('ref:')) { cls = 'cm-ref-link'; }
               else if (urlText.startsWith('http')) { cls = 'cm-ext-link'; }
               else if (!urlText.startsWith('#') && !urlText.startsWith('mailto:')) { cls = 'cm-doc-link'; }
 
@@ -265,10 +264,9 @@ export function buildStructuralDecorations(state: EditorState): DecorationSet {
                 const attrs: Record<string, string> = {};
                 if (cls.startsWith('cm-doc-link')) attrs['data-link-type'] = 'doc';
                 else if (cls.startsWith('cm-ref-link')) attrs['data-link-type'] = 'ref';
-                else if (cls.startsWith('cm-note-link')) attrs['data-link-type'] = 'note';
                 else if (cls.startsWith('cm-ext-link')) attrs['data-link-type'] = 'ext';
                 // data-link-id = urlText verbatim. Doc links are authored as bare ids, so
-                // they're already bare; ref/note urlText includes the scheme prefix. The
+                // they're already bare; ref urlText includes the scheme prefix. The
                 // consumer (EditorLinkPreview) normalizes via decodeLinkId in utils/in-app-link.ts,
                 // which strips any prefix defensively for all types. See that module for the
                 // full contract shared with chat (MarkdownContent, Sources).
@@ -295,9 +293,7 @@ export function buildStructuralDecorations(state: EditorState): DecorationSet {
             const labelTo = linkMarksAll[1].from;
             if (labelTo > labelFrom) {
               let cls: string | null = null;
-              if (urlText.startsWith('note:')) {
-                cls = 'cm-note-link';
-              } else if (urlText.startsWith('ref:')) {
+              if (urlText.startsWith('ref:')) {
                 cls = 'cm-ref-link';
               } else if (urlText.startsWith('http')) {
                 cls = 'cm-ext-link';
@@ -309,10 +305,9 @@ export function buildStructuralDecorations(state: EditorState): DecorationSet {
                 const attrs: Record<string, string> = {};
                 if (cls.startsWith('cm-doc-link')) attrs['data-link-type'] = 'doc';
                 else if (cls.startsWith('cm-ref-link')) attrs['data-link-type'] = 'ref';
-                else if (cls.startsWith('cm-note-link')) attrs['data-link-type'] = 'note';
                 else if (cls.startsWith('cm-ext-link')) attrs['data-link-type'] = 'ext';
                 // data-link-id = urlText verbatim. Doc links are authored as bare ids, so
-                // they're already bare; ref/note urlText includes the scheme prefix. The
+                // they're already bare; ref urlText includes the scheme prefix. The
                 // consumer (EditorLinkPreview) normalizes via decodeLinkId in utils/in-app-link.ts,
                 // which strips any prefix defensively for all types. See that module for the
                 // full contract shared with chat (MarkdownContent, Sources).

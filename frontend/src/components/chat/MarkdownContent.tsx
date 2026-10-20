@@ -5,7 +5,7 @@
  * streaming parser. Raw HTML is escaped by policy, not by us.
  *
  * The Lore layer dsh cannot state, each with its named consumer:
- * - internal link schemes doc:/ref:/note: — dsh's sanitizeUrl allowlists only
+ * - internal link schemes doc:/ref: — dsh's sanitizeUrl allowlists only
  *   http(s)/mailto, so PROSE segments are pre-rewritten to the absolute
  *   https://lore.local/l/<type>/<id> form (an allowlisted destination dsh
  *   renders as a real anchor); the delegated click handler below and
@@ -129,7 +129,7 @@ function splitSegments(src: string): Segment[] {
 // agent's bootstrap prompt spells document links as the bare id, and the editor's
 // docLink pattern (link-patterns.ts) reads `doc:` as optional. No ':' '/' '#' '?'
 // keeps http(s)/mailto/anchors/paths out of the bare arm.
-const INTERNAL_LINK_RE = /(!?)\[([^[\]]*)\]\((?:(doc|ref|note):([^)\s]+)|<?([^)\s<>:/#?]+)>?)\)/g;
+const INTERNAL_LINK_RE = /(!?)\[([^[\]]*)\]\((?:(doc|ref):([^)\s]+)|<?([^)\s<>:/#?]+)>?)\)/g;
 function rewriteInternalLinks(text: string): string {
   return text.replace(INTERNAL_LINK_RE, (match, image: string, alt: string, type?: string, id?: string, bareId?: string) =>
     image ? match : `[${alt}](https://lore.local/l/${type ?? 'doc'}/${id ?? bareId})`);
@@ -153,7 +153,6 @@ function handleInAppLinkClick(e: React.MouseEvent<HTMLDivElement>) {
   // bug). Mirrors Sources.handleRefClick.
   if (type === 'ref') emit('navigate-to-reference', { referenceId: id, stayInContext: true });
   else if (type === 'doc') emit('navigate-to-document', { documentId: id });
-  else if (type === 'note') emit('open-notes', { threadId: id });
 }
 
 // ─── wrapper ────────────────────────────────────────────────────────────

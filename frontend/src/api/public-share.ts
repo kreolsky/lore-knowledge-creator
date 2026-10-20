@@ -10,10 +10,10 @@
  * the public router returns 404 (not 401) for invalid/expired tokens, so
  * apiClient's redirect-on-401 guard never fires here.
  *
- * ARCH (plan "public-share-reuse-readonly-layout"): notes are no longer on the
- * public surface — the `publicNotes` client + the backend endpoint were removed
- * (readonly role, scope creep). The public Editor reads `tables_json` from
- * `publicDocumentByDoc` to seed its table widgets (mirrors snapshot-preview seeding).
+ * Notes are on the public surface only while the covering share has
+ * `allow_comments` — the public* note calls below (backend routes/public_notes.py).
+ * The public Editor reads `tables_json` from `publicDocumentByDoc` to seed its table
+ * widgets (mirrors snapshot-preview seeding).
  */
 // ARCH: apiClient is safe for public endpoints — they return 404 on bad tokens,
 // never 401, so the redirect-on-401 guard in client.ts cannot misfire.
@@ -50,6 +50,8 @@ export interface PublicDocumentResponse {
    *  the markdown anchors as text. */
   tables_json: string | null;
   headings: HeadingItem[];
+  /** Fingerprint of `content`, echoed back when a guest anchors a note to it. */
+  content_sha256: string;
 }
 
 /** Anonymous tree read — no auth, token in path. The ONLY token-keyed survivor:
@@ -80,11 +82,79 @@ export async function publicReferencesByDoc(documentId: string): Promise<Referen
   return data.references;
 }
 
+/**
+ * Public notes (comments on a public link). Offsets are UTF-16 over the payload's
+ * `content` — the public editor's own positions. No member or guest id ever reaches
+ * this surface: authorship is `author_name` + the viewer's own `is_mine`.
+ */
+export interface PublicNoteAnchor {
+  state: 'ok' | 'pending' | 'orphan';
+  start: number | null;
+  end: number | null;
+}
+
+export interface PublicNoteMessage {
+  message_id: string;
+  parent_id: string | null;
+  content: string;
+  created_at: string | null;
+  author_name: string | null;
+  is_mine: boolean;
+}
+
+export interface PublicNote {
+  session_id: string;
+  created_at: string | null;
+  anchor: PublicNoteAnchor | null;
+  anchor_quote: string | null;
+  is_mine: boolean;
+  messages: PublicNoteMessage[];
+}
+
+export interface PublicNotesResponse {
+  allow_comments: boolean;
+  /** The text the anchors were resolved against (null: no anchored note). */
+  content_sha256: string | null;
+  notes: PublicNote[];
+}
+
+/** A guest's selection: UTF-16 offsets + the served payload's fingerprint. */
+export interface PublicNoteSelection {
+  start: number;
+  end: number;
+  content_sha256: string;
+}
+
+export async function publicNotesByDoc(documentId: string): Promise<PublicNotesResponse> {
+  return apiClient.get(`/public/documents/${documentId}/notes`);
+}
+export async function createPublicNote(
+  documentId: string, body: { author_name: string; content: string } & Partial<PublicNoteSelection>,
+): Promise<PublicNote> {
+  return apiClient.post(`/public/documents/${documentId}/notes`, body);
+}
+export async function replyPublicNote(
+  documentId: string, sessionId: string,
+  body: { author_name: string; content: string; parent_id: string | null },
+): Promise<PublicNoteMessage> {
+  return apiClient.post(`/public/documents/${documentId}/notes/${sessionId}/messages`, body);
+}
+export async function deletePublicNoteMessage(
+  documentId: string, sessionId: string, messageId: string,
+): Promise<void> {
+  await apiClient.delete(`/public/documents/${documentId}/notes/${sessionId}/messages/${messageId}`);
+}
+export async function deletePublicNote(documentId: string, sessionId: string): Promise<void> {
+  await apiClient.delete(`/public/documents/${documentId}/notes/${sessionId}`);
+}
+
 /** Owner-facing share management (used by the Access tab). */
 export interface DocumentShare {
   share_id: string;
   scope: 'doc' | 'subtree';
   token: string;
+  /** Link holders may leave notes (the text stays read-only). */
+  allow_comments?: boolean;
   created_at: string;
   created_at_fmt?: string;
   created_by?: string | null;
@@ -124,4 +194,9 @@ export async function revokeShare(shareId: string): Promise<void> {
 /** Atomically change a share's scope (doc ↔ subtree). Owner-only server-side. */
 export async function updateShareScope(shareId: string, scope: 'doc' | 'subtree'): Promise<void> {
   await apiClient.patch(`/shares/${shareId}`, { scope });
+}
+
+/** Turn comments on a public link on or off. Owner-only server-side. */
+export async function updateShareComments(shareId: string, allowComments: boolean): Promise<void> {
+  await apiClient.patch(`/shares/${shareId}`, { allow_comments: allowComments });
 }

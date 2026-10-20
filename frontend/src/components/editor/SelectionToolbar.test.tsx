@@ -44,6 +44,7 @@ vi.mock('./markdown-actions', () => ({
 vi.mock('./markdown-actions-agent', () => ({ agentAction: vi.fn() }));
 
 import SelectionToolbar from './SelectionToolbar';
+import { usePublicNotesStore } from '../../store/public-notes-store';
 
 let root: Root | null = null;
 function mountToolbar() {
@@ -87,7 +88,10 @@ function select(doc: string, from: number, to: number) {
 
 beforeEach(() => {
   uiState.selectionEmpty = true;
+  uiState.isPublicShare = false;
   appState.accessLevel = 'full';
+  appState.currentReference = null;
+  usePublicNotesStore.setState({ allowComments: false });
 });
 afterEach(() => {
   unmount();
@@ -132,8 +136,76 @@ describe('SelectionToolbar', () => {
     expect(activeBtns()).toContain('bulletListTitle');
   });
 
-  it('commentators never see the toolbar (role gate hides formatting AND agent)', () => {
+  it('a commentator sees ONE labeled add-note button — no formatting, no agent', () => {
     appState.accessLevel = 'commentator';
+    mountToolbar();
+    select('some **selected** text', 6, 13);
+    const buttons = Array.from(document.querySelectorAll('.selection-toolbar .sel-toolbar-btn'));
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].textContent).toBe('addNote');
+  });
+
+  it('a full member on a view that is not editable (yet) gets the note-only bar', () => {
+    mountToolbar();
+    view?.destroy();
+    view = new EditorView({
+      state: EditorState.create({
+        doc: 'some **selected** text',
+        selection: { anchor: 6, head: 13 },
+        extensions: EditorView.editable.of(false),
+      }),
+      parent: document.createElement('div'),
+    });
+    view.coordsAtPos = () => ({ left: 100, right: 200, top: 50, bottom: 70 }) as never;
+    uiState.selectionEmpty = false;
+    act(() => { root?.render(createElement(SelectionToolbar)); });
+    const buttons = Array.from(document.querySelectorAll('.selection-toolbar .sel-toolbar-btn'));
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].textContent).toBe('addNote');
+  });
+
+  it('a guest on a public link with comments on sees one strong-yellow add-note button', () => {
+    appState.accessLevel = 'readonly';
+    uiState.isPublicShare = true;
+    usePublicNotesStore.setState({ allowComments: true });
+    mountToolbar();
+    select('some **selected** text', 6, 13);
+    expect(document.querySelector('.selection-toolbar')).toBeNull();
+    const buttons = Array.from(document.querySelectorAll('[data-testid="guest-note-bar"] button'));
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].textContent).toBe('addNote');
+    expect(buttons[0].className).toContain('bg-[var(--warm-strong)]');
+  });
+
+  it("the guest's bar opens under the pointer that released the selection", () => {
+    appState.accessLevel = 'readonly';
+    uiState.isPublicShare = true;
+    usePublicNotesStore.setState({ allowComments: true });
+    mountToolbar();
+    makeView('some **selected** text', 6, 13);
+    act(() => { root?.render(createElement(SelectionToolbar)); }); // attaches the pointer listeners
+    act(() => { view!.scrollDOM.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); });
+    uiState.selectionEmpty = false;
+    act(() => { root?.render(createElement(SelectionToolbar)); });
+    act(() => {
+      view!.scrollDOM.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 300, clientY: 200 }));
+    });
+    const bar = document.querySelector('[data-testid="guest-note-bar"]') as HTMLElement;
+    expect(bar.style.left).toBe('300px');
+    expect(bar.style.top).toBe('214px'); // pointer + the Clarify button's gap, not the selection rect (70 + 6)
+  });
+
+  it('a guest on a public link with comments off sees nothing', () => {
+    appState.accessLevel = 'readonly';
+    uiState.isPublicShare = true;
+    usePublicNotesStore.setState({ allowComments: false });
+    mountToolbar();
+    select('some **selected** text', 6, 13);
+    expect(document.querySelector('.selection-toolbar')).toBeNull();
+  });
+
+  it('readonly never sees the toolbar', () => {
+    appState.accessLevel = 'readonly';
     mountToolbar();
     select('some **selected** text', 6, 13);
     expect(document.querySelector('.selection-toolbar')).toBeNull();

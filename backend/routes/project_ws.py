@@ -175,8 +175,7 @@ async def project_ws(ws: WebSocket, project_id: str):
 # Which bus events reach the project WS — names only, every entry forwarded
 # verbatim. transcription_complete / transcription_error stay custom handlers
 # below: their wire type is reference_status_changed with a SYNTHESIZED status
-# (a translation, not a passthrough); agent_error_note also stays custom —
-# nothing emits it yet.
+# (a translation, not a passthrough).
 _SUBSCRIPTIONS: tuple[str, ...] = (
     "document_created",
     "document_renamed",
@@ -250,19 +249,6 @@ async def _on_transcription_error(reference_id: str, project_id: str) -> None:
 
 _bus_on("transcription_complete", _on_transcription_complete)
 _bus_on("transcription_error", _on_transcription_error)
-
-
-async def _on_agent_error_note(project_id: str, note_id: str, document_id: str, **_kwargs) -> None:
-    session = _sessions.get(project_id)
-    if session:
-        await session.broadcast({
-            "type": "agent_error_note",
-            "note_id": note_id,
-            "document_id": document_id,
-        })
-
-
-_bus_on("agent_error_note", _on_agent_error_note)
 
 
 async def _on_inbox_changed(project_id: str, user_id: str, document_id: str, **_kwargs) -> None:

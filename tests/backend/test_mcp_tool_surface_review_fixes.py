@@ -6,7 +6,6 @@ classifier's advertised cap, the stored node's row, the real convergence core),
 not a hand-copied literal, so the test and the code cannot drift.
 """
 
-import asyncio
 import os
 import secrets
 import struct
@@ -289,7 +288,7 @@ async def test_route_document_content_keeps_a_preexisting_remote_image(
 ):
     """Root cause of D-C: route_document_content converges a WHOLE buffer, so it
     must NOT scan it for remote images — a buffer can legitimately carry an image a
-    human already typed (the note-link strip rewrites exactly such a buffer)."""
+    human already typed."""
     from db import fetch_one
 
     pid, doc_id, _admin_uid = project_with_doc
@@ -299,53 +298,6 @@ async def test_route_document_content_keeps_a_preexisting_remote_image(
         doc_id=doc_id, new_content="![pic](https://example.com/x.png)\n", project_id=pid,
     )
     row = await fetch_one("documents", doc_id)
-    assert "https://example.com/x.png" in row["content"], row["content"]
-
-
-@pytest.mark.asyncio
-async def test_note_link_strip_survives_a_remote_image_in_the_document(
-    client, test_db, admin_user, project_with_doc, monkeypatch,
-):
-    """THE silent-degradation bug: a document holding a remote image URL (typed by a
-    human) + a note link. Deleting the note strips the link. Pre-fix, the strip ran
-    through route_document_content, whose remote-image scan raised 400 inside the
-    best-effort except → the link silently stayed. Drives the REAL convergence path
-    (no mock on route_document_content)."""
-    from db import create_record, fetch_one
-
-    pid, host_id, admin_uid = project_with_doc
-    sid = f"rf-note-{secrets.token_hex(4)}"
-    # A host doc whose content holds a remote image AND the note link.
-    host = f"rf-host-{secrets.token_hex(4)}"
-    await create_record("documents", host, {
-        "project_id": pid, "parent_id": host_id, "title": "Host", "content": "",
-        "path": "host.md", "is_index": False, "is_reference": False,
-    })
-    from ydoc_store import set_content
-
-    seeded = f"![pic](https://example.com/x.png)\n[L](note:{sid})\n"
-    await set_content(host, seeded, persist=True)
-
-    session = {"id": sid, "is_note": True, "document_id": host, "project_id": pid}
-
-    async def fake_require(_sid, _user):
-        return session
-
-    async def _drain():
-        from chat_sessions.note_events import _emit_tasks
-
-        if _emit_tasks:
-            await asyncio.gather(*_emit_tasks, return_exceptions=True)
-
-    monkeypatch.setattr("routes.chat.sessions._require_session_access", fake_require)
-    from routes.chat.sessions import delete_session
-
-    await delete_session(sid, {"user_id": admin_uid}, db=await routes.chat.sessions.get_db())
-    await _drain()
-
-    row = await fetch_one("documents", host)
-    assert f"note:{sid}" not in row["content"], row["content"]
-    # The pre-existing remote image survives (the strip only touched the note link).
     assert "https://example.com/x.png" in row["content"], row["content"]
 
 

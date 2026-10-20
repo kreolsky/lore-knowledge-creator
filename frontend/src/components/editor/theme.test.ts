@@ -72,7 +72,7 @@ function themeRadiusRules(css: string): string[] {
 /**
  * Normalized form for assertions: the per-theme scope classes (ͼN) are
  * stripped (they are unstable per mount and REPEATED inside selector lists —
- * `.ͼ5 .cm-note-link, .ͼ5 .cm-ref-link` would break naive substring checks),
+ * `.ͼ5 .cm-doc-link, .ͼ5 .cm-ref-link` would break naive substring checks),
  * whitespace collapsed, and structural space padding around {} : , removed.
  * Value-internal spacing (font stacks, calc) is preserved.
  */
@@ -151,20 +151,18 @@ describe('loreEditorTheme (rendered css)', () => {
 
   it('link family: shared base, per-type backgrounds, broken variants, dark rules', () => {
     const c = css();
-    // Shared base covers all four types in ONE selector.
-    expect(/\.cm-note-link,[^{]*\.cm-ref-link,[^{]*\.cm-doc-link,[^{]*\.cm-ext-link\{/.test(c), 'shared base covers all four link types').toBe(true);
-    expect(c.includes('var(--warm-tint)'), 'note link background').toBe(true);
+    // Shared base covers all three types in ONE selector.
+    expect(/\.cm-ref-link,[^{]*\.cm-doc-link,[^{]*\.cm-ext-link\{/.test(c), 'shared base covers all three link types').toBe(true);
     expect(c.includes('var(--ref-tint)'), 'ref link background').toBe(true);
     expect(c.includes('var(--surface3)'), 'doc link background').toBe(true);
     // Broken variants render struck-through with a help cursor.
-    expect(c.includes('.cm-doc-link-broken,.cm-note-link-broken,.cm-ref-link-broken')).toBe(true);
+    expect(c.includes('.cm-doc-link-broken,.cm-ref-link-broken')).toBe(true);
     expect(/\.cm-doc-link-broken,[^{]*\.cm-ref-link-broken\{[^}]*text-decoration:line-through/.test(c), 'broken variants struck through').toBe(true);
-    // Dark-mode note/ref variants exist (html.dark ancestor).
+    // Dark-mode ref variants exist (html.dark ancestor).
     expect(c.includes('html.dark'), 'dark-mode rules present').toBe(true);
-    expect(/html\.dark[^{]*\.cm-note-link\{/.test(c), 'dark note-link rule').toBe(true);
     expect(/html\.dark[^{]*\.cm-ref-link\{/.test(c), 'dark ref-link rule').toBe(true);
     // Nested .cm-link borders are killed (no double underline).
-    expect(/\.cm-note-link \.cm-link,[^{]*\{[^}]*border-bottom:none/.test(c), 'nested link border killed').toBe(true);
+    expect(/\.cm-ref-link \.cm-link,[^{]*\{[^}]*border-bottom:none/.test(c), 'nested link border killed').toBe(true);
   });
 
   it('transclusion band: full-bleed negative margins + inner 844px columns', () => {

@@ -1,5 +1,5 @@
 /**
- * Hover preview for links (documents, references, notes, external URLs).
+ * Hover preview for links (documents, references, external URLs) and note anchors.
  *
  * Serves BOTH the CM6 editor decorations and chat links (in-answer markdown links tagged
  * by MarkdownContent + sources list items tagged by Sources). Listens via event
@@ -8,7 +8,7 @@
  * positioned above or below the link after a 300ms delay.
  *
  * // ARCH: Link metadata (type + id/url) stored in state; content derived in useMemo
- * // from stores (ref, note) or useDocumentPreview hook (doc). This unifies sync/async
+ * // from stores (ref) or useDocumentPreview hook (doc). This unifies sync/async
  * // resolution — the showPreview callback only sets positions/meta, never content.
  * // ARCH: Position rule — above cursor aligns bottom edge; below cursor aligns top edge.
  * // ARCH: Horizontal placement is dual (chooseLinkPlacement): links INSIDE
@@ -16,7 +16,7 @@
  * // SIDE of the panel — same formula + shift as useRightPanelHoverPreview
  * // (Notes/Refs card previews); editor links stay near the link.
  * // ARCH: data-link-id contract — centralized in utils/in-app-link.ts. Docs use a bare id;
- * // refs/notes keep their scheme prefix. decodeLinkId strips any prefix defensively for all
+ * // refs keep their scheme prefix. decodeLinkId strips any prefix defensively for all
  * // types, so both bare and prefixed values resolve correctly regardless of the producer.
  * // ARCH: two metadata branches — attributed elements (.chat-link/.chat-source/cm-*) read
  * // data-link-type/id; dsh chat anchors read the rewritten lore.local href instead (they
@@ -28,6 +28,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { LinkPreviewPopup } from '../LinkPreviewPopup';
 import { useAppStore } from '../../store/app-store';
 import { useNoteChatStore } from '../../store/note-chat-store';
+import { usePublicNotesStore, PUBLIC_DRAFT_NOTE_ID } from '../../store/public-notes-store';
 import { useDocumentPreview } from '../../hooks/useDocumentPreview';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useReferencePreview } from '../../hooks/useReferencePreview';
@@ -39,10 +40,11 @@ import { referenceFileUrl } from '../../utils/reference-url';
 import { isTouchPointer } from '../../utils/last-pointer';
 
 // Editor link decorations (CM6) + chat link/source elements tagged with data-link-type
-// + dsh chat anchors: internal doc:/ref:/note: links the chat markdown wrapper rewrote
-// to https://lore.local/l/<type>/<id> (matched by href — dsh owns those anchors' classes).
+// + dsh chat anchors: internal doc:/ref: links the chat markdown wrapper rewrote
+// to https://lore.local/l/<type>/<id> (matched by href — dsh owns those anchors' classes)
+// + note anchors the notes layer paints (.cm-note-anchor, data-note-id).
 const EVERY_LINK_SELECTOR =
-  '.cm-doc-link,.cm-ref-link,.cm-note-link,.cm-ext-link,.cm-doc-link-broken,.cm-ref-link-broken,.cm-note-link-broken,.chat-link,.chat-source,.chat-markdown a[href^="https://lore.local/l/"]';
+  '.cm-note-anchor,.cm-doc-link,.cm-ref-link,.cm-ext-link,.cm-doc-link-broken,.cm-ref-link-broken,.chat-link,.chat-source,.chat-markdown a[href^="https://lore.local/l/"]';
 const DELAY_MS = 300;
 
 interface LinkMeta {
@@ -68,6 +70,7 @@ export function EditorLinkPreview() {
   const currentRefId = useAppStore(s => s.currentReference?.reference_id);
   const references = useAppStore(s => s.references);
   const noteChatSessions = useNoteChatStore(s => s.sessions);
+  const publicNotes = usePublicNotesStore(s => s.notes);
 
   const [visible, setVisible] = useState(false);
   const [state, setState] = useState<PreviewState>(NO_PREVIEW);
@@ -98,7 +101,7 @@ export function EditorLinkPreview() {
   visibleRef.current = visible;
 
   // INVARIANT(no-silent-degradation): error/loading are carried per link TYPE, never
-  // inferred from an undefined `content`. Why: a note/ref/ext link leaves docContent
+  // inferred from an undefined `content`. Why: a ref/ext link leaves docContent
   // undefined forever (previewDocId is null — the body comes from the store), so an
   // inferred "loading" would spin that popup permanently. Only the branch that actually
   // owns a fetch reports its state.
@@ -115,19 +118,20 @@ export function EditorLinkPreview() {
       return { ...(fetchedRefPreview ?? {}), title: ref?.title ?? fetchedRefPreview?.title, error: refError, loading: refLoading };
     }
     if (meta.type === 'note') {
-      const noteId = decodeLinkId('note', meta.id);
-      const session = noteChatSessions.find(s => s.session_id === noteId);
-      // WHY: notes carry no title; the panel hover (NotesPanel) titles the popup with the
-      // first message and fills it with last_message_preview. Unify the editor hover with
-      // that format so it never shows the generic "No content" fallback for a note that
-      // has messages.
-      const preview = session?.last_message_preview?.trim()
-        || session?.first_message_preview?.trim();
-      return preview ? { title: session?.first_message_preview?.trim(), content: preview } : {};
+      // WHY: notes carry no title, so the popup has no plaque — the body is the last
+      // message, as in the panel hover (NotesPanel), falling back to the first so a note
+      // with messages never shows the generic "No content". On a public link the notes
+      // come from the guest list instead.
+      const session = noteChatSessions.find(s => s.session_id === meta.id);
+      const guestNote = session ? null : publicNotes.find(n => n.session_id === meta.id);
+      const first = session?.first_message_preview?.trim() ?? guestNote?.messages[0]?.content.trim();
+      const last = session?.last_message_preview?.trim() ?? guestNote?.messages.at(-1)?.content.trim();
+      const preview = last || first;
+      return preview ? { content: preview } : {};
     }
     if (meta.type === 'ext') return { content: meta.id };
     return {};
-  }, [meta, docTitle, docContent, docError, docLoading, references, noteChatSessions, fetchedRefPreview, refError, refLoading]);
+  }, [meta, docTitle, docContent, docError, docLoading, references, noteChatSessions, publicNotes, fetchedRefPreview, refError, refLoading]);
 
   const clearTimer = useCallback(() => {
     if (timerRef.current) {
@@ -150,11 +154,17 @@ export function EditorLinkPreview() {
     const linkId = el.getAttribute('data-link-id');
     const linkUrl = el.getAttribute('data-link-url');
 
+    const noteId = el.getAttribute('data-note-id');
+
+    // The note being composed has no message yet — nothing to preview.
+    if (noteId === PUBLIC_DRAFT_NOTE_ID) return;
+
     let metaObj: LinkMeta;
-    if (linkType && linkId) {
+    if (noteId) {
+      metaObj = { type: 'note', id: noteId };
+    } else if (linkType && linkId) {
       if (linkType === 'doc') metaObj = { type: 'doc', id: linkId };
       else if (linkType === 'ref') metaObj = { type: 'ref', id: linkId };
-      else if (linkType === 'note') metaObj = { type: 'note', id: linkId };
       else metaObj = { type: 'ext', id: linkUrl || linkId };
     } else {
       // dsh chat anchors carry no data-link-* attributes — their internal

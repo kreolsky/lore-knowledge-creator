@@ -117,12 +117,6 @@ export function useProjectConnection({ projectId }: UseProjectConnectionParams) 
     // the user dismisses it.
     useAppStore.getState().showToast(t('pipelineExtractionFailed'), 'error', { persistent: true });
   }, []));
-  useEvent('ws:agent_error_note', useCallback((_: { note_id: string; document_id: string }) => {
-    // ARCH: an agent proposal apply failed and the backend recorded a system note
-    // on the document. Surface a persistent toast (mirrors extraction_error);
-    // DocumentPage (ws:agent_error_note) refreshes the notes panel + opens it.
-    useAppStore.getState().showToast(t('agentApplyFailed'), 'error', { persistent: true });
-  }, []));
   useEvent('ws:embedding_degraded', useCallback(() => {
     useAppStore.getState().showToast(t('embeddingsIndexFailed'), 'error');
   }, []));

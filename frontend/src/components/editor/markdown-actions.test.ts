@@ -637,15 +637,15 @@ describe('createNote', () => {
     expect(result).toBe(false);
   });
 
-  // Panel quick preview (decision A): the focused editor renders the previewed
-  // reference and notes are document-scoped there — refuse with a toast, no
-  // note: link inserted, no create-note-from-editor emitted.
-  it('focused reference + panel mode → false, toast, no link, no event', async () => {
+  // Panel quick preview (decision A): the editor renders the previewed reference and
+  // notes are document-scoped there — refuse with a toast, text untouched.
+  it('reference view + panel mode → false, toast, text untouched', async () => {
     const { useAppStore } = await import('../../store/app-store');
     const { useUIStore } = await import('../../store/ui-store');
-    const { claimFocus, unmountView } = await import('../../editor/active-editor');
+    const { setViewEntity } = await import('../../editor/active-editor');
     const showToast = vi.fn();
     useAppStore.setState({
+      accessLevel: 'full',
       currentProject: { project_id: 'p1' } as any,
       currentDocument: { document_id: 'doc-1' } as any,
       currentReference: { reference_id: 'ref-1', document_id: 'doc-2' } as any,
@@ -653,17 +653,133 @@ describe('createNote', () => {
     });
     useUIStore.getState().setRefOpenMode('doc-1', 'panel');
     const view = createView('hello world', 0, 5);
-    claimFocus({ role: 'primary', isReference: true, view, handle: null });
+    setViewEntity(view, 'ref-1');
     try {
       expect(markdownActionRegistry.createNote(view)).toBe(false);
       expect(docText(view)).toBe('hello world');
       expect(showToast).toHaveBeenCalledTimes(1);
       expect(showToast.mock.calls[0][1]).toBe('info');
-      expect(emittedEvents.filter(e => e.type === 'create-note-from-editor')).toHaveLength(0);
     } finally {
-      claimFocus({ role: 'primary', isReference: false, view, handle: null });
-      unmountView(view);
       useUIStore.getState().setRefOpenMode('doc-1', 'center');
+    }
+  });
+
+  describe('anchored note over the view entity ytext', () => {
+    async function setup(accessLevel: string) {
+      const Y = await import('yjs');
+      const { useAppStore } = await import('../../store/app-store');
+      const { useNoteChatStore } = await import('../../store/note-chat-store');
+      const { setViewEntity } = await import('../../editor/active-editor');
+      const { setEntityHandle } = await import('../../collab/active-handle-registry');
+      const { resolveNoteAnchor } = await import('../../collab/note-anchor-wire');
+      const text = 'Привет 😀 мир😀край конец';
+      const ydoc = new Y.Doc();
+      const ytext = ydoc.getText('content');
+      ytext.insert(0, text);
+      setEntityHandle('doc-1', { ydoc, ytext } as any);
+      const createNoteSession = vi.fn().mockResolvedValue({ session_id: 's-1' });
+      useNoteChatStore.setState({ createNoteSession } as any);
+      useAppStore.setState({
+        accessLevel: accessLevel as any,
+        currentProject: { project_id: 'p1' } as any,
+        currentDocument: { document_id: 'doc-1' } as any,
+        currentReference: null,
+        showToast: vi.fn(),
+      });
+      const from = text.indexOf('мир');
+      const to = from + 'мир😀край'.length;
+      const view = createView(text, from, to);
+      setViewEntity(view, 'doc-1');
+      return { view, text, ydoc, createNoteSession, resolveNoteAnchor, setEntityHandle };
+    }
+
+    it('commentator: sends a relpos pair that resolves to the selection; the text is untouched', async () => {
+      const { view, text, ydoc, createNoteSession, resolveNoteAnchor, setEntityHandle } = await setup('commentator');
+      try {
+        expect(markdownActionRegistry.createNote(view)).toBe(true);
+        expect(docText(view)).toBe(text);
+        const { anchor } = createNoteSession.mock.calls[0][0];
+        expect(anchor.quote).toBe('мир😀край');
+        const res = resolveNoteAnchor(anchor.relStart, anchor.relEnd, ydoc);
+        expect(res?.state === 'ok' && text.slice(res.from, res.to)).toBe('мир😀край');
+      } finally {
+        setEntityHandle('doc-1', null);
+      }
+    });
+
+    it('readonly: no note, no request', async () => {
+      const { view, createNoteSession, setEntityHandle } = await setup('readonly');
+      try {
+        expect(markdownActionRegistry.createNote(view)).toBe(false);
+        expect(createNoteSession).not.toHaveBeenCalled();
+      } finally {
+        setEntityHandle('doc-1', null);
+      }
+    });
+  });
+});
+
+// ── createNote on the public page ────────────────────────────────────────────
+
+describe('createNote on a public link', () => {
+  async function setup({ allowComments, served }: { allowComments: boolean; served?: string }) {
+    const { useAppStore } = await import('../../store/app-store');
+    const { useUIStore } = await import('../../store/ui-store');
+    const { usePublicNotesStore } = await import('../../store/public-notes-store');
+    const text = 'Привет 😀 мир 😀 пока';
+    const showToast = vi.fn();
+    useUIStore.getState().setPublicShare(true);
+    useAppStore.setState({
+      accessLevel: 'readonly',
+      currentProject: null,
+      currentDocument: { document_id: 'doc-1', content: served ?? text } as any,
+      currentReference: null,
+      showToast,
+    });
+    usePublicNotesStore.setState({ documentId: 'doc-1', allowComments, servedSha: 'sha-1', draft: null });
+    // CM6 positions are UTF-16 offsets: «мир» sits after a surrogate pair.
+    const from = text.indexOf('мир');
+    const view = createView(text, from, from + 3);
+    return { view, text, from, showToast, usePublicNotesStore, useUIStore };
+  }
+
+  it('comments on: opens a draft over the UTF-16 offsets + served fingerprint; text untouched', async () => {
+    const { view, text, from, usePublicNotesStore, useUIStore } = await setup({ allowComments: true });
+    try {
+      expect(markdownActionRegistry.createNote(view)).toBe(true);
+      expect(docText(view)).toBe(text);
+      expect(usePublicNotesStore.getState().draft).toEqual({
+        selection: { start: from, end: from + 3, content_sha256: 'sha-1' },
+        quote: 'мир',
+      });
+      expect(emittedEvents.some(e => e.type === 'open-notes')).toBe(true);
+    } finally {
+      useUIStore.getState().setPublicShare(false);
+    }
+  });
+
+  it('comments off: no draft, nothing opens', async () => {
+    const { view, usePublicNotesStore, useUIStore } = await setup({ allowComments: false });
+    try {
+      expect(markdownActionRegistry.createNote(view)).toBe(false);
+      expect(usePublicNotesStore.getState().draft).toBeNull();
+      expect(emittedEvents.some(e => e.type === 'open-notes')).toBe(false);
+    } finally {
+      useUIStore.getState().setPublicShare(false);
+    }
+  });
+
+  it('the editor no longer shows the served text: refused with a toast', async () => {
+    const { view, showToast, usePublicNotesStore, useUIStore } = await setup({
+      allowComments: true, served: 'другой текст',
+    });
+    try {
+      expect(markdownActionRegistry.createNote(view)).toBe(false);
+      expect(usePublicNotesStore.getState().draft).toBeNull();
+      expect(showToast).toHaveBeenCalledTimes(1);
+      expect(showToast.mock.calls[0][1]).toBe('error');
+    } finally {
+      useUIStore.getState().setPublicShare(false);
     }
   });
 });

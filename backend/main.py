@@ -103,6 +103,7 @@ from routes import (
     project_ws,
     projects,
     projects_members,  # noqa: F401 — import registers members/invites routes on projects.router
+    public_notes,
     public_share,
     references,
     sandbox,
@@ -605,6 +606,7 @@ app.include_router(documents.router)
 app.include_router(document_shares.router)
 app.include_router(checkpoints.router)
 app.include_router(references.router)
+app.include_router(public_notes.router)
 app.include_router(public_share.router)
 app.include_router(files.router)
 app.include_router(files_mcp_upload.router)

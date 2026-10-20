@@ -32,6 +32,27 @@ function anchorContentTop(el: HTMLElement, anchor: HTMLElement): number {
   return anchor.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
 }
 
+// Gap left above a user message the up-jump lands on (the list's own py-3).
+const USER_JUMP_GAP = 12;
+// A landing within this many px of the current scrollTop is "here", not "above" —
+// scrollTop reads back rounded, and a repeat click must step past the row it is on.
+const USER_JUMP_SLACK = 2;
+
+// The branch's user-message rows, top-down.
+function userRows(el: HTMLElement, userIds: Set<string>): HTMLElement[] {
+  return Array.from(el.querySelectorAll<HTMLElement>('[data-message-id]'))
+    .filter(node => userIds.has(node.dataset.messageId ?? ''));
+}
+
+// The scrollTop that puts `row` at the top of the viewport, below the gap.
+function userLanding(el: HTMLElement, row: HTMLElement): number {
+  return Math.max(0, anchorContentTop(el, row) - USER_JUMP_GAP);
+}
+
+function isAbove(el: HTMLElement, landing: number): boolean {
+  return landing < el.scrollTop - USER_JUMP_SLACK;
+}
+
 // WHY the Web Animations API, not a class: a one-off fade on the landed
 // passage needs no stylesheet rule (jsdom has no `animate`, hence the guard).
 function flashPassage(node: HTMLElement): void {
@@ -229,6 +250,15 @@ export function MessageList() {
     });
   }, [basePath, streaming]);
 
+  // User-message ids on the rendered branch — the up-jump's stops.
+  // WHY a ref: setAway/handleScroll read it without changing identity, and setAway
+  // is a dep of the session-switch snap below (a new identity would re-snap).
+  // Declared before the scroll layout effects so they see this commit's path.
+  const userIdsRef = useRef<Set<string>>(new Set());
+  useLayoutEffect(() => {
+    userIdsRef.current = new Set(activePath.filter(m => m.role === 'user').map(m => m.message_id));
+  }, [activePath]);
+
   // Place the switcher (see SYSTEM: chat-branch-sessions): for every fork
   // entry (origin P + the thread's distinct continuations after P, this
   // session's own flagged `current`), the indicator sits on the row whose
@@ -313,13 +343,17 @@ export function MessageList() {
   // (new message / user turn) owned by the smooth glide effect below.
   const prevPathLenRef = useRef<number | null>(null);
 
-  // Last "scrolled away" value broadcast to the composer's scroll-to-bottom button.
+  // Last "scrolled away" value broadcast to the composer's scroll buttons, with
+  // whether a user message lies above the view (whether the up button shows).
   // WHY: a ref + event, not state — a scroll must not re-render the message list.
-  const awayRef = useRef(false);
+  const awayRef = useRef({ away: false, userAbove: false });
   const setAway = useCallback((away: boolean) => {
-    if (awayRef.current === away) return;
-    awayRef.current = away;
-    emit('chat-scrolled-away', { away });
+    const el = containerRef.current;
+    const first = away && el ? userRows(el, userIdsRef.current)[0] : undefined;
+    const userAbove = el !== null && first !== undefined && isAbove(el, userLanding(el, first));
+    if (awayRef.current.away === away && awayRef.current.userAbove === userAbove) return;
+    awayRef.current = { away, userAbove };
+    emit('chat-scrolled-away', { away, userAbove });
   }, []);
 
   const handleScroll = useCallback(() => {
@@ -348,6 +382,29 @@ export function MessageList() {
     };
     on('chat-scroll-to-bottom', jump);
     return () => off('chat-scroll-to-bottom', jump);
+  }, [setAway]);
+
+  useEffect(() => {
+    // INVARIANT: the up-jump steps to the nearest user message ABOVE the current
+    // position, one per click; the down button always goes to the very bottom.
+    // Why: operator decision — discrete navigation over one's own turns, measured
+    // from where the view is now, so a wheel scroll between clicks never desyncs it.
+    const jumpUp = () => {
+      const el = containerRef.current;
+      if (!el) return;
+      const above = userRows(el, userIdsRef.current)
+        .map(row => userLanding(el, row))
+        .filter(landing => isAbove(el, landing));
+      if (above.length === 0) return;
+      // WHY instant: same reason as the bottom jump above.
+      el.scrollTop = above[above.length - 1];
+      stickToBottomRef.current = false;
+      anchorElRef.current = null;
+      anchorTopRef.current = null;
+      setAway(true);
+    };
+    on('chat-scroll-to-prev-user', jumpUp);
+    return () => off('chat-scroll-to-prev-user', jumpUp);
   }, [setAway]);
 
   // Instant snap to bottom on session switch or after messages finish loading.

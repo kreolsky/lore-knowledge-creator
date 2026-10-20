@@ -15,13 +15,14 @@ import { firstVisibleLine, positionCacheSet } from '../editor/position-cache';
 import { resolveReferenceNav } from './resolveReferenceNav';
 import { refIsScope } from '../store/ui-store/documents-slice';
 import { openDocument } from '../navigation/open-document';
+import { findNoteAnchorRange } from '../editor/note-highlight';
 
 interface UseEditorEventsParams {
   editorViewRef: React.RefObject<EditorView | null>;
   currentDocument: { document_id: string } | null;
   // WHY: false on the split-view reference (secondary) column — these listeners
-  // target the document only, and binding them twice would double-fire navigate /
-  // mutate the reference's content on note-link removal.  Why: these listeners target the document; binding them on the split-view reference column too would double-fire navigate and mutate the reference's content.
+  // target the document only, and binding them twice would double-fire navigate and
+  // scroll the wrong column.
   enabled?: boolean;
 }
 
@@ -121,10 +122,9 @@ export function useEditorEvents({ editorViewRef, currentDocument, enabled = true
     if (!enabled) return;
     if (!editorViewRef.current) return;
     const view = editorViewRef.current;
-    const docText = view.state.doc.toString();
-    const idx = docText.indexOf(`note:${noteId}`);
-    if (idx !== -1) {
-      view.dispatch({ effects: EditorView.scrollIntoView(idx, { y: 'center' }) });
+    const pos = findNoteAnchorRange(view.state, noteId)?.from;
+    if (pos != null) {
+      view.dispatch({ effects: EditorView.scrollIntoView(pos, { y: 'center' }) });
     }
   }, [editorViewRef, enabled]));
 

@@ -24,7 +24,7 @@ import { useUIStore } from '../store/ui-store';
 import { apiClient } from '../api/client';
 import { moveDocumentToProject } from '../api/access';
 import {
-  createShare, listShares, revokeShare, updateShareScope,
+  createShare, listShares, revokeShare, updateShareScope, updateShareComments,
   type DocumentShare, type InheritedFrom,
 } from '../api/public-share';
 import { docUrl } from '../utils/routing';
@@ -192,6 +192,26 @@ function GeneralAccessSection({
     }
   };
 
+  // The document's own share row (a doc has at most one); comments ride on it. An
+  // inherited share carries its flag on the ancestor's row — toggled there.
+  const ownShare = shares.find(s => s.share_id !== '__optimistic__') ?? null;
+
+  /** Optimistic comments toggle, re-synced from the server like handleToggle. */
+  const handleCommentsToggle = async () => {
+    if (!ownShare || busy) return;
+    const next = !ownShare.allow_comments;
+    setShares(shares.map(s => (s.share_id === ownShare.share_id ? { ...s, allow_comments: next } : s)));
+    setBusy(true);
+    try {
+      await updateShareComments(ownShare.share_id, next);
+    } catch {
+      showToast(t('accessShareCommentsError'), 'error');
+    } finally {
+      setBusy(false);
+      await refreshShares();
+    }
+  };
+
   const summary = (() => {
     switch (view.summary) {
       case 'subtree': return t('accessSummarySubtree');
@@ -231,6 +251,20 @@ function GeneralAccessSection({
                 title={t('accessIncludeSubtreeHint')}
               />
             </div>
+
+            {ownShare && (
+              <div className="mt-1.5">
+                <FieldCheckbox
+                  checked={!!ownShare.allow_comments}
+                  disabled={busy}
+                  onChange={() => { void handleCommentsToggle(); }}
+                  label={t('accessAllowComments')}
+                />
+                {/* Visibility hint: with comments on, every note on the document is
+                    shown to link holders with author names — no member-only thread. */}
+                <p className="text-ui-xs text-text-dim mt-1">{t('accessAllowCommentsHint')}</p>
+              </div>
+            )}
 
             <p className="text-ui-xs text-text-dim mt-1.5">{summary}</p>
             {view.subtree && (

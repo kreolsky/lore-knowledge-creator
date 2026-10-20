@@ -15,7 +15,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { ensureSyntaxTree } from '@codemirror/language';
 import { buildStructuralDecorations } from './build-structural';
 import { transcludeMap } from './effects';
-import { validDocIds, validNoteThreadIds } from './link-validity';
+import { validDocIds, validRefIds } from './link-validity';
 
 interface Dec {
   from: number;
@@ -166,18 +166,18 @@ describe('inline code color swatch', () => {
 // ── Links ────────────────────────────────────────────────────────────────────
 
 describe('links', () => {
-  it('note: links carry the note class, data attrs, and hidden brackets', () => {
-    validNoteThreadIds.add('t1');
-    const doc = 'see [note link](note:t1) here';
+  it('ref: links carry the ref class, data attrs, and hidden brackets', () => {
+    validRefIds.add('t1');
+    const doc = 'see [ref link](ref:t1) here';
     const decs = decsFor(doc);
-    const mark = decs.find((d) => d.cls === 'cm-note-link');
-    expect(mark, 'cm-note-link mark').toBeDefined();
-    expect(mark!.attrs?.['data-link-type']).toBe('note');
-    expect(mark!.attrs?.['data-link-id']).toBe('note:t1');
-    expect(doc.slice(mark!.from, mark!.to)).toBe('note link');
+    const mark = decs.find((d) => d.cls === 'cm-ref-link');
+    expect(mark, 'cm-ref-link mark').toBeDefined();
+    expect(mark!.attrs?.['data-link-type']).toBe('ref');
+    expect(mark!.attrs?.['data-link-id']).toBe('ref:t1');
+    expect(doc.slice(mark!.from, mark!.to)).toBe('ref link');
     // Both bracket runs hidden.
     expect(decs.some((d) => doc.slice(d.from, d.to) === '[')).toBe(true);
-    expect(decs.some((d) => doc.slice(d.from, d.to).startsWith('](note:t1)'))).toBe(true);
+    expect(decs.some((d) => doc.slice(d.from, d.to).startsWith('](ref:t1)'))).toBe(true);
   });
 
   it('bare-id links classify as doc; # anchors and mailto stay plain cm-link', () => {

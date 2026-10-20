@@ -1,8 +1,8 @@
 /**
  * Unit tests for NotesPanel — the defect-heavy contracts called out by the
- * WHY/INVARIANT markers in NotesPanel.tsx: link-driven anchored coloring
- * (anchorless == no [text](note:ID) link in the OWNING material, regardless of
- * reference attachment), per-reference grouping with title fallback, the
+ * WHY/INVARIANT markers in NotesPanel.tsx: anchor-driven card coloring
+ * (anchored / orphan / none from the note's anchor, regardless of reference
+ * attachment), per-reference grouping with title fallback, the
  * doc-note vs ref-note click fork, role gates (readonly sees no create/delete
  * affordances), and the no-silent-degradation create-failure toast.
  *
@@ -19,6 +19,9 @@ import { act } from 'react';
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 import styles from './ui/ListPill.module.css';
+import * as Y from 'yjs';
+import { setEntityHandle } from '../collab/active-handle-registry';
+import { buildNoteAnchor } from '../collab/note-anchor-wire';
 
 // ---- store / hook mocks (mutable per test) ----
 const appState: Record<string, unknown> = {
@@ -135,7 +138,6 @@ function note(overrides: Record<string, unknown> & { session_id: string }) {
     message_count: 1,
     created_at: '2026-01-01T00:00:00Z',
     anchor_rel_start: null,
-    anchor_offset_start: null,
     ...overrides,
   };
 }
@@ -197,25 +199,45 @@ describe('NotesPanel', () => {
     unmount();
   });
 
-  it('pins the anchored-color INVARIANT — driven ONLY by a body note: link; a reference-attached note with no link stays anchorless', () => {
+  it('a note without an anchor is anchorless — a leftover note: link in the body or a reference attachment does not anchor it', () => {
     appState.currentDocument = { document_id: 'doc-1', content: 'see [frag](note:n-linked)' };
     crudState.noteItems = [
       note({ session_id: 'n-linked' }),
       note({ session_id: 'n-ref-attached', reference_id: 'ref-1' }),
     ];
     mountPanel();
-    expect(pillVariant('n-linked')).toBe('anchored');
-    // Attached to a reference but the OWNING material has no link → grey.
+    expect(pillVariant('n-linked')).toBe('anchorless');
     expect(pillVariant('n-ref-attached')).toBe('anchorless');
     unmount();
   });
 
-  it('anchor_offset hint colors a freshly-created (link-not-yet-propagated) note anchored', () => {
-    appState.currentDocument = { document_id: 'doc-1', content: 'no links at all' };
-    crudState.noteItems = [note({ session_id: 'n-fresh', anchor_offset_start: 4 })];
-    mountPanel();
-    expect(pillVariant('n-fresh')).toBe('anchored');
-    unmount();
+  it('colors a card from its anchor: ok and pending are anchored, a deleted fragment is an orphan', () => {
+    const text = 'Привет 😀 мир😀край конец 😀';
+    const base = new Y.Doc();
+    base.getText('content').insert(0, text);
+    const from = text.indexOf('мир');
+    const ok = buildNoteAnchor(base.getText('content'), from, from + 'мир😀край'.length);
+    const gone = buildNoteAnchor(base.getText('content'), 0, 'Привет'.length);
+    base.getText('content').delete(0, 'Привет'.length);
+    const unsynced = new Y.Doc();
+    unsynced.getText('content').insert(0, 'чужой 😀 текст');
+    const pending = buildNoteAnchor(unsynced.getText('content'), 0, 5);
+    setEntityHandle('doc-1', { ydoc: base, ytext: base.getText('content') } as never);
+    appState.currentDocument = { document_id: 'doc-1', content: base.getText('content').toString() };
+    const anchored = (id: string, a: { relStart: string; relEnd: string }) =>
+      note({ session_id: id, document_id: 'doc-1', anchor_rel_start: a.relStart, anchor_rel_end: a.relEnd });
+    crudState.noteItems = [anchored('n-ok', ok), anchored('n-gone', gone), anchored('n-pending', pending)];
+    try {
+      mountPanel();
+      expect(pillVariant('n-ok')).toBe('anchored');
+      expect(pillVariant('n-pending')).toBe('anchored');
+      expect(pillVariant('n-gone')).toBe('anchorless');
+      expect(document.getElementById('note-n-gone')!.textContent).toContain('noteFragmentDeleted');
+      expect(document.getElementById('note-n-pending')!.textContent).not.toContain('noteFragmentDeleted');
+      unmount();
+    } finally {
+      setEntityHandle('doc-1', null);
+    }
   });
 
   it('doc-note click opens the thread and scrolls the editor; anchor hint connects the pin', () => {
@@ -364,6 +386,45 @@ describe('NotesPanel', () => {
     expect(apiPost).toHaveBeenCalledWith('/inbox/read', { kind: 'note', id: 'n-click' });
     expect(useInboxStore.getState().summary['doc-id'].notes).toBe(0);
     expect(noteStoreState.setActiveNoteThreadId).toHaveBeenCalledWith('n-click', 'doc-id');
+    unmount();
+  });
+
+  // ── note title in the pill meta row (system notes) ─────────────────────────
+  // The wire already carries session.title (widget/pipeline compose it); the
+  // pill must show it as a meta-row prefix while member notes (title '') stay
+  // date-only. The title is caller-supplied and unbounded, so it must ride the
+  // SAME single-line truncated meta span the date does.
+  const metaTextOf = (sessionId: string): string => {
+    const el = document.getElementById(`note-${sessionId}`);
+    const span = el?.querySelector<HTMLSpanElement>('span.text-ui-xs.truncate');
+    return span?.textContent ?? '';
+  };
+
+  it('a titled session shows "title · date" in the meta row; an untitled one stays date-only', () => {
+    crudState.noteItems = [
+      note({ session_id: 'n-titled', title: 'Widget — desk' }),
+      note({ session_id: 'n-plain', title: '' }),
+    ];
+    mountPanel();
+    // Same created_at on both → identical formatted date; the titled pill is
+    // exactly the plain one's meta prefixed with the title (TZ-independent).
+    const plain = metaTextOf('n-plain');
+    expect(metaTextOf('n-titled')).toBe(`Widget — desk · ${plain}`);
+    expect(plain).not.toContain('·');
+    unmount();
+  });
+
+  it('a 300-char title stays on the single-line truncated meta span', () => {
+    const long = 'W'.repeat(300);
+    crudState.noteItems = [note({ session_id: 'n-long', title: long })];
+    mountPanel();
+    const el = document.getElementById('note-n-long')!;
+    const span = el.querySelector<HTMLSpanElement>('span.text-ui-xs.truncate');
+    expect(span).not.toBeNull();
+    expect(span!.textContent).toContain(long.slice(0, 60));
+    // One line: the title rides the meta span's truncate (ellipsis) clamp —
+    // never a wrapping node of its own.
+    expect(span!.classList.contains('truncate')).toBe(true);
     unmount();
   });
 });

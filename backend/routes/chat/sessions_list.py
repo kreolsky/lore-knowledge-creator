@@ -265,7 +265,13 @@ async def _piggyback_messages(db, target_row: dict) -> dict | None:
         load_session_messages,
     )
     tid = extract_id(target_row.get("id"))
-    msgs = await load_session_messages(db, target_row, tid)
+    # WHY: TAIL-anchored for notes (parity INVARIANT below) — the piggyback
+    # serves the same newest-first window the messages GET serves, so any
+    # caller that asks for a note's rows here gets the GET's window. The note
+    # panel does not request the piggyback today (only the AI-chat store does).
+    msgs = await load_session_messages(
+        db, target_row, tid, tail=target_row.get("is_note") is True,
+    )
     # INVARIANT (timeline parity): every path that returns a session's rows
     # returns the SAME timeline. Why: the piggyback is the restore path of a
     # page reload / second tab, and committing rows without `frames` there

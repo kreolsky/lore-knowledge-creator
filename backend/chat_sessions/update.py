@@ -118,9 +118,8 @@ async def _agent_flag_sets(
 # read; there is no separate "chat context doc" field. A reference-scoped
 # session holds the REFERENCE id in that column, so moving it to a document is
 # the same write and the row becomes a plain document chat (reference_id is a
-# read-only derivation). Refused (400) for note sessions — a note is anchored by
-# a note: link inside its owning document's content, moving the row would
-# strand the anchor. A non-null target needs at least commentator access —
+# read-only derivation). Refused (400) for note sessions — a note is anchored to
+# its owning document's text, moving the row would strand the anchor. A non-null target needs at least commentator access —
 # reparenting into a document the user cannot see would hide their own chat
 # from them and leak a title into that branch's proximity ranking. The agent's
 # target_doc_id pin is NOT moved: the turn guard only trusts a target that is a

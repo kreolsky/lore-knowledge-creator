@@ -32,6 +32,10 @@ import { ListRow } from './chat/ListRow';
 import { HoverPreviewPopup } from './HoverPreviewPopup';
 import { NoteChatView } from './NoteChatView';
 import { useNoteCrud } from '../hooks/useNoteCrud';
+import { getEntityHandle } from '../collab/active-handle-registry';
+import { resolveNoteAnchor } from '../collab/note-anchor-wire';
+import { findNoteAnchorRange } from '../editor/note-highlight';
+import { noteOwnerId } from './editor/note-anchor-wiring';
 import { referenceFileUrl } from '../utils/reference-url';
 import { formatDate } from '../utils/format';
 import { ChatSession, Reference } from '../types';
@@ -84,9 +88,12 @@ function useNoteGroups(noteItems: ChatSession[], references: Reference[], isRefM
   }, [noteItems, references, isRefMode]);
 }
 
+/** How a note card shows its anchor: on a fragment, on a deleted fragment, or on none. */
+type CardAnchor = 'anchored' | 'orphan' | 'none';
+
 function NoteSessionCard({
   session,
-  isAnchored,
+  anchor,
   isHighlighted,
   onClick,
   onDelete,
@@ -95,7 +102,7 @@ function NoteSessionCard({
   materialIcon,
 }: {
   session: ChatSession;
-  isAnchored: boolean;
+  anchor: CardAnchor;
   isHighlighted: boolean;
   onClick: () => void;
   onDelete: () => void;
@@ -111,17 +118,7 @@ function NoteSessionCard({
   const canDelete = accessLevel === 'full' || accessLevel === 'commentator';
   const { t } = useTranslation();
 
-  // WHY: anchorless == no [text](note:SESSION_ID) link in the document body.  Why: the note's anchor state is derived from the body link, not anchor_offset_*; the link survives concurrent edits while the offset hint goes stale, so anchorless = link absent.
-  // The link is the source of truth for the editor's highlight + connector line;
-  // anchor_offset_* is only a creation-time hint and may become stale under concurrent
-  // transforms, so it's the wrong discriminator. See lessons/2026-05-21-note-anchor-link-discriminator.md.
-  // WHY: right after createNote the link hasn't propagated into
-  // currentDocument.content yet (Yjs sync is debounced), so the freshly-created anchored
-  // note briefly resolves to the grey anchorless variant. We accept anchor_offset_*/anchor_rel_start
-  // as a COLOR hint only — anchorless notes never carry it. It MUST stay disconnected from
-  // the editor highlight/connector, which keep reading the link (see handleNoteClick guard).
-  const hasAnchorHint = session.anchor_rel_start != null || session.anchor_offset_start != null;
-  const variant = !(isAnchored || hasAnchorHint)
+  const variant = anchor !== 'anchored'
     ? 'anchorless' as const
     : isHighlighted
       ? 'highlight' as const
@@ -138,9 +135,22 @@ function NoteSessionCard({
   const body = session.first_message_preview?.trim() || t('untitledNote');
   // WHY: a single-message note still has a date worth showing. The discussion icon stays
   // gated on hasDiscussion so icon ⇒ discussion is preserved while every card shows a date.
-  const meta = formatDate(
+  const date = formatDate(
     session.last_message_at || session.created_at || session.updated_at,
   );
+  // An orphan stays listed (never auto-deleted, never re-anchored) and says why it is grey.
+  // WHY: a system note's title (widget key label + caller title, pipeline
+  // errors) is documented behavior (configs/help/06-notes.md: the widget note
+  // "is titled with the key's name") and rides the wire unused — surface it as
+  // the meta row's leading term. Member notes carry title "" and stay
+  // date-only. The title is caller-supplied and unbounded, so it rides the SAME
+  // single-line truncated meta span as the date, never a wrapping node.
+  const noteTitle = session.title?.trim();
+  const meta = [
+    ...(noteTitle ? [noteTitle] : []),
+    ...(anchor === 'orphan' ? [t('noteFragmentDeleted')] : []),
+    date,
+  ].join(' · ');
 
   return (
     <ListPill
@@ -226,42 +236,23 @@ export function NotesPanel() {
 
   const noteGroups = useNoteGroups(crud.noteItems, references, isRefMode);
 
-  // INVARIANT: anchored == there is at least one [text](note:SESSION_ID) link  Why: anchored is derived from the body link (the editor's highlight source), not anchor_offset_*, which goes stale under concurrent edits.
-  // in the OWNING material's body. The link is what the editor uses to highlight
-  // the fragment and draw the connector line — anchor_offset_* is unreliable
-  // because concurrent edits may shift or invalidate it.
-  const anchoredSessionIds = useMemo(() => {
-    const re = /\(note:([^)\s]+)\)/g;
-    const scan = (content: string | undefined): Set<string> => {
-      const ids = new Set<string>();
-      if (!content) return ids;
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(content)) !== null) ids.add(m[1]);
-      return ids;
-    };
-    // WHY: per-ownership — a note is anchored iff
-    // its link is in its OWNING material, matching the connector/click which resolve
-    // the owning column's view. Ownership (reference_id) and link location are
-    // correlated by construction (doc notes link in the doc, ref notes in the ref);
-    // per-ownership keeps the card color consistent with click→scroll + connector in
-    // the rare case a note:ID link is pasted into the non-owning material. Outside
-    // split, the single visible material's content is the source.
-    if (isSplitMode) {
-      const docAnchored = scan(currentDocument?.content);
-      const refAnchored = scan(currentReference?.content);
-      const openRefId = currentReference?.reference_id;
-      const ids = new Set<string>();
-      for (const s of crud.noteItems) {
-        if (s.reference_id == null) {
-          if (docAnchored.has(s.session_id)) ids.add(s.session_id);
-        } else if (openRefId && s.reference_id === openRefId) {
-          if (refAnchored.has(s.session_id)) ids.add(s.session_id);
-        }
-      }
-      return ids;
+  // INVARIANT: a card's anchor state comes from the note's anchor resolved against its
+  // OWNING material's live ydoc — the same resolution the editor highlight paints from.
+  // Why: card colour, editor highlight and connector must agree on one source; a
+  // pending anchor (its Yjs update not here yet) shows as anchored, never as an orphan.
+  const cardAnchors = useMemo(() => {
+    const out = new Map<string, CardAnchor>();
+    for (const s of crud.noteItems) {
+      if (!s.anchor_rel_start || !s.anchor_rel_end) { out.set(s.session_id, 'none'); continue; }
+      const owner = noteOwnerId(s);
+      const ydoc = owner ? getEntityHandle(owner)?.ydoc : undefined;
+      // Owning material not open here: the anchor cannot be judged, so it is not called lost.
+      if (!ydoc) { out.set(s.session_id, 'anchored'); continue; }
+      const res = resolveNoteAnchor(s.anchor_rel_start, s.anchor_rel_end, ydoc);
+      out.set(s.session_id, res === null ? 'none' : res.state === 'orphan' ? 'orphan' : 'anchored');
     }
-    return scan(isRefMode ? currentReference?.content : currentDocument?.content);
-  }, [isSplitMode, isRefMode, currentDocument?.content, currentReference?.content, currentReference?.reference_id, crud.noteItems]);
+    return out;
+  }, [crud.noteItems]);
 
   // WHY: shared image-drop capture (useImageDropHandlers) — same policy + budget
   // helpers as ChatPanel, so the chat and note drop paths cannot drift. The drop is
@@ -302,12 +293,12 @@ export function NotesPanel() {
     }
     if (hoverNoteId) {
       const s = crud.noteItems.find(n => n.session_id === hoverNoteId);
-      // The note's title is its first message — the same text its pill shows.
-      const title = s?.first_message_preview?.trim() || t('untitledNote');
-      return { hoverTitle: title, hoverContent: s?.last_message_preview?.trim() ?? '', hoverImageUrl: undefined };
+      // WHY no title: a note has none — its first message is already the pill's text, so
+      // a plaque would only repeat it; the popup shows the last message alone.
+      return { hoverTitle: undefined, hoverContent: s?.last_message_preview?.trim() ?? '', hoverImageUrl: undefined };
     }
     return { hoverTitle: undefined, hoverContent: '', hoverImageUrl: undefined };
-  }, [hoverRefId, hoverNoteId, references, crud.noteItems, hoverRefFetched, t]);
+  }, [hoverRefId, hoverNoteId, references, crud.noteItems, hoverRefFetched]);
   const handleNoteHover = useCallback((sessionId: string, el: HTMLElement) => {
     setHoverRefId(null);
     setHoverNoteId(sessionId);
@@ -355,10 +346,10 @@ export function NotesPanel() {
       useNoteChatStore.getState().setActiveSession(session.session_id);
       useNoteChatStore.getState().setPendingInputFocus(true);
       if (view) {
-        const idx = view.state.doc.toString().indexOf(`note:${session.session_id}`);
-        if (idx !== -1) view.dispatch({ effects: EditorView.scrollIntoView(idx, { y: 'center' }) });
+        const pos = findNoteAnchorRange(view.state, session.session_id)?.from;
+        if (pos != null) view.dispatch({ effects: EditorView.scrollIntoView(pos, { y: 'center' }) });
       }
-      if (session.anchor_rel_start != null || session.anchor_offset_start != null) {
+      if (session.anchor_rel_start != null) {
         useNoteStore.getState().setConnectedNoteId(session.session_id);
       }
       return;
@@ -372,11 +363,7 @@ export function NotesPanel() {
     useNoteChatStore.getState().setActiveSession(session.session_id);
     useNoteChatStore.getState().setPendingInputFocus(true);
     emit('scroll-to-note-in-editor', { noteId: session.session_id });
-    // INVARIANT: anchor_rel_start is read only as a presence hint ("is anchored"),
-    // never decoded into a position. Why: its byte encoding differs between live
-    // note creation (Yjs RelativePosition JSON) and migration backfill (pycrdt
-    // StickyIndex). Reconcile before resolving it to an offset.
-    if (session.anchor_rel_start != null || session.anchor_offset_start != null) {
+    if (session.anchor_rel_start != null) {
       useNoteStore.getState().setConnectedNoteId(session.session_id);
     }
   }, [isSplitMode, isRefMode, currentReference?.reference_id, currentDocument?.document_id]);
@@ -505,13 +492,11 @@ export function NotesPanel() {
                   <NoteSessionCard
                     key={session.session_id}
                     session={session}
-                    // INVARIANT: the yellow "anchored" color is driven ONLY by a text  Why: the highlight keys off a body text-link, not reference attachment; an anchorless note attached to a reference must stay un-highlighted so the color reflects a real text anchor.
-                    // anchor (a [text](note:id) link in the body), never by reference
-                    // attachment. An anchorless note attached to a reference must stay
-                    // gray — reference_id is orthogonal to color. (See NoteSessionCard:
-                    // hasAnchorHint covers freshly-created anchored notes before the link
-                    // propagates.) reference_id is still used for navigation (handleNoteClick).
-                    isAnchored={anchoredSessionIds.has(session.session_id)}
+                    // WHY: the yellow "anchored" color is driven ONLY by a text
+                    // anchor, never by reference attachment — an anchorless note
+                    // attached to a reference must stay gray — reference_id is
+                    // orthogonal to color; it is still used for navigation.
+                    anchor={cardAnchors.get(session.session_id) ?? 'none'}
                     isHighlighted={highlightedNoteId === session.session_id}
                     // WHY: material marker shown only
                     // in split view, where the merged list mixes doc + reference notes.

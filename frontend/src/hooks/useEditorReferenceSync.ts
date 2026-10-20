@@ -7,14 +7,13 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import { useAppStore } from '../store/app-store';
-import { useNoteChatStore } from '../store/note-chat-store';
 import { useEvent } from './useEvent';
 import { useTranslation } from '../i18n';
 import { apiClient } from '../api/client';
 import { fetchContentBatch } from '../api/content-batch';
 import { Reference } from '../types';
 import { fetchReferences } from '../editor/editor-utils';
-import { transcludeMap, linkContextChanged, validDocIds, validNoteThreadIds, validRefIds, projectRefIds, missingRefIds, type TransclusionEntry } from '../components/editor/live-preview';
+import { transcludeMap, linkContextChanged, validDocIds, validRefIds, projectRefIds, missingRefIds, type TransclusionEntry } from '../components/editor/live-preview';
 import { LINK_TYPES } from '../components/editor/live-preview/link-types';
 import { parseTarget } from '../components/editor/live-preview/transclusion-grammar';
 import { setsEqual } from '../components/editor/live-preview/set-equality';
@@ -98,7 +97,6 @@ interface UseEditorReferenceSyncParams {
 export function useEditorReferenceSync({ editorViewRef }: UseEditorReferenceSyncParams) {
   const storeReferences = useAppStore(s => s.references);
   const storeDocuments = useAppStore(s => s.documents);
-  const noteChatSessions = useNoteChatStore(s => s.sessions);
   const currentDocId = useAppStore(s => s.currentDocument?.document_id);
   const currentProjectIndexId = useAppStore(s => s.currentProject?.index_doc_id);
   const currentProjectId = useAppStore(s => s.currentProject?.project_id);
@@ -341,15 +339,13 @@ export function useEditorReferenceSync({ editorViewRef }: UseEditorReferenceSync
     }
     const nextRefIds = new Set(storeReferences.map(r => r.reference_id));
     const nextDocIds = new Set(storeDocuments.map(d => d.document_id));
-    const nextNoteIds = new Set(noteChatSessions.map(s => s.session_id));
 
     // Image entries live inside nextTranscludeMap (kind:'ref-image'), so a single
     // transcludeMapsEqual comparison covers every embed kind — no separate image-map
     // diff term is needed.
     const unchanged = transcludeMapsEqual(transcludeMap, nextTranscludeMap)
       && setsEqual(validRefIds, nextRefIds)
-      && setsEqual(validDocIds, nextDocIds)
-      && setsEqual(validNoteThreadIds, nextNoteIds);
+      && setsEqual(validDocIds, nextDocIds);
     if (unchanged) return;
 
     transcludeMap.clear();
@@ -358,12 +354,10 @@ export function useEditorReferenceSync({ editorViewRef }: UseEditorReferenceSync
     for (const id of nextRefIds) validRefIds.add(id);
     validDocIds.clear();
     for (const id of nextDocIds) validDocIds.add(id);
-    validNoteThreadIds.clear();
-    for (const id of nextNoteIds) validNoteThreadIds.add(id);
 
     const view = editorViewRef.current;
     if (view) view.dispatch({ effects: linkContextChanged.of(null) });
-  }, [storeReferences, storeDocuments, noteChatSessions, refToEntry, editorViewRef]);
+  }, [storeReferences, storeDocuments, refToEntry, editorViewRef]);
 
   // see SYSTEM: transclusion — lazily fetch content for documents AND references that
   // are transcluded but whose entry is still in the loading state (content undefined).

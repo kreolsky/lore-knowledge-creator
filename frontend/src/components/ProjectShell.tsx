@@ -111,6 +111,9 @@ interface ProjectShellProps {
   overlays?: React.ReactNode;
   /** Optional header slot — defaults to <Header/>. */
   renderHeader?: () => React.ReactNode;
+  /** Whether a note thread is open in the notes tab (warm panel chrome). Defaults to
+   *  the member note store; the public page passes its own (public-notes-store). */
+  notesThreadOpen?: boolean;
 }
 
 /**
@@ -133,7 +136,7 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
     leftTabs, rightTabs, renderCenter, userControlsVariant,
     rightPanelDocId, rightPanelReady, effectiveRightTab,
     initialSidebarOpen = true, initialRightOpen = true,
-    onPanelDragEnter, onRightTabClick, overlays, renderHeader,
+    onPanelDragEnter, onRightTabClick, overlays, renderHeader, notesThreadOpen,
   },
   ref,
 ) {
@@ -288,7 +291,8 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
     return () => { document.documentElement.style.removeProperty('--right-tab-bar-w'); };
   });
 
-  const activeNoteThreadId = useNoteStore(s => s.activeNoteThreadId);
+  const memberThreadOpen = useNoteStore(s => !!s.activeNoteThreadId);
+  const threadOpen = notesThreadOpen ?? memberThreadOpen;
 
   const header = renderHeader ? renderHeader() : <Header />;
 
@@ -454,7 +458,7 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
           )}
           {rightIsOpen && rightPanelReady && effectiveRightTab && (
             <aside
-              className={`right-panel${effectiveRightTab === 'notes' && activeNoteThreadId ? ' right-panel--notes-thread' : ''}`}
+              className={`right-panel${effectiveRightTab === 'notes' && threadOpen ? ' right-panel--notes-thread' : ''}`}
             >
               {(() => {
                 const entry = rightTabs.find(e => e.tab === effectiveRightTab);

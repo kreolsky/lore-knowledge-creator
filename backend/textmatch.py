@@ -1,20 +1,21 @@
 """Shared text-matching helpers for the search surfaces (UI route + agent).
 
-Extracted verbatim from agent/search_exec.py so the UI search route
-(routes/projects.py) can reuse the stop-word fan-out guard and the snippet-anchor
-ladder WITHOUT importing the agent package (agent layering must not be imported
-from routes). The agent re-imports these under its former private names — the
+The UI search route (routes/projects.py) reuses the stop-word fan-out guard and
+the snippet-anchor ladder WITHOUT importing the agent package (agent layering must
+not be imported from routes). The agent re-imports these under private names — the
 behavior is pinned by tests/backend/test_search_exec_units.py.
 
-Also home (plan fewer-layers) to the surgical splice primitive and its typed
-failure: `surgical_splice_text` + `AppliedUnverifiedError`, shared by the
-live-session path (collab.events) and the no-session path
-(agent.doc_state.route_document_edits). Keeping them here
+Also home to the surgical splice primitive and its typed failure:
+`surgical_splice_text` + `AppliedUnverifiedError`, shared by the live-session path
+(collab.events) and the no-session path (agent.doc_state.route_document_edits);
+and to its wholesale twin `minimal_splice_text`, shared by ydoc_store.set_content
+and the wholesale branch of collab.events.apply_external_content_change. Keeping them here
 makes this module the one leaf both collab and the agent package converge on —
 it imports nothing from either (fastapi only, for the HTTPException base).
 """
 
 import re
+from difflib import SequenceMatcher
 
 from fastapi import HTTPException
 
@@ -153,6 +154,102 @@ def surgical_splice_text(text, from_cp: int, to_cp: int, new_text: str,
         del text[fb:tb]
     if new_text:
         text.insert(fb, new_text)
+
+
+# WHY: above this size a replaced line block is swapped whole instead of diffed
+# char-wise — SequenceMatcher is quadratic in the worst case and the caller holds
+# `_write_lock`; an anchor inside a block rewritten that heavily is lost either way.
+_CHAR_DIFF_CAP = 2000
+# WHY: diff + apply cost ~0.85 ms per changed block on a 300k-char doc (pycrdt walks
+# its item list per op, SequenceMatcher rescans per matching block), all under
+# `_write_lock`. Past this many changed-line runs the trimmed middle is replaced
+# whole — bounded lock time over keeping anchors inside a rewrite that dense.
+_MAX_CHANGED_RUNS = 64
+
+
+def _common_len(a: str, b: str, *, suffix: bool) -> int:
+    """Length of the common prefix (or suffix) of a and b, by binary search over
+    C-level slice compares instead of a per-char Python loop."""
+    lo, hi = 0, min(len(a), len(b))
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        same = a[len(a) - mid:] == b[len(b) - mid:] if suffix else a[:mid] == b[:mid]
+        lo, hi = (mid, hi) if same else (lo, mid - 1)
+    return lo
+
+
+def _changed_runs(lines: list[str], other: list[str]) -> int:
+    """Runs of consecutive lines absent from `other` — an O(n) lower bound on the
+    number of change blocks a line diff would produce."""
+    present = set(other)
+    runs, prev = 0, False
+    for line in lines:
+        cur = line not in present
+        runs += cur and not prev
+        prev = cur
+    return runs
+
+
+def _diff_spans(a: str, b: str) -> list[tuple[int, int, str]]:
+    """Ascending, non-overlapping `(from_cp, to_cp, replacement)` spans turning a into b."""
+    pre = _common_len(a, b, suffix=False)
+    suf = _common_len(a[pre:], b[pre:], suffix=True)
+    a_mid, b_mid = a[pre:len(a) - suf], b[pre:len(b) - suf]
+    a_lines = a_mid.splitlines(keepends=True)
+    b_lines = b_mid.splitlines(keepends=True)
+    if max(_changed_runs(a_lines, b_lines), _changed_runs(b_lines, a_lines)) > _MAX_CHANGED_RUNS:
+        return [(pre, len(a) - suf, b_mid)]
+    a_at = [pre]
+    for line in a_lines:
+        a_at.append(a_at[-1] + len(line))
+    spans: list[tuple[int, int, str]] = []
+    opcodes = SequenceMatcher(None, a_lines, b_lines, autojunk=False).get_opcodes()
+    for tag, i1, i2, j1, j2 in opcodes:
+        if tag == "equal":
+            continue
+        old, new = a_mid[a_at[i1] - pre:a_at[i2] - pre], "".join(b_lines[j1:j2])
+        if tag != "replace" or max(len(old), len(new)) > _CHAR_DIFF_CAP:
+            spans.append((a_at[i1], a_at[i2], new))
+            continue
+        for ctag, c1, c2, d1, d2 in SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+            if ctag != "equal":
+                spans.append((a_at[i1] + c1, a_at[i1] + c2, new[d1:d2]))
+    return spans
+
+
+def minimal_splice_text(text, new_content: str) -> None:
+    """Turn a pycrdt Text into `new_content` IN PLACE by splicing only what changed.
+
+    The wholesale writers' primitive (restore, re-upload, REST update, workers):
+    the old delete-all + insert re-created every item, so every Yjs RelativePosition
+    anchored in the text (note anchors, pinned regions) was orphaned. Here the
+    common prefix/suffix is trimmed, the middle diffed line-wise, and a replaced
+    line block diffed char-wise when both sides fit `_CHAR_DIFF_CAP` — so unchanged
+    text keeps its items and every anchor on it survives. A middle with more than
+    `_MAX_CHANGED_RUNS` changed-line runs is replaced whole (anchors inside it lost).
+
+    Computes the spans from ONE read of the text and applies them right-to-left in
+    one transaction with no await in between, so the offsets cannot go stale. cp
+    offsets become UTF-8 byte offsets (pycrdt indexing) in a single forward pass.
+    """
+    current = str(text)
+    if current == new_content:
+        return
+    byte_spans: list[tuple[int, int, str]] = []
+    cp = bpos = 0
+    for from_cp, to_cp, replacement in _diff_spans(current, new_content):
+        fb = bpos + len(current[cp:from_cp].encode("utf-8"))
+        tb = fb + len(current[from_cp:to_cp].encode("utf-8"))
+        byte_spans.append((fb, tb, replacement))
+        cp, bpos = to_cp, tb
+    with text.doc.transaction():
+        for fb, tb, replacement in reversed(byte_spans):
+            if tb > fb:
+                del text[fb:tb]
+            if replacement:
+                text.insert(fb, replacement)
+
+
 def _section_end_offset(content: str, section: str) -> int:
     """Code-point offset marking the END of one heading section's content.
 

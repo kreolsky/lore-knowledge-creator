@@ -4,7 +4,6 @@
 // and editor-plugins (click-time validation + toast).
 
 export const validDocIds = new Set<string>();
-export const validNoteThreadIds = new Set<string>();
 export const validRefIds = new Set<string>();
 
 // INVARIANT: projectRefIds holds ref ids RESOLVED FROM THE OPEN DOCUMENT'S TEXT —

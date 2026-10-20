@@ -3,7 +3,7 @@
  * turn's per-row node slice (SYSTEM: dsh-conversation).
  */
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
@@ -614,6 +614,103 @@ describe('MessageList — the one-shot scroll target (a chat search hit)', () =>
     act(() => root.render(createElement(MessageList)));
     expect(el.scrollTop).toBe(2000);
     expect(chatState.clearPendingScroll).toHaveBeenCalledTimes(1);
+    act(() => root.unmount());
+    host.remove();
+  });
+});
+
+describe('MessageList — previous-user-message jump', () => {
+  beforeEach(() => {
+    vi.mocked(emit).mockClear();
+    vi.mocked(on).mockClear();
+  });
+
+  // jsdom lacks ResizeObserver; the user-bubble width-measurement effect uses it.
+  let prevRO: unknown;
+  beforeAll(() => {
+    prevRO = (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver;
+    (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+  });
+  afterAll(() => {
+    (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver = prevRO;
+  });
+
+  const message = (id: string, role: 'user' | 'assistant') => ({ ...assistantMessage(), message_id: id, role });
+
+  function awayEmits() {
+    return vi.mocked(emit).mock.calls
+      .filter(([name]) => name === 'chat-scrolled-away')
+      .map(([, payload]) => payload as { away: boolean; userAbove: boolean });
+  }
+
+  // u1@100, a1@300, u2@900, a2@1100 in content space; 2000 tall, 400 visible.
+  function mountConversation() {
+    chatState.activePath = [message('u1', 'user'), message('a1', 'assistant'), message('u2', 'user'), message('a2', 'assistant')];
+    chatState.streaming = null;
+    chatState.messagesError = null;
+    const mounted = mount();
+    const el = scrollContainer(mounted.host);
+    stubScrollMetrics(el, 2000, 400);
+    trackScrollTop(el);
+    stubBox(el, { top: 0, bottom: 400 });
+    const tops: Record<string, number> = { u1: 100, a1: 300, u2: 900, a2: 1100 };
+    for (const node of el.querySelectorAll<HTMLElement>('[data-message-id]')) {
+      stubContentBox(el, node, tops[node.dataset.messageId!]);
+    }
+    const jumpUp = vi.mocked(on).mock.calls.find(([name]) => name === 'chat-scroll-to-prev-user')?.[1] as () => void;
+    return { ...mounted, el, jumpUp };
+  }
+
+  it('steps up one user message per click, skipping assistant rows, and stops at the first', () => {
+    const { root, host, el, jumpUp } = mountConversation();
+    el.scrollTop = 1400;
+    el.dispatchEvent(new Event('scroll'));
+    act(() => jumpUp());
+    expect(el.scrollTop).toBe(900 - 12);
+    act(() => jumpUp());
+    expect(el.scrollTop).toBe(100 - 12);
+    act(() => jumpUp());
+    expect(el.scrollTop).toBe(100 - 12);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('measures from the current position, so a wheel scroll between clicks does not desync it', () => {
+    const { root, host, el, jumpUp } = mountConversation();
+    el.scrollTop = 1400;
+    el.dispatchEvent(new Event('scroll'));
+    act(() => jumpUp()); // → u2
+    el.scrollTop = 1000; // wheel back down past u2
+    el.dispatchEvent(new Event('scroll'));
+    act(() => jumpUp());
+    expect(el.scrollTop).toBe(900 - 12);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('reports userAbove only while a user message lies above the view', () => {
+    const { root, host, el, jumpUp } = mountConversation();
+    el.scrollTop = 1400;
+    el.dispatchEvent(new Event('scroll'));
+    act(() => jumpUp());
+    act(() => jumpUp()); // landed on u1 — nothing above
+    expect(awayEmits()).toEqual([{ away: true, userAbove: true }, { away: true, userAbove: false }]);
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('the jump does not re-follow the stream: growth keeps the view in place', () => {
+    const { root, host, el, jumpUp } = mountConversation();
+    el.scrollTop = 1400;
+    el.dispatchEvent(new Event('scroll'));
+    act(() => jumpUp());
+    stubScrollMetrics(el, 2500, 400);
+    act(() => root.render(createElement(MessageList)));
+    expect(el.scrollTop).toBe(900 - 12);
     act(() => root.unmount());
     host.remove();
   });

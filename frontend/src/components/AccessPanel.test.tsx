@@ -99,6 +99,7 @@ beforeEach(async () => {
     const mod = {
       createShare: vi.fn(),
       updateShareScope: vi.fn().mockResolvedValue(undefined),
+      updateShareComments: vi.fn().mockResolvedValue(undefined),
       listShares: vi.fn().mockResolvedValue({ shares: [], inherited_from: null }),
       revokeShare: vi.fn().mockResolvedValue(undefined),
     };
@@ -222,6 +223,41 @@ describe('General access two-checkbox wiring', () => {
     // Rolled back to the server truth (no share) — checkbox unchecked again.
     const shareAfter = container.querySelector('input[data-label="accessShareThisDoc"]') as HTMLInputElement;
     expect(shareAfter.checked).toBe(false);
+  });
+});
+
+describe('Comments on the public link', () => {
+  it('is offered only on the document\'s own share', async () => {
+    vi.mocked(apiPublicShare.listShares).mockResolvedValue({
+      shares: [], inherited_from: { document_id: 'parent', title: 'Folder' },
+    });
+    await renderWith({ isOwner: true, docId: 'doc-1' });
+    await flush();
+    expect(container.querySelector('input[data-label="accessAllowComments"]')).toBeNull();
+  });
+
+  it('ticking it turns comments on for that share', async () => {
+    vi.mocked(apiPublicShare.listShares).mockResolvedValue({ shares: [makeShare('sh-1', 'doc')], inherited_from: null });
+    await renderWith({ isOwner: true, docId: 'doc-1' });
+    await flush();
+    const box = container.querySelector('input[data-label="accessAllowComments"]') as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    await act(async () => { box.click(); });
+    await flush();
+    expect(apiPublicShare.updateShareComments).toHaveBeenCalledWith('sh-1', true);
+  });
+
+  it('a failed toggle surfaces a toast and re-syncs from the server', async () => {
+    vi.mocked(apiPublicShare.listShares).mockResolvedValue({ shares: [makeShare('sh-1', 'doc')], inherited_from: null });
+    vi.mocked(apiPublicShare.updateShareComments).mockRejectedValue(new Error('boom'));
+    await renderWith({ isOwner: true, docId: 'doc-1' });
+    await flush();
+    const box = container.querySelector('input[data-label="accessAllowComments"]') as HTMLInputElement;
+    await act(async () => { box.click(); });
+    await flush();
+    expect(showToast).toHaveBeenCalledWith('accessShareCommentsError', 'error');
+    const after = container.querySelector('input[data-label="accessAllowComments"]') as HTMLInputElement;
+    expect(after.checked).toBe(false);
   });
 });
 

@@ -16,7 +16,7 @@ import { MicButton } from './shared/MicButton';
 import { AttachmentChips } from './shared/AttachmentChips';
 import type { PendingFile } from '../../store/chat-store/types';
 import { QueuedChips } from './shared/QueuedChips';
-import { ScrollToBottomButton } from './shared/ScrollToBottomButton';
+import { ScrollToBottomButton, ScrollToPrevUserButton } from './shared/ScrollToBottomButton';
 import type { QueuedMessage } from '../../chat/inbox-queue';
 
 interface Props {
@@ -34,10 +34,13 @@ interface Props {
   canSend: boolean;
   placeholder: string;
   disabled?: boolean;
-  // Mic
-  recording: boolean;
-  transcribing: boolean;
-  onToggleRecording: () => void;
+  /** Hard cap on the text (the public guest composer: the server refuses longer). */
+  maxLength?: number;
+  // Mic — omitted where no transcription endpoint is reachable (the public page):
+  // then no mic button renders.
+  recording?: boolean;
+  transcribing?: boolean;
+  onToggleRecording?: () => void;
   // Escape while recording discards the take (no transcription).
   onCancelRecording?: () => void;
   // Attachments
@@ -53,6 +56,9 @@ interface Props {
   // Set only while the host's message list is scrolled up past its stick threshold;
   // undefined hides the scroll-to-bottom button.
   onScrollToBottom?: () => void;
+  // Set only while a user message lies above the view (AI chat only); shown above
+  // the scroll-to-bottom button, undefined hides it.
+  onScrollToPrevUser?: () => void;
   // AI-only slots (omitted by notes)
   topControls?: ReactNode;
   leftControls?: ReactNode;
@@ -74,8 +80,9 @@ export function ChatComposer({
   canSend,
   placeholder,
   disabled = false,
-  recording,
-  transcribing,
+  maxLength,
+  recording = false,
+  transcribing = false,
   onToggleRecording,
   onCancelRecording,
   images,
@@ -85,6 +92,7 @@ export function ChatComposer({
   queued,
   onRemoveQueued,
   onScrollToBottom,
+  onScrollToPrevUser,
   topControls,
   leftControls,
   warnings,
@@ -142,6 +150,7 @@ export function ChatComposer({
         // clicks/wheel meant for the messages underneath; controls opt back in.
         <div className="relative z-10 flex-shrink-0">
           <div className="absolute bottom-0 left-0 right-0 px-3 pb-2 flex flex-col items-end gap-2 pointer-events-none">
+            {onScrollToPrevUser && <ScrollToPrevUserButton onClick={onScrollToPrevUser} />}
             {onScrollToBottom && <ScrollToBottomButton onClick={onScrollToBottom} />}
             {queued && onRemoveQueued && (
               <div className="self-stretch pointer-events-auto">
@@ -175,6 +184,7 @@ export function ChatComposer({
               onPaste={onPaste}
               placeholder={placeholder}
               disabled={disabled}
+              maxLength={maxLength}
               highlight={highlight}
               className="w-full h-full resize-none"
             />
@@ -187,12 +197,14 @@ export function ChatComposer({
                 {leftControls}
               </div>
               <div className="flex items-center gap-1 shrink-0">
-                <MicButton
-                  recording={recording}
-                  transcribing={transcribing}
-                  onToggleRecording={onToggleRecording}
-                  filled
-                />
+                {onToggleRecording && (
+                  <MicButton
+                    recording={recording}
+                    transcribing={transcribing}
+                    onToggleRecording={onToggleRecording}
+                    filled
+                  />
+                )}
                 {/*
                   One button, state derived from composer emptiness. Empty + streaming →
                   red Stop; non-empty → Send, which while a turn streams lands in dsh's

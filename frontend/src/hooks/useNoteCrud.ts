@@ -98,7 +98,7 @@ export function useNoteCrud({ highlightNote }: UseNoteCrudParams) {
     useNoteStore.getState().setActiveNoteThreadId(pendingNav.noteId, currentDocument?.document_id);
     store.setActiveSession(pendingNav.noteId);
     emit('scroll-to-note-in-editor', { noteId: pendingNav.noteId });
-    if (session.anchor_rel_start != null || session.anchor_offset_start != null) {
+    if (session.anchor_rel_start != null) {
       useNoteStore.getState().setConnectedNoteId(pendingNav.noteId);
     }
   }, [noteSessions, currentDocument?.document_id, pendingNav]);
@@ -143,9 +143,6 @@ export function useNoteCrud({ highlightNote }: UseNoteCrudParams) {
 
   const handleDelete = useCallback(async (sessionId: string) => {
     if (useAppStore.getState().accessLevel === 'readonly') return;
-    // WHY: the [label](note:<id>) link is stripped
-    // authoritatively by the backend on DELETE /sessions/{id} (single source of
-    // truth via the CRDT convergence path). No client-side remove-note-link emit.
     await deleteSession(sessionId);
     if (useNoteStore.getState().activeNoteThreadId === sessionId) {
       setActiveNoteThreadId(null);
@@ -205,13 +202,6 @@ export function useNoteCrud({ highlightNote }: UseNoteCrudParams) {
     };
   }, [activeNoteThreadId]);
 
-  // WHY: the split-mode filter ignores document
-  // content, so gate the content dependency — without this, doc typing (collab content
-  // updates) would spuriously re-sort/re-filter the notes list and re-render every
-  // card. In split the sentinel is null (stable); otherwise it tracks the content the
-  // ref-mode/doc branches actually read.
-  const noteItemsContentDep = isSplitMode ? null : currentDocument?.content;
-
   const noteItems = useMemo(() => {
     // M2: sort a COPY, not the store array the
     // selector returns — mutating it corrupts the store snapshot other selectors read.
@@ -225,20 +215,17 @@ export function useNoteCrud({ highlightNote }: UseNoteCrudParams) {
     if (isSplitMode && currentReference) {
       return selectSplitNoteItems(items, currentReference.reference_id);
     }
+    // A document note anchored to the document's text is hidden while the reference
+    // is shown; the document-wide ones stay.
     if (isRefMode && currentReference) {
-      const content = currentDocument?.content ?? '';
-      const docAnchoredIds = new Set<string>();
-      const re = /\(note:([^)\s]+)\)/g;
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(content)) !== null) docAnchoredIds.add(m[1]);
       return items.filter(s =>
         s.reference_id === currentReference.reference_id
-        || (s.reference_id === null && !docAnchoredIds.has(s.session_id)),
+        || (s.reference_id === null && !s.anchor_rel_start),
       );
     }
     return items;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- noteItemsContentDep replaces currentDocument?.content (split ignores it)
-  }, [noteSessions, isSplitMode, isRefMode, currentReference?.reference_id, noteItemsContentDep]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- currentReference is read by id
+  }, [noteSessions, isSplitMode, isRefMode, currentReference?.reference_id]);
 
   return {
     isRefMode,

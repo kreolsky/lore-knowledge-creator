@@ -501,10 +501,10 @@ export interface ChatSession {
   // AI) — the time of the last message, derived read-time by the backend. Null
   // for a freshly-created / just-PATCHed row; the UI falls back to updated_at.
   last_message_at?: string | null;
-  anchor_offset_start?: number | null;
-  anchor_offset_end?: number | null;
+  // base64 v1 Yjs RelativePositions (collab/note-anchor-wire.ts); null on a legacy row.
   anchor_rel_start?: string | null;
   anchor_rel_end?: string | null;
+  anchor_quote?: string | null;
   // ARCH: `mode` is no longer on the wire
   // (the Ask line + its axis are deleted). The backend serializer drops the
   // column; every AI chat is an agent chat. The surviving selector is agent_auto.

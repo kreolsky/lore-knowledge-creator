@@ -297,8 +297,8 @@ _REF_IMG_PATTERN = re.compile(r"!\[([^\]]*)\]\(ref:([^)]+)\)")
 # SYSTEM: transclusion — export inlining. Matches every embed node `![alt](target)`;
 # the target may be `ref:<id>`, `doc:<id>` or a bare document id. Text embeds (text
 # references + documents) are replaced with the source's content as a native text block;
-# image references are left for _inline_ref_images (base64). External image URLs and
-# `note:` targets are left untouched.
+# image references are left for _inline_ref_images (base64). External image URLs are
+# left untouched.
 _EMBED_PATTERN = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
 

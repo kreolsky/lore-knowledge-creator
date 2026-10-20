@@ -1,4 +1,4 @@
-/** Tests for the shared in-app link contract (ref:/doc:/note: encode/decode/parse). */
+/** Tests for the shared in-app link contract (ref:/doc: encode/decode/parse). */
 
 import { describe, it, expect } from 'vitest';
 import { parseInAppLink, encodeLinkId, decodeLinkId } from './in-app-link';
@@ -12,8 +12,9 @@ describe('parseInAppLink', () => {
     expect(parseInAppLink('doc:doc456')).toEqual({ type: 'doc', id: 'doc456' });
   });
 
-  it('parses note into type + id', () => {
-    expect(parseInAppLink('note:thread1')).toEqual({ type: 'note', id: 'thread1' });
+  it('returns null for a retired note: link', () => {
+    expect(parseInAppLink('note:thread1')).toBeNull();
+    expect(parseInAppLink('https://lore.local/l/note/thread1')).toBeNull();
   });
 
   it('returns null for non-in-app URLs', () => {
@@ -29,10 +30,6 @@ describe('encodeLinkId', () => {
 
   it('encodes ref with scheme prefix', () => {
     expect(encodeLinkId('ref', 'abc')).toBe('ref:abc');
-  });
-
-  it('encodes note with scheme prefix', () => {
-    expect(encodeLinkId('note', 'thread1')).toBe('note:thread1');
   });
 });
 
@@ -52,18 +49,13 @@ describe('decodeLinkId', () => {
   it('decodes bare ref id as-is (defensive)', () => {
     expect(decodeLinkId('ref', 'abc')).toBe('abc');
   });
-
-  it('decodes prefixed note id to bare', () => {
-    expect(decodeLinkId('note', 'note:thread1')).toBe('thread1');
-  });
 });
 
 describe('round-trip encode → decode', () => {
   it('round-trips all types', () => {
-    const cases: Array<{ type: 'ref' | 'doc' | 'note'; id: string }> = [
+    const cases: Array<{ type: 'ref' | 'doc'; id: string }> = [
       { type: 'doc', id: 'doc456' },
       { type: 'ref', id: 'abc' },
-      { type: 'note', id: 'thread1' },
     ];
     for (const { type, id } of cases) {
       const encoded = encodeLinkId(type, id);

@@ -195,6 +195,11 @@ DEFINE FIELD OVERWRITE     scope       ON document_shares TYPE string ASSERT $va
 DEFINE FIELD IF NOT EXISTS created_at  ON document_shares TYPE datetime DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS created_by  ON document_shares TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS deleted_at  ON document_shares TYPE option<datetime>;
+-- Comments on the public link: anyone holding it may leave notes (never edit the
+-- text). A subtree share's flag covers every document under it. Non-option bool +
+-- backfill so the owner's toggle UPDATE never meets NONE on a pre-flag row.
+DEFINE FIELD IF NOT EXISTS allow_comments ON document_shares TYPE bool DEFAULT false;
+UPDATE document_shares SET allow_comments = false WHERE allow_comments IS NONE;
 DEFINE INDEX IF NOT EXISTS idx_dshare_doc     ON document_shares FIELDS document_id;
 DEFINE INDEX IF NOT EXISTS idx_dshare_token   ON document_shares FIELDS token;
 DEFINE INDEX IF NOT EXISTS idx_dshare_project ON document_shares FIELDS project_id;
@@ -597,6 +602,9 @@ DEFINE FIELD IF NOT EXISTS files[*].path ON messages TYPE string;
 DEFINE FIELD IF NOT EXISTS model      ON messages TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS created_at ON messages TYPE datetime DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS deleted_at ON messages TYPE option<datetime>;
+-- The display name an ANONYMOUS note author typed (author_id = anon_<hash>, never
+-- a users row); NONE for members, whose name is read from users.
+DEFINE FIELD IF NOT EXISTS author_name ON messages TYPE option<string>;
 -- ARCH (plan collapse-agent-stack-onto-dsh-vocabulary step 4): the entry_id
 -- field + its chat/entry index are RETIRED with the canonical seam — at that
 -- step the fork branch point became the projection-derived turn ordinal
@@ -883,12 +891,12 @@ DEFINE EVENT IF NOT EXISTS documents_reference_parent_check ON documents
         };
     };
 
--- chat_sessions: note marker + anchor offsets in Unicode code points.
--- INVARIANT: anchor_offset_* are stored in code points (Python-native unit) and
--- converted to UTF-16 (CM6-native unit) only at the API serialization boundary.
+-- chat_sessions: note marker (the anchor is anchor_rel_* below).
 DEFINE FIELD IF NOT EXISTS is_note             ON chat_sessions TYPE bool DEFAULT false;
-DEFINE FIELD IF NOT EXISTS anchor_offset_start ON chat_sessions TYPE option<int>;
-DEFINE FIELD IF NOT EXISTS anchor_offset_end   ON chat_sessions TYPE option<int>;
+-- Fresh-DB twin of the note_links_to_anchors migration, which drops the columns on
+-- DBs created while they lived.
+REMOVE FIELD IF EXISTS anchor_offset_start ON chat_sessions;
+REMOVE FIELD IF EXISTS anchor_offset_end   ON chat_sessions;
 
 DEFINE INDEX IF NOT EXISTS idx_chatsessions_is_note
     ON chat_sessions FIELDS project_id, is_note;
@@ -1181,11 +1189,13 @@ DEFINE FIELD IF NOT EXISTS ydoc_state ON documents TYPE option<bytes>;
 -- cleared to NONE on next successful flush. Frontend checks on collab connect.
 DEFINE FIELD IF NOT EXISTS last_save_failed_at ON documents TYPE option<datetime>;
 
--- chat_sessions: CRDT relative positions for note anchors (binary StickyIndex).
--- INVARIANT: anchor_rel_start/end replace anchor_offset_start/end after cutover.
--- Both int and bytes columns coexist during migration; int columns are dropped later.
+-- chat_sessions: note anchor = a v1-encoded Yjs RelativePosition pair (start bound
+-- AFTER, end bound BEFORE), resolved by the browser and by backend/note_anchors.py.
 DEFINE FIELD IF NOT EXISTS anchor_rel_start ON chat_sessions TYPE option<bytes>;
 DEFINE FIELD IF NOT EXISTS anchor_rel_end   ON chat_sessions TYPE option<bytes>;
+-- The anchored fragment as its author saw it (≤ 500 chars + «…»): what an orphaned
+-- note still shows once its fragment is gone.
+DEFINE FIELD IF NOT EXISTS anchor_quote     ON chat_sessions TYPE option<string>;
 
 -- ─── Pi sessions tables (pi_sessions / pi_session_entries) — RETIRED ────────
 -- No reader, no writer, no pending migration; nothing here defines them anymore.
