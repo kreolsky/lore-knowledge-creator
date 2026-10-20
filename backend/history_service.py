@@ -9,10 +9,14 @@
 import logging
 from uuid import uuid4
 
+from surrealdb.errors import SurrealError
+
 import event_bus
 from db import create_record, get_db, serialize_record
 
 logger = logging.getLogger(__name__)
+
+_FIRST_EDIT_INDEX = "idx_dh_doc_user_action"
 
 
 async def log_event(document_id: str, user_id: str | None, user_name: str, action: str) -> dict | None:
@@ -27,6 +31,10 @@ async def log_event(document_id: str, user_id: str | None, user_name: str, actio
         "user_name": user_name,
         "action": action,
     })
+    return await _broadcast(document_id, record)
+
+
+async def _broadcast(document_id: str, record: dict) -> dict:
     serialized = serialize_record(record, "id")
     await event_bus.emit(
         "document_history_added",
@@ -44,14 +52,28 @@ async def log_first_edit(document_id: str, user_id: str, user_name: str) -> dict
     one `edited` row per user per document, even across sessions and replicas.
     A duplicate insert raises — we catch and return None (no-op).  Why: the unique index is the dedup fence; without it a re-edit would append a duplicate row per save, so the duplicate-raise is caught and treated as a no-op.
     """
+    # WHY: inserts directly instead of via create_record, which logs every DB error at
+    # ERROR — a repeat edit is this function's expected outcome, not a failure.
+    db = await get_db()
     try:
-        return await log_event(document_id, user_id, user_name, "edited")
-    except Exception:
+        rows = await db.query(
+            "CREATE type::record('document_history', $id) CONTENT $data RETURN AFTER",
+            {"id": str(uuid4()), "data": {
+                "document_id": document_id,
+                "user_id": user_id,
+                "user_name": user_name,
+                "action": "edited",
+            }},
+        )
+    except SurrealError as e:
+        if _FIRST_EDIT_INDEX not in str(e):
+            raise
         logger.debug(
             "log_first_edit: duplicate skipped for doc=%s user=%s",
             document_id, user_id,
         )
         return None
+    return await _broadcast(document_id, rows[0])
 
 
 async def list_history(document_id: str) -> list[dict]:
