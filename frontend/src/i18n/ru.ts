@@ -550,6 +550,7 @@ export const ru: Record<TranslationKey, string> = {
   publicNoteMessageHasReplies: 'На это сообщение уже ответили — удалить его нельзя',
   publicNoteFragmentGone: 'Выделенный фрагмент удалён — заметка будет ко всему документу.',
   publicNotesRefreshFailed: 'Не удалось обновить заметки — показан последний загруженный список.',
+  publicNotesLiveLost: 'Онлайн-обновления прекратились — обновите страницу, чтобы видеть новые заметки.',
   publicNotesStale: 'Документ изменился с момента открытия — обновите страницу, чтобы увидеть заметки на своих местах.',
   publicNotesEmpty: 'Заметок пока нет. Выделите текст, чтобы оставить заметку к фрагменту.',
   publicNoteNamePlaceholder: 'Ваше имя',

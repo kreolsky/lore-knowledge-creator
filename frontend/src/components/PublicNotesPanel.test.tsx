@@ -42,6 +42,24 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('PublicNotesPanel', () => {
+  it('a background refetch of an empty list keeps the empty state instead of flashing the loader', () => {
+    usePublicNotesStore.setState({ notes: [], loading: true });
+    render(<PublicNotesPanel />);
+    expect(document.body.textContent).toContain(t('publicNotesEmpty'));
+  });
+
+  it('the first load, before any list arrived, shows the loader', () => {
+    usePublicNotesStore.setState({ notes: [], loading: true, loaded: false });
+    render(<PublicNotesPanel />);
+    expect(document.body.textContent).not.toContain(t('publicNotesEmpty'));
+  });
+
+  it('a dead change-ping socket (liveLost) shows the live-lost banner', () => {
+    usePublicNotesStore.setState({ notes: [], liveLost: true });
+    render(<PublicNotesPanel />);
+    expect(document.body.textContent).toContain(t('publicNotesLiveLost'));
+  });
+
   it('a list card offers delete only for the guest\'s own single-message note', () => {
     usePublicNotesStore.setState({ notes: [
       note('single', [msg('a', true)]),
@@ -68,5 +86,31 @@ describe('PublicNotesPanel', () => {
     const after = document.querySelector('textarea');
     expect(after).not.toBe(before);
     expect(document.activeElement).toBe(after);
+  });
+});
+
+describe('PublicNotesPanel Escape on a new note', () => {
+  const pressEscape = (el: Element) => {
+    act(() => { el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); });
+  };
+  const startDraft = () => {
+    usePublicNotesStore.setState({ notes: [note('n1', [msg('a', true)])] });
+    render(<PublicNotesPanel />);
+    act(() => usePublicNotesStore.getState().startNote({ selection: { start: 0, end: 1, content_sha256: 's' }, quote: 'x' }));
+  };
+
+  it('Escape in the note text cancels the draft and shows the list', () => {
+    startDraft();
+    pressEscape(document.querySelector('textarea')!);
+    expect(usePublicNotesStore.getState().draft).toBeNull();
+    expect(document.getElementById('note-n1')).not.toBeNull();
+  });
+
+  it('Escape in the guest name field cancels the draft and shows the list', () => {
+    usePublicNotesStore.getState().setAuthorName('');
+    startDraft();
+    pressEscape(document.querySelector(`input[placeholder="${t('publicNoteNamePlaceholder')}"]`)!);
+    expect(usePublicNotesStore.getState().draft).toBeNull();
+    expect(document.getElementById('note-n1')).not.toBeNull();
   });
 });

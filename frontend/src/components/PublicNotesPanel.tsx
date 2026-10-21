@@ -97,7 +97,6 @@ function Composer() {
   const setAuthorName = usePublicNotesStore(s => s.setAuthorName);
   const submit = usePublicNotesStore(s => s.submit);
   const sending = usePublicNotesStore(s => s.sending);
-  const closeThread = usePublicNotesStore(s => s.closeThread);
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const nameMissing = authorName.trim().length === 0;
@@ -115,11 +114,6 @@ function Composer() {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
       void send();
-      return;
-    }
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      closeThread();
     }
   };
 
@@ -158,6 +152,7 @@ const noop = () => {};
 
 function ThreadView({ note }: { note: PublicNote | null }) {
   const deleteMessage = usePublicNotesStore(s => s.deleteMessage);
+  const closeThread = usePublicNotesStore(s => s.closeThread);
   const showToast = useAppStore(s => s.showToast);
   const parentIds = useMemo(
     () => new Set((note?.messages ?? []).map(m => m.parent_id).filter((v): v is string => !!v)),
@@ -168,8 +163,17 @@ function ThreadView({ note }: { note: PublicNote | null }) {
     onDelete: (messageId: string) => { if (note) void deleteMessage(note.session_id, messageId); },
   }), [note, deleteMessage, showToast]);
 
+  // WHY: Escape lives on the thread, not the textarea, so it fires from any focused
+  // control — a guest without a name has the caret in the name field. Leaving drops an
+  // unsent draft: a new note exists only once its first message is sent.
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Escape' || e.defaultPrevented || !e.currentTarget.contains(e.target as Node)) return;
+    e.preventDefault();
+    closeThread();
+  };
+
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className="flex flex-col flex-1 min-h-0" onKeyDown={onKeyDown}>
       <div className="flex-1 overflow-y-auto px-3 py-2">
         {note?.messages.map(m => (
           <MessageBubble
@@ -190,10 +194,13 @@ function ThreadView({ note }: { note: PublicNote | null }) {
 export function PublicNotesPanel() {
   const { t } = useTranslation();
   const notes = usePublicNotesStore(s => s.notes);
-  const loading = usePublicNotesStore(s => s.loading);
+  // WHY: the page refetches the list on every change-ping, so `loading` flips on each
+  // one — only the first load (no list yet) shows the loader, or an empty list flashes it.
+  const firstLoad = usePublicNotesStore(s => s.loading && !s.loaded);
   const notesSha = usePublicNotesStore(s => s.notesSha);
   const servedSha = usePublicNotesStore(s => s.servedSha);
   const refreshFailed = usePublicNotesStore(s => s.refreshFailed);
+  const liveLost = usePublicNotesStore(s => s.liveLost);
   const activeNoteId = usePublicNotesStore(s => s.activeNoteId);
   const draft = usePublicNotesStore(s => s.draft);
   const draftSeq = usePublicNotesStore(s => s.draftSeq);
@@ -256,9 +263,10 @@ export function PublicNotesPanel() {
       ) : (
         <div className="flex-1 min-h-0 flex flex-col">
           {refreshFailed && <p className="px-3 py-2 text-ui-xs text-text-dim border-b border-border">{t('publicNotesRefreshFailed')}</p>}
+          {liveLost && <p className="px-3 py-2 text-ui-xs text-text-dim border-b border-border">{t('publicNotesLiveLost')}</p>}
           {stale && <p className="px-3 py-2 text-ui-xs text-text-dim border-b border-border">{t('publicNotesStale')}</p>}
           <PillList className="min-h-0">
-            {loading && notes.length === 0 ? (
+            {firstLoad ? (
               <PanelLoading />
             ) : notes.length === 0 ? (
               <div className="py-4 px-2 text-ui-base text-text-dim text-center">{t('publicNotesEmpty')}</div>

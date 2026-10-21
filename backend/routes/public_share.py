@@ -126,6 +126,19 @@ async def _resolve_doc_ids(
     return ids
 
 
+def clear_doc_ids_cache() -> None:
+    """Drop every cached subtree doc_ids set (public_ws revalidation entry).
+
+    # ARCH: the ONLY sanctioned way to invalidate this cache from outside.
+    Why: a structural change (move/delete/share revoke) can shrink a live
+    doc_ids set, and the TTL alone would serve the stale set for up to
+    _DOC_IDS_TTL_S. routes/public_ws.py calls this before re-proving access on
+    its sockets — reaching into the private dict from there would fork the
+    cache's invariants (prune-on-write, cap) across modules.
+    """
+    _doc_ids_cache.clear()
+
+
 # ─── system-subtree ancestry guard ──────────────────────────────────────────
 #
 # The publishability check itself lives in SYSTEM: share-guard (share_guard.py)

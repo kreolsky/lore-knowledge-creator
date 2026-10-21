@@ -7,8 +7,10 @@
  * (toc only for doc-scope; docs+toc for subtree), same Editor render path
  * (CM6 + render-bundle — see <PublicEditor>), same ReferencesPanel (readonly).
  * Notes tab (<PublicNotesPanel>) only while the covering share has comments on.
- * No WS / collab: the notes list is refetched on open, on tab focus and after the
- * guest's own write.
+ * Live notes/text over ONE anonymous change-ping socket per viewed document
+ * (usePublicDocSocket): the page holds no timer, and the refetch it runs on a
+ * ping is the same the old 5 s poll ran (plus after the guest's own write).
+ * No collab: the guest never edits the text.
  *
  * ARCH (plan "public-document-ids"): the page is now keyed on the document's own
  * uuid (a `documentId` prop), NOT a share token. The funnel is re-keyed:
@@ -56,8 +58,9 @@ import { TableOfContents } from '../components/TableOfContents';
 import { ReferencesPanel } from '../components/ReferencesPanel';
 import { PublicNotesPanel } from '../components/PublicNotesPanel';
 import SelectionToolbar from '../components/editor/SelectionToolbar';
-import { usePublicNotesStore, PUBLIC_DRAFT_NOTE_ID, publicDocIsBehind } from '../store/public-notes-store';
+import { usePublicNotesStore, PUBLIC_DRAFT_NOTE_ID } from '../store/public-notes-store';
 import { PublicNoteConnector } from '../components/PublicNoteConnector';
+import { usePublicDocSocket } from '../hooks/usePublicDocSocket';
 import { useAppStore } from '../store/app-store';
 import { useUIStore, ORPHAN_KEY, type RightTab } from '../store/ui-store';
 import { setPublicFileContext } from '../utils/reference-url';
@@ -68,9 +71,6 @@ import { useEvent } from '../hooks/useEvent';
 import type { Document } from '../types';
 
 type Phase = 'loading' | 'ready' | 'error';
-
-/** How often the open public page re-reads the notes list (it holds no socket). */
-const PUBLIC_NOTES_POLL_MS = 5000;
 
 /** Map a flat public-tree payload to the store's Document[] shape (metadata only —
  *  content is loaded per-doc via publicDocumentByDoc). */
@@ -267,33 +267,13 @@ export function PublicSharePage(
     shellRef.current?.openRightPanel('notes');
   }, []));
 
-  // No socket on this page: while it is visible and comments are on, the list is
-  // re-read every few seconds (and at once when the tab returns), so members' and
-  // other guests' notes and replies arrive without a reload.
+  // ── Live notes/text: one anonymous change-ping socket per viewed document ──
+  // The server sends {"type":"changed"} the moment a note or the text of THIS
+  // document changes (members' and other guests' notes, REST/agent writes at
+  // the next flush); the hook answers with the refetch the old 5 s poll ran.
+  // The socket opens only while comments are on: the channel exists for notes.
   const allowComments = usePublicNotesStore(s => s.allowComments);
-  useEffect(() => {
-    if (!allowComments) return;
-    const refetch = async () => {
-      if (document.visibilityState !== 'visible') return;
-      const docId = usePublicNotesStore.getState().documentId;
-      if (!docId) return;
-      await usePublicNotesStore.getState().load(docId);
-      // The list came back resolved against newer text (a member edited): re-read the
-      // text in place, so the highlights — and a draft's selection — land on the right
-      // words without a reload. Read AFTER the list: with no edit in between, both
-      // carry the same hash.
-      if (publicDocIsBehind()) await usePublicNotesStore.getState().refreshText(docId);
-    };
-    const tick = () => { void refetch(); };
-    const timer = window.setInterval(tick, PUBLIC_NOTES_POLL_MS);
-    window.addEventListener('focus', tick);
-    document.addEventListener('visibilitychange', tick);
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener('focus', tick);
-      document.removeEventListener('visibilitychange', tick);
-    };
-  }, [allowComments]);
+  usePublicDocSocket(documentId, allowComments);
 
   const storedRightTab = useUIStore(s => s.documents[ORPHAN_KEY]?.rightPanelTab);
   const noteThreadOpen = usePublicNotesStore(s => !!s.activeNoteId || !!s.draft);

@@ -551,6 +551,7 @@ export const en = {
   publicNoteMessageHasReplies: 'This message already has replies — it cannot be deleted',
   publicNoteFragmentGone: 'The selected text was deleted — the note will be on the whole document.',
   publicNotesRefreshFailed: 'Could not refresh the notes — showing the last loaded list.',
+  publicNotesLiveLost: 'Live updates stopped — reload the page to see new notes.',
   publicNotesStale: 'The document has changed since you opened it — reload the page to see notes in place.',
   publicNotesEmpty: 'No notes yet. Select text to leave a note on a fragment.',
   publicNoteNamePlaceholder: 'Your name',

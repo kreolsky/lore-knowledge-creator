@@ -238,15 +238,20 @@ export default function SelectionToolbar() {
     return () => document.removeEventListener('keydown', onKey);
   }, [visible, hide]);
 
-  // Click outside toolbar to dismiss
+  // Click outside toolbar (and outside the editor) to dismiss
   useEffect(() => {
     if (!visible) return;
     const onDown = (e: MouseEvent) => {
+      // WHY the editor is exempt: a double/triple click selects the word/line inside
+      // CM6's own mousedown handler, so the bar opens mid-event and this listener,
+      // reached later by the same mousedown, closed it at once. Inside the editor the
+      // selection feed already decides: a click that collapses it hides the bar.
+      if (getEditorView()?.scrollDOM.contains(e.target as Node)) return;
       if (toolbarRef.current && !toolbarRef.current.contains(e.target as Node)) hide();
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [visible, hide]);
+  }, [visible, hide, getEditorView]);
 
   // ARCH: final position is decided post-measure in a layout effect so the toolbar
   // can flip above the selection when there's no room below, and clamp horizontally

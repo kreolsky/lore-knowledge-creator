@@ -32,6 +32,7 @@ from pydantic import BaseModel
 from share_guard import is_unshareable_by_ancestry
 from surrealdb import AsyncSurreal
 
+import event_bus
 from access import ensure_owner_for_doc, require_project_owner
 from auth import get_current_user
 from db import create_record, fetch_one, get_db, serialize_record
@@ -220,6 +221,10 @@ async def update_share(
         "WHERE deleted_at IS NONE",
         {"id": share_id, **sets},
     )
+    # Notify the public change-ping sockets (routes/public_ws.py): a scope
+    # shrink or comments-off must close guest sockets even though no further
+    # doc event pings. Fire-and-forget like every bus emit on this surface.
+    await event_bus.emit("share_changed", project_id=rows[0]["project_id"])
     return {"success": True}
 
 
@@ -247,4 +252,7 @@ async def delete_share(share_id: str, user: dict = Depends(get_current_user), db
         "WHERE deleted_at IS NONE",
         {"id": share_id},
     )
+    # Notify the public change-ping sockets (routes/public_ws.py): a revoked
+    # share must close guest sockets even though nothing pings afterwards.
+    await event_bus.emit("share_changed", project_id=rows[0]["project_id"])
     return {"success": True}

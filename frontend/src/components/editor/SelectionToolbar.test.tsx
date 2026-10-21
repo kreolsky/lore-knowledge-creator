@@ -46,6 +46,13 @@ vi.mock('./markdown-actions-agent', () => ({ agentAction: vi.fn() }));
 import SelectionToolbar from './SelectionToolbar';
 import { usePublicNotesStore } from '../../store/public-notes-store';
 
+// WHY: jsdom lacks Range.getClientRects, and CM6's mousedown handler calls it on the
+// window selection's range once a selection is non-empty (a triple click) — uncaught,
+// it fails the run even though every assertion passed.
+if (!Range.prototype.getClientRects) {
+  Range.prototype.getClientRects = () => ({ length: 0, item: () => null }) as unknown as DOMRectList;
+}
+
 let root: Root | null = null;
 function mountToolbar() {
   const host = document.createElement('div');
@@ -193,6 +200,43 @@ describe('SelectionToolbar', () => {
     const bar = document.querySelector('[data-testid="guest-note-bar"]') as HTMLElement;
     expect(bar.style.left).toBe('300px');
     expect(bar.style.top).toBe('214px'); // pointer + the Clarify button's gap, not the selection rect (70 + 6)
+  });
+
+  it('a double/triple-click selection (made ON mousedown) still opens the bar', () => {
+    appState.accessLevel = 'readonly';
+    uiState.isPublicShare = true;
+    usePublicNotesStore.setState({ allowComments: true });
+    mountToolbar();
+    makeView('some **selected** text', 6, 6);
+    act(() => { root?.render(createElement(SelectionToolbar)); }); // attaches the pointer listeners
+    // CM6 selects the word/line inside its own contentDOM mousedown handler, and the
+    // store update renders before the event reaches scrollDOM and document.
+    view!.contentDOM.addEventListener('mousedown', () => {
+      view!.dispatch({ selection: { anchor: 6, head: 13 } });
+      uiState.selectionEmpty = false;
+      act(() => { root?.render(createElement(SelectionToolbar)); });
+    }, { once: true });
+    // WHY no act() around it: a nested act defers the render to the outer one's end,
+    // i.e. past the document listener this race is about.
+    view!.contentDOM.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, detail: 2 }));
+    act(() => {
+      view!.contentDOM.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 300, clientY: 200 }));
+    });
+    expect(document.querySelector('[data-testid="guest-note-bar"]')).not.toBeNull();
+    // The third click widens the selection to the line on mousedown; it stays non-empty,
+    // so nothing would re-open a bar that this press closed.
+    act(() => {
+      view!.contentDOM.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, detail: 3 }));
+      view!.contentDOM.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 300, clientY: 200 }));
+    });
+    expect(document.querySelector('[data-testid="guest-note-bar"]')).not.toBeNull();
+  });
+
+  it('a press outside the editor still dismisses the bar', () => {
+    mountToolbar();
+    select('some text here', 5, 9);
+    act(() => { document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); });
+    expect(document.querySelector('.selection-toolbar')).toBeNull();
   });
 
   it('a guest on a public link with comments off sees nothing', () => {

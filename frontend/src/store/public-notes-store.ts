@@ -8,8 +8,8 @@
  * there is no edit, no image, no realtime frame and no inbox. The member store's
  * fresh-note / discard / SWR / logout-epoch machinery has nothing to act on here.
  *
- * The list is server truth, refetched on open, on tab focus and after every own write
- * (the page holds no socket); nothing here is optimistic.
+ * The list is server truth, refetched on open, on the live change-ping socket's
+ * nudge (usePublicDocSocket) and after every own write; nothing here is optimistic.
  */
 import { create } from 'zustand';
 import {
@@ -54,6 +54,11 @@ interface PublicNotesState {
    * one and the panel says so (it is kept so an open thread and its composer survive).
    */
   refreshFailed: boolean;
+  /**
+   * The live change-ping socket gave up reconnecting (usePublicDocSocket): the
+   * list no longer refreshes itself — the panel says so (a reload restores it).
+   */
+  liveLost: boolean;
   activeNoteId: string | null;
   draft: PublicNoteDraft | null;
   /**
@@ -76,6 +81,7 @@ interface PublicNotesState {
   openNote: (sessionId: string) => void;
   closeThread: () => void;
   setAuthorName: (name: string) => void;
+  setLiveLost: (v: boolean) => void;
   /** Send the composer: a new note for a draft, else a reply in the open note. */
   submit: (content: string) => Promise<boolean>;
   deleteMessage: (sessionId: string, messageId: string) => Promise<void>;
@@ -92,6 +98,7 @@ const INITIAL = {
   loading: false,
   loaded: false,
   refreshFailed: false,
+  liveLost: false,
   activeNoteId: null,
   draft: null,
   draftSeq: 0,
@@ -130,9 +137,9 @@ export const usePublicNotesStore = create<PublicNotesState>((set, get) => ({
       if (get().documentId !== documentId) return;
       if (get().loaded) {
         // A failed REFETCH keeps the previous list, marked stale by the panel, and
-        // toasts once per failure streak — the page polls, so a toast per attempt
-        // would repeat every few seconds, and dropping the list would unmount an open
-        // thread with the guest's unsent reply.
+        // toasts once per failure streak — every change-ping and reconnect catch-up
+        // refetches, so a toast per attempt would repeat, and dropping the list would
+        // unmount an open thread with the guest's unsent reply.
         if (!get().refreshFailed) toastError('failedToLoadNotes');
         set({ refreshFailed: true });
         return;
@@ -150,8 +157,8 @@ export const usePublicNotesStore = create<PublicNotesState>((set, get) => ({
     try {
       resp = await publicDocumentByDoc(documentId);
     } catch {
-      // WHY no toast: the panel already says the document changed; the next poll
-      // retries, and nothing stale paints — the hashes still differ.
+      // WHY no toast: the panel already says the document changed; the next
+      // change-ping retries, and nothing stale paints — the hashes still differ.
       return false;
     }
     const app = useAppStore.getState();
@@ -192,6 +199,10 @@ export const usePublicNotesStore = create<PublicNotesState>((set, get) => ({
   setAuthorName(name) {
     set({ authorName: name });
     try { localStorage.setItem(NAME_KEY, name); } catch { /* per-viewer convenience only */ }
+  },
+
+  setLiveLost(v) {
+    set({ liveLost: v });
   },
 
   async submit(content) {
