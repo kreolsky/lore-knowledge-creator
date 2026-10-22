@@ -6,7 +6,7 @@
 import { forwardRef } from 'react';
 
 interface ButtonProps {
-  variant?: 'primary' | 'ghost' | 'ghost-note' | 'yellow' | 'yellow-strong' | 'dashed' | 'danger' | 'subtle' | 'highlight' | 'composer';
+  variant?: 'primary' | 'ghost' | 'ghost-note' | 'yellow' | 'yellow-strong' | 'dashed' | 'danger' | 'subtle' | 'highlight' | 'composer' | 'panel';
   size?: 'sm' | 'md' | 'md-square' | 'lg' | 'lg-square';
   danger?: boolean;
   fullWidth?: boolean;
@@ -43,6 +43,8 @@ const variants: Record<string, string> = {
   // ARCH: darker-than-field in BOTH themes via --composer-control-bg (index.css):
   // light uses surface2 (#dbd8d2 < surface), dark uses bg (#1e1e1e < surface).
   composer: 'bg-[var(--composer-control-bg)] text-text-muted hover:bg-surface3 hover:text-text',
+  // A control resting on a surface2 panel: one tone darker at rest, two on hover.
+  panel: 'bg-surface3 text-text-muted hover:bg-surface4 hover:text-text',
   highlight:
     'bg-[var(--color-highlight-agent)] text-white hover:brightness-108',
   dashed:

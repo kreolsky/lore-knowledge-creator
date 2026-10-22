@@ -102,6 +102,31 @@
         "title": "AgentRunRequest",
         "type": "object"
       },
+      "Audience": {
+        "additionalProperties": false,
+        "description": "One row of a project's audiences list — a subject opened at a level.\n\nextra='forbid': an unknown key in a row is a malformed write (422), never a\nsilently-dropped field; the DB-level element schema cannot refuse unknown\nkeys (SurrealDB 2.x stores them), so this model is the refusing layer.",
+        "properties": {
+          "access_level": {
+            "enum": [
+              "full",
+              "commentator",
+              "readonly"
+            ],
+            "title": "Access Level",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject",
+          "access_level"
+        ],
+        "title": "Audience",
+        "type": "object"
+      },
       "Body_chat_transcribe_api_chat_transcribe_post": {
         "properties": {
           "file": {
@@ -1499,6 +1524,20 @@
       },
       "PatchProject": {
         "properties": {
+          "audiences": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Audience"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audiences"
+          },
           "description": {
             "anyOf": [
               {
@@ -1510,17 +1549,6 @@
               }
             ],
             "title": "Description"
-          },
-          "is_public": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Is Public"
           },
           "name": {
             "anyOf": [
@@ -4493,7 +4521,7 @@
     },
     "/api/admin/groups/{group_id}": {
       "delete": {
-        "description": "Hard delete: the group, its membership rows and its `group:<id>` grants.",
+        "description": "Hard delete: the group, its membership rows, its `group:<id>` grants and\nits `group:<id>` project-audience rows; every stripped project gets a\nproject-wide access_changed so connected clients recompute at once.",
         "operationId": "delete_group_api_admin_groups__group_id__delete",
         "parameters": [
           {
@@ -9589,6 +9617,51 @@
         "summary": "Redeem Mcp Upload"
       }
     },
+    "/api/me/group-roster": {
+      "get": {
+        "description": "The caller's moderator group as [{user_id, name, email}] — the invite\npicker's data source (a group-bound owner invites roster emails only,\nrequire_group_scoped_invite). [] for an admin or a user without a group;\nactive rows only.",
+        "operationId": "my_group_roster_api_me_group_roster_get",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "My Group Roster"
+      }
+    },
     "/api/pipeline-schedules": {
       "get": {
         "operationId": "list_schedules_api_pipeline_schedules_get",
@@ -9926,7 +9999,7 @@
     },
     "/api/projects": {
       "get": {
-        "description": "List projects visible to the current user (owner + public + explicit membership).",
+        "description": "List projects visible to the current user (owner + public + explicit membership + group audience).",
         "operationId": "list_projects_api_projects_get",
         "parameters": [
           {
@@ -10151,7 +10224,7 @@
         "summary": "Get Project"
       },
       "patch": {
-        "description": "Update project fields (name, description, status, is_public, project_context, ref_image_preview). Requires full access or admin.",
+        "description": "Update project fields (name, description, status, audiences, project_context, ref_image_preview). Requires full access or admin.",
         "operationId": "patch_project_api_projects__project_id__patch",
         "parameters": [
           {
@@ -10770,7 +10843,7 @@
         "summary": "Get Members"
       },
       "post": {
-        "description": "Owner-only: invite by email (silent). 200 + {queued: true} regardless of whether the email is registered.",
+        "description": "Owner-only: invite by email. A group-bound owner (a non-admin with a\ngroup, or a moderator) invites roster emails only — 403 outside the group,\nnothing queued (require_group_scoped_invite); admin and no-group owners\nkeep the silent free-text invite.",
         "operationId": "invite_member_api_projects__project_id__members_post",
         "parameters": [
           {

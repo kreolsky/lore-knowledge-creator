@@ -26,7 +26,7 @@ function makeProject(id: string, owner: string, access: AccessLevel, overrides: 
     last_accessed_doc_id: null,
     owner_id: owner,
     owner_name: owner,
-    is_public: false,
+    audiences: [],
     my_access: access,
     created_at: '2026-01-01T00:00:00Z',
     members_count: 0,

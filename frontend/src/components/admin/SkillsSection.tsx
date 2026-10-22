@@ -72,6 +72,7 @@ function SkillEditor({ initial, disabled, onSave, onCancel }: {
   return (
     <div className="mt-2 flex flex-col gap-2">
       <FieldTextarea
+        onPanel
         value={draft}
         onChange={e => setDraft(e.target.value)}
         rows={12}

@@ -132,7 +132,25 @@ DEFINE FIELD IF NOT EXISTS index_doc_id         ON projects TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS created_at           ON projects TYPE datetime DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS last_accessed_doc_id ON projects TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS owner_id             ON projects TYPE option<string>;
-DEFINE FIELD IF NOT EXISTS is_public            ON projects TYPE bool DEFAULT false;
+-- Unified audiences: every grant the project makes beyond its member rows —
+-- one {subject, access_level} per row. 'public' = every logged-in user
+-- (readonly|commentator only; admin-only write — routes/projects.py
+-- _guard_audiences), 'mod:<uid>' a moderator group, 'group:<id>' an admin
+-- group. The retired is_public/group_audience/group_access trio and
+-- idx_projects_group_audience are REMOVEd by the audiences_to_list migration,
+-- not here: apply_schema runs before migrations and would drop the definitions
+-- before the migration copies the data (precedent: document_access above).
+DEFINE FIELD IF NOT EXISTS audiences ON projects TYPE array<object> DEFAULT [];
+-- array<object> materializes `audiences.*` at the parent DEFINE — the children
+-- need OVERWRITE to carry their type and ASSERT (gen_steps.* precedent below).
+DEFINE FIELD OVERWRITE audiences.* ON projects TYPE object;
+DEFINE FIELD OVERWRITE audiences.*.subject ON projects TYPE string;
+DEFINE FIELD OVERWRITE audiences.*.access_level ON projects TYPE string ASSERT $value IN ['readonly', 'commentator', 'full'];
+-- INVARIANT(corruption): a non-option field added to `projects` is backfilled
+-- here. Why: DEFAULT fills only new rows; every row predating the field holds
+-- NONE, and its next UPDATE fails coercion (same trap as ref_image_preview
+-- below). Pinned by test_migrate_audiences_to_list.py.
+UPDATE projects SET audiences = [] WHERE audiences IS NONE;
 DEFINE FIELD IF NOT EXISTS voice_recording_doc_id ON projects TYPE option<string>;
 -- Project-wide: references panel renders image refs as a gallery (true) or as plain cards.
 DEFINE FIELD IF NOT EXISTS ref_image_preview     ON projects TYPE bool DEFAULT true;

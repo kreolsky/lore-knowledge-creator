@@ -190,11 +190,8 @@ export interface EventMap {
   // as a markdown blockquote + question.
   'chat-clarify-insert': { quote: string; question: string };
   // MessageList → ChatInput: the stream stopped following because the user scrolled
-  // up past the stick threshold (away=true), or came back (away=false); userAbove =
-  // a user message lies above the view (the up button shows only then).
-  'chat-scrolled-away': { away: boolean; userAbove: boolean };
+  // up past the stick threshold (away=true), or came back (away=false).
+  'chat-scrolled-away': { away: boolean };
   // ChatInput's scroll-to-bottom button → MessageList: jump to the end and re-follow.
   'chat-scroll-to-bottom': void;
-  // ChatInput's up button → MessageList: jump to the nearest user message above.
-  'chat-scroll-to-prev-user': void;
 }

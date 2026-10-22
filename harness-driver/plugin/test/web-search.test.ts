@@ -6,6 +6,7 @@ import type { WebSearchProvider } from '@deepseek-ai/dsh-web'
 
 import { BraveSearchProvider } from '../src/web-search/brave.ts'
 import { PerplexitySearchProvider } from '../src/web-search/perplexity.ts'
+import { RouterSearchProvider } from '../src/web-search/router.ts'
 import { SearxngSearchProvider } from '../src/web-search/searxng.ts'
 import { TavilySearchProvider } from '../src/web-search/tavily.ts'
 import { WEB_SEARCH_KEY_REF } from '../src/web-search/key.ts'
@@ -41,6 +42,19 @@ interface Case {
   config: string
   /** The provider's wire shape for: one full row, one url-less row, one sparse row. */
   payload: unknown
+  /** A successful answer with no rows. */
+  empty: unknown
+}
+
+const ROUTER_GATEWAY = async () => ({ base: 'http://router:8080/v1', key: 'router-key' })
+
+/** An Anthropic Messages answer: the server tool's result block plus `extra` blocks. */
+function messages(results: unknown, ...extra: unknown[]): unknown {
+  return { content: [
+    { type: 'server_tool_use', id: 'srv_1', name: 'web_search', input: { query: 'q' } },
+    { type: 'web_search_tool_result', tool_use_id: 'srv_1', content: results },
+    ...extra,
+  ] }
 }
 
 const CASES: Case[] = [
@@ -53,6 +67,7 @@ const CASES: Case[] = [
       { title: 'No url', description: 'dropped' },
       { url: 'https://a.example/2', title: '', description: null },
     ] } },
+    empty: { web: { results: [] } },
   },
   {
     name: 'tavily',
@@ -63,6 +78,7 @@ const CASES: Case[] = [
       { title: 'No url', content: 'dropped' },
       { url: 'https://a.example/2', title: '', content: null },
     ] },
+    empty: { results: [] },
   },
   {
     name: 'searxng',
@@ -73,6 +89,7 @@ const CASES: Case[] = [
       { title: 'No url', content: 'dropped' },
       { url: 'https://a.example/2', title: '', content: null },
     ] },
+    empty: { results: [] },
   },
   {
     name: 'perplexity',
@@ -83,6 +100,20 @@ const CASES: Case[] = [
       { title: 'No url', snippet: 'dropped' },
       { url: 'https://a.example/2', title: '', snippet: null, date: null },
     ] },
+    empty: { results: [] },
+  },
+  {
+    name: 'router',
+    make: (resolveKey, f) => new RouterSearchProvider(resolveKey, ROUTER_GATEWAY, f),
+    config: 'claude/haiku',
+    payload: messages([
+      { type: 'web_search_result', url: 'https://a.example/1', title: 'Full row', page_age: '2026-09-01T00:00:00', encrypted_content: 'x' },
+      { type: 'web_search_result', title: 'No url', encrypted_content: 'x' },
+      { type: 'web_search_result', url: 'https://a.example/2', title: '', page_age: null },
+    ], { type: 'text', text: 'Found.', citations: [
+      { type: 'web_search_result_location', url: 'https://a.example/1', title: 'Full row', cited_text: 'The snippet' },
+    ] }),
+    empty: messages([]),
   },
 ]
 
@@ -120,7 +151,7 @@ for (const c of CASES) {
 
   test(`${c.name}: a key set after apply is used by the next call`, async () => {
     const keys = keyStore('')
-    const { calls, fetchImpl } = fakeFetch(200, c.name === 'brave' ? { web: { results: [] } } : { results: [] })
+    const { calls, fetchImpl } = fakeFetch(200, c.empty)
     keys.store.set(WEB_SEARCH_KEY_REF, c.config)
     await c.make(keys.resolveKey, fetchImpl).search({ query: 'q' })
     assert.equal(calls.length, 1, 'the rotated key reached the wire')
@@ -215,5 +246,92 @@ test('searxng: a non-URL base is the named empty-key-class error, not a fetch fa
     (error: unknown) => error instanceof WebError
       && error.code === 'WEB_PROVIDER_CREDENTIAL_MISSING'
       && /lore-searxng/.test(error.message),
+  )
+})
+
+// ─── the router: an Anthropic Messages call through Lore's AI router ────────
+
+test('router: POSTs {AI_API_URL}/messages with the router key as x-api-key, the model and a one-use web_search tool', async () => {
+  const { calls, fetchImpl } = fakeFetch(200, messages([]))
+  await new RouterSearchProvider(keyStore('claude/haiku').resolveKey, ROUTER_GATEWAY, fetchImpl).search({ query: 'surrealdb release' })
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].url, 'http://router:8080/v1/messages')
+  const headers = calls[0].init?.headers as Record<string, string>
+  assert.equal(headers['x-api-key'], 'router-key')
+  assert.equal(headers['anthropic-version'], '2023-06-01')
+  assert.ok(!Object.keys(headers).some(h => h.toLowerCase() === 'authorization'), 'no Authorization header')
+  const body = JSON.parse(String(calls[0].init?.body))
+  assert.equal(body.model, 'claude/haiku')
+  assert.deepEqual(body.tools, [{ type: 'web_search_20250305', name: 'web_search', max_uses: 1 }])
+  assert.match(JSON.stringify(body.messages), /surrealdb release/)
+})
+
+test('router: a duplicated url across results is kept once', async () => {
+  const row = { type: 'web_search_result', url: 'https://a.example/1', title: 'One' }
+  const { fetchImpl } = fakeFetch(200, messages([row, row]))
+  const result = await new RouterSearchProvider(keyStore('m').resolveKey, ROUTER_GATEWAY, fetchImpl).search({ query: 'q' })
+  assert.deepEqual(result.sources, [{ url: 'https://a.example/1', title: 'One' }])
+})
+
+test('router: a search error reported with HTTP 200 is WEB_PROVIDER_ERROR naming the error_code', async () => {
+  const { fetchImpl } = fakeFetch(200, messages({ type: 'web_search_tool_result_error', error_code: 'too_many_requests' }))
+  await assert.rejects(
+    new RouterSearchProvider(keyStore('m').resolveKey, ROUTER_GATEWAY, fetchImpl).search({ query: 'q' }),
+    (error: unknown) => error instanceof WebError && error.code === 'WEB_PROVIDER_ERROR'
+      && /lore-router/.test(error.message) && /too_many_requests/.test(error.message),
+  )
+})
+
+test('router: an answer without a search block is WEB_PROVIDER_ERROR, never an empty success', async () => {
+  const { fetchImpl } = fakeFetch(200, { content: [{ type: 'text', text: 'I know this already.' }] })
+  await assert.rejects(
+    new RouterSearchProvider(keyStore('m').resolveKey, ROUTER_GATEWAY, fetchImpl).search({ query: 'q' }),
+    (error: unknown) => error instanceof WebError && error.code === 'WEB_PROVIDER_ERROR'
+      && /did not run a web search/.test(error.message),
+  )
+})
+
+test('router: an Anthropic-shaped 401 carries the status and the error type', async () => {
+  const { fetchImpl } = fakeFetch(401, { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } })
+  await assert.rejects(
+    new RouterSearchProvider(keyStore('m').resolveKey, ROUTER_GATEWAY, fetchImpl).search({ query: 'q' }),
+    (error: unknown) => error instanceof WebError && /lore-router/.test(error.message)
+      && /HTTP 401/.test(error.message) && /authentication_error/.test(error.message),
+  )
+})
+
+test('router: an empty model names the model fix; an empty gateway URL or key names the AI API fix', async () => {
+  const { calls, fetchImpl } = fakeFetch(200, messages([]))
+  await assert.rejects(
+    new RouterSearchProvider(keyStore('').resolveKey, ROUTER_GATEWAY, fetchImpl).search({ query: 'q' }),
+    /lore-router: no model/)
+  for (const gateway of [{ base: '', key: 'k' }, { base: 'http://router:8080/v1', key: '' }]) {
+    await assert.rejects(
+      new RouterSearchProvider(keyStore('m').resolveKey, async () => gateway, fetchImpl).search({ query: 'q' }),
+      (error: unknown) => error instanceof WebError && error.code === 'WEB_PROVIDER_CREDENTIAL_MISSING'
+        && /lore-router: no AI API URL\/key/.test(error.message) && /Admin panel → Models → AI API/.test(error.message),
+    )
+  }
+  assert.equal(calls.length, 0, 'nothing reaches the wire without a model and a gateway')
+})
+
+// ─── the plugin: registration over the live credentials service ─────────────
+
+test('apply before the credentials service is composed: the next search still resolves its key', async () => {
+  const { apply } = await import('../src/web-search/index.ts')
+  let credentials: { resolve: (ref: string) => Promise<{ value: string } | undefined> } | undefined
+  const providers: WebSearchProvider[] = []
+  apply({
+    get: (name: string) => (name === 'credentials' ? credentials : undefined),
+    web: { registerSearchProvider: (p: WebSearchProvider) => { providers.push(p) } },
+  } as never)
+  // The service arrives after apply — the boot order that broke every Lore provider.
+  credentials = { resolve: async () => undefined }
+  const brave = providers.find(p => p.id === 'lore-brave')
+  assert.ok(brave)
+  await assert.rejects(
+    brave.search({ query: 'q' }),
+    (error: unknown) => error instanceof WebError && error.code === 'WEB_PROVIDER_CREDENTIAL_MISSING',
+    'the key lookup reached the late service (empty key), not "not composed"',
   )
 })

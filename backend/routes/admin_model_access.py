@@ -28,6 +28,7 @@ from surrealdb import AsyncSurreal
 
 from auth import require_admin
 from db import create_record, get_db, run_in_transaction
+from event_bus import emit
 from routes.chat import gateway_model_ids
 
 logger = logging.getLogger(__name__)
@@ -239,13 +240,26 @@ async def rename_group(
 async def delete_group(
     group_id: str, _: dict = Depends(require_admin), db: AsyncSurreal = Depends(get_db),
 ):
-    """Hard delete: the group, its membership rows and its `group:<id>` grants."""
+    """Hard delete: the group, its membership rows, its `group:<id>` grants and
+    its `group:<id>` project-audience rows; every stripped project gets a
+    project-wide access_changed so connected clients recompute at once."""
     await _require_admin_group(db, group_id)
+    subject = group_subject(group_id)
+    # The pid list cannot be read back out of run_in_transaction — pre-selected.
+    pids = await db.query(
+        "SELECT VALUE meta::id(id) FROM projects "
+        "WHERE audiences.subject CONTAINS $subject AND deleted_at IS NONE",
+        {"subject": subject},
+    )
     await run_in_transaction(db, [
         "DELETE group_members WHERE group_id = $id",
         "DELETE model_grants WHERE subject = $subject",
+        "UPDATE projects SET audiences = audiences[WHERE subject != $subject] "
+        "WHERE audiences.subject CONTAINS $subject",
         "DELETE type::record('groups', $id)",
-    ], {"id": group_id, "subject": group_subject(group_id)})
+    ], {"id": group_id, "subject": subject})
+    for pid in pids or []:
+        await emit("access_changed", project_id=pid, user_id=None, access=None)
     return {"success": True}
 
 
@@ -270,4 +284,15 @@ async def put_group_members(
         statements.append(f"CREATE group_members CONTENT {{ group_id: $id, user_id: $u{i} }}")
         params[f"u{i}"] = uid
     await run_in_transaction(db, statements, params)
+    # No membership diff: the recompute reads live rows, so a no-op PUT costs
+    # one harmless recompute per project — cheaper and simpler than diffing.
+    # Every project carrying a group:<id> audience row may have just gained or
+    # lost a connected client's grant.
+    rows = await db.query(
+        "SELECT VALUE meta::id(id) FROM projects "
+        "WHERE audiences.subject CONTAINS $subject AND deleted_at IS NONE",
+        {"subject": group_subject(group_id)},
+    )
+    for pid in rows or []:
+        await emit("access_changed", project_id=pid, user_id=None, access=None)
     return await _single_group(db, group_id)

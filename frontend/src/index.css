@@ -10,6 +10,7 @@
   --color-surface: var(--surface);
   --color-surface2: var(--surface2);
   --color-surface3: var(--surface3);
+  --color-surface4: var(--surface4);
   --color-border: var(--border);
   --color-border-soft: var(--border-soft);
   --color-header-bg: var(--header-bg);
@@ -77,6 +78,8 @@
   --surface-transclusion: #e8e5e0;
   --surface2: #dbd8d2;
   --surface3: #cccac4;
+  /* One step past surface3, away from the panel: hover of a control resting on surface3. */
+  --surface4: #bcbab4;
   /* SYSTEM: ui-primitives — composer selector trigger bg. Must be DARKER than
      the composer field (--surface) in BOTH themes so the model/mode/prompt
      triggers read as controls sitting on the field. Light: surface2 < surface;
@@ -179,6 +182,7 @@ html.dark {
   --surface-transclusion: #222222;
   --surface2: #2e2e2e;
   --surface3: #434343;
+  --surface4: #505050;
   /* Dark theme: --bg (#1e1e1e) is darker than --surface (#262626). */
   --composer-control-bg: var(--bg);
   --preview-title-bg: var(--bg);
@@ -832,6 +836,10 @@ body.is-resizing * { transition: none !important; }
   background-color: var(--warm-strong);
   color: var(--text);
 }
+
+/* WHY: the chat prompt rail's left corners are rounded by operator decision — an edge
+   tab flush with the screen's right side. A class for the same reason as above. */
+.prompt-rail { border-radius: 12px 0 0 12px; }
 
 .snapshot-preview-banner {
   display: flex;

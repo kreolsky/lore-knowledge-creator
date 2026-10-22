@@ -33,6 +33,7 @@ from migrations._shared import (
     _record_applied,
     logger,
 )
+from migrations.migrate_audiences_to_list import _migrate_audiences_to_list
 from migrations.migrate_chat_apply_lock_fields_drop import (
     _migrate_chat_apply_lock_fields_drop,
 )
@@ -47,6 +48,9 @@ from migrations.migrate_messages_schemafull_converge import (
 )
 from migrations.migrate_note_links_to_anchors import (
     _migrate_note_links_to_anchors,
+)
+from migrations.migrate_public_to_group_audience import (
+    _migrate_public_to_group_audience,
 )
 from migrations.migrate_reference_sort_keys_backfill import (
     _migrate_reference_sort_keys_backfill,
@@ -112,6 +116,15 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     # (schema.surql carries the same REMOVEs for fresh DBs). Idempotent; no
     # dependency.
     ("note_links_to_anchors", _migrate_note_links_to_anchors),
+    # is_public became admin-only: every non-admin
+    # public project is re-expressed as a group audience (readonly) or goes
+    # private; admin-owned public projects untouched. Idempotent; no dependency.
+    ("public_to_group_audience", _migrate_public_to_group_audience),
+    # The audience trio folds into the audiences list field; MUST run after
+    # public_to_group_audience (it reads is_public) and owns the trio's REMOVEs
+    # (schema.surql does not carry them — apply_schema runs before migrations).
+    # Idempotent; the fresh-DB boot skips the data pass via the INFO gate.
+    ("audiences_to_list", _migrate_audiences_to_list),
 ]
 
 

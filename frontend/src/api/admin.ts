@@ -8,7 +8,7 @@
  */
 
 import { apiClient } from './client';
-import type { Project, User } from '../types';
+import type { Project, Role, User } from '../types';
 
 export interface AdminProjectsQuery {
   /** Name substring, matched case-insensitively server-side; empty → no filter. */
@@ -27,10 +27,12 @@ export async function listAdminProjects({ q, offset = 0, limit = 100 }: AdminPro
 }
 
 /** All active users in one shot — the Projects member picker needs the full
- *  list, and the admin's moderator options are derived from it (AdminPage). */
-export async function listAdminUsers({ limit = 1000 }: { limit?: number } = {}): Promise<User[]> {
+ * list (AdminPage); a `role` filter narrows it (the audience picker does NOT
+ * read this — `listAdminGroups` carries the moderator entries with names). */
+export async function listAdminUsers({ limit = 1000, role }: { limit?: number; role?: Role } = {}): Promise<User[]> {
   const params = new URLSearchParams();
   params.set('limit', String(limit));
+  if (role) params.set('role', role);
   return await apiClient.get(`/admin/users?${params}`) as User[];
 }
 

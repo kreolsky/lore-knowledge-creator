@@ -1,32 +1,22 @@
 /**
- * Project-level settings panel: voice recording target, reference image previews,
- * public access, and project-wide members.
+ * Project-level settings panel: voice recording target and reference image
+ * previews. The sharing surfaces (audiences, members) live in
+ * ProjectAccessSections.
  */
 // ARCH: Only visible to users with accessLevel === 'full'. Persists via PATCH /api/projects/{id}.
-// ARCH: Settings owns every project-scoped preference (voice target, image previews,
-// public access) plus project members; the per-doc Access tab stays scoped to the
-// current document. Personas are `.lore/system` documents, surfaced via the above-chat picker.
+// ARCH: Settings owns every project-scoped preference (voice target, image
+// previews); the access sections (audiences/members) are split into
+// ProjectAccessSections and share this panel's patchProject. Personas are
+// `.lore/system` documents, surfaced via the above-chat picker.
 
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { useAppStore } from '../store/app-store';
 import { apiClient } from '../api/client';
 import { ParentPickerPopup } from './ParentPickerPopup';
-import { Button, IconButton, FieldRadio, FieldCheckbox, FieldInput, SectionHeader, Dropdown } from './ui';
-import type { DropdownOption } from './ui/Dropdown';
-import type { TranslationKey } from '../i18n/en';
+import { Button, IconButton, FieldRadio, FieldCheckbox, SectionHeader } from './ui';
 import { useTranslation } from '../i18n';
-import { useIsProjectOwner } from '../hooks/useIsProjectOwner';
-import { X, Mic, ChevronRight, Users, Globe, Image } from 'lucide-react';
-import {
-  inviteMember, listMembers, patchMember, removeMember, cancelInvite,
-} from '../api/access';
-import type { AccessLevel, ProjectMember } from '../types';
-
-const roleOptions = (t: (k: TranslationKey) => string): DropdownOption[] => [
-  { value: 'readonly', label: t('accessRoleReadonly') },
-  { value: 'commentator', label: t('accessRoleCommentator') },
-  { value: 'full', label: t('accessRoleFull') },
-];
+import { X, Mic, ChevronRight, Image } from 'lucide-react';
+import { AudienceSection, MembersSection } from './ProjectAccessSections';
 
 type VoiceMode = 'current' | 'fixed';
 
@@ -164,9 +154,10 @@ export function ProjectSettingsPanel() {
           />
         </div>
 
-        <PublicAccessSection
-          isPublic={!!project.is_public}
-          onToggle={v => patchProject({ is_public: v })}
+        <AudienceSection
+          project={project}
+          onPatch={patchProject}
+          busy={saving !== null}
         />
 
         <MembersSection projectId={project.project_id} />
@@ -182,174 +173,5 @@ export function ProjectSettingsPanel() {
         />
       )}
     </div>
-  );
-}
-
-// ─── Public access: project-wide read-only broadcast (root-only) ───────────
-// INVARIANT(security): only a project root (owner, or admin with a member row)
-// sees/toggles is_public.
-// Why: is_public grants read-only access to every logged-in user — a project-wide
-// decision that must not be controllable by full-but-not-root collaborators
-// (matches the backend root gate in routes/projects.py::patch_project).
-
-function PublicAccessSection({
-  isPublic, onToggle,
-}: {
-  isPublic: boolean; onToggle: (v: boolean) => void;
-}) {
-  const { t } = useTranslation();
-  const isOwner = useIsProjectOwner();
-  if (!isOwner) return null;
-
-  return (
-    <>
-      <SectionHeader icon={<Globe size={11} />} title={t('accessPublicProject')} />
-      <div className="px-3.5">
-        <FieldCheckbox
-          checked={isPublic}
-          onChange={onToggle}
-          label={t('accessPublicProjectDesc')}
-        />
-      </div>
-    </>
-  );
-}
-
-// ─── Members: project-wide collaborators (root-only) ───────────────────────
-// Moved verbatim from the pre-split PeopleSection in AccessPanel — Settings is
-// project-scoped, so this is the right home. The per-doc Access tab keeps only
-// document overrides.
-
-function MembersSection({ projectId }: { projectId: string }) {
-  const project = useAppStore(s => s.currentProject);
-  const currentUser = useAppStore(s => s.currentUser);
-  const showToast = useAppStore(s => s.showToast);
-  const { t } = useTranslation();
-
-  const [members, setMembers] = useState<ProjectMember[]>([]);
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteRole, setInviteRole] = useState<AccessLevel>('readonly');
-  const [busy, setBusy] = useState(false);
-
-  const isOwner = useIsProjectOwner();
-
-  useEffect(() => {
-    if (!isOwner || !projectId) return;
-    let cancelled = false;
-    listMembers(projectId)
-      .then(m => { if (!cancelled) setMembers(m); })
-      .catch(() => { if (!cancelled) showToast(t('failedToLoadMembers')); });
-    return () => { cancelled = true; };
-  }, [isOwner, projectId, showToast, t]);
-
-  if (!isOwner) return null;
-
-  const refreshMembers = () => listMembers(projectId).then(setMembers).catch(() => showToast(t('failedToLoadMembers')));
-
-  const handleInvite = async () => {
-    const email = inviteEmail.trim().toLowerCase();
-    if (!email) return;
-    if (currentUser && email === currentUser.email.toLowerCase()) {
-      showToast(t('accessCannotInviteSelf')); return;
-    }
-    if (members.some(m => m.email.toLowerCase() === email)) {
-      showToast(t('accessAlreadyInvited', { email })); return;
-    }
-    setBusy(true);
-    try {
-      await inviteMember(projectId, inviteEmail.trim(), inviteRole);
-      setInviteEmail('');
-      showToast(t('accessInviteSent'));
-      refreshMembers();
-    } catch {
-      showToast(t('accessInviteError'));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handlePatch = async (uid: string, role: AccessLevel) => {
-    try { await patchMember(projectId, uid, role); refreshMembers(); }
-    catch { showToast(t('failedToSaveSettings')); }
-  };
-
-  const handleRemove = async (uid: string) => {
-    try { await removeMember(projectId, uid); refreshMembers(); }
-    catch { showToast(t('failedToSaveSettings')); }
-  };
-
-  const handleCancelPending = async (email: string) => {
-    try { await cancelInvite(projectId, email); refreshMembers(); }
-    catch { showToast(t('failedToSaveSettings')); }
-  };
-
-  const ownerId = project?.owner_id;
-
-  return (
-    <>
-      <SectionHeader
-        icon={<Users size={11} />}
-        title={t('settingsAccessTitle')}
-        description={t('settingsAccessDesc')}
-      />
-      <div className="px-3.5">
-        <div className="flex flex-col gap-1.5 mb-2">
-          {members.length === 0 ? (
-            <div className="text-ui-xs text-text-dim">{t('accessNoMembers')}</div>
-          ) : members
-            .filter(m => m.user_id !== ownerId)
-            .map(m => (
-            <div key={`${m.user_id}|${m.email}`} className="flex items-center gap-2">
-              <span className={`flex-1 text-ui-sm overflow-hidden text-ellipsis whitespace-nowrap ${m.pending ? 'italic text-text-dim' : 'text-text'}`}>
-                {m.name || m.email}
-                {m.pending && <span className="ml-1 text-ui-2xs uppercase">[{t('accessPendingBadge')}]</span>}
-              </span>
-              {!m.pending ? (
-                <Dropdown
-                  align="right"
-                  placement="bottom"
-                  value={m.access_level}
-                  options={roleOptions(t)}
-                  onSelect={v => handlePatch(m.user_id, v as AccessLevel)}
-                />
-              ) : (
-                <span className="text-ui-xs text-text-dim w-[110px] text-center">{m.access_level}</span>
-              )}
-              {m.pending ? (
-                <IconButton size="sm" danger onClick={() => handleCancelPending(m.email)} title={t('accessCancelPending')}>
-                  <X size={13} />
-                </IconButton>
-              ) : (
-                <IconButton size="sm" danger onClick={() => handleRemove(m.user_id)} title={t('accessRemove')}>
-                  <X size={13} />
-                </IconButton>
-              )}
-            </div>
-          ))}
-        </div>
-        <div className="flex items-center gap-2">
-          <FieldInput
-            type="email"
-            placeholder={t('accessAddByEmail')}
-            value={inviteEmail}
-            onChange={e => setInviteEmail(e.target.value)}
-            className="flex-1"
-            disabled={busy}
-          />
-          <Dropdown
-            size="lg"
-            align="right"
-            placement="bottom"
-            value={inviteRole}
-            options={roleOptions(t)}
-            onSelect={v => setInviteRole(v as AccessLevel)}
-            disabled={busy}
-          />
-          <Button variant="primary" size="lg" onClick={handleInvite} disabled={busy || !inviteEmail.trim()}>
-            {t('accessInvite')}
-          </Button>
-        </div>
-      </div>
-    </>
   );
 }

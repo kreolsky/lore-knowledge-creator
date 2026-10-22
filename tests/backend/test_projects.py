@@ -602,10 +602,10 @@ async def test_non_member_does_not_see_owner_last_doc(client, admin_user, regula
     _, user_token = regular_user
     pid, idx_id, extra_id = await _make_project_with_two_docs(client, admin_token)
 
-    # Make the project public so the regular (non-member) user can list it.
+    # Open the project to everyone so the regular (non-member) user can list it.
     await client.patch(
         f"/api/projects/{pid}",
-        json={"is_public": True},
+        json={"audiences": [{"subject": "public", "access_level": "readonly"}]},
         cookies={"lore_session": admin_token},
     )
 
@@ -620,7 +620,7 @@ async def test_non_member_does_not_see_owner_last_doc(client, admin_user, regula
 
 async def _make_owned_project_with_full_member(test_db, owner_uid, member_uid):
     """Create a project owned by `owner_uid` (non-admin) with `member_uid` as a
-    full-access member. Returns project_id. Used by the is_public owner-gate tests."""
+    full-access member. Returns project_id. Used by the audiences write-gate tests."""
     from password import hash_secret
 
     from db import create_record
@@ -654,25 +654,29 @@ async def _make_owned_project_with_full_member(test_db, owner_uid, member_uid):
 
 
 @pytest.mark.asyncio
-async def test_owner_can_toggle_is_public(client, test_db):
-    """The (non-admin) project owner may flip is_public → 200."""
+async def test_owner_cannot_add_public_row(client, test_db):
+    """The 'public' subject is admin-only: a non-admin
+    owner's add is refused and the project stays private."""
     owner_token = make_token("vis-owner-001", "owner", "user", "owner@vis.com")
     pid = await _make_owned_project_with_full_member(test_db, "vis-owner-001", "vis-member-001")
     resp = await client.patch(
-        f"/api/projects/{pid}", json={"is_public": True},
+        f"/api/projects/{pid}",
+        json={"audiences": [{"subject": "public", "access_level": "readonly"}]},
         cookies={"lore_session": owner_token},
     )
+    assert resp.status_code == 403
+    resp = await client.get(f"/api/projects/{pid}", cookies={"lore_session": owner_token})
     assert resp.status_code == 200
-    assert resp.json()["is_public"] is True
+    assert resp.json()["project"]["audiences"] == []
 
 
 @pytest.mark.asyncio
-async def test_full_not_owner_cannot_toggle_is_public(client, test_db):
-    """A full-access non-owner member gets 403 when is_public is in the PATCH body."""
+async def test_full_not_owner_cannot_write_audiences(client, test_db):
+    """A full-access non-owner member gets 403 when audiences is in the PATCH body."""
     member_token = make_token("vis-member-001", "member", "user", "member@vis.com")
     pid = await _make_owned_project_with_full_member(test_db, "vis-owner-001", "vis-member-001")
     resp = await client.patch(
-        f"/api/projects/{pid}", json={"is_public": True},
+        f"/api/projects/{pid}", json={"audiences": []},
         cookies={"lore_session": member_token},
     )
     assert resp.status_code == 403
@@ -680,7 +684,7 @@ async def test_full_not_owner_cannot_toggle_is_public(client, test_db):
 
 @pytest.mark.asyncio
 async def test_full_not_owner_can_edit_other_fields(client, test_db):
-    """Regression guard: only is_public is tightened — a full non-owner may still
+    """Regression guard: only audiences is tightened — a full non-owner may still
     edit name/project_context."""
     member_token = make_token("vis-member-001", "member", "user", "member@vis.com")
     pid = await _make_owned_project_with_full_member(test_db, "vis-owner-001", "vis-member-001")
@@ -718,7 +722,7 @@ async def test_ref_image_preview_defaults_true_and_patches(client, admin_user, p
 @pytest.mark.asyncio
 async def test_full_not_owner_can_toggle_ref_image_preview(client, test_db):
     """The gallery mode is a display preference, not an access decision — a full
-    non-owner member may flip it (unlike is_public)."""
+    non-owner member may flip it (unlike audiences)."""
     member_token = make_token("vis-member-002", "member", "user", "member2@vis.com")
     pid = await _make_owned_project_with_full_member(test_db, "vis-owner-002", "vis-member-002")
     resp = await client.patch(

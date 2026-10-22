@@ -38,6 +38,8 @@ ENV/
 
 # Environment variables
 .env
+# The bundled router's live config (holds the client key); router/config.example/ is the template
+/router/config/
 
 # OS
 .DS_Store

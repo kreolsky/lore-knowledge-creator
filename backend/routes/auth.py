@@ -4,7 +4,9 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from model_access import own_group_subject
 from password import verify_secret
+from project_members_service import group_roster
 from rate_limit import (
     check_login_device_rate_limit,
     check_login_email_rate_limit,
@@ -23,7 +25,7 @@ from auth import (
     set_device_cookie,
     set_session_cookie,
 )
-from db import extract_id, get_db
+from db import extract_id, fetch_one, get_db
 from models import LoginRequest, capability_flags
 
 logger = logging.getLogger(__name__)
@@ -75,6 +77,9 @@ async def login(body: LoginRequest, request: Request, response: Response, db: As
     # the UI's gear gate reads can_manage_users straight after login, before
     # any /me refresh, and must never compare role strings in TSX.
     payload.update(capability_flags(user["role"]))
+    # The caller's own group subject (roster invite picker, same shape as /me)
+    # — from the just-fetched row, so a group move lands on the next login.
+    payload["group_subject"] = own_group_subject(user_id, user["role"], user.get("moderator_id"))
     set_session_cookie(request, response, user_id, user["name"], user.get("email", ""), user["role"], token_version=tv)
     set_device_cookie(request, response, body.email)
     log_security("login_success", user_id=user_id, ip=client_ip)
@@ -114,7 +119,7 @@ async def me(request: Request, response: Response, user: dict = Depends(get_curr
     """
     try:
         rows = await db.query(
-            "SELECT pin_hash, token_version, role FROM type::record('users', $id)",
+            "SELECT pin_hash, token_version, role, moderator_id FROM type::record('users', $id)",
             {"id": user["user_id"]},
         )
         db_user = rows[0] if rows else {}
@@ -126,8 +131,36 @@ async def me(request: Request, response: Response, user: dict = Depends(get_curr
         if db_user and db_user.get("role"):
             user["role"] = db_user["role"]
         user.update(capability_flags(user.get("role")))
+        # Same freshness for the group pointer: moderator_id is re-read here, so
+        # a group move lands on the next /me, not at token expiry.
+        user["group_subject"] = own_group_subject(
+            user["user_id"], user.get("role"), db_user.get("moderator_id"),
+        )
     except Exception:
         logger.error("DB unavailable during /me for user %s", user["user_id"])
         return JSONResponse(status_code=503, content={"detail": "Service temporarily unavailable"})
     set_session_cookie(request, response, user["user_id"], user["name"], user.get("email", ""), user.get("role", "user"), token_version=tv)
     return user
+
+
+@router.get("/api/me/group-roster")
+async def my_group_roster(
+    user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db),
+):
+    """The caller's moderator group as [{user_id, name, email}] — the invite
+    picker's data source (a group-bound owner invites roster emails only,
+    require_group_scoped_invite). [] for an admin or a user without a group;
+    active rows only.
+
+    # INVARIANT(security): the roster relaxes anti-enumeration INSIDE the
+    # group only. Why: every listed account shares the caller's moderator —
+    # the same surface the group's admin panel already shows them — while a
+    # no-group or admin caller learns nothing (empty list, no oracle).
+    """
+    row = await fetch_one("users", user["user_id"])
+    if not row:
+        return []
+    return await group_roster(
+        db, user_id=user["user_id"],
+        role=row.get("role"), moderator_id=row.get("moderator_id"),
+    )

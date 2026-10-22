@@ -6,7 +6,7 @@ import pytest
 _REQUIRED_DOC_KEYS = {"document_id", "project_id", "title", "content", "path", "created_at", "updated_at"}
 _REQUIRED_REF_KEYS = {"reference_id", "project_id", "title", "media_type", "content", "created_at", "updated_at"}
 _REQUIRED_NOTE_KEYS = {"note_id", "content", "author_id", "created_at"}
-_REQUIRED_PROJECT_KEYS = {"project_id", "name", "index_doc_id", "owner_id", "is_public", "created_at"}
+_REQUIRED_PROJECT_KEYS = {"project_id", "name", "index_doc_id", "owner_id", "audiences", "created_at"}
 _REQUIRED_CHECKPOINT_KEYS = {"checkpoint_id", "document_id", "content", "label", "comment", "created_at"}
 _REQUIRED_API_KEY_KEYS = {"key_id", "label", "document_id", "created_at"}
 
@@ -240,17 +240,17 @@ async def test_patch_project_returns_resource(client, admin_user, project_with_d
 
 
 @pytest.mark.asyncio
-async def test_patch_project_toggle_public(client, admin_user, project_with_doc):
+async def test_patch_project_set_audiences(client, admin_user, project_with_doc):
     pid, _, _ = project_with_doc
     _, token = admin_user
     resp = await client.patch(
         f"/api/projects/{pid}",
-        json={"is_public": True},
+        json={"audiences": [{"subject": "public", "access_level": "readonly"}]},
         cookies={"lore_session": token},
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["is_public"] is True
+    assert data["audiences"] == [{"subject": "public", "access_level": "readonly"}]
     assert "success" not in data
 
 
@@ -335,7 +335,7 @@ async def test_create_project_returns_full_record(client, admin_user):
     _assert_has_keys(data, _REQUIRED_PROJECT_KEYS)
     assert data["name"] == "New Project"
     assert data["my_access"] == "full"
-    assert data["is_public"] is False
+    assert data["audiences"] == []
     assert data["owner_id"] is not None
     assert data["index_doc_id"] is not None
 

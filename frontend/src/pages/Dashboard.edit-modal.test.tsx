@@ -24,7 +24,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     last_accessed_doc_id: 'd1',
     owner_id: 'u2',
     owner_name: null,
-    is_public: false,
+    audiences: [],
     my_access: 'full',
     created_at: '2026-01-01T00:00:00Z',
     members_count: 0,

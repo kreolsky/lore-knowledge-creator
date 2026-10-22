@@ -20,6 +20,7 @@ from project_members_service import (
     delete_member,
     list_admin_members,
     list_members_full,
+    require_group_scoped_invite,
     require_moderator_scope,
     set_member_level,
     upsert_member,
@@ -27,7 +28,7 @@ from project_members_service import (
 from surrealdb import AsyncSurreal
 
 import event_bus
-from access import require_project_owner
+from access import recompute_project_access, require_project_owner
 from auth import get_current_user, require_user_manager_role
 from db import fetch_one, get_db
 from models import (
@@ -80,7 +81,12 @@ async def set_project_member(
     await upsert_member(
         db, project_id=project_id, user_id=body.user_id, access_level=body.access_level,
     )
-    await event_bus.emit("access_changed", project_id=project_id, user_id=body.user_id, access=body.access_level)
+    # RECOMPUTED level (a group/public grant may hold the effective level above
+    # the row just written) — same contract as every member-mutation emit here.
+    await event_bus.emit(
+        "access_changed", project_id=project_id, user_id=body.user_id,
+        access=await recompute_project_access(project_id, body.user_id),
+    )
     return {"success": True}
 
 
@@ -139,7 +145,13 @@ async def remove_project_member(
     if project and user_id == project.get("owner_id"):
         raise HTTPException(status_code=400, detail="Owner is not a member")
     await delete_member(db, project_id=project_id, user_id=user_id)
-    await event_bus.emit("access_changed", project_id=project_id, user_id=user_id, access=None)
+    # RECOMPUTED, never a guessed None: the removed row may leave a group
+    # audience or public grant, in which case the user still holds access and
+    # must be downgraded to it, not evicted.
+    await event_bus.emit(
+        "access_changed", project_id=project_id, user_id=user_id,
+        access=await recompute_project_access(project_id, user_id),
+    )
     return {"success": True}
 
 
@@ -155,6 +167,9 @@ async def _silent_invite(
 
     # WHY: Silent invite — identical response whether the email is registered or queued.
     # Why: prevents enumeration of registered users via the invite endpoint.
+    # A group-bound owner never reaches here with a foreign email — the roster
+    # gate (require_group_scoped_invite) refuses it upstream with a loud 403,
+    # so this contract covers the admin and no-group paths only.
     """
     from routes._access_grants import grant_or_queue
     return await grant_or_queue(
@@ -181,12 +196,17 @@ async def get_members(project_id: str, user: dict = Depends(get_current_user), d
 @router.post("/api/projects/{project_id}/members")
 async def invite_member(
     project_id: str, body: InviteMember, user: dict = Depends(get_current_user),
+    db: AsyncSurreal = Depends(get_db),
 ):
-    """Owner-only: invite by email (silent). 200 + {queued: true} regardless of whether the email is registered."""
+    """Owner-only: invite by email. A group-bound owner (a non-admin with a
+    group, or a moderator) invites roster emails only — 403 outside the group,
+    nothing queued (require_group_scoped_invite); admin and no-group owners
+    keep the silent free-text invite."""
     project = await fetch_one("projects", project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     await require_project_owner(project, user)
+    await require_group_scoped_invite(db, owner=user, email=body.email)
     return await _silent_invite(
         project_id=project_id, body=body, owner_uid=user["user_id"],
     )
@@ -207,7 +227,11 @@ async def patch_member(
         db, project_id=project_id, user_id=user_id, access_level=body.access_level,
     ):
         raise HTTPException(status_code=404, detail="Member not found")
-    await event_bus.emit("access_changed", project_id=project_id, user_id=user_id, access=body.access_level)
+    # RECOMPUTED level — see set_project_member.
+    await event_bus.emit(
+        "access_changed", project_id=project_id, user_id=user_id,
+        access=await recompute_project_access(project_id, user_id),
+    )
     return {"success": True}
 
 
@@ -226,7 +250,11 @@ async def remove_member(
     if user_id == project.get("owner_id"):
         raise HTTPException(status_code=400, detail="Owner cannot be removed; transfer ownership instead")
     await delete_member(db, project_id=project_id, user_id=user_id)
-    await event_bus.emit("access_changed", project_id=project_id, user_id=user_id, access=None)
+    # RECOMPUTED, never a guessed None — see remove_project_member.
+    await event_bus.emit(
+        "access_changed", project_id=project_id, user_id=user_id,
+        access=await recompute_project_access(project_id, user_id),
+    )
     return {"success": True}
 
 

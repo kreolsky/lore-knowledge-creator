@@ -9,6 +9,9 @@ import type { ChangeEventHandler, KeyboardEventHandler, FocusEventHandler, Mouse
 
 interface FieldInputProps {
   className?: string;
+  // Sits on a surface2 panel: takes the lighter surface tone so it still reads as a field;
+  // the border takes it too, so the fill spans the full height beside an lg Button.
+  onPanel?: boolean;
   value?: string;
   defaultValue?: string;
   onChange?: ChangeEventHandler<HTMLInputElement>;
@@ -30,6 +33,9 @@ interface FieldTextareaProps {
   className?: string;
   // Swaps the locked neutral surface for warm (AI zero-chat experiment).
   highlight?: boolean;
+  // Sits on a surface2 panel: takes the lighter surface tone so it still reads as a field;
+  // the border takes it too, so the fill spans the full height beside an lg Button.
+  onPanel?: boolean;
   // Monospace, smaller text — for code-like values (a pasted JSON workflow).
   mono?: boolean;
   value?: string;
@@ -53,19 +59,20 @@ const textareaCls =
   `${inputCls} resize-y min-h-[80px] leading-[1.55]`;
 
 export const FieldInput = forwardRef<HTMLInputElement, FieldInputProps>(
-  function FieldInput({ className, ...props }, ref) {
+  function FieldInput({ className, onPanel, ...props }, ref) {
     // h-[37px] pins the fractional box (font: inherit → 37.1px) so a Button
     // size="lg" beside it (same 37px) lines up exactly. Inputs only — the
     // textarea keeps its content-driven height.
-    return <input ref={ref} className={`${inputCls} h-[37px]${className ? ` ${className}` : ' w-full'}`} {...props} />;
+    const bg = onPanel ? ' !bg-surface !border-surface' : '';
+    return <input ref={ref} className={`${inputCls} h-[37px]${bg}${className ? ` ${className}` : ' w-full'}`} {...props} />;
   },
 );
 
 export const FieldTextarea = forwardRef<HTMLTextAreaElement, FieldTextareaProps>(
-  function FieldTextarea({ className, highlight, mono, ...props }, ref) {
+  function FieldTextarea({ className, highlight, onPanel, mono, ...props }, ref) {
     const bg = highlight
       ? ' !bg-[var(--zero-chat-field-bg)] !border-[var(--warm-sep)]'
-      : '';
+      : onPanel ? ' !bg-surface !border-surface' : '';
     const font = mono ? ' font-mono !text-xs' : '';
     return <textarea ref={ref} className={`${textareaCls}${bg}${font}${className ? ` ${className}` : ' w-full'}`} {...props} />;
   },

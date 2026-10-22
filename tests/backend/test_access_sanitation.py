@@ -65,7 +65,8 @@ async def public_project(test_db, owner_user):
     await test_db.query("DELETE project_members WHERE project_id = $p", {"p": pid})
     await create_record("projects", pid, {
         "name": "Public", "status": "active", "project_context": "",
-        "owner_id": owner_uid, "is_public": True,
+        "owner_id": owner_uid,
+        "audiences": [{"subject": "public", "access_level": "readonly"}],
     })
     await create_record("documents", did, {
         "project_id": pid, "parent_id": None,
@@ -263,14 +264,30 @@ async def test_public_viewer_last_doc_resumes_on_reads(
 
 @pytest.mark.asyncio
 async def test_public_viewer_access_revoked_when_project_private(
-    client, public_project, stranger_user,
+    client, public_project, stranger_user, admin_user,
 ):
     pid, did, _, owner_token = public_project
     _, s_token = stranger_user
+    _, admin_token = admin_user
     await client.get(f"/api/documents/{did}?track=1", cookies={"lore_session": s_token})
-    await client.patch(
-        f"/api/projects/{pid}", json={"is_public": False},
+    # The public row is removable by the owner too (ruling: narrowing one's own
+    # project never weakens security) and by the admin — both revoke the viewer.
+    resp = await client.patch(
+        f"/api/projects/{pid}", json={"audiences": []},
         cookies={"lore_session": owner_token},
+    )
+    assert resp.status_code == 200
+    resp = await client.get(f"/api/documents/{did}", cookies={"lore_session": s_token})
+    assert resp.status_code == 404
+    # re-add (admin), then the admin removal revokes again
+    await client.patch(
+        f"/api/projects/{pid}",
+        json={"audiences": [{"subject": "public", "access_level": "readonly"}]},
+        cookies={"lore_session": admin_token},
+    )
+    await client.patch(
+        f"/api/projects/{pid}", json={"audiences": []},
+        cookies={"lore_session": admin_token},
     )
     resp = await client.get(f"/api/documents/{did}", cookies={"lore_session": s_token})
     assert resp.status_code == 404

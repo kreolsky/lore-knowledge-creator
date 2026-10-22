@@ -63,26 +63,6 @@ describe('ChatComposer — scroll-to-bottom button', () => {
   });
 });
 
-describe('ChatComposer — previous-user-message button', () => {
-  const up = (host: HTMLElement) => host.querySelector<HTMLButtonElement>('button[aria-label="scrollToPrevUserMessage"]');
-
-  it('is absent without a handler (note chat, or no user message above)', () => {
-    const { host, unmount } = mount({ onScrollToBottom: () => {} });
-    expect(up(host)).toBeNull();
-    unmount();
-  });
-
-  it('sits ABOVE the scroll-to-bottom button and calls its handler', () => {
-    const onScrollToPrevUser = vi.fn();
-    const { host, unmount } = mount({ onScrollToBottom: () => {}, onScrollToPrevUser });
-    const btn = up(host)!;
-    expect(btn.compareDocumentPosition(button(host)!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    act(() => btn.click());
-    expect(onScrollToPrevUser).toHaveBeenCalledTimes(1);
-    unmount();
-  });
-});
-
 describe('ChatComposer — Escape cancels one thing per press, voice before the turn', () => {
   const press = (target: Element, init: KeyboardEventInit = {}) => {
     const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true, ...init });

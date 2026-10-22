@@ -14,6 +14,7 @@ from model_access import drop_moderator_grants
 from password import hash_secret
 from surrealdb import AsyncSurreal
 
+import event_bus
 from auth import (
     bump_token_version,
     get_current_user,
@@ -116,6 +117,38 @@ def _manager_field_updates(body: UpdateUserAdmin) -> dict:
     if body.password is not None:
         updates["password_hash"] = hash_secret(body.password)
     return updates
+
+
+async def _emit_audience_recomputes(
+    db: AsyncSurreal, target: dict, updates: dict, user_id: str,
+) -> None:
+    """Project-wide access_changed for every project carrying an audience row
+    whose subject this admin write moved the target into or out of.
+
+    A `moderator_id` change moves the target between moderator groups, and a
+    moderator role transition grants/drops the target's own `mod:<uid>`
+    subject — both leave projects whose `audiences` carry an affected subject
+    with stale connected clients. The project-wide emit (user_id=None)
+    recomputes each such project's clients from the just-written rows.
+    """
+    subjects: set[str] = set()
+    if "moderator_id" in updates:
+        for mid in (target.get("moderator_id"), updates["moderator_id"]):
+            if mid:
+                subjects.add(f"mod:{mid}")
+    new_role = updates.get("role", target.get("role"))
+    if (target.get("role") == "moderator") != (new_role == "moderator"):
+        subjects.add(f"mod:{user_id}")
+    for subject in subjects:
+        rows = await db.query(
+            "SELECT VALUE meta::id(id) FROM projects "
+            "WHERE audiences.subject CONTAINS $s AND deleted_at IS NONE",
+            {"s": subject},
+        )
+        for pid in rows or []:
+            await event_bus.emit(
+                "access_changed", project_id=pid, user_id=None, access=None,
+            )
 
 
 async def _apply_user_updates(db: AsyncSurreal, user_id: str, updates: dict) -> dict:
@@ -324,6 +357,9 @@ async def patch_user_admin(user_id: str, body: UpdateUserAdmin, current_user: di
     # new role (role overlay in auth.get_current_user).
     if "role" in updates:
         await refresh_user_role_cache(user_id)
+    # AFTER all writes: a group move / moderator role change may have changed
+    # audience-derived access on other projects — recompute their live clients.
+    await _emit_audience_recomputes(db, target, updates, user_id)
     return (await _with_names(db, [serialize_record(row, "user_id")]))[0]
 
 

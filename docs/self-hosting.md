@@ -95,6 +95,66 @@ location /api/widget/ {
 
 If one browser (usually Safari) cannot open projects behind the password while others can, turn it off for `/ws/` as well. Every WebSocket requires a Lore session and project access on its own.
 
+## Bundled LLM router
+
+Lore talks to any OpenAI-compatible API. If you do not have one, the install can run ours next to Lore: [llm-api-gateway](https://github.com/kreolsky/llm-api-gateway), one endpoint in front of Anthropic, DeepSeek, OpenRouter, Kimi, z.ai and any other OpenAI-compatible provider, with its own keys and a usage page. It is off until you switch it on, and it is configured by YAML files on the host.
+
+1. Fetch the example config next to `docker-compose.yml`:
+
+   ```sh
+   mkdir -p router/config
+   for f in providers.yaml models.yaml model_info.yaml user_keys.yaml; do
+     curl -fsSL -o "router/config/$f" "https://raw.githubusercontent.com/kreolsky/lore-knowledge-creator/main/router/config.example/$f"
+   done
+   curl -fsSL -o router/.env https://raw.githubusercontent.com/kreolsky/lore-knowledge-creator/main/router/.env.example
+   ```
+
+2. Providers — in `router/config/providers.yaml` delete every provider you have no API key for. Then in `router/config/models.yaml` and `router/config/model_info.yaml` delete every model whose `provider:` is no longer in `providers.yaml`. Put the key of each provider you kept into `router/.env` (`DEEPSEEK_API_KEY=sk-...`) and delete the lines of the others. An empty value (`ANTHROPIC_API_KEY=`) counts as no key: the router refuses to start and its log names the provider.
+
+3. The key Lore uses — mint one (this works before step 4):
+
+   ```sh
+   docker compose run --rm --no-deps router python scripts/generate_key.py
+   ```
+
+   It prints one line starting with `nnp-v1-`. Replace `REPLACE-with-a-generated-key` in `router/config/user_keys.yaml` with that whole line.
+
+4. Switch it on — add to Lore's `.env`, `AI_API_KEY` being the same line as in step 3:
+
+   ```sh
+   COMPOSE_PROFILES=router
+   AI_API_URL=http://router:8000/v1
+   AI_API_KEY=<the line step 3 printed>
+   ```
+
+5. Pick the model — the name Lore asks for is a key under `models:` in `router/config/models.yaml` (`deepseek/flash`), never its `provider_model_name` (`deepseek-v4-flash`). Add it to the same `.env`:
+
+   ```sh
+   CHAT_MODEL=deepseek/flash
+   ```
+
+   Then `docker compose up -d`. If **Admin panel → Models & APIs** already holds an API URL, key or chat model, it wins over `.env`: set it to the same values there. The example config serves chat models only; speech-to-text and embeddings need their own endpoint or models you add to the router.
+
+6. Check — run all three, in the directory with `docker-compose.yml`:
+
+   ```sh
+   docker compose ps router                # STATUS shows (healthy)
+   docker compose logs router --tail 30    # no ERROR lines
+   docker compose exec backend python -c "import os, urllib.request as u; print(u.urlopen(u.Request('http://router:8000/v1/models', headers={'Authorization': 'Bearer ' + os.environ['AI_API_KEY']})).status)"   # prints 200
+   ```
+
+| Symptom | Cause |
+|---|---|
+| `up` stops at `bind source path does not exist` | `router/config/` missing — step 1 |
+| router restarts, log names providers | a provider left in `providers.yaml` has no key in `router/.env` — step 2 |
+| the check prints `HTTP Error 401` | `AI_API_KEY` in `.env` differs from `api_key` in `user_keys.yaml` — step 3 |
+| the agent answers *No chat model is set* | step 5 skipped, or the admin panel holds an empty value |
+| one model fails, others work | its `provider:` was deleted from `providers.yaml` — step 2 |
+
+The router re-reads its YAML every 5 seconds, so later edits to `router/config/` need no restart; edits to `router/.env` need `docker compose up -d router`. The file format is in the router's [README → Configuration](https://github.com/kreolsky/llm-api-gateway#configuration). The router has no port on the host; Lore reaches it inside the install.
+
+The router version is pinned in `docker-compose.yml` and moves with Lore releases; to pin it yourself, set `ROUTER_VERSION=X.Y.Z` in `.env`. A Lore release that moves it updates the examples in `router/config.example/` too — compare them with your copy when the release note says the config format changed.
+
 ## Updates and rollback
 
 Update as [README → Update](../README.md#update) describes. Take a backup first ([README → Data and backups](../README.md#data-and-backups)): database migrations run automatically when the new version starts, and they run forward only.

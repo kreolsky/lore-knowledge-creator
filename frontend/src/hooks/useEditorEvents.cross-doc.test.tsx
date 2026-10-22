@@ -45,7 +45,7 @@ let root: Root;
 beforeEach(() => {
   navigateSpy.mockReset();
   useAppStore.setState({
-    currentProject: { project_id: 'p1', name: 'P', status: 'active', project_context: '', index_doc_id: 'root', voice_recording_doc_id: null, last_accessed_doc_id: null, owner_id: null, is_public: false, my_access: 'full', created_at: NOW },
+    currentProject: { project_id: 'p1', name: 'P', status: 'active', project_context: '', index_doc_id: 'root', voice_recording_doc_id: null, last_accessed_doc_id: null, owner_id: null, audiences: [], my_access: 'full', created_at: NOW },
     documents: [mkDoc('doc-child'), mkDoc('doc-parent')],
     currentDocument: mkDoc('doc-child'),
     currentReference: null,

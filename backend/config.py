@@ -807,7 +807,7 @@ _section("search", "Web search")
 # install's empty DeepSeek key fails loudly instead.
 WEB_SEARCH_PROVIDER = setting(
     "WEB_SEARCH_PROVIDER", str, default="deepseek",
-    choices=("deepseek", "brave", "tavily", "searxng", "perplexity"),
+    choices=("deepseek", "brave", "tavily", "searxng", "perplexity", "router"),
     label="Search provider",
     help="The one provider behind the agent's web_search tool; it is always "
          "offered — a provider with an empty key/URL fails every search "
@@ -859,6 +859,22 @@ PERPLEXITY_SEARCH_TYPE = setting(
     help="fast: lower latency and cost ($1 per 1k requests) — right for agent "
          "lookups. web: the full search ($5 per 1k) for hard or ambiguous "
          "questions. Applies from the next message.",
+)
+# WHY the model is the router's credential: the router already holds the
+# upstream key and the egress (a per-provider proxy where the install needs
+# one), so searching through it needs no second key in Lore — only which of
+# its models runs the search.
+WEB_SEARCH_MODEL = setting(
+    "WEB_SEARCH_MODEL", str, fallback=("CHAT_MODEL",),
+    visible_if=("WEB_SEARCH_PROVIDER", "router"),
+    label="Web search model",
+    help="Used when the provider is router: a model key of the AI API router "
+         "(the AI API base URL and key above) that speaks the Anthropic "
+         "Messages API and whose upstream runs native web search — Claude via "
+         "api.anthropic.com (web search must be enabled for the organization "
+         "in Console) or DeepSeek's Anthropic endpoint. Each search is one "
+         "model call plus the upstream's per-search fee. Empty = the default "
+         "chat model. Applies from the next message.",
 )
 
 

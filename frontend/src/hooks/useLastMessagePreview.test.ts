@@ -30,7 +30,7 @@ function makeProject(project_id: string): Project {
     voice_recording_doc_id: null,
     last_accessed_doc_id: null,
     owner_id: null,
-    is_public: false,
+    audiences: [],
     my_access: 'full',
     created_at: '2024-01-01T00:00:00Z',
   };

@@ -289,12 +289,12 @@ async def record_doc_open(db, user: dict, project_id: str, document_id: str) -> 
     into GET /members). Read back per-role in projects._enrich_projects /
     get_project.
 
-    INVARIANT(security): a public-project viewer with NO explicit membership must
-    NOT get a project_members row. Why: public read access is purely
-    computed (access.get_project_access is_public branch) and never
+    INVARIANT(security): a public-audience viewer with NO explicit membership must
+    NOT get a project_members row. Why: audience access is purely
+    computed (access.get_project_access audience rows) and never
     materialized — a 'readonly' row would (a) pollute GET /members with
     people the owner never invited, and (b) persist access after the
-    project is made private. The viewer's last-doc lives in
+    audience row is removed. The viewer's last-doc lives in
     user_preferences (per-user/per-project UI-state table), decoupling
     UI state from access.
     """

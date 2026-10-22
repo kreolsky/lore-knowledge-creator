@@ -96,7 +96,7 @@ async def test_instance_admin_without_member_row_is_not_root(client, test_db, ad
     resp = await client.post("/api/projects", json={"name": "Users Own"}, cookies={"lore_session": user_token})
     assert resp.status_code in (200, 201), resp.text
     pid = resp.json()["project_id"]
-    await test_db.query("UPDATE type::record('projects', $id) SET is_public = true", {"id": pid})
+    await test_db.query("UPDATE type::record('projects', $id) SET audiences = [{subject: 'public', access_level: 'readonly'}]", {"id": pid})
     theme, cfg, tgt = await _binding_docs(client, pid, user_token)
 
     resp = await _put(client, admin_token, theme, cfg, tgt, kind="digest", subject_user_ids=[user_uid])

@@ -2,7 +2,13 @@
 // SYSTEM: access-api — owner-gated REST wrappers for project members and pending invites (members in ProjectSettingsPanel under the Access tab).
 
 import { apiClient } from './client';
-import type { AccessLevel, ProjectMember } from '../types';
+import type { AccessLevel, GroupRosterEntry, ProjectMember } from '../types';
+
+/** The caller's moderator group as a pick list — the invite picker's source
+ * for a group-bound owner (backend group_roster; [] for an admin / no group). */
+export async function fetchGroupRoster(): Promise<GroupRosterEntry[]> {
+  return apiClient.get('/me/group-roster');
+}
 
 export async function listMembers(projectId: string): Promise<ProjectMember[]> {
   const data = await apiClient.get(`/projects/${projectId}/members`);

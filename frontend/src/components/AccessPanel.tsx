@@ -2,9 +2,10 @@
  * AccessPanel — unified access management for the current project + document.
  *
  * SYSTEM: access-panel — the project's access surfaces in one right-tab:
- *   1. General access — project `is_public` toggle + anonymous-link share manager.
- *      Read-only by invariant for everyone-except-owner; the backend enforces
- *      owner-only mint/revoke.
+ *   1. General access — anonymous-link share manager (the project's audiences
+ *      live in the settings panel's AudienceSection). Read-only by invariant
+ *      for everyone-except-owner; the backend enforces owner-only
+ *      mint/revoke.
  *   2. Move — move the current document to another project.
  *   3. Inbox — per-(user × document) arrival-notify toggles (SYSTEM: inbox).
  *   4. API — widget/agent keys + transcription agent config for the current

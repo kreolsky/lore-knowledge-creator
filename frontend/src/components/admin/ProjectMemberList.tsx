@@ -96,6 +96,7 @@ export function ProjectMemberList({ members, users, ownerId, ownerName, projectI
             <Dropdown
               placement="bottom"
               align="right"
+              variant="panel"
               title={t('userAccess')}
               value={access}
               options={[
@@ -124,11 +125,13 @@ export function ProjectMemberList({ members, users, ownerId, ownerName, projectI
               and every pick grants read-only (raise it in the row above). */}
           <Dropdown
             placement="bottom"
+            variant="panel"
             triggerLabel={t('addUserPlaceholder')}
             title={t('addUserPlaceholder')}
             value=""
             disabled={!available.length}
-            options={available.map(u => ({ value: u.user_id, label: u.name }))}
+            options={available.map(u => ({ value: u.user_id, label: u.name, note: u.email }))}
+            filterPlaceholder={t('accessInviteFilterPlaceholder')}
             onSelect={uid => onSetAccess(projectId, uid, 'readonly')}
           />
         </div>

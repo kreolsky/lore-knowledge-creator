@@ -1,0 +1,37 @@
+# Upstream LLM providers. Copied from the router repo (kreolsky/llm-api-gateway,
+# config/providers.yaml) at the release named by ROUTER_VERSION in Lore's
+# docker-compose.yml. Delete the providers you do not use: every api_key_env
+# left here must be set in router/.env, or the router refuses to start.
+# Format: README of the router repo → Configuration.
+providers:
+  glm:
+    type: openai
+    base_url: https://api.z.ai/api/coding/paas/v4
+    api_key_env: ZAI_API_KEY
+    identity: passthrough # forward client headers minus the denylist (core/header_policy.py); unset = plain gateway headers
+    reasoning_dialect: deepseek # z.ai speaks the thinking + reasoning_effort wire shape natively
+  deepseek:
+    type: openai # OpenAI-compatible API
+    base_url: https://api.deepseek.com/v1
+    api_key_env: DEEPSEEK_API_KEY
+    reasoning_dialect: deepseek # native: thinking + reasoning_effort both stay on the wire
+  deepseek-anthropic:
+    type: anthropic # native Anthropic Messages protocol -> POST {base_url}/v1/messages
+    base_url: https://api.deepseek.com/anthropic
+    api_key_env: DEEPSEEK_API_KEY
+  anthropic:
+    type: anthropic # native Anthropic Messages protocol -> POST {base_url}/v1/messages
+    base_url: https://api.anthropic.com
+    api_key_env: ANTHROPIC_API_KEY
+  kimi:
+    type: openai
+    base_url: https://api.moonshot.ai/v1
+    api_key_env: KIMI_API_KEY
+  openrouter:
+    type: openai
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+    reasoning_dialect: openrouter # re-nest effort to reasoning.effort / {enabled: false}
+    headers:
+      HTTP-Referer: "https://example.com" # your site; OpenRouter shows it in its app rankings
+      X-Title: "Lore"

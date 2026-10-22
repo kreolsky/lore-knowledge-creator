@@ -109,10 +109,16 @@ export function Popover({
 
   // Focus the panel on open so it captures keydown, and seed the keyboard
   // cursor (e.g. Dropdown seeds it to the currently-selected value).
+  // WHY the contains-check: a field inside the panel (the filterable Dropdown's
+  // filter input) already holds focus and its keydown bubbles here — stealing
+  // it would end typing after the first keystroke that re-seeds the cursor.
   useEffect(() => {
     if (!open) return;
     setActiveIndexState(seedIndex);
-    const id = requestAnimationFrame(() => panelRef.current?.focus());
+    const id = requestAnimationFrame(() => {
+      const panel = panelRef.current;
+      if (panel && !panel.contains(document.activeElement)) panel.focus();
+    });
     return () => cancelAnimationFrame(id);
   }, [open, seedIndex]);
 

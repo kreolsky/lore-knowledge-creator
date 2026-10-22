@@ -1,0 +1,52 @@
+# Model ids clients (Lore) ask for, mapped to a provider from providers.yaml.
+# Delete the models whose provider you deleted.
+models:
+  deepseek/flash:
+    provider: deepseek
+    provider_model_name: deepseek-v4-flash
+    reasoning_effort:
+      allowed: [low, high, max]       # values permitted to reach the upstream
+      param: reasoning_effort         # wire location: reasoning_effort | reasoning.effort
+  deepseek/pro:
+    provider: deepseek
+    provider_model_name: deepseek-v4-pro
+    reasoning_effort:
+      allowed: [low, high, max]
+      param: reasoning_effort
+  deepseek-a/flash:
+    provider: deepseek-anthropic
+    provider_model_name: deepseek-v4-flash
+    # Advertisement only on the Anthropic wire: /v1/capabilities and /v1/models
+    # render these effort_levels, but nothing is gated or injected on
+    # /v1/messages (the policy gate is OpenAI-wire surgery). `param` is
+    # ignored for anthropic-type models.
+    reasoning_effort:
+      allowed: [low, high, max]
+  # Anthropic-type models: the effort list below is advertisement only (see deepseek-a/flash).
+  claude/haiku:
+    provider: anthropic
+    provider_model_name: claude-haiku-5-5
+    reasoning_effort:
+      allowed: [low, medium, high, xhigh, max]
+  claude/sonnet:
+    provider: anthropic
+    provider_model_name: claude-sonnet-5-5
+    reasoning_effort:
+      allowed: [low, medium, high, xhigh, max]
+  claude/opus:
+    provider: anthropic
+    provider_model_name: claude-opus-5-5
+    reasoning_effort:
+      allowed: [low, medium, high, xhigh, max]
+  gemini/mini:
+    provider: openrouter
+    provider_model_name: google/gemini-3.5-flash-lite
+    reasoning_effort:
+      allowed: [minimal]              # mini stays mini: OpenRouter's lowest effort only
+      param: reasoning.effort
+  kimi:
+    provider: kimi
+    provider_model_name: kimi-k2.7-code
+    reasoning_effort:
+      allowed: [low, high]
+      param: reasoning_effort

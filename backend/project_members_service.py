@@ -12,9 +12,11 @@ the queries it guards, so its 404s are raised here.
 from uuid import uuid4
 
 from fastapi import HTTPException
+from model_access import own_group_moderator_uid, own_group_subject
 from surrealdb import AsyncSurreal
 
-from db import create_record, extract_id, record_refs, serialize_record
+from access import get_user_by_email, is_instance_admin
+from db import create_record, extract_id, fetch_one, record_refs, serialize_record
 
 
 async def group_member_ids(db: AsyncSurreal, moderator_uid: str) -> list[str]:
@@ -55,6 +57,75 @@ async def require_moderator_scope(
         raise HTTPException(status_code=404, detail="Project not found")
     if target_uid is not None and target_uid not in allowed:
         raise HTTPException(status_code=404, detail="User not found")
+
+
+async def group_roster(
+    db: AsyncSurreal, *, user_id: str, role: str | None, moderator_id: str | None,
+) -> list[dict]:
+    """The caller's moderator group as [{user_id, name, email}]: the moderator
+    plus active members, minus self. [] for an admin or a user without a group.
+
+    The invite-roster source (GET /api/me/group-roster) and the invite gate's
+    boundary (require_group_scoped_invite) — one definition of "inside my
+    group". Relaxes anti-enumeration INSIDE the group only: every listed
+    account shares the caller's moderator, a surface the group already sees.
+    """
+    mod_uid = own_group_moderator_uid(user_id, role, moderator_id)
+    if not mod_uid:
+        return []
+    rows = await db.query(
+        "SELECT meta::id(id) AS user_id, name, email FROM users "
+        "WHERE moderator_id = $mid AND deleted_at IS NONE",
+        {"mid": mod_uid},
+    )
+    roster = [
+        {"user_id": r["user_id"], "name": r.get("name", ""), "email": r.get("email", "")}
+        for r in (rows or [])
+        if r["user_id"] != user_id
+    ]
+    if mod_uid != user_id:
+        moderator = await fetch_one("users", mod_uid)
+        if moderator:
+            roster.append({
+                "user_id": mod_uid,
+                "name": moderator.get("name", ""),
+                "email": moderator.get("email", ""),
+            })
+    return roster
+
+
+async def require_group_scoped_invite(
+    db: AsyncSurreal, *, owner: dict, email: str,
+) -> None:
+    """403 'Only members of your group' when a group-bound non-admin owner
+    invites an email outside their roster; no-op for an admin or a no-group
+    owner.
+
+    Keyed on group MEMBERSHIP (own_group_subject), not on the roster being
+    non-empty: a dead group's last member still cannot invite past the
+    boundary — the roster picker and this gate must agree on who is bound.
+
+    # INVARIANT(security): a group-bound owner invites roster emails only, and
+    # nothing is queued on refusal. Why: the group is the sharing boundary the
+    # operator chose — a free-text invite would leak the project past it, and
+    # a queued pending row would mint access when the email registers later.
+    """
+    if is_instance_admin(owner):
+        return
+    row = await fetch_one("users", owner["user_id"])
+    role = row.get("role") if row else None
+    moderator_id = row.get("moderator_id") if row else None
+    if own_group_subject(owner["user_id"], role, moderator_id) is None:
+        return
+    roster = await group_roster(
+        db, user_id=owner["user_id"], role=role, moderator_id=moderator_id,
+    )
+    target = await get_user_by_email(email)
+    target_uid = None
+    if target:
+        target_uid = target.get("user_id") or extract_id(target.get("id"))
+    if target_uid is None or target_uid not in {r["user_id"] for r in roster}:
+        raise HTTPException(status_code=403, detail="Only members of your group")
 
 
 async def list_admin_members(

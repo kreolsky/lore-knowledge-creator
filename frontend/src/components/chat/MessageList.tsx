@@ -15,6 +15,8 @@ import { emit, on, off } from '../../events';
 import type { Document } from '../../types';
 import { copyWithToast } from './shared/copy';
 import { locateSnippet } from './locate-snippet';
+import { PromptRail, type PromptRailItem } from './PromptRail';
+import { anchorContentTop, userLanding, userRows } from './scroll-geometry';
 
 // Distance from bottom (px) below which we consider the user "at bottom" and keep
 // auto-scrolling. Must be large enough to tolerate temporary scroll-height spikes
@@ -24,34 +26,6 @@ import { locateSnippet } from './locate-snippet';
 // removed the catch-up window this epsilon was tuned for; narrowing it is a
 // separate task.
 const STICK_EPSILON = 80;
-
-// Content-space top of `anchor` relative to the scroll container's content box.
-// Rect deltas normalized by scrollTop cancel user scrolling between passes and do
-// not depend on which ancestor happens to be the anchor's offsetParent.
-function anchorContentTop(el: HTMLElement, anchor: HTMLElement): number {
-  return anchor.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
-}
-
-// Gap left above a user message the up-jump lands on (the list's own py-3).
-const USER_JUMP_GAP = 12;
-// A landing within this many px of the current scrollTop is "here", not "above" —
-// scrollTop reads back rounded, and a repeat click must step past the row it is on.
-const USER_JUMP_SLACK = 2;
-
-// The branch's user-message rows, top-down.
-function userRows(el: HTMLElement, userIds: Set<string>): HTMLElement[] {
-  return Array.from(el.querySelectorAll<HTMLElement>('[data-message-id]'))
-    .filter(node => userIds.has(node.dataset.messageId ?? ''));
-}
-
-// The scrollTop that puts `row` at the top of the viewport, below the gap.
-function userLanding(el: HTMLElement, row: HTMLElement): number {
-  return Math.max(0, anchorContentTop(el, row) - USER_JUMP_GAP);
-}
-
-function isAbove(el: HTMLElement, landing: number): boolean {
-  return landing < el.scrollTop - USER_JUMP_SLACK;
-}
 
 // WHY the Web Animations API, not a class: a one-off fade on the landed
 // passage needs no stylesheet rule (jsdom has no `animate`, hence the guard).
@@ -250,13 +224,17 @@ export function MessageList() {
     });
   }, [basePath, streaming]);
 
-  // User-message ids on the rendered branch — the up-jump's stops.
-  // WHY a ref: setAway/handleScroll read it without changing identity, and setAway
-  // is a dep of the session-switch snap below (a new identity would re-snap).
-  // Declared before the scroll layout effects so they see this commit's path.
-  const userIdsRef = useRef<Set<string>>(new Set());
-  useLayoutEffect(() => {
-    userIdsRef.current = new Set(activePath.filter(m => m.role === 'user').map(m => m.message_id));
+  // The rail's stops: every user message of the branch, with the assistant
+  // reply that follows it (before the next user message) as its preview.
+  const railItems = useMemo<PromptRailItem[]>(() => {
+    const out: PromptRailItem[] = [];
+    for (const m of activePath) {
+      if (m.role === 'user') out.push({ id: m.message_id, prompt: m.content, answer: '' });
+      else if (m.role === 'assistant' && out.length > 0 && !out[out.length - 1].answer) {
+        out[out.length - 1].answer = m.content;
+      }
+    }
+    return out;
   }, [activePath]);
 
   // Place the switcher (see SYSTEM: chat-branch-sessions): for every fork
@@ -343,17 +321,13 @@ export function MessageList() {
   // (new message / user turn) owned by the smooth glide effect below.
   const prevPathLenRef = useRef<number | null>(null);
 
-  // Last "scrolled away" value broadcast to the composer's scroll buttons, with
-  // whether a user message lies above the view (whether the up button shows).
+  // Last "scrolled away" value broadcast to the composer's scroll-to-bottom button.
   // WHY: a ref + event, not state — a scroll must not re-render the message list.
-  const awayRef = useRef({ away: false, userAbove: false });
+  const awayRef = useRef(false);
   const setAway = useCallback((away: boolean) => {
-    const el = containerRef.current;
-    const first = away && el ? userRows(el, userIdsRef.current)[0] : undefined;
-    const userAbove = el !== null && first !== undefined && isAbove(el, userLanding(el, first));
-    if (awayRef.current.away === away && awayRef.current.userAbove === userAbove) return;
-    awayRef.current = { away, userAbove };
-    emit('chat-scrolled-away', { away, userAbove });
+    if (awayRef.current === away) return;
+    awayRef.current = away;
+    emit('chat-scrolled-away', { away });
   }, []);
 
   const handleScroll = useCallback(() => {
@@ -384,27 +358,22 @@ export function MessageList() {
     return () => off('chat-scroll-to-bottom', jump);
   }, [setAway]);
 
-  useEffect(() => {
-    // INVARIANT: the up-jump steps to the nearest user message ABOVE the current
-    // position, one per click; the down button always goes to the very bottom.
-    // Why: operator decision — discrete navigation over one's own turns, measured
-    // from where the view is now, so a wheel scroll between clicks never desyncs it.
-    const jumpUp = () => {
-      const el = containerRef.current;
-      if (!el) return;
-      const above = userRows(el, userIdsRef.current)
-        .map(row => userLanding(el, row))
-        .filter(landing => isAbove(el, landing));
-      if (above.length === 0) return;
-      // WHY instant: same reason as the bottom jump above.
-      el.scrollTop = above[above.length - 1];
-      stickToBottomRef.current = false;
-      anchorElRef.current = null;
-      anchorTopRef.current = null;
-      setAway(true);
-    };
-    on('chat-scroll-to-prev-user', jumpUp);
-    return () => off('chat-scroll-to-prev-user', jumpUp);
+  // INVARIANT: the rail jumps to the clicked user message; the down button always
+  // goes to the very bottom.
+  // Why: operator decision — discrete navigation over one's own turns; the bottom
+  // jump stays independent.
+  const jumpToUser = useCallback((id: string) => {
+    const el = containerRef.current;
+    if (!el) return;
+    const row = userRows(el, new Set([id]))[0];
+    if (!row) return;
+    // WHY: instant, not smooth — a smooth glide emits mid-way scroll events above the
+    // threshold (re-unsticking) and is cancelled by the anchor branch's scrollTop writes.
+    el.scrollTop = userLanding(el, row);
+    stickToBottomRef.current = false;
+    anchorElRef.current = null;
+    anchorTopRef.current = null;
+    setAway(true);
   }, [setAway]);
 
   // Instant snap to bottom on session switch or after messages finish loading.
@@ -546,23 +515,27 @@ export function MessageList() {
   // branches (live drive, plan reasoning-growth-stops-shaking-tool-chips: with
   // it on, the stuck bottom pin drifted ~1px/frame and the not-stuck manual
   // anchor double-corrected by ~62px per pass).
+  // WHY the rail is a sibling of the scroll container: it must not scroll with content.
   return (
-    <div ref={containerRef} onScroll={handleScroll} className="chat-selection [overflow-anchor:none] flex-1 overflow-y-auto px-3 py-3">
-      {activePath.map((msg, idx) => (
-        <MessageBubble
-          key={msg.message_id}
-          message={msg}
-          variant="ai"
-          isOwn={msg.role === 'user'}
-          isStreaming={isStreaming && msg.message_id === streamingMessageId}
-          nodes={nodesByMessage.get(msg.message_id)}
-          isLast={idx === activePath.length - 1}
-          isFirst={idx === 0}
-          forkNav={forkNavByRow.get(msg.message_id)}
-          isAgent={isAgent}
-          actions={actions}
-        />
-      ))}
+    <div className="relative flex-1 flex min-h-0">
+      <div ref={containerRef} onScroll={handleScroll} className="chat-selection [overflow-anchor:none] flex-1 min-w-0 overflow-y-auto px-3 py-3">
+        {activePath.map((msg, idx) => (
+          <MessageBubble
+            key={msg.message_id}
+            message={msg}
+            variant="ai"
+            isOwn={msg.role === 'user'}
+            isStreaming={isStreaming && msg.message_id === streamingMessageId}
+            nodes={nodesByMessage.get(msg.message_id)}
+            isLast={idx === activePath.length - 1}
+            isFirst={idx === 0}
+            forkNav={forkNavByRow.get(msg.message_id)}
+            isAgent={isAgent}
+            actions={actions}
+          />
+        ))}
+      </div>
+      <PromptRail items={railItems} containerRef={containerRef} onJump={jumpToUser} />
     </div>
   );
 }

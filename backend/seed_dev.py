@@ -341,7 +341,7 @@ async def main():
             await create_record("projects", pid, {
                 "name": proj["name"],
                 "owner_id": owner_uid,
-                "is_public": False,
+                "audiences": [],
                 "project_context": "",
                 "index_doc_id": index_doc_id,
             })

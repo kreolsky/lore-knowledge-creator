@@ -115,20 +115,14 @@ export function ChatInput() {
   }, [t]);
 
   // MessageList owns the scroll container; it reports when auto-follow is off and
-  // listens for the jumps — see 'chat-scrolled-away' / 'chat-scroll-to-bottom' /
-  // 'chat-scroll-to-prev-user'.
+  // listens for the jump — see 'chat-scrolled-away' / 'chat-scroll-to-bottom'.
   const [scrolledAway, setScrolledAway] = useState(false);
-  const [userAbove, setUserAbove] = useState(false);
   useEffect(() => {
-    const handler = ({ away, userAbove }: { away: boolean; userAbove: boolean }) => {
-      setScrolledAway(away);
-      setUserAbove(userAbove);
-    };
+    const handler = ({ away }: { away: boolean }) => setScrolledAway(away);
     on('chat-scrolled-away', handler);
     return () => off('chat-scrolled-away', handler);
   }, []);
   const scrollToBottom = useCallback(() => emit('chat-scroll-to-bottom'), []);
-  const scrollToPrevUser = useCallback(() => emit('chat-scroll-to-prev-user'), []);
   const models = useChatStore(s => s.models);
   // WHY: vision-capable model ids (backend-derived) drive the EyeOff badge (shown on models NOT in this set).
   const visionModels = useChatStore(s => s.visionModels);
@@ -715,7 +709,6 @@ export function ChatInput() {
       queued={queued}
       onRemoveQueued={id => { void discardQueued(id); }}
       onScrollToBottom={scrolledAway ? scrollToBottom : undefined}
-      onScrollToPrevUser={scrolledAway && userAbove ? scrollToPrevUser : undefined}
       topControls={topControls}
       leftControls={leftControls}
       warnings={warnings}

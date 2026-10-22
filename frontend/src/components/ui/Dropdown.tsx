@@ -11,10 +11,11 @@
  * onSelect. INVARIANT: no rounded corners; trigger bg via --composer-control-bg.  Why: project rule (border-radius: 0 everywhere); the trigger bg uses --composer-control-bg for theme consistency.
  */
 
-import { useMemo, useCallback } from 'react';
+import { useMemo, useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { Popover } from './Popover';
 import { Button } from './Button';
+import { FieldInput } from './FieldInput';
 
 export interface DropdownOption {
   value: string;
@@ -37,7 +38,7 @@ export interface DropdownProps {
   title?: string;
   disabled?: boolean;
   highlight?: boolean;
-  variant?: 'composer' | 'highlight' | 'ghost';
+  variant?: 'composer' | 'highlight' | 'ghost' | 'panel';
   align?: 'left' | 'right';
   placement?: 'top' | 'bottom';
   /** Trigger height: `sm` (compact rows), `md` = the md Button's height, for a
@@ -47,6 +48,11 @@ export interface DropdownProps {
   /** Controlled open state, passed through to Popover; omit for uncontrolled. */
   open?: boolean;
   onOpenChange?: (v: boolean) => void;
+  /** Set ⇒ the open panel starts with a filter field (this placeholder) that
+   * narrows the options by label or note; the query resets on close. */
+  filterPlaceholder?: string;
+  /** Trigger fills the row's free width (flex-1) instead of sizing to its label. */
+  fullWidth?: boolean;
 }
 
 export function Dropdown({
@@ -64,26 +70,48 @@ export function Dropdown({
   size = 'sm',
   open,
   onOpenChange,
+  filterPlaceholder,
+  fullWidth = false,
 }: DropdownProps) {
+  const [innerOpen, setInnerOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const isOpen = open ?? innerOpen;
+  const filterRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (isOpen) filterRef.current?.focus(); }, [isOpen]);
+  const setOpen = useCallback((v: boolean) => {
+    if (!v) setQuery('');
+    if (open === undefined) setInnerOpen(v);
+    onOpenChange?.(v);
+  }, [open, onOpenChange]);
+
+  // The panel lists `shown`; keyboard nav, Enter and the cursor seed all index
+  // into it, so a filtered list navigates exactly like an unfiltered one.
+  const shown = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (filterPlaceholder === undefined || !needle) return options;
+    return options.filter(o =>
+      o.label.toLowerCase().includes(needle) || !!o.note?.toLowerCase().includes(needle));
+  }, [options, query, filterPlaceholder]);
+
   // -1 when no option carries `value` (an action picker such as "Add user…"):
   // the keyboard cursor then seeds on nothing, so no row opens pre-highlighted
   // — ArrowDown from -1 lands on 0, Enter on -1 is a no-op.
   const selectedIndex = useMemo(
-    () => options.findIndex(o => o.value === value),
-    [options, value],
+    () => shown.findIndex(o => o.value === value),
+    [shown, value],
   );
 
   // The trigger still falls back to the first option's label/badge (callers
   // whose value lands a render later, e.g. an auto-picked move target).
-  const labelIndex = selectedIndex >= 0 ? selectedIndex : 0;
-  const label = triggerLabel ?? options[labelIndex]?.label ?? '';
+  const triggerIndex = Math.max(options.findIndex(o => o.value === value), 0);
+  const label = triggerLabel ?? options[triggerIndex]?.label ?? '';
 
-  const isItemDisabled = useCallback((i: number) => !!options[i]?.disabled, [options]);
+  const isItemDisabled = useCallback((i: number) => !!shown[i]?.disabled, [shown]);
 
   const handleEnter = useCallback((i: number) => {
-    const opt = options[i];
+    const opt = shown[i];
     if (opt && !opt.disabled) onSelect(opt.value);
-  }, [options, onSelect]);
+  }, [shown, onSelect]);
 
   return (
     <Popover
@@ -96,21 +124,23 @@ export function Dropdown({
           size={size}
           title={title}
           disabled={disabled}
+          fullWidth={fullWidth}
         >
           {icon && <span className="mr-1 shrink-0">{icon}</span>}
-          <span className="truncate max-w-[180px]">{label}</span>
-          {options[labelIndex]?.badge && (
-            <span className="shrink-0">{options[labelIndex].badge}</span>
+          <span className={`truncate ${fullWidth ? 'min-w-0' : 'max-w-[180px]'}`}>{label}</span>
+          {options[triggerIndex]?.badge && (
+            <span className="shrink-0">{options[triggerIndex].badge}</span>
           )}
           <ChevronDown size={12} className="ml-1 opacity-60 shrink-0" />
         </Button>
       }
       align={align}
       placement={placement}
-      open={open}
-      onOpenChange={onOpenChange}
+      open={isOpen}
+      onOpenChange={setOpen}
+      rootClassName={fullWidth ? 'flex-1 min-w-0' : ''}
       keyboardNav
-      itemCount={options.length}
+      itemCount={shown.length}
       isItemDisabled={isItemDisabled}
       onEnter={handleEnter}
       seedIndex={selectedIndex}
@@ -119,7 +149,17 @@ export function Dropdown({
     >
       {({ activeIndex, close }) => (
         <div role="listbox">
-          {options.map((opt, i) => {
+          {filterPlaceholder !== undefined && (
+            <div className="p-1.5">
+              <FieldInput
+                ref={filterRef}
+                value={query}
+                placeholder={filterPlaceholder}
+                onChange={e => setQuery(e.target.value)}
+              />
+            </div>
+          )}
+          {shown.map((opt, i) => {
             const isActive = opt.value === value;
             const isCursor = i === activeIndex;
             // ARCH: `truncate` lives on the LABEL span, not the row. The row wraps

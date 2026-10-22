@@ -1,0 +1,199 @@
+# Model information catalog — exposed to clients via /v1/models and /v1/models/{id}.
+# Keyed by model_id (matching models.yaml keys).
+#
+# This is the MANUAL layer of model capabilities. The AUTO-CACHE layer
+# (src/core/model_capabilities.py, persisted to data/model_cache.json) is filled
+# from upstream /models responses. On serialization the two are deep-merged:
+#
+#   INVARIANT: model_info.yaml ALWAYS wins over the auto-cache.
+#
+# Stored schema (all fields optional). This is the SAME shape the auto-cache
+# stores, so a deep-merge between the two is well-defined:
+#   <model_id>:
+#     name: str                            # human-readable name
+#     description: str
+#     context_length: int
+#     max_completion_tokens: int
+#     is_moderated: bool                   # -> top_provider.is_moderated
+#     architecture:
+#       input_modalities: [text, image]    # presence of "image" == vision support
+#       output_modalities: [text]
+#       tokenizer: str                     # optional
+#       instruct_type: str                 # optional
+#     supported_parameters: [tools, tool_choice, max_tokens, temperature, top_p, stream]
+#                                          # response_format = accepts json_object; structured_outputs =
+#                                          # accepts json_schema strict (Lore's extractor lists only these)
+#     reasoning:
+#       supported: bool                     # auto-derived from upstream supported_parameters
+#       default_enabled: bool               # manual only — no upstream shape expresses it
+#       effort_levels: [low, high]          # optional; derived from models.yaml reasoning_effort
+#       default_effort: str                 # optional; derived from models.yaml reasoning_effort
+#     pricing:                             # numbers per-token; serialized to strings
+#       prompt: float
+#       completion: float
+#       input_cache_read: float
+#       input_cache_write: float           # cache writes (Anthropic 5m / OpenRouter)
+#       image: float                       # optional
+#     compat:                              # manual-only pi-ai compat flags, rendered
+#       <flag>: bool | str | int           # as stored on /v1/models; non-scalar values
+#                                           # are warned and dropped; anthropic-type:
+#                                           # allow-listed keys only (ANTHROPIC_COMPAT_KEYS)
+#
+# Anthropic-type model checklist (what a /v1/models consumer like Lore's pi-ai
+# needs on every anthropic-type model — the auto-cache does NOT fill these for
+# anthropic backends): context_length, max_completion_tokens,
+# architecture.input_modalities (else the client falls back to a 128k window
+# and no images), pricing. context_length / max_completion_tokens are checked
+# at load: a per-model warning names every missing key. `input_cache_write`
+# is owed only when the upstream reports cache writes — DeepSeek reports
+# cache_creation_input_tokens: 0, so deepseek-a/flash carries no line here
+# (1h writes under-reported 2x vs 1.25x — accepted). `compat` is for ANY
+# anthropic-type model and limited to the seven allow-listed keys
+# (src/core/config_schema.py ANTHROPIC_COMPAT_KEYS — others are warned and
+# dropped at load); forceAdaptiveThinking is the flag for an upstream that
+# honours output_config.effort: pi-ai then sends thinking: {type: adaptive} +
+# output_config: {effort} instead of budget_tokens (DeepSeek honours effort,
+# and showed no measurable response to budget_tokens).
+#
+# Derived fields (architecture.modality, supports_vision, top_provider,
+# flat-duplicated max_completion_tokens, string pricing, per_request_limits) are
+# NOT stored here — they are computed by render_capabilities() on serialization.
+# reasoning.effort_levels / default_effort are likewise derived — from the
+# models.yaml `reasoning_effort` block (src/services/reasoning_effort.py), the
+# same key the dispatch funnel enforces; entries here override the derived
+# values (deep merge, lists replaced).
+model_info:
+  deepseek/flash:
+    description: "DeepSeek V4 Flash — efficiency-optimized MoE, 284B total / 13B active params, thinking mode, tool calling"
+    context_length: 262144
+    max_completion_tokens: 32768
+    architecture:
+      input_modalities: [text]
+      output_modalities: [text]
+    supported_parameters: [tools, tool_choice, max_tokens, temperature, top_p, stream]
+    reasoning:
+      supported: true
+      default_enabled: true
+    pricing:
+      prompt: 0.00000014
+      completion: 0.00000028
+      input_cache_read: 0.0000000028
+  deepseek/pro:
+    description: "DeepSeek V4 Pro — high-performance MoE, thinking mode, tool calling"
+    context_length: 262144
+    max_completion_tokens: 32768
+    architecture:
+      input_modalities: [text]
+      output_modalities: [text]
+    supported_parameters: [tools, tool_choice, max_tokens, temperature, top_p, stream]
+    reasoning:
+      supported: true
+      default_enabled: true
+    pricing:
+      prompt: 0.000000435
+      completion: 0.00000087
+      input_cache_read: 0.000000003625
+  deepseek-a/flash:
+    # Same upstream model as deepseek/flash, over the Anthropic Messages wire.
+    # compat: forceAdaptiveThinking makes pi-ai send thinking: {type: adaptive}
+    # + output_config.effort (DeepSeek honours effort; it showed no measurable
+    # response to budget_tokens). supportsMidConvoEffort stays OFF — only that
+    # flag makes pi-ai send thinking.block_binding / mid-conversation
+    # output_config system messages, which DeepSeek is expected to reject.
+    description: "DeepSeek V4 Flash (Anthropic Messages wire) — efficiency-optimized MoE, 284B total / 13B active params, thinking mode, tool calling"
+    context_length: 524288
+    max_completion_tokens: 131072
+    architecture:
+      input_modalities: [text, image]
+      output_modalities: [text]
+    supported_parameters: [tools, tool_choice, max_tokens, temperature, top_p, stream]
+    reasoning:
+      supported: true
+      default_enabled: true
+    pricing:
+      prompt: 0.00000014
+      completion: 0.00000028
+      input_cache_read: 0.0000000028
+    compat:
+      forceAdaptiveThinking: true
+  # Claude 5.5 family over the Anthropic Messages wire. Thinking is adaptive only
+  # (budget_tokens is a 400) and non-default sampling is a 400, hence the two
+  # compat flags. input_cache_write is the 5-minute write rate (1.25x input).
+  claude/haiku:
+    # Prices for prompts up to 100K tokens; beyond that Anthropic bills 0.0000005 / 0.0000025.
+    description: "Claude Haiku 5.5 — fast and cheap, vision, tool calling"
+    context_length: 1000000
+    max_completion_tokens: 128000
+    architecture:
+      input_modalities: [text, image]
+      output_modalities: [text]
+    supported_parameters: [tools, tool_choice, max_tokens, stream]
+    reasoning:
+      supported: true
+      default_enabled: true
+    pricing:
+      prompt: 0.0000001
+      completion: 0.0000005
+      input_cache_read: 0.00000001
+      input_cache_write: 0.000000125
+    compat:
+      forceAdaptiveThinking: true
+      supportsTemperature: false
+  claude/sonnet:
+    description: "Claude Sonnet 5.5 — everyday coding and agent work, vision, tool calling"
+    context_length: 1000000
+    max_completion_tokens: 128000
+    architecture:
+      input_modalities: [text, image]
+      output_modalities: [text]
+    supported_parameters: [tools, tool_choice, max_tokens, stream]
+    reasoning:
+      supported: true
+      default_enabled: true
+    pricing:
+      prompt: 0.000002
+      completion: 0.00001
+      input_cache_read: 0.0000002
+      input_cache_write: 0.0000025
+    compat:
+      forceAdaptiveThinking: true
+      supportsTemperature: false
+  claude/opus:
+    description: "Claude Opus 5.5 — Anthropic's Opus tier, vision, tool calling"
+    context_length: 1000000
+    max_completion_tokens: 128000
+    architecture:
+      input_modalities: [text, image]
+      output_modalities: [text]
+    supported_parameters: [tools, tool_choice, max_tokens, stream]
+    reasoning:
+      supported: true
+      default_enabled: true
+    pricing:
+      prompt: 0.000004
+      completion: 0.00002
+      input_cache_read: 0.0000002
+      input_cache_write: 0.000005
+    compat:
+      forceAdaptiveThinking: true
+      supportsTemperature: false
+  kimi:
+    description: "Kimi K2.7 Code — Moonshot AI, code-optimized, tool calling, thinking mode"
+    context_length: 262144
+    max_completion_tokens: 8192
+    architecture:
+      input_modalities: [text]
+      output_modalities: [text]
+    supported_parameters: [tools, tool_choice, max_tokens, temperature, top_p, stream]
+    reasoning:
+      supported: true
+  gemini/mini:
+    # context_length / max_completion_tokens / pricing come from the openrouter
+    # auto-cache; this entry only declares what the cache cannot (vision flag,
+    # reasoning policy, display name).
+    description: "Google Gemini 2.0 Flash — fast, multimodal, tool calling"
+    architecture:
+      input_modalities: [text, image]
+      output_modalities: [text]
+    # reasoning.supported is auto-derived from the upstream supported_parameters
+    # (reasoning / reasoning_effort) — do not pin it back here.

@@ -1,15 +1,33 @@
 """Project access control — guards for route handlers."""
-# ARCH: Access cascade: owner→full, member→lookup, public→readonly. An admin
-# WITH a project_members row is elevated to full on both the membership and the
-# public branch (admin-member = project root). An admin WITHOUT a row gets what
-# the project already offers everyone: full on the public branch, None on a
-# private project. require_admin_or_project_full stays the admin-override
-# management gate. A document inherits its project's access level.
+# ARCH: Access cascade: owner→full, member→lookup, each matching audience row
+# →lookup, 'public' row→its level ('full' for an admin) — the effective level
+# is the MAX over the concurrent grants (a lower member row never caps a
+# higher audience grant; see max_access). An admin WITH a project_members row
+# is elevated to full on the membership branch (admin-member = project root).
+# An admin WITHOUT a row gets what the project already offers everyone: full
+# while a 'public' row exists, None on a private project.
+# require_admin_or_project_full stays the admin-override management gate. A
+# document inherits its project's access level.
 
 from fastapi import HTTPException
 
 import db as db_mod
 from db import extract_id, fetch_doc_meta, fetch_one
+
+# Rank for the cascade max: a user may hold several concurrent grants (member
+# row, several audience rows); the effective level is the highest, never the
+# first match.
+_ACCESS_RANK = {"readonly": 1, "commentator": 2, "full": 3}
+
+
+def max_access(*levels: str | None) -> str | None:
+    """The highest of the given access levels; None when none is a known level.
+
+    Single ordering source for get_project_access and the my_access enrichment
+    in routes/projects.py — the two must never disagree.
+    """
+    live = [lv for lv in levels if lv in _ACCESS_RANK]
+    return max(live, key=lambda lv: _ACCESS_RANK[lv]) if live else None
 
 
 async def get_project_access(project_id: str, user: dict) -> str | None:
@@ -31,17 +49,34 @@ async def get_project_access(project_id: str, user: dict) -> str | None:
         {"pid": project_id, "uid": uid},
         site="access_check",
     )
+    # ARCH: an admin with a member row is elevated to 'full' — the member row
+    # is the explicit act of joining a project, and the admin's instance role
+    # tops up the joined access (never the reverse: elevation is gated on the
+    # row existing, so a row is required on private projects).
+    if member_rows and is_instance_admin(user):
+        return "full"
+    levels: list[str | None] = []
     if member_rows:
-        # ARCH: an admin with a member row is elevated to 'full' — the member row
-        # is the explicit act of joining a project, and the admin's instance role
-        # tops up the joined access (never the reverse: elevation is gated on the
-        # row existing, so a row is required on private projects).
-        if is_instance_admin(user):
-            return "full"
-        return member_rows[0]["access_level"]
-    if project.get("is_public"):
-        return "full" if is_instance_admin(user) else "readonly"
-    return None
+        levels.append(member_rows[0]["access_level"])
+    audiences = project.get("audiences")
+    if audiences:
+        # INVARIANT(security): an audience row matches the CONCRETE stored
+        # subject only. Why: an owner who moves groups must not carry the
+        # project to the new group — explicit binding (_guard_audiences and the
+        # migrations write the subject, this only reads it).
+        # Lazy import: model_access imports this module (is_instance_admin), so
+        # the dependency may only resolve at call time. Lazy read: only a
+        # project WITH audiences pays the user-subject query.
+        from model_access import PUBLIC_SUBJECT, user_subjects
+        subjects = set(await user_subjects(db, uid))
+        for row in audiences:
+            subject = row.get("subject")
+            if subject in subjects:
+                if subject == PUBLIC_SUBJECT and is_instance_admin(user):
+                    levels.append("full")
+                else:
+                    levels.append(row.get("access_level"))
+    return max_access(*levels)
 
 
 def is_instance_admin(user: dict) -> bool:
@@ -52,6 +87,23 @@ def is_instance_admin(user: dict) -> bool:
     # third value exists. This is the one place that comparison lives.
     """
     return user.get("role") == "admin"
+
+
+async def recompute_project_access(project_id: str, user_id: str) -> str | None:
+    """Re-resolve a user's effective project access from live rows.
+
+    The access_changed emit companion: per-user emits carry the RECOMPUTED
+    level (never a guessed one — a removed member row may leave a group or
+    public grant underneath), and the collab project-wide branch
+    (user_id=None) recomputes per connected client. Reads the target's live
+    role so the admin-member elevation resolves exactly as in
+    get_project_access.
+    """
+    row = await fetch_one("users", user_id)
+    return await get_project_access(
+        project_id,
+        {"user_id": user_id, "role": row.get("role") if row else None},
+    )
 
 
 async def is_project_root(project: dict, user: dict) -> bool:

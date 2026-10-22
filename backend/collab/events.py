@@ -13,6 +13,7 @@ import logging
 
 from textmatch import minimal_splice_text, surgical_splice_text
 
+from access import get_doc_project_id, recompute_project_access
 from collab import registry
 from collab.registry import _session_key, _sessions
 from collab.session import CollabSession, ConnectedClient, _safe_ws_close
@@ -230,6 +231,11 @@ async def _notify_user_access(session: CollabSession, client: ConnectedClient, a
     msg = {"type": msg_type}
     if access is not None:
         msg["level"] = access
+    # WHY the level write: the session's write gate (session.py handle_binary_message)
+    # reads client.access_level — the frame alone is UI truth, not enforcement, so a
+    # downgraded editor could keep mutating the Y.Doc until reconnect without it.
+    # None on revocation is fail-closed for the 1s grace window before the close.
+    client.access_level = access
     try:
         await client.ws.send_text(json.dumps(msg))
     except Exception as exc:
@@ -241,8 +247,39 @@ async def _notify_user_access(session: CollabSession, client: ConnectedClient, a
         asyncio.create_task(_close_after_revocation(client.ws, session))
 
 
-async def _on_access_changed(project_id: str, user_id: str, access: str | None) -> None:
+async def _on_access_changed(project_id: str, user_id: str | None, access: str | None) -> None:
     for session in list(_sessions.values()):
+        # INVARIANT(security): an access change in project X never reaches the user's sessions in project Y; an unknown-project session ("") is still notified.
+        # Why: a foreign session must not be closed with 4003, and skipping an
+        # unknown one would leave a revoked user connected.
+        if session.project_id and session.project_id != project_id:
+            continue
+        if user_id is None:
+            # Project-wide emit (audiences change, group move): no
+            # single user is named, so every connected client of every matching
+            # session is RECOMPUTED from live rows — the effective level may be
+            # anything (member row under a removed audience row, public
+            # fallback…), never a guessed one.
+            # INVARIANT(security): an unknown-project ("") session is resolved by
+            # its entity's live project, never skipped.
+            # Why: a revoked viewer of a doc whose session never learned its
+            # project would otherwise stay connected until reload.
+            if not session.project_id:
+                if await get_doc_project_id(session.entity_id) != project_id:
+                    continue
+            notified = 0
+            # Sequential per session (shared SurrealDB connection — no gather),
+            # one recompute per client; the count keeps the fan-out observable.
+            for client in list(session.clients.values()):
+                level = await recompute_project_access(project_id, client.user_id)
+                await _notify_user_access(session, client, level)
+                notified += 1
+            if notified:
+                logger.info(
+                    "project-wide access recompute project=%s entity=%s clients=%d",
+                    project_id, session.entity_id, notified,
+                )
+            continue
         for client in list(session.clients.values()):
             if client.user_id == user_id:
                 await _notify_user_access(session, client, access)

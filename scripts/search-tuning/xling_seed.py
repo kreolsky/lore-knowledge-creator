@@ -17,7 +17,7 @@ async def main():
     idx = str(uuid.uuid4())
     await db.query(
         "CREATE type::record('projects',$p) SET name=$n, owner_id=$o, status='active', "
-        "is_public=false, project_context='', index_doc_id=$i, created_at=$t",
+        "audiences=[], project_context='', index_doc_id=$i, created_at=$t",
         {"p": PID, "n": NAME, "o": owner, "i": idx, "t": now})
     async def mkdoc(did, title, content, path, is_index, sort):
         await db.query(

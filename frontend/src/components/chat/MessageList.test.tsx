@@ -106,8 +106,9 @@ function assistantMessage() {
   };
 }
 
+// The scroll div sits inside a wrapper beside the prompt rail.
 function scrollContainer(host: HTMLElement): HTMLElement {
-  return host.firstElementChild as HTMLElement;
+  return (host.querySelector<HTMLElement>('.overflow-y-auto') ?? host.firstElementChild) as HTMLElement;
 }
 
 function stubScrollMetrics(el: HTMLElement, scrollHeight: number, clientHeight: number) {
@@ -619,7 +620,7 @@ describe('MessageList — the one-shot scroll target (a chat search hit)', () =>
   });
 });
 
-describe('MessageList — previous-user-message jump', () => {
+describe('MessageList — prompt rail jump', () => {
   beforeEach(() => {
     vi.mocked(emit).mockClear();
     vi.mocked(on).mockClear();
@@ -639,13 +640,16 @@ describe('MessageList — previous-user-message jump', () => {
     (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver = prevRO;
   });
 
-  const message = (id: string, role: 'user' | 'assistant') => ({ ...assistantMessage(), message_id: id, role });
+  const message = (id: string, role: 'user' | 'assistant') => ({ ...assistantMessage(), message_id: id, role, content: `text ${id}` });
 
   function awayEmits() {
     return vi.mocked(emit).mock.calls
       .filter(([name]) => name === 'chat-scrolled-away')
-      .map(([, payload]) => payload as { away: boolean; userAbove: boolean });
+      .map(([, payload]) => payload as { away: boolean });
   }
+
+  const ticks = (host: HTMLElement) =>
+    Array.from(host.querySelectorAll<HTMLElement>('[data-prompt-tick]')).map(n => n.dataset.promptTick);
 
   // u1@100, a1@300, u2@900, a2@1100 in content space; 2000 tall, 400 visible.
   function mountConversation() {
@@ -661,53 +665,40 @@ describe('MessageList — previous-user-message jump', () => {
     for (const node of el.querySelectorAll<HTMLElement>('[data-message-id]')) {
       stubContentBox(el, node, tops[node.dataset.messageId!]);
     }
-    const jumpUp = vi.mocked(on).mock.calls.find(([name]) => name === 'chat-scroll-to-prev-user')?.[1] as () => void;
-    return { ...mounted, el, jumpUp };
+    return { ...mounted, el };
   }
 
-  it('steps up one user message per click, skipping assistant rows, and stops at the first', () => {
-    const { root, host, el, jumpUp } = mountConversation();
-    el.scrollTop = 1400;
-    el.dispatchEvent(new Event('scroll'));
-    act(() => jumpUp());
-    expect(el.scrollTop).toBe(900 - 12);
-    act(() => jumpUp());
-    expect(el.scrollTop).toBe(100 - 12);
-    act(() => jumpUp());
-    expect(el.scrollTop).toBe(100 - 12);
+  it('one tick per user message of the branch, none for assistant rows', () => {
+    const { root, host } = mountConversation();
+    expect(ticks(host)).toEqual(['u1', 'u2']);
     act(() => root.unmount());
     host.remove();
   });
 
-  it('measures from the current position, so a wheel scroll between clicks does not desync it', () => {
-    const { root, host, el, jumpUp } = mountConversation();
-    el.scrollTop = 1400;
-    el.dispatchEvent(new Event('scroll'));
-    act(() => jumpUp()); // → u2
-    el.scrollTop = 1000; // wheel back down past u2
-    el.dispatchEvent(new Event('scroll'));
-    act(() => jumpUp());
-    expect(el.scrollTop).toBe(900 - 12);
+  it('no rail with a single user message', () => {
+    chatState.activePath = [message('u1', 'user'), message('a1', 'assistant')];
+    chatState.streaming = null;
+    chatState.messagesError = null;
+    const { root, host } = mount();
+    expect(host.querySelector('[data-prompt-rail]')).toBeNull();
     act(() => root.unmount());
     host.remove();
   });
 
-  it('reports userAbove only while a user message lies above the view', () => {
-    const { root, host, el, jumpUp } = mountConversation();
-    el.scrollTop = 1400;
-    el.dispatchEvent(new Event('scroll'));
-    act(() => jumpUp());
-    act(() => jumpUp()); // landed on u1 — nothing above
-    expect(awayEmits()).toEqual([{ away: true, userAbove: true }, { away: true, userAbove: false }]);
+  it('a tick click lands on that user message and leaves the bottom button shown', () => {
+    const { root, host, el } = mountConversation();
+    act(() => host.querySelector<HTMLElement>('[data-prompt-tick="u1"]')!.click());
+    expect(el.scrollTop).toBe(100 - 12);
+    act(() => host.querySelector<HTMLElement>('[data-prompt-tick="u2"]')!.click());
+    expect(el.scrollTop).toBe(900 - 12);
+    expect(awayEmits()).toEqual([{ away: true }]);
     act(() => root.unmount());
     host.remove();
   });
 
   it('the jump does not re-follow the stream: growth keeps the view in place', () => {
-    const { root, host, el, jumpUp } = mountConversation();
-    el.scrollTop = 1400;
-    el.dispatchEvent(new Event('scroll'));
-    act(() => jumpUp());
+    const { root, host, el } = mountConversation();
+    act(() => host.querySelector<HTMLElement>('[data-prompt-tick="u2"]')!.click());
     stubScrollMetrics(el, 2500, 400);
     act(() => root.render(createElement(MessageList)));
     expect(el.scrollTop).toBe(900 - 12);

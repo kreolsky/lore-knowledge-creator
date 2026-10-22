@@ -6,7 +6,7 @@
  */
 
 import { reasoningEffortsDeclaration } from './caps.ts'
-import { WEB_SEARCH_KEY_REF } from './web-search/key.ts'
+import { ROUTER_URL_REF, WEB_SEARCH_KEY_REF } from './web-search/key.ts'
 
 /** The LLM route an openai-completions model drives: the `lore` provider
  * route of the llm-pi-ai adapter, hand-declared (pi-ai's installed catalog
@@ -271,6 +271,17 @@ function entryConfig(
   return configEditor.entries().find((entry) => entry.options.id === id)
 }
 
+/** Store `value` under `ref` when it differs; an EMPTY value unsets the ref
+ * (credentials-local refuses to store ''; a missing ref reads as empty). */
+async function syncRef(credentials: CredentialsSeam, ref: string, value: string): Promise<void> {
+  const stored = (await credentials.resolve(ref))?.value
+  if (value === '') {
+    if (stored !== undefined) await credentials.unset(ref)
+  } else if (stored !== value) {
+    await credentials.set(ref, value)
+  }
+}
+
 /**
  * Apply the turn's web-search provider and credential with dsh's own calls,
  * before the agent runs: a non-empty credential lands under the ONE ref when
@@ -280,12 +291,14 @@ function entryConfig(
  * no-key failure), and the `web` entry's `searchProvider` is edited only when
  * it differs (the edit reloads the entry live and the provider plugins
  * re-register) — an admin change reaches the next call with no restart.
+ * The turn's gateway URL lands under ROUTER_URL_REF by the same rule, for the
+ * router search provider (which reads the gateway key from AGENT_KEY_REF).
  * A missing seam fails loud: the pin and the credential are not optional.
  */
 export async function ensureWebSearch(
   configEditor: ConfigEditorSeam | undefined,
   credentials: CredentialsSeam | undefined,
-  provider: string, credential: string,
+  provider: string, credential: string, gatewayBase: string,
 ): Promise<void> {
   if (!configEditor) {
     throw new Error('the config editor is not composed — cannot pin the web-search provider')
@@ -293,12 +306,8 @@ export async function ensureWebSearch(
   if (!credentials) {
     throw new Error('the credentials service is not composed — cannot store the web-search key')
   }
-  const stored = (await credentials.resolve(WEB_SEARCH_KEY_REF))?.value
-  if (credential === '') {
-    if (stored !== undefined) await credentials.unset(WEB_SEARCH_KEY_REF)
-  } else if (stored !== credential) {
-    await credentials.set(WEB_SEARCH_KEY_REF, credential)
-  }
+  await syncRef(credentials, WEB_SEARCH_KEY_REF, credential)
+  await syncRef(credentials, ROUTER_URL_REF, gatewayBase)
   const entry = entryConfig(configEditor, 'web')
   if (!entry) {
     throw new Error('the web entry is not configurable — cannot pin the web-search provider')

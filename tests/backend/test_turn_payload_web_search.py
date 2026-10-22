@@ -30,6 +30,9 @@ EXPECTED = {
     "tavily": ("lore-tavily", "TAVILY_API_KEY"),
     "searxng": ("lore-searxng", "SEARXNG_URL"),
     "perplexity": ("lore-perplexity-fast", "PERPLEXITY_API_KEY"),
+    # The router searches with one of its own models; its upstream key never
+    # enters Lore (plugin web-search/router.ts).
+    "router": ("lore-router", "WEB_SEARCH_MODEL"),
 }
 #: PERPLEXITY_SEARCH_TYPE value → the pinned id; the harness registers one
 #: Perplexity provider per search type (plugin web-search/perplexity.ts).
@@ -72,6 +75,9 @@ async def _pinned_payload_flags(test_db, monkeypatch):
         CHAT_MODEL="env-titler",
         **{key: f"env-{key.lower()}" for key in CREDENTIAL_KEYS},
     )
+    # WHY env too: WEB_SEARCH_MODEL has a fallback, and settings._resolve reads
+    # a fallback key's own config value only when its env var is present.
+    monkeypatch.setenv("WEB_SEARCH_MODEL", "env-web_search_model")
     yield
     settings.drop_cache()
     await test_db.query("DELETE instance_settings")
@@ -204,6 +210,19 @@ async def test_unset_title_model_falls_back_to_the_chat_model(
     _pin_config(monkeypatch, CHAT_TITLE_MODEL="", CHAT_MODEL="local/orange/chat")
     payload = await _turn_payload_of(client, collab_project, harness_env)
     assert payload["title_model"] == "local/orange/chat"
+
+
+@pytest.mark.asyncio
+async def test_router_without_its_own_model_searches_with_the_chat_model(
+    client, collab_project, harness_env, monkeypatch,
+):
+    """The partner story: provider router, no search model set — the search
+    runs on the default chat model the router already serves."""
+    monkeypatch.delenv("WEB_SEARCH_MODEL")
+    _pin_config(monkeypatch, WEB_SEARCH_PROVIDER="router", WEB_SEARCH_MODEL="", CHAT_MODEL="claude/haiku")
+    payload = await _turn_payload_of(client, collab_project, harness_env)
+    assert payload["web_search_provider"] == "lore-router"
+    assert payload["web_search_credential"] == "claude/haiku"
 
 
 @pytest.mark.asyncio

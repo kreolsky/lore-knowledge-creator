@@ -24,7 +24,7 @@ type ShowToast = (message: string, type?: 'error' | 'info' | 'warning', options?
 
 const PROJECT: Project = {
   project_id: 'p1', name: 'P1', status: 'active', project_context: '', index_doc_id: 'root',
-  voice_recording_doc_id: null, last_accessed_doc_id: null, owner_id: null, is_public: false,
+  voice_recording_doc_id: null, last_accessed_doc_id: null, owner_id: null, audiences: [],
   my_access: 'full', created_at: NOW,
 };
 

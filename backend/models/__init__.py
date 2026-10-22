@@ -61,6 +61,7 @@ from models.pipeline import (
     PipelineSchedulePatch,
 )
 from models.projects import (
+    Audience,
     CancelInvite,
     CreateProject,
     InviteMember,
@@ -112,6 +113,7 @@ __all__ = [
     "AgentConfigResponse",
     "AgentRunRequest",
     "ApiKeyResponse",
+    "Audience",
     "BranchCreate",
     "CancelInvite",
     "ChatMessage",

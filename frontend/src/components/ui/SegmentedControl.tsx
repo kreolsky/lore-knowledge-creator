@@ -28,7 +28,11 @@ export function SegmentedControl({ options, value, onChange, disabled, ariaLabel
             aria-checked={active}
             disabled={off}
             onClick={() => { if (!active) onChange(opt.value); }}
-            className={`px-2.5 py-1 text-ui-xs whitespace-nowrap transition-colors duration-150 ${
+            // h-[20px] stop + the container's 1px borders = 22px total — the
+            // SAME height as Button/Dropdown size="sm", so a Dropdown sharing
+            // a row with this control (AudienceSection) aligns exactly;
+            // the fixed height also makes it font-independent.
+            className={`h-[20px] px-2.5 inline-flex items-center text-ui-xs whitespace-nowrap transition-colors duration-150 ${
               active ? 'bg-accent text-bg' : 'bg-surface text-text-dim hover:bg-surface2'
             } ${off ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
           >

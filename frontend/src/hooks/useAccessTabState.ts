@@ -4,7 +4,7 @@
  * SYSTEM: access-panel — the tint reflects the STRONGEST active access on the
  * current document, top→down:
  *   red    — an agent key with auto_apply (read-write agent) lives on this doc
- *   yellow — an active anonymous share OR the project is public
+ *   yellow — an active anonymous share OR the project carries any audience row
  *   blue   — a widget-only key lives on this doc
  *   none   — no external access
  *
@@ -28,7 +28,7 @@ interface ApiKeyRow {
 export function useAccessTabState(
   docId: string | null | undefined,
   projectId: string | null | undefined,
-  isPublic: boolean,
+  hasAudience: boolean,
 ): AccessTabTint {
   const [tint, setTint] = useState<AccessTabTint>('none');
 
@@ -53,7 +53,7 @@ export function useAccessTabState(
         // Precedence: red > yellow > blue > none.
         const next: AccessTabTint = hasAgentFull
           ? 'red'
-          : (hasShare || isPublic)
+          : (hasShare || hasAudience)
             ? 'yellow'
             : hasWidget
               ? 'blue'
@@ -64,7 +64,7 @@ export function useAccessTabState(
       }
     })();
     return () => { cancelled = true; };
-  }, [docId, projectId, isPublic]);
+  }, [docId, projectId, hasAudience]);
 
   return tint;
 }

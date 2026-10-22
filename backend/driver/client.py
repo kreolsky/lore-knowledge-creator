@@ -278,14 +278,17 @@ def _derived_tool_sets() -> dict[str, list[str]]:
 
 
 #: WEB_SEARCH_PROVIDER value → (the dsh provider id the harness pins, the
-#: setting that is its credential — the key, or the URL for SearXNG). The
-#: turn payload builder is the one reader.
+#: setting that is its credential — the key, the URL for SearXNG, the model
+#: for the router). The turn payload builder is the one reader.
 WEB_SEARCH_PROVIDERS: dict[str, tuple[str, str]] = {
     "deepseek": ("deepseek-official", "DEEPSEEK_API_KEY"),
     "brave": ("lore-brave", "BRAVE_API_KEY"),
     "tavily": ("lore-tavily", "TAVILY_API_KEY"),
     "searxng": ("lore-searxng", "SEARXNG_URL"),
     "perplexity": ("lore-perplexity-fast", "PERPLEXITY_API_KEY"),
+    # The router's "credential" is the model that searches: the router holds
+    # the upstream key, and the gateway URL/key already ride every turn.
+    "router": ("lore-router", "WEB_SEARCH_MODEL"),
 }
 
 #: PERPLEXITY_SEARCH_TYPE value → the dsh provider id the harness pins; the

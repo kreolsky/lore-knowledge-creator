@@ -71,6 +71,32 @@ async def user_subjects(db: AsyncSurreal, user_id: str) -> list[str]:
     return subjects
 
 
+def own_group_moderator_uid(user_id: str, role: str | None, moderator_id: str | None) -> str | None:
+    """The moderator whose virtual group the user belongs to (own uid for a
+    moderator); None for an admin or a user without a group.
+
+    The ONE derivation behind group_roster and own_group_subject — the roster
+    and the client flag must agree on who "my group" is.
+    """
+    if role == "moderator":
+        return user_id
+    if role == "admin":
+        return None
+    return moderator_id or None
+
+
+def own_group_subject(user_id: str, role: str | None, moderator_id: str | None) -> str | None:
+    """The user's own moderator-group subject ('mod:<uid>') for the client
+    payloads (login, /me); None for an admin or a user without a group.
+
+    A client flag, never a role string: the frontend gates the roster invite
+    picker on it. Derived from live row fields at answer time — a group move
+    lands on the next /me, not at token expiry.
+    """
+    uid = own_group_moderator_uid(user_id, role, moderator_id)
+    return moderator_subject(uid) if uid else None
+
+
 async def available_models(user: dict) -> set[str] | None:
     """Model ids the user may run; None = every model (admin)."""
     if is_instance_admin(user):

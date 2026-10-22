@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from documents.service import last_doc_rule, live_doc_ids
 from fastapi import APIRouter, Depends, HTTPException, Query
+from model_access import PUBLIC_SUBJECT, own_group_subject, user_subjects
 from project_members_service import group_member_ids
 from share_guard import system_root_id
 from sort_keys import key_between
@@ -15,6 +16,8 @@ from textmatch import anchor_pattern, fts_operand
 from access import (
     get_project_access,
     is_instance_admin,
+    is_project_root,
+    max_access,
     require_admin_or_project_full,
     require_project_read,
 )
@@ -45,22 +48,38 @@ async def _enrich_projects(db: AsyncSurreal, projects: list[dict], user: dict, m
     `is_owner_like` is DERIVED from the already-fetched `member_access` map —
     owner, or an admin with a member row — never by calling is_project_root per
     project (that would add N no-LIMIT membership queries on the dashboard).
-    `my_access` mirrors get_project_access truthfully: owner → full, member →
-    full for admins (elevated), public → full for admins / readonly otherwise,
-    else → None (a private non-member project is NOT readonly).
+    `my_access` mirrors get_project_access truthfully: owner → full; else the
+    MAX over member row (full for admins — elevated) and every audience row the
+    caller's subjects match ('public' row → full for an admin); a private
+    non-member project is NOT readonly (None).
     """
     uid = user["user_id"]
     is_admin = is_instance_admin(user)
+    # The caller's grant subjects, read ONCE per list and only when some project
+    # in the page carries an audience row (mirrors the lazy branch in
+    # get_project_access — audience-less pages pay nothing).
+    audience_subjects: set[str] | None = None
+    if any(p.get("audiences") for p in projects):
+        audience_subjects = set(await user_subjects(db, uid))
     for p in projects:
         pid = p["project_id"]
         if p.get("owner_id") == uid:
             p["my_access"] = "full"
-        elif pid in member_access:
-            p["my_access"] = "full" if is_admin else member_access[pid]
-        elif p.get("is_public"):
-            p["my_access"] = "full" if is_admin else "readonly"
         else:
-            p["my_access"] = None
+            levels: list[str | None] = []
+            if pid in member_access:
+                levels.append("full" if is_admin else member_access[pid])
+            if audience_subjects is not None:
+                # mirror of get_project_access's audience loop: MAX over every
+                # matching row; a 'public' row tops an admin up to full
+                for row in p.get("audiences") or []:
+                    subject = row.get("subject")
+                    if subject in audience_subjects:
+                        if subject == PUBLIC_SUBJECT and is_admin:
+                            levels.append("full")
+                        else:
+                            levels.append(row.get("access_level"))
+            p["my_access"] = max_access(*levels)
         # INVARIANT(security): the payload carries a capability flag, never the
         # instance role. Why: the frontend must not branch on `role` in TSX; a
         # future moderator role changes this predicate in ONE backend place.
@@ -160,16 +179,28 @@ async def list_projects(
     user: dict = Depends(get_current_user),
     db: AsyncSurreal = Depends(get_db),
 ):
-    """List projects visible to the current user (owner + public + explicit membership)."""
+    """List projects visible to the current user (owner + public + explicit membership + group audience)."""
     uid = user["user_id"]
     member_access, last_doc_map = await _get_member_maps(db, uid)
-
+    # INCLUDES 'public' (every live user holds it) — the predicate carries the
+    # public rows, so it is never empty for a live user.
+    subjects = await user_subjects(db, uid)
+    # INVARIANT(security): the audience predicate is CONDITIONAL — it joins the
+    # query only when the caller holds at least one subject. Why: a
+    # `audiences.subject CONTAINSANY $subjects` run over an EMPTY list (a
+    # deleted user, user_subjects → []) must be omitted, not trusted to match
+    # nothing — the operator semantics over an empty list are version-sensitive
+    # and an `IN`-shaped degeneration leaked every private project once (the
+    # pre-audiences trap). Same shape as the moderator scope_sql in
+    # list_all_projects, for the same reason.
+    audience_sql = " OR audiences.subject CONTAINSANY $subjects" if subjects else ""
     rows = await db.query(
         "SELECT * FROM projects WHERE deleted_at IS NONE AND "
-        "(owner_id = $uid OR is_public = true OR "
-        "id IN (SELECT VALUE type::record('projects', project_id) FROM project_members WHERE user_id = $uid)) "
+        "(owner_id = $uid OR "
+        "id IN (SELECT VALUE type::record('projects', project_id) FROM project_members WHERE user_id = $uid)"
+        f"{audience_sql}) "
         "ORDER BY created_at DESC LIMIT $limit START $offset",
-        {"uid": uid, "limit": limit, "offset": offset},
+        {"uid": uid, "limit": limit, "offset": offset, **({"subjects": subjects} if subjects else {})},
     )
 
     projects = [serialize_record(r, "project_id") for r in (rows or [])]
@@ -282,7 +313,7 @@ async def create_project(body: CreateProject, user: dict = Depends(get_current_u
         "description": body.description,
         "index_doc_id": index_doc_id,
         "owner_id": user["user_id"],
-        "is_public": False,
+        "audiences": [],
         "ref_image_preview": True,
     }
     result["my_access"] = "full"
@@ -428,7 +459,6 @@ async def get_project(project_id: str, user: dict = Depends(get_current_user), d
 
     project_data = serialize_record(record, "project_id")
     project_data["my_access"] = await get_project_access(project_id, user)
-    from access import is_project_root
     project_data["is_owner_like"] = await is_project_root(record, user)
 
     user_id = user["user_id"]
@@ -643,19 +673,80 @@ def _build_snippet(content: str, query_lower: str, context_chars: int = 60) -> d
     return {"before": raw_before, "match": matched_text, "after": raw_after}
 
 
+async def _audience_writer(project: dict | None, user: dict) -> tuple[bool, str | None]:
+    """(is_admin, own group subject) of a caller allowed to write the audiences
+    list — the owner or ANY admin, never is_project_root (a full non-owner
+    member cannot touch the audiences)."""
+    if is_instance_admin(user):
+        return True, None
+    if not project or project.get("owner_id") != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Only the project owner can change the audiences")
+    row = await fetch_one("users", user["user_id"]) or {}
+    return False, own_group_subject(user["user_id"], row.get("role"), row.get("moderator_id"))
+
+
+async def _require_live_moderator_subject(audience: str) -> None:
+    """422 unless `audience` is 'mod:<uid>' of a live moderator row (admin writes)."""
+    mod_uid = audience.removeprefix("mod:")
+    row = await fetch_one("users", mod_uid) if mod_uid != audience else None
+    if not row or row.get("deleted_at") or row.get("role") != "moderator":
+        raise HTTPException(status_code=422, detail="a mod: audience subject must be a live moderator's mod:<uid>")
+
+
+async def _guard_audiences(project: dict, new_audiences: list[dict], user: dict) -> None:
+    """Set gate for the audiences list — a diff vs the stored list.
+
+    # INVARIANT(security): ADDED/CHANGED rows are authorized per subject, REMOVED
+    # rows are always allowed for the writer. Why: narrowing a project's audience
+    # never weakens it — the owner revoking the admin-set 'public' row is a
+    # deliberate ruling (the old is_public 403 for the owner is dropped;
+    # _audience_writer already refused everyone else, so a full non-owner member
+    # removes nothing) — while every add/change WIDENS it:
+    #   'public' — an instance-wide broadcast is an operator decision:
+    #     admin-only, and readonly|commentator only (write for everyone is
+    #     never offered);
+    #   admin 'mod:<uid>' — a live moderator row (a dead subject would read as
+    #     granted while granting nothing); 'group:<id>' — an existing groups row;
+    #   non-admin owner — ONLY their own group's subject (a foreign or
+    #     admin-group subject opens the project past the owner's group, and an
+    #     owner who moved groups must not raise what the OLD group gets —
+    #     explicit binding).
+    """
+    is_admin, own = await _audience_writer(project, user)
+    stored = {
+        row.get("subject"): row.get("access_level")
+        for row in (project.get("audiences") or [])
+    }
+    new = {row["subject"]: row["access_level"] for row in new_audiences}
+    for subject, level in new.items():
+        if stored.get(subject) == level:
+            continue  # untouched row rides along in the full-list write
+        if subject == PUBLIC_SUBJECT:
+            if not is_admin:
+                raise HTTPException(status_code=403, detail="Only an admin can set the 'public' audience")
+            if level not in ("readonly", "commentator"):
+                raise HTTPException(status_code=422, detail="The 'public' audience allows readonly or commentator only")
+        elif is_admin:
+            if subject.startswith("mod:"):
+                await _require_live_moderator_subject(subject)
+            else:
+                group_uid = subject.removeprefix("group:")
+                if not await fetch_one("groups", group_uid):
+                    raise HTTPException(status_code=422, detail="audiences subject must be an existing group's group:<id>")
+        elif subject != own:
+            raise HTTPException(status_code=403, detail="Only your own group can be an audience")
+
+
 @router.patch("/api/projects/{project_id}")
 async def patch_project(project_id: str, body: PatchProject, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
-    """Update project fields (name, description, status, is_public, project_context, ref_image_preview). Requires full access or admin."""
+    """Update project fields (name, description, status, audiences, project_context, ref_image_preview). Requires full access or admin."""
     await require_admin_or_project_full(project_id, user)
     updates = body.model_dump(exclude_unset=True)
-    # INVARIANT(security): only the project owner (or admin) may toggle is_public.
-    # Why: is_public is a project-wide read-only broadcast to every logged-in user —
-    # a full-but-not-owner collaborator must not control it (mirrors the owner-only
-    # share-link mint/revoke gate). All other PATCH fields stay full-or-admin.
-    if "is_public" in updates and not is_instance_admin(user):
+    if "audiences" in updates:
         project = await fetch_one("projects", project_id)
-        if not project or project.get("owner_id") != user["user_id"]:
-            raise HTTPException(status_code=403, detail="Only the project owner can change visibility")
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        await _guard_audiences(project, updates["audiences"], user)
     if updates:
         set_parts = []
         params: dict = {"id": project_id}
@@ -671,10 +762,17 @@ async def patch_project(project_id: str, body: PatchProject, user: dict = Depend
             params,
         )
         await emit("project_updated", project_id=project_id, updates=updates)
+        # INVARIANT(security): an audiences change reaches OPEN collab sessions
+        # at once — a project-wide access_changed (user_id=None) makes every
+        # connected client recompute from the just-written rows. Why: the grants
+        # are project-wide, so no single user can be named; and skipping this
+        # is the pre-existing gap where an audience removal reached nobody
+        # until reload.
+        if "audiences" in updates:
+            await emit("access_changed", project_id=project_id, user_id=None, access=None)
     updated = await fetch_one("projects", project_id)
     result = serialize_record(updated, "project_id") if updated else {}
     result["my_access"] = await get_project_access(project_id, user)
-    from access import is_project_root
     result["is_owner_like"] = await is_project_root(updated or {}, user)
     return result
 

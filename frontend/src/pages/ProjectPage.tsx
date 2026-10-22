@@ -280,7 +280,8 @@ export function ProjectPage() {
   // Access-tab tint: strongest active external access on the current doc.
   const currentProject = useAppStore(s => s.currentProject);
   const accessTint = useAccessTabState(
-    currentDocId, currentProject?.project_id ?? null, !!currentProject?.is_public,
+    currentDocId, currentProject?.project_id ?? null,
+    (currentProject?.audiences?.length ?? 0) > 0,
   );
 
   // see SYSTEM: inbox — the caller's unread pool for this project (loaded once,

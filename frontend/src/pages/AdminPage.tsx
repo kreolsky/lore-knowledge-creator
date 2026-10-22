@@ -22,7 +22,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FolderOpen, Users as UsersIcon, Layers, Cpu, Bot, Wrench, Search, Database, Sparkles, Gauge, KeyRound, UsersRound } from 'lucide-react';
-import { apiClient } from '../api/client';
+import { apiClient, isAccessRefusal } from '../api/client';
 import { listAdminProjects, listAdminUsers } from '../api/admin';
 import type { SettingsTabId } from '../api/admin';
 import { useAppStore } from '../store/app-store';
@@ -320,13 +320,15 @@ export function AdminPage() {
     }
   };
 
-  const handleSaveUser = async (user: User, updates: UserUpdates) => {
-    if (!Object.keys(updates).length) return;
+  const handleSaveUser = async (user: User, updates: UserUpdates): Promise<boolean> => {
+    if (!Object.keys(updates).length) return true;
     try {
       const updated = await apiClient.patch(`/admin/users/${user.user_id}`, updates);
       setUsers(prev => prev.map(u => u.user_id === user.user_id ? updated : u));
+      return true;
     } catch (err: unknown) {
       useAppStore.getState().showToast(serverRefusalDetail(err) ?? t('failedToUpdateUser'));
+      return false;
     }
   };
 
@@ -338,16 +340,29 @@ export function AdminPage() {
         await apiClient.post(`/admin/projects/${projectId}/members`, { user_id: userId, access_level: access });
       }
       await loadProjectMembers(projectId);
-      // A change on MY OWN membership moves the open-project button: recompute
-      // the row's my_access with the SAME predicate the server list uses
-      // (owner full / member level, admin-elevated / public readonly / none)
-      // so the button updates without a reload.
+      // A change on MY OWN membership moves the open-project button: take
+      // my_access from the SERVER (the max over the member row and every
+      // audience row — a local fallback cannot mirror user_subjects). 404 on
+      // the re-read = access fully gone (a revoked reader is
+      // answered 404 on every read path); other failures leave the row — the
+      // next list load tells the truth.
       if (userId === currentUser?.user_id) {
-        setProjects(prev => prev.map(p =>
-          p.project_id !== projectId || p.owner_id === currentUser.user_id ? p : {
-            ...p,
-            my_access: access === null ? (p.is_public ? 'readonly' : null) : (isAdmin ? 'full' : access),
-          }));
+        let mine: AccessLevel | null | undefined;
+        try {
+          const resp = await apiClient.get(`/projects/${projectId}`) as { project?: { my_access?: AccessLevel | null } };
+          mine = resp.project?.my_access ?? null;
+        } catch (err) {
+          if (isAccessRefusal(err)) mine = null;
+          else useAppStore.getState().showToast(t('failedToLoadProjects'), 'error');
+        }
+        const next = mine;
+        if (next !== undefined) {
+          setProjects(prev => prev.map(p =>
+            p.project_id !== projectId || p.owner_id === currentUser.user_id ? p : {
+              ...p,
+              my_access: next,
+            }));
+        }
       }
     } catch {
       useAppStore.getState().showToast(t('failedToUpdateAccess'));
@@ -401,16 +416,6 @@ export function AdminPage() {
       setProjects(prev => prev.filter(p => p.project_id !== project.project_id));
     } catch {
       useAppStore.getState().showToast(t('failedToDeleteProject'));
-    }
-  };
-
-  const handleTogglePublic = async (project: Project) => {
-    const newValue = !project.is_public;
-    try {
-      const updated = await apiClient.patch(`/projects/${project.project_id}`, { is_public: newValue });
-      setProjects(prev => prev.map(p => p.project_id === project.project_id ? { ...p, ...updated } : p));
-    } catch {
-      useAppStore.getState().showToast(t('failedToUpdateProject'));
     }
   };
 
@@ -496,7 +501,6 @@ export function AdminPage() {
                   onDelete={handleDeleteProject}
                   onSetAccess={handleSetAccess}
                   onTransferOwner={handleTransferOwner}
-                  onTogglePublic={handleTogglePublic}
                   onToggleExpand={toggleProject}
                   expandedProject={expandedProject}
                   projectMembers={projectMembers}

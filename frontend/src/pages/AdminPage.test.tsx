@@ -61,15 +61,15 @@ const USERS = [
  * 100) ends before "Project 101", so sentinel paging is observable via
  * "Project 150". */
 const ALL_PROJECTS = [
-  { project_id: 'p1', name: 'Alpha Project', owner_id: 'u1', owner_name: 'Alice Admin', is_public: false, my_access: 'full' },
-  { project_id: 'p2', name: 'Beta Project', owner_id: 'u2', owner_name: 'Bob', is_public: true, my_access: 'readonly' },
-  { project_id: 'p_locked', name: 'Locked Project', owner_id: 'u2', owner_name: 'Bob', is_public: false, my_access: null },
+  { project_id: 'p1', name: 'Alpha Project', owner_id: 'u1', owner_name: 'Alice Admin', audiences: [], my_access: 'full' },
+  { project_id: 'p2', name: 'Beta Project', owner_id: 'u2', owner_name: 'Bob', audiences: [{ subject: 'public', access_level: 'readonly' }], my_access: 'readonly' },
+  { project_id: 'p_locked', name: 'Locked Project', owner_id: 'u2', owner_name: 'Bob', audiences: [], my_access: null },
   ...Array.from({ length: 148 }, (_, i) => ({
     project_id: `p${i + 3}`,
     name: `Project ${String(i + 3).padStart(3, '0')}`,
     owner_id: 'u1',
     owner_name: 'Alice Admin',
-    is_public: false,
+    audiences: [],
     my_access: 'full',
   })),
 ];
@@ -92,7 +92,6 @@ const I18N: Record<string, string> = {
   openProject: 'Open project',
   noProjectAccess: 'No access',
   publicLabel: 'Public',
-  privateLabel: 'Private',
   inviteLink: 'Invite link',
   inviteLinkCopied: 'Invite link copied',
   failedToCreateInvite: 'Failed to create the invite link',
@@ -106,6 +105,7 @@ const I18N: Record<string, string> = {
   clearPassword: 'Clear password',
   copied: 'Copied!',
   save: 'Save',
+  saved: 'Saved',
   cancel: 'Cancel',
   adminInfo: 'Info',
   settingsModels: 'Models & APIs',
@@ -141,7 +141,7 @@ class IntersectionObserverStub {
 
 beforeEach(async () => {
   vi.resetModules();
-  appState = { currentUser: { user_id: 'u1', name: 'Alice Admin', role: 'admin', is_admin: true, can_manage_users: true }, showToast: vi.fn(), sectionOrigin: null, sectionCrumb: null };
+  appState = { currentUser: { user_id: 'u1', name: 'Alice Admin', role: 'admin', is_admin: true, can_manage_users: true, can_publish_project: true }, showToast: vi.fn(), sectionOrigin: null, sectionCrumb: null };
   appState.setSectionCrumb = vi.fn((label: string | null) => { appState.sectionCrumb = label; });
   navigate = vi.fn();
   apiPatch = vi.fn(() => Promise.resolve({}));
@@ -311,7 +311,8 @@ async function dropdownOptionLabels(scope: ParentNode, title: string): Promise<s
   const [trigger] = dropdownTriggers(scope, title);
   expect(trigger, `dropdown "${title}"`).toBeDefined();
   await act(async () => { trigger.click(); });
-  const labels = Array.from(scope.querySelectorAll('[role=option]')).map(o => o.textContent ?? '');
+  // The first `.truncate` is the label; an option's `note` (email) renders below it.
+  const labels = Array.from(scope.querySelectorAll('[role=option]')).map(o => o.querySelector('.truncate')?.textContent ?? '');
   await act(async () => { trigger.click(); });
   return labels;
 }
@@ -393,23 +394,26 @@ describe('AdminPage — sections (initial = Users)', () => {
     // No access → no anchor at all; a disabled placeholder carries the reason.
     expect(card('Locked Project').querySelector('a[href="/projects/p_locked"]')).toBeNull();
     expect(card('Locked Project').querySelector('span[title="No access"]')).not.toBeNull();
-    // Access (owner, member, or public-readonly) → the link stays.
+    // Access (owner, member, or audience row) → the link stays.
     expect(card('Alpha Project').querySelector('a[href="/projects/p1"]')).not.toBeNull();
     expect(card('Beta Project').querySelector('a[href="/projects/p2"]')).not.toBeNull();
+    // Audience editing lives in the settings panel only: the card carries a
+    // PASSIVE badge (a span), never a toggle button — for admins too.
+    expect(Array.from(card('Beta Project').querySelectorAll('button')).some(b => b.textContent === 'Public')).toBe(false);
+    expect(card('Beta Project').textContent).toContain('Public');
   });
 
-  it('the public/private toggle wears the accent fill only while public', async () => {
+  it('the Public badge wears the accent fill and appears only for a public project', async () => {
     await openProjects();
-    const labelBtn = (title: string, label: string) =>
-      Array.from(
-        Array.from(main()!.querySelectorAll('section'))
-          .find(s => s.textContent!.startsWith(title))!
-          .querySelectorAll('button'),
-      ).find(b => b.textContent === label)!;
+    const card = (title: string) =>
+      Array.from(main()!.querySelectorAll('section'))
+        .find(s => s.textContent!.startsWith(title))!;
     // Public state must read at a glance (accent = purple) that the project is
-    // open to everyone; private stays the quiet ghost.
-    expect(labelBtn('Beta Project', 'Public').classList.contains('bg-accent')).toBe(true);
-    expect(labelBtn('Alpha Project', 'Private').classList.contains('bg-accent')).toBe(false);
+    // open to everyone; a private project carries no badge at all.
+    const badge = card('Beta Project').querySelector('span.bg-accent')!;
+    expect(badge.textContent).toBe('Public');
+    expect(card('Alpha Project').querySelector('span.bg-accent')).toBeNull();
+    expect(card('Alpha Project').textContent).not.toContain('Private');
   });
 });
 
@@ -777,7 +781,7 @@ describe('AdminPage — user card: collapsed row, expand-down edit panel, one PA
     expect(alice.querySelector('button[title="Delete user"]')).toBeNull();
   });
 
-  it('Save sends ONE PATCH with only the changed name + the typed password (no email key) and closes the panel', async () => {
+  it('Save sends ONE PATCH with only the changed name + the typed password (no email key), keeps the panel open and marks it Saved until the next edit', async () => {
     await openUsers();
     apiPatch.mockResolvedValueOnce({ user_id: 'u2', name: 'Bobby', email: 'bob@x.test', role: 'user', has_pin: false });
     clickPencil('bob@x.test');
@@ -787,19 +791,21 @@ describe('AdminPage — user card: collapsed row, expand-down edit panel, one PA
     clickButtonWithText(card('bob@x.test'), 'Save');
     await act(async () => {});
     expect(apiPatch.mock.calls).toEqual([['/admin/users/u2', { name: 'Bobby', password: 's3cret' }]]);
-    expect(inputs(card('bob@x.test'))).toHaveLength(0);
-    expect(card('bob@x.test').textContent).toContain('Bobby');
+    expect(inputs(card('bob@x.test')).map(i => i.value)).toEqual(['Bobby', 'bob@x.test', '']);
+    expect(card('bob@x.test').textContent).toContain('Saved');
+
+    await typeInto(inputs(card('bob@x.test'))[0], 'Bobby2');
+    expect(card('bob@x.test').textContent).not.toContain('Saved');
   });
 
-  it('Save with nothing changed closes without a request; Cancel closes without a request', async () => {
+  it('Save with nothing changed sends no request and stays open; Cancel closes without a request', async () => {
     await openUsers();
     clickPencil('bob@x.test');
     clickButtonWithText(card('bob@x.test'), 'Save');
     await act(async () => {});
     expect(apiPatch).not.toHaveBeenCalled();
-    expect(inputs(card('bob@x.test'))).toHaveLength(0);
+    expect(inputs(card('bob@x.test'))).toHaveLength(3);
 
-    clickPencil('bob@x.test');
     await typeInto(inputs(card('bob@x.test'))[0], 'Changed');
     clickButtonWithText(card('bob@x.test'), 'Cancel');
     expect(apiPatch).not.toHaveBeenCalled();
@@ -883,28 +889,64 @@ describe('AdminPage — moderator view (can_manage_users && !is_admin)', () => {
   it('removing MYSELF from a project disables its open button at once', async () => {
     const project = {
       project_id: 'p9', name: 'Group Project', owner_id: 'u3', owner_name: 'Carol',
-      is_public: false, my_access: 'commentator',
+      audiences: [], my_access: 'commentator',
     };
     (apiGet as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
       const [path] = url.split('?');
       if (path === '/admin/users') return Promise.resolve(USERS);
       if (path === '/admin/projects') return Promise.resolve([project]);
       if (path === '/admin/projects/p9/members') return Promise.resolve({ m1: 'commentator' });
+      // my_access comes from the SERVER after a self-membership change — the
+      // re-read of the project, never a local audiences fallback.
+      if (path === '/projects/p9') return Promise.resolve({ project: { project_id: 'p9', my_access: null } });
       return Promise.resolve([]);
     });
     await renderAsModerator();
     clickSection('Projects');
     await act(async () => {});
     const card = main()!.querySelector('section')!;
+    // The card badge is passive for everyone: no Public button (nothing to
+    // 403 on click), and a project with no 'public' row carries no badge.
+    expect(Array.from(card.querySelectorAll('button')).some(b => b.textContent === 'Public')).toBe(false);
+    expect(card.textContent).not.toContain('Public');
     // Member (commentator) → the open link is live.
     expect(card.querySelector('a[href="/projects/p9"]')).not.toBeNull();
     act(() => { card.querySelector<HTMLButtonElement>('button')!.click(); });
     await act(async () => {});
     await act(async () => { (card.querySelector('button[title="Remove access"]') as HTMLButtonElement).click(); });
     expect(apiDelete).toHaveBeenCalledWith('/admin/projects/p9/members/m1');
-    // Private, not a member anymore → disabled immediately, no reload.
+    expect(apiGet).toHaveBeenCalledWith('/projects/p9');
+    // Server says no access left → disabled immediately, no reload.
     expect(card.querySelector('a[href="/projects/p9"]')).toBeNull();
     expect(card.querySelector('span[title="No access"]')).not.toBeNull();
+  });
+
+  it('removing MYSELF keeps the open button when a group audience remains (my_access from the server)', async () => {
+    const project = {
+      project_id: 'p9', name: 'Group Project', owner_id: 'u3', owner_name: 'Carol',
+      audiences: [{ subject: 'mod:m1', access_level: 'readonly' }], my_access: 'commentator',
+    };
+    (apiGet as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      const [path] = url.split('?');
+      if (path === '/admin/users') return Promise.resolve(USERS);
+      if (path === '/admin/projects') return Promise.resolve([project]);
+      if (path === '/admin/projects/p9/members') return Promise.resolve({ m1: 'commentator' });
+      // The removed row leaves the group audience grant underneath — the
+      // server re-read resolves it, the old local fallback said null.
+      if (path === '/projects/p9') return Promise.resolve({ project: { project_id: 'p9', my_access: 'readonly' } });
+      return Promise.resolve([]);
+    });
+    await renderAsModerator();
+    clickSection('Projects');
+    await act(async () => {});
+    const card = main()!.querySelector('section')!;
+    act(() => { card.querySelector<HTMLButtonElement>('button')!.click(); });
+    await act(async () => {});
+    await act(async () => { (card.querySelector('button[title="Remove access"]') as HTMLButtonElement).click(); });
+    expect(apiDelete).toHaveBeenCalledWith('/admin/projects/p9/members/m1');
+    // readonly (the audience level) — the link stays live.
+    expect(card.querySelector('a[href="/projects/p9"]')).not.toBeNull();
+    expect(card.querySelector('span[title="No access"]')).toBeNull();
   });
 
   it('user edit panel has no role select for a moderator', async () => {
@@ -1045,14 +1087,12 @@ describe('AdminPage — admin-only surfaces', () => {
     clickButtonWithText(localCard('bob@x.test'), 'Save');
     await act(async () => {});
     expect(appState.showToast).toHaveBeenCalledWith('Cannot change your own role');
+    // A refused save keeps the draft and never claims Saved.
+    expect(localCard('bob@x.test').querySelectorAll('input')[0].value).toBe('Bobby');
+    expect(localCard('bob@x.test').textContent).not.toContain('Saved');
 
     // pydantic 422 shape: detail is an ARRAY — the short-password refusal.
-    // (The panel closes after every Save — reopen it for the second round.)
     (apiPatch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new HttpError(422, '{"detail":[{"type":"string_too_short","loc":["body","password"],"msg":"String should have at least 6 characters"}]}'));
-    act(() => { (localCard('bob@x.test').querySelector('button[title="Edit name / email"]') as HTMLButtonElement).click(); });
-    await act(async () => {});
-    const reopened = localCard('bob@x.test').querySelectorAll('input')[0];
-    await typeInto(reopened, 'Bobby');
     clickButtonWithText(localCard('bob@x.test'), 'Save');
     await act(async () => {});
     expect(appState.showToast).toHaveBeenCalledWith('String should have at least 6 characters');

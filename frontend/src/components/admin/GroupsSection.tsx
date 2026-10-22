@@ -72,12 +72,14 @@ function AdminGroupEditor({ group, users, disabled, onRename, onMembers }: {
       <div className="flex gap-2 items-center">
         <FieldInput
           className="flex-1"
+          onPanel
           value={name}
           onChange={e => setName(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && name.trim()) onRename(name.trim()); }}
           disabled={disabled}
         />
         <Button
+          variant="primary"
           size="lg"
           disabled={disabled || !name.trim() || name.trim() === group.name}
           onClick={() => onRename(name.trim())}
@@ -87,6 +89,7 @@ function AdminGroupEditor({ group, users, disabled, onRename, onMembers }: {
       </div>
       <FieldInput
         className="w-full"
+        onPanel
         placeholder={t('filterUsers')}
         value={filter}
         onChange={e => setFilter(e.target.value)}

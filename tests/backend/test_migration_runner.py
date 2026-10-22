@@ -50,6 +50,8 @@ def test_migrations_registry_order_snapshot():
         "turn_timeout_override_fold",
         "chat_branches_to_sessions",
         "note_links_to_anchors",
+        "public_to_group_audience",
+        "audiences_to_list",
     ]
     # Every entry resolves to a distinct callable (a lost import would leave a
     # duplicated/None fn but keep the name).

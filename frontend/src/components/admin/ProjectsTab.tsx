@@ -1,6 +1,7 @@
-/** Admin: full project list — per-project card with rename, delete, public
- * toggle and members. All mutation handlers stay in AdminPage; each card owns
- * only its inline edit state, so one project's rename cannot leak into another.
+/** Admin: full project list — per-project card with rename, delete, a
+ * passive Public badge and members. All mutation handlers stay in AdminPage;
+ * each card owns only its inline edit state, so one project's rename cannot
+ * leak into another.
  */
 
 import { useState, useRef } from 'react';
@@ -18,7 +19,6 @@ interface ProjectCardProps {
   onDelete: (project: Project, confirmValue: string) => void;
   onSetAccess: (projectId: string, userId: string, access: AccessLevel | null) => void;
   onTransferOwner: (projectId: string, userId: string) => Promise<boolean>;
-  onTogglePublic: (project: Project) => void;
   onToggleExpand: (projectId: string) => void;
   expanded: boolean;
   members: Record<string, string>;
@@ -31,7 +31,6 @@ interface ProjectsTabProps {
   onDelete: (project: Project, confirmValue: string) => void;
   onSetAccess: (projectId: string, userId: string, access: AccessLevel | null) => void;
   onTransferOwner: (projectId: string, userId: string) => Promise<boolean>;
-  onTogglePublic: (project: Project) => void;
   onToggleExpand: (projectId: string) => void;
   expandedProject: string | null;
   projectMembers: Record<string, Record<string, string>>;
@@ -60,7 +59,6 @@ function ProjectCard({
   onDelete,
   onSetAccess,
   onTransferOwner,
-  onTogglePublic,
   onToggleExpand,
   expanded,
   members,
@@ -157,15 +155,15 @@ function ProjectCard({
           )}
         </span>
 
-        {/* Accent fill only while PUBLIC: the project being open to everyone
-         * must read at a glance from the list; private stays the quiet ghost. */}
-        <Button
-          variant={project.is_public ? 'primary' : 'ghost'}
-          size="sm"
-          onClick={() => onTogglePublic(project)}
-        >
-          {project.is_public ? t('publicLabel') : t('privateLabel')}
-        </Button>
+        {/* Accent badge only while PUBLIC (a 'public' audience row): the
+         * project being open to everyone must read at a glance from the list.
+         * Passive for everyone — audience editing lives in the project's
+         * settings panel; a list-row toggle is a dead control here. */}
+        {project.audiences.some(a => a.subject === 'public') && (
+          <span className="inline-flex items-center h-[22px] px-2.5 text-xs whitespace-nowrap bg-accent text-white">
+            {t('publicLabel')}
+          </span>
+        )}
 
         <IconButton
           size="sm"

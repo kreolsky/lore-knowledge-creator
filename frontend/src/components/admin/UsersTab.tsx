@@ -87,7 +87,8 @@ interface UserCardProps {
   currentUserId: string | undefined;
   expanded: boolean;
   onToggleExpand: () => void;
-  onSave: (user: User, updates: UserUpdates) => void;
+  /** Resolves true once the PATCH landed (or there was nothing to save). */
+  onSave: (user: User, updates: UserUpdates) => Promise<boolean>;
   onDelete: (userId: string) => void;
   /** Admin-only surfaces: role + group selects in the edit panel. */
   isAdmin: boolean;
@@ -144,7 +145,7 @@ function UserCard({ user, currentUserId, expanded, onToggleExpand, onSave, onDel
           user={user}
           canDelete={user.user_id !== currentUserId}
           isSelf={user.user_id === currentUserId}
-          onSave={updates => { onSave(user, updates); onToggleExpand(); }}
+          onSave={updates => onSave(user, updates)}
           onCancel={onToggleExpand}
           onDelete={() => onDelete(user.user_id)}
           isAdmin={isAdmin}
@@ -161,7 +162,7 @@ interface UserEditPanelProps {
   /** The current user's own card: role/group selects stay hidden (the
    * server refuses self role changes — offer nothing that cannot save). */
   isSelf: boolean;
-  onSave: (updates: UserUpdates) => void;
+  onSave: (updates: UserUpdates) => Promise<boolean>;
   onCancel: () => void;
   onDelete: () => void;
   isAdmin: boolean;
@@ -169,7 +170,8 @@ interface UserEditPanelProps {
 }
 
 /** Mounted only while the card is expanded, so the draft state resets on
- * every open and the password field never pre-fills.
+ * every open and the password field never pre-fills. A save keeps the panel
+ * open and shows "Saved" until the next edit.
  */
 function UserEditPanel({ user, canDelete, isSelf, onSave, onCancel, onDelete, isAdmin, moderators }: UserEditPanelProps) {
   const { t } = useTranslation();
@@ -179,6 +181,9 @@ function UserEditPanel({ user, canDelete, isSelf, onSave, onCancel, onDelete, is
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<Role>(user.role);
   const [moderatorId, setModeratorId] = useState<string | null>(user.moderator_id ?? null);
+  const [saved, setSaved] = useState(false);
+  // Any draft edit makes the "Saved" mark stale.
+  const edit = <V,>(set: (v: V) => void) => (v: V) => { setSaved(false); set(v); };
 
   const commit = () => {
     const updates: UserUpdates = {};
@@ -196,7 +201,11 @@ function UserEditPanel({ user, canDelete, isSelf, onSave, onCancel, onDelete, is
         updates.moderator_id = role === 'user' ? moderatorId : null;
       }
     }
-    onSave(updates);
+    void onSave(updates).then(ok => {
+      if (!ok) return;
+      setPassword('');
+      setSaved(true);
+    });
   };
 
   const keys = (e: KeyboardEvent) => {
@@ -210,29 +219,32 @@ function UserEditPanel({ user, canDelete, isSelf, onSave, onCancel, onDelete, is
     <div className="border-t border-border py-2 px-3.5 flex flex-col gap-2">
       <div className="flex items-center gap-2 flex-wrap">
         <FieldInput
+          onPanel
           className="w-[140px]"
           value={name}
-          onChange={e => setName(e.target.value)}
+          onChange={e => edit(setName)(e.target.value)}
           placeholder={t('name')}
           autoComplete="off"
           autoFocus
           onKeyDown={keys}
         />
         <FieldInput
+          onPanel
           type="email"
           className="w-[180px]"
           value={email}
-          onChange={e => setEmail(e.target.value)}
+          onChange={e => edit(setEmail)(e.target.value)}
           placeholder={t('email')}
           autoComplete="off"
           onKeyDown={keys}
         />
         <div className="flex gap-1">
           <FieldInput
+            onPanel
             type="password"
             className="w-[140px]"
             value={password}
-            onChange={e => setPassword(e.target.value)}
+            onChange={e => edit(setPassword)(e.target.value)}
             placeholder={t('newPassword')}
             autoComplete="new-password"
             onKeyDown={keys}
@@ -244,7 +256,7 @@ function UserEditPanel({ user, canDelete, isSelf, onSave, onCancel, onDelete, is
             title={t('generatePasswordTitle')}
             onClick={() => {
               const pwd = generatePassword();
-              setPassword(pwd);
+              edit(setPassword)(pwd);
               navigator.clipboard.writeText(pwd);
               showToast(t('copied'), 'info');
             }}
@@ -257,7 +269,7 @@ function UserEditPanel({ user, canDelete, isSelf, onSave, onCancel, onDelete, is
             size="lg-square"
             title={t('clearPassword')}
             disabled={!password}
-            onClick={() => setPassword('')}
+            onClick={() => edit(setPassword)('')}
           >
             <X size={14} />
           </Button>
@@ -271,7 +283,7 @@ function UserEditPanel({ user, canDelete, isSelf, onSave, onCancel, onDelete, is
             title={t('role')}
             value={role}
             options={roleOptions(t)}
-            onSelect={v => setRole(v as Role)}
+            onSelect={v => edit(setRole)(v as Role)}
           />
         )}
         {isAdmin && !isSelf && role === 'user' && (
@@ -281,11 +293,12 @@ function UserEditPanel({ user, canDelete, isSelf, onSave, onCancel, onDelete, is
             title={t('group')}
             value={moderatorId ?? ''}
             options={groupOptions(t, moderators)}
-            onSelect={v => setModeratorId(v || null)}
+            onSelect={v => edit(setModeratorId)(v || null)}
           />
         )}
         <Button variant="primary" size="lg" onClick={commit}>{t('save')}</Button>
         <Button variant="ghost" size="lg" onClick={onCancel}>{t('cancel')}</Button>
+        {saved && <span className="text-sm text-text-dim">{t('saved')}</span>}
         <span className="flex-1" />
         {canDelete && <UserDeleteButton onDelete={onDelete} />}
       </div>

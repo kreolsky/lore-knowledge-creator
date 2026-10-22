@@ -37,6 +37,10 @@ def capability_flags(role: str | None) -> dict:
     return {
         "is_admin": role == "admin",
         "can_manage_users": role in USER_MANAGER_ROLES,
+        # 'public' ("All users") and any foreign-group audience row are
+        # admin-only writes: the audience editor gates on this flag (an owner
+        # may still set their own group's row and remove rows).
+        "can_publish_project": role == "admin",
     }
 
 

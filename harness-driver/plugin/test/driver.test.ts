@@ -48,7 +48,7 @@ async function whileRunning(dshId: string, body: () => Promise<void>): Promise<v
   }
 }
 import { reasoningEffortsDeclaration } from '../src/caps.ts'
-import { WEB_SEARCH_KEY_REF } from '../src/web-search/key.ts'
+import { ROUTER_URL_REF, WEB_SEARCH_KEY_REF } from '../src/web-search/key.ts'
 
 function ev(seq: number, type: string, data?: any, surfaceOp?: any): any {
   return { seq, type, data, surfaceOp }
@@ -518,8 +518,8 @@ test('a changed provider edits web exactly once, keeping every other field; the 
     web: { searchProvider: 'deepseek-official', fetchProvider: 'http' },
   })
   const creds = fakeCredentials()
-  await ensureWebSearch(editor, creds, 'lore-brave', 'brave-key')
-  await ensureWebSearch(editor, creds, 'lore-brave', 'brave-key')
+  await ensureWebSearch(editor, creds, 'lore-brave', 'brave-key', '')
+  await ensureWebSearch(editor, creds, 'lore-brave', 'brave-key', '')
   assert.deepEqual(editor.edits, [
     { id: 'web', next: { searchProvider: 'lore-brave', fetchProvider: 'http' } },
   ])
@@ -530,26 +530,39 @@ test('the credential lands under the ONE ref only when it differs — empty UNSE
   const creds = fakeCredentials()
   // First turn on a fresh install: nothing stored, the payload says '' — a
   // missing ref IS the empty credential (the loud no-key failure).
-  await ensureWebSearch(editor, creds, 'deepseek-official', '')
-  await ensureWebSearch(editor, creds, 'deepseek-official', '')
+  await ensureWebSearch(editor, creds, 'deepseek-official', '', '')
+  await ensureWebSearch(editor, creds, 'deepseek-official', '', '')
   assert.deepEqual(creds.sets, [], 'no write and no unset for an already-absent key')
   // An admin sets a key: one write.
-  await ensureWebSearch(editor, creds, 'deepseek-official', 'sk-deepseek')
+  await ensureWebSearch(editor, creds, 'deepseek-official', 'sk-deepseek', '')
   assert.deepEqual(creds.sets, [[WEB_SEARCH_KEY_REF, 'sk-deepseek']])
   // An admin clears the key: the off switch UNSETS the ref (credentials-local
   // refuses to store '').
-  await ensureWebSearch(editor, creds, 'deepseek-official', '')
+  await ensureWebSearch(editor, creds, 'deepseek-official', '', '')
   assert.deepEqual(creds.sets.at(-1), [WEB_SEARCH_KEY_REF, undefined])
   assert.deepEqual(editor.edits, [], 'an unchanged provider never edits, whatever the key does')
+})
+
+test('the turn gateway URL lands under the router ref only when it differs — empty UNSETS', async () => {
+  const editor = fakeConfigEditor({ web: { searchProvider: 'lore-router', fetchProvider: 'http' } })
+  const creds = fakeCredentials()
+  await ensureWebSearch(editor, creds, 'lore-router', 'claude/haiku', 'http://router:8080/v1')
+  await ensureWebSearch(editor, creds, 'lore-router', 'claude/haiku', 'http://router:8080/v1')
+  assert.deepEqual(creds.sets, [
+    [WEB_SEARCH_KEY_REF, 'claude/haiku'],
+    [ROUTER_URL_REF, 'http://router:8080/v1'],
+  ])
+  await ensureWebSearch(editor, creds, 'lore-router', 'claude/haiku', '')
+  assert.deepEqual(creds.sets.at(-1), [ROUTER_URL_REF, undefined])
 })
 
 test('a missing seam fails loud — the pin and the key are not optional', async () => {
   const editor = fakeConfigEditor({ web: {} })
   await assert.rejects(
-    ensureWebSearch(undefined, fakeCredentials(), 'lore-brave', 'k'),
+    ensureWebSearch(undefined, fakeCredentials(), 'lore-brave', 'k', ''),
     /config editor is not composed/)
   await assert.rejects(
-    ensureWebSearch(editor, undefined, 'lore-brave', 'k'),
+    ensureWebSearch(editor, undefined, 'lore-brave', 'k', ''),
     /credentials service is not composed/)
 })
 

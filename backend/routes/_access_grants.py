@@ -14,7 +14,7 @@ from uuid import uuid4
 from surrealdb import AsyncSurreal
 
 import event_bus
-from access import get_user_by_email
+from access import get_user_by_email, recompute_project_access
 from db import create_record, extract_id, get_db, record_refs
 
 
@@ -66,7 +66,11 @@ async def grant_or_queue(
 
     # INVARIANT(security): Silent invite — identical response whether the email is
     # registered or queued. Why: prevents enumeration of registered users via
-    # the invite endpoint (security contract).
+    # the invite endpoint (security contract). The group-restricted caller
+    # never reaches this service with a foreign email — the roster gate in
+    # require_group_scoped_invite (routes/projects_members.py) refuses it
+    # upstream with a loud 403, so this contract covers the admin and
+    # no-group paths only.
     # INVARIANT(security): owner is never a member row. Why: owner access is
     # implied by projects.owner_id; a row would only leak into GET /members.
     """
@@ -127,4 +131,9 @@ async def _apply_grant(
             "user_id": target_uid,
             "access_level": access_level,
         })
-    await event_bus.emit("access_changed", project_id=project_id, user_id=target_uid, access=access_level)
+    # RECOMPUTED, never the written row level: a group audience or public grant
+    # may sit underneath and hold the effective level higher.
+    await event_bus.emit(
+        "access_changed", project_id=project_id, user_id=target_uid,
+        access=await recompute_project_access(project_id, target_uid),
+    )

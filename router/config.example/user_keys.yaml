@@ -1,0 +1,9 @@
+# Client keys. Lore is the one client: put this key into Lore's .env as
+# AI_API_KEY. Mint a key with
+#   docker compose run --rm --no-deps router python scripts/generate_key.py
+# (prints nnp-v1-<64 hex>) and paste it below.
+user_keys:
+  lore:                       # this name is the "user" on the router's /stat/ page
+    api_key: REPLACE-with-a-generated-key
+    allowed_models:           # empty = all models
+    allowed_endpoints:        # empty = all endpoints

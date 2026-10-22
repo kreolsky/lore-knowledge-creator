@@ -28,6 +28,12 @@
 # blocks egress to those addresses — set it to the HOST's own public IP if a
 # firewall in front of the published port filters by source IP: Docker hairpin
 # DNAT would otherwise let the sandbox reach that port from inside.
+#
+# Bundled LLM router (optional): `router` below is our OpenAI-compatible gateway
+# (github.com/kreolsky/llm-api-gateway), off unless COMPOSE_PROFILES=router is in
+# .env. Its YAML config lives on the host in router/config/ (start from
+# router/config.example/ in the repository) and its provider keys in router/.env;
+# Lore reaches it at AI_API_URL=http://router:8000/v1. See docs/self-hosting.md.
 
 name: lore
 
@@ -206,6 +212,33 @@ services:
       backend:
         condition: service_healthy
 
+  # The bundled LLM router — only with COMPOSE_PROFILES=router. The image carries
+  # no config: without ./router/config `up` stops at "bind source path does not
+  # exist", and it re-reads the YAML every 5 s. Not published on a host port;
+  # the backend and the harness reach it on the default network at router:8000.
+  router:
+    image: ghcr.io/kreolsky/llm-api-gateway:${ROUTER_VERSION:-1.3.0}
+    profiles: [router]
+    restart: unless-stopped
+    env_file:
+      - path: router/.env
+        required: false
+    volumes:
+      # WHY create_host_path: false — a missing router/config is otherwise created
+      # by Docker as root, and fetching the example config into it then fails.
+      - type: bind
+        source: ./router/config
+        target: /app/config
+        bind:
+          create_host_path: false
+      - router-usage:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
   # One-shot: writes the SSH keypair the bundled sandbox and the backend share
   # — the private half stays in the volume (backend reads it read-only), the
   # public half is installed into sshd by the sandbox entrypoint. Exits 0
@@ -304,3 +337,4 @@ volumes:
   harness-attachments:
   sandbox-keys:
   sandbox-workspace:
+  router-usage:

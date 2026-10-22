@@ -164,7 +164,7 @@ async def test_agent_key_of_removed_member_forbidden_on_write_read_stays(client,
         from db import get_db
         db = await get_db()
         await db.query(
-            "UPDATE type::record('projects', $id) SET is_public = true", {"id": w["pid"]},
+            "UPDATE type::record('projects', $id) SET audiences = [{subject: 'public', access_level: 'readonly'}]", {"id": w["pid"]},
         )
         await db.query("DELETE type::record('project_members', $id)", {"id": pm})
         key = await _agent_key(test_db, w["member_uid"], w["pid"])
@@ -218,7 +218,7 @@ async def test_admin_public_nonmember_get_project_access_full(client, test_db, a
     from db import get_db
     db = await get_db()
     await db.query(
-        "UPDATE type::record('projects', $id) SET is_public = true", {"id": w["pid"]},
+        "UPDATE type::record('projects', $id) SET audiences = [{subject: 'public', access_level: 'readonly'}]", {"id": w["pid"]},
     )
     from access import get_project_access
     assert await get_project_access(
@@ -276,7 +276,7 @@ async def test_admin_agent_key_on_public_without_membership_resolves_readonly_no
     from db import get_db
     db = await get_db()
     await db.query(
-        "UPDATE type::record('projects', $id) SET is_public = true", {"id": w["pid"]},
+        "UPDATE type::record('projects', $id) SET audiences = [{subject: 'public', access_level: 'readonly'}]", {"id": w["pid"]},
     )
     key = await _agent_key(test_db, w["admin_uid"], w["pid"])
     from api_key_auth import resolve_api_key
@@ -443,7 +443,7 @@ async def test_project_list_admin_public_nonmember_owner_like_false(client, test
     from db import get_db
     db = await get_db()
     await db.query(
-        "UPDATE type::record('projects', $id) SET is_public = true", {"id": w["pid"]},
+        "UPDATE type::record('projects', $id) SET audiences = [{subject: 'public', access_level: 'readonly'}]", {"id": w["pid"]},
     )
     r = await client.get("/api/projects", cookies={"lore_session": w["sadmin_tok"]})
     assert r.status_code == 200

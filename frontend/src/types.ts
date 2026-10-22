@@ -11,6 +11,16 @@
 
 export type AccessLevel = 'full' | 'commentator' | 'readonly';
 
+/** One row of a project's audiences list (Project.audiences): a subject the
+ * project is open to, at a level. The subject is 'public' (every logged-in
+ * user; readonly|commentator only, admin-written), 'mod:<uid>' (a moderator
+ * group) or 'group:<id>' (an admin group). Effective access = MAX over the
+ * member row and every audience row the caller's subjects match. */
+export interface Audience {
+  subject: string;
+  access_level: AccessLevel;
+}
+
 export type Language = 'en' | 'ru';
 
 /** Instance role — mirrors the backend Literal (models/auth.py). */
@@ -34,6 +44,15 @@ export interface User {
    * never on role string comparisons in TSX. */
   is_admin?: boolean;
   can_manage_users?: boolean;
+  /** Admin-only decisions: writing 'public' rows and any-group audience rows
+   * (the whole multi-row editor). Gates AudienceSection's admin branch; the
+   * backend guard (patch_project) enforces the same line. */
+  can_publish_project?: boolean;
+  /** The caller's own moderator-group subject ('mod:<uid>') from /me + login;
+   * null for an admin or a user without a group. Gates the own-group audience
+   * control and the roster invite picker — must agree with the backend
+   * require_group_scoped_invite boundary (same derivation, own_group_subject). */
+  group_subject?: string | null;
   /** Free-text biographical notes about the user (editable by user themselves). */
   user_facts: string;
   /** IANA timezone (e.g. "Europe/Moscow"), auto-detected by the client on session start. */
@@ -65,7 +84,10 @@ export interface Project {
   last_accessed_doc_id: string | null;
   owner_id: string | null;
   owner_name?: string | null;
-  is_public: boolean;
+  /** The audiences list as stored — every row opens the project to a subject
+   * (Audience) at a level, beyond the member rows. [] = members only. The
+   * client always PATCHes the FULL list (clearing is []). */
+  audiences: Audience[];
   /** Caller's access level for this project, computed server-side from project_members. Null if no access. */
   my_access: AccessLevel | null;
   /** Whether the caller is a project root (the owner, or an admin with a member
@@ -83,6 +105,15 @@ export interface ProjectMember {
   name: string;
   access_level: AccessLevel;
   pending?: boolean;
+}
+
+/** One member of the caller's moderator group — GET /api/me/group-roster
+ * ({moderator} ∪ active members minus self; [] for an admin / no group). The
+ * invite picker's data source for a group-bound owner. */
+export interface GroupRosterEntry {
+  user_id: string;
+  name: string;
+  email: string;
 }
 
 export interface SearchSnippet {

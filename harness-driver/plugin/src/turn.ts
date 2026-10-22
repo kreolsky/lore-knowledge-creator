@@ -467,6 +467,7 @@ async function buildTurnPrep(ctx: Context, map: SessionMap, body: Record<string,
       ctx.get('credentials') as CredentialsSeam | undefined,
       typeof body.web_search_provider === 'string' ? body.web_search_provider : '',
       typeof body.web_search_credential === 'string' ? body.web_search_credential : '',
+      gateway.base,
     )
     const blocks = await prepareUserContent(
       body.prompt, saveImage, ctx.get('settings'), model, cap, maxOut,
