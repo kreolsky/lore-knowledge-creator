@@ -164,7 +164,7 @@ async def harness_env(monkeypatch, driver_line_pinned):
     monkeypatch.setattr(driver.channel, "_ws_connect", connector)
     monkeypatch.setattr(driver.channel, "fetch_session_entries", replay)
     # GET messages reads the timeline from driver.timeline's OWN namespace
-    # (deferred import in routes/chat/messages.py), not the channel's — left
+    # (deferred import in routes/chat/timeline_attach.py), not the channel's — left
     # unpatched it called the LIVE harness container on gray.
     monkeypatch.setattr(driver.timeline, "fetch_session_entries", replay)
     monkeypatch.setattr(driver.timeline, "fetch_session_status", statuses)

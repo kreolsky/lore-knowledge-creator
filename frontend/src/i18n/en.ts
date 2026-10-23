@@ -113,6 +113,9 @@ export const en = {
   recordingRequiresAccess: 'Recording requires edit access',
   recordAudioFor: 'Record audio for "{title}"',
   openDocToRecord: 'Open a document to record',
+  // capability tiers (see SYSTEM: capability-tiers)
+  tierVoiceRequired: 'Voice features are not enabled for your account',
+  tierAiRequired: 'AI features are not enabled for your account',
 
   // toast / errors
   serverUnavailable: 'Server temporarily unavailable',
@@ -121,6 +124,7 @@ export const en = {
   recordingRestoredPartial: 'Restored an unfinished recording (browser closed mid-take) — uploading…',
   recordingRestoreFailed: 'Restored recording discarded — access to its document was refused',
   recordingKeptForRetry: 'Recording not sent — it will retry when the project is next opened',
+  recordingCacheDegraded: 'Recording crash protection is off — this take will still upload from memory',
   voiceTranscriptionFailed: 'Voice transcription failed — please try again',
   voiceTranscriptionEmpty: 'Nothing recognized — try speaking again',
   accessRevokedOrExpired: 'Access revoked or session expired — please reload',
@@ -601,6 +605,7 @@ export const en = {
   adminModelTier: 'Visibility',
   adminModelGroupCount: 'groups: {count}',
   adminModelSaveFailed: 'Failed to save model access',
+  adminModelOrderFailed: 'Failed to save model order',
   adminGroups: 'Groups',
   adminGroupsHint: 'Groups receive model grants. Moderator groups follow each user\'s moderator and are edited on the Users section.',
   adminGroupsEmpty: 'No groups yet',
@@ -642,6 +647,10 @@ export const en = {
   userRole: 'User',
   adminRole: 'Admin',
   moderatorRole: 'Moderator',
+  tierLabel: 'Tier',
+  tierAi: 'AI',
+  tierVoice: 'Voice',
+  tierBase: 'Base',
   invitedBy: 'invited by',
   group: 'group',
   noGroup: 'No group',

@@ -35,6 +35,15 @@ DEFINE FIELD IF NOT EXISTS created_by    ON users TYPE option<string>;
 -- role='moderator' row — enforced in the handler (422), not here: a cross-row
 -- ASSERT is not expressible on a field. Promotion clears it (flat groups, no
 -- nesting); demote/delete of a moderator with members is refused with 409.
+-- tier: the per-account capability ladder (see SYSTEM: capability-tiers,
+-- backend/tiers.py) — base | voice | ai. One field on the user, NOT a grant:
+-- grants are an additive allow-list; the tier is the restricting axis that
+-- decides which costly features (voice → STT, ai → chat/agent/pipelines/image
+-- gen) the account may START in ANY project. Instance role and project access
+-- are two further, never-merged axes. OVERWRITE like `role` (carries an
+-- ASSERT); backfilled to 'ai' by migrate_user_tier_backfill (every existing
+-- user keeps everything).
+DEFINE FIELD OVERWRITE tier ON users TYPE string ASSERT $value IN ['base', 'voice', 'ai'] DEFAULT 'ai';
 DEFINE FIELD IF NOT EXISTS moderator_id ON users TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS created_at    ON users TYPE datetime DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS token_version ON users TYPE int DEFAULT 0;
@@ -55,6 +64,14 @@ DEFINE FIELD IF NOT EXISTS subject    ON model_grants TYPE string;
 DEFINE FIELD IF NOT EXISTS created_at ON model_grants TYPE datetime DEFAULT time::now();
 DEFINE INDEX IF NOT EXISTS idx_model_grants_unique ON model_grants FIELDS model_id, subject UNIQUE;
 DEFINE INDEX IF NOT EXISTS idx_model_grants_subject ON model_grants FIELDS subject;
+
+-- model_order: the admin-set display order of models in the admin list and every
+-- picker. Full-replaced by PUT /api/admin/model-order; a model with no row lists
+-- after the placed ones, alphabetically.
+DEFINE TABLE IF NOT EXISTS model_order SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS model_id ON model_order TYPE string;
+DEFINE FIELD IF NOT EXISTS position ON model_order TYPE int;
+DEFINE INDEX IF NOT EXISTS idx_model_order_model ON model_order FIELDS model_id UNIQUE;
 
 -- groups: ADMIN groups only (moderator groups are virtual). Hard-deleted together
 -- with their group_members rows and their 'group:<id>' grants.
@@ -248,6 +265,12 @@ DEFINE TABLE IF NOT EXISTS registration_invites SCHEMAFULL;
 DEFINE FIELD IF NOT EXISTS token_hash    ON registration_invites TYPE string;
 DEFINE FIELD IF NOT EXISTS invited_by    ON registration_invites TYPE string;
 DEFINE FIELD IF NOT EXISTS moderator_id  ON registration_invites TYPE option<string>;
+-- The tier the registered account starts at (see SYSTEM: capability-tiers).
+-- option<string>: a mint that omits it registers at 'ai' (the historical
+-- behaviour — invites predate tiers). The Literal on CreateInvite is
+-- load-bearing BEFORE this ASSERT: register claims the invite before creating
+-- the user, so a bad tier must 422 at MINT, not burn the invite at register.
+DEFINE FIELD OVERWRITE tier ON registration_invites TYPE option<string> ASSERT $value IS NONE OR $value IN ['base', 'voice', 'ai'];
 DEFINE FIELD IF NOT EXISTS created_at    ON registration_invites TYPE datetime DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS expires_at    ON registration_invites TYPE datetime;
 DEFINE FIELD IF NOT EXISTS used_at       ON registration_invites TYPE option<datetime>;

@@ -3,6 +3,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { apiClient, AuthError, ForbiddenError, ServiceUnavailableError, HttpError, _resetRedirectGuard } from './client';
+import { tierRefusal } from '../utils/server-refusal-detail';
 
 // ── Mock fetch ──────────────────────────────────────────────────────────────
 
@@ -200,6 +201,31 @@ describe('apiClient.upload', () => {
     expect(callArgs.body).toBe(formData);
     // Must NOT set Content-Type — browser sets multipart boundary
     expect(callArgs.headers).toBeUndefined();
+  });
+});
+
+// ── Tier refusal (SYSTEM: capability-tiers) ─────────────────────────────────
+
+describe('tierRefusal', () => {
+  function mock403(body: unknown) {
+    const res = { status: 403, ok: false, json: () => Promise.resolve(body) };
+    globalThis.fetch = vi.fn().mockResolvedValue({ ...res, clone: () => res } as unknown as Response);
+  }
+
+  async function refusalOf(body: unknown): Promise<unknown> {
+    mock403(body);
+    return apiClient.upload('/references/upload', new FormData()).catch((e: unknown) => e);
+  }
+
+  it('names the refused tier of a 403 tier_required:<tier>', async () => {
+    expect(tierRefusal(await refusalOf({ detail: 'tier_required:voice' }))).toBe('voice');
+    expect(tierRefusal(await refusalOf({ detail: 'tier_required:ai' }))).toBe('ai');
+  });
+
+  it('a project-access 403, a structured 403 and a non-403 are NOT tier refusals', async () => {
+    expect(tierRefusal(await refusalOf({ detail: 'Full project access required' }))).toBeNull();
+    expect(tierRefusal(await refusalOf({ detail: { code: 'model_forbidden', model: 'm' } }))).toBeNull();
+    expect(tierRefusal(new HttpError(404, 'tier_required:voice'))).toBeNull();
   });
 });
 

@@ -29,7 +29,7 @@ import { useAppStore } from '../store/app-store';
 import { useChatStore } from '../store/chat-store';
 import { useUIStore, type AdminSectionTab } from '../store/ui-store';
 import { useSectionAsideWidth } from '../hooks/useSectionAsideWidth';
-import { AccessLevel, Role, User, Project } from '../types';
+import { AccessLevel, Role, Tier, User, Project } from '../types';
 import { SectionShell, SectionAsideRow } from '../components/SectionShell';
 import { CenterHeading, FieldInput } from '../components/ui';
 import { useTranslation } from '../i18n';
@@ -285,7 +285,7 @@ export function AdminPage() {
 
   /** Toasts the refusal (duplicate email, short password, …) and rethrows so
    * the form keeps its draft instead of clearing on a failed create. */
-  const handleAddUser = async (data: { name: string; email: string; password: string; role: Role; moderator_id: string | null }) => {
+  const handleAddUser = async (data: { name: string; email: string; password: string; role: Role; moderator_id: string | null; tier: Tier }) => {
     try {
       const user = await apiClient.post('/admin/users', data);
       setUsers(prev => [...prev, user]);
@@ -298,10 +298,11 @@ export function AdminPage() {
   /** Mint a single-use invite token and copy the /register link to the
    * clipboard (both roles). The URL is composed from THIS page's origin —
    * the origin the admin can reach is by definition the origin the invitee
-   * can reach; the backend returns only {token, expires_at}. */
-  const handleInvite = async () => {
+   * can reach; the backend returns only {token, expires_at}. The invite
+   * registers the account at `tier` (see SYSTEM: capability-tiers). */
+  const handleInvite = async (tier: Tier) => {
     try {
-      const { token } = await apiClient.post('/invites', {});
+      const { token } = await apiClient.post('/invites', { tier });
       if (token) {
         await navigator.clipboard?.writeText(`${window.location.origin}/register/${token}`);
       }

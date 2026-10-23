@@ -1,7 +1,7 @@
 /**
  * useSiblingDragReorder: pointer-driven manual reordering of draggable rows —
- * tree documents (anywhere across the visible tree levels) or reference cards
- * (within their host).
+ * tree documents (anywhere across the visible tree levels), reference cards
+ * (within their host) or admin model cards (one flat list).
  *
  * // ARCH: backend-authoritative ordering — on drop we send `after_id` (the sibling
  * // to land after, null = top) and the server computes the fractional sort_key,
@@ -14,9 +14,10 @@
  *
  * The KIND of rows is supplied by the adapter (row/group attributes, drop
  * RESOLUTION, ignore-target predicate, commit) — the pointer mechanics are
- * shared. Two adapters = the real seam: tree docs and reference cards commit to
- * the same PATCH /documents/{id}/reorder but own different resolutions and
- * stores.
+ * shared. Tree docs and reference cards commit to the same
+ * PATCH /documents/{id}/reorder but own different resolutions and stores; the
+ * admin model list (ModelsSection) commits the full order to
+ * PUT /admin/model-order.
  *
  * Reuses the repo's PointerEvent drag pattern (see useResizer.ts): document-level
  * listeners, refs for transient state, visual feedback via imperative inline styles

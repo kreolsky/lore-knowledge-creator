@@ -54,6 +54,7 @@ qdrant_data/
 
 # File storage (user uploads)
 storage/
+bufer/
 
 # CIR pipeline experiment
 cir/

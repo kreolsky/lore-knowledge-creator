@@ -93,6 +93,13 @@ async def test_create_ai_chat_writes_target_doc_and_agent_auto_unconditionally(m
     monkeypatch.setattr(sessions_module, "get_db", fake_get_db)
     monkeypatch.setattr("chat_sessions.serialize.build_ref_map", fake_build_ref_map)
 
+    # capability-tiers: the tier gate's fresh users read hits the REAL db (only
+    # sessions_module.get_db is faked) — give u-1 a real 'ai' row so the gate
+    # passes and the create payload stays under test.
+    from db import create_record, get_db
+    await (await get_db()).query("DELETE type::record('users', $id)", {"id": "u-1"})
+    await create_record("users", "u-1", {"name": "u1", "role": "user", "tier": "ai"})
+
     # No `mode`, no explicit target_doc_id — the D4 default must still resolve it.
     body = SessionCreate(project_id="proj-1", document_id="doc-1")
     out = await sessions_module.create_session(db=await sessions_module.get_db(), body=body, user={"user_id": "u-1"})

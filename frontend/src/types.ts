@@ -26,6 +26,10 @@ export type Language = 'en' | 'ru';
 /** Instance role — mirrors the backend Literal (models/auth.py). */
 export type Role = 'admin' | 'moderator' | 'user';
 
+/** Account capability tier — mirrors the backend Literal (SYSTEM:
+ * capability-tiers). base | voice | ai; NOT a project access level. */
+export type Tier = 'base' | 'voice' | 'ai';
+
 export interface User {
   user_id: string;
   name: string;
@@ -53,6 +57,14 @@ export interface User {
    * control and the roster invite picker — must agree with the backend
    * require_group_scoped_invite boundary (same derivation, own_group_subject). */
   group_subject?: string | null;
+  /** Account tier (see SYSTEM: capability-tiers) from /me + login. The UI hides
+   * on can_voice/can_ai, never on the tier string; the server 403
+   * (tier_required:*) is the guarantee — the flags only remove triggers. */
+  tier?: Tier;
+  /** Tier-derived flags: may this account start voice (recording / STT) or
+   * AI (chat, agent, pipelines, image gen) features? Admin ⇒ both true. */
+  can_voice?: boolean;
+  can_ai?: boolean;
   /** Free-text biographical notes about the user (editable by user themselves). */
   user_facts: string;
   /** IANA timezone (e.g. "Europe/Moscow"), auto-detected by the client on session start. */

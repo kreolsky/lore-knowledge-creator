@@ -43,6 +43,7 @@ from files_util import (
 )
 from inbox import KIND_REF, mark_arrived
 from mcp_gateway.upload import MCP_UPLOAD_ROUTE_PREFIX, verify_upload_token
+from tiers import require_tier
 from transcription import enqueue_transcription
 
 import event_bus
@@ -91,8 +92,18 @@ async def redeem_mcp_upload(token: str, file: UploadFile = File(...)):
     Orchestrates: resolve token claims → dedup-or-create → normalize response. Each
     stage is a helper so the route reads as the protocol it implements (see the
     per-helper docstrings for the invariants they own).
+
+    # see SYSTEM: capability-tiers — the audio arm queues STT, so it is
+    # 'voice'-gated. Principal = the key owner who minted the token
+    # (claims["user_id"], pinned role "user" — a key never inherits an
+    # instance role, so an admin's key is bounded by that admin's stored
+    # tier). Runs BEFORE the dedup claim so a refused upload leaves no
+    # locking sentinel.
     """
     claims, kind, mime, original_name, title = await _resolve_redeem_inputs(token, file)
+
+    if kind == "audio":
+        await require_tier({"user_id": claims["user_id"], "role": "user"}, "voice")
 
     dedup_key = _dedup_key(claims)
     if dedup_key:

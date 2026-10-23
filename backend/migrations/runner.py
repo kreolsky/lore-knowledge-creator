@@ -58,6 +58,7 @@ from migrations.migrate_reference_sort_keys_backfill import (
 from migrations.migrate_turn_timeout_override_fold import (
     _migrate_turn_timeout_override_fold,
 )
+from migrations.migrate_user_tier_backfill import _migrate_user_tier_backfill
 from migrations.migrate_web_search_off_drop import _migrate_web_search_off_drop
 
 # --- Per-migration modules (registry composition) ---
@@ -125,6 +126,12 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     # (schema.surql does not carry them — apply_schema runs before migrations).
     # Idempotent; the fresh-DB boot skips the data pass via the INFO gate.
     ("audiences_to_list", _migrate_audiences_to_list),
+    # users.tier (see SYSTEM: capability-tiers): the column lands with DEFAULT
+    # 'ai', but the DEFAULT never reaches pre-existing rows — every tier-less
+    # user is stamped 'ai' so the backfill preserves today's behaviour (no
+    # existing account loses a feature). Idempotent (NONE rows only); no
+    # dependency.
+    ("user_tier_backfill", _migrate_user_tier_backfill),
 ]
 
 

@@ -135,6 +135,7 @@ def test_agent_boundary_scanner_flags_synthetic_private_import():
     "collab/session.py",
     "collab/join.py",
     "routes/chat/messages.py",
+    "routes/chat/timeline_attach.py",
     "agent/keys.py",
     "agent/apply_policy.py",
 ])

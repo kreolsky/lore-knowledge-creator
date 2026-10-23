@@ -19,6 +19,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException
 from pipeline.core.registry import foreign_scoped_param, pipeline_names
 from surrealdb import AsyncSurreal
+from tiers import require_tier
 
 from access import require_digest_editor, require_project_full
 from auth import get_current_user
@@ -107,6 +108,10 @@ async def _validate_schedule_params(spec, params: dict, project_id: str) -> None
 async def create_schedule(
     body: PipelineScheduleCreate, user: dict = Depends(get_current_user),
 ):
+    # see SYSTEM: capability-tiers — 'ai' gate: a schedule is an ONGOING model
+    # cost; creating one is an ai-tier act (the tick also re-checks the
+    # creator at fire time, so a downgrade stops it).
+    await require_tier(user, "ai")
     await require_project_full(body.project_id, user)
     # Registry-derived validation (never a hand-list) — the error names the known
     # pipelines so the fix is actionable.
@@ -142,6 +147,10 @@ async def patch_schedule(
     db: AsyncSurreal = Depends(get_db),
 ):
     await _load_owned_schedule(schedule_id, user)
+    # see SYSTEM: capability-tiers — re-ENABLING a schedule is a new cost start
+    # (the 'ai' gate); disabling or changing the interval is not.
+    if body.enabled is True:
+        await require_tier(user, "ai")
     sets = ["updated_at = time::now()"]
     if body.enabled is not None:
         sets.append("enabled = $enabled")

@@ -15,9 +15,25 @@ diagnostics must be safe to drop). All errors are logged and None is returned.  
 import logging
 from uuid import uuid4
 
-from db import create_record, get_db
+from chat_sessions.delete import delete_session_command
+
+from db import create_record, fetch_one, get_db
 
 logger = logging.getLogger(__name__)
+
+
+async def _drop_failed_session(session_uid: str) -> None:
+    """Delete a just-created system-note session whose first message failed."""
+    # WHY: a note exists only together with its first message — a failed write
+    # would leave exactly the empty anchorless card the public path guards
+    # against (public_notes deletes the session on the same failure), so the
+    # just-created session goes with it. Best-effort on purpose: a delete
+    # failure falls into the caller's outer arm — still None, still never
+    # raises (the module INVARIANT above).
+    session = await fetch_one("chat_sessions", session_uid)
+    if session:
+        db = await get_db()
+        await delete_session_command(db, session_uid, session)
 
 
 async def create_system_note(
@@ -45,11 +61,16 @@ async def create_system_note(
             "is_note": True,
         })
         msg_uid = str(uuid4())
-        await create_record("messages", msg_uid, {
-            "chat_id": session_uid,
-            "role": "user",
-            "content": body,
-        })
+        try:
+            await create_record("messages", msg_uid, {
+                "chat_id": session_uid,
+                "role": "user",
+                "content": body,
+            })
+        except Exception:
+            # Re-raised into the outer arm: still None, still never raises.
+            await _drop_failed_session(session_uid)
+            raise
         db = await get_db()
         await db.query(
             "UPDATE type::record('chat_sessions', $id) SET updated_at = time::now()",

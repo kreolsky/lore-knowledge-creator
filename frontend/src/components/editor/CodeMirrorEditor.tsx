@@ -23,6 +23,7 @@ import { autoFenceSelection } from './auto-fence-selection';
 import { smartQuotes } from './smart-quotes';
 import { thickCursorLayer } from './thick-cursor';
 import { searchHighlight, searchPanelListenerCompartment } from './find-matches';
+import { noteConnectorRefresh } from '../../editor/note-connector-refresh';
 
 /**
  * Standard CM6 extensions replacing @uiw's basicSetup (without lineNumbers,
@@ -60,7 +61,10 @@ export function cmSetup({ search = true, thickCursor = true }: { search?: boolea
     // searchHighlight decorates EVERY query match (the stock searchHighlighter refuses
     // to render without its own panel — see find-matches.ts). The listener compartment
     // is kept inert here; FindReplacePanel reconfigures it on mount for the live count.
+    // The connector compartment is the same seam for NoteConnector (inert until a
+    // note is connected — see editor/note-connector-refresh.ts).
     ...(search ? [searchExt(), searchHighlight, searchPanelListenerCompartment.of([])] : []),
+    noteConnectorRefresh,
     keymap.of([
       ...closeBracketsKeymap,
       ...defaultKeymap,

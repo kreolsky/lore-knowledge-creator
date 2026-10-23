@@ -290,3 +290,40 @@ async def test_register_flushes_pending_invites(client, admin_user, project_with
         "SELECT id FROM pending_invites WHERE email = $e", {"e": INVITE_EMAIL},
     )
     assert not leftover
+
+
+# ─── Capability tier on invites (see SYSTEM: capability-tiers) ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_mint_tier_applied_at_register(client, admin_user, test_db):
+    """The invite's tier is copied onto the registered account."""
+    _, admin_token = admin_user
+    token = await _mint(client, admin_token, {"tier": "voice"})
+    resp = await client.post(
+        f"/api/register/{token}",
+        json={"name": "tiered", "email": "tiered@test.com", "password": "pass123"},
+    )
+    assert resp.status_code == 200, resp.text
+    rows = await test_db.query(
+        "SELECT tier FROM type::record('users', $id)",
+        {"id": resp.json()["user_id"]},
+    )
+    assert rows[0]["tier"] == "voice"
+
+
+@pytest.mark.asyncio
+async def test_mint_default_tier_is_ai(client, admin_user, test_db):
+    """A mint without a tier registers at 'ai' — the historical behaviour."""
+    _, admin_token = admin_user
+    token = await _mint(client, admin_token)
+    resp = await client.post(
+        f"/api/register/{token}",
+        json={"name": "untiered", "email": "untiered@test.com", "password": "pass123"},
+    )
+    assert resp.status_code == 200, resp.text
+    rows = await test_db.query(
+        "SELECT tier FROM type::record('users', $id)",
+        {"id": resp.json()["user_id"]},
+    )
+    assert rows[0]["tier"] == "ai"

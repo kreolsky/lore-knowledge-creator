@@ -22,6 +22,7 @@
 import { useCallback } from 'react';
 import { useAppStore } from '../store/app-store';
 import { emit } from '../events';
+import { t } from '../i18n';
 import { voiceWidgetField, voiceWidgetRemove } from '../components/editor/voice-widget';
 import { getEditorView } from '../editor/active-editor';
 import { isVoiceCancelled } from '../components/editor/voice-cancel-flag';
@@ -43,6 +44,16 @@ export function useVoiceInput() {
   ): Promise<boolean> => {
     // Escape was pressed — discard recording entirely
     if (isVoiceCancelled()) return true;
+
+    // see SYSTEM: capability-tiers — a stale tab after a downgrade can still hold
+    // an active voice widget; the sync upload would 403 (tier_required:voice),
+    // so refuse here, drop the widget and toast instead.
+    if (useAppStore.getState().currentUser?.can_voice === false) {
+      const view0 = getEditorView();
+      view0?.dispatch({ effects: voiceWidgetRemove.of(undefined) });
+      useAppStore.getState().showToast(t('tierVoiceRequired'), 'error');
+      return true;
+    }
 
     const view = getEditorView();
     if (!view) return false;

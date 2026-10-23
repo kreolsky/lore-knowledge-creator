@@ -16,6 +16,7 @@ from chat_sessions.delete import delete_session_command
 from chat_sessions.update import update_session_command
 from fastapi import Depends, HTTPException
 from surrealdb import AsyncSurreal
+from tiers import require_tier
 
 from access import can_write_note, get_document_access, get_project_access
 from auth import get_current_user
@@ -134,7 +135,14 @@ async def create_session(body: SessionCreate, user: dict = Depends(get_current_u
 
     Note-chats (body.is_note=true) need at least commentator access: they are
     the comment channel, and readonly users cannot start one.
+
+    # see SYSTEM: capability-tiers — AI session create is 'ai'-gated, note-chats
+    # are 'base': the gate runs BEFORE the project-access checks so the tier
+    # 403 is the first answer. The note path is exempt — notes never call
+    # the LLM.
     """
+    if not body.is_note:
+        await require_tier(user, "ai")
     await _guard_create_access(body, user)
     return await create_session_command(db, body, user["user_id"])
 

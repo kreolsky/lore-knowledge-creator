@@ -18,7 +18,9 @@ from auth import get_current_user
 from db import extract_id, fetch_one, get_ancestor_ids, get_db
 from models import is_ref_row
 from routes.chat._router import router
+from routes.chat.messages import load_session_messages
 from routes.chat.serializers import PREVIEW_CONTENT_MAX
+from routes.chat.timeline_attach import _attach_timeline
 
 logger = logging.getLogger(__name__)
 
@@ -260,10 +262,6 @@ async def _piggyback_messages(db, target_row: dict) -> dict | None:
     piggyback keeps the session INDEX alive when one transcript is down, and it
     is not silent — the fallback still shows the user the real error.
     """
-    from routes.chat.messages import (  # local: avoid import cycle
-        _attach_timeline,
-        load_session_messages,
-    )
     tid = extract_id(target_row.get("id"))
     # WHY: TAIL-anchored for notes (parity INVARIANT below) — the piggyback
     # serves the same newest-first window the messages GET serves, so any

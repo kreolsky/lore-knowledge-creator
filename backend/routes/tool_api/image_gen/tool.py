@@ -18,6 +18,7 @@ from agent.context import get_agent_context
 from comfy_markers import marked_nodes, parse_size
 from driver.frames import resolve_image_gen_anchor
 from fastapi import Depends, HTTPException
+from tiers import require_tier
 
 from access import get_project_access
 from db import fetch_one
@@ -134,7 +135,13 @@ async def tool_generate_image(
     reload still shows them (the driver's log never sees the background task).
     The refined SD prompt is NOT in the result (it would land in the agent's
     context) — it travels inside the minted frame and the persisted chip.
+
+    # see SYSTEM: capability-tiers — 'ai' gate, defense in depth: the only caller
+    # is an ai-gated turn (the completion gate), but the tool itself is a
+    # cost start and carries its own gate. Principal = ctx["user"] (the
+    # role-pinned agent principal — no role inheritance).
     """
+    await require_tier(ctx["user"], "ai")
     await _require_configured()
     # B2a: pin the target to the chat session's stable parent document, not the
     # agent's document_id argument (which can move mid-generation).

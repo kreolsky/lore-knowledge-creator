@@ -157,6 +157,12 @@ async def test_create_session_rejects_agent_mode_for_non_full_access(monkeypatch
 
     monkeypatch.setattr(sessions_module, "get_document_access", fake_access)
 
+    # capability-tiers: the tier gate runs BEFORE the access check — give u-1 a
+    # real 'ai' row so the REAL gate passes and the access axis stays under test.
+    from db import create_record, get_db
+    await (await get_db()).query("DELETE type::record('users', $id)", {"id": "u-1"})
+    await create_record("users", "u-1", {"name": "u1", "role": "user", "tier": "ai"})
+
     body = SessionCreate(
         project_id="proj-1",
         document_id="doc-1",
@@ -201,6 +207,13 @@ async def test_create_session_allows_ai_chat_for_full_access(monkeypatch):
     monkeypatch.setattr("chat_sessions.create.create_record", fake_create_record)
     monkeypatch.setattr(sessions_module, "get_db", fake_get_db)
     monkeypatch.setattr("chat_sessions.serialize.build_ref_map", fake_build_ref_map)
+
+    # capability-tiers: the tier gate's fresh users read hits the REAL db (only
+    # sessions_module.get_db is faked) — give u-1 a real 'ai' row so the gate
+    # passes and the create payload stays under test.
+    from db import create_record, get_db
+    await (await get_db()).query("DELETE type::record('users', $id)", {"id": "u-1"})
+    await create_record("users", "u-1", {"name": "u1", "role": "user", "tier": "ai"})
 
     body = SessionCreate(
         project_id="proj-1",

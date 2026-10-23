@@ -115,6 +115,9 @@ export const ru: Record<TranslationKey, string> = {
   recordingRequiresAccess: 'Запись требует права на редактирование',
   recordAudioFor: 'Записать аудио для «{title}»',
   openDocToRecord: 'Откройте документ для записи',
+  // capability tiers (see SYSTEM: capability-tiers)
+  tierVoiceRequired: 'Голосовые функции недоступны для вашего аккаунта',
+  tierAiRequired: 'AI-функции недоступны для вашего аккаунта',
 
   // toast / errors
   serverUnavailable: 'Сервер временно недоступен',
@@ -123,6 +126,7 @@ export const ru: Record<TranslationKey, string> = {
   recordingRestoredPartial: 'Восстановлена незавершённая запись (браузер закрылся во время записи) — загружаю…',
   recordingRestoreFailed: 'Восстановленная запись удалена — доступ к её документу отклонён',
   recordingKeptForRetry: 'Запись не отправлена — повторим при следующем открытии проекта',
+  recordingCacheDegraded: 'Защита записи от сбоя браузера не работает — запись всё равно будет отправлена из памяти',
   voiceTranscriptionFailed: 'Не удалось расшифровать запись — попробуйте ещё раз',
   voiceTranscriptionEmpty: 'Не удалось распознать речь — попробуйте ещё раз',
   accessRevokedOrExpired: 'Доступ отозван или сессия истекла — перезагрузите страницу',
@@ -600,6 +604,7 @@ export const ru: Record<TranslationKey, string> = {
   adminModelTier: 'Видимость',
   adminModelGroupCount: 'групп: {count}',
   adminModelSaveFailed: 'Не удалось сохранить доступ к модели',
+  adminModelOrderFailed: 'Не удалось сохранить порядок моделей',
   adminGroups: 'Группы',
   adminGroupsHint: 'Группам выдаются модели. Группы модераторов следуют за модератором пользователя и меняются в разделе «Пользователи».',
   adminGroupsEmpty: 'Групп пока нет',
@@ -641,6 +646,10 @@ export const ru: Record<TranslationKey, string> = {
   userRole: 'Пользователь',
   adminRole: 'Администратор',
   moderatorRole: 'Модератор',
+  tierLabel: 'Уровень',
+  tierAi: 'AI',
+  tierVoice: 'Голос',
+  tierBase: 'Базовый',
   invitedBy: 'пригласил',
   group: 'группа',
   noGroup: 'Без группы',

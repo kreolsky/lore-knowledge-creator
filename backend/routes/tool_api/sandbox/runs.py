@@ -191,11 +191,16 @@ def _parse_run_status(stdout: str) -> dict:
             try:
                 parsed["exit_code"] = int(line[5:])
             except ValueError:
+                # WHY: EXIT=<n> is printed only for a terminated run — a
+                # non-integer line means it was truncated or absent, and
+                # "unknown" (None) is the honest parse.
                 pass
         elif line.startswith("SIZE="):
             try:
                 parsed["size"] = int(line[5:])
             except ValueError:
+                # WHY: same truncated-or-absent line as EXIT= above — keep the
+                # 0 default rather than guessing a size.
                 pass
     return parsed
 

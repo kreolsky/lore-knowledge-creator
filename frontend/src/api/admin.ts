@@ -184,6 +184,12 @@ export async function putAdminModelSubjects(modelId: string, subjects: string[])
   return await apiClient.put(`/admin/models/${path}`, { subjects });
 }
 
+/** Full replace of the admin model order — the admin list and every picker
+ * follow it; a model left out lists after the placed ones, alphabetically. */
+export async function putAdminModelOrder(modelIds: string[]): Promise<{ model_ids: string[] }> {
+  return await apiClient.put('/admin/model-order', { model_ids: modelIds });
+}
+
 /** An admin group (stored, editable) or a moderator group (virtual, derived
  * from `users.moderator_id`, read-only; `name` is the moderator's name). */
 export interface AdminGroup {

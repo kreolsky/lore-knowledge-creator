@@ -468,3 +468,50 @@ async def test_default_model_cannot_be_tools(client, world, gateway):
     )
     assert resp.status_code == 422, resp.text
     assert resp.json()["detail"] == {"code": "default_model_tools"}
+
+
+# ─── Admin-defined order ──────────────────────────────────────────────────────
+
+
+async def _put_order(client, token: str, ids: list[str]):
+    return await client.put("/api/admin/model-order", json={"model_ids": ids}, cookies=_c(token))
+
+
+@pytest.mark.asyncio
+async def test_order_applies_to_admin_list_and_every_picker(client, world, gateway):
+    """Placed models come first in their stored order; unplaced ones follow,
+    alphabetically — in the admin list, the chat roster and the tool roster."""
+    await _grant(client, world, PUBLIC, ["public"])
+    await _grant(client, world, PRIVATE, ["tools"])
+    placed = [PRIVATE, PUBLIC, MOD_MODEL]
+    resp = await _put_order(client, world["tokens"]["admin"], placed)
+    assert resp.status_code == 200, resp.text
+    expected = placed + sorted(m for m in SERVED if m not in placed)
+
+    admin = _c(world["tokens"]["admin"])
+    rows = (await client.get("/api/admin/models", cookies=admin)).json()
+    assert [r["id"] for r in rows] == expected
+
+    body = (await client.get("/api/chat/models", cookies=admin)).json()
+    assert body["models"] == [m for m in expected if m != PRIVATE]
+    assert body["tool_models"] == expected
+
+    blue = (await client.get("/api/chat/models", cookies=_c(world["tokens"]["blue"]))).json()
+    assert blue["models"] == [PUBLIC, DEFAULT]
+    assert blue["tool_models"] == [PRIVATE, PUBLIC, DEFAULT]
+
+
+@pytest.mark.asyncio
+async def test_order_put_is_a_full_replace(client, world, gateway):
+    admin = world["tokens"]["admin"]
+    await _put_order(client, admin, [PRIVATE, PUBLIC])
+    await _put_order(client, admin, [GROUP_MODEL])
+    rows = (await client.get("/api/admin/models", cookies=_c(admin))).json()
+    assert [r["id"] for r in rows] == [GROUP_MODEL] + sorted(m for m in SERVED if m != GROUP_MODEL)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("who", ["mod", "red"])
+async def test_order_put_is_refused_to_non_admin(client, world, who):
+    resp = await _put_order(client, world["tokens"][who], [PRIVATE])
+    assert resp.status_code == 403, resp.text

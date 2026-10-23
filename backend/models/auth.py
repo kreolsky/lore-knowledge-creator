@@ -25,15 +25,29 @@ class LoginRequest(BaseModel):
 # role == "admin" everywhere in the access cascade (access.py).
 Role = Literal["admin", "moderator", "user"]
 
+# Account capability tiers (see SYSTEM: capability-tiers, backend/tiers.py):
+# base | voice | ai. NOT 'full' — that is a project access level
+# (full|commentator|readonly); handlers check both axes side by side.
+Tier = Literal["base", "voice", "ai"]
+
 # The ONE home for the manager-role set — auth.require_user_manager_role and
 # the login / /me capability flags all read it; a re-spelled ("admin", …)
 # tuple at a call site is a future drift.
 USER_MANAGER_ROLES: frozenset[str] = frozenset({"admin", "moderator"})
 
 
-def capability_flags(role: str | None) -> dict:
+def capability_flags(role: str | None, tier: str | None = None) -> dict:
     """Per-role capability flags answered to clients (login payload, /me) —
-    the frontend gates UI on these flags, never on role string comparisons."""
+    the frontend gates UI on these flags, never on role string comparisons.
+
+    `tier` widens/limits the costly-feature flags (can_voice, can_ai); None
+    reads as 'ai' (the schema default — a caller without the column yet must
+    not lock the account out). An admin is always 'ai' (an admin with a
+    lowered tier keeps both: the tier gates a key principal's descent, never
+    the instance admin's own session)."""
+    from tiers import TIER_ORDER
+
+    t = tier if tier in TIER_ORDER else "ai"
     return {
         "is_admin": role == "admin",
         "can_manage_users": role in USER_MANAGER_ROLES,
@@ -41,6 +55,8 @@ def capability_flags(role: str | None) -> dict:
         # admin-only writes: the audience editor gates on this flag (an owner
         # may still set their own group's row and remove rows).
         "can_publish_project": role == "admin",
+        "can_voice": role == "admin" or TIER_ORDER.index(t) >= TIER_ORDER.index("voice"),
+        "can_ai": role == "admin" or TIER_ORDER.index(t) >= TIER_ORDER.index("ai"),
     }
 
 
@@ -52,6 +68,10 @@ class CreateUserAdmin(BaseModel):
     # Admin-only on create; a moderator's create forces role='user' and
     # moderator_id=<self> regardless of the body (routes/users.py).
     moderator_id: str | None = None
+    # Capability tier (see SYSTEM: capability-tiers). Manager-writable (no
+    # ceiling on what a moderator may grant — small trusted group); None →
+    # 'ai' (the schema default).
+    tier: Tier | None = None
 
 
 class UpdateUserAdmin(BaseModel):
@@ -63,12 +83,19 @@ class UpdateUserAdmin(BaseModel):
     # via `is not None`.
     role: Role | None = None
     moderator_id: str | None = None
+    # MANAGER_FIELDS — admin and moderator alike may set it on own-group users.
+    tier: Tier | None = None
 
 
 class CreateInvite(BaseModel):
     """POST /api/invites body — group binding for an admin's mint. A moderator's
     mint ignores it and pins their own uid (routes/invites.py)."""
     moderator_id: str | None = None
+    # The tier the registered account starts at (see SYSTEM: capability-tiers).
+    # Default 'ai' = the historical behaviour (invites predate tiers). The
+    # Literal is load-bearing: register claims the invite BEFORE creating the
+    # user, so a bad tier must 422 HERE, not burn the invite at register.
+    tier: Tier = "ai"
 
 
 class RegisterRequest(BaseModel):

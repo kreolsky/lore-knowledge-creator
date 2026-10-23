@@ -23,7 +23,9 @@ from model_access import (
     HIDDEN_SUBJECT,
     TOOLS_SUBJECT,
     available_models,
+    model_order_positions,
     models_with_subject,
+    order_models,
 )
 
 import config
@@ -350,8 +352,8 @@ def _models_payload(
     return body
 
 
-async def _caller_tiers(user: dict) -> tuple[set[str] | None, set[str], set[str]]:
-    """(visible ids — None for an admin, hidden ids, tools-tier ids).
+async def _caller_tiers(user: dict) -> tuple[set[str] | None, set[str], set[str], dict[str, int]]:
+    """(visible ids — None for an admin, hidden ids, tools-tier ids, admin order positions).
 
     Visible = the caller's grants ∪ the tools tier: every user sees a tools-tier
     model, in the utility roster only (_split_rosters)."""
@@ -359,17 +361,19 @@ async def _caller_tiers(user: dict) -> tuple[set[str] | None, set[str], set[str]
     allowed = await available_models(user)
     hidden = await models_with_subject(db, HIDDEN_SUBJECT)
     tools = await models_with_subject(db, TOOLS_SUBJECT)
-    return (None if allowed is None else allowed | tools), hidden, tools
+    positions = await model_order_positions(db)
+    return (None if allowed is None else allowed | tools), hidden, tools, positions
 
 
-def _split_rosters(body: dict, hidden: set[str], tools: set[str]) -> dict:
+def _split_rosters(body: dict, hidden: set[str], tools: set[str], positions: dict[str, int]) -> dict:
     """`models` (chat picker) drops hidden and tools-tier models; `tool_models`
     (utility pickers, e.g. the extractor model) drops hidden ones only, so it is
-    `models` plus the tools tier (SYSTEM: model-access tier ladder)."""
+    `models` plus the tools tier (SYSTEM: model-access tier ladder). Both rosters
+    come in the admin order (order_models) — every picker renders them as served."""
     return {
         **body,
-        "models": [m for m in body["models"] if m not in hidden and m not in tools],
-        "tool_models": [m for m in body["tool_models"] if m not in hidden],
+        "models": order_models([m for m in body["models"] if m not in hidden and m not in tools], positions),
+        "tool_models": order_models([m for m in body["tool_models"] if m not in hidden], positions),
     }
 
 
@@ -411,7 +415,7 @@ async def list_models(user: dict = Depends(get_current_user)):
         cap = await _capability_snapshot()
         return _models_payload([], cap)
     # Read before the try: a DB failure here is not "AI service unavailable".
-    visible, hidden, tools = await _caller_tiers(user)
+    visible, hidden, tools, positions = await _caller_tiers(user)
     try:
         # Run the gateway fetches and the capability check concurrently — they're
         # independent. agent_capability is a config read (no probe, cannot
@@ -429,7 +433,7 @@ async def list_models(user: dict = Depends(get_current_user)):
             entries, cap, reasoning=reasoning,
             default_model=await settings.get("CHAT_MODEL"),
         )
-        return _split_rosters(body, hidden, tools)
+        return _split_rosters(body, hidden, tools, positions)
     except Exception as e:
         logger.warning("Failed to fetch models: %s", e)
         raise HTTPException(status_code=503, detail="AI service unavailable")

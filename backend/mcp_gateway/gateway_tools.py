@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import HTTPException
+from tiers import require_tier, require_voice_for_audio_ref
 
 from models import is_ref_row
 
@@ -256,6 +257,25 @@ async def _dispatch_get_file(args: dict, ctx: dict) -> dict:
     }
 
 
+def _require_mcp_reprocessable(ref: dict) -> None:
+    """The MCP-edge retryable-state gate (see _dispatch_reprocess_file's
+    docstring for the WHY: force-auto MCP must not wipe a corrected
+    transcript)."""
+    status = ref.get("processing_status")
+    if status not in ("error", "processing"):
+        raise HTTPException(
+            status_code=400,
+            detail="reprocess_file is only for a node whose processing_status is "
+                   "'error' or 'processing' and whose text is empty.",
+        )
+    if bool((ref.get("content") or "").strip()):
+        raise HTTPException(
+            status_code=403,
+            detail="This node has text that would be wiped; retry it from the "
+                   "document's reference panel in the app.",
+        )
+
+
 async def _dispatch_reprocess_file(args: dict, ctx: dict) -> dict:
     """Re-run a node's conversion, gated to the stuck/failed state.
 
@@ -282,26 +302,16 @@ async def _dispatch_reprocess_file(args: dict, ctx: dict) -> dict:
     if not document_id:
         raise HTTPException(status_code=400, detail="document_id is required")
     ref = await fetch_one("documents", document_id)
-    if not ref or ref.get("deleted_at") or not is_ref_row(ref):
-        raise HTTPException(status_code=404, detail="Document not found")
-    if ref.get("project_id") != ctx["project_id"]:
+    # One uniform 404 for a missing/soft-deleted/non-ref/foreign-project row —
+    # no existence oracle across projects (the load_owned_proposal discipline).
+    if (
+        not ref or ref.get("deleted_at") or not is_ref_row(ref)
+        or ref.get("project_id") != ctx["project_id"]
+    ):
         raise HTTPException(status_code=404, detail="Document not found")
     await require_doc_in_scope(ctx.get("scope_root"), document_id)
-
-    status = ref.get("processing_status")
-    has_text = bool((ref.get("content") or "").strip())
-    if status not in ("error", "processing"):
-        raise HTTPException(
-            status_code=400,
-            detail="reprocess_file is only for a node whose processing_status is "
-                   "'error' or 'processing' and whose text is empty.",
-        )
-    if has_text:
-        raise HTTPException(
-            status_code=403,
-            detail="This node has text that would be wiped; retry it from the "
-                   "document's reference panel in the app.",
-        )
+    await require_voice_for_audio_ref(ref, ctx["user"])
+    _require_mcp_reprocessable(ref)
     from files_service import reprocess_reference
 
     result = await reprocess_reference(document_id, ref, user_id=ctx["user_id"])
@@ -327,6 +337,10 @@ async def _dispatch_preview_extractor(args: dict, ctx: dict) -> dict:
     """
     from pipeline.extractor.runner import run_extractor_dry
 
+    # see SYSTEM: capability-tiers — 'ai' gate: a dry-run is a real model run.
+    # Principal = the key owner (ctx["user"], role-pinned — no role
+    # inheritance), so an admin's key is bounded by that admin's stored tier.
+    await require_tier(ctx["user"], "ai")
     params_list = await _resolve_extractor_params_list(args, ctx)
     params = _select_extractor_params(params_list, args)
 

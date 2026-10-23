@@ -36,7 +36,10 @@ router = APIRouter()
 
 # PATCH field split: manager fields both roles may write; admin fields are
 # admin-only (a moderator's body touching them is a 403 — lookup, not a chain).
-MANAGER_FIELDS = ("name", "email", "password")
+# 'tier' is manager-writable: setting an account's capability tier is group
+# management, not instance administration (no ceiling on what a moderator may
+# grant — small trusted group; see SYSTEM: capability-tiers).
+MANAGER_FIELDS = ("name", "email", "password", "tier")
 ADMIN_FIELDS = ("role", "moderator_id")
 
 
@@ -108,7 +111,7 @@ async def _collect_admin_field_updates(
 
 
 def _manager_field_updates(body: UpdateUserAdmin) -> dict:
-    """MANAGER_FIELDS (name/email/password) → write set (password → password_hash)."""
+    """MANAGER_FIELDS (name/email/password/tier) → write set (password → password_hash)."""
     updates: dict = {}
     if body.name is not None:
         updates["name"] = body.name
@@ -116,6 +119,8 @@ def _manager_field_updates(body: UpdateUserAdmin) -> dict:
         updates["email"] = body.email
     if body.password is not None:
         updates["password_hash"] = hash_secret(body.password)
+    if body.tier is not None:
+        updates["tier"] = body.tier
     return updates
 
 
@@ -214,7 +219,7 @@ async def list_users(
     a moderator sees only their own group."""
     sql = (
         "SELECT id, name, email, role, user_facts, timezone, created_by, moderator_id, "
-        "created_at, token_version, updated_at FROM users WHERE deleted_at IS NONE"
+        "tier, created_at, token_version, updated_at FROM users WHERE deleted_at IS NONE"
     )
     params: dict = {"limit": limit, "offset": offset}
     if role is not None:
@@ -284,6 +289,9 @@ async def create_user_admin(body: CreateUserAdmin, manager: dict = Depends(requi
         "password_hash": hash_secret(body.password),
         "role": role,
         "user_facts": "",
+        # Capability tier (see SYSTEM: capability-tiers): kept from the body for a
+        # moderator's create too (no ceiling); None → the schema default 'ai'.
+        "tier": body.tier or "ai",
         # created_by: provenance for the moderator's group — which admin created
         # this account. Nothing reads it yet; it cannot be backfilled later.
         "created_by": manager["user_id"],

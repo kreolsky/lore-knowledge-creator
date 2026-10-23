@@ -57,7 +57,7 @@ def _replay(open_frames):
 
 async def _attach(out, replay, monkeypatch, db=None, running=False):
     import driver.timeline
-    from routes.chat.messages import _attach_timeline
+    from routes.chat.timeline_attach import _attach_timeline
 
     async def fake_fetch(_session_id):
         return replay

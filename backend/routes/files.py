@@ -38,6 +38,7 @@ from files_util import (
 )
 from markdown_normalize import normalize_markdown
 from surrealdb import AsyncSurreal
+from tiers import require_tier, require_voice_for_audio_ref
 from transcription import enqueue_transcription, transcribe_audio
 
 import event_bus
@@ -120,6 +121,26 @@ async def _upload_image_reference(
     return result
 
 
+def _declared_media_type(file: UploadFile) -> tuple[str, str | None]:
+    """The upload's declared (mime, media_type) from headers only — no body read."""
+    mime = file.content_type or mimetypes.guess_type(file.filename or "")[0] or ""
+    return mime, detect_media_type(mime)
+
+
+async def _replay_hit(project_id: str, idempotency_key: str | None) -> dict | None:
+    """The SELECT-before-create replay guard's early-exit row, or None.
+
+    # ARCH: a lost 2xx makes the client re-send the same take; without this
+    # check every retry would duplicate the reference row. The unique index
+    # idx_documents_idem backs the simultaneous window this SELECT cannot
+    # see; _replay_or_reraise serves the loser.
+    """
+    if not idempotency_key:
+        return None
+    existing = await find_reference_by_idempotency_key(project_id, idempotency_key)
+    return serialize_record(existing, "reference_id") if existing else None
+
+
 @router.post("/api/references/upload")
 @router.post("/api/documents/upload", include_in_schema=False)
 async def upload_reference_file(
@@ -134,20 +155,20 @@ async def upload_reference_file(
 
     idempotency_key (SYSTEM: recording-cache): a replay of an already-served key
     returns the EXISTING reference — no re-save, no re-enqueued transcription.
+
+    # see SYSTEM: capability-tiers — the audio arm is 'voice'-gated BEFORE the
+    # upload starts (a base account gets the tier 403 and no reference row
+    # stuck "not transcribed").
     """
+    mime, media_type = _declared_media_type(file)
+    if media_type == "audio":
+        await require_tier(user, "voice")
     await require_project_full(project_id, user)
 
-    # ARCH: SELECT-before-create replay guard. A lost 2xx makes the client
-    # re-send the same take; without this check every retry would duplicate the
-    # reference row. The unique index idx_documents_idem backs the simultaneous
-    # window this SELECT cannot see; _replay_or_reraise serves the loser.
-    if idempotency_key:
-        existing = await find_reference_by_idempotency_key(project_id, idempotency_key)
-        if existing:
-            return serialize_record(existing, "reference_id")
+    replayed = await _replay_hit(project_id, idempotency_key)
+    if replayed:
+        return replayed
 
-    mime = file.content_type or mimetypes.guess_type(file.filename or "")[0] or ""
-    media_type = detect_media_type(mime)
     if not media_type:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {mime}")
 
@@ -254,7 +275,11 @@ async def upload_and_transcribe(
     recording-cache): a replay returns the stored text of the existing
     reference when it is ready, and RETRIES the transcription ON the existing
     reference (no new row) when it is not.
+
+    # see SYSTEM: capability-tiers — 'voice' gate: this route is audio-only STT,
+    # so the tier 403 is the first answer (before project access).
     """
+    await require_tier(user, "voice")
     await require_project_full(project_id, user)
 
     mime = file.content_type or mimetypes.guess_type(file.filename or "")[0] or ""
@@ -411,10 +436,14 @@ async def retry_processing(reference_id: str, user: dict = Depends(get_current_u
     Delegates to the shared `_reprocess_reference` core (also used by the agent-only
     reprocess_reference tool). Access (require_document_full) is checked at this
     edge; the core owns the retryable-state + dispatch-by-file-type invariants.
+
+    # see SYSTEM: capability-tiers — the audio arm re-enqueues STT, so it is
+    # 'voice'-gated (a base account cannot restart a transcription).
     """
     ref = await fetch_one("documents", reference_id)
     if not ref or not is_ref_row(ref):
         raise HTTPException(status_code=404, detail="Reference not found")
+    await require_voice_for_audio_ref(ref, user)
     await require_document_full(reference_id, user)
     return await reprocess_reference(reference_id, ref, user_id=user.get("user_id", ""))
 

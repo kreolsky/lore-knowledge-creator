@@ -412,6 +412,10 @@ interface _HarnessTurn {
 }
 
 const harnessTurns = new Map<string, _HarnessTurn>();
+/** Sessions already warned for a malformed DETACHED lore frame (the no-turn
+ *  arm of dispatchChatFrame) — one chatStreamDegraded per session until chat
+ *  reset, the same one-shot discipline as the turn sink's warnMalformed. */
+const noTurnWarnedSessions = new Set<string>();
 
 /** Whether THIS tab holds an open harness turn registration for the session —
  * the browser-WS-gap resync's trigger (a reconnect reloads the session when
@@ -577,6 +581,15 @@ export function dispatchChatFrame(
     const validated = validateFrame(frame);
     if (!validated) {
       console.warn('Chat frame handler failed: malformed lore frame', frame);
+      // WHY once per session: a detached run has no turn state to hang a
+      // one-shot on, and a burst of bad frames must not toast per frame.
+      // Cleared with the module's other per-session state on chat reset.
+      // (Today the lore/image-gen type carries no GUARD, so this arm fires
+      // only once a guard exists — kept loud for that day rather than dropped.)
+      if (!noTurnWarnedSessions.has(sessionId)) {
+        noTurnWarnedSessions.add(sessionId);
+        useAppStore.getState().showToast(t('chatStreamDegraded'), 'warning');
+      }
       return;
     }
     feedFrame(validated, sessionId, set);
@@ -593,6 +606,10 @@ export function dispatchChatFrame(
     // dispatch loop's catch (which surfaces through runCompletion) with a
     // loud console line; the terminal frame still closes the turn.
     console.error('Chat frame handler failed:', e);
+    // Surface ONCE per turn through the sink's own one-shot — the user sees
+    // the same chatStreamDegraded toast a malformed frame raises, while the
+    // loop keeps dispatching.
+    turn.sink.warnMalformed(e);
   }
   if (event && TERMINAL_FRAME_TYPES.has(event.type)) {
     // The turn's transport end. The DISPLAY half — binding the fed nodes to
@@ -684,4 +701,5 @@ registerChatResetHandler(() => {
     turn.settle();
   }
   harnessTurns.clear();
+  noTurnWarnedSessions.clear();
 });

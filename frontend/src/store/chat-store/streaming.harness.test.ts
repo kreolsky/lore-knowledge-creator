@@ -83,6 +83,7 @@ vi.mock('../../i18n', () => ({ t: (k: string) => k }));
 import { streamCompletion, dispatchChatFrame, hasOpenHarnessTurn } from './streaming';
 import { clearChatCaches } from './reset-registry';
 import { useChatStore } from '../chat-store';
+import { useAppStore } from '../app-store';
 import { apiClient } from '../../api/client';
 import type { ChatState, Set } from './types';
 
@@ -206,6 +207,37 @@ describe('the harness transport — a turn over the WS dispatch', () => {
     // itself is flushed by the store-level reset, not by this handler.)
     dispatchChatFrame(get, set, 's-reset', DONE);
     expect(get().streaming?.messageId).toBe('am');
+  });
+
+  it('a handler exception surfaces ONCE per turn through the sink (chatStreamDegraded); the loop keeps dispatching', async () => {
+    // The sink's handlers close over the set the TURN was created with (not
+    // dispatchChatFrame's argument), so the throw is injected there: a set
+    // that blows up exactly on the context_usage sessions patch. The turn's
+    // session is NOT the shown one — applyInboxFrame is skipped, isolating
+    // the handler call the dispatch catch guards.
+    const { get, set } = makeStore('s-shown');
+    const pickySet: Set = u => {
+      const patch = typeof u === 'function' ? (u as (s: ChatState) => Partial<ChatState>)(get()) : u;
+      if (patch !== null && typeof patch === 'object' && 'sessions' in patch) {
+        throw new Error('handler blew up');
+      }
+      set(u);
+    };
+    const p = startHarness(get, pickySet, 's-blow');
+    const toast = useAppStore.getState().showToast as unknown as ReturnType<typeof vi.fn>;
+
+    dispatchChatFrame(get, set, 's-blow', { type: 'context_usage', used: 1, cap: 10 });
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith('chatStreamDegraded', 'warning');
+
+    dispatchChatFrame(get, set, 's-blow', { type: 'context_usage', used: 2, cap: 10 });
+    expect(toast).toHaveBeenCalledTimes(1); // once per turn, never per frame
+
+    // The turn still settles normally — the exception killed neither the
+    // registration nor the terminal path.
+    dispatchChatFrame(get, set, 's-blow', TURN_CLOSED);
+    await p;
+    expect(hasOpenHarnessTurn('s-blow')).toBe(false);
   });
 
   it('frames of a turn whose opening ids this tab never saw are ignored (the reload brings it)', () => {

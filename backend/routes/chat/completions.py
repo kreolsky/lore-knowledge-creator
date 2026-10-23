@@ -45,6 +45,7 @@ from fastapi import Depends, HTTPException
 from model_access import require_model_access
 from rate_limit import check_completion_rate_limit
 from surrealdb import AsyncSurreal
+from tiers import require_tier
 
 from auth import get_current_user
 from db import get_db
@@ -219,11 +220,16 @@ async def _fail_pre_stream_setup(
 async def _validate_turn_and_model(
     session: dict, body: CompletionRequest, user: dict,
 ) -> tuple[str, str | None]:
-    """The validation cluster: note/API/rate-limit guards and
-    model + reasoning-effort resolution.
+    """The validation cluster: note/API/rate-limit guards, the account tier,
+    and model + reasoning-effort resolution.
     Raises on refusal; returns the resolved (model, reasoning_effort)."""
     await _validate_chat_turn(session, user)
     _require_own_attachments(body, user)
+    # see SYSTEM: capability-tiers — the 'ai' gate sits HERE, after the note 400
+    # and the rate-limit 429, beside require_model_access, so ONE call covers
+    # every turn entry (a note-chat's base user never reaches it; a base
+    # account's AI-chat turn is refused before the model resolves).
+    await require_tier(user, "ai")
     model = body.model or session.get("model") or await settings.get("CHAT_MODEL")
     if not model:
         raise HTTPException(

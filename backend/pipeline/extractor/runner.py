@@ -198,6 +198,13 @@ async def on_transcription_complete(reference_id: str, project_id: str, user_id:
     # add an agent_configs field or change parent_id normalization, update BOTH
     # sites. Why: the two paths feed the same extract_task; a silent divergence here
     # is exactly the parity class this alignment rule exists to prevent.
+
+    # WHY (see SYSTEM: capability-tiers): this auto-trigger is deliberately NOT
+    # tier-gated (operator decision). Why: the pipeline is a cost of the
+    # project, paid by whoever configured it (an 'ai' user); gating it on the
+    # dictating member's tier would break a 'voice' member's dictation in a
+    # project with an extractor — the tier gates STARTS, and the start here
+    # was the transcription, already authorized.
     """
     # Resolved as soon as the reference's host is known — the failure branch below
     # needs it to leave the error note on the SOURCE document even when the failure

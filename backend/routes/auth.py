@@ -33,21 +33,30 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("/api/auth/login")
-async def login(body: LoginRequest, request: Request, response: Response, db: AsyncSurreal = Depends(get_db)):
-    """Authenticate user and set httpOnly session cookie."""
-    client_ip = request.client.host if request.client else "unknown"
+async def _login_rate_gate(request: Request, email: str) -> tuple[str, str | None]:
+    """The login throttler: 429 past the budget; returns (client ip, device
+    nonce) — the nonce's presence decides which counter a SUCCESS resets.
+
     # INVARIANT(security): a client with a valid device cookie for this account is
     # throttled only on its own counter; every other client shares the account's.
     # Why: strangers' failed guesses must never lock the owner's known device out.
-    nonce = read_device_nonce(request, body.email)
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    nonce = read_device_nonce(request, email)
     allowed = (
         await check_login_device_rate_limit(nonce) if nonce
-        else await check_login_email_rate_limit(body.email)
+        else await check_login_email_rate_limit(email)
     )
     if not allowed:
         log_security("login_rate_limited", ip=client_ip, tier="device" if nonce else "email")
         raise HTTPException(status_code=429, detail="Too many login attempts. Try again later.")
+    return client_ip, nonce
+
+
+@router.post("/api/auth/login")
+async def login(body: LoginRequest, request: Request, response: Response, db: AsyncSurreal = Depends(get_db)):
+    """Authenticate user and set httpOnly session cookie."""
+    client_ip, nonce = await _login_rate_gate(request, body.email)
     try:
         rows = await db.query(
             "SELECT * FROM users WHERE email = $e AND deleted_at IS NONE LIMIT 1",
@@ -72,11 +81,15 @@ async def login(body: LoginRequest, request: Request, response: Response, db: As
         await reset_login_email_rate_limit(body.email)
     user_id = extract_id(user["id"])
     tv = user.get("token_version") or 0
-    payload = {"user_id": user_id, "name": user["name"], "email": user.get("email", ""), "role": user["role"]}
-    # ARCH: capability flags ride the login payload too (same shape as /me) —
-    # the UI's gear gate reads can_manage_users straight after login, before
-    # any /me refresh, and must never compare role strings in TSX.
-    payload.update(capability_flags(user["role"]))
+    # ARCH: capability flags (same shape as /me) + the tier axis ride the
+    # login payload — the UI gates on flags straight after login, never on
+    # role/tier strings in TSX. A pre-migration NONE tier lands as 'ai'.
+    payload = {
+        "user_id": user_id, "name": user["name"],
+        "email": user.get("email", ""), "role": user["role"],
+        "tier": user.get("tier") or "ai",
+        **capability_flags(user["role"], user.get("tier")),
+    }
     # The caller's own group subject (roster invite picker, same shape as /me)
     # — from the just-fetched row, so a group move lands on the next login.
     payload["group_subject"] = own_group_subject(user_id, user["role"], user.get("moderator_id"))
@@ -119,7 +132,8 @@ async def me(request: Request, response: Response, user: dict = Depends(get_curr
     """
     try:
         rows = await db.query(
-            "SELECT pin_hash, token_version, role, moderator_id FROM type::record('users', $id)",
+            "SELECT pin_hash, token_version, role, moderator_id, tier "
+            "FROM type::record('users', $id)",
             {"id": user["user_id"]},
         )
         db_user = rows[0] if rows else {}
@@ -127,10 +141,13 @@ async def me(request: Request, response: Response, user: dict = Depends(get_curr
         tv = (db_user.get("token_version") or 0) if db_user else 0
         # ARCH: /me answers with the DB role (fresh even when the JWT claim is
         # stale — a role flip takes effect without re-login), and with capability
-        # flags so the frontend never compares role strings in TSX.
+        # flags so the frontend never compares role strings in TSX. Same
+        # freshness for the tier: a downgrade flips can_voice/can_ai on the
+        # next /me, without re-login.
         if db_user and db_user.get("role"):
             user["role"] = db_user["role"]
-        user.update(capability_flags(user.get("role")))
+        user["tier"] = (db_user.get("tier") if db_user else None) or "ai"
+        user.update(capability_flags(user.get("role"), user.get("tier")))
         # Same freshness for the group pointer: moderator_id is re-read here, so
         # a group move lands on the next /me, not at token expiry.
         user["group_subject"] = own_group_subject(

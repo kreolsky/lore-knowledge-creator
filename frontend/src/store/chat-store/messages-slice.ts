@@ -2,6 +2,7 @@
 import type { ChatFile, ChatMessage, ChatSession, RegionRef } from '../../types';
 import { deriveUIMode } from '../../types';
 import { apiClient, HttpError, RequestTooLargeError } from '../../api/client';
+import { tierRefusal } from '../../utils/server-refusal-detail';
 import type { ForbiddenError } from '../../api/client';
 import { useAppStore } from '../app-store';
 import { useUIStore } from '../ui-store';
@@ -313,6 +314,13 @@ function handleSendError(e: unknown, label: string, set: Set, get: Get): boolean
     // picker opens on it.
     set({ modelsLoaded: false, modelPickerOpen: true });
     void get().loadModels();
+    return true;
+  }
+  // see SYSTEM: capability-tiers — a stale tab keeps the chat tab after a
+  // downgrade; the server's 403 `tier_required:ai` must surface as the
+  // account-level explanation, never as the generic send-failed toast.
+  if (tierRefusal(e) !== null) {
+    useAppStore.getState().showToast(t('tierAiRequired'), 'error');
     return true;
   }
   if ((e as Error).name === 'AbortError') {

@@ -23,7 +23,7 @@ ones, so the browser's ONE replaceWindow input carries both.
 import json
 
 import pytest
-from routes.chat.messages import _assign_frames_by_stamp
+from routes.chat.timeline_attach import _assign_frames_by_stamp
 
 
 def row(mid, role="assistant", seq=None, created="t"):
@@ -110,7 +110,7 @@ async def test_attach_reads_the_driver_session_the_turns_ran_under(monkeypatch):
     chat id, so asking for it yields an empty turn list and the rows never get
     frames (observed class: live stream shows chips, reload loses them)."""
     import driver.timeline
-    from routes.chat.messages import _attach_timeline
+    from routes.chat.timeline_attach import _attach_timeline
 
     asked: list[str] = []
 
@@ -136,7 +136,7 @@ async def test_attach_reads_the_driver_session_the_turns_ran_under(monkeypatch):
 async def test_attach_plain_chat_reads_its_own_id(monkeypatch):
     """A normal chat (no compacted_from) keeps reading its own id — unchanged."""
     import driver.timeline
-    from routes.chat.messages import _attach_timeline
+    from routes.chat.timeline_attach import _attach_timeline
 
     asked: list[str] = []
 
@@ -163,7 +163,7 @@ async def test_attach_unseeded_branch_reads_the_seed_source_cut_at_the_boundary(
     before the boundary count — the source's later turns and its live open
     turn are never grafted onto the branch."""
     import driver.timeline
-    from routes.chat.messages import _attach_timeline
+    from routes.chat.timeline_attach import _attach_timeline
 
     asked: list[str] = []
 
@@ -193,7 +193,7 @@ async def test_attach_half_stamped_branch_reads_its_own_id(monkeypatch):
     """The migration's 422 marker (seed source, no seq) names no boundary to
     cut at — the read stays on the branch's own id, never an uncut source."""
     import driver.timeline
-    from routes.chat.messages import _attach_timeline
+    from routes.chat.timeline_attach import _attach_timeline
 
     asked: list[str] = []
 
@@ -218,7 +218,7 @@ async def test_attach_mints_the_halt_card_for_the_turnless_row(monkeypatch):
     no replayed turn — its record is the row's `halt` column, minted at the
     log tail (tail_seq) so the browser renders the card where the turn was."""
     import driver.timeline
-    from routes.chat.messages import _attach_timeline
+    from routes.chat.timeline_attach import _attach_timeline
 
     async def fake_fetch(session_id):
         # The trailing turn never ended: no entry, but the log has a tail.
@@ -239,7 +239,7 @@ async def test_attach_mints_image_gen_from_gen_steps(monkeypatch):
     inside the row's own replayed turn — the same anchor the live WS mint
     uses, derived from the SAME gen_steps the WS event carries."""
     import driver.timeline
-    from routes.chat.messages import _attach_timeline
+    from routes.chat.timeline_attach import _attach_timeline
     from test_driver_frames import _stub_live_refs
 
     # The deleted-image filter's DB seam — all live (the filter has its own
@@ -275,7 +275,7 @@ async def test_attach_mints_nothing_for_a_pre_harness_thread(monkeypatch):
     """No turns AND no tail: the driver never logged anything for this
     lineage — the attach must not even mint a halt (no honest anchor)."""
     import driver.timeline
-    from routes.chat.messages import _attach_timeline
+    from routes.chat.timeline_attach import _attach_timeline
 
     async def fake_fetch(session_id):
         return {"turns": [], "tail_seq": None}

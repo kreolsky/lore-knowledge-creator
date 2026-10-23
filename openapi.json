@@ -858,6 +858,16 @@
               }
             ],
             "title": "Moderator Id"
+          },
+          "tier": {
+            "default": "ai",
+            "enum": [
+              "base",
+              "voice",
+              "ai"
+            ],
+            "title": "Tier",
+            "type": "string"
           }
         },
         "title": "CreateInvite",
@@ -1002,6 +1012,22 @@
             ],
             "title": "Role",
             "type": "string"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "enum": [
+                  "base",
+                  "voice",
+                  "ai"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier"
           }
         },
         "required": [
@@ -1394,6 +1420,22 @@
           }
         },
         "title": "MessageUpdate",
+        "type": "object"
+      },
+      "ModelOrder": {
+        "properties": {
+          "model_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Model Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "model_ids"
+        ],
+        "title": "ModelOrder",
         "type": "object"
       },
       "ModelSubjects": {
@@ -4016,6 +4058,22 @@
               }
             ],
             "title": "Role"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "enum": [
+                  "base",
+                  "voice",
+                  "ai"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier"
           }
         },
         "title": "UpdateUserAdmin",
@@ -4765,9 +4823,67 @@
         ]
       }
     },
+    "/api/admin/model-order": {
+      "put": {
+        "description": "Full replace of the admin model order: position = index in `model_ids`.\n\nNot under /models/… — PUT /models/{model_id:path} would take the path.",
+        "operationId": "put_model_order_api_admin_model_order_put",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelOrder"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Model Order",
+        "tags": [
+          "admin-model-access"
+        ]
+      }
+    },
     "/api/admin/models": {
       "get": {
-        "description": "Gateway roster ∪ granted ids → [{id, in_gateway, is_default, subjects}].\n\n`in_gateway` is None on every row when the gateway cannot be read: the grants\nstay listed and revocable during a gateway outage, and the client names the\noutage instead of marking every model \"not in gateway\".",
+        "description": "Gateway roster ∪ granted ids → [{id, in_gateway, is_default, subjects}],\nin the admin order (order_models).\n\n`in_gateway` is None on every row when the gateway cannot be read: the grants\nstay listed and revocable during a gateway outage, and the client names the\noutage instead of marking every model \"not in gateway\".",
         "operationId": "list_model_grants_api_admin_models_get",
         "parameters": [
           {
@@ -7032,7 +7148,7 @@
         ]
       },
       "post": {
-        "description": "Create a new chat session scoped to a document or reference.\n\nNote-chats (body.is_note=true) need at least commentator access: they are\nthe comment channel, and readonly users cannot start one.",
+        "description": "Create a new chat session scoped to a document or reference.\n\nNote-chats (body.is_note=true) need at least commentator access: they are\nthe comment channel, and readonly users cannot start one.\n\n# see SYSTEM: capability-tiers — AI session create is 'ai'-gated, note-chats\n# are 'base': the gate runs BEFORE the project-access checks so the tier\n# 403 is the first answer. The note path is exempt — notes never call\n# the LLM.",
         "operationId": "create_session_api_chat_sessions_post",
         "parameters": [
           {
@@ -7801,7 +7917,7 @@
     },
     "/api/chat/transcribe": {
       "post": {
-        "description": "Transcribe audio to text for chat input. No Reference creation.",
+        "description": "Transcribe audio to text for chat input. No Reference creation.\n\n# see SYSTEM: capability-tiers — 'voice' gate: STT is a per-account cost, so a\n# base account is refused here before any rate-limit accounting.",
         "operationId": "chat_transcribe_api_chat_transcribe_post",
         "parameters": [
           {
@@ -9571,7 +9687,7 @@
         "summary": "Redeem Mcp Upload Recipe"
       },
       "post": {
-        "description": "Store a file and create a reference node, authorized ONLY by the signed token.\n\nOrchestrates: resolve token claims → dedup-or-create → normalize response. Each\nstage is a helper so the route reads as the protocol it implements (see the\nper-helper docstrings for the invariants they own).",
+        "description": "Store a file and create a reference node, authorized ONLY by the signed token.\n\nOrchestrates: resolve token claims → dedup-or-create → normalize response. Each\nstage is a helper so the route reads as the protocol it implements (see the\nper-helper docstrings for the invariants they own).\n\n# see SYSTEM: capability-tiers — the audio arm queues STT, so it is\n# 'voice'-gated. Principal = the key owner who minted the token\n# (claims[\"user_id\"], pinned role \"user\" — a key never inherits an\n# instance role, so an admin's key is bounded by that admin's stored\n# tier). Runs BEFORE the dedup claim so a refused upload leaves no\n# locking sentinel.",
         "operationId": "redeem_mcp_upload_api_mcp_upload__token__post",
         "parameters": [
           {
@@ -12597,7 +12713,7 @@
     },
     "/api/references/upload": {
       "post": {
-        "description": "Upload a binary file (audio/image) and create a reference for it.\n\nidempotency_key (SYSTEM: recording-cache): a replay of an already-served key\nreturns the EXISTING reference — no re-save, no re-enqueued transcription.",
+        "description": "Upload a binary file (audio/image) and create a reference for it.\n\nidempotency_key (SYSTEM: recording-cache): a replay of an already-served key\nreturns the EXISTING reference — no re-save, no re-enqueued transcription.\n\n# see SYSTEM: capability-tiers — the audio arm is 'voice'-gated BEFORE the\n# upload starts (a base account gets the tier 403 and no reference row\n# stuck \"not transcribed\").",
         "operationId": "upload_reference_file_api_references_upload_post",
         "parameters": [
           {
@@ -12652,7 +12768,7 @@
     },
     "/api/references/upload-and-transcribe": {
       "post": {
-        "description": "Upload audio and return transcription synchronously.\n\nCreates a reference as side-effect. Used by the in-document voice widget\nwhere polling is impractical. With idempotency_key (SYSTEM:\nrecording-cache): a replay returns the stored text of the existing\nreference when it is ready, and RETRIES the transcription ON the existing\nreference (no new row) when it is not.",
+        "description": "Upload audio and return transcription synchronously.\n\nCreates a reference as side-effect. Used by the in-document voice widget\nwhere polling is impractical. With idempotency_key (SYSTEM:\nrecording-cache): a replay returns the stored text of the existing\nreference when it is ready, and RETRIES the transcription ON the existing\nreference (no new row) when it is not.\n\n# see SYSTEM: capability-tiers — 'voice' gate: this route is audio-only STT,\n# so the tier 403 is the first answer (before project access).",
         "operationId": "upload_and_transcribe_api_references_upload_and_transcribe_post",
         "parameters": [
           {
@@ -13146,7 +13262,7 @@
     },
     "/api/references/{reference_id}/retry": {
       "post": {
-        "description": "Re-queue a stuck/failed reference: audio → transcription, .docx → conversion.\n\nDelegates to the shared `_reprocess_reference` core (also used by the agent-only\nreprocess_reference tool). Access (require_document_full) is checked at this\nedge; the core owns the retryable-state + dispatch-by-file-type invariants.",
+        "description": "Re-queue a stuck/failed reference: audio → transcription, .docx → conversion.\n\nDelegates to the shared `_reprocess_reference` core (also used by the agent-only\nreprocess_reference tool). Access (require_document_full) is checked at this\nedge; the core owns the retryable-state + dispatch-by-file-type invariants.\n\n# see SYSTEM: capability-tiers — the audio arm re-enqueues STT, so it is\n# 'voice'-gated (a base account cannot restart a transcription).",
         "operationId": "retry_processing_api_references__reference_id__retry_post",
         "parameters": [
           {
@@ -14686,7 +14802,7 @@
     },
     "/api/tool/generate_image": {
       "post": {
-        "description": "Generate an image via ComfyUI and attach it as an image reference to the\nworking document.\n\nThe agent's `prompt` — a complete, self-contained scene description — is\nrefined server-side into an SD prompt before it reaches ComfyUI.\nDETACHED: this handler is a\nfast LAUNCHER. It validates the doc + target + the count/workflow pairing\n(everything that surfaces a clean HTTP error), mints a run_id, enqueues an\narq task with the admin workflow, size and prompt template, and returns\nat once:\n\n    {status:\"generating\", run_id, doc_id}\n\nThe ~10–20s generation runs on the arq DEFAULT queue (NOT a web-process\ntask — the web process is reload-volatile and a create_task dies with an\nunreported CancelledError on any .py edit/deploy/restart). The image lands\nasynchronously on the chat's working document (the session's stable parent)\nand is delivered to the chat as backend-minted `lore/image-gen` frames on\nthe owner-filtered chat channel (bus chat_frame_push → the chat_frame WS\nenvelope); the chips are persisted server-side to messages.gen_steps so a\nreload still shows them (the driver's log never sees the background task).\nThe refined SD prompt is NOT in the result (it would land in the agent's\ncontext) — it travels inside the minted frame and the persisted chip.",
+        "description": "Generate an image via ComfyUI and attach it as an image reference to the\nworking document.\n\nThe agent's `prompt` — a complete, self-contained scene description — is\nrefined server-side into an SD prompt before it reaches ComfyUI.\nDETACHED: this handler is a\nfast LAUNCHER. It validates the doc + target + the count/workflow pairing\n(everything that surfaces a clean HTTP error), mints a run_id, enqueues an\narq task with the admin workflow, size and prompt template, and returns\nat once:\n\n    {status:\"generating\", run_id, doc_id}\n\nThe ~10–20s generation runs on the arq DEFAULT queue (NOT a web-process\ntask — the web process is reload-volatile and a create_task dies with an\nunreported CancelledError on any .py edit/deploy/restart). The image lands\nasynchronously on the chat's working document (the session's stable parent)\nand is delivered to the chat as backend-minted `lore/image-gen` frames on\nthe owner-filtered chat channel (bus chat_frame_push → the chat_frame WS\nenvelope); the chips are persisted server-side to messages.gen_steps so a\nreload still shows them (the driver's log never sees the background task).\nThe refined SD prompt is NOT in the result (it would land in the agent's\ncontext) — it travels inside the minted frame and the persisted chip.\n\n# see SYSTEM: capability-tiers — 'ai' gate, defense in depth: the only caller\n# is an ai-gated turn (the completion gate), but the tool itself is a\n# cost start and carries its own gate. Principal = ctx[\"user\"] (the\n# role-pinned agent principal — no role inheritance).",
         "operationId": "tool_generate_image_api_tool_generate_image_post",
         "parameters": [
           {
@@ -17103,7 +17219,7 @@
     },
     "/api/widget/extract": {
       "post": {
-        "description": "Upload one recording under a widget key; receive a job that turns it into\nthe config's variables as JSON — no document is created.\n\n`session` is a JSON form field: {\"id\": \"<external session id>\", \"protocol\":\n\"<reserved, T4>\"}. The session id is the idempotency key: a replay returns\nthe SAME job (reset + re-enqueued if that job failed).",
+        "description": "Upload one recording under a widget key; receive a job that turns it into\nthe config's variables as JSON — no document is created.\n\n`session` is a JSON form field: {\"id\": \"<external session id>\", \"protocol\":\n\"<reserved, T4>\"}. The session id is the idempotency key: a replay returns\nthe SAME job (reset + re-enqueued if that job failed).\n\n# see SYSTEM: capability-tiers — 'ai' gate (ai ⊃ voice: the extraction runs a\n# model on the transcript). Principal = the widget key owner.",
         "operationId": "widget_extract_api_widget_extract_post",
         "parameters": [
           {

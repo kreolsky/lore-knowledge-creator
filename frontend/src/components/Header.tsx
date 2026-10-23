@@ -39,6 +39,7 @@ export function Header() {
   const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocument?.document_id ?? ''], s.compactLayout));
   const currentReference = refIsScope(refOpenMode) ? rawReference : null;
   const accessLevel = useAppStore(s => s.accessLevel);
+  const currentUser = useAppStore(s => s.currentUser);
   const sectionCrumb = useAppStore(s => s.sectionCrumb);
   const rightPanelOpen = useDocState(currentDocument?.document_id ?? null).rightPanelOpen;
   // Compact viewport: no floating right tab bar over the header, so nothing to reserve.
@@ -184,8 +185,10 @@ export function Header() {
       )}
 
       <div className="ml-auto flex items-center gap-1" style={!rightPanelOpen && !compactLayout ? { marginRight: 'var(--right-tab-bar-w)' } : undefined}>
-        {/* Recording button: hidden on public share (gated by accessLevel + URL check). */}
-        {!isPublicShare && isEditorShell(location.pathname) && (
+        {/* Recording button: hidden on public share (gated by accessLevel + URL check)
+            and for a non-voice account (see SYSTEM: capability-tiers — can_voice;
+            startRecording keeps the handler-side guard for stale tabs). */}
+        {!isPublicShare && isEditorShell(location.pathname) && currentUser?.can_voice !== false && (
           <button
             className={`header-recording-btn ${recording ? '' : 'header-recording-btn--idle'}`}
             onClick={() => recording ? emit('stop-recording') : emit('start-recording')}

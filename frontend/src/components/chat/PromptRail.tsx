@@ -27,6 +27,32 @@ interface Props {
 const HOVER_CLOSE_MS = 150;
 // A landing within this many px of scrollTop counts as reached — scrollTop reads back rounded.
 const CURRENT_SLACK = 2;
+// Tick geometry in CSS px, before snapping to device pixels.
+const TICK_PITCH = 12;
+const TICK_THICKNESS = 3;
+
+/** devicePixelRatio, re-read on resize — browser zoom resizes the CSS viewport. */
+function useDevicePixelRatio(): number {
+  const [dpr, setDpr] = useState(() => window.devicePixelRatio || 1);
+  useEffect(() => {
+    const onResize = () => setDpr(window.devicePixelRatio || 1);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return dpr;
+}
+
+/**
+ * Pitch and thickness as whole device pixels, with an even gap around the tick.
+ * WHY: at a fractional zoom a 3px tick spans 3.3 device px and each one snaps to
+ * 3 or 4 on its own; whole-pixel sizes with a shared fractional offset snap alike.
+ */
+function tickGeometry(dpr: number): { pitch: number; thickness: number } {
+  const pitch = Math.round(TICK_PITCH * dpr);
+  let thickness = Math.max(1, Math.round(TICK_THICKNESS * dpr));
+  if ((pitch - thickness) % 2 !== 0) thickness += 1;
+  return { pitch: pitch / dpr, thickness: thickness / dpr };
+}
 // WHY no border, the deep shadow: matches the link hover preview (LinkPreviewPopup).
 const PANEL_CLASS = 'bg-surface shadow-[0_8px_32px_rgba(0,0,0,0.25)] z-50';
 
@@ -59,10 +85,13 @@ export function PromptRail({ items, containerRef, onJump }: Props) {
   const { t } = useTranslation();
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  // The jump target under the pointer (tick or row) — drawn apart from the current prompt.
+  const [hoverId, setHoverId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const pointerRef = useRef<string>('mouse');
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
+  const tick = tickGeometry(useDevicePixelRatio());
 
   const measure = useCallback(() => {
     const el = containerRef.current;
@@ -119,7 +148,17 @@ export function PromptRail({ items, containerRef, onJump }: Props) {
   const onPointerLeave = (e: PointerEvent) => {
     if (e.pointerType !== 'mouse') return;
     cancelClose();
+    setHoverId(null);
     closeTimerRef.current = setTimeout(() => setOpen(false), HOVER_CLOSE_MS);
+  };
+  const hoverOn = (id: string) => (e: PointerEvent) => {
+    if (e.pointerType === 'mouse') setHoverId(id);
+  };
+  // WHY only from a tick: scrolling the panel under a hovered row would slide rows under the pointer.
+  const hoverTick = (id: string) => (e: PointerEvent) => {
+    if (e.pointerType !== 'mouse') return;
+    setHoverId(id);
+    rowRefs.current.get(id)?.scrollIntoView?.({ block: 'nearest' });
   };
 
   return (
@@ -141,6 +180,8 @@ export function PromptRail({ items, containerRef, onJump }: Props) {
             {items.map(item => {
               const preview = answerPreview(item.answer);
               const isCurrent = item.id === currentId;
+              const isTarget = item.id === hoverId && !isCurrent;
+              const rowTone = isCurrent ? 'bg-surface3' : isTarget ? 'bg-surface2' : '';
               return (
                 <div
                   key={item.id}
@@ -149,9 +190,10 @@ export function PromptRail({ items, containerRef, onJump }: Props) {
                   tabIndex={0}
                   aria-current={isCurrent || undefined}
                   data-prompt-row={item.id}
+                  onPointerEnter={hoverOn(item.id)}
                   onClick={() => jump(item.id, !isMouse())}
                   onKeyDown={e => { if (e.key === 'Enter') jump(item.id, false); }}
-                  className={`px-3 py-2 cursor-pointer ${isCurrent ? 'bg-surface2' : 'hover:bg-surface2'}`}
+                  className={`px-3 py-2 cursor-pointer transition-colors duration-150 ${rowTone}`}
                 >
                   <div className={`truncate text-ui-sm ${isCurrent ? 'text-text' : 'text-text-muted'}`}>{promptTitle(item.prompt)}</div>
                   {preview && <div className="line-clamp-2 text-ui-xs text-text-dim mt-0.5">{preview}</div>}
@@ -166,26 +208,32 @@ export function PromptRail({ items, containerRef, onJump }: Props) {
         // WHY flush right: a cursor pushed against the screen edge must land on the rail.
         // WHY prompt-rail: rounded left corners by operator decision (see index.css).
         role="presentation"
-        className="prompt-rail flex flex-col justify-center max-h-full px-1.5 py-2 bg-surface/40 cursor-pointer pointer-events-auto"
+        // WHY fixed pitch + scroll, not shrink: a shrunk row has a fractional height, and a
+        // 3px tick on a fractional y renders blurred, so equal ticks looked unequal.
+        className="prompt-rail flex flex-col justify-center-safe max-h-full overflow-y-auto [scrollbar-width:none] px-1.5 py-2 bg-surface/40 cursor-pointer pointer-events-auto"
         data-prompt-rail
         onClick={() => { if (!isMouse()) setOpen(v => !v); }}
       >
         {items.map(item => {
           const isCurrent = item.id === currentId;
+          const isTarget = item.id === hoverId && !isCurrent;
+          const tickTone = isCurrent ? 'w-5 bg-text' : isTarget ? 'w-5 bg-text-muted' : 'w-3 bg-text-dim';
           return (
             <div
               key={item.id}
               role="presentation"
               data-prompt-tick={item.id}
               aria-current={isCurrent || undefined}
-              className="flex items-center justify-end h-3 min-h-[4px] shrink w-5"
+              className="flex items-center justify-end shrink-0 w-5"
+              style={{ height: tick.pitch }}
+              onPointerEnter={hoverTick(item.id)}
               onClick={e => {
                 if (!isMouse()) return; // touch: the tap toggles the panel instead
                 e.stopPropagation();
                 jump(item.id, false);
               }}
             >
-              <div className={`h-[3px] ${isCurrent ? 'w-5 bg-text' : 'w-3 bg-text-dim'}`} />
+              <div className={`transition-all duration-150 ${tickTone}`} style={{ height: tick.thickness }} />
             </div>
           );
         })}

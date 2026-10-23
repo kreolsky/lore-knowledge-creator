@@ -75,6 +75,15 @@ export function ReferencesPanel() {
   const canEdit = !isPublicShare && accessLevel === 'full';
   const { t } = useTranslation();
   const getView = useEditorView();
+  // see SYSTEM: capability-tiers — a non-voice account drops EVERY audio-capable
+  // extension from the picker (the server treats video/webm as audio too, so
+  // .webm/.mp4 go with it). A dragged-in audio file is still refused by the
+  // server 403 and toasted by the upload handler — hiding narrows the picker,
+  // it never decides.
+  const canVoice = useAppStore(s => s.currentUser?.can_voice) !== false;
+  const uploadAccept = canVoice
+    ? 'text/*,.md,.markdown,.txt,.rst,.tex,.csv,.json,.yaml,.yml,.log,.docx,.pdf,.webm,.ogg,.mp3,.wav,.m4a,.mp4,.jpg,.jpeg,.png,.gif,.webp'
+    : 'text/*,.md,.markdown,.txt,.rst,.tex,.csv,.json,.yaml,.yml,.log,.docx,.pdf,.jpg,.jpeg,.png,.gif,.webp';
 
   const {
     isDragging,
@@ -312,7 +321,8 @@ export function ReferencesPanel() {
   // gate flip is what re-runs it against the fresh node (otherwise drag is dead
   // until the panel remounts).
   const listRef = useRef<HTMLDivElement>(null);
-  const dragEnabled = canEdit && !isPublicShare && !panelRef;
+  // WHY: `!compactLayout` — on the touch layout a scroll swipe would start a reorder.
+  const dragEnabled = canEdit && !isPublicShare && !panelRef && !compactLayout;
   useSiblingDragReorder(listRef, dragEnabled, refDragAdapter);
 
   // Live table list for the current document, derived from the document editor's ydoc.
@@ -668,7 +678,7 @@ export function ReferencesPanel() {
       <input
         ref={fileInputRef}
         type="file"
-        accept="text/*,.md,.markdown,.txt,.rst,.tex,.csv,.json,.yaml,.yml,.log,.docx,.pdf,.webm,.ogg,.mp3,.wav,.m4a,.mp4,.jpg,.jpeg,.png,.gif,.webp"
+        accept={uploadAccept}
         className="hidden"
         onChange={handleFileInput}
       />

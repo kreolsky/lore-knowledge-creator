@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import logging
 
+from tiers import user_has_tier
+
 from jobs import pool as jobs_pool
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,20 @@ async def _claim_due_schedule(db, schedule_id: str) -> str | None:
     return str((claimed[0] or {}).get("last_run_at") or schedule_id)
 
 
+async def _creator_tier_ok(db, user_id: str) -> bool:
+    """The schedule creator still holds the 'ai' tier (see SYSTEM:
+    capability-tiers). The creator's ROLE is read from the DB row and passed
+    in as a parameter — user_has_tier never re-reads it (a key principal
+    passing role=None would otherwise inherit the admin bypass)."""
+    if not user_id:
+        return False
+    rows = await db.query(
+        "SELECT role FROM type::record('users', $id)", {"id": user_id},
+    )
+    role = rows[0].get("role") if rows else None
+    return await user_has_tier(user_id, role, "ai")
+
+
 async def _dispatch_claimed_schedule(db, schedule_id: str, row: dict, claimed_at: str) -> None:
     """Resolve the registry row and enqueue with the frozen params; record the
     dispatch outcome ('ok'/'error') on the schedule row. Raises never — the
@@ -47,6 +63,11 @@ async def _dispatch_claimed_schedule(db, schedule_id: str, row: dict, claimed_at
     from pipeline.core.registry import get_pipeline
 
     try:
+        # see SYSTEM: capability-tiers — a schedule is an ONGOING cost, not
+        # content: a creator downgraded below 'ai' must stop paying for it.
+        # Below-tier ⇒ no enqueue; the recorded last_error names the cause.
+        if not await _creator_tier_ok(db, str(row.get("created_by") or "")):
+            raise ValueError("creator tier")
         spec = get_pipeline(str(row.get("pipeline") or ""))
         if spec is None:
             raise ValueError(f"unknown pipeline {row.get('pipeline')!r}")
@@ -127,7 +148,7 @@ async def pipeline_schedule_tick_task(ctx) -> None:
     db = await get_db()
     # Bounded per tick (memory discipline); the rest is picked up next tick.
     rows = await db.query(
-        "SELECT id, created_at, project_id, pipeline, params_json "
+        "SELECT id, created_at, project_id, pipeline, params_json, created_by "
         f"FROM pipeline_schedules WHERE {_DUE_PREDICATE} "
         "ORDER BY created_at LIMIT 50",
     )

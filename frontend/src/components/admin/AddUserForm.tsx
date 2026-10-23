@@ -7,10 +7,10 @@ import type React from 'react';
 import { useState } from 'react';
 import { Link2, Plus, RefreshCw } from 'lucide-react';
 import { Button, CenterHeading, Dropdown, FieldInput } from '../ui';
-import { groupOptions, roleOptions } from './UsersTab';
+import { groupOptions, roleOptions, tierOptions } from './UsersTab';
 import { useTranslation } from '../../i18n';
 import { useAppStore } from '../../store/app-store';
-import { Role, User } from '../../types';
+import { Role, Tier, User } from '../../types';
 import { generatePassword } from '../../utils/generate-password';
 
 export interface AddUserData {
@@ -19,13 +19,16 @@ export interface AddUserData {
   password: string;
   role: Role;
   moderator_id: string | null;
+  /** Capability tier (see SYSTEM: capability-tiers) — manager-writable: sent for
+   * both an admin's and a moderator's create (no ceiling server-side). */
+  tier: Tier;
 }
 
 interface AddUserFormProps {
   /** Rejects on a refused create (after toasting the reason); the form then keeps its draft. */
   onAdd: (data: AddUserData) => Promise<void>;
-  /** Mints POST /api/invites and copies the URL to the clipboard. */
-  onInvite: () => Promise<void>;
+  /** Mints POST /api/invites (at the form's selected tier) and copies the URL to the clipboard. */
+  onInvite: (tier: Tier) => Promise<void>;
   isAdmin: boolean;
   /** Moderator rows for the group select (admin only). */
   moderators: User[];
@@ -38,6 +41,7 @@ export function AddUserForm({ onAdd, onInvite, isAdmin, moderators }: AddUserFor
   const [newPassword, setNewPassword] = useState('');
   const [newRole, setNewRole] = useState<Role>('user');
   const [newModeratorId, setNewModeratorId] = useState<string | null>(null);
+  const [newTier, setNewTier] = useState<Tier>('ai');
   const showToast = useAppStore(s => s.showToast);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -46,12 +50,14 @@ export function AddUserForm({ onAdd, onInvite, isAdmin, moderators }: AddUserFor
       await onAdd({
         name: newName, email: newEmail, password: newPassword,
         role: newRole, moderator_id: newRole === 'user' ? newModeratorId : null,
+        tier: newTier,
       });
       setNewName('');
       setNewEmail('');
       setNewPassword('');
       setNewRole('user');
       setNewModeratorId(null);
+      setNewTier('ai');
     } catch {
       // Refused: onAdd already toasted the server's reason — keep the draft
       // so the operator can correct it instead of retyping.
@@ -67,8 +73,9 @@ export function AddUserForm({ onAdd, onInvite, isAdmin, moderators }: AddUserFor
           {t('addUser')}
         </CenterHeading>
         {/* Invite link: the no-password handoff — the inviter copies the URL
-            and hands it over (both admin and moderator). */}
-        <Button type="button" variant="ghost" size="sm" onClick={() => void onInvite()}>
+            and hands it over (both admin and moderator). Mints at the tier
+            selected below (see SYSTEM: capability-tiers). */}
+        <Button type="button" variant="ghost" size="sm" onClick={() => void onInvite(newTier)}>
           <Link2 size={14} />
           {t('inviteLink')}
         </Button>
@@ -150,6 +157,19 @@ export function AddUserForm({ onAdd, onInvite, isAdmin, moderators }: AddUserFor
               />
             </div>
           )}
+          {/* Capability tier — manager select (both roles may set it, no
+              ceiling server-side); also the tier the invite button mints at. */}
+          <div>
+            <label className="block text-ui-xs text-text-dim mb-1">{t('tierLabel')}</label>
+            <Dropdown
+              size="lg"
+              placement="bottom"
+              title={t('tierLabel')}
+              value={newTier}
+              options={tierOptions(t)}
+              onSelect={v => setNewTier(v as Tier)}
+            />
+          </div>
           <Button
             type="submit"
             variant="primary"

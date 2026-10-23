@@ -89,6 +89,9 @@ async def create_invite(
         "token_hash": _hash_token(token),
         "invited_by": manager["user_id"],
         "moderator_id": moderator_id,
+        # see SYSTEM: capability-tiers — the tier the registered account starts
+        # at (the CreateInvite Literal validated it BEFORE this write).
+        "tier": body.tier,
         "expires_at": expires_at,
     })
     return {"token": token, "expires_at": expires_at}
@@ -139,6 +142,9 @@ async def _create_registered_user(db: AsyncSurreal, invite: dict, body: Register
         "password_hash": hash_secret(body.password),
         "role": "user",
         "user_facts": "",
+        # see SYSTEM: capability-tiers — copied from the invite (a mint without
+        # one carries 'ai', the historical default).
+        "tier": invite.get("tier") or "ai",
         "created_by": invite["invited_by"],
         "moderator_id": moderator_id,
     })

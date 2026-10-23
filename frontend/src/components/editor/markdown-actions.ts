@@ -643,6 +643,14 @@ function voiceInput(view: EditorView): boolean {
   const accessLevel = useAppStore.getState().accessLevel;
   if (accessLevel !== 'full') return false;
 
+  // see SYSTEM: capability-tiers — Cmd+D in the editor plants the widget BEFORE
+  // emitting start-recording; refuse a non-voice account HERE so no orphan
+  // widget is left behind (startRecording's own guard would never remove it).
+  if (useAppStore.getState().currentUser?.can_voice === false) {
+    useAppStore.getState().showToast(t('tierVoiceRequired'), 'error');
+    return true;
+  }
+
   const widgetState = view.state.field(voiceWidgetField);
   const recording = useAppStore.getState().recording;
 

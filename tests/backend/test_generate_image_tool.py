@@ -1130,6 +1130,11 @@ async def test_generate_image_done_frame_equals_the_reload_mint(
         calls: list[tuple[str, dict]] = []
 
         async def query(self, sql, params=None):
+            # capability-tiers: the tier gate's fresh users read flows through
+            # this fake too — serve it WITHOUT recording, so calls[0] stays the
+            # chips-persist query (the gate itself is covered by test_user_tiers).
+            if "tier" in sql:
+                return [{"tier": "ai", "deleted_at": None}]
             _FakeDB.calls.append((sql, params or {}))
             return []
 

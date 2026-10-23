@@ -7,6 +7,7 @@ import type React from 'react';
 import { useAppStore } from '../store/app-store';
 import { useUIStore } from '../store/ui-store';
 import { apiClient } from '../api/client';
+import { tierRefusal } from '../utils/server-refusal-detail';
 import { useTranslation } from '../i18n';
 import type { Reference } from '../types';
 import { getEntityHandle } from '../collab/active-handle-registry';
@@ -119,6 +120,14 @@ export function useReferenceUpload() {
       const ref = await apiClient.upload('/references/upload', formData);
       replaceReference(tempId, ref);
     } catch (err) {
+      // see SYSTEM: capability-tiers — a dragged-in audio file from a non-voice
+      // account: name the account-level reason and drop the placeholder (the
+      // server created no reference, so an "error" row would be a phantom).
+      if (tierRefusal(err) !== null) {
+        useAppStore.getState().removeReference(tempId);
+        useAppStore.getState().showToast(t('tierVoiceRequired'), 'error');
+        return;
+      }
       console.error('Failed to upload file', err);
       useAppStore.getState().showToast(t('failedToUpload'), 'error');
       updateReference(tempId, { processing_status: 'error' });

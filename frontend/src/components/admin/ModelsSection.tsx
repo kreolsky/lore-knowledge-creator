@@ -11,15 +11,18 @@
  * Every change shows at once, PUTs the model's FULL subject list and replaces
  * the row with the server's answer; a refusal (a moderator demoted meanwhile →
  * 422) restores the old subjects and renders under the row.
+ * Cards drag-reorder (useSiblingDragReorder, the reference cards' mechanics);
+ * a drop PUTs the full order, which every model picker follows.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { CenterHeading, FieldCheckbox, IconButton, SegmentedControl } from '../ui';
 import {
-  HIDDEN_SUBJECT, listAdminGroups, listAdminModels, putAdminModelSubjects, PUBLIC_SUBJECT,
-  TOOLS_SUBJECT, type AdminGroup, type AdminModelAccess,
+  HIDDEN_SUBJECT, listAdminGroups, listAdminModels, putAdminModelOrder, putAdminModelSubjects,
+  PUBLIC_SUBJECT, TOOLS_SUBJECT, type AdminGroup, type AdminModelAccess,
 } from '../../api/admin';
+import { rowDropLine, useSiblingDragReorder, type SiblingDragAdapter } from '../../hooks/useSiblingDragReorder';
 import { useAppStore } from '../../store/app-store';
 import { useTranslation } from '../../i18n';
 import { serverRefusalDetail } from '../../utils/server-refusal-detail';
@@ -50,6 +53,15 @@ export function subjectsForTier(subjects: string[], tier: Tier): string[] {
   return byTier[tier];
 }
 
+/** `rows` with `id` moved to just after `afterId` (null = top). */
+export function moveAfter<T extends { id: string }>(rows: T[], id: string, afterId: string | null): T[] {
+  const moved = rows.find(r => r.id === id);
+  if (!moved) return rows;
+  const rest = rows.filter(r => r.id !== id);
+  const at = afterId === null ? 0 : rest.findIndex(r => r.id === afterId) + 1;
+  return [...rest.slice(0, at), moved, ...rest.slice(at)];
+}
+
 export function ModelsSection() {
   const { t } = useTranslation();
   const [models, setModels] = useState<AdminModelAccess[] | null>(null);
@@ -60,6 +72,40 @@ export function ModelsSection() {
   const [msg, setMsg] = useState<{ id: string; text: string } | null>(null);
   const tRef = useRef(t);
   tRef.current = t;
+  const modelsRef = useRef(models);
+  modelsRef.current = models;
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // WHY: refs, not state, inside the adapter — useSiblingDragReorder re-binds
+  // its listeners whenever the adapter identity changes, so it is built once.
+  const dragAdapter = useMemo<SiblingDragAdapter>(() => ({
+    rowIdAttr: 'data-model-id',
+    groupAttr: 'data-model-group',
+    // Don't hijack the chevron, the tier selector or the group checkboxes.
+    ignoreTarget: (el) => !!el.closest('button, input, label'),
+    dropTarget: (row, e, candidate) => {
+      const rowId = row.getAttribute('data-model-id')!;
+      if (rowId === candidate.id) return undefined;
+      const others = (modelsRef.current ?? []).filter(m => m.id !== candidate.id);
+      const idx = others.findIndex(m => m.id === rowId);
+      if (idx === -1) return undefined;
+      const rect = row.getBoundingClientRect();
+      const before = e.clientY < rect.top + rect.height / 2;
+      const afterId = before ? (idx > 0 ? others[idx - 1].id : null) : rowId;
+      return { parentId: null, afterId, ...rowDropLine(rect, before) };
+    },
+    commit: (id, target) => {
+      const prev = modelsRef.current;
+      if (!prev) return;
+      const next = moveAfter(prev, id, target.afterId);
+      setModels(next);
+      putAdminModelOrder(next.map(m => m.id)).catch(() => {
+        setModels(prev); // rollback
+        useAppStore.getState().showToast(tRef.current('adminModelOrderFailed'), 'error');
+      });
+    },
+  }), []);
+  useSiblingDragReorder(listRef, models !== null, dragAdapter);
 
   const reload = useCallback(async () => {
     try {
@@ -110,7 +156,7 @@ export function ModelsSection() {
       {models?.some(m => m.in_gateway === null) && (
         <p className="text-xs text-red mb-2">{t('adminModelGatewayUnavailable')}</p>
       )}
-      <div className="flex flex-col gap-0.5">
+      <div ref={listRef} className="flex flex-col gap-0.5">
         {(models ?? []).map(model => {
           const open = expanded === model.id;
           const tier = tierOf(model.subjects);
@@ -119,6 +165,7 @@ export function ModelsSection() {
             <section
               key={model.id}
               data-model-id={model.id}
+              data-model-group=""
               className={`hover:bg-surface2 transition-colors duration-150 ${open ? 'bg-surface2' : 'bg-surface'}`}
             >
               <div className="py-2.5 px-3.5 flex items-center gap-3">

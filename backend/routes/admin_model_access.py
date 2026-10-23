@@ -21,7 +21,9 @@ from model_access import (
     PUBLIC_SUBJECT,
     TOOLS_SUBJECT,
     group_subject,
+    model_order_positions,
     moderator_subject,
+    order_models,
 )
 from pydantic import BaseModel, Field
 from surrealdb import AsyncSurreal
@@ -46,6 +48,10 @@ class GroupName(BaseModel):
 
 class GroupMembers(BaseModel):
     user_ids: list[str]
+
+
+class ModelOrder(BaseModel):
+    model_ids: list[str]
 
 
 async def _grants_by_model(db: AsyncSurreal) -> dict[str, list[str]]:
@@ -88,7 +94,8 @@ async def _validate_subjects(db: AsyncSurreal, subjects: list[str]) -> None:
 
 @router.get("/models")
 async def list_model_grants(_: dict = Depends(require_admin), db: AsyncSurreal = Depends(get_db)):
-    """Gateway roster ∪ granted ids → [{id, in_gateway, is_default, subjects}].
+    """Gateway roster ∪ granted ids → [{id, in_gateway, is_default, subjects}],
+    in the admin order (order_models).
 
     `in_gateway` is None on every row when the gateway cannot be read: the grants
     stay listed and revocable during a gateway outage, and the client names the
@@ -101,6 +108,7 @@ async def list_model_grants(_: dict = Depends(require_admin), db: AsyncSurreal =
     grants = await _grants_by_model(db)
     default_model = await settings.get("CHAT_MODEL")
     ids = (roster or set()) | set(grants)
+    positions = await model_order_positions(db)
     return [
         {
             "id": mid,
@@ -108,8 +116,25 @@ async def list_model_grants(_: dict = Depends(require_admin), db: AsyncSurreal =
             "is_default": mid == default_model,
             "subjects": sorted(grants.get(mid, [])),
         }
-        for mid in sorted(ids)
+        for mid in order_models(ids, positions)
     ]
+
+
+@router.put("/model-order")
+async def put_model_order(
+    body: ModelOrder, _: dict = Depends(require_admin), db: AsyncSurreal = Depends(get_db),
+):
+    """Full replace of the admin model order: position = index in `model_ids`.
+
+    Not under /models/… — PUT /models/{model_id:path} would take the path."""
+    model_ids = list(dict.fromkeys(body.model_ids))
+    statements = ["DELETE model_order"]
+    params: dict = {}
+    for i, mid in enumerate(model_ids):
+        statements.append(f"CREATE model_order CONTENT {{ model_id: $m{i}, position: {i} }}")
+        params[f"m{i}"] = mid
+    await run_in_transaction(db, statements, params)
+    return {"model_ids": model_ids}
 
 
 @router.put("/models/{model_id:path}")

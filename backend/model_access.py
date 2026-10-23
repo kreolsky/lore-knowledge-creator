@@ -125,6 +125,19 @@ async def models_with_subject(db: AsyncSurreal, subject: str) -> set[str]:
     return set(rows or [])
 
 
+async def model_order_positions(db: AsyncSurreal) -> dict[str, int]:
+    """model id → admin-set position (model_order rows); unplaced ids are absent."""
+    rows = await db.query("SELECT model_id, position FROM model_order")
+    return {r["model_id"]: r["position"] for r in rows or []}
+
+
+def order_models(ids: list[str] | set[str], positions: dict[str, int]) -> list[str]:
+    """`ids` in the admin order: placed by position, then unplaced alphabetically.
+
+    The ONE ordering of the admin list and every picker roster."""
+    return sorted(ids, key=lambda m: (m not in positions, positions.get(m, 0), m))
+
+
 async def require_model_access(user: dict, model: str) -> None:
     """403 `model_forbidden` when the user may not run `model`.
 

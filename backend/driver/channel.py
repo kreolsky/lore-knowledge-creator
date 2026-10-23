@@ -468,6 +468,8 @@ class DriverChannel:
             try:
                 await sock.close()
             except Exception:
+                # WHY: shutdown path — the socket is already dead or dying;
+                # teardown must run on, there is nothing left to salvage.
                 pass
 
     # ── the connection worker ───────────────────────────────────────────────
@@ -511,6 +513,8 @@ class DriverChannel:
                 try:
                     await sock.close()
                 except Exception:
+                    # WHY: the connection just ended (logged above) — a close
+                    # failure on the dead socket needs no second report.
                     pass
                 self._socket = None
             await self._backoff_sleep(backoff)
@@ -1014,6 +1018,8 @@ class DriverChannel:
             await asyncio.wait_for(self._wake.wait(), timeout=seconds)
             self._wake.clear()
         except asyncio.TimeoutError:
+            # WHY: the timeout IS the sleep completing uninterrupted — the
+            # normal path, not an error (a wake event pre-empts it).
             pass
 
     def _emit(self, sub: _Subscription, frames: list[dict]) -> None:

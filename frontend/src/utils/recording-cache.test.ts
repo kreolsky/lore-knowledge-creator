@@ -12,6 +12,9 @@ const DB_NAME = 'lore-recording-cache';
 const LOCK_KEY = 'lore-recording-live';
 
 let cache: Cache;
+/** Toast spy bound to the SAME module graph as `cache` (freshModule re-imports both). */
+type ShowToast = (message: string, type?: 'info' | 'error' | 'warning') => void;
+let toastSpy: ReturnType<typeof vi.fn<ShowToast>>;
 
 interface CachedRecord {
   id: string;
@@ -40,6 +43,11 @@ async function freshModule(): Promise<void> {
     req.onsuccess = req.onerror = req.onblocked = () => resolve();
   });
   cache = await import('./recording-cache');
+  // Same fresh registry as the cache module → the store instance the cache
+  // toasts through; swap its showToast for a spy.
+  const { useAppStore } = await import('../store/app-store');
+  toastSpy = vi.fn<ShowToast>(() => undefined);
+  useAppStore.setState({ showToast: toastSpy });
 }
 
 /** Read/write the module's stores directly — the tests must not widen the module's API.
@@ -82,7 +90,7 @@ function setLocks(locks: Record<string, number>): void {
 }
 
 beforeEach(async () => { await freshModule(); });
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('recording-cache — round trip', () => {
   it('create→append→finalize→listRestorable assembles one playable audio Blob with the title', async () => {
@@ -369,5 +377,46 @@ describe('recording-cache — no IndexedDB', () => {
     } finally {
       globalThis.indexedDB = real;
     }
+  });
+});
+
+describe('recording-cache — take-path failure warning (no-silent-degradation)', () => {
+  /** Quota-style breakage: the DB OPENS but every store op throws — the
+   * per-op catches fire while the module stays out of memory mode. */
+  function breakObjectStores(): void {
+    const boom = () => { throw new Error('QuotaExceeded'); };
+    vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(boom);
+    vi.spyOn(IDBObjectStore.prototype, 'get').mockImplementation(boom);
+    vi.spyOn(IDBObjectStore.prototype, 'getAll').mockImplementation(boom);
+  }
+
+  it('the FIRST take-path failure toasts one warning; later ones stay console-only; listRestorable still answers []', async () => {
+    breakObjectStores();
+    await cache.createSession('s1', 'p1', 'd1');
+    await cache.appendChunk('s1', new Blob(['aa']));
+    await cache.finalizeSession('s1', 't.webm');
+    const list = await cache.listRestorable();
+
+    expect(list).toEqual([]);
+    expect(toastSpy).toHaveBeenCalledTimes(1);
+    expect(toastSpy.mock.calls[0][1]).toBe('warning');
+  });
+
+  it('a new createSession re-arms the one-shot — the next take warns again', async () => {
+    breakObjectStores();
+    await cache.createSession('take-1', 'p1', 'd1');
+    expect(toastSpy).toHaveBeenCalledTimes(1);
+    await cache.createSession('take-2', 'p1', 'd1');
+    expect(toastSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('list and delete failures outside a take stay console-only — no take, no promise to warn about', async () => {
+    breakObjectStores();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect(await cache.listRestorable('p1')).toEqual([]);
+    await cache.deleteSession('gone');
+    await cache.sweepRecordingCache();
+    await cache.clearProjectRecordings('p1');
+    expect(toastSpy).not.toHaveBeenCalled();
   });
 });

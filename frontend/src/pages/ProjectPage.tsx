@@ -51,26 +51,33 @@ import { getEditorView } from '../editor/active-editor';
 import { voiceWidgetField, voiceWidgetRemove } from '../components/editor/voice-widget';
 
 /**
- * Allowed right-panel tabs per access role.
- * INVARIANT: Right-panel tab visibility is gated by role. Why: access roles must
- * not reach privileged panels via hidden UI. Allowed sets:
+ * Allowed right-panel tabs per access role × account tier.
+ * INVARIANT: Right-panel tab visibility is gated by project access × account
+ * tier (see SYSTEM: capability-tiers). Why: access roles must not reach privileged
+ * panels via hidden UI, and a non-ai account must not reach the chat panel —
+ * the server 403 (tier_required:ai) on session create/turn is the guarantee,
+ * the tab list only removes the trigger. Allowed sets:
  *   - full:        notes, refs, checkpoint, chat, search, links, settings, find
  *   - commentator: notes, refs, chat, search, links, find (no checkpoint/settings)
  *   - readonly:    refs, search, links, find (no chat/notes)
- * Order defines the fallback when a persisted tab is no longer permitted.
+ * 'chat' drops from every set when the account's tier flag denies ai
+ * (can_ai === false). Order defines the fallback when a persisted tab is no
+ * longer permitted.
  * INVARIANT: 'find' is allowed for every role so the persisted ephemeral tab is not
  * filtered out as invalid on hydration. Why: the replace row is gated by accessLevel
  * inside FindReplacePanel, not by tab visibility — search is available to all roles.
  * It must NOT be allowedTabs[0] (the fallback), so it is appended last.
  */
-function allowedRightTabs(accessLevel: AccessLevel): RightTab[] {
+export function allowedRightTabs(accessLevel: AccessLevel, canAi = true): RightTab[] {
+  const withTier = (tabs: RightTab[]): RightTab[] =>
+    canAi ? tabs : tabs.filter(tab => tab !== 'chat');
   switch (accessLevel) {
     case 'full':
       // 'access' is full-only AND hidden when a reference is open (render-gate below);
       // it sits beside 'checkpoint' as a document-scoped management surface.
-      return ['notes', 'refs', 'checkpoint', 'chat', 'search', 'links', 'settings', 'access', 'find'];
+      return withTier(['notes', 'refs', 'checkpoint', 'chat', 'search', 'links', 'settings', 'access', 'find']);
     case 'commentator':
-      return ['notes', 'refs', 'chat', 'search', 'links', 'find'];
+      return withTier(['notes', 'refs', 'chat', 'search', 'links', 'find']);
     case 'readonly':
       return ['refs', 'search', 'links', 'find'];
   }
@@ -108,7 +115,11 @@ export function ProjectPage() {
   const docPending = !!urlDocId && currentDocId !== urlDocId;
   const rightPanelReady = isRightPanelReady({ projectPrefsLoaded, docPending, currentDocId });
   const accessLevel = useAppStore(s => s.accessLevel);
-  const allowedTabs = allowedRightTabs(accessLevel);
+  // see SYSTEM: capability-tiers — can_ai from /me drops the chat tab (see
+  // allowedRightTabs); undefined reads as allowed (an old payload predating
+  // the flags must not hide chat).
+  const canAi = useAppStore(s => s.currentUser?.can_ai) !== false;
+  const allowedTabs = allowedRightTabs(accessLevel, canAi);
   // Ephemeral search overlay (see documents-slice INVARIANT): while alive for the
   // current doc (panel open), search renders + highlights as active instead of the
   // stored tab. allowedRightTabs includes 'search' for every role, so the overlay
@@ -229,7 +240,13 @@ export function ProjectPage() {
       // is re-sent when the project is next opened. The temp ref must not hang
       // in `uploading` forever — no silent degradation.
       updateReference(tempId, { processing_status: 'error' });
-      useAppStore.getState().showToast(tImperative('recordingKeptForRetry'), 'error');
+      // see SYSTEM: capability-tiers — a downgrade mid-take is refused 403
+      // tier_required:voice; the take is kept all the same, the toast names why.
+      const { tierRefusal } = await import('../utils/server-refusal-detail');
+      useAppStore.getState().showToast(
+        tImperative(tierRefusal(err) !== null ? 'tierVoiceRequired' : 'recordingKeptForRetry'),
+        'error',
+      );
     }
   }, [addReference, replaceReference, updateReference, handleVoiceRecording]);
 

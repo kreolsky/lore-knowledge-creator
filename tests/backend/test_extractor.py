@@ -445,8 +445,27 @@ async def test_fetch_user_timezone_missing_field():
 # ── _create_error_note: rich message content ────────────────────────────────
 
 
+@pytest.fixture
+def capture_system_note():
+    """Capture _create_error_note's create_system_note call.
+
+    ONE notes_service patch seam shared by the rich/degraded body tests below
+    (the two duplicated inline patches are what these were — the dedupe pays
+    the import-shape seam back for test_notes_service's routing seam)."""
+    from unittest.mock import patch
+
+    captured: dict = {}
+
+    async def mock_create_system_note(**kwargs):
+        captured.update(kwargs)
+        return "note-1"
+
+    with patch("notes_service.create_system_note", side_effect=mock_create_system_note):
+        yield captured
+
+
 @pytest.mark.asyncio
-async def test_create_error_note_includes_reference_link():
+async def test_create_error_note_includes_reference_link(capture_system_note):
     from unittest.mock import AsyncMock, patch
 
     from pipeline.extractor.runner import _create_error_note
@@ -454,15 +473,8 @@ async def test_create_error_note_includes_reference_link():
     ref_doc = {"title": "Жукоцкая", "is_reference": True}
     config_doc = {"title": "УЗИ конфиг"}
 
-    captured = {}
-
-    async def mock_create_system_note(**kwargs):
-        captured.update(kwargs)
-        return "note-1"
-
     with (
         patch("pipeline.extractor.runner.fetch_one", side_effect=[ref_doc, config_doc]),
-        patch("notes_service.create_system_note", side_effect=mock_create_system_note),
         patch("pipeline.extractor.runner.emit", new_callable=AsyncMock),
     ):
         await _create_error_note(
@@ -473,27 +485,20 @@ async def test_create_error_note_includes_reference_link():
             config_doc_id="cfg-xyz",
         )
 
-    msg = captured["body"]
+    msg = capture_system_note["body"]
     assert "[Жукоцкая](ref:ref-abc)" in msg
     assert "[УЗИ конфиг](doc:cfg-xyz)" in msg
     assert "YAML parse error at line 3" in msg
 
 
 @pytest.mark.asyncio
-async def test_create_error_note_degrades_when_titles_unavailable():
+async def test_create_error_note_degrades_when_titles_unavailable(capture_system_note):
     from unittest.mock import AsyncMock, patch
 
     from pipeline.extractor.runner import _create_error_note
 
-    captured = {}
-
-    async def mock_create_system_note(**kwargs):
-        captured.update(kwargs)
-        return "note-1"
-
     with (
         patch("pipeline.extractor.runner.fetch_one", side_effect=[None, None]),
-        patch("notes_service.create_system_note", side_effect=mock_create_system_note),
         patch("pipeline.extractor.runner.emit", new_callable=AsyncMock),
     ):
         await _create_error_note(
@@ -504,7 +509,7 @@ async def test_create_error_note_degrades_when_titles_unavailable():
             config_doc_id="cfg-xyz",
         )
 
-    msg = captured["body"]
+    msg = capture_system_note["body"]
     assert "ref-abc" in msg
     assert "cfg-xyz" in msg
 

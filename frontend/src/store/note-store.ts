@@ -44,8 +44,16 @@ export const useNoteStore = create<NoteState>((set) => ({
   setPendingNoteNavigation: (nav) => set({ pendingNoteNavigation: nav }),
   setConnectedNoteId: (id) => set({ connectedNoteId: id }),
   setPreviousRightTab: (tab) => set({ previousRightTab: tab }),
+  // WHY all five fields: a project switch must not carry note state across
+  // projects — the per-doc remembered thread is intentionally forgotten
+  // (document ids are project-unique, so the map is pure stale memory after a
+  // switch), and a pending one-shot navigation or connector note left over
+  // would fire against the new project's documents.
   resetForProjectSwitch: () => set({
     activeNoteThreadId: null,
+    documentNoteThreads: {},
+    pendingNoteNavigation: null,
+    connectedNoteId: null,
     previousRightTab: null,
   }),
 }));

@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pipeline.digest.triggers import enqueue_digest
 from pipeline.extractor.params import EXTRACTOR_ROWS, resolve_extractor_params
 from surrealdb import AsyncSurreal
+from tiers import require_tier
 
 from access import require_digest_editor, require_project_full, resolve_digest_subjects
 from auth import get_current_user
@@ -160,6 +161,10 @@ async def run_agent(
     body: AgentRunRequest,
     user=Depends(get_current_user),
 ):
+    # see SYSTEM: capability-tiers — 'ai' gate: a pipeline launch is a model run;
+    # refused before any project/config resolution so the tier 403 is the
+    # first answer.
+    await require_tier(user, "ai")
     if body.config_id:
         return await _run_digest_binding(body.config_id, user)
     # ARCH: param resolution is shared with the MCP `run_extractor` tool via

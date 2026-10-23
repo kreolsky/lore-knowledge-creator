@@ -8,6 +8,7 @@ from pathlib import Path
 import settings
 from fastapi import Depends, File, HTTPException, UploadFile
 from rate_limit import check_transcribe_rate_limit
+from tiers import require_tier
 from transcription import transcribe_audio
 
 from auth import get_current_user
@@ -21,11 +22,15 @@ logger = logging.getLogger(__name__)
 async def chat_transcribe(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
     """Transcribe audio to text for chat input. No Reference creation.
 
+    # see SYSTEM: capability-tiers — 'voice' gate: STT is a per-account cost, so a
+    # base account is refused here before any rate-limit accounting.
+
     # INVARIANT: enforce a per-user request-count limit (5/60s) BEFORE the expensive STT
     # call. Why: STT is synchronous and minutes-long; STT_CONCURRENCY bounds in-flight jobs
     # but not requests/min from one user, so without this one user can exhaust the shared
     # worker pool for everyone.
     """
+    await require_tier(user, "voice")
     if not await check_transcribe_rate_limit(user["user_id"]):
         raise HTTPException(status_code=429, detail="Too many transcription requests. Try again later.")
 

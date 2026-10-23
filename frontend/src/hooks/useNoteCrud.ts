@@ -8,6 +8,7 @@
 import { useEffect, useCallback, useMemo } from 'react';
 import { useAppStore } from '../store/app-store';
 import { useNoteStore } from '../store/note-store';
+import { exitNoteThread } from '../store/note-exit';
 import { useNoteChatStore } from '../store/note-chat-store';
 import { useUIStore, useDocState } from '../store/ui-store';
 import { readRefOpenMode, showsBothPanes, refIsScope } from '../store/ui-store/documents-slice';
@@ -149,31 +150,11 @@ export function useNoteCrud({ highlightNote }: UseNoteCrudParams) {
     }
   }, [deleteSession, setActiveNoteThreadId]);
 
+  // The discard-empty + tab-restore rules live in the shared exitNoteThread
+  // (store/note-exit.ts) — the same path NoteChatView's Escape takes.
   const exitThread = useCallback(() => {
-    // INVARIANT: leaving an empty note-chat thread (no messages) deletes the
-    // session — both Esc inside NoteChatView and the "back to all notes"
-    // button must follow this rule. Why: an anchorless note with zero
-    // messages is the same as cancelling creation; persisting it leaks
-    // empty cards into the list and the editor link map.
-    // ARCH: link strip is backend-authoritative on
-    // delete; no client emit here.
-    const store = useNoteChatStore.getState();
-    const sessionId = store.activeSessionId;
-    if (sessionId) store.discardIfEmpty(sessionId);
-    // INVARIANT: exit stays on the notes tab. previousRightTab is only restored
-    // when non-null — set only by editor-initiated note creation
-    // (markdown-actions.createNote). Why: anchorless notes are created from
-    // the notes panel itself; restoring a null previousRightTab would close
-    // the right panel and leave a blank surface under the tab bar.
-    const previousTab = useNoteStore.getState().previousRightTab;
-    setActiveNoteThreadId(null, currentDocument?.document_id);
-    useNoteChatStore.getState().setActiveSession(null);
-    if (previousTab) {
-      useNoteStore.getState().setPreviousRightTab(null);
-      const docId = currentDocument?.document_id ?? null;
-      useUIStore.getState().setRightPanelTab(docId, previousTab);
-    }
-  }, [setActiveNoteThreadId, currentDocument?.document_id]);
+    exitNoteThread(currentDocument?.document_id ?? null);
+  }, [currentDocument?.document_id]);
 
   useEffect(() => {
     mountedNoteHosts += 1;

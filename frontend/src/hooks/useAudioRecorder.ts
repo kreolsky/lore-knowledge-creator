@@ -69,6 +69,15 @@ export function useAudioRecorder(
   const startRecording = useCallback(async () => {
     if (_recorder) return;
 
+    // see SYSTEM: capability-tiers — the account-level 'voice' gate. The handler
+    // no-ops with a toast even when a trigger slipped past the UI hiding
+    // (hotkey, editor action, a stale tab after a downgrade); the server 403
+    // is the guarantee, this is the visible half.
+    if (useAppStore.getState().currentUser?.can_voice === false) {
+      useAppStore.getState().showToast(t('tierVoiceRequired'), 'error');
+      return;
+    }
+
     const { currentProject, currentDocument, accessLevel, documents } = useAppStore.getState();
     if (!currentProject || !currentDocument || accessLevel !== 'full') return;
 

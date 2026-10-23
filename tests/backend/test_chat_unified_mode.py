@@ -124,6 +124,12 @@ async def test_create_ai_chat_non_full_user_is_rejected(monkeypatch):
 
     monkeypatch.setattr(sessions_module, "get_document_access", fake_access)
 
+    # capability-tiers: the tier gate runs BEFORE the access check — give u-1 a
+    # real 'ai' row so the REAL gate passes and the access axis stays under test.
+    from db import create_record, get_db
+    await (await get_db()).query("DELETE type::record('users', $id)", {"id": "u-1"})
+    await create_record("users", "u-1", {"name": "u1", "role": "user", "tier": "ai"})
+
     body = SessionCreate(project_id="proj-1", document_id="doc-1")
     with _pytest.raises(HTTPException) as exc:
         await sessions_module.create_session(db=await sessions_module.get_db(), body=body, user={"user_id": "u-1"})

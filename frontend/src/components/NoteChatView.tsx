@@ -10,8 +10,7 @@ import { ChatComposer } from './chat/ChatComposer';
 import { MessageBubble, type MessageBubbleActions } from './chat/MessageBubble';
 import { copyWithToast } from './chat/shared/copy';
 import { useNoteChatStore } from '../store/note-chat-store';
-import { useNoteStore } from '../store/note-store';
-import { useUIStore } from '../store/ui-store';
+import { exitNoteThread } from '../store/note-exit';
 import { useAppStore } from '../store/app-store';
 import { useIsProjectOwner } from '../hooks/useIsProjectOwner';
 import { useTranslation } from '../i18n';
@@ -91,6 +90,11 @@ export function NoteChatView() {
     set(sid, prev + (prev ? ' ' : '') + transcribed);
   }, []);
   const { recording, transcribing, toggleRecording, cancelRecording } = useSimpleVoiceRecording(onTranscribed);
+  // see SYSTEM: capability-tiers — the note mic is voice-gated: ChatComposer hides
+  // the mic when onToggleRecording is undefined, so a non-voice account
+  // (can_voice === false) gets no trigger (the server 403 on /transcribe is
+  // the guarantee; the useSimpleVoiceRecording failure toast is the backstop).
+  const canVoice = currentUser?.can_voice !== false;
 
   const handleSend = useCallback(() => {
     if (!text.trim()) return;
@@ -116,22 +120,11 @@ export function NoteChatView() {
     if (e.key === 'Escape' && recording) return;
     if (e.key === 'Escape') {
       e.preventDefault();
-      const { activeSessionId } = useNoteChatStore.getState();
-      // ARCH: link strip is backend-authoritative
-      // on delete; no client emit here.
-      if (activeSessionId) useNoteChatStore.getState().discardIfEmpty(activeSessionId);
-      // INVARIANT: Esc stays on the notes tab unless previousRightTab is
-      // explicitly set (editor-initiated note creation only). Why: anchorless
-      // notes created from the panel itself have no previous tab to restore;
-      // restoring null would close the panel and leave a blank surface.
-      const previousTab = useNoteStore.getState().previousRightTab;
+      // The shared exit path (store/note-exit.ts): discard-if-empty and the
+      // previousRightTab restore live there once, identical to the back
+      // button's exitThread.
       const docId = useAppStore.getState().currentDocument?.document_id ?? null;
-      useNoteStore.getState().setActiveNoteThreadId(null, docId);
-      useNoteChatStore.getState().setActiveSession(null);
-      if (previousTab) {
-        useNoteStore.getState().setPreviousRightTab(null);
-        useUIStore.getState().setRightPanelTab(docId, previousTab);
-      }
+      exitNoteThread(docId);
     }
   }, [handleSend, recording]);
 
@@ -255,9 +248,9 @@ export function NoteChatView() {
         isStreaming={false}
         canSend={text.trim().length > 0}
         placeholder={t('noteChatPlaceholder')}
-        recording={recording}
+        recording={canVoice ? recording : false}
         transcribing={transcribing}
-        onToggleRecording={toggleRecording}
+        onToggleRecording={canVoice ? toggleRecording : undefined}
         onCancelRecording={cancelRecording}
         images={images}
         onRemoveImage={removePendingImage}

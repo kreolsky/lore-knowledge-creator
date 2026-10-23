@@ -120,3 +120,24 @@ describe('ProjectPage smoke', () => {
     expect(container.querySelector('[data-testid="shell"]')).toBeTruthy();
   });
 });
+
+describe('allowedRightTabs × capability tier (see SYSTEM: capability-tiers)', () => {
+  // Pure-function import under the same mock scaffold — the module pulls in
+  // panels and stores that need the stubs above.
+  it("drops 'chat' from full/commentator when can_ai is false; readonly and ai unchanged", async () => {
+    const { allowedRightTabs } = await import('./ProjectPage');
+    // ai (default): the historical sets, chat everywhere it was.
+    expect(allowedRightTabs('full', true)).toContain('chat');
+    expect(allowedRightTabs('commentator', true)).toContain('chat');
+    // non-ai: chat is gone, every other tab survives, order preserved.
+    expect(allowedRightTabs('full', false)).not.toContain('chat');
+    expect(allowedRightTabs('full', false)).toEqual(
+      ['notes', 'refs', 'checkpoint', 'search', 'links', 'settings', 'access', 'find'],
+    );
+    expect(allowedRightTabs('commentator', false)).toEqual(
+      ['notes', 'refs', 'search', 'links', 'find'],
+    );
+    // readonly never had chat — the tier flag changes nothing.
+    expect(allowedRightTabs('readonly', false)).toEqual(['refs', 'search', 'links', 'find']);
+  });
+});

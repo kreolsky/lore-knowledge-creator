@@ -13,12 +13,18 @@
 //       WebM (backend/files_util.py), so a crash-truncated chunk stream
 //       is still playable. The session id doubles as the upload
 //       idempotency_key (replay-safe re-sends).
-// WHY: every IndexedDB failure below logs only. The cache is a crash-safety copy;
-//       the take itself uploads from memory when recording stops, and an upload
-//       failure is toasted (recordingKeptForRetry).
+// WHY: the three TAKE-path failures below (create/append/finalize) warn ONCE
+//      per recording through warnCacheFailed — the user believes a rolling
+//      take is crash-protected, and that belief must not outlive a dead mirror
+//      (no-silent-degradation). Nothing throws: the take still uploads from
+//      memory when recording stops. Every other failure — list, delete (after
+//      upload, on discard, from sweep/clear) and the memory-mode report — stays
+//      console-only: no take is rolling, so the warning's promise would be
+//      false. An UPLOAD failure is toasted separately (recordingKeptForRetry).
 
 import { useAppStore } from '../store/app-store';
 import { apiClient, AuthError, isAccessRefusal } from '../api/client';
+import { tierRefusal } from './server-refusal-detail';
 import { createTempRef } from '../components/references/ref-utils';
 import { t } from '../i18n';
 import { registerLogoutHandler } from '../store/logout-handlers';
@@ -92,6 +98,16 @@ let memoryOnlyReported = false;
 /** Serializes every DB operation. The first link is the boot sweep, so mutations
  *  can never race the sweep or the counter hydration. */
 let queue: Promise<unknown> = Promise.resolve();
+
+/** One-shot degradation flag for the TAKE path (header WHY): the first per-op
+ *  failure of a recording warns; createSession re-arms it for the next take. */
+let cacheFailed = false;
+
+function warnCacheFailed(): void {
+  if (cacheFailed) return;
+  cacheFailed = true;
+  useAppStore.getState().showToast(t('recordingCacheDegraded'), 'warning');
+}
 
 /** Synchronous unsent-record count — an async read cannot answer beforeunload.
  *  Hydrated from IDB by the boot sweep, maintained on every mutation. */
@@ -279,6 +295,10 @@ function clearLock(id: string): void {
  * the queued create.
  */
 export function createSession(id: string, projectId: string, documentId: string): Promise<void> {
+  // A new recording re-arms the one-shot (header WHY): each take gets its own
+  // warning. Reset before the enqueue — the flag guards failures of the take
+  // this call opens.
+  cacheFailed = false;
   return enqueue(async () => {
     activeId = id;
     tabSessionIds.add(id);
@@ -295,6 +315,7 @@ export function createSession(id: string, projectId: string, documentId: string)
       unsentCount += 1;
     } catch (e) {
       console.error('recording cache: createSession failed', e);
+      warnCacheFailed();
     }
   });
 }
@@ -333,6 +354,7 @@ export function appendChunk(id: string, chunk: Blob): Promise<void> {
       });
     } catch (e) {
       console.error('recording cache: appendChunk failed', e);
+      warnCacheFailed();
     }
   });
 }
@@ -359,6 +381,7 @@ export function finalizeSession(id: string, title: string): Promise<void> {
       await idbPut(rec);
     } catch (e) {
       console.error('recording cache: finalizeSession failed', e);
+      warnCacheFailed();
     }
   });
 }
@@ -393,6 +416,8 @@ async function doDelete(id: string): Promise<void> {
     });
     if (existed) unsentCount -= 1;
   } catch (e) {
+    // WHY log-only: no take is rolling — a delete runs after upload, on
+    // discard, or from sweep/clear (header WHY).
     console.error('recording cache: deleteSession failed', e);
   }
 }
@@ -430,6 +455,7 @@ export function listRestorable(projectId?: string): Promise<RestorableRecording[
       try {
         all = await idbGetAll();
       } catch (e) {
+        // WHY log-only: runs on project open, before any take (header WHY).
         console.error('recording cache: listRestorable failed', e);
         return [];
       }
@@ -486,6 +512,8 @@ export function sweepRecordingCache(): Promise<void> {
       try {
         all = await idbGetAll();
       } catch (e) {
+        // WHY log-only: maintenance path — the boot sweep runs before any UI
+        // exists and no user action is in flight (header WHY: only the take path warns).
         console.error('recording cache: sweep failed', e);
         return;
       }
@@ -527,6 +555,8 @@ async function clearMatching(matches: (r: CachedRecording) => boolean): Promise<
     try {
       all = await idbGetAll();
     } catch (e) {
+      // WHY log-only: maintenance path (logout / access-refusal cleanup) — no
+      // user action is in flight to warn about (header WHY: only the take path warns).
       console.error('recording cache: clear failed', e);
       return;
     }
@@ -589,6 +619,14 @@ async function doRestore(projectId: string): Promise<void> {
       if (err instanceof AuthError) {
         // Session gone (apiClient already redirected) — keep: re-login rescues it.
         useAppStore.getState().updateReference(tempId, { processing_status: 'error' });
+        continue;
+      }
+      if (tierRefusal(err) !== null) {
+        // see SYSTEM: capability-tiers — the account lost 'voice' after this take
+        // was recorded. A downgrade never destroys content: KEEP the take (a
+        // later upgrade re-sends it) and drop only the placeholder row.
+        useAppStore.getState().removeReference(tempId);
+        useAppStore.getState().showToast(t('tierVoiceRequired'), 'error');
         continue;
       }
       if (isAccessRefusal(err)) {

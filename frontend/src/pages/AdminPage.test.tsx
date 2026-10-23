@@ -857,7 +857,8 @@ describe('AdminPage — moderator view (can_manage_users && !is_admin)', () => {
       .find(b => b.textContent?.includes('Invite link'));
     expect(inviteBtn, 'invite link button').toBeDefined();
     await act(async () => { inviteBtn!.click(); });
-    expect(apiPost).toHaveBeenCalledWith('/invites', {});
+    // The invite mints at the form's tier select (default 'ai' — SYSTEM: capability-tiers).
+    expect(apiPost).toHaveBeenCalledWith('/invites', { tier: 'ai' });
     // The URL is composed client-side: page origin (read off the live
     // window.location.origin — never a hard-coded jsdom origin) + /register/.
     expect(clip).toHaveBeenCalledWith(`${window.location.origin}/register/tok1`);
@@ -1018,7 +1019,7 @@ describe('AdminPage — admin-only surfaces', () => {
     (apiPost as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new HttpError(409, '{"detail":"Email already in use"}'));
     clickButtonWithText(addForm, 'Add');
     await act(async () => {});
-    expect(apiPost).toHaveBeenCalledWith('/admin/users', { name: 'Dave', email: 'dave@x.test', password: 'hunter22', role: 'user', moderator_id: null });
+    expect(apiPost).toHaveBeenCalledWith('/admin/users', { name: 'Dave', email: 'dave@x.test', password: 'hunter22', role: 'user', moderator_id: null, tier: 'ai' });
     expect(appState.showToast).toHaveBeenCalledWith('Email already in use', 'error');
     expect(Array.from(addForm.querySelectorAll('input')).map(i => i.value)).toEqual(['Dave', 'dave@x.test', 'hunter22']);
   });

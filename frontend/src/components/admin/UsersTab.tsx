@@ -14,7 +14,7 @@ import { Button, Dropdown, FieldInput, IconButton } from '../ui';
 import type { DropdownOption } from '../ui/Dropdown';
 import { useTranslation } from '../../i18n';
 import type { TranslationKey } from '../../i18n/en';
-import { Role, User } from '../../types';
+import { Role, Tier, User } from '../../types';
 import { useArmedAction } from '../../hooks/useArmedAction';
 import { useAppStore } from '../../store/app-store';
 import { generatePassword } from '../../utils/generate-password';
@@ -25,6 +25,9 @@ export interface UserUpdates {
   password?: string;
   role?: Role;
   moderator_id?: string | null;
+  /** Capability tier (see SYSTEM: capability-tiers) — manager-writable on the
+   * same PATCH (MANAGER_FIELDS server-side), for admin AND moderator. */
+  tier?: Tier;
 }
 
 function UserDeleteButton({ onDelete }: { onDelete: () => void }) {
@@ -51,6 +54,16 @@ export function roleOptions(t: T): DropdownOption[] {
     { value: 'user', label: t('userRole') },
     { value: 'moderator', label: t('moderatorRole') },
     { value: 'admin', label: t('adminRole') },
+  ];
+}
+
+/** Capability-tier rows (see SYSTEM: capability-tiers) — shared by the add form
+ * and the edit panel, ladder order. */
+export function tierOptions(t: T): DropdownOption[] {
+  return [
+    { value: 'ai', label: t('tierAi') },
+    { value: 'voice', label: t('tierVoice') },
+    { value: 'base', label: t('tierBase') },
   ];
 }
 
@@ -181,6 +194,7 @@ function UserEditPanel({ user, canDelete, isSelf, onSave, onCancel, onDelete, is
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<Role>(user.role);
   const [moderatorId, setModeratorId] = useState<string | null>(user.moderator_id ?? null);
+  const [tier, setTier] = useState<Tier>(user.tier ?? 'ai');
   const [saved, setSaved] = useState(false);
   // Any draft edit makes the "Saved" mark stale.
   const edit = <V,>(set: (v: V) => void) => (v: V) => { setSaved(false); set(v); };
@@ -192,6 +206,8 @@ function UserEditPanel({ user, canDelete, isSelf, onSave, onCancel, onDelete, is
     if (trimmedName && trimmedName !== user.name) updates.name = trimmedName;
     if (trimmedEmail && trimmedEmail !== user.email) updates.email = trimmedEmail;
     if (password) updates.password = password;
+    // Manager field, both roles may write it (see SYSTEM: capability-tiers).
+    if (tier !== (user.tier ?? 'ai')) updates.tier = tier;
     // Admin fields ride the same PATCH, only when changed (a moderator's
     // body touching them is a 403 server-side — the selects are admin-only).
     if (isAdmin) {
@@ -296,6 +312,17 @@ function UserEditPanel({ user, canDelete, isSelf, onSave, onCancel, onDelete, is
             onSelect={v => edit(setModeratorId)(v || null)}
           />
         )}
+        {/* Capability tier — manager-writable (both roles), never gated on
+            isAdmin: MANAGER_FIELDS carries tier server-side. Unlike role/group
+            it IS saveable on self (only key principals feel an admin's tier). */}
+        <Dropdown
+          size="lg"
+          placement="bottom"
+          title={t('tierLabel')}
+          value={tier}
+          options={tierOptions(t)}
+          onSelect={v => edit(setTier)(v as Tier)}
+        />
         <Button variant="primary" size="lg" onClick={commit}>{t('save')}</Button>
         <Button variant="ghost" size="lg" onClick={onCancel}>{t('cancel')}</Button>
         {saved && <span className="text-sm text-text-dim">{t('saved')}</span>}

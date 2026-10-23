@@ -52,6 +52,7 @@ from files_util import (
     validate_magic,
 )
 from markdown_normalize import normalize_markdown
+from tiers import require_tier, require_voice_for_audio_ref
 
 from access import get_project_access
 from models import ToolImportFile, ToolReprocessReference, is_ref_row
@@ -369,6 +370,10 @@ async def _create_binary_reference(
         return {"status": "applied", "reference_id": ref_id, "doc_id": ref_id}
 
     if media_type == "audio":
+        # see SYSTEM: capability-tiers — the audio arm queues STT, so it is
+        # 'voice'-gated. Principal = the agent key owner (role-pinned); reached
+        # by import_file on the Tool-API, which a key may call directly.
+        await require_tier(user, "voice")
         max_audio_mb = await settings.get("MAX_AUDIO_SIZE_MB")
         if len(data) > max_audio_mb * 1024 * 1024:
             raise HTTPException(status_code=413, detail=f"File too large (max {max_audio_mb}MB)")
@@ -635,6 +640,10 @@ async def tool_reprocess_reference(
     # retry edge.
     if ref.get("project_id") != ctx["project_id"]:
         raise HTTPException(status_code=404, detail="Reference not found")
+    # see SYSTEM: capability-tiers — the Tool-API route is callable directly with
+    # an agent key (no ai-gated turn in front of it), so re-transcribing audio
+    # carries its own 'voice' gate.
+    await require_voice_for_audio_ref(ref, user)
     # Validate (image refusal, retryable state, file type) BEFORE the apply gate so a
     # confirm-mode call does not propose a reprocess that could never apply.
     await validate_reprocessable(ref)

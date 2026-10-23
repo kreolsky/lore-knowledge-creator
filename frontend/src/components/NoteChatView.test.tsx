@@ -28,18 +28,12 @@ vi.mock('../store/app-store', () => ({
     { getState: () => appStoreState },
   ),
 }));
-vi.mock('../store/note-store', () => ({
-  useNoteStore: Object.assign(() => ({}), {
-    getState: () => ({
-      previousRightTab: null,
-      setActiveNoteThreadId: vi.fn(),
-      setPreviousRightTab: vi.fn(),
-    }),
-  }),
-}));
+// The shared exit path runs against the REAL note-store + note-chat-store;
+// only ui-store stays mocked, with a hoisted spy for the restore call.
+const { setRightPanelTabMock } = vi.hoisted(() => ({ setRightPanelTabMock: vi.fn() }));
 vi.mock('../store/ui-store', () => ({
   useUIStore: {
-    getState: () => ({ setRightPanelTab: vi.fn(), getRefOpenMode: () => 'center' }),
+    getState: () => ({ setRightPanelTab: setRightPanelTabMock, getRefOpenMode: () => 'center' }),
   },
 }));
 vi.mock('../api/client', () => ({
@@ -72,6 +66,7 @@ vi.mock('./chat/ChatComposer', () => ({
 
 import { NoteChatView } from './NoteChatView';
 import { useNoteChatStore } from '../store/note-chat-store';
+import { useNoteStore } from '../store/note-store';
 
 function render(node: ReturnType<typeof createElement>): { container: HTMLElement; root: Root } {
   const container = document.createElement('div');
@@ -116,6 +111,14 @@ function seedOpenThread() {
 
 beforeEach(() => {
   seedOpenThread();
+  setRightPanelTabMock.mockClear();
+  useNoteStore.setState({
+    activeNoteThreadId: null,
+    documentNoteThreads: {},
+    pendingNoteNavigation: null,
+    connectedNoteId: null,
+    previousRightTab: null,
+  });
 });
 
 const voice = { recording: false };
@@ -172,6 +175,44 @@ describe('NoteChatView Escape never deletes a note on an unproven empty', () => 
     pressEscape(textareaOf(rig.container));
     expect(apiClient.delete).not.toHaveBeenCalled();
     expect(useNoteChatStore.getState().sessions.map(r => r.session_id)).toEqual(['ns1']);
+    unmount(rig);
+  });
+});
+
+// ── shared exit path ──────────────────────────────────────────────────────────
+// Escape must route through the ONE exitNoteThread: discard an empty thread,
+// clear the thread state, restore previousRightTab when it was set.
+describe('NoteChatView Escape leaves via the shared exit path', () => {
+  const pressEscape = (ta: HTMLTextAreaElement) => {
+    act(() => { ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); });
+  };
+
+  it('deletes an empty thread and restores previousRightTab', async () => {
+    const { apiClient } = await import('../api/client');
+    (apiClient.delete as ReturnType<typeof vi.fn>).mockClear();
+    // Provably empty: the server count is 0 and the load finished.
+    useNoteChatStore.setState(s => ({ sessions: s.sessions.map(r => ({ ...r, message_count: 0 })) }));
+    useNoteStore.setState({ previousRightTab: 'chat' });
+
+    const rig = render(createElement(NoteChatView));
+    pressEscape(textareaOf(rig.container));
+
+    expect(apiClient.delete).toHaveBeenCalledWith('/chat/sessions/ns1');
+    expect(useNoteChatStore.getState().activeSessionId).toBeNull();
+    expect(useNoteStore.getState().activeNoteThreadId).toBeNull();
+    expect(useNoteStore.getState().previousRightTab).toBeNull();
+    expect(setRightPanelTabMock).toHaveBeenCalledWith(null, 'chat');
+    unmount(rig);
+  });
+
+  it('stays on the notes tab when previousRightTab was never set (anchorless note)', () => {
+    useNoteChatStore.setState(s => ({ sessions: s.sessions.map(r => ({ ...r, message_count: 0 })) }));
+
+    const rig = render(createElement(NoteChatView));
+    pressEscape(textareaOf(rig.container));
+
+    expect(setRightPanelTabMock).not.toHaveBeenCalled();
+    expect(useNoteChatStore.getState().activeSessionId).toBeNull();
     unmount(rig);
   });
 });

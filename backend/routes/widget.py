@@ -17,12 +17,18 @@ import mimetypes
 
 from documents.service import find_reference_by_idempotency_key
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from files_util import AUDIO_CHUNK_SIZE, save_audio_upload
+from files_util import (
+    AUDIO_CHUNK_SIZE,
+    detect_media_type,
+    mime_for_filename,
+    save_audio_upload,
+)
 from inbox import KIND_NOTE, KIND_REF, mark_arrived
 from notes_service import create_system_note
 from pipeline.extractor.params import resolve_extractor_params
 from pipeline.extractor.runner import PIPELINE_AUTHOR_ID
 from pydantic import BaseModel, ValidationError
+from tiers import require_tier
 
 from config import AUDIO_MIMES
 from db import extract_id, fetch_one, get_db
@@ -118,6 +124,18 @@ async def _emit_widget_note_created(document_id: str, session_uid: str) -> None:
     )
 
 
+async def _require_upload_voice_tier(file: UploadFile, ctx: dict) -> str:
+    """Resolve the part's filename and 'voice'-gate it when it names audio
+    (see SYSTEM: capability-tiers). Principal = the widget key owner
+    (ctx["user"], the role-pinned principal — they minted and pay for the
+    key); audio-ness is read from the filename extension, so the gate
+    precedes every byte read. Returns the original filename."""
+    original_name = file.filename or _fallback_name(file.content_type)
+    if detect_media_type(mime_for_filename(original_name)) == "audio":
+        await require_tier(ctx["user"], "voice")
+    return original_name
+
+
 @router.post("/api/widget/upload")
 async def widget_upload(
     file: UploadFile = File(...),
@@ -143,7 +161,7 @@ async def widget_upload(
     project_id = ctx["project_id"]
     document_id = ctx["scope_root"]
 
-    original_name = file.filename or _fallback_name(file.content_type)
+    original_name = await _require_upload_voice_tier(file, ctx)
     data = await _read_capped(file, await _sandbox_path_max_bytes(original_name))
     content, content_base64 = _categorise_upload_bytes(data, original_name)
     result = await _import_document(
@@ -403,7 +421,11 @@ async def widget_extract(
     `session` is a JSON form field: {"id": "<external session id>", "protocol":
     "<reserved, T4>"}. The session id is the idempotency key: a replay returns
     the SAME job (reset + re-enqueued if that job failed).
+
+    # see SYSTEM: capability-tiers — 'ai' gate (ai ⊃ voice: the extraction runs a
+    # model on the transcript). Principal = the widget key owner.
     """
+    await require_tier(ctx["user"], "ai")
     sess = _parse_widget_session(session)
 
     mime = file.content_type or mimetypes.guess_type(file.filename or "")[0] or ""

@@ -1,7 +1,7 @@
 /**
  * Restore flow contract: a 2xx upload deletes the cached take, an auth failure
- * keeps it (re-login rescues), an access refusal deletes it and says so, an
- * outage keeps it and says so, and concurrent restores of one project dedupe.
+ * keeps it (re-login rescues), an access refusal deletes it and says so, a
+ * tier refusal keeps it and names the tier, an outage keeps it and says so, and concurrent restores of one project dedupe.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import 'fake-indexeddb/auto';
@@ -46,6 +46,7 @@ type Cache = typeof import('./recording-cache');
 let cache: Cache;
 let AuthErrorC: typeof import('../api/client').AuthError;
 let HttpErrorC: typeof import('../api/client').HttpError;
+let ForbiddenErrorC: typeof import('../api/client').ForbiddenError;
 
 async function freshModule(): Promise<void> {
   vi.resetModules();
@@ -55,7 +56,7 @@ async function freshModule(): Promise<void> {
     const req = indexedDB.deleteDatabase(DB_NAME);
     req.onsuccess = req.onerror = req.onblocked = () => resolve();
   });
-  ({ AuthError: AuthErrorC, HttpError: HttpErrorC } = await import('../api/client'));
+  ({ AuthError: AuthErrorC, HttpError: HttpErrorC, ForbiddenError: ForbiddenErrorC } = await import('../api/client'));
   cache = await import('./recording-cache');
 }
 
@@ -151,6 +152,18 @@ describe('restorePendingRecordings', () => {
     expect(await cache.listRestorable('p1')).toHaveLength(0);
     expect(mocks.removeReference).toHaveBeenCalledTimes(1);
     expect(mocks.showToast).toHaveBeenCalledWith('recordingRestoreFailed', 'error');
+  });
+
+  it('a tier refusal KEEPS the record (a downgrade never destroys a take) and names the tier', async () => {
+    await seedPending('s1');
+    mocks.upload.mockRejectedValue(new ForbiddenErrorC('tier_required:voice'));
+
+    await cache.restorePendingRecordings('p1');
+
+    expect(await cache.listRestorable('p1')).toHaveLength(1);
+    expect(mocks.removeReference).toHaveBeenCalledTimes(1);
+    expect(mocks.showToast).toHaveBeenCalledWith('tierVoiceRequired', 'error');
+    expect(mocks.showToast).not.toHaveBeenCalledWith('recordingRestoreFailed', 'error');
   });
 
   it('a network failure KEEPS the record and toasts the retry promise', async () => {

@@ -349,7 +349,10 @@ export function DocumentTree({ onDelete, onCreateChild, onChangeParent, canEdit 
 
   // INVARIANT(security): drag reordering is gated on edit access (handler no-ops + the rows
   // only respond when canEdit). Never rely on hiding alone.  Why: hiding is not enforcement — a readonly user could still dispatch a drag event, so the handler no-ops and the rows ignore drag unless canEdit (defense in depth).
-  useSiblingDragReorder(treeRef, canEdit, treeDragAdapter);
+  // WHY: no drag on the compact (touch) layout — a vertical swipe to scroll the tree
+  // otherwise crosses the drag threshold and starts a reorder instead of scrolling.
+  const compactLayout = useUIStore(s => s.compactLayout);
+  useSiblingDragReorder(treeRef, canEdit && !compactLayout, treeDragAdapter);
 
   // reveal-in-tree — explicit "show me where this document is" gesture
   // (breadcrumb active crumb). Expands collapsed ancestors, switches the sidebar

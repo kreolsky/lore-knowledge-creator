@@ -52,6 +52,7 @@ def test_migrations_registry_order_snapshot():
         "note_links_to_anchors",
         "public_to_group_audience",
         "audiences_to_list",
+        "user_tier_backfill",
     ]
     # Every entry resolves to a distinct callable (a lost import would leave a
     # duplicated/None fn but keep the name).

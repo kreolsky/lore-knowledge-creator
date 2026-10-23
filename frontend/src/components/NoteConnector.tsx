@@ -6,9 +6,10 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { EditorView } from '@codemirror/view';
+import { EditorView } from '@codemirror/view';
 import { findNoteAnchorRange } from '../editor/note-highlight';
-import { useEditorView, getRoleView, subscribeRoleView, type EditorRole } from '../editor/active-editor';
+import { noteConnectorListenerCompartment } from '../editor/note-connector-refresh';
+import { useEditorView, getRoleView, getRootEditorView, subscribeRoleView, type EditorRole } from '../editor/active-editor';
 import { useNoteStore } from '../store/note-store';
 import { useAppStore } from '../store/app-store';
 import { useNoteChatStore } from '../store/note-chat-store';
@@ -103,14 +104,14 @@ export function NoteConnector() {
   useEffect(() => {
     if (!visible) {
       setCoords(null);
-      if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = 0; }
       return;
     }
 
     const compute = () => {
       // In split resolve the owning column's view by role; otherwise the focused
       // view. findAnchorCoords returns null when the owning view isn't mounted yet
-      // → connector hidden until ready (the role-view tick + rAF loop re-resolve it).
+      // → connector hidden until ready (the role-view tick restarts this effect
+      // and re-resolves as soon as the secondary column mounts).
       const view = owningRole ? getRoleView(owningRole) : getEditorView();
       const anchor = findAnchorCoords(connectedNoteId!, () => view);
       const panel = findPanelCoords();
@@ -119,15 +120,48 @@ export function NoteConnector() {
       } else {
         setCoords(null);
       }
-      rafRef.current = requestAnimationFrame(compute);
     };
-    compute();
+
+    // Coalescing scheduler: at most one rAF in flight — a burst of scroll
+    // events collapses into a single pre-layout compute. Geometry only changes
+    // on scroll/resize/editor updates, so the connector idles between them.
+    const schedule = () => {
+      if (rafRef.current) return;
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = 0;
+        compute();
+      });
+    };
+
+    schedule();
+
+    // The three geometry-changing inputs: any scroll (capture=true — the
+    // editor scroller and the right-panel scroller are different elements
+    // and scroll does not bubble), window resize, and the owning editor's
+    // own updates (doc + viewport changes; the compartment listener fires
+    // on the editor's scroll too). All canceled on unmount / effect restart.
+    window.addEventListener('scroll', schedule, true);
+    window.addEventListener('resize', schedule);
+    // WHY the HOST view outside split, not the focused one: the anchor lives in
+    // the document, and a focused table cell (claimNestedView) never sees the
+    // edits that move it. Captured once — focus changes do not restart this
+    // effect, so cleanup must detach the view it attached to, not today's.
+    const listenedView = owningRole ? getRoleView(owningRole) : getRootEditorView();
+    // Editor updates: attach via the compartment (the leak-free attach/remove
+    // seam — see editor/note-connector-refresh.ts), NOT appendConfig: the
+    // connector does not own the view and must detach on unmount.
+    listenedView?.dispatch({ effects: noteConnectorListenerCompartment.reconfigure(
+      EditorView.updateListener.of(() => schedule()),
+    ) });
 
     return () => {
+      window.removeEventListener('scroll', schedule, true);
+      window.removeEventListener('resize', schedule);
+      listenedView?.dispatch({ effects: noteConnectorListenerCompartment.reconfigure([]) });
       if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = 0; }
     };
-    // owningRole + roleViewTick ensure recompute when the owning column/role view
-    // changes; the rAF loop re-queries the live view each frame in between.
+    // owningRole + roleViewTick restart the listeners when the owning
+    // column/role view changes; compute re-queries the live view each event.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectedNoteId, visible, getEditorView, owningRole, roleViewTick]);
 
