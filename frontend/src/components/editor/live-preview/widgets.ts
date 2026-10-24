@@ -35,6 +35,12 @@ export class CheckboxWidget extends WidgetType {
 
     input.addEventListener('click', (e) => {
       e.preventDefault();
+      // INVARIANT: a task checkbox toggles only in an editable view — a viewer,
+      // an offline/binding editor and a readOnly preview never change the doc.
+      // Why: view.dispatch bypasses both facets (they gate DOM input, not
+      // programmatic transactions), so the widget must check them itself; the
+      // editable compartment is reconfigured live, hence the check at click time.
+      if (view.state.readOnly || !view.state.facet(EditorView.editable)) return;
       const current = view.state.doc.sliceString(this.markerFrom, this.markerFrom + 3);
       const isChecked = current === '[x]' || current === '[X]';
       view.dispatch({

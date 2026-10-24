@@ -1607,6 +1607,11 @@ html.dark .cm-color-swatch[style*="rgb(253, 214, 99)"] { background-color: var(-
   top: -2px;
 }
 
+/* A non-editable view refuses the toggle (CheckboxWidget click guard). */
+.cm-content[contenteditable="false"] .cm-task-checkbox {
+  cursor: default;
+}
+
 /* Rendered markdown table — → see live-preview/table-widget.ts → TableWidget */
 .cm-table-widget-wrap {
   /* WHY padding (not margin): CM6 measures block widgets via getBoundingClientRect,
