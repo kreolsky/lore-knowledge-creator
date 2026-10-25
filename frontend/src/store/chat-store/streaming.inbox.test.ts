@@ -31,6 +31,7 @@ function makeStore(active = 's1', messages: ChatMessage[] = []) {
     sessions: [], messages, streaming: null,
     conversation: [], turnRanges: {}, turnStartSeq: null,
     inboxQueue: [], dshRunning: false, liveSend: null,
+    runningSessions: new Set<string>(),
   } as unknown as ChatState;
   const get = () => state;
   const set: Set = (u: unknown) => {

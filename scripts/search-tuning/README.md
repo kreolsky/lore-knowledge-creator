@@ -53,6 +53,8 @@ answers only the cross-language question.
 ```bash
 # 1. In .env: the model under test, both cuts zeroed. Then recreate backend + worker.
 #    EMBEDDING_MODEL=<model>  RETRIEVAL_MIN_SCORE=0.0  RETRIEVAL_SCORE_DROP_OFF=0.0
+#    RETRIEVAL_BUDGET_TOKENS_DOCS=40000  RETRIEVAL_BUDGET_TOKENS_REFS=40000  RETRIEVAL_BUDGET_TOKENS_MEMORY=40000
+#    (an override saved in Admin beats the env — clear it for these keys first)
 docker compose up -d --force-recreate backend worker
 
 # 2. Seed the synthetic bench (skip for your own project).
@@ -65,8 +67,8 @@ docker exec $B python /tmp/xling_seed.py
 docker cp scripts/search-tuning/arm_embed.py $B:/tmp/arm_embed.py
 docker exec $B python /tmp/arm_embed.py e11c0000-0000-4000-8000-000000000001 6
 
-# 4. Probe. Wide top_k and budget so a low-ranked answer is still visible.
-scripts/search-tuning/run.sh xling-bench <arm-label> --top-k 25 --budget 40000
+# 4. Probe. Wide top_k (and the budgets from step 1) so a low-ranked answer is still visible.
+scripts/search-tuning/run.sh xling-bench <arm-label> --top-k 25
 ```
 
 Recreating the container wipes its `/tmp` — copy the scripts again after every model switch.
@@ -109,7 +111,7 @@ Never name a throwaway script after an importable module: the container's `/tmp`
 
 ## Reference result
 
-One corpus, coverage 1.0, cuts zeroed, `--top-k 25 --budget 40000`:
+One corpus, coverage 1.0, cuts zeroed, `--top-k 25`, budgets 40000:
 
 | bench | qwen3/600m | giga/480m |
 |-------|-----------|-----------|

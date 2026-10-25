@@ -15,6 +15,11 @@ from datetime import datetime
 
 MAX_WS_MESSAGE_SIZE = 1_000_000
 
+# A line of 3+ backticks or tildes opens/closes a fenced code block. Shared by
+# extract_headings (TOC) and the public preview's plain-text derivation
+# (routes/public_preview.py) so the two cannot drift on what a fence is.
+FENCE_LINE_RE = re.compile(r"^(`{3,}|~{3,})")
+
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -40,7 +45,7 @@ def extract_headings(content: str, *, max_level: int = 4) -> list[dict]:
     fence_len = 0
 
     for i, line_text in enumerate(lines):
-        fence_match = re.match(r"^(`{3,}|~{3,})", line_text)
+        fence_match = FENCE_LINE_RE.match(line_text)
         if fence_match:
             if not in_fenced:
                 in_fenced = True

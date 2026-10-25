@@ -1,5 +1,5 @@
 /**
- * Subtree chat privacy — the doc-tree half: the row carries an amber mark while
+ * Subtree chat privacy — the doc-tree half: the row carries a green mark while
  * `chats_unindexed` is set, at every access level; the toggle is NOT in the
  * tree (it lives in the Access tab, access/ChatsPrivacySection).
  */
@@ -132,7 +132,7 @@ function renderTree(canEdit = true) {
 }
 
 describe('DocumentTree subtree chat privacy — row mark', () => {
-  it('an amber mark renders on the flagged doc only, readonly included', () => {
+  it('a green mark renders on the flagged doc only, readonly included', () => {
     renderTree(false);
     expect(container.querySelector('[data-doc-id="doc-2"] [data-chats-private-mark]')).not.toBeNull();
     expect(container.querySelector('[data-doc-id="doc-1"] [data-chats-private-mark]')).toBeNull();

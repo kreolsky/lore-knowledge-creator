@@ -140,6 +140,8 @@ export function createMiscSlice(set: Set, get: Get): MiscSlice {
         // The active chat's queue view — the queue itself lives in dsh.
         inboxQueue: [],
         dshRunning: false,
+        // Per-session working set — logout hygiene, same as the queue above.
+        runningSessions: new Set(),
         liveSend: null,
         ghostAgentAuto: false,
         ghostUnindexed: false,

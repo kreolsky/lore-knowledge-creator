@@ -13,6 +13,7 @@ import { clearProjectLocalDocs } from '../collab/local-doc-persistence';
 import { clearProjectRecordings } from '../utils/recording-cache';
 import { useChatStore } from '../store/chat-store';
 import { dispatchChatFrame } from '../store/chat-store/streaming';
+import { clearRunningSessions } from '../store/chat-store/inbox-slice';
 import { t } from '../i18n';
 
 interface UseProjectConnectionParams {
@@ -83,6 +84,10 @@ export function useProjectConnection({ projectId }: UseProjectConnectionParams) 
       // Plan agent-line-harness-lifecycle step 8: chat frames lost in a
       // project-WS outage recover through the reload + re-adoption.
       onProjectWsResync: () => {
+        // The socket gap may have swallowed a turn's terminal `dsh_status`:
+        // drop the per-session running set rather than show a mark that never
+        // clears (inbox-slice.ts owns the ruling).
+        clearRunningSessions(patch => useChatStore.setState(patch));
         void useChatStore.getState().resyncOpenHarnessTurn();
       },
       onStatusChange: () => {},

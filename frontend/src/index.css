@@ -1910,3 +1910,24 @@ html.dark .mic-btn-wrap > button.mic-transcribing:hover {
   accent-color: var(--accent);
   border-radius: 0;
 }
+
+/* Chat list's live "agent is working" square (ChatRow): marching-ants dashes
+ * run around an 11×11 square — square corners per the project rule. A CSS
+ * class, not Tailwind, because it is an animation (allowed use of index.css);
+ * the dash period (4+4=8) divides the rect's perimeter (4×8=32), so the
+ * pattern closes at the corners and the -8 offset loops seamlessly. */
+.chat-running-mark rect {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+  animation: chat-running-ants 1.2s linear infinite;
+}
+
+@keyframes chat-running-ants {
+  to { stroke-dashoffset: -8; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-running-mark rect { animation: none; }
+}

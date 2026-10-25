@@ -1,4 +1,5 @@
-/** Inbox slice — the ACTIVE chat's queue and its dsh status.
+/** Inbox slice — the ACTIVE chat's queue and its dsh status, plus the
+ * per-session running set that marks EVERY working chat in the list.
  *
  * The queue is dsh's next-turn inbox (SYSTEM: harness-driver, session-agents.ts):
  * a busy send POSTs like any other and dsh queues it; the browser only
@@ -7,10 +8,12 @@
  * ✕ asks the plugin to remove the message; the chip leaves when the splice
  * frame arrives, never optimistically (the fold is index-based).
  *
- * INVARIANT: the fold and `dshRunning` belong to the active chat and are
- * reset on every activeSessionId transition (chat-store.ts watcher). Why:
+ * INVARIANT: the queue fold and `dshRunning` belong to the active chat and
+ * are reset on every activeSessionId transition (chat-store.ts watcher). Why:
  * splice indices are relative to ONE chat's inbox — a fold carried across a
- * switch applies one chat's removals to another chat's chips. */
+ * switch applies one chat's removals to another chat's chips.
+ * `runningSessions` is deliberately exempt: it is per-session, so it crosses
+ * switches untouched (the list keeps marking a working chat the user left). */
 // SYSTEM: chat-message-queue — the chat queue is dsh's inbox, rendered from snapshot + splices
 
 import { apiClient } from '../../api/client';
@@ -44,6 +47,29 @@ export function applyInboxFrame(set: Set, frame: unknown): void {
   if (!splice) return;
   fold = withSplice(fold, splice);
   set({ inboxQueue: foldQueue(fold) });
+}
+
+/** Fold a `dsh_status` frame into the PER-SESSION running set — for ANY
+ * chat, not just the active one: the chat list marks the chats whose turn
+ * is still open while another chat is shown. A new Set is written only when
+ * membership actually changes (dsh emits status often; a fresh reference
+ * per frame re-renders every row). `dshRunning` is not touched here — it
+ * stays the active chat's own gate. */
+export function applyRunningStatus(get: Get, set: Set, sessionId: string, frame: unknown): void {
+  const running = (frame as { status?: unknown } | null)?.status === 'running';
+  const cur = get().runningSessions;
+  if (cur.has(sessionId) === running) return;
+  const next = new Set(cur);
+  if (running) next.add(sessionId);
+  else next.delete(sessionId);
+  set({ runningSessions: next });
+}
+
+/** A project-WS gap may have swallowed the `idle` that ended a turn: drop
+ * the set wholesale rather than leave a mark that never clears (no mark is
+ * less wrong than a permanent false one; the reload-seed closes the gap). */
+export function clearRunningSessions(set: Set): void {
+  set({ runningSessions: new Set() });
 }
 
 /** The activeSessionId transition: the next chat starts with no queue and

@@ -97,6 +97,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   // The active chat's dsh inbox + status (inbox-slice).
   inboxQueue: [],
   dshRunning: false,
+  // Per-session working set (the chat list's running mark) — inbox-slice.ts.
+  runningSessions: new Set<string>(),
   liveSend: null,
 
   // Ghost overrides: defaults match createSession's no-opts path.

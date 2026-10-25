@@ -17,6 +17,12 @@ vi.mock('../../store/app-store', () => ({
 vi.mock('../../i18n', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
+// The per-session running set — a mutable Set so a test can seat its session.
+const chatStoreState = vi.hoisted(() => ({ runningSessions: new Set<string>() }));
+vi.mock('../../store/chat-store', () => ({
+  useChatStore: (selector: (s: { runningSessions: Set<string> }) => unknown) =>
+    selector({ runningSessions: chatStoreState.runningSessions }),
+}));
 
 const { emitMock } = vi.hoisted(() => ({
   emitMock: vi.fn(),
@@ -167,6 +173,35 @@ describe('ChatRow — parent navigation payload', () => {
     });
     expect(emitMock).toHaveBeenCalledWith('navigate-to-reference', { referenceId: 'ref-1' });
     expect(emitMock).not.toHaveBeenCalledWith('navigate-to-document', expect.anything());
+    act(() => root.unmount());
+  });
+});
+
+describe('ChatRow — running mark', () => {
+  beforeEach(() => {
+    chatStoreState.runningSessions = new Set();
+  });
+
+  it('renders the running mark with its label when the session is in the set', () => {
+    chatStoreState.runningSessions.add('s1');
+    const { container, root } = renderSession(baseSession());
+    const mark = container.querySelector('svg[aria-label="chatRunningMark"]');
+    expect(mark).toBeTruthy();
+    expect(mark?.querySelector('title')?.textContent).toBe('chatRunningMark');
+    act(() => root.unmount());
+  });
+
+  it('renders no mark when the session is not running', () => {
+    const { container, root } = renderSession(baseSession());
+    expect(container.querySelector('svg[aria-label="chatRunningMark"]')).toBeNull();
+    act(() => root.unmount());
+  });
+
+  it('renders BOTH the running mark and the unindexed mask for an unindexed running chat', () => {
+    chatStoreState.runningSessions.add('s1');
+    const { container, root } = renderSession(baseSession({ unindexed: true }));
+    expect(container.querySelector('svg[aria-label="chatRunningMark"]')).toBeTruthy();
+    expect(container.querySelector('[title="chatUnindexedMark"]')).toBeTruthy();
     act(() => root.unmount());
   });
 });

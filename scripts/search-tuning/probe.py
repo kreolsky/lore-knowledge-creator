@@ -15,7 +15,10 @@ score cuts, top_k, budgets). Two snapshots taken under different configs are not
 comparable — the model A/B zeroes the score cuts and widens top_k, so its snapshots
 must not be diffed against ones captured at the defaults.
 
-Usage (via run.sh):  python probe.py --queries <file.json> [--top-k N] [--budget N]
+Usage (via run.sh):  python probe.py --queries <file.json> [--top-k N]
+
+Token budgets are instance settings (RETRIEVAL_BUDGET_TOKENS_*), not per-call arguments:
+set them in the environment for the run; the snapshot records the effective values.
 """
 
 from __future__ import annotations
@@ -29,7 +32,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, "/app")
 
-import config  # noqa: E402
+import settings  # noqa: E402
 from db import get_db  # noqa: E402
 from retrieval import retrieve_context  # noqa: E402
 
@@ -103,41 +106,41 @@ async def _fingerprint(db, project_id: str) -> str:
     return hashlib.sha256("|".join(pairs).encode()).hexdigest()[:16]
 
 
-def _measurement_config(top_k: int | None, budget: int | None) -> dict:
+async def _measurement_config(top_k: int | None) -> dict:
     """The knobs a rank is measured under — recorded so a diff cannot silently mix arms.
 
     RETRIEVAL_MIN_SCORE and RETRIEVAL_SCORE_DROP_OFF are absolute/relative cosine cuts
-    read from module constants, not overridable per call: different embedding models sit
+    resolved through settings (an admin override in the DB beats the env), not overridable
+    per call: different embedding models sit
     at different score distributions, so at the defaults a cross-model run measures the
     threshold rather than the model. The model A/B pins both to 0 in the environment;
     this block is what proves it did.
     """
     return {
-        "embedding_model": config.EMBEDDING_MODEL,
-        "min_score": config.RETRIEVAL_MIN_SCORE,
-        "score_drop_off": config.RETRIEVAL_SCORE_DROP_OFF,
-        "max_per_doc": config.RETRIEVAL_MAX_PER_DOC,
+        "embedding_model": await settings.get("EMBEDDING_MODEL"),
+        "min_score": await settings.get("RETRIEVAL_MIN_SCORE"),
+        "score_drop_off": await settings.get("RETRIEVAL_SCORE_DROP_OFF"),
+        "max_per_doc": await settings.get("RETRIEVAL_MAX_PER_DOC"),
         "top_k": top_k if top_k is not None else "config default",
-        "budget_tokens": budget if budget is not None else "config default",
+        "budget_tokens": {
+            kind: await settings.get(f"RETRIEVAL_BUDGET_TOKENS_{kind.upper()}")
+            for kind in ("docs", "refs", "memory")
+        },
     }
 
 
 async def _run_query(
-    project_id: str, q: dict, top_k: int | None, budget: int | None
+    project_id: str, q: dict, top_k: int | None
 ) -> dict:
     res = await retrieve_context(
         project_id=project_id,
         user_query=q["query"],
-        history=[],  # INVARIANT: empty — history would trigger the LLM query rewrite
-        include_documents=True,      # and make the run non-reproducible.
+        include_documents=True,
         include_references=True,
         include_memory=True,
         top_k_docs=top_k,
         top_k_refs=top_k,
         top_k_memory=top_k,
-        token_budget_docs=budget,
-        token_budget_refs=budget,
-        token_budget_memory=budget,
     )
     if res.error:
         return {**q, "error": res.error, "hits": [], "rank": None}
@@ -206,8 +209,6 @@ async def main() -> None:
     # None = the config default, so an unflagged run reproduces the existing snapshots.
     ap.add_argument("--top-k", type=int, default=None,
                     help="override top_k for docs/refs/memory (default: config)")
-    ap.add_argument("--budget", type=int, default=None,
-                    help="override the per-kind token budget (default: config)")
     args = ap.parse_args()
 
     with open(args.queries) as f:
@@ -220,7 +221,7 @@ async def main() -> None:
 
     results = []
     for q in spec["queries"]:
-        results.append(await _run_query(project_id, q, args.top_k, args.budget))
+        results.append(await _run_query(project_id, q, args.top_k))
 
     json.dump(
         {
@@ -228,7 +229,7 @@ async def main() -> None:
             "project_id": project_id,
             "captured_at": datetime.now(timezone.utc).isoformat(),
             "corpus_fingerprint": fingerprint,
-            "measurement": _measurement_config(args.top_k, args.budget),
+            "measurement": await _measurement_config(args.top_k),
             "coverage": coverage,
             "summary": _aggregate(results),
             "results": results,

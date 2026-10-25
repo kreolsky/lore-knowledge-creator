@@ -231,6 +231,14 @@ export interface ChatState {
   // send while it is — or while the queue is non-empty — queues in dsh with
   // no optimistic row; Stop and the busy composer read it beside `streaming`.
   dshRunning: boolean;
+  // ARCH: sessions whose dsh agent is running a turn — folded from
+  // `dsh_status` frames of ANY chat (streaming.ts), not just the active one,
+  // so the chat list rows can carry a "working" mark. Unlike `dshRunning`
+  // (the active chat's gate, reset on every switch), the set survives
+  // session switches; reset() and a project-WS resync clear it (a socket gap
+  // may have swallowed the terminal status — no mark beats a permanent
+  // false one).
+  runningSessions: ReadonlySet<string>;
   // The idle send whose turn this tab is opening: its chip is hidden (dsh
   // inserts the message into the inbox and claims it at once, and the
   // optimistic bubble already shows it). `messageId` = dsh's id from the

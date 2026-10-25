@@ -81,7 +81,7 @@ services:
       - secrets:/secrets
 
   surreal:
-    image: surrealdb/surrealdb:v3.3.0
+    image: surrealdb/surrealdb:v3.3.4
     # WHY --import-file and no --user/--pass: the image has no shell to read a
     # file into a flag, and --user/--pass only create a root user when none
     # exists. The import runs on every start and OVERWRITEs the root user, so the

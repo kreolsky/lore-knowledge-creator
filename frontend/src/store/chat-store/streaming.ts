@@ -13,7 +13,7 @@ import { registerChatResetHandler } from './reset-registry';
 import {
   isFeedFrame, feedFrame, beginTurn, endTurn, adoptStreamBaseline,
 } from './conversation-feed';
-import { applyInboxFrame } from './inbox-slice';
+import { applyInboxFrame, applyRunningStatus } from './inbox-slice';
 import { resolveActivePath } from './tree';
 
 /** A wire field is usable as display text only when it is a non-empty string —
@@ -556,8 +556,10 @@ export function dispatchChatFrame(
   frame: unknown,
 ): void {
   const raw = frame as { type?: unknown; assistant_message_id?: unknown; chat_id?: unknown } | null;
-  // The queue and the status are the ACTIVE chat's (inbox-slice.ts) — folded
-  // whether or not a turn is registered (a splice lands between turns too).
+  // The per-session running set folds for ANY chat (the chat list marks the
+  // working chats); the queue and the status below stay the ACTIVE chat's —
+  // folded whether or not a turn is registered (a splice lands between turns too).
+  if (raw?.type === 'dsh_status') applyRunningStatus(get, set, sessionId, frame);
   if (sessionId === get().activeSessionId) applyInboxFrame(set, frame);
   let turn = harnessTurns.get(sessionId);
   // WHY chat_id: every chat on one driver session (a compaction source and

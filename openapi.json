@@ -12168,6 +12168,44 @@
         "summary": "Delete Public Message"
       }
     },
+    "/api/public/documents/{document_id}/preview": {
+      "get": {
+        "description": "Open Graph card for /docs/<id>: always HTTP 200, published or not.",
+        "operationId": "public_preview_api_public_documents__document_id__preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Public Preview"
+      }
+    },
     "/api/public/documents/{document_id}/references": {
       "get": {
         "operationId": "public_references_api_public_documents__document_id__references_get",

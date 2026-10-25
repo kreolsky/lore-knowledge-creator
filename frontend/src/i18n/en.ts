@@ -511,6 +511,7 @@ export const en = {
   chatUnindexedOn: 'Unindexed: the assistant does not find this chat from your other chats. Click to make it searchable',
   chatUnindexedOff: 'Hide this chat from the assistant\'s search across your chats',
   chatUnindexedMark: 'Unindexed — not found from your other chats',
+  chatRunningMark: 'Agent is working',
   chatUnindexedFailed: 'Failed to change the chat\'s search visibility',
 
   // Reasoning-effort dropdown (plan reasoning-effort-selector) — default sends

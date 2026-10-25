@@ -3,7 +3,7 @@
  * size="sm" (22px) for note cards, "md" (28px, default) elsewhere.
  * filled — solid background with white text (e.g. armed-delete confirmation).
  * pressed — a toggle in its ON state: held at the hover background, aria-pressed set.
- * pressed + color — the ON state takes that color's tint instead (amber = privacy mode; OFF stays plain).
+ * pressed + color — the ON state takes that color's tint instead (green = privacy mode; OFF stays plain).
  */
 
 interface IconButtonProps {
@@ -35,7 +35,7 @@ const pressedIdleNote = 'bg-[var(--warm-strong)] text-text hover:bg-[var(--warm-
 
 // A colored pressed toggle replaces the gray hold entirely, so the two text colors never compete.
 const pressedColors: Record<string, string> = {
-  amber: 'bg-amber/15 text-amber hover:bg-amber/25 hover:text-amber',
+  green: 'bg-green/15 text-green hover:bg-green/25 hover:text-green',
 };
 
 const sizes: Record<string, string> = {

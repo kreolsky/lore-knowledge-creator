@@ -77,7 +77,7 @@ beforeEach(async () => {
   }));
   const icon = () => null;
   vi.doMock('lucide-react', () => ({
-    X: icon, Link2: icon, Plus: icon, KeyRound: icon, Trash2: icon, FileLock2: icon, Check: icon, FolderOutput: icon, ChevronDown: icon, Inbox: icon, VenetianMask: icon,
+    X: icon, Link2: icon, Plus: icon, KeyRound: icon, Trash2: icon, FileLock2: icon, Check: icon, FolderOutput: icon, ChevronDown: icon, Inbox: icon, ShieldCheck: icon,
   }));
   vi.doMock('../i18n', () => ({
     // `t` is used directly by the shared copyWithToast helper; useTranslation by the panel.

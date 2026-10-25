@@ -512,6 +512,7 @@ export const ru: Record<TranslationKey, string> = {
   chatUnindexedOn: 'Вне поиска: ассистент не находит этот чат из других ваших чатов. Нажмите, чтобы вернуть в поиск',
   chatUnindexedOff: 'Скрыть этот чат от поиска ассистента по вашим чатам',
   chatUnindexedMark: 'Вне поиска — не находится из других чатов',
+  chatRunningMark: 'Агент работает',
   chatUnindexedFailed: 'Не удалось изменить видимость чата для поиска',
 
   // Reasoning-effort dropdown (plan reasoning-effort-selector) — default sends

@@ -7,7 +7,7 @@
  * PATCH response's value is written back; on failure the prior value returns
  * and a toast says why — no silent degradation.
  */
-import { VenetianMask } from 'lucide-react';
+import { ShieldCheck } from 'lucide-react';
 import { useAppStore } from '../../store/app-store';
 import { apiClient } from '../../api/client';
 import { FieldCheckbox, SectionHeader } from '../ui';
@@ -43,7 +43,7 @@ export function ChatsPrivacySection({ docId }: { docId: string }) {
   return (
     <>
       <SectionHeader
-        icon={<VenetianMask size={11} />}
+        icon={<ShieldCheck size={11} className="text-green" />}
         title={t('accessChatsPrivateTitle')}
         description={t('accessChatsPrivateDesc')}
       />

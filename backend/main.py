@@ -104,6 +104,7 @@ from routes import (
     projects,
     projects_members,  # noqa: F401 — import registers members/invites routes on projects.router
     public_notes,
+    public_preview,
     public_share,
     public_ws,
     references,
@@ -609,6 +610,7 @@ app.include_router(checkpoints.router)
 app.include_router(references.router)
 app.include_router(public_notes.router)
 app.include_router(public_share.router)
+app.include_router(public_preview.router)
 # Public change-ping WS — see routes/public_ws.py. Registered beside the other
 # WS routers; the module import itself subscribes its _bus_on handlers at
 # module level (before the lifespan's subscribe_backplane_events).

@@ -5,7 +5,7 @@
 #
 # CONTAINER=<name> overrides the backend container (default: the compose `backend`
 # service of the current directory).
-# Extra args go straight to probe.py — e.g. --top-k 25 --budget 40000 for the
+# Extra args go straight to probe.py — e.g. --top-k 25 for the
 # embedding-model A/B, whose snapshots are NOT comparable with default-config ones.
 #
 # Snapshots land in snapshots/<set>-<label>.json and are diffed with compare.py.

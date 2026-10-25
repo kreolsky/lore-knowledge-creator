@@ -1,10 +1,11 @@
 /** Shared two-line chat session row — rendered in the empty-screen list. Labels the row with its parent entity: a document-session shows its document title (backend document_title); a reference-scoped chat shows `ref: <reference title>` (its parent IS the reference). The label is clickable → navigates to that document/reference; the row body click → opens the chat. */
 
 import { memo, useMemo, useState } from 'react';
-import { Pencil, Trash2, VenetianMask } from 'lucide-react';
+import { Pencil, Trash2, ShieldCheck } from 'lucide-react';
 import type { ChatSession } from '../../types';
 import { useAppStore } from '../../store/app-store';
 import { useUIStore } from '../../store/ui-store';
+import { useChatStore } from '../../store/chat-store';
 import { readRefOpenMode, refIsScope } from '../../store/ui-store/documents-slice';
 import { emit } from '../../events';
 import { useTranslation } from '../../i18n';
@@ -46,6 +47,9 @@ export const ChatRow = memo(function ChatRow({ session, isActive, onSelect, onDe
   // "current" while its ref is merely previewed — the goto-ref affordance shows.
   const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocumentId ?? ''], s.compactLayout));
   const currentReferenceId = refIsScope(refOpenMode) ? rawReferenceId : null;
+  // The list's "agent is working" mark: the boolean selector re-renders only
+  // the rows whose membership flipped (a fresh Set per frame would repaint all).
+  const running = useChatStore(s => s.runningSessions.has(session.session_id));
   const deleteAction = useArmedAction();
   // Inline rename — same contract as the reference plaque (RefCard): pencil or
   // double-click opens the input, Enter / blur (click anywhere) commits, Escape cancels.
@@ -163,9 +167,26 @@ export const ChatRow = memo(function ChatRow({ session, isActive, onSelect, onDe
           />
         ) : undefined}
         onBodyDoubleClick={onRename ? startRename : undefined}
-        metaIcon={session.unindexed
-          ? <span className="text-amber" title={t('chatUnindexedMark')}><VenetianMask size={11} aria-label={t('chatUnindexedMark')} /></span>
-          : undefined}
+        metaIcon={(running || session.unindexed) ? (
+          <>
+            {running && (
+              <svg
+                className="chat-running-mark"
+                width="11"
+                height="11"
+                viewBox="0 0 11 11"
+                role="img"
+                aria-label={t('chatRunningMark')}
+              >
+                <title>{t('chatRunningMark')}</title>
+                <rect x="1.5" y="1.5" width="8" height="8" />
+              </svg>
+            )}
+            {session.unindexed && (
+              <span className="text-green" title={t('chatUnindexedMark')}><ShieldCheck size={14} aria-label={t('chatUnindexedMark')} /></span>
+            )}
+          </>
+        ) : undefined}
         meta={
           parentLabel ? (
             <>
