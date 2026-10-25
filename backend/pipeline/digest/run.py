@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 
 from chat_sessions.recall_search import Window
-from documents.service import create_document
+from documents.service import create_document, effective_parent_id
 
 from db import extract_id, fetch_one, get_db
 from event_bus import emit
@@ -103,9 +103,11 @@ async def _write_report(binding: DigestBinding, content: str, until: datetime) -
         tz_name=await _fetch_user_timezone(binding.created_by),
     )
     doc_uid = str(uuid.uuid4())
+    # A target of the project's index stores at the root (effective_parent_id).
+    parent_id = await effective_parent_id(binding.target_doc_id, binding.project_id)
     record = await create_document(doc_uid, {
         "project_id": binding.project_id,
-        "parent_id": binding.target_doc_id,
+        "parent_id": parent_id,
         "title": title,
         "content": content,
         "path": f"{doc_uid}.md",
@@ -120,7 +122,7 @@ async def _write_report(binding: DigestBinding, content: str, until: datetime) -
         project_id=binding.project_id,
         document_id=doc_uid,
         title=title,
-        parent_id=binding.target_doc_id,
+        parent_id=parent_id,
         sort_key=record.get("sort_key"),
     )
     return doc_uid

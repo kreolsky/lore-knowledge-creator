@@ -29,6 +29,7 @@ from documents.service import (
     ancestor_chain,
     assert_no_cycle,
     assert_parent_valid,
+    effective_parent_id,
     generate_path_for_title,
     place_after,
     sibling_rows,
@@ -221,6 +222,34 @@ async def _emit_move_events(
     )
 
 
+async def _finish_cross_project_move(
+    db, docs: dict[str, dict], source_project_id: str, target_project_id: str,
+) -> dict:
+    """The move's post-documents tail: denormalized rewrites, live-session
+    project_id patches and the out/in event pair. Returns the response."""
+    document_ids = [did for did, d in docs.items() if not is_ref_row(d)]
+    reference_ids = [did for did, d in docs.items() if is_ref_row(d)]
+    all_ids = list(docs.keys())
+    await _rewrite_denormalized(db, source_project_id, target_project_id, all_ids)
+
+    # Live collab sessions cache project_id — patch or the next flush writes
+    # doc_chunks under the OLD project and nudges the wrong project WS
+    # (INVARIANT on CollabSession.project_id, collab/session.py).
+    for did in all_ids:
+        session = get_active_session("doc", did)
+        if session is not None:
+            session.project_id = target_project_id
+
+    await _emit_move_events(
+        source_project_id, target_project_id, document_ids, reference_ids,
+    )
+    return {
+        "moved": len(all_ids),
+        "document_ids": document_ids,
+        "reference_ids": reference_ids,
+    }
+
+
 async def move_document_to_project_command(
     document_id: str, target_project_id: str, parent_id: str | None,
 ) -> dict:
@@ -246,30 +275,17 @@ async def move_document_to_project_command(
     if not docs:
         raise HTTPException(status_code=404, detail="Document not found")
     parent_id = await _validate_move(db, docs, target_project_id, parent_id)
+    # "Under the target index" IS the target root for a document (the tree
+    # renders the index row childless); a reference keeps the index as its
+    # host. Stored-value normalisation AFTER _validate_move — the wall and
+    # parent checks ran on the id the caller sent.
+    if parent_id is not None and not is_ref_row(docs[document_id]):
+        parent_id = await effective_parent_id(parent_id, target_project_id)
 
     await _rewrite_documents(db, docs, document_id, target_project_id, parent_id)
-
-    document_ids = [did for did, d in docs.items() if not is_ref_row(d)]
-    reference_ids = [did for did, d in docs.items() if is_ref_row(d)]
-    all_ids = list(docs.keys())
-    await _rewrite_denormalized(db, source_project_id, target_project_id, all_ids)
-
-    # Live collab sessions cache project_id — patch or the next flush writes
-    # doc_chunks under the OLD project and nudges the wrong project WS
-    # (INVARIANT on CollabSession.project_id, collab/session.py).
-    for did in all_ids:
-        session = get_active_session("doc", did)
-        if session is not None:
-            session.project_id = target_project_id
-
-    await _emit_move_events(
-        source_project_id, target_project_id, document_ids, reference_ids,
+    return await _finish_cross_project_move(
+        db, docs, source_project_id, target_project_id,
     )
-    return {
-        "moved": len(all_ids),
-        "document_ids": document_ids,
-        "reference_ids": reference_ids,
-    }
 
 
 # ─── In-project move (reparent / reorder / kind conversion) ──────────────────
@@ -486,6 +502,31 @@ async def _emit_document_moved(
     )
 
 
+async def _resolve_move_destination(
+    target: dict, document_id: str, parent_id: str | None, after_id: str | None,
+    project_id: str, scope_root: str | None, node_type: str | None,
+) -> tuple[str | None, bool]:
+    """Resolve + validate the in-project destination: the KEY's root for a
+    null parent, the node's final kind, the reference edges, and — for a
+    non-root destination — the cycle/parent/scope checks. Returns the
+    VALIDATED (new_parent, final_is_reference) pair."""
+    # INVARIANT(security): null/empty resolves to the KEY's root before the
+    # reference-root check and the `if new_parent is not None:` destination block.
+    # Why: the previous `parent_id or None` skipped destination validation for a
+    # root move entirely — a scoped key could park its target OUTSIDE the wall (a
+    # one-way escape: the next read 403'd). Resolving first means the cycle guard +
+    # assert_parent_valid + require_doc_in_scope all run on a real in-scope id
+    # (scope_root for a scoped key). Unscoped keys keep null ⇒ project root; the
+    # `or None` tail keeps empty-string ⇒ project root for them.
+    new_parent = resolve_scoped_parent(scope_root, parent_id) or None
+
+    final_is_reference = await _resolve_final_kind(target, document_id, node_type)
+    _check_reference_edges(final_is_reference, new_parent, after_id)
+    if new_parent is not None:
+        await _validate_destination(document_id, new_parent, project_id, scope_root)
+    return new_parent, final_is_reference
+
+
 async def move_document_command(
     *, document_id: str, parent_id: str | None, after_id: str | None,
     project_id: str, scope_root: str | None = None, node_type: str | None = None,
@@ -508,30 +549,27 @@ async def move_document_command(
     await require_doc_in_scope(scope_root, document_id)
 
     old_parent = extract_id(target.get("parent_id")) if target.get("parent_id") else None
-    # INVARIANT(security): null/empty resolves to the KEY's root before the
-    # reference-root check and the `if new_parent is not None:` destination block.
-    # Why: the previous `parent_id or None` skipped destination validation for a
-    # root move entirely — a scoped key could park its target OUTSIDE the wall (a
-    # one-way escape: the next read 403'd). Resolving first means the cycle guard +
-    # assert_parent_valid + require_doc_in_scope all run on a real in-scope id
-    # (scope_root for a scoped key). Unscoped keys keep null ⇒ project root; the
-    # `or None` tail keeps empty-string ⇒ project root for them.
-    new_parent = resolve_scoped_parent(scope_root, parent_id) or None
+    new_parent, final_is_reference = await _resolve_move_destination(
+        target, document_id, parent_id, after_id, project_id, scope_root, node_type,
+    )
 
-    final_is_reference = await _resolve_final_kind(target, document_id, node_type)
-    _check_reference_edges(final_is_reference, new_parent, after_id)
-    if new_parent is not None:
-        await _validate_destination(document_id, new_parent, project_id, scope_root)
+    # Stored-parent normalisation AFTER the destination resolution above: a
+    # document moved onto the index is stored at the project root (the tree
+    # renders the index row childless); a reference keeps the index as its
+    # host. The key lands in the stored parent's sibling group.
+    stored_parent = new_parent
+    if new_parent is not None and not final_is_reference:
+        stored_parent = await effective_parent_id(new_parent, project_id)
 
     new_key = await _write_move(
-        document_id, project_id, new_parent, after_id, final_is_reference,
+        document_id, project_id, stored_parent, after_id, final_is_reference,
     )
     await _emit_document_moved(
-        target, project_id, document_id, new_parent, old_parent,
+        target, project_id, document_id, stored_parent, old_parent,
         new_key, final_is_reference,
     )
     return {
         "status": "applied", "document_id": document_id,
-        "parent_id": new_parent, "sort_key": new_key,
+        "parent_id": stored_parent, "sort_key": new_key,
         "is_reference": final_is_reference,
     }

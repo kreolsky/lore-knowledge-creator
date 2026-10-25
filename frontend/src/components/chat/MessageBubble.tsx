@@ -407,14 +407,17 @@ export const MessageBubble = memo(function MessageBubble({
         )}
       </div>
 
-      {/* Actions — always visible below the bubble */}
+      {/* Actions — always visible below the bubble.
+          WHY pr-3 on user rows: the prompt rail overlays the list's right edge, 24px
+          at rest (half of PEAK_WIDTH plus its px-1.5); with the list's px-3 the
+          buttons end on its edge. Opened, it is wider, but only under the pointer. */}
       {!editing && !isStreaming && (
         <div
           className={`flex items-center mt-0.5 ${
             isUser
               ? userFork
-                ? 'justify-between'
-                : 'justify-end'
+                ? 'justify-between pr-3'
+                : 'justify-end pr-3'
               : 'justify-start'
           }`}
           style={userFork ? { width: bubbleW } : undefined}

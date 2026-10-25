@@ -665,6 +665,33 @@ async def assert_no_cycle(document_id: str, new_parent_id: str | None) -> None:
         )
 
 
+async def effective_parent_id(parent_id: str | None, project_id: str) -> str | None:
+    """The parent_id value to STORE for a DOCUMENT node: the project's index
+    document normalises to None (project root), everything else passes through.
+
+    # INVARIANT(persisted): a DOCUMENT's stored parent_id never names the
+    # project's index doc (tree-visibility). Why: the tree renders the index
+    # row childless ("Project Context"), so a document stored under it exists
+    # but is invisible; project level for a document IS parent_id = None.
+    # REFERENCES ARE CARVED OUT: for a reference, parent_id = index_doc_id is
+    # the canonical project-level HOST (resolve_reference_host,
+    # documents_reference_parent_check) — callers must NOT normalise a
+    # reference through this helper.
+    # ORDER (scope wall): callers validate the ORIGINAL id first
+    # (assert_parent_valid / require_doc_in_scope) and normalise only the
+    # stored value afterwards. Why: resolving to None BEFORE validation once
+    # let a scoped key park its target outside the wall — the destination
+    # checks only run for a non-null parent (INVARIANT(security) at
+    # documents/move.py move_document_command).
+    """
+    if not parent_id:
+        return None
+    project = await fetch_one("projects", project_id)
+    if parent_id == (project or {}).get("index_doc_id"):
+        return None
+    return parent_id
+
+
 async def resolve_reference_host(document_id: str | None, project_id: str) -> str:
     """Resolve a reference's host (parent_id) for the project-level intent.
 

@@ -163,6 +163,7 @@ export function ChatInput() {
   // the picker's default tab all follow the doc scope; the ref is added by hand
   // through the picker like any material.
   const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocId ?? ''], s.compactLayout));
+  const compactLayout = useUIStore(s => s.compactLayout);
   const currentReference = refIsScope(refOpenMode) ? rawReference : null;
   // Ghost: when no session is active, context is DERIVED from the open entity
   // (useGhostChatContext) — it is never stored. The content picker writes manual
@@ -635,7 +636,10 @@ export function ChatInput() {
           onOpenChange={setModelPickerOpen}
         />
       )}
-      {reasoningLevels.length > 0 && (
+      {/* WHY: on a compact (phone) layout the reasoning picker and the unindexed
+          opt-out are hidden so the toolbar fits one row; the session keeps its
+          values, they are changed from a wide layout. */}
+      {reasoningLevels.length > 0 && !compactLayout && (
         <Dropdown
           value={displayReasoningEffort ?? ''}
           options={[
@@ -672,7 +676,7 @@ export function ChatInput() {
           : t('chatAutoApplyHint')}
       />
       {/* Create-time opt-out of chat recall; an existing chat toggles it in the header. */}
-      {!activeSessionId && (
+      {!activeSessionId && !compactLayout && (
         <FieldCheckbox
           checked={ghostUnindexed}
           onChange={checked => { void setChatUnindexed(checked); }}

@@ -85,7 +85,10 @@ vi.mock('../ui', () => ({
     dropdownProps.push(props);
     return null;
   },
-  FieldCheckbox: () => null,
+  FieldCheckbox: (props: { label?: string }) => {
+    checkboxLabels.push(props.label ?? '');
+    return null;
+  },
 }));
 vi.mock('./SelectionPill', () => ({ SelectionPill: () => null }));
 vi.mock('./TokenUsageGauge', () => ({ TokenUsageGauge: () => null }));
@@ -115,10 +118,12 @@ vi.mock('./ChatComposer', () => ({
 
 import { ChatInput } from './ChatInput';
 import { useChatStore } from '../../store/chat-store';
+import { useUIStore } from '../../store/ui-store';
 
 const cancelRecording = vi.fn();
 const composerProps: { current: Record<string, unknown> | null } = { current: null };
 const dropdownProps: { title?: string; value?: string; options?: { value: string }[] }[] = [];
+const checkboxLabels: string[] = [];
 // The reasoning map the dropdown reads: m1 advertises low|high; a row pinned
 // to something else (here 'max') is the stale-foreign case under test.
 const REASONING_M1 = { supported: true, effort_levels: ['low', 'high'] };
@@ -270,5 +275,30 @@ describe('ChatInput reasoning-effort dropdown options (plan reasoning-effort-sel
     expect(dd.options!.map(o => o.value)).toEqual(['', 'low', 'high', 'max']);
 
     unmount(rig);
+  });
+  it('a compact (phone) layout hides the reasoning picker and the unindexed opt-out; auto-apply stays', () => {
+    const ui = useUIStore.getState() as { compactLayout?: boolean };
+    const ghost = baseState({ sessions: [], activeSessionId: null, ghostModel: 'm1' });
+
+    dropdownProps.length = 0;
+    checkboxLabels.length = 0;
+    useChatStore.setState(ghost);
+    let rig = render(createElement(ChatInput));
+    expect(dropdownProps.some(p => p.title === 'chatReasoningTitle')).toBe(true);
+    expect(checkboxLabels).toContain('chatUnindexed');
+    unmount(rig);
+
+    ui.compactLayout = true;
+    try {
+      dropdownProps.length = 0;
+      checkboxLabels.length = 0;
+      rig = render(createElement(ChatInput));
+      expect(dropdownProps.some(p => p.title === 'chatReasoningTitle')).toBe(false);
+      expect(checkboxLabels).not.toContain('chatUnindexed');
+      expect(checkboxLabels).toContain('chatAutoApply');
+      unmount(rig);
+    } finally {
+      ui.compactLayout = false;
+    }
   });
 });

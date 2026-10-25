@@ -40,7 +40,13 @@ CHAT_INDEX_MAX_PASSES = 5
 
 async def _live_messages(db, user_id: str, project_id: str) -> list[dict]:
     """The pair's indexable messages: live, non-empty, in a live non-note,
-    non-`unindexed` session the user owns in this project."""
+    non-`unindexed` session the user owns in this project.
+
+    WHY no documents.chats_unindexed filter: hidden-document chats stay
+    indexed — inside-subtree viewers and digest both search them through the
+    same index; filtering here would silently kill both (the hide is a
+    read-time predicate in recall_search.visible_sessions).
+    """
     # DEBT: every search (index_coverage) and every turn-end reconcile reads the
     # pair's whole message corpus plus all its chunks — O(corpus) per call; a
     # stored per-message hash would let the diff run in the DB. Why deferred: a

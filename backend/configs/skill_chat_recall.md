@@ -1,8 +1,10 @@
 ---
 name: chat-recall
-description: Use when the user refers to something said in another of their chats in this project — recall it instead of asking them to repeat it. Вспомни, мы обсуждали, я говорил, в другом чате, в прошлом разговоре, что мы решили тогда. Loads search over the user's own other chats and its tool.
+description: Use when the user refers to something said in another of their chats in this project — recall it instead of asking them to repeat it — or asks to list, read or analyse one of their chats whole. Вспомни, мы обсуждали, я говорил, в другом чате, в прошлом разговоре, что мы решили тогда, разбери чат, проанализируй сессию, список чатов, прочитай чат целиком. Loads search over the user's own other chats and its tools.
 tools:
   - search_my_chats
+  - list_my_chats
+  - read_my_chat
 ---
 
 # Chat recall
@@ -27,6 +29,22 @@ to repeat themselves.
    that turn plus one turn above and below. Follow `earlier` / `later` to move
    through the chat, and `next_offset` to finish a long message.
 3. Tell the user which chat and when ("in «<chat title>» on <date> you said …").
+
+## Whole chat
+
+To list, read or analyse a whole chat (not just recall a fragment):
+
+1. `list_my_chats` — every other chat of this project (the user's own only),
+   newest activity first. Narrow by `title_contains` or `under_document_id`,
+   follow `next_offset` while it is present.
+2. Pick the chat by title, document or date, then `read_my_chat` from turn 0.
+   Follow `next_turn` to the end — no turn is lost or repeated.
+3. A message marked `truncated` continues in `search_my_chats`: call it with
+   that `message_id` and `offset` = the `next_offset` shown, until the message
+   is done. Never count characters yourself.
+
+A hidden (`unindexed`) chat is not visible to these tools — if the user asks
+for one, ask them to turn hiding off first.
 
 ## What a hit is
 

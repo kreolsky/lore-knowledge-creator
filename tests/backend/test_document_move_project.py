@@ -276,6 +276,50 @@ async def test_move_root_lands_top_of_target_siblings(
 
 
 @pytest.mark.asyncio
+async def test_move_document_with_target_index_parent_lands_at_target_root(
+    client, test_db, admin_user, project_with_doc,
+):
+    """A document moved with parent_id = the TARGET project's index is stored
+    at the target ROOT: the tree renders the index row childless, so a
+    document under it exists but is invisible."""
+    pid, _, _ = project_with_doc
+    _, token = admin_user
+    target_pid, target_idx = await _mk_project(client, token, "Move Target P")
+
+    doc = await _mk_doc(client, pid, token, title="IdxParentDoc")
+    resp = await _move(client, token, doc, target_pid, parent_id=target_idx)
+    assert resp.status_code == 200, resp.text
+
+    rows = await _doc_rows(test_db, [doc])
+    assert rows[doc]["project_id"] == target_pid
+    assert rows[doc]["parent_id"] is None, \
+        "target index as parent = target root for a document"
+
+
+@pytest.mark.asyncio
+async def test_move_reference_with_target_index_parent_keeps_host(
+    client, test_db, admin_user, project_with_doc,
+):
+    """CARVE-OUT: a REFERENCE moved with parent_id = the target project's
+    index keeps the index as its host — the canonical project-level host."""
+    pid, _, _ = project_with_doc
+    _, token = admin_user
+    target_pid, target_idx = await _mk_project(client, token, "Move Target Q")
+
+    host = await _mk_doc(client, pid, token, title="RefHost")
+    ref = await _mk_doc(
+        client, pid, token, title="Ref", parent_id=host, is_reference=True,
+    )
+    resp = await _move(client, token, ref, target_pid, parent_id=target_idx)
+    assert resp.status_code == 200, resp.text
+
+    rows = await _doc_rows(test_db, [ref])
+    assert rows[ref]["project_id"] == target_pid
+    assert rows[ref]["parent_id"] == target_idx, \
+        "a reference keeps the target index as its host"
+
+
+@pytest.mark.asyncio
 async def test_move_rederives_colliding_path(
     client, test_db, admin_user, project_with_doc,
 ):

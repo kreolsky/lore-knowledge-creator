@@ -109,6 +109,11 @@ describe('Dashboard own / shared sections', () => {
     ]);
     expect(badges[0].className).toContain('warm-strong');
     expect(badges[1].className).toContain('text-red');
+    // A long name clips to an ellipsis inside the card; the badge beside it never shrinks.
+    const title = badges[0].parentElement!;
+    expect(title.className).toContain('min-w-0');
+    expect((title.firstChild as HTMLElement).className).toContain('truncate');
+    expect(badges[0].className).toContain('shrink-0');
   });
 
   it('renders no shared section when nothing is shared, and the empty hint under own', () => {

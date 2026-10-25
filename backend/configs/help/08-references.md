@@ -12,7 +12,7 @@ References are materials attached to a document: recordings, transcripts, files,
 
 What you can upload:
 
-- **Audio and video** (mp3, wav, m4a, ogg, webm, mp4) — transcribed to text automatically. The retry button on the card runs transcription again, including for a recording stuck in "Queued".
+- **Audio and video** (mp3, wav, m4a, ogg, webm, mp4) — transcribed to text automatically; uploading them needs the voice tier or higher. The retry button on the card runs transcription again, including for a recording stuck in "Queued".
 - **Word (DOCX)** — turned into text with markup automatically.
 - **PDF** — supported, but the quality of text extraction is often poor. Upload DOCX or text when you can.
 - **Text** (md, txt, json, yaml and others) and **pictures** (jpg, png, gif, webp).

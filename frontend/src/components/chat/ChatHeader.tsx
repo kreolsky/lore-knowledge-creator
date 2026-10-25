@@ -1,10 +1,11 @@
-/** Chat header — static title (double-click to rename) + new chat / goto-parent / unindexed toggle / export / delete. Chat-store slices: sessions, activeSessionId, modelsLoaded, createSession, setActiveSession, deleteSession, updateSession, setChatUnindexed, loadModels. App-store slices: currentProject, currentDocument, currentReference. */
+/** Chat header — static title (double-click to rename) + new chat / goto-parent / unindexed toggle / export / analyse-in-new-chat / delete. Chat-store slices: sessions, activeSessionId, modelsLoaded, createSession, setActiveSession, deleteSession, updateSession, setChatUnindexed, loadModels. App-store slices: currentProject, currentDocument, currentReference. */
 
 import { useState, useCallback, useEffect } from 'react';
-import { ArrowLeft, Trash2, Download, FileText, Network, Clock, FolderUp, VenetianMask } from 'lucide-react';
+import { ArrowLeft, Trash2, Download, FileText, Network, Clock, FolderUp, VenetianMask, Sparkles } from 'lucide-react';
 import { Button, IconButton, FieldInput, Popover } from '../ui';
 import { ParentPickerPopup } from '../ParentPickerPopup';
 import { useChatStore, selectBranchPath } from '../../store/chat-store';
+import { appendDraft } from '../../store/chat-store/misc-slice';
 import { useAppStore } from '../../store/app-store';
 import { useUIStore } from '../../store/ui-store';
 import { readRefOpenMode, refIsScope } from '../../store/ui-store/documents-slice';
@@ -62,6 +63,26 @@ export function ChatHeader() {
     if (!activeSessionId) return;
     startGhostChat();
   }, [activeSessionId, startGhostChat]);
+
+  // "Analyse in a new chat": open a fresh ghost,
+  // then prefill its composer with a request naming THIS chat by title +
+  // chat_id, so the agent reads it via read_my_chat without searching. Why
+  // capture title/id BEFORE startGhostChat: it clears activeSessionId — after
+  // it the session row is no longer resolvable. appendDraft, never setDraft:
+  // the draft is ONE shared field across chats and appendDraft is the
+  // append-never-overwrite rule (see its INVARIANT in misc-slice) — a setDraft
+  // prefill would erase the unsent text of the chat being left. The unindexed
+  // guard repeats the button's `disabled` because a programmatic click on a
+  // disabled button still reaches onClick. Plain handler, not useCallback: it
+  // uses `t`, which is a new function every render (i18n rule — never in a
+  // callback dep array).
+  const handleAnalyseInNewChat = () => {
+    if (!activeSession || activeSession.unindexed) return;
+    const title = activeSession.title || t('newChat');
+    const id = activeSession.session_id;
+    startGhostChat();
+    appendDraft(useChatStore.getState, t('analyseChatPrompt', { title, id }));
+  };
 
   const handleExportJson = useCallback(() => {
     const messages = selectBranchPath(useChatStore.getState());
@@ -312,6 +333,14 @@ export function ChatHeader() {
             onClick={() => { void setChatUnindexed(!activeSession?.unindexed); }}
           >
             <VenetianMask size={14} />
+          </IconButton>
+          <IconButton
+            size="sm"
+            disabled={!!activeSession?.unindexed}
+            title={activeSession?.unindexed ? t('analyseChatHiddenHint') : t('analyseInNewChat')}
+            onClick={handleAnalyseInNewChat}
+          >
+            <Sparkles size={14} />
           </IconButton>
           <Popover
             align="right"

@@ -5,7 +5,7 @@
 #
 # The first `up` builds the agent (harness) and its sandbox from this repository
 # on GitHub, so it needs git and network on the Docker host and takes several
-# minutes. Then open http://localhost:8080, sign in as admin@lore.app /
+# minutes. Then open http://localhost:5673, sign in as admin@lore.app /
 # lore-admin (change the password in your profile), and set the AI API URL, key
 # and chat model in Admin panel → Models & APIs — the agent works from the next
 # message, no restart.
@@ -173,7 +173,7 @@ services:
     image: ghcr.io/kreolsky/lore-frontend:${LORE_VERSION:-stable}
     restart: unless-stopped
     ports:
-      - "${LORE_PORT:-8080}:80"
+      - "${LORE_PORT:-5673}:80"
     depends_on:
       backend:
         condition: service_healthy

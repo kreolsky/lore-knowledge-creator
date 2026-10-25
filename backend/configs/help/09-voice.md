@@ -1,6 +1,6 @@
 # Voice notes
 
-A recording is transcribed to text automatically and saved as a reference.
+A recording is transcribed to text automatically and saved as a reference. Recording, audio upload and voice input need an account with the voice tier or higher (see [Access and publishing](help:access)); without it the record and microphone buttons are hidden.
 
 ## A voice note for a document
 

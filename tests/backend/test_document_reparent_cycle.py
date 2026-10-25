@@ -39,32 +39,34 @@ async def _parent_of(test_db, doc_id):
 
 @pytest_asyncio.fixture
 async def chain(client, admin_user, project_with_doc):
-    """A → B → C under the index doc, plus a sibling S of A."""
+    """A → B → C (A at the project root), plus a sibling S of A. A doc can no
+    longer be stored under the index (index parent normalises to root), so the
+    chain anchors on a root-level A."""
     pid, idx_id, _ = project_with_doc
     _, token = admin_user
-    a = await _mk_doc(client, pid, token, title="A", parent_id=idx_id)
+    a = await _mk_doc(client, pid, token, title="A")
     b = await _mk_doc(client, pid, token, title="B", parent_id=a)
     c = await _mk_doc(client, pid, token, title="C", parent_id=b)
-    s = await _mk_doc(client, pid, token, title="S", parent_id=idx_id)
+    s = await _mk_doc(client, pid, token, title="S")
     return token, idx_id, a, c, s
 
 
 @pytest.mark.asyncio
 async def test_reparent_to_self_is_refused(client, test_db, chain):
-    token, idx_id, a, _, _ = chain
+    token, _, a, _, _ = chain
     resp = await _reparent(client, token, a, a)
     assert resp.status_code == 400, resp.text
     assert resp.json()["detail"] == "A document cannot be its own parent"
-    assert await _parent_of(test_db, a) == idx_id
+    assert await _parent_of(test_db, a) is None
 
 
 @pytest.mark.asyncio
 async def test_reparent_into_grandchild_is_refused(client, test_db, chain):
-    token, idx_id, a, c, _ = chain
+    token, _, a, c, _ = chain
     resp = await _reparent(client, token, a, c)
     assert resp.status_code == 400, resp.text
     assert resp.json()["detail"] == "Cannot move a document into its own subtree (cycle)"
-    assert await _parent_of(test_db, a) == idx_id
+    assert await _parent_of(test_db, a) is None
 
 
 @pytest.mark.asyncio
@@ -73,6 +75,40 @@ async def test_reparent_under_sibling_is_accepted(client, test_db, chain):
     resp = await _reparent(client, token, a, s)
     assert resp.status_code == 200, resp.text
     assert await _parent_of(test_db, a) == s
+
+
+# ─── Index-doc parent normalises to root (documents only) ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_reparent_document_onto_index_lands_at_root(client, test_db, chain):
+    """An in-project move of a DOCUMENT onto the index doc is stored at the
+    project root: the tree renders the index row childless, so a document
+    under it exists but is invisible."""
+    token, idx_id, _, c, _ = chain
+    resp = await _reparent(client, token, c, idx_id)
+    assert resp.status_code == 200, resp.text
+    rows = await test_db.query(
+        "SELECT parent_id FROM type::record('documents', $id)", {"id": c},
+    )
+    assert rows[0].get("parent_id") is None
+
+
+@pytest.mark.asyncio
+async def test_reparent_reference_onto_index_keeps_index_host(
+    client, test_db, chain, project_with_doc,
+):
+    """CARVE-OUT: a re-host of a REFERENCE onto the index keeps the index as
+    its host (200, stored index id) — the index IS the project-level host."""
+    token, idx_id, a, _, _ = chain
+    pid, _, _ = project_with_doc
+    ref = await _mk_ref(client, pid, token, host=a)
+    resp = await _reparent(client, token, ref, idx_id)
+    assert resp.status_code == 200, resp.text
+    rows = await test_db.query(
+        "SELECT parent_id FROM type::record('documents', $id)", {"id": ref},
+    )
+    assert rows[0].get("parent_id") == idx_id
 
 
 async def _mk_ref(client, pid, token, *, host):
@@ -88,21 +124,21 @@ async def _mk_ref(client, pid, token, *, host):
 
 @pytest.mark.asyncio
 async def test_reparent_system_document_is_refused(client, test_db, chain):
-    token, idx_id, a, _, s = chain
+    token, _, a, _, s = chain
     await test_db.query(
         "UPDATE type::record('documents', $id) SET is_system = true", {"id": a},
     )
     resp = await _reparent(client, token, a, s)
     assert resp.status_code == 403, resp.text
     assert resp.json()["detail"] == "System documents cannot be moved"
-    assert await _parent_of(test_db, a) == idx_id
+    assert await _parent_of(test_db, a) is None
 
 
 @pytest.mark.asyncio
 async def test_reparent_reference_to_project_level_is_refused(
     client, test_db, chain, project_with_doc,
 ):
-    token, idx_id, a, _, _ = chain
+    token, _, a, _, _ = chain
     pid, _, _ = project_with_doc
     ref = await _mk_ref(client, pid, token, host=a)
     resp = await _reparent(client, token, ref, "")
@@ -148,22 +184,22 @@ async def memory(client, admin_user, project_with_doc):
 
 @pytest.mark.asyncio
 async def test_reparent_under_memory_folder_is_refused(client, test_db, chain, memory):
-    token, idx_id, a, _, _ = chain
+    token, _, a, _, _ = chain
     folder, _ = memory
     resp = await _reparent(client, token, a, folder)
     assert resp.status_code == 400, resp.text
     assert resp.json()["detail"] == "A document cannot be moved into the Memory folder"
-    assert await _parent_of(test_db, a) == idx_id
+    assert await _parent_of(test_db, a) is None
 
 
 @pytest.mark.asyncio
 async def test_reparent_under_memory_card_is_refused(client, test_db, chain, memory):
-    token, idx_id, a, _, _ = chain
+    token, _, a, _, _ = chain
     _, card = memory
     resp = await _reparent(client, token, a, card)
     assert resp.status_code == 400, resp.text
     assert resp.json()["detail"] == "A document cannot be moved into the Memory folder"
-    assert await _parent_of(test_db, a) == idx_id
+    assert await _parent_of(test_db, a) is None
 
 
 @pytest.mark.asyncio

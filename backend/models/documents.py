@@ -27,6 +27,9 @@ class PatchDocument(BaseModel):
     content: str | None = None
     title: str | None = None
     parent_id: str | None = None
+    # WHY option-with-None (not bare bool): None = leave unchanged, the same
+    # contract as every other field here.
+    chats_unindexed: bool | None = None
 
 
 class ReorderDocument(BaseModel):

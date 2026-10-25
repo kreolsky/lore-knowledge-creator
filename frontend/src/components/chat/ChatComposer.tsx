@@ -98,9 +98,8 @@ export function ChatComposer({
   const compactLayout = useUIStore(s => s.compactLayout);
   const { height: inputHeight, handleRef: dragHandleRef } = useVerticalDragResize({
     defaultHeight: 300,
-    // INVARIANT: input min-height equals the default floor (200) — the form must
-    // never shrink below this size. The default height (300) is taller than the
-    // floor, so the form opens at 300 but can be dragged down to 200.  Why: the min-height (200) is the floor the form can't shrink below; the default (300) opens taller and drags down to 200 but no further.
+    // WHY: on a wide layout the form never shrinks below 200 (a compact layout sizes it by a two-row textarea).
+    // Why: the min-height (200) is the floor the form can't shrink below; the default (300) opens taller and drags down to 200 but no further.
     minHeight: 200,
     maxHeight: 600,
   });
@@ -155,10 +154,12 @@ export function ChatComposer({
           </div>
         </div>
       )}
-      <div ref={dragHandleRef} className="resizer-v" />
+      {/* WHY: on a compact (phone) layout the form is not drag-resized — its height
+          follows a two-line textarea so it does not eat half the screen. */}
+      {!compactLayout && <div ref={dragHandleRef} className="resizer-v" />}
       <div
         className={`chat-selection flex-shrink-0 border-t pb-safe ${panelBg} ${panelBorderClass}`}
-        style={{ minHeight: inputHeight }}
+        style={compactLayout ? undefined : { minHeight: inputHeight }}
         onKeyDown={handleEscape}
       >
         <div className="flex flex-col h-full">
@@ -170,7 +171,7 @@ export function ChatComposer({
           </div>
 
           {/* Textarea fills the drag-resized height (no auto-grow). */}
-          <div className="px-3 py-1 flex-1 min-h-[60px]">
+          <div className={compactLayout ? 'px-3 py-1' : 'px-3 py-1 flex-1 min-h-[60px]'}>
             <FieldTextarea
               ref={textareaRef}
               value={value}
@@ -181,7 +182,8 @@ export function ChatComposer({
               disabled={disabled}
               maxLength={maxLength}
               highlight={highlight}
-              className="w-full h-full resize-none"
+              rows={compactLayout ? 2 : undefined}
+              className={compactLayout ? 'w-full resize-none' : 'w-full h-full resize-none'}
             />
           </div>
 
@@ -209,9 +211,16 @@ export function ChatComposer({
                   still available whenever text is present.
                 */}
                 {isStreaming && onStop && value.trim().length === 0 ? (
-                  <Button variant="danger" onClick={onStop}>
-                    <Square size={14} className="mr-1" /> {t('stop')}
-                  </Button>
+                  // WHY: on a compact layout Stop collapses to an icon-only square, like Send.
+                  compactLayout ? (
+                    <Button variant="danger" size="md-square" onClick={onStop} title={t('stop')}>
+                      <Square size={14} />
+                    </Button>
+                  ) : (
+                    <Button variant="danger" onClick={onStop}>
+                      <Square size={14} className="mr-1" /> {t('stop')}
+                    </Button>
+                  )
                 ) : (
                   // WHY: on a compact (phone) layout the hotkey label means nothing and
                   // costs row width — send collapses to an icon-only square.

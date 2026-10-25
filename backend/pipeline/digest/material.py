@@ -101,7 +101,12 @@ async def _unindexed_message_starts(
         floor = max(floor, since)
     starts = []
     for uid in subjects:
-        anchored = await visible_sessions(db, uid, project_id, set(), {theme_doc_id})
+        # WHY include_doc_unindexed: digest is not affected by the subtree
+        # hide (user ruling) — a hidden chat's
+        # unindexed message must still hold the window, or the run would mark
+        # it covered while semantic search could not see it.
+        anchored = await visible_sessions(db, uid, project_id, set(), {theme_doc_id},
+                                          include_doc_unindexed=True)
         pending, _stale = await plan_chat_index(db, uid, project_id, model)
         starts += [m["created_at"] for m in pending
                    if m["created_at"] > floor and m["chat_id"] not in anchored]
@@ -206,13 +211,18 @@ async def _related_turns(
 ) -> list[list[dict]]:
     """The subject's best-matching messages outside the theme's chats, each with its
     neighbour turn, in conversation order."""
+    # WHY include_doc_unindexed: digest is not affected by the subtree hide
+    # (user ruling) — related turns keep coming
+    # from every chat of the project, hidden rooms included.
     result = await search_chats(
         db, uid, project_id, query, exclude=set(anchored), scope="project",
         anchor_doc_id=None, under_document_id=None, window=window,
+        include_doc_unindexed=True,
     )
     if not result["hits"]:
         return []
-    sessions = await visible_sessions(db, uid, project_id, set(anchored))
+    sessions = await visible_sessions(db, uid, project_id, set(anchored),
+                                      include_doc_unindexed=True)
     hits = list((await live_rows(db, {h["message_id"] for h in result["hits"]}, sessions)).values())
     by_score = {h["message_id"]: i for i, h in enumerate(result["hits"])}
     hits.sort(key=lambda m: by_score[m["id"]])
@@ -240,7 +250,12 @@ async def collect(
     anchored_msgs: list[dict] = []
     related_turns: list[list[dict]] = []
     for uid in subjects:
-        anchored = await visible_sessions(db, uid, project_id, set(), {theme_doc_id})
+        # WHY include_doc_unindexed: digest is not affected by the subtree
+        # hide (user ruling) — the theme's own
+        # chats stay the anchored material even when the theme document is a
+        # flagged room.
+        anchored = await visible_sessions(db, uid, project_id, set(), {theme_doc_id},
+                                          include_doc_unindexed=True)
         owner_of.update({sid: uid for sid in anchored})
         anchored_msgs += await _anchored_messages(db, anchored, window)
         for turn in await _related_turns(db, uid, project_id, query, anchored, window):

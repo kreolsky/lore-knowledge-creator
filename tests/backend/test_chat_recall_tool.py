@@ -46,14 +46,14 @@ async def world(client, test_db, admin_user, regular_user, project_with_doc, emb
             "ca": admin_user[1], "cb": regular_user[1]}
 
 
-async def _key(user_id: str, project_id: str) -> str:
+async def _key(user_id: str, project_id: str, *, internal: bool = True) -> str:
     from db import create_record
 
     token = "lore_" + secrets.token_hex(32)
     await create_record("api_keys", f"agent-key-{secrets.token_hex(4)}", {
         "user_id": user_id, "project_id": project_id, "document_id": "",
         "token_hash": hashlib.sha256(token.encode()).hexdigest(),
-        "label": "agent", "capabilities": ["agent"],
+        "label": "agent", "capabilities": ["agent"], "internal": internal,
     })
     return token
 
@@ -500,5 +500,14 @@ async def test_skill_pack_is_served():
     skill = skill_frontmatter(content.strip())
     assert skill is not None and skill["name"] == "chat-recall"
     served = {t["function"]["name"] for t in await agent_toolset()}
-    assert skill["tools"] == ["search_my_chats"]
+    assert skill["tools"] == ["search_my_chats", "list_my_chats", "read_my_chat"]
     assert set(skill["tools"]) <= served
+
+
+async def test_external_key_is_refused_search_is_in_app_only(client, test_db, world):
+    """Operator ruling 2026-10-24: the chat-recall pack is closed to EXTERNAL
+    keys — the person's chat corpus is the in-app assistant's own memory."""
+    ext = await _key(world["a"], world["pid"], internal=False)
+    resp = await _call(client, ext, {"query": "anything"})
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["detail"] == "chat-recall is available only to the in-app assistant"

@@ -23,7 +23,7 @@ A document is deleted with the trash button in the tree. To confirm, you type th
 
 Links plus the hierarchy form the project graph. A document should link to the mechanics it is used in and the decisions it relies on.
 
-- Insert a link: select text, press ⌘/Ctrl + K or the "Link" button on the selection toolbar, and pick a document. To pick a reference, start typing with `ref:`, a note with `note:`, an external address with `http://`. With no text selected, ⌘/Ctrl + K does nothing.
+- Insert a link: select text, press ⌘/Ctrl + K or the "Link" button on the selection toolbar, and pick a document. To pick a reference, start typing with `ref:`, an external address with `http://`. With no text selected, ⌘/Ctrl + K does nothing.
 - Link to a heading: in the "Table of Contents" tab each heading has a "Copy link to heading" button.
 - A link starting with `!` (`![text](document)`) embeds the content of the target document right into the page (see [Images and embeds](help:embeds)).
 - A click on a link opens the target; hovering shows a preview.

@@ -518,7 +518,7 @@ export function MessageList() {
   // WHY the rail is a sibling of the scroll container: it must not scroll with content.
   return (
     <div className="relative flex-1 flex min-h-0">
-      <div ref={containerRef} onScroll={handleScroll} className="chat-selection [overflow-anchor:none] flex-1 min-w-0 overflow-y-auto px-3 py-3">
+      <div ref={containerRef} onScroll={handleScroll} className="chat-selection chat-scroll [overflow-anchor:none] flex-1 min-w-0 overflow-y-auto px-3 py-3">
         {activePath.map((msg, idx) => (
           <MessageBubble
             key={msg.message_id}

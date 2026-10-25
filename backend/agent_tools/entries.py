@@ -16,7 +16,11 @@ The base entries iterate the spec LISTS (READ_TOOLS + MUTATE_TOOLS) so the
 declaration never drifts from the spec constants' own order.
 """
 from agent_tools.registry import ToolEntry, register
-from agent_tools.specs.chat_recall import SEARCH_MY_CHATS_TOOL
+from agent_tools.specs.chat_recall import (
+    LIST_MY_CHATS_TOOL,
+    READ_MY_CHAT_TOOL,
+    SEARCH_MY_CHATS_TOOL,
+)
 from agent_tools.specs.media import (
     GENERATE_IMAGE_TOOL,
     IMPORT_FILE_TOOL,
@@ -54,9 +58,11 @@ from models import (
     ToolGetMemoryFacts,
     ToolGetProjectStructure,
     ToolImportFile,
+    ToolListMyChats,
     ToolMoveDocument,
     ToolNextReference,
     ToolReadDocument,
+    ToolReadMyChat,
     ToolRenameDocument,
     ToolReopenConsolidation,
     ToolReprocessReference,
@@ -269,9 +275,20 @@ register(ToolEntry(
     handler_path="routes.tool_api.skills:tool_save_skill",
     surfaces=_AGENT_HTTP,
 ))
-# search_my_chats: agent-only, the chat-recall skill's pack (see specs/chat_recall.py ARCH).
+# search_my_chats + the list/read pair: agent-only, the chat-recall skill's pack
+# (see specs/chat_recall.py ARCH).
 register(ToolEntry(
     spec=SEARCH_MY_CHATS_TOOL, request_model=ToolSearchMyChats,
     handler_path="routes.tool_api.chat_recall:tool_search_my_chats",
+    surfaces=_AGENT_HTTP,
+))
+register(ToolEntry(
+    spec=LIST_MY_CHATS_TOOL, request_model=ToolListMyChats,
+    handler_path="routes.tool_api.chat_recall:tool_list_my_chats",
+    surfaces=_AGENT_HTTP,
+))
+register(ToolEntry(
+    spec=READ_MY_CHAT_TOOL, request_model=ToolReadMyChat,
+    handler_path="routes.tool_api.chat_recall:tool_read_my_chat",
     surfaces=_AGENT_HTTP,
 ))

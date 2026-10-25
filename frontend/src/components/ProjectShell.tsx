@@ -334,7 +334,10 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
               </IconButton>
             </div>
           )}
-          <div className="flex-1 min-w-0">{header}</div>
+          {/* WHY: beside the compact tree toggle the header drops its left padding, so
+              the logo sits flush to the toggle the way the rec button sits flush to the
+              right-panel toggle. */}
+          <div className={`flex-1 min-w-0${compact && hasLeftBar ? ' [&>header]:pl-0' : ''}`}>{header}</div>
           {compact && hasRight && (
             <div className="flex items-center h-12 pr-2 bg-header-bg border-b border-border-soft">
               <IconButton title={t('compactOpenPanel')} onClick={() => setCompactPanel('right')}>

@@ -35,8 +35,8 @@ export const en = {
   accessInviteOnly: 'Access is by invitation only.',
   landingTagline1: 'Document-first.',
   landingTagline2: 'Agent-ready.',
-  landingSubtext: 'A knowledge workspace built around the document \u2014 not the chat window. Write with precision, co-work with AI agents grounded in your canon.',
-  landingCopyright: '\u00A9 2026 Lore',
+  landingSubtext: 'A knowledge workspace built around the document \u2014 not the chat window. Write with precision, co-work with an AI agent that sees the whole project.',
+  landingGithub: 'Lore on GitHub',
 
   // labels
   email: 'Email',
@@ -147,6 +147,12 @@ export const en = {
   addDocument: 'Add document',
   changeParent: 'Change parent',
   addSubDocument: 'Add sub-document',
+  // subtree chat privacy
+  accessChatsPrivateTitle: 'Private chats',
+  accessChatsPrivateDesc: 'Chats of this document and its subtree are found by the assistant only from conversations inside it. Digest still reads them.',
+  accessChatsPrivateToggle: 'Hide this subtree\'s chats from search outside it',
+  docChatsUnindexedMark: 'Chats of this subtree are visible only inside it',
+  docChatsUnindexedFailed: 'Failed to change the subtree chat visibility',
   failedToReorderDocument: 'Failed to reorder document',
   failedToReorderReference: 'Failed to reorder reference',
   failedToImportMarkdown: 'Failed to import Markdown file',
@@ -290,6 +296,9 @@ export const en = {
   exportAsMarkdown: 'Markdown',
   exportAsJson: 'JSON',
   deleteChat: 'Delete chat',
+  analyseInNewChat: 'Analyse in a new chat',
+  analyseChatPrompt: 'Analyse the chat "{title}" (chat_id: {id})',
+  analyseChatHiddenHint: 'Unindexed chat — turn off hiding first so the assistant can read it',
   thinking: 'Thinking...',
   reasoningLabel: 'reasoning',
   // dsh process-group titles (ProcessActivity); lowercase like every chip label.

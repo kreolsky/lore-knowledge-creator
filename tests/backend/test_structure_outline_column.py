@@ -53,6 +53,22 @@ async def _make_doc(
     return resp.json()["document_id"]
 
 
+async def _make_index_child_doc(
+    test_db, project_id: str, index_id: str, title: str, content: str,
+) -> str:
+    """Raw documents row UNDER the index doc. The create/move API normalises
+    an index parent to project root, so a stored index-child shape is only
+    reachable through a raw row."""
+    from db import create_record
+
+    doc_id = f"outline-child-{secrets.token_hex(6)}"
+    await create_record("documents", doc_id, {
+        "project_id": project_id, "parent_id": index_id, "title": title,
+        "content": content, "path": f"{doc_id}.md",
+    })
+    return doc_id
+
+
 HEADED_CONTENT = "# Анамнез\n## Осмотр\n## Пальпация\n### Живот\n### Печень"
 
 
@@ -78,9 +94,8 @@ async def test_enumeration_with_flag_carries_outlines(
 
     pid, idx_id, admin_uid = project_with_doc
     _, token = admin_user
-    a = await _make_doc(
-        client, token, pid, "A", idx_id,
-        content="# Заголовок\n" + HEADED_CONTENT,
+    a = await _make_index_child_doc(
+        test_db, pid, idx_id, "A", "# Заголовок\n" + HEADED_CONTENT,
     )
     await refresh_outline(a)
     tok = await _make_agent_key(test_db, admin_uid, pid)
@@ -103,7 +118,7 @@ async def test_outline_hidden_emitted_only_when_nonzero(
 
     pid, idx_id, admin_uid = project_with_doc
     _, token = admin_user
-    a = await _make_doc(client, token, pid, "A", idx_id, content=HEADED_CONTENT)
+    a = await _make_index_child_doc(test_db, pid, idx_id, "A", HEADED_CONTENT)
     await refresh_outline(a)  # short content — nothing dropped
     tok = await _make_agent_key(test_db, admin_uid, pid)
 
@@ -123,7 +138,7 @@ async def test_without_flag_no_row_carries_outline_keys(
 
     pid, idx_id, admin_uid = project_with_doc
     _, token = admin_user
-    a = await _make_doc(client, token, pid, "A", idx_id, content=HEADED_CONTENT)
+    a = await _make_index_child_doc(test_db, pid, idx_id, "A", HEADED_CONTENT)
     await refresh_outline(a)
     tok = await _make_agent_key(test_db, admin_uid, pid)
 
@@ -239,7 +254,7 @@ async def test_scoped_key_enumeration_stays_inside_the_wall(
     _, token = admin_user
     outside = await _make_doc(client, token, pid, "Outside", None, content=HEADED_CONTENT)
     await refresh_outline(outside)
-    inside = await _make_doc(client, token, pid, "Inside", idx_id, content=HEADED_CONTENT)
+    inside = await _make_index_child_doc(test_db, pid, idx_id, "Inside", HEADED_CONTENT)
     await refresh_outline(inside)
     scoped = await _make_agent_key(test_db, admin_uid, pid, scope_root=idx_id)
 

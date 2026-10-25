@@ -346,6 +346,15 @@ DEFINE FIELD IF NOT EXISTS system_role ON documents TYPE option<string>;
 -- SCHEMAFULL and dies on legacy rows carrying pre-SCHEMAFULL fields ("Found field
 -- 'position', but no such field exists"), which crash-looped the backend at startup.
 DEFINE FIELD IF NOT EXISTS archived     ON documents TYPE option<bool> DEFAULT false;
+-- ARCH: `chats_unindexed` hides this
+-- document's subtree's chats from chat recall called OUTSIDE the subtree —
+-- read-time, subtree-wide, viewer-relative (the flag is NEVER copied onto
+-- chats, so moving a chat or a subtree across the boundary changes visibility
+-- with no write). Digest opts out and keeps reading; the indexer ignores it
+-- (inside-subtree viewers still search the index). option<bool> DEFAULT false
+-- and deliberately NOT backfilled — same SCHEMAFULL UPDATE trap as `archived`
+-- above; the reader asks `chats_unindexed = true`, so NONE counts as false.
+DEFINE FIELD IF NOT EXISTS chats_unindexed ON documents TYPE option<bool> DEFAULT false;
 -- Document inbox (SYSTEM: inbox): the unread
 -- flag on a reference that arrived from OUTSIDE (a widget key or an MCP key over
 -- the gateway). `unread_for` = the RECIPIENT user id (the key owner). Written
@@ -356,6 +365,8 @@ DEFINE FIELD IF NOT EXISTS archived     ON documents TYPE option<bool> DEFAULT f
 DEFINE FIELD IF NOT EXISTS unread_for   ON documents TYPE option<string>;
 DEFINE INDEX IF NOT EXISTS idx_documents_unread
     ON documents FIELDS project_id, unread_for;
+DEFINE INDEX IF NOT EXISTS idx_documents_chats_unindexed
+    ON documents FIELDS project_id, chats_unindexed;
 
 -- ─── Project memory (plan project-memory-mvp §1 / design record P8, P12) ────
 -- A FACT doc: one document per distilled fact (Order 2 — the entity level was

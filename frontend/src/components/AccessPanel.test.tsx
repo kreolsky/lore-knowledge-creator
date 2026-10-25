@@ -77,7 +77,7 @@ beforeEach(async () => {
   }));
   const icon = () => null;
   vi.doMock('lucide-react', () => ({
-    X: icon, Link2: icon, Plus: icon, KeyRound: icon, Trash2: icon, FileLock2: icon, Check: icon, FolderOutput: icon, ChevronDown: icon, Inbox: icon,
+    X: icon, Link2: icon, Plus: icon, KeyRound: icon, Trash2: icon, FileLock2: icon, Check: icon, FolderOutput: icon, ChevronDown: icon, Inbox: icon, VenetianMask: icon,
   }));
   vi.doMock('../i18n', () => ({
     // `t` is used directly by the shared copyWithToast helper; useTranslation by the panel.
@@ -144,6 +144,7 @@ function renderWith({ isOwner, docId }: { isOwner: boolean; docId: string | null
     currentProject: { project_id: 'p1', owner_id: isOwner ? uid : 'someone-else', index_doc_id: null },
     currentDocument: docId ? { document_id: docId } : null,
     currentUser: { user_id: uid },
+    documents: [],
     showToast,
   };
   vi.doMock('../store/app-store', () => ({
@@ -165,6 +166,7 @@ describe('AccessPanel smoke', () => {
   it('owner: renders the General-access section and the API section when a doc is open', async () => {
     await renderWith({ isOwner: true, docId: 'doc-1' });
     expect(container.querySelector('[data-section="accessGeneralTitle"]')).toBeTruthy();
+    expect(container.querySelector('[data-section="accessChatsPrivateTitle"]')).toBeTruthy();
     expect(container.querySelector('[data-testid="api-keys"]')).toBeTruthy();
   });
 

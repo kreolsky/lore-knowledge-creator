@@ -11,7 +11,7 @@
 
 import type React from 'react';
 import { memo, useState, useRef, useCallback, useMemo } from 'react';
-import { FileText, Trash2, Plus, ChevronRight, ChevronDown, Pencil, BookOpen, Menu, FolderUp } from 'lucide-react';
+import { FileText, Trash2, Plus, ChevronRight, ChevronDown, Pencil, BookOpen, Menu, FolderUp, VenetianMask } from 'lucide-react';
 import { useAppStore } from '../store/app-store';
 import { useUIStore } from '../store/ui-store';
 import { useInboxStore } from '../store/inbox-store';
@@ -207,12 +207,26 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
             onClick={e => e.stopPropagation()}
           />
         ) : (
-          <span
-            className="doc-label"
-            onDoubleClick={e => { e.stopPropagation(); startRename(); }}
-          >
-            {doc.title}
-          </span>
+          <>
+            {/* Subtree chat privacy mark — shown to EVERY access level (the room
+             * being private is public knowledge; the toggle lives in the Access
+             * tab). Same idea as ChatRow's unindexed metaIcon: amber VenetianMask. */}
+            {doc.chats_unindexed && (
+              <span
+                data-chats-private-mark
+                className="shrink-0 text-amber"
+                title={t('docChatsUnindexedMark')}
+              >
+                <VenetianMask size={11} aria-label={t('docChatsUnindexedMark')} />
+              </span>
+            )}
+            <span
+              className="doc-label"
+              onDoubleClick={e => { e.stopPropagation(); startRename(); }}
+            >
+              {doc.title}
+            </span>
+          </>
         )}
         {!isRenaming && canEdit && (
           <div className="doc-item-actions" onClick={e => e.stopPropagation()}>

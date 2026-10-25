@@ -101,7 +101,12 @@ function ToolCallNode({ data, isStreaming }: { data: unknown; isStreaming: boole
     >
       {body
         ? <pre className="text-xs font-mono whitespace-pre-wrap break-words m-0">{body}</pre>
-        : <div className="text-ui-sm text-text-dim">{t('agentStepNoop')}</div>}
+        // "No change" claims a RESULT that is empty — true only for a settled
+        // call. An unsettled call has no result yet (e.g. parked on a verdict),
+        // so its body renders empty instead of a false "No change".
+        : settled
+          ? <div className="text-ui-sm text-text-dim">{t('agentStepNoop')}</div>
+          : null}
     </ToolPlate>
   );
 }
@@ -160,6 +165,24 @@ function isDecidedVerdict(callId: string, nodes: TurnNodeLike[]): boolean {
   });
 }
 
+/** The held call's own args, read off its tool-call node: dsh appends the
+ * call BEFORE asking (the INVARIANT above), and that node already carries
+ * `argsRaw` — the ask frame itself carries only {turn, callId, toolName}. */
+function verdictArgsRaw(callId: string, nodes: TurnNodeLike[]): string | undefined {
+  for (const n of nodes) {
+    if (n.kind !== 'tool-call') continue;
+    const root = (typeof n.data === 'object' && n.data !== null ? n.data : {}) as Record<string, unknown>;
+    const block = root.root as Record<string, unknown> | undefined;
+    if (!block || String(block.callId ?? '') !== callId) continue;
+    // A settled call moved its args onto `call`; a running one holds them flat.
+    const raw = block.kind === 'tool-result'
+      ? String((block.call as Record<string, unknown> | null)?.argsRaw ?? '')
+      : String(block.argsRaw ?? '');
+    if (raw !== '') return raw;
+  }
+  return undefined;
+}
+
 /** The verdict ask card. The card STAYS once asked — while the parked call
  * has no tool row it renders the decision card; once the call's own tool-call
  * node exists (the verdict published, the call ran) it renders as a settled
@@ -170,13 +193,15 @@ function VerdictAskNode({ data, nodes }: { data: unknown; nodes: TurnNodeLike[] 
   const callId = String(d.callId ?? '');
   const toolName = String(d.toolName ?? '');
   if (isDecidedVerdict(callId, nodes)) {
+    // DECIDED on purpose renders the bare body: once decided, the call's own
+    // chip carries the result — no args preview next to a settled record.
     return (
       <ToolPlate icon={<ShieldAlert size={13} />} title={toolName}>
         <div className="text-ui-sm text-text-dim">{t('verdictBody')}</div>
       </ToolPlate>
     );
   }
-  return <VerdictCard pending={{ call_id: callId, tool_name: toolName, message_id: '' }} />;
+  return <VerdictCard pending={{ call_id: callId, tool_name: toolName, message_id: '' }} argsRaw={verdictArgsRaw(callId, nodes)} />;
 }
 
 /** The halt card: what stopped the turn and how far it got. The sentence is

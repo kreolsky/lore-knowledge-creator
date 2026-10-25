@@ -52,5 +52,6 @@ async def chat_search(
         await require_scope_document(project_id, anchor_document_id)
     result = await search_chats(
         db, user["user_id"], project_id, q, exclude=set(), scope=scope,
-        anchor_doc_id=anchor_document_id, under_document_id=under_document_id)
+        anchor_doc_id=anchor_document_id, under_document_id=under_document_id,
+        viewer_doc_id=anchor_document_id)
     return {"query": q, **result}

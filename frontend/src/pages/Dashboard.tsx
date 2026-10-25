@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../store/app-store';
+import { useUIStore } from '../store/ui-store';
 import { useShallow } from 'zustand/react/shallow';
 import { apiClient } from '../api/client';
 import type { AccessLevel, Project } from '../types';
@@ -26,6 +27,7 @@ const ACCESS_BADGE: Partial<Record<AccessLevel, { label: 'notesAccess' | 'roAcce
 export function Dashboard() {
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const compactLayout = useUIStore(s => s.compactLayout);
   // WHY: a ref, not a dep — the load runs on mount/route change, never on a language switch.
   const tRef = useRef(t);
   tRef.current = t;
@@ -99,13 +101,15 @@ export function Dashboard() {
       <div
         key={project.project_id}
         onClick={() => handleProjectClick(project)}
-        className="group p-5 bg-surface border border-border-soft cursor-pointer transition-all duration-150 hover:border-accent hover:bg-surface2"
+        className="group min-w-0 p-5 bg-surface border border-border-soft cursor-pointer transition-all duration-150 hover:border-accent hover:bg-surface2"
       >
         <div className="flex items-start justify-between gap-2">
-          <h3 className="text-base font-semibold text-text whitespace-nowrap">
-            {project.name}
+          {/* WHY: a long name truncates with an ellipsis (like the breadcrumb's project
+              name) instead of overflowing the card; the access badge never shrinks. */}
+          <h3 className="flex min-w-0 text-base font-semibold text-text whitespace-nowrap">
+            <span className="truncate">{project.name}</span>
             {badge && (
-              <span data-access-badge={project.my_access} className={`${badge.className} pl-0.5 select-none`}>
+              <span data-access-badge={project.my_access} className={`${badge.className} shrink-0 whitespace-pre pl-0.5 select-none`}>
                 {` ${t(badge.label)}`}
               </span>
             )}
@@ -152,7 +156,9 @@ export function Dashboard() {
 
   return (
     <div className="h-full overflow-y-auto">
-    <div className="max-w-[800px] mx-auto py-12 px-8">
+    {/* WHY: gutters follow the same compact query as the chat and header, so a
+        portrait tablet gets phone gutters too. */}
+    <div className={`max-w-[800px] mx-auto ${compactLayout ? 'py-6 px-4' : 'py-12 px-8'}`}>
       <section className="mb-10" data-section="own">
         <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-border mb-3">
           {/* Text-only variant: the flex row above carries the rule (heading + create button). */}
@@ -176,7 +182,7 @@ export function Dashboard() {
           </div>
         )}
 
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(min(320px,100%),1fr))] gap-3">
           {ownProjects.map(renderCard)}
           {ownProjects.length === 0 && !isCreating && (
             <div className="col-span-full p-12 text-center border-2 border-dashed border-border text-text-dim">
@@ -189,7 +195,7 @@ export function Dashboard() {
       {sharedProjects.length > 0 && (
         <section data-section="shared">
           <CenterHeading as="h2">{t('sharedProjects')}</CenterHeading>
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(min(320px,100%),1fr))] gap-3">
             {sharedProjects.map(renderCard)}
           </div>
         </section>

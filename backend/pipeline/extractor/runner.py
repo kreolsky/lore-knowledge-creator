@@ -11,7 +11,7 @@ import logging
 import uuid
 from typing import TYPE_CHECKING
 
-from documents.service import create_document
+from documents.service import create_document, effective_parent_id
 
 from db import extract_id, fetch_one, get_db
 from event_bus import emit
@@ -128,11 +128,13 @@ async def run_extractor(
     from markdown_normalize import normalize_list_spacing
     rendered = normalize_list_spacing(rendered)
 
+    # A target of the project's index stores at the root (effective_parent_id).
+    parent_id = await effective_parent_id(target_doc_id, extract_id(project_id))
     # create_document (not create_record) so the extracted doc gets a sort_key and
     # is reorderable — a raw create_record left sort_key NONE and broke drag-reorder.
     record = await create_document(doc_uid, {
         "project_id": project_id,
-        "parent_id": target_doc_id,
+        "parent_id": parent_id,
         "title": title,
         "content": rendered,
         "path": f"{doc_uid}.md",
@@ -148,7 +150,7 @@ async def run_extractor(
         project_id=extract_id(project_id),
         document_id=doc_uid,
         title=title,
-        parent_id=target_doc_id,
+        parent_id=parent_id,
         sort_key=record.get("sort_key"),
     )
 

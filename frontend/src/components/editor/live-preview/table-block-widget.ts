@@ -336,7 +336,12 @@ export class TableBlockWidget extends WidgetType {
       const text = this.doc ? (getCellText(this.doc, this.tableId, row, col)?.toString() ?? '') : '';
       const body = document.createElement('div');
       body.className = 'cm-table-block-cell-editor cm-table-block-cell-static';
-      body.textContent = text;
+      // Render through the SAME live-preview pipeline as the editable placeholder
+      // (links collapsed, marks, ligatures) — textContent would show the raw
+      // `[label](url)` source in a public share / history preview. The renderer is
+      // read-only and the fragment is cloned without listeners, so this write-path
+      // INVARIANT above still holds.
+      body.append(renderCellStatic(text));
       cell.appendChild(body);
       return cell;
     }

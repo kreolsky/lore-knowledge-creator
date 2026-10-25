@@ -37,8 +37,8 @@ export const ru: Record<TranslationKey, string> = {
   accessInviteOnly: 'Доступ только по приглашению.',
   landingTagline1: 'Документ в центре.',
   landingTagline2: 'Агент наготове.',
-  landingSubtext: 'Рабочее пространство, построенное вокруг документа, а не окна чата. Пишите точно, работайте с ИИ-агентами, опирающимися на ваш канон.',
-  landingCopyright: '\u00A9 2026 Lore',
+  landingSubtext: 'Рабочее пространство, построенное вокруг документа, а не окна чата. Пишите точно, работайте с ИИ-агентом, который видит весь проект.',
+  landingGithub: 'Lore на GitHub',
 
   // labels
   email: 'Email',
@@ -149,6 +149,12 @@ export const ru: Record<TranslationKey, string> = {
   addDocument: 'Добавить документ',
   changeParent: 'Изменить родителя',
   addSubDocument: 'Добавить подчинённый документ',
+  // subtree chat privacy
+  accessChatsPrivateTitle: 'Приватные чаты',
+  accessChatsPrivateDesc: 'Чаты этого документа и его подразделов ассистент находит только из разговоров внутри раздела. Дайджест их по-прежнему читает.',
+  accessChatsPrivateToggle: 'Скрыть чаты раздела от поиска снаружи',
+  docChatsUnindexedMark: 'Чаты раздела видны только внутри него',
+  docChatsUnindexedFailed: 'Не удалось изменить видимость чатов раздела',
   failedToReorderDocument: 'Не удалось изменить порядок документа',
   failedToReorderReference: 'Не удалось изменить порядок референса',
   failedToImportMarkdown: 'Не удалось импортировать Markdown файл',
@@ -292,6 +298,9 @@ export const ru: Record<TranslationKey, string> = {
   exportAsMarkdown: 'Markdown',
   exportAsJson: 'JSON',
   deleteChat: 'Удалить чат',
+  analyseInNewChat: 'Разобрать в новом чате',
+  analyseChatPrompt: 'Разбери чат «{title}» (chat_id: {id})',
+  analyseChatHiddenHint: 'Чат вне поиска — сначала выключите скрытие, чтобы ассистент мог его прочитать',
   thinking: 'Думаю...',
   reasoningLabel: 'размышления',
   // dsh process-group titles (ProcessActivity); lowercase like every chip label.

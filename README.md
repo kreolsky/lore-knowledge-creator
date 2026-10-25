@@ -2,30 +2,34 @@
 
 # Lore
 
-**A self-hosted knowledge base for worldbuilders, writers and small studios — a real-time collaborative Markdown editor built around a linked graph of documents, with an AI agent that works inside your project.**
+**A self-hosted second brain for small teams and enthusiasts — a linked graph of Markdown documents you edit together in real time, with an AI agent that sees the whole project and works inside it on your permissions.**
 
 [![Release](https://img.shields.io/github/v/tag/kreolsky/lore-knowledge-creator?label=release&sort=semver)](https://github.com/kreolsky/lore-knowledge-creator/tags)
 [![License: BSL 1.1](https://img.shields.io/badge/license-BSL%201.1-blue)](#license)
 [![Docker images](https://img.shields.io/badge/images-ghcr.io-2496ED?logo=docker&logoColor=white)](https://github.com/kreolsky?tab=packages&repo_name=lore-knowledge-creator)
 [![Self-hosted](https://img.shields.io/badge/self--hosted-Docker%20Compose-555)](#install)
 
-[Features](#features) · [Install](#install) · [AI agent](#an-ai-agent-that-lives-in-your-project) · [Architecture](#architecture) · [Related projects](#related-projects) · [License](#license)
+[Why Lore](#why-lore) · [Features](#features) · [Install](#install) · [Architecture](#architecture) · [Related projects](#related-projects) · [License](#license)
 
 </div>
 
-<!-- Hero screenshot goes here: assets/readme/hero.png (editor + document tree + chat) -->
+![A project in Lore: the document tree, a decisions log, and the agent asking to approve an edit](assets/readme/hero.png)
 
 ## Why Lore
 
-A setting, a campaign or a game design grows into hundreds of pages that reference each other: characters, places, factions, timelines, rules, meeting notes, audio from playtests. Wikis are rigid, note apps are single-player, and chat assistants forget everything between conversations.
+Thinking happens in conversations, and conversations get lost. Notes apps keep the text but not the discussion that produced it; chat assistants keep the discussion but forget it between sessions and know nothing of your documents.
 
-Lore keeps all of it in one place, as a **graph of Markdown documents** that a team edits together in real time — and gives you an **AI agent that reads, searches and edits that graph** with the same permissions you have, asking before it changes anything you care about.
+Lore keeps both in one project. Documents form a **graph** — linked, embedded, versioned. Chats live **next to the documents** they are about. The agent in the chat **sees the whole project**: it searches your documents, files and earlier conversations, so a thread you dropped last week can be picked up in a new chat without retelling it. A discussion turns into a document when it is ready, and the agent keeps a **project memory** — durable facts as small linked cards you can read and correct.
 
-You run it on your own server. Your texts never leave it except to the model provider you configure.
+Capturing a thought takes one key: **voice input runs through the whole app** — dictate into a document or any chat, or leave a voice note that is transcribed and kept with the document it belongs to.
+
+It works the same for one person and for a small team: write alone as a journal or a research notebook, or edit together in real time with comments and roles. When something is worth showing, **share it with a public link** — a single page or a whole section, readable without an account.
+
+You run it yourself — on a server or on a laptop: the whole stack runs comfortably in Docker on an Apple M1. Your texts never leave it except to the model provider you configure, and that can be a model you host yourself.
 
 ## Features
 
-### Writing and structure
+### Write and connect
 
 - **Live-preview Markdown editor** (CodeMirror 6): headings, tables, checklists, images, code, **KaTeX math** and **Mermaid diagrams** render in place while the source stays plain Markdown.
 - **Documents in a tree**, ordered by hand, with drag-and-drop and keyboard navigation.
@@ -34,34 +38,35 @@ You run it on your own server. Your texts never leave it except to the model pro
 - **Editable tables** as first-class blocks inside documents.
 - **Export** any document to Markdown, DOCX or PDF.
 
-### Working together
+### Think with an agent
+
+The chat panel is a full agent loop, not a text box bolted onto an editor. It works on your documents with your permissions:
+
+- **Sees the whole project**: semantic search over documents and files, the project outline, any document by link — and **your earlier chats**, so a new conversation can continue an old one. A chat can be excluded from that search when it should stay private.
+- **Writes and edits**: creates documents, applies targeted edits, fills tables, moves and renames — with **approve / reject per change** when you want to stay in control.
+- **Project memory**: the agent distills durable facts into small linked documents — one fact per card — that you read, link and correct like any other page.
+- **Skills**: reusable instructions the agent loads on demand; the agent can write new ones for itself.
+- **Personas**: switch the system prompt per chat session.
+- **Web search**, **image generation** (ComfyUI) and an optional **sandboxed shell** for scripts and data work.
+- Works with **any OpenAI-compatible endpoint** — hosted models or your own (vLLM, llama.cpp…). For everything else there is **[LLM API Gateway](https://github.com/kreolsky/llm-api-gateway)**, our router, bundled as an optional part of the stack: it puts Anthropic, other providers that speak their own API, and local servers behind one endpoint, with a separate key per app.
+
+### Work together and share
 
 - **Real-time co-editing** on CRDTs (Yjs): no locks, no merge conflicts, remote cursors in the gutter, safe reconnects after a network blip.
 - **Comments anchored to text**, with threaded discussion right next to the passage.
 - **Version history**: automatic checkpoints and snapshots; restore any earlier version.
 - **Access control per project**: owner, full access, commentator, read-only; invite links for new members.
-- **Public read-only links** to a single document or a whole subtree — no account needed to read.
+- **Public links** to a single document or a whole subtree — readable without an account, so a page you wrote can be sent to friends and colleagues as it is.
 
-### Files, audio and voice
+### Capture by voice and bring material in
 
+- **Voice everywhere**: one shortcut (`Cmd+D`) dictates into the editor, any chat or a note; speech is transcribed by the model you configure.
+- **Voice notes**: record a thought and it lands next to the document as a reference with its transcript — readable, searchable, and visible to the agent.
 - **References**: attach images, PDFs, Word documents and audio to the project; each file carries its own text.
 - **Automatic conversion**: DOCX and PDF become editable Markdown; audio is **transcribed**; images get thumbnails.
-- **Voice input** in the editor and the chat (`Cmd+D`).
-- **Recorder apps**: a macOS menu-bar recorder and an Android app send voice notes and meeting recordings straight into a project for transcription.
+- **Recorder apps**: a macOS menu-bar recorder and an Android app send voice notes and recordings straight into a project for transcription.
 
-### An AI agent that lives in your project
-
-The chat panel is a full agent loop, not a text box bolted onto an editor. It works on your documents with your permissions:
-
-- **Reads and searches the project**: semantic search over documents and files, the project outline, any document by link.
-- **Writes and edits**: creates documents, applies targeted edits, fills tables, moves and renames — with **approve / reject per change** when you want to stay in control.
-- **Project memory**: the agent keeps durable facts about your world as documents you can read and correct.
-- **Skills**: reusable instructions the agent loads on demand; the agent can write new ones for itself.
-- **Web search**, **image generation** (ComfyUI) and an optional **sandboxed shell** for scripts and data work.
-- **Personas**: switch the system prompt per chat session.
-- Works with **any OpenAI-compatible endpoint** — hosted models or your own (LiteLLM, vLLM, llama.cpp behind a proxy).
-
-### Automation and integrations
+### Connect other tools
 
 - **MCP server**: connect Claude Desktop, Cursor or any MCP client to a project with a scoped key — external agents get the same tools, limited to the documents you allow.
 - **Pipelines**: background jobs such as structured data extraction from transcripts, on demand or on a schedule.
@@ -69,16 +74,25 @@ The chat panel is a full agent loop, not a text box bolted onto an editor. It wo
 
 ### Yours to run
 
-- **Self-hosted**: one Docker Compose file, no configuration needed to start.
+- **Self-hosted**: one Docker Compose file, no configuration needed to start; light enough for a laptop.
 - Light and dark themes, English and Russian interface.
 
-<!-- Screenshot gallery goes here: assets/readme/*.png (editor, links + preview, agent chat with approvals, comments, history) -->
+<table>
+<tr>
+<td width="50%"><img src="assets/readme/notebook.png" alt="A personal notebook: journal entries linked to reading notes, with a hover preview of the linked page"></td>
+<td width="50%"><img src="assets/readme/dark.png" alt="Dark theme: a research page with a table, a Mermaid diagram and math, next to the agent chat"></td>
+</tr>
+<tr>
+<td align="center">A personal notebook — notes link to each other, hover to preview</td>
+<td align="center">Tables, diagrams and math render in place; dark theme</td>
+</tr>
+</table>
 
 ## Install
 
 Everything below is written to be followed literally — by a person or by an AI agent. Each step is a command followed by the check that proves it worked.
 
-**Requirements:** Docker Engine **26.0 or newer** (`docker version`) with Docker Compose **v2.26.0 or newer** (`docker compose version`), and a free TCP port 8080.
+**Requirements:** Docker Engine **26.0 or newer** (`docker version`) with Docker Compose **v2.26.0 or newer** (`docker compose version`), and a free TCP port 5673.
 
 ### 1. Download and start
 
@@ -93,14 +107,14 @@ No configuration file is needed. The first start downloads the images and builds
 ### 2. Check that it runs
 
 ```sh
-curl -s http://localhost:8080/api/health
+curl -s http://localhost:5673/api/health
 ```
 
 Expected: a JSON object containing `"status":"ok"` and `"harness":"reachable"`. Until the backend has finished starting, the request fails or returns an error page — repeat it after 15 seconds.
 
 ### 3. Sign in
 
-Open http://localhost:8080 and sign in:
+Open http://localhost:5673 and sign in:
 
 | Email | Password |
 |---|---|
@@ -118,7 +132,7 @@ Settings go into a file named `.env` next to `docker-compose.yml`, one `NAME=val
 
 | Variable | Default | What it does |
 |---|---|---|
-| `LORE_PORT` | `8080` | Port the web interface listens on |
+| `LORE_PORT` | `5673` | Port the web interface listens on |
 | `LORE_VERSION` | latest release | Pin a release, e.g. `v0.21.0` |
 | `LORE_ADMIN_USERNAME` | `admin` | First admin, created once on the first start; the login is `<username>@lore.app` |
 | `LORE_ADMIN_PASSWORD` | `lore-admin` | Password of that first admin; has no effect after the first start |
@@ -143,7 +157,7 @@ Every name must be a model your endpoint serves. No restart is needed: the agent
 
 | Symptom | Check | Fix |
 |---|---|---|
-| `docker compose up` fails with `address already in use` or `port is already allocated` | another service uses 8080 | put `LORE_PORT=8090` (any free port) in `.env`, run `docker compose up -d`, use that port |
+| `docker compose up` fails with `address already in use` or `port is already allocated` | another service uses 5673 | put `LORE_PORT=5674` (any free port) in `.env`, run `docker compose up -d`, use that port |
 | `env_file` / `required` or `subpath is not allowed` error on `up` | `docker compose version` | upgrade Docker Compose to v2.26.0 or newer (and Docker Engine to 26.0 or newer) |
 | after an update the backend log says `the database password file /secrets/surreal/pass is missing or empty` | `docker compose config --services` lists no `secrets-init` | the compose file predates v0.21.0: download it again and run `docker compose up -d --build` (see Update below) |
 | health never returns `"status":"ok"` | `docker compose logs backend` | the log names the failing setting or service |
@@ -246,14 +260,14 @@ Individuals, non-profits, schools and universities, and any non-commercial use a
 - Organizations above any of the thresholds above.
 - **Anyone, of any size**, offering Lore to third parties as a hosted or managed service.
 
-If your studio grows past a threshold, you have **90 days** to get a commercial license. Contact: zaigraeff@gmail.com.
+If your organization grows past a threshold, you have **90 days** to get a commercial license. Contact: zaigraeff@gmail.com.
 
 ### Examples
 
 | Situation | License |
 |---|---|
-| A 6-person indie studio, $300k revenue, self-funded | Free |
-| A solo writer building a setting for a novel | Free |
+| A 6-person team, $300k revenue, self-funded | Free |
+| One person running Lore on a laptop as a personal knowledge base | Free |
 | A 12-person studio that got a $400k advance from a publisher | Free (a publisher advance counts as revenue, not funding) |
 | A 10-person startup that raised a $3M seed round | Commercial |
 | A studio owned by a large publisher, even if the studio is small | Commercial (affiliates count) |

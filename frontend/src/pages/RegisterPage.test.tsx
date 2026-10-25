@@ -30,7 +30,7 @@ const I18N: Record<string, string> = {
   landingTagline1: 'Document-first.',
   landingTagline2: 'Agent-ready.',
   landingSubtext: 'A knowledge workspace built around the document.',
-  landingCopyright: '\u00A9 2026 Lore',
+  landingGithub: 'Lore on GitHub',
   registerTitle: 'Create account',
   registerInvitedBy: 'Invited by {name}',
   registerInviterUnknown: 'a Lore member',
@@ -137,8 +137,8 @@ describe('RegisterPage submit errors', () => {
   it('the page is the landing frame: subtext and footer render', async () => {
     await render();
     expect(container.textContent).toContain(I18N.landingSubtext);
-    expect(container.textContent).toContain(I18N.landingCopyright);
-    // The dead "Guide" placeholder anchor is gone — the footer is copyright only.
+    const repoLink = container.querySelector('a[href="https://github.com/kreolsky/lore-knowledge-creator"]');
+    expect(repoLink?.textContent).toBe(I18N.landingGithub);
     expect(container.querySelector('a[href="#"]')).toBeNull();
   });
 

@@ -121,7 +121,11 @@ async def create_document_via_collab(
     failure. Caller is responsible for the access check (the two callers use
     different access-resolution helpers) and any proposal bookkeeping.
     """
-    from documents.service import assert_parent_valid, create_with_unique_path
+    from documents.service import (
+        assert_parent_valid,
+        create_with_unique_path,
+        effective_parent_id,
+    )
     from fastapi import HTTPException
     from markdown_normalize import normalize_list_spacing, unwrap_placeholder_brackets
 
@@ -146,10 +150,14 @@ async def create_document_via_collab(
     if parent_id:
         await require_doc_in_scope(scope_root, parent_id)
     await assert_parent_valid(parent_id, project_id)
+    # "Under the index" IS the project root for a document (the tree renders
+    # the index row childless). Stored-value normalisation AFTER the wall +
+    # parent checks above — they ran on the id the caller sent.
+    stored_parent = await effective_parent_id(parent_id, project_id)
 
     doc_id = str(uuid4())
     payload = {
-        "project_id": project_id, "parent_id": parent_id,
+        "project_id": project_id, "parent_id": stored_parent,
         "title": title, "content": content, "is_reference": False,
         "is_system": is_system,
     }
@@ -165,7 +173,7 @@ async def create_document_via_collab(
     await event_bus.emit(
         "document_created",
         project_id=project_id, document_id=doc_id, title=title,
-        parent_id=parent_id, is_reference=False,
+        parent_id=stored_parent, is_reference=False,
         sort_key=payload.get("sort_key"),
     )
     # WHY: a create that CARRIES a body runs the same finalize tail as an edit —

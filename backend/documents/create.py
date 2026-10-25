@@ -15,6 +15,7 @@ from documents.service import (
     assert_parent_valid,
     create_document,
     create_with_unique_path,
+    effective_parent_id,
     generate_unique_title,
 )
 from models import CreateDocument
@@ -76,12 +77,18 @@ async def create_document_command(
     await assert_parent_valid(body.parent_id, body.project_id)
     if body.is_reference and not body.media_type:
         raise HTTPException(status_code=400, detail="Reference documents require media_type")
+    # A document's "under the index" IS the project root (the tree renders the
+    # index row childless); a reference keeps the index as its canonical host.
+    # Normalisation is stored-value only — validation above ran on the id sent.
+    parent_id = body.parent_id
+    if not body.is_reference:
+        parent_id = await effective_parent_id(body.parent_id, body.project_id)
 
     title, path, auto_path = await _derive_title_path(body)
     doc_id = str(uuid4())
     payload: dict = {
         "project_id": body.project_id,
-        "parent_id": body.parent_id,
+        "parent_id": parent_id,
         "title": title,
         "content": body.content or "",
         "path": path,
@@ -97,7 +104,7 @@ async def create_document_command(
         title=title, user_id=user_id, user_name=user_name,
     )
     await event_bus.emit("document_created", project_id=body.project_id, document_id=doc_id,
-                         title=title, parent_id=body.parent_id, is_reference=body.is_reference,
+                         title=title, parent_id=parent_id, is_reference=body.is_reference,
                          sort_key=payload.get("sort_key"))
     record = await fetch_one("documents", doc_id)
     return serialize_record(record, "document_id") if record else {
@@ -106,6 +113,6 @@ async def create_document_command(
         "title": title,
         "content": body.content or "",
         "path": path,
-        "parent_id": body.parent_id,
+        "parent_id": parent_id,
         "is_reference": body.is_reference,
     }

@@ -671,7 +671,7 @@ async def test_import_file_attachment_index_resolves_image(
     pid, _, admin_uid = project_with_doc
     _, token = admin_user
     host = await _make_doc(client, token, pid, "AttachHost")
-    agent_tok = await _make_agent_key(test_db, admin_uid, pid, auto_apply=True)
+    agent_tok = await _make_internal_key(test_db, admin_uid, pid)
 
     session_id = "test-att-session-0"
     data_uri = f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode()}"
@@ -707,7 +707,7 @@ async def test_import_file_attachment_index_enqueues_thumbnail_and_serves(
     pid, _, admin_uid = project_with_doc
     _, token = admin_user
     host = await _make_doc(client, token, pid, "AttachThumbHost")
-    agent_tok = await _make_agent_key(test_db, admin_uid, pid, auto_apply=True)
+    agent_tok = await _make_internal_key(test_db, admin_uid, pid)
 
     valid_png = _make_valid_png(4, 4)
     session_id = "test-att-session-thumb"
@@ -740,7 +740,7 @@ async def test_import_file_attachment_index_as_document_rejected(
     the same gate the content_base64 binary path hits, reached via the attachment
     resolution branch."""
     pid, _, admin_uid = project_with_doc
-    agent_tok = await _make_agent_key(test_db, admin_uid, pid, auto_apply=True)
+    agent_tok = await _make_internal_key(test_db, admin_uid, pid)
 
     session_id = "test-att-session-doc"
     data_uri = f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode()}"
@@ -764,11 +764,38 @@ async def test_import_file_attachment_index_requires_session(
     """attachment_index without an in-chat session (no X-Agent-Session-Id, e.g. an
     external/MCP caller that shouldn't be able to use it) → 400, not a confusing 422."""
     pid, _, admin_uid = project_with_doc
-    agent_tok = await _make_agent_key(test_db, admin_uid, pid, auto_apply=True)
+    agent_tok = await _make_internal_key(test_db, admin_uid, pid)
 
     resp = await client.post("/api/tool/import_file", json={
         "filename": "pic.png", "node_type": "reference", "parent_id": "host", "attachment_index": 0,
     }, headers=_hdr(agent_tok))
+    assert resp.status_code == 400, resp.text
+    assert "chat session" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_attachment_index_refuses_an_external_key_on_its_own_session(
+    client, test_db, admin_user, project_with_doc,
+):
+    """A user-minted (non-internal) agent key is refused attachment_index even
+    on the caller's OWN session: chat content is the in-app assistant's surface
+    only, never external automation's. Same 400 as the other refusals."""
+    pid, _, admin_uid = project_with_doc
+    _, token = admin_user
+    host = await _make_doc(client, token, pid, "AttExternalHost")
+    ext_tok = await _make_agent_key(test_db, admin_uid, pid, auto_apply=True)
+
+    session_id = "test-att-session-external"
+    data_uri = f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode()}"
+    await _seed_user_message_with_images(
+        test_db, session_id, "test-att-msg-external", [data_uri],
+        user_id=admin_uid, project_id=pid,
+    )
+
+    resp = await client.post("/api/tool/import_file", json={
+        "filename": "pic.png", "node_type": "reference", "parent_id": host,
+        "attachment_index": 0,
+    }, headers={**_hdr(ext_tok), "X-Agent-Session-Id": session_id})
     assert resp.status_code == 400, resp.text
     assert "chat session" in resp.json()["detail"]
 
@@ -794,7 +821,7 @@ async def test_attachment_index_refuses_a_foreign_session(
         "project_id": pid, "user_id": other_uid, "access_level": "full",
     })
     host = await _make_doc(client, token, pid, "AttForeignHost")
-    other_tok = await _make_agent_key(test_db, other_uid, pid, auto_apply=True)
+    other_tok = await _make_internal_key(test_db, other_uid, pid)
 
     session_id = "test-att-session-foreign"
     data_uri = f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode()}"
@@ -819,7 +846,7 @@ async def test_import_file_attachment_index_out_of_range(
 ):
     """An out-of-range index → actionable 400 naming the valid range."""
     pid, _, admin_uid = project_with_doc
-    agent_tok = await _make_agent_key(test_db, admin_uid, pid, auto_apply=True)
+    agent_tok = await _make_internal_key(test_db, admin_uid, pid)
 
     session_id = "test-att-session-1"
     data_uri = f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode()}"
@@ -856,7 +883,7 @@ async def test_import_file_attachment_index_ignores_wrong_extension(
     pid, _, admin_uid = project_with_doc
     _, token = admin_user
     host = await _make_doc(client, token, pid, "WrongExtHost")
-    agent_tok = await _make_agent_key(test_db, admin_uid, pid, auto_apply=True)
+    agent_tok = await _make_internal_key(test_db, admin_uid, pid)
 
     valid_png = _make_valid_png(4, 4)
     session_id = "test-att-wrongext"
@@ -888,7 +915,7 @@ async def test_import_file_attachment_index_webp_creates_reference(
     pid, _, admin_uid = project_with_doc
     _, token = admin_user
     host = await _make_doc(client, token, pid, "WebpHost")
-    agent_tok = await _make_agent_key(test_db, admin_uid, pid, auto_apply=True)
+    agent_tok = await _make_internal_key(test_db, admin_uid, pid)
 
     # Minimal RIFF….WEBP — validate_magic keys off the RIFF magic + image/webp.
     webp = b"RIFF\x1a\x00\x00\x00WEBP" + b"\x00" * 32
@@ -920,7 +947,7 @@ async def test_import_file_attachment_index_normalizes_jpeg_to_jpg(
     pid, _, admin_uid = project_with_doc
     _, token = admin_user
     host = await _make_doc(client, token, pid, "JpgHost")
-    agent_tok = await _make_agent_key(test_db, admin_uid, pid, auto_apply=True)
+    agent_tok = await _make_internal_key(test_db, admin_uid, pid)
 
     # Minimal JPEG magic (FF D8 FF) — validate_magic keys off it for image/jpeg.
     jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 32
@@ -954,7 +981,7 @@ async def test_import_file_attachment_index_no_filename_uses_mime_ext(
     pid, _, admin_uid = project_with_doc
     _, token = admin_user
     host = await _make_doc(client, token, pid, "NoNameHost")
-    agent_tok = await _make_agent_key(test_db, admin_uid, pid, auto_apply=True)
+    agent_tok = await _make_internal_key(test_db, admin_uid, pid)
 
     valid_png = _make_valid_png(4, 4)
     session_id = "test-att-noname"

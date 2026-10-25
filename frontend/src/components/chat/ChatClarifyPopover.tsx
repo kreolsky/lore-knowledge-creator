@@ -87,15 +87,26 @@ export function ChatClarifyPopover() {
 
   // Detect selection on mouseup anywhere; show only for selections inside a chat bubble.
   useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const onMouseUp = (e: MouseEvent) => {
       // Ignore clicks inside the popover itself (button/form interactions).
       if (popoverRef.current?.contains(e.target as Node)) return;
-      const found = selectionInChatMarkdown();
-      if (found) showFor(found, { x: e.clientX, y: e.clientY });
-      else if (!asking) hide();
+      const point = { x: e.clientX, y: e.clientY };
+      // WHY: deferred — a click inside an existing selection collapses it only as
+      // mouseup's default action, after this listener; read synchronously, the stale
+      // selection re-showed the button and its hidden text became the quote.
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const found = selectionInChatMarkdown();
+        if (found) showFor(found, point);
+        else if (!asking) hide();
+      }, 0);
     };
     document.addEventListener('mouseup', onMouseUp);
-    return () => document.removeEventListener('mouseup', onMouseUp);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
   }, [showFor, hide, asking]);
 
   // Esc dismisses.

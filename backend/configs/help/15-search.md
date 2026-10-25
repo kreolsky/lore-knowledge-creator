@@ -6,9 +6,9 @@ The "Search" tab searches the project's documents, references and your chats:
 
 - **Full-text** — search by words. Titles match by the start of a word, text by whole words. Word forms are taken into account for Russian text only (for example, «миром» finds «мира»); in other languages a word must match as written. The "Substring" checkbox switches on a literal search for a fragment in titles and text, without word forms.
 - **Semantic** — search by meaning, for when the wording is not remembered. "Memory only" keeps only [memory](help:memory) facts.
-- **Chats** — your own chats in this project. Title matches come first (marked "title") and open the chat; content matches open the chat scrolled to the message. Without "In this document", chats of the open document's subtree come first. Chats marked "Unindexed" are found by title only. Opening the Search tab from the Chat tab starts in this mode.
+- **Chats** — your own chats in this project. Title matches come first (marked "title") and open the chat; content matches open the chat at the matched passage and briefly highlight it. Results are ranked by relevance alone. Chats marked "Unindexed" are found by title only. Opening the Search tab from the Chat tab starts in this mode.
 
-"In this document" limits any mode to the open document and its subtree.
+"In this document" limits any mode to the open document and its subtree. Coming back to the Search tab shows the previous results at the same scroll position, without searching again.
 
 ## Find and replace
 

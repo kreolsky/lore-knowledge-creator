@@ -100,6 +100,26 @@ class ToolSearchMyChats(BaseModel):
         return self
 
 
+class ToolListMyChats(BaseModel):
+    """`list_my_chats` body — the caller's visible chats of the key's project,
+    paged. Same visible-session predicate as `search_my_chats`; a hidden
+    (`unindexed`) chat is invisible here too."""
+
+    under_document_id: str | None = Field(default=None, min_length=1)
+    title_contains: str | None = Field(default=None, min_length=1, max_length=200)
+    limit: int = Field(default=50, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+
+
+class ToolReadMyChat(BaseModel):
+    """`read_my_chat` body — one visible chat from its first turn, in pages of
+    whole turns. A message cut by the page budget is finished through
+    `search_my_chats` (`message_id` + `offset`), never by counting characters."""
+
+    chat_id: str = Field(min_length=1)
+    from_turn: int = Field(default=0, ge=0)
+
+
 class ToolSandboxBash(BaseModel):
     """Args for `sandbox_bash`.
 

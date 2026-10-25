@@ -50,7 +50,11 @@ async def test_agent_toolset_returns_full_surface(_tool_axes_off):
     # use_skill is GONE entirely (plan collapse-the-editor-harness-layer step 3):
     # skill bodies ride the payload's raw wire, dsh's `skill` tool is the only loader.
     from agent.tools import AGENT_TOOLS, agent_toolset
-    from agent_tools.specs.chat_recall import SEARCH_MY_CHATS_TOOL
+    from agent_tools.specs.chat_recall import (
+        LIST_MY_CHATS_TOOL,
+        READ_MY_CHAT_TOOL,
+        SEARCH_MY_CHATS_TOOL,
+    )
     from agent_tools.specs.media import (
         IMPORT_FILE_TOOL,
         REPROCESS_REFERENCE_TOOL,
@@ -73,8 +77,11 @@ async def test_agent_toolset_returns_full_surface(_tool_axes_off):
         # external dependency; CORE so a model that skipped the skill load
         # still finds it by name.
         SAVE_SKILL_TOOL,
-        # search_my_chats: the chat-recall skill's pack, ungated.
+        # search_my_chats + the list/read pair: the chat-recall skill's pack,
+        # ungated.
         SEARCH_MY_CHATS_TOOL,
+        LIST_MY_CHATS_TOOL,
+        READ_MY_CHAT_TOOL,
     ]
 
 
@@ -85,7 +92,7 @@ async def test_agent_toolset_names_match_agent_tools(_tool_axes_off):
         "reprocess_reference", "import_file", "consolidate_memory",
         "next_reference", "get_memory_facts", "get_fact_history",
         "apply_memory_verdicts", "reopen_consolidation",
-        "save_skill", "search_my_chats",
+        "save_skill", "search_my_chats", "list_my_chats", "read_my_chat",
     }
     # One skill loader only: use_skill is deleted, dsh's `skill` tool is the
     # model-facing loader (the lore-skills provider serves bodies in memory).

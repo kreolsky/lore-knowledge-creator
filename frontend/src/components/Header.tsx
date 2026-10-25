@@ -115,7 +115,9 @@ export function Header() {
     <header className="flex items-center gap-0 h-12 bg-header-bg border-b border-border-soft pl-4 shrink-0 relative z-[13]">
       <Link
         to={isPublicShare ? '/' : '/projects'}
-        className="flex items-center no-underline text-text mr-2"
+        // WHY: a compact (phone) header is short on width — the logo sits ~3x closer
+        // to the project crumb and the divider below is dropped.
+        className={`flex items-center no-underline text-text ${compactLayout ? 'mr-0.5' : 'mr-2'}`}
       >
         <div className="w-[26px] h-[26px] bg-accent flex items-center justify-center text-sm text-white tracking-[-0.5px] font-bold">L</div>
       </Link>
@@ -130,7 +132,7 @@ export function Header() {
           static label below (their currentProject is a leftover, not context). */}
       {currentProject && !isPublicShare && !isCabinet && !isAdmin && (
         <>
-          <div className="w-px h-5 bg-border mx-1" />
+          {!compactLayout && <div className="w-px h-5 bg-border mx-1" />}
           <Breadcrumb
             projectName={currentProject.name}
             ancestors={ancestors}
@@ -152,7 +154,7 @@ export function Header() {
       {/* Non-editor surfaces: the page title sits in the header like a project crumb. */}
       {(isProjectList || isCabinet || isAdmin) && (
         <>
-          <div className="w-px h-5 bg-border mx-1" />
+          {!compactLayout && <div className="w-px h-5 bg-border mx-1" />}
           <span className="text-[15.6px] text-text-muted px-1 py-0.5 select-none">
             {isProjectList ? t('projects') : isCabinet ? t('profile') : t('adminPanel')}
             {isAdmin && <AdminVersion />}
@@ -169,7 +171,7 @@ export function Header() {
       )}
       {isPublicShare && currentDocument && (
         <>
-          <div className="w-px h-5 bg-border mx-1" />
+          {!compactLayout && <div className="w-px h-5 bg-border mx-1" />}
           <Breadcrumb
             projectName={publicProjectName ?? ''}
             ancestors={[]}

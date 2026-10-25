@@ -43,6 +43,9 @@ from migrations.migrate_chat_branches_to_sessions import (
 from migrations.migrate_chat_lifecycle_drop import _migrate_chat_lifecycle_drop
 from migrations.migrate_comfy_config_docs_drop import _migrate_comfy_config_docs_drop
 from migrations.migrate_document_access_drop import _migrate_document_access_drop
+from migrations.migrate_index_children_to_root import (
+    _migrate_index_children_to_root,
+)
 from migrations.migrate_messages_schemafull_converge import (
     _migrate_messages_schemafull_converge,
 )
@@ -132,6 +135,11 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     # existing account loses a feature). Idempotent (NONE rows only); no
     # dependency.
     ("user_tier_backfill", _migrate_user_tier_backfill),
+    # Documents stored under their project's index (invisible in the tree —
+    # the index row renders childless) move to the project root; references
+    # are carved out (index = canonical project-level host). Idempotent; runs
+    # last, no dependency.
+    ("index_children_to_root", _migrate_index_children_to_root),
 ]
 
 

@@ -9,7 +9,7 @@ Put these in `.env` next to `docker-compose.yml` **before** the first `docker co
 | Variable | Value | Why |
 |---|---|---|
 | `LORE_ADMIN_PASSWORD` | a strong password | The first administrator is created once, on the first start. Otherwise sign in and change `lore-admin` right away. |
-| `LORE_PORT` | `127.0.0.1:8080` | Lore listens only on the server itself, so the plain-HTTP port is reachable only through your proxy. Leave it as a bare port only when the proxy runs on another host. |
+| `LORE_PORT` | `127.0.0.1:5673` | Lore listens only on the server itself, so the plain-HTTP port is reachable only through your proxy. Leave it as a bare port only when the proxy runs on another host. |
 
 `CORS_ORIGINS` is not needed: Lore accepts writes from a page served at the address the browser used, as long as the proxy passes the original `Host` header (see below). Set it only when a web page served from another origin must write to Lore.
 
@@ -39,7 +39,7 @@ server {
     client_max_body_size 600M;
 
     location / {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:5673;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header Upgrade $http_upgrade;
@@ -57,7 +57,7 @@ The `map` block belongs in the `http` context; a file in `conf.d/` is already in
 
 ### Other proxies
 
-- **Caddy**, **Traefik**: WebSocket upgrades and the `Host` header pass by default, and neither limits the body size by default. A plain `reverse_proxy 127.0.0.1:8080` (Caddy) or a router to the service (Traefik) is enough.
+- **Caddy**, **Traefik**: WebSocket upgrades and the `Host` header pass by default, and neither limits the body size by default. A plain `reverse_proxy 127.0.0.1:5673` (Caddy) or a router to the service (Traefik) is enough.
 - **Kubernetes ingress-nginx**: WebSocket works when `/ws/` reaches the same service as `/`. Add the annotations `nginx.ingress.kubernetes.io/proxy-body-size: "600m"`, `proxy-read-timeout: "3600"` and `proxy-send-timeout: "3600"`, and do not use `rewrite-target`.
 
 ### Check the proxy

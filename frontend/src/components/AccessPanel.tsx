@@ -6,9 +6,10 @@
  *      live in the settings panel's AudienceSection). Read-only by invariant
  *      for everyone-except-owner; the backend enforces owner-only
  *      mint/revoke.
- *   2. Move — move the current document to another project.
- *   3. Inbox — per-(user × document) arrival-notify toggles (SYSTEM: inbox).
- *   4. API — widget/agent keys + transcription agent config for the current
+ *   2. Private chats — the document's subtree chat hide (access/ChatsPrivacySection).
+ *   3. Move — move the current document to another project.
+ *   4. Inbox — per-(user × document) arrival-notify toggles (SYSTEM: inbox).
+ *   5. API — widget/agent keys + transcription agent config for the current
  *      document. Project-wide members live in ProjectSettingsPanel.MembersSection.
  *
  * ARCH: the tab is full-only and hidden when a reference is open (gated in
@@ -38,6 +39,7 @@ import { useIsProjectOwner } from '../hooks/useIsProjectOwner';
 import { Link2, KeyRound, FolderOutput, Inbox, ChevronDown } from 'lucide-react';
 import type { Document, Project } from '../types';
 import { deriveShareState, planShareToggle, type ShareAction } from './access/share-state';
+import { ChatsPrivacySection } from './access/ChatsPrivacySection';
 import { useInboxStore } from '../store/inbox-store';
 import { fetchInboxToggles, type InboxToggles } from '../api/inbox';
 
@@ -57,6 +59,7 @@ export function AccessPanel() {
           projectId={project.project_id}
           docId={docId}
         />
+        {docId && <ChatsPrivacySection docId={docId} />}
         {docId && (
           <MoveDocumentSection
             projectId={project.project_id}
@@ -263,14 +266,16 @@ function GeneralAccessSection({
                 />
                 {/* Visibility hint: with comments on, every note on the document is
                     shown to link holders with author names — no member-only thread. */}
-                <p className="text-ui-xs text-text-dim mt-1">{t('accessAllowCommentsHint')}</p>
+                {!!ownShare.allow_comments && (
+                  <p className="text-ui-xs text-text-dim mt-1">{t('accessAllowCommentsHint')}</p>
+                )}
               </div>
             )}
 
-            <p className="text-ui-xs text-text-dim mt-1.5">{summary}</p>
-            {view.subtree && (
-              <p className="text-ui-xs text-text-dim mt-1">{t('accessShareDepthWarning')}</p>
-            )}
+            <p className="text-ui-xs text-text-dim mt-1.5">
+              {summary}
+              {view.subtree && ` ${t('accessShareDepthWarning')}`}
+            </p>
 
             {view.shared && (
               // The link plaque — click to copy (unified toast feedback). The URL is

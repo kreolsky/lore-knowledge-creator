@@ -11,7 +11,89 @@ without depending on the dev DB's live CRDT backplane.
 """
 import inspect
 
+import pytest
 from emit_recorder import EmitRecorder
+
+
+async def _raw_parent(test_db, doc_id):
+    """Stored parent_id of a raw row (None = at root; option<string> field)."""
+    rows = await test_db.query(
+        "SELECT parent_id FROM type::record('documents', $id)", {"id": doc_id},
+    )
+    return rows[0].get("parent_id")
+
+
+# ─── Defect: index-doc parent normalises to root (documents only) ────────────
+
+
+@pytest.mark.asyncio
+async def test_document_created_under_index_stored_at_root(
+    client, test_db, admin_user, project_with_doc,
+):
+    """A DOCUMENT created with parent_id = the index doc is stored at the
+    project root: the tree renders the index row childless, so a document
+    under it exists but is invisible."""
+    pid, idx_id, _ = project_with_doc
+    _, token = admin_user
+
+    r = await client.post(
+        "/api/documents",
+        json={"project_id": pid, "title": "Under index", "parent_id": idx_id},
+        cookies={"lore_session": token},
+    )
+    assert r.status_code == 200, r.text
+    doc_id = r.json()["document_id"]
+    assert await _raw_parent(test_db, doc_id) is None
+
+    # Read-back contract: a root doc's GET row carries no parent_id key.
+    g = await client.get(
+        f"/api/documents/{doc_id}", cookies={"lore_session": token},
+    )
+    assert g.status_code == 200, g.text
+    assert g.json().get("parent_id") is None
+
+
+@pytest.mark.asyncio
+async def test_reference_created_under_index_keeps_index_host(
+    client, test_db, admin_user, project_with_doc,
+):
+    """CARVE-OUT: for a reference, parent_id = index_doc_id is the canonical
+    project-level host (resolve_reference_host / documents_reference_parent_
+    check) — it must NOT be normalised to root."""
+    pid, idx_id, _ = project_with_doc
+    _, token = admin_user
+
+    r = await client.post(
+        "/api/documents",
+        json={"project_id": pid, "title": "Project-level ref",
+              "is_reference": True, "media_type": "markdown", "content": "b",
+              "parent_id": idx_id},
+        cookies={"lore_session": token},
+    )
+    assert r.status_code == 200, r.text
+    ref_id = r.json()["document_id"]
+    assert await _raw_parent(test_db, ref_id) == idx_id
+
+
+@pytest.mark.asyncio
+async def test_agent_create_under_index_stores_root_and_emits_root(
+    test_db, project_with_doc,
+):
+    """The agent create (Tool-API single source) stores root AND broadcasts
+    parent_id=None — the client tree inserts from the event, so emitting the
+    raw index id would keep the doc invisible until reload."""
+    pid, idx_id, uid = project_with_doc
+    from agent.collab_writes import create_document_via_collab
+
+    with EmitRecorder.active() as emitted:
+        created = await create_document_via_collab(
+            title="Agent under index", content="", parent_id=idx_id,
+            project_id=pid, user={"user_id": uid, "name": "t"},
+        )
+    assert await _raw_parent(test_db, created["doc_id"]) is None
+    events = emitted.of("document_created")
+    assert events, "create emitted no document_created"
+    assert events[0]["parent_id"] is None
 
 
 def test_create_document_via_collab_exists_in_collab_writes():

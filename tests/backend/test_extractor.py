@@ -578,3 +578,15 @@ async def test_run_extractor_emits_sort_key(project_with_doc):
     created = [kw for ev, kw in captured if ev == "document_created"]
     assert created, f"document_created not emitted; got {[e for e, _ in captured]}"
     assert created[0].get("sort_key"), "document_created emit is missing sort_key"
+
+    # The target here IS the project's index: the output stores at the project
+    # root — the tree renders the index row childless, so a row stored under it
+    # would exist but be invisible.
+    from db import get_db
+    assert created[0]["parent_id"] is None
+    db = await get_db()
+    [row] = await db.query(
+        "SELECT * FROM documents WHERE id = type::record('documents', $id)",
+        {"id": created[0]["document_id"]},
+    )
+    assert row.get("parent_id") is None

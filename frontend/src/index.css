@@ -85,8 +85,9 @@
      triggers read as controls sitting on the field. Light: surface2 < surface;
      Dark: bg < surface. */
   --composer-control-bg: var(--surface2);
-  /* Preview popup title plaque — one step darker than the popup (--surface) in BOTH
-     themes, same pairing as --composer-control-bg. */
+  /* Preview popup title plaque — must read apart from both the popup (--surface) and
+     the page (--bg): darker than the popup in light, lighter (--header-bg) in dark,
+     where --bg would merge with the page behind the popup. */
   --preview-title-bg: var(--surface2);
   --border: #cccac4;
   --border-soft: #e4e2dd;
@@ -185,7 +186,7 @@ html.dark {
   --surface4: #505050;
   /* Dark theme: --bg (#1e1e1e) is darker than --surface (#262626). */
   --composer-control-bg: var(--bg);
-  --preview-title-bg: var(--bg);
+  --preview-title-bg: var(--header-bg);
   --border: #363636;
   --border-soft: #2a2a2a;
   --header-bg: #363636;
@@ -365,6 +366,10 @@ html, body { height: 100%; overflow: hidden; }
    Canvas first, spinner second. No overflow here — html/body already clip. */
 #root { height: 100%; }
 * { scrollbar-width: thin; scrollbar-color: var(--text-dim) transparent; }
+/* WHY: the prompt rail is the chat's position indicator. Unlayered on purpose —
+   the `*` rule above is unlayered too and beats any Tailwind @layer utility. */
+.chat-scroll { scrollbar-width: none; }
+.chat-scroll::-webkit-scrollbar { display: none; }
 
 body {
   /* WHY: drop the tap flash and the double-tap-zoom wait on touch. */

@@ -21,7 +21,7 @@ What the guide does not describe and the "Planned" list does not mention is most
 - [Editor](help:editor) — markup, the selection toolbar, keyboard shortcuts, paste.
 - [Tables](help:tables) — table objects, CSV import, editing.
 - [Images and embeds](help:embeds) — pictures, embedding documents and references.
-- [Notes](help:notes) — discussions attached to text, notes from the apps.
+- [Notes](help:notes) — discussions attached to text, notes from guests on a public link and from the apps.
 - [Snapshots and history](help:history) — automatic and manual snapshots, restore, export.
 - [References](help:references) — uploading, visibility, viewing, archive.
 - [Voice notes](help:voice) — recording, where it lands, the apps.
@@ -31,14 +31,13 @@ What the guide does not describe and the "Planned" list does not mention is most
 - [Memory](help:memory) — project facts and consolidation.
 - [Pipelines](help:pipelines) — the extractor and theme digests.
 - [Search](help:search) — documents, memory, your chats, find and replace.
-- [Access and publishing](help:access) — members, public links, API keys, arrival notifications, moving between projects.
+- [Access and publishing](help:access) — members, group access, public links and comments, account tiers, API keys, arrival notifications, moving between projects.
 - [Screen lock](help:pin-lock) — PIN lock.
 
 ## Planned
 
 Not available in the interface yet:
 
-- per-project user groups with different permissions;
 - scheduling pipeline runs (the scheduler exists; there is no setting in the interface);
 - new pipeline kinds, and pipelines the agent assembles itself;
 - comparing two snapshots with the differences highlighted (for now: open them one after another).

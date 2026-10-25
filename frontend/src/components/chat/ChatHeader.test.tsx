@@ -1,8 +1,9 @@
 /**
  * Unit tests for ChatHeader — ghost plaque, new-chat no-op, goto-parent
  * visibility rules (icon lives in the reserved LEFT slot), the always-reserved
- * title slot, double-click rename, and the optimistic rename commit. Mounted
- * with mocked stores per the repo's component-test pattern.
+ * title slot, double-click rename, the optimistic rename commit, and the
+ * analyse-in-new-chat action (ghost + appendDraft prefill, unindexed guard).
+ * Mounted with mocked stores per the repo's component-test pattern.
  */
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -16,12 +17,16 @@ const chatState: Record<string, unknown> = {
   sessions: [],
   activeSessionId: null,
   modelsLoaded: true,
+  draft: '',
 };
 const chatActions = {
   deleteSession: vi.fn(),
   updateSession: vi.fn().mockResolvedValue(undefined),
   loadModels: vi.fn(),
   startGhostChat: vi.fn(),
+  // Real store semantics (misc-slice setDraft) so appendDraft's append-contract
+  // is asserted against state, not against a bare spy.
+  setDraft: vi.fn((v: string) => { chatState.draft = v; }),
 };
 vi.mock('../../store/chat-store', () => ({
   useChatStore: Object.assign((sel: (s: unknown) => unknown) => sel({ ...chatState, ...chatActions }), {
@@ -51,7 +56,14 @@ vi.mock('../../store/ui-store', () => ({
 const emitted: string[] = [];
 vi.mock('../../events', () => ({ emit: (...a: unknown[]) => emitted.push(String(a[0])) }));
 vi.mock('../../chat/navigate', () => ({ navigateToDocKeepingChat: vi.fn() }));
-vi.mock('../../i18n', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
+// t mock carries the vars through so the prefill test pins WHICH key and
+// WHICH params (title, chat_id) the request is composed with. Keys without
+// vars still return the bare key, keeping the title^-prefix assertions below.
+vi.mock('../../i18n', () => ({
+  useTranslation: () => ({
+    t: (k: string, vars?: Record<string, string | number>) => (vars ? `${k}:${JSON.stringify(vars)}` : k),
+  }),
+}));
 vi.mock('../../hooks/useArmedAction', () => ({
   useArmedAction: () => ({ armed: false, handleClick: (fn: () => void) => fn(), disarm: () => {} }),
 }));
@@ -79,6 +91,7 @@ beforeEach(() => {
   emitted.length = 0;
   chatState.sessions = [];
   chatState.activeSessionId = null;
+  chatState.draft = '';
   appState.currentDocument = { document_id: 'doc-1' };
   appState.currentReference = null;
 });
@@ -232,6 +245,50 @@ describe('ChatHeader', () => {
       await Promise.resolve();
     });
     expect(chatActions.updateSession).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('analyse-in-new-chat opens a ghost, then appends the request after an EXISTING draft', () => {
+    chatState.activeSessionId = 's5';
+    chatState.sessions = [{ session_id: 's5', document_id: 'doc-2', reference_id: null, title: 'Diary', unindexed: false }];
+    chatState.draft = 'existing note';
+    const host = mount();
+    const btn = host.querySelector('[title="analyseInNewChat"]');
+    expect(btn, 'analyse affordance rendered').toBeTruthy();
+    act(() => btn!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(chatActions.startGhostChat).toHaveBeenCalledTimes(1);
+    // INVARIANT(data-loss) via appendDraft: the draft is one shared field —
+    // the user's unsent text survives and the request is appended after it.
+    expect(chatState.draft).toBe('existing note\n\nanalyseChatPrompt:{"title":"Diary","id":"s5"}');
+    // The ghost opens BEFORE the prefill: startGhostChat clears the active
+    // session, so the request must be composed from values captured first.
+    expect(chatActions.setDraft.mock.invocationCallOrder[0]).toBeGreaterThan(
+      chatActions.startGhostChat.mock.invocationCallOrder[0],
+    );
+    unmount();
+  });
+
+  it('analyse-in-new-chat prefills an EMPTY draft bare (no leading blanks)', () => {
+    chatState.activeSessionId = 's6';
+    chatState.sessions = [{ session_id: 's6', document_id: 'doc-2', reference_id: null, title: 'Notes', unindexed: false }];
+    const host = mount();
+    act(() => host.querySelector('[title="analyseInNewChat"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(chatState.draft).toBe('analyseChatPrompt:{"title":"Notes","id":"s6"}');
+    unmount();
+  });
+
+  it('analyse-in-new-chat is disabled on an unindexed chat and does nothing on click', () => {
+    chatState.activeSessionId = 's7';
+    chatState.sessions = [{ session_id: 's7', document_id: 'doc-2', reference_id: null, title: 'Hidden', unindexed: true }];
+    const host = mount();
+    const btn = host.querySelector('[title="analyseChatHiddenHint"]') as HTMLButtonElement;
+    expect(btn, 'disabled analyse affordance carries the unhide hint').toBeTruthy();
+    expect(btn.disabled).toBe(true);
+    // jsdom still dispatches click on a disabled button — the handler guard,
+    // not the native disabled alone, keeps the ghost and draft untouched.
+    act(() => btn.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(chatActions.startGhostChat).not.toHaveBeenCalled();
+    expect(chatState.draft).toBe('');
     unmount();
   });
 });

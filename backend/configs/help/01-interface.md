@@ -14,7 +14,7 @@ The open document or reference. Split view shows the document on the left and a 
 
 ## Right panel
 
-The available tabs depend on the role: a viewer, for example, has no Chat and no Notes.
+The available tabs depend on the role: a viewer, for example, has no Chat and no Notes. Chat also needs an account tier with AI (see [Access and publishing](help:access)).
 
 - **Chat** — the agent (see [Chat and the agent](help:chat-agent)).
 - **References** — the document's materials, tables and pipelines (see [References](help:references)).
@@ -27,7 +27,7 @@ The available tabs depend on the role: a viewer, for example, has no Chat and no
 
 ## Header
 
-Voice recording for the open document, theme and language switches, profile settings, sign-out. The "Lock screen" button appears once a PIN is set (see [Screen lock](help:pin-lock)).
+Voice recording for the open document (accounts with the voice tier or higher), theme and language switches, profile settings, sign-out. The "Lock screen" button appears once a PIN is set (see [Screen lock](help:pin-lock)).
 
 ## Unread arrivals
 
@@ -35,4 +35,4 @@ Notes and references that arrive from outside — from the recording apps (widge
 
 ## Narrow screens and touch
 
-On a narrow screen (a phone) only the center is shown; the "Documents" button opens the left panel and "Open panel" the right panel as drawers over it. On touch devices hover previews are off, row menus open on tap, and actions that normally appear on hover are always visible.
+On a narrow screen (a phone) only the center is shown; the "Documents" button opens the left panel and "Open panel" the right panel as drawers over it. On touch devices hover previews are off, row menus open on tap, and actions that normally appear on hover are always visible. On a narrow screen a swipe over the document tree or the references list scrolls it; reordering by drag works on a wide screen only.

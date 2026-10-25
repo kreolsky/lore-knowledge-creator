@@ -163,7 +163,11 @@ async def _resolve_attachment(
     from db import get_db
 
     session_id = ctx.get("session_id")
-    if not session_id:
+    # INVARIANT(security): only an internal key (the in-app assistant) reads chat
+    # attachments — a user-minted key is refused even on its own session.
+    # Why: chat content is the in-app assistant's surface, never external
+    # automation's; same refusal as the chat-recall pack (chat_recall.py).
+    if ctx.get("internal") is not True or not session_id:
         raise HTTPException(
             status_code=400,
             detail="attachment_index is only available in a chat session (in-chat agent)",

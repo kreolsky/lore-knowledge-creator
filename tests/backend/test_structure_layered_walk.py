@@ -89,6 +89,22 @@ async def _make_system_doc(
     return doc_id
 
 
+async def _make_index_child_doc(
+    test_db, doc_id: str, project_id: str, index_id: str, title: str,
+) -> str:
+    """Raw documents row UNDER the index doc. The create/move API normalises an
+    index parent to project root, so a stored index-child shape (legacy rows
+    the walk must still serve) is only reachable through a raw row."""
+    from db import create_record
+
+    await test_db.query("DELETE type::record('documents', $id)", {"id": doc_id})
+    await create_record("documents", doc_id, {
+        "project_id": project_id, "parent_id": index_id, "title": title,
+        "content": "", "path": f"layered-{doc_id}.md",
+    })
+    return doc_id
+
+
 async def _layered_tree(client, test_db, admin_user, project_with_doc) -> dict:
     """idx (level 1) → A (2) → B (3) → C (4); reference R on idx (level 2);
     the seeded-shaped system subtree: sys root (1) → rules (2) → rule leaf (3)
@@ -96,7 +112,9 @@ async def _layered_tree(client, test_db, admin_user, project_with_doc) -> dict:
     pid, idx_id, admin_uid = project_with_doc
     _, token = admin_user
 
-    a = await _make_doc(client, token, pid, "A", idx_id)
+    a = await _make_index_child_doc(
+        test_db, f"layered-a-{pid}", pid, idx_id, "A",
+    )
     b = await _make_doc(client, token, pid, "B", a)
     c = await _make_doc(client, token, pid, "C", b)
     r = await _make_reference(client, token, pid, idx_id, "R")

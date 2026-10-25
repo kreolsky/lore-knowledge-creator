@@ -325,7 +325,7 @@ function UserEditPanel({ user, canDelete, isSelf, onSave, onCancel, onDelete, is
         />
         <Button variant="primary" size="lg" onClick={commit}>{t('save')}</Button>
         <Button variant="ghost" size="lg" onClick={onCancel}>{t('cancel')}</Button>
-        {saved && <span className="text-sm text-text-dim">{t('saved')}</span>}
+        {saved && <span className="text-sm font-bold text-green">{t('saved')}</span>}
         <span className="flex-1" />
         {canDelete && <UserDeleteButton onDelete={onDelete} />}
       </div>

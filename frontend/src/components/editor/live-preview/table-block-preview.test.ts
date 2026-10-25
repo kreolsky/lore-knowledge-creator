@@ -87,6 +87,23 @@ describe('TableBlockWidget — snapshot preview (readonly)', () => {
     widget.destroy();
   });
 
+  it('renders a doc-link cell formatted, not raw markdown (public share / history preview)', () => {
+    const previewDoc = new Y.Doc();
+    const link = '[Interviews](doc:3f2a9c1e-8b7d-4e5f-9a01-2c6d4b8e7f10)';
+    const id = createTable(previewDoc, [['Source'], [link]]);
+    const widget = new TableBlockWidget(id, 't') as unknown as PreviewWidget;
+    const wrap = widget.toDOM(makeView(previewDoc));
+
+    // The read-only cell must go through the same live-preview render as the
+    // editable placeholder (renderCellStatic): link label only, never the raw
+    // `[label](url)` source text.
+    const cells = wrap.querySelectorAll('.cm-table-block-cell-static');
+    const cellText = cells[1].textContent ?? '';
+    expect(cellText).toBe('Interviews');
+    expect(cellText).not.toContain('](');
+    widget.destroy();
+  });
+
   it('shows the "not captured" placeholder for a legacy checkpoint (no model)', () => {
     // The facet doc has NO table for the anchor's id → readonly missing-model state.
     const emptyDoc = new Y.Doc();

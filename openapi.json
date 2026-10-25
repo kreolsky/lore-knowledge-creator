@@ -1509,6 +1509,17 @@
       },
       "PatchDocument": {
         "properties": {
+          "chats_unindexed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chats Unindexed"
+          },
           "content": {
             "anyOf": [
               {
@@ -3335,6 +3346,51 @@
         "title": "ToolImportFile",
         "type": "object"
       },
+      "ToolListMyChats": {
+        "description": "`list_my_chats` body — the caller's visible chats of the key's project,\npaged. Same visible-session predicate as `search_my_chats`; a hidden\n(`unindexed`) chat is invisible here too.",
+        "properties": {
+          "limit": {
+            "default": 50,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "title_contains": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title Contains"
+          },
+          "under_document_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Under Document Id"
+          }
+        },
+        "title": "ToolListMyChats",
+        "type": "object"
+      },
       "ToolMoveDocument": {
         "description": "move_document body — reparent and/or reorder a node, and/or convert its kind.",
         "properties": {
@@ -3476,6 +3532,27 @@
           "document_id"
         ],
         "title": "ToolReadDocument",
+        "type": "object"
+      },
+      "ToolReadMyChat": {
+        "description": "`read_my_chat` body — one visible chat from its first turn, in pages of\nwhole turns. A message cut by the page budget is finished through\n`search_my_chats` (`message_id` + `offset`), never by counting characters.",
+        "properties": {
+          "chat_id": {
+            "minLength": 1,
+            "title": "Chat Id",
+            "type": "string"
+          },
+          "from_turn": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "From Turn",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "chat_id"
+        ],
+        "title": "ToolReadMyChat",
         "type": "object"
       },
       "ToolRenameDocument": {
@@ -15453,6 +15530,136 @@
         ]
       }
     },
+    "/api/tool/list_my_chats": {
+      "post": {
+        "description": "List the caller's other chats of the key's project — the whole pack, not\nonly the indexed ones. Refused while the admin disabled the `chat-recall`\nskill, for the same reason as the search.",
+        "operationId": "tool_list_my_chats_api_tool_list_my_chats_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolListMyChats"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool List My Chats",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
     "/api/tool/move_document": {
       "post": {
         "description": "Reparent and/or reorder a document. NOT reversible via the Lore History panel\n(move is structural, not a content edit) — undo by moving it back.\n\nSplits into the same auto/confirm modes as the other mutating tools. The\nconfirm path stores the move intent (document_id/parent_id/after_id); apply\nre-validates against live tree state.",
@@ -15840,6 +16047,137 @@
           }
         },
         "summary": "Tool Read Document",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
+    "/api/tool/read_my_chat": {
+      "post": {
+        "description": "Read one of the caller's other chats whole, from its first turn, in pages\nof whole turns. Refused while the admin disabled the `chat-recall` skill;\na chat outside the visible set is a uniform 404 — no existence oracle.",
+        "operationId": "tool_read_my_chat_api_tool_read_my_chat_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolReadMyChat"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Read My Chat",
         "tags": [
           "tool-api"
         ]

@@ -54,7 +54,7 @@ Highlight colors mark fragments of text: orange, blue, green, purple, yellow. Th
 
 ## Markup shown in finished form
 
-- Headings, lists, quotes, checkboxes (clickable), bold, italic, strikethrough.
+- Headings, lists, quotes, checkboxes (clickable for those who can edit the document), bold, italic, strikethrough.
 - Code blocks with syntax highlighting and a copy button.
 - Formulas: `$...$` inline, `$$...$$` as a separate block (LaTeX).
 - Diagrams: a code block with the `mermaid` language.

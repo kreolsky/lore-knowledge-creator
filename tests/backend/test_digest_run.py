@@ -364,3 +364,35 @@ async def test_long_unindexed_message_does_not_freeze_the_window(
 
     [report] = await _reports(test_db, b["target"])
     assert report["digest_covered_until"] > now - timedelta(minutes=1)
+
+
+async def test_report_under_index_lands_at_root(client, test_db, collab_project, embed, llm):
+    """A digest whose target is the project's index writes its report at the
+    project root — under the index it would exist but be invisible in the tree."""
+    pid, _d, admin_token, _ut, admin_uid, _uu = collab_project
+    [project] = await test_db.query(
+        "SELECT index_doc_id FROM type::record('projects', $pid)", {"pid": pid},
+    )
+    index_id = project["index_doc_id"]
+    theme = await _doc(client, pid, admin_token, "Health")
+    cfg = await _doc(client, pid, admin_token, "Health config", CONFIG)
+    resp = await client.put(
+        "/api/agent-config",
+        json={"document_id": theme, "config_doc_id": cfg, "target_doc_id": index_id,
+              "kind": "digest"},
+        cookies={"lore_session": admin_token},
+    )
+    assert resp.status_code == 200, resp.text
+    await _session(test_db, "anch", admin_uid, pid, document_id=theme)
+    await _msg(test_db, "anch0", "anch", "my knee hurts after running")
+    await index_chat_messages({}, admin_uid, pid)
+
+    result = await _run({"id": resp.json()["config_id"]}, pid)
+
+    assert result["status"] == "written"
+    assert await _reports(test_db, index_id) == []
+    rows = await test_db.query(
+        "SELECT * FROM documents WHERE project_id = $pid AND digest_config_id = $cid",
+        {"pid": pid, "cid": resp.json()["config_id"]},
+    )
+    assert len(rows) == 1 and rows[0].get("parent_id") is None

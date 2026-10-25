@@ -18,14 +18,14 @@ import pytest
 # ─── Shared helpers (mirror test_tool_api / test_mcp_gateway_mutating) ─────────
 
 
-async def _make_agent_key(test_db, user_id, project_id, *, auto_apply=False):
+async def _make_agent_key(test_db, user_id, project_id, *, auto_apply=False, scope_root=""):
     from db import create_record
 
     token = "lore_" + secrets.token_hex(32)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     key_id = f"am-key-{secrets.token_hex(4)}"
     await create_record("api_keys", key_id, {
-        "user_id": user_id, "project_id": project_id, "document_id": "",
+        "user_id": user_id, "project_id": project_id, "document_id": scope_root,
         "token_hash": token_hash, "label": "agent", "capabilities": ["agent"],
         "auto_apply": auto_apply,
     })
@@ -410,5 +410,32 @@ async def test_move_mcp_readonly_key_rejected(client, mcp_running, test_db, admi
     data = await _mcp_call(client, agent_tok, "move_document", {"document_id": doc_id})
     assert _is_error(data)
     assert _result_text(data)["status_code"] == 403
+
+
+@pytest.mark.asyncio
+async def test_scoped_move_onto_project_index_outside_wall_refused(
+    client, test_db, admin_user, project_with_doc,
+):
+    """Scope-wall fence for index→root normalisation: a scoped key moving a doc
+    onto the project index (OUTSIDE its subtree) is refused 403 as today. The
+    normalisation to root must run only AFTER the destination checks —
+    resolving to None before them once let a scoped key park its target
+    outside the wall (INVARIANT at documents/move.py move_document_command)."""
+    pid, idx_id, admin_uid = project_with_doc
+    _, token = admin_user
+    inner = await _make_doc(client, token, pid, "WallInner")
+    child = await _make_doc(client, token, pid, "WallChild", parent_id=inner)
+    agent_tok = await _make_agent_key(
+        test_db, admin_uid, pid, auto_apply=True, scope_root=inner,
+    )
+
+    resp = await _move(client, token, agent_tok, child, parent_id=idx_id)
+    assert resp.status_code == 403, resp.text
+    assert "subtree scope" in resp.json().get("detail", "")
+
+    rows = await test_db.query(
+        "SELECT parent_id FROM type::record('documents', $id)", {"id": child},
+    )
+    assert rows[0].get("parent_id") == inner, "refused move must write nothing"
 
 

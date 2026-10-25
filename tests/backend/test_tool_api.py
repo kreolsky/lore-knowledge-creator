@@ -569,15 +569,19 @@ async def test_get_project_structure_depth_cap(
     client, test_db, admin_user, project_with_doc,
 ):
     """depth=1 returns only the seed's direct children (no grandchildren)."""
+    from db import create_record
+
     pid, idx_id, admin_uid = project_with_doc
     _, token = admin_user
     agent_tok = await _make_agent_key(test_db, admin_uid, pid)
 
-    child = await _make_doc(client, token, pid, "CapChild", "c")
-    await client.patch(
-        f"/api/documents/{child}", json={"parent_id": idx_id},
-        cookies={"lore_session": token},
-    )
+    # A raw row under the index (the API normalises an index parent to root;
+    # the reader still serves the stored shape).
+    child = "cap-child-under-index"
+    await create_record("documents", child, {
+        "project_id": pid, "parent_id": idx_id, "title": "CapChild",
+        "content": "c", "path": "cap-child-under-index.md",
+    })
     grand = await _make_doc(client, token, pid, "CapGrand", "g")
     await client.patch(
         f"/api/documents/{grand}", json={"parent_id": child},

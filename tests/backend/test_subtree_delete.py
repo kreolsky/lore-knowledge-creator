@@ -95,7 +95,9 @@ async def test_lift_mode_reparents_children_to_grandparent(
     rows = await _doc_rows(test_db, [parent, child])
     assert rows[parent]["deleted_at"] is not None
     assert rows[child]["deleted_at"] is None, "lift mode keeps the child alive"
-    assert rows[child]["parent_id"] == idx_id, "child lifted to the grandparent"
+    # The parent's stored parent was the project root (an index parent
+    # normalises to root), so the child lifts to the root grandparent.
+    assert rows[child]["parent_id"] is None, "child lifted to the grandparent"
 
 
 @pytest.mark.asyncio
@@ -280,7 +282,9 @@ async def test_batch_delete_lift_mode_keeps_children(
     rows = await _doc_rows(test_db, [parent, child])
     assert rows[parent]["deleted_at"] is not None
     assert rows[child]["deleted_at"] is None
-    assert rows[child]["parent_id"] == idx_id
+    # The parent's stored parent was the project root (an index parent
+    # normalises to root), so the child lifts to the root grandparent.
+    assert rows[child]["parent_id"] is None
 
 
 @pytest.mark.asyncio

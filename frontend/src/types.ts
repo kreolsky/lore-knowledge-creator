@@ -172,6 +172,11 @@ export interface Document {
   // with system_role === 'system_prompt') by parent_id — not by role tag.
   is_system?: boolean;
   system_role?: string | null;
+  // True ⇒ chats rooted in this document's subtree are hidden from chat recall
+  // called outside the subtree (decided at READ time server-side, so a move
+  // across the boundary just changes what sees it). Absent = false. Drives the
+  // doc-tree privacy mark + the Access-tab checkbox.
+  chats_unindexed?: boolean;
   // Caller's own non-internal key capabilities on this doc (server-derived,
   // plan "glimmering-knitting-pebble"). Omitted when no key exists. Drives the
   // doc-tree key indicator and ParentPickerPopup's reparent warning.

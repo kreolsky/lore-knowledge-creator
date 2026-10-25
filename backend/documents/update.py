@@ -187,9 +187,9 @@ async def _write_content_update(
     return backup
 
 
-async def _apply_parent_update(document_id: str, project_id: str, parent_id: str) -> None:
+async def _apply_parent_update(document_id: str, project_id: str, parent_id: str | None) -> None:
     """Re-parent through the ONE in-project move (documents.move)."""
-    # Empty string means "clear parent" (move to root)
+    # Sent null and "" both mean "clear parent" (move to root)
     # WHY: a re-parented doc is treated as new for the new parent and goes
     # to the TOP of the new sibling group (after_id=None). Why: user spec 2026-06-03 (newest-first).
     await move_document_command(
@@ -213,8 +213,20 @@ async def update_document_command(document_id: str, body: PatchDocument) -> dict
         # content_flushed all live there. The breadcrumb/_chunk_hash WHY moved
         # with the code.
         await rename_document(document_id=document_id, title=body.title)
-    if body.parent_id is not None:
+    if "parent_id" in body.model_fields_set:
+        # WHY model_fields_set, not `is not None`: an explicitly SENT null moves
+        # to the project root exactly like "" — the same contract /reorder
+        # already uses (routes/documents.py) — while an ABSENT parent_id leaves
+        # the parent alone (a title-only PATCH must not re-parent).
         await _apply_parent_update(document_id, project_id, body.parent_id)
+    if body.chats_unindexed is not None:
+        # The subtree hide of chats (documents.chats_unindexed) — a plain
+        # column write; visibility is decided at READ time (recall_search),
+        # so nothing else is updated here when it flips.
+        await db.query(
+            "UPDATE type::record('documents', $id) SET chats_unindexed = $flag",
+            {"id": document_id, "flag": body.chats_unindexed},
+        )
     if body.content is not None:
         auto_backup = await _apply_content_update(db, document_id, project_id, body.content)
     updated = await fetch_one("documents", document_id)

@@ -13,7 +13,7 @@ from content_hash import hash_content
 from fastapi import HTTPException
 
 import embeddings
-from db import fetch_one
+from db import extract_id, fetch_one, get_ancestor_ids
 from jobs.tasks.chat_index import index_coverage
 from scope import subtree_doc_ids
 
@@ -40,27 +40,115 @@ def iso(value: object) -> str:
     return value.isoformat() if isinstance(value, datetime) else str(value or "")
 
 
+async def _outer_flagged_roots(db, project_id: str, viewer_doc_id: str | None) -> set[str]:
+    """Live flagged documents the viewer sits OUTSIDE of.
+
+    V is inside F iff F is among V's ancestors (`get_ancestor_ids` includes V
+    itself); V = None is outside every F. Empty when nothing is flagged —
+    then no walk is owed at all. `archived` is NOT a filter — archiving a
+    room must not open it.
+    """
+    flagged = await db.query(
+        "SELECT meta::id(id) AS did FROM documents "
+        "WHERE project_id = $pid AND chats_unindexed = true AND deleted_at IS NONE",
+        {"pid": project_id},
+    ) or []
+    roots = {r["did"] for r in flagged if r.get("did")}
+    if not roots:
+        return set()
+    inside = set(await get_ancestor_ids(viewer_doc_id)) if viewer_doc_id else set()
+    return roots - inside
+
+
+async def _children_map(db, project_id: str) -> dict[str, list[str]]:
+    """Live parent→children of the project, from ONE fetch shared across every
+    flagged root — never one `get_descendant_ids` project scan per root."""
+    rows = await db.query(
+        "SELECT meta::id(id) AS did, parent_id FROM documents "
+        "WHERE project_id = $pid AND deleted_at IS NONE",
+        {"pid": project_id},
+    ) or []
+    children: dict[str, list[str]] = {}
+    for r in rows:
+        parent = r.get("parent_id")
+        if not parent:
+            continue
+        pid = extract_id(parent) if not isinstance(parent, str) or ":" in parent else parent
+        if pid:
+            children.setdefault(pid, []).append(r["did"])
+    return children
+
+
+def _subtree_closure(children: dict[str, list[str]], roots: set[str]) -> set[str]:
+    """`roots` plus every descendant under them (BFS)."""
+    # WHY no depth cap (unlike get_descendant_ids): a cap here fails OPEN — chats
+    # below the cap would leak out of the room. A cyclic parent_id still ends the
+    # walk: a node already in `hidden` is never expanded again.
+    hidden = set(roots)
+    queue = [c for f in roots for c in children.get(f, [])]
+    while queue:
+        cid = queue.pop()
+        if cid in hidden:
+            continue
+        hidden.add(cid)
+        queue.extend(children.get(cid, []))
+    return hidden
+
+
+async def hidden_doc_ids(db, project_id: str, viewer_doc_id: str | None) -> set[str]:
+    """Documents whose chats are hidden from this viewer: the union of
+    `subtree(F)` over every live flagged document F with the viewer OUTSIDE it.
+
+    # ARCH: read-time, viewer-relative, never denormalized. The flag lives on
+    # the document and is never copied onto chats, so a chat reparent or a subtree move changes
+    # visibility with no write to any chat. Cost: one indexed query for
+    # flagged docs; with any flag, one ancestor walk of V plus at most ONE
+    # project-docs fetch shared across all such F.
+    """
+    outer = await _outer_flagged_roots(db, project_id, viewer_doc_id)
+    if not outer:
+        return set()
+    return _subtree_closure(await _children_map(db, project_id), outer)
+
+
 async def visible_sessions(
     db, user_id: str, project_id: str, exclude: set[str],
     doc_ids: set[str] | None = None,
+    viewer_doc_id: str | None = None,
+    include_doc_unindexed: bool = False,
 ) -> dict[str, dict]:
     """`{session id: {title, root, document_id}}` of the sessions an answer may
-    draw from; `doc_ids` keeps only sessions whose root's document is in it."""
-    # INVARIANT(security): what the user deleted or marked unindexed is never returned by the assistant.
-    # Why: deletion paths are many (session delete, message delete, the document
-    # cascade) and the index can lag or fail — so every search and every window read
-    # re-checks live rows here and in live_rows; the index only proposes candidates.
+    draw from; `doc_ids` keeps only sessions whose root's document is in it.
+    `viewer_doc_id` is the calling conversation's root document: a chat whose
+    root document sits inside a `chats_unindexed` subtree the viewer is OUTSIDE
+    is dropped (include_doc_unindexed=True opts out — digest only)."""
+    # INVARIANT(security): what the user deleted, marked unindexed, or put under a
+    # hidden subtree is never returned to a viewer outside that subtree.
+    # Why: deletion paths are many (session delete, message delete, the
+    # document cascade) and the index can lag or fail — so every search and
+    # every window read re-checks live rows here and in live_rows; the index
+    # only proposes candidates. The subtree hide is decided the same way, at
+    # read time against the live tree (hidden_doc_ids), so a chat or a
+    # document that moves across the boundary changes visibility with no write
+    # to any chat; a caller that forgets the viewer fails SAFE (V = None is
+    # outside every flagged subtree).
     rows = await db.query(
-        "SELECT meta::id(id) AS sid, title, thread_id FROM chat_sessions "
+        "SELECT meta::id(id) AS sid, title, thread_id, created_at FROM chat_sessions "
         "WHERE user_id = $uid AND project_id = $pid AND deleted_at IS NONE "
         "AND is_note = false AND unindexed = false",
         {"uid": user_id, "pid": project_id},
     ) or []
-    sessions = {r["sid"]: {"title": r.get("title") or "", "root": r.get("thread_id") or r["sid"]}
+    sessions = {r["sid"]: {"title": r.get("title") or "", "root": r.get("thread_id") or r["sid"],
+                           "created_at": r.get("created_at")}
                 for r in rows if r["sid"] not in exclude}
     root_docs = await root_documents(db, {s["root"] for s in sessions.values()})
     for s in sessions.values():
         s["document_id"] = root_docs.get(s["root"])
+    if not include_doc_unindexed:
+        hidden = await hidden_doc_ids(db, project_id, viewer_doc_id)
+        if hidden:
+            sessions = {sid: s for sid, s in sessions.items()
+                        if s["document_id"] not in hidden}
     if doc_ids is None:
         return sessions
     return {sid: s for sid, s in sessions.items() if s["document_id"] in doc_ids}
@@ -184,24 +272,30 @@ async def _ranked(
 async def _scoped_sessions(
     db, user_id: str, project_id: str, exclude: set[str], scope: ChatScope,
     siblings: set[str] | None, under_document_id: str | None,
+    viewer_doc_id: str | None = None, include_doc_unindexed: bool = False,
 ) -> dict:
     if scope == "siblings":
         if siblings is None:
             raise HTTPException(
                 status_code=400,
                 detail="no anchor document — use scope=project or subtree")
-        return await visible_sessions(db, user_id, project_id, exclude, siblings)
+        return await visible_sessions(db, user_id, project_id, exclude, siblings,
+                                      viewer_doc_id, include_doc_unindexed)
     if scope == "subtree":
         await require_scope_document(project_id, under_document_id)
         under = set(await subtree_doc_ids(under_document_id, project_id))
-        return await visible_sessions(db, user_id, project_id, exclude, under)
-    return await visible_sessions(db, user_id, project_id, exclude)
+        return await visible_sessions(db, user_id, project_id, exclude, under,
+                                      viewer_doc_id, include_doc_unindexed)
+    return await visible_sessions(db, user_id, project_id, exclude,
+                                  viewer_doc_id=viewer_doc_id,
+                                  include_doc_unindexed=include_doc_unindexed)
 
 
 async def search_chats(
     db, user_id: str, project_id: str, query: str, *, exclude: set[str],
     scope: ChatScope, anchor_doc_id: str | None, under_document_id: str | None,
     window: Window = Window(),
+    viewer_doc_id: str | None = None, include_doc_unindexed: bool = False,
 ) -> dict:
     """Semantic search over the user's own visible chats of the project.
 
@@ -209,12 +303,16 @@ async def search_chats(
     only the anchor document and its subtree (400 without an anchor — a narrow
     the caller cannot get is an error, never a wider search); `subtree` only
     under `under_document_id` (404 when it is not a live document of the project).
-    `window` keeps only messages created inside it.
+    `window` keeps only messages created inside it. `viewer_doc_id` is the
+    caller's VIEWER document — a chat inside a `chats_unindexed` subtree the
+    viewer is outside is never returned (see visible_sessions); default None
+    fails safe (outside every flagged subtree).
     """
     siblings = (set(await subtree_doc_ids(anchor_doc_id, project_id))
                 if anchor_doc_id else None)
     sessions = await _scoped_sessions(
-        db, user_id, project_id, exclude, scope, siblings, under_document_id)
+        db, user_id, project_id, exclude, scope, siblings, under_document_id,
+        viewer_doc_id, include_doc_unindexed)
     qvec = await _embed_query(query)
     picked = await _ranked(db, user_id, project_id, sessions, qvec, window)
     parents = await live_rows(db, {
@@ -223,9 +321,12 @@ async def search_chats(
     }, sessions)
     hits = [_hit(p, sessions, parents, siblings or set()) for p in picked]
     result: dict = {"hits": hits}
+    # WHY only_chat_ids for EVERY scope: `indexed: N of M` must count what THIS
+    # caller can see — for scope=project `sessions` is already the full visible
+    # set, so an unfiltered count would report chats the subtree hide removed.
     indexed, total = await index_coverage(
         db, user_id, project_id, await settings.get("EMBEDDING_MODEL"), exclude,
-        only_chat_ids=None if scope == "project" else set(sessions))
+        only_chat_ids=set(sessions))
     if indexed < total:
         result["indexed"] = f"{indexed} of {total}"
     return result

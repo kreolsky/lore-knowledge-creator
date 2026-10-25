@@ -133,6 +133,65 @@ describe('TurnNodes', () => {
     expect(pre!.className).not.toContain('max-h-');
   });
 
+  it('an UNSETTLED tool call renders no body text — "No change" claims a result nothing produced yet', () => {
+    // Defect: the chip above a held approval card said "No change" because an
+    // unsettled call has no result text; an empty body is the honest state.
+    const html = render(createElement(TurnNodes, {
+      nodes: [node('tool-call', {
+        root: {
+          kind: 'tool-call', callId: 'c1', name: 'edit_document',
+          argsRaw: '{"document_id":"d1","edits":[]}',
+        },
+      })],
+      isStreaming: true,
+    })).textContent ?? '';
+    expect(html).toContain('edit_document');
+    expect(html).not.toContain('agentStepNoop');
+  });
+
+  it('a SETTLED call with no result text keeps the nothing-done note', () => {
+    const html = render(createElement(TurnNodes, {
+      nodes: [node('tool-call', {
+        root: {
+          kind: 'tool-result', callId: 'c1',
+          call: { name: 'noop_tool', argsRaw: '{}' }, content: [], isError: false,
+        },
+      })],
+      isStreaming: false,
+    }));
+    act(() => { html.querySelector('button[aria-expanded]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(html.textContent).toContain('agentStepNoop');
+  });
+
+  it('a pending verdict ask shows the held call\'s args read off its tool-call node', () => {
+    // dsh appends the tool/call node BEFORE asking (the isDecidedVerdict
+    // INVARIANT); the ask frame itself carries only {turn, callId, toolName},
+    // so the args come from that node.
+    const html = render(createElement(TurnNodes, {
+      nodes: [
+        node('tool-call', {
+          root: {
+            kind: 'tool-call', callId: 'c9', name: 'edit_document',
+            argsRaw: '{"document_id":"d1","edits":[{"old_string":"old line","new_string":"new line"}]}',
+          },
+        }, 1),
+        node('verdict-ask', { callId: 'c9', toolName: 'edit_document' }, 2),
+      ],
+      isStreaming: true,
+    }));
+    const text = html.textContent ?? '';
+    expect(text).toContain('verdictAllowOnce');
+    // The card's own diff pair (the header gist quoting the args is a span, not a pre).
+    const pres = [...html.querySelectorAll('pre')];
+    expect(pres.length).toBe(2);
+    expect(pres[0].textContent).toBe('old line');
+    expect(pres[0].className).toContain('text-red');
+    expect(pres[1].textContent).toBe('new line');
+    expect(pres[1].className).toContain('text-green');
+    // The chip above the card no longer claims a result ("No change" is gone).
+    expect(text).not.toContain('agentStepNoop');
+  });
+
   it('renders the halt card with its reason (unknown reasons degrade visibly)', () => {
     const html = render(createElement(TurnNodes, {
       nodes: [node('halt', { turn: 0, reason: 'aborted' })],
