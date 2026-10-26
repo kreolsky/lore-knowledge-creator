@@ -4,8 +4,8 @@ A link-preview bot (Telegram, WhatsApp, Slack, …) does not execute JS, so the
 SPA shell it receives at /docs/<id> carries no per-document metadata and every
 pasted link renders the same generic title. nginx (frontend/nginx.conf) routes
 known bot UAs on /docs/<id> to this endpoint, which answers a tiny HTML page
-with og:*/twitter:* tags: the document's title and excerpt when it is
-published, a generic Lore card when it is not. Humans keep getting the
+with og:*/twitter:* tags: the document's title, excerpt and first servable
+image when it is published, a generic Lore card when it is not. Humans keep getting the
 unchanged SPA.
 
 Enters through SYSTEM: public-share's single funnel (`_require_doc`) exactly
@@ -32,8 +32,9 @@ import re
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from db import get_db
+from db import extract_id, fetch_one, get_db
 from deps import FENCE_LINE_RE, extract_headings
+from models import is_ref_row
 from routes.public_share import _capture_public_content, _require_doc
 
 router = APIRouter()
@@ -47,6 +48,12 @@ _IMAGE_PATH = "/og-default.png"
 _IMAGE_WIDTH = 1200
 _IMAGE_HEIGHT = 630
 _EXCERPT_MAX = 200
+_EMBED_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)\)")
+# WHY a cap: text transclusions before the first image would otherwise cost one
+# row read each per bot hit; a later first image falls back to the generic one.
+_MAX_REF_LOOKUPS = 5
+_FRONT_MATTER_RE = re.compile(r"\A---[ \t]*\n.*?\n---[ \t]*(\n|\Z)", re.DOTALL)
+_HEADING_RE = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$")
 # Revoking a share stops new cards within 5 minutes; caches inside the
 # messengers are out of our control.
 _CACHE_CONTROL = "public, max-age=300"
@@ -89,13 +96,27 @@ def _plain_text(content: str) -> str:
     """Markdown → flat plain text: fences dropped, embed/link syntax and
     markdown markers stripped, whitespace collapsed."""
     text = "\n".join(_lines_outside_fences(content))
-    # Lore embeds / markdown images / links: keep the visible label only.
-    text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    # Lore embeds / markdown images: dropped — an alt or embed label is not
+    # article text. Links: keep the visible label only.
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
     # Inline code, bold, italic, strikethrough markers.
     text = re.sub(r"(`+|\*+|_+|~~)", "", text)
     # Heading marks, blockquotes, list bullets at line starts.
     text = re.sub(r"^\s*(#{1,6}|>|[-*+]|\d+\.)\s+", "", text, flags=re.MULTILINE)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _article_body(content: str, title: str) -> str:
+    """Content minus a leading YAML front-matter block and a leading heading
+    that repeats the card title — neither is article text a reader should see
+    under the title."""
+    body = _FRONT_MATTER_RE.sub("", content, count=1).lstrip("\n")
+    first, _, rest = body.partition("\n")
+    heading = _HEADING_RE.match(first.strip())
+    if heading and heading.group(1).strip() == title:
+        return rest
+    return body
 
 
 def _excerpt(content: str) -> str:
@@ -118,8 +139,34 @@ def _title_or_fallback(title: str, content: str) -> str:
     return headings[0]["text"] if headings else _SITE_NAME
 
 
-async def _title_and_excerpt(document_id: str) -> tuple[str, str]:
-    """(title, excerpt) from live text; on the capture 503, DB content.
+async def _image_url(content: str, document_id: str, doc_ids: list[str], origin: str) -> str | None:
+    """First image embed the share serves anonymously, as an absolute URL.
+
+    `ref:<id>` qualifies only under the membership rule `_handle_file` enforces
+    (image ref, owning doc ∈ doc_ids), so the card never points a bot at a URL
+    the share refuses; an external http(s) image is used as is.
+    """
+    lookups = 0
+    for target in _EMBED_RE.findall("\n".join(_lines_outside_fences(content))):
+        if target.startswith(("https://", "http://")):
+            return target
+        if not target.startswith("ref:") or lookups >= _MAX_REF_LOOKUPS:
+            continue
+        lookups += 1
+        ref_id = target[4:]
+        ref = await fetch_one("documents", ref_id)
+        if not ref or not is_ref_row(ref) or ref.get("media_type") != "image":
+            continue
+        parent_id = extract_id(ref.get("parent_id")) if ref.get("parent_id") else None
+        basename = (ref.get("file_path") or "").split("/")[-1]
+        if ref.get("deleted_at") or parent_id not in doc_ids or not basename:
+            continue
+        return f"{origin}/api/public/documents/{document_id}/files/{ref_id}/{basename}"
+    return None
+
+
+async def _document_content(document_id: str) -> tuple[str, str]:
+    """(title, content) from live text; on the capture 503, DB content.
 
     Ruling (plan): preview-only DB fallback — the human reader path keeps its
     503 (no silent degradation for readers); a bot card must not become a
@@ -143,16 +190,21 @@ async def _title_and_excerpt(document_id: str) -> tuple[str, str]:
             raise
         logger.warning("preview serving DB content for public doc %s", document_id)
         content = db_content
-    return _title_or_fallback(row.get("title") or "", content), _excerpt(content)
+    return _title_or_fallback(row.get("title") or "", content), content
 
 
 def _preview_html(
     *, document_id: str, origin: str, title: str, description: str, og_type: str,
+    image: str | None,
 ) -> str:
     """The card page. Every value is HTML-escaped — titles and content are
-    user-authored."""
+    user-authored. `image` None → the generic card image with its known size."""
     url = f"{origin}/docs/{document_id}"
-    image = f"{origin}{_IMAGE_PATH}"
+    size = "" if image else (
+        f'<meta property="og:image:width" content="{_IMAGE_WIDTH}">\n'
+        f'<meta property="og:image:height" content="{_IMAGE_HEIGHT}">\n'
+    )
+    image = image or f"{origin}{_IMAGE_PATH}"
     refresh = f"0;url=/docs/{document_id}/"  # trailing slash: see module docstring
     esc = lambda s: html.escape(s, quote=True)  # noqa: E731
     return (
@@ -166,8 +218,7 @@ def _preview_html(
         f'<meta property="og:site_name" content="{esc(_SITE_NAME)}">\n'
         f'<meta property="og:url" content="{esc(url)}">\n'
         f'<meta property="og:image" content="{esc(image)}">\n'
-        f'<meta property="og:image:width" content="{_IMAGE_WIDTH}">\n'
-        f'<meta property="og:image:height" content="{_IMAGE_HEIGHT}">\n'
+        f"{size}"
         f'<meta name="twitter:card" content="summary_large_image">\n'
         f'<meta http-equiv="refresh" content="{esc(refresh)}">\n'
         "</head><body></body></html>\n"
@@ -184,9 +235,12 @@ def _card_response(body: str) -> Response:
 async def public_preview(document_id: str, request: Request) -> Response:
     """Open Graph card for /docs/<id>: always HTTP 200, published or not."""
     origin = _origin(request)
+    image: str | None = None
     try:
-        await _require_doc(document_id)
-        title, description = await _title_and_excerpt(document_id)
+        ctx = await _require_doc(document_id)
+        title, content = await _document_content(document_id)
+        description = _excerpt(_article_body(content, title))
+        image = await _image_url(content, document_id, ctx["doc_ids"], origin)
         og_type = "article"
     except HTTPException as e:
         if e.status_code != 404:
@@ -196,5 +250,5 @@ async def public_preview(document_id: str, request: Request) -> Response:
         title, description, og_type = _SITE_NAME, _GENERIC_DESCRIPTION, "website"
     return _card_response(_preview_html(
         document_id=document_id, origin=origin, title=title,
-        description=description, og_type=og_type,
+        description=description, og_type=og_type, image=image,
     ))

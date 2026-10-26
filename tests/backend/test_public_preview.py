@@ -441,3 +441,136 @@ def test_generic_description_matches_spa_shell_title():
             )
             return
     pytest.skip("frontend/index.html not reachable from the test container")
+
+
+# ─── Document image and clean excerpt ────────────────────────────────────────
+
+_PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+    b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
+    b"\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00"
+    b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
+async def _upload(client, token: str, project_id: str, owner_id: str, name: str, mime: str, data: bytes) -> dict:
+    import io
+
+    resp = await client.post(
+        "/api/documents/upload",
+        data={"project_id": project_id, "document_id": owner_id, "title": name},
+        files={"file": (name, io.BytesIO(data), mime)},
+        cookies={"lore_session": token},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+async def _set_content(document_id: str, content: str) -> None:
+    from db import get_db
+
+    db = await get_db()
+    await db.query(
+        "UPDATE type::record('documents', $id) SET content = $c",
+        {"id": document_id, "c": content},
+    )
+
+
+@pytest.mark.asyncio
+async def test_first_in_scope_image_ref_is_og_image_and_served_anonymously(
+    client, admin_user, project_with_doc,
+):
+    """A doc embed and a non-image ref before the image are skipped; the image
+    ref's public file URL becomes og:image, and that URL answers 200 without a
+    cookie — the card never points a bot at a URL the share would refuse."""
+    pid, _, _ = project_with_doc
+    _, admin_token = admin_user
+    other = await _make_doc(client, admin_token, pid, "Other", "x")
+    doc = await _make_doc(client, admin_token, pid, "Image Doc", "body")
+    # A non-image ref: an uploaded file re-typed as a plain file (uploads accept media only).
+    text_ref = await _upload(client, admin_token, pid, doc, "clip.png", "image/png", _PNG_BYTES)
+    from db import get_db
+    await (await get_db()).query(
+        "UPDATE type::record('documents', $id) SET media_type = 'file'",
+        {"id": text_ref["reference_id"]},
+    )
+    img = await _upload(client, admin_token, pid, doc, "pic.png", "image/png", _PNG_BYTES)
+    await _set_content(doc, (
+        f"Intro text.\n\n![o](doc:{other})\n\n![v](ref:{text_ref['reference_id']})\n\n"
+        f"![p](ref:{img['reference_id']})\n"
+    ))
+    await _mint_share(client, admin_token, pid, doc, "doc")
+
+    resp = await client.get(f"/api/public/documents/{doc}/preview")
+
+    assert resp.status_code == 200, resp.text
+    origin = str(client.base_url).rstrip("/")
+    basename = img["file_path"].split("/")[-1]
+    path = f"/api/public/documents/{doc}/files/{img['reference_id']}/{basename}"
+    assert _meta(resp.text, "og:image") == f"{origin}{path}"
+    assert _meta(resp.text, "og:image:width") is None, "a document image has no known size"
+    assert _meta(resp.text, "twitter:card") == "summary_large_image"
+    served = await client.get(path)
+    assert served.status_code == 200, served.text
+    assert served.content == _PNG_BYTES
+
+
+@pytest.mark.asyncio
+async def test_out_of_scope_image_ref_falls_back_to_generic_image(
+    client, admin_user, project_with_doc,
+):
+    """An image owned by a doc outside a `doc`-scope share is not served
+    anonymously, so it must not become og:image."""
+    pid, _, _ = project_with_doc
+    _, admin_token = admin_user
+    private = await _make_doc(client, admin_token, pid, "Private", "x")
+    img = await _upload(client, admin_token, pid, private, "secret.png", "image/png", _PNG_BYTES)
+    doc = await _make_doc(client, admin_token, pid, "Public Doc", "body")
+    await _set_content(doc, f"Text.\n\n![s](ref:{img['reference_id']})\n")
+    await _mint_share(client, admin_token, pid, doc, "doc")
+
+    resp = await client.get(f"/api/public/documents/{doc}/preview")
+
+    origin = str(client.base_url).rstrip("/")
+    assert _meta(resp.text, "og:image") == f"{origin}/og-default.png"
+    assert img["reference_id"] not in resp.text
+    assert _meta(resp.text, "og:image:width") == "1200"
+
+
+@pytest.mark.asyncio
+async def test_external_https_image_is_og_image(client, admin_user, project_with_doc):
+    pid, _, _ = project_with_doc
+    _, admin_token = admin_user
+    doc = await _make_doc(
+        client, admin_token, pid, "Ext Doc",
+        "Text.\n\n![cover](https://cdn.example.org/cover.jpg)\n",
+    )
+    await _mint_share(client, admin_token, pid, doc, "doc")
+
+    resp = await client.get(f"/api/public/documents/{doc}/preview")
+
+    assert _meta(resp.text, "og:image") == "https://cdn.example.org/cover.jpg"
+
+
+@pytest.mark.asyncio
+async def test_excerpt_drops_front_matter_and_leading_title_heading(
+    client, admin_user, project_with_doc,
+):
+    pid, _, _ = project_with_doc
+    _, admin_token = admin_user
+    content = (
+        "---\nstatus: published\nslug: some-slug\ntags: [a, b]\n---\n\n"
+        "# Card Title\n\nFirst paragraph of the article.\n\n![alt label](https://x.y/i.png)\n\n"
+        "## Section\n\nMore text.\n"
+    )
+    doc = await _make_doc(client, admin_token, pid, "Card Title", content)
+    await _mint_share(client, admin_token, pid, doc, "doc")
+
+    resp = await client.get(f"/api/public/documents/{doc}/preview")
+
+    description = _meta(resp.text, "og:description")
+    assert description.startswith("First paragraph of the article."), description
+    assert "status:" not in description and "some-slug" not in description
+    assert "Card Title" not in description
+    assert "Section" in description, "a later heading is article text and stays"
+    assert "alt label" not in description, "an image's alt text is not article text"
