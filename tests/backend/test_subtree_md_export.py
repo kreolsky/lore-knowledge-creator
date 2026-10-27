@@ -2,13 +2,15 @@
 
 # SYSTEM: subtree-md (see backend/subtree_md.py) — the EXPORT direction: a Lore
 # subtree → a zip of Markdown files (GitHub/Obsidian-compatible layout:
-# dir + INDEX.md per parent, Title.md per leaf, _assets/ for inline image
+# dir + README.md per parent, Title.md per leaf, _assets/ for inline image
 # binaries). The tool stages the zip and hands back a short-lived signed URL
 # (never bytes as tool output).
 
 Drives the real MCP surface (tools/call) with a read-write key, then downloads
 the staged zip through the UNAUTHENTICATED serve route — the same route an
-external agent uses.
+external agent uses. The REST half (GET /api/documents/{id}/export/subtree,
+the browser zip for the snapshot tab) rides the same domain exporter and is
+covered at the bottom.
 """
 import hashlib
 import io
@@ -16,8 +18,10 @@ import json
 import secrets
 import uuid
 import zipfile
+from urllib.parse import quote
 
 import pytest
+from helpers import make_token
 
 # ─── fixtures: project + agent keys ───────────────────────────────────────────
 
@@ -173,7 +177,7 @@ async def test_export_layout_index_rules_and_empty_leaf_skip(
     result, data = await _export(client, rw_key, root)
     assert result["status"] == "ok"
     names = _zip_names(data)
-    # Parent with EMPTY content: dir stays, INDEX.md omitted.
+    # Parent with EMPTY content: dir stays, README.md omitted.
     assert names == ["Research/Notes.md"], names
     # The empty leaf is skipped entirely (no file, no dir, no link target).
     assert "Research/Empty.md" not in names
@@ -188,8 +192,8 @@ async def test_export_parent_with_content_writes_index(
                            "# Hello\n\nbody", None)
     await _seed_doc(test_db, pid, "x-child", "Notes", "n", root)
     _result, data = await _export(client, rw_key, root)
-    assert _zip_names(data) == ["Research/INDEX.md", "Research/Notes.md"]
-    assert _read(data, "Research/INDEX.md") == "# Hello\n\nbody"
+    assert _zip_names(data) == ["Research/Notes.md", "Research/README.md"]
+    assert _read(data, "Research/README.md") == "# Hello\n\nbody"
 
 
 @pytest.mark.asyncio
@@ -219,7 +223,7 @@ async def test_export_sibling_title_dedup(
     await _seed_doc(test_db, pid, "x-d1", "Same", "one", root)
     await _seed_doc(test_db, pid, "x-d2", "Same", "two", root)
     _result, data = await _export(client, rw_key, root)
-    assert _zip_names(data) == ["R/INDEX.md", "R/Same (2).md", "R/Same.md"]
+    assert _zip_names(data) == ["R/README.md", "R/Same (2).md", "R/Same.md"]
     assert _read(data, "R/Same.md") == "one"
     assert _read(data, "R/Same (2).md") == "two"
 
@@ -230,16 +234,16 @@ async def test_export_reserved_entry_names_escaped(
 ):
     pid = make_project.pid
     root = await _seed_doc(test_db, pid, "x-root", "R", "root body", None)
-    await _seed_doc(test_db, pid, "x-r1", "INDEX", "content", root)
+    await _seed_doc(test_db, pid, "x-r1", "README", "content", root)
     await _seed_doc(test_db, pid, "x-r2", "_assets", "content2", root)
     _result, data = await _export(client, rw_key, root)
     names = _zip_names(data)
-    # `R/INDEX.md` is the ROOT's own content file — the mechanism itself. What
+    # `R/README.md` is the ROOT's own content file — the mechanism itself. What
     # must hold: no CHILD exported onto a reserved entry name (a child named
-    # INDEX must NOT become the parent's content on re-import).
-    assert names == ["R/INDEX (doc).md", "R/INDEX.md", "R/_assets (doc).md"]
-    assert _read(data, "R/INDEX.md") == "root body"
-    assert _read(data, "R/INDEX (doc).md") == "content"
+    # README must NOT become the parent's content on re-import).
+    assert names == ["R/README (doc).md", "R/README.md", "R/_assets (doc).md"]
+    assert _read(data, "R/README.md") == "root body"
+    assert _read(data, "R/README (doc).md") == "content"
     assert _read(data, "R/_assets (doc).md") == "content2"
 
 
@@ -268,7 +272,7 @@ async def test_export_links_inside_and_outside_subtree(
     _result, data = await _export(client, rw_key, root)
     text = _read(data, "R/Src.md")
     assert "[to leaf](./Leaf.md)" in text
-    assert "[to parent](./Parent%20Doc/INDEX.md)" in text
+    assert "[to parent](./Parent%20Doc/README.md)" in text
     # A target outside the exported subtree becomes plain text, no link.
     assert "outside" in text and "[outside](" not in text
     # External URLs are left verbatim.
@@ -411,3 +415,129 @@ async def test_export_unknown_root_is_error(
     body = resp.json()
     assert body["result"].get("isError")
     assert "not found" in json.dumps(body)
+
+
+# ─── REST surface: GET /api/documents/{id}/export/subtree (snapshot tab) ──────
+#
+# The browser twin of the tool: same domain exporter, different transport —
+# the zip streams inline with Content-Disposition (no staging, no token),
+# because a browser can receive bytes and an agent cannot.
+
+
+async def _rest_user(test_db, uid: str, name: str) -> str:
+    """A registered user row + bearer token (no login round-trip needed)."""
+    from db import create_record
+
+    await create_record("users", uid, {
+        "name": name, "email": f"{name}@test.com", "role": "user",
+        "user_facts": "",
+    })
+    return make_token(uid, name, "user", f"{name}@test.com")
+
+
+def _session(token: str) -> dict:
+    """REST auth is the lore_session cookie (Bearer is the MCP/API-key path)."""
+    return {"cookies": {"lore_session": token}}
+
+
+@pytest.mark.asyncio
+async def test_rest_subtree_export_streams_domain_zip(
+    client, test_db, make_project, admin_user,
+):
+    """Owner GET → 200 application/zip, attachment disposition, and the SAME
+    entry list the domain exporter builds for that root (bound to
+    export_subtree, never a literal) — the route adds transport only."""
+    pid = make_project.pid
+    root = await _seed_doc(test_db, pid, "r-root", "Research", "root body", None)
+    await _seed_doc(test_db, pid, "r-child", "Notes", "note body", root)
+
+    resp = await client.get(
+        f"/api/documents/{root}/export/subtree",
+        **_session(admin_user[1]),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("application/zip")
+    disposition = resp.headers["content-disposition"]
+    assert disposition.startswith("attachment;")
+    assert 'filename="subtree.zip"' in disposition
+
+    from subtree_md import export_subtree
+    domain = await export_subtree(root_id=root, project_id=pid)
+    assert _zip_names(resp.content) == _zip_names(domain["zip_bytes"])
+    encoded = quote(domain["filename"].encode("utf-8"), safe="")
+    assert f"filename*=UTF-8''{encoded}" in disposition
+
+
+@pytest.mark.asyncio
+async def test_rest_subtree_export_readonly_member_gets_zip(
+    client, test_db, make_project,
+):
+    """Read access is enough — the zip is a read-only artifact."""
+    from db import create_record
+
+    pid = make_project.pid
+    uid = "subtree-readonly-" + uuid.uuid4().hex[:8]
+    token = await _rest_user(test_db, uid, "readonly-member")
+    await create_record("project_members", f"pm-{uid}", {
+        "project_id": pid, "user_id": uid, "access_level": "readonly",
+    })
+    root = await _seed_doc(test_db, pid, "r-root", "R", "body", None)
+    await _seed_doc(test_db, pid, "r-child", "C", "c", root)
+
+    resp = await client.get(
+        f"/api/documents/{root}/export/subtree", **_session(token),
+    )
+    assert resp.status_code == 200, resp.text
+    assert _zip_names(resp.content)
+
+
+@pytest.mark.asyncio
+async def test_rest_subtree_export_non_member_is_exactly_404(
+    client, test_db, make_project,
+):
+    """A registered non-member gets exactly 404 — missing and forbidden are
+    one answer (require_document_read posture)."""
+    pid = make_project.pid
+    token = await _rest_user(
+        test_db, "subtree-stranger-" + uuid.uuid4().hex[:8], "stranger",
+    )
+    root = await _seed_doc(test_db, pid, "r-root", "R", "body", None)
+
+    resp = await client.get(
+        f"/api/documents/{root}/export/subtree", **_session(token),
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_rest_subtree_export_reference_root_is_404(
+    client, test_db, make_project, admin_user,
+):
+    """A reference has no subtree — refused like the tool gate refuses it."""
+    pid = make_project.pid
+    host = await _seed_doc(test_db, pid, "r-host", "Host", "h", None)
+    ref = await _seed_image_ref(test_db, pid, "r-img-ref", host)
+
+    resp = await client.get(
+        f"/api/documents/{ref}/export/subtree", **_session(admin_user[1]),
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_rest_subtree_export_deleted_root_is_404(
+    client, test_db, make_project, admin_user,
+):
+    """Soft-deleted root: the row keeps project_id, so access may resolve —
+    the gate (fetch_doc_meta or the route's own deleted check) must 404."""
+    pid = make_project.pid
+    root = await _seed_doc(test_db, pid, "r-root", "R", "body", None)
+    await test_db.query(
+        "UPDATE type::record('documents', $id) SET deleted_at = time::now()",
+        {"id": root},
+    )
+
+    resp = await client.get(
+        f"/api/documents/{root}/export/subtree", **_session(admin_user[1]),
+    )
+    assert resp.status_code == 404

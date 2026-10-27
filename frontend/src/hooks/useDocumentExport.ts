@@ -11,8 +11,28 @@ import { parseContentDispositionFilename } from '../utils/content-disposition';
 
 export type ExportFormat = 'pdf' | 'docx' | 'md';
 
+/** Internal busy tag: a format from the ?format= export, or the subtree zip
+ *  (a different endpoint — hence NOT in ExportFormat, which feeds ?format=). */
+export type ExportingKind = ExportFormat | 'zip';
+
+/** Shared download tail: blob → Content-Disposition filename → anchor click.
+ *  Module-level: uses no hook state, so the callbacks need no extra deps. */
+async function downloadBlob(resp: Response, fallbackFilename: string) {
+  const blob = await resp.blob();
+  const cd = resp.headers.get('content-disposition') || '';
+  const filename = parseContentDispositionFilename(cd, fallbackFilename);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 export function useDocumentExport() {
-  const [exportingFormat, setExportingFormat] = useState<ExportFormat | null>(null);
+  const [exportingFormat, setExportingFormat] = useState<ExportingKind | null>(null);
   const showToast = useAppStore(s => s.showToast);
   const { t } = useTranslation();
 
@@ -23,17 +43,7 @@ export function useDocumentExport() {
       if (checkpointId) qs.set("checkpoint_id", checkpointId);
       const resp = await fetch(`/api/documents/${documentId}/export?${qs.toString()}`, { credentials: 'include' });
       if (!resp.ok) throw new Error('Export failed');
-      const blob = await resp.blob();
-      const cd = resp.headers.get('content-disposition') || '';
-      const filename = parseContentDispositionFilename(cd, `document.${format}`);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      await downloadBlob(resp, `document.${format}`);
     } catch {
       showToast(t('infoExportFailed'), 'error');
     } finally {
@@ -41,5 +51,20 @@ export function useDocumentExport() {
     }
   }, [showToast, t]);
 
-  return { exportingFormat, exportFormat };
+  /** Subtree archive (SYSTEM: subtree-md): the document + all descendants as
+   *  one *.zip, always LIVE content — no checkpoint variant exists. */
+  const exportSubtree = useCallback(async (documentId: string) => {
+    setExportingFormat('zip');
+    try {
+      const resp = await fetch(`/api/documents/${documentId}/export/subtree`, { credentials: 'include' });
+      if (!resp.ok) throw new Error('Export failed');
+      await downloadBlob(resp, 'subtree.zip');
+    } catch {
+      showToast(t('infoExportFailed'), 'error');
+    } finally {
+      setExportingFormat(null);
+    }
+  }, [showToast, t]);
+
+  return { exportingFormat, exportFormat, exportSubtree };
 }

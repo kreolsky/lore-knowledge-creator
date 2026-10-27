@@ -15,7 +15,7 @@ import { useEvent } from '../hooks/useEvent';
 import { useHoverPreview } from '../hooks/useHoverPreview';
 import { useTranslation } from '../i18n';
 import { useEditorContent, getRoleView } from '../editor/active-editor';
-import type { Checkpoint, DocumentHistoryEntry } from '../types';
+import type { Checkpoint, DocumentHistoryEntry, DocumentTreeNode } from '../types';
 import { formatDate } from '../utils/format';
 import { Button, IconButton, FieldTextarea, DownloadMenu, PanelLoading } from './ui';
 import { PREVIEW_WIDTH } from '../utils/preview-geometry';
@@ -48,10 +48,10 @@ function SnapshotActions({ onEdit, isSelected }: { onEdit: () => void; isSelecte
 }
 
 export function HistoryPanel() {
-  const { currentDocument, rawReference, snapshotPreview, setSnapshotPreview, openSnapshotModal } = useAppStore(useShallow(s => ({
+  const { currentDocument, rawReference, snapshotPreview, setSnapshotPreview, openSnapshotModal, documentTree } = useAppStore(useShallow(s => ({
     currentDocument: s.currentDocument, rawReference: s.currentReference,
     snapshotPreview: s.snapshotPreview, setSnapshotPreview: s.setSnapshotPreview,
-    openSnapshotModal: s.openSnapshotModal,
+    openSnapshotModal: s.openSnapshotModal, documentTree: s.documentTree,
   })));
   // Panel quick preview: the Checkpoint tab is the DOCUMENT's — a previewed
   // reference is not the scope, so it does not lock the panel to
@@ -81,6 +81,24 @@ export function HistoryPanel() {
   const { t } = useTranslation();
   const isReference = !!currentReference;
   const currentDocId = currentDocument?.document_id ?? null;
+  // Subtree-zip gate: the *.zip item needs the CURRENT doc's node from the
+  // tree (no byId map exists for tree nodes — DocumentTree has its own walk).
+  // INVARIANT: offered only for a LIVE view of a PARENT doc.  Why: descendants
+  // have no matching snapshot, so a zip beside a selected one would mislabel a
+  // live archive as that snapshot; a one-file zip is the existing *.md.
+  const hasChildren = useMemo(() => {
+    if (!currentDocId) return false;
+    function search(nodes: DocumentTreeNode[]): DocumentTreeNode | undefined {
+      for (const n of nodes) {
+        if (n.document_id === currentDocId) return n;
+        const found = search(n.children);
+        if (found) return found;
+      }
+      return undefined;
+    }
+    const node = search(documentTree);
+    return !!node && node.children.length > 0;
+  }, [documentTree, currentDocId]);
 
   // INVARIANT: Shared cache Map for hover+click lazy content fetch.  Why: hover and click both lazy-fetch snapshot content; one shared Map avoids refetching the same snapshot on hover-then-click.
   const contentCache = useRef<Map<string, Checkpoint>>(new Map());
@@ -343,7 +361,7 @@ export function HistoryPanel() {
           <Plus size={13} />
           {t('saveSnapshot')}
         </Button>
-        <DownloadMenu documentId={currentDocId!} hasText theme={selectedId ? 'green' : 'default'} checkpointId={selectedId ?? undefined} />
+        <DownloadMenu documentId={currentDocId!} hasText theme={selectedId ? 'green' : 'default'} checkpointId={selectedId ?? undefined} subtree={!selectedId && hasChildren} />
       </div>
 
       {/* Timeline (overflow-hidden: capacity fits exactly; swipe owns paging) */}

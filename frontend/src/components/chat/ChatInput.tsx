@@ -24,6 +24,7 @@ import { canSend as computeCanSend } from '../../chat/send-gate';
 import { ghostPinTransfer } from '../../chat/ghost-pin-transfer';
 import { on, off, emit } from '../../events';
 import { clarifyBlock } from './clarify-format';
+import { insertAtCaret } from '../../utils/insert-at-caret';
 import { totalAttachmentBytes, attachmentBudgetExceeded, formatAttachmentMb } from '../../utils/attachment-size';
 import { selectBranchPath } from '../../store/chat-store/tree';
 import { effectiveCap } from '../../store/chat-store/misc-slice';
@@ -38,11 +39,14 @@ export function ChatInput() {
   const setDraft = useChatStore(s => s.setDraft);
   const { t } = useTranslation();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  // Voice transcription APPENDS to the store draft (read-append-write is safe:
-  // the callback is not concurrent with typing).
+  // Voice transcription is inserted at the composer's caret, not appended — the user
+  // dictates into the middle of a draft (read-splice-write is safe: the callback is not
+  // concurrent with typing). The caret is restored after the controlled value re-renders.
   const onTranscribed = useCallback((transcribed: string) => {
-    const draft = useChatStore.getState().draft;
-    useChatStore.getState().setDraft(draft + (draft ? ' ' : '') + transcribed);
+    const el = textareaRef.current;
+    const { text: next, caret } = insertAtCaret(useChatStore.getState().draft, transcribed, el);
+    useChatStore.getState().setDraft(next);
+    requestAnimationFrame(() => el?.setSelectionRange(caret, caret));
   }, []);
   const { recording, transcribing, toggleRecording, cancelRecording } = useSimpleVoiceRecording(onTranscribed);
 
@@ -86,33 +90,17 @@ export function ChatInput() {
     }
   }, [pendingInputFocus]);
 
-  // INVARIANT: the intro header is inserted only before the FIRST clarification in
-  // the current draft; the ref resets on send and on session switch.
-  // Why: otherwise the header would be duplicated before every appended question.
-  const hasClarificationsRef = useRef(false);
-  useEffect(() => {
-    hasClarificationsRef.current = false;
-  }, [activeSessionId]);
-
   useEffect(() => {
     const handler = ({ quote, question }: { quote: string; question: string }) => {
       const block = clarifyBlock(quote, question);
       // Append to the store draft (never overwrite — the user may have typed more).
       const prev = useChatStore.getState().draft;
-      let next: string;
-      if (!hasClarificationsRef.current) {
-        hasClarificationsRef.current = true;
-        const intro = t('chatClarifyIntro');
-        next = prev ? `${prev}\n\n${intro}\n\n${block}` : `${intro}\n\n${block}`;
-      } else {
-        next = prev ? `${prev}\n\n${block}` : block;
-      }
-      useChatStore.getState().setDraft(next);
+      useChatStore.getState().setDraft(prev ? `${prev}\n\n${block}` : block);
       textareaRef.current?.focus();
     };
     on('chat-clarify-insert', handler);
     return () => off('chat-clarify-insert', handler);
-  }, [t]);
+  }, []);
 
   // MessageList owns the scroll container; it reports when auto-follow is off and
   // listens for the jump — see 'chat-scrolled-away' / 'chat-scroll-to-bottom'.
@@ -377,7 +365,6 @@ export function ChatInput() {
     // the composer is consumed either way.
     sendMessage(text.trim(), imgs, files);
     setDraft('');
-    hasClarificationsRef.current = false;
     clearPendingImages();
     clearPendingFiles();
   }, [canSend, activeSessionId, projectId, currentDocId, currentReference, text, images, uploadedFiles, createSession, sendMessage, clearPendingImages, clearPendingFiles, setDraft]);

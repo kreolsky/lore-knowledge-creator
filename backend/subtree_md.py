@@ -133,7 +133,7 @@ class ExportNode:
     is_dir: bool
     #: zip-relative DIRECTORY this doc's file lives in ("" for the zip root).
     dir_path: str
-    #: zip-relative FILE path (`Title.md` leaf / `Title/INDEX.md` parent).
+    #: zip-relative FILE path (`Title.md` leaf / `Title/README.md` parent).
     file_path: str
     #: zip-relative assets dir for this doc's inline images (a LEAF shares its
     #: parent dir's bucket — a file cannot own a directory).
@@ -185,7 +185,7 @@ async def _subtree_children(
 
 async def _visit_export_node(row: dict, dir_path: str, *, children: dict,
                              plan: dict, dedup: _Dedup) -> None:
-    """Name one doc and recurse: a parent becomes `Title/` + `INDEX.md`, a
+    """Name one doc and recurse: a parent becomes `Title/` + `README.md`, a
     leaf `Title.md`; an empty leaf is skipped entirely."""
     doc_id = str(row["id"])
     kids = children.get(doc_id, [])
@@ -197,7 +197,7 @@ async def _visit_export_node(row: dict, dir_path: str, *, children: dict,
         node_dir = f"{dir_path}{stem}/"
         plan[doc_id] = ExportNode(
             doc_id=doc_id, title=row.get("title") or "Untitled",
-            is_dir=True, dir_path=dir_path, file_path=f"{node_dir}INDEX.md",
+            is_dir=True, dir_path=dir_path, file_path=f"{node_dir}README.md",
             assets_dir=f"{node_dir}_assets", content=content,
         )
         for kid in kids:
@@ -215,7 +215,7 @@ async def _visit_export_node(row: dict, dir_path: str, *, children: dict,
 async def plan_export(root_id: str, project_id: str) -> dict[str, ExportNode]:
     """Walk the subtree and produce the naming plan (doc_id → node), in tree
     order. Empty leaves are skipped entirely; a parent with empty content
-    keeps its dir but its INDEX.md is omitted at zip time. Siblings are
+    keeps its dir but its README.md is omitted at zip time. Siblings are
     alphabetical — manual order is an accepted round-trip loss."""
     root_row, children = await _subtree_children(root_id, project_id)
     plan: dict[str, ExportNode] = {}
@@ -410,7 +410,7 @@ async def export_subtree(*, root_id: str, project_id: str) -> dict:
 
     entries: dict[str, bytes] = {}
     for node in plan.values():
-        # INDEX.md is omitted for an empty parent — the dir stays for children.
+        # README.md is omitted for an empty parent — the dir stays for children.
         if node.content.strip():
             entries[node.file_path] = node.content.encode("utf-8")
     entries.update(assets.files)

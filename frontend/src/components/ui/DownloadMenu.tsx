@@ -1,7 +1,8 @@
 /** Unified download menu — one trigger ("Download ▾") opening a dropdown with
  * pdf / docx / markdown export items (driven by useDocumentExport → backend
  * `/api/documents/{id}/export`) plus an optional raw original-file item for
- * references that carry an uploaded file.
+ * references that carry an uploaded file, and an optional `*.zip` subtree
+ * item (live subtree archive via `/export/subtree`, caller-gated by `subtree`).
  *
  * ARCH: Replaces the divergent document/reference download buttons; both now
  * share one export path (backend already inlines ref images for every format).
@@ -46,13 +47,19 @@ interface Props {
   /** Icon-only trigger (IconButton, title = download) — for icon rows like the
    *  chat header / right-panel plaque, where a labelled button does not fit. */
   iconOnly?: boolean;
+  /** Offer the `*.zip` subtree item (document + all descendants, live content,
+   *  via /export/subtree — SYSTEM: subtree-md). Hidden while `checkpointId` is
+   *  set regardless of this prop: descendants have no matching snapshot, so a
+   *  zip beside a selected one would mislabel a live archive as that snapshot.
+   *  Caller gates the parent-doc half (a one-file zip is the existing *.md). */
+  subtree?: boolean;
 }
 
 const ALL_FORMATS: ExportFormat[] = ['pdf', 'docx', 'md'];
 
-export function DownloadMenu({ documentId, hasText, original, theme = 'default', checkpointId, exportFormats = ALL_FORMATS, iconOnly = false }: Props) {
+export function DownloadMenu({ documentId, hasText, original, theme = 'default', checkpointId, exportFormats = ALL_FORMATS, iconOnly = false, subtree = false }: Props) {
   const { t } = useTranslation();
-  const { exportingFormat, exportFormat } = useDocumentExport();
+  const { exportingFormat, exportFormat, exportSubtree } = useDocumentExport();
 
   if (!hasText && !original) return null;
 
@@ -123,6 +130,20 @@ export function DownloadMenu({ documentId, hasText, original, theme = 'default',
               {exportingFormat === fmt ? <span className="animate-pulse">{t('infoExporting')}</span> : `*.${fmt}`}
             </div>
           ))}
+          {subtree && !checkpointId && (
+            <div
+              role="button"
+              tabIndex={0}
+              className="download-menu__item block w-full text-left px-3 py-2 text-sm cursor-pointer text-text hover:bg-surface2 disabled:opacity-40 disabled:cursor-default"
+              onClick={() => {
+                if (busy) return;
+                exportSubtree(documentId);
+              }}
+              onKeyDown={e => { if (!busy && (e.key === 'Enter')) exportSubtree(documentId); }}
+            >
+              {exportingFormat === 'zip' ? <span className="animate-pulse">{t('infoExporting')}</span> : '*.zip'}
+            </div>
+          )}
           {original && (
             <a
               className="download-menu__item block w-full text-left px-3 py-2 text-sm cursor-pointer text-text hover:bg-surface2"

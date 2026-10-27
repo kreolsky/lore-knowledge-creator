@@ -47,13 +47,19 @@ export function isPlainCellText(text: string): boolean {
     && !LIGATURE_RULES.some((r) => text.includes(r.pattern));
 }
 
+/** `stampOffsets`: stamp each top-level rendered element with `data-src-off`, its start
+ *  offset in the cell text — opt-in, read by click-to-source mapping (table-widget.ts). */
+export interface CellRenderOptions {
+  stampOffsets?: boolean;
+}
+
 /**
  * Render cell markdown through the cell's live-preview pipeline: one plain `<div>` per line
  * holding a copy of the line's rendered content. Line-level decoration (classes other than
  * `cm-line`, inline style such as list indent) is carried over; `cm-line` itself is not, so
  * the document's line padding and `:has()` heading rules never match placeholder lines.
  */
-export function renderCellThroughEditor(text: string): DocumentFragment {
+export function renderCellThroughEditor(text: string, opts: CellRenderOptions = {}): DocumentFragment {
   const view = getRenderer();
   view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
   const frag = document.createDocumentFragment();
@@ -63,7 +69,15 @@ export function renderCellThroughEditor(text: string): DocumentFragment {
     if (classes.length) div.className = classes.join(' ');
     const style = line.getAttribute('style');
     if (style) div.setAttribute('style', style);
-    for (const node of line.childNodes) div.appendChild(node.cloneNode(true));
+    for (const node of line.childNodes) {
+      const copy = node.cloneNode(true);
+      // WHY stamped from the source node: the copy is detached, so only the renderer can
+      // still say which cell-text offset a rendered element starts at.
+      if (opts.stampOffsets && copy instanceof HTMLElement) {
+        copy.dataset.srcOff = String(view.posAtDOM(node, 0));
+      }
+      div.appendChild(copy);
+    }
     frag.appendChild(div);
   }
   return frag;
@@ -74,6 +88,6 @@ export function renderCellThroughEditor(text: string): DocumentFragment {
  * dispatch per cell, which makes a large imported CSV (mostly numbers and plain words) slow
  * to open; plain text renders as itself, so it is a bare text node.
  */
-export function renderCellStatic(text: string): Node {
-  return isPlainCellText(text) ? document.createTextNode(text) : renderCellThroughEditor(text);
+export function renderCellStatic(text: string, opts: CellRenderOptions = {}): Node {
+  return isPlainCellText(text) ? document.createTextNode(text) : renderCellThroughEditor(text, opts);
 }

@@ -82,3 +82,21 @@ describe('renderCellStatic', () => {
     expect(isPlainCellText(text)).toBe(false);
   });
 });
+
+describe('renderCellStatic — source-offset stamps', () => {
+  const wrap = (n: Node) => { const d = document.createElement('div'); d.appendChild(n); return d; };
+
+  it('stamps the link element with an offset inside the link source', () => {
+    const src = 'see [repo](https://e.com)';
+    const el = wrap(renderCellStatic(src, { stampOffsets: true }));
+    const link = [...el.querySelectorAll<HTMLElement>('[data-src-off]')].find((e) => e.textContent === 'repo')!;
+    const off = Number(link.dataset.srcOff);
+    expect(off).toBeGreaterThanOrEqual(src.indexOf('['));
+    expect(off).toBeLessThan(src.length);
+  });
+
+  it('stamps nothing without the option', () => {
+    const el = wrap(renderCellStatic('see [repo](https://e.com)'));
+    expect(el.querySelector('[data-src-off]')).toBeNull();
+  });
+});

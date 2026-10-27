@@ -12,7 +12,7 @@ EXPORT_SUBTREE_MD_TOOL: dict = {
         "description": (
             "Export a document's whole subtree as ONE zip of Markdown files, "
             "laid out for GitHub/Obsidian: a parent becomes `Title/` with its "
-            "body in `INDEX.md`, a leaf becomes `Title.md`, inline image "
+            "body in `README.md`, a leaf becomes `Title.md`, inline image "
             "binaries land in `Title/_assets/` and are linked relatively, "
             "tables are plain GFM, mention links to docs inside the subtree "
             "become relative file links. Returns a short-lived URL to "

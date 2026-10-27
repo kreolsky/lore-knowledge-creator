@@ -33,6 +33,7 @@ What the guide does not describe and the "Planned" list does not mention is most
 - [Search](help:search) — documents, memory, your chats, find and replace.
 - [Access and publishing](help:access) — members, group access, public links and comments, account tiers, API keys, arrival notifications, moving between projects.
 - [Screen lock](help:pin-lock) — PIN lock.
+- [External agent (MCP)](help:external-agent) — connecting Claude Code or another MCP client with an API key: scope, rights, what it can and cannot do, undo, limits.
 
 ## Planned
 

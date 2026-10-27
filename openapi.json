@@ -9222,6 +9222,60 @@
         "summary": "Export Document Endpoint"
       }
     },
+    "/api/documents/{document_id}/export/subtree": {
+      "get": {
+        "description": "Download the document's whole subtree as a zip of Markdown files.",
+        "operationId": "export_subtree_endpoint_api_documents__document_id__export_subtree_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Subtree Endpoint"
+      }
+    },
     "/api/documents/{document_id}/history": {
       "get": {
         "description": "Return the document change history (creation + first-edit-per-user).",

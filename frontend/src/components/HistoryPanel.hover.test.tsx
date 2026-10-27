@@ -35,6 +35,8 @@ const appState: Record<string, unknown> = {
   setSnapshotPreview: vi.fn(),
   openSnapshotModal: vi.fn(),
   showToast: vi.fn(),
+  // HistoryPanel walks the tree for the subtree-zip gate; real store always has it.
+  documentTree: [],
 };
 vi.mock('../store/app-store', () => ({
   useAppStore: Object.assign((sel: (s: unknown) => unknown) => sel(appState), { getState: () => appState }),

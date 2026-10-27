@@ -6,7 +6,8 @@
  * renders the inbox — seeded from the messages GET's snapshot and kept
  * current by the relayed `agent/inbox/spliced` frames (chat/inbox-queue.ts).
  * ✕ asks the plugin to remove the message; the chip leaves when the splice
- * frame arrives, never optimistically (the fold is index-based).
+ * frame arrives, never optimistically (the fold is index-based), and a removed
+ * message's text returns to the composer.
  *
  * INVARIANT: the queue fold and `dshRunning` belong to the active chat and
  * are reset on every activeSessionId transition (chat-store.ts watcher). Why:
@@ -24,6 +25,7 @@ import {
   type InboxFold,
 } from '../../chat/inbox-queue';
 import { registerChatResetHandler } from './reset-registry';
+import { appendDraft } from './misc-slice';
 import type { ChatState, Get, Set } from './types';
 
 let fold: InboxFold = EMPTY_FOLD;
@@ -79,15 +81,27 @@ export function resetInbox(set: Set): void {
   set({ inboxQueue: [], dshRunning: false });
 }
 
-export function createInboxSlice(_set: Set, get: Get): Pick<ChatState, 'discardQueued'> {
+export function createInboxSlice(set: Set, get: Get): Pick<ChatState, 'discardQueued'> {
   return {
     async discardQueued(messageId) {
       const sessionId = get().activeSessionId;
       if (!sessionId) return;
+      // Read before the POST: the chip leaves with the splice frame, which may
+      // land before the reply does.
+      const text = get().inboxQueue.find(m => m.id === messageId)?.text ?? '';
       try {
         // `{removed: false}` = claimed in the meantime: its turn running in
         // the transcript is the feedback, so no toast (operator ruling).
-        await apiClient.post(`/chat/sessions/${sessionId}/inbox/discard`, { message_id: messageId });
+        const reply: { removed?: boolean } | undefined = await apiClient.post(
+          `/chat/sessions/${sessionId}/inbox/discard`, { message_id: messageId });
+        // INVARIANT(data-loss): a discarded message's text returns to the composer,
+        // appended below the draft — successive discards stack in discard order.
+        // Why: ✕ means "not now", not "delete what I wrote"; a claimed one ran,
+        // so nothing returns.
+        if (reply?.removed && text) {
+          appendDraft(get, text);
+          set({ pendingInputFocus: true });
+        }
       } catch {
         useAppStore.getState().showToast(t('queueDiscardFailed'), 'error');
       }

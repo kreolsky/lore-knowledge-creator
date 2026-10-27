@@ -16,6 +16,7 @@ import { useIsProjectOwner } from '../hooks/useIsProjectOwner';
 import { useTranslation } from '../i18n';
 import { useSimpleVoiceRecording } from '../hooks/useSimpleVoiceRecording';
 import { totalAttachmentBytes, attachmentBudgetExceeded, formatAttachmentMb } from '../utils/attachment-size';
+import { insertAtCaret } from '../utils/insert-at-caret';
 
 const STICK_EPSILON = 48;
 
@@ -81,13 +82,15 @@ export function NoteChatView() {
     }
   }, [pendingInputFocus, messagesLoading, setPendingInputFocus]);
 
-  // Voice transcription APPENDS to the thread's draft (read-append-write is safe:
-  // the callback is not concurrent with typing).
+  // Voice transcription is inserted at the composer's caret, like the main chat
+  // (read-splice-write is safe: the callback is not concurrent with typing).
   const onTranscribed = useCallback((transcribed: string) => {
     const { activeSessionId: sid, drafts, setDraftForSession: set } = useNoteChatStore.getState();
     if (!sid) return;
-    const prev = drafts[sid] ?? '';
-    set(sid, prev + (prev ? ' ' : '') + transcribed);
+    const el = textareaRef.current;
+    const { text: next, caret } = insertAtCaret(drafts[sid] ?? '', transcribed, el);
+    set(sid, next);
+    requestAnimationFrame(() => el?.setSelectionRange(caret, caret));
   }, []);
   const { recording, transcribing, toggleRecording, cancelRecording } = useSimpleVoiceRecording(onTranscribed);
   // see SYSTEM: capability-tiers — the note mic is voice-gated: ChatComposer hides

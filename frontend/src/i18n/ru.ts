@@ -383,7 +383,6 @@ export const ru: Record<TranslationKey, string> = {
   chatRequestTooLarge: 'Запрос слишком большой — в этой переписке слишком много изображений. Начните новый чат, чтобы продолжить.',
   chatClarify: 'Уточнить',
   chatClarifyPlaceholder: 'Ваш уточняющий вопрос…',
-  chatClarifyIntro: 'Ниже — фрагменты ответа выше, по которым у меня есть уточняющие вопросы:',
   removeImage: 'Удалить изображение',
   removeFile: 'Удалить файл',
   chatFileTooLarge: '{name} слишком большой — файлы до {limit} МБ',

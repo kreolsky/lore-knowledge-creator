@@ -5,6 +5,8 @@ last-accessed pointer) lives in backend/documents/ (command modules +
 service helpers); these handlers enforce access, then delegate.
 See SYSTEM: documents (entry: backend/documents/__init__.py).
 """
+from urllib.parse import quote
+
 from documents.batch_read import fetch_content_batch
 from documents.create import create_document_command
 from documents.delete import delete_document_command, delete_documents_batch_command
@@ -15,8 +17,9 @@ from documents.update import (
     reorder_document_command,
     update_document_command,
 )
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from history_service import list_history as _list_history
+from subtree_md import export_subtree
 from surrealdb import AsyncSurreal
 
 from access import (
@@ -195,6 +198,36 @@ async def export_document_endpoint(document_id: str, format: str = "pdf", checkp
     """
     await require_document_read(document_id, user)
     return await export_document(document_id, format=format, checkpoint_id=checkpoint_id)
+
+
+# ARCH(subtree-zip): the browser twin of the MCP export_subtree_md tool — the
+# SAME domain exporter (subtree_md.export_subtree, SYSTEM: subtree-md), a
+# different transport: the browser can receive bytes, so the zip streams
+# inline with Content-Disposition instead of staging + a signed URL. The gate
+# mirrors the tool's _gate_export_root minus the agent-scope ceiling; access
+# needs no per-descendant filter because document access IS project access
+# (INVARIANT(security), access.py) and _subtree_children walks only in-project
+# live rows.
+@router.get("/api/documents/{document_id}/export/subtree")
+async def export_subtree_endpoint(document_id: str, user: dict = Depends(get_current_user)):
+    """Download the document's whole subtree as a zip of Markdown files."""
+    await require_document_read(document_id, user)
+    row = await fetch_one("documents", document_id)
+    if not row or row.get("deleted_at") or is_ref_row(row):
+        raise HTTPException(status_code=404, detail="Document not found")
+    result = await export_subtree(
+        root_id=document_id, project_id=row["project_id"],
+    )
+    # Same inline RFC 5987 form the single-doc export builds (service.py) —
+    # no shared helper exists; these two lines are the duplicate the plan
+    # accepted rather than inventing one.
+    encoded_name = quote(result["filename"].encode("utf-8"), safe="")
+    content_disposition = f"attachment; filename=\"subtree.zip\"; filename*=UTF-8''{encoded_name}"
+    return Response(
+        content=result["zip_bytes"],
+        media_type="application/zip",
+        headers={"Content-Disposition": content_disposition},
+    )
 
 
 @router.post("/api/documents")

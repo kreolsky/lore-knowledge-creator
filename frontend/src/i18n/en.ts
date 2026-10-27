@@ -381,7 +381,6 @@ export const en = {
   chatRequestTooLarge: 'Request too large — too many images in this conversation. Start a new chat to continue.',
   chatClarify: 'Clarify',
   chatClarifyPlaceholder: 'Your clarifying question…',
-  chatClarifyIntro: 'Below are fragments of the answer above that I have clarifying questions about:',
   removeImage: 'Remove image',
   removeFile: 'Remove file',
   chatFileTooLarge: '{name} is too large — files up to {limit} MB',
