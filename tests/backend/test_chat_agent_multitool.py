@@ -100,9 +100,11 @@ def test_agent_tool_set_capability_surface():
     # D14: import_file moved off AGENT_TOOLS (Pi-only now); MCP serves attach_file.
     assert names == {
         "search_materials", "read_document", "get_project_structure",
+        "export_subtree_md",
         "edit_document", "create_document", "edit_table_cell",
         "create_table", "add_table_rows", "add_table_column",
         "append_to_document", "move_document", "rename_document",
+        "import_subtree_md",
     }
     for t in AGENT_TOOLS:
         assert t["type"] == "function"
@@ -119,6 +121,7 @@ def test_agent_tool_kinds_classified():
         "create_document", "edit_document", "edit_table_cell",
         "create_table", "add_table_rows", "add_table_column",
         "append_to_document", "move_document", "rename_document",
+        "import_subtree_md",
         "import_file",
         "sandbox_bash", "sandbox_fetch_reference",
         # generate_image (comfyui-agent-image-gen): mutating for sequential ComfyUI

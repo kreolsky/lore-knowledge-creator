@@ -41,6 +41,7 @@ import routes.tool_api.reads  # noqa: F401
 import routes.tool_api.sandbox  # noqa: F401
 import routes.tool_api.skills  # noqa: F401
 import routes.tool_api.structure  # noqa: F401
+import routes.tool_api.subtree  # noqa: F401
 from routes.tool_api._router import router  # noqa: E402
 
 bind_tool_api_routes(router)

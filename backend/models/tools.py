@@ -586,6 +586,40 @@ class ToolImportFile(BaseModel):
         return self
 
 
+class ToolExportSubtreeMd(BaseModel):
+    """export_subtree_md body — subtree → staged Markdown zip + signed URL.
+
+    Non-mutating by declaration: the call changes no Lore state (the staged
+    zip is ephemeral storage swept by TTL), so a read-only key may call it.
+    """
+
+    root_id: str
+
+
+class ToolImportSubtreeMd(BaseModel):
+    """import_subtree_md body — an md-folder zip → a Lore subtree under a parent.
+
+    Auto-only (the import_file posture: the bytes are user-supplied data, not
+    a text edit to confirm — no `apply` field, never held). At most ONE zip
+    source: `staged_id` (the mcp-upload staging flow) or `sandbox_path` (a
+    workspace file, console-only). NEITHER means MINT — the call returns a
+    short-lived upload URL to POST the zip to, then re-call with the POST's
+    `staged_id`.
+    """
+
+    parent_id: str | None = None
+    staged_id: str | None = None
+    sandbox_path: str | None = None
+
+    @model_validator(mode="after")
+    def _at_most_one_source(self) -> "ToolImportSubtreeMd":
+        if self.staged_id is not None and self.sandbox_path is not None:
+            raise ValueError(
+                "Provide at most one of `staged_id` or `sandbox_path`"
+            )
+        return self
+
+
 class ToolSandboxFetchReference(BaseModel):
     """sandbox_fetch_reference body — copy an uploaded reference INTO the workspace.
 

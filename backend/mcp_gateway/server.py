@@ -43,7 +43,11 @@ from mcp.server.context import ServerRequestContext
 from mcp.server.lowlevel.server import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.shared.exceptions import MCPError
-from rate_limit import check_mcp_mutating_rate_limit, check_mcp_transport_rate_limit
+from rate_limit import (
+    check_mcp_mutating_rate_limit,
+    check_mcp_transport_ip_rate_limit,
+    check_mcp_transport_rate_limit,
+)
 
 from db import coerce_record_ids, fetch_one
 from mcp_gateway.dispatch import dispatch_tool
@@ -322,6 +326,58 @@ async def _send_http_json(send, status: int, payload: dict) -> None:
     await send({"type": "http.response.body", "body": body})
 
 
+def _client_ip(headers: list, scope: dict) -> str:
+    """The caller's address for the per-IP flood bucket: X-Real-IP first (nginx
+    overwrites it with $remote_addr at the edge, so a client-supplied value does
+    not survive the proxy), falling back to the ASGI client address.
+    X-Forwarded-For is deliberately NOT parsed — its leftmost value is
+    client-controlled. Empty when no address is resolvable (local/tests)."""
+    for k, v in headers:
+        if k == b"x-real-ip":
+            ip = v.decode("latin-1").strip()
+            if ip:
+                return ip
+    client = scope.get("client")
+    if client and client[0]:
+        return client[0]
+    return ""
+
+
+async def _transport_gate(scope: dict, headers: list) -> tuple[int, dict] | None:
+    """Gate 1 + the F3 flood ceilings: Bearer-format check and the two transport
+    rate-limit buckets, all BEFORE the stateless session manager runs — none of
+    them touches the DB. Returns the (status, payload) rejection to send, or
+    None when the request may reach the session manager.
+
+    F3 (audit) — two buckets, two jobs:
+    - Per-token bucket: bounds a REPEATED token. initialize and ping still reach
+      the manager with no app-level auth (tools/list carries per-call DB auth,
+      but the request itself is not free), so one token hammering the manager
+      is capped here.
+    - Per-IP bucket: bounds token ROTATION — a flood where every request
+      carries a fresh bogus Bearer gives the per-token bucket nothing to count.
+      Keyed on the address _client_ip reports. Cross-IP volumetric DoS is
+      neither bucket's job — that stays the edge's.
+    """
+    auth = ""
+    for k, v in headers:
+        if k == b"authorization":
+            auth = v.decode("latin-1")
+            break
+    token = auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else ""
+    if not token:
+        return 401, {"detail": "Missing or invalid Authorization"}
+    import hashlib
+
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    if not await check_mcp_transport_rate_limit(token_hash):
+        return 429, {"detail": "Too many requests"}
+    ip = _client_ip(headers, scope)
+    if ip and not await check_mcp_transport_ip_rate_limit(ip):
+        return 429, {"detail": "Too many requests"}
+    return None
+
+
 async def mcp_asgi_app(scope, receive, send) -> None:
     """The mounted /mcp ASGI app: a cheap Authorization format gate in front of
     the session manager's handle_request (gate 1; the DB-backed gate 2 runs per
@@ -344,27 +400,9 @@ async def mcp_asgi_app(scope, receive, send) -> None:
                 send, 405, {"detail": "SSE stream not supported in stateless mode"}
             )
             return
-        headers = scope.get("headers") or []
-        auth = ""
-        for k, v in headers:
-            if k == b"authorization":
-                auth = v.decode("latin-1")
-                break
-        token = auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else ""
-        if not token:
-            await _send_http_json(send, 401, {"detail": "Missing or invalid Authorization"})
-            return
-        # F3 (audit): transport-level flood ceiling BEFORE the stateless session
-        # manager runs. tools/list now carries per-call DB auth (the {{ROOT}}
-        # render needs the key), but initialize and ping still reach the manager
-        # with no app-level auth — without this ceiling an unauthenticated flood
-        # (bad token spam) hits the manager unbounded. Keyed on the token hash —
-        # the cheap gate never touches the DB.
-        import hashlib
-
-        token_hash = hashlib.sha256(token.encode()).hexdigest()
-        if not await check_mcp_transport_rate_limit(token_hash):
-            await _send_http_json(send, 429, {"detail": "Too many requests"})
+        rejection = await _transport_gate(scope, scope.get("headers") or [])
+        if rejection is not None:
+            await _send_http_json(send, rejection[0], rejection[1])
             return
     await _manager.handle_request(scope, receive, send)  # type: ignore[union-attr]
 

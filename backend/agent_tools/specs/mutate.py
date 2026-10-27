@@ -1,7 +1,10 @@
 """Mutating agent tool CONSTANTS: the document/table write entries of
 AGENT_TOOLS (MUTATE_TOOLS) — create/edit/append/move_document/rename_document
-+ the table tools. Pure data — imports nothing from the agent package (leaf).
++ the table tools + the subtree zip import. Pure data — imports nothing from
+the agent package (leaf; the subtree spec dict comes from the sibling
+specs/subtree.py data module).
 """
+from agent_tools.specs.subtree import IMPORT_SUBTREE_MD_TOOL
 
 MUTATE_TOOLS: list[dict] = [
     {
@@ -387,4 +390,5 @@ MUTATE_TOOLS: list[dict] = [
             },
         },
     },
+    IMPORT_SUBTREE_MD_TOOL,
 ]

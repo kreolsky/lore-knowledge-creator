@@ -469,9 +469,9 @@ class TestRenameDocumentTool:
 
 class TestRenameDocumentSurface:
     """The tool's declaration surface: serving order (Pi = declaration order,
-    rename after move_document), MCP membership (appended — _TOOL_LIST_ORDER
-    deliberately not edited), mutating + holdable derivation, and the
-    MCP description override (proposal-free wording)."""
+    rename after move_document), MCP membership (ordered in the tree part of
+    _TOOL_LIST_ORDER since the subtree-md branch), mutating + holdable
+    derivation, and the MCP description override (proposal-free wording)."""
 
     async def test_served_after_move_document_on_pi(self):
         from agent.tools import AGENT_TOOLS, agent_toolset

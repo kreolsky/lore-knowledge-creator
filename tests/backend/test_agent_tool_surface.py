@@ -27,9 +27,11 @@ def test_agent_tools_exact_capability_surface():
     # rename_document (rename-document-tool): the reviewed expansion of this set.
     assert names == {
         "search_materials", "read_document", "get_project_structure",
+        "export_subtree_md",
         "edit_document", "create_document", "edit_table_cell",
         "create_table", "add_table_rows", "add_table_column",
         "append_to_document", "move_document", "rename_document",
+        "import_subtree_md",
     }
 
 
@@ -73,6 +75,7 @@ def test_mutating_tools_unaffected():
         "create_document", "edit_document", "edit_table_cell",
         "create_table", "add_table_rows", "add_table_column",
         "append_to_document", "move_document", "rename_document",
+        "import_subtree_md",
         "import_file",
         "sandbox_bash",
         # sandbox_fetch_reference (sandbox-file-bridge plan) rides the same property

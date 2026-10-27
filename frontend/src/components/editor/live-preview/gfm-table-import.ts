@@ -1,12 +1,12 @@
 /**
  * GFM markdown → table-object import (the paste/import path).
  *
- * SYSTEM: table-block — the ONE sanctioned GFM→object conversion on the frontend (the
- * Python twin is the `parse_gfm_table` oracle in tests/backend/helpers.py — production
- * serializes only). Typed/authored pipe tables stay plain
- * GFM; only an *imported* GFM table is upgraded into an editable table object so the user
- * can edit it. Detects a GFM table block in markdown, creates a `tables` model per block,
- * and splices an `![label](table:id)` anchor in its place.
+ * SYSTEM: table-block — the sanctioned UI-side GFM→object conversion (whole-file imports
+ * run the backend twin in table_serialize.py — parse_gfm_table + import_gfm_tables — which
+ * the test oracle delegates to, so there is ONE parser per side). Typed/authored pipe
+ * tables stay plain GFM; only an *imported* GFM table is upgraded into an editable table
+ * object so the user can edit it. Detects a GFM table block in markdown, creates a
+ * `tables` model per block, and splices an `![label](table:id)` anchor in its place.
  *
  * INVARIANT: cell-text parsing is byte-for-byte the inverse of the serializer — `<br>` →
  * newline, `\|` → literal pipe, exactly one padding space stripped per side. Why: an

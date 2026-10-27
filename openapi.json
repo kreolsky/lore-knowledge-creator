@@ -3175,6 +3175,20 @@
         "title": "ToolEditTableCell",
         "type": "object"
       },
+      "ToolExportSubtreeMd": {
+        "description": "export_subtree_md body — subtree → staged Markdown zip + signed URL.\n\nNon-mutating by declaration: the call changes no Lore state (the staged\nzip is ephemeral storage swept by TTL), so a read-only key may call it.",
+        "properties": {
+          "root_id": {
+            "title": "Root Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "root_id"
+        ],
+        "title": "ToolExportSubtreeMd",
+        "type": "object"
+      },
       "ToolGenerateImage": {
         "description": "generate_image body — produce an image via ComfyUI and attach it as an\nimage reference to the working document.",
         "properties": {
@@ -3344,6 +3358,46 @@
           }
         },
         "title": "ToolImportFile",
+        "type": "object"
+      },
+      "ToolImportSubtreeMd": {
+        "description": "import_subtree_md body — an md-folder zip → a Lore subtree under a parent.\n\nAuto-only (the import_file posture: the bytes are user-supplied data, not\na text edit to confirm — no `apply` field, never held). At most ONE zip\nsource: `staged_id` (the mcp-upload staging flow) or `sandbox_path` (a\nworkspace file, console-only). NEITHER means MINT — the call returns a\nshort-lived upload URL to POST the zip to, then re-call with the POST's\n`staged_id`.",
+        "properties": {
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          },
+          "sandbox_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sandbox Path"
+          },
+          "staged_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Staged Id"
+          }
+        },
+        "title": "ToolImportSubtreeMd",
         "type": "object"
       },
       "ToolListMyChats": {
@@ -9726,6 +9780,44 @@
         "summary": "Serve Mcp Download"
       }
     },
+    "/api/mcp/staged/{token}": {
+      "get": {
+        "description": "Serve a STAGED export zip by signed token (UNAUTHENTICATED).\n\nThe subtree-Markdown export channel (domain: backend/subtree_md.py) — the\ndownload half of the staged-artifact transport in mcp_gateway/staging.py\n(see SYSTEM: mcp-upload-url for the upload half). A staged zip has no\ndocuments row, which is why this does NOT go through\nresolve_reference_file: the token binds exactly one staging-root\nartifact id and expires, and staged_path re-validates the id and the\ncontainment under the staging root.\n\n# INVARIANT (security): same posture as serve_mcp_download — a valid\n# token is the ONLY way in, it cannot be widened (single artifact, short\n# exp), a bad/expired/tampered token is a uniform 403, and there is no\n# app-layer rate limit by design (edge job; blast radius is one immutable\n# swept-by-TTL zip).",
+        "operationId": "serve_mcp_staged_download_api_mcp_staged__token__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "title": "Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Serve Mcp Staged Download"
+      }
+    },
     "/api/mcp/upload/{token}": {
       "get": {
         "description": "D11: an agent holding a URL WILL probe it with GET. Return the recipe (a curl\nexample) rather than a bare Method Not Allowed, so the agent learns the POST shape\nwithout guessing. The token is NOT verified here — a probe carries no bytes.",
@@ -9764,7 +9856,7 @@
         "summary": "Redeem Mcp Upload Recipe"
       },
       "post": {
-        "description": "Store a file and create a reference node, authorized ONLY by the signed token.\n\nOrchestrates: resolve token claims → dedup-or-create → normalize response. Each\nstage is a helper so the route reads as the protocol it implements (see the\nper-helper docstrings for the invariants they own).\n\n# see SYSTEM: capability-tiers — the audio arm queues STT, so it is\n# 'voice'-gated. Principal = the key owner who minted the token\n# (claims[\"user_id\"], pinned role \"user\" — a key never inherits an\n# instance role, so an admin's key is bounded by that admin's stored\n# tier). Runs BEFORE the dedup claim so a refused upload leaves no\n# locking sentinel.",
+        "description": "Store a file and create a reference node, authorized ONLY by the signed\ntoken — or, for a STAGING token, stage the bytes with no node at all (the\nsubtree-zip import flow; the import tool call walks the staged artifact).\n\nOrchestrates: resolve token claims → dedup-or-create → normalize response. Each\nstage is a helper so the route reads as the protocol it implements (see the\nper-helper docstrings for the invariants they own).\n\n# see SYSTEM: capability-tiers — the audio arm queues STT, so it is\n# 'voice'-gated. Principal = the key owner who minted the token\n# (claims[\"user_id\"], pinned role \"user\" — a key never inherits an\n# instance role, so an admin's key is bounded by that admin's stored\n# tier). Runs BEFORE the dedup claim so a refused upload leaves no\n# locking sentinel.",
         "operationId": "redeem_mcp_upload_api_mcp_upload__token__post",
         "parameters": [
           {
@@ -14915,6 +15007,137 @@
         ]
       }
     },
+    "/api/tool/export_subtree_md": {
+      "post": {
+        "description": "Export a document's whole subtree as a zip of Markdown files\n(GitHub/Obsidian-compatible layout) and return a short-lived download URL\n— never bytes.",
+        "operationId": "tool_export_subtree_md_api_tool_export_subtree_md_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolExportSubtreeMd"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Export Subtree Md",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
     "/api/tool/generate_image": {
       "post": {
         "description": "Generate an image via ComfyUI and attach it as an image reference to the\nworking document.\n\nThe agent's `prompt` — a complete, self-contained scene description — is\nrefined server-side into an SD prompt before it reaches ComfyUI.\nDETACHED: this handler is a\nfast LAUNCHER. It validates the doc + target + the count/workflow pairing\n(everything that surfaces a clean HTTP error), mints a run_id, enqueues an\narq task with the admin workflow, size and prompt template, and returns\nat once:\n\n    {status:\"generating\", run_id, doc_id}\n\nThe ~10–20s generation runs on the arq DEFAULT queue (NOT a web-process\ntask — the web process is reload-volatile and a create_task dies with an\nunreported CancelledError on any .py edit/deploy/restart). The image lands\nasynchronously on the chat's working document (the session's stable parent)\nand is delivered to the chat as backend-minted `lore/image-gen` frames on\nthe owner-filtered chat channel (bus chat_frame_push → the chat_frame WS\nenvelope); the chips are persisted server-side to messages.gen_steps so a\nreload still shows them (the driver's log never sees the background task).\nThe refined SD prompt is NOT in the result (it would land in the agent's\ncontext) — it travels inside the minted frame and the persisted chip.\n\n# see SYSTEM: capability-tiers — 'ai' gate, defense in depth: the only caller\n# is an ai-gated turn (the completion gate), but the tool itself is a\n# cost start and carries its own gate. Principal = ctx[\"user\"] (the\n# role-pinned agent principal — no role inheritance).",
@@ -15563,6 +15786,136 @@
           }
         },
         "summary": "Tool Import File",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
+    "/api/tool/import_subtree_md": {
+      "post": {
+        "description": "Import an md-folder zip (Obsidian-shaped) as a subtree under parent_id.\n\nNo zip source ⇒ MINT: return the short-lived upload URL to POST it to.\n`staged_id` ⇒ walk the staged artifact; `sandbox_path` (console) ⇒ read\nthe workspace zip. Applies immediately (auto-only, the import_file\nposture); every created document goes through the shared create factory,\nso parent validity, the scope wall and unique paths are its own gates.",
+        "operationId": "tool_import_subtree_md_api_tool_import_subtree_md_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolImportSubtreeMd"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Import Subtree Md",
         "tags": [
           "tool-api"
         ]

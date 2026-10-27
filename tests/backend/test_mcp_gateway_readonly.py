@@ -285,6 +285,7 @@ async def test_tools_list_returns_agent_surface(client, mcp_running, test_db, ad
         t["function"]["name"]: t for t in AGENT_TOOLS
         if t["function"]["name"] in {
             "search_materials", "read_document", "get_project_structure",
+            "export_subtree_md",
         }
     }
     for name, spec in read_in_agent.items():
@@ -317,14 +318,13 @@ def test_tools_list_curated_order(monkeypatch):
     assert names == [
         "init",
         "search_materials", "read_document", "get_project_structure",
+        "export_subtree_md",
         "create_document", "edit_document", "append_to_document",
         "attach_file", "get_file", "reprocess_file",
-        "move_document",
+        "move_document", "rename_document", "import_subtree_md",
         "create_table", "edit_table_cell", "add_table_rows", "add_table_column",
-        # rename_document: not in _TOOL_LIST_ORDER (deliberately unordered —
-        # curation is cosmetic), so build_tool_list APPENDS it.
-        "rename_document",
-        # D14: import_file is Pi-only now (MCP serves attach_file). 16 tools by default.
+        # D14: import_file is Pi-only now (MCP serves attach_file). 18 tools by
+        # default, counting init like the redesign suite's pin.
     ], names
 
 

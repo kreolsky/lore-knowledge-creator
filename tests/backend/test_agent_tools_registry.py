@@ -120,9 +120,11 @@ def test_agent_tools_equals_mcp_surface_of_registry_in_order():
     )
     assert [t["function"]["name"] for t in AGENT_TOOLS] == [
         "search_materials", "read_document", "get_project_structure",
+        "export_subtree_md",
         "create_document", "edit_document", "edit_table_cell",
         "create_table", "add_table_rows", "add_table_column",
         "append_to_document", "move_document", "rename_document",
+        "import_subtree_md",
     ]
 
 
@@ -134,9 +136,11 @@ async def test_agent_toolset_full_order_with_gates_on(monkeypatch):
     names = [t["function"]["name"] for t in await tools.agent_toolset()]
     assert names == [
         "search_materials", "read_document", "get_project_structure",
+        "export_subtree_md",
         "create_document", "edit_document", "edit_table_cell",
         "create_table", "add_table_rows", "add_table_column",
         "append_to_document", "move_document", "rename_document",
+        "import_subtree_md",
         "sandbox_bash", "sandbox_fetch_reference", "sandbox_fetch_skill",
         "sandbox_run_status",
         "generate_image",

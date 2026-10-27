@@ -138,7 +138,7 @@ def test_d13_run_extractor_renamed_to_preview_extractor(monkeypatch):
 
 
 def test_resulting_surface_is_the_expected_set():
-    """The full served surface (16 by default; preview_extractor gated). Pins every
+    """The full served surface (18 by default; preview_extractor gated). Pins every
     flag that shapes it (testing.md) via the INVARIANT fixture below."""
     from mcp_gateway.schemas import build_tool_list
 
@@ -146,13 +146,14 @@ def test_resulting_surface_is_the_expected_set():
 
     expected = {
         "init", "search_materials", "read_document", "get_project_structure",
+        "export_subtree_md",
         "create_document", "edit_document", "append_to_document",
         "attach_file", "get_file", "reprocess_file", "move_document",
         "create_table", "edit_table_cell", "add_table_rows", "add_table_column",
-        "rename_document",
+        "rename_document", "import_subtree_md",
     }
     # INVARIANT: preview_extractor is gated on MCP_RUN_EXTRACTOR; the default ship
-    # value (.env.example) is 0, so a default deployment advertises 16. Pinning the
+    # value (.env.example) is 0, so a default deployment advertises 18. Pinning the
     # flag keeps this assertion honest across environments.
     if getattr(config, "MCP_RUN_EXTRACTOR", False):
         expected.add("preview_extractor")

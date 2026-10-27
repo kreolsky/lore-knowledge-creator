@@ -363,6 +363,35 @@ async def serve_mcp_download(token: str):
     )
 
 
+@router.get("/api/mcp/staged/{token}")
+async def serve_mcp_staged_download(token: str):
+    """Serve a STAGED export zip by signed token (UNAUTHENTICATED).
+
+    The subtree-Markdown export channel (domain: backend/subtree_md.py) — the
+    download half of the staged-artifact transport in mcp_gateway/staging.py
+    (see SYSTEM: mcp-upload-url for the upload half). A staged zip has no
+    documents row, which is why this does NOT go through
+    resolve_reference_file: the token binds exactly one staging-root
+    artifact id and expires, and staged_path re-validates the id and the
+    containment under the staging root.
+
+    # INVARIANT (security): same posture as serve_mcp_download — a valid
+    # token is the ONLY way in, it cannot be widened (single artifact, short
+    # exp), a bad/expired/tampered token is a uniform 403, and there is no
+    # app-layer rate limit by design (edge job; blast radius is one immutable
+    # swept-by-TTL zip).
+    """
+    from mcp_gateway.staging import staged_path, verify_staged_download_token
+
+    artifact_id, filename = verify_staged_download_token(token)
+    return FileResponse(
+        staged_path(artifact_id),
+        media_type="application/zip",
+        filename=filename,
+        headers={"Cache-Control": "private, max-age=60"},
+    )
+
+
 @router.delete("/api/references/{reference_id}/file")
 @router.delete("/api/documents/{reference_id}/file", include_in_schema=False)
 async def delete_reference_file(reference_id: str, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):

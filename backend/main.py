@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from http_clients import close_all as _close_http_clients
+from mcp_gateway.staging import sweep_staging
 from mcp_gateway.upload import MCP_UPLOAD_ROUTE_PREFIX
 from pipeline.digest.triggers import (
     on_transcription_complete as digest_on_transcription_complete,
@@ -351,6 +352,9 @@ async def lifespan(_: FastAPI):
     await _recover_stuck_transcriptions()
     from files_util import sweep_tmp_uploads
     await sweep_tmp_uploads()
+    # Staged subtree-zip artifacts (subtree Markdown tools) — sweep leftovers
+    # from a previous process at boot; every mint sweeps again after this.
+    sweep_staging()
     _bus_on("transcription_complete", on_transcription_complete)
     _bus_on("transcription_complete", digest_on_transcription_complete)
     from auth import on_token_version_bumped
@@ -460,13 +464,16 @@ app.add_middleware(
 async def csrf_origin_check(request: Request, call_next):
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         path = request.url.path
-        # ARCH: /mcp is EXEMPT from the CSRF Origin guard. The MCP gateway
-        # authenticates ONLY via the Authorization Bearer header and never reads the
-        # lore_session cookie — CSRF is a cookie-credential attack, so there is no
-        # vector on /mcp. Keeps MCP clients that send an Origin (some Electron-based
-        # clients) working. Safe only because /mcp is token-only: do NOT extend this
-        # exemption to any path that reads lore_session.
-        if path.startswith("/mcp"):
+        # ARCH: the MCP gateway routes are EXEMPT from the CSRF Origin guard —
+        # exactly /mcp and /mcp/, the only two mounted gateway routes (see the
+        # Route append at the bottom of this file); a prefix match would
+        # silently exempt any future /mcp* path. The gateway authenticates ONLY
+        # via the Authorization Bearer header and never reads the lore_session
+        # cookie — CSRF is a cookie-credential attack, so there is no vector on
+        # /mcp. Keeps MCP clients that send an Origin (some Electron-based
+        # clients) working. Safe only because /mcp is token-only: do NOT extend
+        # this exemption to any path that reads lore_session.
+        if path in ("/mcp", "/mcp/"):
             return await call_next(request)
         origin = request.headers.get("origin")
         if origin and origin not in _CORS_ORIGINS and not _same_host(origin, request):

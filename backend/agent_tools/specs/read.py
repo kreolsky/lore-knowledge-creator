@@ -3,6 +3,7 @@ AGENT_TOOLS (READ_TOOLS) plus the two project-memory readers served only on
 the agent path (GET_MEMORY_FACTS_TOOL, GET_FACT_HISTORY_TOOL). Pure data —
 imports nothing from the agent package (leaf).
 """
+from agent_tools.specs.subtree import EXPORT_SUBTREE_MD_TOOL
 
 READ_TOOLS: list[dict] = [
     {
@@ -300,6 +301,7 @@ READ_TOOLS: list[dict] = [
             },
         },
     },
+    EXPORT_SUBTREE_MD_TOOL,
 ]
 
 

@@ -53,11 +53,13 @@ from models import (
     ToolCreateTable,
     ToolEditDocument,
     ToolEditTableCell,
+    ToolExportSubtreeMd,
     ToolGenerateImage,
     ToolGetFactHistory,
     ToolGetMemoryFacts,
     ToolGetProjectStructure,
     ToolImportFile,
+    ToolImportSubtreeMd,
     ToolListMyChats,
     ToolMoveDocument,
     ToolNextReference,
@@ -78,10 +80,12 @@ from models import (
 # ─── The public base surface (pi + tool_api + mcp) ────────────────────────────
 # (model, handler) per base tool, in READ_TOOLS + MUTATE_TOOLS order.
 _BASE: tuple[tuple[type, str], ...] = (
-    # READ_TOOLS: search_materials, read_document, get_project_structure
+    # READ_TOOLS: search_materials, read_document, get_project_structure,
+    # export_subtree_md
     (ToolSearch, "routes.tool_api.reads:tool_search_materials"),
     (ToolReadDocument, "routes.tool_api.reads:tool_read_document"),
     (ToolGetProjectStructure, "routes.tool_api.reads:tool_get_project_structure"),
+    (ToolExportSubtreeMd, "routes.tool_api.subtree:tool_export_subtree_md"),
     # MUTATE_TOOLS: create_document .. rename_document
     (ToolCreateDocument, "routes.tool_api.creates:tool_create_document"),
     (ToolEditDocument, "routes.tool_api.edits:tool_edit_document"),
@@ -92,6 +96,7 @@ _BASE: tuple[tuple[type, str], ...] = (
     (ToolAppendDocument, "routes.tool_api.edits:tool_append_document"),
     (ToolMoveDocument, "routes.tool_api.structure:tool_move_document"),
     (ToolRenameDocument, "routes.tool_api.structure:tool_rename_document"),
+    (ToolImportSubtreeMd, "routes.tool_api.subtree:tool_import_subtree_md"),
 )
 
 # MCP-only descriptions for the mutating base tools (entry.mcp_description).
@@ -180,6 +185,18 @@ _MCP_MUTATING_DESCRIPTIONS: dict[str, str] = {
         "NOT reversible via the Lore History panel (rename is structural, not a "
         "content edit) — undo by renaming back. Read-write key: applies "
         "immediately."
+    ),
+    "import_subtree_md": (
+        "Import an md-folder zip (Obsidian-shaped) as a subtree under "
+        "`parent_id`. Directories become documents (INDEX.md/README.md = the "
+        "parent's content), `X.md` becomes a leaf titled X, `_assets/` files "
+        "become references on their directory's document, GFM tables become "
+        "editable table blocks, wiki/relative links re-link to the imported "
+        "documents. THE ZIP NEVER RIDES AS AN ARGUMENT: call once with only "
+        "`parent_id` to mint a short-lived upload URL, POST the zip to it, then "
+        "re-call with the POST response's `staged_id`. Read-write key: applies "
+        "immediately; undo by deleting the created subtree (the deletion itself "
+        "is reversible in the Lore History panel)."
     ),
 }
 

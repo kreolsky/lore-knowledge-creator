@@ -60,6 +60,25 @@ async def test_opaque_null_origin_is_refused(client, admin_user):
     assert resp.status_code == 403
 
 
+# ─── /mcp exemption from the Origin guard (exact paths) ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_mcp_exempt_from_origin_guard(client, mcp_running):
+    """POST /mcp and /mcp/ with a foreign Origin reach the gateway's own gate-1
+    (401 Missing or invalid Authorization), NOT the guard's 403 "Origin not
+    allowed" — the gateway authenticates via Bearer only and never reads the
+    lore_session cookie. Pins the exemption across the startswith → exact-paths
+    tightening: /mcp and /mcp/ are the only mounted gateway routes."""
+    for path in ("/mcp", "/mcp/"):
+        resp = await client.post(
+            path, json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+            headers={"Origin": "http://evil.example"},
+        )
+        assert resp.status_code == 401, (path, resp.status_code, resp.text)
+        assert resp.json() == {"detail": "Missing or invalid Authorization"}
+
+
 # ─── WebSocket Origin guard (M2) ──────────────────────────────────────────────
 
 

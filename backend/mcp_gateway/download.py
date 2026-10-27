@@ -32,8 +32,9 @@ async def mint_download_token(ref_id: str) -> tuple[str, str]:
 
     Signed with the existing SECRET_KEY + ALGORITHM (same pair as the session
     cookie in auth.py) — no new key material, no new table, no persisted row. The
-    token carries ONLY ref_id + exp; it grants nothing else and cannot be widened
-    (a project_id claim would be redundant — the mint already verified ownership).
+    token carries ONLY kind + ref_id + exp; it grants nothing else and cannot be
+    widened (a project_id claim would be redundant — the mint already verified
+    ownership).
 
     TTL is read at call time through settings (row → env → default) so a
     settings PUT (e.g. shortening it) reaches the next minted URL.
@@ -42,7 +43,7 @@ async def mint_download_token(ref_id: str) -> tuple[str, str]:
     now = datetime.now(timezone.utc)
     exp = now + timedelta(seconds=ttl)
     token = jwt.encode(
-        {"ref_id": ref_id, "exp": exp, "iat": now},
+        {"kind": "mcp_download", "ref_id": ref_id, "exp": exp, "iat": now},
         SECRET_KEY,
         algorithm=ALGORITHM,
     )
@@ -51,14 +52,21 @@ async def mint_download_token(ref_id: str) -> tuple[str, str]:
 
 def verify_download_token(token: str) -> str:
     """Verify a download token, returning the bound ref_id. Raises 403 on any
-    failure (expired, tampered, missing exp, wrong shape) — uniform 403 so a probe
-    learns only "not valid", never which check failed."""
+    failure (expired, tampered, missing exp, wrong kind, wrong shape) — uniform
+    403 so a probe learns only "not valid", never which check failed."""
     try:
         payload = jwt.decode(
             token, SECRET_KEY, algorithms=[ALGORITHM],
             options={"require": ["exp"]},
         )
     except jwt.PyJWTError:
+        raise HTTPException(status_code=403, detail="Download link invalid or expired")
+    # INVARIANT(security): reject any token whose kind is not mcp_download.
+    # Why: token-type separation must rest on an explicit claim, not on the
+    # absence of a ref_id in sibling tokens — upload and staged-download tokens
+    # are signed with the SAME key (mirrors upload.py's verify_upload_token and
+    # staging.py's staged kind check).
+    if payload.get("kind") != "mcp_download":
         raise HTTPException(status_code=403, detail="Download link invalid or expired")
     ref_id = payload.get("ref_id")
     if not isinstance(ref_id, str) or not ref_id:

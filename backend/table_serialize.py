@@ -3,10 +3,12 @@
 SYSTEM: table-block — backend serializer entry point. The editable table block stores
 its model as a Yjs subtree (`ydoc.getMap('tables')`); this module serializes the flat
 cell-body form (``rows = list[list[str]]``) to a GFM table; ``expand_tables`` consumes
-it for the derived plaintext / export. The inverse GFM→model parse is NOT here: the
-import path is the frontend (``gfm-table-import.ts``) and the Python-side parser is
-the test oracle in ``tests/backend/helpers.py`` (no production
-caller).
+it for the derived plaintext / export. The inverse GFM→model parse ALSO lives here
+(``parse_gfm_table`` + the block scanner ``import_gfm_tables``) — production's
+subtree-zip import converts whole files, and the test oracle
+(``tests/backend/helpers.py``) delegates to the same functions, so there is ONE
+Python copy. The frontend twin (``gfm-table-import.ts``) stays the sanctioned
+UI-side conversion (paste/import in the editor).
 
 ARCH (three representations, one source of truth): an editable table exists in THREE
 places, by design — future table regressions land here.
@@ -396,3 +398,120 @@ def expand_tables(doc) -> str:
         return gfm if gfm else m.group(0)
 
     return _TABLE_ANCHOR.sub(_repl, text)
+
+
+# ─── GFM → model (the inverse direction; shared with the test oracle) ────────
+
+_CELL_SPLIT = re.compile(r"(?<!\\)\|")
+
+
+def _unescape_cell(wire: str) -> str:
+    """Reverse `_escape_cell`: `<br>` → newline, `\\|` → literal pipe.
+
+    Matches the frontend ``gfm-table-import.ts`` unescape: any ``<br>``/``<br/>``/
+    ``<br />``, case-insensitive (GFM-spec lenient), so the two parsers agree
+    byte-for-byte."""
+    return re.sub(r"<br\s*/?>", "\n", wire, flags=re.IGNORECASE).replace("\\|", "|")
+
+
+def _is_separator(line: str) -> bool:
+    """True for a GFM header-separator row (`| --- | :--: | …`)."""
+    stripped = line.strip()
+    if not stripped.startswith("|"):
+        return False
+    cells = [c.strip() for c in _CELL_SPLIT.split(stripped[1:-1])]
+    # Require >=1 NON-EMPTY dash cell. Why: ``all([])`` is True, so without this an
+    # all-empty data row (``|   |   |``) is misclassified as the separator and
+    # silently dropped on import.
+    non_empty = [c for c in cells if c != ""]
+    return bool(non_empty) and all(re.fullmatch(r":?-+:?", c) for c in non_empty)
+
+
+def _parse_row(line: str) -> list[str]:
+    inner = line.strip()[1:-1]  # drop leading/trailing pipe
+    out: list[str] = []
+    for seg in _CELL_SPLIT.split(inner):
+        # Strip exactly the one padding space added on each side by serialize_table.
+        if seg.startswith(" "):
+            seg = seg[1:]
+        if seg.endswith(" "):
+            seg = seg[:-1]
+        out.append(_unescape_cell(seg))
+    return out
+
+
+def parse_gfm_table(md: str) -> list[list[str]]:
+    """Parse a GFM table string into the cell-body model (the inverse of
+    `serialize_table`). The separator row is dropped; every other non-empty
+    `|`-delimited line is a data row. `<br>` → newline; `\\|` → literal pipe."""
+    rows: list[list[str]] = []
+    for line in md.splitlines():
+        if not line.strip().startswith("|"):
+            continue
+        if _is_separator(line):
+            continue
+        rows.append(_parse_row(line))
+    return rows
+
+
+def import_gfm_tables(markdown: str, label: str = "Table") -> tuple[str, str]:
+    """Replace every GFM table BLOCK in `markdown` with a fresh table anchor,
+    building the models — the backend mirror of the frontend
+    ``importGfmTables`` (the sanctioned UI-side conversion; this is the
+    file-import side). Returns ``(rewritten_text, tables_json)`` where
+    tables_json is the ``capture_tables_json`` shape, ready for
+    ``ydoc_store.set_content(..., tables_json=...)``.
+
+    A block = a pipe-line header immediately followed by a separator row, then
+    any run of pipe-lines. Prose (and pipes not forming a table) are left
+    untouched.
+    """
+    import json
+    import uuid
+
+    lines = markdown.split("\n")
+    out: list[str] = []
+    tables: dict[str, dict] = {}
+    i = 0
+    while i < len(lines):
+        matrix, next_i = _collect_table_block(lines, i)
+        if matrix is not None:
+            table_id = uuid.uuid4().hex
+            width = max(len(r) for r in matrix)
+            tables[table_id] = {
+                "columns": [DEFAULT_COLUMN_WIDTH] * width,
+                "rows": matrix,
+            }
+            out.append(table_anchor(label, table_id))
+            i = next_i
+            continue
+        out.append(lines[i])
+        i += 1
+
+    return "\n".join(out), json.dumps(tables, separators=(",", ":"),
+                                      ensure_ascii=False)
+
+
+def _collect_table_block(lines: list[str], i: int) -> tuple[list | None, int]:
+    """From line `i`, collect one GFM table block's matrix (header + data
+    rows, separator dropped) → (matrix, next_index_after_block); (None, i)
+    when line i does not START a table (pipe header immediately followed by a
+    separator row)."""
+    def _pipe(line: str) -> bool:
+        return line.strip().startswith("|")
+
+    header_is_table = (
+        _pipe(lines[i])
+        and not _is_separator(lines[i])
+        and i + 1 < len(lines)
+        and _is_separator(lines[i + 1])
+    )
+    if not header_is_table:
+        return None, i
+    j = i + 1
+    while j + 1 < len(lines) and _pipe(lines[j + 1]):
+        j += 1
+    matrix = [
+        _parse_row(line) for line in lines[i:j + 1] if not _is_separator(line)
+    ]
+    return (matrix if matrix else None), j + 1

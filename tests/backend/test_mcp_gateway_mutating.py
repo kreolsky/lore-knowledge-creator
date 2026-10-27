@@ -441,6 +441,35 @@ async def test_transport_rate_limit_keyed_per_token(
     assert resp.status_code == 200
 
 
+@pytest.mark.asyncio
+async def test_transport_ip_limit_bounds_token_rotation(
+    client, mcp_running, test_db, admin_user, project_with_doc, monkeypatch,
+):
+    """The per-token transport bucket cannot bound a flood that ROTATES tokens
+    (each bogus Bearer gets a fresh bucket) — the per-IP tier bounds exactly
+    that rotation. With the IP cap monkeypatched to 3, the 4th request from one
+    address is a raw HTTP 429 while NO per-token bucket tripped (each token was
+    seen once). Keyed on X-Real-IP, the header the edge overwrites."""
+    import rate_limit as _rl
+
+    monkeypatch.setattr(_rl._tiers["mcp_transport_ip"], "max", 3)
+
+    headers = {"X-Real-IP": "198.51.100.77"}
+    for i in range(3):
+        resp = await client.post(
+            "/mcp", json=_rpc("tools/list"),
+            headers={**_mcp_headers(f"lore_bogus_{i}"), **headers},
+        )
+        assert resp.status_code != 429, f"request {i} tripped a bucket unexpectedly"
+
+    resp = await client.post(
+        "/mcp", json=_rpc("tools/list"),
+        headers={**_mcp_headers("lore_bogus_3"), **headers},
+    )
+    assert resp.status_code == 429
+    assert resp.json() == {"detail": "Too many requests"}
+
+
 # ─── batch edit_document — one atomic call carries N pointwise edits ─────────
 
 

@@ -162,6 +162,21 @@ _MCP_TRANSPORT_MAX = 240
 _MCP_TRANSPORT_WINDOW = 60
 _mcp_transport_bucket = make_tier("mcp_transport", _MCP_TRANSPORT_MAX, _MCP_TRANSPORT_WINDOW)
 
+# MCP transport-IP tier: 600 requests / 60s per source address, enforced beside
+# the per-token transport tier at the /mcp ASGI gate. The per-token tier cannot
+# bound token ROTATION (a flood where every request carries a fresh bogus
+# Bearer gives it nothing to count) — this tier does. Keyed on the client
+# address as the edge reports it: X-Real-IP (nginx overwrites it with
+# $remote_addr, so it is not client-spoofable through the edge), falling back
+# to the ASGI client address; X-Forwarded-For is deliberately NOT parsed (its
+# leftmost value is client-controlled). A flood ceiling, not a business limit —
+# per-key budgets (reads 120/120s, mutating 30/60s) sit far below it, so an
+# honest NAT of agents fits. Cross-IP volumetric DoS stays the edge's job.
+# See SYSTEM: rate-limiter + SYSTEM: mcp-gateway.
+_MCP_TRANSPORT_IP_MAX = 600
+_MCP_TRANSPORT_IP_WINDOW = 60
+_mcp_transport_ip_bucket = make_tier("mcp_transport_ip", _MCP_TRANSPORT_IP_MAX, _MCP_TRANSPORT_IP_WINDOW)
+
 # Completion tier: 20 LLM completions per 60s per user.
 # LLM requests are expensive — prevents API quota exhaustion.
 _COMPLETION_MAX = 20
@@ -255,6 +270,15 @@ async def check_mcp_transport_rate_limit(token_hash: str) -> bool:
     session manager. Distinct, looser bucket than the per-call tiers (F3 note:
     avoids double-counting a call against both transport and api-key budgets)."""
     return await _mcp_transport_bucket.allow(token_hash)
+
+
+async def check_mcp_transport_ip_rate_limit(ip: str) -> bool:
+    """Return True if the MCP transport request from this ADDRESS is allowed.
+
+    Bounds token-rotation floods — every request carrying a fresh bogus Bearer,
+    which the per-token tier cannot see. 600/60s: a flood ceiling orders of
+    magnitude above honest per-key budgets, so a shared NAT of agents fits."""
+    return await _mcp_transport_ip_bucket.allow(ip)
 
 
 async def check_completion_rate_limit(user_id: str) -> bool:

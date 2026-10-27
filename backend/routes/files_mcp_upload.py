@@ -42,6 +42,12 @@ from files_util import (
     validate_magic,
 )
 from inbox import KIND_REF, mark_arrived
+from mcp_gateway.staging import (
+    STAGE_UPLOAD_KIND,
+    new_artifact_id,
+    stage_artifact,
+    sweep_staging,
+)
 from mcp_gateway.upload import MCP_UPLOAD_ROUTE_PREFIX, verify_upload_token
 from tiers import require_tier
 from transcription import enqueue_transcription
@@ -87,7 +93,9 @@ async def redeem_mcp_upload_recipe(token: str):
 
 @router.post(MCP_UPLOAD_ROUTE_PREFIX + "{token}")
 async def redeem_mcp_upload(token: str, file: UploadFile = File(...)):
-    """Store a file and create a reference node, authorized ONLY by the signed token.
+    """Store a file and create a reference node, authorized ONLY by the signed
+    token — or, for a STAGING token, stage the bytes with no node at all (the
+    subtree-zip import flow; the import tool call walks the staged artifact).
 
     Orchestrates: resolve token claims → dedup-or-create → normalize response. Each
     stage is a helper so the route reads as the protocol it implements (see the
@@ -100,8 +108,22 @@ async def redeem_mcp_upload(token: str, file: UploadFile = File(...)):
     # tier). Runs BEFORE the dedup claim so a refused upload leaves no
     # locking sentinel.
     """
-    claims, kind, mime, original_name, title = await _resolve_redeem_inputs(token, file)
+    claims = verify_upload_token(token)
+    if claims.get("kind") == STAGE_UPLOAD_KIND:
+        return await _redeem_staged_subtree(claims, file)
 
+    _claims, kind, mime, original_name, title = await _resolve_redeem_inputs(
+        claims, file,
+    )
+    return await _redeem_create_node(claims, kind, file, mime, original_name, title)
+
+
+async def _redeem_create_node(
+    claims: dict, kind: str, file: UploadFile, mime: str,
+    original_name: str, title: str,
+) -> dict:
+    """The node-creating redeem tail: voice tier gate → dedup claim → store by
+    kind → inbox flag → the normalized response carrying the NEW node's id."""
     if kind == "audio":
         await require_tier({"user_id": claims["user_id"], "role": "user"}, "voice")
 
@@ -152,7 +174,38 @@ async def _flag_redeemed_inbox(claims: dict, ref_id: str) -> None:
     )
 
 
-async def _resolve_redeem_inputs(token: str, file: UploadFile):
+async def _redeem_staged_subtree(claims: dict, file: UploadFile) -> dict:
+    """Stage an uploaded subtree zip into the staging root — NO reference node.
+
+    The staging kind is byte-channel-only: cap by MAX_ARCHIVE_SIZE_MB (on the
+    parser-tracked part size, like `_enforce_size_cap`), confirm ZIP magic,
+    sweep, stage atomically. Returns the staged_id the follow-up
+    import_subtree_md call consumes; every replay of the same URL stages a
+    fresh artifact (harmless — swept by TTL), so no jti dedup is needed.
+    """
+    import settings as _settings
+    from files_util import ARCHIVE_MIME, validate_magic
+
+    max_mb = await _settings.get("MAX_ARCHIVE_SIZE_MB")
+    size = getattr(file, "size", None)
+    if size is None:
+        raise HTTPException(
+            status_code=411, detail="Content-Length is required for this upload",
+        )
+    if size == 0:
+        raise HTTPException(status_code=400, detail="Empty upload — no file bytes received")
+    if size > max_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File too large (max {max_mb}MB)")
+    data = await file.read()
+    if not validate_magic(data, ARCHIVE_MIME):
+        raise HTTPException(status_code=400, detail="File content is not a valid .zip")
+    sweep_staging()
+    artifact_id = new_artifact_id("import")
+    stage_artifact(artifact_id, data)
+    return {"staged_id": artifact_id, "accepted": True}
+
+
+async def _resolve_redeem_inputs(claims: dict, file: UploadFile):
     """Verify the signed token and classify the upload, refusing an unsupported type
     or a zero-byte part BEFORE any dedup claim or node creation.
 
@@ -164,7 +217,6 @@ async def _resolve_redeem_inputs(token: str, file: UploadFile):
     # multipart part supplies bytes and nothing else; its own filename and
     # content_type are deliberately ignored.
     """
-    claims = verify_upload_token(token)
     mime = claims["mime"]
     original_name = claims["filename"]
     title = claims.get("title") or original_name

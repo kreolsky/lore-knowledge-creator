@@ -122,9 +122,9 @@ async def mint_upload_token(
 
 
 def verify_upload_token(token: str) -> dict:
-    """Verify an upload token, returning its bound claims. Raises 403 on any failure
-    (expired, tampered, missing exp, wrong kind, wrong shape) — uniform 403 so a
-    probe learns only "not valid", never which check failed."""
+    """Verify an upload token, returning its bound claims. Raises 403 on any
+    failure (expired, tampered, missing exp, wrong kind, wrong shape) — uniform
+    403 so a probe learns only "not valid", never which check failed."""
     try:
         payload = jwt.decode(
             token, SECRET_KEY, algorithms=[ALGORITHM],
@@ -132,14 +132,20 @@ def verify_upload_token(token: str) -> dict:
         )
     except jwt.PyJWTError:
         raise HTTPException(status_code=403, detail="Upload link invalid or expired")
-    # INVARIANT(security): reject any token that is not explicitly an upload token.
-    # Why: download tokens are signed with the SAME key; without this claim a
-    # read-only key's download URL would redeem as a write.
-    if payload.get("kind") != _TOKEN_KIND:
+    # INVARIANT(security): reject any token that is not explicitly an upload
+    # token of a KNOWN kind. Why: download/staged-download tokens are signed
+    # with the SAME key; without this claim a read-only key's download URL
+    # would redeem as a write. The staging kind (mcp_subtree_stage, minted by
+    # mcp_gateway.staging) is the one sibling: it writes only into the staging
+    # root and creates no node — its own claims shape is validated by the
+    # redeem branch that consumes it.
+    if payload.get("kind") not in ("mcp_upload", "mcp_subtree_stage"):
         raise HTTPException(status_code=403, detail="Upload link invalid or expired")
-    required = ("project_id", "document_id", "filename", "mime", "user_id")
-    if any(not isinstance(payload.get(f), str) or not payload.get(f) for f in required):
-        raise HTTPException(status_code=403, detail="Upload link invalid or expired")
+    if payload.get("kind") == "mcp_upload":
+        required = ("project_id", "document_id", "filename", "mime", "user_id")
+        if any(not isinstance(payload.get(f), str) or not payload.get(f)
+               for f in required):
+            raise HTTPException(status_code=403, detail="Upload link invalid or expired")
     return payload
 
 

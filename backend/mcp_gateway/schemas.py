@@ -207,6 +207,23 @@ _READ_TOOL_OUTPUT_SCHEMAS: dict[str, dict] = {
             },
         },
     },
+    # The staged-zip export result — a URL, never bytes. The serve side is
+    # the unauthenticated /api/mcp/staged/<token> route bound to exactly this
+    # artifact (mcp_gateway/staging.py), mirroring get_file's download
+    # contract.
+    "export_subtree_md": {
+        "type": "object",
+        "properties": {
+            "status": {"type": "string"},
+            "root_id": {"type": "string"},
+            "url": {"type": "string"},
+            "path": {"type": "string"},
+            "filename": {"type": "string"},
+            "documents": {"type": "integer"},
+            "files": {"type": "integer"},
+            "expires_at": {"type": "string"},
+        },
+    },
 }
 
 
@@ -343,12 +360,13 @@ _TOOL_LIST_ORDER: tuple[str, ...] = (
     "init",
     # reads (incl. read_document — addresses the text part but grouped as a read)
     "search_materials", "read_document", "get_project_structure",
+    "export_subtree_md",
     # text part
     "create_document", "edit_document", "append_to_document",
     # file part — the ONE byte channel (attach_file mints the URL; no bytes as args)
     "attach_file", "get_file", "reprocess_file",
     # tree part
-    "move_document",
+    "move_document", "rename_document", "import_subtree_md",
     # tables
     "create_table", "edit_table_cell", "add_table_rows", "add_table_column",
     # dev/benchmark — heavy, dry-run only, advertised last (gated off by default)

@@ -385,3 +385,40 @@ async def test_token_type_cannot_be_swapped_with_a_download_token(
     with pytest.raises(HTTPException) as exc:
         verify_upload_token(dl_token)
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_download_token_requires_own_kind(
+    client, mcp_running, test_db, admin_user, project_with_doc,
+):
+    """INVARIANT(security): verify_download_token rejects any payload whose
+    kind ≠ mcp_download — token-type separation must not rest on the absence of
+    a ref_id claim. A legacy-shape {ref_id, exp} token (pre-kind) and an
+    mcp_upload-kind token both fail with the uniform 403; a minted download
+    token resolves its ref_id."""
+    from datetime import datetime, timedelta, timezone
+
+    import jwt as pyjwt
+    from fastapi import HTTPException
+    from mcp_gateway.download import mint_download_token, verify_download_token
+
+    from config import ALGORITHM, SECRET_KEY
+
+    exp = datetime.now(timezone.utc) + timedelta(minutes=5)
+    legacy = pyjwt.encode(
+        {"ref_id": "legacy-ref", "exp": exp}, SECRET_KEY, algorithm=ALGORITHM,
+    )
+    with pytest.raises(HTTPException) as exc:
+        verify_download_token(legacy)
+    assert exc.value.status_code == 403
+
+    upload_kind = pyjwt.encode(
+        {"kind": "mcp_upload", "ref_id": "r", "exp": exp},
+        SECRET_KEY, algorithm=ALGORITHM,
+    )
+    with pytest.raises(HTTPException) as exc:
+        verify_download_token(upload_kind)
+    assert exc.value.status_code == 403
+
+    dl_token, _exp = await mint_download_token("some-ref-id")
+    assert verify_download_token(dl_token) == "some-ref-id"
