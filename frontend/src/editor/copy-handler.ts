@@ -5,7 +5,8 @@
  * `cleanMarkdownToHtml`) and a portable `text/plain` (markdown source, with table
  * transclusion anchors expanded to GFM). External rich editors (Word / Google Docs /
  * Gmail / Notion) read `text/html` and preserve formatting; plain targets (Notepad, code
- * editors) read `text/plain`. Paste already converts HTML→Markdown (see paste-handler).
+ * editors) read `text/plain`. A whole-selected image also puts the picture itself
+ * (`image/png`) on the clipboard. Paste already converts HTML→Markdown (see paste-handler).
  *
  * ARCH: EditorView.domEventHandlers intercept copy/cut BEFORE CM6's default handler. The
  * selection's raw markdown source is the single portable intermediate: table anchors are
@@ -21,6 +22,9 @@ import { getActiveHandle } from './active-editor';
 import { cleanMarkdownToHtml } from '../components/editor/markdown-to-html';
 import { expandTableAnchorsToGfm } from '../components/editor/live-preview/table-block-model';
 import { ligatureSubstitutedText } from '../components/editor/ligature-plugin';
+import { selectedAtomicRange } from '../components/editor/live-preview/atomic-delete-guard';
+import { useAppStore } from '../store/app-store';
+import { t } from '../i18n';
 
 // CF_HTML-compatible envelope. The browser serializes this `text/html` to the native
 // clipboard (computing the StartHTML/EndHTML offsets itself); the StartFragment/EndFragment
@@ -33,6 +37,80 @@ const FRAGMENT_TAIL = '\n</body>\n</html>';
 // Why an HTML comment: invisible to external editors and works in the standard clipboard
 // channel without relying on custom MIME types.
 const LORE_CLIP_MARK = '<!--lore-clipboard-->';
+
+/** The rendered `<img>` of the whole-selected image embed, or null for any other selection. */
+function selectedImageElement(view: EditorView): HTMLImageElement | null {
+  const range = selectedAtomicRange(view.state);
+  if (!range || range.tableId !== null) return null;
+  for (const img of view.contentDOM.querySelectorAll<HTMLImageElement>('img:not(.cm-widgetBuffer)')) {
+    let pos: number;
+    try { pos = view.posAtDOM(img); } catch { continue; }
+    if (pos >= range.from && pos < range.to) return img;
+  }
+  return null;
+}
+
+/** Re-encode a loaded image as PNG — the only image flavor browsers accept on the clipboard. */
+function imageToPng(img: HTMLImageElement): Promise<Blob> {
+  // WHY inside the executor: a cross-origin (tainted) canvas makes toBlob THROW synchronously;
+  // the executor turns that into a rejection instead of an exception out of the copy handler.
+  return new Promise((resolve, reject) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('no 2d context');
+    ctx.drawImage(img, 0, 0);
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob returned null'))), 'image/png');
+  });
+}
+
+/**
+ * text/html for a copied image: the picture inlined as a data URI, plus the Lore marker.
+ * WHY: rich targets (Google Docs, Word) read text/html BEFORE image/png — the rendered
+ * markdown of an embed is just its filename text. A data URI needs no auth to fetch.
+ */
+function imageHtml(png: Blob): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const body = `<!--StartFragment-->${LORE_CLIP_MARK}<img src="${reader.result as string}"><!--EndFragment-->`;
+      resolve(new Blob([FRAGMENT_HEAD + body + FRAGMENT_TAIL], { type: 'text/html' }));
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(png);
+  });
+}
+
+/**
+ * Whole-selected image → additionally put the picture itself (`image/png`) on the clipboard,
+ * next to the same markdown/html flavors, so external apps paste the media.
+ * WHY async Clipboard API: `clipboardData.setData` takes strings only. The ClipboardItem is
+ * built synchronously inside the gesture with a PROMISE for the PNG — Safari rejects a
+ * write that starts after an await. The Lore marker stays in text/html, so a Lore paste
+ * still resolves to the markdown link, never a re-upload. On failure the user is told
+ * the image was not copied.
+ */
+function writeSelectedImage(view: EditorView, img: HTMLImageElement): void {
+  const { from, to } = view.state.selection.main;
+  const plain = view.state.sliceDoc(from, to);
+  // WHY a toast, not a silent return: the async Clipboard API exists only in a secure
+  // context (https/localhost); over plain http the image would silently not be copied.
+  if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+    useAppStore.getState().showToast(t('failedToCopyImage'), 'error');
+    return;
+  }
+  const png = imageToPng(img);
+  const item = new ClipboardItem({
+    'image/png': png,
+    'text/plain': new Blob([plain], { type: 'text/plain' }),
+    'text/html': png.then(imageHtml),
+  });
+  navigator.clipboard.write([item]).catch((err: unknown) => {
+    console.warn('[copy] image clipboard write failed', err);
+    useAppStore.getState().showToast(t('failedToCopyImage'), 'error');
+  });
+}
 
 /**
  * Write the rich clipboard payload for a copy/cut event. Returns true when handled (the
@@ -98,7 +176,25 @@ export function handleCopyCut(e: ClipboardEvent, view: EditorView, isCut: boolea
   return true;
 }
 
+/**
+ * Cmd/Ctrl+C on a whole-selected image → write the image clipboard payload and swallow the
+ * key, so no `copy` event follows. Returns false for any other key or selection.
+ * WHY keydown, not the `copy` event: Firefox refuses `navigator.clipboard.write` from
+ * inside a clipboard event ("Clipboard write is not allowed"); the keydown carries the
+ * user activation every browser accepts. Menu Copy still goes through `handleCopyCut`
+ * and copies the markdown only.
+ */
+function handleImageCopyKey(e: KeyboardEvent, view: EditorView): boolean {
+  if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.code !== 'KeyC') return false;
+  const img = selectedImageElement(view);
+  if (!img) return false;
+  e.preventDefault();
+  writeSelectedImage(view, img);
+  return true;
+}
+
 export const copyHandlerExtension = EditorView.domEventHandlers({
+  keydown: (e, view) => handleImageCopyKey(e, view),
   copy: (e, view) => handleCopyCut(e, view, false),
   cut: (e, view) => handleCopyCut(e, view, true),
 });

@@ -129,6 +129,7 @@ export const en = {
   voiceTranscriptionEmpty: 'Nothing recognized — try speaking again',
   accessRevokedOrExpired: 'Access revoked or session expired — please reload',
   failedToSaveDocument: 'Failed to save document',
+  failedToCopyImage: 'Could not copy the image — only its link was copied',
   attachmentsExceedLimit: 'Attachments are too large ({used}MB of {limit}MB) — remove some to send',
   fileTooLargeAudio: 'Audio file must be under {limit}MB',
   fileTooLargeImage: 'Image must be under {limit}MB',

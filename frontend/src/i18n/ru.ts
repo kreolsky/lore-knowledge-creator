@@ -131,6 +131,7 @@ export const ru: Record<TranslationKey, string> = {
   voiceTranscriptionEmpty: 'Не удалось распознать речь — попробуйте ещё раз',
   accessRevokedOrExpired: 'Доступ отозван или сессия истекла — перезагрузите страницу',
   failedToSaveDocument: 'Не удалось сохранить документ',
+  failedToCopyImage: 'Не удалось скопировать картинку — скопирована только ссылка',
   attachmentsExceedLimit: 'Вложения слишком большие ({used} МБ из {limit} МБ) — удалите часть, чтобы отправить',
   fileTooLargeAudio: 'Аудиофайл должен быть менее {limit} МБ',
   fileTooLargeImage: 'Изображение должно быть менее {limit} МБ',
