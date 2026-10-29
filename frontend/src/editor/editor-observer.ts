@@ -17,6 +17,7 @@ import { takesNotesWithoutFocus } from './note-surface';
 import { useUIStore } from '../store/ui-store';
 import { firstVisibleLine, positionCacheSet } from './position-cache';
 import { emit } from '../events';
+import { getEditorView } from './active-editor';
 import { transcludeMap } from '../components/editor/live-preview';
 import { parseTarget } from '../components/editor/live-preview/transclusion-grammar';
 
@@ -44,15 +45,20 @@ function getItemId(item: ActiveItem): string | undefined {
 function publishSelection(update: ViewUpdate): void {
   if (!update.selectionSet && !update.focusChanged) return;
   const { view } = update;
-  const { from, to } = view.state.selection.main;
   const live = view.hasFocus || takesNotesWithoutFocus(view.state);
+  // WHY: the store is one slot shared by every view. A view that is neither live nor the
+  // active editor (the document after focus moved into a table cell — its focus loss
+  // arrives 10ms late) must not overwrite what the active one published.
+  if (!live && getEditorView() !== view) return;
+  const { from, to } = view.state.selection.main;
   const empty = from === to || !live;
   useUIStore.getState().setSelectionEmpty(empty);
   if (update.selectionSet && !empty) emit('editor-selection-change', { empty: false });
 }
 
-/** The selection feed alone — for a viewer with no position cache or doc scan (public page). */
-export const selectionFeedExtension: Extension = ViewPlugin.define(() => ({ update: publishSelection }));
+/** The ONE selection feed every active-able editor carries — mounted by `editorExperience`
+ * (render-bundle) for the document and the editable cell; `setFocusedView` checks for it. */
+export const selectionFeedPlugin = ViewPlugin.define(() => ({ update: publishSelection }));
 
 export function createObserverExtension(deps: ObserverDeps): Extension {
   return ViewPlugin.define((view) => {
@@ -87,7 +93,6 @@ export function createObserverExtension(deps: ObserverDeps): Extension {
           }, 500);
 
         }
-        publishSelection(update);
 
         if (update.docChanged) {
           const item = deps.activeItemRef.current;

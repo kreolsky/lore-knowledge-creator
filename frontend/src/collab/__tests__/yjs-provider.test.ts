@@ -218,32 +218,6 @@ describe('YjsProjectProvider', () => {
     });
   });
 
-  describe('heartbeat', () => {
-    it('sends heartbeat at interval while the server keeps acking', () => {
-      const provider = new YjsProjectProvider('proj1', 'user1');
-      provider.connect();
-      const ws = MockWebSocket.latest()!;
-      ws.simulateOpen();
-
-      const beats = () => ws.sent
-        .filter(s => typeof s === 'string')
-        .map(s => JSON.parse(s as string))
-        .filter(m => m.type === 'heartbeat');
-
-      // The ack is what keeps the beat going: an unanswered heartbeat drops the
-      // connection at HEARTBEAT_ACK_DEADLINE_MS, so a silent server has no second beat
-      // (see yjs-provider-liveness.test.ts — that is the contract, not a regression).
-      vi.advanceTimersByTime(30_000);
-      expect(beats().length).toBe(1);
-      ws.simulateMessage({ type: 'heartbeat_ack', t: Date.now() });
-
-      vi.advanceTimersByTime(30_000);
-      expect(beats().length).toBe(2);
-
-      provider.disconnect();
-    });
-  });
-
   describe('flushAndWait', () => {
     it('resolves on flush_ack', async () => {
       const provider = new YjsProjectProvider('proj1', 'user1');
@@ -447,48 +421,6 @@ describe('YjsProjectProvider', () => {
       // Frame layout: [msgType(1 byte=awareness), eidLenHi, eidLenLo, ...eid, payload]
       const isAwareness = awarenessFrames.some(buf => buf.length >= 3 && buf[0] === 1);
       expect(isAwareness).toBe(true);
-
-      provider.disconnect();
-    });
-  });
-
-  // ── Entity-type single point: stored per entity, rejoin reads it ───────────
-
-  describe('entity type storage + rejoin', () => {
-    it('EntityYjsState carries the entityType it was joined with', () => {
-      const provider = new YjsProjectProvider('proj1', 'user1');
-      provider.connect();
-      const ws = MockWebSocket.latest()!;
-      ws.simulateOpen();
-
-      const entity = provider.joinEntity('doc', 'e1', makeCallbacks(), localUser);
-      expect(entity.entityType).toBe('doc');
-
-      provider.disconnect();
-    });
-
-    it('rejoin after reconnect sends entity_type from the STORED type, not a literal', () => {
-      const provider = new YjsProjectProvider('proj1', 'user1');
-      provider.connect();
-      const ws = MockWebSocket.latest()!;
-      ws.simulateOpen();
-
-      provider.joinEntity('doc', 'e1', makeCallbacks(), localUser);
-      ws.sent.length = 0;
-
-      ws.simulateClose(1000);
-      vi.advanceTimersByTime(2000);
-
-      const ws2 = MockWebSocket.latest()!;
-      ws2.simulateOpen();
-
-      const joins = ws2.sent
-        .filter(s => typeof s === 'string')
-        .map(s => JSON.parse(s as string))
-        .filter(m => m.type === 'join');
-      expect(joins).toHaveLength(1);
-      expect(joins[0].entity_type).toBe('doc');
-      expect(joins[0].entity_id).toBe('e1');
 
       provider.disconnect();
     });

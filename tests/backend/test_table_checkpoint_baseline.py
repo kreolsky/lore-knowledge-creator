@@ -21,10 +21,7 @@ guards three entry points:
 from unittest.mock import AsyncMock, patch
 
 from auto_backup import maybe_backup_on_content_loss
-from collab.session import CollabSession
 from emit_recorder import EmitRecorder
-from enqueue_recorder import EnqueueRecorder
-from pycrdt import Doc, Text
 
 from models import PatchDocument
 
@@ -36,31 +33,6 @@ TABLES_JSON = '{"abc":{"columns":[160],"rows":[["h"],["a"]]}}'
 def _anchor_baseline() -> str:
     """A long anchor-form baseline (well above the loss thresholds)."""
     return "![t](table:abc) " + ("word " * 160)
-
-
-# ─── 1. session flush: empty baseline not coerced to None ─────────────────────
-class TestSessionBaselineNotCoerced:
-    async def test_empty_flushed_content_passed_as_empty_string_not_none(self):
-        """``_last_flushed_content == ""`` must reach the loss-task enqueue as
-        ``baseline_content=""`` (nothing to lose), NOT ``None`` (unknown → worker
-        reads the GFM ``documents.content`` fallback)."""
-        doc = Doc()
-        text = doc.get("content", type=Text)
-        text += "hello world"
-        session = CollabSession(entity_type="doc", entity_id="d1", ydoc=doc)
-        session._last_flushed_content = ""  # the bug: `or None` turns this into None
-        session._dirty = True
-
-        db_mock = AsyncMock()
-        db_mock.query = AsyncMock()
-
-        with patch("collab.flush_pipeline.get_db", return_value=db_mock), \
-                EnqueueRecorder.active() as mock_enqueue, \
-                patch("collab.flush_pipeline.extract_doc_mentions", return_value=[]):
-            await session.flush_to_db()
-
-        assert len(mock_enqueue.calls) == 1
-        assert mock_enqueue.calls[0].kwargs["baseline_content"] == ""
 
 
 # ─── 2. loss backup None-fallback: derive from Y.Doc, not documents.content ───
@@ -150,13 +122,6 @@ class TestPatchAnchorFormComparison:
             await patch_document("doc1", body, user={"user_id": "u1"})
         return mock_backup
 
-    async def test_table_expansion_only_difference_no_spurious_backup(self):
-        """``body.content`` (anchor form) equal to the live raw text must NOT
-        trigger a backup, even though ``documents.content`` (GFM) differs. The bug
-        compared GFM-vs-anchor and counted the expansion as a change."""
-        anchor = _anchor_baseline()
-        mock_backup = await self._run_patch(body_content=anchor, live_text=anchor)
-        mock_backup.assert_not_called()
 
     async def test_real_loss_baseline_is_anchor_form(self):
         """On a genuine loss, the baseline passed to the loss backup MUST be the

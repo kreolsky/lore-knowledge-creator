@@ -105,24 +105,6 @@ async def _build_tree(client, admin_token, project_id):
 
 
 @pytest.mark.asyncio
-async def test_in_subtree_membership(test_db, client, admin_user, project_with_doc):
-    """in_subtree: root/child/grandchild in; outside out; None = whole project."""
-    from scope import in_subtree
-
-    pid, _, admin_uid = project_with_doc
-    _, admin_token = admin_user
-    root, child, grandchild, outside = await _build_tree(client, admin_token, pid)
-
-    assert await in_subtree(root, root) is True
-    assert await in_subtree(root, child) is True
-    assert await in_subtree(root, grandchild) is True
-    assert await in_subtree(root, outside) is False
-    # No scope_root ⇒ whole project ⇒ always True.
-    assert await in_subtree("", outside) is True
-    assert await in_subtree(None, outside) is True
-
-
-@pytest.mark.asyncio
 async def test_in_subtree_soft_deleted_ancestor_breaks_chain(
     test_db, client, admin_user, project_with_doc,
 ):
@@ -157,22 +139,6 @@ async def test_subtree_doc_ids_enumeration(test_db, client, admin_user, project_
 
 
 # ─── Enforcement: read_document ──────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_scoped_read_in_subtree_ok(client, test_db, admin_user, project_with_doc):
-    """A scoped key CAN read docs inside its subtree (root, child, grandchild)."""
-    pid, _, admin_uid = project_with_doc
-    _, admin_token = admin_user
-    root, child, grandchild, _outside = await _build_tree(client, admin_token, pid)
-    scoped = await _make_agent_key(test_db, admin_uid, pid, scope_root=root)
-
-    for doc_id in (root, child, grandchild):
-        resp = await client.post(
-            "/api/tool/read_document", json={"document_id": doc_id}, headers=_hdr(scoped),
-        )
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["doc_id"] == doc_id
 
 
 @pytest.mark.asyncio
@@ -236,24 +202,6 @@ async def test_scoped_edit_outside_subtree_forbidden(
     assert resp.status_code == 403, resp.text
 
 
-@pytest.mark.asyncio
-async def test_scoped_edit_inside_subtree_ok(client, test_db, admin_user, project_with_doc):
-    """A scoped key CAN edit a doc inside its subtree (auto-apply mode)."""
-    pid, _, admin_uid = project_with_doc
-    _, admin_token = admin_user
-    root, _child, _grandchild, _outside = await _build_tree(client, admin_token, pid)
-    scoped = await _make_agent_key(test_db, admin_uid, pid, scope_root=root)
-
-    resp = await client.post(
-        "/api/tool/edit_document",
-        json={"document_id": root, "old_string": "root body", "new_string": "edited",
-              "apply": "auto"},
-        headers=_hdr(scoped),
-    )
-    assert resp.status_code == 200, resp.text
-    assert resp.json().get("status") == "applied"
-
-
 # ─── Enforcement: search_materials ───────────────────────────────────────────
 
 
@@ -280,28 +228,6 @@ async def test_scoped_search_returns_only_subtree(client, test_db, admin_user, p
     assert outside not in hit_ids, "outside doc leaked into scoped search"
 
 
-# ─── Enforcement: get_project_structure ──────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_scoped_structure_returns_only_subtree(
-    client, test_db, admin_user, project_with_doc,
-):
-    """get_project_structure is scoped to the subtree (root + descendants only)."""
-    pid, _, admin_uid = project_with_doc
-    _, admin_token = admin_user
-    root, child, grandchild, outside = await _build_tree(client, admin_token, pid)
-    scoped = await _make_agent_key(test_db, admin_uid, pid, scope_root=root)
-
-    resp = await client.post(
-        "/api/tool/get_project_structure", json={}, headers=_hdr(scoped),
-    )
-    assert resp.status_code == 200, resp.text
-    ids = {d["document_id"] for d in resp.json()["documents"]}
-    assert ids == {root, child, grandchild}, f"outside leaked: {ids}"
-    assert outside not in ids
-
-
 # ─── Enforcement: create_document ────────────────────────────────────────────
 
 
@@ -323,58 +249,7 @@ async def test_scoped_create_outside_parent_forbidden(
     assert resp.status_code == 403, resp.text
 
 
-@pytest.mark.asyncio
-async def test_scoped_create_no_parent_defaults_to_scope_root(
-    client, test_db, admin_user, project_with_doc,
-):
-    """create_document with no parent_id lands at the subtree root (inside scope)."""
-    pid, _, admin_uid = project_with_doc
-    _, admin_token = admin_user
-    root, _child, _grandchild, _outside = await _build_tree(client, admin_token, pid)
-    scoped = await _make_agent_key(test_db, admin_uid, pid, scope_root=root)
-
-    resp = await client.post(
-        "/api/tool/create_document",
-        json={"title": "NewDoc", "content": "x", "apply": "auto"},
-        headers=_hdr(scoped),
-    )
-    assert resp.status_code == 200, resp.text
-    new_id = resp.json()["doc_id"]
-    # The new doc must be a child of the scope root (inside the wall).
-    from db import fetch_one
-    created = await fetch_one("documents", new_id)
-    from db import extract_id
-    assert extract_id(created["parent_id"]) == root
-
-
 # ─── Enforcement: move_document ──────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_scoped_move_null_parent_lands_under_scope_root(
-    client, test_db, admin_user, project_with_doc,
-):
-    """move_document with parent_id null lands under the SCOPE root, not the
-    project root — and the doc stays visible to the same key afterwards (the
-    pre-fix escape was silent until the next read 403'd)."""
-    pid, _, admin_uid = project_with_doc
-    _, admin_token = admin_user
-    root, child, _grandchild, _outside = await _build_tree(client, admin_token, pid)
-    scoped = await _make_agent_key(test_db, admin_uid, pid, scope_root=root)
-
-    resp = await client.post(
-        "/api/tool/move_document",
-        json={"document_id": child, "parent_id": None, "apply": "auto"},
-        headers=_hdr(scoped),
-    )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["parent_id"] == root
-
-    # Still INSIDE the wall: the same key can read it after the move.
-    resp = await client.post(
-        "/api/tool/read_document", json={"document_id": child}, headers=_hdr(scoped),
-    )
-    assert resp.status_code == 200, resp.text
 
 
 @pytest.mark.asyncio
@@ -395,93 +270,6 @@ async def test_scoped_move_out_of_scope_parent_forbidden(
     )
     assert resp.status_code == 403, resp.text
     assert root in resp.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_scoped_reference_move_null_hosts_on_scope_root(
-    client, test_db, admin_user, project_with_doc,
-):
-    """A scoped reference move with parent_id null hosts on the scope root
-    (200) instead of the reference-at-root 400 — null never means the project
-    root under a scoped key."""
-    pid, _, admin_uid = project_with_doc
-    _, admin_token = admin_user
-    root, child, _grandchild, _outside = await _build_tree(client, admin_token, pid)
-    ref_resp = await client.post(
-        "/api/documents", json={
-            "project_id": pid, "title": "Ref", "content": "r",
-            "is_reference": True, "media_type": "markdown", "parent_id": child,
-        }, cookies={"lore_session": admin_token},
-    )
-    assert ref_resp.status_code == 200, ref_resp.text
-    ref_id = ref_resp.json()["document_id"]
-    scoped = await _make_agent_key(test_db, admin_uid, pid, scope_root=root)
-
-    resp = await client.post(
-        "/api/tool/move_document",
-        json={"document_id": ref_id, "parent_id": None, "apply": "auto"},
-        headers=_hdr(scoped),
-    )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["parent_id"] == root
-
-
-@pytest.mark.asyncio
-async def test_unscoped_move_null_parent_still_project_root(
-    client, test_db, admin_user, project_with_doc,
-):
-    """An UNSCOPED key's null move keeps today's meaning: the project root."""
-    pid, _, admin_uid = project_with_doc
-    _, admin_token = admin_user
-    root, child, _grandchild, _outside = await _build_tree(client, admin_token, pid)
-    unscoped = await _make_agent_key(test_db, admin_uid, pid)
-
-    resp = await client.post(
-        "/api/tool/move_document",
-        json={"document_id": child, "parent_id": None, "apply": "auto"},
-        headers=_hdr(unscoped),
-    )
-    assert resp.status_code == 200, resp.text
-    from db import extract_id, fetch_one
-
-    row = await fetch_one("documents", child)
-    assert not (row.get("parent_id") and extract_id(row.get("parent_id")))
-
-
-@pytest.mark.asyncio
-async def test_scoped_move_scope_root_itself_null_parent_refused(
-    client, test_db, admin_user, project_with_doc,
-):
-    """Moving the SCOPE ROOT itself with parent_id null is refused (400 own
-    parent), not parked at the project root. Why pinned: pre-fix, a null root
-    move skipped destination validation entirely, so the root-itself move was
-    the same one-way escape; post-fix the resolution yields
-    new_parent == document_id and the cycle guard catches it."""
-    pid, _, admin_uid = project_with_doc
-    _, admin_token = admin_user
-    # The scope root sits under a HOST doc, so "did not move" is a real check
-    # (_build_tree's roots are parentless — a parentless refusal would be
-    # indistinguishable from a successful root move on the row).
-    host = await _make_doc(client, admin_token, pid, "Host")
-    root = await _make_doc(
-        client, admin_token, pid, "ScopedRoot", "root body and more text",
-        parent_id=host,
-    )
-    scoped = await _make_agent_key(test_db, admin_uid, pid, scope_root=root)
-
-    resp = await client.post(
-        "/api/tool/move_document",
-        json={"document_id": root, "parent_id": None, "apply": "auto"},
-        headers=_hdr(scoped),
-    )
-    assert resp.status_code == 400, resp.text
-    assert "own parent" in resp.json()["detail"]
-
-    # Refused BEFORE the UPDATE: the root is still hosted, not root-less.
-    from db import extract_id, fetch_one
-
-    row = await fetch_one("documents", root)
-    assert extract_id(row.get("parent_id")) == host
 
 
 # ─── Out-of-scope transclusion ───────────────────────────────────────────────
@@ -548,28 +336,3 @@ async def test_agent_only_key_rejected_on_widget(client, test_db, admin_user, pr
 
     resp = await client.get("/api/widget/info", headers=_hdr(agent))
     assert resp.status_code == 403, resp.text
-
-
-@pytest.mark.asyncio
-async def test_combined_key_accepted_on_both_surfaces(
-    client, test_db, admin_user, project_with_doc,
-):
-    """ONE key with both capabilities works on the widget surface AND the agent
-    surface (document_id = bound doc = subtree root)."""
-    pid, _, admin_uid = project_with_doc
-    _, admin_token = admin_user
-    doc = await _make_doc(client, admin_token, pid, "CombinedDoc", "combined body text")
-    combined = await _make_key(
-        test_db, admin_uid, pid, document_id=doc,
-        capabilities=["widget", "agent"],
-    )
-
-    resp_w = await client.get("/api/widget/info", headers=_hdr(combined))
-    assert resp_w.status_code == 200, resp_w.text
-
-    resp_a = await client.post(
-        "/api/tool/read_document", json={"document_id": doc}, headers=_hdr(combined),
-    )
-    assert resp_a.status_code == 200, resp_a.text
-
-

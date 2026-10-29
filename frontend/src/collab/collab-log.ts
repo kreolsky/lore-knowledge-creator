@@ -27,7 +27,9 @@ export type CollabEventKind =
   /** An edit landed in a Y.Doc after it was destroyed: accepted on screen, never sent or mirrored. */
   | 'edit-dead-doc'
   /** An edit could not go out because the socket was not open (once per entity per sync). */
-  | 'edit-unsent';
+  | 'edit-unsent'
+  /** The editor still shows an empty document a few seconds after it was opened. */
+  | 'view-empty';
 
 export interface CollabEventDetail {
   code?: number;
@@ -60,6 +62,10 @@ export interface CollabEventDetail {
   msSinceLeave?: number;
   /** edit-unsent: the socket's readyState when the frame was refused. */
   readyState?: number;
+  /** view-empty: which layer is empty — the phase machine, the Y.Doc, the socket. */
+  live?: boolean;
+  ytextLen?: number;
+  status?: string;
 }
 
 /** Build and ship a collab telemetry event. `conn` distinguishes the two WS channels. */

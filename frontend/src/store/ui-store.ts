@@ -207,6 +207,7 @@ function triggerSaveGlobalPrefs(state: UIState) {
     splitRatio: state.splitRatio,
     showArchived: state.showArchived,
     adminSectionTab: state.adminSectionTab,
+    sidebarPinned: state.sidebarPinned,
   };
   apiClient.put('/preferences/_global', { preferences: blob })
     .catch(() => _appBridge?.showToast('Settings not saved', 'error'));
@@ -229,6 +230,8 @@ export interface UIState {
   language: Language;
   // Global "Show archived" reference-panel filter (global-persisted).
   showArchived: boolean;
+  // Left panel docked (true) or auto-hiding on hover (global-persisted).
+  sidebarPinned: boolean;
   // Admin panel's last-open section (global-persisted per user; see
   // theme-slice GlobalPrefs). The aside WIDTH is not a section field: it is
   // panelWidths.left — ONE width shared with the project sidebar (no jump in
@@ -298,6 +301,7 @@ export interface UIState {
   setSplitRatio: (ratio: number) => void;
   getSplitRatio: () => number;
   setShowArchived: (showArchived: boolean) => void;
+  setSidebarPinned: (pinned: boolean) => void;
   setAdminSectionTab: (tab: AdminSectionTab) => void;
   setSearchMode: (mode: SearchMode) => void;
   setTheme: (theme: 'light' | 'dark') => void;

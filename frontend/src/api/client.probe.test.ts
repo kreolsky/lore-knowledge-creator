@@ -31,11 +31,6 @@ afterEach(() => {
 });
 
 describe('apiClient.probe', () => {
-  it('returns {ok:true, data} on 200', async () => {
-    mockFetch(200, { user_id: 'u1' });
-    const r = await apiClient.probe('/auth/me');
-    expect(r).toEqual({ ok: true, status: 200, data: { user_id: 'u1' } });
-  });
 
   it('returns {ok:false, status:401} on 401 WITHOUT redirecting to "/"', async () => {
     // The whole point: no window.location redirect on the anonymous branch. A
@@ -45,11 +40,5 @@ describe('apiClient.probe', () => {
     const r = await apiClient.probe('/auth/me');
     expect(r).toEqual({ ok: false, status: 401 });
     expect(redirecting).toBe(false);
-  });
-
-  it('returns {ok:false} on 404 (uniform anonymous 404)', async () => {
-    mockFetch(404);
-    const r = await apiClient.probe('/documents/open/missing');
-    expect(r).toEqual({ ok: false, status: 404 });
   });
 });

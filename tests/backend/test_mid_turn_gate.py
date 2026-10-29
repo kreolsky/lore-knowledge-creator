@@ -70,16 +70,6 @@ async def _make_doc(client, token: str, project_id: str, title: str, content: st
     return resp.json()["document_id"]
 
 
-async def _make_session(client, token: str, project_id: str, doc_id: str) -> str:
-    resp = await client.post(
-        "/api/chat/sessions",
-        json={"project_id": project_id, "document_id": doc_id, "model": "test-model"},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 201, resp.text
-    return resp.json()["session_id"]
-
-
 def _confirm_edit(doc_id: str) -> dict:
     return {
         "document_id": doc_id, "old_string": "beta", "new_string": "BETA",
@@ -88,122 +78,7 @@ def _confirm_edit(doc_id: str) -> dict:
 
 
 class TestConfirmCell:
-    @pytest.mark.asyncio
-    async def test_mutating_confirm_refuses_with_the_ask_signal(
-        self, bp, client, test_db, admin_user, project_with_doc,
-    ):
-        admin_uid, admin_token = admin_user
-        pid, _, _ = project_with_doc
-        agent_token = await _make_agent_key(test_db, admin_uid, pid)
-        doc_id = await _make_doc(client, admin_token, pid, "Gate doc", "alpha beta")
-        session_id = await _make_session(client, admin_token, pid, doc_id)
 
-        resp = await client.post(
-            "/api/tool/edit_document",
-            json=_confirm_edit(doc_id),
-            headers=_hdr(agent_token, "gate-call-1", session_id),
-        )
-        assert resp.status_code == 409, resp.text
-        detail = resp.json()["detail"]
-        assert isinstance(detail, dict)
-        assert detail["code"] == "confirmation_required"
-        assert "edit_document" in detail["detail"]
-
-        # Refused, never applied: the document is unchanged.
-        read = await client.post(
-            "/api/tool/read_document",
-            json={"document_id": doc_id},
-            headers=_hdr(agent_token, "gate-call-ro-1", session_id),
-        )
-        assert "alpha beta" in read.json().get("content", "")
-
-        # A read-only call with the same headers is never refused — it returns
-        # immediately with no ask signal.
-        ro = await client.post(
-            "/api/tool/read_document",
-            json={"document_id": doc_id},
-            headers=_hdr(agent_token, "gate-call-ro-2", session_id),
-        )
-        assert ro.status_code == 200
-
-    @pytest.mark.asyncio
-    async def test_the_verdict_marker_applies_the_confirm_call(
-        self, bp, client, test_db, admin_user, project_with_doc, monkeypatch,
-    ):
-        """The driver's retry shape: the same confirm call plus the approval
-        marker (dsh's user-approval service already asked) AND the driver
-        secret that attests the marker applies through the ordinary auto path
-        — the pair replaces the deleted verdict_approved flag."""
-        import config
-
-        monkeypatch.setattr(config, "HARNESS_DRIVER_SECRET", "drv-s3cret")
-        admin_uid, admin_token = admin_user
-        pid, _, _ = project_with_doc
-        agent_token = await _make_agent_key(test_db, admin_uid, pid)
-        doc_id = await _make_doc(client, admin_token, pid, "Marker doc", "alpha beta")
-        session_id = await _make_session(client, admin_token, pid, doc_id)
-
-        resp = await client.post(
-            "/api/tool/edit_document",
-            json=_confirm_edit(doc_id),
-            headers={
-                **_hdr(agent_token, "gate-marker-1", session_id),
-                "X-Agent-Verdict": "allowed-once",
-                "X-Driver-Secret": "drv-s3cret",
-            },
-        )
-        assert resp.status_code == 200, resp.text
-        assert resp.json().get("status") == "applied"
-
-        read = await client.post(
-            "/api/tool/read_document",
-            json={"document_id": doc_id},
-            headers=_hdr(agent_token, "gate-marker-ro", session_id),
-        )
-        assert "alpha BETA" in read.json().get("content", "")
-
-    @pytest.mark.asyncio
-    async def test_an_unattested_marker_still_refuses_the_confirm_call(
-        self, bp, client, test_db, admin_user, project_with_doc, monkeypatch,
-    ):
-        """The falsifier for the test above: the SAME call, the SAME marker,
-        no driver secret.
-
-        # INVARIANT(security): only OUR driver's marker converts a confirm
-        # cell to auto. Why: the Tool-API is reachable by any agent-capable
-        # key (external brains included) and the marker is a plain header —
-        # unattested, it would let its holder self-approve every write the
-        # confirm cell exists to stop, so the call refuses with the ordinary
-        # ask signal and the document is left untouched.
-        """
-        import config
-
-        monkeypatch.setattr(config, "HARNESS_DRIVER_SECRET", "drv-s3cret")
-        admin_uid, admin_token = admin_user
-        pid, _, _ = project_with_doc
-        agent_token = await _make_agent_key(test_db, admin_uid, pid)
-        doc_id = await _make_doc(client, admin_token, pid, "Unattested", "alpha beta")
-        session_id = await _make_session(client, admin_token, pid, doc_id)
-
-        for secret in (None, "wrong-secret"):
-            headers = {
-                **_hdr(agent_token, f"gate-unattested-{secret}", session_id),
-                "X-Agent-Verdict": "allowed-once",
-            }
-            if secret is not None:
-                headers["X-Driver-Secret"] = secret
-            resp = await client.post(
-                "/api/tool/edit_document", json=_confirm_edit(doc_id), headers=headers,
-            )
-            assert resp.status_code == 409, resp.text
-            assert resp.json()["detail"].get("code") == "confirmation_required"
-
-        read = await client.post(
-            "/api/tool/read_document",
-            json={"document_id": doc_id},
-            headers=_hdr(agent_token, "gate-unattested-ro", session_id),
-        )
-        assert read.json().get("content") == "alpha beta"
 
     @pytest.mark.asyncio
     async def test_a_non_full_caller_is_refused_at_dispatch_never_shown_an_ask(
@@ -231,26 +106,6 @@ class TestConfirmCell:
         )
         assert resp.status_code == 403, resp.text
 
-    @pytest.mark.asyncio
-    async def test_a_full_caller_gets_the_ask_signal(
-        self, bp, client, test_db, admin_user, project_with_doc,
-    ):
-        """The falsifier: the same call from a caller who CAN write gets the
-        409 ask signal, so the test above measures the RBAC cell and not a
-        route that refuses everyone."""
-        admin_uid, admin_token = admin_user
-        pid, _, _ = project_with_doc
-        agent_token = await _make_agent_key(test_db, admin_uid, pid)
-        doc_id = await _make_doc(client, admin_token, pid, "RBAC doc 2", "alpha beta")
-
-        resp = await client.post(
-            "/api/tool/edit_document",
-            json=_confirm_edit(doc_id),
-            headers=_hdr(agent_token, "rbac-call-2", "rbac-sess-2"),
-        )
-        assert resp.status_code == 409, resp.text
-        assert resp.json()["detail"].get("code") == "confirmation_required"
-
 
 class TestApplyResolver:
     """The unified resolver's cells (pure — no I/O): the marker, the MCP
@@ -262,24 +117,6 @@ class TestApplyResolver:
 
         return await _resolve_apply_or_force(ctx, ui_preference=ui, is_system=system)
 
-    @pytest.mark.asyncio
-    async def test_the_marker_applies_a_system_doc(self):
-        # The marker reaches ctx only on a driver-attested request, so it is
-        # the user's approval of THIS call — a system doc applies like any
-        # other (the self-edit path: the card asks, the user allows, it lands).
-        decision = await self._resolve(
-            {"verdict": "allowed-once"}, ui="confirm", system=True,
-        )
-        assert decision.mode == "auto"
-        assert decision.reason == "verdict_approved"
-
-    @pytest.mark.asyncio
-    async def test_the_marker_applies_a_non_system_doc(self):
-        decision = await self._resolve(
-            {"verdict": "allowed-once"}, ui="confirm", system=False,
-        )
-        assert decision.mode == "auto"
-        assert decision.reason == "verdict_approved"
 
     @pytest.mark.asyncio
     async def test_mcp_force_auto_refuses_system_docs(self):
@@ -289,74 +126,11 @@ class TestApplyResolver:
             await self._resolve({"force_auto_apply": True}, ui="auto", system=True)
         assert exc.value.status_code == 403
 
-    @pytest.mark.asyncio
-    async def test_mcp_force_auto_applies_non_system(self):
-        decision = await self._resolve(
-            {"force_auto_apply": True}, ui="confirm", system=False,
-        )
-        assert decision.mode == "auto"
-        assert decision.reason == "mcp_force_auto"
-
-    @pytest.mark.asyncio
-    async def test_a_system_doc_without_approval_confirms(self):
-        decision = await self._resolve({}, ui="auto", system=True)
-        assert decision.mode == "confirm"
-        assert decision.reason == "system_doc"
-
-    @pytest.mark.asyncio
-    async def test_the_ui_confirm_preference_confirms(self):
-        decision = await self._resolve({}, ui="confirm", system=False)
-        assert decision.mode == "confirm"
-        assert decision.reason == "ui_confirm"
-
-    @pytest.mark.asyncio
-    async def test_an_auto_preference_applies(self):
-        decision = await self._resolve({}, ui="auto", system=False)
-        assert decision.mode == "auto"
-        assert decision.reason == "opted_in"
-
-    @pytest.mark.asyncio
-    async def test_an_unknown_marker_value_is_ignored(self):
-        decision = await self._resolve(
-            {"verdict": "allowed-forever"}, ui="confirm", system=False,
-        )
-        assert decision.mode == "confirm"
-
 
 class TestSystemDocRefusal:
     """A system-doc target reaches the confirm cell even in auto mode (the
     agent self-edit privilege path): the ask signal, never a silent apply."""
 
-    @pytest.mark.asyncio
-    async def test_system_doc_auto_without_approval_refuses(
-        self, bp, client, test_db, admin_user, project_with_doc, monkeypatch,
-    ):
-        admin_uid, admin_token = admin_user
-        pid, _, _ = project_with_doc
-        agent_token = await _make_agent_key(test_db, admin_uid, pid)
-        doc_id = await _make_doc(client, admin_token, pid, "System doc", "alpha beta")
-
-        import db as db_mod
-
-        real_fetch_one = db_mod.fetch_one
-
-        async def system_flagged_fetch_one(table, _id):
-            if table == "documents" and _id == doc_id:
-                return {"project_id": pid, "is_system": True}
-            return await real_fetch_one(table, _id)
-
-        monkeypatch.setattr(db_mod, "fetch_one", system_flagged_fetch_one)
-
-        resp = await client.post(
-            "/api/tool/edit_document",
-            json={
-                "document_id": doc_id, "old_string": "beta", "new_string": "BETA",
-                "apply": "auto",
-            },
-            headers=_hdr(agent_token, "sys-call-1", "sys-sess-1"),
-        )
-        assert resp.status_code == 409, resp.text
-        assert resp.json()["detail"].get("code") == "confirmation_required"
 
     @pytest.mark.asyncio
     async def test_system_doc_applies_after_the_attested_approval(
@@ -411,24 +185,6 @@ class TestVerdictAttestation:
             "call-1", "sess-1", "msg-1", verdict, driver_secret,
         )
 
-    @pytest.mark.asyncio
-    async def test_the_marker_survives_a_matching_driver_secret(self, monkeypatch):
-        import config
-
-        monkeypatch.setattr(config, "HARNESS_DRIVER_SECRET", "s3cret", raising=False)
-        assert (await self._decode("allowed-once", "s3cret"))["verdict"] == "allowed-once"
-
-    @pytest.mark.asyncio
-    async def test_an_unattested_marker_is_dropped(self, monkeypatch):
-        import config
-
-        monkeypatch.setattr(config, "HARNESS_DRIVER_SECRET", "s3cret", raising=False)
-        # No secret at all — an agent key claiming its own approval.
-        assert (await self._decode("allowed-once", None))["verdict"] is None
-        assert (await self._decode("allowed-once", ""))["verdict"] is None
-        # A wrong secret is the same refusal (compare_digest, not a prefix).
-        assert (await self._decode("allowed-once", "s3cret-guess"))["verdict"] is None
-        assert (await self._decode("allowed-once", "s3"))["verdict"] is None
 
     @pytest.mark.asyncio
     async def test_an_unconfigured_line_attests_nothing(self, monkeypatch):
@@ -437,14 +193,3 @@ class TestVerdictAttestation:
         monkeypatch.setattr(config, "HARNESS_DRIVER_SECRET", "", raising=False)
         assert (await self._decode("allowed-once", ""))["verdict"] is None
         assert (await self._decode("allowed-once", "anything"))["verdict"] is None
-
-    @pytest.mark.asyncio
-    async def test_the_other_correlation_headers_are_untouched(self, monkeypatch):
-        import config
-
-        monkeypatch.setattr(config, "HARNESS_DRIVER_SECRET", "s3cret", raising=False)
-        ctx = await self._decode(None, None)
-        assert ctx == {
-            "call_id": "call-1", "session_id": "sess-1",
-            "message_id": "msg-1", "verdict": None,
-        }

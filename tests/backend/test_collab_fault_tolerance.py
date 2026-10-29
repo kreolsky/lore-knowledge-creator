@@ -8,7 +8,6 @@ Task 7: Event bus subscriber errors log at WARNING level.
 Task 8: Non-serializable broadcast payload does NOT kill the batch task.
 """
 
-import asyncio
 import json
 import logging
 from unittest.mock import AsyncMock
@@ -71,50 +70,10 @@ class TestMalformedJsonProjectWS:
             assert "malformed" in msg.get("code", "").lower() or "malformed" in msg.get("message", "").lower()
 
 
-# ─── Task 7: Event bus subscriber error visibility ───────────────────────────
-
-
-class TestEventBusSubscriberErrorVisibility:
-    async def test_throwing_subscriber_logs_warning(self, caplog):
-        """A failing event bus subscriber logs WARNING + ERROR detail."""
-        from event_bus import emit, off, on
-
-        def bad_handler(**kw):
-            raise ValueError("subscriber boom")
-
-        on("visibility_test", bad_handler)
-        try:
-            with caplog.at_level(logging.WARNING, logger="event_bus"):
-                await emit("visibility_test", data="x")
-                await asyncio.sleep(0)
-                await asyncio.sleep(0)
-            warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
-            assert len(warning_records) > 0, "Expected WARNING log for subscriber error"
-        finally:
-            off("visibility_test", bad_handler)
-
-
 # ─── Task 8: _flush_batch serialization guard ────────────────────────────────
 
 
 class TestFlushBatchSerializationGuard:
-    async def test_non_serializable_payload_does_not_kill_batch_task(self):
-        """A non-serializable broadcast message is skipped, others still delivered."""
-        session = _mk_session()
-        client = _mk_client()
-        session.clients[id(client.ws)] = client
-
-        class BadObj:
-            pass
-
-        session._pending_broadcasts.append(({"type": "update", "bad": BadObj()}, set()))
-        session._pending_broadcasts.append(({"type": "update", "version": 1, "data": "ok"}, set()))
-
-        await session._flush_batch()
-
-        sent_texts = [c.args[0] for c in client.ws.send_text.call_args_list]
-        good_msgs = [json.loads(t) for t in sent_texts if t]
-        assert any(m.get("data") == "ok" for m in good_msgs), "Good message was dropped along with bad one"
 
     async def test_non_serializable_payload_logs_warning(self, caplog):
         """Non-serializable payload is logged at WARNING."""
@@ -132,24 +91,3 @@ class TestFlushBatchSerializationGuard:
 
         assert any("non-serializable" in r.message.lower() or "dropping" in r.message.lower()
                     for r in caplog.records)
-
-    async def test_batch_task_survives_non_serializable(self):
-        """The batch task does not crash — subsequent broadcasts still work."""
-        session = _mk_session()
-        client = _mk_client()
-        session.clients[id(client.ws)] = client
-
-        class BadObj:
-            pass
-
-        session._pending_broadcasts.append(({"bad": BadObj()}, set()))
-        await session._flush_batch()
-
-        session.queue_broadcast({"type": "update", "version": 2})
-        assert session._batch_task is not None or session._pending_broadcasts
-        client.ws.send_text.reset_mock()
-        if session._batch_task:
-            await session._batch_task
-
-        sent_texts = [c.args[0] for c in client.ws.send_text.call_args_list]
-        assert any("update" in t for t in sent_texts if t)

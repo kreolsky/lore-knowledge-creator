@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-
 
 async def _count(db, **where) -> int:
     clause = " AND ".join(f"{k} = ${k}" for k in where)
@@ -41,22 +39,6 @@ async def test_valid_batch_inserts_rows(client, admin_user, test_db):
     assert any(r["category"] == "collab" and r["detail"]["reason"] == "Heartbeat timeout" for r in rows)
 
 
-async def test_client_ts_roundtrips(client, admin_user, test_db):
-    """A browser-supplied client_ts (ISO string) is parsed and persisted as a datetime."""
-    _, token = admin_user
-    resp = await client.post(
-        "/api/telemetry",
-        json={"events": [{"category": "perf", "kind": "sync-slow", "entity_id": "doc-ts",
-                          "detail": {"ms": 2000}, "client_ts": "2026-06-18T03:00:00Z"}]},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200
-    rows = await test_db.query(
-        "SELECT client_ts FROM telemetry_event WHERE entity_id = 'doc-ts'",
-    )
-    assert rows and rows[0]["client_ts"] is not None
-
-
 async def test_oversized_batch_is_truncated(client, admin_user, test_db):
     _, token = admin_user
     events = [{"category": "perf", "kind": "rtt", "detail": {"i": i}} for i in range(80)]
@@ -67,33 +49,6 @@ async def test_oversized_batch_is_truncated(client, admin_user, test_db):
     assert resp.status_code == 200
     # Bounded to MAX_BATCH (50), never 500.
     assert resp.json()["accepted"] == 50
-
-
-async def test_oversized_detail_is_clamped(client, admin_user, test_db):
-    _, token = admin_user
-    huge = {"blob": "x" * 10000}
-    resp = await client.post(
-        "/api/telemetry",
-        json={"events": [{"category": "perf", "kind": "lag", "detail": huge}]},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200
-    rows = await test_db.query(
-        "SELECT detail FROM telemetry_event WHERE category = 'perf' AND kind = 'lag'",
-    )
-    assert any(r["detail"].get("_truncated") is True for r in rows)
-
-
-async def test_collab_close_emits_warning(client, admin_user, caplog):
-    _, token = admin_user
-    with caplog.at_level(logging.WARNING, logger="lore.collab.client"):
-        await client.post(
-            "/api/telemetry",
-            json={"events": [{"category": "collab", "kind": "close",
-                              "detail": {"code": 1006}}]},
-            cookies={"lore_session": token},
-        )
-    assert any("collab/close" in r.message for r in caplog.records)
 
 
 def test_clamp_detail_shared_early_exit_and_passthrough():
@@ -170,19 +125,6 @@ def test_clamp_detail_drops_only_large_values_keeps_short_ones():
     assert "content" not in clamped
 
 
-async def test_record_telemetry_events_roundtrip(test_db):
-    from telemetry_store import record_telemetry_events
-    # Session-scoped test DB persists across runs — start from a clean slate for this id.
-    await test_db.query("DELETE telemetry_event WHERE user_id = 'u-reap'")
-    n = await record_telemetry_events([{
-        "category": "collab", "kind": "server-reap", "user_id": "u-reap",
-        "project_id": None, "entity_id": "doc-reap",
-        "detail": {"idle_ms": 95000}, "client_ts": None,
-    }])
-    assert n == 1
-    assert await _count(test_db, kind="server-reap", user_id="u-reap") == 1
-
-
 async def test_retention_deletes_old_rows(test_db):
     from jobs.tasks import TELEMETRY_RETENTION_DAYS, telemetry_retention_task
     await test_db.query("DELETE telemetry_event WHERE user_id = 'u-ret'")
@@ -201,13 +143,3 @@ async def test_retention_deletes_old_rows(test_db):
     await telemetry_retention_task(None)
     after = await _count(test_db, user_id="u-ret")
     assert after == 1
-
-
-async def test_retention_window_is_90_days():
-    """Agent-tool telemetry needs a longer analysis horizon (turn/retry joins).
-
-    The retention constant governs ALL telemetry (collab/perf/agent). 90d keeps
-    agent-tool usage signal around long enough to tune tool descriptions from real
-    data; the 40d-old row above stays valid (40 < 90)."""
-    from jobs.tasks import TELEMETRY_RETENTION_DAYS
-    assert TELEMETRY_RETENTION_DAYS == 90

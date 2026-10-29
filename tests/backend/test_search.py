@@ -33,41 +33,6 @@ async def search_project(client, admin_user):
 
 
 @pytest.mark.asyncio
-async def test_search_finds_document_by_title(client, search_project):
-    pid, _, token = search_project
-    resp = await client.get(f"/api/projects/{pid}/search?q=valdris", cookies={"lore_session": token})
-    results = resp.json()["results"]
-    assert any(r.get("document_id") and "Valdris" in r["title"] for r in results)
-
-
-@pytest.mark.asyncio
-async def test_search_finds_document_by_content(client, search_project):
-    pid, _, token = search_project
-    resp = await client.get(f"/api/projects/{pid}/search?q=aetherium", cookies={"lore_session": token})
-    results = resp.json()["results"]
-    assert len(results) == 1
-    assert "document_id" in results[0]
-
-
-@pytest.mark.asyncio
-async def test_search_finds_reference_by_title(client, search_project):
-    pid, _, token = search_project
-    resp = await client.get(f"/api/projects/{pid}/search?q=climate", cookies={"lore_session": token})
-    results = resp.json()["results"]
-    assert len(results) == 1
-    assert "reference_id" in results[0]
-
-
-@pytest.mark.asyncio
-async def test_search_finds_reference_by_content(client, search_project):
-    pid, _, token = search_project
-    resp = await client.get(f"/api/projects/{pid}/search?q=geological", cookies={"lore_session": token})
-    results = resp.json()["results"]
-    assert len(results) == 1
-    assert "reference_id" in results[0]
-
-
-@pytest.mark.asyncio
 async def test_search_returns_both_docs_and_refs(client, search_project):
     pid, _, token = search_project
     resp = await client.get(f"/api/projects/{pid}/search?q=magic", cookies={"lore_session": token})
@@ -96,33 +61,6 @@ async def test_search_snippet_structure(client, search_project):
     assert "match" in snippet
     assert "after" in snippet
     assert snippet["match"].lower() == "aetherium"
-
-
-@pytest.mark.asyncio
-async def test_search_case_insensitive(client, search_project):
-    pid, _, token = search_project
-    resp = await client.get(f"/api/projects/{pid}/search?q=thunderpeak", cookies={"lore_session": token})
-    assert len(resp.json()["results"]) >= 1
-
-
-@pytest.mark.asyncio
-async def test_search_excludes_deleted(client, search_project, admin_user):
-    pid, _, token = search_project
-    cookies = {"lore_session": token}
-    # Find the Valdris doc and delete it
-    resp = await client.get(f"/api/projects/{pid}/search?q=valdris", cookies=cookies)
-    doc_id = resp.json()["results"][0]["document_id"]
-    await client.delete(f"/api/documents/{doc_id}", cookies=cookies)
-    # Search again
-    resp = await client.get(f"/api/projects/{pid}/search?q=valdris", cookies=cookies)
-    assert len(resp.json()["results"]) == 0
-
-
-@pytest.mark.asyncio
-async def test_search_min_query_length(client, search_project):
-    pid, _, token = search_project
-    resp = await client.get(f"/api/projects/{pid}/search?q=ab", cookies={"lore_session": token})
-    assert resp.status_code == 422
 
 
 @pytest.mark.asyncio

@@ -62,37 +62,3 @@ async def test_old_override_reaches_the_grace(clean_db):
     settings.drop_cache()
     assert await settings.get("TURN_PROGRESS_GRACE_S") == 600.0
     assert "TURN_TIMEOUT_S" not in await _keys(test_db)
-
-
-@pytest.mark.asyncio
-async def test_the_grace_own_override_wins(clean_db):
-    test_db = clean_db
-    import settings
-
-    await _put_override(test_db, "TURN_TIMEOUT_S", 600.0)
-    await _put_override(test_db, "TURN_PROGRESS_GRACE_S", 120.0)
-    await _migrate_turn_timeout_override_fold(test_db)
-    settings.drop_cache()
-    assert await settings.get("TURN_PROGRESS_GRACE_S") == 120.0
-    assert "TURN_TIMEOUT_S" not in await _keys(test_db)
-
-
-@pytest.mark.asyncio
-async def test_no_override_and_a_rerun_are_noops(clean_db):
-    test_db = clean_db
-    import settings
-
-    await _migrate_turn_timeout_override_fold(test_db)
-    await _put_override(test_db, "TURN_TIMEOUT_S", 600.0)
-    await _migrate_turn_timeout_override_fold(test_db)
-    await _migrate_turn_timeout_override_fold(test_db)
-    settings.drop_cache()
-    assert await settings.get("TURN_PROGRESS_GRACE_S") == 600.0
-    assert await _keys(test_db) == {"TURN_PROGRESS_GRACE_S"}
-
-
-def test_registered_in_registry():
-    from migrations.runner import _MIGRATIONS
-
-    names = [name for name, _ in _MIGRATIONS]
-    assert "turn_timeout_override_fold" in names

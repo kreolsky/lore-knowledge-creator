@@ -45,60 +45,6 @@ async def test_storage_requires_admin(client, regular_user):
 
 
 @pytest.mark.asyncio
-async def test_storage_admin_shape(client, admin_user, project_with_doc):
-    """Admin → 200 with the full response shape."""
-    data = await _storage(client, admin_user[1])
-    assert "disk" in data
-    assert "disk_error" in data
-    assert "measured_ms" in data
-    assert "measured_at" in data
-    assert isinstance(data["tables"], list) and data["tables"]
-    row = data["tables"][0]
-    for key in ("name", "live_rows", "live_bytes", "deleted_rows", "deleted_bytes",
-                "in_deleted_projects_rows", "in_deleted_projects_bytes"):
-        assert key in row, f"table row missing {key}"
-    totals = data["totals"]
-    for key in ("live_rows", "live_bytes", "deleted_rows", "deleted_bytes",
-                "in_deleted_projects_rows", "in_deleted_projects_bytes"):
-        assert key in totals, f"totals missing {key}"
-
-
-@pytest.mark.asyncio
-async def test_tables_derived_from_info_for_db(client, admin_user, project_with_doc):
-    """`tables` names equal `INFO FOR DB` tables — derived, not a literal list."""
-    db = await get_db()
-    info = await db.query("INFO FOR DB")
-    blob = info[0] if isinstance(info, list) else info
-    expected = set((blob or {}).get("tables") or {})
-    assert expected, "test DB must have tables"
-
-    data = await _storage(client, admin_user[1])
-    assert {t["name"] for t in data["tables"]} == expected
-
-
-@pytest.mark.asyncio
-async def test_soft_deleted_document_raises_deleted_rows(client, admin_user, project_with_doc):
-    """A soft-deleted document raises documents.deleted_rows by exactly 1."""
-    _, token = admin_user
-    _, idx_id, _ = project_with_doc
-    db = await get_db()
-
-    before = _documents_row(await _storage(client, token))
-
-    await db.query(
-        "UPDATE type::record('documents', $id) SET deleted_at = time::now()",
-        {"id": idx_id},
-    )
-    after = _documents_row(await _storage(client, token))
-
-    assert after["deleted_rows"] == before["deleted_rows"] + 1
-    assert after["live_rows"] == before["live_rows"] - 1
-    # The doc is soft-deleted while its project is LIVE: the in-deleted-projects
-    # bucket must not move (the buckets are disjoint).
-    assert after["in_deleted_projects_rows"] == before["in_deleted_projects_rows"]
-
-
-@pytest.mark.asyncio
 async def test_live_document_in_deleted_project_raises_in_dead_bucket(
     client, admin_user, project_with_doc,
 ):

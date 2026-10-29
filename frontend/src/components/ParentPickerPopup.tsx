@@ -243,6 +243,7 @@ export function ParentPickerPopup({ doc, currentDocumentId, onMoved, anchorRect,
     <>
       <div
         ref={popupRef}
+        data-sidebar-hold
         className="link-suggest-popup"
         style={{ top: popupTop, left: popupLeft, maxHeight: POPUP_ESTIMATED_HEIGHT }}
         onMouseDown={(e) => e.stopPropagation()}

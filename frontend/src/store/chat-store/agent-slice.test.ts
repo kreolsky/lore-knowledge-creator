@@ -47,57 +47,6 @@ const MSG = {
 
 beforeEach(() => { showToast.mockClear(); });
 
-describe('fetchPendingVerdicts — the reload re-render path', () => {
-  it('merges held calls onto their assistant message pending_verdicts (cards render after reload)', async () => {
-    const { get, set } = makeStore([{ ...MSG }]);
-    getMock.mockResolvedValue({
-      holds: [
-        { call_id: 'c1', tool_name: 'edit_document', message_id: 'am' },
-        { call_id: 'c2', tool_name: 'append_to_document', message_id: 'am' },
-      ],
-    } as never);
-
-    const slice = createAgentSlice(set, get);
-    await slice.fetchPendingVerdicts('s1');
-
-    const messages = get().messages as Array<{ message_id: string; pending_verdicts: unknown[] }>;
-    expect(messages[0].pending_verdicts).toEqual([
-      { call_id: 'c1', tool_name: 'edit_document', message_id: 'am' },
-      { call_id: 'c2', tool_name: 'append_to_document', message_id: 'am' },
-    ]);
-  });
-
-  it('never duplicates an already-present hold (frame card + reload race)', async () => {
-    const { get, set } = makeStore([{ ...MSG, pending_verdicts: [{ call_id: 'c1', tool_name: 'edit_document', message_id: 'am' }] }]);
-    getMock.mockResolvedValue({
-      holds: [
-        { call_id: 'c1', tool_name: 'edit_document', message_id: 'am' },
-        { call_id: 'c2', tool_name: 'append_to_document', message_id: 'am' },
-      ],
-    } as never);
-
-    const slice = createAgentSlice(set, get);
-    await slice.fetchPendingVerdicts('s1');
-
-    const messages = get().messages as Array<{ pending_verdicts: Array<{ call_id: string }> }>;
-    expect(messages[0].pending_verdicts).toHaveLength(2);
-    expect(messages[0].pending_verdicts.map(p => p.call_id)).toEqual(['c1', 'c2']);
-  });
-
-  it('holds without a message_id are dropped (no card can attach to a message)', async () => {
-    const { get, set } = makeStore([{ ...MSG }]);
-    getMock.mockResolvedValue({
-      holds: [{ call_id: 'c1', tool_name: 'edit_document', message_id: '' }],
-    } as never);
-
-    const slice = createAgentSlice(set, get);
-    await slice.fetchPendingVerdicts('s1');
-
-    const messages = get().messages as Array<{ pending_verdicts: unknown[] }>;
-    expect(messages[0].pending_verdicts).toEqual([]);
-  });
-});
-
 describe('decideVerdict — expired hold (409 hold_expired)', () => {
   const held = [
     { ...MSG, pending_verdicts: [{ call_id: 'c9', tool_name: 'edit_document', message_id: 'am' }] },

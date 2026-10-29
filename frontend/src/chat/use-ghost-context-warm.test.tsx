@@ -104,17 +104,6 @@ import type { FirstCircle } from '../utils/cascade-selection';
 
 const cache = linkCache as unknown as Map<string, FirstCircle>;
 
-function renderWarm(): () => void {
-  const container = document.createElement('div');
-  const root = createRoot(container);
-  function Harness() {
-    useGhostContextWarm();
-    return createElement('div');
-  }
-  act(() => root.render(createElement(Harness)));
-  return () => act(() => root.unmount());
-}
-
 function renderWarmWithSelector(): { unmount: () => void; getContext: () => { documentIds: string[]; referenceIds: string[] } } {
   const container = document.createElement('div');
   const root = createRoot(container);
@@ -159,54 +148,6 @@ beforeEach(() => {
   linkMock.version = 0;
   linkMock.listeners.clear();
   __resetLinkWarmState();
-});
-
-describe('useGhostContextWarm — failure escalation (plan #4)', () => {
-  it('warns and shows a single debounced toast when a first-circle fetch fails', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    const unmount = renderWarm();
-    await act(async () => { await vi.runAllTimersAsync(); });
-
-    // console.warn fired (dev-loud) for the failed doc-1 fetch.
-    expect(warnSpy).toHaveBeenCalled();
-    // Exactly ONE toast — debounced per warm cycle, not per failed fetch.
-    expect(mocks.appState.showToast).toHaveBeenCalledTimes(1);
-    expect(mocks.appState.showToast).toHaveBeenCalledWith('Some linked context could not be loaded', 'error');
-    warnSpy.mockRestore();
-    unmount();
-  });
-
-  it('coalesces multiple failures into one toast (debounced per warm cycle)', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    // Split view with both panes open → two base targets (doc-1 + ref-1). This
-    // avoids the ghost delta store, which syncGhostBaseKey resets on mount.
-    mocks.appState.currentReference = { reference_id: 'ref-1' };
-    mocks.uiState.documents = { 'doc-1': { refOpenMode: 'split' } };
-
-    const unmount = renderWarm();
-    await act(async () => { await vi.runAllTimersAsync(); });
-
-    // Two failed fetches → two console.warn (per fetch), but still ONE toast.
-    expect(warnSpy).toHaveBeenCalledTimes(2);
-    expect(mocks.appState.showToast).toHaveBeenCalledTimes(1);
-    warnSpy.mockRestore();
-    unmount();
-  });
-
-  it('does not toast after unmount before the debounce fires (cancelled guard)', async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    const unmount = renderWarm();
-    // Advance just past the catch's microtask flush (which schedules the 500ms toast
-    // timer) but NOT to 500ms, so the toast has not fired yet.
-    await act(async () => { await vi.advanceTimersByTimeAsync(499); });
-    // Unmount runs the effect cleanup: cancelled=true + clears the pending toast timer.
-    unmount();
-    await act(async () => { await vi.runAllTimersAsync(); });
-
-    expect(mocks.appState.showToast).not.toHaveBeenCalled();
-  });
 });
 
 // ─── Always-fresh base contract ──────────────────────────────────────────

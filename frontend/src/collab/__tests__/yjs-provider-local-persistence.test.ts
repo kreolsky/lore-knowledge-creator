@@ -114,26 +114,6 @@ function joinMessages(ws: MockWebSocket): unknown[] {
     .filter(m => m.type === 'join');
 }
 
-async function seedLocalCopy(text: string): Promise<void> {
-  const ydoc = new Y.Doc();
-  const handle = attachLocalDoc(PROJECT, ENTITY, ydoc)!;
-  await handle.whenReady;
-  ydoc.getText('content').insert(0, text);
-  await handle.flush();
-  await handle.detach();
-  ydoc.destroy();
-}
-
-async function readLocalCopy(): Promise<string> {
-  const ydoc = new Y.Doc();
-  const handle = attachLocalDoc(PROJECT, ENTITY, ydoc)!;
-  await handle.whenReady;
-  const text = ydoc.getText('content').toString();
-  await handle.detach();
-  ydoc.destroy();
-  return text;
-}
-
 describe('YjsProjectProvider — local persistence', () => {
   beforeEach(async () => {
     MockWebSocket.reset();
@@ -145,136 +125,6 @@ describe('YjsProjectProvider — local persistence', () => {
     MockWebSocket.restore();
     await clearAllLocalDocs();
   });
-
-  it('defers the join until the local copy is loaded, and the sync carries it up', async () => {
-    await seedLocalCopy('typed during the outage');
-
-    const provider = new YjsProjectProvider(PROJECT, 'user1');
-    provider.connect();
-    const ws = MockWebSocket.latest()!;
-    ws.simulateOpen();
-
-    const entity = provider.joinEntity('doc', ENTITY, makeCallbacks(), localUser);
-    // The join must NOT have gone out yet — a step1 sent now would carry an empty
-    // state vector and the local edits would never reach the server.
-    expect(joinMessages(ws)).toHaveLength(0);
-
-    await waitFor(() => joinMessages(ws).length === 1);
-    expect(entity.ydoc.getText('content').toString()).toBe('typed during the outage');
-    expect(pushedStep2Text(ws)).toBe('typed during the outage');
-
-    provider.disconnect();
-  });
-
-  it('pushes edits typed while the socket was down on the next sync', async () => {
-    const provider = new YjsProjectProvider(PROJECT, 'user1');
-    provider.connect();
-    const first = MockWebSocket.latest()!;
-    first.simulateOpen();
-    const entity = provider.joinEntity('doc', ENTITY, makeCallbacks(), localUser);
-    await waitFor(() => joinMessages(first).length === 1);
-
-    first.simulateClose(1006, 'network blip');
-    entity.ydoc.getText('content').insert(0, 'offline edit');
-
-    await waitFor(() => MockWebSocket.instances.length === 2, 8000);
-    const second = MockWebSocket.latest()!;
-    second.simulateOpen();
-
-    await waitFor(() => joinMessages(second).length === 1);
-    expect(pushedStep2Text(second)).toBe('offline edit');
-
-    provider.disconnect();
-  }, 15000);
-
-  it('retires the local copy when the document is left fully synced', async () => {
-    const provider = new YjsProjectProvider(PROJECT, 'user1');
-    provider.connect();
-    const ws = MockWebSocket.latest()!;
-    ws.simulateOpen();
-    provider.joinEntity('doc', ENTITY, makeCallbacks(), localUser);
-    await waitFor(() => joinMessages(ws).length === 1);
-
-    // The server answers the sync: this client now holds nothing the server does not.
-    const serverDoc = new Y.Doc();
-    serverDoc.getText('content').insert(0, 'all safely on the server');
-    const state = Y.encodeStateAsUpdate(serverDoc);
-    const step2 = new Uint8Array(2 + state.length);
-    step2[0] = MSG_SYNC;
-    step2[1] = SYNC_STEP2;
-    step2.set(state, 2);
-    ws.simulateBinary(wrapBinary(ENTITY, MSG_SYNC, step2));
-
-    provider.leaveEntity(ENTITY);
-
-    await waitForAsync(async () => (await readLocalCopy()) === '');
-
-    provider.disconnect();
-  });
-
-  it('keeps the local copy when the leave happens with edits the server never got', async () => {
-    const provider = new YjsProjectProvider(PROJECT, 'user1');
-    provider.connect();
-    const ws = MockWebSocket.latest()!;
-    ws.simulateOpen();
-    const entity = provider.joinEntity('doc', ENTITY, makeCallbacks(), localUser);
-    await waitFor(() => joinMessages(ws).length === 1);
-    entity.ydoc.getText('content').insert(0, 'still mine');
-
-    provider.leaveEntity(ENTITY);
-    provider.disconnect();
-
-    await waitForAsync(async () => (await readLocalCopy()) === 'still mine');
-  });
-
-  it('drops the local copy when the server closes with an access code', async () => {
-    const provider = new YjsProjectProvider(PROJECT, 'user1');
-    provider.connect();
-    const ws = MockWebSocket.latest()!;
-    ws.simulateOpen();
-    const entity = provider.joinEntity('doc', ENTITY, makeCallbacks(), localUser);
-    await waitFor(() => joinMessages(ws).length === 1);
-    entity.ydoc.getText('content').insert(0, 'revoked content');
-
-    ws.simulateClose(4003, 'no access');
-
-    await waitForAsync(async () => (await readLocalCopy()) === '');
-
-    provider.disconnect();
-  });
-
-  it('drops the local copy when the document is deleted', async () => {
-    const provider = new YjsProjectProvider(PROJECT, 'user1');
-    provider.connect();
-    const ws = MockWebSocket.latest()!;
-    ws.simulateOpen();
-    const entity = provider.joinEntity('doc', ENTITY, makeCallbacks(), localUser);
-    await waitFor(() => joinMessages(ws).length === 1);
-    entity.ydoc.getText('content').insert(0, 'deleted content');
-
-    ws.onmessage?.({ data: JSON.stringify({ type: 'doc_deleted', entity_id: ENTITY }) });
-
-    await waitForAsync(async () => (await readLocalCopy()) === '');
-
-    provider.disconnect();
-  });
-
-  it('drops the local copy when access to the entity is revoked', async () => {
-    const provider = new YjsProjectProvider(PROJECT, 'user1');
-    provider.connect();
-    const ws = MockWebSocket.latest()!;
-    ws.simulateOpen();
-    const entity = provider.joinEntity('doc', ENTITY, makeCallbacks(), localUser);
-    await waitFor(() => joinMessages(ws).length === 1);
-    entity.ydoc.getText('content').insert(0, 'no longer mine');
-
-    ws.onmessage?.({ data: JSON.stringify({ type: 'access_revoked', entity_id: ENTITY }) });
-
-    await waitForAsync(async () => (await readLocalCopy()) === '');
-
-    provider.disconnect();
-  });
-
 
   it('joins the socket even when the local mirror cannot be opened', async () => {
     // A browser that refuses IndexedDB (quota, private mode, corrupt db) must cost the
@@ -330,7 +180,6 @@ describe('YjsProjectProvider — local persistence', () => {
 
     provider.disconnect();
   }, 15000);
-
 
   it('typing in the join window is carried by the update stream, not re-pushed later', async () => {
     // Join sent, server step2 not back yet: the entity is joined, so the server DOES

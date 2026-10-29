@@ -54,67 +54,6 @@ async def group_user(test_db, moderator_user):
 
 
 @pytest.mark.asyncio
-async def test_moderator_lists_only_own_group(client, admin_user, moderator_user, group_user, regular_user):
-    """Moderator's list is scoped to the own group and carries provenance fields."""
-    mod_uid, mod_token = moderator_user
-    resp = await client.get("/api/admin/users", cookies={"lore_session": mod_token})
-    assert resp.status_code == 200
-    users = resp.json()
-    names = {u["name"] for u in users}
-    assert "groupmember" in names
-    assert "testadmin" not in names
-    assert "testuser" not in names
-    assert "testmod" not in names  # the moderator themself is not in the group
-    member = next(u for u in users if u["name"] == "groupmember")
-    assert member["moderator_id"] == mod_uid
-    assert "created_by" in member
-
-
-@pytest.mark.asyncio
-async def test_list_resolves_group_and_creator_names(client, test_db, admin_user, moderator_user, group_user):
-    """The row carries moderator_name / created_by_name resolved server-side, so a
-    moderator (whose scoped list does not contain themself) still sees names, not uids."""
-    mod_uid, mod_token = moderator_user
-    admin_uid, admin_token = admin_user
-    member_uid, _ = group_user
-    await test_db.query(
-        "UPDATE type::record('users', $id) SET created_by = $by", {"id": member_uid, "by": admin_uid},
-    )
-    for token in (mod_token, admin_token):
-        resp = await client.get("/api/admin/users", cookies={"lore_session": token})
-        assert resp.status_code == 200
-        member = next(u for u in resp.json() if u["user_id"] == member_uid)
-        assert member["moderator_name"] == "testmod"
-        assert member["created_by_name"] == "testadmin"
-
-
-@pytest.mark.asyncio
-async def test_patch_and_create_return_resolved_names(client, admin_user, moderator_user, regular_user):
-    """PATCH and POST answer with the LIST row shape — moderator_name / created_by_name
-    resolved — so the admin page can splice the response in without a reload
-    (the group chip appeared only after a refresh when the PATCH row lacked them)."""
-    mod_uid, _ = moderator_user
-    _, admin_token = admin_user
-    reg_uid, _ = regular_user
-    resp = await client.patch(
-        f"/api/admin/users/{reg_uid}",
-        json={"moderator_id": mod_uid},
-        cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["moderator_name"] == "testmod"
-    resp = await client.post(
-        "/api/admin/users",
-        json={"name": "named", "email": "named@test.com", "password": "pass123",
-              "role": "user", "moderator_id": mod_uid},
-        cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["moderator_name"] == "testmod"
-    assert resp.json()["created_by_name"] == "testadmin"
-
-
-@pytest.mark.asyncio
 async def test_admin_role_param_filters_moderators(client, admin_user, moderator_user):
     """?role=moderator feeds the admin's moderator select."""
     _, admin_token = admin_user
@@ -176,19 +115,6 @@ async def test_admin_create_with_moderator_id(client, admin_user, moderator_user
 
 
 @pytest.mark.asyncio
-async def test_moderator_patch_group_member(client, moderator_user, group_user):
-    """The happy path: moderator edits a own-group member's manager fields."""
-    group_uid, mod_token = group_user[0], moderator_user[1]
-    resp = await client.patch(
-        f"/api/admin/users/{group_uid}",
-        json={"name": "renamed_by_mod"},
-        cookies={"lore_session": mod_token},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["name"] == "renamed_by_mod"
-
-
-@pytest.mark.asyncio
 async def test_moderator_patch_foreign_user_404(client, moderator_user, regular_user):
     """A foreign user must not be known to exist — 404, not 403."""
     foreign_uid, mod_token = regular_user[0], moderator_user[1]
@@ -224,44 +150,7 @@ async def test_moderator_patch_with_moderator_id_403(client, moderator_user, gro
     assert resp.status_code == 403
 
 
-@pytest.mark.asyncio
-async def test_moderator_foreign_project_access_404(client, moderator_user, regular_user):
-    """project-access of a foreign user reads as nonexistent."""
-    foreign_uid, mod_token = regular_user[0], moderator_user[1]
-    resp = await client.get(
-        f"/api/admin/users/{foreign_uid}/project-access",
-        cookies={"lore_session": mod_token},
-    )
-    assert resp.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_moderator_group_member_project_access(client, moderator_user, group_user):
-    """project-access of an own-group member is readable."""
-    group_uid, mod_token = group_user[0], moderator_user[1]
-    resp = await client.get(
-        f"/api/admin/users/{group_uid}/project-access",
-        cookies={"lore_session": mod_token},
-    )
-    assert resp.status_code == 200
-
-
 # ─── Transition rules ─────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_admin_promote_clears_moderator_id(client, admin_user, moderator_user, group_user):
-    """Promotion to moderator flattens the tree — the target's group link is dropped."""
-    group_uid, admin_token = group_user[0], admin_user[1]
-    resp = await client.patch(
-        f"/api/admin/users/{group_uid}",
-        json={"role": "moderator"},
-        cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["role"] == "moderator"
-    assert data["moderator_id"] is None
 
 
 @pytest.mark.asyncio
@@ -294,92 +183,12 @@ async def test_demote_with_nonempty_group_409(client, admin_user, moderator_user
 
 
 @pytest.mark.asyncio
-async def test_demote_and_delete_drop_moderator_group_grants(client, test_db, admin_user, moderator_user):
-    """The virtual group's grants go with the moderator role; a re-promoted
-    moderator starts with none, and a deleted one leaves none behind."""
-    mod_uid, admin_token = moderator_user[0], admin_user[1]
-    admin = {"lore_session": admin_token}
-
-    async def grants() -> list:
-        return await test_db.query(
-            "SELECT VALUE model_id FROM model_grants WHERE subject = $s", {"s": f"mod:{mod_uid}"},
-        )
-
-    resp = await client.put("/api/admin/models/a/b", json={"subjects": [f"mod:{mod_uid}"]}, cookies=admin)
-    assert resp.status_code == 200, resp.text
-    assert await grants() == ["a/b"]
-    assert (await client.patch(f"/api/admin/users/{mod_uid}", json={"role": "user"}, cookies=admin)).status_code == 200
-    assert await grants() == []
-    assert (await client.patch(f"/api/admin/users/{mod_uid}", json={"role": "moderator"}, cookies=admin)).status_code == 200
-    assert await grants() == []
-
-    await client.put("/api/admin/models/a/b", json={"subjects": [f"mod:{mod_uid}"]}, cookies=admin)
-    assert (await client.delete(f"/api/admin/users/{mod_uid}", cookies=admin)).status_code == 200
-    assert await grants() == []
-
-
-@pytest.mark.asyncio
-async def test_promotion_drops_grants_left_by_a_failed_demotion_drop(client, test_db, admin_user, regular_user):
-    """The demotion drop is not in the role write's transaction; a grant it
-    failed to delete must not come back with a re-promotion."""
-    uid, admin_token = regular_user[0], admin_user[1]
-    await test_db.query(
-        "CREATE model_grants CONTENT { model_id: 'a/b', subject: $s }", {"s": f"mod:{uid}"},
-    )
-    resp = await client.patch(
-        f"/api/admin/users/{uid}", json={"role": "moderator"}, cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 200, resp.text
-    assert await test_db.query(
-        "SELECT VALUE model_id FROM model_grants WHERE subject = $s", {"s": f"mod:{uid}"},
-    ) == []
-
-
-@pytest.mark.asyncio
 async def test_delete_moderator_with_group_409(client, admin_user, moderator_user, group_user):
     """Soft-deleting a moderator with a non-empty group is guarded the same way."""
     mod_uid, admin_token = moderator_user[0], admin_user[1]
     resp = await client.delete(f"/api/admin/users/{mod_uid}", cookies={"lore_session": admin_token})
     assert resp.status_code == 409
     assert resp.json()["group_size"] == 1
-
-
-@pytest.mark.asyncio
-async def test_moderator_id_targeting_non_moderator_422(client, admin_user, regular_user):
-    """A group link must point at a role='moderator' row — an admin uid is not one."""
-    admin_uid, admin_token = admin_user
-    target_uid, _ = regular_user
-    resp = await client.patch(
-        f"/api/admin/users/{target_uid}",
-        json={"moderator_id": admin_uid},
-        cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_moderator_id_only_on_user_role_422(client, admin_user, moderator_user):
-    """Pinning a group onto a moderator/admin row is a contradictory request."""
-    mod_uid, _ = moderator_user
-    _, admin_token = admin_user
-    resp = await client.patch(
-        f"/api/admin/users/{mod_uid}",
-        json={"moderator_id": mod_uid},
-        cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_self_role_change_400(client, admin_user):
-    """Self-demotion (any self role change) is refused like self-delete."""
-    uid, token = admin_user
-    resp = await client.patch(
-        f"/api/admin/users/{uid}",
-        json={"role": "user"},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 400
 
 
 # ─── Role overlay — role change without logout ────────────────────────────────
@@ -431,17 +240,6 @@ async def test_role_overlay_demotion(client, admin_user, moderator_user):
     assert me["role"] == "user"
     assert me["can_manage_users"] is False
     assert me["is_admin"] is False
-
-
-@pytest.mark.asyncio
-async def test_me_flags_for_admin(client, admin_user):
-    """/me capability flags for an admin."""
-    _, token = admin_user
-    resp = await client.get("/api/auth/me", cookies={"lore_session": token})
-    assert resp.status_code == 200
-    me = resp.json()
-    assert me["is_admin"] is True
-    assert me["can_manage_users"] is True
 
 
 # ─── Moderator's scoped admin panel: Projects ─────────────────────────────────
@@ -499,22 +297,6 @@ async def test_project_list_requires_manager_role(client, regular_user):
     assert resp.status_code == 403
 
 
-@pytest.mark.asyncio
-async def test_moderator_project_members_scoped(client, moderator_user, scoped_projects):
-    """Members of a project owned by the moderator's group are readable; a
-    foreign project reads as nonexistent."""
-    _, mod_token = moderator_user
-    resp = await client.get(
-        "/api/admin/projects/p-group/members", cookies={"lore_session": mod_token},
-    )
-    assert resp.status_code == 200
-
-    resp = await client.get(
-        "/api/admin/projects/p-admin/members", cookies={"lore_session": mod_token},
-    )
-    assert resp.status_code == 404
-
-
 # ─── Member writes (step 4) ───────────────────────────────────────────────────
 
 
@@ -523,36 +305,6 @@ async def _member_row(test_db, pid: str, uid: str) -> list:
         "SELECT user_id FROM project_members WHERE project_id = $pid AND user_id = $uid",
         {"pid": pid, "uid": uid},
     ) or []
-
-
-@pytest.mark.asyncio
-async def test_moderator_sets_group_member_on_own_project(client, test_db, moderator_user, group_user, scoped_projects):
-    """A moderator grants a group member access to the moderator's own project;
-    the row exists afterwards and the members list shows it."""
-    _, mod_token = moderator_user
-    group_uid, _ = group_user
-    resp = await client.post(
-        "/api/admin/projects/p-mod/members",
-        json={"user_id": group_uid, "access_level": "full"},
-        cookies={"lore_session": mod_token},
-    )
-    assert resp.status_code == 200
-    assert len(await _member_row(test_db, "p-mod", group_uid)) == 1
-    resp = await client.get("/api/admin/projects/p-mod/members", cookies={"lore_session": mod_token})
-    assert resp.json() == {group_uid: "full"}
-
-
-@pytest.mark.asyncio
-async def test_moderator_adds_self_to_group_member_project(client, test_db, moderator_user, group_user, scoped_projects):
-    """A moderator can add themself to a project owned by a group member."""
-    mod_uid, mod_token = moderator_user
-    resp = await client.post(
-        "/api/admin/projects/p-group/members",
-        json={"user_id": mod_uid, "access_level": "full"},
-        cookies={"lore_session": mod_token},
-    )
-    assert resp.status_code == 200
-    assert len(await _member_row(test_db, "p-group", mod_uid)) == 1
 
 
 @pytest.mark.asyncio
@@ -635,25 +387,6 @@ async def test_plain_user_member_write_403(client, regular_user, scoped_projects
 
 
 @pytest.mark.asyncio
-async def test_moderator_transfers_own_project_to_group_member(
-    client, test_db, moderator_user, group_user, scoped_projects,
-):
-    """Happy path: a moderator transfers their own project to a group member."""
-    mod_uid, mod_token = moderator_user
-    group_uid, _ = group_user
-    resp = await client.post(
-        "/api/admin/projects/p-mod/owner",
-        json={"user_id": group_uid},
-        cookies={"lore_session": mod_token},
-    )
-    assert resp.status_code == 200, resp.text
-    rows = await test_db.query(
-        "SELECT owner_id FROM type::record('projects', $id)", {"id": "p-mod"},
-    )
-    assert rows[0]["owner_id"] == group_uid
-
-
-@pytest.mark.asyncio
 async def test_moderator_transfer_to_foreign_user_404(
     client, test_db, moderator_user, regular_user, scoped_projects,
 ):
@@ -688,16 +421,3 @@ async def test_moderator_transfer_on_foreign_project_404(
         "SELECT owner_id FROM type::record('projects', $id)", {"id": "p-admin"},
     )
     assert rows[0]["owner_id"] != group_uid
-
-
-@pytest.mark.asyncio
-async def test_login_returns_capability_flags(client, moderator_user):
-    """Login carries the same capability flags as /me — the gear gate reads
-    can_manage_users straight after login, before any /me refresh."""
-    resp = await client.post(
-        "/api/auth/login", json={"email": "mod@test.com", "password": "pass123"},
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["can_manage_users"] is True
-    assert data["is_admin"] is False

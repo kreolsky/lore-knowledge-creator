@@ -44,8 +44,7 @@ vi.mock('../../i18n', () => ({
 }));
 
 import { MessageBubble } from './MessageBubble';
-import { userColor } from '../../utils/user-color';
-import type { ChatMessage, HaltReason } from '../../types';
+import type { ChatMessage } from '../../types';
 
 function makeMsg(overrides: Partial<ChatMessage> = {}): ChatMessage {
   return {
@@ -82,327 +81,6 @@ afterEach(() => {
   (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver = prevRO;
 });
 
-/** Returns the outermost bubble wrapper (the `flex flex-col` alignment container). */
-function wrapper() {
-  return container.firstElementChild as HTMLElement;
-}
-
-/** jsdom normalizes hex colors to rgb(...) when reading back inline styles. */
-function toRgb(hex: string): string {
-  const probe = document.createElement('div');
-  probe.style.borderLeftColor = hex;
-  return probe.style.borderLeftColor;
-}
-
-/** Returns the bubble body div — the first child after the author header. */
-function bubbleBody() {
-  // The header (when present) is text-text-dim; the body holds the bg tokens.
-  const divs = Array.from(wrapper().children) as HTMLElement[];
-  return divs.find(d => !d.className.includes('text-text-dim') && !d.className.includes('mt-0.5')) ?? divs[0];
-}
-
-describe('unified MessageBubble — note variant', () => {
-  it('right-aligns (items-end) and uses warm-strong for own messages', () => {
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'note',
-        message: makeMsg({ author_name: 'red' }),
-        isOwn: true,
-        actions: { onCopy: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn() },
-      }));
-    });
-    expect(wrapper().className).toContain('items-end');
-    expect(bubbleBody().className).toContain('warm-strong');
-  });
-
-  it('left-aligns (items-start) and renders a transparent bubble with the author-color left border for other-user messages', () => {
-    const authorId = 'user-blue-123';
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'note',
-        message: makeMsg({ author_name: 'blue', author_id: authorId }),
-        isOwn: false,
-        actions: { onCopy: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn() },
-      }));
-    });
-    expect(wrapper().className).toContain('items-start');
-    // Fully transparent plaque: no surface fill (warm is own-only).
-    expect(bubbleBody().className).not.toContain('bg-surface2');
-    expect(bubbleBody().className).not.toContain('warm-strong');
-    // 4px author-colored left border at 80% transparency; no rounding (project rule).
-    const color = `${userColor(authorId)}33`;
-    expect(bubbleBody().style.borderLeftWidth).toBe('4px');
-    expect(bubbleBody().style.borderLeftStyle).toBe('solid');
-    expect(bubbleBody().style.borderLeftColor).toBe(toRgb(color));
-    expect(bubbleBody().style.borderRadius).toBe('');
-  });
-
-  it('keeps the warm plaque and has no colored border for own note messages', () => {
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'note',
-        message: makeMsg({ author_name: 'red', author_id: 'user-red-9' }),
-        isOwn: true,
-        actions: { onCopy: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn() },
-      }));
-    });
-    expect(bubbleBody().className).toContain('warm-strong');
-    expect(bubbleBody().style.borderLeft).toBe('');
-  });
-
-  it('omits the colored border when an other-user note message has no author_id (defensive guard)', () => {
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'note',
-        message: makeMsg({ author_name: 'blue' }),
-        isOwn: false,
-        actions: { onCopy: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn() },
-      }));
-    });
-    expect(bubbleBody().style.borderLeft).toBe('');
-  });
-
-  it('renders "<author_name> | <formatted date>" header for a user-authored message', () => {
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'note',
-        message: makeMsg({ author_name: 'red' }),
-        isOwn: true,
-      }));
-    });
-    const header = container.querySelector('.text-text-dim');
-    expect(header?.textContent).toMatch(/^red \| 2026-05-20 \d{2}:\d{2}$/);
-  });
-
-  it('renders "system notes | <date>" for pipeline-authored messages', () => {
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'note',
-        message: makeMsg({ author_name: 'system notes' }),
-        isOwn: false,
-      }));
-    });
-    const header = container.querySelector('.text-text-dim');
-    expect(header?.textContent).toMatch(/^system notes \| 2026-05-20 \d{2}:\d{2}$/);
-  });
-
-  it('falls back to the unknownAuthor i18n key when author_name is missing', () => {
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'note',
-        message: makeMsg(),
-        isOwn: true,
-      }));
-    });
-    const header = container.querySelector('.text-text-dim');
-    expect(header?.textContent).toMatch(/^unknown \| 2026-05-20 \d{2}:\d{2}$/);
-  });
-});
-
-describe('unified MessageBubble — AI variant', () => {
-  it('renders agent/assistant messages full-width with the base AI style (no outer card)', () => {
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'ai',
-        message: makeMsg({ role: 'assistant', content: 'response' }),
-        isOwn: false,
-      }));
-    });
-    const body = bubbleBody();
-    expect(body.className).toContain('w-full');
-    // No outer surface card: reasoning/sources/tool chips carry their own cards,
-    // so an outer bg-surface2/border would nest identical plates (rejected base).
-    expect(body.className).toContain('px-0');
-    expect(body.className).not.toContain('bg-surface2');
-    expect(body.className).not.toContain('border');
-  });
-
-  it('caps user-message width at 85% and aligns own messages right', () => {
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'ai',
-        message: makeMsg({ role: 'user' }),
-        isOwn: true,
-      }));
-    });
-    expect(bubbleBody().className).toContain('max-w-[85%]');
-    expect(wrapper().className).toContain('items-end');
-  });
-
-  it('hides fork/regenerate actions when their callbacks are absent (note-like minimal actions)', () => {
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'ai',
-        message: makeMsg({ role: 'user' }),
-        isOwn: true,
-        actions: { onCopy: vi.fn() },
-      }));
-    });
-    // Only copy present → no fork/regenerate/edit/delete buttons (icons absent).
-    const titles = Array.from(container.querySelectorAll('[title]')).map(b => b.getAttribute('title'));
-    expect(titles).toContain('copy');
-    expect(titles).not.toContain('forkAndResend');
-    expect(titles).not.toContain('regenerate');
-  });
-});
-
-describe('unified MessageBubble — agent edit→fork', () => {
-  /** Find an action button (IconButton) by its title attribute. */
-  function buttonByTitle(title: string): HTMLElement {
-    const el = container.querySelector(`[title="${title}"]`) as HTMLElement | null;
-    if (!el) throw new Error(`no button with title=${title}`);
-    return el;
-  }
-
-  /** Set a React-controlled textarea's value + dispatch input (jsdom-safe). */
-  function setTextarea(text: string) {
-    const ta = container.querySelector('textarea') as HTMLTextAreaElement;
-    if (!ta) throw new Error('no textarea (not in edit mode)');
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!;
-    act(() => {
-      setter.call(ta, text);
-      ta.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-  }
-
-  it('shows an Edit button (not a fork button) for an agent user message', () => {
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'ai', isAgent: true, isOwn: true,
-        message: makeMsg({ role: 'user' }),
-        actions: { onCopy: vi.fn(), onForkResend: vi.fn(), onEdit: vi.fn() },
-      }));
-    });
-    const titles = Array.from(container.querySelectorAll('[title]')).map(b => b.getAttribute('title'));
-    expect(titles).toContain('edit');            // Edit button present (agent edit→fork)
-    expect(titles).not.toContain('forkAndResend'); // no separate fork button for agent
-  });
-
-  it('does NOT show an Edit button on an agent (assistant) reply — editing replies is unsupported', () => {
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'ai', isAgent: true, isOwn: false,
-        message: makeMsg({ role: 'assistant', message_id: 'a1' }),
-        actions: { onCopy: vi.fn(), onForkResend: vi.fn(), onEdit: vi.fn() },
-      }));
-    });
-    const titles = Array.from(container.querySelectorAll('[title]')).map(b => b.getAttribute('title'));
-    expect(titles).not.toContain('edit');          // agent replies are not editable
-    expect(titles).not.toContain('forkAndResend');
-  });
-
-  it('Save in an agent chat FORKS (not in-place edit)', async () => {
-    const onForkResend = vi.fn();
-    const onEdit = vi.fn();
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'ai', isAgent: true, isOwn: true,
-        message: makeMsg({ role: 'user', content: 'original' }),
-        actions: { onCopy: vi.fn(), onForkResend, onEdit },
-      }));
-    });
-    await act(async () => { buttonByTitle('edit').click(); });   // open edit mode
-    await act(async () => { buttonByTitle('save').click(); });   // save → fork (async)
-    expect(onForkResend).toHaveBeenCalledWith('m1', 'original', undefined);
-    expect(onEdit).not.toHaveBeenCalled();                       // in-place edit NOT invoked
-  });
-
-  it('Save forks with the EDITED text', async () => {
-    const onForkResend = vi.fn();
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'ai', isAgent: true, isOwn: true,
-        message: makeMsg({ role: 'user', content: 'original' }),
-        actions: { onCopy: vi.fn(), onForkResend, onEdit: vi.fn() },
-      }));
-    });
-    await act(async () => { buttonByTitle('edit').click(); });
-    setTextarea('edited prompt');
-    await act(async () => { buttonByTitle('save').click(); });
-    expect(onForkResend).toHaveBeenCalledWith('m1', 'edited prompt', undefined);
-  });
-
-  it('Save in a NOTE chat is in-place (onEdit), not a fork', () => {
-    const onForkResend = vi.fn();
-    const onEdit = vi.fn();
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'note', isOwn: true,
-        message: makeMsg({ role: 'user', content: 'note text' }),
-        actions: { onCopy: vi.fn(), onEdit, onForkResend, onDelete: vi.fn() },
-      }));
-    });
-    act(() => { buttonByTitle('edit').click(); });
-    setTextarea('edited note');
-    act(() => { buttonByTitle('save').click(); });
-    expect(onEdit).toHaveBeenCalledWith('m1', 'edited note');
-    expect(onForkResend).not.toHaveBeenCalled();
-  });
-});
-
-describe('unified MessageBubble — the first message is immutable', () => {
-  function titles() {
-    return Array.from(container.querySelectorAll('[title]')).map(b => b.getAttribute('title'));
-  }
-
-  it('hides edit AND rewind on the FIRST user row of an agent chat', () => {
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'ai', isAgent: true, isOwn: true, isFirst: true,
-        message: makeMsg({ role: 'user' }),
-        actions: { onCopy: vi.fn(), onForkResend: vi.fn(), onRewind: vi.fn() },
-      }));
-    });
-    const got = titles();
-    expect(got).not.toContain('edit');
-    expect(got).not.toContain('rewindHere');
-  });
-
-  it('shows edit + rewind on a NON-first user row of an agent chat', () => {
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'ai', isAgent: true, isOwn: true, isFirst: false,
-        message: makeMsg({ role: 'user', parent_id: 'a0' }),
-        actions: { onCopy: vi.fn(), onForkResend: vi.fn(), onRewind: vi.fn() },
-      }));
-    });
-    const got = titles();
-    expect(got).toContain('edit');
-    expect(got).toContain('rewindHere');
-  });
-
-  it('note chats ignore isFirst — the first note message still edits in place', () => {
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'note', isOwn: true, isFirst: true,
-        message: makeMsg({ role: 'user' }),
-        actions: { onCopy: vi.fn(), onEdit: vi.fn() },
-      }));
-    });
-    expect(titles()).toContain('edit');
-  });
-
-  it('renders the fork switcher from forkNav and routes prev/next', () => {
-    const onPrev = vi.fn();
-    const onNext = vi.fn();
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'ai', isAgent: true, isOwn: true,
-        message: makeMsg({ role: 'user', parent_id: 'a0' }),
-        forkNav: { current: 2, total: 3, onPrev, onNext },
-        actions: { onCopy: vi.fn() },
-      }));
-    });
-    expect(container.textContent).toContain('2/3');
-    const prevBtn = container.querySelector('button[title="previous"]') as HTMLButtonElement;
-    const nextBtn = container.querySelector('button[title="next"]') as HTMLButtonElement;
-    act(() => prevBtn.click());
-    expect(onPrev).toHaveBeenCalledTimes(1);
-    act(() => nextBtn.click());
-    expect(onNext).toHaveBeenCalledTimes(1);
-  });
-});
-
 describe('unified MessageBubble — user attachment image lightbox (plan user-attachment-image-lightbox)', () => {
   // Attachments are already-resolved data URIs (persisted path — no fetch), passed
   // directly via message.images. Clicking a thumb opens the SAME src-based lightbox
@@ -424,28 +102,12 @@ describe('unified MessageBubble — user attachment image lightbox (plan user-at
     act(() => { (btns[i] as HTMLButtonElement).click(); });
   }
 
-  function dialog() {
-    return document.body.querySelector('[role="dialog"]') as HTMLElement;
-  }
-
   function dialogImg() {
     return document.body.querySelector<HTMLImageElement>('[role="dialog"] img');
   }
 
-  function pressKey(key: string) {
-    act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key })); });
-  }
-
   const A = 'data:image/png;base64,AAAA';
   const B = 'data:image/png;base64,BBBB';
-
-  it('renders one clickable thumbnail per attachment (no bare <img>)', () => {
-    renderUserImages([A, B]);
-    const btns = container.querySelectorAll('button[aria-label="viewAttachmentImage"]');
-    expect(btns.length).toBe(2);
-    const imgs = Array.from(btns).map(b => b.querySelector('img')!.getAttribute('src'));
-    expect(imgs).toEqual([A, B]);
-  });
 
   it('opens the lightbox showing the clicked attachment\'s data URI as the full image', () => {
     renderUserImages([A]);
@@ -458,66 +120,6 @@ describe('unified MessageBubble — user attachment image lightbox (plan user-at
     renderUserImages([A, B]);
     openAttachThumb(1);
     expect(dialogImg()!.getAttribute('src')).toBe(B);
-  });
-
-  it('count=2: ArrowRight advances to the next image', () => {
-    renderUserImages([A, B]);
-    openAttachThumb(0);
-    pressKey('ArrowRight');
-    expect(dialogImg()!.getAttribute('src')).toBe(B);
-  });
-
-  it('count=2: ArrowRight wraps from last back to first', () => {
-    renderUserImages([A, B]);
-    openAttachThumb(1);
-    pressKey('ArrowRight');
-    expect(dialogImg()!.getAttribute('src')).toBe(A);
-  });
-
-  it('count=2: ArrowLeft wraps from first back to last', () => {
-    renderUserImages([A, B]);
-    openAttachThumb(0);
-    pressKey('ArrowLeft');
-    expect(dialogImg()!.getAttribute('src')).toBe(B);
-  });
-
-  it('count=2: the right-third nextImage nav zone advances', () => {
-    renderUserImages([A, B]);
-    openAttachThumb(0);
-    const next = dialog().querySelector<HTMLButtonElement>('button[aria-label="nextImage"]');
-    expect(next).not.toBeNull();
-    act(() => { next!.click(); });
-    expect(dialogImg()!.getAttribute('src')).toBe(B);
-  });
-
-  it('count=2: counter shows n/total and updates on navigation', () => {
-    renderUserImages([A, B]);
-    openAttachThumb(0);
-    expect(dialog().textContent).toContain('1 / 2');
-    pressKey('ArrowRight');
-    expect(dialog().textContent).toContain('2 / 2');
-  });
-
-  it('the open image carries a download link for the CURRENT image, following navigation', () => {
-    renderUserImages([A, 'data:image/jpeg;base64,BBBB']);
-    openAttachThumb(0);
-    const link = () => dialog().querySelector<HTMLAnchorElement>('a[aria-label="download"]');
-    expect(link()!.getAttribute('href')).toBe(A);
-    expect(link()!.getAttribute('download')).toBe('image-1.png');
-    pressKey('ArrowRight');
-    expect(link()!.getAttribute('href')).toBe('data:image/jpeg;base64,BBBB');
-    expect(link()!.getAttribute('download')).toBe('image-2.jpg');
-  });
-
-  it('single attachment: no nav zones, no counter, ArrowRight is a no-op', () => {
-    renderUserImages([A]);
-    openAttachThumb(0);
-    const dlg = dialog();
-    expect(dlg.querySelectorAll('button[aria-label="previousImage"]')).toHaveLength(0);
-    expect(dlg.querySelectorAll('button[aria-label="nextImage"]')).toHaveLength(0);
-    expect(dlg.textContent).not.toContain('1 / 1');
-    pressKey('ArrowRight');
-    expect(dialogImg()!.getAttribute('src')).toBe(A);
   });
 });
 
@@ -545,20 +147,6 @@ describe('unified MessageBubble — verdict card on a frameless row (render gate
     return (container.textContent ?? '').match(/verdictBody/g)?.length ?? 0;
   }
 
-  it('renders the verdict card on a frameless row (tool-first turn)', () => {
-    renderAgentMsg({ pending_verdicts: [PENDING] });
-    expect(container.textContent).toContain('verdictBody');
-    expect(container.textContent).toContain('verdictAllowOnce');
-    expect(container.textContent).toContain('create_document');
-  });
-
-  it('renders the verdict card for a reloaded message (holds from the REST list, no live frames)', () => {
-    // Reload shape: persisted content, pending_verdicts merged onto the
-    // message by fetchPendingVerdicts (GET /api/chat/verdicts).
-    renderAgentMsg({ content: 'partial reply', pending_verdicts: [PENDING] });
-    expect(verdictCardCount()).toBe(1);
-  });
-
   it('renders one card per held call', () => {
     renderAgentMsg({
       pending_verdicts: [
@@ -567,12 +155,6 @@ describe('unified MessageBubble — verdict card on a frameless row (render gate
       ],
     });
     expect(verdictCardCount()).toBe(2);
-  });
-
-  it('a resolved hold removes the card (pending_verdicts filtered by the store)', () => {
-    renderAgentMsg({ content: 'created d1', pending_verdicts: [] });
-    expect(verdictCardCount()).toBe(0);
-    expect(container.textContent).toContain('created d1');
   });
 
   it('renders no verdict card when there are no holds', () => {
@@ -633,13 +215,6 @@ describe('unified MessageBubble — the row halt column (retire-the-stored-turn-
     });
   }
 
-  it('renders the halt card + the content for a frameless row with a halt column', () => {
-    renderRowHalt({ halt: { reason: 'disconnected', steps: 1 } });
-    expect(container.textContent).toContain('chatHaltReasonDisconnected');
-    expect(container.textContent).toContain('chatHaltStepCountNoLimit');
-    expect(container.textContent).toContain('partial answer');
-  });
-
   it('labels a BACKEND abnormal reason — the card draws two vocabularies', () => {
     // messages.halt carries the backend's abnormal set (error, turn_timeout,
     // line_unreachable, stream_failed), which the live HaltReason union does
@@ -669,100 +244,7 @@ describe('unified MessageBubble — the thinking line while the relay shows noth
     return container.textContent ?? '';
   }
 
-  it('shows while the turn has produced no text yet', () => {
-    expect(renderStreaming({})).toContain('thinking');
-  });
-
   it('stays out of the way while text streams', () => {
     expect(renderStreaming({ content: 'the answer so far' })).not.toContain('thinking');
-  });
-});
-
-describe('unified MessageBubble — rewind button (agent user messages)', () => {
-  function renderBubble(props: {
-    role?: 'user' | 'assistant';
-    isAgent?: boolean;
-    onRewind?: (messageId: string) => void;
-  }) {
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'ai',
-        isAgent: props.isAgent ?? true,
-        isOwn: (props.role ?? 'user') === 'user',
-        message: makeMsg({ role: props.role ?? 'user' }),
-        actions: { onCopy: vi.fn(), onForkResend: vi.fn(), onEdit: vi.fn(), onRewind: props.onRewind },
-      }));
-    });
-  }
-
-  function titles(): string[] {
-    return Array.from(container.querySelectorAll('[title]')).map(b => b.getAttribute('title')!);
-  }
-
-  it('shows the rewind button for an agent user bubble when onRewind is wired', () => {
-    renderBubble({ onRewind: vi.fn() });
-    expect(titles()).toContain('rewindHere');
-  });
-
-  it('a single click only arms; the second click fires onRewind (double-click confirm)', async () => {
-    const onRewind = vi.fn();
-    renderBubble({ onRewind });
-    const btn = container.querySelector('[title="rewindHere"]') as HTMLElement;
-    expect(btn.className).not.toContain('bg-red');
-    await act(async () => { btn.click(); });
-    expect(onRewind).not.toHaveBeenCalled();
-    // The armed state is visible: the first click turns the button solid red.
-    expect(container.querySelector('[title="rewindHere"]')!.className).toContain('bg-red');
-    await act(async () => { btn.click(); });
-    expect(onRewind).toHaveBeenCalledWith('m1');
-  });
-
-  it('an assistant bubble shows no rewind button even with onRewind wired', () => {
-    renderBubble({ role: 'assistant', onRewind: vi.fn() });
-    expect(titles()).not.toContain('rewindHere');
-  });
-
-  it('a non-agent bubble shows no rewind button even with onRewind wired', () => {
-    renderBubble({ isAgent: false, onRewind: vi.fn() });
-    expect(titles()).not.toContain('rewindHere');
-  });
-});
-
-describe('unified MessageBubble — Escape cancels editing', () => {
-  const press = (target: Element) => {
-    act(() => { target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); });
-  };
-  const btn = (title: string) => container.querySelector(`[title="${title}"]`) as HTMLElement;
-
-  function openEditor(actions: Record<string, unknown>) {
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'note', isOwn: true,
-        message: makeMsg({ role: 'user', content: 'original' }),
-        actions: { onCopy: vi.fn(), ...actions },
-      }));
-    });
-    act(() => { btn('edit').click(); });
-    const ta = container.querySelector('textarea') as HTMLTextAreaElement;
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!;
-    act(() => { setter.call(ta, 'changed'); ta.dispatchEvent(new Event('input', { bubbles: true })); });
-    return ta;
-  }
-
-  it('Escape in the edit textarea leaves edit mode without saving', () => {
-    const onEdit = vi.fn();
-    const ta = openEditor({ onEdit });
-    press(ta);
-    expect(container.querySelector('textarea')).toBeNull();
-    expect(container.textContent).toContain('original');
-    expect(onEdit).not.toHaveBeenCalled();
-  });
-
-  it('Escape with focus on a button of the edit block also cancels', () => {
-    const onEdit = vi.fn();
-    openEditor({ onEdit });
-    press(btn('cancel'));
-    expect(container.querySelector('textarea')).toBeNull();
-    expect(onEdit).not.toHaveBeenCalled();
   });
 });

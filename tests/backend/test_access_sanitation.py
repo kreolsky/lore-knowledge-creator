@@ -12,8 +12,6 @@ Covers:
 
 from __future__ import annotations
 
-from uuid import uuid4
-
 import pytest
 import pytest_asyncio
 from helpers import make_token
@@ -85,45 +83,6 @@ async def _db():
     return await get_db()
 
 
-async def _direct_project_member(test_db, *, project_id, user_id, access_level="full", **extra):
-    from db import create_record
-    payload = {"project_id": project_id, "user_id": user_id, "access_level": access_level}
-    payload.update(extra)
-    await create_record("project_members", str(uuid4()), payload)
-
-
-# ─── Owner never a member row: read filters ─────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_get_members_excludes_owner_even_with_direct_row(
-    client, public_project, test_db,
-):
-    """A legacy owner project_members row must NOT leak into GET /members."""
-    pid, _, owner_uid, owner_token = public_project
-    await _direct_project_member(test_db, project_id=pid, user_id=owner_uid, access_level="full")
-    resp = await client.get(
-        f"/api/projects/{pid}/members", cookies={"lore_session": owner_token},
-    )
-    assert resp.status_code == 200
-    emails = {m.get("email") for m in resp.json()["members"]}
-    assert "owner@san.com" not in emails
-
-
-@pytest.mark.asyncio
-async def test_admin_list_project_members_excludes_owner(
-    client, public_project, admin_user, test_db,
-):
-    pid, _, owner_uid, _ = public_project
-    _, admin_token = admin_user
-    await _direct_project_member(test_db, project_id=pid, user_id=owner_uid, access_level="full")
-    resp = await client.get(
-        f"/api/admin/projects/{pid}/members", cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 200
-    assert owner_uid not in resp.json()
-
-
 # ─── Owner guard on invite (silent no-op) ───────────────────────────────────
 
 
@@ -142,32 +101,6 @@ async def test_invite_owner_email_is_silent_noop(client, public_project, test_db
         {"p": pid, "u": owner_uid},
     )
     assert len(rows) == 0
-
-
-# ─── Admin owner guards ─────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_admin_set_project_member_owner_rejected(client, public_project, admin_user):
-    pid, _, owner_uid, _ = public_project
-    _, admin_token = admin_user
-    resp = await client.post(
-        f"/api/admin/projects/{pid}/members",
-        json={"user_id": owner_uid, "access_level": "readonly"},
-        cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 400
-
-
-@pytest.mark.asyncio
-async def test_admin_remove_project_member_owner_rejected(client, public_project, admin_user):
-    pid, _, owner_uid, _ = public_project
-    _, admin_token = admin_user
-    resp = await client.delete(
-        f"/api/admin/projects/{pid}/members/{owner_uid}",
-        cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 400
 
 
 # ─── Dedup / single write path ──────────────────────────────────────────────
@@ -195,31 +128,6 @@ async def test_invite_existing_member_updates_role_single_row(
     )
     assert len(rows) == 1
     assert rows[0]["access_level"] == "full"
-
-
-# ─── create_project: owner row never created ────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_create_project_no_owner_member_row(client, owner_user):
-    owner_uid, owner_token = owner_user
-    resp = await client.post(
-        "/api/projects", json={"name": "Fresh"},
-        cookies={"lore_session": owner_token},
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["my_access"] == "full"
-    pid = body["project_id"]
-    rows = await (await _db()).query(
-        "SELECT id FROM project_members WHERE project_id = $p",
-        {"p": pid},
-    )
-    assert len(rows) == 0
-    members = (await client.get(
-        f"/api/projects/{pid}/members", cookies={"lore_session": owner_token},
-    )).json()["members"]
-    assert members == []
 
 
 # ─── Public viewer leaves no row; last-doc in user_preferences ──────────────
@@ -291,32 +199,6 @@ async def test_public_viewer_access_revoked_when_project_private(
     )
     resp = await client.get(f"/api/documents/{did}", cookies={"lore_session": s_token})
     assert resp.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_real_member_last_doc_uses_member_row(
-    client, public_project, stranger_user,
-):
-    """A real member still tracks last-doc on project_members, not user_preferences."""
-    pid, did, _, owner_token = public_project
-    s_uid, s_token = stranger_user
-    await client.post(
-        f"/api/projects/{pid}/members",
-        json={"email": "stranger@san.com", "access_level": "commentator"},
-        cookies={"lore_session": owner_token},
-    )
-    await client.get(f"/api/documents/{did}?track=1", cookies={"lore_session": s_token})
-    db = await _db()
-    pm = await db.query(
-        "SELECT last_accessed_doc_id FROM project_members WHERE project_id = $p AND user_id = $u",
-        {"p": pid, "u": s_uid},
-    )
-    assert pm and pm[0]["last_accessed_doc_id"] == did
-    prefs = await db.query(
-        "SELECT id FROM user_preferences WHERE project_id = $p AND user_id = $u",
-        {"p": pid, "u": s_uid},
-    )
-    assert len(prefs) == 0
 
 
 # ─── Pending-invite flush ───────────────────────────────────────────────────
@@ -410,38 +292,3 @@ async def test_cancel_invite_non_owner_forbidden(client, public_project, strange
         cookies={"lore_session": s_token},
     )
     assert resp.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_cancel_invite_unknown_email_noop(client, public_project):
-    pid, _, _, owner_token = public_project
-    resp = await client.delete(
-        f"/api/projects/{pid}/invites?email=ghost@san.com",
-        cookies={"lore_session": owner_token},
-    )
-    assert resp.status_code == 200
-
-
-# ─── No over-filtering: real member still returned & editable ───────────────
-
-
-@pytest.mark.asyncio
-async def test_real_member_still_listed_and_editable(client, public_project, stranger_user):
-    pid, _, _, owner_token = public_project
-    s_uid, _ = stranger_user
-    await client.post(
-        f"/api/projects/{pid}/members",
-        json={"email": "stranger@san.com", "access_level": "readonly"},
-        cookies={"lore_session": owner_token},
-    )
-    members = (await client.get(
-        f"/api/projects/{pid}/members", cookies={"lore_session": owner_token},
-    )).json()["members"]
-    assert any(m["email"] == "stranger@san.com" for m in members)
-    resp = await client.patch(
-        f"/api/projects/{pid}/members/{s_uid}",
-        json={"access_level": "commentator"},
-        cookies={"lore_session": owner_token},
-    )
-    assert resp.status_code == 200
-

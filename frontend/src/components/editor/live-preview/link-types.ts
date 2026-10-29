@@ -170,6 +170,17 @@ const BARE: LinkTypeEntry = {
 /** Ordered registry consumed by the click router. */
 export const LINK_TYPES: LinkTypeEntry[] = [REF, DOC, EXT, BARE];
 
+/**
+ * True when the match is an EMBED (`![…](…)`), not a plain link. Embed clicks
+ * belong to the rendered widget (image selection, transclusion band, file card),
+ * so the click router never navigates them. `refLink` puts the `!` INSIDE the
+ * match (`raw` starts with it); `docLink`/`extLink` leave it immediately BEFORE
+ * the match start.
+ */
+export function isEmbedMatch(lineText: string, m: LinkMatch): boolean {
+  return m.raw.startsWith('!') || (m.start > 0 && lineText[m.start - 1] === '!');
+}
+
 const ENTRY_BY_CLASS = new Map<string, LinkTypeEntry>(
   LINK_TYPES.map((e) => [e.decorationClass, e]),
 );

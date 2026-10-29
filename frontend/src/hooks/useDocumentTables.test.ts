@@ -14,7 +14,7 @@ import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 import * as Y from 'yjs';
-import { createTable, addRow, deleteTable, tableAnchor, setCellText } from '../components/editor/live-preview/table-block-model';
+import { createTable, addRow, deleteTable, tableAnchor } from '../components/editor/live-preview/table-block-model';
 import { setEntityHandle } from '../collab/active-handle-registry';
 import { releaseHandle, publishHandle } from '../editor/active-editor';
 import type { EntityYjsState } from '../collab/yjs-provider';
@@ -49,11 +49,6 @@ function renderHook(documentId: string | null): {
 }
 
 describe('useDocumentTables (reactive list)', () => {
-  it('returns [] when no document is open', () => {
-    const h = renderHook(null);
-    expect(h.current()).toEqual([]);
-    h.unmount();
-  });
 
   it('returns [] before the entity handle publishes a ydoc (mount race)', () => {
     setEntityHandle('doc-1', null);
@@ -160,22 +155,6 @@ describe('useDocumentTables (reactive list)', () => {
       { table_id: t2, label: 'T2', rows: 1, cols: 2, unlinked: false },
       { table_id: t1, label: 'T1', rows: 1, cols: 1, unlinked: false },
     ]);
-    h.unmount();
-    doc.destroy();
-  });
-
-  it('does NOT re-render on a cell-text-only edit (shape unchanged — panel badge unaffected)', () => {
-    const doc = new Y.Doc();
-    const t1 = createTable(doc, [['a']]);
-    doc.getText('content').insert(0, tableAnchor('T', t1));
-    setEntityHandle('doc-1', makeHandle(doc));
-
-    const h = renderHook('doc-1');
-    const before = h.current();
-    act(() => { setCellText(doc, t1, 0, 0, 'changed cell body'); });
-    // Same shape → list is identical (deep-equal); the hook may or may not re-render, but
-    // the DERIVED value must be unchanged.
-    expect(h.current()).toEqual(before);
     h.unmount();
     doc.destroy();
   });

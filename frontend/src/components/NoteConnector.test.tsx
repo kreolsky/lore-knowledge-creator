@@ -19,12 +19,13 @@ vi.mock('../api/client', () => ({
 import { NoteConnector } from './NoteConnector';
 import { noteConnectorListenerCompartment, noteConnectorRefresh } from '../editor/note-connector-refresh';
 import { mountView, unmountView, claimNestedView } from '../editor/active-editor';
+import { selectionFeedPlugin } from '../editor/editor-observer';
 import { useAppStore } from '../store/app-store';
 import { useNoteStore } from '../store/note-store';
 import { useUIStore } from '../store/ui-store';
 
 function makeView(): EditorView {
-  return new EditorView({ state: EditorState.create({ doc: 'text', extensions: [noteConnectorRefresh] }) });
+  return new EditorView({ state: EditorState.create({ doc: 'text', extensions: [noteConnectorRefresh, selectionFeedPlugin] }) });
 }
 
 function isAttached(view: EditorView): boolean {

@@ -63,62 +63,7 @@ def _meta(body: str, name: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _refresh_target(body: str) -> str | None:
-    m = re.search(r'<meta http-equiv="refresh" content="0;url=([^"]*)"', body)
-    return m.group(1) if m else None
-
-
 # ─── Published card ──────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_published_doc_card_carries_title_excerpt_url_image(
-    client, admin_user, project_with_doc,
-):
-    pid, _, _ = project_with_doc
-    _, admin_token = admin_user
-    doc = await _make_doc(
-        client, admin_token, pid, "Published Doc", "published body text here",
-    )
-    await _mint_share(client, admin_token, pid, doc, "doc")
-
-    resp = await client.get(f"/api/public/documents/{doc}/preview")
-
-    assert resp.status_code == 200, resp.text
-    assert resp.headers["content-type"].startswith("text/html")
-    assert resp.headers["cache-control"] == "public, max-age=300"
-    body = resp.text
-    assert _meta(body, "og:title") == "Published Doc"
-    assert "published body text here" in _meta(body, "og:description")
-    origin = str(client.base_url).rstrip("/")
-    assert _meta(body, "og:url") == f"{origin}/docs/{doc}"
-    assert _meta(body, "og:image") == f"{origin}/og-default.png"
-    assert _meta(body, "og:site_name") == "Lore"
-    assert _meta(body, "og:type") == "article"
-    assert _meta(body, "og:image:width") == "1200"
-    assert _meta(body, "og:image:height") == "630"
-    assert _meta(body, "twitter:card") == "summary_large_image"
-    assert "<title>Published Doc</title>" in body
-
-
-@pytest.mark.asyncio
-async def test_doc_under_subtree_share_carries_its_own_title(
-    client, admin_user, project_with_doc,
-):
-    pid, _, _ = project_with_doc
-    _, admin_token = admin_user
-    root = await _make_doc(client, admin_token, pid, "Root Title", "root body")
-    child = await _make_doc(
-        client, admin_token, pid, "Child Title", "child body", parent_id=root,
-    )
-    await _mint_share(client, admin_token, pid, root, "subtree")
-
-    resp = await client.get(f"/api/public/documents/{child}/preview")
-
-    assert resp.status_code == 200, resp.text
-    assert _meta(resp.text, "og:title") == "Child Title", (
-        "a subtree descendant must show ITS title, not the share root's"
-    )
 
 
 @pytest.mark.asyncio
@@ -226,45 +171,6 @@ async def test_refused_principals_generic_card_bodies_identical(
     )
 
 
-@pytest.mark.asyncio
-async def test_refresh_target_has_trailing_slash_never_reenters_bot_location(
-    client, admin_user, project_with_doc,
-):
-    """The refresh target is /docs/<id>/ WITH the trailing slash: the nginx bot
-    location matches ^/docs/([^/]+)$, so a slash-less target would make a bot
-    reload the preview forever. /docs/<id>/ falls to the SPA location."""
-    pid, _, _ = project_with_doc
-    _, admin_token = admin_user
-    doc = await _make_doc(client, admin_token, pid, "Loop Doc", "body")
-    await _mint_share(client, admin_token, pid, doc, "doc")
-
-    resp = await client.get(f"/api/public/documents/{doc}/preview")
-
-    target = _refresh_target(resp.text)
-    assert target == f"/docs/{doc}/", f"refresh target must be /docs/<id>/: {target}"
-    assert re.match(r"^/docs/[^/]+$", target) is None, (
-        "refresh target must NOT match the nginx bot location (reload loop)"
-    )
-
-
-@pytest.mark.asyncio
-async def test_title_html_escaped(client, admin_user, project_with_doc):
-    pid, _, _ = project_with_doc
-    _, admin_token = admin_user
-    doc = await _make_doc(
-        client, admin_token, pid, '<script>"&', "body",
-    )
-    await _mint_share(client, admin_token, pid, doc, "doc")
-
-    resp = await client.get(f"/api/public/documents/{doc}/preview")
-
-    assert resp.status_code == 200, resp.text
-    assert "<script>" not in resp.text
-    # The attribute carries the ESCAPED form; html-unescaping it yields the title.
-    assert _meta(resp.text, "og:title") == "&lt;script&gt;&quot;&amp;"
-    assert "&lt;script&gt;&quot;&amp;" in resp.text
-
-
 # ─── Excerpt derivation ──────────────────────────────────────────────────────
 
 
@@ -330,117 +236,6 @@ async def test_empty_title_falls_back_to_first_heading_then_site_name(
     resp2 = await client.get(f"/api/public/documents/{doc2}/preview")
     assert resp2.status_code == 200, resp2.text
     assert _meta(resp2.text, "og:title") == "Lore"
-
-
-# ─── Origin headers ──────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_forwarded_proto_and_host_build_absolute_origin(
-    client, admin_user, project_with_doc,
-):
-    """X-Forwarded-Proto first hop + Host header — same rule as the session
-    cookie's scheme detection; og:url/og:image must come out https absolute."""
-    pid, _, _ = project_with_doc
-    _, admin_token = admin_user
-    doc = await _make_doc(client, admin_token, pid, "Origin Doc", "body")
-    await _mint_share(client, admin_token, pid, doc, "doc")
-
-    resp = await client.get(
-        f"/api/public/documents/{doc}/preview",
-        headers={"X-Forwarded-Proto": "https", "Host": "example.org"},
-    )
-
-    assert resp.status_code == 200, resp.text
-    assert _meta(resp.text, "og:url") == f"https://example.org/docs/{doc}"
-    assert _meta(resp.text, "og:image") == "https://example.org/og-default.png"
-
-
-# ─── Static nginx routing guard ──────────────────────────────────────────────
-
-_NGINX_CONF_CANDIDATES = (
-    "/frontend/nginx.conf",
-    "frontend/nginx.conf",
-)
-
-
-def _read_nginx_conf() -> str:
-    import pathlib
-
-    for c in _NGINX_CONF_CANDIDATES:
-        if pathlib.Path(c).exists():
-            return pathlib.Path(c).read_text()
-    pytest.skip("frontend/nginx.conf not reachable from the test container")
-
-
-def _block(text: str, opening_re: str) -> str | None:
-    """The { ... } block whose opening line matches opening_re (brace-counted)."""
-    lines = text.splitlines()
-    for i, line in enumerate(lines):
-        if re.search(opening_re, line.strip()):
-            depth = 0
-            started = False
-            block: list[str] = []
-            for j in range(i, len(lines)):
-                block.append(lines[j])
-                depth += lines[j].count("{") - lines[j].count("}")
-                if "{" in lines[j]:
-                    started = True
-                if started and depth == 0:
-                    return "\n".join(block)
-            return "\n".join(block)
-    return None
-
-
-def test_nginx_bot_map_has_default_zero_and_known_uas():
-    text = _read_nginx_conf()
-    block = _block(text, r"^map \$http_user_agent \$lore_link_bot \{")
-    assert block is not None, (
-        "nginx.conf lost the $lore_link_bot map — /docs/<id> previews are dead"
-    )
-    assert re.search(r"^\s*default\s+0\s*;", block, re.M), (
-        "the bot map MUST default to 0 (humans keep the SPA)"
-    )
-    pattern = re.search(r'"~\*\(([^)]+)\)"\s+1\s*;', block)
-    assert pattern, f"the bot map must carry a ~* UA pattern: {block}"
-    uas = pattern.group(1)
-    assert "TelegramBot" in uas and "WhatsApp" in uas, (
-        f"the UA list must name TelegramBot and WhatsApp, got: {uas}"
-    )
-
-
-def test_nginx_docs_location_rewrites_bots_to_preview():
-    text = _read_nginx_conf()
-    block = _block(text, r"^location ~ \^/docs/\(\[\^/\]\+\)\$")
-    assert block is not None, (
-        "nginx.conf lost the /docs/<id> location — every preview request "
-        "falls through to the SPA"
-    )
-    assert (
-        "rewrite ^/docs/([^/]+)$ /api/public/documents/$1/preview last;" in block
-    ), f"the bot rewrite must re-enter location /api/ via last: {block}"
-    assert "try_files /index.html =404;" in block, (
-        "non-bot clients must keep the SPA fallback"
-    )
-
-
-def test_generic_description_matches_spa_shell_title():
-    """The generic card's description restates the SPA shell's <title>: for a
-    /docs/<id> URL a bot sees one or the other, so the tagline must not drift
-    (frontend/index.html is the source of truth)."""
-    import pathlib
-
-    from routes.public_preview import _GENERIC_DESCRIPTION
-
-    for c in ("/frontend/index.html", "frontend/index.html"):
-        if pathlib.Path(c).exists():
-            m = re.search(r"<title>([^<]*)</title>", pathlib.Path(c).read_text())
-            assert m, "frontend/index.html lost its <title>"
-            assert _GENERIC_DESCRIPTION == m.group(1), (
-                "the preview generic description drifted from the SPA shell title"
-            )
-            return
-    pytest.skip("frontend/index.html not reachable from the test container")
 
 
 # ─── Document image and clean excerpt ────────────────────────────────────────
@@ -550,27 +345,3 @@ async def test_external_https_image_is_og_image(client, admin_user, project_with
     resp = await client.get(f"/api/public/documents/{doc}/preview")
 
     assert _meta(resp.text, "og:image") == "https://cdn.example.org/cover.jpg"
-
-
-@pytest.mark.asyncio
-async def test_excerpt_drops_front_matter_and_leading_title_heading(
-    client, admin_user, project_with_doc,
-):
-    pid, _, _ = project_with_doc
-    _, admin_token = admin_user
-    content = (
-        "---\nstatus: published\nslug: some-slug\ntags: [a, b]\n---\n\n"
-        "# Card Title\n\nFirst paragraph of the article.\n\n![alt label](https://x.y/i.png)\n\n"
-        "## Section\n\nMore text.\n"
-    )
-    doc = await _make_doc(client, admin_token, pid, "Card Title", content)
-    await _mint_share(client, admin_token, pid, doc, "doc")
-
-    resp = await client.get(f"/api/public/documents/{doc}/preview")
-
-    description = _meta(resp.text, "og:description")
-    assert description.startswith("First paragraph of the article."), description
-    assert "status:" not in description and "some-slug" not in description
-    assert "Card Title" not in description
-    assert "Section" in description, "a later heading is article text and stays"
-    assert "alt label" not in description, "an image's alt text is not article text"

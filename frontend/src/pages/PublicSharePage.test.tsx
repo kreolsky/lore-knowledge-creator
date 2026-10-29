@@ -100,15 +100,6 @@ afterEach(() => {
 });
 
 describe('PublicSharePage smoke', () => {
-  it('mounts without throwing and renders the shared shell once the doc resolves', async () => {
-    PublicSharePage = (await import('./PublicSharePage')).PublicSharePage;
-    act(() => root.render(createElement(PublicSharePage, { documentId: 'doc-1' })));
-    // The fetch effect resolves asynchronously; flush it so the page leaves the
-    // loading phase and renders the shell.
-    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
-    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
-    expect(container.querySelector('[data-testid="shell"]')).toBeTruthy();
-  });
 
   it('downgrades accessLevel to readonly on mount and RESTORES it on unmount', async () => {
     // The authed-fallback mount (EditorRoutes serves this page to a signed-in

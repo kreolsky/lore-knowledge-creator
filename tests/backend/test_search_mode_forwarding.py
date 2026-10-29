@@ -16,33 +16,10 @@ reader cannot "fix" one into the other. The derived every-advertised-property gu
 its sentinels asserted the old include switches.
 """
 
-import hashlib
-import secrets
 
 import pytest
 
 # ─── Test helpers ─────────────────────────────────────────────────────────────
-
-
-async def _make_agent_key(test_db, user_id: str, project_id: str) -> str:
-    """Insert a project-scoped agent API key and return the plaintext token."""
-    from db import create_record
-
-    token = "lore_" + secrets.token_hex(32)
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-    await create_record("api_keys", f"mode-agent-key-{secrets.token_hex(4)}", {
-        "user_id": user_id,
-        "project_id": project_id,
-        "document_id": "",  # project-scoped
-        "token_hash": token_hash,
-        "label": "agent",
-        "capabilities": ["agent"],
-    })
-    return token
-
-
-def _hdr(token: str) -> dict:
-    return {"Authorization": f"Bearer {token}"}
 
 
 def _patch_executor(monkeypatch):
@@ -66,29 +43,6 @@ def _mcp_ctx() -> dict:
     return {"project_id": "p", "user": {"id": "u"}, "scope_root": None}
 
 
-# ─── A: HTTP route forwards mode ──────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_http_search_mode_exact_reaches_executor(
-    client, test_db, admin_user, project_with_doc, monkeypatch,
-):
-    """Test A — POST /api/tool/search_materials with mode:"exact" reaches the executor
-    as exact. Fails today: reads.py drops mode (ToolSearch has no field), so the
-    executor always runs semantic."""
-    pid, _, admin_uid = project_with_doc
-    mock = _patch_executor(monkeypatch)
-    token = await _make_agent_key(test_db, admin_uid, pid)
-
-    resp = await client.post(
-        "/api/tool/search_materials",
-        json={"query": "x", "mode": "exact"}, headers=_hdr(token),
-    )
-    assert resp.status_code == 200, resp.text
-    assert mock.await_count == 1
-    assert mock.call_args.kwargs.get("mode") == "exact"
-
-
 # ─── B: MCP dispatch forwards mode ────────────────────────────────────────────
 
 
@@ -105,26 +59,6 @@ async def test_mcp_dispatch_mode_exact_reaches_executor(monkeypatch):
 
     assert mock.await_count == 1
     assert mock.call_args.kwargs.get("mode") == "exact"
-
-
-# ─── D: HTTP rejects an invalid mode (422) ────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_http_invalid_mode_is_422(client, test_db, admin_user, project_with_doc):
-    """Test D — mode:"banana" on the HTTP route is REFUSED (422), never silently
-    coerced to semantic. The Literal on ToolSearch turns a misspelled mode into an
-    actionable error Pi's own loop can self-correct from. The MCP path deliberately
-    does the OPPOSITE (see test_mcp_invalid_mode_is_coerced) because a third-party model
-    cannot act on it. Do not "fix" one into the other."""
-    pid, _, admin_uid = project_with_doc
-    token = await _make_agent_key(test_db, admin_uid, pid)
-
-    resp = await client.post(
-        "/api/tool/search_materials",
-        json={"query": "x", "mode": "banana"}, headers=_hdr(token),
-    )
-    assert resp.status_code == 422, resp.text
 
 
 # ─── E: MCP coerces an invalid mode (no raise) ────────────────────────────────

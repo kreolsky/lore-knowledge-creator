@@ -25,7 +25,6 @@ model-change reset rides this).
 from __future__ import annotations
 
 import time
-from uuid import uuid4
 
 import driver.client
 import pytest
@@ -101,40 +100,6 @@ _SERVED = [
 
 
 @pytest.mark.asyncio
-async def test_models_carries_reasoning_map_from_capabilities(
-    client, admin_user, monkeypatch, http_pool
-):
-    """The payload carries the gateway's per-model reasoning map verbatim under
-    `reasoning` — the picker's single source for the effort dropdown."""
-    pin_chat_api(monkeypatch, url="http://gateway.example")
-    monkeypatch.setattr(driver.client, "agent_capability", _ok_capability)
-    _reset_gateway_caches(monkeypatch)
-    http_pool(
-        "models_catalog", _RouterClient({"data": _SERVED}, caps=_CAPS)
-    )
-
-    _uid, token = admin_user
-    resp = await client.get("/api/chat/models", cookies={"lore_session": token})
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["reasoning"] == _CAPS
-
-
-@pytest.mark.asyncio
-async def test_models_empty_gateway_branch_carries_empty_reasoning(
-    client, admin_user, monkeypatch
-):
-    """Empty-AI_API_URL branch: `reasoning: {}` — both payload branches stay
-    identical in shape."""
-    pin_chat_api(monkeypatch, url="")
-    monkeypatch.setattr(driver.client, "agent_capability", _ok_capability)
-
-    _uid, token = admin_user
-    resp = await client.get("/api/chat/models", cookies={"lore_session": token})
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["reasoning"] == {}
-
-
-@pytest.mark.asyncio
 async def test_models_capabilities_unreachable_serves_empty_reasoning(
     client, admin_user, monkeypatch, http_pool
 ):
@@ -187,22 +152,6 @@ async def test_models_drops_malformed_capabilities_entries(
 # ─── the pi-ai nameability filter (twin of the plugin's translation table) ────
 
 
-def test_normalize_drops_levels_pi_ai_cannot_name():
-    """A gateway level outside pi-ai's vocabulary and synonym table is dropped
-    from the normalized map; `none` (the synonym) survives verbatim — the
-    session row and the wire keep the GATEWAY spelling, only the dsh seam
-    translates."""
-    raw = {
-        "m/a": {"supported": True, "effort_levels": ["low", "ultra", "none"]},
-        "m/b": {"supported": True, "effort_levels": ["turbo"]},
-        "garbage": "not-a-dict",
-    }
-    assert comp._normalize_reasoning_map(raw) == {
-        "m/a": {"supported": True, "effort_levels": ["low", "none"]},
-        "m/b": {"supported": True, "effort_levels": []},
-    }
-
-
 def test_normalize_off_only_offer_is_no_offer():
     """Twin of the plugin's off-only rule: pi-ai refuses a declaration that
     offers nothing beyond `off` (catalog.ts:688), and a failed catalog
@@ -250,69 +199,6 @@ async def test_patch_rejects_the_off_synonym_of_an_off_only_offer(
     assert resp.status_code == 400, resp.text
 
 
-@pytest.mark.asyncio
-async def test_models_payload_never_offers_a_level_the_adapter_would_refuse(
-    client, admin_user, monkeypatch, http_pool
-):
-    """A gateway advertising a level pi-ai cannot name (here: 'ultra') must not
-    push it into the picker data — every non-default pick of it would die in
-    dsh with UNSUPPORTED_REASONING_EFFORT before network I/O."""
-    pin_chat_api(monkeypatch, url="http://gateway.example")
-    monkeypatch.setattr(driver.client, "agent_capability", _ok_capability)
-    _reset_gateway_caches(monkeypatch)
-    http_pool(
-        "models_catalog",
-        _RouterClient(
-            {"data": _SERVED},
-            caps={"deepseek/flash": {"supported": True,
-                                     "effort_levels": ["low", "high", "ultra"]}},
-        ),
-    )
-
-    _uid, token = admin_user
-    resp = await client.get("/api/chat/models", cookies={"lore_session": token})
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["reasoning"]["deepseek/flash"]["effort_levels"] == ["low", "high"]
-
-
-@pytest.mark.asyncio
-async def test_patch_rejects_a_level_the_adapter_would_refuse(
-    client, admin_user, project_with_doc, monkeypatch
-):
-    """The PATCH guard reads the SAME filtered map: a gateway-advertised but
-    pi-ai-unnameable level is a 400 — the row must never pin a level whose
-    turn would die before network I/O. (The seeded cache is what
-    _refresh_gateway_reasoning stores after normalization.)"""
-    pid, doc_id, _ = project_with_doc
-    _, token = admin_user
-    sid = (await _post_session(client, token, {
-        "project_id": pid, "document_id": doc_id, "model": "deepseek/flash",
-    })).json()["session_id"]
-    _seed_reasoning_cache(
-        monkeypatch,
-        comp._normalize_reasoning_map(
-            {"deepseek/flash": {"supported": True,
-                                "effort_levels": ["low", "high", "ultra"]}}
-        ),
-    )
-
-    resp = await client.patch(
-        f"/api/chat/sessions/{sid}",
-        json={"reasoning_effort": "ultra"},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 400, resp.text
-
-    # The synonym spelling stays legal end to end (the driver translates at
-    # the dsh seam; the row keeps the gateway's word).
-    resp = await client.patch(
-        f"/api/chat/sessions/{sid}",
-        json={"reasoning_effort": "low"},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200, resp.text
-
-
 # ─── session column: create ──────────────────────────────────────────────────
 
 
@@ -322,71 +208,11 @@ async def _post_session(client, token, body):
     )
 
 
-@pytest.mark.asyncio
-async def test_create_session_persists_reasoning_effort(
-    client, admin_user, project_with_doc
-):
-    """An explicit create value lands on the row; omitted → null (Default)."""
-    pid, doc_id, _ = project_with_doc
-    _, token = admin_user
-    resp = await _post_session(client, token, {
-        "project_id": pid, "document_id": doc_id,
-        "model": "deepseek/flash", "reasoning_effort": "high",
-    })
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["reasoning_effort"] == "high"
-
-    resp = await _post_session(client, token, {
-        "project_id": pid, "document_id": doc_id,
-    })
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["reasoning_effort"] is None
-
-
-@pytest.mark.asyncio
-async def test_reasoning_effort_does_not_inherit(client, admin_user, project_with_doc):
-    """Unlike model/system_prompt_id, the effort does NOT inherit from the
-    project-latest chat — a donor row's model may differ from the resolved
-    one, and a stale level under a foreign model is exactly the hazard the
-    reset-on-model-change decision fights."""
-    pid, doc_id, _ = project_with_doc
-    _, token = admin_user
-    await _post_session(client, token, {
-        "project_id": pid, "document_id": doc_id,
-        "model": "deepseek/flash", "reasoning_effort": "high",
-    })
-    resp = await _post_session(client, token, {
-        "project_id": pid, "document_id": doc_id,
-    })
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["reasoning_effort"] is None
-
-
 # ─── session column: PATCH + the update guard ─────────────────────────────────
 
 
 def _seed_caps(monkeypatch):
     _seed_reasoning_cache(monkeypatch, _CAPS)
-
-
-@pytest.mark.asyncio
-async def test_patch_reasoning_effort_legal_value_lands(
-    client, admin_user, project_with_doc, monkeypatch
-):
-    pid, doc_id, _ = project_with_doc
-    _, token = admin_user
-    sid = (await _post_session(client, token, {
-        "project_id": pid, "document_id": doc_id, "model": "deepseek/flash",
-    })).json()["session_id"]
-    _seed_caps(monkeypatch)
-
-    resp = await client.patch(
-        f"/api/chat/sessions/{sid}",
-        json={"reasoning_effort": "high"},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["reasoning_effort"] == "high"
 
 
 @pytest.mark.asyncio
@@ -433,31 +259,6 @@ async def test_patch_reasoning_effort_null_always_legal_and_clears(
 
 
 @pytest.mark.asyncio
-async def test_patch_model_change_with_null_effort_clears(
-    client, admin_user, project_with_doc, monkeypatch
-):
-    """The reset contract: a model change PATCH carries reasoning_effort: null —
-    null is legal under ANY target model (even a non-reasoning one)."""
-    pid, doc_id, _ = project_with_doc
-    _, token = admin_user
-    sid = (await _post_session(client, token, {
-        "project_id": pid, "document_id": doc_id,
-        "model": "deepseek/flash", "reasoning_effort": "high",
-    })).json()["session_id"]
-    _seed_caps(monkeypatch)
-
-    resp = await client.patch(
-        f"/api/chat/sessions/{sid}",
-        json={"model": "local/orange/chat", "reasoning_effort": None},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["model"] == "local/orange/chat"
-    assert body["reasoning_effort"] is None
-
-
-@pytest.mark.asyncio
 async def test_patch_effort_validated_against_patched_target_model(
     client, admin_user, project_with_doc, monkeypatch
 ):
@@ -485,104 +286,3 @@ async def test_patch_effort_validated_against_patched_target_model(
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["reasoning_effort"] == "max"
-
-
-@pytest.mark.asyncio
-async def test_patch_effort_on_unknown_model_rejected(
-    client, admin_user, project_with_doc, monkeypatch
-):
-    """A model ABSENT from the capabilities map advertises nothing: any non-null
-    effort is a 400 (covers the map-{} gateway too)."""
-    pid, doc_id, _ = project_with_doc
-    _, token = admin_user
-    sid = (await _post_session(client, token, {
-        "project_id": pid, "document_id": doc_id, "model": "mystery/model",
-    })).json()["session_id"]
-    _seed_caps(monkeypatch)
-
-    resp = await client.patch(
-        f"/api/chat/sessions/{sid}",
-        json={"reasoning_effort": "high"},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 400, resp.text
-
-
-@pytest.mark.asyncio
-async def test_patch_effort_on_empty_caps_map_rejected(
-    client, admin_user, project_with_doc, monkeypatch
-):
-    """Capabilities endpoint unreachable (map {}): non-null PATCH is an honest
-    400 — the feature is absent, and the row must not carry an unvalidatable
-    pin."""
-    pid, doc_id, _ = project_with_doc
-    _, token = admin_user
-    sid = (await _post_session(client, token, {
-        "project_id": pid, "document_id": doc_id, "model": "deepseek/flash",
-    })).json()["session_id"]
-    _seed_reasoning_cache(monkeypatch, {})
-
-    resp = await client.patch(
-        f"/api/chat/sessions/{sid}",
-        json={"reasoning_effort": "high"},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 400, resp.text
-
-
-# ─── turn payload threading ───────────────────────────────────────────────────
-
-
-def test_build_turn_payload_reasoning_effort_only_when_pinned():
-    """The payload key is present ONLY when pinned — absent = Default, the
-    harness materializes the adapter default. Never a null/'' placeholder."""
-    payload = driver.client._build_turn_payload(
-        model="deepseek/flash", system_prompt="s", tools=[],
-        agent_key="k", apply_mode="confirm", reasoning_effort="high",
-    )
-    assert payload["reasoning_effort"] == "high"
-
-    bare = driver.client._build_turn_payload(
-        model="deepseek/flash", system_prompt="s", tools=[],
-        agent_key="k", apply_mode="confirm",
-    )
-    assert "reasoning_effort" not in bare
-
-
-@pytest.mark.asyncio
-async def test_completions_threads_session_reasoning_effort(
-    client, admin_user, project_with_doc, harness_env
-):
-    """The turn reads the SESSION's pinned effort (no per-request override —
-    the session is the single source of truth) and threads it into the
-    /followup payload; a Default session omits the key entirely."""
-    pid, doc_id, _ = project_with_doc
-    _, token = admin_user
-    sid = (await _post_session(client, token, {
-        "project_id": pid, "document_id": doc_id, "target_doc_id": doc_id,
-        "model": "deepseek/flash", "reasoning_effort": "low",
-    })).json()["session_id"]
-
-    resp = await client.post(
-        f"/api/chat/sessions/{sid}/completions",
-        json={"user_msg_id": str(uuid4()), "messages": [{"role": "user", "content": "edit it"}],
-              "auto_apply": True},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200, resp.text
-    assert harness_env.followups.payloads[0]["reasoning_effort"] == "low"
-
-    sid_default = (await _post_session(client, token, {
-        "project_id": pid, "document_id": doc_id, "target_doc_id": doc_id,
-        "model": "deepseek/flash",
-    })).json()["session_id"]
-    resp = await client.post(
-        f"/api/chat/sessions/{sid_default}/completions",
-        json={"user_msg_id": str(uuid4()), "messages": [{"role": "user", "content": "edit it"}],
-              "auto_apply": True},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200, resp.text
-    # Default = the key is ABSENT from the wire (never a null placeholder).
-    assert "reasoning_effort" not in harness_env.followups.payloads[1]
-

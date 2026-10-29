@@ -10,7 +10,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EditorView } from '@codemirror/view';
-import { EditorState, Compartment, type Extension } from '@codemirror/state';
+import { EditorState, Compartment } from '@codemirror/state';
 
 const { claimFocus } = vi.hoisted(() => ({ claimFocus: vi.fn() }));
 vi.mock('../../editor/active-editor', async (importOriginal) => ({
@@ -20,7 +20,6 @@ vi.mock('../../editor/active-editor', async (importOriginal) => ({
 
 import {
   buildEditorExtensions,
-  makeRawModeToggle,
   type EditorExtensionDeps,
 } from './editor-extension-bundle';
 
@@ -83,43 +82,6 @@ describe('buildEditorExtensions', () => {
     expect(claimFocus).toHaveBeenCalledWith(
       expect.objectContaining({ role: 'secondary', isReference: true, handle }),
     );
-    view.destroy();
-  });
-});
-
-describe('makeRawModeToggle', () => {
-  const sentinelExt: Extension = EditorState.readOnly.of(true);
-
-  function makeView(deps: EditorExtensionDeps): EditorView {
-    return new EditorView({
-      state: EditorState.create({
-        doc: 'x',
-        // Only the compartment mounts; the toggle handler is invoked directly.
-        extensions: [deps.renderCompartment.of(sentinelExt)],
-      }),
-      parent: document.createElement('div'),
-    });
-  }
-
-  it('detaches the render compartment on first toggle and flips the ref', () => {
-    const deps = makeDeps();
-    const view = makeView(deps);
-    expect(view.state.facet(EditorState.readOnly)).toBe(true);
-    const handled = makeRawModeToggle(deps.renderCompartment, deps.rawModeRef, sentinelExt)(view);
-    expect(handled).toBe(true);
-    expect(deps.rawModeRef.current).toBe(true);
-    expect(view.state.facet(EditorState.readOnly)).toBe(false);
-    view.destroy();
-  });
-
-  it('reattaches on the second toggle', () => {
-    const deps = makeDeps();
-    const view = makeView(deps);
-    const toggle = makeRawModeToggle(deps.renderCompartment, deps.rawModeRef, sentinelExt);
-    toggle(view);
-    toggle(view);
-    expect(deps.rawModeRef.current).toBe(false);
-    expect(view.state.facet(EditorState.readOnly)).toBe(true);
     view.destroy();
   });
 });

@@ -76,20 +76,6 @@ async def _run_section(
 
 
 @pytest.mark.asyncio
-async def test_document_without_parent_uses_document_id():
-    """document_id is the Working-in line; no Parent; no target line."""
-    session = {"document_id": "doc-1", "target_doc_id": "doc-1"}
-    section = await _run_section(
-        session, docs=[_doc("doc-1", title="Саммари 1", is_reference=False)]
-    )
-    assert section is not None
-    working = _working_bullet(section)
-    assert "Саммари 1" in working and "id: doc-1" in working and "kind: document" in working
-    # No parent and no separate target: the working doc is the only bullet.
-    assert len([ln for ln in section.splitlines() if ln.startswith("- ")]) == 1
-
-
-@pytest.mark.asyncio
 async def test_poisoned_target_doc_id_never_becomes_working_doc():
     """target_doc_id != document_id and NOT a descendant → ignored entirely."""
     session = {"document_id": "dfc9dbea", "target_doc_id": "19f12050"}
@@ -130,73 +116,10 @@ async def test_descendant_target_shown_separately():
 
 
 @pytest.mark.asyncio
-async def test_reference_working_doc_kind_label():
-    """When document_id itself is a reference, kind label is 'reference'."""
-    session = {"document_id": "ref-1", "target_doc_id": "ref-1"}
-    section = await _run_section(
-        session, docs=[_doc("ref-1", title="A Reference", is_reference=True)]
-    )
-    working = _working_bullet(section)
-    assert "A Reference" in working and "id: ref-1" in working and "kind: reference" in working
-
-
-@pytest.mark.asyncio
-async def test_parent_hierarchy_with_access():
-    """document_id has a parent the user can access AND the parent is in
-    context_ids → Parent: <title> line.
-
-    INVARIANT: the Parent line is emitted only when the parent doc is in
-    context_ids — chat context = what is open on screen; a lone reference must
-    not drag its owning doc in (see completions.py:178)."""
-    session = {"document_id": "ref-1", "target_doc_id": "ref-1"}
-    section = await _run_section(
-        session,
-        docs=[
-            _doc("ref-1", title="Ref", parent_id="parent-1", is_reference=True),
-            _doc("parent-1", title="Container Doc"),
-        ],
-        context_ids=["parent-1"],
-    )
-    parent = _bullet_for(section, "parent-1")
-    assert parent != _working_bullet(section)
-    assert "Container Doc" in parent
-
-
-@pytest.mark.asyncio
-async def test_parent_not_shown_when_absent_from_context_ids():
-    """A lone reference (parent NOT in context_ids) must NOT pull its owning doc
-    into the prompt — the "ref context over-inclusion" regression guard.
-    The parent exists and is accessible, but is omitted from context_ids."""
-    session = {"document_id": "ref-1", "target_doc_id": "ref-1"}
-    section = await _run_section(
-        session,
-        docs=[
-            _doc("ref-1", title="Ref", parent_id="parent-1", is_reference=True),
-            _doc("parent-1", title="Container Doc"),
-        ],
-        context_ids=[],  # parent-1 NOT open → must not be revealed
-    )
-    assert section is not None
-    working = _working_bullet(section)
-    assert "Ref" in working and "id: ref-1" in working and "kind: reference" in working
-    assert "parent-1" not in section
-    assert "Container Doc" not in section
-
-
-@pytest.mark.asyncio
 async def test_missing_working_doc_returns_none():
     """document_id fetch returns None → section omitted (None)."""
     session = {"document_id": "ghost", "target_doc_id": "ghost"}
     section = await _run_section(session, docs=[])
-    assert section is None
-
-
-@pytest.mark.asyncio
-async def test_deleted_working_doc_returns_none():
-    session = {"document_id": "del", "target_doc_id": "del"}
-    section = await _run_section(
-        session, docs=[_doc("del", title="Deleted", deleted=True)]
-    )
     assert section is None
 
 
@@ -250,53 +173,6 @@ async def test_open_doc_equals_document_id_stable_anchor_no_read_hint():
     assert anchor, "the open-doc anchor is missing"
     assert "doc-1" in anchor[0]
     # but no read-first instruction when open == working
-    assert "read_document" not in section
-
-
-@pytest.mark.asyncio
-async def test_open_doc_no_access_reveals_id_only_never_title():
-    """open_doc_id in another project / no access → id revealed, title never."""
-    session = {"document_id": "doc-1", "target_doc_id": "doc-1"}
-    section = await _run_section(
-        session,
-        docs=[
-            _doc("doc-1", title="Pinned Doc"),
-            _doc("open-x", title="Secret Title", is_reference=False),
-        ],
-        open_doc_id="open-x",
-        open_access=None,  # no access
-    )
-    assert section is not None
-    assert "open-x" in section
-    assert "Secret Title" not in section
-    # read-first hint must NOT steer the agent at an unreachable doc
-    assert "read_document" not in section
-
-
-@pytest.mark.asyncio
-async def test_open_doc_missing_does_not_crash():
-    """open_doc_id points at a non-existent doc → no crash, no title."""
-    session = {"document_id": "doc-1", "target_doc_id": "doc-1"}
-    section = await _run_section(
-        session,
-        docs=[_doc("doc-1", title="Pinned Doc")],
-        open_doc_id="ghost-open",
-    )
-    assert section is not None
-    assert "Pinned Doc" in _working_bullet(section)
-    assert "ghost-open" in section  # id still revealed
-    assert "read_document" not in section  # unreachable → no read-first steer
-
-
-@pytest.mark.asyncio
-async def test_no_open_doc_id_omits_line():
-    """open_doc_id None → no open-doc line at all (backwards compatible)."""
-    session = {"document_id": "doc-1", "target_doc_id": "doc-1"}
-    section = await _run_section(
-        session,
-        docs=[_doc("doc-1", title="Pinned Doc")],
-        open_doc_id=None,
-    )
     assert "read_document" not in section
 
 

@@ -7,6 +7,7 @@ import { EditorView } from '@codemirror/view';
 import { Bold, Italic, Strikethrough, TextQuote, Code, FileCode2, Link2, StickyNote, FileText, ChevronDown, List, ListOrdered, ListChecks, Bot } from 'lucide-react';
 import { markdownActionRegistry, applyColorHighlight, getLastHighlightColor, createReference, HIGHLIGHT_COLORS } from './markdown-actions';
 import { isPanelPreviewView } from '../../editor/editor-plugins';
+import { selectedAtomicRange } from './live-preview/atomic-delete-guard';
 import { agentAction } from './markdown-actions-agent';
 import { useUIStore } from '../../store/ui-store';
 import { useAppStore } from '../../store/app-store';
@@ -156,6 +157,11 @@ export default function SelectionToolbar() {
     if (!view) return;
     const { from, to } = view.state.selection.main;
     if (from === to) { hide(); return; }
+    // An exactly-one-image selection belongs to the ImageToolbar (the atomic
+    // block's own bar): formatting actions are meaningless on a replaced widget.
+    // Images only (tableId === null): a whole-selected TABLE is not this bar's case.
+    const g = selectedAtomicRange(view.state);
+    if (g && g.tableId === null) { hide(); return; }
     const a = computeAnchor(view);
     if (!a) return;
     setAnchor(a);

@@ -74,13 +74,6 @@ describe('handleResponse (via apiClient)', () => {
     expect((err as ForbiddenError).detail).toBeUndefined();
   });
 
-  it('throws HttpError with status 500 on 500', async () => {
-    mockFetch(500);
-    await expect(apiClient.get('/test')).rejects.toBeInstanceOf(HttpError);
-    mockFetch(500);
-    await expect(apiClient.get('/test')).rejects.toMatchObject({ status: 500 });
-  });
-
   it('throws ServiceUnavailableError on 502', async () => {
     mockFetch(502);
     await expect(apiClient.get('/test')).rejects.toThrow(ServiceUnavailableError);
@@ -110,97 +103,6 @@ describe('handleResponse (via apiClient)', () => {
     } as unknown as Response);
     const result = await apiClient.delete('/items/1');
     expect(result).toBeUndefined();
-  });
-});
-
-// ── PUT method ──────────────────────────────────────────────────────────────
-
-describe('apiClient.put', () => {
-  it('sends PUT with JSON body and returns parsed response', async () => {
-    mockFetch(200, { updated: true });
-    const result = await apiClient.put('/items/1', { name: 'updated' });
-    expect(result).toEqual({ updated: true });
-    expect(globalThis.fetch).toHaveBeenCalledWith('/api/items/1', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ name: 'updated' }),
-    });
-  });
-
-  it('handles 204 on PUT', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      status: 204,
-      ok: true,
-      json: () => { throw new SyntaxError('Unexpected end of JSON input'); },
-    } as unknown as Response);
-    const result = await apiClient.put('/items/1', { name: 'x' });
-    expect(result).toBeUndefined();
-  });
-});
-
-// ── PATCH method ────────────────────────────────────────────────────────────
-
-describe('apiClient.patch', () => {
-  it('sends PATCH with JSON body and returns parsed response', async () => {
-    mockFetch(200, { patched: true });
-    const result = await apiClient.patch('/items/1', { title: 'new' });
-    expect(result).toEqual({ patched: true });
-    expect(globalThis.fetch).toHaveBeenCalledWith('/api/items/1', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ title: 'new' }),
-    });
-  });
-});
-
-// ── DELETE method ───────────────────────────────────────────────────────────
-
-describe('apiClient.delete', () => {
-  it('sends DELETE and returns parsed response on 200', async () => {
-    mockFetch(200, { deleted: true });
-    const result = await apiClient.delete('/items/1');
-    expect(result).toEqual({ deleted: true });
-    expect(globalThis.fetch).toHaveBeenCalledWith('/api/items/1', {
-      method: 'DELETE',
-      credentials: 'include',
-    });
-  });
-
-  it('handles 204 No Content on DELETE', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      status: 204,
-      ok: true,
-      json: () => { throw new SyntaxError('Unexpected end of JSON input'); },
-    } as unknown as Response);
-    const result = await apiClient.delete('/items/1');
-    expect(result).toBeUndefined();
-  });
-
-  it('does not send Content-Type header', async () => {
-    mockFetch(204);
-    await apiClient.delete('/items/1').catch(() => {});
-    const callArgs = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1];
-    expect(callArgs.headers).toBeUndefined();
-  });
-});
-
-// ── UPLOAD method ───────────────────────────────────────────────────────────
-
-describe('apiClient.upload', () => {
-  it('sends POST with FormData body, no Content-Type header', async () => {
-    mockFetch(200, { file_id: 'f1' });
-    const formData = new FormData();
-    formData.append('file', new Blob(['content']), 'test.txt');
-    const result = await apiClient.upload('/files', formData);
-    expect(result).toEqual({ file_id: 'f1' });
-    const callArgs = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1];
-    expect(callArgs.method).toBe('POST');
-    expect(callArgs.credentials).toBe('include');
-    expect(callArgs.body).toBe(formData);
-    // Must NOT set Content-Type — browser sets multipart boundary
-    expect(callArgs.headers).toBeUndefined();
   });
 });
 

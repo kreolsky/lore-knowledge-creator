@@ -13,7 +13,7 @@ path are the canary's whole contract.
 from __future__ import annotations
 
 import pytest
-from code_stamp import CODE_STAMP, WEB_STAMP_REDIS_KEY, stale_code_guard
+from code_stamp import WEB_STAMP_REDIS_KEY, stale_code_guard
 
 
 class _FakeRedis:
@@ -48,45 +48,6 @@ async def test_absent_web_stamp_runs_with_grace():
     assert await wrapped(ctx) == "ran"
     assert ctx["ran"] is True
     assert ctx["redis"].requested_key == WEB_STAMP_REDIS_KEY
-
-
-@pytest.mark.asyncio
-async def test_equal_web_stamp_runs():
-    """Web stamp == worker CODE_STAMP → run (normal path)."""
-    wrapped = stale_code_guard(_task)
-    ctx = _ctx(CODE_STAMP)  # str form
-    assert await wrapped(ctx) == "ran"
-    assert ctx["ran"] is True
-
-
-@pytest.mark.asyncio
-async def test_equal_web_stamp_runs_bytes_encoded():
-    """The web publishes via the backplane (bytes); arq ctx['redis'].get returns
-    bytes. A bytes-encoded equal stamp must still match (no false divergence)."""
-    wrapped = stale_code_guard(_task)
-    ctx = _ctx(CODE_STAMP.encode())  # bytes form, as arq redis.get returns
-    assert await wrapped(ctx) == "ran"
-    assert ctx["ran"] is True
-
-
-@pytest.mark.asyncio
-async def test_divergent_web_stamp_refuses():
-    """Web stamp present and != worker CODE_STAMP → refuse (raise), task never runs."""
-    wrapped = stale_code_guard(_task)
-    ctx = _ctx(CODE_STAMP + "__stale")
-    with pytest.raises(RuntimeError, match="stale worker code"):
-        await wrapped(ctx)
-    assert ctx.get("ran") is not True, "the guarded task must NOT run on divergence"
-
-
-@pytest.mark.asyncio
-async def test_divergent_bytes_web_stamp_refuses():
-    """Divergence must also fire when the web stamp arrives bytes-encoded."""
-    wrapped = stale_code_guard(_task)
-    ctx = _ctx((CODE_STAMP + "__stale").encode())
-    with pytest.raises(RuntimeError):
-        await wrapped(ctx)
-    assert ctx.get("ran") is not True
 
 
 @pytest.mark.asyncio

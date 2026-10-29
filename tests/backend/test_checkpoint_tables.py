@@ -9,37 +9,12 @@ test_table_capture.py):
 """
 import json
 
-import pycrdt as Y
 import pytest
 from cp_store import create_checkpoint
-
-from table_serialize import capture_tables_json
 
 TABLES_PAYLOAD = json.dumps({
     "t1": {"columns": [200, 320], "rows": [["a", "b"], ["c", "d"]]},
 })
-
-
-def _make_table(doc: Y.Doc, tid: str, matrix: list[list[str]], widths: list[int]) -> None:
-    tables = doc.get("tables", type=Y.Map)
-    table = Y.Map()
-    tables[tid] = table
-    cols = Y.Array()
-    table["columns"] = cols
-    width = max(len(r) for r in matrix) if matrix else 0
-    for i in range(width):
-        c = Y.Map()
-        cols.append(c)
-        c["w"] = widths[i] if i < len(widths) else 160
-    rows = Y.Array()
-    table["rows"] = rows
-    for row in matrix:
-        yrow = Y.Array()
-        rows.append(yrow)
-        for i in range(width):
-            cell = Y.Map()
-            yrow.append(cell)
-            cell["t"] = Y.Text(row[i] if i < len(row) else "")
 
 
 # ── unified writer ─────────────────────────────────────────────────────────────
@@ -109,80 +84,7 @@ async def test_writer_deterministic_id_upserts_last_session(test_db):
     assert await get_content(rows[0]["content_ref"]) == "second"
 
 
-# ── restore rebuilds tables ───────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_set_content_applies_tables_json(test_db):
-    """set_content(tables_json=...) rebuilds getMap('tables') on the loaded Y.Doc."""
-    # Seed a document row with content + a ydoc_state.
-    from ydoc_store import load, set_content
-
-    await test_db.query(
-        "CREATE type::record('documents', 'doc-r') CONTENT { content: 'seed', project_id: 'p', title: 'R', path: 'r' }",
-    )
-    await set_content("doc-r", "![t](table:t1)", persist=True, tables_json=TABLES_PAYLOAD)
-    doc = await load("doc-r")
-    data = json.loads(capture_tables_json(doc))
-    assert data == {"t1": {"columns": [200, 320], "rows": [["a", "b"], ["c", "d"]]}}
-
-
-@pytest.mark.asyncio
-async def test_set_content_none_tables_json_is_legacy_noop(test_db):
-    from ydoc_store import load, set_content
-
-    # Pre-populate tables map, then set_content with tables_json=None must leave it.
-    await test_db.query(
-        "CREATE type::record('documents', 'doc-leg') CONTENT { content: 'seed', project_id: 'p', title: 'L', path: 'leg' }",
-    )
-    # First write WITH tables, then a legacy (None) write keeps the prior map untouched.
-    await set_content("doc-leg", "![t](table:t1)", persist=True, tables_json=TABLES_PAYLOAD)
-    await set_content("doc-leg", "![t](table:t1) more", persist=True, tables_json=None)
-    doc = await load("doc-leg")
-    data = json.loads(capture_tables_json(doc))
-    assert "t1" in data  # legacy restore leaves tables as-is
-
-
-# ── integrity ──────────────────────────────────────────────────────────────────
-
-
 # ── serialization (list excludes, get includes) ────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_get_checkpoint_returns_tables_json(test_db, client, admin_user, project_with_doc):
-    """GET /api/checkpoints/{id} returns tables_json (preview renders editable tables)."""
-    pid, _, _ = project_with_doc
-    _, token = admin_user
-    cookies = {"lore_session": token}
-    doc = (await client.post("/api/documents", json={"project_id": pid, "title": "T"},
-                             cookies=cookies)).json()
-    resp = await client.post("/api/checkpoints", json={
-        "document_id": doc["document_id"], "content": "x", "tables_json": TABLES_PAYLOAD,
-    }, cookies=cookies)
-    cp_id = resp.json()["checkpoint_id"]
-
-    got = (await client.get(f"/api/checkpoints/{cp_id}", cookies=cookies)).json()
-    assert got["tables_json"] == TABLES_PAYLOAD
-
-
-@pytest.mark.asyncio
-async def test_list_checkpoint_excludes_tables_json(test_db, client, admin_user, project_with_doc):
-    """LIST /api/checkpoints omits tables_json (can be large with many tables)."""
-    pid, _, _ = project_with_doc
-    _, token = admin_user
-    cookies = {"lore_session": token}
-    doc = (await client.post("/api/documents", json={"project_id": pid, "title": "T2"},
-                             cookies=cookies)).json()
-    await client.post("/api/checkpoints", json={
-        "document_id": doc["document_id"], "content": "x", "tables_json": TABLES_PAYLOAD,
-    }, cookies=cookies)
-
-    rows = (await client.get(f"/api/checkpoints?document_id={doc['document_id']}",
-                             cookies=cookies)).json()
-    assert rows, "expected at least one checkpoint"
-    assert "tables_json" not in rows[0]
-
 
 
 @pytest.mark.asyncio

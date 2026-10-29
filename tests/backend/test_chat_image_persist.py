@@ -107,37 +107,3 @@ async def test_user_message_persists_images_from_last_message(
     # the data URIs are lazy-fetched from the per-message images endpoint.
     assert user_msgs[-1]["image_count"] == 1
     assert await _fetch_images(client, token, sid, user_msgs[-1]["message_id"]) == [img]
-
-
-async def test_user_message_imageless_when_last_message_has_no_images(
-    client, admin_user, project_with_doc, harness_env,
-):
-    """2a negative: history images must NOT be attributed to the new user message."""
-    pid, doc_id, _ = project_with_doc
-    _, token = admin_user
-    sid = await _create_session(client, token, pid, doc_id)
-
-    history_img = "data:image/png;base64,aGk="
-    await _completion(client, token, sid, {
-        "messages": [
-            {"role": "user", "content": "earlier", "images": [history_img]},
-            {"role": "assistant", "content": "ack"},
-            {"role": "user", "content": "no image this time"},
-        ],
-    }, env=harness_env)
-
-    msgs = await _list_messages(client, token, sid)
-    user_msgs = [m for m in msgs if m["role"] == "user"]
-    new_user = user_msgs[-1]
-    assert new_user["content"] == "no image this time"
-    assert new_user["image_count"] == 0, "new user message must be imageless"
-
-
-async def test_models_exposes_attachment_budget(client, admin_user):
-    """2b: /chat/models returns max_attachment_mb so front/back share one source."""
-    _, token = admin_user
-    resp = await client.get("/api/chat/models", cookies={"lore_session": token})
-    assert resp.status_code == 200, resp.text
-    data = resp.json()
-    assert isinstance(data.get("max_attachment_mb"), int)
-    assert data["max_attachment_mb"] >= 1

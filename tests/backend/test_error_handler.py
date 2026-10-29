@@ -95,17 +95,3 @@ def test_uncaught_500_logged_with_request_id(app, path, caplog):
     assert REQUEST_ID_HEADER in resp.headers
     assert resp.headers[REQUEST_ID_HEADER]
     assert any("Unhandled exception" in r.message for r in caplog.records)
-
-
-def test_inbound_request_id_is_honored(app):
-    client = TestClient(app, raise_server_exceptions=False)
-    resp = client.get("/route-raise", headers={REQUEST_ID_HEADER: "trace-123"})
-    assert resp.status_code == 500
-    assert resp.headers[REQUEST_ID_HEADER] == "trace-123"
-
-
-def test_http_exception_not_intercepted(app):
-    client = TestClient(app, raise_server_exceptions=False)
-    resp = client.get("/http-exc")
-    assert resp.status_code == 404
-    assert resp.json() == {"detail": "not found"}

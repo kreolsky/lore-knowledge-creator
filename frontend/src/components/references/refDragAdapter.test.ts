@@ -4,16 +4,26 @@
  * by (sort_key, id)); a pointerdown on a RefCard action button or the
  * inline-rename input never starts a drag; commit is
  * optimistic-provisional → PATCH reconcile → rollback.
+ *
+ * Outside surface (plan image-block-in-document step 4): a card dragged over
+ * the document editor resolves the drop view from pointer coordinates
+ * (editable gate — readonly/commentator/public views are no drop surfaces),
+ * shows the drop caret there, and commits the `![title](ref:id)` embed INLINE
+ * at the drop position in THAT view (the drop view, never the focused slot).
  */
 
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { apiClient } from '../../api/client';
+import { EditorView } from '@codemirror/view';
+import { EditorState } from '@codemirror/state';
 import { useAppStore } from '../../store/app-store';
-import { t } from '../../i18n';
 import { refDragAdapter } from './refDragAdapter';
-import { createDropIndicator, placeDropIndicator, rowDropLine } from '../../hooks/useSiblingDragReorder';
+import { dropCaret } from '../editor/drop-caret';
 import type { Reference } from '../../types';
+
+vi.mock('mermaid', () => ({
+  default: { initialize: vi.fn(), render: vi.fn(async () => ({ svg: '<svg></svg>' })) },
+}));
 
 function makeRef(overrides: Partial<Reference> = {}): Reference {
   return {
@@ -32,6 +42,33 @@ function makeRef(overrides: Partial<Reference> = {}): Reference {
   };
 }
 
+// ── Harness for the editor-drop half ────────────────────────────────────────
+
+const views: EditorView[] = [];
+
+function makeView(doc: string, editable = true): EditorView {
+  const view = new EditorView({
+    state: EditorState.create({
+      doc,
+      extensions: [EditorView.editable.of(editable), dropCaret()],
+    }),
+    parent: document.body,
+  });
+  views.push(view);
+  return view;
+}
+
+/** Point document.elementFromPoint at `el` and view.posAtCoords at `pos`.
+ * (jsdom implements neither — both are stubbed directly.) */
+function aim(el: Element, pos = 0, view?: EditorView) {
+  document.elementFromPoint = () => el;
+  if (view) vi.spyOn(view, 'posAtCoords').mockReturnValue(pos);
+}
+
+function caret(view: EditorView): Element | null {
+  return view.dom.querySelector('[data-drop-caret]');
+}
+
 let patchSpy: ReturnType<typeof vi.spyOn> | null = null;
 let host: HTMLDivElement | null = null;
 
@@ -48,6 +85,8 @@ function cardRow(id: string, group: string | undefined, top: number): HTMLElemen
 }
 
 beforeEach(() => {
+  // WHY: jsdom has no elementFromPoint; nothing under the pointer until a test aims.
+  document.elementFromPoint = () => null;
   useAppStore.getState().setReferences([
     makeRef({ reference_id: 'own-a', document_id: 'child', sort_key: 'a0' }),
     makeRef({ reference_id: 'own-b', document_id: 'child', sort_key: 'a2' }),
@@ -70,72 +109,43 @@ afterEach(() => {
   host?.remove();
   host = null;
   vi.restoreAllMocks();
+  while (views.length) views.pop()!.destroy();
 });
 
-describe('refDragAdapter.dropTarget', () => {
-  const drag = { id: 'own-b', groupId: 'child' };
+describe('refDragAdapter.outsideTarget — editor drop controller', () => {
+  const drag = { id: 'own-a', groupId: 'child' };
 
-  it('resolves inside the live host group only, ordered by (sort_key, id)', () => {
-    const row = (id: string) => host!.querySelector<HTMLElement>(`[data-ref-id="${id}"]`)!;
-    // own-b's upper half over own-a → before it → top of the group (after=null).
-    expect(refDragAdapter.dropTarget(row('own-a'), { clientX: 100, clientY: 105 }, drag))
-      .toMatchObject({ parentId: null, afterId: null });
-    // Lower half of own-a → after own-a.
-    expect(refDragAdapter.dropTarget(row('own-a'), { clientX: 100, clientY: 115 }, drag))
-      .toMatchObject({ parentId: null, afterId: 'own-a' });
-    // A foreign-group card, an archived card and the dragged card are not targets.
-    expect(refDragAdapter.dropTarget(row('par-a'), { clientX: 100, clientY: 145 }, drag)).toBeUndefined();
-    expect(refDragAdapter.dropTarget(row('arch'), { clientX: 100, clientY: 165 }, drag)).toBeUndefined();
-    expect(refDragAdapter.dropTarget(row('own-b'), { clientX: 100, clientY: 125 }, drag)).toBeUndefined();
+  it('a pointer-following ghost + copy/no-drop cursor; hide and commit remove both', () => {
+    const view = makeView('hello world');
+    const ghost = () => document.querySelector('[data-ref-drag-ghost]') as HTMLElement | null;
+    const ctl = refDragAdapter.outsideTarget!(drag);
+    expect(ghost()).not.toBeNull();
+    ctl.move({ clientX: 30, clientY: 40 });
+    expect(ghost()!.style.transform).toBe('translate(42px, 52px)');
+    expect(document.body.classList.contains('ref-drag-none')).toBe(true);
+    aim(view.dom, 5, view);
+    ctl.move({ clientX: 10, clientY: 10 });
+    expect(document.body.classList.contains('ref-drag-copy')).toBe(true);
+    ctl.hide();
+    expect(ghost()).toBeNull();
+    expect(document.body.className).not.toMatch(/ref-drag-/);
+    const ctl2 = refDragAdapter.outsideTarget!(drag);
+    ctl2.commit(drag.id);
+    expect(ghost()).toBeNull();
   });
 
-  it('spans the row with the line geometry shared with the tree (both chevrons)', () => {
-    const row = host!.querySelector<HTMLElement>('[data-ref-id="own-a"]')!;
-    const target = refDragAdapter.dropTarget(row, { clientX: 100, clientY: 115 }, drag)!;
-    const line = rowDropLine({ top: 100, bottom: 120, left: 40, right: 340 } as DOMRect, false);
-    expect({ lineLeft: target.lineLeft, lineRight: target.lineRight, lineY: target.lineY }).toEqual(line);
-    // …and that geometry drives the ONE shared two-chevron indicator.
-    const el = createDropIndicator();
-    placeDropIndicator(el, target);
-    const shown = Array.from(el.querySelectorAll<SVGElement>('svg[data-chevron]'))
-      .filter(svg => svg.style.display !== 'none').map(svg => svg.dataset.chevron).sort();
-    expect(shown).toEqual(['left', 'right']);
-  });
-});
-
-describe('refDragAdapter.ignoreTarget', () => {
-  it('a pointerdown on a RefCard action button or the rename input starts no drag', () => {
-    const row = document.createElement('div');
-    document.body.appendChild(row);
-    const btn = document.createElement('button');
-    const input = document.createElement('input');
-    const body = document.createElement('span');
-    row.append(btn, input, body);
-    expect(refDragAdapter.ignoreTarget(btn)).toBe(true);
-    expect(refDragAdapter.ignoreTarget(input)).toBe(true);
-    expect(refDragAdapter.ignoreTarget(body)).toBe(false);
-    row.remove();
-  });
-});
-
-describe('refDragAdapter.commit', () => {
-  it('applies a provisional key, PATCHes the reorder route, reconciles with the server key', async () => {
-    patchSpy = vi.spyOn(apiClient, 'patch').mockResolvedValue({ document_id: 'own-b', sort_key: 'a1V' });
-    refDragAdapter.commit('own-b', { parentId: null, afterId: 'own-a', lineLeft: 0, lineRight: 0, lineY: 0 });
-    // Provisional key lands synchronously (optimistic) — a0 < a0V < a2 keeps the slot.
-    expect(useAppStore.getState().references.find(r => r.reference_id === 'own-b')?.sort_key).toBe('a0V');
-    await vi.waitFor(() => {
-      expect(useAppStore.getState().references.find(r => r.reference_id === 'own-b')?.sort_key).toBe('a1V');
-    });
-    expect(patchSpy).toHaveBeenCalledWith('/documents/own-b/reorder', { after_id: 'own-a' });
-  });
-
-  it('rolls back to the old key and toasts on failure', async () => {
-    patchSpy = vi.spyOn(apiClient, 'patch').mockRejectedValue(new Error('boom'));
-    refDragAdapter.commit('own-b', { parentId: null, afterId: null, lineLeft: 0, lineRight: 0, lineY: 0 });
-    await vi.waitFor(() => {
-      expect(useAppStore.getState().references.find(r => r.reference_id === 'own-b')?.sort_key).toBe('a2');
-    });
-    expect(useAppStore.getState().toast?.message).toBe(t('failedToReorderReference'));
+  it('switching editors (split view) clears the OTHER view\'s caret', () => {
+    const left = makeView('left');
+    const right = makeView('right');
+    const ctl = refDragAdapter.outsideTarget!(drag);
+    aim(left.dom, 1, left);
+    ctl.move({ clientX: 10, clientY: 10 });
+    expect(caret(left)).not.toBeNull();
+    aim(right.dom, 2, right);
+    ctl.move({ clientX: 500, clientY: 10 });
+    expect(caret(left)).toBeNull();
+    expect(caret(right)).not.toBeNull();
+    ctl.hide();
+    expect(caret(right)).toBeNull();
   });
 });

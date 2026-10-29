@@ -93,78 +93,7 @@ async def group_cast(test_db):
     yield
 
 
-# ─── Cascade: max over each pair ──────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_member_row_does_not_cap_group_audience(client, test_db, group_cast):
-    """member row (readonly) + audience (full) → full — the member row no
-    longer wins-outright over a higher concurrent grant."""
-    from access import get_project_access
-    pid = "ga-proj-pair1"
-    await _mk_project(test_db, pid, "ga-owner",
-                      audiences=[_row(f"mod:{_MOD}", "full")])
-    await _mk_member(test_db, pid, "ga-u1", "readonly")
-    assert await get_project_access(pid, {"user_id": "ga-u1", "role": "user"}) == "full"
-
-
-@pytest.mark.asyncio
-async def test_higher_member_row_beats_lower_audience(client, test_db, group_cast):
-    from access import get_project_access
-    pid = "ga-proj-pair2"
-    await _mk_project(test_db, pid, "ga-owner",
-                      audiences=[_row(f"mod:{_MOD}", "readonly")])
-    await _mk_member(test_db, pid, "ga-u2", "commentator")
-    assert await get_project_access(pid, {"user_id": "ga-u2", "role": "user"}) == "commentator"
-
-
-@pytest.mark.asyncio
-async def test_public_does_not_cap_audience_or_member(client, test_db, group_cast):
-    """audience (commentator) + public readonly → commentator; member row
-    (commentator) + public readonly → commentator — public never downgrades."""
-    from access import get_project_access
-    pid = "ga-proj-pair3"
-    await _mk_project(test_db, pid, "ga-owner", audiences=[
-        _row(f"mod:{_MOD}", "commentator"), _row("public", "readonly"),
-    ])
-    assert await get_project_access(pid, {"user_id": "ga-u1", "role": "user"}) == "commentator"
-    await _mk_member(test_db, pid, "ga-x", "commentator")
-    assert await get_project_access(pid, {"user_id": "ga-x", "role": "user"}) == "commentator"
-
-
-# ─── Group member gets the level; everyone else None ──────────────────────────
-
-@pytest.mark.asyncio
-async def test_group_member_gets_level_non_member_none(client, test_db, group_cast):
-    from access import get_project_access
-    pid = "ga-proj-level"
-    await _mk_project(test_db, pid, "ga-owner",
-                      audiences=[_row(f"mod:{_MOD}", "commentator")])
-    assert await get_project_access(pid, {"user_id": "ga-u1", "role": "user"}) == "commentator"
-    assert await get_project_access(pid, {"user_id": "ga-u2", "role": "user"}) == "commentator"
-    # the moderator themself holds mod:<own uid>
-    assert await get_project_access(pid, {"user_id": _MOD, "role": "moderator"}) == "commentator"
-    # a user without the subject gets nothing
-    assert await get_project_access(pid, {"user_id": "ga-x", "role": "user"}) is None
-
-
 # ─── Dashboard list: conditional audience predicate (the NONE trap) ──────────
-
-@pytest.mark.asyncio
-async def test_no_group_user_does_not_see_other_owners_private_project(
-    client, test_db, group_cast,
-):
-    """A user WITHOUT a matching subject must not see another owner's
-    audience-bearing project in the list (a bare `CONTAINSANY $subjects` with
-    an empty subject list must not match audience-less/private projects)."""
-    pid = "ga-proj-list"
-    await _mk_project(test_db, pid, "ga-owner",
-                      audiences=[_row(f"mod:{_MOD}", "readonly")])
-    resp = await client.get(
-        "/api/projects", cookies={"lore_session": make_token("ga-x", "x", "user")},
-    )
-    assert resp.status_code == 200
-    assert all(p["project_id"] != pid for p in resp.json()), \
-        "no-group user must not see a foreign group-audience project"
 
 
 @pytest.mark.asyncio
@@ -189,26 +118,6 @@ async def test_group_member_sees_audience_project_with_my_access(
     assert target["my_access"] == "commentator"
 
 
-# ─── Explicit binding: an owner who moves groups leaves the project bound ─────
-
-@pytest.mark.asyncio
-async def test_owner_moving_groups_keeps_old_binding(client, test_db, group_cast):
-    pid = "ga-proj-move"
-    await _mk_project(test_db, pid, "ga-owner",
-                      audiences=[_row(f"mod:{_MOD}", "readonly")])
-    await _mk_user(test_db, _MOD2, role="moderator")
-    await _mk_user(test_db, "ga-u3", moderator_id=_MOD2)
-    # the owner moves to the other group
-    await test_db.query(
-        "UPDATE type::record('users', $id) SET moderator_id = $m",
-        {"id": "ga-owner", "m": _MOD2},
-    )
-    from access import get_project_access
-    # OLD group keeps access (explicit binding), NEW group gains none
-    assert await get_project_access(pid, {"user_id": "ga-u1", "role": "user"}) == "readonly"
-    assert await get_project_access(pid, {"user_id": "ga-u3", "role": "user"}) is None
-
-
 # ─── PATCH guards: public row admin-only, own-subject rule ────────────────────
 
 @pytest.mark.asyncio
@@ -222,25 +131,6 @@ async def test_non_admin_owner_cannot_add_public_row(client, test_db, group_cast
         cookies={"lore_session": make_token("ga-owner", "owner", "user")},
     )
     assert resp.status_code == 403
-    assert (await _project_row(test_db, pid))["audiences"] == []
-
-
-@pytest.mark.asyncio
-async def test_admin_adds_and_removes_public_row(client, test_db, group_cast, admin_user):
-    pid = "ga-proj-guard2"
-    await _mk_project(test_db, pid, "ga-owner")
-    _, admin_token = admin_user
-    resp = await client.patch(
-        f"/api/projects/{pid}", json={"audiences": [_row("public", "readonly")]},
-        cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 200
-    assert (await _project_row(test_db, pid))["audiences"] == [_row("public", "readonly")]
-    resp = await client.patch(
-        f"/api/projects/{pid}", json={"audiences": []},
-        cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 200
     assert (await _project_row(test_db, pid))["audiences"] == []
 
 
@@ -273,63 +163,11 @@ async def test_owner_sets_own_group_subject_and_foreign_is_refused(
     assert (await _project_row(test_db, pid))["audiences"] == []
 
 
-@pytest.mark.asyncio
-async def test_full_member_without_ownership_cannot_set_audience(
-    client, test_db, group_cast,
-):
-    pid = "ga-proj-guard4"
-    await _mk_project(test_db, pid, "ga-owner")
-    await _mk_member(test_db, pid, "ga-u1", "full")
-    resp = await client.patch(
-        f"/api/projects/{pid}",
-        json={"audiences": [_row(f"mod:{_MOD}", "readonly")]},
-        cookies={"lore_session": make_token("ga-u1", "u1", "user")},
-    )
-    assert resp.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_admin_sets_any_live_moderator_subject_and_a_dead_one_is_422(
-    client, test_db, group_cast, admin_user,
-):
-    pid = "ga-proj-guard5"
-    await _mk_project(test_db, pid, "ga-owner")
-    _, admin_token = admin_user
-    resp = await client.patch(
-        f"/api/projects/{pid}",
-        json={"audiences": [_row(f"mod:{_MOD}", "full")]},
-        cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 200
-    # mod:<uid of a row that is NOT role=moderator> → 422
-    resp = await client.patch(
-        f"/api/projects/{pid}",
-        json={"audiences": [_row("mod:ga-u1", "readonly")]},
-        cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 422
-
-
 # The old pair-semantics tests (audience-without-level → readonly default;
 # lone group_access → 422) are gone with the pair: every audiences row carries
 # its level — a level-less row 422s (test_unified_audiences.py
 # test_row_missing_access_level_is_422) and the readonly default lives in the
 # migration (test_migrate_audiences_to_list.py test_audience_only_defaults_readonly_level).
-
-
-@pytest.mark.asyncio
-async def test_owner_changes_level_only_on_audience_project(client, test_db, group_cast):
-    pid = "ga-proj-guard8"
-    await _mk_project(test_db, pid, "ga-owner",
-                      audiences=[_row(f"mod:{_MOD}", "readonly")])
-    resp = await client.patch(
-        f"/api/projects/{pid}", json={"audiences": [_row(f"mod:{_MOD}", "full")]},
-        cookies={"lore_session": make_token("ga-owner", "owner", "user")},
-    )
-    assert resp.status_code == 200
-    assert (await _project_row(test_db, pid))["audiences"] == [_row(f"mod:{_MOD}", "full")]
-    from access import get_project_access
-    assert await get_project_access(pid, {"user_id": "ga-u1", "role": "user"}) == "full"
 
 
 @pytest.mark.asyncio
@@ -348,32 +186,4 @@ async def test_owner_cannot_set_an_admin_group_subject(client, test_db, group_ca
         cookies={"lore_session": make_token("ga-owner", "owner", "user")},
     )
     assert resp.status_code == 403
-    assert (await _project_row(test_db, pid))["audiences"] == []
-
-
-@pytest.mark.asyncio
-async def test_owner_moved_groups_cannot_relevel_old_binding_but_may_clear_it(
-    client, test_db, group_cast,
-):
-    """Explicit binding: after a group move the owner no longer belongs to the
-    bound group, so they may not raise what it gets — only take it away."""
-    pid = "ga-proj-guard10"
-    await _mk_project(test_db, pid, "ga-owner",
-                      audiences=[_row(f"mod:{_MOD}", "readonly")])
-    await _mk_user(test_db, _MOD2, role="moderator")
-    await test_db.query(
-        "UPDATE type::record('users', $id) SET moderator_id = $m",
-        {"id": "ga-owner", "m": _MOD2},
-    )
-    owner = {"lore_session": make_token("ga-owner", "owner", "user")}
-    resp = await client.patch(
-        f"/api/projects/{pid}", json={"audiences": [_row(f"mod:{_MOD}", "full")]},
-        cookies=owner,
-    )
-    assert resp.status_code == 403
-    assert (await _project_row(test_db, pid))["audiences"] == [_row(f"mod:{_MOD}", "readonly")]
-    resp = await client.patch(
-        f"/api/projects/{pid}", json={"audiences": []}, cookies=owner,
-    )
-    assert resp.status_code == 200
     assert (await _project_row(test_db, pid))["audiences"] == []

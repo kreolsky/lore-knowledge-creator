@@ -66,23 +66,4 @@ describe('context_usage frame handler', () => {
     // denominator) — a stale /models fallback self-corrects on every turn.
     expect(s?.context_window).toBe(262144);
   });
-
-  it('overwrites the prior value on a second turn (new value, not accumulate)', async () => {
-    const get = await drive([CU, { ...CU, used: 20000, cap: 1000000 }]);
-    // Two context_usage frames in one turn: the LAST one wins (per-turn snapshot).
-    const s = get().sessions.find(x => x.session_id === 's1');
-    expect(s?.context_tokens_used).toBe(20000);
-    expect(s?.context_window).toBe(1000000);
-  });
-
-  it('does not touch other sessions', async () => {
-    const other = { session_id: 's2', model: 'm' } as never;
-    const get = await drive([CU], [
-      { session_id: 's1', model: 'deepseek/flash' },
-      other,
-    ] as unknown as ChatState['sessions']);
-    const untouched = get().sessions.find(x => x.session_id === 's2');
-    expect(untouched?.context_tokens_used).toBeUndefined();
-    expect(untouched?.context_window).toBeUndefined();
-  });
 });

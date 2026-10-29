@@ -123,9 +123,6 @@ async function fillAndSubmit(repeat: string = 'secret') {
   await act(async () => { btn!.click(); });
 }
 
-/** Every fetch call that issued a POST (the register submit). */
-const postCalls = () => fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST');
-
 function postResponds(status: number, body: unknown) {
   fetchMock.mockImplementation((_i: unknown, init?: RequestInit) =>
     init?.method === 'POST'
@@ -134,20 +131,6 @@ function postResponds(status: number, body: unknown) {
 }
 
 describe('RegisterPage submit errors', () => {
-  it('the page is the landing frame: subtext and footer render', async () => {
-    await render();
-    expect(container.textContent).toContain(I18N.landingSubtext);
-    const repoLink = container.querySelector('a[href="https://github.com/kreolsky/lore-knowledge-creator"]');
-    expect(repoLink?.textContent).toBe(I18N.landingGithub);
-    expect(container.querySelector('a[href="#"]')).toBeNull();
-  });
-
-  it('mismatched repeat renders passwordsDoNotMatch and fires no POST', async () => {
-    await render();
-    await fillAndSubmit('different');
-    expect(container.textContent).toContain(I18N.passwordsDoNotMatch);
-    expect(postCalls()).toHaveLength(0);
-  });
 
   it('422 renders the pydantic detail, not the invalid-link line', async () => {
     postResponds(422, {

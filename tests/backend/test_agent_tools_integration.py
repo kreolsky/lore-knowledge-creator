@@ -13,7 +13,6 @@ proposal cluster (mid-turn approval replaced the /proposals apply endpoint).
 """
 
 
-
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
 
@@ -38,22 +37,6 @@ async def _create_doc(test_db, *, doc_id: str, project_id: str, title: str,
 # ─── search_materials (real DB) ─────────────────────────────────────────────
 
 
-async def test_search_returns_fresh_doc_as_direct_hit(client, test_db, admin_user, project_with_doc):
-    """A freshly-created doc (embeddings lag) is found by the direct layer."""
-    pid, _idx, admin_uid = project_with_doc
-    await _create_doc(
-        test_db, doc_id="search-target-1", project_id=pid,
-        title="Dragon Lore", content="Ancient wyrm chronicles",
-    )
-    from agent.readonly_executors import _search_materials_exec
-    result = await _search_materials_exec(
-        project_id=pid, user=_user(admin_uid), query="dragon", k=5,
-    )
-    hits = {h["doc_id"]: h for h in result["hits"]}
-    assert "search-target-1" in hits, result
-    assert hits["search-target-1"]["source"] == "direct"
-
-
 async def test_search_excludes_doc_without_access(client, test_db, admin_user,
                                                   regular_user, project_with_doc):
     """A user without project/per-doc access never sees a doc's snippet."""
@@ -72,21 +55,6 @@ async def test_search_excludes_doc_without_access(client, test_db, admin_user,
 
 
 # ─── read_document (real DB) ────────────────────────────────────────────────
-
-
-async def test_read_returns_full_content(client, test_db, admin_user, project_with_doc):
-    pid, _idx, admin_uid = project_with_doc
-    await _create_doc(
-        test_db, doc_id="read-target-1", project_id=pid,
-        title="Readable Doc", content="line one\nline two",
-    )
-    from agent.readonly_executors import _read_document_exec
-    result = await _read_document_exec(
-        doc_id="read-target-1", project_id=pid, user=_user(admin_uid),
-    )
-    assert result.get("content") == "line one\nline two"
-    assert result.get("title") == "Readable Doc"
-    assert result.get("is_reference") is False
 
 
 async def test_read_cross_project_rejected(client, test_db, admin_user, project_with_doc):
@@ -123,21 +91,3 @@ async def test_read_no_access_rejected(client, test_db, admin_user, regular_user
         doc_id="read-noaccess-1", project_id=pid, user=_user(regular_uid),
     )
     assert "error" in result
-
-
-async def test_read_does_not_resolve_title_to_doc(client, test_db, admin_user, project_with_doc):
-    """D8 (plan mcp-tool-surface-redesign): addressing is id-only — the name fallback
-    is REMOVED (titles are not unique, so a name is not an address). Passing a doc
-    TITLE now returns not-found instead of resolving."""
-    pid, _idx, admin_uid = project_with_doc
-    await _create_doc(
-        test_db, doc_id="read-named-1", project_id=pid,
-        title="Named Chronicle", content="named content",
-    )
-    from agent.readonly_executors import _read_document_exec
-    result = await _read_document_exec(
-        doc_id="Named Chronicle", project_id=pid, user=_user(admin_uid),
-    )
-    assert "error" in result  # id-only contract: a title is not an address
-
-

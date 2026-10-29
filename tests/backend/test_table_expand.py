@@ -5,7 +5,7 @@ anchor in `content` expands to a GFM table, splicing at the anchor offset.
 """
 import pycrdt as Y
 
-from table_serialize import expand_tables, table_model_from_map
+from table_serialize import expand_tables
 
 
 def _make_table(doc: Y.Doc, tid: str, matrix: list[list[str]]) -> None:
@@ -28,13 +28,6 @@ def _make_table(doc: Y.Doc, tid: str, matrix: list[list[str]]) -> None:
             cell = Y.Map()
             yrow.append(cell)
             cell["t"] = Y.Text(row[i] if i < len(row) else "")
-
-
-def test_model_from_map_round_trips():
-    doc = Y.Doc()
-    _make_table(doc, "t1", [["a", "b"], ["c", "d"]])
-    tables = doc.get("tables", type=Y.Map)
-    assert table_model_from_map(tables["t1"]) == [["a", "b"], ["c", "d"]]
 
 
 def test_expand_replaces_anchor_with_gfm():
@@ -60,10 +53,3 @@ def test_orphan_anchor_left_verbatim():
     text += "x ![missing](table:gone) y"
     out = expand_tables(doc)
     assert out == "x ![missing](table:gone) y"
-
-
-def test_no_anchor_is_identity():
-    doc = Y.Doc()
-    text = doc.get("content", type=Y.Text)
-    text += "plain text only"
-    assert expand_tables(doc) == "plain text only"

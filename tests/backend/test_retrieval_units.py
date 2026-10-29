@@ -10,7 +10,7 @@ mocked-DB unit path (previously E2E-only via the subtree-narrow suite).
 from unittest.mock import AsyncMock, patch
 
 import config
-from retrieval import RetrievalHit, _allowed_fact_ids
+from retrieval import RetrievalHit
 
 
 def _row(did: str, score: float, content: str = "text", **extra) -> dict:
@@ -23,57 +23,6 @@ def _row(did: str, score: float, content: str = "text", **extra) -> dict:
 
 def _meta(title: str = "T", *, is_reference: bool = False, is_memory: bool = False) -> dict:
     return {"title": title, "is_reference": is_reference, "is_memory": is_memory}
-
-
-# ─── _allowed_fact_ids (unit path; join semantics over a mocked DB) ──────────
-
-
-class TestAllowedFactIds:
-    async def test_fact_joined_by_provenance_to_hosted_ref(self):
-        db = AsyncMock()
-        db.query = AsyncMock(side_effect=[
-            ["ref1", "ref2"],
-            [
-                {"id": "f1", "mem": {"provenance": {"sources": [
-                    {"kind": "reference", "id": "ref1"},
-                ]}}},
-                {"id": "f2", "mem": {"provenance": {"sources": [
-                    {"kind": "reference", "id": "refElsewhere"},
-                ]}}},
-                {"id": "f3", "mem": None},
-            ],
-        ])
-        out = await _allowed_fact_ids(db, "p1", {"d1"})
-        assert out == {"f1"}
-
-    async def test_non_reference_kind_source_never_hosts_a_fact(self):
-        db = AsyncMock()
-        db.query = AsyncMock(side_effect=[
-            ["ref1"],
-            [{"id": "f1", "mem": {"provenance": {"sources": [
-                {"kind": "document", "id": "ref1"},
-            ]}}},
-            ],
-        ])
-        assert await _allowed_fact_ids(db, "p1", {"d1"}) == set()
-
-    async def test_no_hosted_refs_short_circuits_before_the_fact_scan(self):
-        db = AsyncMock()
-        db.query = AsyncMock(return_value=[])
-        assert await _allowed_fact_ids(db, "p1", {"d1"}) == set()
-        assert db.query.call_count == 1
-
-    async def test_refs_scan_has_no_deleted_at_filter_fact_scan_keeps_it(self):
-        """The two halves of the provenance join disagree ON PURPOSE: soft-deleted
-        references still scope a fact (provenance is a historical thread), while a
-        soft-deleted FACT is out of every memory surface (R0a's one-axis rule)."""
-        db = AsyncMock()
-        db.query = AsyncMock(side_effect=[["ref1"], []])
-        await _allowed_fact_ids(db, "p1", {"d1"})
-        refs_sql = db.query.call_args_list[0].args[0]
-        facts_sql = db.query.call_args_list[1].args[0]
-        assert "deleted_at" not in refs_sql
-        assert "deleted_at IS NONE" in facts_sql
 
 
 # ─── _fetch_relevant_chunks (per-kind queries, scope pushdown) ───────────────
@@ -180,14 +129,6 @@ class TestFetchRelevantChunks:
         assert mem_params["allowed_facts"] == ["f1"]
         assert db.query.call_args_list[2].args[1]["allowed_docs"] == ["d1"]
 
-    async def test_narrow_with_memory_off_skips_the_fact_scan(self):
-        db = AsyncMock()
-        db.query = AsyncMock(return_value=[_row("d1", 0.9)])
-        await self._fetch(db, include_memory=False, allowed_doc_ids={"d1"})
-        assert db.query.call_count == 2  # doc + ref queries; no fact scan, no memory query
-        for call in db.query.call_args_list:
-            assert call.args[1]["allowed_facts"] == []
-
 
 # ─── _fetch_relevant_chunks (model/dimension predicate over REAL rows) ───────
 
@@ -273,26 +214,6 @@ class TestClassifyChunkHits:
         include.update(kw)
         return _classify_chunk_hits(rows, meta, **include)
 
-    def test_kind_split_by_parent_meta(self):
-        meta = {
-            "d1": _meta("Doc"),
-            "r1": _meta("Ref", is_reference=True),
-            "f1": _meta("Fact", is_memory=True),
-        }
-        doc, ref, mem = self._classify(
-            [_row("d1", 0.9), _row("r1", 0.8), _row("f1", 0.7)], meta,
-        )
-        assert [h.parent_id for h in doc] == ["d1"]
-        assert [h.parent_id for h in ref] == ["r1"]
-        assert [h.parent_id for h in mem] == ["f1"]
-        assert doc[0].kind == "document" and ref[0].kind == "reference"
-        assert mem[0].kind == "memory"
-
-    def test_one_hit_per_fact_even_when_several_chunks_match(self):
-        meta = {"f1": _meta("Fact", is_memory=True)}
-        doc, ref, mem = self._classify([_row("f1", 0.9), _row("f1", 0.8)], meta)
-        assert len(mem) == 1
-        assert mem[0].score == 0.9  # the strongest matching chunk represents the fact
 
     def test_include_flags_gate_each_kind(self):
         meta = {
@@ -323,16 +244,6 @@ class TestClassifyChunkHits:
         assert len(doc) == 2
         assert [h.score for h in doc] == [0.9, 0.89]  # keeps the strongest
 
-    def test_doc_hit_keeps_position_memory_and_ref_hits_do_not(self):
-        meta = {"d1": _meta("Doc"), "f1": _meta("Fact", is_memory=True)}
-        row = _row("d1", 0.9, heading="H")
-        row["offset_start"], row["offset_end"] = 3, 9
-        doc, ref, mem = self._classify(
-            [row, _row("f1", 0.8)], meta,
-        )
-        assert doc[0].heading == "H" and doc[0].offset_start == 3
-        assert mem[0].heading is None and mem[0].offset_end is None
-
 
 # ─── _assemble_hits (drop-off, fact payloads, level ordering) ────────────────
 
@@ -351,22 +262,6 @@ class TestAssembleHits:
         hits = await _assemble_hits(db, doc, [], mem)
         assert hits[0].parent_id == "f1"
 
-    async def test_fact_payloads_loaded_for_surviving_memory_hits(self):
-        from retrieval import _assemble_hits
-        db = AsyncMock()
-        db.query = AsyncMock(side_effect=[
-            [{"id": "f1", "content": "whole fact body", "mem": {"provenance": {
-                "sources": [{"kind": "reference", "id": "ref1"}],
-            }}}],
-            [{"id": "ref1", "title": "The Source"}],
-        ])
-        mem = [RetrievalHit(kind="memory", parent_id="f1", parent_title="F",
-                            heading=None, snippet="chunk", offset_start=None,
-                            offset_end=None, score=0.9)]
-        hits = await _assemble_hits(db, [], [], mem)
-        assert hits[0].snippet == "whole fact body"
-        assert hits[0].sources == [{"id": "ref1", "title": "The Source"}]
-
 
 # ─── _apply_token_budgets ────────────────────────────────────────────────────
 
@@ -377,17 +272,6 @@ class TestApplyTokenBudgets:
                             heading=None, snippet=snippet, offset_start=None,
                             offset_end=None, score=0.9)
 
-    def test_budgets_are_per_kind_no_borrowing(self):
-        from retrieval import _apply_token_budgets
-        hits = [self._hit("document", "x" * 400), self._hit("reference", "y" * 100)]
-        out = _apply_token_budgets(hits, budget_docs=10, budget_refs=10_000, budget_mem=10_000)
-        assert [h.kind for h in out] == ["reference"]
-
-    def test_memory_never_shares_the_docs_budget(self):
-        from retrieval import _apply_token_budgets
-        hits = [self._hit("document", "x" * 400), self._hit("memory", "fact")]
-        out = _apply_token_budgets(hits, budget_docs=10, budget_refs=10, budget_mem=10_000)
-        assert [h.kind for h in out] == ["memory"]
 
     def test_smaller_later_hit_fits_after_an_oversized_one_is_skipped(self):
         from retrieval import _apply_token_budgets

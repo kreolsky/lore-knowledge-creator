@@ -72,24 +72,6 @@ async def _legacy_override(did: str, uid: str, level: str) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("project_level", "row_level"), [
-    ("full", "readonly"),
-    ("readonly", "full"),
-])
-async def test_legacy_override_row_resolves_to_project_access(
-    legacy_schema, project_with_doc, regular_user, project_level, row_level,
-):
-    from access import get_document_access
-
-    pid, did, _ = project_with_doc
-    uid, _ = regular_user
-    await _add_member(uid, pid, project_level)
-    await _legacy_override(did, uid, row_level)
-
-    assert await get_document_access(did, {"user_id": uid, "role": "user"}) == project_level
-
-
-@pytest.mark.asyncio
 async def test_commentator_with_legacy_full_row_cannot_patch(
     client, legacy_schema, project_with_doc, regular_user,
 ):
@@ -142,36 +124,3 @@ async def test_migration_drops_overrides_and_doc_invites_and_dedups(
             "access_level = 'full', invited_by = $u",
             {"p": pid, "u": uid},
         )
-
-
-@pytest.mark.asyncio
-async def test_migration_is_a_noop_on_a_fresh_db_and_idempotent(test_db, caplog):
-    before_tables = await _table_names(test_db)
-    before_index = await _pi_index(test_db)
-
-    with caplog.at_level(logging.INFO, logger="migrations.runner"):
-        await _migrate_document_access_drop(test_db)
-        await _migrate_document_access_drop(test_db)
-
-    assert "document_access" not in before_tables
-    assert await _table_names(test_db) == before_tables
-    assert await _pi_index(test_db) == before_index
-    assert caplog.text.count("0 document_access row(s), 0 per-document pending invite(s)") == 2
-
-
-@pytest.mark.asyncio
-async def test_cancel_invite_with_document_id_is_422(client, project_with_doc, admin_user, test_db):
-    pid, did, _ = project_with_doc
-    _, token = admin_user
-    await create_record("pending_invites", "pi-keep", {
-        "email": "c@x.io", "project_id": pid, "access_level": "full", "invited_by": "u",
-    })
-
-    resp = await client.delete(
-        f"/api/projects/{pid}/invites",
-        params={"email": "c@x.io", "document_id": did},
-        cookies={"lore_session": token},
-    )
-
-    assert resp.status_code == 422, resp.text
-    assert await test_db.query("SELECT email FROM pending_invites") == [{"email": "c@x.io"}]

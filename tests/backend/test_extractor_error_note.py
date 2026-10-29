@@ -7,7 +7,7 @@ real ``_create_error_note`` → real ``create_system_note`` → real
 Unlike ``test_extract_task_dead_letter_*`` (which only mocks ``_create_error_note``),
 this exercises the REAL note-persistence path. All scenarios are deterministic:
 YAML/missing-child cases fail before the LLM is reached; LLM/compute cases patch
-``call_llm_structured`` so no network is needed. Nothing here is ``@pytest.mark.llm``.
+``call_llm_structured`` so no network is needed.
 """
 from unittest.mock import AsyncMock, patch
 

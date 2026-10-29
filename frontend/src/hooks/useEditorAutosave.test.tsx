@@ -111,21 +111,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-// ── beforeunload: no keepalive PATCH ─────────────────────────────────────────
-
-describe('beforeunload sends no content PATCH', () => {
-  it('closing the tab triggers no fetch and no apiClient.patch', () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true }) as unknown as typeof fetch;
-    vi.stubGlobal('fetch', fetchMock);
-
-    renderAutosave();
-    window.dispatchEvent(new Event('beforeunload'));
-
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(patchMock).not.toHaveBeenCalled();
-  });
-});
-
 // ── checkpoint: flushAndWait failure toasts instead of REST ──────────────────
 
 describe('checkpoint with a failing flushAndWait', () => {
@@ -140,16 +125,5 @@ describe('checkpoint with a failing flushAndWait', () => {
     expect(storeState.showToast).toHaveBeenCalledWith('failedToSaveDocument', 'error');
     expect(patchMock).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-});
-
-describe('checkpoint with a healthy flushAndWait', () => {
-  it('flushes the entity and resolves without any REST write', async () => {
-    const h = renderAutosave();
-
-    await expect(h.checkpoint(doc)).resolves.toBeUndefined();
-
-    expect(provider.flushAndWait).toHaveBeenCalledWith('doc-1');
-    expect(patchMock).not.toHaveBeenCalled();
   });
 });

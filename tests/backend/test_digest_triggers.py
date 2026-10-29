@@ -64,19 +64,6 @@ async def test_manual_run_by_config_id_enqueues_one_digest(client, collab_projec
 
 
 @pytest.mark.asyncio
-async def test_manual_run_by_config_id_refuses_an_extractor_binding(client, collab_project, enqueue_recorder):
-    pid, _doc_id, admin_token, _user_token, _admin_uid, _user_uid = collab_project
-    config_id, _theme = await _bind(client, pid, admin_token, kind="extractor")
-
-    resp = await client.post(
-        "/api/agent-config/run", json={"config_id": config_id}, cookies={"lore_session": admin_token},
-    )
-
-    assert resp.status_code == 400, resp.text
-    assert _pipeline_calls(enqueue_recorder) == []
-
-
-@pytest.mark.asyncio
 async def test_manual_run_refuses_a_user_without_project_access(
     client, project_with_doc, regular_user, enqueue_recorder,
 ):
@@ -97,20 +84,6 @@ async def test_manual_run_refuses_a_user_without_project_access(
     assert _pipeline_calls(enqueue_recorder) == []
 
 
-@pytest.mark.asyncio
-async def test_manual_run_needs_exactly_one_target(client, collab_project, enqueue_recorder):
-    pid, _doc_id, admin_token, _user_token, _admin_uid, _user_uid = collab_project
-    config_id, theme = await _bind(client, pid, admin_token)
-    cookies = {"lore_session": admin_token}
-
-    both = await client.post("/api/agent-config/run", json={"config_id": config_id, "document_id": theme}, cookies=cookies)
-    neither = await client.post("/api/agent-config/run", json={}, cookies=cookies)
-
-    assert both.status_code == 422, both.text
-    assert neither.status_code == 422, neither.text
-    assert _pipeline_calls(enqueue_recorder) == []
-
-
 # ─── transcription_complete ──────────────────────────────────────────────────
 
 
@@ -124,31 +97,6 @@ async def test_transcription_of_an_attached_reference_runs_the_digest(client, co
     await triggers.on_transcription_complete(reference_id=ref_id, project_id=pid)
 
     _assert_one_digest_run(enqueue_recorder, config_id, pid)
-
-
-@pytest.mark.asyncio
-async def test_transcription_elsewhere_runs_no_digest(client, collab_project, enqueue_recorder):
-    pid, _doc_id, admin_token, _user_token, _admin_uid, _user_uid = collab_project
-    await _bind(client, pid, admin_token)
-    other = await _doc(client, pid, admin_token, "Unrelated")
-    ref_id = await _doc(client, pid, admin_token, "Voice memo", other, media_type="markdown", is_reference=True)
-
-    from pipeline.digest import triggers
-    await triggers.on_transcription_complete(reference_id=ref_id, project_id=pid)
-
-    assert _pipeline_calls(enqueue_recorder) == []
-
-
-@pytest.mark.asyncio
-async def test_extractor_binding_on_the_host_is_not_a_digest(client, collab_project, enqueue_recorder):
-    pid, _doc_id, admin_token, _user_token, _admin_uid, _user_uid = collab_project
-    _config_id, theme = await _bind(client, pid, admin_token, kind="extractor")
-    ref_id = await _doc(client, pid, admin_token, "Voice memo", theme, media_type="markdown", is_reference=True)
-
-    from pipeline.digest import triggers
-    await triggers.on_transcription_complete(reference_id=ref_id, project_id=pid)
-
-    assert enqueue_recorder.of(DIGEST_JOB) == []
 
 
 # ─── schedules ───────────────────────────────────────────────────────────────

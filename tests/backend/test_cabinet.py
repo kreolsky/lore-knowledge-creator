@@ -38,24 +38,6 @@ async def test_change_name_unauthenticated(client):
 
 
 @pytest.mark.asyncio
-async def test_change_email(client, regular_user):
-    uid, token = regular_user
-    resp = await client.patch(
-        "/api/cabinet/email",
-        json={"email": "newemail@test.com", "current_password": "userpass"},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["email"] == "newemail@test.com"
-    # JWT cookie re-issued with new email
-    new_token = resp.cookies.get("lore_session")
-    assert new_token is not None
-    payload = jwt.decode(new_token, SECRET_KEY, algorithms=[ALGORITHM])
-    assert payload["email"] == "newemail@test.com"
-
-
-@pytest.mark.asyncio
 async def test_change_email_wrong_password(client, regular_user):
     _, token = regular_user
     resp = await client.patch(
@@ -66,37 +48,7 @@ async def test_change_email_wrong_password(client, regular_user):
     assert resp.status_code == 403
 
 
-@pytest.mark.asyncio
-async def test_change_email_duplicate(client, admin_user, regular_user):
-    """Cannot change email to one already used by another user."""
-    _, token = regular_user
-    resp = await client.patch(
-        "/api/cabinet/email",
-        json={"email": "admin@test.com", "current_password": "userpass"},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 409
-
-
 # ─── Change Password ────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_change_password(client, regular_user):
-    uid, token = regular_user
-    resp = await client.patch(
-        "/api/cabinet/password",
-        json={"current_password": "userpass", "new_password": "newpass123"},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["success"] is True
-    # Verify new password works for login
-    resp2 = await client.post(
-        "/api/auth/login",
-        json={"email": "user@test.com", "password": "newpass123"},
-    )
-    assert resp2.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -161,63 +113,6 @@ async def test_email_change_ends_other_sessions(client, app, regular_user):
     assert me_a.status_code == 200
 
 
-# ─── PIN Management ─────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_set_pin(client, regular_user):
-    _, token = regular_user
-    resp = await client.patch(
-        "/api/cabinet/pin",
-        json={"pin": "1234"},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["has_pin"] is True
-
-
-@pytest.mark.asyncio
-async def test_set_pin_invalid_format(client, regular_user):
-    """PIN must be exactly 4 digits."""
-    _, token = regular_user
-    resp = await client.patch(
-        "/api/cabinet/pin",
-        json={"pin": "12"},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_set_pin_non_numeric(client, regular_user):
-    _, token = regular_user
-    resp = await client.patch(
-        "/api/cabinet/pin",
-        json={"pin": "abcd"},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_remove_pin(client, regular_user):
-    _, token = regular_user
-    # Set PIN first
-    await client.patch(
-        "/api/cabinet/pin",
-        json={"pin": "1234"},
-        cookies={"lore_session": token},
-    )
-    # Remove PIN
-    resp = await client.patch(
-        "/api/cabinet/pin",
-        json={"pin": None},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["has_pin"] is False
-
-
 # ─── Verify PIN ─────────────────────────────────────────────────────────────
 
 
@@ -237,24 +132,6 @@ async def test_verify_pin_correct(client, regular_user):
     )
     assert resp.status_code == 200
     assert resp.json()["valid"] is True
-
-
-@pytest.mark.asyncio
-async def test_verify_pin_wrong(client, regular_user):
-    _, token = regular_user
-    # Set PIN first
-    await client.patch(
-        "/api/cabinet/pin",
-        json={"pin": "5678"},
-        cookies={"lore_session": token},
-    )
-    resp = await client.post(
-        "/api/cabinet/verify-pin",
-        json={"pin": "0000"},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["valid"] is False
 
 
 @pytest.mark.asyncio

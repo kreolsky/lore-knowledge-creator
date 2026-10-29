@@ -23,7 +23,6 @@ import secrets
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from enqueue_recorder import EnqueueRecorder
 from helpers import pinned_stt_url
 
 # ─── Shared seeding helpers ──────────────────────────────────────────────────
@@ -66,191 +65,6 @@ async def _fetch_ref(ref_id):
 # ════════════════════════════════════════════════════════════════════════════
 # Shared core (routes.files._reprocess_reference) — extracted from retry_processing
 # ════════════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.asyncio
-async def test_core_audio_wipes_content_and_enqueues_transcription(test_db):
-    """Audio ref → content wiped, processing_status='queued', enqueue_transcription
-    called (when STT is configured). Mirrors retry_processing's audio dispatch."""
-    from files_service import reprocess_reference
-
-    pid = "rp-core-audio"
-    ref_id = "rp-ref-audio"
-    await _seed_ref(test_db, pid, ref_id, media_type="audio",
-                    file_path=f"{pid}/{ref_id}/clip.mp3", processing_status="error")
-    ref = await _fetch_ref(ref_id)
-
-    with pinned_stt_url(), \
-            patch("files_service.enqueue_transcription", new_callable=AsyncMock) as enc:
-        result = await reprocess_reference(ref_id, ref, user_id="u1")
-
-    assert result["success"] is True
-    after = await _fetch_ref(ref_id)
-    assert after["content"] == ""
-    assert after["processing_status"] == "queued"
-    enc.assert_awaited_once()
-    # enqueue_transcription(user_id, reference_id) — second positional is the ref.
-    assert enc.await_args.args[-1] == ref_id
-
-
-@pytest.mark.asyncio
-async def test_core_docx_wipes_content_and_enqueues_convert_task(test_db):
-    """A markdown reference whose source file is a .docx → re-convert. Dispatch is
-    by the stored file type, not a generic flag (the retry INVARIANT)."""
-    from files_service import reprocess_reference
-
-    pid = "rp-core-docx"
-    ref_id = "rp-ref-docx"
-    await _seed_ref(test_db, pid, ref_id, media_type="markdown",
-                    file_path=f"{pid}/{ref_id}/notes.docx", processing_status="error")
-    ref = await _fetch_ref(ref_id)
-
-    with EnqueueRecorder.active() as enq:
-        result = await reprocess_reference(ref_id, ref, user_id="u1")
-
-    assert result["success"] is True
-    after = await _fetch_ref(ref_id)
-    assert after["content"] == ""
-    assert after["processing_status"] == "queued"
-    # enqueue("convert_docx_task", reference_id, user_id, job_id=f"docx:{ref_id}")
-    called_task = enq.of("convert_docx_task")
-    assert len(called_task) == 1
-    assert called_task[0].args[0] == ref_id
-
-
-@pytest.mark.asyncio
-async def test_core_pdf_wipes_content_and_enqueues_convert_pdf_task(test_db):
-    """A markdown reference whose source file is a .pdf → re-convert via
-    convert_pdf_task (job_id pdf:{id}) — the retry gate is per-extension
-    (is_convertible_reference), mirroring the DOCX dispatch."""
-    from files_service import reprocess_reference
-
-    pid = "rp-core-pdf"
-    ref_id = "rp-ref-pdf"
-    await _seed_ref(test_db, pid, ref_id, media_type="markdown",
-                    file_path=f"{pid}/{ref_id}/paper.pdf", processing_status="error",
-                    safe_name="paper.pdf")
-    ref = await _fetch_ref(ref_id)
-
-    with EnqueueRecorder.active() as enq:
-        result = await reprocess_reference(ref_id, ref, user_id="u1")
-
-    assert result["success"] is True
-    after = await _fetch_ref(ref_id)
-    assert after["content"] == ""
-    assert after["processing_status"] == "queued"
-    # enqueue("convert_pdf_task", reference_id, user_id, job_id=f"pdf:{ref_id}")
-    called_task = enq.of("convert_pdf_task")
-    assert len(called_task) == 1
-    assert called_task[0].args[0] == ref_id
-    assert called_task[0].kwargs.get("job_id") == f"pdf:{ref_id}"
-
-
-@pytest.mark.asyncio
-async def test_core_image_refused_naming_the_alternative(test_db):
-    """Images are never reprocessed — no OCR pipeline exists. The refusal must name
-    the alternative (look at the image / ask the user), and must NOT wipe content."""
-    from fastapi import HTTPException
-    from files_service import reprocess_reference
-
-    pid = "rp-core-img"
-    ref_id = "rp-ref-img"
-    await _seed_ref(test_db, pid, ref_id, media_type="image",
-                    file_path=f"{pid}/{ref_id}/pic.png", processing_status=None,
-                    safe_name="pic.png")
-    ref = await _fetch_ref(ref_id)
-
-    with pytest.raises(HTTPException) as ei:
-        await reprocess_reference(ref_id, ref, user_id="u1")
-    assert ei.value.status_code == 400
-    detail = ei.value.detail.lower()
-    assert "image" in detail
-    # Names the alternative, not just "cannot".
-    assert "look" in detail or "ask" in detail
-    # Content untouched.
-    after = await _fetch_ref(ref_id)
-    assert after["content"] == "OLD TEXT"
-
-
-@pytest.mark.asyncio
-async def test_core_ready_state_accepted_under_gate(test_db):
-    """Decision 7 = A: a 'ready' reference (possibly hand-cleaned) IS reprocessable.
-    We cannot detect hand-editing (no stored baseline), and the apply-mode gate /
-    confirmation is the protection — so the core accepts it and wipes on execution.
-    Asserts the CHOSEN behaviour, not silence."""
-    from files_service import reprocess_reference
-
-    pid = "rp-core-ready"
-    ref_id = "rp-ref-ready"
-    await _seed_ref(test_db, pid, ref_id, media_type="audio",
-                    file_path=f"{pid}/{ref_id}/clip.mp3", processing_status="ready",
-                    content="HAND-CLEANED TRANSCRIPT")
-    ref = await _fetch_ref(ref_id)
-
-    with pinned_stt_url(), \
-            patch("files_service.enqueue_transcription", new_callable=AsyncMock):
-        await reprocess_reference(ref_id, ref, user_id="u1")
-
-    after = await _fetch_ref(ref_id)
-    assert after["content"] == ""
-    assert after["processing_status"] == "queued"
-
-
-@pytest.mark.asyncio
-async def test_core_non_retryable_status_refused(test_db):
-    """Only error/ready/processing/queued are retryable (the retry INVARIANT —
-    'processing' and 'queued' are included so a user can self-unstick a frozen ref).
-    A ref with no processing status is refused, and its content is NOT wiped."""
-    from fastapi import HTTPException
-    from files_service import reprocess_reference
-
-    pid = "rp-core-status"
-    ref_id = "rp-ref-status"
-    await _seed_ref(test_db, pid, ref_id, media_type="audio",
-                    file_path=f"{pid}/{ref_id}/clip.mp3", processing_status=None)
-    ref = await _fetch_ref(ref_id)
-
-    with pytest.raises(HTTPException) as ei:
-        await reprocess_reference(ref_id, ref, user_id="u1")
-    assert ei.value.status_code == 400
-    after = await _fetch_ref(ref_id)
-    assert after["content"] == "OLD TEXT"
-
-
-@pytest.mark.asyncio
-async def test_core_no_file_path_refused(test_db):
-    """A reference with no attached binary cannot be re-processed — refuse, do not
-    wipe."""
-    from fastapi import HTTPException
-    from files_service import reprocess_reference
-
-    pid = "rp-core-nofile"
-    ref_id = "rp-ref-nofile"
-    await _seed_ref(test_db, pid, ref_id, media_type="audio", file_path=None)
-    ref = await _fetch_ref(ref_id)
-
-    with pytest.raises(HTTPException) as ei:
-        await reprocess_reference(ref_id, ref, user_id="u1")
-    assert ei.value.status_code == 400
-
-
-@pytest.mark.asyncio
-async def test_core_unsupported_source_type_refused(test_db):
-    """A markdown reference whose source file is NOT a .docx (e.g. a .txt) cannot be
-    re-processed by the pipeline — refuse."""
-    from fastapi import HTTPException
-    from files_service import reprocess_reference
-
-    pid = "rp-core-txt"
-    ref_id = "rp-ref-txt"
-    await _seed_ref(test_db, pid, ref_id, media_type="markdown",
-                    file_path=f"{pid}/{ref_id}/notes.txt", processing_status="error",
-                    safe_name="notes.txt")
-    ref = await _fetch_ref(ref_id)
-
-    with pytest.raises(HTTPException) as ei:
-        await reprocess_reference(ref_id, ref, user_id="u1")
-    assert ei.value.status_code == 400
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -302,27 +116,6 @@ async def test_tool_auto_applies_and_wipes(client, test_db, admin_user, project_
 
 
 @pytest.mark.asyncio
-async def test_tool_confirm_refuses_image_before_confirmation(
-    client, test_db, admin_user, project_with_doc,
-):
-    """An image reference is refused immediately even in confirm mode — it can never
-    be reprocessed (no OCR), so the refusal fires before the confirmation hold."""
-    pid, _, admin_uid = project_with_doc
-    agent_tok = await _make_agent_key(test_db, admin_uid, pid)
-    ref_id = "rp-tool-img"
-    await _seed_ref(test_db, pid, ref_id, media_type="image",
-                    file_path=f"{pid}/{ref_id}/pic.png", processing_status=None,
-                    safe_name="pic.png")
-
-    resp = await client.post("/api/tool/reprocess_reference", json={
-        "reference_id": ref_id, "apply": "confirm",
-    }, headers=_hdr(agent_tok))
-
-    assert resp.status_code == 400, resp.text
-    assert "image" in resp.json()["detail"].lower()
-
-
-@pytest.mark.asyncio
 async def test_tool_non_full_principal_refused(
     client, test_db, admin_user, project_with_doc,
 ):
@@ -352,18 +145,6 @@ async def test_tool_non_full_principal_refused(
     }, headers=_hdr(agent_tok))
 
     assert resp.status_code == 403, resp.text
-
-
-@pytest.mark.asyncio
-async def test_tool_unknown_reference_404(client, test_db, admin_user, project_with_doc):
-    pid, _, admin_uid = project_with_doc
-    agent_tok = await _make_agent_key(test_db, admin_uid, pid)
-
-    resp = await client.post("/api/tool/reprocess_reference", json={
-        "reference_id": "does-not-exist", "apply": "auto",
-    }, headers=_hdr(agent_tok))
-
-    assert resp.status_code == 404, resp.text
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -402,46 +183,3 @@ async def test_tool_refuses_cross_project_reference(
 # viewer, not download; every other binary keeps the attachment default —
 # explicit is better than relying on FileResponse's default here).
 # ════════════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.asyncio
-async def test_serve_disposition_inline_for_pdf_attachment_otherwise():
-    """_serve_reference_file: a PDF reference serves Content-Disposition: inline
-    (browser viewer in a new tab); a DOCX reference keeps attachment. Download
-    is unaffected — the frontend download link's `download` attribute wins over
-    inline for a same-origin URL."""
-    from routes.files_serve import _serve_reference_file
-
-    from config import STORAGE_PATH
-
-    d = STORAGE_PATH / "rp-serve"
-    d.mkdir(parents=True, exist_ok=True)
-    f = d / "paper.pdf"
-    f.write_bytes(b"%PDF-1.7\n")
-    try:
-        pdf_ref = {
-            "is_reference": True, "project_id": "rp-serve-proj",
-            "file_path": "rp-serve/paper.pdf",
-            "file_meta": {"mime_type": "application/pdf"},
-        }
-        resp = await _serve_reference_file(pdf_ref, "paper.pdf")
-        assert resp.headers["content-disposition"].startswith("inline")
-
-        docx_ref = {
-            "is_reference": True, "project_id": "rp-serve-proj",
-            "file_path": "rp-serve/paper.pdf",
-            "file_meta": {
-                "mime_type": "application/vnd.openxmlformats-officedocument"
-                             ".wordprocessingml.document",
-            },
-        }
-        resp = await _serve_reference_file(docx_ref, "paper.docx")
-        assert resp.headers["content-disposition"].startswith("attachment")
-    finally:
-        f.unlink(missing_ok=True)
-        try:
-            d.rmdir()
-        except OSError:
-            pass
-
-

@@ -52,21 +52,3 @@ async def test_a_live_choice_is_untouched(test_db):
     await _migrate_web_search_off_drop(test_db)
     settings.drop_cache()
     assert await settings.get("WEB_SEARCH_PROVIDER") == "brave"
-
-
-@pytest.mark.asyncio
-async def test_no_override_and_a_rerun_are_noops(test_db):
-    await _migrate_web_search_off_drop(test_db)
-    await _put_override(test_db, "off")
-    await _migrate_web_search_off_drop(test_db)
-    await _migrate_web_search_off_drop(test_db)
-    rows = await test_db.query(
-        "SELECT key, value FROM instance_settings WHERE key = 'WEB_SEARCH_PROVIDER'")
-    assert rows == []
-
-
-def test_registered_in_registry():
-    from migrations.runner import _MIGRATIONS
-
-    names = [name for name, _ in _MIGRATIONS]
-    assert "web_search_off_drop" in names

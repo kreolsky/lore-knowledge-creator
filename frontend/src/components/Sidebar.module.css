@@ -12,6 +12,15 @@
   z-index: 2;
 }
 
+/* Unpinned: the panel floats over the editor, right of the tab strip. */
+.sidebarFloating {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 100%;
+  z-index: 12;
+}
+
 .sidebarDocs {
   flex: 1;
   overflow-y: auto;

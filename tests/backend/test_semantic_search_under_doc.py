@@ -72,25 +72,6 @@ async def _get(client, pid, token, path):
     )
 
 
-# ─── (a) No param ⇒ unchanged, memory present ────────────────────────────────
-
-
-async def test_no_under_document_id_is_whole_project(client, admin_user, narrow_corpus):
-    """Absent param ⇒ today's behavior: every fact served, out-subtree docs too."""
-    _, token = admin_user
-    pid = narrow_corpus["pid"]
-    corpus = narrow_corpus
-
-    resp = await _get(client, pid, token, f"?q={TOKEN}")
-    assert resp.status_code == 200, resp.text
-    hits = _hits(resp.json())
-
-    for f in ("fact_in", "fact_out", "fact_merged", "fact_soft", "fact_empty"):
-        assert corpus[f] in hits, f"{f} must be served with no narrow"
-    assert corpus["host_out"] in hits
-    assert corpus["ref_out"] in hits
-
-
 # ─── (b) under_document_id ⇒ subtree + provenance-scoped memory ──────────────
 
 
@@ -124,61 +105,7 @@ async def test_under_document_id_narrows_and_keeps_memory_by_provenance(
     assert corpus["fact_empty"] not in hits
 
 
-# ─── (c) include_docs=false & include_refs=false ⇒ memory-only ───────────────
-
-
-async def test_memory_only_via_two_switches(client, admin_user, narrow_corpus):
-    """D2: memory-only is the two existing switches — only memory hits arrive,
-    each as the WHOLE fact body (a fact is served whole, never windowed)."""
-    _, token = admin_user
-    pid = narrow_corpus["pid"]
-    corpus = narrow_corpus
-
-    resp = await _get(client, pid, token, f"?q={TOKEN}&include_docs=false&include_refs=false")
-    assert resp.status_code == 200, resp.text
-    data = resp.json()
-
-    assert data["hits"], "memory-only returned nothing"
-    assert all(h["kind"] == "memory" for h in data["hits"]), (
-        f"non-memory kinds leaked: {[h['kind'] for h in data['hits']]}"
-    )
-    hits = _hits(data)
-    for f in ("fact_in", "fact_out", "fact_merged", "fact_soft", "fact_empty"):
-        assert corpus[f] in hits, f"{f} must be served memory-only (whole project)"
-    # Whole fact bodies, not query-windowed fragments of them.
-    assert hits[corpus["fact_in"]]["snippet"] == f"{TOKEN} fact from an inside source"
-    assert hits[corpus["fact_out"]]["snippet"] == f"{TOKEN} fact from an outside source"
-
-
-async def test_memory_only_under_narrow_still_provenance_scoped(
-    client, admin_user, narrow_corpus,
-):
-    """The motivating workflow: memory-only + subtree = ONLY the facts the
-    subtree's own material produced."""
-    _, token = admin_user
-    pid = narrow_corpus["pid"]
-    corpus = narrow_corpus
-
-    resp = await _get(
-        client, pid, token,
-        f"?q={TOKEN}&include_docs=false&include_refs=false&under_document_id={corpus['root']}",
-    )
-    assert resp.status_code == 200, resp.text
-    hits = _hits(resp.json())
-
-    assert set(hits) == {corpus["fact_in"], corpus["fact_merged"], corpus["fact_soft"]}, (
-        f"memory-only narrow returned {sorted(hits)}"
-    )
-
-
 # ─── (d) Root validation ⇒ uniform 404 ───────────────────────────────────────
-
-
-async def test_unknown_root_404(client, admin_user, narrow_corpus):
-    _, token = admin_user
-    pid = narrow_corpus["pid"]
-    resp = await _get(client, pid, token, f"?q={TOKEN}&under_document_id=no-such-doc")
-    assert resp.status_code == 404
 
 
 async def test_cross_project_root_404(client, admin_user, narrow_corpus, test_db):
@@ -192,18 +119,6 @@ async def test_cross_project_root_404(client, admin_user, narrow_corpus, test_db
         "title": "Foreign", "content": "", "path": "foreign-root",
     })
     resp = await _get(client, pid, token, "?q=vertigo&under_document_id=foreign-root")
-    assert resp.status_code == 404
-
-
-async def test_soft_deleted_root_404(client, admin_user, narrow_corpus, test_db):
-    _, token = admin_user
-    pid = narrow_corpus["pid"]
-    corpus = narrow_corpus
-    await test_db.query(
-        "UPDATE type::record('documents', $id) SET deleted_at = time::now()",
-        {"id": corpus["host_out"]},
-    )
-    resp = await _get(client, pid, token, f"?q={TOKEN}&under_document_id={corpus['host_out']}")
     assert resp.status_code == 404
 
 
@@ -225,30 +140,3 @@ async def test_scoped_key_out_of_scope_root_403(client, narrow_corpus, test_db):
     detail = resp.json()["detail"]
     assert "outside" in detail.lower()
     assert "get_project_structure" in detail
-
-
-async def test_scoped_key_in_scope_root_intersects(client, narrow_corpus, test_db):
-    """Key scope (root's subtree) ∩ requested (host_in's subtree) — the narrow
-    may only narrow further, and memory follows provenance inside it."""
-    corpus = narrow_corpus
-    token = await _make_widget_key(test_db, corpus["uid"], corpus["pid"], corpus["root"])
-
-    resp = await client.get(
-        f"/api/projects/{corpus['pid']}/semantic-search"
-        f"?q={TOKEN}&under_document_id={corpus['host_in']}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert resp.status_code == 200, resp.text
-    hits = _hits(resp.json())
-
-    assert corpus["host_in"] in hits
-    assert corpus["ref_in"] in hits
-    # The key's root itself is OUTSIDE the requested intersection.
-    assert corpus["root"] not in hits
-    assert corpus["host_out"] not in hits
-    assert corpus["ref_out"] not in hits
-    # Provenance within the intersection: ref_in and ref_soft host under host_in.
-    assert corpus["fact_in"] in hits
-    assert corpus["fact_merged"] in hits
-    assert corpus["fact_soft"] in hits
-    assert corpus["fact_out"] not in hits

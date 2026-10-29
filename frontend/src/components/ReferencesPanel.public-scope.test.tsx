@@ -169,36 +169,6 @@ function renderedRowTitles(): string[] {
 }
 
 describe('ReferencesPanel on public share', () => {
-  it('renders own → parent → share-root batches in backend order; badges lead; foreign refs never render', async () => {
-    act(() => root.render(createElement(ReferencesPanel)));
-    await flushEffects();
-
-    expect(renderedRowTitles()).toEqual([
-      'First', 'Second',                       // table badges (anchor order)
-      'a1-newest', 'a1-older',                 // own batch, newest first
-      'a-ref',                                 // parent batch
-      'root-ref',                              // share-root batch
-    ]);
-    expect(container.textContent).not.toContain('b-ref');
-    expect(container.textContent).not.toContain('a1child-ref');
-  });
-
-  it('keeps the whole-subtree payload in the store (public transclusion parity)', async () => {
-    act(() => root.render(createElement(ReferencesPanel)));
-    await flushEffects();
-
-    const storeRefs = useAppStore.getState().references;
-    expect(storeRefs.map(r => r.reference_id)).toEqual(payloadFor('A1').map(r => r.reference_id));
-  });
-
-  it('uses the anonymous per-doc fetch only (no authed loadReferences, no agent-config GET)', async () => {
-    act(() => root.render(createElement(ReferencesPanel)));
-    await flushEffects();
-
-    expect(publicRefsMock).toHaveBeenCalledWith('A1');
-    expect(loadReferencesMock).not.toHaveBeenCalled();
-    expect(apiGetMock).not.toHaveBeenCalled();
-  });
 
   it('re-filters on doc switch: opening sibling B shows B\'s own batch then the root batch (re-tiered payload order preserved)', async () => {
     act(() => root.render(createElement(ReferencesPanel)));

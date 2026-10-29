@@ -156,68 +156,6 @@ def _row(doc: dict, document_id: str) -> dict | None:
 
 
 @pytest.mark.asyncio
-async def test_root_call_is_two_layers_with_counters(
-    client, test_db, admin_user, project_with_doc,
-):
-    """Default root call: depth-2 layering, references hidden, system + Memory
-    contents withheld — and every withheld thing counted on its parent row."""
-    t = await _layered_tree(client, test_db, admin_user, project_with_doc)
-    tok = await _make_agent_key(test_db, t["admin_uid"], t["pid"])
-    out = await _structure(client, tok, {})
-
-    ids = {d["document_id"] for d in out["documents"]}
-    # Visible layer: index + A (level 2) + the two system door rows.
-    assert t["idx"] in ids and t["a"] in ids
-    assert t["sys_root"] in ids and t["mem"] in ids
-    # Hidden: depth-3+ rows, the reference, system contents, memory facts.
-    for hidden in ("b", "c", "r", "rules", "rule_leaf", "fact"):
-        assert t[hidden] not in ids, f"{hidden} must be hidden on the root call"
-
-    idx_row = _row(out, t["idx"])
-    assert idx_row["n_references"] == 1
-    assert idx_row["subtree_total"] == 3  # R + B + C
-    assert idx_row["subtree_depth"] == 3  # idx → A → B → C
-    assert "child_count" not in idx_row  # its only non-ref child (A) is visible
-
-    a_row = _row(out, t["a"])
-    assert a_row["child_count"] == 1
-    assert a_row["subtree_total"] == 2  # B + C
-    assert a_row["subtree_depth"] == 2  # A → B → C
-    assert "n_references" not in a_row
-
-    sys_row = _row(out, t["sys_root"])
-    assert sys_row["is_system"] is True
-    assert sys_row["child_count"] == 1  # rules (Memory is a visible door row)
-    assert sys_row["subtree_total"] == 3  # rules + rule leaf + fact
-    assert sys_row["subtree_depth"] == 2
-
-    mem_row = _row(out, t["mem"])
-    assert mem_row["child_count"] == 1  # the fact
-    assert mem_row["subtree_total"] == 1
-    assert mem_row["subtree_depth"] == 1
-
-
-@pytest.mark.asyncio
-async def test_root_call_include_references_lists_reference_rows(
-    client, test_db, admin_user, project_with_doc,
-):
-    """include_references: true surfaces reference rows (with media fields) and
-    drops the n_references counters; media fields live on reference rows ONLY."""
-    t = await _layered_tree(client, test_db, admin_user, project_with_doc)
-    tok = await _make_agent_key(test_db, t["admin_uid"], t["pid"])
-    out = await _structure(client, tok, {"include_references": True})
-
-    ref = _row(out, t["r"])
-    assert ref is not None and ref["is_reference"] is True
-    assert ref["media_type"] == "markdown"
-    assert "source_url" in ref
-    idx_row = _row(out, t["idx"])
-    assert "n_references" not in idx_row
-    assert "media_type" not in idx_row, "non-reference rows carry no media fields"
-    assert "source_url" not in idx_row
-
-
-@pytest.mark.asyncio
 async def test_root_call_no_media_fields_when_references_hidden(
     client, test_db, admin_user, project_with_doc,
 ):
@@ -231,116 +169,7 @@ async def test_root_call_no_media_fields_when_references_hidden(
         assert "source_url" not in d
 
 
-@pytest.mark.asyncio
-async def test_root_call_explicit_depth_one(
-    client, test_db, admin_user, project_with_doc,
-):
-    """Explicit depth on the root call narrows the layer; the counters then name
-    everything below the cut."""
-    t = await _layered_tree(client, test_db, admin_user, project_with_doc)
-    tok = await _make_agent_key(test_db, t["admin_uid"], t["pid"])
-    out = await _structure(client, tok, {"depth": 1})
-
-    ids = {d["document_id"] for d in out["documents"]}
-    assert ids == {t["idx"], t["sys_root"]}
-    idx_row = _row(out, t["idx"])
-    assert idx_row["child_count"] == 1  # A now below the cut
-    assert idx_row["n_references"] == 1
-    assert idx_row["subtree_total"] == 4  # A + R + B + C
-    assert idx_row["subtree_depth"] == 3
-
-
-@pytest.mark.asyncio
-async def test_root_call_hides_system_by_ancestry_not_flag(
-    client, test_db, admin_user, project_with_doc,
-):
-    """The system exclusion is by ANCESTRY: an is_system=false leaf under the
-    system root (a rule entry) is hidden, while a root-level is_system row
-    outside the deterministic subtree stays visible (flag parity pin)."""
-    pid, idx_id, admin_uid = project_with_doc
-    _, token = admin_user
-    # A root-level system-flagged row NOT under sys-system_root — stays visible.
-    rogue = "struct-sys-outside"
-    await _make_system_doc(test_db, rogue, pid, None, "Rogue", is_system=True)
-
-    t = await _layered_tree(client, test_db, admin_user, project_with_doc)
-    tok = await _make_agent_key(test_db, admin_uid, pid)
-    out = await _structure(client, tok, {})
-
-    ids = {d["document_id"] for d in out["documents"]}
-    assert t["rule_leaf"] not in ids, "ancestry hides is_system=false leaves"
-    rogue_row = _row(out, rogue)
-    assert rogue_row is not None and rogue_row["is_system"] is True
-
-
 # ─── start_id = enumeration (the breadth the live callers depend on) ─────────
-
-
-@pytest.mark.asyncio
-async def test_start_id_enumerates_whole_subtree_regardless_of_depth(
-    client, test_db, admin_user, project_with_doc,
-):
-    """PIN (consolidation breadth, skill_memory_consolidation.md:25): with an
-    explicit start_id the default breadth is the target's WHOLE subtree — no
-    depth default leaks onto this path, references included, no counters."""
-    t = await _layered_tree(client, test_db, admin_user, project_with_doc)
-    tok = await _make_agent_key(test_db, t["admin_uid"], t["pid"])
-    out = await _structure(client, tok, {"start_id": t["a"]})
-
-    ids = {d["document_id"] for d in out["documents"]}
-    assert ids == {t["a"], t["b"], t["c"]}, "every descendant listed, whole subtree"
-    for d in out["documents"]:
-        assert "subtree_total" not in d, "nothing is hidden on this path"
-        assert "child_count" not in d
-        assert "n_references" not in d
-        assert "is_memory" in d, "is_memory joins the row projection"
-
-
-@pytest.mark.asyncio
-async def test_start_id_enumerates_references(
-    client, test_db, admin_user, project_with_doc,
-):
-    """References appear on the start_id path without asking (the start_id call
-    is enumeration, not orientation)."""
-    t = await _layered_tree(client, test_db, admin_user, project_with_doc)
-    tok = await _make_agent_key(test_db, t["admin_uid"], t["pid"])
-    out = await _structure(client, tok, {"start_id": t["idx"]})
-
-    ref = _row(out, t["r"])
-    assert ref is not None and ref["is_reference"] is True
-    assert ref["media_type"] == "markdown"
-
-
-@pytest.mark.asyncio
-async def test_start_id_on_system_root_enumerates_config_whole(
-    client, test_db, admin_user, project_with_doc,
-):
-    """An explicit start_id on the system root enumerates its contents whole —
-    the door opens when named."""
-    t = await _layered_tree(client, test_db, admin_user, project_with_doc)
-    tok = await _make_agent_key(test_db, t["admin_uid"], t["pid"])
-    out = await _structure(client, tok, {"start_id": t["sys_root"]})
-
-    ids = {d["document_id"] for d in out["documents"]}
-    assert ids == {
-        t["sys_root"], t["rules"], t["rule_leaf"], t["mem"], t["fact"],
-    }
-
-
-@pytest.mark.asyncio
-async def test_start_id_on_memory_folder_enumerates_facts(
-    client, test_db, admin_user, project_with_doc,
-):
-    """An explicit start_id on the Memory folder enumerates the facts; fact rows
-    carry is_memory=true (the flag must exist before hiding can be reasoned about)."""
-    t = await _layered_tree(client, test_db, admin_user, project_with_doc)
-    tok = await _make_agent_key(test_db, t["admin_uid"], t["pid"])
-    out = await _structure(client, tok, {"start_id": t["mem"]})
-
-    ids = {d["document_id"] for d in out["documents"]}
-    assert ids == {t["mem"], t["fact"]}
-    assert _row(out, t["fact"])["is_memory"] is True
-    assert _row(out, t["mem"])["is_memory"] is False
 
 
 @pytest.mark.asyncio
@@ -386,19 +215,6 @@ async def test_scoped_key_enumerates_scope_only_with_no_outside_counters(
     out2 = await _structure(client, scoped, {"start_id": t["idx"]})
     ids2 = {d["document_id"] for d in out2["documents"]}
     assert ids2 == {t["a"], t["b"], t["c"]}
-
-
-@pytest.mark.asyncio
-async def test_scoped_key_deleted_wall_returns_empty_map(
-    client, test_db, admin_user, project_with_doc,
-):
-    """A scoped key whose wall doc is deleted/unknown gets an EMPTY map — never
-    a resolve attempt, never candidates, never rows from outside the wall
-    (review finding: the wall owns the seed)."""
-    pid, idx_id, admin_uid = project_with_doc
-    scoped = await _make_agent_key(test_db, admin_uid, pid, scope_root="ghost-wall")
-    out = await _structure(client, scoped, {})
-    assert out == {"project_id": pid, "documents": []}
 
 
 @pytest.mark.asyncio

@@ -14,10 +14,9 @@ import { EditorView } from '@codemirror/view';
 import { EditorState, EditorSelection } from '@codemirror/state';
 import * as Y from 'yjs';
 import { pasteHandlerExtension, htmlToMarkdown } from './paste-handler';
-import { setEntityHandle } from '../collab/active-handle-registry';
-import { releaseHandle, publishHandle, setViewEntity } from './active-editor';
+import { releaseHandle, publishHandle } from './active-editor';
 import type { EntityYjsState } from '../collab/yjs-provider';
-import { readTableModel, getTablesMap, TABLE_ANCHOR_RE } from '../components/editor/live-preview/table-block-model';
+import { readTableModel, TABLE_ANCHOR_RE } from '../components/editor/live-preview/table-block-model';
 
 const origRangeGetClientRects = Range.prototype.getClientRects;
 const origRangeGetBoundingClientRect = Range.prototype.getBoundingClientRect;
@@ -86,20 +85,6 @@ describe('Lore-origin paste (lossless source path)', () => {
     publishHandle({ ydoc } as unknown as EntityYjsState);
   });
   afterEach(() => releaseHandle());
-
-  it('inserts ref:/doc: links and underscores without Turndown escaping', () => {
-    const source = '[src](ref:abc) and my_var [n](doc:d1)';
-    const view = makeView();
-    view.contentDOM.dispatchEvent(
-      makePasteEvent({ html: '<!--lore-clipboard--><p>ignored</p>', plain: source }),
-    );
-    const doc = view.state.doc.toString();
-    expect(doc).toContain('[src](ref:abc)');
-    expect(doc).toContain('my_var');
-    expect(doc).not.toContain('\\_');
-    expect(doc).toContain('[n](doc:d1)');
-    view.destroy();
-  });
 
   it('recreates a GFM table as a table object, not raw pipe text', () => {
     const source = '| A | B |\n| --- | --- |\n| 1 | 2 |';
@@ -491,78 +476,6 @@ describe('Paste guards', () => {
     });
     view.contentDOM.dispatchEvent(event);
     expect(view.state.doc.toString()).toBe('shift plain');
-    view.destroy();
-  });
-});
-
-describe('Paste table targeting (split view)', () => {
-  afterEach(() => {
-    releaseHandle();
-    setEntityHandle('e-1', null);
-  });
-
-  const GFM = '| A | B |\n| --- | --- |\n| 1 | 2 |';
-
-  it('creates the model in the VIEW\'S entity ydoc while the slot points at a foreign one', () => {
-    const entityDoc = new Y.Doc();
-    setEntityHandle('e-1', { ydoc: entityDoc } as unknown as EntityYjsState);
-    const foreignDoc = new Y.Doc();
-    publishHandle({ ydoc: foreignDoc } as unknown as EntityYjsState);
-
-    const view = makeView();
-    setViewEntity(view, 'e-1');
-    view.contentDOM.dispatchEvent(
-      makePasteEvent({ html: '<!--lore-clipboard--><table></table>', plain: GFM }),
-    );
-
-    // Anchor landed in the view's doc; the model in the ENTITY ydoc…
-    const matches = [...view.state.doc.toString().matchAll(TABLE_ANCHOR_RE)];
-    expect(matches).toHaveLength(1);
-    expect(readTableModel(entityDoc, matches[0][2])!.rows).toEqual([
-      ['A', 'B'],
-      ['1', '2'],
-    ]);
-    // …and the foreign (slot) ydoc got nothing.
-    expect([...getTablesMap(foreignDoc).keys()]).toHaveLength(0);
-    view.destroy();
-  });
-
-  it('unknown view → old fallback: the slot handle is used', () => {
-    const slotDoc = new Y.Doc();
-    publishHandle({ ydoc: slotDoc } as unknown as EntityYjsState);
-
-    const view = makeView(); // NOT registered for any entity
-    view.contentDOM.dispatchEvent(
-      makePasteEvent({ html: '<!--lore-clipboard--><table></table>', plain: GFM }),
-    );
-
-    const matches = [...view.state.doc.toString().matchAll(TABLE_ANCHOR_RE)];
-    expect(matches).toHaveLength(1);
-    expect(readTableModel(slotDoc, matches[0][2])!.rows).toEqual([
-      ['A', 'B'],
-      ['1', '2'],
-    ]);
-    view.destroy();
-  });
-
-  it('known entity whose handle has NOT landed → verbatim text, never the slot ydoc', () => {
-    // The conn-land race: the view IS registered for e-1, but e-1's handle is not
-    // published yet. The slot holds the OTHER column's live handle. Falling back to
-    // the slot would put the model in the foreign ydoc and the anchor in this view —
-    // the exact split-ydoc split this targeting exists to prevent.
-    const foreignDoc = new Y.Doc();
-    publishHandle({ ydoc: foreignDoc } as unknown as EntityYjsState);
-
-    const view = makeView();
-    setViewEntity(view, 'e-1');
-    view.contentDOM.dispatchEvent(
-      makePasteEvent({ html: '<!--lore-clipboard--><table></table>', plain: GFM }),
-    );
-
-    // Degrade: the GFM source is inserted as plain text — no anchor, no import.
-    expect(view.state.doc.toString()).toContain('| A | B |');
-    expect([...view.state.doc.toString().matchAll(TABLE_ANCHOR_RE)]).toHaveLength(0);
-    expect([...getTablesMap(foreignDoc).keys()]).toHaveLength(0);
     view.destroy();
   });
 });

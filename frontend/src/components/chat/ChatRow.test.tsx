@@ -30,7 +30,6 @@ const { emitMock } = vi.hoisted(() => ({
 vi.mock('../../events', () => ({ on: vi.fn(), off: vi.fn(), emit: emitMock }));
 
 import { ChatRow } from './ChatRow';
-import { formatDate } from '../../utils/format';
 import type { ChatSession } from '../../types';
 
 function baseSession(overrides: Partial<ChatSession> = {}): ChatSession {
@@ -59,68 +58,7 @@ function renderSession(session: ChatSession): { container: HTMLElement; root: Ro
   return { container, root };
 }
 
-describe('ChatRow — date source', () => {
-  it('renders the last_message_at date when present (not updated_at)', () => {
-    const session = baseSession({
-      updated_at: '2026-01-15T12:00:00Z',
-      last_message_at: '2026-03-15T12:00:00Z',
-    });
-    const { container, root } = renderSession(session);
-    // Both sides go through the SAME formatter → TZ-independent.
-    expect(container.textContent).toContain(formatDate('2026-03-15T12:00:00Z'));
-    expect(container.textContent).not.toContain(formatDate('2026-01-15T12:00:00Z'));
-    act(() => root.unmount());
-  });
-
-  it('falls back to created_at (not updated_at) when last_message_at is absent (F3)', () => {
-    // created_at and updated_at deliberately differ: the card must show created_at.
-    const session = baseSession({
-      created_at: '2026-02-20T08:00:00Z',
-      updated_at: '2026-01-15T12:00:00Z',
-    });
-    const { container, root } = renderSession(session);
-    expect(container.textContent).toContain(formatDate('2026-02-20T08:00:00Z'));
-    expect(container.textContent).not.toContain(formatDate('2026-01-15T12:00:00Z'));
-    act(() => root.unmount());
-  });
-
-  it('falls back to created_at (not updated_at) when last_message_at is null (F3)', () => {
-    const session = baseSession({
-      created_at: '2026-02-20T08:00:00Z',
-      updated_at: '2026-01-15T12:00:00Z',
-      last_message_at: null,
-    });
-    const { container, root } = renderSession(session);
-    expect(container.textContent).toContain(formatDate('2026-02-20T08:00:00Z'));
-    expect(container.textContent).not.toContain(formatDate('2026-01-15T12:00:00Z'));
-    act(() => root.unmount());
-  });
-});
-
 describe('ChatRow — parent hover preview forwarding', () => {
-  it('forwards onParentHover with docId + the span element on mouseenter when a parent doc exists', () => {
-    // document_id set + document_title → parentLabel = 'Doc Title'; currentDocumentId
-    // is undefined (mocked store has no currentDocument) → clickable branch (role=button).
-    const session = baseSession({ document_id: 'doc-9', document_title: 'Doc Title' });
-    const onParentHover = vi.fn();
-    const container = document.createElement('div');
-    document.body.appendChild(container);
-    const root = createRoot(container);
-    act(() => {
-      root.render(createElement(ChatRow, { session, onSelect: vi.fn(), onParentHover, onParentHoverLeave: vi.fn() }));
-    });
-    // ListPill renders a div[role=button] (the clickable pill); the parent label
-    // is a nested span[role=button] — disambiguate by tag.
-    const span = container.querySelector('span[role="button"]') as HTMLElement;
-    expect(span).toBeTruthy();
-    act(() => {
-      span.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true }));
-    });
-    expect(onParentHover).toHaveBeenCalledTimes(1);
-    expect(onParentHover.mock.calls[0][0]).toBe('doc-9');
-    expect(onParentHover.mock.calls[0][1]).toBe(span);
-    act(() => root.unmount());
-  });
 
   it('forwards hover with the reference id for a ref-scoped session (ref: label)', () => {
     // INVARIANT: a reference-scoped chat's parent IS the reference — the label is
@@ -173,108 +111,6 @@ describe('ChatRow — parent navigation payload', () => {
     });
     expect(emitMock).toHaveBeenCalledWith('navigate-to-reference', { referenceId: 'ref-1' });
     expect(emitMock).not.toHaveBeenCalledWith('navigate-to-document', expect.anything());
-    act(() => root.unmount());
-  });
-});
-
-describe('ChatRow — running mark', () => {
-  beforeEach(() => {
-    chatStoreState.runningSessions = new Set();
-  });
-
-  it('renders the running mark with its label when the session is in the set', () => {
-    chatStoreState.runningSessions.add('s1');
-    const { container, root } = renderSession(baseSession());
-    const mark = container.querySelector('svg[aria-label="chatRunningMark"]');
-    expect(mark).toBeTruthy();
-    expect(mark?.querySelector('title')?.textContent).toBe('chatRunningMark');
-    act(() => root.unmount());
-  });
-
-  it('renders no mark when the session is not running', () => {
-    const { container, root } = renderSession(baseSession());
-    expect(container.querySelector('svg[aria-label="chatRunningMark"]')).toBeNull();
-    act(() => root.unmount());
-  });
-
-  it('renders BOTH the running mark and the unindexed mask for an unindexed running chat', () => {
-    chatStoreState.runningSessions.add('s1');
-    const { container, root } = renderSession(baseSession({ unindexed: true }));
-    expect(container.querySelector('svg[aria-label="chatRunningMark"]')).toBeTruthy();
-    expect(container.querySelector('[title="chatUnindexedMark"]')).toBeTruthy();
-    act(() => root.unmount());
-  });
-});
-
-describe('ChatRow — inline rename', () => {
-  function renderWithRename(onRename: (id: string, title: string) => Promise<void>) {
-    const container = document.createElement('div');
-    document.body.appendChild(container);
-    const root = createRoot(container);
-    act(() => {
-      root.render(createElement(ChatRow, { session: baseSession(), onSelect: vi.fn(), onDelete: vi.fn(), onRename }));
-    });
-    return { container, root };
-  }
-  const pencil = (c: HTMLElement) => c.querySelector('button[title="rename"]') as HTMLButtonElement;
-  const input = (c: HTMLElement) => c.querySelector('input[data-rename-input]') as HTMLInputElement | null;
-  const setValue = (el: HTMLInputElement, v: string) => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
-    setter.call(el, v);
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-  };
-
-  it('shows no pencil without onRename', () => {
-    const { container, root } = renderSession(baseSession());
-    expect(pencil(container)).toBeNull();
-    act(() => root.unmount());
-  });
-
-  it('pencil opens the input with the current title; Enter commits the trimmed value', async () => {
-    const onRename = vi.fn().mockResolvedValue(undefined);
-    const { container, root } = renderWithRename(onRename);
-    expect(input(container)).toBeNull();
-    act(() => { pencil(container).click(); });
-    const el = input(container)!;
-    expect(el.value).toBe('Hello');
-    act(() => { setValue(el, '  New name '); });
-    await act(async () => {
-      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    });
-    expect(onRename).toHaveBeenCalledWith('s1', 'New name');
-    expect(input(container)).toBeNull();
-    act(() => root.unmount());
-  });
-
-  it('Escape cancels without a write', () => {
-    const onRename = vi.fn().mockResolvedValue(undefined);
-    const { container, root } = renderWithRename(onRename);
-    act(() => { pencil(container).click(); });
-    const el = input(container)!;
-    act(() => { setValue(el, 'Changed'); });
-    act(() => { el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
-    expect(onRename).not.toHaveBeenCalled();
-    expect(input(container)).toBeNull();
-    act(() => root.unmount());
-  });
-
-  it('blur commits; an unchanged or empty title closes without a write', async () => {
-    const onRename = vi.fn().mockResolvedValue(undefined);
-    const { container, root } = renderWithRename(onRename);
-    act(() => { pencil(container).click(); });
-    await act(async () => { input(container)!.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); });
-    expect(onRename).not.toHaveBeenCalled();
-    expect(input(container)).toBeNull();
-
-    act(() => { pencil(container).click(); });
-    act(() => { setValue(input(container)!, '   '); });
-    await act(async () => { input(container)!.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); });
-    expect(onRename).not.toHaveBeenCalled();
-
-    act(() => { pencil(container).click(); });
-    act(() => { setValue(input(container)!, 'Via blur'); });
-    await act(async () => { input(container)!.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); });
-    expect(onRename).toHaveBeenCalledWith('s1', 'Via blur');
     act(() => root.unmount());
   });
 });

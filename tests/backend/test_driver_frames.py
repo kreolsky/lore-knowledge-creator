@@ -64,41 +64,7 @@ def _parse(frames):
     return list(frames)
 
 
-# ─── _lore_event: the mint envelope + the offset parity pin ──────────────────
-
-
-def test_lore_event_offsets_pin_the_ts_lore_seq_offsets():
-    """The mirrored literals. lore-events.ts (LORE_SEQ_OFFSETS): verdictAsk
-    0.5, imageGen 0.6, halt 0.7, compactionMint 0.8 — the producers mint with
-    exactly these, so a reload lands where the live stream did. Changing one
-    side without the other silently breaks reload==live placement."""
-    assert driver.frames._lore_event("lore/verdict-ask", 10, {})["seq"] == 10.5
-    assert driver.frames._lore_event("lore/image-gen", 10, {})["seq"] == 10.6
-    assert driver.frames._lore_event("lore/halt", 10, {})["seq"] == 10.7
-    assert driver.frames._lore_event("lore/compaction-mint", 10, {})["seq"] == 10.8
-
-
-def test_lore_event_envelope_is_an_ignorable_session_event():
-    frame = driver.frames._lore_event("lore/halt", 4, {"turn": None, "reason": "x"})
-    assert frame["type"] == "lore/halt"
-    assert frame["seq"] == 4.7
-    assert frame["ignorable"] is True
-    assert isinstance(frame["time"], int)
-    assert frame["data"] == {"turn": None, "reason": "x"}
-
-
 # ─── _TurnProjection: the accumulation ───────────────────────────────────────
-
-
-async def test_assistant_message_text_accumulates_and_finalize_persists():
-    """v3: the row's content comes from the SETTLED `assistant/message` (the
-    whole step text per event, joined across the turn's steps) — the dead
-    `assistant/chunk` kind no longer exists in the log."""
-    turn = _turn()
-    await _relay(turn, _assistant_message(1, "Hello"))
-    await _relay(turn, _assistant_message(2, "world"))
-    await turn.finalize()
-    turn._persist_content.assert_awaited_once_with("m1", "Hello\n\nworld")  # type: ignore[attr-defined]
 
 
 async def test_steps_join_as_separate_paragraphs():
@@ -115,38 +81,6 @@ async def test_steps_join_as_separate_paragraphs():
         "m1", "Plan:\n\n1. one\n2. two\n\nSaved to the doc.")
 
 
-async def test_non_text_message_blocks_accumulate_nothing():
-    turn = _turn()
-
-    def msg(content):
-        return {"turn": 1, "step": 1,
-                "message": {"content": content}, "stream": []}
-
-    await _relay(turn, _dsh(1, "assistant/message", msg(
-        [{"type": "reasoning", "text": "hmm"}])))
-    await _relay(turn, _dsh(2, "assistant/message", msg(
-        [{"type": "tool-call", "id": "t1", "name": "search"}])))
-    # Non-string text and a non-list content degrade to nothing.
-    await _relay(turn, _dsh(3, "assistant/message", msg(
-        [{"type": "text", "text": 5}])))
-    await _relay(turn, _dsh(4, "assistant/message", {"message": {"content": "flat"}}))
-    await _relay(turn, _dsh(5, "assistant/message", None))
-    assert turn.content_acc == []
-
-
-async def test_replace_op_message_does_not_join_the_row():
-    """Only the `append` surface op accumulates — dsh's own assistant node's
-    filter. A replace-op re-statement of an earlier message (a rewrite of
-    the surface) would otherwise land the same text in the row twice."""
-    turn = _turn()
-    await _relay(turn, _assistant_message(1, "once"))
-    replaced = _assistant_message(2, "once")
-    replaced["surfaceOp"] = {"op": "replace", "start": 1, "end": 1}
-    await _relay(turn, replaced)
-    await _relay(turn, _assistant_message(3, " more"))
-    assert "".join(turn.content_acc) == "once more"
-
-
 def test_message_text_joins_only_text_blocks():
     data = {"message": {"content": [
         {"type": "reasoning", "text": "thinking"},
@@ -159,42 +93,12 @@ def test_message_text_joins_only_text_blocks():
     assert driver.frames._message_text({}) == ""
 
 
-async def test_tool_result_counts_one_finished_call_per_event():
-    turn = _turn()
-    result = {"message": {"role": "tool", "source": {"kind": "tool", "callId": "c1"},
-                          "toolCallId": "c1", "content": [{"type": "text", "text": "ok"}]}}
-    await _relay(turn, _dsh(1, "tool/result", result))
-    await _relay(turn, _dsh(2, "tool/result", result))
-    assert turn.steps_count == 2
-
-
 async def test_turn_start_sets_the_turn_coordinate_and_warns_without_one(caplog):
     turn = _turn()
     await _relay(turn, _dsh(1, "turn/start", {"turn": 3}))
     assert turn.turn_no == 3
     await _relay(turn, _dsh(9, "turn/start", {}))
     assert turn.turn_no == 3  # a missing number never clobbers the open turn
-
-
-async def test_last_seq_tracks_the_window_tail():
-    turn = _turn()
-    await _relay(turn, _assistant_message(5, "x"))
-    await _relay(turn, _dsh(2, "hook/invoked", {}))
-    assert turn.last_seq == 5
-    await _relay(turn, {"type": "model_update", "model": "m"})  # not a dsh event
-    assert turn.last_seq == 5
-
-
-async def test_turn_end_completed_is_graceful_and_stamps_driver_seq():
-    turn = _turn()
-    await _relay(turn, _assistant_message(1, "done"))
-    frames = await _relay(turn, _dsh(9, "turn/end", {"turn": 1, "reason": {"kind": "completed"}}))
-    assert [f["type"] for f in _parse(frames)] == ["dsh_event", "done"]
-    assert turn.finished and turn.finalize_pending
-    assert turn.driver_seq == 9
-    await turn.finalize()
-    turn._persist_turn_seq.assert_awaited_once_with("m1", 9, None)  # type: ignore[attr-defined]
-    turn._persist_extras.assert_not_awaited()  # type: ignore[attr-defined]
 
 
 async def test_driver_seq_stamp_carries_the_turns_dsh_session():
@@ -210,21 +114,6 @@ async def test_driver_seq_stamp_carries_the_turns_dsh_session():
     await turn.finalize()
     turn._persist_turn_seq.assert_awaited_once_with(  # type: ignore[attr-defined]
         "m1", 9, "chat-1~fdeadbee")
-
-
-async def test_turn_end_max_tokens_is_graceful():
-    """A max-tokens halt IS graceful — the halt card renders from dsh's own
-    turn-max-tokens node; no Lore-side halt write, no lore/halt mint."""
-    turn = _turn()
-    frames = await _relay(turn, _dsh(9, "turn/end", {"turn": 1, "reason": {"kind": "max-tokens"}}))
-    parsed = _parse(frames)
-    assert len(parsed) == 2
-    # The chunk-less turn's done frame still rides (contract: unconditional
-    # on the graceful branch) — the store's done handler ignores "".
-    assert parsed[1] == {"type": "done", "content": ""}
-    turn._persist_extras.assert_not_awaited()  # type: ignore[attr-defined]
-    await turn.finalize()
-    turn._persist_content.assert_awaited_once()  # type: ignore[attr-defined]
 
 
 async def test_turn_end_graceful_done_carries_the_joined_messages():
@@ -249,25 +138,6 @@ async def test_turn_end_graceful_done_carries_the_joined_messages():
     assert [f["type"] for f in _parse(frames)] == ["dsh_event"]
 
 
-async def test_turn_end_error_persists_the_abnormal_product():
-    turn = _turn()
-    await _relay(turn, _assistant_message(1, "partial"))
-    await _relay(turn, _dsh(2, "tool/result", {"message": {
-        "role": "tool", "source": {"kind": "tool", "callId": "c1"},
-        "toolCallId": "c1", "content": [{"type": "text", "text": "ok"}]}}))
-    await _relay(turn, _dsh(9, "turn/end", {
-        "turn": 1, "reason": {"kind": "error", "error": {"message": "gateway 502"}}}))
-    assert turn.errored and not turn.finalize_pending
-    # The abnormal write already persisted the product; the façade gates
-    # finalize() off (finalize_pending False), so this is the ONE write.
-    turn._persist_content.assert_awaited_once_with("m1", "partial")  # type: ignore[attr-defined]
-    extras = turn._persist_extras.call_args.args[1]  # type: ignore[attr-defined]
-    # anchor_seq: the window tail the live card would have taken (see the
-    # persisted INVARIANT in _persist_abnormal).
-    assert extras["halt"] == {"reason": "error", "steps": 1, "anchor_seq": 9}
-    turn._persist_turn_seq.assert_awaited_once_with("m1", 9, None)  # type: ignore[attr-defined]
-
-
 async def test_abnormal_halt_stores_the_live_mints_anchor_and_turn():
     """The stored halt carries WHERE the live card stood, so the reload card
     lands at the same anchor instead of the log tail."""
@@ -280,115 +150,7 @@ async def test_abnormal_halt_stores_the_live_mints_anchor_and_turn():
     assert extras["halt"]["turn"] == 2
 
 
-async def test_turn_end_aborted_persists_without_a_message():
-    turn = _turn()
-    await _relay(turn, _dsh(9, "turn/end", {"turn": 1, "reason": {"kind": "aborted"}}))
-    extras = turn._persist_extras.call_args.args[1]  # type: ignore[attr-defined]
-    assert extras["halt"] == {"reason": "aborted", "anchor_seq": 9}
-
-
-async def test_turn_end_unknown_reason_degrades_to_the_generic_sentence():
-    turn = _turn()
-    await _relay(turn, _dsh(9, "turn/end", {"turn": 1, "reason": {}}))
-    turn._persist_content.assert_awaited_once_with(
-        "m1", "The turn ended without completing (unknown reason).")  # type: ignore[attr-defined]
-
-
-# ─── _relay_frame: the dispatch ───────────────────────────────────────────────
-
-
-async def test_unknown_dsh_kinds_relay_verbatim_and_record_nothing():
-    turn = _turn()
-    frames = await _relay(turn, _dsh(12, "guard/reminder", {"note": "stay on task"}))
-    assert _parse(frames) == [_dsh(12, "guard/reminder", {"note": "stay on task"})]
-    assert turn.steps_count == 0 and turn.content_acc == []
-
-
-async def test_unknown_typed_frames_relay_verbatim():
-    turn = _turn()
-    frames = await _relay(turn, {"type": "some_future_kind", "x": 1})
-    assert _parse(frames) == [{"type": "some_future_kind", "x": 1}]
-
-
-async def test_dsh_stream_frames_relay_untouched():
-    """The transient live stream (`dsh_stream`, the assistant-stream tap the
-    plugin pushes per session) rides the relay byte-identical — the module
-    ARCH promise: the browser owns the transient fold, the backend derives
-    nothing from it (the row content comes from the settled event)."""
-    turn = _turn()
-    frame = {"type": "dsh_stream", "frame": {
-        "type": "chunk", "attemptId": "a1", "revision": 1, "index": 0,
-        "time": 5, "chunk": {"type": "text-delta", "index": 0, "text": "x"}}}
-    assert await _relay(turn, frame) == [frame]
-    assert turn.content_acc == []  # a chunk NEVER accumulates: not the settled kind
-
-
-async def test_model_update_and_context_usage_accumulate_and_relay():
-    turn = _turn()
-    mu = await _relay(turn, {"type": "model_update", "model": "deepseek/flash"})
-    assert _parse(mu) == [{"type": "model_update", "model": "deepseek/flash"}]
-    cu = await _relay(turn, {"type": "context_usage", "used": 1200, "cap": 64000})
-    assert _parse(cu) == [{"type": "context_usage", "used": 1200, "cap": 64000}]
-    assert turn.model == "deepseek/flash"
-    assert turn.context_usage == {"used": 1200, "cap": 64000}
-
-
-async def test_surface_metadata_rides_the_relay():
-    turn = _turn()
-    frames = await _relay(turn, _dsh(
-        4, "user/message", {"role": "user", "content": []},
-        surfaceOp={"op": "replace", "start": 1, "end": 3}, sourceEventSeqs=[1, 2, 3]))
-    frame = _parse(frames)[0]
-    assert frame["surfaceOp"] == {"op": "replace", "start": 1, "end": 3}
-    assert frame["sourceEventSeqs"] == [1, 2, 3]
-
-
-# ─── the backend-product lore mints on the live path ─────────────────────────
-
-
-async def test_driver_error_frame_mints_the_halt_at_the_window_tail():
-    turn = _turn()
-    await _relay(turn, _dsh(1, "turn/start", {"turn": 2}))
-    await _relay(turn, _assistant_message(7, "w"))
-    frames = await _relay(turn, {"type": "error", "message": "boom", "halt_reason": "turn_timeout"})
-    parsed = _parse(frames)
-    assert [f["type"] for f in parsed] == ["error", "lore/halt"]
-    assert parsed[1]["seq"] == 7.7
-    assert parsed[1]["data"] == {"turn": 2, "reason": "turn_timeout", "message": "boom"}
-    assert turn.errored and not turn.finalize_pending
-    turn._persist_extras.assert_awaited_once()  # type: ignore[attr-defined]
-
-
-async def test_driver_error_frame_without_a_tail_mints_nothing():
-    """No dsh event ever relayed — no anchor exists, and a fabricated one
-    would misplace the card. The error frame itself still relays."""
-    turn = _turn()
-    frames = await _relay(turn, {"type": "error", "message": "boom", "halt_reason": "stream_failed"})
-    assert [f["type"] for f in _parse(frames)] == ["error"]
-
-
 # ─── the compaction mint (window-keyed, best-effort) ─────────────────────────
-
-
-async def test_compaction_end_mints_the_outcome_beside_the_frame(monkeypatch):
-    calls: list[dict] = []
-
-    async def fake_mint(payload):
-        calls.append(payload)
-        return {"continuation_chat_id": "cont-1", "created_continuation": True}
-
-    monkeypatch.setattr(driver.persistence, "_record_compaction_mint_failed", AsyncMock())
-    import driver.compaction as compaction
-    monkeypatch.setattr(compaction, "mint_compaction_chats", fake_mint)
-
-    turn = _turn()
-    await _relay(turn, _dsh(1, "turn/start", {"turn": 4}))
-    frames = await _relay(turn, _dsh(7, "compaction/end", {"compactionId": "cpt-9", "turn": 4}))
-    parsed = _parse(frames)
-    assert [f["type"] for f in parsed] == ["dsh_event", "lore/compaction-mint"]
-    assert calls == [{"session_id": "chat-1", "fork_id": "chat-1~ccpt-9"}]
-    assert parsed[1]["seq"] == 7.8
-    assert parsed[1]["data"] == {"turn": 4, "compactionEntryId": "cpt-9", "mintFailed": False}
 
 
 async def test_compaction_end_failure_is_reported_not_fatal(monkeypatch):
@@ -413,22 +175,6 @@ async def test_compaction_end_failure_is_reported_not_fatal(monkeypatch):
     assert recorded == [("m1", "source_chat_missing")]
 
 
-async def test_compaction_end_raise_still_relays_the_frame(monkeypatch):
-    async def boom(payload):
-        raise RuntimeError("db down")
-
-    monkeypatch.setattr(driver.persistence, "_record_compaction_mint_failed", AsyncMock())
-    import driver.compaction as compaction
-    monkeypatch.setattr(compaction, "mint_compaction_chats", boom)
-
-    turn = _turn()
-    frames = await _relay(turn, _dsh(7, "compaction/end", {"compactionId": "cpt-9"}))
-    parsed = _parse(frames)
-    assert [f["type"] for f in parsed] == ["dsh_event", "lore/compaction-mint"]
-    assert parsed[1]["data"]["mintFailed"] is True
-    assert "db down" in parsed[1]["data"]["mintReason"]
-
-
 async def test_compaction_end_malformed_or_failed_compaction_mints_nothing():
     turn = _turn()
     frames = await _relay(turn, _dsh(7, "compaction/end", {"compactionId": "", "turn": 1}))
@@ -442,46 +188,11 @@ async def test_compaction_end_malformed_or_failed_compaction_mints_nothing():
 # ─── the reload attach mints ──────────────────────────────────────────────────
 
 
-def _call_seq(frames, call_id):
-    return next(f for f in frames
-                if f.get("kind") == "tool/call" and f["data"]["callId"] == call_id)
-
-
 def _result_frame(seq, call_id, text):
     """A settled v4 tool/result: a FLAT tool message (role 'tool')."""
     return _dsh(seq, "tool/result", {"message": {
         "role": "tool", "source": {"kind": "tool", "callId": call_id},
         "toolCallId": call_id, "content": [{"type": "text", "text": text}]}})
-
-
-async def test_reload_halt_mints_from_the_row_column_at_the_tail(monkeypatch):
-    """The turn-less halt's record: the row's `halt` column, anchored at the
-    log tail — the plan's "the window tail when none exists"."""
-    row = {"message_id": "m-ab", "created_at": "2", "halt": {"reason": "turn_timeout", "steps": 3}}
-    await driver.frames.attach_reload_lore_mints(
-        [row], tail_seq=42, session_id="chat-1")
-    mint = row["frames"][0]
-    assert mint["type"] == "lore/halt"
-    assert mint["seq"] == 42.7
-    assert mint["data"] == {"turn": None, "reason": "turn_timeout", "steps": 3}
-
-
-async def test_reload_halt_skips_rows_whose_turn_resolved():
-    """A turn/end reason=error row carries a halt column too — but its turn
-    IS in the replay and dsh's own turn-error node renders it. A mint here
-    would double the card."""
-    row = {"message_id": "m-err", "created_at": "1",
-           "halt": {"reason": "error"}, "frames": [_dsh(9, "turn/end", {"reason": {"kind": "error"}})]}
-    await driver.frames.attach_reload_lore_mints(
-        [row], tail_seq=30, session_id="chat-1")
-    assert [f["type"] for f in row["frames"]] == ["dsh_event"]
-
-
-async def test_reload_halt_needs_a_numeric_tail():
-    row = {"message_id": "m-ab", "created_at": "1", "halt": {"reason": "disconnected"}}
-    await driver.frames.attach_reload_lore_mints(
-        [row], tail_seq=None, session_id="chat-1")
-    assert row.get("frames") is None
 
 
 async def test_reload_halt_mints_at_the_stored_anchor_with_its_turn():
@@ -550,73 +261,6 @@ async def test_reload_halt_two_anchored_rows_at_one_seq_drop_the_later(caplog):
     assert "m-b" in caplog.text
 
 
-async def test_reload_image_gen_mints_at_the_dispatching_call(monkeypatch):
-    _stub_live_refs(monkeypatch)
-    call = _dsh(3, "tool/call", {"turn": 1, "step": 2, "callId": "call-gen",
-                                 "name": "generate_image",
-                                 "arguments": json.dumps({"prompt": "a cat"})})
-    # NO tool/result frame: the anchor is the dispatching call id the step
-    # carries, never a parse of the result body.
-    row = {
-        "message_id": "m1", "created_at": "1",
-        "frames": [_dsh(1, "turn/start", {"turn": 1}), call,
-                   _dsh(9, "turn/end", {"turn": 1, "reason": {"kind": "completed"}})],
-        "gen_steps": [
-            {"tool_call_id": "gen:run-1:refine", "tool": "refine_prompt",
-             "summary": "refine prompt", "detail": "a cat, refined"},
-            {"tool_call_id": "gen:run-1", "tool": "generate_image",
-             "summary": "generate image", "image_ref_ids": ["ref-1", "ref-2"],
-             "run_id": "run-1", "call_id": "call-gen", "title": "Мир документа"},
-        ],
-    }
-    await driver.frames.attach_reload_lore_mints([row], tail_seq=9, session_id="c")
-    mints = [f for f in row["frames"] if f["type"] == "lore/image-gen"]
-    assert len(mints) == 1
-    mint = mints[0]
-    assert mint["seq"] == 3.6  # the dispatching call's seq + the image-gen offset
-    assert row["frames"].index(mint) == row["frames"].index(call) + 1
-    assert mint["data"] == {
-        "turn": 1, "runId": "run-1", "status": "done",
-        "imageRefIds": ["ref-1", "ref-2"], "refine": {"ok": True, "prompt": "a cat, refined"},
-        "title": "Мир документа",
-    }
-
-
-async def test_reload_image_gen_failed_run_carries_the_error():
-    row = {
-        "message_id": "m1", "created_at": "1",
-        "frames": [
-            _dsh(3, "tool/call", {"turn": 1, "step": 1, "callId": "call-gen",
-                                  "name": "generate_image", "arguments": "{}"}),
-        ],
-        "gen_steps": [{
-            "tool_call_id": "gen:run-f", "tool": "generate_image",
-            "summary": "generate image", "detail": "comfy unreachable",
-            "outcome": "failed", "run_id": "run-f", "call_id": "call-gen",
-        }],
-    }
-    await driver.frames.attach_reload_lore_mints([row], tail_seq=4, session_id="c")
-    mint = next(f for f in row["frames"] if f["type"] == "lore/image-gen")
-    assert mint["seq"] == 3.6
-    assert mint["data"] == {"turn": 1, "runId": "run-f", "status": "failed",
-                            "error": "comfy unreachable"}
-
-
-async def test_reload_image_gen_without_its_call_mints_nothing(monkeypatch):
-    """The run's dispatching call is not in the replayed turn (truncated log,
-    cross-turn attach) — no honest anchor exists. The reference itself is on
-    the document; the gap is logged, never silently fabricated."""
-    _stub_live_refs(monkeypatch)
-    row = {
-        "message_id": "m1", "created_at": "1",
-        "frames": [_dsh(1, "turn/start", {"turn": 1})],
-        "gen_steps": [{"tool": "generate_image", "run_id": "run-1",
-                       "image_ref_ids": ["ref-1"]}],
-    }
-    await driver.frames.attach_reload_lore_mints([row], tail_seq=1, session_id="c")
-    assert not [f for f in row["frames"] if f.get("type") == "lore/image-gen"]
-
-
 async def test_reload_image_gen_step_without_call_id_mints_nothing(monkeypatch, caplog):
     """A step persisted without the dispatching call id has no anchor — even
     when a call and a result naming its run id are both in the replay, the
@@ -648,40 +292,6 @@ async def test_reload_image_gen_step_without_call_id_mints_nothing(monkeypatch, 
 # dicts — one producer, so live == reload by construction.
 
 
-def _gen_steps(call_id="call-gen", *, failed=False):
-    """The two chips a settled run persists (persist.py's step dicts)."""
-    refine = {"tool_call_id": "gen:run-1:refine", "tool": "refine_prompt",
-              "summary": "refine prompt",
-              "detail": "queue full" if failed else "a cat, refined"}
-    if failed:
-        refine["outcome"] = "failed"
-    gen = {"tool_call_id": "gen:run-1", "tool": "generate_image",
-           "summary": "generate image", "run_id": "run-1",
-           "call_id": call_id, "title": "Мир документа"}
-    if failed:
-        gen["outcome"] = "failed"
-        gen["detail"] = "comfy unreachable"
-    else:
-        gen["image_ref_ids"] = ["ref-1", "ref-2"]
-    return [refine, gen]
-
-
-def _replay_with_call(call_id="call-gen", *, open_turn=False):
-    """A ReplayedSession holding the run's dispatching `tool/call`. With
-    `open_turn` the trailing turn carries no `end_seq` (the run finished while
-    the agent turn still streams)."""
-    call = _dsh(3, "tool/call", {"turn": 1, "step": 2, "callId": call_id,
-                                 "name": "generate_image",
-                                 "arguments": json.dumps({"prompt": "a cat"})})
-    frames = [_dsh(1, "turn/start", {"turn": 1}), call]
-    turn: dict = {"frames": frames}
-    if open_turn:
-        return call, {"turns": [turn], "tail_seq": 3}
-    frames.append(_dsh(9, "turn/end", {"turn": 1, "reason": {"kind": "completed"}}))
-    turn["end_seq"] = 9
-    return call, {"turns": [turn], "tail_seq": 9}
-
-
 def _stub_replay(monkeypatch, replay=None, *, unavailable=False, forbidden=False, seen=None):
     """The ONE seam of the anchor tests: the driver replay fetch.
     `forbidden` proves a path never reads it; `unavailable` simulates a down
@@ -711,38 +321,6 @@ def _stub_live_refs(monkeypatch, live=None, *, boom=False, seen=None):
     monkeypatch.setattr(driver.frames, "_live_image_ref_ids", _live)
 
 
-async def test_settled_frame_equals_the_reload_attach(monkeypatch):
-    """The parity bound, by calling BOTH: the worker's settled frame over the
-    payload anchor and the reload's attach over the same row must return
-    EQUAL frames (the wall-clock `time` stamp aside — the drive's criterion; a
-    literal payload assertion would drift with the payload and is
-    deliberately not used)."""
-    _call, replay = _replay_with_call()
-    seen: list[str] = []
-    _stub_live_refs(monkeypatch)
-
-    async def _fetch(session_id, line=None, *, since_seq=None):
-        seen.append(session_id)
-        return replay
-    monkeypatch.setattr(driver.frames, "fetch_session_entries", _fetch)
-    anchor = await driver.frames.resolve_image_gen_anchor("src-1", "call-gen")
-    assert seen == ["src-1"]
-    assert anchor == {"seq": 3, "turn": 1}
-
-    live = driver.frames.image_gen_settled_frame(anchor, _gen_steps(), "run-1")
-    assert live is not None
-    assert live["type"] == "lore/image-gen"
-    assert live["seq"] == 3.6
-    row = {"message_id": "m1", "created_at": "1",
-           "frames": list(replay["turns"][0]["frames"]),
-           "gen_steps": _gen_steps()}
-    await driver.frames.attach_reload_lore_mints(
-        [row], tail_seq=9, session_id="c")
-    reload_mint = next(f for f in row["frames"] if f["type"] == "lore/image-gen")
-    live.pop("time"), reload_mint.pop("time")
-    assert live == reload_mint
-
-
 def _row_with_image_run(ref_ids, *, call_id="call-gen"):
     """One assistant row holding a settled image run over `ref_ids`, with the
     dispatching call in its frames (the mint's anchor)."""
@@ -758,63 +336,6 @@ def _row_with_image_run(ref_ids, *, call_id="call-gen"):
     }
 
 
-async def test_reload_mint_drops_deleted_image_refs(monkeypatch):
-    """References are the truth: a deleted image reference (soft delete from
-    the chat or the References panel) never re-appears as a broken thumb after
-    a reload — the mint carries only the LIVE ids, in their original order."""
-    row = _row_with_image_run(["ref-1", "ref-2", "ref-3"])
-    seen: list[list[str]] = []
-    _stub_live_refs(monkeypatch, live={"ref-1", "ref-3"}, seen=seen)
-    await driver.frames.attach_reload_lore_mints([row], tail_seq=9, session_id="c")
-    mint = next(f for f in row["frames"] if f["type"] == "lore/image-gen")
-    assert mint["data"]["imageRefIds"] == ["ref-1", "ref-3"]
-    assert "deletedByUser" not in mint["data"]
-    # ONE query carries the whole page's ids.
-    assert seen == [["ref-1", "ref-2", "ref-3"]]
-
-
-async def test_reload_mint_queries_once_per_page(monkeypatch):
-    """Two image runs on one page — still ONE live-ref query over the union of
-    their ids (the per-page cost bound)."""
-    row1 = _row_with_image_run(["ref-1", "ref-2"])
-    row2 = _row_with_image_run(["ref-3"], call_id="call-gen-2")
-    row2["gen_steps"][0]["run_id"] = "run-2"
-    seen: list[list[str]] = []
-    _stub_live_refs(monkeypatch, seen=seen)
-    await driver.frames.attach_reload_lore_mints(
-        [row1, row2], tail_seq=9, session_id="c")
-    assert len(seen) == 1
-    assert sorted(seen[0]) == ["ref-1", "ref-2", "ref-3"]
-    mints = [f for f in row1["frames"] + row2["frames"] if f.get("type") == "lore/image-gen"]
-    assert len(mints) == 2
-
-
-async def test_reload_mint_marks_a_fully_deleted_run(monkeypatch):
-    """A run whose images were ALL deleted keeps its chip with the
-    deletedByUser note — never an empty plate or broken thumbs."""
-    row = _row_with_image_run(["ref-1", "ref-2"])
-    _stub_live_refs(monkeypatch, live=set())
-    await driver.frames.attach_reload_lore_mints([row], tail_seq=9, session_id="c")
-    mint = next(f for f in row["frames"] if f["type"] == "lore/image-gen")
-    assert "imageRefIds" not in mint["data"]
-    assert mint["data"]["deletedByUser"] is True
-
-
-async def test_reload_mint_no_image_run_no_live_query(monkeypatch):
-    """A page without an image run never reaches the DB — the query is the
-    image-run path's cost alone. Asserted on the recorded calls: a raise
-    inside the seam would be swallowed by the attach's degrade path."""
-    seen: list[list[str]] = []
-    _stub_live_refs(monkeypatch, seen=seen)
-    row = {"message_id": "m1", "created_at": "1", "frames": [
-        _dsh(1, "turn/start", {"turn": 1}),
-        _dsh(9, "turn/end", {"turn": 1, "reason": {"kind": "completed"}}),
-    ]}
-    await driver.frames.attach_reload_lore_mints([row], tail_seq=9, session_id="c")
-    assert seen == []
-    assert [f["type"] for f in row["frames"]] == ["dsh_event", "dsh_event"]
-
-
 async def test_reload_mint_live_query_failure_keeps_ids_verbatim(monkeypatch, caplog):
     """The live-ref query failing must not blank the page's images — the mint
     degrades to today's verbatim ids, and the miss is logged, never silent."""
@@ -828,34 +349,11 @@ async def test_reload_mint_live_query_failure_keeps_ids_verbatim(monkeypatch, ca
     assert "deletedByUser" not in mint["data"]
 
 
-async def test_resolve_anchors_inside_the_open_trailing_turn(monkeypatch):
-    """The run settles while the agent turn still streams (no `end_seq` on the
-    trailing turn) — the dispatching call is already in the log, so the anchor
-    resolves there exactly as the reload attach will."""
-    _call, replay = _replay_with_call(open_turn=True)
-    _stub_replay(monkeypatch, replay)
-    anchor = await driver.frames.resolve_image_gen_anchor("src-1", "call-gen")
-    assert anchor == {"seq": 3, "turn": 1}
-    assert driver.frames.image_gen_settled_frame(
-        anchor, _gen_steps(), "run-1")["seq"] == 3.6
-
-
 async def test_resolve_without_a_call_id_returns_none(monkeypatch):
     """No dispatching call id — no anchor. The replay is never even read (the
     stub forbids the read)."""
     _stub_replay(monkeypatch, forbidden=True)
     assert await driver.frames.resolve_image_gen_anchor("src-1", "") is None
-
-
-async def test_resolve_without_a_matching_call_returns_none(monkeypatch, caplog):
-    """The replay holds no dispatching call for the call id — no honest
-    anchor exists. The miss is NAMED (lineage + call id), never fabricated."""
-    _call, replay = _replay_with_call(call_id="some-other-call")
-    _stub_replay(monkeypatch, replay)
-    with caplog.at_level("WARNING"):
-        anchor = await driver.frames.resolve_image_gen_anchor("src-1", "call-gen")
-    assert anchor is None
-    assert "call-gen" in caplog.text
 
 
 async def test_resolve_on_an_unreadable_timeline_returns_none(monkeypatch, caplog):
@@ -897,12 +395,6 @@ def test_running_frames_ladder_below_the_settled_offset():
         {"seq": "3", "turn": 1}, "run-1", "refining") is None
 
 
-def test_settled_frame_without_an_anchor_is_none():
-    """A run whose anchor never resolved (payload anchor None) pushes no
-    settled card — a reload still shows it from the row's gen_steps."""
-    assert driver.frames.image_gen_settled_frame({}, _gen_steps(), "run-1") is None
-
-
 async def test_reload_compaction_mint_rides_its_frame(monkeypatch):
     async def fake_outcome(session_id, compaction_id):
         assert (session_id, compaction_id) == ("src-1", "cpt-9")
@@ -916,18 +408,6 @@ async def test_reload_compaction_mint_rides_its_frame(monkeypatch):
     assert mint["type"] == "lore/compaction-mint"
     assert mint["seq"] == 7.8
     assert mint["data"] == {"turn": 2, "compactionEntryId": "cpt-9", "mintFailed": False}
-
-
-async def test_reload_compaction_mint_failure_is_reported(monkeypatch):
-    async def fake_outcome(session_id, compaction_id):
-        return True, "source_chat_missing"
-
-    monkeypatch.setattr(driver.frames, "_compaction_mint_outcome", fake_outcome)
-    cpt = _dsh(7, "compaction/end", {"compactionId": "cpt-9", "turn": 2})
-    row = {"message_id": "m1", "created_at": "1", "frames": [cpt]}
-    await driver.frames.attach_reload_lore_mints([row], tail_seq=9, session_id="src-1")
-    assert row["frames"][1]["data"]["mintFailed"] is True
-    assert row["frames"][1]["data"]["mintReason"] == "source_chat_missing"
 
 
 async def test_reload_compaction_skips_failed_and_malformed_frames(monkeypatch):

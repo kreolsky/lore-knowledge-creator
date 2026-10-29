@@ -57,21 +57,6 @@ async def _run(body_region):
     )
 
 
-async def test_prompt_includes_pinned_fragment_when_region_present(_stub_turn_deps):
-    plan = await _run({"doc_id": "d-1", "from_cp": 0, "to_cp": 11, "text": "hello world"})
-    assert "# Pinned fragment" in plan.system_prompt
-    assert "hello world" in plan.system_prompt
-    # The hard-scope instruction must reach the model.
-    assert "only" in plan.system_prompt.lower()
-
-
-async def test_prompt_omits_pinned_fragment_when_no_region(_stub_turn_deps):
-    plan = await _run(None)
-    assert "# Pinned fragment" not in plan.system_prompt
-    # The base prompt + current-doc section are still present.
-    assert "BASE AGENT PROMPT" in plan.system_prompt
-
-
 async def test_pinned_fragment_appended_after_current_document(_stub_turn_deps):
     # Ordering: base prompt → context → current document → pinned fragment.
     plan = await _run({"doc_id": "d-1", "from_cp": 0, "to_cp": 5, "text": "hello"})

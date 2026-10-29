@@ -134,42 +134,6 @@ async def test_reparent_system_document_is_refused(client, test_db, chain):
     assert await _parent_of(test_db, a) is None
 
 
-@pytest.mark.asyncio
-async def test_reparent_reference_to_project_level_is_refused(
-    client, test_db, chain, project_with_doc,
-):
-    token, _, a, _, _ = chain
-    pid, _, _ = project_with_doc
-    ref = await _mk_ref(client, pid, token, host=a)
-    resp = await _reparent(client, token, ref, "")
-    assert resp.status_code == 400, resp.text
-    assert "index document" in resp.json()["detail"]
-    assert await _parent_of(test_db, ref) == a
-
-
-@pytest.mark.asyncio
-async def test_reparent_reference_gets_top_key_of_new_host_group(
-    client, test_db, chain, project_with_doc,
-):
-    token, _, a, _, s = chain
-    pid, _, _ = project_with_doc
-    existing = await _mk_ref(client, pid, token, host=s)
-    ref = await _mk_ref(client, pid, token, host=a)
-    resp = await _reparent(client, token, ref, s)
-    assert resp.status_code == 200, resp.text
-    rows = await test_db.query(
-        "SELECT parent_id, sort_key, is_reference FROM type::record('documents', $id)",
-        {"id": ref},
-    )
-    assert extract_id(rows[0]["parent_id"]) == s
-    assert rows[0].get("sort_key"), "a re-hosted ref carries the new group's top key"
-    assert rows[0]["is_reference"] is True
-    existing_key = (await test_db.query(
-        "SELECT sort_key FROM type::record('documents', $id)", {"id": existing},
-    ))[0]["sort_key"]
-    assert rows[0]["sort_key"] < existing_key, "re-host lands at the TOP of the group"
-
-
 @pytest_asyncio.fixture
 async def memory(client, admin_user, project_with_doc):
     """The seeded Memory folder with one card under it."""

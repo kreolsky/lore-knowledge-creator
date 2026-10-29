@@ -17,8 +17,7 @@
 import { EditorView } from '@codemirror/view';
 import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
-import { getEntityHandle } from '../collab/active-handle-registry';
-import { getActiveHandle, getViewEntity } from './active-editor';
+import { entityYdoc } from './active-editor';
 import { importGfmTables } from '../components/editor/live-preview/gfm-table-import';
 import { t } from '../i18n';
 
@@ -230,10 +229,9 @@ function insertVerbatim(view: EditorView, source: string): void {
   // through to the slot would import the model into the OTHER column's ydoc while the
   // anchor lands here, splitting model and anchor across ydocs (the exact bug class
   // this targeting exists to prevent).
-  const entityId = getViewEntity(view);
-  const handle = entityId ? getEntityHandle(entityId) : getActiveHandle();
-  if (handle?.ydoc) {
-    insert = importGfmTables(handle.ydoc, insert, t('tableBlockUntitled')).text;
+  const ydoc = entityYdoc(view);
+  if (ydoc) {
+    insert = importGfmTables(ydoc, insert, t('tableBlockUntitled')).text;
   }
   const main = view.state.selection.main;
   view.dispatch({

@@ -29,6 +29,13 @@ export function referenceDownloadProps(reference: Reference): { original?: Origi
   return { original, exportFormats: isConvertedPdf(reference) ? ['docx', 'md'] : undefined };
 }
 
+/** The `![title](ref:id)` embed text for a reference — ONE writer for every
+ * "insert this reference into a document" surface (the card/gallery insert
+ * buttons, the panel drag into the editor). */
+export function refEmbedText(reference: Reference): string {
+  return `![${reference.title}](ref:${reference.reference_id})`;
+}
+
 export function createTempRef(project: Project, document: Document, fileName: string, mediaType: 'audio' | 'image' | 'markdown'): { tempId: string; tempRef: Reference } {
   const tempId = `temp_${Date.now()}_${fileName}`;
   return {
@@ -98,6 +105,11 @@ export function isTableFile(name: string): boolean {
 export function isAudioFile(name: string): boolean {
   const lower = name.toLowerCase();
   return AUDIO_EXTS.some(ext => lower.endsWith(ext));
+}
+
+export function isImageFile(name: string): boolean {
+  const lower = name.toLowerCase();
+  return IMAGE_EXTS.some(ext => lower.endsWith(ext));
 }
 
 export function getMediaType(name: string): 'audio' | 'image' | 'markdown' {

@@ -12,6 +12,8 @@ interface FieldInputProps {
   // Sits on a surface2 panel: takes the lighter surface tone so it still reads as a field;
   // the border takes it too, so the fill spans the full height beside an lg Button.
   onPanel?: boolean;
+  // Toolbar height (25px): sits flush beside a .sel-toolbar-btn icon button.
+  compact?: boolean;
   value?: string;
   defaultValue?: string;
   onChange?: ChangeEventHandler<HTMLInputElement>;
@@ -19,6 +21,7 @@ interface FieldInputProps {
   onBlur?: FocusEventHandler<HTMLInputElement>;
   onClick?: MouseEventHandler<HTMLInputElement>;
   placeholder?: string;
+  title?: string;
   disabled?: boolean;
   readOnly?: boolean;
   type?: string;
@@ -27,6 +30,7 @@ interface FieldInputProps {
   name?: string;
   maxLength?: number;
   inputMode?: 'none' | 'text' | 'decimal' | 'numeric' | 'tel' | 'search' | 'email' | 'url';
+  'aria-label'?: string;
 }
 
 interface FieldTextareaProps {
@@ -59,12 +63,13 @@ const textareaCls =
   `${inputCls} resize-y min-h-[80px] leading-[1.55]`;
 
 export const FieldInput = forwardRef<HTMLInputElement, FieldInputProps>(
-  function FieldInput({ className, onPanel, ...props }, ref) {
+  function FieldInput({ className, onPanel, compact, ...props }, ref) {
     // h-[37px] pins the fractional box (font: inherit → 37.1px) so a Button
     // size="lg" beside it (same 37px) lines up exactly. Inputs only — the
     // textarea keeps its content-driven height.
     const bg = onPanel ? ' !bg-surface !border-surface' : '';
-    return <input ref={ref} className={`${inputCls} h-[37px]${bg}${className ? ` ${className}` : ' w-full'}`} {...props} />;
+    const height = compact ? ' !h-[25px] !py-0 !px-2' : ' h-[37px]';
+    return <input ref={ref} className={`${inputCls}${height}${bg}${className ? ` ${className}` : ' w-full'}`} {...props} />;
   },
 );
 

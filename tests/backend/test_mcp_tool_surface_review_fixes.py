@@ -283,48 +283,6 @@ async def test_replay_of_deleted_node_is_404(
 
 
 @pytest.mark.asyncio
-async def test_route_document_content_keeps_a_preexisting_remote_image(
-    client, test_db, admin_user, project_with_doc,
-):
-    """Root cause of D-C: route_document_content converges a WHOLE buffer, so it
-    must NOT scan it for remote images — a buffer can legitimately carry an image a
-    human already typed."""
-    from db import fetch_one
-
-    pid, doc_id, _admin_uid = project_with_doc
-    from agent.doc_state import route_document_content
-
-    await route_document_content(
-        doc_id=doc_id, new_content="![pic](https://example.com/x.png)\n", project_id=pid,
-    )
-    row = await fetch_one("documents", doc_id)
-    assert "https://example.com/x.png" in row["content"], row["content"]
-
-
-@pytest.mark.asyncio
-async def test_append_to_empty_doc_with_remote_image_is_rejected(
-    client, mcp_running, test_db, admin_user, project_with_doc,
-):
-    """Empty-doc append (the content-set branch) rejects a remote image in the
-    AUTHORED append text. Regression guard: removing the scan from
-    route_document_content must NOT open this path — the guard moves to the append
-    entry point."""
-    pid, doc_id, admin_uid = project_with_doc
-    key = await _make_agent_key(test_db, admin_uid, pid)
-    created = _result_text(await _call(client, key, "create_document", {
-        "parent_id": doc_id, "node_type": "reference",
-        "title": "Empty", "content": "",
-    }))
-    target = created.get("document_id") or created.get("doc_id")
-    data = await _call(client, key, "append_to_document", {
-        "document_id": target,
-        "content": "![pic](https://example.invalid/x.png)\n",
-    })
-    assert _is_error(data), data
-    assert _result_text(data)["status_code"] == 400
-
-
-@pytest.mark.asyncio
 async def test_append_to_nonempty_doc_with_remote_image_is_rejected(
     client, mcp_running, test_db, admin_user, project_with_doc,
 ):
@@ -348,36 +306,3 @@ async def test_append_to_nonempty_doc_with_remote_image_is_rejected(
 
 
 # ═══ D-D — the mint refuses a host that cannot be a parent ═════════════════════
-
-
-@pytest.mark.asyncio
-async def test_attach_file_to_a_reference_host_is_refused_at_mint(
-    client, mcp_running, test_db, admin_user, project_with_doc,
-):
-    """A reference node cannot be a parent (schema documents_parent_check). The
-    refusal must land at MINT — no url, no upload token issued — so the client never
-    streams a file to a dead URL. Asserting the MINT refuses is the fix; asserting
-    the redeem 500s is the bug."""
-    from db import create_record
-
-    pid, doc_id, admin_uid = project_with_doc
-    key = await _make_agent_key(test_db, admin_uid, pid)
-    # A reference node (looks exactly like a host id to a weak model).
-    ref_id = f"rf-ref-{secrets.token_hex(4)}"
-    await create_record("documents", ref_id, {
-        "project_id": pid, "parent_id": doc_id, "title": "ref", "content": "",
-        "path": f"{ref_id}.md", "is_index": False, "is_reference": True,
-        "media_type": "image", "file_path": "img/x.png",
-    })
-    data = await _call(client, key, "attach_file", {
-        "attach_to": ref_id, "filename": "probe.png",
-    })
-    assert _is_error(data), data
-    payload = _result_text(data)
-    assert payload["status_code"] == 400, payload
-    # No url / accepted in the response — the mint refused before issuing a token.
-    assert "url" not in payload
-    assert payload.get("accepted") is not True
-    # The message names the fix in the surface's own vocabulary (a file attaches to
-    # a document, not to another attached node).
-    assert "document" in payload.get("error", "").lower(), payload

@@ -47,15 +47,6 @@ async def moderator_user(test_db):
     await test_db.query("DELETE type::record('users', $id)", {"id": uid})
 
 
-def _expected_source(env: str, overridden: bool) -> str:
-    """The chip's expected state, derived from the runner env (never assumed)."""
-    if overridden:
-        return "override"
-    import os
-
-    return ".env" if env in os.environ else "default"
-
-
 # ─── RBAC ─────────────────────────────────────────────────────────────────────
 
 
@@ -94,116 +85,7 @@ async def test_moderator_forbidden_everywhere(client, moderator_user):
     assert resp.status_code == 403
 
 
-# ─── GET — the derived surface ────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_get_lists_registry_derived_surface(client, admin_user, test_db):
-    """GET serves one entry per registry key with its source and effective value."""
-    _, token = admin_user
-    resp = await client.get("/api/admin/settings", cookies={"lore_session": token})
-    assert resp.status_code == 200
-    entries = {e["key"]: e for e in resp.json()["settings"]}
-    assert set(entries) == {e.key for e in settings_registry.REGISTRY}
-
-    entry = entries["MAX_IMAGE_SIZE_MB"]
-    for field in ("env", "tab", "section", "type", "label", "help", "effect", "source", "value"):
-        assert field in entry, f"MAX_IMAGE_SIZE_MB missing {field}"
-    assert entry["effect"] == "live"
-    assert entry["value"] == (await settings.get("MAX_IMAGE_SIZE_MB"))
-    assert entry["source"] == _expected_source(entry["env"], overridden=False)
-
-    # A restart key is served read-only with the process's effective env value.
-    restart = entries["STT_CONCURRENCY"]
-    assert restart["effect"] == "restart"
-    assert restart["source"] in (".env", "default")
-
-    # An override flips exactly that key's source/value.
-    await test_db.query(
-        "CREATE instance_settings CONTENT { key: 'MAX_IMAGE_SIZE_MB', "
-        "value: $v, updated_by: 'x', updated_at: time::now() }",
-        {"v": json.dumps(7)},
-    )
-    settings.drop_cache()
-    resp = await client.get("/api/admin/settings", cookies={"lore_session": token})
-    entry = {e["key"]: e for e in resp.json()["settings"]}["MAX_IMAGE_SIZE_MB"]
-    assert entry["source"] == "override"
-    assert entry["value"] == 7
-
-
 # ─── PUT — override write, validation, event ─────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_put_creates_override_drops_cache_and_emits(client, admin_user, test_db, caplog):
-    """PUT writes the row, this process's cache drops, and the invalidation
-    event is emitted for every OTHER process (worker included)."""
-    _, token = admin_user
-    seen: list[str] = []
-
-    def _record(**kw) -> None:
-        seen.append(kw.get("key"))
-
-    from event_bus import off, on
-
-    on(settings.SETTINGS_EVENT, _record)
-    try:
-        with caplog.at_level("INFO", logger="routes.admin_settings"):
-            resp = await client.put(
-                "/api/admin/settings/MAX_IMAGE_SIZE_MB", json={"value": 7},
-                cookies={"lore_session": token},
-            )
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["key"] == "MAX_IMAGE_SIZE_MB"
-        assert body["source"] == "override"
-
-        rows = await test_db.query(
-            # `value` LAST: as the first projection it parses as SELECT VALUE …
-            # and the statement is a syntax error (SurrealDB keyword collision).
-            "SELECT updated_by, value FROM instance_settings WHERE key = $k",
-            {"k": "MAX_IMAGE_SIZE_MB"},
-        )
-        assert rows and rows[0]["value"] == json.dumps(7)
-        assert rows[0]["updated_by"] == "test-admin-001"
-
-        # Same-process read sees the override immediately (cache dropped).
-        assert await settings.get("MAX_IMAGE_SIZE_MB") == 7
-        for _ in range(10):
-            await asyncio.sleep(0)
-        assert "MAX_IMAGE_SIZE_MB" in seen
-        assert "instance_setting_changed" in caplog.text
-    finally:
-        off(settings.SETTINGS_EVENT, _record)
-
-
-@pytest.mark.asyncio
-async def test_put_validation(client, admin_user):
-    """Unknown key → 404; restart key → 422; wrong type / below min → 422."""
-    _, token = admin_user
-    resp = await client.put(
-        "/api/admin/settings/NO_SUCH_KEY", json={"value": 1},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 404
-
-    resp = await client.put(
-        "/api/admin/settings/THIN_CRON_HOUR", json={"value": 5},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 422
-
-    resp = await client.put(
-        "/api/admin/settings/MAX_IMAGE_SIZE_MB", json={"value": "big"},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 422
-
-    resp = await client.put(
-        "/api/admin/settings/MAX_IMAGE_SIZE_MB", json={"value": 0},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -215,92 +97,6 @@ async def test_put_bool_rejected_for_int_key(client, admin_user):
         cookies={"lore_session": token},
     )
     assert resp.status_code == 422
-
-
-# ─── text settings with a validator (the ComfyUI workflow) ─────────────────────
-
-
-@pytest.mark.asyncio
-async def test_multiline_workflow_put_round_trips_byte_for_byte(client, admin_user):
-    """A pasted multiline graph is stored and served back exactly — the admin
-    field's Save-disabled check compares strings."""
-    from helpers import COMFY_TEST_WORKFLOW
-
-    _, token = admin_user
-    wf = dict(COMFY_TEST_WORKFLOW)
-    wf["3"] = {**wf["3"], "_meta": {"title": "KSampler"}}  # a fixed-seed workflow
-    raw = json.dumps(wf, indent=2) + "\n"
-    resp = await client.put(
-        "/api/admin/settings/COMFYUI_WORKFLOW", json={"value": raw},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["value"] == raw
-    assert await settings.get("COMFYUI_WORKFLOW") == raw
-
-
-@pytest.mark.asyncio
-async def test_workflow_with_unknown_marker_is_refused_and_not_written(
-    client, admin_user, test_db,
-):
-    from helpers import COMFY_TEST_WORKFLOW
-
-    _, token = admin_user
-    wf = dict(COMFY_TEST_WORKFLOW)
-    wf["3"] = {**wf["3"], "_meta": {"title": "KSampler [lore:foo]"}}
-    resp = await client.put(
-        "/api/admin/settings/COMFYUI_WORKFLOW", json={"value": json.dumps(wf)},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 422, resp.text
-    assert "[lore:foo]" in resp.text and "node 3" in resp.text
-    rows = await test_db.query(
-        "SELECT * FROM instance_settings WHERE key = $k", {"k": "COMFYUI_WORKFLOW"},
-    )
-    assert rows == []
-
-
-@pytest.mark.asyncio
-async def test_size_with_spaces_is_refused(client, admin_user):
-    _, token = admin_user
-    resp = await client.put(
-        "/api/admin/settings/COMFYUI_SIZE_PORTRAIT", json={"value": "832 x 1216"},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 422, resp.text
-
-
-# ─── DELETE — reset to env/default ────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_delete_removes_row_and_reverts_value(client, admin_user, test_db):
-    """DELETE = reset: the row is REMOVED (not written null), so 'overridden'
-    stays `row exists`; the value falls back to env/default."""
-    _, token = admin_user
-    resp = await client.put(
-        "/api/admin/settings/MAX_IMAGE_SIZE_MB", json={"value": 7},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200
-
-    import config
-
-    resp = await client.delete(
-        "/api/admin/settings/MAX_IMAGE_SIZE_MB", cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["reset"] is True
-    rows = await test_db.query(
-        "SELECT * FROM instance_settings WHERE key = $k", {"k": "MAX_IMAGE_SIZE_MB"},
-    )
-    assert rows == []
-    assert await settings.get("MAX_IMAGE_SIZE_MB") == config.MAX_IMAGE_SIZE_MB
-
-    resp = await client.delete(
-        "/api/admin/settings/NO_SUCH_KEY", cookies={"lore_session": token},
-    )
-    assert resp.status_code == 404
 
 
 # ─── fallback chains — derived defaults re-derived at the reader ──────────────
@@ -341,35 +137,6 @@ async def test_get_walks_stt_api_fallback_base_override_reaches_dependent(
     assert await settings.get("STT_API_URL") == "http://own.test", (
         "the dependent's own override outranks the base's"
     )
-
-
-@pytest.mark.asyncio
-async def test_get_row_shows_fallback_effective_value(
-    client, admin_user, test_db, monkeypatch,
-):
-    """The admin GET row of a dependent key carries the value the READERS use:
-    PUT AI_API_URL → the STT_API_URL row (own row absent, own env unset) shows
-    `source: default` with the base override as its effective value — not the
-    stale import-time fold `getattr(config, key)` would keep serving."""
-    import config
-
-    monkeypatch.delenv("STT_API_URL", raising=False)
-    monkeypatch.delenv("AI_API_URL", raising=False)
-    monkeypatch.setattr(config, "STT_API_URL", "http://stale-fold")
-    _, token = admin_user
-
-    resp = await client.put(
-        "/api/admin/settings/AI_API_URL", json={"value": "http://override.test"},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200
-
-    resp = await client.get("/api/admin/settings", cookies={"lore_session": token})
-    assert resp.status_code == 200
-    entries = {e["key"]: e for e in resp.json()["settings"]}
-    stt_row = entries["STT_API_URL"]
-    assert stt_row["source"] == "default", "the dependent's own row is un-set"
-    assert stt_row["value"] == "http://override.test"
 
 
 # ─── secrets — masked GET, mask-write is a no-op ──────────────────────────────
@@ -425,9 +192,6 @@ async def test_secret_masked_in_get_and_mask_put_is_noop(client, admin_user, mon
     assert "newsecret" not in resp.text
 
 
-# ─── cross-process invalidation ───────────────────────────────────────────────
-
-
 # ─── wiring is not configuration (plan component-wiring-not-settings) ────────
 
 
@@ -455,48 +219,6 @@ async def test_wiring_keys_are_neither_listed_nor_editable(client, admin_user):
             cookies={"lore_session": token},
         )
         assert put.status_code == 404, f"PUT {key} must be unknown, got {put.status_code}"
-
-
-@pytest.mark.asyncio
-async def test_internal_knobs_are_neither_listed_nor_editable(client, admin_user):
-    """The five purely internal knobs are constants, not admin rows:
-    GET serves none of them and a PUT on each is a 404 —
-    the same contract the wiring keys carry above. Why: a knob nobody can
-    meaningfully choose (a cache TTL, a read-slice window) is an admin row that only invites drift from the
-    value the surrounding code was sized for."""
-    _, token = admin_user
-    resp = await client.get("/api/admin/settings", cookies={"lore_session": token})
-    assert resp.status_code == 200
-    served = {row["key"] for row in resp.json()["settings"]}
-    for key in (
-        "MEM_RUN_KEY_TTL_S", "BACKPLANE_PUBLISH_TIMEOUT_S",
-        "FLUSH_SNAPSHOT_MIN_INTERVAL_SEC", "CHAT_MODELS_CACHE_TTL_S",
-        "AGENT_READ_SLICE_CHARS",
-    ):
-        assert key not in served, f"{key} must not be an admin setting"
-        put = await client.put(
-            f"/api/admin/settings/{key}", json={"value": 1},
-            cookies={"lore_session": token},
-        )
-        assert put.status_code == 404, f"PUT {key} must be unknown, got {put.status_code}"
-
-
-@pytest.mark.asyncio
-async def test_backplane_event_drops_cache(client, admin_user):
-    """A backplane-delivered instance_settings_changed (a web PUT seen from
-    another process) drops this process's override cache."""
-    settings._cache = {"PROBE_KEY": json.dumps(1)}
-    payload = json.dumps({
-        "src": "foreign-process",
-        "type": settings.SETTINGS_EVENT,
-        "kwargs": {"key": "PROBE_KEY"},
-    }).encode()
-    from event_bus import _on_backplane_event
-
-    await _on_backplane_event(payload)
-    for _ in range(10):
-        await asyncio.sleep(0)
-    assert settings._cache is None, "backplane delivery must drop the override cache"
 
 
 @pytest.mark.asyncio

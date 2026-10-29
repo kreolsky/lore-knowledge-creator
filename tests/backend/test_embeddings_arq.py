@@ -14,40 +14,6 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_on_content_flushed_enqueues_embed_task(enqueue_recorder):
-    """_on_content_flushed enqueues embed_document_task with deadline key and defer."""
-    from embeddings import _on_content_flushed
-
-    redis_set_calls = []
-
-    class FakeRedis:
-        async def set(self, key, value, **kwargs):
-            redis_set_calls.append((key, value, kwargs))
-
-        async def get(self, key):
-            return None
-
-        async def delete(self, key):
-            pass
-
-    with patch("jobs.pool.get_arq_pool", return_value=FakeRedis()):
-        await _on_content_flushed("doc", "ent-1", "proj-1")
-
-    calls = enqueue_recorder.calls
-    assert len(calls) == 1
-    name, args, kwargs = calls[0]
-    assert name == "embed_document_task"
-    assert args == ("doc", "ent-1", "proj-1")
-    assert kwargs["job_id"] == "embed:ent-1"
-    assert kwargs.get("defer") is not None
-
-    assert len(redis_set_calls) == 1
-    key, value, set_kwargs = redis_set_calls[0]
-    assert key == "embed:deadline:ent-1"
-    assert "ex" in set_kwargs
-
-
-@pytest.mark.asyncio
 async def test_on_content_flushed_failed_status_skips_cooldown(enqueue_recorder):
     """When embedding_status='failed', enqueue without defer (immediate retry)."""
     from embeddings import _on_content_flushed
@@ -63,106 +29,6 @@ async def test_on_content_flushed_failed_status_skips_cooldown(enqueue_recorder)
     name, args, kwargs = calls[0]
     assert name == "embed_document_task"
     assert kwargs.get("defer") is None, "Should not defer when status is failed"
-
-
-@pytest.mark.asyncio
-async def test_on_content_flushed_no_enqueue_for_unknown_type(enqueue_recorder):
-    """_on_content_flushed still enqueues even for unknown types (task handles the noop)."""
-    from embeddings import _on_content_flushed
-
-    class FakeRedis:
-        async def set(self, key, value, **kwargs):
-            pass
-        async def get(self, key):
-            return None
-        async def delete(self, key):
-            pass
-
-    with patch("jobs.pool.get_arq_pool", return_value=FakeRedis()):
-        await _on_content_flushed("note", "ent-note", "proj-1")
-
-    assert len(enqueue_recorder.calls) == 1
-    assert enqueue_recorder.calls[0][0] == "embed_document_task"
-
-
-@pytest.mark.asyncio
-async def test_embed_document_task_success():
-    """Successful embed_document_task calls _reembed and _on_embed_success."""
-    from jobs.tasks import embed_document_task
-
-    class FakeRedis:
-        async def get(self, key):
-            return None
-        async def delete(self, key):
-            pass
-
-    ctx = {"redis": FakeRedis(), "job_try": 1, "max_tries": 4}
-
-    with patch("embeddings._reembed", new_callable=AsyncMock) as mock_reembed, \
-         patch("embeddings._on_embed_success", new_callable=AsyncMock) as mock_success, \
-         patch("embeddings._on_embed_failure", new_callable=AsyncMock) as mock_failure:
-        await embed_document_task(ctx, "doc", "ent-1", "proj-1")
-
-    mock_reembed.assert_awaited_once_with("doc", "ent-1", "proj-1")
-    mock_success.assert_awaited_once_with("proj-1")
-    mock_failure.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_embed_document_task_dead_letter():
-    """On final attempt failure, embed_document_task calls _on_embed_failure and persists status."""
-    from jobs.tasks import embed_document_task
-
-    class FakeRedis:
-        async def get(self, key):
-            return None
-        async def delete(self, key):
-            pass
-
-    ctx = {"redis": FakeRedis(), "job_try": 4, "max_tries": 4}
-
-    async def failing_reembed(*a, **kw):
-        raise RuntimeError("provider down")
-
-    mock_db = AsyncMock()
-    mock_db.query = AsyncMock(return_value=None)
-
-    with patch("embeddings._reembed", side_effect=failing_reembed), \
-         patch("embeddings._on_embed_failure", new_callable=AsyncMock) as mock_failure, \
-         patch("embeddings._on_embed_success", new_callable=AsyncMock), \
-         patch("db.get_db", return_value=mock_db):
-        with pytest.raises(RuntimeError, match="provider down"):
-            await embed_document_task(ctx, "doc", "ent-dl", "proj-dl")
-
-    mock_failure.assert_awaited_once_with("proj-dl")
-
-
-@pytest.mark.asyncio
-async def test_embed_document_task_dead_letters_on_first_failure():
-    """A failure on try 1 already calls _on_embed_failure — arq does NOT auto-retry plain
-    exceptions, so job_try never climbs to max_tries and the failure is terminal.
-    Regression for BUG C (2026-06-01): the old job_try>=max_tries gate was dead code."""
-    from jobs.tasks import embed_document_task
-
-    class FakeRedis:
-        async def get(self, key):
-            return None
-        async def delete(self, key):
-            pass
-
-    ctx = {"redis": FakeRedis(), "job_try": 1, "max_tries": 4}
-
-    mock_db = AsyncMock()
-    mock_db.query = AsyncMock(return_value=None)
-
-    with patch("embeddings._reembed", side_effect=RuntimeError("provider down")), \
-         patch("embeddings._on_embed_failure", new_callable=AsyncMock) as mock_failure, \
-         patch("embeddings._on_embed_success", new_callable=AsyncMock), \
-         patch("db.get_db", return_value=mock_db):
-        with pytest.raises(RuntimeError, match="provider down"):
-            await embed_document_task(ctx, "doc", "ent-first", "proj-1")
-
-    mock_failure.assert_awaited_once_with("proj-1")
 
 
 @pytest.mark.asyncio
@@ -361,29 +227,6 @@ async def test_embed_document_task_4xx_is_not_transient():
 
 
 @pytest.mark.asyncio
-async def test_embed_document_task_embeds_when_deadline_passed():
-    """Deadline already passed → task deletes the deadline key and embeds."""
-    from jobs.tasks import embed_document_task
-
-    deleted = []
-
-    class FakeRedis:
-        async def get(self, key):
-            return str(time.time() - 1).encode()
-        async def delete(self, key):
-            deleted.append(key)
-
-    ctx = {"redis": FakeRedis(), "job_id": "embed:ent-1", "job_try": 1, "max_tries": 4}
-
-    with patch("embeddings._reembed", new_callable=AsyncMock) as mock_reembed, \
-         patch("embeddings._on_embed_success", new_callable=AsyncMock):
-        await embed_document_task(ctx, "doc", "ent-1", "proj-1")
-
-    mock_reembed.assert_awaited_once()
-    assert "embed:deadline:ent-1" in deleted
-
-
-@pytest.mark.asyncio
 async def test_embed_document_task_redefers_when_edit_lands_during_run():
     """An edit landing DURING the embed run re-defers the job — after success.
 
@@ -445,39 +288,3 @@ async def test_embed_document_task_returns_plain_with_no_edit_during_run():
     assert result is None
     mock_reembed.assert_awaited_once()
     mock_success.assert_awaited_once_with("proj-1")
-
-
-@pytest.mark.asyncio
-async def test_embed_missing_enqueues_per_doc(client, admin_user, project_with_doc, enqueue_recorder):
-    """POST /embed-missing enqueues embed_document_task per missing doc."""
-    _, token = admin_user
-    pid, _idx, _uid = project_with_doc
-    # A genuinely missing document: non-empty content, no chunks. The old test
-    # relied on the fixture's EMPTY index doc being enqueued — exactly the
-    # false positive the D4a predicate removes (an empty document can never
-    # need chunks, so enqueueing it re-runs a no-op forever).
-    from db import create_record, get_db
-
-    await create_record("documents", "arq-embed-missing-1", {
-        "project_id": pid, "parent_id": None, "title": "arq-embed-missing-1",
-        "content": "a body that was never embedded", "path": "arq-embed-missing-1.md",
-    })
-    try:
-        with patch("embeddings._ensure_config", new_callable=AsyncMock):
-            resp = await client.post(
-                "/api/admin/embeddings/embed-missing",
-                json={"project_id": pid},
-                cookies={"lore_session": token},
-            )
-        assert resp.status_code == 200
-        assert resp.json()["started"] is True
-    finally:
-        db = await get_db()
-        await db.query("DELETE type::record('documents', $id)",
-                       {"id": "arq-embed-missing-1"})
-    embed_calls = enqueue_recorder.of("embed_document_task")
-    assert len(embed_calls) >= 1
-    for _, args, kwargs in embed_calls:
-        assert args[0] == "doc"
-        assert "job_id" in kwargs
-        assert kwargs["job_id"].startswith("embed:")

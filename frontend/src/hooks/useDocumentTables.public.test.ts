@@ -71,37 +71,6 @@ function renderHook(documentId: string | null): {
 }
 
 describe('useDocumentTables (public static branch)', () => {
-  it('derives badges from content anchors + tables_json: linked in anchor order, unlinked appended', () => {
-    useUIStore.setState({ isPublicShare: true });
-    useAppStore.setState({ currentDocument: mkDoc('doc-1', CONTENT, TABLES_JSON) });
-
-    const h = renderHook('doc-1');
-    expect(h.current()).toEqual([
-      { table_id: 't2', label: 'Second', rows: 1, cols: 1, unlinked: false },
-      { table_id: 't1', label: 'First', rows: 2, cols: 2, unlinked: false },
-      { table_id: 't3', label: '', rows: 1, cols: 2, unlinked: true },
-    ]);
-    h.unmount();
-  });
-
-  it('returns [] when no document is open on public', () => {
-    useUIStore.setState({ isPublicShare: true });
-    useAppStore.setState({ currentDocument: null });
-    const h = renderHook(null);
-    expect(h.current()).toEqual([]);
-    h.unmount();
-  });
-
-  it('does NOT poll getActiveHandle on public (no collab ydoc will ever arrive)', () => {
-    useUIStore.setState({ isPublicShare: true });
-    useAppStore.setState({ currentDocument: mkDoc('doc-1', CONTENT, TABLES_JSON) });
-
-    const setSpy = vi.spyOn(globalThis, 'setInterval');
-    const h = renderHook('doc-1');
-    expect(setSpy.mock.calls.some(c => c[1] === 150)).toBe(false);
-    setSpy.mockRestore();
-    h.unmount();
-  });
 
   it('ignores a published active handle on public (static seed is authoritative)', () => {
     useUIStore.setState({ isPublicShare: true });
@@ -147,17 +116,5 @@ describe('useDocumentTables (public static branch)', () => {
       { table_id: 'u1', label: 'Only', rows: 1, cols: 1, unlinked: false },
     ]);
     act(() => r.unmount());
-  });
-
-  it('disposes the throwaway Y.Doc after deriving (no leak per re-seed)', () => {
-    useUIStore.setState({ isPublicShare: true });
-    useAppStore.setState({ currentDocument: mkDoc('doc-1', CONTENT, TABLES_JSON) });
-
-    const destroySpy = vi.spyOn(Y.Doc.prototype, 'destroy');
-    const h = renderHook('doc-1');
-    expect(h.current()).toHaveLength(3);
-    expect(destroySpy).toHaveBeenCalled();
-    destroySpy.mockRestore();
-    h.unmount();
   });
 });

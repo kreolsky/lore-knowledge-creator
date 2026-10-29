@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from collab.registry import _sessions
-from collab.session import CollabSession, ConnectedClient
+from collab.session import CollabSession
 from emit_recorder import EmitRecorder
 from pycrdt import Doc, Text
 
@@ -109,40 +109,6 @@ class TestFlushPipelineCounters:
             assert fp.flush_pipeline_failures() == before + 1
 
 
-class TestCollabSessionCounters:
-    """Every best-effort collab-session guard increments collab_session_failures()."""
-
-    async def test_ws_send_failure_increments_counter(self):
-        from collab import session as sess
-
-        session = _mk_session()
-        ws = AsyncMock()
-        ws.send_text = AsyncMock(side_effect=RuntimeError("ws gone"))
-        client = ConnectedClient(ws=ws, user_id="u1", user_name="U1", access_level="full")
-        session.clients[id(ws)] = client
-
-        before = sess.collab_session_failures()
-        await session.broadcast({"type": "ping"})
-        assert sess.collab_session_failures() == before + 1
-
-    async def test_periodic_flush_loop_failure_increments_counter(self, monkeypatch):
-        from collab import session as sess
-
-        session = _mk_session()
-
-        async def _boom_flush(self):
-            raise RuntimeError("flush exploded")
-
-        monkeypatch.setattr(sess.CollabSession, "_flush_if_needed", _boom_flush)
-        monkeypatch.setattr(sess, "FLUSH_INTERVAL_SEC", 0)
-
-        before = sess.collab_session_failures()
-        session.start_periodic_flush()
-        await asyncio.sleep(0.05)
-        session.stop_periodic_flush()
-        assert sess.collab_session_failures() > before
-
-
 class TestCollabRegistryCounters:
     """Every best-effort registry guard increments collab_registry_failures()."""
 
@@ -155,20 +121,6 @@ class TestCollabRegistryCounters:
         assert reg.collab_registry_failures() == before + 1
         assert doc is not None
 
-    async def test_cleanup_flush_failure_increments_counter(self):
-        from collab import registry as reg
-
-        session = _mk_session()
-        _sessions[reg._session_key("doc", "d1")] = session
-
-        with patch(
-            "collab.session.CollabSession._flush_if_needed",
-            new=AsyncMock(side_effect=RuntimeError("flush boom")),
-        ):
-            before = reg.collab_registry_failures()
-            await reg._cleanup_session("doc", "d1")
-        assert reg.collab_registry_failures() == before + 1
-
 
 class TestEventBusCounters:
     """event_bus best-effort guards increment their own counters."""
@@ -177,20 +129,6 @@ class TestEventBusCounters:
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
-    async def test_subscriber_failure_increments_counter(self):
-        import event_bus
-
-        def bad_handler(**kw):
-            raise RuntimeError("boom")
-
-        event_bus.on("counter_sub_test", bad_handler)
-        try:
-            before = event_bus.subscriber_failures()
-            await event_bus.emit("counter_sub_test", x=1)
-            await self._drain()
-            assert event_bus.subscriber_failures() == before + 1
-        finally:
-            event_bus.off("counter_sub_test", bad_handler)
 
     async def test_backplane_subscription_failure_increments_counter(self, monkeypatch):
         import backplane

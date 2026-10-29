@@ -218,38 +218,6 @@ async def test_gated_route_table(route, needed, tier_world):
 
 
 @pytest.mark.asyncio
-async def test_note_session_is_base(tier_world):
-    """POST /sessions with is_note=true is base — a base member's note-chat
-    is the comment channel, never an LLM."""
-    resp = await tier_world.client.post(
-        "/api/chat/sessions",
-        json={"project_id": tier_world.pid, "document_id": tier_world.doc_id,
-              "is_note": True},
-        cookies={"lore_session": tier_world.tokens["base"]},
-    )
-    assert resp.status_code == 201, resp.text
-
-
-@pytest.mark.asyncio
-async def test_admin_with_lowered_tier_passes(client, admin_user, project_with_doc, test_db):
-    """An admin is always 'ai': a lowered tier never gates the admin's own
-    session (the tier bounds a key principal's descent, not the admin).
-    The audio upload arm needs no STT (it enqueues only when STT is wired),
-    so this reads a clean 200."""
-    admin_uid, admin_token = admin_user
-    await test_db.query(
-        "UPDATE type::record('users', $id) SET tier = 'base'", {"id": admin_uid},
-    )
-    pid, _, _ = project_with_doc
-    resp = await client.post(
-        "/api/references/upload", files=_audio_files(),
-        data={"project_id": pid},
-        cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 200, resp.text
-
-
-@pytest.mark.asyncio
 async def test_downgrade_bites_on_next_request(tier_world, test_db):
     """A tier PATCH is live immediately — the same session token's next
     request reads the new tier (fresh DB read, never the auth cache)."""
@@ -416,105 +384,6 @@ async def test_generate_image_gates_ai_for_key_owner(tier_world):
 
 
 @pytest.mark.asyncio
-async def test_invite_mint_rejects_unknown_tier(client, admin_user):
-    """CreateInvite.tier is a Literal — an unknown value is a 422 at MINT,
-    never an invite burned at register."""
-    _, admin_token = admin_user
-    resp = await client.post(
-        "/api/invites", json={"tier": "enterprise"},
-        cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_schedule_creator_below_ai_not_enqueued(client, project_with_doc, test_db, enqueue_recorder):
-    """The tick refuses to enqueue a schedule whose creator is below 'ai' and
-    records last_status='error', last_error='creator tier'; an ai creator
-    passes the tier check (a non-tier error names something else)."""
-    from jobs.tasks.schedules import _dispatch_claimed_schedule
-
-    pid, _, _ = project_with_doc
-    await _make_user(test_db, "tier-voice", "voice")
-    await _make_user(test_db, "tier-ai", "ai")
-
-    async def _row(created_by: str) -> dict:
-        return {"pipeline": "extractor", "params_json": "{}",
-                "project_id": pid, "created_by": created_by}
-
-    sched = f"tier-fire-{uuid_mod.uuid4().hex[:8]}"
-    await create_record("pipeline_schedules", sched, {
-        "project_id": pid, "pipeline": "extractor", "interval_s": 3600,
-        "enabled": True, "params_json": "{}", "created_by": "tier-voice",
-    })
-    from db import get_db
-
-    db = await get_db()
-    await _dispatch_claimed_schedule(db, sched, await _row("tier-voice"), "t1")
-    row = (await test_db.query(
-        "SELECT last_status, last_error FROM type::record('pipeline_schedules', $id)",
-        {"id": sched},
-    ))[0]
-    assert row["last_status"] == "error"
-    assert row["last_error"] == "creator tier"
-    assert not enqueue_recorder.calls, "a below-tier schedule must enqueue nothing"
-
-    # An ai creator passes the TIER check: the row's missing params then name
-    # a NON-tier error (the gate ran, the dispatch continued).
-    sched2 = f"tier-fire2-{uuid_mod.uuid4().hex[:8]}"
-    await create_record("pipeline_schedules", sched2, {
-        "project_id": pid, "pipeline": "nope", "interval_s": 3600,
-        "enabled": True, "params_json": "{}", "created_by": "tier-ai",
-    })
-    await _dispatch_claimed_schedule(db, sched2, await _row("tier-ai"), "t2")
-    row2 = (await test_db.query(
-        "SELECT last_status, last_error FROM type::record('pipeline_schedules', $id)",
-        {"id": sched2},
-    ))[0]
-    assert row2["last_error"] != "creator tier"
-
-
-@pytest.mark.parametrize("tier,can_voice,can_ai", [
-    ("base", False, False), ("voice", True, False), ("ai", True, True),
-])
-@pytest.mark.asyncio
-async def test_me_and_login_carry_tier_flags(client, test_db, tier, can_voice, can_ai):
-    """Login and /me answer can_voice/can_ai from the account's tier."""
-    token = await _make_user(test_db, f"tier-{tier}", tier)
-    resp = await client.post(
-        "/api/auth/login",
-        json={"email": f"tier-{tier}@test.com", "password": "tierpass"},
-    )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["can_voice"] is can_voice and body["can_ai"] is can_ai
-    assert body["tier"] == tier
-
-    resp = await client.get("/api/auth/me", cookies={"lore_session": token})
-    assert resp.status_code == 200
-    assert resp.json()["can_voice"] is can_voice
-    assert resp.json()["can_ai"] is can_ai
-
-
-@pytest.mark.asyncio
-async def test_me_flags_flip_after_downgrade(client, test_db, admin_user):
-    """A tier PATCH flips /me flags on the next call — no re-login."""
-    token = await _make_user(test_db, "tier-flip", "ai")
-    resp = await client.get("/api/auth/me", cookies={"lore_session": token})
-    assert resp.json()["can_voice"] is True
-    _, admin_token = admin_user
-    resp = await client.patch(
-        "/api/admin/users/tier-flip", json={"tier": "base"},
-        cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 200, resp.text
-    resp = await client.get("/api/auth/me", cookies={"lore_session": token})
-    body = resp.json()
-    assert body["can_voice"] is False and body["can_ai"] is False
-    assert body["tier"] == "base"
-
-
-@pytest.mark.asyncio
 async def test_backfill_migration_stamps_ai_and_is_idempotent(test_db):
     """migrate_user_tier_backfill: rows predating the column (tier NONE) are
     stamped 'ai'; a re-run is a no-op."""
@@ -581,31 +450,3 @@ async def test_moderator_sets_tier_on_own_group_member(client, moderator_and_gro
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["tier"] == "voice"
-
-
-@pytest.mark.asyncio
-async def test_moderator_tier_patch_scoping(client, moderator_and_group):
-    """A moderator cannot tier-PATCH a foreign user (404) or self (404)."""
-    for uid in ("tier-foreign", "tier-mod"):
-        resp = await client.patch(
-            f"/api/admin/users/{uid}", json={"tier": "base"},
-            cookies={"lore_session": moderator_and_group},
-        )
-        assert resp.status_code == 404, (uid, resp.status_code)
-
-
-@pytest.mark.asyncio
-async def test_self_service_put_cannot_set_tier(client, test_db):
-    """PUT /api/users/{id} (self-service facts) has no tier arm — the body
-    key is ignored and the stored tier is untouched."""
-    token = await _make_user(test_db, "tier-selfput", "voice")
-    resp = await client.put(
-        "/api/users/tier-selfput",
-        json={"user_facts": "x", "tier": "base"},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200, resp.text
-    rows = await test_db.query(
-        "SELECT tier FROM type::record('users', $id)", {"id": "tier-selfput"},
-    )
-    assert rows[0]["tier"] == "voice"

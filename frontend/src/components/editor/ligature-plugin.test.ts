@@ -3,7 +3,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest';
 import { EditorState } from '@codemirror/state';
-import { Decoration, EditorView } from '@codemirror/view';
+import { EditorView } from '@codemirror/view';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { ensureSyntaxTree } from '@codemirror/language';
 import { ligaturePlugin, ligatureSubstitutedText, LIGATURE_RULES } from './ligature-plugin';

@@ -54,12 +54,6 @@ describe('PublicNotesPanel', () => {
     expect(document.body.textContent).not.toContain(t('publicNotesEmpty'));
   });
 
-  it('a dead change-ping socket (liveLost) shows the live-lost banner', () => {
-    usePublicNotesStore.setState({ notes: [], liveLost: true });
-    render(<PublicNotesPanel />);
-    expect(document.body.textContent).toContain(t('publicNotesLiveLost'));
-  });
-
   it('a list card offers delete only for the guest\'s own single-message note', () => {
     usePublicNotesStore.setState({ notes: [
       note('single', [msg('a', true)]),

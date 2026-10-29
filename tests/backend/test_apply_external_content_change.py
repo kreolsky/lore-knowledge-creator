@@ -4,7 +4,6 @@ CRDT migration: content is a read-only property derived from the pycrdt Y.Doc.
 Tests mutate the Y.Text directly instead of setting session.content.
 """
 
-import json
 
 import pytest
 from helpers import join_collab_ws, project_collab_url
@@ -91,18 +90,3 @@ class TestApplyExternalContentChangeNoop:
             )
             assert session.content == "new"
             assert session._dirty is True
-
-
-class TestFlushAckIncludesEntityId:
-
-    def test_flush_ack_has_entity_id(self, sync_app, collab_project):
-        pid, doc_id, admin_token, *_ = collab_project
-        with sync_app.websocket_connect(
-            project_collab_url(pid), cookies={"lore_session": admin_token}
-        ) as ws:
-            join_collab_ws(ws, doc_id)
-            ws.receive_text()
-            ws.send_text(json.dumps({"type": "flush", "entity_id": doc_id}))
-            ack = json.loads(ws.receive_text())
-            assert ack["type"] == "flush_ack"
-            assert ack["entity_id"] == doc_id

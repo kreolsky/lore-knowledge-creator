@@ -23,10 +23,8 @@ import { act } from 'react';
 import {
   initialSwitchState,
   transition,
-  isLiveFor,
   useEntitySwitchPhase,
   type SwitchState,
-  type SwitchRecord,
   type EntitySwitchController,
 } from './entity-switch-phase';
 
@@ -174,14 +172,6 @@ describe('useEntitySwitchPhase — controller', () => {
     expect(logLines()).toEqual(['chosen:doc-a', 'bound:doc-a']);
   });
 
-  it('rejected apply() returns false and leaves state + a reason in the log', () => {
-    act(() => root.render(createElement(Harness)));
-    act(() => last!.apply({ type: 'chosen', id: 'doc-a' }));
-    expect(last!.apply({ type: 'bound', id: 'doc-old' })).toBe(false);
-    expect(last!.state).toEqual({ phase: 'binding', entityId: 'doc-a' });
-    expect(logLines()[1]).toContain('stale');
-  });
-
   it('records through unmount — the final teardown is never dropped', () => {
     act(() => root.render(createElement(Harness)));
     act(() => last!.apply({ type: 'chosen', id: 'doc-a' }));
@@ -191,35 +181,5 @@ describe('useEntitySwitchPhase — controller', () => {
     expect(() => last!.apply({ type: 'teardown', id: 'doc-a' })).not.toThrow();
     expect(logLines().slice(-1)).toEqual(['teardown:doc-a']);
     expect(last!.state).toEqual({ phase: 'leaving', entityId: 'doc-a' });
-  });
-});
-
-// ── isLiveFor: the one derivation both consumers read ─────────────────────────
-
-describe('isLiveFor — live for the entity being rendered', () => {
-  it('is true only in the live phase AND for the current entity', () => {
-    expect(isLiveFor({ phase: 'live', entityId: 'doc-a' }, 'doc-a')).toBe(true);
-    expect(isLiveFor({ phase: 'live', entityId: 'doc-a' }, 'doc-b')).toBe(false);
-    expect(isLiveFor({ phase: 'binding', entityId: 'doc-a' }, 'doc-a')).toBe(false);
-    expect(isLiveFor({ phase: 'leaving', entityId: 'doc-a' }, 'doc-a')).toBe(false);
-    expect(isLiveFor(initialSwitchState(), undefined)).toBe(false);
-  });
-
-  it('is false for an undefined entity even while the machine is live', () => {
-    // Why: `activeItemId` is undefined between entities; a nullish==nullish match
-    // would mark the editor editable against the entity it is leaving.
-    expect(isLiveFor({ phase: 'live', entityId: 'doc-a' }, undefined)).toBe(false);
-    expect(isLiveFor({ phase: 'live', entityId: null }, undefined)).toBe(false);
-  });
-
-  it('controller exposes it against its own current state', () => {
-    act(() => root.render(createElement(Harness)));
-    act(() => last!.apply({ type: 'chosen', id: 'doc-a' }));
-    expect(last!.isLiveFor('doc-a')).toBe(false);
-    act(() => last!.apply({ type: 'bound', id: 'doc-a' }));
-    expect(last!.isLiveFor('doc-a')).toBe(true);
-    expect(last!.isLiveFor('doc-b')).toBe(false);
-    act(() => last!.apply({ type: 'lost' }));
-    expect(last!.isLiveFor('doc-a')).toBe(false);
   });
 });

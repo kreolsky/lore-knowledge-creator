@@ -26,21 +26,6 @@ function buildWithBounds(state: EditorState): BlockReplaceState {
   return { decs, bounds };
 }
 
-/**
- * Build fn that tracks a PARTIAL bound [2..4] only — lets us test the case where
- * cursor moves entirely OUTSIDE any bound (neither endpoint touches it).
- */
-function buildPartialBound(state: EditorState): BlockReplaceState {
-  buildCalls++;
-  const end = state.doc.length;
-  if (end < 4) return { decs: Decoration.set([], true), bounds: [] };
-  const bounds = [{ from: 2, to: 4 }];
-  return {
-    decs: Decoration.set([Decoration.replace({ block: true }).range(2, 4)], true),
-    bounds,
-  };
-}
-
 /** Build fn that returns empty bounds (cursorSensitive:false shape). */
 function buildNoBounds(state: EditorState): BlockReplaceState {
   buildCalls++;
@@ -67,53 +52,6 @@ describe('blockReplaceField — cursorSensitive: true', () => {
     expect(buildCalls).toBe(before + 1);
     view.destroy();
   });
-
-  it('rebuilds when either cursor endpoint touches a bound (enter OR leave)', () => {
-    // Behaviour preserved from the original inline StateFields: rebuild fires when
-    // the old head was in a bound OR the new head is in a bound. Moving fully inside
-    // a bound still rebuilds (wasIn === true). Only a move with BOTH endpoints
-    // outside any bound skips the rebuild (covered by the next test).
-    const field = blockReplaceField(buildPartialBound, { cursorSensitive: true });
-    const state = EditorState.create({
-      doc: 'hello world', // bound [2..4]
-      selection: { anchor: 0 }, // outside
-      extensions: [field],
-    });
-    const view = new EditorView({ state });
-    buildCalls = 0;
-    // Enter: 0 (out) → 3 (in).
-    view.dispatch({ selection: { anchor: 3 } });
-    expect(buildCalls).toBe(1);
-    // Leave: 3 (in) → 8 (out).
-    view.dispatch({ selection: { anchor: 8 } });
-    expect(buildCalls).toBe(2);
-    view.destroy();
-  });
-
-  it('does NOT rebuild when cursor moves with both endpoints outside any bound', () => {
-    const field = blockReplaceField(buildPartialBound, { cursorSensitive: true });
-    const state = EditorState.create({
-      doc: 'hello world', // bound [2..4]
-      selection: { anchor: 8 }, // outside
-      extensions: [field],
-    });
-    const view = new EditorView({ state });
-    buildCalls = 0;
-    // 8 → 9, both outside bound [2..4].
-    view.dispatch({ selection: { anchor: 9 } });
-    expect(buildCalls).toBe(0);
-    view.destroy();
-  });
-
-  it('provides decorations from the decs slot', () => {
-    const field = blockReplaceField(buildWithBounds, { cursorSensitive: true });
-    const view = mount(field, 'hello');
-    const decorations = view.state.field(field);
-    expect(decorations).toBeDefined();
-    expect(decorations).toHaveProperty('decs');
-    expect(decorations).toHaveProperty('bounds');
-    view.destroy();
-  });
 });
 
 describe('blockReplaceField — cursorSensitive: false', () => {
@@ -123,30 +61,6 @@ describe('blockReplaceField — cursorSensitive: false', () => {
     buildCalls = 0;
     view.dispatch({ changes: { from: 5, insert: '!' } });
     expect(buildCalls).toBe(1);
-    view.destroy();
-  });
-
-  it('does NOT rebuild on cursor movement (bounds: [] path never enters selection branch)', () => {
-    const field = blockReplaceField(buildNoBounds, { cursorSensitive: false });
-    const state = EditorState.create({
-      doc: 'hello',
-      selection: { anchor: 0 },
-      extensions: [field],
-    });
-    const view = new EditorView({ state });
-    buildCalls = 0;
-    view.dispatch({ selection: { anchor: 3 } });
-    view.dispatch({ selection: { anchor: 1 } });
-    expect(buildCalls).toBe(0);
-    view.destroy();
-  });
-
-  it('state shape is { decs, bounds: [] } and does not crash', () => {
-    const field = blockReplaceField(buildNoBounds, { cursorSensitive: false });
-    const view = mount(field, 'hello');
-    const decorations = view.state.field(field) as BlockReplaceState;
-    expect(decorations.bounds).toEqual([]);
-    expect(decorations.decs).toBeDefined();
     view.destroy();
   });
 });

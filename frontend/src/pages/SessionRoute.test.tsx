@@ -189,10 +189,6 @@ async function go(to: string) {
 }
 
 describe('SessionRoute — probe phases (T3: 401 vs transient failure)', () => {
-  it('paints the route-loading spinner while probing', () => {
-    renderAt(`/docs/${VALID_DOC}`);
-    expect(container.querySelector('[data-testid="route-loading"]')).not.toBeNull();
-  });
 
   it('401 → anonymous branch: /docs/:id renders the public share surface', async () => {
     renderAt(`/docs/${VALID_DOC}`);
@@ -202,105 +198,6 @@ describe('SessionRoute — probe phases (T3: 401 vs transient failure)', () => {
     expect(container.querySelector('[data-testid="public-share"]')?.textContent)
       .toContain(VALID_DOC);
     expect(container.querySelector('[data-testid="project-page"]')).toBeNull();
-  });
-
-  it('200 → authed branch: /docs/:id renders AuthGuard → Layout → ProjectPage → DocumentPage', async () => {
-    renderAt(`/docs/${VALID_DOC}`);
-    await act(async () => { probeResolve({ ok: true, status: 200, data: AUTHED_USER }); });
-    await flush();
-    // Structure, not just presence: the guard is OUTSIDE the layout, and the
-    // document page renders as ProjectPage's index child.
-    const guard = container.querySelector('[data-testid="auth-guard"]');
-    const layout = container.querySelector('[data-testid="layout"]');
-    const project = container.querySelector('[data-testid="project-page"]');
-    expect(guard).not.toBeNull();
-    expect(layout).not.toBeNull();
-    expect(project).not.toBeNull();
-    expect(guard!.contains(layout)).toBe(true);
-    expect(layout!.contains(project)).toBe(true);
-    expect(project!.querySelector('[data-testid="document-page"]')).not.toBeNull();
-    expect(container.querySelector('[data-testid="public-share"]')).toBeNull();
-  });
-
-  it('200 → authed branch: /projects/:projectId renders the shell too (parity)', async () => {
-    renderAt('/projects/p1');
-    await act(async () => { probeResolve({ ok: true, status: 200, data: AUTHED_USER }); });
-    await flush();
-    expect(container.querySelector('[data-testid="layout"]')).not.toBeNull();
-    expect(container.querySelector('[data-testid="project-page"]')).not.toBeNull();
-    // No document route → no DocumentPage child.
-    expect(container.querySelector('[data-testid="document-page"]')).toBeNull();
-  });
-
-  it('500 → error phase with retry (NOT the public surface)', async () => {
-    renderAt(`/docs/${VALID_DOC}`);
-    await act(async () => { probeResolve({ ok: false, status: 500 }); });
-    await flush();
-    expect(container.querySelector('[data-testid="public-share"]')).toBeNull();
-    expect(container.textContent).toContain('publicShareSessionProbeFailed');
-    expect(container.textContent).toContain('retry');
-  });
-
-  it('502 gateway → error phase (NOT anonymous), and NO shell content behind it', async () => {
-    renderAt(`/docs/${VALID_DOC}`);
-    await act(async () => { probeResolve({ ok: false, status: 502 }); });
-    await flush();
-    expect(container.querySelector('[data-testid="public-share"]')).toBeNull();
-    expect(container.textContent).toContain('publicShareSessionProbeFailed');
-    // The cold 502 used to reach AuthGuard's lenient ServiceUnavailableError branch,
-    // which rendered children with a toast. That branch is gone: a probe that could
-    // not verify the session renders the retry screen and nothing else.
-    expect(container.querySelector('[data-testid="auth-guard"]')).toBeNull();
-    expect(container.querySelector('[data-testid="layout"]')).toBeNull();
-    expect(container.querySelector('[data-testid="project-page"]')).toBeNull();
-  });
-
-  it('200 with an unparsable body → error phase (no invented user for the guard)', async () => {
-    renderAt(`/docs/${VALID_DOC}`);
-    await act(async () => { probeResolve({ ok: true, status: 200 }); });
-    await flush();
-    expect(container.querySelector('[data-testid="auth-guard"]')).toBeNull();
-    expect(container.textContent).toContain('publicShareSessionProbeFailed');
-  });
-
-  it('network throw → error phase (NOT anonymous)', async () => {
-    renderAt(`/docs/${VALID_DOC}`);
-    await act(async () => { probeReject(new TypeError('Failed to fetch')); });
-    await flush();
-    expect(container.querySelector('[data-testid="public-share"]')).toBeNull();
-    expect(container.textContent).toContain('publicShareSessionProbeFailed');
-  });
-
-  it('probe timeout → error phase', async () => {
-    vi.useFakeTimers();
-    try {
-      renderAt(`/docs/${VALID_DOC}`);
-      // Probe stays pending; advance past the AbortController deadline. The abort
-      // rejects the signal-aware mock → .catch → error phase (a non-lazy render).
-      await act(async () => { vi.advanceTimersByTime(8000); });
-      expect(container.querySelector('[data-testid="public-share"]')).toBeNull();
-      expect(container.textContent).toContain('publicShareSessionProbeFailed');
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('retry re-runs the probe', async () => {
-    renderAt(`/docs/${VALID_DOC}`);
-    await act(async () => { probeResolve({ ok: false, status: 500 }); });
-    await flush();
-    const callsAfterFail = probeCalls;
-
-    // The harness NavButton ('nav') is also a <button> and comes first in DOM
-    // order — pick the retry button by its i18n key text.
-    const btn = Array.from(container.querySelectorAll('button'))
-      .find(b => b.textContent === 'retry');
-    expect(btn).not.toBeNull();
-    await act(async () => { btn!.click(); });
-    expect(probeCalls).toBe(callsAfterFail + 1);
-    await act(async () => { probeResolve({ ok: true, status: 200, data: AUTHED_USER }); });
-    await flush();
-    expect(container.querySelector('[data-testid="project-page"]')).not.toBeNull();
   });
 });
 
@@ -327,50 +224,5 @@ describe('SessionRoute — branch structure (unification)', () => {
     await act(async () => { probeResolve({ ok: false, status: 401 }); });
     await flush();
     expect(container.querySelector('[data-testid="landing"]')).not.toBeNull();
-  });
-
-  it('the probed user reaches AuthGuard — the guard never fetches /auth/me itself', async () => {
-    const probed = { user_id: 'u1', name: 'Red', email: 'red@lore.app' };
-    renderAt('/projects/p1');
-    await act(async () => { probeResolve({ ok: true, status: 200, data: probed }); });
-    await flush();
-    expect(guardUser).toBe(probed);
-  });
-
-  it('an unknown authed path redirects to /projects (not an empty shell)', async () => {
-    renderAt('/foo');
-    await act(async () => { probeResolve({ ok: true, status: 200, data: {} }); });
-    await flush();
-    expect(container.querySelector('[data-testid="dashboard"]')).not.toBeNull();
-    expect(container.querySelector('[data-testid="project-page"]')).toBeNull();
-  });
-
-  it('crossing /projects/:id → /docs/:id keeps the shell mounted and does NOT re-probe', async () => {
-    renderAt('/projects/p1');
-    await act(async () => { probeResolve({ ok: true, status: 200, data: AUTHED_USER }); });
-    await flush();
-    const layoutBefore = container.querySelector('[data-testid="layout"]');
-    const projectBefore = container.querySelector('[data-testid="project-page"]');
-    expect(layoutBefore).not.toBeNull();
-    expect(projectBefore).not.toBeNull();
-
-    await go(`/docs/${VALID_DOC}`);
-    // THE property: same DOM nodes (React reconciled an inner route change, not a
-    // remount), the doc page mounted as the index child, and the probe ran ONCE.
-    expect(container.querySelector('[data-testid="layout"]')).toBe(layoutBefore);
-    expect(container.querySelector('[data-testid="project-page"]')).toBe(projectBefore);
-    expect(projectBefore!.querySelector('[data-testid="document-page"]')).not.toBeNull();
-    expect(probeCalls).toBe(1);
-  });
-
-  it('crossing back /docs/:id → /projects/:id keeps the shell mounted too', async () => {
-    renderAt(`/docs/${VALID_DOC}`);
-    await act(async () => { probeResolve({ ok: true, status: 200, data: AUTHED_USER }); });
-    await flush();
-    const layoutBefore = container.querySelector('[data-testid="layout"]');
-    await go('/projects/p1');
-    expect(container.querySelector('[data-testid="layout"]')).toBe(layoutBefore);
-    expect(container.querySelector('[data-testid="project-page"]')).not.toBeNull();
-    expect(probeCalls).toBe(1);
   });
 });

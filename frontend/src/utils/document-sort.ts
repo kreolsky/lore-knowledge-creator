@@ -164,7 +164,7 @@ export function sortDocumentsForChat(
 
 // ARCH: Chat picker reference sort — selected-first, then anchor ref, then
 // name-match (query only), then parent-document proximity to the anchor, then
-// updated_at DESC (newest first within a doc). The open document's reference
+// created_at DESC (newest first within a distance tier). The open document's reference
 // scope is NEVER consulted — the picker lists ALL project references (Part B),
 // so a cross-doc ref must sort by its owning document's tree distance, and a
 // selected ref always stays in view regardless of query/anchor/proximity.
@@ -209,6 +209,9 @@ export function sortReferencesByProximity(
     const dB = distance(b);
     if (dA !== null && dB !== null && dA !== dB) return dA - dB;
 
-    return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+    // INVARIANT: within a distance tier refs sort by created_at DESC, not
+    // updated_at. Why: user rule "inside a distance group, by creation date" —
+    // a transcription finishing bumps updated_at and would reshuffle the list.
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
   });
 }

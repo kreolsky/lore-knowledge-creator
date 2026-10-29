@@ -14,9 +14,9 @@ import type { UIState } from '../ui-store';
 export type ThemeSlice = Pick<
   UIState,
   | 'theme' | 'language' | 'panelWidths' | 'splitRatio' | 'globalPrefsLoaded'
-  | 'showArchived' | 'adminSectionTab'
+  | 'showArchived' | 'adminSectionTab' | 'sidebarPinned'
   | 'setTheme' | 'setLanguage' | 'setPanelWidth' | 'setSplitRatio' | 'getSplitRatio' | 'loadGlobalPrefs'
-  | 'setShowArchived' | 'setAdminSectionTab'
+  | 'setShowArchived' | 'setAdminSectionTab' | 'setSidebarPinned'
 >;
 
 type UISet = (
@@ -64,6 +64,8 @@ export interface GlobalPrefs {
   // store saves it raw; the page validates it at mount against the sections the
   // user is offered (a moderator has no Embeddings row).
   adminSectionTab: AdminSectionTab | null;
+  // WHY: global like panelWidths — docked vs auto-hiding left panel is a layout habit.
+  sidebarPinned: boolean;
 }
 
 const GLOBAL_DEFAULTS: GlobalPrefs = {
@@ -73,6 +75,7 @@ const GLOBAL_DEFAULTS: GlobalPrefs = {
   splitRatio: SPLIT_RATIO_DEFAULT,
   showArchived: false,
   adminSectionTab: null,
+  sidebarPinned: true,
 };
 
 // WHY: per-device mirror of the server theme, read by public/theme-boot.js before first
@@ -109,6 +112,7 @@ export function createThemeSlice(set: UISet, get: UIGet): ThemeSlice {
     splitRatio: SPLIT_RATIO_DEFAULT,
     showArchived: false,
     adminSectionTab: null,
+    sidebarPinned: true,
     globalPrefsLoaded: false,    setTheme: (theme) => { set({ theme }); cacheTheme(theme); get().saveGlobalPrefsNow(); },
     setLanguage: (language) => { set({ language }); get().saveGlobalPrefsNow(); },
     setPanelWidth: (side, width) => {
@@ -125,6 +129,7 @@ export function createThemeSlice(set: UISet, get: UIGet): ThemeSlice {
     setShowArchived: (showArchived) => { set({ showArchived }); get().saveGlobalPrefsNow(); },
     // Admin section pref — same persistence route as showArchived (per-user _global).
     setAdminSectionTab: (tab) => { set({ adminSectionTab: tab }); get().saveGlobalPrefsNow(); },
+    setSidebarPinned: (sidebarPinned) => { set({ sidebarPinned }); get().saveGlobalPrefsNow(); },
     loadGlobalPrefs: () => {
       if (_globalPrefsPromise) return _globalPrefsPromise;
       _globalPrefsPromise = (async () => {
@@ -148,6 +153,7 @@ export function createThemeSlice(set: UISet, get: UIGet): ThemeSlice {
             // Garbage-proofing is the PAGE's job (availability check at mount);
             // here unknown values load raw and never block hydration.
             adminSectionTab: data.adminSectionTab ?? null,
+            sidebarPinned: data.sidebarPinned ?? GLOBAL_DEFAULTS.sidebarPinned,
             globalPrefsLoaded: true,
           });
         } catch {

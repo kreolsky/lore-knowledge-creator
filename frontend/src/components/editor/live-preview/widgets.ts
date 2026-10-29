@@ -2,7 +2,7 @@
  * Widget classes for live-preview: checkboxes, bullets, images, copy buttons, math.
  */
 import { EditorView, WidgetType } from '@codemirror/view';
-import { EditorState } from '@codemirror/state';
+import { EditorSelection, EditorState } from '@codemirror/state';
 import { renderMathCached } from '../math-render';
 import { renderMermaid } from '../../../editor/mermaid-render';
 import { useAppStore } from '../../../store/app-store';
@@ -12,6 +12,11 @@ import { copyWithToast } from '../../chat/shared/copy';
 import { COPY_ICON, CHECK_ICON } from '../../../utils/copy-icons';
 import { formatFileSize } from '../../references/ref-utils';
 import type { TransclusionEntry } from './effects';
+// WHY direct import despite the module cycle (widgets → atomic-delete-guard →
+// fields → widgets): atomicRangeAt is only called INSIDE function bodies, never
+// at module-eval time, so the cycle resolves the same way as the documented
+// live-preview one.
+import { atomicRangeAt } from './atomic-delete-guard';
 
 // ─── Checkbox widget ──────────────────────────────────────────────────────────
 
@@ -76,15 +81,94 @@ export class BulletWidget extends WidgetType {
 
 // ─── Image sizing ─────────────────────────────────────────────────────────────
 
+/** The size-suffix grammar shared by parseSizeFromAlt, setImageSize and the ImageToolbar's size field. */
+export const SIZE_SUFFIX_RE = /^(\d+%?)(?:x(\d+%?))?$/;
+
 /** Parses `|WIDTHxHEIGHT` from the alt text of an image node. */
 export function parseSizeFromAlt(alt: string): { width?: string; height?: string } {
   const pipeIdx = alt.lastIndexOf('|');
   if (pipeIdx === -1) return {};
-  const sizeStr = alt.slice(pipeIdx + 1).trim();
-  const m = /^(\d+%?)(?:x(\d+%?))?$/.exec(sizeStr);
+  const m = SIZE_SUFFIX_RE.exec(alt.slice(pipeIdx + 1).trim());
   if (!m) return {};
   const toCSS = (v: string) => v.endsWith('%') ? v : `${v}px`;
   return { width: toCSS(m[1]), height: m[2] ? toCSS(m[2]) : undefined };
+}
+
+/**
+ * Splits a VALID size suffix off an image alt: `{ base, height }`. A `|` whose
+ * remainder does not parse as `WIDTH[xHEIGHT]` belongs to the base (mirrors
+ * parseSizeFromAlt, so the two never disagree on where the suffix starts).
+ */
+function splitSizeSuffix(alt: string): { base: string; height?: string } {
+  const pipeIdx = alt.lastIndexOf('|');
+  if (pipeIdx === -1) return { base: alt };
+  const m = SIZE_SUFFIX_RE.exec(alt.slice(pipeIdx + 1).trim());
+  if (!m) return { base: alt };
+  return { base: alt.slice(0, pipeIdx), height: m[2] };
+}
+
+/**
+ * The writer half of parseSizeFromAlt: rewrites ONLY the width of an image
+ * alt's `|…` size suffix. `300` ⇒ px, `50%` ⇒ percent; `''` clears the suffix
+ * WHOLE (width and height); an authored `x<height>` is preserved verbatim; an
+ * invalid value leaves the alt unchanged. Writers never touch any other part
+ * of the embed text — no new syntax, only the existing suffix.
+ */
+export function setImageSize(alt: string, value: string): string {
+  const { base, height } = splitSizeSuffix(alt);
+  if (value === '') return base;
+  if (!/^\d+%?$/.test(value)) return alt;
+  return `${base}|${height ? `${value}x${height}` : value}`;
+}
+
+/** The width an image may be drawn at inside `el`: its client width minus horizontal
+ * padding (the document's `.cm-line` keeps CM6's side padding; a cell's is zero).
+ * 0 when `el` has no layout. */
+export function contentBoxWidth(el: HTMLElement): number {
+  const cs = getComputedStyle(el);
+  return el.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+}
+
+/** alt + url of a raw `![alt](url)` embed text, or null for non-embed text. */
+export function imageEmbedParts(raw: string): { alt: string; url: string } | null {
+  const m = /^!\[([\s\S]*)\]\(([^)]*)\)$/.exec(raw);
+  return m ? { alt: m[1], url: m[2] } : null;
+}
+
+/**
+ * Applies a new size value to the image embed covering [from, to] in ONE
+ * transaction, re-selecting the new node range so the image toolbar stays up
+ * across its own edit (the atomic block remains selected whole). Returns false
+ * (no dispatch) when the range is not a `![alt](url)` embed or the value
+ * changed nothing. Shared by the ImageToolbar's size field and the widget's
+ * resize handle — the two writers of the suffix.
+ */
+export function applyImageSize(view: EditorView, from: number, to: number, value: string): boolean {
+  return rewriteImageAlt(view, from, to, (alt) => setImageSize(alt, value));
+}
+
+/**
+ * Replaces the WHOLE size suffix (`300` or `300x200`) — the resize handles'
+ * writer: the corner drops an authored height, the edges set both axes.
+ */
+export function applyImageSuffix(view: EditorView, from: number, to: number, suffix: string): boolean {
+  if (!SIZE_SUFFIX_RE.test(suffix)) return false;
+  return rewriteImageAlt(view, from, to, (alt) => `${splitSizeSuffix(alt).base}|${suffix}`);
+}
+
+function rewriteImageAlt(
+  view: EditorView, from: number, to: number, rewrite: (alt: string) => string,
+): boolean {
+  const parts = imageEmbedParts(view.state.doc.sliceString(from, to));
+  if (!parts) return false;
+  const nextAlt = rewrite(parts.alt);
+  if (nextAlt === parts.alt) return false;
+  const insert = `![${nextAlt}](${parts.url})`;
+  view.dispatch({
+    changes: { from, to, insert },
+    selection: { anchor: from, head: from + insert.length },
+  });
+  return true;
 }
 
 // ARCH: Cache actual rendered heights so CM6 height estimates match reality after first
@@ -100,8 +184,44 @@ export function clearWidgetHeightCache(): void {
 // ─── Image widget ─────────────────────────────────────────────────────────────
 
 /**
+ * Focuses the view and selects exactly the image node rendered by `el`.
+ */
+export function selectImageAt(view: EditorView, el: Node): void {
+  view.focus();
+  let pos: number;
+  try { pos = view.posAtDOM(el); } catch { return; }
+  // posAtDOM yields -1 for a node outside the editor content.
+  if (pos < 0) return;
+  // Images only (tableId === null): guardedAtomicRanges also yields table anchors.
+  const atom = atomicRangeAt(view.state, pos);
+  if (atom && atom.tableId === null) {
+    view.dispatch({ selection: EditorSelection.range(atom.from, atom.to) });
+  }
+}
+
+type ResizeDir = 'corner' | 'corner-top' | 'right' | 'bottom';
+const RESIZE_DIRS: readonly ResizeDir[] = ['corner', 'corner-top', 'right', 'bottom'];
+/** Corner handles resize proportionally (width only, height dropped). */
+const isCorner = (dir: ResizeDir) => dir === 'corner' || dir === 'corner-top';
+
+/** Sizes the embed box: the wrapper carries width/height, the img fills it. */
+function setImageBox(wrap: HTMLElement, img: HTMLImageElement, width?: string, height?: string): void {
+  wrap.style.width = width ?? '';
+  wrap.style.height = height ?? '';
+  // WHY fill (not contain): an explicit WxH is a deliberate non-proportional size.
+  img.style.cssText = 'display:block;max-width:100%;'
+    + (width ? 'width:100%;' : '')
+    + (height ? 'height:100%;object-fit:fill;' : '');
+}
+
+/**
  * Replaces a ![alt](ref:id) image node with an <img> element.
  * Supports optional width/height from alt-text sizing syntax.
+ *
+ * ATOMIC BLOCK: the raw `![alt](ref:id)` text is never revealed (build-structural
+ * renders this widget under every caret position). A plain press selects exactly
+ * the node's range — the selection Delete then removes (atomic-delete-guard.ts
+ * swallows one-key deletes) and the selection the step-2 toolbar keys on.
  */
 export class ImageWidget extends WidgetType {
   constructor(
@@ -110,15 +230,91 @@ export class ImageWidget extends WidgetType {
     readonly height?: string,
   ) { super(); }
 
-  toDOM(): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
+    const wrap = document.createElement('span');
+    wrap.className = 'cm-image-embed';
     const img = document.createElement('img');
     img.src = this.src;
-    let css = 'display:inline-block;vertical-align:top;margin:4px 0;max-width:100%;';
-    if (this.width) css += `width:${this.width};`;
-    if (this.height) css += `height:${this.height};object-fit:contain;`;
-    img.style.cssText = css;
+    // WHY the size sits on the wrapper, not the <img>: a percent width on the img
+    // resolves against the shrink-to-fit wrapper, which then grows to the image's
+    // natural width — the box (and its handles) no longer match the picture.
+    setImageBox(wrap, img, this.width, this.height);
     img.onload = () => { widgetHeightCache.set(this.src, img.offsetHeight); };
-    return img;
+    // Select the whole node on press: preventDefault keeps the browser (and CM6 —
+    // via stopPropagation) from placing a caret inside the hidden embed text; the
+    // explicit view.focus() preserves what the prevented default did for us.
+    img.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      selectImageAt(view, wrap);
+    });
+    wrap.appendChild(img);
+    // WHY always mounted: the view is usually NOT editable yet at first render
+    // (collab joining) and eq() never rebuilds the widget when it becomes so.
+    // CSS hides the handles on a non-editable content DOM; drag time re-checks.
+    for (const dir of RESIZE_DIRS) wrap.appendChild(this.buildResizeHandle(view, wrap, img, dir));
+    return wrap;
+  }
+
+  /**
+   * Drag-to-resize: the drag updates the box live as CSS ONLY (no transactions
+   * mid-drag); pointerup writes the size suffix once (one transaction).
+   * corners = proportional (`|W`, height dropped); right/bottom = free (`|WxH`).
+   * pointercancel restores the pre-drag CSS.
+   */
+  private buildResizeHandle(
+    view: EditorView, wrap: HTMLElement, img: HTMLImageElement, dir: ResizeDir,
+  ): HTMLElement {
+    const handle = document.createElement('span');
+    handle.className = `cm-image-resize-handle cm-image-resize-${dir}`;
+    handle.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      // Same live re-check as CheckboxWidget's click: a stale handle must never
+      // edit a read-only view.
+      if (view.state.readOnly || !view.state.facet(EditorView.editable)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      // Select the image first: the text caret disappears (a non-empty
+      // selection draws none) and the resize happens on the selected block.
+      selectImageAt(view, wrap);
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const rect = img.getBoundingClientRect();
+      const prev = { w: wrap.style.width, h: wrap.style.height };
+      let w = Math.round(rect.width);
+      let h = Math.round(rect.height);
+      // The drag stops at the line's content box — the stored number is the drawn one,
+      // in a cell and in the document alike. No layout (0) ⇒ unclamped.
+      const cap = wrap.parentElement ? Math.floor(contentBoxWidth(wrap.parentElement)) : 0;
+      const capped = (v: number) => (cap > 0 ? Math.min(cap, v) : v);
+      const onMove = (ev: PointerEvent) => {
+        if (dir !== 'bottom') w = capped(Math.max(24, Math.round(rect.width + ev.clientX - startX)));
+        if (dir === 'bottom') h = Math.max(24, Math.round(rect.height + ev.clientY - startY));
+        setImageBox(wrap, img, `${w}px`, isCorner(dir) ? undefined : `${h}px`);
+      };
+      const detach = () => {
+        handle.removeEventListener('pointermove', onMove);
+        handle.removeEventListener('pointerup', onUp);
+        handle.removeEventListener('pointercancel', onCancel);
+      };
+      const restore = () => { setImageBox(wrap, img, prev.w || undefined, prev.h || undefined); };
+      const onUp = () => {
+        detach();
+        let pos: number;
+        try { pos = view.posAtDOM(wrap); } catch { restore(); return; }
+        // Images only (tableId === null): guardedAtomicRanges also yields table anchors.
+        const atom = pos >= 0 ? atomicRangeAt(view.state, pos) : null;
+        const suffix = isCorner(dir) ? String(w) : `${w}x${h}`;
+        if (!atom || atom.tableId !== null || !applyImageSuffix(view, atom.from, atom.to, suffix)) restore();
+      };
+      const onCancel = () => { detach(); restore(); };
+      try { handle.setPointerCapture(e.pointerId); } catch { /* detached DOM — listeners below still bound */ }
+      handle.addEventListener('pointermove', onMove);
+      handle.addEventListener('pointerup', onUp);
+      handle.addEventListener('pointercancel', onCancel);
+    });
+    return handle;
   }
 
   eq(other: ImageWidget): boolean {

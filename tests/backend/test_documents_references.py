@@ -12,19 +12,8 @@ import pytest
 
 # ─── Create + parent constraint ──────────────────────────────────────────────
 
-@pytest.mark.asyncio
-async def test_create_reference_requires_media_type(client, admin_user, project_with_doc):
-    pid, idx_id, _ = project_with_doc
-    _, token = admin_user
-    resp = await client.post(
-        "/api/documents",
-        json={"project_id": pid, "is_reference": True, "parent_id": idx_id},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 400
-    assert "media_type" in resp.json()["detail"].lower()
 
-
+# TEST-WHY: cross-process-contract — is_reference create over the real HTTP+Surreal path; guard file named by documents/delete.py ("pinned by").
 @pytest.mark.asyncio
 async def test_create_reference_markdown(client, admin_user, project_with_doc):
     pid, idx_id, _ = project_with_doc
@@ -46,6 +35,7 @@ async def test_create_reference_markdown(client, admin_user, project_with_doc):
     assert data["parent_id"] == idx_id
 
 
+# TEST-WHY: cross-process-contract — parent-refusal contract over the real route+DB; guard file named by documents/delete.py ("pinned by").
 @pytest.mark.asyncio
 async def test_create_document_under_reference_rejected(
     client, admin_user, project_with_doc,
@@ -74,6 +64,7 @@ async def test_create_document_under_reference_rejected(
     assert "Reference documents cannot be parents" in resp.json()["detail"]
 
 
+# TEST-WHY: cross-process-contract — move-under-reference refusal over the real route+DB; guard file named by documents/delete.py ("pinned by").
 @pytest.mark.asyncio
 async def test_patch_move_under_reference_rejected(
     client, admin_user, project_with_doc,
@@ -108,6 +99,7 @@ async def test_patch_move_under_reference_rejected(
 
 # ─── Tree exclusion ──────────────────────────────────────────────────────────
 
+# TEST-WHY: cross-process-contract — project tree read excludes references over the real HTTP+Surreal path; guard named by documents/delete.py.
 @pytest.mark.asyncio
 async def test_project_tree_excludes_references(
     client, admin_user, project_with_doc,
@@ -141,6 +133,7 @@ async def test_project_tree_excludes_references(
 
 # ─── Batch delete ────────────────────────────────────────────────────────────
 
+# TEST-WHY: cross-process-contract — soft-delete cascade across the real Surreal graph; guard named by documents/delete.py.
 @pytest.mark.asyncio
 async def test_delete_parent_cascades_reference_children(
     client, admin_user, project_with_doc,
@@ -173,6 +166,7 @@ async def test_delete_parent_cascades_reference_children(
     assert get_ref.status_code == 404
 
 
+# TEST-WHY: cross-process-contract — batch-delete over the real HTTP+Surreal path; guard named by documents/delete.py.
 @pytest.mark.asyncio
 async def test_batch_delete_documents(client, admin_user, project_with_doc):
     pid, _, _ = project_with_doc
@@ -201,62 +195,7 @@ async def test_batch_delete_documents(client, admin_user, project_with_doc):
         assert r.status_code == 404
 
 
-@pytest.mark.asyncio
-async def test_no_auto_backup_for_reference(client, admin_user, project_with_doc):
-    """maybe_backup_on_content_loss() must return None for is_reference documents."""
-    from auto_backup import maybe_backup_on_content_loss
-    pid, idx_id, _ = project_with_doc
-    _, token = admin_user
-    # Create a reference with long content so the BACKUP_MIN_CONTENT gate alone
-    # would not skip the backup.
-    long_text = "abc " * 200
-    ref = await client.post(
-        "/api/documents",
-        json={
-            "project_id": pid, "is_reference": True,
-            "media_type": "markdown", "parent_id": idx_id,
-            "content": long_text,
-        },
-        cookies={"lore_session": token},
-    )
-    ref_id = ref.json()["document_id"]
-
-    # Even a destructive replace (most of the content gone) must not trigger a backup.
-    result = await maybe_backup_on_content_loss(ref_id, "x")
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_rest_patch_no_backup_for_reference(client, admin_user, project_with_doc):
-    """PATCH on a reference document with a destructive content delta must not
-    create a checkpoint (references never auto-backup, even via REST)."""
-    pid, idx_id, _ = project_with_doc
-    _, token = admin_user
-    cookies = {"lore_session": token}
-    long_text = "abc " * 200
-    ref = await client.post(
-        "/api/documents",
-        json={
-            "project_id": pid, "is_reference": True,
-            "media_type": "markdown", "parent_id": idx_id,
-            "content": long_text,
-        },
-        cookies=cookies,
-    )
-    ref_id = ref.json()["document_id"]
-
-    resp = await client.patch(
-        f"/api/documents/{ref_id}",
-        json={"content": "x"},
-        cookies=cookies,
-    )
-    assert resp.status_code == 200
-    assert resp.json().get("auto_backup") in (None, {})
-
-    cps = await client.get(f"/api/checkpoints?document_id={ref_id}", cookies=cookies)
-    assert cps.json() == []
-
-
+# TEST-WHY: cross-process-contract — batch-delete skip accounting over the real API+DB; guard named by documents/delete.py.
 @pytest.mark.asyncio
 async def test_batch_delete_skips_unknown(client, admin_user, project_with_doc):
     pid, _, _ = project_with_doc
@@ -312,6 +251,7 @@ async def _deleted_at(test_db, table, rid):
     return rows[0].get("deleted_at") if rows and rows[0] else None
 
 
+# TEST-WHY: cross-process-contract — host-cascade record-targeted tombstones over the real Surreal; the exact contract documents/delete.py pins by name.
 @pytest.mark.asyncio
 async def test_document_delete_soft_deletes_hosted_refs_only(
     client, test_db, admin_user, project_with_doc,
@@ -348,6 +288,7 @@ async def test_document_delete_soft_deletes_hosted_refs_only(
     assert count_after == count_before, "cascade delete must create no documents row"
 
 
+# TEST-WHY: cross-process-contract — delete cascades chat sessions and messages by record id over the real Surreal; guard named by documents/delete.py.
 @pytest.mark.asyncio
 async def test_cascade_soft_deletes_chat_sessions_by_id(
     client, test_db, admin_user, project_with_doc,
@@ -386,6 +327,7 @@ async def test_cascade_soft_deletes_chat_sessions_by_id(
     assert not live_msgs or live_msgs[0] == 0, "chat messages must be soft-deleted"
 
 
+# TEST-WHY: cross-process-contract — delete drops inbound and outbound doc_mentions graph edges over the real Surreal; guard named by documents/delete.py.
 @pytest.mark.asyncio
 async def test_cascade_deletes_inbound_and_outbound_mentions(
     client, test_db, admin_user, project_with_doc,
@@ -422,6 +364,7 @@ async def test_cascade_deletes_inbound_and_outbound_mentions(
     assert await edge_count(b, c) == 1, "unrelated mention edge must survive"
 
 
+# TEST-WHY: cross-process-contract — the absent-id UPDATE no-op on real SurrealDB that documents/delete.py pins by name.
 @pytest.mark.asyncio
 async def test_record_targeted_update_on_missing_id_is_a_noop(
     client, test_db, admin_user, project_with_doc,

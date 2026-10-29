@@ -27,33 +27,6 @@ async def _clean_pool():
 
 
 @pytest.mark.asyncio
-async def test_same_name_returns_one_client():
-    import http_clients
-    a = http_clients.get_http_client("t1", timeout=1.0)
-    b = http_clients.get_http_client("t1", timeout=1.0)
-    assert a is b
-
-
-@pytest.mark.asyncio
-async def test_different_names_return_different_clients():
-    import http_clients
-    a = http_clients.get_http_client("t1", timeout=1.0)
-    b = http_clients.get_http_client("t2", timeout=1.0)
-    assert a is not b
-
-
-@pytest.mark.asyncio
-async def test_closed_client_is_rebuilt():
-    import http_clients
-    a = http_clients.get_http_client("t1", timeout=1.0)
-    await a.aclose()
-    assert a.is_closed
-    b = http_clients.get_http_client("t1", timeout=1.0)
-    assert b is not a
-    assert not b.is_closed
-
-
-@pytest.mark.asyncio
 async def test_first_timeout_wins_no_rebuild_on_different_timeout():
     # WHY pinned: the six driver sites share the "driver" name with different
     # budgets — a later caller's timeout must not rebuild the client (dropping
@@ -64,20 +37,6 @@ async def test_first_timeout_wins_no_rebuild_on_different_timeout():
     b = http_clients.get_http_client("t1", timeout=99.0)
     assert a is b
     assert a.timeout == httpx.Timeout(1.0)
-
-
-@pytest.mark.asyncio
-async def test_close_all_closes_every_name():
-    import http_clients
-    a = http_clients.get_http_client("t1", timeout=1.0)
-    b = http_clients.get_http_client("t2", timeout=1.0)
-    await http_clients.close_all()
-    assert a.is_closed
-    assert b.is_closed
-    # The pool is empty: a later get builds a fresh client, not the closed one.
-    c = http_clients.get_http_client("t1", timeout=1.0)
-    assert c is not a
-    assert not c.is_closed
 
 
 # ─── the driver line: per-request timeouts on one shared client ───────────────

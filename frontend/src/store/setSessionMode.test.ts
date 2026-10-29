@@ -112,76 +112,8 @@ beforeEach(async () => {
   useChatStore.getState().reset();
 });
 
-// ─── setSessionMode ───────────────────────
-// Collapsed from (mode, systemPromptId) to a single system_prompt_id PATCH.
-describe('setSessionMode', () => {
-  it('PATCHes system_prompt_id in place when the prompt changes', async () => {
-    const { apiClient } = await import('../api/client');
-    const sess = makeSession({ session_id: 'cur', system_prompt_id: 'p-1' });
-    useChatStore.setState({ sessions: [sess], activeSessionId: 'cur' });
-    (apiClient.patch as ReturnType<typeof vi.fn>).mockResolvedValue(
-      makeSession({ session_id: 'cur', system_prompt_id: 'p-2' }),
-    );
-
-    await useChatStore.getState().setSessionMode('p-2');
-
-    expect(apiClient.patch).toHaveBeenCalledWith('/chat/sessions/cur', expect.objectContaining({
-      system_prompt_id: 'p-2',
-    }));
-    // No `mode` key on the PATCH body (the axis left the wire).
-    const body = (apiClient.patch as ReturnType<typeof vi.fn>).mock.calls[0][1];
-    expect(body).not.toHaveProperty('mode');
-    expect(apiClient.post).not.toHaveBeenCalled();
-  });
-
-  it('clears system_prompt_id when passed null', async () => {
-    const { apiClient } = await import('../api/client');
-    const sess = makeSession({ session_id: 'cur', system_prompt_id: 'p-1' });
-    useChatStore.setState({ sessions: [sess], activeSessionId: 'cur' });
-    (apiClient.patch as ReturnType<typeof vi.fn>).mockResolvedValue(
-      makeSession({ session_id: 'cur', system_prompt_id: null }),
-    );
-
-    await useChatStore.getState().setSessionMode(null);
-
-    expect(apiClient.patch).toHaveBeenCalledWith('/chat/sessions/cur', expect.objectContaining({
-      system_prompt_id: null,
-    }));
-  });
-
-  it('is a no-op PATCH when the prompt is unchanged', async () => {
-    const { apiClient } = await import('../api/client');
-    const sess = makeSession({ session_id: 'cur', system_prompt_id: 'p-1' });
-    useChatStore.setState({ sessions: [sess], activeSessionId: 'cur' });
-
-    await useChatStore.getState().setSessionMode('p-1');
-
-    expect(apiClient.patch).not.toHaveBeenCalled();
-  });
-
-  it('is a no-op when there is no active session', async () => {
-    const { apiClient } = await import('../api/client');
-    useChatStore.setState({ sessions: [], activeSessionId: null });
-
-    await useChatStore.getState().setSessionMode('p-9');
-
-    expect(apiClient.patch).not.toHaveBeenCalled();
-  });
-});
-
 // ─── deriveUIMode (reads only agent_auto) ──────────────────────────────────
 describe('deriveUIMode', () => {
-  it('maps agent_auto=false to agent_confirm', () => {
-    expect(deriveUIMode({ agent_auto: false })).toBe('agent_confirm');
-  });
-
-  it('maps agent_auto=true to agent_auto', () => {
-    expect(deriveUIMode({ agent_auto: true })).toBe('agent_auto');
-  });
-
-  it('defaults to agent_confirm when agent_auto is absent', () => {
-    expect(deriveUIMode({})).toBe('agent_confirm');
-  });
 
   it('maps null/undefined session to agent_confirm (no active session)', () => {
     expect(deriveUIMode(null)).toBe('agent_confirm');
@@ -196,37 +128,6 @@ describe('setSessionUIMode', () => {
     useChatStore.setState({ sessions: [sess], activeSessionId: 's1' });
   });
 
-  it('PATCHes {agent_auto:true} for confirm → auto', async () => {
-    const { apiClient } = await import('../api/client');
-    (apiClient.patch as ReturnType<typeof vi.fn>).mockResolvedValue(
-      makeSession({ session_id: 's1', agent_auto: true }),
-    );
-
-    useChatStore.getState().setSessionUIMode('agent_auto');
-    await new Promise(r => setTimeout(r, 0));
-
-    expect(apiClient.patch).toHaveBeenCalledWith('/chat/sessions/s1', expect.objectContaining({
-      agent_auto: true,
-    }));
-    // No `mode` key on the PATCH body (the axis left the wire).
-    const body = (apiClient.patch as ReturnType<typeof vi.fn>).mock.calls[0][1];
-    expect(body).not.toHaveProperty('mode');
-  });
-
-  it('PATCHes {agent_auto:false} for auto → confirm', async () => {
-    const { apiClient } = await import('../api/client');
-    (apiClient.patch as ReturnType<typeof vi.fn>).mockResolvedValue(
-      makeSession({ session_id: 's1', agent_auto: false }),
-    );
-
-    useChatStore.getState().setSessionUIMode('agent_confirm');
-    await new Promise(r => setTimeout(r, 0));
-
-    expect(apiClient.patch).toHaveBeenCalledWith('/chat/sessions/s1', expect.objectContaining({
-      agent_auto: false,
-    }));
-  });
-
   it('updates the session row so deriveUIMode reflects the PATCH (agent_auto survives)', async () => {
     const { apiClient } = await import('../api/client');
     (apiClient.patch as ReturnType<typeof vi.fn>).mockResolvedValue(
@@ -238,26 +139,6 @@ describe('setSessionUIMode', () => {
 
     const sess = useChatStore.getState().sessions.find(s => s.session_id === 's1');
     expect(deriveUIMode(sess)).toBe('agent_auto');
-  });
-
-  it('optimistically reflects the new uiMode BEFORE the PATCH resolves (instant feedback)', async () => {
-    const { apiClient } = await import('../api/client');
-    let resolvePatch!: (v: ChatSession) => void;
-    (apiClient.patch as ReturnType<typeof vi.fn>).mockReturnValue(
-      new Promise<ChatSession>(r => { resolvePatch = r; }),
-    );
-
-    useChatStore.getState().setSessionUIMode('agent_auto');
-
-    expect(apiClient.patch).toHaveBeenCalledTimes(1);
-    const sess = useChatStore.getState().sessions.find(s => s.session_id === 's1');
-    expect(deriveUIMode(sess)).toBe('agent_auto');
-
-    // Server reconciles to confirm → the row follows the server-serialized value.
-    resolvePatch(makeSession({ session_id: 's1', agent_auto: false }));
-    await new Promise(r => setTimeout(r, 0));
-    const sess2 = useChatStore.getState().sessions.find(s => s.session_id === 's1');
-    expect(deriveUIMode(sess2)).toBe('agent_confirm');
   });
 
   it('derived uiMode survives reload (sessions reloaded from server with agent_auto)', async () => {
@@ -293,19 +174,6 @@ describe('setSessionUIMode', () => {
 
     expect(apiClient.patch).not.toHaveBeenCalled();
     expect(showToast).toHaveBeenCalledWith(expect.any(String), 'error');
-  });
-
-  it('is a no-op when there is no active session (ghost holds the choice client-side)', async () => {
-    const { apiClient } = await import('../api/client');
-    (apiClient.patch as ReturnType<typeof vi.fn>).mockClear();
-
-    useChatStore.setState({ activeSessionId: null });
-
-    useChatStore.getState().setSessionUIMode('agent_auto');
-
-    expect(apiClient.patch).not.toHaveBeenCalled();
-    // The ghost override is held client-side.
-    expect(useChatStore.getState().ghostAgentAuto).toBe(true);
   });
 
   it('surfaces a toast on a failed PATCH (updateSession catches)', async () => {

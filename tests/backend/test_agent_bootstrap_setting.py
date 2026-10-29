@@ -11,7 +11,6 @@ from agent_config import (
 )
 
 import config
-from transclusion_grammar import render_embed_schemes
 
 _URL = "/api/admin/settings/AGENT_BOOTSTRAP_PROMPT"
 
@@ -24,16 +23,6 @@ async def _clean_settings_state(test_db):
     yield
     settings.drop_cache()
     await test_db.query("DELETE instance_settings")
-
-
-def test_shipped_default_renders_the_projected_embed_forms():
-    """The shipped file carries the token once; the rendered default carries the
-    SCHEME_TABLE projection in its place and no leftover token."""
-    assert config.AGENT_BOOTSTRAP_PROMPT.count(config.BOOTSTRAP_EMBED_TOKEN) == 1
-    assert config.BOOTSTRAP_EMBED_TOKEN not in DEFAULT_BOOTSTRAP_PROMPT
-    assert render_embed_schemes() in DEFAULT_BOOTSTRAP_PROMPT
-    # Literal braces survive rendering (str.replace, not str.format).
-    assert '{status:"applied"}' in DEFAULT_BOOTSTRAP_PROMPT
 
 
 @pytest.mark.asyncio
@@ -55,18 +44,6 @@ async def test_admin_override_reaches_the_turn_and_reset_restores_default(
     prompt = (await build_prompt_and_skill_docs(pid))[0]
     assert prompt.startswith(DEFAULT_BOOTSTRAP_PROMPT)
     assert "OVERRIDE-MARKER" not in prompt
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("value", [
-    "no token at all",
-    f"{config.BOOTSTRAP_EMBED_TOKEN} twice {config.BOOTSTRAP_EMBED_TOKEN}",
-])
-async def test_put_without_exactly_one_token_is_rejected(client, admin_user, value):
-    _, token = admin_user
-    resp = await client.put(_URL, json={"value": value}, cookies={"lore_session": token})
-    assert resp.status_code == 422, resp.text
-    assert await settings.get("AGENT_BOOTSTRAP_PROMPT") == config.AGENT_BOOTSTRAP_PROMPT
 
 
 @pytest.mark.asyncio

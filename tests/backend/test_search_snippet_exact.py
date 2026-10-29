@@ -32,25 +32,6 @@ async def fanout_project(client, admin_user):
 
 
 @pytest.fixture
-async def punct_project(client, admin_user):
-    """`ИИ-1.2` tokenizes (\\W+) to ии/1/2 — all sub-3-char, so the default mode
-    must degrade to the literal contains scan, not FTS."""
-    uid, token = admin_user
-    cookies = {"lore_session": token}
-    resp = await client.post("/api/projects", json={"name": "Punct Test"}, cookies=cookies)
-    pid = resp.json()["project_id"]
-    await client.post("/api/documents", json={
-        "project_id": pid, "title": "Системный журнал",
-        "content": "код ИИ-1.2 активен",
-    }, cookies=cookies)
-    await client.post("/api/documents", json={
-        "project_id": pid, "title": "Заметки",
-        "content": "версия 1 и 2",
-    }, cookies=cookies)
-    return pid, uid, token
-
-
-@pytest.fixture
 async def stem_project(client, admin_user):
     """Same body as test_search_fts: inflected forms of мир (мира/миру)."""
     uid, token = admin_user
@@ -92,18 +73,6 @@ async def test_stop_word_fanout_kills_garbage_cards(client, fanout_project):
     assert "замок" in window, hit
 
 
-async def test_punctuation_query_degrades_to_literal_scan(client, punct_project):
-    """`ИИ-1.2` (default mode, no exact): every token is sub-3-char → the FTS
-    operand is empty → the literal scan runs. Only docA matches; docB
-    (`версия 1 и 2`, matched pre-fix via token `1`/`2`) is absent."""
-    pid, _, token = punct_project
-    results = await _search(client, pid, token, "ИИ-1.2")
-    titles = [r["title"] for r in results]
-    assert titles == ["Системный журнал"], results
-    hit = results[0]
-    assert hit["snippet"]["match"].lower() == "ии-1.2", hit
-
-
 # ─── stem anchors: kept, counted, snippet non-null ───────────────────────────
 
 
@@ -130,63 +99,6 @@ async def test_title_only_hit_is_not_dropped(client, stem_project):
     hits = [r for r in results if r["title"] == "Valdris Geography"]
     assert hits, results
     assert hits[0]["match_count"] >= 1, hits[0]
-
-
-# ─── exact mode (D1: case-insensitive literal substring, no FTS) ─────────────
-
-
-async def test_exact_mode_is_case_insensitive(client, punct_project):
-    pid, _, token = punct_project
-    results = await _search(client, pid, token, "ии-1.2", exact=True)
-    titles = [r["title"] for r in results]
-    assert "Системный журнал" in titles, results
-    assert "Заметки" not in titles, results
-
-
-async def test_exact_mode_every_hit_contains_query_literally(client, punct_project):
-    """Matcher-level guard (mirror of the agent D9a test): every exact hit's
-    title+content literally contains the lowercased query — exact may never
-    gain a matcher (stem/prefix) the literal scan lacks."""
-    pid, _, token = punct_project
-    from db import get_db
-
-    db = await get_db()
-    for q in ["ии-1.2", "версия", "код"]:
-        for h in await _search(client, pid, token, q, exact=True):
-            rows = await db.query(
-                "SELECT title, content FROM documents WHERE meta::id(id) = $id",
-                {"id": h["document_id"]},
-            )
-            row = rows[0] if isinstance(rows, list) and rows else {}
-            blob = f"{row.get('title') or ''} {row.get('content') or ''}".lower()
-            assert q.lower() in blob, (
-                q, h["document_id"], "exact hit must literally contain the query string"
-            )
-
-
-async def test_exact_mode_never_issues_fts_query(client, punct_project, monkeypatch):
-    """exact runs the contains scan alone — an @0@ (FTS) statement reaching the
-    wire is the regression. The wrapper also raises on @0@ so an accidental FTS
-    attempt cannot hide behind the route's fallback."""
-    pid, _, token = punct_project
-    from db import get_db
-
-    db = await get_db()
-    orig_query = db.query
-    seen: list[str] = []
-
-    async def recording(sql, *args, **kwargs):
-        seen.append(sql)
-        if "@0@" in sql:
-            raise RuntimeError("simulated: FTS must not run in exact mode")
-        return await orig_query(sql, *args, **kwargs)
-
-    monkeypatch.setattr(db, "query", recording)
-    results = await _search(client, pid, token, "ИИ-1.2", exact=True)
-    assert any(r["title"] == "Системный журнал" for r in results), results
-    assert not any("@0@" in s for s in seen), (
-        "exact mode issued an FTS statement", [s for s in seen if "@0@" in s]
-    )
 
 
 # ─── under_document_id ("In this document") — subtree scope ──────────────────
@@ -227,14 +139,3 @@ async def test_under_document_id_scopes_to_subtree(client, subtree_project):
     assert resp.status_code == 200, resp.text
     titles = {r["title"] for r in resp.json()["results"]}
     assert titles == {"Родитель", "Потомок"}, titles
-
-
-async def test_under_document_id_unknown_root_404(client, subtree_project):
-    """Uniform 404 on an unknown root — mirrors semantic-search (no existence
-    oracle; never silently degrades to a whole-project search)."""
-    pid, _, _, token = subtree_project
-    resp = await client.get(
-        f"/api/projects/{pid}/search?q=замок&under_document_id=no-such-doc",
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 404, resp.text

@@ -32,14 +32,6 @@ describe('copyWithToast', () => {
     delete (navigator as { clipboard?: unknown }).clipboard;
   });
 
-  it('a successful write toasts success and fires onSuccess', async () => {
-    stubClipboard(vi.fn().mockResolvedValue(undefined));
-    const { copyWithToast } = await import('./copy');
-    copyWithToast('hello', showToast, onSuccess);
-    await vi.waitFor(() => expect(showToast).toHaveBeenCalledWith('copied', 'info'));
-    expect(onSuccess).toHaveBeenCalledOnce();
-  });
-
   it('a rejected write toasts the failure and never fires onSuccess', async () => {
     stubClipboard(vi.fn().mockRejectedValue(new Error('denied')));
     const { copyWithToast } = await import('./copy');

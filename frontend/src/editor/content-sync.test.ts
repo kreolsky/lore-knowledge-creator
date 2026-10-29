@@ -14,8 +14,6 @@ vi.mock('../i18n', () => ({
 }));
 
 import {
-  readEditorContent,
-  mergeContentIntoDoc,
   checkpointContent,
   clearAllCheckpointDedup,
   type PersistOptions,
@@ -70,63 +68,6 @@ function connectedOptions(provider: ReturnType<typeof makeProvider>): PersistOpt
     projectCollab: provider as unknown as PersistOptions['projectCollab'],
   };
 }
-
-// ── readEditorContent ────────────────────────────────────────────────────────
-
-describe('readEditorContent', () => {
-  it('returns doc content when view is present', () => {
-    const ref = mockEditorViewRef('hello world');
-    expect(readEditorContent(ref as any)).toBe('hello world');
-  });
-
-  it('returns null when view is null', () => {
-    const ref = mockEditorViewRef(null);
-    expect(readEditorContent(ref as any)).toBeNull();
-  });
-
-  it('returns empty string for empty doc', () => {
-    const ref = mockEditorViewRef('');
-    expect(readEditorContent(ref as any)).toBe('');
-  });
-
-  it('returns multi-line content preserving newlines', () => {
-    const content = 'line1\nline2\nline3';
-    const ref = mockEditorViewRef(content);
-    expect(readEditorContent(ref as any)).toBe(content);
-  });
-});
-
-// ── mergeContentIntoDoc ──────────────────────────────────────────────────────
-
-describe('mergeContentIntoDoc', () => {
-  it('returns doc with updated content when id matches', () => {
-    const doc = makeDoc();
-    const result = mergeContentIntoDoc(doc, 'doc-1', 'new content');
-    expect(result.content).toBe('new content');
-    expect(result.document_id).toBe('doc-1');
-  });
-
-  it('returns unchanged doc when id does not match', () => {
-    const doc = makeDoc();
-    const result = mergeContentIntoDoc(doc, 'doc-other', 'new content');
-    expect(result.content).toBe('old content');
-    expect(result).toEqual(doc);
-  });
-
-  it('preserves other fields', () => {
-    const doc = makeDoc({ title: 'My Title', headings: [] });
-    const result = mergeContentIntoDoc(doc, 'doc-1', 'x');
-    expect(result.title).toBe('My Title');
-    expect(result.headings).toEqual([]);
-  });
-
-  it('does not mutate the original', () => {
-    const doc = makeDoc();
-    const result = mergeContentIntoDoc(doc, 'doc-1', 'new');
-    expect(doc.content).toBe('old content');
-    expect(result.content).toBe('new');
-  });
-});
 
 // ── checkpointContent empty-read guard (empty-checkpoint wipe) ───────────────
 

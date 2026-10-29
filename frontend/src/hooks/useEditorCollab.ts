@@ -49,6 +49,10 @@ import { useProjectCollab } from '../collab/ProjectCollabContext';
 import type { EntitySwitchController } from '../editor/entity-switch-phase';
 import type { WsStatus } from '../collab/ws-status';
 import type { Document, Reference } from '../types';
+import { logCollabEvent } from '../collab/collab-log';
+
+/** How long after opening a document an empty editor counts as the "opened empty" symptom. */
+const VIEW_EMPTY_PROBE_MS = 5000;
 
 type ActiveItem = Document | Reference | null;
 
@@ -224,6 +228,31 @@ export function useEditorCollab({
       ],
     });
   }, [activeItemId, liveForCurrent, snapshotPreview, viewEpoch]);
+
+  // WHY: probe the symptom, not a hypothesis — "the page opened empty and a reload fixed
+  // it" left no trace in telemetry, because entity-join looks identical whether content
+  // arrived or not. The detail tells which layer is empty: live=false is a stuck switch,
+  // ytextLen=0 with synced=true is the server's answer, ytextLen>0 is the view binding.
+  // A genuinely empty document reports too; the server side tells those apart by content.
+  const liveRef = useRef(liveForCurrent);
+  liveRef.current = liveForCurrent;
+  const statusRef = useRef(collabStatus);
+  statusRef.current = collabStatus;
+  useEffect(() => {
+    if (!activeItemId || snapshotPreview || isReference) return;
+    const timer = setTimeout(() => {
+      const view = editorViewRef.current;
+      if (!view || view.state.doc.length > 0) return;
+      const conn = collabConnectionRef.current;
+      logCollabEvent('yjs', 'view-empty', activeItemId, {
+        live: liveRef.current,
+        synced: conn?.synced,
+        ytextLen: conn?.ytext.length,
+        status: statusRef.current,
+      });
+    }, VIEW_EMPTY_PROBE_MS);
+    return () => clearTimeout(timer);
+  }, [activeItemId, snapshotPreview, isReference, editorViewRef, collabConnectionRef]);
 
   // Poll reconnect counter while reconnecting so overlay can show "attempt N of M".
   useEffect(() => {

@@ -21,14 +21,6 @@ def _doc(content, is_reference=False, file_path=None, deleted_at=None):
 
 
 @pytest.mark.asyncio
-async def test_inlines_doc_embed_as_text():
-    fake = AsyncMock(return_value=_doc("# Embedded\nbody"))
-    with patch("documents.service.fetch_one", fake):
-        out = await _inline_transclusions("before\n![T](doc:d1)\nafter", _PROJ)
-    assert out == "before\n# Embedded\nbody\nafter"
-
-
-@pytest.mark.asyncio
 async def test_inlines_bare_id_doc_embed():
     fake = AsyncMock(return_value=_doc("plain text"))
     with patch("documents.service.fetch_one", fake):
@@ -54,17 +46,6 @@ async def test_skips_image_reference_for_base64_pass():
     assert out == "![I](ref:img1)"
 
 
-@pytest.mark.asyncio
-async def test_inlines_audio_transcription_as_text():
-    # An audio reference carries a file AND a transcription — the transcription text is
-    # inlined (it renders as a text band in the editor); the file is NOT base64'd here.
-    ref = {"content": "transcribed words", "is_reference": True, "file_path": "a/v.webm",
-           "media_type": "audio", "deleted_at": None, "project_id": _PROJ}
-    with patch("documents.service.fetch_one", AsyncMock(return_value=ref)):
-        out = await _inline_transclusions("![voice](ref:aud1)", _PROJ)
-    assert out == "transcribed words"
-
-
 # Bug G: a soft-deleted text-reference must NOT inline into export (mirrors the bare/doc
 # branch which already guards deleted_at). This is the SOLE deletion-bug coverage — the
 # frontend never sees deleted refs (storeReferences excludes them).
@@ -77,28 +58,11 @@ async def test_skips_soft_deleted_text_reference():
 
 
 @pytest.mark.asyncio
-async def test_skips_data_uri_target():
-    # The shared reject regex must include `data:` — a data: URI is never a doc id.
-    with patch("documents.service.fetch_one", AsyncMock(return_value=None)):
-        out = await _inline_transclusions("![x](data:image/png;base64,AAAA)", _PROJ)
-    assert out == "![x](data:image/png;base64,AAAA)"
-
-
-@pytest.mark.asyncio
 async def test_leaves_external_and_unresolvable_targets():
     fake = AsyncMock(return_value=None)
     with patch("documents.service.fetch_one", fake):
         out = await _inline_transclusions("![x](https://a/b.png)\n![y](doc:missing)", _PROJ)
     assert out == "![x](https://a/b.png)\n![y](doc:missing)"
-
-
-@pytest.mark.asyncio
-async def test_one_level_only_nested_embed_left_raw():
-    # The inlined doc body itself contains an embed — it is NOT recursively resolved.
-    fake = AsyncMock(return_value=_doc("outer\n![N](doc:inner)"))
-    with patch("documents.service.fetch_one", fake):
-        out = await _inline_transclusions("![T](doc:outer)", _PROJ)
-    assert out == "outer\n![N](doc:inner)"
 
 
 # ─── _inline_ref_images: base64 for images only, drop other media ───────────

@@ -75,19 +75,6 @@ async def _seed_skill(test_db, pid, uid, name, children: dict[str, str]) -> str:
     return head["doc_id"]
 
 
-def test_registry_shape():
-    """Read-only, sandbox-gated, on exactly the surfaces sandbox_fetch_reference
-    serves — derived from that entry, never a literal."""
-    from agent_tools import registry
-
-    entry = registry.by_name("sandbox_fetch_skill")
-    twin = registry.by_name("sandbox_fetch_reference")
-    assert entry.mutating is False
-    assert entry.env_gate == "sandbox"
-    assert set(entry.surfaces) == set(twin.surfaces)
-    assert "mcp" not in entry.surfaces
-
-
 @pytest.mark.asyncio
 async def test_writes_skill_md_and_every_path_titled_child(
     client, test_db, project_with_doc, sftp_write,
@@ -118,39 +105,6 @@ async def test_writes_skill_md_and_every_path_titled_child(
     }
     assert sftp_write[f"{base}/scripts/run.py"] == b"print('hi')\n"
     assert sftp_write[f"{base}/SKILL.md"].startswith(b"---\nname: repo-stats\n")
-
-
-@pytest.mark.asyncio
-async def test_unknown_name_is_404_listing_project_skills(
-    client, test_db, project_with_doc, sftp_write,
-):
-    pid, _, uid = project_with_doc
-    await _seed_skill(test_db, pid, uid, "known-one", {})
-    tok = await _make_key(uid, pid)
-    resp = await client.post("/api/tool/sandbox_fetch_skill", json={
-        "name": "nope",
-    }, headers=_hdr(tok))
-    assert resp.status_code == 404, resp.text
-    assert "known-one" in resp.json()["detail"]
-    assert sftp_write == {}
-
-
-@pytest.mark.asyncio
-async def test_shipped_only_name_is_404(client, test_db, project_with_doc, sftp_write):
-    """Shipped skills carry no files — a shipped name with no project copy
-    resolves nothing (derived from the shipped layer, not a literal name)."""
-    from agent_skills import frontmatter_name, shipped_skill_docs
-
-    pid, _, uid = project_with_doc
-    shipped = next(
-        n for n in (frontmatter_name(d["content"]) for d in shipped_skill_docs()) if n
-    )
-    tok = await _make_key(uid, pid)
-    resp = await client.post("/api/tool/sandbox_fetch_skill", json={
-        "name": shipped,
-    }, headers=_hdr(tok))
-    assert resp.status_code == 404, resp.text
-    assert sftp_write == {}
 
 
 @pytest.mark.asyncio

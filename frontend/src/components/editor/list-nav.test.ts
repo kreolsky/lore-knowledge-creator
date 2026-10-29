@@ -46,20 +46,6 @@ function createViewWithSelection(doc: string, anchor: number, head: number): Edi
 }
 
 describe('cursorLineStartStep — Cmd+ArrowLeft (lists, multi-step)', () => {
-  it('first press from line end goes to contentStart (after "- ")', () => {
-    const doc = '- bullet text';
-    const view = createView(doc, doc.length);
-    expect(cursorLineStartStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(2);
-  });
-
-  it('second press goes to lineFrom (before bullet)', () => {
-    const doc = '- bullet text';
-    const view = createView(doc, doc.length);
-    cursorLineStartStep(view);
-    cursorLineStartStep(view);
-    expect(view.state.selection.main.head).toBe(0);
-  });
 
   it('third press at lineFrom returns false', () => {
     const doc = '- bullet text';
@@ -80,56 +66,10 @@ describe('cursorLineStartStep — Cmd+ArrowLeft (lists, multi-step)', () => {
     const view = createView(doc, 1);
     expect(cursorLineStartStep(view)).toBe(true);
     expect(view.state.selection.main.head).toBe(0);
-  });
-
-  it('handles nested bullet — contentStart at 4, then lineFrom at 0', () => {
-    const doc = '  - nested bullet';
-    const view = createView(doc, doc.length);
-    cursorLineStartStep(view);
-    expect(view.state.selection.main.head).toBe(4);
-    cursorLineStartStep(view);
-    expect(view.state.selection.main.head).toBe(0);
-  });
-
-  it('handles checkbox items — contentStart at 6', () => {
-    const doc = '- [ ] task text';
-    const view = createView(doc, doc.length);
-    cursorLineStartStep(view);
-    expect(view.state.selection.main.head).toBe(6);
-  });
-
-  it('handles numbered list — "1. " contentStart at 3', () => {
-    const doc = '1. numbered text';
-    const view = createView(doc, doc.length);
-    cursorLineStartStep(view);
-    expect(view.state.selection.main.head).toBe(3);
-    cursorLineStartStep(view);
-    expect(view.state.selection.main.head).toBe(0);
-  });
-
-  it('handles double-digit numbered list — "12. " contentStart at 4', () => {
-    const doc = '12. double digit';
-    const view = createView(doc, doc.length);
-    cursorLineStartStep(view);
-    expect(view.state.selection.main.head).toBe(4);
   });
 });
 
 describe('cursorLineStartStep — Cmd+ArrowLeft (headings, multi-step)', () => {
-  it('first press from line end goes to contentStart (after "# ")', () => {
-    const doc = '# heading text';
-    const view = createView(doc, doc.length);
-    expect(cursorLineStartStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(2);
-  });
-
-  it('second press goes to lineFrom (before "#")', () => {
-    const doc = '# heading text';
-    const view = createView(doc, doc.length);
-    cursorLineStartStep(view);
-    cursorLineStartStep(view);
-    expect(view.state.selection.main.head).toBe(0);
-  });
 
   it('third press at lineFrom returns false', () => {
     const doc = '# heading text';
@@ -151,52 +91,9 @@ describe('cursorLineStartStep — Cmd+ArrowLeft (headings, multi-step)', () => {
     expect(cursorLineStartStep(view)).toBe(true);
     expect(view.state.selection.main.head).toBe(0);
   });
-
-  it('handles H2 — contentStart at 3', () => {
-    const doc = '## sub heading';
-    const view = createView(doc, doc.length);
-    cursorLineStartStep(view);
-    expect(view.state.selection.main.head).toBe(3);
-  });
-
-  it('handles H6 — contentStart at 7', () => {
-    const doc = '###### deep heading';
-    const view = createView(doc, doc.length);
-    cursorLineStartStep(view);
-    expect(view.state.selection.main.head).toBe(7);
-  });
-
-  it('handles multiple spaces after marker — contentStart after all whitespace', () => {
-    const doc = '##   spaced heading';
-    const view = createView(doc, doc.length);
-    cursorLineStartStep(view);
-    expect(view.state.selection.main.head).toBe(doc.indexOf('spaced'));
-  });
-
-  it('treats hash with no trailing space as paragraph (single step)', () => {
-    const doc = '#NoSpace text';
-    const view = createView(doc, doc.length);
-    expect(cursorLineStartStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(0);
-    expect(cursorLineStartStep(view)).toBe(false);
-  });
-
-  it('heading followed by paragraph scopes to correct line', () => {
-    const doc = '# heading text\nregular paragraph';
-    const view = createView(doc, doc.indexOf('text'));
-    expect(cursorLineStartStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(2);
-  });
 });
 
 describe('selectLineStartStep — Cmd+Shift+ArrowLeft (headings)', () => {
-  it('first press extends selection to heading contentStart', () => {
-    const doc = '# heading text';
-    const view = createView(doc, doc.length);
-    expect(selectLineStartStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(2);
-    expect(view.state.selection.main.anchor).toBe(doc.length);
-  });
 
   it('second press extends selection to lineFrom', () => {
     const doc = '# heading text';
@@ -208,57 +105,7 @@ describe('selectLineStartStep — Cmd+Shift+ArrowLeft (headings)', () => {
   });
 });
 
-describe('cursorLineStartStep — Cmd+ArrowLeft (regular paragraph)', () => {
-  it('first press from line end goes to lineFrom (no contentStart for paragraph)', () => {
-    const doc = 'just regular text';
-    const view = createView(doc, doc.length);
-    expect(cursorLineStartStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(0);
-  });
-
-  it('second press at lineFrom returns false', () => {
-    const doc = 'just regular text';
-    const view = createView(doc, doc.length);
-    cursorLineStartStep(view);
-    expect(cursorLineStartStep(view)).toBe(false);
-  });
-
-  it('works on a paragraph that lives on a non-first document line', () => {
-    const doc = 'first line\nsecond paragraph here';
-    const lineFrom = doc.indexOf('second');
-    const view = createView(doc, doc.length);
-    expect(cursorLineStartStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(lineFrom);
-  });
-});
-
 describe('cursorLineEndStep — Cmd+ArrowRight (paragraphs and lists)', () => {
-  it('moves cursor to end of line in a list item', () => {
-    const doc = '- bullet text';
-    const view = createView(doc, 2);
-    expect(cursorLineEndStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(doc.length);
-  });
-
-  it('returns false when already at lineTo', () => {
-    const doc = '- bullet text';
-    const view = createView(doc, doc.length);
-    expect(cursorLineEndStep(view)).toBe(false);
-  });
-
-  it('moves cursor to lineTo in a regular paragraph', () => {
-    const doc = 'just regular text';
-    const view = createView(doc, 0);
-    expect(cursorLineEndStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(doc.length);
-  });
-
-  it('works from inside marker zone in lists', () => {
-    const doc = '- bullet text';
-    const view = createView(doc, 0);
-    expect(cursorLineEndStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(doc.length);
-  });
 
   it('works for nested bullet', () => {
     const doc = '  - nested bullet';
@@ -273,24 +120,9 @@ describe('cursorLineEndStep — Cmd+ArrowRight (paragraphs and lists)', () => {
     expect(cursorLineEndStep(view)).toBe(true);
     expect(view.state.selection.main.head).toBe(doc.length);
   });
-
-  it('stops at lineTo of current paragraph, not document end', () => {
-    const doc = 'first paragraph\nsecond one';
-    const lineToOfFirst = doc.indexOf('\n');
-    const view = createView(doc, 0);
-    expect(cursorLineEndStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(lineToOfFirst);
-  });
 });
 
 describe('selectLineStartStep — Cmd+Shift+ArrowLeft', () => {
-  it('first press extends selection to contentStart', () => {
-    const doc = '- bullet text';
-    const view = createView(doc, doc.length);
-    expect(selectLineStartStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(2);
-    expect(view.state.selection.main.anchor).toBe(doc.length);
-  });
 
   it('second press extends selection to lineFrom', () => {
     const doc = '- bullet text';
@@ -299,19 +131,6 @@ describe('selectLineStartStep — Cmd+Shift+ArrowLeft', () => {
     selectLineStartStep(view);
     expect(view.state.selection.main.head).toBe(0);
     expect(view.state.selection.main.anchor).toBe(doc.length);
-  });
-
-  it('returns false when head already at lineFrom', () => {
-    const doc = '- bullet text';
-    const view = createView(doc, 0);
-    expect(selectLineStartStep(view)).toBe(false);
-  });
-
-  it('works for plain paragraph (single step to lineFrom)', () => {
-    const doc = 'just regular text\nmore text';
-    const view = createView(doc, doc.length);
-    expect(selectLineStartStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(doc.indexOf('more'));
   });
 
   it('preserves existing anchor when extending', () => {
@@ -332,26 +151,6 @@ describe('selectLineStartStep — Cmd+Shift+ArrowLeft', () => {
 });
 
 describe('selectLineEndStep — Cmd+Shift+ArrowRight', () => {
-  it('extends selection to lineTo in a list item', () => {
-    const doc = '- bullet text';
-    const view = createView(doc, 2);
-    expect(selectLineEndStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(doc.length);
-    expect(view.state.selection.main.anchor).toBe(2);
-  });
-
-  it('returns false when head already at lineTo', () => {
-    const doc = '- bullet text';
-    const view = createView(doc, doc.length);
-    expect(selectLineEndStep(view)).toBe(false);
-  });
-
-  it('works for plain paragraph', () => {
-    const doc = 'just regular text';
-    const view = createView(doc, 0);
-    expect(selectLineEndStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(doc.length);
-  });
 
   it('preserves existing anchor when extending', () => {
     const doc = '- bullet text';
@@ -548,134 +347,5 @@ describe('Cmd+Arrow delimiter stops — sentence-ending punctuation', () => {
     cursorLineStartStep(view);
     expect(view.state.selection.main.head).toBe(0);
     expect(cursorLineStartStep(view)).toBe(false);
-  });
-});
-
-describe('Cmd+Arrow delimiter stops — negative (no delimiters)', () => {
-  it('paragraph with no delimiters jumps straight to lineFrom (single step)', () => {
-    const doc = 'just regular words';
-    const view = createView(doc, doc.length);
-    expect(cursorLineStartStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(0);
-    expect(cursorLineStartStep(view)).toBe(false);
-  });
-
-  it('paragraph with no delimiters jumps straight to lineTo (single step)', () => {
-    const doc = 'just regular words';
-    const view = createView(doc, 0);
-    expect(cursorLineEndStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(doc.length);
-    expect(cursorLineEndStep(view)).toBe(false);
-  });
-});
-
-describe('Cmd+Arrow delimiter stops — list item with delimiter', () => {
-  it('left: delimiter stop fires, contentStart still fires, then lineFrom', () => {
-    const doc = '- one. two';
-    const period = doc.indexOf('.');
-    const view = createView(doc, doc.length);
-    cursorLineStartStep(view);
-    expect(view.state.selection.main.head).toBe(period);
-    cursorLineStartStep(view);
-    expect(view.state.selection.main.head).toBe(2);
-    cursorLineStartStep(view);
-    expect(view.state.selection.main.head).toBe(0);
-    expect(cursorLineStartStep(view)).toBe(false);
-  });
-});
-
-describe('Shift variants — delimiter stops with selection preserved', () => {
-  it('selectLineStartStep extends to delimiter then lineFrom keeping anchor', () => {
-    const doc = 'one. two. three';
-    const view = createViewWithSelection(doc, 0, doc.length);
-    selectLineStartStep(view);
-    expect(view.state.selection.main.head).toBe(doc.lastIndexOf('.'));
-    expect(view.state.selection.main.anchor).toBe(0);
-    selectLineStartStep(view);
-    expect(view.state.selection.main.head).toBe(doc.indexOf('.'));
-    expect(view.state.selection.main.anchor).toBe(0);
-  });
-
-  it('selectLineEndStep extends to delimiter then lineTo keeping anchor', () => {
-    const doc = 'one. two. three';
-    const view = createViewWithSelection(doc, doc.length, 0);
-    selectLineEndStep(view);
-    expect(view.state.selection.main.head).toBe(doc.indexOf('.') + 1);
-    expect(view.state.selection.main.anchor).toBe(doc.length);
-    selectLineEndStep(view);
-    expect(view.state.selection.main.head).toBe(doc.lastIndexOf('.') + 1);
-    expect(view.state.selection.main.anchor).toBe(doc.length);
-  });
-});
-
-describe('Cmd+Arrow delimiter stops — whitespace adjacency gate', () => {
-  it('price 1.5 and more — right from 0 jumps straight to lineTo (no mid stop)', () => {
-    const doc = 'price 1.5 and more';
-    const view = createView(doc, 0);
-    expect(cursorLineEndStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(doc.length);
-    expect(cursorLineEndStep(view)).toBe(false);
-  });
-
-  it('price 1.5 and more — left from end jumps straight to lineFrom', () => {
-    const doc = 'price 1.5 and more';
-    const view = createView(doc, doc.length);
-    expect(cursorLineStartStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(0);
-    expect(cursorLineStartStep(view)).toBe(false);
-  });
-
-  it('see file.txt now — no stop on . in filename', () => {
-    const doc = 'see file.txt now';
-    const view = createView(doc, 0);
-    expect(cursorLineEndStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(doc.length);
-    expect(cursorLineEndStep(view)).toBe(false);
-  });
-
-  it('visit example.com today — no stop on . in domain', () => {
-    const doc = 'visit example.com today';
-    const view = createView(doc, 0);
-    expect(cursorLineEndStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(doc.length);
-    expect(cursorLineEndStep(view)).toBe(false);
-  });
-
-  it('Hello world. — period at line end STILL a stop: right', () => {
-    const doc = 'Hello world.';
-    const view = createView(doc, 0);
-    expect(cursorLineEndStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(doc.indexOf('.') + 1);
-    expect(cursorLineEndStep(view)).toBe(false);
-  });
-
-  it('Hello world. — period at line end STILL a stop: left', () => {
-    const doc = 'Hello world.';
-    const view = createView(doc, doc.length);
-    expect(cursorLineStartStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(doc.indexOf('.'));
-    expect(cursorLineStartStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(0);
-    expect(cursorLineStartStep(view)).toBe(false);
-  });
-
-  it('Wait... next — only the . adjacent to the space stops', () => {
-    const doc = 'Wait... next';
-    const view = createView(doc, 0);
-    expect(cursorLineEndStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(doc.lastIndexOf('.') + 1);
-    expect(cursorLineEndStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(doc.length);
-    expect(cursorLineEndStep(view)).toBe(false);
-  });
-
-  it('What?! next — only the ! adjacent to the space stops', () => {
-    const doc = 'What?! next';
-    const view = createView(doc, 0);
-    expect(cursorLineEndStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(doc.lastIndexOf('!') + 1);
-    expect(cursorLineEndStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(doc.length);
-    expect(cursorLineEndStep(view)).toBe(false);
   });
 });

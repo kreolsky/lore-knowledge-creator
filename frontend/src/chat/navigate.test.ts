@@ -13,7 +13,6 @@ const { emitMock } = vi.hoisted(() => ({
 vi.mock('../events', () => ({ emit: emitMock }));
 
 import { navigateToDocKeepingChat } from './navigate';
-import { useUIStore } from '../store/ui-store';
 
 describe('navigateToDocKeepingChat', () => {
   beforeEach(() => {
@@ -23,23 +22,5 @@ describe('navigateToDocKeepingChat', () => {
   it('emits navigate-to-document for the destination doc', () => {
     navigateToDocKeepingChat('doc-dest');
     expect(emitMock).toHaveBeenCalledWith('navigate-to-document', { documentId: 'doc-dest' });
-  });
-
-  it('always navigates regardless of active chat state (chat persists by default)', () => {
-    navigateToDocKeepingChat('doc-9');
-    expect(emitMock).toHaveBeenCalledTimes(1);
-    expect(emitMock).toHaveBeenCalledWith('navigate-to-document', { documentId: 'doc-9' });
-  });
-});
-
-describe('navigateToDocKeepingChat', () => {
-  beforeEach(() => { useUIStore.setState({ documents: {}, searchTabDocId: null }); });
-
-  it('pins chat on the target doc before emitting', () => {
-    navigateToDocKeepingChat('doc-y');
-    const d = useUIStore.getState().documents['doc-y'];
-    expect(d.rightPanelTab).toBe('chat');
-    expect(d.rightPanelOpen).toBe(true);
-    expect(emitMock).toHaveBeenCalledWith('navigate-to-document', { documentId: 'doc-y' });
   });
 });

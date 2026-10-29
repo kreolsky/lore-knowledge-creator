@@ -24,13 +24,14 @@ export const tableDocSource = Facet.define<Y.Doc | null, Y.Doc | null>({
 });
 
 /**
- * Entity id of the host view's document — the identity the table widget late-binds
- * its live ydoc through (getViewEntity → subscribeEntityHandle). A facet (not the
- * WeakMap alone) because the widget's `toDOM` runs during view construction, BEFORE
- * the host's `onCreateView` registers the view→entity pair: a TableFocusView whose
- * doc text IS the anchor mounts its widget at construction time. Hosts without the
- * facet fall back to the module registry (`getViewEntity(view)`).
+ * Entity id the view renders — the ONE answer to "which entity is this view", read by
+ * getViewEntity (table widget late-bind, image drop, paste/drop model placement). The
+ * focused slot cannot answer it in split view (it points at whichever column holds
+ * focus). A facet because it is set at view construction: the widget's `toDOM` runs
+ * during construction, so a host that registered after it would be read too late.
+ * Provided by every host (the document editor, TableFocusView, table cells); a view
+ * without a provider (PublicEditor, nested transclusion views) reads null.
  */
-export const tableHostEntity = Facet.define<string, string | null>({
+export const viewEntity = Facet.define<string | null, string | null>({
   combine: (ids) => ids[0] ?? null,
 });

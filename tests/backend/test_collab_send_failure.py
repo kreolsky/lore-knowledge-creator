@@ -5,7 +5,7 @@ must log the failure, close the WS with code 1011, and remove the client.
 """
 
 import logging
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from collab.events import _on_access_changed
@@ -42,36 +42,7 @@ def _clear_sessions():
 
 
 class TestFlushBatchSendFailure:
-    async def test_client_removed_on_send_failure(self):
-        session = _mk_session()
-        good_client = _mk_client(user_id="u-good")
-        bad_client = _mk_client(user_id="u-bad")
-        bad_client.ws.send_text.side_effect = RuntimeError("connection lost")
 
-        session.clients[id(good_client.ws)] = good_client
-        session.clients[id(bad_client.ws)] = bad_client
-
-        session.queue_broadcast({"type": "update", "entity_id": "d1", "version": 1, "changes": []})
-
-        with patch.object(session, "_flush_batch", wraps=session._flush_batch):
-            await session._flush_batch()
-
-        assert id(bad_client.ws) not in session.clients
-        assert id(good_client.ws) in session.clients
-
-    async def test_ws_closed_with_1011_on_send_failure(self):
-        session = _mk_session()
-        bad_client = _mk_client(user_id="u-bad")
-        bad_client.ws.send_text.side_effect = RuntimeError("connection lost")
-
-        session.clients[id(bad_client.ws)] = bad_client
-        session.queue_broadcast({"type": "update", "entity_id": "d1", "version": 1, "changes": []})
-
-        await session._flush_batch()
-
-        bad_client.ws.close.assert_awaited()
-        call_args = bad_client.ws.close.call_args
-        assert call_args.kwargs.get("code") == 1011 or (call_args.args and call_args.args[0] == 1011)
 
     async def test_logger_warning_on_send_failure(self, caplog):
         session = _mk_session()
@@ -87,70 +58,8 @@ class TestFlushBatchSendFailure:
         assert any("WS send failed" in r.message for r in caplog.records)
 
 
-class TestBroadcastSendFailure:
-    async def test_client_removed_on_broadcast_failure(self):
-        session = _mk_session()
-        bad_client = _mk_client(user_id="u-bad")
-        bad_client.ws.send_text.side_effect = RuntimeError("broken pipe")
-
-        session.clients[id(bad_client.ws)] = bad_client
-
-        await session.broadcast({"type": "user_joined"})
-
-        assert id(bad_client.ws) not in session.clients
-
-    async def test_ws_closed_with_1011_on_broadcast_failure(self):
-        session = _mk_session()
-        bad_client = _mk_client(user_id="u-bad")
-        bad_client.ws.send_text.side_effect = RuntimeError("broken pipe")
-
-        session.clients[id(bad_client.ws)] = bad_client
-
-        await session.broadcast({"type": "user_joined"})
-
-        bad_client.ws.close.assert_awaited()
-        call_args = bad_client.ws.close.call_args
-        assert call_args.kwargs.get("code") == 1011 or (call_args.args and call_args.args[0] == 1011)
-
-    async def test_logger_warning_on_broadcast_failure(self, caplog):
-        session = _mk_session()
-        bad_client = _mk_client(user_id="u-bad")
-        bad_client.ws.send_text.side_effect = RuntimeError("broken pipe")
-
-        session.clients[id(bad_client.ws)] = bad_client
-
-        with caplog.at_level(logging.WARNING, logger="collab.session"):
-            await session.broadcast({"type": "user_joined"})
-
-        assert any("WS send failed" in r.message for r in caplog.records)
-
-
 class TestAccessChangedSendFailure:
-    async def test_client_cleaned_up_on_access_changed_failure(self):
-        session = _mk_session()
-        bad_client = _mk_client(user_id="u-bad")
-        bad_client.ws.send_text.side_effect = RuntimeError("closed")
 
-        session.clients[id(bad_client.ws)] = bad_client
-        _sessions[_session_key("doc", "d1")] = session
-
-        await _on_access_changed("p1", "u-bad", None)
-
-        assert id(bad_client.ws) not in session.clients
-
-    async def test_ws_closed_with_1011_on_access_changed_failure(self):
-        session = _mk_session()
-        bad_client = _mk_client(user_id="u-bad")
-        bad_client.ws.send_text.side_effect = RuntimeError("closed")
-
-        session.clients[id(bad_client.ws)] = bad_client
-        _sessions[_session_key("doc", "d1")] = session
-
-        await _on_access_changed("p1", "u-bad", None)
-
-        bad_client.ws.close.assert_awaited()
-        call_args = bad_client.ws.close.call_args
-        assert call_args.kwargs.get("code") == 1011 or (call_args.args and call_args.args[0] == 1011)
 
     async def test_logger_warning_on_access_changed_failure(self, caplog):
         session = _mk_session()

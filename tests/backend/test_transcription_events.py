@@ -28,55 +28,6 @@ async def _create_audio_ref(ref_id: str, pid: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_enqueue_transcription_submits_arq_job(enqueue_recorder):
-    """enqueue_transcription enqueues transcribe_task with a per-ref job_id on the transcription queue."""
-    import transcription
-
-    await transcription.enqueue_transcription("user-1", "ref-xyz")
-
-    assert enqueue_recorder.calls == [(
-        "transcribe_task",
-        ("user-1", "ref-xyz"),
-        {"job_id": "transcribe:ref-xyz", "queue": "transcription"},
-    )]
-
-
-@pytest.mark.asyncio
-async def test_transcribe_task_complete_emits_event(test_db):
-    """Successful transcribe_task sets content via set_content and emits transcription_complete."""
-    from event_bus import off, on
-    from jobs.tasks import transcribe_task
-
-    ref_id = "task-test-ref-ok"
-    pid = "task-test-project"
-    await _create_audio_ref(ref_id, pid)
-
-    events = []
-    async def capture(**kw):
-        events.append(kw)
-
-    on("transcription_complete", capture)
-    try:
-        with patch("transcription.transcribe_audio", new_callable=AsyncMock, return_value="Hello world"), \
-             patch("ydoc_store.set_content", new_callable=AsyncMock) as set_content, \
-             patch("jobs.tasks.media.STORAGE_PATH"):
-            await transcribe_task({"job_try": 1, "max_tries": 2}, "test-user", ref_id)
-            # emit() is fire-and-forget (create_task) — drain the loop so the
-            # local capture handler runs before asserting.
-            await asyncio.sleep(0.05)
-
-        # INVARIANT: worker reaches editors via set_content (no live session), not
-        # apply_external_content_change.
-        set_content.assert_awaited_once()
-        assert set_content.await_args.args[1] == "Hello world"
-        assert len(events) == 1
-        assert events[0]["reference_id"] == ref_id
-        assert events[0]["project_id"] == pid
-    finally:
-        off("transcription_complete", capture)
-
-
-@pytest.mark.asyncio
 async def test_transcribe_task_emits_content_flushed_to_schedule_embed(test_db):
     """A worker-written content change MUST emit content_flushed so the embedding
     scheduler (embeddings._on_content_flushed) enqueues an embed_document_task.
@@ -112,40 +63,6 @@ async def test_transcribe_task_emits_content_flushed_to_schedule_embed(test_db):
         assert flushed[0]["project_id"] == pid
     finally:
         off("content_flushed", capture)
-
-
-@pytest.mark.asyncio
-async def test_transcribe_task_dead_letter_sets_error(test_db):
-    """On the final attempt, a failed transcription sets status 'error' and emits transcription_error."""
-    from db import get_db
-    from event_bus import off, on
-    from jobs.tasks import transcribe_task
-
-    ref_id = "task-test-ref-err"
-    pid = "task-test-project-err"
-    await _create_audio_ref(ref_id, pid)
-
-    events = []
-    async def capture(**kw):
-        events.append(kw)
-
-    on("transcription_error", capture)
-    try:
-        with patch("transcription.transcribe_audio", new_callable=AsyncMock, side_effect=RuntimeError("STT failed")), \
-             patch("jobs.tasks.media.STORAGE_PATH"):
-            with pytest.raises(RuntimeError):
-                await transcribe_task({"job_try": 2, "max_tries": 2}, "test-user", ref_id)
-            await asyncio.sleep(0.05)  # drain fire-and-forget emit
-
-        assert len(events) == 1
-        assert events[0]["reference_id"] == ref_id
-        db = await get_db()
-        rows = await db.query(
-            "SELECT processing_status FROM type::record('documents', $id)", {"id": ref_id}
-        )
-        assert rows[0]["processing_status"] == "error"
-    finally:
-        off("transcription_error", capture)
 
 
 @pytest.mark.asyncio

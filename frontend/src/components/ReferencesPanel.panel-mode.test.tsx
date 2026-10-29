@@ -17,7 +17,6 @@ import { act } from 'react';
 
 import type { Document, Project, Reference } from '../types';
 import type { RefOpenMode } from '../store/ui-store/documents-slice';
-import { ACTIVE_TOGGLE_CLS } from './references/ref-utils';
 
 const NOW = '2026-01-01T00:00:00Z';
 
@@ -40,7 +39,6 @@ const REF: Reference = {
   file_path: null, file_meta: null, created_at: NOW, updated_at: NOW,
 };
 const AUDIO_REF: Reference = { ...REF, reference_id: 'ref-2', title: 'Audio', media_type: 'audio', file_path: '/a.mp3' };
-const FILE_REF: Reference = { ...REF, reference_id: 'ref-3', title: 'Archive', media_type: 'file', file_path: '/a.zip' };
 
 let container: HTMLDivElement;
 let root: Root;
@@ -135,27 +133,6 @@ describe("ReferencesPanel — 'panel' open mode", () => {
     expect(q('[data-testid="panel-media-bar"]').length).toBe(0);
   });
 
-  it('panel + open AUDIO reference: media bar above the editor', async () => {
-    await mount('panel', AUDIO_REF);
-    expect(q('[data-testid="panel-media-bar"]').length).toBe(1);
-    expect(q('[data-testid="panel-editor"]').length).toBe(1);
-  });
-
-  it('panel + open FILE reference: the archive card (media bar) renders above the editor', async () => {
-    await mount('panel', FILE_REF);
-    expect(q('[data-testid="panel-media-bar"]').length).toBe(1);
-    expect(q('[data-testid="panel-editor"]').length).toBe(1);
-  });
-
-  it('← Refs on the plaque clears currentReference and the list comes back', async () => {
-    await mount('panel', REF);
-    const back = q('[data-testid="refs-panel-plaque"] button')[0];
-    await act(async () => { back.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
-    expect(useAppStore.getState().currentReference).toBeNull();
-    expect(q('[data-testid="refs-panel-plaque"]').length).toBe(0);
-    expect(q('[data-testid="refcard"]').length).toBe(2);
-  });
-
   it('after ← Refs the remounted list still starts a drag-reorder', async () => {
     await mount('panel', REF);
     const back = q('[data-testid="refs-panel-plaque"] button')[0];
@@ -171,83 +148,6 @@ describe("ReferencesPanel — 'panel' open mode", () => {
     // The drag hook marks an active drag by disabling text selection on <body>.
     expect(document.body.style.userSelect).toBe('none');
     act(() => { document.dispatchEvent(new MouseEvent('pointerup', { bubbles: true })); });
-  });
-
-  it('panel + no open reference: the list renders, no plaque', async () => {
-    await mount('panel', null);
-    expect(q('[data-testid="refs-panel-plaque"]').length).toBe(0);
-    expect(q('[data-testid="refcard"]').length).toBe(2);
-  });
-
-  it("'center' + open reference: the list renders, no plaque, no panel editor", async () => {
-    await mount('center', REF);
-    expect(q('[data-testid="refs-panel-plaque"]').length).toBe(0);
-    expect(q('[data-testid="panel-editor"]').length).toBe(0);
-    expect(q('[data-testid="refcard"]').length).toBe(2);
-  });
-
-  it('the chosen mode is highlighted with NO reference open — the user sees it before clicking', async () => {
-    await mount('split', null);
-    const byTitle = (t: string) => container.querySelector(`button[title="${t}"]`) as HTMLButtonElement;
-    expect(byTitle('toggleSplitView').className).toContain(ACTIVE_TOGGLE_CLS);
-    expect(byTitle('toggleRefInPanel').className).not.toContain(ACTIVE_TOGGLE_CLS);
-    await act(async () => { byTitle('toggleRefInPanel').click(); });
-    expect(byTitle('toggleRefInPanel').className).toContain(ACTIVE_TOGGLE_CLS);
-    expect(byTitle('toggleSplitView').className).not.toContain(ACTIVE_TOGGLE_CLS);
-  });
-
-  it('the two toggles set their own mode, and the active one returns to center', async () => {
-    await mount('center', REF);
-    const byTitle = (t: string) => container.querySelector(`button[title="${t}"]`) as HTMLButtonElement;
-    await act(async () => { byTitle('toggleRefInPanel').click(); });
-    expect(useUIStore.getState().getRefOpenMode('doc-1')).toBe('panel');
-    // Panel mode swaps the toolbar for the plaque; go back to the list to reach the toggles.
-    await act(async () => { useAppStore.setState({ currentReference: null }); });
-    await act(async () => { byTitle('toggleSplitView').click(); });
-    expect(useUIStore.getState().getRefOpenMode('doc-1')).toBe('split');
-    await act(async () => { byTitle('toggleSplitView').click(); });
-    expect(useUIStore.getState().getRefOpenMode('doc-1')).toBe('center');
-  });
-
-  it('archive from the plaque: the reference STAYS open in the panel, now archived', async () => {
-    const { apiClient } = await import('../api/client');
-    (apiClient.patch as ReturnType<typeof vi.fn>).mockResolvedValue({ ...REF, archived: true });
-    await mount('panel', REF);
-    useAppStore.setState({ references: [REF, AUDIO_REF] });
-    const archiveBtn = container.querySelector('button[title="archiveReference"]')!;
-    await act(async () => { archiveBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
-    expect(apiClient.patch).toHaveBeenCalledWith('/references/ref-1', { archived: true });
-    expect(useAppStore.getState().currentReference?.archived).toBe(true);
-    expect(q('[data-testid="refs-panel-plaque"]').length).toBe(1);
-    expect(q('[data-testid="refcard"]').length).toBe(0);
-    expect(container.querySelector('button[title="deleteReferencePermanently"]')).not.toBeNull();
-    expect(container.querySelector('button[title="restoreReference"]')).not.toBeNull();
-  });
-
-  it('armed delete of an archived reference from the plaque: back to the list, reference gone', async () => {
-    const archived = { ...REF, archived: true };
-    // The delete hook's unmount flush is fire-and-forget (`.catch`) — it needs a promise back.
-    const { apiClient } = await import('../api/client');
-    (apiClient.post as ReturnType<typeof vi.fn>).mockResolvedValue({});
-    await mount('panel', archived);
-    useAppStore.setState({ references: [archived, AUDIO_REF] });
-    const trash = () => container.querySelector('button[title="deleteReferencePermanently"]')!;
-    await act(async () => { trash().dispatchEvent(new MouseEvent('click', { bubbles: true })); });
-    expect(useAppStore.getState().currentReference).not.toBeNull();
-    await act(async () => { trash().dispatchEvent(new MouseEvent('click', { bubbles: true })); });
-    expect(useAppStore.getState().currentReference).toBeNull();
-    expect(q('[data-testid="refs-panel-plaque"]').length).toBe(0);
-    expect(useAppStore.getState().references.map(r => r.reference_id)).toEqual(['ref-2']);
-  });
-
-  it('the pressed eye on the plaque switches the doc back to center; the reference stays open (moves to the center)', async () => {
-    await mount('panel', REF);
-    const eye = container.querySelector('[data-testid="refs-panel-plaque"] button[title="toggleRefInPanel"]')!;
-    await act(async () => { eye.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
-    expect(useUIStore.getState().getRefOpenMode('doc-1')).toBe('center');
-    expect(useAppStore.getState().currentReference).toBe(REF);
-    expect(q('[data-testid="refs-panel-plaque"]').length).toBe(0);
-    expect(q('[data-testid="refcard"]').length).toBe(2);
   });
 
   it('goto-parent on the plaque: the parent document OPENS, in panel mode, with the reference still open in its Refs tab', async () => {

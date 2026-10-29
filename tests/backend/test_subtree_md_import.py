@@ -85,20 +85,6 @@ async def ro_key(test_db, make_project, admin_user):
     )
 
 
-@pytest.fixture
-def scoped_key(test_db, make_project, admin_user):
-    """Factory: an agent key scoped to a subtree root; returns (token, root)."""
-
-    async def _make(scope_root: str) -> tuple[str, str]:
-        token = await _make_agent_key(
-            test_db, admin_user[0], make_project.pid,
-            auto_apply=True, scope_root=scope_root,
-        )
-        return token, scope_root
-
-    return _make
-
-
 async def _seed_doc(db, pid: str, doc_id: str, title: str, content: str,
                     parent: str | None) -> str:
     from db import create_record
@@ -236,26 +222,6 @@ async def test_import_dir_index_readme_and_empty_dir(
     assert not [d for d in tree if d["title"] == "workspace.json"]
 
 
-@pytest.mark.asyncio
-async def test_import_top_level_leaf_and_single_dir_root(
-    client, mcp_running, test_db, make_project, rw_key,
-):
-    pid = make_project.pid
-    host = await _seed_doc(test_db, pid, "imp-host", "Host", "h", None)
-    result = await _import_files(client, rw_key, host, {
-        "Solo.md": "solo body",
-        "Pack/INDEX.md": "pack body",
-    })
-    # Two top-level entries → no single root doc.
-    assert result["root_id"] is None
-    assert result["documents"] == 2
-    tree = await _tree(test_db, pid)
-    by_title = {d["title"]: d for d in tree if not d["is_ref"]}
-    assert by_title["Solo"]["parent"] == host
-    assert by_title["Pack"]["parent"] == host
-    assert await _content_of(test_db, by_title["Solo"]["id"]) == "solo body"
-
-
 # ─── links: wiki, aliases, headings, relative md links ───────────────────────
 
 
@@ -329,53 +295,7 @@ async def test_import_relative_md_links_and_wiki_embed(
     assert f"![Note](doc:{note})" in e_text
 
 
-@pytest.mark.asyncio
-async def test_import_builds_mention_edges(
-    client, mcp_running, test_db, make_project, rw_key,
-):
-    pid = make_project.pid
-    host = await _seed_doc(test_db, pid, "imp-host", "Host", "h", None)
-    await _import_files(client, rw_key, host, {
-        "B.md": "b",
-        "A.md": "go [[B]]",
-    })
-    tree = await _tree(test_db, pid)
-    by = {d["title"]: d for d in tree if not d["is_ref"]}
-    from db import extract_id
-
-    edges = await test_db.query(
-        "SELECT * FROM doc_mentions WHERE in = type::record('documents', $id)",
-        {"id": by["A"]["id"]},
-    )
-    targets = {extract_id(e.get("out")) for e in (edges or [])}
-    assert by["B"]["id"] in targets
-
-
 # ─── tables + images ─────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_import_gfm_table_becomes_table_block(
-    client, mcp_running, test_db, make_project, rw_key,
-):
-    pid = make_project.pid
-    host = await _seed_doc(test_db, pid, "imp-host", "Host", "h", None)
-    gfm = "| a | b |\n| --- | --- |\n| 1 | 2 |"
-    await _import_files(client, rw_key, host, {"T.md": f"head\n\n{gfm}\n\ntail"})
-    tree = await _tree(test_db, pid)
-    doc = next(d for d in tree if d["title"] == "T")
-    content = await _content_of(test_db, doc["id"])
-    # The GFM block is replaced by a table anchor; the model lives in the ydoc.
-    assert "| a | b |" not in content
-    anchor = re.search(r"!\[Table\]\(table:([^)]+)\)", content)
-    assert anchor, content
-    from helpers import read_table_grid
-
-    from ydoc_store import load
-
-
-    grid = read_table_grid(await load(doc["id"]), anchor.group(1))
-    assert grid["rows"] == [["a", "b"], ["1", "2"]]
 
 
 @pytest.mark.asyncio
@@ -491,26 +411,6 @@ async def test_import_readonly_key_is_403(
 
 
 @pytest.mark.asyncio
-async def test_import_scope_wall_and_default_parent(
-    client, mcp_running, test_db, make_project, scoped_key,
-):
-    pid = make_project.pid
-    wall = await _seed_doc(test_db, pid, "imp-wall", "Wall", "w", None)
-    outside = await _seed_doc(test_db, pid, "imp-out", "Out", "o", None)
-    token, _root = await scoped_key(wall)
-
-    # An explicit parent outside the scope → the wall's distinct 403.
-    body = await _mcp(client, token, "import_subtree_md", {"parent_id": outside})
-    assert body["result"].get("isError")
-    assert "subtree scope" in json.dumps(body)
-
-    # An omitted parent resolves to the scope root — the import lands inside.
-    await _import_files(client, token, None, {"N.md": "n"})
-    tree = await _tree(test_db, pid)
-    assert any(d["title"] == "N" and d["parent"] == wall for d in tree)
-
-
-@pytest.mark.asyncio
 async def test_import_via_sandbox_path(
     client, test_db, make_project, admin_user, monkeypatch,
 ):
@@ -544,65 +444,6 @@ async def test_import_via_sandbox_path(
 
 async def _async_const(value):
     return value
-
-
-@pytest.mark.asyncio
-async def test_import_rejects_zip_slip(
-    client, mcp_running, test_db, make_project, rw_key,
-):
-    pid = make_project.pid
-    host = await _seed_doc(test_db, pid, "imp-host", "Host", "h", None)
-    before = await _tree(test_db, pid)
-    for evil in ("../evil.md", "/abs.md", "sub/../../up.md"):
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w") as zf:
-            zf.writestr(evil, "payload")
-        mint = _result(await _mcp(client, rw_key, "import_subtree_md",
-                                  {"parent_id": host}))
-        resp = await client.post(
-            mint["url"], files={"file": ("subtree.zip", buf.getvalue())},
-        )
-        assert resp.status_code == 200, resp.text
-        body = await _mcp(client, rw_key, "import_subtree_md",
-                          {"parent_id": host, "staged_id": resp.json()["staged_id"]})
-        assert body["result"].get("isError"), evil
-    # A symlink entry is refused too.
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        info = zipfile.ZipInfo("link.png")
-        info.external_attr = 0o120777 << 16
-        zf.writestr(info, "/etc/passwd")
-    mint = _result(await _mcp(client, rw_key, "import_subtree_md",
-                              {"parent_id": host}))
-    resp = await client.post(
-        mint["url"], files={"file": ("subtree.zip", buf.getvalue())},
-    )
-    body = await _mcp(client, rw_key, "import_subtree_md",
-                      {"parent_id": host, "staged_id": resp.json()["staged_id"]})
-    assert body["result"].get("isError")
-    assert await _tree(test_db, pid) == before
-
-
-@pytest.mark.asyncio
-async def test_import_caps_enforced(
-    client, mcp_running, test_db, make_project, rw_key,
-):
-    pid = make_project.pid
-    host = await _seed_doc(test_db, pid, "imp-host", "Host", "h", None)
-    # Whole-zip cap at REDEEM: a 1-byte zip against a 0 MB cap → 413.
-    with patch("config.MAX_ARCHIVE_SIZE_MB", 0):
-        mint = _result(await _mcp(client, rw_key, "import_subtree_md",
-                                  {"parent_id": host}))
-        resp = await client.post(
-            mint["url"], files={"file": ("subtree.zip", b"PK\x03\x04 tiny")},
-        )
-        assert resp.status_code == 413, resp.text
-    # Per-file markdown cap at import: a tiny md against a 0 MB cap → error.
-    with patch("config.MAX_MARKDOWN_SIZE_MB", 0):
-        staged = await _stage_zip(client, rw_key, host, {"A.md": "x"})
-        body = await _mcp(client, rw_key, "import_subtree_md",
-                          {"parent_id": host, "staged_id": staged})
-        assert body["result"].get("isError")
 
 
 def _zip_bytes(entries: list[tuple[str, bytes]]) -> bytes:

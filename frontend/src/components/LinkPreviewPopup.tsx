@@ -115,6 +115,7 @@ function LinkPreviewContent({
   return (
     <div
       ref={handleRef}
+      data-sidebar-hold
       className="fixed z-55 flex flex-col overflow-hidden"
       style={style}
       onMouseLeave={onMouseLeave}

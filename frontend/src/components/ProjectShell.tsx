@@ -26,7 +26,7 @@
 
 import type React from 'react';
 import { Fragment, forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
-import { PanelLeft, PanelRight, X } from 'lucide-react';
+import { PanelLeft, PanelRight, Pin, PinOff, X } from 'lucide-react';
 import { useResizer } from '../hooks/useResizer';
 import { useDocumentNavigation } from '../navigation/useDocumentNavigation';
 import { useUIStore, type RightTab } from '../store/ui-store';
@@ -206,6 +206,15 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
   const rightPanelOpen = rightPanelOpenStored ?? initialRightOpen;
   const sidebarOpen = sidebarOpenStored;
 
+  // ── Auto-hiding left panel (unpinned, desktop only) ─────────────────────
+  const sidebarPinned = useUIStore(s => s.sidebarPinned);
+  const setSidebarPinned = useUIStore(s => s.setSidebarPinned);
+  const floating = !compact && !sidebarPinned;
+  // INVARIANT: while floating only hoverOpen changes — the per-project sidebarOpen is never written.
+  // Why: re-pinning must restore the docked state the user had before unpinning.
+  const [hoverOpen, setHoverOpen] = useState(false);
+  const hoverCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // ── Resizers ─────────────────────────────────────────────────────────────
   const sidebarResizer = useResizer({
     side: 'left',
@@ -213,10 +222,27 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
     minWidth: 140,
     maxWidth: 500,
     initialWidth: leftWidth ?? undefined,
-    isOpen: sidebarOpen,
+    isOpen: floating ? hoverOpen : sidebarOpen,
     onWidthChange: (w) => setPanelWidth('left', w),
-    onOpenChange: (open) => setSidebarOpen(open),
+    onOpenChange: (open) => (floating ? setHoverOpen(open) : setSidebarOpen(open)),
   });
+
+  const cancelHoverClose = useCallback(() => {
+    if (hoverCloseTimer.current) clearTimeout(hoverCloseTimer.current);
+    hoverCloseTimer.current = null;
+  }, []);
+  // WHY: portaled popups (link preview, parent picker) carry data-sidebar-hold and a resizer
+  // drag can leave the zone — both re-arm the close instead of hiding the panel under them.
+  const scheduleHoverClose = useCallback(() => {
+    cancelHoverClose();
+    hoverCloseTimer.current = setTimeout(() => {
+      const held = document.querySelector('[data-sidebar-hold]')
+        || sidebarResizer.resizerRef.current?.classList.contains('dragging');
+      if (held) scheduleHoverClose();
+      else { hoverCloseTimer.current = null; setHoverOpen(false); }
+    }, 250);
+  }, [cancelHoverClose, sidebarResizer.resizerRef]);
+  useEffect(() => cancelHoverClose, [cancelHoverClose]);
 
   const rightPanelResizer = useResizer({
     side: 'right',
@@ -240,6 +266,10 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
   const handleSidebarTabClick = useCallback((tab: LeftTab) => {
     if (compact) {
       setSidebarTab(tab);
+    } else if (floating) {
+      // Unpinned: a click only switches the tab — closing is by leaving the zone.
+      setSidebarTab(tab);
+      setHoverOpen(true);
     } else if (!sidebarResizer.isOpen) {
       setSidebarTab(tab);
       sidebarResizer.open();
@@ -248,7 +278,7 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
     } else {
       setSidebarTab(tab);
     }
-  }, [compact, sidebarResizer, effectiveSidebarTab, setSidebarTab]);
+  }, [compact, floating, sidebarResizer, effectiveSidebarTab, setSidebarTab]);
 
   const handleRightTabClick = useCallback((tab: RightTab) => {
     if (compact) {
@@ -277,9 +307,10 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
     openSidebar: (tab?: LeftTab) => {
       if (tab) setSidebarTab(tab);
       if (compact) setCompactPanel('left');
+      else if (floating) setHoverOpen(true);
       else if (!sidebarResizer.isOpen) sidebarResizer.open();
     },
-  }), [compact, rightPanelResizer, sidebarResizer, setRightPanelTab, setSidebarTab, rightPanelDocId]);
+  }), [compact, floating, rightPanelResizer, sidebarResizer, setRightPanelTab, setSidebarTab, rightPanelDocId]);
 
   // ── Right-tab-bar width CSS var (Header reads it for layout margin) ─────
   const rightTabBarRef = useRef<HTMLDivElement>(null);
@@ -310,6 +341,7 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
       key={entry.tab}
       className={`left-bar-tab ${sidebarIsOpen && effectiveSidebarTab === entry.tab ? 'active' : ''}`}
       onClick={() => handleSidebarTabClick(entry.tab)}
+      onPointerEnter={floating ? () => setSidebarTab(entry.tab) : undefined}
       title={entry.title}
     >
       {entry.icon}
@@ -353,7 +385,9 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
               data-testid="shell-left"
               className={compact
                 ? `compact-drawer ${sidebarIsOpen ? 'compact-drawer--open' : ''} fixed inset-y-0 left-0 z-[31] w-[min(calc(100vw-56px),360px)] flex flex-col bg-surface`
-                : 'flex flex-col shrink-0 h-full'}
+                : 'relative flex flex-col shrink-0 h-full'}
+              onPointerEnter={floating ? () => { cancelHoverClose(); setHoverOpen(true); } : undefined}
+              onPointerLeave={floating ? scheduleHoverClose : undefined}
             >
               {/* Compact title row spans the whole drawer; the tab bar starts below it. */}
               {compact && (
@@ -371,13 +405,25 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
                 <div className="left-tab-bar">
                   <div className="flex flex-col items-center gap-0.5">
                     {renderLeftTabButtons()}
+                    {!compact && (
+                      <button
+                        className="left-bar-tab left-bar-tab--pin"
+                        onClick={() => {
+                          if (!sidebarPinned) setSidebarOpen(true);
+                          setSidebarPinned(!sidebarPinned);
+                        }}
+                        title={sidebarPinned ? t('sidebarUnpin') : t('sidebarPin')}
+                      >
+                        {sidebarPinned ? <Pin size={16} /> : <PinOff size={16} />}
+                      </button>
+                    )}
                   </div>
                   <div className="flex-1" />
                   <UserControls layout="vertical" variant={userControlsVariant} />
                 </div>
 
                 <aside
-                  className={`${s.sidebar} ${compact ? 'flex-1 min-w-0 !w-auto !max-w-none' : ''}`}
+                  className={`${s.sidebar} ${compact ? 'flex-1 min-w-0 !w-auto !max-w-none' : ''} ${floating ? `${s.sidebarFloating} transition-[width] duration-150 ${sidebarResizer.isOpen ? 'border-r border-border-soft' : ''}` : ''}`}
                   style={compact ? undefined : {
                     width: sidebarResizer.isOpen ? sidebarResizer.width : 0,
                     minWidth: sidebarResizer.isOpen ? undefined : 0,
@@ -389,12 +435,15 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
                   {leftTabs.map(entry => effectiveSidebarTab === entry.tab ? (
                     <Fragment key={entry.tab}>{entry.renderPanel()}</Fragment>
                   ) : null)}
+                  {floating && sidebarResizer.isOpen && (
+                    <div className="resizer resizer--floating" ref={sidebarResizer.resizerRef} />
+                  )}
                 </aside>
               </div>
             </div>
           )}
 
-          {!compact && sidebarResizer.isOpen && hasLeftBar && (
+          {!compact && !floating && sidebarResizer.isOpen && hasLeftBar && (
             <div className="resizer" ref={sidebarResizer.resizerRef} />
           )}
 

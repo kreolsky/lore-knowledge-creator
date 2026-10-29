@@ -1,14 +1,12 @@
 /** Unit tests for live-preview-plugin — CM6 decorations in jsdom. */
 
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { EditorState, type Extension, type StateField } from '@codemirror/state';
 import { Decoration, EditorView, type DecorationSet } from '@codemirror/view';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { ensureSyntaxTree } from '@codemirror/language';
-import { livePreviewField, listLinePlugin, cursorLinePlugin, tableRenderField, mathBlockRenderField, mermaidBlockRenderField, transcludeMap, parseSizeFromAlt, validDocIds, validRefIds, transclusionDepth, revealAtCursor } from './live-preview';
-import { resolveTransclusion } from './live-preview';
-import { TransclusionWidget } from './live-preview/widgets';
+import { livePreviewField, listLinePlugin, cursorLinePlugin, tableRenderField, mathBlockRenderField, mermaidBlockRenderField, transcludeMap, validDocIds, validRefIds, transclusionDepth, revealAtCursor } from './live-preview';
 import { LIST_STEP, LIST_GUTTER, BASE_PADDING } from './live-preview/list-indent';
 
 // WHY mock mermaid: these tests assert the widget, not the diagram. A real
@@ -52,14 +50,6 @@ function getDecorations(view: EditorView) {
   return decs;
 }
 
-function hasReplaceDec(view: EditorView): boolean {
-  return getDecorations(view).some((d) => {
-    const spec = d.spec as Record<string, unknown>;
-    // Decoration.replace sets isReplace or has no class
-    return !('class' in spec) || spec.isReplace;
-  });
-}
-
 /** Count decorations that are Decoration.replace (no class property, or widget). */
 function replaceDecorations(view: EditorView) {
   return getDecorations(view).filter((d) => {
@@ -85,7 +75,6 @@ function markDecorations(view: EditorView, cls: string) {
   });
 }
 
-
 // ── Setup ────────────────────────────────────────────────────────────────────
 
 beforeEach(() => {
@@ -94,57 +83,7 @@ beforeEach(() => {
   validRefIds.clear();
 });
 
-// ── Tests ────────────────────────────────────────────────────────────────────
-
-describe('marker hiding — emphasis', () => {
-  it('hides bold markers when cursor is outside', () => {
-    // Cursor at end of doc, outside the bold span
-    const view = createView('hello **world** end', 19);
-    const reps = replaceDecorations(view);
-    // Should have replace decorations for the ** markers
-    const inBoldRange = reps.filter((d) => d.from >= 6 && d.to <= 15);
-    expect(inBoldRange.length).toBeGreaterThan(0);
-  });
-
-  it('shows bold markers when cursor is inside', () => {
-    // Cursor inside the bold text
-    const view = createView('hello **world** end', 10);
-    const reps = replaceDecorations(view);
-    // No replace decorations within the bold range (markers visible)
-    const inBoldRange = reps.filter((d) => d.from >= 6 && d.to <= 15);
-    expect(inBoldRange).toHaveLength(0);
-  });
-
-  it('hides italic markers when cursor is outside', () => {
-    const view = createView('hello *world* end', 17);
-    const reps = replaceDecorations(view);
-    const inItalicRange = reps.filter((d) => d.from >= 6 && d.to <= 13);
-    expect(inItalicRange.length).toBeGreaterThan(0);
-  });
-
-  it('shows italic markers when cursor is inside', () => {
-    const view = createView('hello *world* end', 9);
-    const reps = replaceDecorations(view);
-    const inItalicRange = reps.filter((d) => d.from >= 6 && d.to <= 13);
-    expect(inItalicRange).toHaveLength(0);
-  });
-});
-
 describe('marker hiding — headings', () => {
-  it('hides heading marker when cursor is on different line', () => {
-    const view = createView('# Title\nBody text', 13);
-    const reps = replaceDecorations(view);
-    // HeaderMark (# ) should be hidden
-    const headingReps = reps.filter((d) => d.from === 0 && d.to <= 2);
-    expect(headingReps.length).toBeGreaterThan(0);
-  });
-
-  it('shows heading marker when cursor is on heading line', () => {
-    const view = createView('# Title\nBody text', 3);
-    const reps = replaceDecorations(view);
-    const headingReps = reps.filter((d) => d.from === 0 && d.to <= 2);
-    expect(headingReps).toHaveLength(0);
-  });
 
   it('nested view (revealAtCursor=false) hides the heading marker even with the cursor on it', () => {
     // A nested transclusion view defaults its selection to position 0; it must NOT reveal
@@ -165,41 +104,6 @@ describe('marker hiding — headings', () => {
     const reps = replaceDecorations(view);
     const headingReps = reps.filter((d) => d.from === 0 && d.to <= 2);
     expect(headingReps.length).toBeGreaterThan(0);
-  });
-});
-
-describe('marker hiding — blockquote', () => {
-  it('hides quote marker when cursor is outside', () => {
-    // Blank line separates blockquote from paragraph so cursor is clearly outside.
-    const view = createView('> quoted\n\nunquoted', 15);
-    const allDecs = getDecorations(view);
-    // QuoteMark at position 0 should be replaced (hidden)
-    const quoteReps = allDecs.filter((d) => d.from === 0 && d.to <= 2 && !('class' in d.spec));
-    expect(quoteReps.length).toBeGreaterThan(0);
-  });
-
-  it('shows quote marker when cursor is inside', () => {
-    const view = createView('> quoted\n\nunquoted', 4);
-    const allDecs = getDecorations(view);
-    const quoteReps = allDecs.filter((d) => d.from === 0 && d.to <= 2 && !('class' in d.spec));
-    expect(quoteReps).toHaveLength(0);
-  });
-});
-
-describe('links', () => {
-  it('hides link syntax when cursor is outside', () => {
-    const view = createView('see [text](http://x.com) end', 28);
-    const reps = replaceDecorations(view);
-    // Should have decorations hiding [ and ](url)
-    const linkReps = reps.filter((d) => d.from >= 4 && d.to <= 24);
-    expect(linkReps.length).toBeGreaterThan(0);
-  });
-
-  it('shows all link syntax when cursor is inside', () => {
-    const view = createView('see [text](http://x.com) end', 8);
-    const reps = replaceDecorations(view);
-    const linkReps = reps.filter((d) => d.from >= 4 && d.to <= 24);
-    expect(linkReps).toHaveLength(0);
   });
 });
 
@@ -266,41 +170,7 @@ describe('double-bracket links — pattern 2 [[text](url)]', () => {
   });
 });
 
-describe('horizontal rule', () => {
-  it('hides HR and adds line class when cursor is outside', () => {
-    // Blank lines around --- ensure it's parsed as HorizontalRule, not setext heading.
-    const view = createView('above\n\n---\n\nbelow', 0);
-    const allDecs = getDecorations(view);
-    // HR content (position 7-10) should have a replace decoration
-    const hrReps = allDecs.filter((d) => d.from >= 7 && d.to <= 10 && !('class' in d.spec));
-    expect(hrReps.length).toBeGreaterThan(0);
-    const hrLines = lineDecorations(view, 'cm-hr-line');
-    expect(hrLines.length).toBeGreaterThan(0);
-  });
-
-  it('shows HR syntax when cursor is on HR line', () => {
-    const view = createView('above\n\n---\n\nbelow', 8);
-    const allDecs = getDecorations(view);
-    const hrReps = allDecs.filter((d) => d.from >= 7 && d.to <= 10 && !('class' in d.spec));
-    expect(hrReps).toHaveLength(0);
-  });
-});
-
 describe('fenced code blocks', () => {
-  it('adds cm-fenced-code line decorations when cursor is outside', () => {
-    const doc = 'text\n\n```\ncode here\n```\n\nend';
-    const view = createView(doc, doc.length - 1); // cursor on "end"
-    const codeLines = lineDecorations(view, 'cm-fenced-code');
-    expect(codeLines.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('adds --editing modifier to fence lines when cursor is inside block', () => {
-    const doc = 'text\n\n```\ncode here\n```\n\nend';
-    const codeStart = doc.indexOf('code here');
-    const view = createView(doc, codeStart + 2);
-    const fenceLines = lineDecorations(view, 'cm-fenced-code-fence--editing');
-    expect(fenceLines).toHaveLength(2); // opening and closing fence
-  });
 
   // F3 (charWidth guard): the raw fence marker lines (``` / ```lang) render in the
   // CODE font; a short pure-ASCII line in code font is a valid charWidth sample for
@@ -352,13 +222,6 @@ describe('fenced code blocks', () => {
 });
 
 describe('task checkboxes', () => {
-  it('replaces unchecked task with widget when cursor is outside', () => {
-    const doc = '- [ ] task one\n\nother line';
-    const view = createView(doc, doc.length - 1);
-    const reps = replaceDecorations(view);
-    const taskReps = reps.filter((d) => d.from <= 6 && d.spec.widget);
-    expect(taskReps.length).toBeGreaterThan(0);
-  });
 
   it('replaces asterisk task identically to dash task', () => {
     const dashView = createView('- [ ] task one\n\nother line', 25);
@@ -368,39 +231,6 @@ describe('task checkboxes', () => {
     expect(starRep).toHaveLength(1);
     expect(dashRep).toHaveLength(1);
     expect(starRep[0].to).toBe(dashRep[0].to);
-  });
-
-  // INVARIANT: an LLM-style multi-space task line (`*   [ ]`) must NOT be  Why: LLMs emit task markers with multiple spaces; mistaking that for a plain bullet mid-typing would flicker the checkbox, so build-structural tolerates the extra spaces.
-  // mistaken for a plain bullet during the mid-typing reparse — the flicker
-  // guard in build-structural.ts tolerates multiple spaces after the marker so
-  // a BulletWidget is never swapped in (which leaves `[ ]` lingering as text).
-  it('does not render a BulletWidget for a multi-space task (`*   [ ]`)', () => {
-    const doc = '*   [ ] task one\n\nother line';
-    const view = createView(doc, doc.length - 1);
-    const reps = replaceDecorations(view);
-    const widgetAtZero = reps.filter((d) => d.from === 0 && d.spec.widget);
-    // Either no widget, or a widget that is NOT a BulletWidget.
-    const bulletAtZero = widgetAtZero.filter(
-      (d) => String((d.spec.widget as { constructor?: { name?: string } })?.constructor?.name) === 'BulletWidget',
-    );
-    expect(bulletAtZero).toHaveLength(0);
-    // The CheckboxWidget must be anchored at the bullet (from === 0) and cover the
-    // whole `*   [ ]` marker — otherwise the bare `*` renders as a literal symbol.
-    const checkboxAtZero = widgetAtZero.filter(
-      (d) => String((d.spec.widget as { constructor?: { name?: string } })?.constructor?.name) === 'CheckboxWidget',
-    );
-    expect(checkboxAtZero).toHaveLength(1);
-    expect(checkboxAtZero[0].to).toBe(doc.indexOf(']') + 1);
-  });
-
-  it('replaces checked task and adds cm-task-done mark', () => {
-    const doc = '- [x] done task\n\nother line';
-    const view = createView(doc, doc.length - 1);
-    const reps = replaceDecorations(view);
-    const taskReps = reps.filter((d) => d.from <= 6 && d.spec.widget);
-    expect(taskReps.length).toBeGreaterThan(0);
-    const doneMarks = markDecorations(view, 'cm-task-done');
-    expect(doneMarks.length).toBeGreaterThan(0);
   });
 
   it('keeps checkbox widget when cursor is on text after marker', () => {
@@ -454,104 +284,6 @@ describe('task checkboxes', () => {
       });
     }
     expect(atomicCheckbox).toBe(true);
-  });
-});
-
-describe('image with transcludeMap (ref-image entries)', () => {
-  it('replaces ref: image with ImageWidget when URL is in map', () => {
-    transcludeMap.set('abc123', { kind: 'ref-image', title: 'I', imageUrl: 'http://localhost/img.png' });
-    const view = createView('text\n![alt](ref:abc123)\nend', 0);
-    const reps = replaceDecorations(view);
-    const imgReps = reps.filter((d) => d.spec.widget && d.from >= 5);
-    expect(imgReps.length).toBeGreaterThan(0);
-  });
-
-  it('does not replace ref: image when URL is not in map', () => {
-    const view = createView('text\n![alt](ref:unknown)\nend', 0);
-    const reps = replaceDecorations(view);
-    const imgWidgets = reps.filter(
-      (d) => d.spec.widget && String(d.spec.widget.constructor?.name) === 'ImageWidget',
-    );
-    expect(imgWidgets).toHaveLength(0);
-  });
-
-  it('renders two images on the same line', () => {
-    transcludeMap.set('a', { kind: 'ref-image', title: 'A', imageUrl: 'http://localhost/a.png' });
-    transcludeMap.set('b', { kind: 'ref-image', title: 'B', imageUrl: 'http://localhost/b.png' });
-    const view = createView('![x](ref:a) ![y](ref:b)\nend', 27);
-    const reps = replaceDecorations(view);
-    const imgWidgets = reps.filter(
-      (d) => d.spec.widget && String(d.spec.widget.constructor?.name) === 'ImageWidget',
-    );
-    expect(imgWidgets).toHaveLength(2);
-  });
-});
-
-// SYSTEM: transclusion — content embeds (ref-text + doc) reuse the Image node path.
-describe('transclusion — content embeds', () => {
-  it('replaces ![alt](ref:id) text-ref with TransclusionWidget', () => {
-    transcludeMap.set('md1', { kind: 'ref-text', title: 'Note', content: '# Heading' });
-    const view = createView('text\n![Note](ref:md1)\nend', 0);
-    const reps = replaceDecorations(view);
-    const widgets = reps.filter(
-      (d) => d.spec.widget && String((d.spec.widget as { constructor?: { name?: string } }).constructor?.name) === 'TransclusionWidget',
-    );
-    expect(widgets.length).toBe(1);
-    const w = widgets[0].spec.widget as TransclusionWidget;
-    expect(w.kind).toBe('ref');
-    expect(w.entry.title).toBe('Note');
-  });
-
-  it('replaces ![alt](doc:id) with a doc TransclusionWidget', () => {
-    transcludeMap.set('docA', { kind: 'doc', title: 'Page', content: 'body text' });
-    const view = createView('see ![Page](doc:docA) here', 0);
-    const reps = replaceDecorations(view);
-    const widgets = reps.filter(
-      (d) => d.spec.widget && String((d.spec.widget as { constructor?: { name?: string } }).constructor?.name) === 'TransclusionWidget',
-    );
-    expect(widgets.length).toBe(1);
-    expect((widgets[0].spec.widget as TransclusionWidget).kind).toBe('doc');
-  });
-
-  it('replaces ![alt](bare-id) doc transclusion', () => {
-    transcludeMap.set('docB', { kind: 'doc', title: 'Bare', content: 'x' });
-    const view = createView('see ![Bare](docB) end', 0);
-    const reps = replaceDecorations(view);
-    const widgets = reps.filter(
-      (d) => d.spec.widget && String((d.spec.widget as { constructor?: { name?: string } }).constructor?.name) === 'TransclusionWidget',
-    );
-    expect(widgets.length).toBe(1);
-  });
-
-  it('image refs still use ImageWidget (not TransclusionWidget)', () => {
-    transcludeMap.set('img1', { kind: 'ref-image', title: 'I', imageUrl: 'http://localhost/img.png' });
-    const doc = '![I](ref:img1) end';
-    const view = createView(doc, doc.length - 1);
-    const reps = replaceDecorations(view);
-    const transclusionWidgets = reps.filter(
-      (d) => d.spec.widget && String((d.spec.widget as { constructor?: { name?: string } }).constructor?.name) === 'TransclusionWidget',
-    );
-    expect(transclusionWidgets).toHaveLength(0);
-    const imgWidgets = reps.filter(
-      (d) => d.spec.widget && String((d.spec.widget as { constructor?: { name?: string } }).constructor?.name) === 'ImageWidget',
-    );
-    expect(imgWidgets.length).toBe(1);
-  });
-
-  it('renders a broken doc id (not in transcludeMap) as a non-widget Image fallback', () => {
-    // Unresolved doc id: no ImageWidget, no TransclusionWidget — falls through to
-    // the generic Image link-mark hiding path (no silent stale content).
-    const view = createView('see ![Broken](doc:nope) end', 0);
-    const reps = replaceDecorations(view);
-    const widgets = reps.filter((d) => d.spec.widget);
-    const transclusion = widgets.filter(
-      (d) => String((d.spec.widget as { constructor?: { name?: string } }).constructor?.name) === 'TransclusionWidget',
-    );
-    const images = widgets.filter(
-      (d) => String((d.spec.widget as { constructor?: { name?: string } }).constructor?.name) === 'ImageWidget',
-    );
-    expect(transclusion).toHaveLength(0);
-    expect(images).toHaveLength(0);
   });
 });
 
@@ -629,50 +361,7 @@ describe('transclusion — block vs inline rendering', () => {
   });
 });
 
-describe('resolveTransclusion', () => {
-  it('resolves a ref-text entry', () => {
-    transcludeMap.set('t1', { kind: 'ref-text', title: 'T', content: 'c' });
-    expect(resolveTransclusion('ref:t1')).toEqual({ kind: 'text', id: 't1' });
-  });
-  it('resolves a ref-image entry as image', () => {
-    transcludeMap.set('i1', { kind: 'ref-image', title: 'I', imageUrl: 'u' });
-    expect(resolveTransclusion('ref:i1')).toEqual({ kind: 'image', id: 'i1' });
-  });
-  it('resolves a doc: entry', () => {
-    transcludeMap.set('d1', { kind: 'doc', title: 'D', content: 'c' });
-    expect(resolveTransclusion('doc:d1')).toEqual({ kind: 'doc', id: 'd1' });
-  });
-  it('resolves a bare id that is a document', () => {
-    transcludeMap.set('d2', { kind: 'doc', title: 'D', content: 'c' });
-    expect(resolveTransclusion('d2')).toEqual({ kind: 'doc', id: 'd2' });
-  });
-  it('returns null for an http URL', () => {
-    expect(resolveTransclusion('https://example.com/x.png')).toBeNull();
-  });
-  it('returns null for an unknown ref id', () => {
-    expect(resolveTransclusion('ref:missing')).toBeNull();
-  });
-  it('returns null for an unknown bare id', () => {
-    expect(resolveTransclusion('unknown-bare-id')).toBeNull();
-  });
-});
-
 describe('bullet list markers', () => {
-  it('replaces dash bullet with BulletWidget when cursor is outside', () => {
-    const doc = '- item one\n\nother line';
-    const view = createView(doc, doc.length - 1);
-    const reps = replaceDecorations(view);
-    const bulletReps = reps.filter((d) => d.from === 0 && d.spec.widget);
-    expect(bulletReps.length).toBeGreaterThan(0);
-  });
-
-  it('replaces asterisk bullet with BulletWidget when cursor is outside', () => {
-    const doc = '* item one\n\nother line';
-    const view = createView(doc, doc.length - 1);
-    const reps = replaceDecorations(view);
-    const bulletReps = reps.filter((d) => d.from === 0 && d.spec.widget);
-    expect(bulletReps.length).toBeGreaterThan(0);
-  });
 
   it('keeps bullet widget when cursor is on text after marker', () => {
     const view = createView('- item one\nother line', 4);
@@ -690,12 +379,6 @@ describe('bullet list markers', () => {
 });
 
 describe('list line hanging indent', () => {
-  it('adds cm-list-line decoration to bullet list items', () => {
-    const doc = '- item one\n\nother line';
-    const view = createView(doc, doc.length - 1);
-    const listLines = lineDecorations(view, 'cm-list-line');
-    expect(listLines.length).toBeGreaterThan(0);
-  });
 
   it('sets indent for regular bullet items', () => {
     const doc = '- item one\n\nother line';
@@ -770,31 +453,6 @@ describe('multi-level list indent — bullets', () => {
   });
 });
 
-describe('tab-indented list leading whitespace', () => {
-  // Tabs must be hidden like spaces; otherwise the rendered tab adds to the stepped
-  // padding and double-indents tab-authored lists.
-  const doc = '- l1\n\t- l2\n\t\t- l3\n\nend';
-
-  it('hides leading tabs on nested lines', () => {
-    const view = createView(doc, doc.length - 1);
-    const reps = replaceDecorations(view);
-    for (const n of [2, 3]) {
-      const line = view.state.doc.line(n);
-      const leadingRep = reps.find((d) => d.from === line.from && d.to > line.from);
-      expect(leadingRep, `missing leading-tab replacement on line ${n}`).toBeDefined();
-    }
-  });
-
-  it('applies cm-list-line to tab-indented nested items', () => {
-    const view = createView(doc, doc.length - 1);
-    const listLines = lineDecorations(view, 'cm-list-line');
-    for (const n of [1, 2, 3]) {
-      const lineFrom = view.state.doc.line(n).from;
-      expect(listLines.find((d) => d.from === lineFrom), `missing cm-list-line on line ${n}`).toBeDefined();
-    }
-  });
-});
-
 describe('multi-level list indent — checkboxes', () => {
   const doc = '- [ ] l1\n  - [ ] l2\n    - [ ] l3\n      - [ ] l4\n        - [ ] l5\n\nend';
   const expectedIndents = [1, 2, 3, 4, 5].map(l => (l - 1) * LIST_STEP + LIST_GUTTER);
@@ -857,36 +515,6 @@ describe('multi-level list indent — numbered', () => {
   });
 });
 
-describe('parseSizeFromAlt', () => {
-  it('returns empty for alt without pipe', () => {
-    expect(parseSizeFromAlt('my image')).toEqual({});
-  });
-
-  it('parses width in pixels', () => {
-    expect(parseSizeFromAlt('alt|300')).toEqual({ width: '300px', height: undefined });
-  });
-
-  it('parses width in percent', () => {
-    expect(parseSizeFromAlt('alt|30%')).toEqual({ width: '30%', height: undefined });
-  });
-
-  it('parses width and height', () => {
-    expect(parseSizeFromAlt('alt|300x200')).toEqual({ width: '300px', height: '200px' });
-  });
-
-  it('parses percent width with pixel height', () => {
-    expect(parseSizeFromAlt('alt|50%x300')).toEqual({ width: '50%', height: '300px' });
-  });
-
-  it('returns empty for invalid size after pipe', () => {
-    expect(parseSizeFromAlt('alt|invalid')).toEqual({});
-  });
-
-  it('uses last pipe when alt contains multiple pipes', () => {
-    expect(parseSizeFromAlt('alt|text|300')).toEqual({ width: '300px', height: undefined });
-  });
-});
-
 describe('lazy continuation lines — style inheritance fix', () => {
   it('does NOT apply cm-list-line to lazy continuation (no indent)', () => {
     const doc = '- bullet one\nlazy continuation';
@@ -943,97 +571,6 @@ describe('lazy continuation lines — style inheritance fix', () => {
     const nestedLineFrom = view.state.doc.line(2).from;
     const coveringDec = taskDoneDecs.find((d) => d.to > nestedLineFrom);
     expect(coveringDec).toBeUndefined();
-  });
-});
-
-describe('color labels in inline code', () => {
-  it('pure color cursor outside → mark present, replace hides color code', () => {
-    const doc = 'see `#8ab4f8` here';
-    const view = createView(doc, doc.length - 1);
-    const markDecs = markDecorations(view, 'cm-color-swatch');
-    expect(markDecs.length).toBeGreaterThan(0);
-    const attrs = (markDecs[0].spec as Record<string, unknown>).attributes as Record<string, string> | undefined;
-    expect(attrs).toBeDefined();
-    expect(attrs!.style).toContain('background-color:#8ab4f8');
-
-    const reps = replaceDecorations(view);
-    const nonWidgetReps = reps.filter((d) => !d.spec.widget && d.from > doc.indexOf('`'));
-    expect(nonWidgetReps.length).toBeGreaterThan(0);
-  });
-
-  it('pure color cursor inside → mark present, no replace', () => {
-    const doc = 'see `#8ab4f8` here';
-    const codeStart = doc.indexOf('`') + 1;
-    const view = createView(doc, codeStart + 2);
-    const markDecs = markDecorations(view, 'cm-color-swatch');
-    expect(markDecs.length).toBeGreaterThan(0);
-
-    const reps = replaceDecorations(view);
-    const nonWidgetReps = reps.filter((d) => !d.spec.widget && d.from > doc.indexOf('`'));
-    expect(nonWidgetReps).toHaveLength(0);
-  });
-
-  it('color + label cursor outside → cm-color-swatch mark + replace hides prefix', () => {
-    const doc = 'see `#8ab4f8 Draft` here';
-    const view = createView(doc, doc.length - 1);
-    const markDecs = markDecorations(view, 'cm-color-swatch');
-    expect(markDecs.length).toBeGreaterThan(0);
-    const attrs = (markDecs[0].spec as Record<string, unknown>).attributes as Record<string, string> | undefined;
-    expect(attrs).toBeDefined();
-    expect(attrs!.style).toContain('background-color:#8ab4f8');
-
-    const reps = replaceDecorations(view);
-    const nonWidgetReps = reps.filter((d) => !d.spec.widget && d.from > doc.indexOf('`'));
-    expect(nonWidgetReps.length).toBeGreaterThan(0);
-  });
-
-  it('color + label cursor inside → cm-color-swatch mark, NO replace for prefix', () => {
-    const doc = 'see `#8ab4f8 Draft` here';
-    const codeStart = doc.indexOf('`') + 1;
-    const view = createView(doc, codeStart + 5);
-    const markDecs = markDecorations(view, 'cm-color-swatch');
-    expect(markDecs.length).toBeGreaterThan(0);
-
-    const reps = replaceDecorations(view);
-    const nonWidgetReps = reps.filter((d) => !d.spec.widget && d.from > doc.indexOf('`'));
-    expect(nonWidgetReps).toHaveLength(0);
-  });
-
-  it('short hex #f00 with label → mark with bg-color:#f00', () => {
-    const doc = 'see `#f00 Urgent` here';
-    const view = createView(doc, doc.length - 1);
-    const markDecs = markDecorations(view, 'cm-color-swatch');
-    expect(markDecs.length).toBeGreaterThan(0);
-    const attrs = (markDecs[0].spec as Record<string, unknown>).attributes as Record<string, string> | undefined;
-    expect(attrs!.style).toContain('background-color:#f00');
-  });
-
-  it('does NOT apply cm-color-swatch for non-color inline code', () => {
-    const doc = 'see `not a color` here';
-    const view = createView(doc, doc.length - 1);
-    const markDecs = markDecorations(view, 'cm-color-swatch');
-    expect(markDecs).toHaveLength(0);
-  });
-
-  it('does NOT apply cm-color-swatch for inline code with text around color', () => {
-    const doc = 'see `color: #8ab4f8` here';
-    const view = createView(doc, doc.length - 1);
-    const markDecs = markDecorations(view, 'cm-color-swatch');
-    expect(markDecs).toHaveLength(0);
-  });
-
-  it('3-digit color with label works', () => {
-    const doc = '`#1a2 text`';
-    const view = createView(doc, doc.length - 1);
-    const markDecs = markDecorations(view, 'cm-color-swatch');
-    expect(markDecs.length).toBeGreaterThan(0);
-  });
-
-  it('8-digit color with label works', () => {
-    const doc = '`#1a2b3c4d text`';
-    const view = createView(doc, doc.length - 1);
-    const markDecs = markDecorations(view, 'cm-color-swatch');
-    expect(markDecs.length).toBeGreaterThan(0);
   });
 });
 

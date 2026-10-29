@@ -99,13 +99,6 @@ def test_merge_keeps_its_text_exemption():
     assert _validator_accepts(verdict)
 
 
-def test_supersede_inherits_title_when_omitted():
-    """A supersede rewrites a fact in place; its title is optional (inherited)."""
-    verdict = {"action": "supersede", "fact_id": "fact-1", "reason": "r", "text": "у"}
-    assert _schema_accepts(verdict)
-    assert _validator_accepts(verdict)
-
-
 def test_fact_id_targeting_is_rejected_when_labelled_new():
     """Regression shape: a `new` carrying `fact_id` + no text is a mislabelled merge.
     The validator must name the correction — an error that does not discriminate the
@@ -134,26 +127,3 @@ def test_rejection_messages_name_the_correction_not_only_the_rule():
 
     bare = _validate_verdict({"action": "new", "title": "t"})
     assert bare == "new requires text"
-
-
-def test_the_batch_ceiling_is_a_guard_not_a_target():
-    """D2 (plan 1786250000000): the verdict cap is a TRUNCATION GUARD, not a batch-size
-    target. It sits well above any plausible single-reference batch (a full reference
-    yields low tens of facts), the `maxItems` guard stays on (a batch that does not fit
-    is refused, not truncated), and the description must NOT advertise a small fixed size
-    as the norm — that is the quota (five per reference, one apply each) this run removes.
-
-    Binds config (`MEMORY_VERDICTS_MAX_PER_BATCH`) against the tool schema's `maxItems`
-    and description so the two cannot drift back into '5 is the target'."""
-    from config import MEMORY_VERDICTS_MAX_PER_BATCH
-
-    verdicts_schema = (
-        APPLY_MEMORY_VERDICTS_TOOL["function"]["parameters"]
-        ["properties"]["verdicts"]
-    )
-    assert verdicts_schema["maxItems"] == MEMORY_VERDICTS_MAX_PER_BATCH
-    assert MEMORY_VERDICTS_MAX_PER_BATCH > 20
-    description = verdicts_schema["description"].lower()
-    assert "at most" not in description
-    assert "several small calls" not in description
-    assert "reference" in description

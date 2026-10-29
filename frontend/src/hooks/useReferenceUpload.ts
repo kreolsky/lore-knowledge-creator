@@ -7,6 +7,7 @@ import type React from 'react';
 import { useAppStore } from '../store/app-store';
 import { useUIStore } from '../store/ui-store';
 import { apiClient } from '../api/client';
+import { uploadReferenceFile } from '../api/reference-upload';
 import { tierRefusal } from '../utils/server-refusal-detail';
 import { useTranslation } from '../i18n';
 import type { Reference } from '../types';
@@ -110,14 +111,8 @@ export function useReferenceUpload() {
     );
     addReference(tempRef);
 
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('project_id', currentProject.project_id);
-    formData.append('document_id', currentDocument.document_id);
-    formData.append('title', file.name);
-
     try {
-      const ref = await apiClient.upload('/references/upload', formData);
+      const ref = await uploadReferenceFile(currentProject.project_id, currentDocument.document_id, file);
       replaceReference(tempId, ref);
     } catch (err) {
       // see SYSTEM: capability-tiers — a dragged-in audio file from a non-voice

@@ -33,8 +33,7 @@ import { SnapshotPreviewBanner } from './editor/SnapshotPreviewBanner';
 import { PreviewDocumentBanner } from './editor/PreviewDocumentBanner';
 import { CollabPresenceChips } from './editor/CollabPresenceChips';
 import { ReferenceMediaBar } from './editor/ReferenceMediaBar';
-import { mountTableTestHook } from './editor/dev-table-test-hook';
-import { mountView, type EditorRole, setRoleView, setViewEntity } from '../editor/active-editor';
+import { mountView, type EditorRole, setRoleView } from '../editor/active-editor';
 import { positionCacheGet } from '../editor/position-cache';
 import { editableCompartment } from '../editor/editor-plugins';
 import { useEditorAutosave } from '../hooks/useEditorAutosave';
@@ -207,15 +206,6 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
     role,
   });
 
-  // DEV-ONLY repro hook for the table cell click/focus race: lets an e2e spec poll
-  // whether the collab handle is ready and insert a table without the timing-flaky
-  // Shift-Mod-T hotkey path. See dev-table-test-hook.ts.
-  // DEBT: dev test hook — Why deferred: nested-cell focus race can't be observed without
-  // a deterministic table-seed; the hotkey path needs a synced handle the e2e stand lacks.
-  useEffect(() => {
-    mountTableTestHook();
-  }, []);
-
   const { checkpoint } = useEditorAutosave({
     editorViewRef,
     getCollabStatus: () => collabConnectionRef.current?.synced ? 'connected' as const : 'connecting' as const,
@@ -342,10 +332,6 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
     // role so the note connector + click handler can resolve a note's OWNING column
     // by role (not by focus). Split view mounts primary + secondary simultaneously.
     setRoleView(roleRef.current, view);
-    // WHY: register the entity this view renders so identity-scoped non-React
-    // consumers (table widget late-bind, paste/drop model placement) can resolve
-    // the view's OWN ydoc — the focused slot cannot answer that in split view.
-    setViewEntity(view, activeItemIdRef.current ?? null);
     const item = activeItemRef.current;
     if (item && 'reference_id' in item) {
       refIsEmptySetterRef.current(view.state.doc.length === 0);

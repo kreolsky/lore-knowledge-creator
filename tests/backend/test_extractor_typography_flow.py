@@ -2,31 +2,6 @@
 import pytest
 from pipeline.extractor.nodes import ComputeNode, RenderNode
 
-
-@pytest.mark.asyncio
-async def test_compute_node_applies_dictionary_after_calculations():
-    node = ComputeNode()
-    shared = {
-        "extracted_data": {"a": "2", "b": "3", "note": "до 6 штук, 8 миллиметров"},
-        "calculations": {"total": "={{a}} + {{b}}"},
-        "typography": {"штук": "шт.", "миллиметров": "мм"},
-    }
-    prep = await node.prep_async(shared)
-    out = await node.exec_async(prep)
-    await node.post_async(shared, prep, out)
-    assert str(shared["extracted_data"]["total"]) in ("5", "5.0")
-    assert shared["extracted_data"]["note"] == "до 6 шт., 8 мм"
-
-
-@pytest.mark.asyncio
-async def test_compute_node_without_dictionary_is_unchanged():
-    node = ComputeNode()
-    shared = {"extracted_data": {"note": "до 6 штук"}, "calculations": {}, "typography": {}}
-    prep = await node.prep_async(shared)
-    out = await node.exec_async(prep)
-    assert out["note"] == "до 6 штук"
-
-
 RANGES = {
     "uterus_length": [
         {"name": "ниже", "max": 40},

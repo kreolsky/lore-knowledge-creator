@@ -76,6 +76,7 @@ def _declared_keys(interface: str) -> set[str]:
 # ─── live response snapshot ───────────────────────────────────────────────────
 
 
+# TEST-WHY: cross-process-contract — live chat message response keys cross-checked against the hand-written ChatMessage interface in frontend/src/types.ts (guard named by docker-compose.yml).
 @pytest.mark.asyncio
 async def test_chat_message_response_keys_are_declared_in_types_ts(
     client, admin_user, project_with_doc
@@ -120,6 +121,7 @@ async def test_chat_message_response_keys_are_declared_in_types_ts(
     )
 
 
+# TEST-WHY: cross-process-contract — live chat session response keys cross-checked against the hand-written ChatSession interface in frontend/src/types.ts (guard named by docker-compose.yml).
 @pytest.mark.asyncio
 async def test_chat_session_response_keys_are_declared_in_types_ts(
     client, admin_user, project_with_doc

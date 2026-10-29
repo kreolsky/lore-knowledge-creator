@@ -28,13 +28,14 @@ import { createBoundedMemo } from '../../../utils/bounded-memo';
 // rendered. Policy and measurement live in utils/bounded-memo.ts (plan
 // resource-cache-one-primitive, step 6).
 const tableHeightCache = createBoundedMemo<number>(200);
-// Fallback for a table never yet rendered (nothing cached): row-based estimate.
-// MUST NOT be -1/0 — a too-small first estimate reintroduces the scroll jerk on
-// the FIRST scroll-through, before any measurement exists. ~38px/row ≈ 26px
-// line-height + 8px cell padding + 1px border; refined to the exact measured
+// Fallback height estimate, shared by both table renderers (this GFM pipe-table widget
+// and the table-block widget): a table never yet rendered (nothing cached) is sized by a
+// row-based estimate. MUST NOT be -1/0 — a too-small first estimate reintroduces the
+// scroll jerk on the FIRST scroll-through, before any measurement exists. ~38px/row ≈
+// 26px line-height + 8px cell padding + 1px border; refined to the exact measured
 // height on first render.
-const ESTIMATED_ROW_HEIGHT = 38;
-const TABLE_WRAP_PADDING = 8;
+export const ESTIMATED_ROW_HEIGHT = 38;
+export const TABLE_WRAP_PADDING = 8;
 
 export class TableWidget extends WidgetType {
   constructor(readonly rawText: string) { super(); }

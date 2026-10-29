@@ -20,6 +20,7 @@ import { AccessPanel } from '../components/AccessPanel';
 import { SnapshotModal } from '../components/SnapshotModal';
 import { NoteConnector } from '../components/NoteConnector';
 import SelectionToolbar from '../components/editor/SelectionToolbar';
+import ImageToolbar from '../components/editor/ImageToolbar';
 import { FindReplacePanel } from '../components/editor/FindReplacePanel';
 import { LinkSuggestionsPopup } from '../components/editor/LinkSuggestionsPopup';
 import { EditorLinkPreview } from '../components/editor/EditorLinkPreview';
@@ -428,6 +429,7 @@ export function ProjectPage() {
                 two split-view columns share one toolbar/popup/preview. Each reads the focused
                 EditorView via editor/active-editor, so they target whichever column has focus. */}
             <SelectionToolbar />
+            <ImageToolbar />
             <LinkSuggestionsPopup />
             <EditorLinkPreview />
           </>

@@ -48,6 +48,34 @@ need ancestor selectors (`.editor-cm`, `.editor-content`) that exist outside CM6
 
 **Source:** `live-preview/widgets.ts` → `CheckboxWidget.toDOM()`
 
+## Atomic Selected Highlight (index.css, after `.cm-task-checkbox`)
+
+| Selector | Why in index.css |
+|----------|------------------|
+| `.cm-atomic-selected` | Selection-state mark over atomic blocks (image embeds, table anchors) |
+
+**Source:** `live-preview/atomic-delete-guard.ts` → `atomicSelectedField`
+
+## Image Embed + Resize Handle (index.css, after `.cm-atomic-selected`)
+
+| Selector | Why in index.css |
+|----------|------------------|
+| `.cm-image-embed` | Widget DOM styling — positioned wrapper for the bottom-edge resize handle |
+| `.cm-image-resize-handle` | Hover-revealed drag tab; `:hover`-chain on the wrapper (EditorView.theme can't cross the two elements) |
+
+**Source:** `live-preview/widgets.ts` → `ImageWidget.toDOM()`
+
+## Table Block Object (index.css, table block section)
+
+| Selector | Why in index.css |
+|----------|------------------|
+| `.cm-table-block-wrap--selected` | Selection-state outline drawn on the table inside the wrap (ViewPlugin in `atomic-delete-guard.ts` toggles it — a mark decoration cannot reach a block widget's replaced line) |
+| `.cm-table-block-scroll` | Scroller around the table; `overflow-y: hidden` must be explicit (computed auto breaks block-widget height measurement) |
+| `.cm-table-block` | `table-layout: auto; width: 100%` — content-driven widths; `<col>` px is a hint for fixed columns |
+| `.cm-table-block-col-resize` (+ `::after`) | Invisible resize hit zone (9px) with a 4px accent bar (panel resizer thickness) over the border on hover; `:hover` chain — same rationale as `.cm-image-resize-handle` |
+
+**Source:** `live-preview/table-block-widget.ts` → `TableBlockWidget.toDOM()`
+
 ## Table Widget (index.css lines 849-879)
 
 | Selector | Lines | Why in index.css |

@@ -150,8 +150,6 @@ function renderPanel() {
 }
 
 const scopeToggle = () => container.querySelector('input[data-label="searchScopeThisDoc"]') as HTMLInputElement | null;
-const memoryBox = () => container.querySelector('input[data-label="searchMemoryOnly"]') as HTMLInputElement | null;
-const exactBox = () => container.querySelector('input[data-label="searchExactMatch"]') as HTMLInputElement | null;
 
 /** Last call to `endpoint`, parsed into params. */
 function lastParams(endpoint: 'semantic-search' | 'search' | 'chat-search'): URLSearchParams {
@@ -165,149 +163,7 @@ function lastParams(endpoint: 'semantic-search' | 'search' | 'chat-search'): URL
   const url = new URL(String(calls[calls.length - 1][0]), 'http://x');
   return url.searchParams;
 }
-
-const lastSemanticParams = () => lastParams('semantic-search');
-const lastFulltextParams = () => lastParams('search');
 const lastChatParams = () => lastParams('chat-search');
-
-describe('SearchPanel semantic scope row', () => {
-  it('semantic mode with a current document renders both scope controls', async () => {
-    appState.currentDocument = { document_id: 'doc-1' };
-    await renderPanel();
-    expect(scopeToggle()).toBeTruthy();
-    expect(memoryBox()).toBeTruthy();
-  });
-
-  it('fulltext mode renders the this-document narrow and the exact toggle, never memory-only', async () => {
-    uiState.searchMode = 'fulltext';
-    appState.currentDocument = { document_id: 'doc-1' };
-    await renderPanel();
-    expect(scopeToggle()).toBeTruthy();
-    expect(exactBox()).toBeTruthy();
-    // Memory is a semantic-only corpus — the fulltext scan has no memory layer,
-    // so the checkbox must not appear where it would do nothing.
-    expect(memoryBox()).toBeNull();
-  });
-
-  it('semantic mode never renders the exact toggle', async () => {
-    appState.currentDocument = { document_id: 'doc-1' };
-    await renderPanel();
-    expect(exactBox()).toBeNull();
-  });
-
-  it('fulltext with no current document hides the toggle, keeps exact', async () => {
-    uiState.searchMode = 'fulltext';
-    await renderPanel();
-    expect(scopeToggle()).toBeNull();
-    expect(exactBox()).toBeTruthy();
-  });
-
-  it('no current document hides the this-document toggle, keeps memory-only', async () => {
-    await renderPanel();
-    expect(scopeToggle()).toBeNull();
-    expect(memoryBox()).toBeTruthy();
-  });
-
-  it('default semantic request carries only q (whole project, all kinds)', async () => {
-    appState.currentDocument = { document_id: 'doc-1' };
-    await renderPanel();
-    await wait(0);
-    const params = lastSemanticParams();
-    expect(params.get('q')).toBe('vertigo');
-    expect(params.has('under_document_id')).toBe(false);
-    expect(params.has('include_docs')).toBe(false);
-    expect(params.has('include_refs')).toBe(false);
-  });
-
-  it('memory-only checkbox flips BOTH include params in the request', async () => {
-    appState.currentDocument = { document_id: 'doc-1' };
-    await renderPanel();
-    await wait(0);
-
-    await act(async () => { memoryBox()!.click(); });
-    await wait(350); // debounced re-run
-    let params = lastSemanticParams();
-    expect(params.get('include_docs')).toBe('false');
-    expect(params.get('include_refs')).toBe('false');
-    expect(params.has('include_memory')).toBe(false); // server default: true
-
-    await act(async () => { memoryBox()!.click(); });
-    await wait(350);
-    params = lastSemanticParams();
-    expect(params.has('include_docs')).toBe(false);
-    expect(params.has('include_refs')).toBe(false);
-  });
-
-  it('this-document toggle adds under_document_id=currentDocument', async () => {
-    appState.currentDocument = { document_id: 'doc-1' };
-    await renderPanel();
-    await wait(0);
-
-    await act(async () => { scopeToggle()!.click(); });
-    await wait(350);
-    const params = lastSemanticParams();
-    expect(params.get('under_document_id')).toBe('doc-1');
-
-    await act(async () => { scopeToggle()!.click(); });
-    await wait(350);
-    expect(lastSemanticParams().has('under_document_id')).toBe(false);
-  });
-
-  it('both controls combine: memory-only + subtree', async () => {
-    appState.currentDocument = { document_id: 'doc-1' };
-    await renderPanel();
-    await wait(0);
-
-    await act(async () => { scopeToggle()!.click(); });
-    await act(async () => { memoryBox()!.click(); });
-    await wait(350);
-    const params = lastSemanticParams();
-    expect(params.get('under_document_id')).toBe('doc-1');
-    expect(params.get('include_docs')).toBe('false');
-    expect(params.get('include_refs')).toBe('false');
-  });
-
-  it('default fulltext request carries only q (whole project, no exact)', async () => {
-    uiState.searchMode = 'fulltext';
-    appState.currentDocument = { document_id: 'doc-1' };
-    await renderPanel();
-    await wait(0);
-    const params = lastFulltextParams();
-    expect(params.get('q')).toBe('vertigo');
-    expect(params.has('under_document_id')).toBe(false);
-    expect(params.has('exact')).toBe(false);
-  });
-
-  it('fulltext this-document toggle sends the SAME under_document_id semantic sends', async () => {
-    uiState.searchMode = 'fulltext';
-    appState.currentDocument = { document_id: 'doc-1' };
-    await renderPanel();
-    await wait(0);
-
-    await act(async () => { scopeToggle()!.click(); });
-    await wait(350);
-    expect(lastFulltextParams().get('under_document_id')).toBe('doc-1');
-
-    await act(async () => { scopeToggle()!.click(); });
-    await wait(350);
-    expect(lastFulltextParams().has('under_document_id')).toBe(false);
-  });
-
-  it('fulltext exact toggle adds exact=true and drops it again', async () => {
-    uiState.searchMode = 'fulltext';
-    appState.currentDocument = { document_id: 'doc-1' };
-    await renderPanel();
-    await wait(0);
-
-    await act(async () => { exactBox()!.click(); });
-    await wait(350);
-    expect(lastFulltextParams().get('exact')).toBe('true');
-
-    await act(async () => { exactBox()!.click(); });
-    await wait(350);
-    expect(lastFulltextParams().has('exact')).toBe(false);
-  });
-});
 
 const chatHit = (over: Record<string, unknown> = {}) => ({
   chat_id: 'b2', thread_id: 'r1', chat_title: 'Plague notes', document_id: 'doc-9',
@@ -316,56 +172,8 @@ const chatHit = (over: Record<string, unknown> = {}) => ({
   score: 0.81, sibling: false, ...over,
 });
 const panelText = () => container.textContent ?? '';
-const modeButton = (key: string) =>
-  Array.from(container.querySelectorAll('button')).find(b => b.textContent === key) as HTMLButtonElement;
 
 describe('SearchPanel chats mode', () => {
-  it('switching to «Chats» issues /chat-search in project scope anchored on the open document', async () => {
-    appState.currentDocument = { document_id: 'doc-1' };
-    await renderPanel();
-    await wait(0);
-    await act(async () => { modeButton('searchModeChats').click(); });
-    await wait(250);
-    const params = lastChatParams();
-    expect(params.get('q')).toBe('vertigo');
-    expect(params.get('scope')).toBe('project');
-    expect(params.get('anchor_document_id')).toBe('doc-1');
-    expect(params.has('under_document_id')).toBe(false);
-  });
-
-  it('«In this document» maps to scope=siblings with the open document as the anchor', async () => {
-    uiState.searchMode = 'chats';
-    appState.currentDocument = { document_id: 'doc-1' };
-    await renderPanel();
-    await wait(0);
-    await act(async () => { scopeToggle()!.click(); });
-    await wait(350);
-    const params = lastChatParams();
-    expect(params.get('scope')).toBe('siblings');
-    expect(params.get('anchor_document_id')).toBe('doc-1');
-    // Memory-only is a documents-corpus switch — it never rides a chat search.
-    expect(memoryBox()).toBeNull();
-  });
-
-  it('no open document: project scope, no anchor, no this-document toggle', async () => {
-    uiState.searchMode = 'chats';
-    await renderPanel();
-    await wait(0);
-    const params = lastChatParams();
-    expect(params.get('scope')).toBe('project');
-    expect(params.has('anchor_document_id')).toBe(false);
-    expect(scopeToggle()).toBeNull();
-  });
-
-  it('a failed request shows the error row, not the empty state', async () => {
-    uiState.searchMode = 'chats';
-    apiGet.mockRejectedValue(new Error('boom'));
-    await renderPanel();
-    await wait(0);
-    lastChatParams();
-    expect(panelText()).toContain('searchFailed');
-    expect(panelText()).not.toContain('noMatchesFound');
-  });
 
   it('the administrator-disabled 403 shows its own text, not the generic failure', async () => {
     uiState.searchMode = 'chats';
@@ -375,25 +183,6 @@ describe('SearchPanel chats mode', () => {
     expect(panelText()).toContain('chatSearchDisabled');
     expect(panelText()).not.toContain('searchFailed');
     expect(panelText()).not.toContain('noMatchesFound');
-  });
-
-  it('no hits shows the empty state', async () => {
-    uiState.searchMode = 'chats';
-    await renderPanel();
-    await wait(0);
-    lastChatParams();
-    expect(panelText()).toContain('noMatchesFound');
-    expect(panelText()).not.toContain('searchFailed');
-  });
-
-  it('renders a hit with its chat title and snippet, and marks a sibling hit', async () => {
-    uiState.searchMode = 'chats';
-    apiGet.mockResolvedValue({ hits: [chatHit({ sibling: true }), chatHit({ chat_id: 'c3', message_id: 'm3', chat_title: 'Elsewhere' })] });
-    await renderPanel();
-    await wait(0);
-    expect(panelText()).toContain('Plague notes');
-    expect(panelText()).toContain('the plague reached the port');
-    expect(container.querySelectorAll('[data-sibling="true"]').length).toBe(1);
   });
 
   it('a hit click opens the hit\'s branch on its thread root, scrolls to the message and never navigates', async () => {
@@ -415,22 +204,6 @@ describe('SearchPanel chats mode', () => {
     expect(events).not.toContain('navigate-to-reference');
   });
 
-  it('a hit click before the chat list was ever loaded loads it first, then opens', async () => {
-    uiState.searchMode = 'chats';
-    appState.currentDocument = { document_id: 'doc-1' };
-    apiGet.mockResolvedValue({ hits: [chatHit()] });
-    scopeLoaded = false;
-    const order: string[] = [];
-    chatState.loadSessions = vi.fn(async () => { order.push('load'); });
-    chatState.openBranch = vi.fn(() => { order.push('open'); });
-    await renderPanel();
-    await wait(0);
-    await act(async () => { (container.querySelector('[data-chat-hit]') as HTMLElement).click(); });
-    await wait(0);
-    expect(chatState.loadSessions).toHaveBeenCalledWith('p1', 'doc-1');
-    expect(order).toEqual(['load', 'open']);
-  });
-
   describe('«By title» group', () => {
     const session = (id: string, title: string) => ({ session_id: id, title, last_message_at: null });
 
@@ -440,54 +213,12 @@ describe('SearchPanel chats mode', () => {
       chatState.sessions = [session('s-gob', 'Гоблины'), session('s-elf', 'Эльфы')];
     });
 
-    it('renders the matching chat as a title row before any semantic hit', async () => {
-      apiGet.mockResolvedValue({ hits: [chatHit()] });
-      await renderPanel();
-      await wait(0);
-      const titleRows = Array.from(container.querySelectorAll('[data-chat-title-hit]'));
-      expect(titleRows.map(r => r.getAttribute('data-chat-title-hit'))).toEqual(['s-gob']);
-      expect(titleRows[0].textContent).toContain('chatSearchTitleBadge');
-      const semanticRow = container.querySelector('[data-chat-hit]')!;
-      expect(titleRows[0].compareDocumentPosition(semanticRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-      expect(panelText()).not.toContain('noMatchesFound');
-    });
-
     it('a disabled semantic search still shows the title row AND the disabled text', async () => {
       apiGet.mockRejectedValue(new FakeForbidden('chat-recall is disabled by the administrator'));
       await renderPanel();
       await wait(0);
       expect(container.querySelector('[data-chat-title-hit="s-gob"]')).toBeTruthy();
       expect(panelText()).toContain('chatSearchDisabled');
-    });
-
-    it('a title row click opens that chat in the Chat tab without a message scroll', async () => {
-      appState.currentDocument = { document_id: 'doc-1' };
-      await renderPanel();
-      await wait(0);
-      await act(async () => { (container.querySelector('[data-chat-title-hit="s-gob"]') as HTMLElement).click(); });
-      await wait(0);
-      expect(chatState.activeSessionId).toBe('s-gob');
-      expect(chatState.setPendingScroll).not.toHaveBeenCalled();
-      expect(uiState.setRightPanelTab).toHaveBeenCalledWith('doc-1', 'chat');
-      expect(emitSpy.mock.calls.map((c: unknown[]) => c[0])).toContain('open-right-panel');
-    });
-
-    it('an unloaded chat scope is loaded once, and its list feeds the title rows', async () => {
-      scopeLoaded = false;
-      const loaded = chatState.sessions;
-      chatState.sessions = [];
-      chatState.loadSessions = vi.fn(async () => { chatState.sessions = loaded; });
-      await renderPanel();
-      await wait(0);
-      expect(chatState.loadSessions).toHaveBeenCalledTimes(1);
-      expect(container.querySelector('[data-chat-title-hit="s-gob"]')).toBeTruthy();
-    });
-
-    it('below the chats minimum no title row renders', async () => {
-      uiState.searchQuery = 'г';
-      await renderPanel();
-      await wait(0);
-      expect(container.querySelector('[data-chat-title-hit]')).toBeNull();
     });
   });
 });

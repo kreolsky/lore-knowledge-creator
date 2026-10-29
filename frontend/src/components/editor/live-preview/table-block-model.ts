@@ -5,7 +5,7 @@
  * data OUTSIDE the plain-text buffer, as a sibling root in the same entity Y.Doc:
  *
  *     ydoc.getMap('tables') : Y.Map<tableId, Y.Map{
- *       columns: Y.Array<Y.Map{ w: number }>,            // px width per column
+ *       columns: Y.Array<Y.Map{ w: number }>,            // px width per column; 0 = AUTO
  *       rows:    Y.Array<Y.Array<Y.Map{ t: Y.Text }>>,   // cell = Y.Map, body = Y.Text
  *     }>
  *
@@ -25,14 +25,26 @@
  * inline error. Why: "no matching anchor" cannot distinguish a deliberate anchor removal
  * from a corrupted `table:id`, so auto-cleanup silently lost whole tables on a single
  * mangled char. Deletion is EXPLICIT-UI-ONLY (`deleteTableWithBackup`); a retained orphan is
- * accepted dead weight (no GC). `deleteOrphanModels` survives only for the composed
- * `reconcileTables` helper (tests / a possible future manual "clean unused"), NOT as an auto
- * caller — see `table-reconcile.ts`.
+ * accepted dead weight (no GC).
  */
 import * as Y from 'yjs';
 import { uuid } from '../../../utils/uuid';
 
-/** Default column width in px for new columns / freshly created tables. */
+/**
+ * Column width value meaning AUTO: no stored px. Rendered as an EMPTY `<col>`
+ * width inside a `table-layout: fixed` table — auto columns split the free
+ * width equally, never by content (widths must not move by themselves). "Auto" is the absence of a
+ * measurement, so nothing computed from one client's font metrics is ever
+ * written to the shared model. New tables, imports and added columns start auto;
+ * dragging a border turns a column fixed (writes px), double-click turns it back.
+ */
+export const AUTO_COLUMN_WIDTH = 0;
+
+/**
+ * Default FIXED column width in px — the restore fallback for captured tables
+ * with missing widths (mirrored in `backend/table_serialize.py`; the two
+ * constants must stay equal — see table-block-model.test.ts).
+ */
 export const DEFAULT_COLUMN_WIDTH = 160;
 
 export interface TableModel {
@@ -81,7 +93,7 @@ export function createTable(doc: Y.Doc, matrix: string[][]): string {
     // 5000×200 import pushed cell-by-cell emitted ~1M ops; batched it is O(rows+2) pushes.
     // Pre-built Y.Map/Y.Array/Y.Text children integrate correctly when inserted in bulk.
     const columns = new Y.Array<ColMap>();
-    columns.push(Array.from({ length: width }, () => makeColumn(DEFAULT_COLUMN_WIDTH)));
+    columns.push(Array.from({ length: width }, () => makeColumn(AUTO_COLUMN_WIDTH)));
     const rows = new Y.Array<Y.Array<CellMap>>();
     rows.push(matrix.map((row) => {
       const yrow = new Y.Array<CellMap>();
@@ -207,18 +219,6 @@ export function createUnlinkedTable(doc: Y.Doc, matrix: string[][], label: strin
   return id;
 }
 
-export function setCellText(doc: Y.Doc, id: string, row: number, col: number, text: string): void {
-  const table = getTablesMap(doc).get(id);
-  if (!table) return;
-  const cell = getRows(table).get(row)?.get(col);
-  if (!cell) return;
-  const body = cell.get('t') as Y.Text;
-  doc.transact(() => {
-    if (body.length) body.delete(0, body.length);
-    if (text) body.insert(0, text);
-  });
-}
-
 export function setColumnWidth(doc: Y.Doc, id: string, col: number, width: number): void {
   const table = getTablesMap(doc).get(id);
   if (!table) return;
@@ -245,7 +245,7 @@ export function addColumn(doc: Y.Doc, id: string, at?: number): void {
   const rows = getRows(table);
   const index = at ?? columns.length;
   doc.transact(() => {
-    columns.insert(index, [makeColumn(DEFAULT_COLUMN_WIDTH)]);
+    columns.insert(index, [makeColumn(AUTO_COLUMN_WIDTH)]);
     rows.forEach((row) => row.insert(index, [makeCell('')]));
   });
 }
@@ -281,27 +281,18 @@ export function tableAnchor(label: string, id: string): string {
 export const TABLE_ANCHOR_RE = /!\[([^\]]*)\]\(table:([^)]+)\)/g;
 
 /**
-  * Reconcile the `tables` model against the document content (anchor ↔ model lifecycle):
-  *
-  *  - A DUPLICATED anchor id (copy-paste) is cloned under a fresh id and the content is
-  *    rewritten so each anchor owns a distinct model (no aliasing).
-  *  - A model whose anchor is gone (deleted line) is removed (orphan cleanup).
+  * Clone a DUPLICATED anchor id (copy-paste) under a fresh id and rewrite the content so
+  * each anchor owns a distinct model (no aliasing). The live trigger is the debounced
+  * `tableReconcileExtension` (see `table-reconcile.ts`); orphan MODELS are never pruned
+  * here — see the INVARIANT(data-loss) in the header.
   *
   * Returns the (possibly rewritten) content + a `changed` flag. The caller is responsible
   * for writing `content` back into the text buffer when `changed` (the model mutations are
   * already applied to the Y.Doc here).
   *
   * INVARIANT: an orphan ANCHOR (anchor present, no model) is NOT created here — it renders
-  * an inline error in the widget. Only orphan MODELS are cleaned up. Why: content is the
-  * user's authored text; we never silently delete an anchor they typed.
-  *
-  * ARCH: the two passes are split (`cloneDuplicateAnchors` + `deleteOrphanModels`) so the
-  * live trigger can run them on different timers — clone (latency-sensitive, paste) on a short
-  * debounce; orphan cleanup on a longer idle timer. Why: `insertTable`/paste emit the model
-  * and its anchor as SEPARATE Yjs updates; a peer that has the model but not yet the anchor,
-  * and whose own typing fires the short timer in between, must NOT have that just-synced model
-  * deleted as an "orphan" before its anchor arrives. Deferring cleanup gives the anchor a wide
-  * window to land. This composed function runs both immediately (used by tests / explicit save).
+  * an inline error in the widget. Why: content is the user's authored text; we never
+  * silently delete an anchor they typed.
   */
 export function cloneDuplicateAnchors(doc: Y.Doc, content: string): { content: string; changed: boolean } {
   const tables = getTablesMap(doc);
@@ -327,22 +318,6 @@ export function cloneDuplicateAnchors(doc: Y.Doc, content: string): { content: s
     return tableAnchor(label, newId);
   });
 
-  return { content: rewritten, changed };
-}
-
-/** Drop any `tables` model that no surviving anchor in `content` references. */
-export function deleteOrphanModels(doc: Y.Doc, content: string): void {
-  const tables = getTablesMap(doc);
-  const referenced = new Set<string>();
-  for (const m of content.matchAll(TABLE_ANCHOR_RE)) referenced.add(m[2]);
-  for (const key of [...tables.keys()]) {
-    if (!referenced.has(key)) deleteTable(doc, key);
-  }
-}
-
-export function reconcileTables(doc: Y.Doc, content: string): { content: string; changed: boolean } {
-  const { content: rewritten, changed } = cloneDuplicateAnchors(doc, content);
-  deleteOrphanModels(doc, rewritten);
   return { content: rewritten, changed };
 }
 

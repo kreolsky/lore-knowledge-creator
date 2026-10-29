@@ -9,7 +9,7 @@ import { useArmedAction } from '../../hooks/useArmedAction';
 import { useTranslation } from '../../i18n';
 import { useEditorView } from '../../editor/active-editor';
 import { referenceThumbUrl } from '../../utils/reference-url';
-import { hueForId } from './ref-utils';
+import { hueForId, refEmbedText } from './ref-utils';
 import styles from './ImageGallery.module.css';
 
 interface ImageGalleryProps {
@@ -101,6 +101,9 @@ const ImageThumb = memo(function ImageThumb({
     <div
       ref={thumbRef}
       className={cls}
+      // Drag source for the editor drop (useSiblingDragReorder outside target).
+      // No group attribute: a gallery tile is never a reorder row or target.
+      data-ref-id={reference.reference_id}
       onClick={() => { if (!isUploading) onSelect(reference); }}
       onMouseEnter={() => {
         if (!isUploading && thumbRef.current && onRefHover) onRefHover(reference.reference_id, thumbRef.current);
@@ -108,7 +111,7 @@ const ImageThumb = memo(function ImageThumb({
       onMouseLeave={(e) => { if (onRefHoverLeave) onRefHoverLeave(e); }}
       title={reference.title}
     >
-      {fileUrl && <img src={fileUrl} alt={reference.title} className={styles.thumbImg} loading="lazy" decoding="async" />}
+      {fileUrl && <img src={fileUrl} alt={reference.title} className={styles.thumbImg} draggable={false} loading="lazy" decoding="async" />}
       {(isUploading || reference.processing_status === 'queued' || reference.processing_status === 'processing') && (
         <div className={styles.spinnerWrap}>
           <div className="w-4 h-4 border-2 border-white/30 border-t-white animate-spin" />
@@ -149,7 +152,7 @@ const ImageThumb = memo(function ImageThumb({
               const view = getEditorView();
               if (!view) return;
               const pos = view.state.selection.main.head;
-              const text = `![${reference.title}](ref:${reference.reference_id})`;
+              const text = refEmbedText(reference);
               view.dispatch({
                 changes: { from: pos, insert: text },
                 selection: { anchor: pos + 2 + reference.title.length },

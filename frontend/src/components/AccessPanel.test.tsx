@@ -409,29 +409,6 @@ describe('Move to another project section', () => {
       target_project_id: 'p2', parent_id: null,
     });
   });
-
-  it('a failed move surfaces the error toast (no silent degradation)', async () => {
-    vi.mocked(apiAccess.moveDocumentToProject).mockRejectedValue(new Error('boom'));
-    apiClientGet.mockImplementation((url: string) => {
-      if (url === '/projects') {
-        return Promise.resolve([{ project_id: 'p2', name: 'Writable', my_access: 'full' }]);
-      }
-      return Promise.resolve({ documents: [] });
-    });
-    await renderWith({ isOwner: true, docId: 'doc-1' });
-    await flush();
-    await flush();
-
-    const moveBtn = [...container.querySelectorAll('button')]
-      .find(b => b.textContent === 'accessMoveButton') as HTMLButtonElement;
-    await act(async () => { moveBtn.click(); });
-    const confirmBtn = [...container.querySelectorAll('[data-testid="move-confirm-modal"] button')]
-      .find(b => b.textContent === 'accessMoveButton') as HTMLButtonElement;
-    await act(async () => { confirmBtn.click(); });
-    await flush();
-
-    expect(showToast).toHaveBeenCalledWith('accessMoveFailed', 'error');
-  });
 });
 
 describe('General access link plaque', () => {

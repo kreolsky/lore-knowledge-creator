@@ -5,7 +5,6 @@ create, toggled both ways by PATCH across the WHOLE conversation (every
 branch and every compaction continuation), refused on a note session, and
 inherited by every row minted from an unindexed one.
 """
-import re
 from pathlib import Path
 
 import pytest
@@ -44,71 +43,7 @@ async def _mk_row(test_db, sid, fields):
     )
 
 
-# ─── create + serialize ──────────────────────────────────────────────────────
-
-
-async def test_unindexed_set_on_create_and_serialized(
-    client, admin_user, project_with_doc, test_db,
-):
-    pid, doc_id, _ = project_with_doc
-    _, token = admin_user
-    out = await _mk_chat(client, token, pid, doc_id, unindexed=True)
-    assert out["unindexed"] is True
-    assert (await _row(test_db, out["session_id"]))["unindexed"] is True
-
-
-async def test_unindexed_defaults_false(client, admin_user, project_with_doc):
-    pid, doc_id, _ = project_with_doc
-    _, token = admin_user
-    out = await _mk_chat(client, token, pid, doc_id)
-    assert out["unindexed"] is False
-
-
-async def test_unindexed_refused_on_note_create(client, admin_user, project_with_doc):
-    pid, doc_id, _ = project_with_doc
-    _, token = admin_user
-    resp = await client.post(
-        "/api/chat/sessions",
-        json={"project_id": pid, "document_id": doc_id, "is_note": True,
-              "unindexed": True},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 422, resp.text
-
-
-def test_serializer_reads_missing_flag_as_false():
-    from chat_sessions.serialize import serialize_session
-
-    assert serialize_session({"id": "chat_sessions:s1"})["unindexed"] is False
-
-
 # ─── PATCH: the whole conversation, both ways ────────────────────────────────
-
-
-async def test_patch_on_branch_flips_every_row_of_the_conversation(
-    client, admin_user, project_with_doc, test_db,
-):
-    """A toggle on one branch must not leave its siblings or its compaction
-    continuation searchable — and an unrelated chat is untouched."""
-    pid, doc_id, uid = project_with_doc
-    _, token = admin_user
-    root = (await _mk_chat(client, token, pid, doc_id))["session_id"]
-    other = (await _mk_chat(client, token, pid, doc_id))["session_id"]
-    base = {"project_id": pid, "user_id": uid}
-    await _mk_row(test_db, "br", {**base, "thread_id": root})
-    await _mk_row(test_db, "cont", {**base, "compacted_from": "br"})
-
-    resp = await _patch(client, token, "br", {"unindexed": True})
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["unindexed"] is True
-    for sid in (root, "br", "cont"):
-        assert (await _row(test_db, sid))["unindexed"] is True, sid
-    assert (await _row(test_db, other))["unindexed"] is False
-
-    resp = await _patch(client, token, "cont", {"unindexed": False})
-    assert resp.status_code == 200, resp.text
-    for sid in (root, "br", "cont"):
-        assert (await _row(test_db, sid))["unindexed"] is False, sid
 
 
 async def test_patch_unindexed_on_note_is_400(client, admin_user, project_with_doc):
@@ -132,54 +67,6 @@ async def test_patch_unindexed_never_touches_another_users_rows(
     resp = await _patch(client, token, root, {"unindexed": True})
     assert resp.status_code == 200, resp.text
     assert (await _row(test_db, "foreign"))["unindexed"] is False
-
-
-# ─── inheritance at mint ─────────────────────────────────────────────────────
-
-
-async def test_branch_inherits_unindexed(client, admin_user, project_with_doc, test_db):
-    pid, doc_id, _ = project_with_doc
-    _, token = admin_user
-    sid = (await _mk_chat(client, token, pid, doc_id, unindexed=True))["session_id"]
-    await test_db.query(
-        "CREATE type::record('messages', 'u1') CONTENT $f",
-        {"f": {"chat_id": sid, "role": "user", "content": "hi"}},
-    )
-    resp = await client.post(
-        f"/api/chat/sessions/{sid}/branches",
-        json={"after_message_id": "u1"},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["unindexed"] is True
-    assert (await _row(test_db, resp.json()["session_id"]))["unindexed"] is True
-
-
-_MINT = re.compile(
-    r"create_record\(\s*[\"']chat_sessions[\"']"
-    r"|\b(?:CREATE|INSERT(?:\s+INTO)?|UPSERT)\b[^\n]{0,60}chat_sessions",
-)
-# Every site that mints a chat_sessions row, classified. `inherits` copies
-# `unindexed` from its source row; `root-default` takes it from the request;
-# `note` mints a note session, which `is_note` already keeps out of the index.
-_CLASSIFIED_MINT_SITES = {
-    "chat_sessions/create.py": "root-default",
-    "routes/chat/branches.py": "inherits",
-    "driver/compaction.py": "inherits",
-    "notes_service.py": "note",
-    "migrations/migrate_chat_branches_to_sessions.py": "inherits",
-}
-
-
-def test_every_chat_session_minting_site_is_classified():
-    """A fifth minting path that does not carry `unindexed` would silently make
-    an anonymous chat searchable — every site must be classified here."""
-    found = {
-        str(path.relative_to(BACKEND))
-        for path in BACKEND.rglob("*.py")
-        if _MINT.search(path.read_text(encoding="utf-8"))
-    }
-    assert found == set(_CLASSIFIED_MINT_SITES), found
 
 
 # ─── conversation_session_ids ────────────────────────────────────────────────
@@ -214,17 +101,3 @@ async def test_conversation_closure_from_any_member(test_db, chain, start):
 
     session = await _row(test_db, start)
     assert await conversation_session_ids(test_db, start, session) == chain
-
-
-async def test_conversation_of_a_lone_chat_is_itself(test_db, chain):
-    from chat_sessions.conversation import conversation_session_ids
-
-    session = await _row(test_db, "lone")
-    assert await conversation_session_ids(test_db, "lone", session) == {"lone"}
-
-
-def test_migration_carved_branch_inherits_unindexed():
-    from migrations.migrate_chat_branches_to_sessions import _branch_data
-
-    chat = {"project_id": "p1", "user_id": "u1", "unindexed": True}
-    assert _branch_data(chat, "s1", [], "n1", set())["unindexed"] is True

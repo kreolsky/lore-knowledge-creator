@@ -1,7 +1,7 @@
 /**
  * The one answer to "which editor is active": the focused CM6 EditorView, the host (root)
  * view, the focused column's role and content type, the focused collab handle, the
- * role-keyed column views and the view→entity map — every slot, its listeners and its
+ * role-keyed column views and the view→entity read — every slot, its listeners and its
  * mutators.
  *
  * ARCH: module-level, not React Context — CM6 extensions (table-block-widget), hooks run in
@@ -34,6 +34,9 @@
 import type { EditorView } from '@codemirror/view';
 import type { EntityYjsState } from '../collab/yjs-provider';
 import { serializeTables } from '../components/editor/live-preview/table-block-model';
+import { viewEntity } from '../components/editor/live-preview/table-doc-source';
+import { getEntityHandle } from '../collab/active-handle-registry';
+import { selectionFeedPlugin } from './editor-observer';
 
 export type EditorRole = 'primary' | 'secondary';
 
@@ -86,6 +89,14 @@ function setFocusedView(view: EditorView | null, previous?: EditorView): void {
   // would null the main editor's view, so the clear only happens when `previous`
   // is still the current view.
   if (view === null && previous !== undefined && previous !== focusedView) return;
+  // INVARIANT: a view that can become the active editor carries the shared selection feed.
+  // Why: the toolbars read only the active view and re-derive on its feed; an active
+  // view without it leaves the image size field and the toolbar anchor stale.
+  if (view && view.plugin(selectionFeedPlugin) === null) {
+    const msg = 'active-editor: a view without selectionFeedPlugin cannot become the active editor';
+    if (import.meta.env.MODE === 'test') throw new Error(msg);
+    console.error(msg);
+  }
   focusedView = view;
 }
 
@@ -253,21 +264,19 @@ export function getRoleView(role: EditorRole): EditorView | null {
   return roleViews.get(role) ?? null;
 }
 
-// ─── View → entity registry ──────────────────────────────────────────────────
-// ARCH: a FOURTH registry concern. Identity-scoped non-React consumers (the table
-// widget's late-bind, paste/drop model placement) must resolve WHICH entity a
-// given EditorView renders — the focused slot cannot answer that in split view
-// (it points at whichever column holds focus). WeakMap: a destroyed view's entry
-// is garbage-collected, no explicit teardown needed.
-const viewEntities = new WeakMap<EditorView, string>();
+// ─── View → entity ───────────────────────────────────────────────────────────
 
-/** Register the entity a view renders. `null` (or view destruction) clears it. */
-export function setViewEntity(view: EditorView, entityId: string | null): void {
-  if (entityId === null) viewEntities.delete(view);
-  else viewEntities.set(view, entityId);
+/** Return the entity id a view renders (its `viewEntity` facet), or null for hosts without one. */
+export function getViewEntity(view: EditorView): string | null {
+  return view.state.facet(viewEntity);
 }
 
-/** Return the entity id a view renders, or null for unregistered views. */
-export function getViewEntity(view: EditorView): string | null {
-  return viewEntities.get(view) ?? null;
+/**
+ * The ydoc a view's content belongs to: its entity's handle, or the focused slot for a view
+ * with no entity. A KNOWN entity whose handle has not landed yields undefined — never the
+ * slot's ydoc, which may be the OTHER column's (model and anchor would split across ydocs).
+ */
+export function entityYdoc(view: EditorView): EntityYjsState['ydoc'] | undefined {
+  const entityId = getViewEntity(view);
+  return entityId ? getEntityHandle(entityId)?.ydoc : getActiveHandle()?.ydoc;
 }

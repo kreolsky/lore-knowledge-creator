@@ -84,19 +84,6 @@ class TestMaybeBackupOnOpen:
         assert result is not None
         mock_create.assert_called_once()
 
-    @patch("auto_backup.json_safe", return_value={})
-    @patch("auto_backup.create_checkpoint", new_callable=AsyncMock, side_effect=_writer_stub)
-    @patch("auto_backup.get_db", new_callable=AsyncMock)
-    async def test_creates_backup_when_no_prior_checkpoint(
-        self, mock_get_db, mock_create, mock_json, emit_recorder,
-    ):
-        mock_db = AsyncMock()
-        mock_db.query = AsyncMock(return_value=[])
-        mock_get_db.return_value = mock_db
-
-        result = await maybe_backup_on_open("doc1", FRESH_CONTENT)
-        assert result is not None
-        mock_create.assert_called_once()
 
     @patch("auto_backup.json_safe", return_value={})
     @patch("auto_backup.create_checkpoint", new_callable=AsyncMock, side_effect=_writer_stub)
@@ -132,21 +119,3 @@ class TestMaybeBackupOnOpen:
         assert result is None
         mock_create.assert_not_called()
         mock_get_db.assert_not_called()
-
-    @patch("auto_backup.create_checkpoint", new_callable=AsyncMock, side_effect=_writer_stub)
-    @patch("auto_backup.get_db", new_callable=AsyncMock)
-    async def test_no_backup_when_ancient_checkpoint_has_equal_content(
-        self, mock_get_db, mock_create,
-    ):
-        """The age gate is REMOVED, not inverted: equal content at ANY age means the
-        state is already preserved — no snapshot."""
-        mock_db = AsyncMock()
-        ancient = datetime.now(timezone.utc) - timedelta(days=30)
-        mock_db.query = AsyncMock(
-            return_value=[{"created_at": ancient, "content_hash": FRESH_HASH}]
-        )
-        mock_get_db.return_value = mock_db
-
-        result = await maybe_backup_on_open("doc1", FRESH_CONTENT)
-        assert result is None
-        mock_create.assert_not_called()

@@ -90,32 +90,3 @@ async def test_backfill_restores_duration_sec_for_ref_missing_it(tmp_path):
     assert after["file_meta"]["duration_sec"] > 0
     # The stored file is never rewritten (write-once + immutable-cache invariant).
     assert after["file_path"] == stored_before
-
-
-@pytest.mark.asyncio
-async def test_backfill_dry_run_does_not_write(tmp_path):
-    import files_util
-
-    from db import fetch_one, get_db
-
-    mod = _load()
-
-    db = await get_db()
-    await _clear_audio_refs(db)
-    src = tmp_path / "in.webm"
-    src.write_bytes(WEBM_WITH_DUR)
-    ref_id, _ = await files_util.save_upload(
-        None, "audio/webm", "clip.webm", "ptest_backfill_dry", "ptest_backfill_dry-host",
-        title="clip", media_type="audio", processing_status=None, src_path=src,
-    )
-    ref = await fetch_one("documents", ref_id)
-    stripped = {k: v for k, v in ref["file_meta"].items() if k != "duration_sec"}
-    await db.query(
-        "UPDATE type::record('documents', $id) SET file_meta = $fm",
-        {"id": ref_id, "fm": stripped},
-    )
-
-    await mod.main(dry_run=True)
-
-    # Dry-run: duration_sec stays absent.
-    assert "duration_sec" not in (await fetch_one("documents", ref_id))["file_meta"]

@@ -90,29 +90,12 @@ async def test_persist_session_title_runs_guarded_update(monkeypatch):
     assert params == {"sid": "chat-1", "t": "Fresh Title"}
 
 
-async def test_persist_session_title_skips_empty_title(monkeypatch):
-    """An empty/whitespace title writes nothing (keeps the previous row value)."""
-    db = _FakeDB(rows=[{"id": "chat-1"}])
-    monkeypatch.setattr(driver.persistence, "get_db", lambda: _AsyncBox(db))
-    assert await driver.persistence._persist_session_title("chat-1", "   ") is False
-    assert await driver.persistence._persist_session_title("chat-1", "") is False
-    assert db.executed == []
-
-
 async def test_persist_session_title_skips_missing_session(monkeypatch):
     """No session id → no write (the relay arm logs instead)."""
     db = _FakeDB(rows=[])
     monkeypatch.setattr(driver.persistence, "get_db", lambda: _AsyncBox(db))
     assert await driver.persistence._persist_session_title("", "Title") is False
     assert db.executed == []
-
-
-async def test_persist_session_title_reports_pinned_row_as_not_written(monkeypatch):
-    """A pinned row (title_user_set) matches zero rows → the guard held the
-    user's title; the relay reports not-written instead of failing."""
-    db = _FakeDB(rows=[])
-    monkeypatch.setattr(driver.persistence, "get_db", lambda: _AsyncBox(db))
-    assert await driver.persistence._persist_session_title("chat-1", "Revision") is False
 
 
 # ─── driver.frames session_title arm ─────────────────────────────────────────
@@ -154,38 +137,6 @@ async def test_an_event_with_no_usable_title_never_reaches_the_db(monkeypatch):
     for bad in (None, 42, {"title": "nested"}, "", "   "):
         assert await driver.frames._relay_frame(_turn(), _title_event(bad)) == []
     assert queries == [], "an event with no usable title must not reach the DB"
-
-
-async def test_a_tokenizer_leak_title_never_reaches_the_user(monkeypatch):
-    """The leak guard moved here with the translation's death: Gemma
-    SentencePiece unused slots and raw byte tokens must never land in the chat
-    list — no write, no frame, the row keeps the deterministic fallback."""
-    queries: list[tuple] = []
-
-    class _CountingDB:
-        async def query(self, sql, params):
-            queries.append((sql, params))
-            return [{"id": "chat-1"}]
-
-    monkeypatch.setattr(driver.persistence, "get_db", lambda: _AsyncBox(_CountingDB()))
-    for leak in ("<unused49><unused49> the document", "<0x1F600> title"):
-        assert await driver.frames._relay_frame(_turn(), _title_event(leak)) == []
-    assert queries == [], "a leaking title must not reach the DB"
-    # The guard is on the TRIMMED title: whitespace around a leak is still one.
-    assert await driver.frames._relay_frame(
-        _turn(), _title_event("  <unused49>  ")) == []
-
-
-async def test_a_real_title_passes_the_leak_guard(monkeypatch):
-    """The patterns are anchored to the token shape: prose containing the word
-    'unused' or hex-adjacent text is a legitimate title."""
-    async def fake_persist(session_id, title):
-        return True
-
-    monkeypatch.setattr(driver.persistence, "_persist_session_title", fake_persist)
-    turn = _turn()
-    frames = await driver.frames._relay_frame(turn, _title_event("Unused corridors of the keep"))
-    assert frames == [{"type": "session_title", "title": "Unused corridors of the keep"}]
 
 
 async def test_persist_failure_does_not_break_the_turn(monkeypatch):

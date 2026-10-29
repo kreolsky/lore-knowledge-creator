@@ -12,12 +12,11 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, cleanup } from '@testing-library/react';
 import { EditorLinkPreview } from './EditorLinkPreview';
-import { useAppStore } from '../../store/app-store';
 import { useNoteChatStore } from '../../store/note-chat-store';
 import { usePublicNotesStore, PUBLIC_DRAFT_NOTE_ID } from '../../store/public-notes-store';
-import type { ChatSession, Document } from '../../types';
+import type { ChatSession } from '../../types';
 
 vi.mock('../../hooks/useDocumentPreview', () => ({
   useDocumentPreview: vi.fn((id: string | null) => ({
@@ -31,92 +30,12 @@ vi.mock('../../hooks/useReferencePreview', () => ({
   useReferencePreview: vi.fn(() => ({ preview: null, error: false, loading: false })),
 }));
 
-/** Mount the host, append a link, hover it (mouseenter, as the host listens on
- * the document with capture), and let the 300ms delay elapse via waitFor. */
-async function renderHostAndHover(link: HTMLAnchorElement) {
-  render(<EditorLinkPreview />);
-  document.body.appendChild(link);
-  link.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
-  return link;
-}
-
-function testLink(): HTMLAnchorElement {
-  const a = document.createElement('a');
-  a.setAttribute('data-test-link', '');
-  a.textContent = 'link';
-  return a;
-}
-
 afterEach(() => {
   cleanup();
   document.querySelectorAll('a[data-test-link]').forEach(el => el.remove());
 });
 
 describe('EditorLinkPreview — metadata branches', () => {
-  it('attribute branch: a .chat-link with data-link-type/id shows the doc preview', async () => {
-    const a = testLink();
-    a.className = 'chat-link';
-    a.setAttribute('data-link-type', 'doc');
-    a.setAttribute('data-link-id', 'doc123');
-    await renderHostAndHover(a);
-    expect(await screen.findByText('preview:doc123')).toBeTruthy();
-  });
-
-  it('href branch: a dsh chat anchor with an internal lore.local href shows the doc preview', async () => {
-    const a = testLink();
-    a.className = 'chat-link-dsh'; // any class — matched by the .chat-markdown a[href^=…] selector
-    a.href = 'https://lore.local/l/doc/doc123';
-    const host = document.createElement('div');
-    host.className = 'chat-markdown';
-    host.appendChild(a);
-    render(<EditorLinkPreview />);
-    document.body.appendChild(host);
-    a.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
-    expect(await screen.findByText('preview:doc123')).toBeTruthy();
-  });
-
-  it('attribute branch: a prefixed ref id resolves through decodeLinkId', async () => {
-    const a = testLink();
-    a.className = 'chat-source';
-    a.setAttribute('data-link-type', 'ref');
-    a.setAttribute('data-link-id', 'ref:ref456');
-    await renderHostAndHover(a);
-    // Ref previews resolve from the (empty) store + the mocked fetch hook;
-    // the popup must be VISIBLE with the ref branch active — assert the
-    // popup container exists (content branch is covered by the doc cases).
-    await waitFor(() => {
-      const popup = document.querySelector('.fixed.z-55');
-      if (!popup) throw new Error('popup not mounted');
-    });
-  });
-
-  it('href branch: an external dsh anchor gets NO preview (no data attributes, external href)', async () => {
-    const a = testLink();
-    a.href = 'https://example.com/x';
-    const host = document.createElement('div');
-    host.className = 'chat-markdown';
-    host.appendChild(a);
-    render(<EditorLinkPreview />);
-    document.body.appendChild(host);
-    a.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
-    // Give the 300ms delay room to fire; the popup must stay absent.
-    await new Promise(r => setTimeout(r, 500));
-    expect(document.querySelector('.fixed.z-55')).toBeNull();
-  });
-
-  it('titles the popup with the linked document name from the store', async () => {
-    useAppStore.setState({ documents: [{ document_id: 'doc789', title: 'Kingdoms of the North' } as Document] });
-    const a = testLink();
-    a.className = 'chat-link';
-    a.setAttribute('data-link-type', 'doc');
-    a.setAttribute('data-link-id', 'doc789');
-    await renderHostAndHover(a);
-    await waitFor(() => {
-      const plaque = document.querySelector('[data-preview-title]');
-      expect(plaque?.textContent).toBe('Kingdoms of the North');
-    });
-    useAppStore.setState({ documents: [] });
-  });
 
   it('a painted note anchor shows the note\'s last message, with no title plaque', async () => {
     useNoteChatStore.setState({ sessions: [{

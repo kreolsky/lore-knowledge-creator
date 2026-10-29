@@ -328,10 +328,24 @@ export function buildStructuralDecorations(state: EditorState): DecorationSet {
 
         const revealFrom = hasOuterBrackets ? node.from - 1 : node.from;
         const revealTo = hasOuterBrackets ? node.to + 1 : node.to;
-        if (isCursorIn(revealFrom, revealTo)) return false;
+
+        // ARCH: an image embed (`![alt](ref:id)` resolving to an image) is an ATOMIC
+        // BLOCK: its ImageWidget is ALWAYS rendered — the raw text is never revealed,
+        // not even under the caret. Motion jumps over the range as one unit
+        // (inlineAtomicRanges facet in fields.ts), a press on the widget selects it
+        // whole (ImageWidget mousedown), and one-key deletes are swallowed
+        // (atomic-delete-guard.ts). Raw source (alt, size suffix) stays editable in
+        // plain-text mode (Mod-/). All other Image/Link nodes keep the
+        // reveal-on-cursor editing affordance below.
+        const embed = node.name === 'Image'
+          ? extractEmbedFromImageNode(node.node, state, children)
+          : null;
+        const isAtomicImageEmbed =
+          !!embed && resolveTransclusion(embed.urlText)?.kind === 'image';
+
+        if (!isAtomicImageEmbed && isCursorIn(revealFrom, revealTo)) return false;
 
         if (node.name === 'Image') {
-          const embed = extractEmbedFromImageNode(node.node, state, children);
           if (embed) {
             const { urlText, alt } = embed;
             // `table:` anchors are owned by `tableBlockField` (block replace) — skip ALL

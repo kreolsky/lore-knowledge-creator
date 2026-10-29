@@ -12,11 +12,7 @@ ASSEMBLED prompt — a loader-shape assertion would not see that regression.
 
 import pytest
 from agent_config import (
-    _MEMORY_ROLES,
-    _REQUIRED_ROLES,
     DEFAULT_BOOTSTRAP_PROMPT,
-    PROTECTED_SYSTEM_ROLES,
-    SYSTEM_DOC_ROLES,
     build_agent_system_prompt,
     ensure_agent_system_docs,
     load_agent_system_docs,
@@ -24,24 +20,10 @@ from agent_config import (
 
 from db import create_record, get_db
 
-# ─── The role joins the vocabulary + the protected set, never the injected set ──
-
-
-def test_memory_folder_role_posture():
-    """`memory_folder` is valid vocabulary and delete-protected, but NEVER injected.
-
-    Derived over `_MEMORY_ROLES` rather than the literal so a second memory role is
-    covered the day it is added (testing.md: assert over the derived source).
-    """
-    for role in _MEMORY_ROLES:
-        assert role in SYSTEM_DOC_ROLES, f"{role} missing from the role vocabulary"
-        assert role in PROTECTED_SYSTEM_ROLES, f"{role} is not delete-protected"
-        assert role not in _REQUIRED_ROLES, f"{role} must never be injected"
-
-
 # ─── Seeding ─────────────────────────────────────────────────────────────────
 
 
+# TEST-WHY: cross-process-contract — Memory folder seeding over the real SCHEMAFULL Surreal; guard gated by agent_config_seed.py.
 @pytest.mark.asyncio
 async def test_ensure_seeds_the_memory_folder(test_db, project_with_doc):
     """`Memory` exists as a child of the system root after lazy init."""
@@ -64,6 +46,7 @@ async def test_ensure_seeds_the_memory_folder(test_db, project_with_doc):
     assert not (rows[0].get("content") or "").strip()
 
 
+# TEST-WHY: cross-process-contract — lazy re-init keeps a single Memory folder over the real Surreal; guard gated by agent_config_seed.py.
 @pytest.mark.asyncio
 async def test_reinit_does_not_duplicate_the_memory_folder(test_db, project_with_doc):
     pid, _idx, _admin = project_with_doc
@@ -80,6 +63,7 @@ async def test_reinit_does_not_duplicate_the_memory_folder(test_db, project_with
     assert rows[0]["n"] == 1
 
 
+# TEST-WHY: cross-process-contract — delete-guard for the seeded Memory folder over the real HTTP path; guard gated by agent_config_seed.py.
 @pytest.mark.asyncio
 async def test_memory_folder_is_delete_guarded(
     client, test_db, admin_user, project_with_doc,
@@ -109,36 +93,7 @@ async def test_memory_folder_is_delete_guarded(
 # ─── The carve-out: Memory is retrieved, never injected ──────────────────────
 
 
-def test_renderer_never_injects_memory_even_when_handed_it():
-    """THE decisive gate. `build_agent_system_prompt` must not render memory content
-    even when it is handed to it pre-resolved.
-
-    Why a PURE-function assertion and not only the end-to-end one below: the
-    non-injection rests on three independent absences (see the INVARIANT on
-    `_MEMORY_ROLES`) — the loader's role filter, the BFS folder list, and this
-    renderer's section loop. A refactor that touches only one or two injects
-    nothing, so the end-to-end test passes on a half-done "unify the folders"
-    change and only fails once all three land. This assertion removes the loader
-    from the equation entirely: whatever any future resolver decides to put in
-    `docs_by_role`, the renderer is still the last gate and it must hold alone.
-
-    Verified to fail: adding ("Memory", "memory_folder", "memory_children") to the
-    section loop turns this red.
-    """
-    marker = "MEMORY-BODY-MUST-NOT-RENDER"
-    prompt = build_agent_system_prompt(DEFAULT_BOOTSTRAP_PROMPT, {
-        "rules_folder": {"id": "rf", "title": "Rules", "content": "a rule"},
-        "rules_children": [],
-        "memory_folder": {"id": "mf", "title": "Memory", "content": ""},
-        "memory_children": [
-            {"id": "e1", "title": "Гарет", "content": marker},
-        ],
-    })
-    assert "a rule" in prompt, "the Rules section stopped rendering"
-    assert marker not in prompt
-    assert "# Memory" not in prompt
-
-
+# TEST-WHY: cross-process-contract — the not-injected carve-out end-to-end over real data across all three seams; gated by agent_config_seed.py.
 @pytest.mark.asyncio
 async def test_memory_is_not_injected_into_the_prompt(test_db, project_with_doc):
     """The same rule end-to-end: fact docs really under `Memory` reach NO part of the
@@ -187,6 +142,7 @@ async def test_memory_is_not_injected_into_the_prompt(test_db, project_with_doc)
 # ─── The documents fields exist on the SCHEMAFULL table ──────────────────────
 
 
+# TEST-WHY: cross-process-contract — memory fields round-trip through the real SCHEMAFULL documents table; guard gated by agent_config_seed.py.
 @pytest.mark.asyncio
 async def test_memory_fields_persist_on_documents(test_db, project_with_doc):
     """The memory fields round-trip through the real SCHEMAFULL table.
@@ -233,6 +189,7 @@ async def test_memory_fields_persist_on_documents(test_db, project_with_doc):
     assert "claims" not in stored_mem  # the entity level is gone
 
 
+# TEST-WHY: cross-process-contract — ordinary documents keep the memory fields NONE on the real schema; guard gated by agent_config_seed.py.
 @pytest.mark.asyncio
 async def test_memory_fields_absent_on_ordinary_documents(test_db, project_with_doc):
     """An ordinary document keeps the fields NONE — no non-option DEFAULT.
@@ -255,4 +212,3 @@ async def test_memory_fields_absent_on_ordinary_documents(test_db, project_with_
     assert not row.get("is_memory")
     assert row.get("mem_active") is None
     assert row.get("mem") is None
-

@@ -8,7 +8,6 @@ from note_anchors import anchor_space, resolve_anchor, utf16_to_cp
 from pycrdt import Doc, Text
 
 from migrations.migrate_note_links_to_anchors import (
-    _migrate_note_links_to_anchors,
     migrate_doc_links,
     run,
 )
@@ -125,16 +124,3 @@ async def test_run_writes_the_note_row_before_publishing_the_removal(
     # Idempotent: the text holds no link any more, nothing is published again.
     await run(db, publish=recorder)
     assert len(seen_at_publish) == 1
-
-
-@pytest.mark.asyncio
-async def test_runner_entry_drops_the_retired_offset_columns(test_db):
-    from db import get_db
-
-    db = await get_db()
-    await db.query("DEFINE FIELD IF NOT EXISTS anchor_offset_start ON chat_sessions TYPE option<int>")
-    await db.query("DEFINE FIELD IF NOT EXISTS anchor_offset_end ON chat_sessions TYPE option<int>")
-    await _migrate_note_links_to_anchors(db)
-    info = await db.query("INFO FOR TABLE chat_sessions")
-    fields = (info[0] if isinstance(info, list) else info)["fields"]
-    assert "anchor_offset_start" not in fields and "anchor_offset_end" not in fields

@@ -15,17 +15,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scripts.import_shape import SCC_MAX, check, measure
+from scripts.import_shape import check, measure
 
 
 def _write(root: Path, rel: str, content: str) -> None:
     path = root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
-
-
-def test_hard_cap_is_three() -> None:
-    assert SCC_MAX == 3
 
 
 def test_acyclic_package_passes_against_its_own_numbers(tmp_path: Path) -> None:

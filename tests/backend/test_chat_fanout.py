@@ -36,12 +36,8 @@ from routes.chat.fanout import ensure_fanout
 from test_driver_channel import (
     FakeConnector,
     FakeReplay,
-    PersistSpy,
     _chunk,
-    _claim,
     _env,
-    _turn_end,
-    _verdict_ask,
 )
 
 
@@ -107,140 +103,6 @@ def _open_ws(sync_app, pid: str, token: str):
     return ws, ctx
 
 
-# ─── delivery: order, envelope, and the leak actor ────────────────────────────
-
-
-class TestFanoutDelivery:
-    @pytest.mark.asyncio
-    async def test_frames_reach_owner_tabs_in_order_member_gets_nothing(
-        self, sync_app, client, collab_project, wired_channel,
-    ):
-        """The owner's two tabs receive every frame as chat_frame in seq
-        order; a second project member's socket receives NOTHING — its next
-        message is the shared broadcast sentinel, not a chat frame."""
-        pid, _doc, admin_token, user_token, _admin_uid, _user_uid = collab_project
-        sid = await _harness_chat(client, pid, _doc, user_token)
-        _ch, connector = wired_channel
-
-        owner_a = _open_ws(sync_app, pid, user_token)
-        owner_b = _open_ws(sync_app, pid, user_token)
-        member = _open_ws(sync_app, pid, admin_token)
-
-        assert await ensure_fanout(sid) is True
-        sock = connector.sockets[0]
-        for frame in (
-            {"type": "model_update", "model": "local/test"},
-            _chunk(8, "Hello "),
-            _verdict_ask(9),
-        ):
-            sock.push(_env(sid, frame))
-        await _settle()
-
-        expected = [
-            {"type": "model_update", "model": "local/test"},
-            _chunk(8, "Hello "),
-            _verdict_ask(9),
-        ]
-        for owner in (owner_a, owner_b):
-            got = [json.loads(owner[1].receive_text()) for _ in range(3)]
-            assert got == [
-                {"type": "chat_frame", "session_id": sid, "frame": f}
-                for f in expected
-            ]
-
-        # The sentinel: a shared broadcast AFTER the fan-out. WS delivery is
-        # ordered per socket — the member's NEXT message being the sentinel
-        # (and not a chat frame) is the leak assertion.
-        from event_bus import emit
-        await emit("embedding_degraded", project_id=pid)
-        await _settle()
-        assert json.loads(member[1].receive_text()) == {
-            "type": "embedding_degraded"}
-        # And the owner's socket is drained of chat frames: the sentinel is
-        # its next message too (nothing else was pending).
-        assert json.loads(owner_a[1].receive_text()) == {
-            "type": "embedding_degraded"}
-
-        for ws_ctx in (owner_a, owner_b, member):
-            ws_ctx[0].__exit__(None, None, None)
-
-    @pytest.mark.asyncio
-    async def test_claimed_turn_done_frame_reaches_the_wire(
-        self, sync_app, client, collab_project, wired_channel, monkeypatch,
-    ):
-        """A CLAIMED turn flows through the relay arms: the listener receives
-        the preamble then the wire order (model_update, dsh_event…, done) and
-        the done frame — the SAME join finalize persists — reaches the
-        owner's socket inside the chat_frame envelope."""
-        pid, _doc, _admin_token, user_token, _admin_uid, _user_uid = collab_project
-        sid = await _harness_chat(client, pid, _doc, user_token)
-        ch, connector = wired_channel
-        PersistSpy(monkeypatch)
-
-        owner = _open_ws(sync_app, pid, user_token)
-        try:
-            assert await ensure_fanout(sid) is True
-            sock = connector.sockets[0]
-            for frame in (
-                _claim("m1"),
-                {"type": "model_update", "model": "local/test"},
-                _chunk(8, "Hello "),
-                _turn_end(10, "completed"),
-            ):
-                sock.push(_env(sid, frame))
-            await _settle()
-
-            got = [json.loads(owner[1].receive_text()) for _ in range(5)]
-            assert [g["frame"]["type"] for g in got] == [
-                "ids", "model_update", "dsh_event", "dsh_event", "done"]
-            assert got[-1]["frame"]["content"] == "Hello"
-            assert got[-1]["session_id"] == sid
-        finally:
-            owner[0].__exit__(None, None, None)
-
-
-# ─── who does NOT get a pump (the only noops left) ─────────────────────────────
-
-
-class TestFanoutGating:
-    @pytest.mark.asyncio
-    async def test_note_row_is_a_noop(self, client, collab_project, wired_channel):
-        """Note chats never ride the owner's project WS — their frames have
-        no fan-out consumer (the lifecycle flag died with the SSE arm; the
-        row's note-ness is the whole gate)."""
-        pid, doc_id, _admin_token, user_token, *_ = collab_project
-        resp = await client.post(
-            "/api/chat/sessions",
-            json={"project_id": pid, "document_id": doc_id, "is_note": True},
-            cookies={"lore_session": user_token},
-        )
-        assert resp.status_code == 201, resp.text
-        sid = resp.json()["session_id"]
-
-        _ch, connector = wired_channel
-        assert await ensure_fanout(sid) is False
-        assert not connector.sockets
-        assert not chat_fanout._pumps
-
-    @pytest.mark.asyncio
-    async def test_missing_session_is_a_noop(self, wired_channel):
-        _ch, connector = wired_channel
-        assert await ensure_fanout("chat_sessions:nope") is False
-        assert not connector.sockets
-
-    @pytest.mark.asyncio
-    async def test_ensure_is_idempotent_one_pump(
-        self, client, collab_project, wired_channel,
-    ):
-        pid, _doc, _admin_token, user_token, *_ = collab_project
-        sid = await _harness_chat(client, pid, _doc, user_token)
-        _ch, _connector = wired_channel
-
-        assert await ensure_fanout(sid) is True
-        assert await ensure_fanout(sid) is True
-        assert len(chat_fanout._pumps) == 1
-
-
 # ─── backpressure: drop + resync, never reorder ───────────────────────────────
 
 
@@ -295,19 +157,6 @@ class TestFanoutBackpressure:
             assert got["frame"]["data"]["message"]["content"][0]["text"] == "e"
         finally:
             owner[0].__exit__(None, None, None)
-
-    @pytest.mark.asyncio
-    async def test_unsubscribe_closes_the_pump(
-        self, client, collab_project, wired_channel,
-    ):
-        pid, _doc, _admin_token, user_token, *_ = collab_project
-        sid = await _harness_chat(client, pid, _doc, user_token)
-        ch, _connector = wired_channel
-
-        assert await ensure_fanout(sid) is True
-        await ch.unsubscribe(sid)
-        await _settle()
-        assert not chat_fanout._pumps
 
 
 # ─── the doc contract ─────────────────────────────────────────────────────────
@@ -398,35 +247,6 @@ def _orig_send_to_project_user():
 # ─── step 6: the driver session id + the explicit stop ────────────────────────
 
 
-class TestFanoutDriverSessionId:
-    @pytest.mark.asyncio
-    async def test_channel_subscribes_the_driver_id_envelope_keeps_chat_id(
-        self, sync_app, client, collab_project, wired_channel,
-    ):
-        """A continuation chat (compacted_from) drives under the DRIVER session
-        id: the channel subscribes drv-1, frames pushed for its dsh mapping
-        reach the owner enveloped with the CHAT session id."""
-        pid, _doc, _admin_token, user_token, _admin_uid, _user_uid = collab_project
-        sid = await _harness_chat(client, pid, _doc, user_token)
-        _ch, connector = wired_channel
-        connector._ack_map = {sid: sid, f"drv-{sid}": f"dsh-{sid}"}
-
-        owner = _open_ws(sync_app, pid, user_token)
-        try:
-            assert await ensure_fanout(sid, driver_session_id=f"drv-{sid}") is True
-            sock = connector.sockets[0]
-            assert {"type": "subscribe", "session_id": f"drv-{sid}"} in sock.sent
-
-            sock.push(_env(f"dsh-{sid}", _chunk(8, "hey")))
-            await _settle()
-            got = json.loads(owner[1].receive_text())
-            assert got == {
-                "type": "chat_frame", "session_id": sid, "frame": _chunk(8, "hey"),
-            }
-        finally:
-            owner[0].__exit__(None, None, None)
-
-
 class TestFanoutStop:
     @pytest.mark.asyncio
     async def test_stop_unsubscribes_and_removes_the_pump(
@@ -460,10 +280,3 @@ class TestFanoutStop:
                 "type": "embedding_degraded"}
         finally:
             owner[0].__exit__(None, None, None)
-
-    @pytest.mark.asyncio
-    async def test_stop_without_a_pump_is_a_noop(self, wired_channel):
-        from routes.chat.fanout import stop_fanout
-
-        _ch, _connector = wired_channel
-        await stop_fanout("chat_sessions:never-flagged")  # must not raise

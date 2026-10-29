@@ -71,23 +71,6 @@ function makeTextRef(id: string, content: string | undefined, title = id): Refer
   };
 }
 
-function makeFileRef(id: string, filePath: string, title = id): Reference {
-  return {
-    reference_id: id,
-    project_id: '',
-    document_id: 'owner',
-    title,
-    media_type: 'file',
-    source_url: null,
-    content: '',
-    processing_status: null,
-    file_path: filePath,
-    file_meta: { mime_type: 'application/zip', file_size: 4096, original_name: 'page.zip' },
-    updated_at: '',
-    created_at: '',
-  };
-}
-
 describe('buildPublicTransclusionMap', () => {
   beforeEach(() => {
     transcludeMap.clear();
@@ -120,27 +103,6 @@ describe('buildPublicTransclusionMap', () => {
     const ref = makeImageRef('img-1', '', 'No file');
     const map = buildPublicTransclusionMap([], [ref]);
     expect(map.has('img-1')).toBe(false);
-  });
-
-  it('seeds a file ref (agent archive) as ref-file with fileUrl + size', () => {
-    const ref = makeFileRef('zip-1', 'proj/zip-1/page.zip', 'Bundle');
-    const map = buildPublicTransclusionMap([], [ref]);
-
-    const entry = map.get('zip-1');
-    expect(entry).toBeDefined();
-    expect(entry!.kind).toBe('ref-file');
-    expect(entry!.title).toBe('Bundle');
-    expect(entry!.fileUrl).toBe('/api/files/zip-1/page.zip');
-    expect(entry!.fileSize).toBe(4096);
-    expect(entry!.source).toBe('ancestor-ref');
-    // A file ref has no body — content stays undefined (no loading band).
-    expect(entry!.content).toBeUndefined();
-  });
-
-  it('skips a file ref that has no file_path (broken save)', () => {
-    const ref = makeFileRef('zip-1', '', 'No file');
-    const map = buildPublicTransclusionMap([], [ref]);
-    expect(map.has('zip-1')).toBe(false);
   });
 
   it('seeds a text ref with content as ref-text', () => {

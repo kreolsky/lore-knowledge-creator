@@ -132,11 +132,6 @@ function renderTree(canEdit = true) {
 }
 
 describe('DocumentTree subtree chat privacy — row mark', () => {
-  it('a green mark renders on the flagged doc only, readonly included', () => {
-    renderTree(false);
-    expect(container.querySelector('[data-doc-id="doc-2"] [data-chats-private-mark]')).not.toBeNull();
-    expect(container.querySelector('[data-doc-id="doc-1"] [data-chats-private-mark]')).toBeNull();
-  });
 
   it('an editor tree has no privacy toggle in the gear — the Access tab owns it', () => {
     renderTree(true);

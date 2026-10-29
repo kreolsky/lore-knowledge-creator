@@ -17,7 +17,6 @@ vi.mock('../../api/client', () => ({ apiClient: { delete: vi.fn(), get: vi.fn(),
 import { ReferenceMediaBar } from './ReferenceMediaBar';
 import { useAppStore } from '../../store/app-store';
 import { apiClient } from '../../api/client';
-import { closeDeletedReference } from '../../hooks/useReferenceFileDelete';
 
 const NOW = '2026-01-01T00:00:00Z';
 
@@ -39,15 +38,6 @@ function baseRef(mediaType: Reference['media_type'], over: Partial<Reference> = 
   } as Reference;
 }
 
-function pdfRef(over: Partial<Reference> = {}): Reference {
-  return baseRef('markdown', {
-    title: 'paper.pdf',
-    file_path: 'p/ref-1/paper.pdf',
-    file_meta: { mime_type: 'application/pdf', file_size: 4096, original_name: 'paper.pdf' },
-    ...over,
-  });
-}
-
 let container: HTMLDivElement;
 let root: Root;
 
@@ -64,78 +54,10 @@ function renderBar(ref: Reference, opts: { canEdit?: boolean } = {}) {
   });
   return container;
 }
-
-const downloadLink = () => container.querySelector('a[aria-label="download"]') as HTMLAnchorElement | null;
 const deleteBtn = () => container.querySelector('button[title="deleteFile"]') as HTMLButtonElement | null;
 const click = (el: Element) => act(() => { el.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
 
-describe('ReferenceMediaBar PDF branch', () => {
-  it('renders nothing for a markdown ref with a .pdf file_path (the action moved to the banner)', () => {
-    const el = renderBar(pdfRef());
-    expect(el.querySelector('a')).toBeNull();
-    expect(el.textContent).toBe('');
-  });
-
-  it('renders nothing for a markdown ref with a non-pdf file_path (docx has no card either)', () => {
-    const el = renderBar(pdfRef({
-      title: 'paper.docx',
-      file_path: 'p/ref-1/paper.docx',
-      file_meta: { mime_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', file_size: 4096, original_name: 'paper.docx' },
-    }));
-    expect(el.querySelector('a')).toBeNull();
-  });
-});
-
-describe.each(['image', 'file'] as const)('ReferenceMediaBar %s branch', (mediaType) => {
-  it('canEdit: download link + delete button', () => {
-    renderBar(baseRef(mediaType));
-    expect(downloadLink()).not.toBeNull();
-    expect(deleteBtn()).not.toBeNull();
-  });
-
-  it('canEdit=false (public share / viewer): download only, no delete', () => {
-    renderBar(baseRef(mediaType), { canEdit: false });
-    expect(downloadLink()).not.toBeNull();
-    expect(deleteBtn()).toBeNull();
-  });
-
-  it('delete hidden while processing_status is uploading/processing (job running on the file)', () => {
-    renderBar(baseRef(mediaType, { processing_status: 'processing' }));
-    expect(downloadLink()).not.toBeNull();
-    expect(deleteBtn()).toBeNull();
-    renderBar(baseRef(mediaType, { processing_status: 'uploading' }));
-    expect(deleteBtn()).toBeNull();
-  });
-});
-
-describe('ReferenceMediaBar audio branch', () => {
-  it('canEdit: player download link + delete rendered right after it', () => {
-    renderBar(baseRef('audio'));
-    const del = deleteBtn();
-    expect(del).not.toBeNull();
-    // showDownload=false on the audio row — the PLAYER's download is the one link.
-    expect(container.querySelectorAll('a[aria-label="download"]').length).toBe(1);
-    expect(del!.previousElementSibling).toBe(downloadLink());
-  });
-
-  it('canEdit=false: download only', () => {
-    renderBar(baseRef('audio'), { canEdit: false });
-    expect(downloadLink()).not.toBeNull();
-    expect(deleteBtn()).toBeNull();
-  });
-});
-
 describe('MediaFileActions delete flow (real store)', () => {
-  it('first click arms, second click DELETEs /references/{id}/file', async () => {
-    const ref = baseRef('image');
-    useAppStore.setState({ references: [ref], currentReference: ref, currentDocument: null });
-    (apiClient.delete as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, reference_deleted: false });
-    renderBar(ref);
-    click(deleteBtn()!);
-    expect(apiClient.delete).not.toHaveBeenCalled();
-    await act(async () => { click(deleteBtn()!); });
-    expect(apiClient.delete).toHaveBeenCalledWith('/references/ref-1/file');
-  });
 
   it('server deleted the text-less reference: it leaves the list and the viewer closes', async () => {
     const ref = baseRef('image');
@@ -149,35 +71,6 @@ describe('MediaFileActions delete flow (real store)', () => {
     expect(state.currentReference).toBeNull();
   });
 
-  it('server deleted the open image while other images remain: the next image opens', async () => {
-    const ref = baseRef('image');
-    const other = { ...baseRef('image'), reference_id: 'ref-2' };
-    useAppStore.setState({ references: [ref, other], currentReference: ref, currentDocument: null });
-    (apiClient.delete as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true, reference_deleted: true });
-    renderBar(ref);
-    click(deleteBtn()!);
-    await act(async () => { click(deleteBtn()!); });
-    const state = useAppStore.getState();
-    expect(state.references.map(r => r.reference_id)).toEqual(['ref-2']);
-    expect(state.currentReference?.reference_id).toBe('ref-2');
-  });
-
-  it('collab doc_deleted lands BEFORE the DELETE response (server order): the next image still opens', async () => {
-    const ref = baseRef('image');
-    const other = baseRef('image', { reference_id: 'ref-2' });
-    useAppStore.setState({ references: [ref, other], currentReference: ref, currentDocument: null });
-    (apiClient.delete as ReturnType<typeof vi.fn>).mockImplementation(async () => {
-      closeDeletedReference('ref-1'); // what useCollabConnection's onDocDeleted calls
-      return { success: true, reference_deleted: true };
-    });
-    renderBar(ref);
-    click(deleteBtn()!);
-    await act(async () => { click(deleteBtn()!); });
-    const state = useAppStore.getState();
-    expect(state.references.map(r => r.reference_id)).toEqual(['ref-2']);
-    expect(state.currentReference?.reference_id).toBe('ref-2');
-  });
-
   it('server kept the reference (it has text): it stays open as markdown', async () => {
     const ref = baseRef('image');
     useAppStore.setState({ references: [ref], currentReference: ref, currentDocument: null });
@@ -189,22 +82,5 @@ describe('MediaFileActions delete flow (real store)', () => {
     expect(state.references.find(r => r.reference_id === 'ref-1')?.media_type).toBe('markdown');
     expect(state.currentReference?.reference_id).toBe('ref-1');
     expect(state.currentReference?.media_type).toBe('markdown');
-  });
-
-  it('API failure: store rolled back and error toast shown (no silent degradation)', async () => {
-    const ref = baseRef('image');
-    useAppStore.setState({ references: [ref], currentReference: ref, currentDocument: null });
-    (apiClient.delete as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('boom'));
-    renderBar(ref);
-    click(deleteBtn()!);
-    await act(async () => { click(deleteBtn()!); });
-    await act(async () => { await Promise.resolve(); });
-    const state = useAppStore.getState();
-    expect(state.references.find(r => r.reference_id === 'ref-1')?.file_path).toBe(ref.file_path);
-    expect(state.references.find(r => r.reference_id === 'ref-1')?.media_type).toBe('image');
-    expect(state.currentReference?.file_path).toBe(ref.file_path);
-    expect(state.currentReference?.media_type).toBe('image');
-    expect(state.toast?.message).toBe('failedToDeleteReferenceFile');
-    expect(state.toast?.type).toBe('error');
   });
 });

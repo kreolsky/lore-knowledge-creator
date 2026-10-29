@@ -15,7 +15,7 @@ import type React from 'react';
 import { FileInput, Pencil, Trash2, ArchiveRestore, RotateCcw, FolderUp, Bot, MessagesSquare } from 'lucide-react';
 import { useTranslation } from '../../i18n';
 import { Reference, hasReferenceContent } from '../../types';
-import { StatusBadge, formatFileSize, hueForId, RefIcon } from './ref-utils';
+import { StatusBadge, formatFileSize, hueForId, RefIcon, refEmbedText } from './ref-utils';
 import { formatDate } from '../../utils/format';
 import { IconButton, FieldInput, ListPill, RowActions } from '../ui';
 import { ListRow } from '../chat/ListRow';
@@ -146,7 +146,7 @@ export const RefCard = memo(function RefCard({
           const view = getEditorView();
           if (!view) return;
           const pos = view.state.selection.main.head;
-          const text = `![${reference.title}](ref:${reference.reference_id})`;
+          const text = refEmbedText(reference);
           view.dispatch({
             changes: { from: pos, insert: text },
             selection: { anchor: pos + 2 + reference.title.length },

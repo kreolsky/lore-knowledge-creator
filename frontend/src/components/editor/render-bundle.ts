@@ -28,6 +28,8 @@ import { languages } from '@codemirror/language-data';
 import { markdownExtensions } from '../../editor/markdown-config';
 import { headingHighlight, bareUrlPlugin, linkClickExtension } from '../../editor/editor-plugins';
 import { copyHandlerExtension } from '../../editor/copy-handler';
+import { selectionFeedPlugin } from '../../editor/editor-observer';
+import { cellLinkContextRelay } from './live-preview/table-block-widget';
 import { codeHighlightStyle } from '../../editor/code-highlight';
 import { ligaturePlugin } from './ligature-plugin';
 import { thickCursorLayer } from './thick-cursor';
@@ -46,6 +48,8 @@ import {
   transclusionDepth,
   revealAtCursor,
 } from './live-preview';
+import { atomicDeleteGuard, atomicSelectedField, atomicTableSelectedPlugin, atomicCompositionGuard, atomicKeymap } from './live-preview/atomic-delete-guard';
+import { dropCaret } from './drop-caret';
 
 /**
  * Everything visual: structural rendering (replace/widgets) + syntax coloring
@@ -66,7 +70,7 @@ export function liveFields({ tableBlock }: { tableBlock: boolean }): Extension {
     listLinePlugin,
     cursorLinePlugin,
     tableRenderField,
-    ...(tableBlock ? [tableBlockField] : []),
+    ...(tableBlock ? [tableBlockField, cellLinkContextRelay] : []),
     mathBlockRenderField,
     mermaidBlockRenderField,
     headingHighlight,
@@ -76,9 +80,29 @@ export function liveFields({ tableBlock }: { tableBlock: boolean }): Extension {
   ];
 }
 
-/** Document-editor alias: the full visual group (with table block objects), toggled by Mod-/. */
+/** The atomic-block group (input/delete guard, selected highlight, whole-table
+ * selection affordances, composition pre-empt, Enter/Esc on a selected object) — ONE
+ * mount for every EDITABLE surface: the document and a table cell. The table parts
+ * read tableBlockField with `false`, so in a cell (no table objects) they are inert.
+ * Read-only nested views never edit and do not mount it. */
+function atomicBlocks(): Extension {
+  return [atomicDeleteGuard, atomicSelectedField, atomicTableSelectedPlugin, atomicCompositionGuard, atomicKeymap];
+}
+
+/** Document-editor alias: the full visual group (with table block objects), toggled by Mod-/.
+ *
+ * The atomic-block group lives HERE, not in `liveFields`: mounting it inside the Mod-/
+ * compartment makes plain-text mode detach it together with the widgets — raw text is
+ * freely editable and one-key deletes work character by character there. */
 export function renderExtensions(): Extension {
-  return liveFields({ tableBlock: true });
+  return [
+    ...(liveFields({ tableBlock: true }) as Extension[]),
+    atomicBlocks(),
+    // Drop caret: pointer-drag drop-point feedback (reference cards dragged
+    // from the panel). Document surface only — read-only nested views are
+    // never drop targets.
+    dropCaret(),
+  ];
 }
 
 /**
@@ -138,6 +162,16 @@ const cellThemeOverride = EditorView.theme({
     fontSize: 'inherit !important',
     lineHeight: '1.4',
     caretColor: 'transparent', // cell uses the thick-layer caret (loreEditorTheme parity)
+    // Live cells wrap like the static/lazy placeholders (index.css): without this
+    // a long URL in a FOCUSED cell overflows its fixed-width column. break-word,
+    // not anywhere: a word breaks only when it alone cannot fit the line.
+    wordBreak: 'break-word',
+    overflowWrap: 'break-word',
+    // WHY min-width 0: .cm-content is a flex item of the scroller, so its min-content (a
+    // px-wide image) would widen it past the fixed column; at 0 it stays column-wide and
+    // `.cm-image-embed { max-width: 100% }` clamps the picture as in the document.
+    minWidth: '0 !important',
+    maxWidth: '100%',
   },
   '.cm-line': { padding: '0 !important' },
   // Cells are compact — no document-scale heading sizes and no heading top-spacing.
@@ -206,6 +240,7 @@ export function editorExperience(opts: {
     // cmSetup already includes the thick caret + search. Render fields + Mod-/
     // compartment stay entity-specific in Editor.tsx.
     ext.unshift(cmSetup({ search: true, thickCursor: true }));
+    ext.push(selectionFeedPlugin);
     return ext;
   }
 
@@ -229,10 +264,19 @@ export function editorExperience(opts: {
       // The document's formatting hotkeys (bold/italic/quote/lists/…), minus cell-unsafe ones.
       buildKeymapExtension(CELL_HOTKEYS),
       liveFields({ tableBlock: false }),
+      // An image in a cell is the same object as in the document: never deleted by one key.
+      atomicBlocks(),
       thickCursorLayer,
+      // A cell is a pointer-drag drop surface too (drop caret feedback) — the
+      // caret lands in whichever editor is under the pointer.
+      dropCaret(),
       // A link in a cell navigates exactly like one in the document (the document wires
       // its own copy in editor-extension-bundle).
       linkClickExtension,
+      // The SAME selection feed as the document: the image/selection toolbars read the
+      // active view and re-derive on its events. Never on the static placeholder above —
+      // it renders offscreen and would write the global UI store on every render.
+      selectionFeedPlugin,
       cellThemeOverride,
     );
     return ext;

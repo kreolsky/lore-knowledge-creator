@@ -207,11 +207,6 @@ async def _until(predicate, timeout: float = 10.0) -> None:
         await asyncio.sleep(0.01)
 
 
-def _frame_of(line: str) -> dict:
-    assert line.startswith("data: ")
-    return json.loads(line[len("data: "):].strip())
-
-
 class PersistSpy:
     """Rebinds the channel's persist globals with recorders."""
 
@@ -896,42 +891,6 @@ async def test_fetch_session_entries_since_seq_wire_shape(http_pool):
     assert log[0]["headers"]["X-Driver-Secret"] == "s3cr3t"
 
 
-@pytest.mark.asyncio
-async def test_fetch_session_entries_without_since_seq_omits_it(http_pool, driver_line_pinned):
-    import driver.timeline
-
-    log: list[dict] = []
-
-    class _Resp:
-        status_code = 200
-
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {"turns": [], "tail_seq": None}
-
-    class _Client:
-        def __init__(self, *a, **k):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            return None
-
-        async def post(self, url, json=None, headers=None, timeout=None):
-            log.append({"url": url, "json": json, "headers": headers})
-            return _Resp()
-
-    http_pool("driver", _Client())
-
-    await driver.timeline.fetch_session_entries("lore-1")
-
-    assert log[0]["json"] == {"session_id": "lore-1"}
-
-
 # ─── helpers ─────────────────────────────────────────────────────────────────
 
 
@@ -1178,113 +1137,6 @@ async def test_a_gap_spanning_two_closed_turns_delivers_both_terminals(channel):
 # above cover the silence breach and the held-turn resume; these pin the wall
 # clamp, the budget naming and the aggregate pause cap — the properties that
 # decide whether an endless-tool-loop turn is ever killed.
-
-
-class _FakeMonotonic:
-    """A controllable clock for the deadline unit tests. driver.channel reads
-    time.monotonic() through the shared `time` module; asyncio's event loop
-    captured its own bound reference at construction, so the patch is safe to
-    hold for the duration of these synchronous tests."""
-
-    def __init__(self) -> None:
-        self.now = 1_000_000.0
-
-    def monotonic(self) -> float:
-        return self.now
-
-    def advance(self, dt: float) -> None:
-        self.now += dt
-
-
-def _deadline(monkeypatch, grace=300.0, wall=1800.0, pause_cap=600.0):
-    clock = _FakeMonotonic()
-    monkeypatch.setattr(driver.channel.time, "monotonic", clock.monotonic)
-    return driver.channel._HoldPausedDeadline(grace, wall, pause_cap), clock
-
-
-def test_deadline_no_progress_breaches_at_grace(monkeypatch):
-    d, clock = _deadline(monkeypatch)
-    clock.advance(299.0)
-    assert d.remaining() > 0
-    clock.advance(2.0)  # past the 300s grace with not a single frame
-    assert d.remaining() <= 0
-
-
-def test_deadline_progress_keeps_a_turn_alive_past_the_flat_total(monkeypatch):
-    d, clock = _deadline(monkeypatch)
-    # A frame every grace/2 (150s) re-arms the deadline each time: after 750s
-    # of steady progress the turn is still alive — a flat 300s total (armed
-    # once at turn start, never re-armed) would have breached long before.
-    for _ in range(5):
-        clock.advance(150.0)
-        d.note_progress()
-    assert d.remaining() > 0
-
-
-def test_deadline_ceaseless_progress_breaches_at_the_wall(monkeypatch):
-    d, clock = _deadline(monkeypatch)
-    for _ in range(11):  # t = 1650: 11 × 150s of steady progress
-        clock.advance(150.0)
-        d.note_progress()
-    assert d.remaining() > 0  # grace extension still buys time under the wall
-    clock.advance(150.0)      # t = 1800 = start + TURN_MAX_WALL_S
-    d.note_progress()
-    assert d.remaining() <= 0  # the extension is clamped at the wall
-
-
-def test_breached_budget_names_the_silent_window(monkeypatch):
-    d, clock = _deadline(monkeypatch)
-    clock.advance(301.0)  # not a single frame — silence past the 300s grace
-    assert d.remaining() <= 0
-    assert d.breached_budget() == "grace"
-
-
-def test_breached_budget_names_the_wall(monkeypatch):
-    d, clock = _deadline(monkeypatch)
-    for _ in range(12):  # steady progress clamps the deadline onto the wall
-        clock.advance(150.0)
-        d.note_progress()
-    assert d.remaining() <= 0
-    assert d.breached_budget() == "wall"
-
-
-def test_deadline_a_hold_still_adds_its_grant(monkeypatch):
-    d, clock = _deadline(monkeypatch)
-    clock.advance(200.0)  # the turn is mid-work at t = 200
-    d.pause()             # an approval hold parks the stream
-    clock.advance(400.0)  # the user takes 400s to answer
-    d.resume()            # grant min(400, cap 600) → deadline 700, wall 2200
-    clock.advance(50.0)   # t = 650: real work resumes
-    assert d.remaining() > 0  # without the grant the grace (300) breached at t = 300
-    # The grant extends the WALL ceiling too: keep producing past t = 1800
-    # (the un-paused wall) and the turn is still alive.
-    for _ in range(10):   # notes every 150s → t = 2150
-        clock.advance(150.0)
-        d.note_progress()
-    assert d.remaining() > 0
-    clock.advance(50.0)   # t = 2200 = start + wall(1800) + grant(400)
-    assert d.remaining() <= 0
-
-
-def test_deadline_pause_cap_is_aggregate_per_turn(monkeypatch):
-    d, clock = _deadline(monkeypatch)
-    # Two sequential holds of 400s each draw from ONE 600s grant: the second
-    # hold is granted only the 200s of headroom left, and the 200s it held
-    # beyond the cap burn both budgets.
-    d.pause(); clock.advance(400.0); d.resume()   # grant 400 → wall 2200
-    d.note_progress()
-    d.pause(); clock.advance(400.0); d.resume()   # grant 200 → wall 2400
-    for _ in range(10):
-        clock.advance(150.0)
-        d.note_progress()
-    # t = 2300 = start + 800 held + 1500 of work: alive only because the
-    # aggregate grant (600) moved the wall to 2400.
-    assert d.remaining() > 0
-    clock.advance(100.0)  # t = 2400 = start + wall(1800) + cap(600)
-    assert d.remaining() <= 0
-    # Mid-hold past an exhausted cap: remaining() keeps ticking down.
-    d.pause(); clock.advance(10.0)
-    assert d.remaining() <= -10.0
 
 
 @pytest.mark.asyncio

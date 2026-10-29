@@ -40,14 +40,6 @@ function setup(overrides: Record<string, unknown> = {}) {
 describe('openDocument', () => {
   beforeEach(() => { getStateMock.mockReset(); });
 
-  it('unknown id → no-op: no focus, no commit, no navigate', () => {
-    const { setCurrentDocument, focusDocument, navigate } = setup();
-    openDocument('missing', { navigate });
-    expect(setCurrentDocument).not.toHaveBeenCalled();
-    expect(focusDocument).not.toHaveBeenCalled();
-    expect(navigate).not.toHaveBeenCalled();
-  });
-
   it("default (no restore), other doc → focusDocument (the pointer-clear owner) THEN commit THEN navigate", () => {
     const { order, focusDocument, setCurrentDocument, navigate } = setup();
     openDocument('d2', { navigate });

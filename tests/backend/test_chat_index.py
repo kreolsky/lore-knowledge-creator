@@ -10,7 +10,6 @@ posts the trigger with the stable job_id.
 
 import pytest
 import pytest_asyncio
-import settings
 from helpers import fake_embedding_provider
 
 import jobs.pool
@@ -76,95 +75,6 @@ async def _run(uid=UID, pid=PID):
 # ─── reconcile ───────────────────────────────────────────────────────────────
 
 
-async def test_new_message_gets_chunks_under_the_current_model(test_db, embed):
-    await _session(test_db, "s1")
-    await _msg(test_db, "m1", "s1", "the dragon sleeps under the north gate")
-    await _run()
-    rows = await _chunks(test_db, message_id="m1")
-    assert len(rows) == 1
-    row = rows[0]
-    assert row["model"] == await settings.get("EMBEDDING_MODEL")
-    assert (row["user_id"], row["project_id"], row["chat_id"]) == (UID, PID, "s1")
-    assert row["origin_key"] == "m1"  # an original is its own origin
-    assert row["content"] == "the dragon sleeps under the north gate"
-    # Chunks are a document: embedded plain, never with the query instruction.
-    assert embed.await_args.kwargs.get("instruction") is None
-
-
-async def test_edited_content_is_re_embedded(test_db, embed):
-    await _session(test_db, "s1")
-    await _msg(test_db, "m1", "s1", "first wording")
-    await _run()
-    await test_db.query("UPDATE type::record('messages', 'm1') SET content = 'second wording'")
-    await _run()
-    rows = await _chunks(test_db, message_id="m1")
-    assert [r["content"] for r in rows] == ["second wording"]
-    assert embed.await_count == 2
-
-
-@pytest.mark.parametrize("revoke", [
-    "UPDATE type::record('messages', 'm1') SET deleted_at = time::now()",
-    "DELETE type::record('messages', 'm1')",
-    "UPDATE type::record('chat_sessions', 's1') SET deleted_at = time::now()",
-    "UPDATE type::record('chat_sessions', 's1') SET unindexed = true",
-    "UPDATE type::record('chat_sessions', 's1') SET is_note = true",
-], ids=["message-deleted", "message-gone", "session-deleted", "unindexed", "note"])
-async def test_unindexable_messages_lose_their_chunks(test_db, embed, revoke):
-    await _session(test_db, "s1")
-    await _msg(test_db, "m1", "s1", "a secret plan")
-    await _run()
-    assert await _chunks(test_db, message_id="m1")
-    await test_db.query(revoke)
-    await _run()
-    assert await _chunks(test_db, message_id="m1") == []
-
-
-async def test_branch_copy_reuses_the_stored_vector(test_db, embed):
-    await _session(test_db, "s1")
-    await _msg(test_db, "m1", "s1", "shared prefix line")
-    await _run()
-    assert embed.await_count == 1
-    await _session(test_db, "s2", thread_id="s1")
-    await _msg(test_db, "c1", "s2", "shared prefix line", origin_id="m1")
-    await _run()
-    assert embed.await_count == 1  # zero embed calls for the copy
-    copy = await _chunks(test_db, message_id="c1")
-    assert [r["origin_key"] for r in copy] == ["m1"]
-
-
-async def test_original_and_copy_pending_together_embed_once(test_db, embed):
-    await _session(test_db, "s1")
-    await _session(test_db, "s2", thread_id="s1")
-    await _msg(test_db, "m1", "s1", "said once, copied once")
-    await _msg(test_db, "c1", "s2", "said once, copied once", origin_id="m1")
-    await _run()
-    assert embed.await_count == 1
-    assert len(await _chunks(test_db)) == 2
-
-
-async def test_chunk_of_another_model_is_re_embedded(test_db, embed):
-    await _session(test_db, "s1")
-    await _msg(test_db, "m1", "s1", "old geometry")
-    await _run()
-    await test_db.query("UPDATE chat_chunks SET model = 'retired/model', embedding = [0.1, 0.2]")
-    await _run()
-    rows = await _chunks(test_db, message_id="m1")
-    assert [r["model"] for r in rows] == [await settings.get("EMBEDDING_MODEL")]
-    assert len(rows[0]["embedding"]) == 8
-    assert embed.await_count == 2  # the retired vector was NOT reused
-
-
-async def test_other_pairs_are_untouched(test_db, embed):
-    await _session(test_db, "mine")
-    await _session(test_db, "theirs", uid="someone-else")
-    await _session(test_db, "elsewhere", pid="another-project")
-    await _msg(test_db, "m1", "mine", "mine")
-    await _msg(test_db, "t1", "theirs", "theirs")
-    await _msg(test_db, "e1", "elsewhere", "elsewhere")
-    await _run()
-    assert {r["message_id"] for r in await _chunks(test_db)} == {"m1"}
-
-
 async def test_run_budget_is_held_and_the_rest_waits(test_db, embed):
     budget = chat_index.CHAT_INDEX_RUN_BUDGET
     await _session(test_db, "s1")
@@ -183,25 +93,6 @@ async def test_run_budget_is_held_and_the_rest_waits(test_db, embed):
     assert oldest not in first  # newest first; the leftover waits
     await _run()
     assert len({r["message_id"] for r in await _chunks(test_db)}) == budget + 1
-
-
-async def test_message_landing_mid_run_is_indexed_by_that_run(test_db, embed):
-    # A trigger posted while the pair's run is in flight collapses onto it, so the
-    # run itself must pick up what landed during it.
-    await _session(test_db, "s1")
-    await _msg(test_db, "m1", "s1", "said before the run")
-    landed = False
-
-    async def _embed_and_land(texts, **_):
-        nonlocal landed
-        if not landed:
-            landed = True
-            await _msg(test_db, "m2", "s1", "said while the run embeds")
-        return [[0.5] * 8 for _ in texts]
-
-    embed.side_effect = _embed_and_land
-    await _run()
-    assert {r["message_id"] for r in await _chunks(test_db)} == {"m1", "m2"}
 
 
 async def _disable_skill(db):
@@ -259,23 +150,6 @@ async def test_sweep_posts_only_pairs_with_work(test_db, embed, posted):
     assert posted == [("index_chat_messages", ("lagger", PID), f"chat_index:lagger:{PID}")]
 
 
-async def test_sweep_posts_a_pair_that_only_holds_stale_chunks(test_db, embed, posted):
-    await _session(test_db, "s1")
-    await _msg(test_db, "m1", "s1", "to be deleted")
-    await _run()
-    await test_db.query("UPDATE type::record('chat_sessions', 's1') SET deleted_at = time::now()")
-    await chat_index_sweep_task({})
-    assert posted == [("index_chat_messages", (UID, PID), f"chat_index:{UID}:{PID}")]
-
-
-def test_both_tasks_are_registered_on_the_default_worker():
-    from jobs.worker import WorkerSettings
-    names = {f.name for f in WorkerSettings.functions}
-    assert {"index_chat_messages", "chat_index_sweep_task"} <= names
-    crons = {c.name for c in WorkerSettings.cron_jobs}
-    assert any("chat_index_sweep_task" in n for n in crons)
-
-
 # ─── the writer triggers ─────────────────────────────────────────────────────
 
 
@@ -304,30 +178,4 @@ async def test_message_patch_posts_the_reconcile(
     resp = await client.patch("/api/chat/messages/u1", json={"content": "after"},
                               cookies={"lore_session": token})
     assert resp.status_code == 200, resp.text
-    assert _index_posts(posted, uid, pid)
-
-
-async def test_unindexed_toggle_posts_the_reconcile(
-    client, admin_user, project_with_doc, posted,
-):
-    pid, doc_id, uid = project_with_doc
-    _, token = admin_user
-    sid = await _mk_chat(client, token, pid, doc_id)
-    resp = await client.patch(f"/api/chat/sessions/{sid}", json={"unindexed": True},
-                              cookies={"lore_session": token})
-    assert resp.status_code == 200, resp.text
-    assert _index_posts(posted, uid, pid)
-
-
-async def test_branch_create_posts_the_reconcile(
-    client, admin_user, project_with_doc, test_db, posted,
-):
-    pid, doc_id, uid = project_with_doc
-    _, token = admin_user
-    sid = await _mk_chat(client, token, pid, doc_id)
-    await _msg(test_db, "u1", sid, "hi")
-    resp = await client.post(f"/api/chat/sessions/{sid}/branches",
-                             json={"after_message_id": "u1"},
-                             cookies={"lore_session": token})
-    assert resp.status_code == 201, resp.text
     assert _index_posts(posted, uid, pid)

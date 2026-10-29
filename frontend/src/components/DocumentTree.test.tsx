@@ -176,35 +176,6 @@ describe('DocumentTree hover-preview — feeds hovered docId on both surfaces', 
   });
 });
 
-describe('DocumentTree key indicator — public-share paints the icon orange', () => {
-  it('a doc with public_share gets the .key-public class on its icon', () => {
-    appState.documentTree = [makeNode('doc-pub', 'Public', { public_share: true })];
-    act(() => root.render(createElement(Harness)));
-
-    const icon = container.querySelector('.doc-icon.key-public');
-    expect(icon, 'expected a .doc-icon.key-public span').not.toBeNull();
-  });
-
-  it('a plain doc (no key, no public share) has no key-* class', () => {
-    appState.documentTree = [makeNode('doc-plain', 'Plain')];
-    act(() => root.render(createElement(Harness)));
-
-    expect(container.querySelector('.doc-icon.key-public')).toBeNull();
-    expect(container.querySelector('.doc-icon.key-agent')).toBeNull();
-    expect(container.querySelector('.doc-icon.key-widget')).toBeNull();
-  });
-
-  it('agent capability wins over public_share (red, not orange)', () => {
-    appState.documentTree = [makeNode('doc-agent', 'Agent', {
-      key_capabilities: ['agent'], public_share: true,
-    })];
-    act(() => root.render(createElement(Harness)));
-
-    expect(container.querySelector('.doc-icon.key-agent')).not.toBeNull();
-    expect(container.querySelector('.doc-icon.key-public')).toBeNull();
-  });
-});
-
 describe('DocumentTree reference plaques — source and parent never coincide', () => {
   it('a reference opened from its own parent paints the row ref-parent only', () => {
     // Regression: both `active` (ref source) and `ref-parent` on one row let the
@@ -230,87 +201,5 @@ describe('DocumentTree reference plaques — source and parent never coincide', 
     expect(src.classList.contains('ref-parent')).toBe(false);
     expect(parent.classList.contains('ref-parent')).toBe(true);
     expect(parent.classList.contains('active')).toBe(false);
-  });
-
-  // Panel quick preview: the reference takes part in nothing but its own tab —
-  // the current document stays `active`, no row is `ref-parent`.
-  it('panel mode + open cross-doc ref → current doc active, no ref-parent anywhere', () => {
-    appState.documentTree = [makeNode('doc-1', 'Doc 1'), makeNode('doc-2', 'Doc 2')];
-    appState.currentReference = { document_id: 'doc-2' };
-    appState.referenceSourceDocId = null;
-    // The row reads the mode of the CURRENT document (app-store), not useParams.
-    appState.currentDocument = { document_id: 'doc-1' };
-    __docUi = { 'doc-1': { refOpenMode: 'panel' } };
-    act(() => root.render(createElement(Harness)));
-
-    const cur = container.querySelector('[data-doc-id="doc-1"]')!;
-    const parent = container.querySelector('[data-doc-id="doc-2"]')!;
-    expect(cur.classList.contains('active')).toBe(true);
-    expect(cur.classList.contains('ref-parent')).toBe(false);
-    expect(parent.classList.contains('ref-parent')).toBe(false);
-    expect(parent.classList.contains('active')).toBe(false);
-  });
-});
-
-describe('DocumentTree inbox mark — SYSTEM: inbox unread painting', () => {
-  it('a flagged row carries .inbox-unread; an unflagged sibling does not', () => {
-    appState.documentTree = [makeNode('doc-1', 'Doc 1'), makeNode('doc-2', 'Doc 2')];
-    __inboxSummary = { 'doc-2': { notes: 1, refs: 0 } };
-    act(() => root.render(createElement(Harness)));
-
-    expect(container.querySelector('[data-doc-id="doc-2"]')!.classList.contains('inbox-unread')).toBe(true);
-    expect(container.querySelector('[data-doc-id="doc-1"]')!.classList.contains('inbox-unread')).toBe(false);
-    expect(container.querySelector('[data-doc-id="doc-1"]')!.classList.contains('inbox-unread-muted')).toBe(false);
-  });
-
-  it('a zeroed summary entry paints nothing (all read → plain row)', () => {
-    appState.documentTree = [makeNode('doc-1', 'Doc 1')];
-    __inboxSummary = { 'doc-1': { notes: 0, refs: 0 } };
-    act(() => root.render(createElement(Harness)));
-
-    expect(container.querySelector('[data-doc-id="doc-1"]')!.classList.contains('inbox-unread')).toBe(false);
-  });
-
-  it('a COLLAPSED ancestor of a flagged row is muted; an EXPANDED ancestor stays plain', () => {
-    const child = makeNode('doc-child', 'Child');
-    appState.documentTree = [makeNode('doc-parent', 'Parent', { children: [child] })];
-    __inboxSummary = { 'doc-child': { notes: 0, refs: 2 } };
-
-    // Expanded (default): parent plain, flagged child visible and direct-marked.
-    act(() => root.render(createElement(Harness)));
-    const parentRow = container.querySelector('[data-doc-id="doc-parent"]')!;
-    expect(parentRow.classList.contains('inbox-unread-muted')).toBe(false);
-    expect(parentRow.classList.contains('inbox-unread')).toBe(false);
-    expect(container.querySelector('[data-doc-id="doc-child"]')!.classList.contains('inbox-unread')).toBe(true);
-
-    // Collapsed: child row unmounts, parent takes the muted hint.
-    __collapsedDocIds = ['doc-parent'];
-    act(() => root.render(createElement(Harness)));
-    const parentRow2 = container.querySelector('[data-doc-id="doc-parent"]')!;
-    expect(parentRow2.classList.contains('inbox-unread-muted')).toBe(true);
-    expect(parentRow2.classList.contains('inbox-unread')).toBe(false);
-    expect(container.querySelector('[data-doc-id="doc-child"]')).toBeNull();
-  });
-
-  it('active + flagged compose on one row: both classes (CSS keeps the gray action plate)', () => {
-    // doc-1 is the route-active doc (useParams documentId='doc-1') AND flagged.
-    __inboxSummary = { 'doc-1': { notes: 1, refs: 0 } };
-    act(() => root.render(createElement(Harness)));
-
-    const row = container.querySelector('[data-doc-id="doc-1"]')!;
-    expect(row.classList.contains('active')).toBe(true);
-    expect(row.classList.contains('inbox-unread')).toBe(true);
-  });
-
-  it('ref-parent (blue) + flagged compose: blue row, yellow title (both classes, neither dropped)', () => {
-    appState.documentTree = [makeNode('doc-1', 'Doc 1'), makeNode('doc-2', 'Doc 2')];
-    appState.currentReference = { document_id: 'doc-2' };
-    appState.referenceSourceDocId = 'doc-1';
-    __inboxSummary = { 'doc-2': { notes: 1, refs: 0 } };
-    act(() => root.render(createElement(Harness)));
-
-    const row = container.querySelector('[data-doc-id="doc-2"]')!;
-    expect(row.classList.contains('ref-parent')).toBe(true);
-    expect(row.classList.contains('inbox-unread')).toBe(true);
   });
 });

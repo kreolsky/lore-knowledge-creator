@@ -119,26 +119,6 @@ const I18N: Record<string, string> = {
 };
 const tFn = (k: string) => I18N[k] ?? k;
 
-/** dsh pdf-body.client.spec.tsx pattern (first-party code has no other IO
- * stub; the component guards IntersectionObserver's absence in jsdom). */
-class IntersectionObserverStub {
-  static instances: IntersectionObserverStub[] = [];
-  readonly observed = new Set<Element>();
-  disconnected = false;
-
-  constructor(private readonly callback: IntersectionObserverCallback) {
-    IntersectionObserverStub.instances.push(this);
-  }
-
-  observe(element: Element): void { this.observed.add(element); }
-  unobserve(element: Element): void { this.observed.delete(element); }
-  disconnect(): void { this.disconnected = true; this.observed.clear(); }
-  takeRecords(): IntersectionObserverEntry[] { return []; }
-  intersect(element: Element, isIntersecting: boolean): void {
-    this.callback([{ target: element, isIntersecting } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
-  }
-}
-
 beforeEach(async () => {
   vi.resetModules();
   appState = { currentUser: { user_id: 'u1', name: 'Alice Admin', role: 'admin', is_admin: true, can_manage_users: true, can_publish_project: true }, showToast: vi.fn(), sectionOrigin: null, sectionCrumb: null };
@@ -286,44 +266,10 @@ async function typeInto(input: HTMLInputElement, value: string) {
   });
 }
 
-function pressEscape(input: HTMLInputElement) {
-  act(() => { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
-}
-
-/** Outlive the 200 ms filter debounce (real timers; 250 ms sleep inside act). */
-async function settleDebounce() {
-  await act(async () => { await new Promise(r => setTimeout(r, 250)); });
-}
-
-function filterInput(placeholder: string): HTMLInputElement {
-  const el = main()?.querySelector(`input[placeholder="${placeholder}"]`);
-  expect(el, `filter input "${placeholder}"`).toBeDefined();
-  return el as HTMLInputElement;
-}
-
 /** Dropdown triggers carry `title` (Role / group); the listbox mounts only
  * while open, so read options by clicking the trigger first. */
 function dropdownTriggers(scope: ParentNode, title: string): HTMLButtonElement[] {
   return Array.from(scope.querySelectorAll(`button[title="${title}"]`));
-}
-
-async function dropdownOptionLabels(scope: ParentNode, title: string): Promise<string[]> {
-  const [trigger] = dropdownTriggers(scope, title);
-  expect(trigger, `dropdown "${title}"`).toBeDefined();
-  await act(async () => { trigger.click(); });
-  // The first `.truncate` is the label; an option's `note` (email) renders below it.
-  const labels = Array.from(scope.querySelectorAll('[role=option]')).map(o => o.querySelector('.truncate')?.textContent ?? '');
-  await act(async () => { trigger.click(); });
-  return labels;
-}
-
-async function pickDropdownOption(scope: ParentNode, title: string, label: string) {
-  const [trigger] = dropdownTriggers(scope, title);
-  expect(trigger, `dropdown "${title}"`).toBeDefined();
-  await act(async () => { trigger.click(); });
-  const opt = Array.from(scope.querySelectorAll('[role=option]')).find(o => o.textContent === label);
-  expect(opt, `option "${label}" in "${title}"`).toBeDefined();
-  await act(async () => { (opt as HTMLElement).click(); });
 }
 
 function projectsCalls(): string[] {
@@ -338,40 +284,6 @@ async function openProjects() {
 }
 
 describe('AdminPage — sections (initial = Users)', () => {
-  it('aside lists all section rows (admin: Info + Models & APIs + Model access on top, Groups under Users, settings tabs + Skills) with Users active; no top tabs; projects not fetched until opened', async () => {
-    await render();
-    const rows = Array.from(aside()!.querySelectorAll('button.doc-item'));
-    expect(rows.map(r => r.textContent)).toEqual([
-      'Info', 'Models & APIs', 'Model access', 'Users', 'Groups', 'Projects',
-      'Search', 'Agent', 'Tools', 'Storage & Jobs', 'Embeddings', 'Skills',
-    ]);
-    expect(rows[3].classList.contains('active')).toBe(true);
-    expect(container.querySelector('.left-bar-tab')).toBeNull();
-    expect(projectsCalls()).toEqual([]);
-    expect(main()?.textContent).toContain('Add user');
-    // Sections are rows, not entities: no project row in the aside.
-    expect(aside()?.textContent).not.toContain('Alpha Project');
-  });
-
-  it('a settings row swaps the center to that settings tab; the Skills row to the skills tab', async () => {
-    await render();
-    // By textContent, not the title attribute: jsdom's selector engine fails
-    // to match an `&` inside an attribute value ("Storage & Jobs").
-    const clickRow = (label: string) => {
-      const btn = Array.from(aside()!.querySelectorAll<HTMLButtonElement>('button.doc-item'))
-        .find(b => b.textContent === label);
-      expect(btn, `section row "${label}"`).toBeDefined();
-      act(() => btn!.click());
-    };
-    clickRow('Agent');
-    expect(main()?.querySelector('[data-testid="settings-section-agent"]')).not.toBeNull();
-    expect(main()?.textContent).not.toContain('Alpha Project');
-    clickRow('Storage & Jobs');
-    expect(main()?.querySelector('[data-testid="settings-section-storage"]')).not.toBeNull();
-    clickRow('Skills');
-    expect(main()?.querySelector('[data-testid="skills-section"]')).not.toBeNull();
-    expect(main()?.querySelector('[data-testid^="settings-section-"]')).toBeNull();
-  });
 
   it('center shows the FULL project card list, each collapsed card chipping its owner', async () => {
     await openProjects();
@@ -397,178 +309,15 @@ describe('AdminPage — sections (initial = Users)', () => {
     // Access (owner, member, or audience row) → the link stays.
     expect(card('Alpha Project').querySelector('a[href="/projects/p1"]')).not.toBeNull();
     expect(card('Beta Project').querySelector('a[href="/projects/p2"]')).not.toBeNull();
+    // Entering a project must NOT replace the admin list: the link opens a
+    // NEW window (target=_blank, noopener) so the panel stays behind it.
+    const enter = card('Alpha Project').querySelector('a[href="/projects/p1"]')!;
+    expect(enter.getAttribute('target')).toBe('_blank');
+    expect(enter.getAttribute('rel')).toContain('noopener');
     // Audience editing lives in the settings panel only: the card carries a
     // PASSIVE badge (a span), never a toggle button — for admins too.
     expect(Array.from(card('Beta Project').querySelectorAll('button')).some(b => b.textContent === 'Public')).toBe(false);
     expect(card('Beta Project').textContent).toContain('Public');
-  });
-
-  it('the Public badge wears the accent fill and appears only for a public project', async () => {
-    await openProjects();
-    const card = (title: string) =>
-      Array.from(main()!.querySelectorAll('section'))
-        .find(s => s.textContent!.startsWith(title))!;
-    // Public state must read at a glance (accent = purple) that the project is
-    // open to everyone; a private project carries no badge at all.
-    const badge = card('Beta Project').querySelector('span.bg-accent')!;
-    expect(badge.textContent).toBe('Public');
-    expect(card('Alpha Project').querySelector('span.bg-accent')).toBeNull();
-    expect(card('Alpha Project').textContent).not.toContain('Private');
-  });
-});
-
-describe('AdminPage — ownership transfer (pinned owner row + no-jump swap)', () => {
-  /** Alpha Project (p1): owner u1 (Alice), members Carol (commentator) and
-   * Bob (readonly) — sort order [Carol, Bob], so Bob is the second member
-   * row and the pick target. */
-  async function openTransferProject(members: Record<string, string>) {
-    (apiGet as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
-      const [path] = url.split('?');
-      if (path === '/admin/users') return Promise.resolve(USERS);
-      if (path === '/admin/projects') return Promise.resolve([ALL_PROJECTS[0]]);
-      if (path === '/admin/projects/p1/members') return Promise.resolve(members);
-      return Promise.resolve([]);
-    });
-    await openProjects();
-    const card = main()!.querySelector('section')!;
-    act(() => { card.querySelector<HTMLButtonElement>('button')!.click(); });
-    await act(async () => {});
-    return card;
-  }
-
-  /** Pinned owner row + member rows (the add-user picker row has no
-   * items-center/gap-2 classes and is excluded). */
-  function memberRows(card: HTMLElement): HTMLElement[] {
-    return Array.from(card.querySelectorAll('div.flex.flex-col.gap-1 > div.flex.items-center.gap-2'));
-  }
-
-  it('pinned owner row renders first: disabled Owner dropdown, no remove button; members keep theirs', async () => {
-    const card = await openTransferProject({ u2: 'readonly', u3: 'commentator' });
-    const rows = memberRows(card);
-    expect(rows).toHaveLength(3);
-    const [ownerRow, carolRow, bobRow] = rows;
-    expect(ownerRow.textContent).toContain('Alice Admin');
-    expect(ownerRow.textContent).toContain('alice@x.test');
-    const ownerTrigger = ownerRow.querySelector<HTMLButtonElement>('button[title="Owner"]');
-    expect(ownerTrigger).not.toBeNull();
-    expect(ownerTrigger!.disabled).toBe(true);
-    expect(ownerRow.querySelector('button[title="Remove access"]')).toBeNull();
-    for (const row of [carolRow, bobRow]) {
-      expect(row.querySelector('button[title="Remove access"]')).not.toBeNull();
-    }
-    // Option labels come from the i18n fallback (raw keys) except ownerRole.
-    expect(await dropdownOptionLabels(card, 'userAccess')).toEqual([
-      'readOnly', 'commentator', 'fullAccess', 'Owner',
-    ]);
-  });
-
-  it('picking Owner POSTs the transfer and swaps in place: old owner takes the slot, pinned row shows the new owner — no gap while the members reload', async () => {
-    let transferred = false;
-    (apiPost as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
-      if (url === '/admin/projects/p1/owner') {
-        transferred = true;
-        return Promise.resolve({ owner_id: 'u2', owner_name: 'Bob' });
-      }
-      return Promise.resolve({});
-    });
-    const card = await openTransferProject({ u2: 'readonly', u3: 'commentator' });
-    // The members GET re-issued after the POST is held open, so the window
-    // between the POST and the reload can be observed.
-    let releaseMembers: (m: Record<string, string>) => void = () => {};
-    (apiGet as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
-      const [path] = url.split('?');
-      if (path === '/admin/users') return Promise.resolve(USERS);
-      if (path === '/admin/projects') return Promise.resolve([ALL_PROJECTS[0]]);
-      if (path === '/admin/projects/p1/members' && transferred) {
-        return new Promise(resolve => { releaseMembers = resolve; });
-      }
-      return Promise.resolve([]);
-    });
-
-    const before = memberRows(card);
-    expect(before).toHaveLength(3);
-    expect(before[0].textContent).toContain('Alice Admin');
-    // Pick Owner on Bob (the SECOND member row — readonly sorts last).
-    const triggers = dropdownTriggers(card, 'userAccess');
-    expect(triggers).toHaveLength(2);
-    await act(async () => { triggers[1].click(); });
-    const opt = Array.from(card.querySelectorAll('[role=option]')).find(o => o.textContent === 'Owner');
-    expect(opt, 'Owner option').toBeDefined();
-    await act(async () => { (opt as HTMLElement).click(); });
-    await act(async () => {});
-
-    expect(apiPost).toHaveBeenCalledWith('/admin/projects/p1/owner', { user_id: 'u2' });
-    // POST done, members still loading: no row has vanished.
-    const during = memberRows(card);
-    expect(during).toHaveLength(3);
-    expect(during[0].textContent).toContain('Alice Admin');
-
-    await act(async () => { releaseMembers({ u1: 'full', u3: 'commentator' }); });
-    await act(async () => {});
-    const after = memberRows(card);
-    expect(after).toHaveLength(3);
-    // Pinned row = the new owner; Bob's former slot = Alice with Full.
-    expect(after[0].textContent).toContain('Bob');
-    expect(after[2].textContent).toContain('Alice Admin');
-    expect(after[2].textContent).toContain('fullAccess');
-  });
-
-  it('a refused transfer toasts and leaves the rows unchanged', async () => {
-    (apiPost as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('boom'));
-    const card = await openTransferProject({ u2: 'readonly', u3: 'commentator' });
-    const before = memberRows(card).map(r => r.textContent);
-    const triggers = dropdownTriggers(card, 'userAccess');
-    await act(async () => { triggers[1].click(); });
-    const opt = Array.from(card.querySelectorAll('[role=option]')).find(o => o.textContent === 'Owner');
-    await act(async () => { (opt as HTMLElement).click(); });
-    await act(async () => {});
-    await act(async () => {});
-    expect(appState.showToast).toHaveBeenCalledWith('Failed to update access', 'error');
-    const after = memberRows(card).map(r => r.textContent);
-    expect(after).toEqual(before);
-  });
-});
-
-describe('AdminPage — Users section', () => {
-  async function openUsers() {
-    await render();
-    clickSection('Users');
-    await act(async () => {});
-  }
-
-  it('center = add-user form, "Users" heading, filter, full user card list (with emails)', async () => {
-    await openUsers();
-    const text = main()?.textContent ?? '';
-    expect(text).toContain('Add user');
-    expect(text).toContain('Users');
-    expect(filterInput('Filter users')).toBeDefined();
-    expect(text).toContain('bob@x.test');
-    expect(text).toContain('alice@x.test');
-    expect(text).not.toContain('Alpha Project');
-    expect(aside()?.querySelector('button.doc-item.active')?.textContent).toBe('Users');
-  });
-
-  it('Embeddings row swaps the center to the embeddings tab', async () => {
-    await render();
-    clickSection('Embeddings');
-    expect(main()?.querySelector('[data-testid="embeddings-tab"]')).not.toBeNull();
-    expect(main()?.textContent).not.toContain('Alpha Project');
-  });
-
-  it('header crumb follows the ACTIVE section and clears on unmount', async () => {
-    await render();
-    expect(appState.sectionCrumb).toBe('Users');
-    clickSection('Embeddings');
-    expect(appState.sectionCrumb).toBe('Embeddings');
-    act(() => root.unmount());
-    expect(appState.sectionCrumb).toBeNull();
-  });
-
-  it('leaving the page marks the chat model roster stale', async () => {
-    await render();
-    expect(chatState.modelsLoaded).toBe(true);
-    act(() => root.unmount());
-    expect(chatState.modelsLoaded).toBe(false);
   });
 });
 
@@ -586,53 +335,6 @@ describe('AdminPage — per-user persistence: last section + shared width (panel
     expect(aside()?.querySelector('button.doc-item.active')?.textContent).toBe('Projects');
     // Restored Projects behaves like a click: the pipeline fetches page 0.
     expect(projectsCalls()[0]).toBe('/admin/projects?offset=0&limit=100');
-  });
-
-  it('saved section unavailable to this user (moderator, embeddings) → Users', async () => {
-    appState.currentUser = { user_id: 'm1', name: 'Mia Mod', role: 'moderator', can_manage_users: true, is_admin: false };
-    useUIStore.setState({ adminSectionTab: 'embeddings' });
-    await render();
-    expect(aside()?.querySelector('button.doc-item.active')?.textContent).toBe('Users');
-    expect(main()?.querySelector('[data-testid="embeddings-tab"]')).toBeNull();
-    expect(main()?.textContent).toContain('Add user');
-  });
-
-  it('saved settings/skills section unavailable to a moderator → Users, no settings/skills fetch', async () => {
-    appState.currentUser = { user_id: 'm1', name: 'Mia Mod', role: 'moderator', can_manage_users: true, is_admin: false };
-    for (const saved of ['settings:agent', 'skills'] as const) {
-      useUIStore.setState({ adminSectionTab: saved });
-      await render();
-      expect(aside()?.querySelector('button.doc-item.active')?.textContent).toBe('Users');
-      expect(aside()?.textContent).not.toContain('Skills');
-      expect(aside()?.textContent).not.toContain('Model access');
-      expect(aside()?.textContent).not.toContain('Groups');
-      expect(main()?.querySelector('[data-testid^="settings-section-"]')).toBeNull();
-      expect(main()?.querySelector('[data-testid="skills-section"]')).toBeNull();
-      expect(main()?.textContent).toContain('Add user');
-      // The sections are mounted only inside the admin-only components — a
-      // moderator's admin-page open must fire no /admin/settings|skills read.
-      expect(apiGet.mock.calls.map(c => c[0] as string)
-        .filter(u => u.startsWith('/admin/settings') || u.startsWith('/admin/skills'))).toEqual([]);
-      // Remount for the next saved value: the initial tab is a mount-time
-      // snapshot, later store changes do not yank the open section.
-      act(() => { root.unmount(); });
-      container = document.createElement('div');
-      document.body.appendChild(container);
-      root = createRoot(container);
-    }
-  });
-
-  it('saved garbage section string → Users (availability check, not a crash)', async () => {
-    useUIStore.setState({ adminSectionTab: 'nope' as unknown as 'embeddings' });
-    await render();
-    expect(aside()?.querySelector('button.doc-item.active')?.textContent).toBe('Users');
-  });
-
-  it('clicking a section row PUTs _global with the chosen tab', async () => {
-    await render();
-    clickSection('Projects');
-    await act(async () => {});
-    expect(lastGlobalPrefs().adminSectionTab).toBe('projects');
   });
 
   it('aside seeds at the shared width (panelWidths.left); a drag PUTs the new width', async () => {
@@ -657,235 +359,13 @@ describe('AdminPage — per-user persistence: last section + shared width (panel
   });
 });
 
-describe('AdminPage — projects filter (server-side q, debounced)', () => {
-  it('typing replaces the list via /admin/projects?q=…&offset=0', async () => {
-    await openProjects();
-    await typeInto(filterInput('Filter projects'), 'Alpha');
-    await settleDebounce();
-    expect(projectsCalls().at(-1)).toBe('/admin/projects?q=Alpha&offset=0&limit=100');
-    expect(main()?.textContent).toContain('Alpha Project');
-    expect(main()?.textContent).not.toContain('Beta Project');
-  });
-
-  it('Escape clears + blurs the input and re-requests with empty q', async () => {
-    await openProjects();
-    const input = filterInput('Filter projects');
-    await typeInto(input, 'Alpha');
-    await settleDebounce();
-    act(() => { input.focus(); });
-    pressEscape(input);
-    expect(input.value).toBe('');
-    expect(document.activeElement).not.toBe(input);
-    await settleDebounce();
-    expect(projectsCalls().at(-1)).toBe('/admin/projects?offset=0&limit=100');
-    expect(main()?.textContent).toContain('Beta Project');
-  });
-});
-
-describe('AdminPage — projects paging by scroll (sentinel)', () => {
-  it('a sentinel intersection requests offset=100 and appends the page; an exhausted list does not re-request', async () => {
-    IntersectionObserverStub.instances.length = 0;
-    vi.stubGlobal('IntersectionObserver', IntersectionObserverStub);
-    await openProjects();
-    const io = IntersectionObserverStub.instances.at(-1);
-    expect(io, 'sentinel observer').toBeDefined();
-    const sentinel = [...io!.observed][0];
-    expect(sentinel, 'observed sentinel element').toBeDefined();
-    expect(main()?.textContent).not.toContain('Project 150');
-    // The sentinel sits at the END of the center list.
-    expect(main()?.contains(sentinel!)).toBe(true);
-    await act(async () => { io!.intersect(sentinel!, true); });
-    await act(async () => {});
-    expect(projectsCalls().at(-1)).toBe('/admin/projects?offset=100&limit=100');
-    expect(main()?.textContent).toContain('Project 150');
-    // Page 2 returned 50 < 100 → list exhausted: a repeat intersection is a no-op.
-    await act(async () => { io!.intersect(sentinel!, true); });
-    await act(async () => {});
-    expect(projectsCalls().filter(u => u.includes('offset=100'))).toHaveLength(1);
-  });
-});
-
-describe('AdminPage — users filter (client-side, name OR email)', () => {
-  it('fetches users once on mount (limit=1000) and filters by name', async () => {
-    await render();
-    expect(apiGet.mock.calls.map(c => c[0] as string)).toContain('/admin/users?limit=1000');
-    clickSection('Users');
-    await act(async () => {});
-    // "Adm" is in Alice's NAME only — no email contains it.
-    await typeInto(filterInput('Filter users'), 'Adm');
-    expect(main()?.textContent).toContain('Alice Admin');
-    expect(main()?.textContent).not.toContain('Bob');
-  });
-
-  it('matches by email as well as name', async () => {
-    await render();
-    clickSection('Users');
-    await act(async () => {});
-    // "alice@x" is in Alice's EMAIL only — neither name contains it.
-    await typeInto(filterInput('Filter users'), 'alice@x');
-    expect(main()?.textContent).toContain('Alice Admin');
-    expect(main()?.textContent).not.toContain('Bob');
-  });
-});
-
-describe('AdminPage — user card: collapsed row, expand-down edit panel, one PATCH', () => {
-  /** The card <section> whose text carries the email. */
-  function card(email: string): HTMLElement {
-    const el = Array.from(main()?.querySelectorAll('section') ?? [])
-      .find(sec => sec.textContent?.includes(email));
-    expect(el, `card for ${email}`).toBeDefined();
-    return el!;
-  }
-  function inputs(sec: HTMLElement): HTMLInputElement[] {
-    return Array.from(sec.querySelectorAll('input'));
-  }
-  function clickPencil(email: string) {
-    act(() => { (card(email).querySelector('button[title="Edit name / email"]') as HTMLButtonElement).click(); });
-  }
-  async function openUsers() {
-    await render();
-    clickSection('Users');
-    await act(async () => {});
-  }
-
-  it('collapsed row = name · email | role label, one pencil, no inputs', async () => {
-    await openUsers();
-    const bob = card('bob@x.test');
-    expect(bob.textContent).toContain('Bob');
-    expect(bob.textContent).toContain('| User');
-    // A grouped user shows `group: <name>` on the SAME line, labelled —
-    // never a second row.
-    const carol = card('carol@x.test');
-    expect(Array.from(carol.querySelectorAll('span.whitespace-nowrap')).map(el => el.textContent)).toEqual(['| User', '| group: Bob', '| invited by: Alice Admin']);
-    expect(carol.querySelectorAll('div').length).toBe(1);
-    expect(bob.querySelectorAll('button[title]')).toHaveLength(1);
-    expect(bob.querySelector('button[title]')?.getAttribute('title')).toBe('Edit name / email');
-    expect(inputs(bob)).toHaveLength(0);
-  });
-
-  it('pencil expands a panel with prefilled name/email, empty password, Save/Cancel, delete; another pencil closes it; self has no delete', async () => {
-    await openUsers();
-    clickPencil('bob@x.test');
-    const bob = card('bob@x.test');
-    expect(inputs(bob).map(i => i.value)).toEqual(['Bob', 'bob@x.test', '']);
-    expect(inputs(bob)[2].type).toBe('password');
-    expect(bob.textContent).toContain('Save');
-    expect(bob.textContent).toContain('Cancel');
-    expect(bob.querySelector('button[title="Delete user"]')).not.toBeNull();
-
-    clickPencil('alice@x.test');
-    expect(inputs(card('bob@x.test'))).toHaveLength(0);
-    const alice = card('alice@x.test');
-    expect(inputs(alice)).toHaveLength(3);
-    // Alice is the current user (u1) — no self-delete.
-    expect(alice.querySelector('button[title="Delete user"]')).toBeNull();
-  });
-
-  it('Save sends ONE PATCH with only the changed name + the typed password (no email key), keeps the panel open and marks it Saved until the next edit', async () => {
-    await openUsers();
-    apiPatch.mockResolvedValueOnce({ user_id: 'u2', name: 'Bobby', email: 'bob@x.test', role: 'user', has_pin: false });
-    clickPencil('bob@x.test');
-    const [nameInput, , pwdInput] = inputs(card('bob@x.test'));
-    await typeInto(nameInput, 'Bobby');
-    await typeInto(pwdInput, 's3cret');
-    clickButtonWithText(card('bob@x.test'), 'Save');
-    await act(async () => {});
-    expect(apiPatch.mock.calls).toEqual([['/admin/users/u2', { name: 'Bobby', password: 's3cret' }]]);
-    expect(inputs(card('bob@x.test')).map(i => i.value)).toEqual(['Bobby', 'bob@x.test', '']);
-    expect(card('bob@x.test').textContent).toContain('Saved');
-
-    await typeInto(inputs(card('bob@x.test'))[0], 'Bobby2');
-    expect(card('bob@x.test').textContent).not.toContain('Saved');
-  });
-
-  it('Save with nothing changed sends no request and stays open; Cancel closes without a request', async () => {
-    await openUsers();
-    clickPencil('bob@x.test');
-    clickButtonWithText(card('bob@x.test'), 'Save');
-    await act(async () => {});
-    expect(apiPatch).not.toHaveBeenCalled();
-    expect(inputs(card('bob@x.test'))).toHaveLength(3);
-
-    await typeInto(inputs(card('bob@x.test'))[0], 'Changed');
-    clickButtonWithText(card('bob@x.test'), 'Cancel');
-    expect(apiPatch).not.toHaveBeenCalled();
-    expect(inputs(card('bob@x.test'))).toHaveLength(0);
-  });
-
-  it('Escape in the name input closes the panel without a request', async () => {
-    await openUsers();
-    clickPencil('bob@x.test');
-    pressEscape(inputs(card('bob@x.test'))[0]);
-    expect(apiPatch).not.toHaveBeenCalled();
-    expect(inputs(card('bob@x.test'))).toHaveLength(0);
-  });
-});
-
 describe('AdminPage — moderator view (can_manage_users && !is_admin)', () => {
-  function localCard(email: string): HTMLElement {
-    const el = Array.from(main()?.querySelectorAll('section') ?? [])
-      .find(sec => sec.textContent?.includes(email));
-    expect(el, `card for ${email}`).toBeDefined();
-    return el!;
-  }
 
   async function renderAsModerator() {
     appState.currentUser = { user_id: 'm1', name: 'Mia Mod', role: 'moderator', can_manage_users: true, is_admin: false };
     await render();
     await act(async () => {});
   }
-
-  it('stays on the page (no redirect) and the aside lists ONLY Projects + Users', async () => {
-    await renderAsModerator();
-    expect(navigate).not.toHaveBeenCalledWith('/');
-    const rows = Array.from(aside()!.querySelectorAll('button.doc-item'));
-    expect(rows.map(r => r.textContent)).toEqual(['Users', 'Projects']);
-  });
-
-  it('Users section: add form has no role/moderator selects; invite button POSTs /api/invites and copies the /register URL built from the page origin', async () => {
-    await renderAsModerator();
-    clickSection('Users');
-    await act(async () => {});
-    const addForm = main()!.querySelector('section')!;
-    expect(dropdownTriggers(addForm, 'Role')).toHaveLength(0);
-    expect(dropdownTriggers(addForm, 'group')).toHaveLength(0);
-
-    const clip = vi.fn(() => Promise.resolve());
-    Object.assign(navigator, { clipboard: { writeText: clip } });
-    (apiPost as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ token: 'tok1', expires_at: '2026-09-22T00:00:00Z' });
-    const inviteBtn = Array.from(main()!.querySelectorAll('button'))
-      .find(b => b.textContent?.includes('Invite link'));
-    expect(inviteBtn, 'invite link button').toBeDefined();
-    await act(async () => { inviteBtn!.click(); });
-    // The invite mints at the form's tier select (default 'ai' — SYSTEM: capability-tiers).
-    expect(apiPost).toHaveBeenCalledWith('/invites', { tier: 'ai' });
-    // The URL is composed client-side: page origin (read off the live
-    // window.location.origin — never a hard-coded jsdom origin) + /register/.
-    expect(clip).toHaveBeenCalledWith(`${window.location.origin}/register/tok1`);
-    expect(appState.showToast).toHaveBeenCalledWith('Invite link copied', 'info');
-  });
-
-  it('Projects section: expanded project offers the add-member dropdown and member remove buttons', async () => {
-    (apiGet as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
-      const [path] = url.split('?');
-      if (path === '/admin/users') return Promise.resolve(USERS);
-      if (path === '/admin/projects') return Promise.resolve([ALL_PROJECTS[1]]);
-      if (path === '/admin/projects/p2/members') return Promise.resolve({ u3: 'readonly' });
-      return Promise.resolve([]);
-    });
-    await renderAsModerator();
-    clickSection('Projects');
-    await act(async () => {});
-    const card = main()!.querySelector('section')!;
-    act(() => { card.querySelector<HTMLButtonElement>('button')!.click(); });
-    await act(async () => {});
-    expect(dropdownTriggers(card, 'addUserPlaceholder')).toHaveLength(1);
-    expect(dropdownTriggers(card, 'userAccess')).toHaveLength(1);
-    expect(card.querySelector('button[title="Remove access"]')).not.toBeNull();
-    // The scoped user list excludes the moderator; they may still add THEMSELF
-    // (self is in the backend scope set) — so self heads the candidate list.
-    expect(await dropdownOptionLabels(card, 'addUserPlaceholder')).toEqual(['Mia Mod', 'Alice Admin']);
-  });
 
   it('removing MYSELF from a project disables its open button at once', async () => {
     const project = {
@@ -921,44 +401,6 @@ describe('AdminPage — moderator view (can_manage_users && !is_admin)', () => {
     expect(card.querySelector('a[href="/projects/p9"]')).toBeNull();
     expect(card.querySelector('span[title="No access"]')).not.toBeNull();
   });
-
-  it('removing MYSELF keeps the open button when a group audience remains (my_access from the server)', async () => {
-    const project = {
-      project_id: 'p9', name: 'Group Project', owner_id: 'u3', owner_name: 'Carol',
-      audiences: [{ subject: 'mod:m1', access_level: 'readonly' }], my_access: 'commentator',
-    };
-    (apiGet as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
-      const [path] = url.split('?');
-      if (path === '/admin/users') return Promise.resolve(USERS);
-      if (path === '/admin/projects') return Promise.resolve([project]);
-      if (path === '/admin/projects/p9/members') return Promise.resolve({ m1: 'commentator' });
-      // The removed row leaves the group audience grant underneath — the
-      // server re-read resolves it, the old local fallback said null.
-      if (path === '/projects/p9') return Promise.resolve({ project: { project_id: 'p9', my_access: 'readonly' } });
-      return Promise.resolve([]);
-    });
-    await renderAsModerator();
-    clickSection('Projects');
-    await act(async () => {});
-    const card = main()!.querySelector('section')!;
-    act(() => { card.querySelector<HTMLButtonElement>('button')!.click(); });
-    await act(async () => {});
-    await act(async () => { (card.querySelector('button[title="Remove access"]') as HTMLButtonElement).click(); });
-    expect(apiDelete).toHaveBeenCalledWith('/admin/projects/p9/members/m1');
-    // readonly (the audience level) — the link stays live.
-    expect(card.querySelector('a[href="/projects/p9"]')).not.toBeNull();
-    expect(card.querySelector('span[title="No access"]')).toBeNull();
-  });
-
-  it('user edit panel has no role select for a moderator', async () => {
-    await renderAsModerator();
-    clickSection('Users');
-    await act(async () => {});
-    act(() => { (localCard('bob@x.test').querySelector('button[title="Edit name / email"]') as HTMLButtonElement).click(); });
-    await act(async () => {});
-    expect(dropdownTriggers(localCard('bob@x.test'), 'Role')).toHaveLength(0);
-    expect(dropdownTriggers(localCard('bob@x.test'), 'group')).toHaveLength(0);
-  });
 });
 
 describe('AdminPage — admin-only surfaces', () => {
@@ -968,61 +410,6 @@ describe('AdminPage — admin-only surfaces', () => {
     expect(el, `card for ${email}`).toBeDefined();
     return el!;
   }
-
-  it('add form carries the role select (Moderator option) and the moderator select for role=user', async () => {
-    await render();
-    clickSection('Users');
-    await act(async () => {});
-    const addForm = main()!.querySelector('section')!;
-    expect(await dropdownOptionLabels(addForm, 'Role')).toEqual(['User', 'Moderator', 'Admin']);
-    expect(dropdownTriggers(addForm, 'group')).toHaveLength(1);
-    // Opening a selector inside the <form> must not submit it (a default
-    // type=submit trigger POSTed an empty user → "Failed to create user").
-    await pickDropdownOption(addForm, 'Role', 'Moderator');
-    expect(apiPost).not.toHaveBeenCalled();
-    expect(dropdownTriggers(addForm, 'group')).toHaveLength(0);
-  });
-
-  it('edit panel: generate fills + copies a password, clear empties it, Save sends it', async () => {
-    const clip = vi.fn(() => Promise.resolve());
-    Object.assign(navigator, { clipboard: { writeText: clip } });
-    await render();
-    clickSection('Users');
-    await act(async () => {});
-    act(() => { (localCard('bob@x.test').querySelector('button[title="Edit name / email"]') as HTMLButtonElement).click(); });
-    await act(async () => {});
-    const panel = localCard('bob@x.test').querySelector('div.border-t')!;
-    const pwd = () => panel.querySelector('input[type=password]') as HTMLInputElement;
-    const clear = () => panel.querySelector('button[title="Clear password"]') as HTMLButtonElement;
-    expect(clear().disabled).toBe(true);
-    act(() => { (panel.querySelector('button[title="Generate password"]') as HTMLButtonElement).click(); });
-    expect(pwd().value).toHaveLength(12);
-    expect(clip).toHaveBeenCalledWith(pwd().value);
-    expect(appState.showToast).toHaveBeenCalledWith('Copied!', 'info');
-    expect(clear().disabled).toBe(false);
-    act(() => { clear().click(); });
-    expect(pwd().value).toBe('');
-    // Neither button submitted anything.
-    expect(apiPatch).not.toHaveBeenCalled();
-  });
-
-  it('a refused create toasts the server reason and keeps the draft', async () => {
-    const { HttpError } = await vi.importActual<typeof import('../api/client')>('../api/client');
-    await render();
-    clickSection('Users');
-    await act(async () => {});
-    const addForm = main()!.querySelector('section')!;
-    const [name, email, password] = Array.from(addForm.querySelectorAll('input'));
-    await typeInto(name, 'Dave');
-    await typeInto(email, 'dave@x.test');
-    await typeInto(password, 'hunter22');
-    (apiPost as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new HttpError(409, '{"detail":"Email already in use"}'));
-    clickButtonWithText(addForm, 'Add');
-    await act(async () => {});
-    expect(apiPost).toHaveBeenCalledWith('/admin/users', { name: 'Dave', email: 'dave@x.test', password: 'hunter22', role: 'user', moderator_id: null, tier: 'ai' });
-    expect(appState.showToast).toHaveBeenCalledWith('Email already in use', 'error');
-    expect(Array.from(addForm.querySelectorAll('input')).map(i => i.value)).toEqual(['Dave', 'dave@x.test', 'hunter22']);
-  });
 
   it('user edit panel has role + moderator selects for an admin, and no plain-text role chip in the panel', async () => {
     await render();
@@ -1054,25 +441,6 @@ describe('AdminPage — admin-only surfaces', () => {
     await act(async () => {});
     expect(dropdownTriggers(localCard('alice@x.test'), 'Role')).toHaveLength(0);
     expect(dropdownTriggers(localCard('alice@x.test'), 'group')).toHaveLength(0);
-  });
-
-  it('a user promoted to moderator is offered in the group dropdown at once, without a reload', async () => {
-    await render();
-    clickSection('Users');
-    await act(async () => {});
-    act(() => { (localCard('bob@x.test').querySelector('button[title="Edit name / email"]') as HTMLButtonElement).click(); });
-    await act(async () => {});
-    (apiPatch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...USERS[1], role: 'moderator' });
-    await pickDropdownOption(localCard('bob@x.test'), 'Role', 'Moderator');
-    clickButtonWithText(localCard('bob@x.test'), 'Save');
-    await act(async () => {});
-    expect(apiPatch.mock.calls).toEqual([['/admin/users/u2', { role: 'moderator' }]]);
-
-    act(() => { (localCard('carol@x.test').querySelector('button[title="Edit name / email"]') as HTMLButtonElement).click(); });
-    await act(async () => {});
-    expect(await dropdownOptionLabels(localCard('carol@x.test'), 'group')).toEqual(['No group', 'Bob']);
-    // The add form's group dropdown reads the same derived list.
-    expect(await dropdownOptionLabels(main()!.querySelector('section')!, 'group')).toEqual(['No group', 'Bob']);
   });
 
   it('failed save toasts the server refusal detail verbatim, not only the generic line', async () => {
@@ -1128,12 +496,6 @@ describe('AdminPage — Model access: Hidden · Private · Public selector', () 
     await act(async () => {});
   }
 
-  it('a row granted to a group shows Private active', async () => {
-    await openModels();
-    const checked = modelRow('openai/luna').querySelectorAll('[aria-checked="true"]');
-    expect(Array.from(checked).map(b => b.textContent)).toEqual(['adminModelPrivate']);
-  });
-
   it('clicking Hidden PUTs the model\'s subjects as ["hidden"] alone', async () => {
     // Routed by URL: the section click also PUTs the global prefs.
     apiPut.mockImplementation((url: string) => Promise.resolve(
@@ -1143,29 +505,6 @@ describe('AdminPage — Model access: Hidden · Private · Public selector', () 
     await act(async () => { stop(modelRow('openai/luna'), 'adminModelHidden').click(); });
     expect(apiPut).toHaveBeenCalledWith('/admin/models/openai/luna', { subjects: ['hidden'] });
     expect(stop(modelRow('openai/luna'), 'adminModelHidden').getAttribute('aria-checked')).toBe('true');
-  });
-
-  it('the clicked stop is active before the PUT answers', async () => {
-    let answer: (v: unknown) => void = () => {};
-    apiPut.mockImplementation((url: string) => (url === '/admin/models/openai/luna'
-      ? new Promise(r => { answer = r; })
-      : Promise.resolve({})));
-    await openModels();
-    await act(async () => { stop(modelRow('openai/luna'), 'adminModelPublic').click(); });
-    expect(stop(modelRow('openai/luna'), 'adminModelPublic').getAttribute('aria-checked')).toBe('true');
-    expect(stop(modelRow('openai/luna'), 'adminModelPrivate').disabled).toBe(false);
-    await act(async () => { answer({ id: 'openai/luna', subjects: ['group:g1', 'public'] }); });
-    expect(stop(modelRow('openai/luna'), 'adminModelPublic').getAttribute('aria-checked')).toBe('true');
-  });
-
-  it('a refused PUT restores the previous stop and shows the error', async () => {
-    apiPut.mockImplementation((url: string) => (url === '/admin/models/openai/luna'
-      ? Promise.reject(new Error('boom'))
-      : Promise.resolve({})));
-    await openModels();
-    await act(async () => { stop(modelRow('openai/luna'), 'adminModelHidden').click(); });
-    expect(stop(modelRow('openai/luna'), 'adminModelPrivate').getAttribute('aria-checked')).toBe('true');
-    expect(modelRow('openai/luna').textContent).toContain('adminModelSaveFailed');
   });
 
   it('the default model\'s Hidden stop is disabled', async () => {

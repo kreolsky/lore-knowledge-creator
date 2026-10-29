@@ -13,7 +13,7 @@ import { RangeSetBuilder, Compartment, EditorSelection, type EditorState } from 
 import { bareUrl } from '../components/editor/link-patterns';
 import { isViewportCovered, revealAtCursor } from '../components/editor/live-preview';
 import { collectCodeRanges, makeInCodeChecker, isPosInCode } from '../components/editor/code-range-utils';
-import { LINK_TYPES, onBrokenLinkClick } from '../components/editor/live-preview/link-types';
+import { LINK_TYPES, onBrokenLinkClick, isEmbedMatch } from '../components/editor/live-preview/link-types';
 import { widgetClickPos } from '../components/editor/live-preview/table-widget';
 import { getRoleView } from './active-editor';
 import { useUIStore } from '../store/ui-store';
@@ -150,6 +150,8 @@ function linkAt(state: EditorState, pos: number): { entry: LinkEntry; match: Lin
   const offset = pos - line.from;
   for (const entry of LINK_TYPES) {
     for (const match of entry.match(line.text)) {
+      // Embeds never claim/navigate — the gesture belongs to the rendered widget.
+      if (isEmbedMatch(line.text, match)) continue;
       if (offset >= match.start && offset < match.end) return { entry, match };
     }
   }
@@ -266,8 +268,12 @@ const linkClickHandlers = EditorView.domEventHandlers({
     };
 
     // Registry-driven: iterate each link type's normalized matches in priority order.
+    // Embeds (`![…](…)`) are skipped — an embed click never navigates; the gesture
+    // belongs to the rendered widget (image selects its node, the transclusion band
+    // header keeps its own open-source affordance).
     for (const entry of LINK_TYPES) {
       for (const m of entry.match(lineText)) {
+        if (isEmbedMatch(lineText, m)) continue;
         const handled = tryLink(m.start, m.end, () => followLink({ entry, match: m }));
         if (handled) return true;
       }

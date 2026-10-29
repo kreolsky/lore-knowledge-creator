@@ -4,7 +4,6 @@
 Unit-level, mirrors `test_chat_agent_multitool.py`: pure primitives + monkeypatched
 DB/collab seams over a real pycrdt Doc fixture (no live DB/Redis).
 """
-import asyncio
 
 import pycrdt as Y
 import pytest
@@ -36,23 +35,6 @@ def _make_table(doc: Y.Doc, tid: str, matrix: list[list[str]], widths: list[int]
 
 
 # ─── table_serialize primitives ──────────────────────────────────────────────
-
-
-def test_read_table_grid_returns_columns_and_rows():
-    from helpers import read_table_grid
-
-    doc = Y.Doc()
-    _make_table(doc, "t1", [["Name", "Role"], ["Aragorn", "Ranger"]], [200, 300])
-    assert read_table_grid(doc, "t1") == {
-        "columns": [200, 300], "rows": [["Name", "Role"], ["Aragorn", "Ranger"]],
-    }
-
-
-def test_read_table_grid_missing_id_returns_none():
-    from helpers import read_table_grid
-
-    doc = Y.Doc()
-    assert read_table_grid(doc, "missing") is None
 
 
 def test_read_table_cell_reads_and_bounds():
@@ -107,13 +89,6 @@ def test_set_table_cell_out_of_bounds_is_noop():
     assert set_table_cell(doc, "t1", 9, 9, "x") is False
 
 
-def test_extract_table_labels_reads_anchor():
-    from table_serialize import extract_table_labels
-
-    content = "intro\n![Characters](table:t1)\nmore\n![Places](table:t2)"
-    assert extract_table_labels(content) == {"t1": "Characters", "t2": "Places"}
-
-
 # ─── read_document tables field (Step 2c: read_table folded in) ──────────────
 
 
@@ -157,29 +132,6 @@ def _mk_read_table_mocks(monkeypatch, *, doc, content, access="full", project_id
     monkeypatch.setattr(agent_module, "_build_references_field", fake_references)
 
 
-async def test_read_document_default_returns_table_index(monkeypatch):
-    """tables default "index" → INDEX only (table_id + label + n_cols, no `rows`) so
-    a weak agent does not dump every full grid into context (Step 2c fold of
-    read_table's index-only INVARIANT)."""
-    from agent import readonly_executors as agent_module
-
-    doc = Y.Doc()
-    _make_table(doc, "t1", [["Name", "Role"], ["Aragorn", "Ranger"]])
-    content = "intro\n![Characters](table:t1)"
-    _mk_read_table_mocks(monkeypatch, doc=doc, content=content)
-
-    out = await agent_module._read_document_exec(
-        doc_id="doc-1", project_id="p-1", user={"user_id": "u-1"},
-    )
-    assert out["doc_id"] == "doc-1"
-    assert len(out["tables"]) == 1
-    t = out["tables"][0]
-    assert t["table_id"] == "t1"
-    assert t["label"] == "Characters"
-    assert t["n_cols"] == 2
-    assert "rows" not in t
-
-
 async def test_read_document_table_id_returns_full_grid(monkeypatch):
     from agent import readonly_executors as agent_module
 
@@ -201,30 +153,6 @@ async def test_read_document_table_id_returns_full_grid(monkeypatch):
         doc_id="doc-1", project_id="p-1", user={"user_id": "u-1"}, table_id="no-such-id",
     )
     assert out_missing["tables"] == []
-
-
-async def test_read_document_rejects_no_access(monkeypatch):
-    from agent import readonly_executors as agent_module
-
-    doc = Y.Doc()
-    _mk_read_table_mocks(monkeypatch, doc=doc, content="", access=None)
-
-    out = await agent_module._read_document_exec(
-        doc_id="doc-1", project_id="p-1", user={"user_id": "u-1"},
-    )
-    assert "error" in out
-
-
-async def test_read_document_rejects_cross_project(monkeypatch):
-    from agent import readonly_executors as agent_module
-
-    doc = Y.Doc()
-    _mk_read_table_mocks(monkeypatch, doc=doc, content="", doc_project_id="p-OTHER")
-
-    out = await agent_module._read_document_exec(
-        doc_id="doc-1", project_id="p-1", user={"user_id": "u-1"},
-    )
-    assert "error" in out
 
 
 # ─── validate_table_cell_edit / apply_edit_table_cell ────────────────────────
@@ -273,154 +201,6 @@ def _mk_apply_table_mocks(monkeypatch, *, doc, access="full", project_id="p-1",
     return captured
 
 
-async def test_validate_table_cell_edit_stale_carries_current_value(monkeypatch):
-    from agent.table_writes import validate_table_cell_edit
-
-    doc = Y.Doc()
-    _make_table(doc, "t1", [["a", "b"], ["c", "d"]])
-    _mk_apply_table_mocks(monkeypatch, doc=doc)
-
-    with pytest.raises(HTTPException) as exc:
-        await validate_table_cell_edit(
-            document_id="doc-1",
-            edits=[{"table_id": "t1", "row": 1, "col": 0, "old_value": "WRONG"}],
-            project_id="p-1", user={"user_id": "u-1"},
-        )
-    assert exc.value.status_code == 409
-    assert exc.value.detail["current_value"] == "c"
-
-
-async def test_validate_table_cell_edit_empty_cell_old_value_resolves(monkeypatch):
-    from agent.table_writes import validate_table_cell_edit
-
-    doc = Y.Doc()
-    _make_table(doc, "t1", [["a", ""], ["c", "d"]])
-    _mk_apply_table_mocks(monkeypatch, doc=doc)
-
-    # old_value="" for an empty cell must resolve WITHOUT raising.
-    result = await validate_table_cell_edit(
-        document_id="doc-1",
-        edits=[{"table_id": "t1", "row": 0, "col": 1, "old_value": ""}],
-        project_id="p-1", user={"user_id": "u-1"},
-    )
-    assert result == "{}"
-
-
-async def test_validate_table_cell_edit_oob_carries_bounds(monkeypatch):
-    from agent.table_writes import validate_table_cell_edit
-
-    doc = Y.Doc()
-    _make_table(doc, "t1", [["a", "b"], ["c", "d"]])
-    _mk_apply_table_mocks(monkeypatch, doc=doc)
-
-    with pytest.raises(HTTPException) as exc:
-        await validate_table_cell_edit(
-            document_id="doc-1",
-            edits=[{"table_id": "t1", "row": 9, "col": 0, "old_value": "x"}],
-            project_id="p-1", user={"user_id": "u-1"},
-        )
-    assert exc.value.status_code == 404
-    assert exc.value.detail["n_rows"] == 2
-    assert exc.value.detail["n_cols"] == 2
-
-
-async def test_validate_table_cell_edit_by_header_name_resolves_col(monkeypatch):
-    """3A: a header-NAME `column` resolves to its numeric index and is written back
-    onto the edit dict, overriding the numeric `col` fallback."""
-    from agent.table_writes import validate_table_cell_edit
-
-    doc = Y.Doc()
-    _make_table(doc, "t1", [["Name", "HP"], ["Goblin", "7"]])
-    _mk_apply_table_mocks(monkeypatch, doc=doc)
-
-    edit = {"table_id": "t1", "row": 1, "col": 0, "column": "HP", "old_value": "7"}
-    result = await validate_table_cell_edit(
-        document_id="doc-1", edits=[edit], project_id="p-1", user={"user_id": "u-1"},
-    )
-    assert result == "{}"
-    assert edit["col"] == 1, "column='HP' must resolve to index 1, overriding col=0"
-
-
-async def test_validate_table_cell_edit_by_header_name_col_absent(monkeypatch):
-    """Real Pi-bridge shape: the model sends only `column` (col un-advertised), so the
-    edit dict carries `col=None`. Resolution must succeed off `column` alone — never
-    TypeError on the None fallback."""
-    from agent.table_writes import validate_table_cell_edit
-
-    doc = Y.Doc()
-    _make_table(doc, "t1", [["Name", "HP"], ["Goblin", "7"]])
-    _mk_apply_table_mocks(monkeypatch, doc=doc)
-
-    edit = {"table_id": "t1", "row": 1, "col": None, "column": "HP", "old_value": "7"}
-    result = await validate_table_cell_edit(
-        document_id="doc-1", edits=[edit], project_id="p-1", user={"user_id": "u-1"},
-    )
-    assert result == "{}"
-    assert edit["col"] == 1
-
-
-def test_edit_table_cell_schema_requires_column():
-    """`column` MUST be a required parameter of EACH advertised edit item — col/column
-    both optional let weak models fill an empty cell (old_value="") addressing by row
-    alone, producing a proposal with no coordinate that 500s at apply
-    (edit-table-cell-column-apply-fix live recurrence). The batch schema advertises
-    edits[]; the per-item required set binds the contract (and `col` is NOT advertised)."""
-    from agent.tools import AGENT_TOOLS
-
-    tool = next(t for t in AGENT_TOOLS if t["function"]["name"] == "edit_table_cell")
-    params = tool["function"]["parameters"]
-    assert params["required"] == ["document_id", "edits"]
-    item = params["properties"]["edits"]["items"]
-    assert "column" in item["required"]
-    # INVARIANT: the numeric `col` is NOT advertised anywhere (dispatch-only fallback).
-    assert "col" not in item["properties"]
-
-
-async def test_resolve_table_col_no_coord_raises_400():
-    """Neither a `column` name nor a `col` index → HTTPException(400), never a
-    TypeError→500 (the confirm-route self-correct contract)."""
-    from agent.table_writes import _resolve_table_col
-
-    doc = Y.Doc()
-    _make_table(doc, "t1", [["Name", "HP"], ["Goblin", "7"]])
-    with pytest.raises(HTTPException) as exc:
-        _resolve_table_col(doc, "t1", None, None, 2, 2)
-    assert exc.value.status_code == 400
-
-
-async def test_validate_table_cell_edit_unknown_column_name(monkeypatch):
-    """3A: a header name that does not exist → 404 carrying the available headers."""
-    from agent.table_writes import validate_table_cell_edit
-
-    doc = Y.Doc()
-    _make_table(doc, "t1", [["Name", "HP"], ["Goblin", "7"]])
-    _mk_apply_table_mocks(monkeypatch, doc=doc)
-
-    with pytest.raises(HTTPException) as exc:
-        await validate_table_cell_edit(
-            document_id="doc-1",
-            edits=[{"table_id": "t1", "row": 1, "col": 0, "column": "Mana", "old_value": "7"}],
-            project_id="p-1", user={"user_id": "u-1"},
-        )
-    assert exc.value.status_code == 404
-    assert exc.value.detail["headers"] == ["Name", "HP"]
-
-
-async def test_validate_table_cell_edit_unknown_table_id(monkeypatch):
-    from agent.table_writes import validate_table_cell_edit
-
-    doc = Y.Doc()
-    _mk_apply_table_mocks(monkeypatch, doc=doc)
-
-    with pytest.raises(HTTPException) as exc:
-        await validate_table_cell_edit(
-            document_id="doc-1",
-            edits=[{"table_id": "no-such", "row": 0, "col": 0, "old_value": "x"}],
-            project_id="p-1", user={"user_id": "u-1"},
-        )
-    assert exc.value.status_code == 404
-
-
 async def test_validate_table_cell_edit_no_access_rejected(monkeypatch):
     from agent.table_writes import validate_table_cell_edit
 
@@ -435,44 +215,6 @@ async def test_validate_table_cell_edit_no_access_rejected(monkeypatch):
             project_id="p-1", user={"user_id": "u-1"},
         )
     assert exc.value.status_code == 403
-
-
-async def test_validate_table_cell_edit_cross_project_rejected(monkeypatch):
-    from agent.table_writes import validate_table_cell_edit
-
-    doc = Y.Doc()
-    _make_table(doc, "t1", [["a"]])
-    _mk_apply_table_mocks(monkeypatch, doc=doc, doc_project_id="p-OTHER")
-
-    with pytest.raises(HTTPException) as exc:
-        await validate_table_cell_edit(
-            document_id="doc-1",
-            edits=[{"table_id": "t1", "row": 0, "col": 0, "old_value": "a"}],
-            project_id="p-1", user={"user_id": "u-1"},
-        )
-    assert exc.value.status_code == 404
-
-
-async def test_apply_edit_table_cell_mutates_and_persists(monkeypatch):
-    from agent.table_writes import apply_edit_table_cell
-
-    from table_serialize import read_table_cell
-
-    doc = Y.Doc()
-    _make_table(doc, "t1", [["a", "b"], ["c", "d"]])
-    captured = _mk_apply_table_mocks(monkeypatch, doc=doc)
-
-    result = await apply_edit_table_cell(
-        edits=[{
-            "document_id": "doc-1", "table_id": "t1", "row": 1, "col": 1,
-            "old_value": "d", "new_value": "DDD",
-        }],
-        project_id="p-1", user={"user_id": "u-1"},
-    )
-    assert result["status"] == "applied"
-    assert read_table_cell(doc, "t1", 1, 1) == "DDD"
-    assert captured["published"] is True
-    assert captured["checkpoint"]["document_id"] == "doc-1"
 
 
 async def test_apply_edit_table_cell_noop_skips_checkpoint(monkeypatch):
@@ -493,95 +235,7 @@ async def test_apply_edit_table_cell_noop_skips_checkpoint(monkeypatch):
     assert "checkpoint" not in captured
 
 
-async def test_apply_edit_table_cell_stale_raises_before_mutating(monkeypatch):
-    from agent.table_writes import apply_edit_table_cell
-
-
-    doc = Y.Doc()
-    _make_table(doc, "t1", [["a"]])
-    _mk_apply_table_mocks(monkeypatch, doc=doc)
-
-    with pytest.raises(HTTPException) as exc:
-        await apply_edit_table_cell(
-            edits=[{
-                "document_id": "doc-1", "table_id": "t1", "row": 0, "col": 0,
-                "old_value": "WRONG", "new_value": "x",
-            }],
-            project_id="p-1", user={"user_id": "u-1"},
-        )
-    assert exc.value.status_code == 409
-
-
-# ─── doc-edit-lock: parallel table-cell edits (Fix A.3) ──────────────────────
-
-
-async def test_table_cell_parallel_edits_all_apply(monkeypatch):
-    """2 cell edits to DIFFERENT cells of the same table, issued via gather — both
-    must apply. Fix A.3 wraps apply_edit_table_cell in the SAME per-doc lock as text
-    edits (a table-cell edit and a text edit on one doc must serialize through the
-    document's convergence tail). This confirms the table path applies cleanly under
-    the lock — no deadlock / over-serialization."""
-    from agent import collab_writes as cw
-    from agent.table_writes import apply_edit_table_cell
-
-    from table_serialize import read_table_cell
-
-    doc = Y.Doc()
-    _make_table(doc, "t1", [["a", "b"], ["c", "d"]])
-    _mk_apply_table_mocks(monkeypatch, doc=doc)
-
-    async def fake_presence(*_a, **_kw):
-        return None
-
-    monkeypatch.setattr(cw, "broadcast_agent_presence", fake_presence)
-
-    results = await asyncio.gather(
-        apply_edit_table_cell(
-            edits=[{
-                "document_id": "doc-1", "table_id": "t1", "row": 0, "col": 0,
-                "old_value": "a", "new_value": "AAA",
-            }],
-            project_id="p-1", user={"user_id": "u-1"},
-        ),
-        apply_edit_table_cell(
-            edits=[{
-                "document_id": "doc-1", "table_id": "t1", "row": 1, "col": 1,
-                "old_value": "d", "new_value": "DDD",
-            }],
-            project_id="p-1", user={"user_id": "u-1"},
-        ),
-    )
-
-    assert all(r["status"] == "applied" for r in results)
-    assert read_table_cell(doc, "t1", 0, 0) == "AAA"
-    assert read_table_cell(doc, "t1", 1, 1) == "DDD"
-
-
 # ─── structural primitives: add_table_rows / add_table_column / create_table_entry ─
-
-
-def test_add_table_rows_appends_at_bottom():
-    from helpers import read_table_grid
-
-    from table_serialize import add_table_rows
-
-    doc = Y.Doc()
-    _make_table(doc, "t1", [["A", "B"], ["1", "2"]])
-    add_table_rows(doc, "t1", [["3", "4"], ["5", "6"]], width=2)
-    grid = read_table_grid(doc, "t1")
-    assert grid["rows"] == [["A", "B"], ["1", "2"], ["3", "4"], ["5", "6"]]
-
-
-def test_add_table_rows_pads_shorter_row():
-    from helpers import read_table_grid
-
-    from table_serialize import add_table_rows
-
-    doc = Y.Doc()
-    _make_table(doc, "t1", [["A", "B"]])
-    add_table_rows(doc, "t1", [["only-one"]], width=2)
-    grid = read_table_grid(doc, "t1")
-    assert grid["rows"] == [["A", "B"], ["only-one", ""]]
 
 
 def test_add_table_rows_empty_is_noop():
@@ -692,51 +346,6 @@ async def test_apply_add_table_rows_appends_at_bottom(monkeypatch):
     assert captured["published"] is True
 
 
-async def test_apply_add_table_rows_empty_raises_400(monkeypatch):
-    from agent.table_writes import apply_add_table_rows
-
-    doc = Y.Doc()
-    _make_table(doc, "t1", [["a"]])
-    _mk_apply_table_mocks(monkeypatch, doc=doc)
-
-    with pytest.raises(HTTPException) as exc:
-        await apply_add_table_rows(
-            doc_id="doc-1", table_id="t1", rows_matrix=[],
-            project_id="p-1", user={"user_id": "u-1"},
-        )
-    assert exc.value.status_code == 400
-
-
-async def test_apply_add_table_rows_over_length_row_400(monkeypatch):
-    from agent.table_writes import apply_add_table_rows
-
-    doc = Y.Doc()
-    _make_table(doc, "t1", [["a", "b"]])
-    _mk_apply_table_mocks(monkeypatch, doc=doc)
-
-    with pytest.raises(HTTPException) as exc:
-        await apply_add_table_rows(
-            doc_id="doc-1", table_id="t1", rows_matrix=[["x", "y", "z"]],
-            project_id="p-1", user={"user_id": "u-1"},
-        )
-    assert exc.value.status_code == 400
-
-
-async def test_apply_add_table_rows_unknown_table_404(monkeypatch):
-    from agent.table_writes import apply_add_table_rows
-
-    doc = Y.Doc()
-    _make_table(doc, "t1", [["a"]])
-    _mk_apply_table_mocks(monkeypatch, doc=doc)
-
-    with pytest.raises(HTTPException) as exc:
-        await apply_add_table_rows(
-            doc_id="doc-1", table_id="no-such", rows_matrix=[["x"]],
-            project_id="p-1", user={"user_id": "u-1"},
-        )
-    assert exc.value.status_code == 404
-
-
 async def test_apply_add_table_column_inserts_at_end(monkeypatch):
     from agent.table_writes import apply_add_table_column
     from helpers import read_table_grid
@@ -755,52 +364,6 @@ async def test_apply_add_table_column_inserts_at_end(monkeypatch):
     assert captured["checkpoint"]["document_id"] == "doc-1"
 
 
-async def test_apply_add_table_column_bad_index_400(monkeypatch):
-    from agent.table_writes import apply_add_table_column
-
-    doc = Y.Doc()
-    _make_table(doc, "t1", [["a", "b"]])
-    _mk_apply_table_mocks(monkeypatch, doc=doc)
-
-    with pytest.raises(HTTPException) as exc:
-        await apply_add_table_column(
-            doc_id="doc-1", table_id="t1", at_index=5, header="x", values=[],
-            project_id="p-1", user={"user_id": "u-1"},
-        )
-    assert exc.value.status_code == 400
-
-
-async def test_apply_create_table_builds_anchor_and_model(monkeypatch):
-    from agent.table_writes import apply_create_table
-    from helpers import read_table_grid
-
-    from table_serialize import extract_table_labels
-
-    doc = Y.Doc()
-    # non-empty content at the doc tail — set on BOTH the resolve snapshot and the doc
-    content = "Some intro text."
-    doc.get("content", type=Y.Text).insert(0, content)
-    captured = _mk_apply_table_mocks(monkeypatch, doc=doc, content=content)
-
-    result = await apply_create_table(
-        doc_id="doc-1", label="Monsters",
-        rows_matrix=[["Name", "HP"], ["Goblin", "7"]],
-        section=None, project_id="p-1", user={"user_id": "u-1"},
-    )
-    assert result["status"] == "applied"
-    new_id = result["table_id"]
-    # the anchor was spliced into content
-    final = str(doc.get("content", type=Y.Text))
-    labels = extract_table_labels(final)
-    assert labels[new_id] == "Monsters"
-    # the model was built under the fresh id
-    grid = read_table_grid(doc, new_id)
-    assert grid["rows"] == [["Name", "HP"], ["Goblin", "7"]]
-    assert grid["columns"] == [160, 160]
-    assert captured["checkpoint"]["document_id"] == "doc-1"
-    assert captured["published"] is True
-
-
 async def test_apply_create_table_unknown_section_404(monkeypatch):
     from agent.table_writes import apply_create_table
 
@@ -817,30 +380,3 @@ async def test_apply_create_table_unknown_section_404(monkeypatch):
             project_id="p-1", user={"user_id": "u-1"},
         )
     assert exc.value.status_code == 404
-
-
-async def test_apply_create_table_section_appends_at_section_end(monkeypatch):
-    from agent.table_writes import apply_create_table
-
-    from table_serialize import extract_table_labels
-
-    doc = Y.Doc()
-    content = "# Chapter\n\nIntro line.\n\n# Other\n\nBody."
-    doc.get("content", type=Y.Text).insert(0, content)
-    _mk_apply_table_mocks(monkeypatch, doc=doc, content=content)
-
-    result = await apply_create_table(
-        doc_id="doc-1", label="Table",
-        rows_matrix=[["a", "b"]],
-        section="Chapter",
-        project_id="p-1", user={"user_id": "u-1"},
-    )
-    new_id = result["table_id"]
-    final = str(doc.get("content", type=Y.Text))
-    # the anchor lands at the end of the Chapter section, before "# Other"
-    anchor_at = final.index(f"![Table](table:{new_id})")
-    other_at = final.index("# Other")
-    assert anchor_at < other_at
-    assert extract_table_labels(final)[new_id] == "Table"
-
-

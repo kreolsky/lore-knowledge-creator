@@ -19,6 +19,12 @@
  * admin model list (ModelsSection) commits the full order to
  * PUT /admin/model-order.
  *
+ * An adapter may also declare an OUTSIDE surface (SiblingDragAdapter.outsideTarget):
+ * a drop that is not over any row — reference cards dragged over the document
+ * editor (refDragAdapter) show a drop caret and insert an embed on pointerup.
+ * The same lifecycle covers cancel paths: pointercancel and Escape end the drag
+ * with all feedback cleared and nothing committed.
+ *
  * Reuses the repo's PointerEvent drag pattern (see useResizer.ts): document-level
  * listeners, refs for transient state, visual feedback via imperative inline styles
  * (no new CSS classes), commit on pointerup. The drop target is a fixed-position
@@ -34,7 +40,7 @@ import { apiClient } from '../api/client';
 import { t } from '../i18n';
 import { resolveTreeDrop, resolveTreeNest, TREE_INDENT } from './treeDropTarget';
 
-const DRAG_THRESHOLD = 5; // px before a press becomes a drag (vs a click)
+export const DRAG_THRESHOLD = 5; // px before a press becomes a drag (vs a click)
 const INDICATOR_LINE = 4; // px, thickness of the drop line
 const INDICATOR_CHEVRON = 10; // px, chevron box at each of the line's ends
 /** Fraction of a tree row's height at each edge that means "between"; the
@@ -74,6 +80,26 @@ export interface SiblingDragAdapter {
   ): DragDropTarget | undefined;
   /** Commit a drop: optimistic provisional key, PATCH, reconcile, rollback. */
   commit(id: string, target: DragDropTarget): void;
+  /** Optional: build the OUTSIDE-panel drop controller for a drag — the drop
+   * surface beyond the panel's rows (reference cards dragged over the document
+   * editor). One controller per drag; the hook drives its lifecycle: move per
+   * pointer move outside the rows, hide on leave/cancel/unmount, commit on
+   * pointerup. Undefined = the adapter has no outside surface. */
+  outsideTarget?(candidate: { id: string; groupId: string | null }): DragOutsideTarget;
+}
+
+/** The outside-panel half of a drag (see SiblingDragAdapter.outsideTarget). The
+ * controller owns its own feedback: move() shows/clears it with the pointer,
+ * hide() clears it for good, commit() inserts at the last resolved point and is
+ * a NO-OP when the last move found no valid surface (the drop point is gone). */
+export interface DragOutsideTarget {
+  /** Resolve the drop point under the pointer and show feedback there; clear
+   * feedback when the pointer is over no valid outside surface. */
+  move(e: { clientX: number; clientY: number }): void;
+  /** Clear all feedback this target showed. */
+  hide(): void;
+  /** Commit the drop of dragged row `id` at the last resolved point. */
+  commit(id: string): void;
 }
 
 /** Detached drop-line element: a 4px accent line plus TWO chevrons pointing
@@ -305,6 +331,10 @@ export function useSiblingDragReorder(
     let indicator: HTMLElement | null = null;
     // The pending drop: undefined = no valid target under the pointer.
     let pendingTarget: DragDropTarget | undefined = undefined;
+    // The outside-panel controller (adapter.outsideTarget), built once per drag
+    // when the pointer first leaves the rows; undefined while over rows or when
+    // the adapter has no outside surface.
+    let outside: DragOutsideTarget | undefined;
 
     const reorderableRow = (target: EventTarget | null): HTMLElement | null => {
       const el = target as HTMLElement | null;
@@ -323,11 +353,19 @@ export function useSiblingDragReorder(
       indicator = null;
     };
 
+    // A drag SOURCE: a reorderable row, or — when the adapter owns an outside
+    // surface — any row carrying an id (gallery tiles, unhosted cards). The
+    // latter has no group, so no row ever accepts it: it can only drop outside.
+    const sourceRow = (target: EventTarget | null): HTMLElement | null => {
+      if (!adapter.outsideTarget) return reorderableRow(target);
+      return (target as HTMLElement | null)?.closest?.(`[${adapter.rowIdAttr}]`) as HTMLElement | null;
+    };
+
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
       const tgt = e.target as HTMLElement;
       if (adapter.ignoreTarget(tgt)) return;
-      const row = reorderableRow(tgt);
+      const row = sourceRow(tgt);
       if (!row) return;
       const id = row.getAttribute(adapter.rowIdAttr);
       if (!id) return;
@@ -338,7 +376,18 @@ export function useSiblingDragReorder(
       clearIndicator();
       pendingTarget = undefined;
       const row = reorderableRow(document.elementFromPoint(e.clientX, e.clientY));
-      if (!row || !candidate) return;
+      if (!row || !candidate) {
+        // Outside the panel's rows: the adapter may own an outside surface (the
+        // document editor — reference-card drag). One controller per drag;
+        // move() clears its own feedback when the pointer is over no valid
+        // surface, so the panel-gap → editor → panel-gap sweep stays clean.
+        if (candidate && adapter.outsideTarget && !outside) outside = adapter.outsideTarget(candidate);
+        outside?.move(e);
+        return;
+      }
+      // Back over a row: the outside controller is done.
+      outside?.hide();
+      outside = undefined;
       pendingTarget = adapter.dropTarget(row, e, candidate);
       if (!pendingTarget) return;
       if (!indicator) {
@@ -360,10 +409,15 @@ export function useSiblingDragReorder(
       updateDropTarget(e);
     };
 
-    const endDrag = () => {
+    // End the drag. `doCommit` runs the adapter's commit for whichever target
+    // is resolved (row line or outside surface); a CANCEL (pointercancel,
+    // Escape) only cleans up — every piece of feedback, the outside
+    // controller's included, must be gone with no drop committed.
+    const finishDrag = (doCommit: boolean) => {
       const wasDragging = dragging;
       const cand = candidate;
       const target = pendingTarget;
+      const outsideCtl = outside;
       if (draggedRow) draggedRow.style.opacity = '';
       removeIndicator();
       document.body.style.userSelect = '';
@@ -371,7 +425,12 @@ export function useSiblingDragReorder(
       dragging = false;
       draggedRow = null;
       pendingTarget = undefined;
-      if (!wasDragging || !cand || !target) return;
+      outside = undefined;
+      if (!wasDragging || !cand) return;
+      if (!doCommit) {
+        outsideCtl?.hide();
+        return;
+      }
       // Suppress the click that may fire after pointerup so the row doesn't navigate.
       // Browsers usually suppress click after pointer movement; this is defensive and
       // self-removes after a short window so it can never swallow a later real click.
@@ -379,16 +438,38 @@ export function useSiblingDragReorder(
       container.addEventListener('click', swallow, { capture: true, once: true });
       setTimeout(() => container.removeEventListener('click', swallow, true), 250);
 
-      adapter.commit(cand.id, target);
+      if (target) {
+        adapter.commit(cand.id, target);
+      } else {
+        // No row target — an outside target (editor drop) may still be
+        // resolved; commit() no-ops when the last move found no valid surface.
+        outsideCtl?.commit(cand.id);
+      }
     };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && dragging) {
+        e.preventDefault();
+        finishDrag(false);
+      }
+    };
+
+    const onPointerUp = () => finishDrag(true);
+    const onPointerCancel = () => finishDrag(false);
 
     container.addEventListener('pointerdown', onPointerDown);
     document.addEventListener('pointermove', onPointerMove);
-    document.addEventListener('pointerup', endDrag);
+    document.addEventListener('pointerup', onPointerUp);
+    document.addEventListener('pointercancel', onPointerCancel);
+    document.addEventListener('keydown', onKeyDown);
     return () => {
       container.removeEventListener('pointerdown', onPointerDown);
       document.removeEventListener('pointermove', onPointerMove);
-      document.removeEventListener('pointerup', endDrag);
+      document.removeEventListener('pointerup', onPointerUp);
+      document.removeEventListener('pointercancel', onPointerCancel);
+      document.removeEventListener('keydown', onKeyDown);
+      outside?.hide();
+      outside = undefined;
       removeIndicator();
       document.body.style.userSelect = '';
     };

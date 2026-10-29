@@ -23,7 +23,7 @@ import {
 import { EditorState, Range, RangeSetBuilder, StateField } from '@codemirror/state';
 import { findSingleLineDisplayMath, findBlockMath } from '../math-render';
 import { linkContextChanged, revealAtCursor } from './effects';
-import { BlockMathWidget, CheckboxWidget, MermaidWidget } from './widgets';
+import { BlockMathWidget, CheckboxWidget, ImageWidget, MermaidWidget } from './widgets';
 import { TableWidget } from './table-widget';
 import { TableBlockWidget } from './table-block-widget';
 import { parseTarget, extractEmbedFromImageNode } from './transclusion-grammar';
@@ -31,20 +31,26 @@ import { buildStructuralDecorations } from './build-structural';
 import { buildListLineDecorations, buildCursorLineDecorations } from './build-line';
 import { getListNestingLevel, getListIndent } from './list-indent';
 import { blockReplaceField, type BlockReplaceState } from './block-replace-field';
+// WHY direct import despite the module cycle (fields → atomic-delete-guard →
+// fields): widgetOf is only called INSIDE function bodies, never at module-eval
+// time, so the cycle resolves the same way as the documented live-preview one.
+import { widgetOf } from './atomic-delete-guard';
 
 // ─── Structural StateField ────────────────────────────────────────────────────
 
-// WHY: Filter the structural decoration set down to just CheckboxWidget
-// replace ranges, then surface them via EditorView.atomicRanges. Cursor
-// commands (cursorLeft, moveByChar, Home/End) jump over the widget instead
-// of landing inside its replaced range. Implicit Decoration.replace
-// atomicity is browser-inconsistent at line-end boundaries; the explicit
-// facet makes the contract uniform.
-function checkboxAtomicRanges(decs: DecorationSet): DecorationSet {
+// WHY: Filter the structural decoration set down to the inline ATOMIC widgets —
+// CheckboxWidget and ImageWidget replace ranges — then surface them via
+// EditorView.atomicRanges. Cursor commands (cursorLeft, moveByChar, Home/End)
+// jump over the widget instead of landing inside its replaced range; Shift+Arrow
+// selects the atom whole in one step. Implicit Decoration.replace atomicity is
+// browser-inconsistent at line-end boundaries; the explicit facet makes the
+// contract uniform. (Table-block anchors register the same facet via
+// blockReplaceField's `atomic` option.)
+function inlineAtomicRanges(decs: DecorationSet): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   decs.between(0, Number.MAX_SAFE_INTEGER, (from, to, dec) => {
-    const spec = (dec as unknown as { spec: { widget?: unknown } }).spec;
-    if (spec.widget instanceof CheckboxWidget) builder.add(from, to, dec);
+    const widget = widgetOf(dec);
+    if (widget instanceof CheckboxWidget || widget instanceof ImageWidget) builder.add(from, to, dec);
   });
   return builder.finish();
 }
@@ -61,7 +67,7 @@ export const livePreviewField = StateField.define<DecorationSet>({
   },
   provide: (f) => [
     EditorView.decorations.from(f),
-    EditorView.atomicRanges.of(view => checkboxAtomicRanges(view.state.field(f))),
+    EditorView.atomicRanges.of(view => inlineAtomicRanges(view.state.field(f))),
   ],
 });
 
@@ -167,13 +173,15 @@ export const tableRenderField = blockReplaceField(buildTableDecorationsWithBound
 // INVARIANT: the table block widget is ALWAYS rendered (no reveal-raw-on-cursor like
 // tableRenderField/GFM). Why: its cells are `contenteditable` — editing happens IN the
 // widget, so collapsing it to raw text on cursor would make editing impossible. The raw
-// `![label](table:id)` anchor is never shown; deletion goes through the widget controls.
-// The same invariant is why this field is ATOMIC (`atomic: true`): the hidden anchor text
-// must never receive a caret or a partial edit — motion skips it as one unit and a
-// Backspace that reaches it removes the whole anchor, never a mangled fragment that
-// orphans the table behind the error plate (same contract CheckboxWidget registers via
-// livePreviewField). Why not the cursorSensitive siblings: they reveal raw markdown
-// under the caret, so their ranges must stay enterable.
+// `![label](table:id)` anchor is never shown. The same invariant is why this field is
+// ATOMIC (`atomic: true`): the hidden anchor text must never receive a caret or a
+// partial edit — motion skips it as one unit. One-key deletes that reach the anchor
+// (from either edge, or a line join into/out of its line) are SWALLOWED by
+// atomic-delete-guard.ts — PINNED USER RULE: «мы не удаляем таблицу/картинку одним
+// символом — только выделив её целиком» (we never delete a table/image with a single
+// character — only by selecting it whole). Removal = a selection covering the anchor
+// whole + Backspace/Delete, or the widget's own controls. Why not the cursorSensitive
+// siblings: they reveal raw markdown under the caret, so their ranges must stay enterable.
 function buildTableBlockDecorations(state: EditorState): DecorationSet {
   const ranges: Range<Decoration>[] = [];
 

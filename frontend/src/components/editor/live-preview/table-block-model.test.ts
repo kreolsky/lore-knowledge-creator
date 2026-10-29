@@ -10,16 +10,12 @@ import {
   getTablesMap,
   createTable,
   readTableModel,
-  cloneTable,
-  deleteTable,
-  setCellText,
   setColumnWidth,
   addRow,
   addColumn,
   removeRow,
   removeColumn,
   tableAnchor,
-  reconcileTables,
   serializeTables,
   applyTablesJson,
   modelToGfm,
@@ -46,8 +42,9 @@ describe('createTable / readTableModel', () => {
   it('creates a table from a cell-body matrix and reads it back', () => {
     const id = createTable(doc, [['a', 'b'], ['c', 'd']]);
     expect(typeof id).toBe('string');
+    // New columns are AUTO (w=0, content-driven) — see AUTO_COLUMN_WIDTH.
     expect(readTableModel(doc, id)).toEqual({
-      columns: [DEFAULT_COLUMN_WIDTH, DEFAULT_COLUMN_WIDTH],
+      columns: [0, 0],
       rows: [['a', 'b'], ['c', 'd']],
     });
   });
@@ -70,26 +67,7 @@ describe('createTable / readTableModel', () => {
   });
 });
 
-describe('cloneTable (copy-paste of an anchor)', () => {
-  it('clones content under a fresh id (no aliasing of one model)', () => {
-    const src = createTable(doc, [['a', 'b']]);
-    const dst = cloneTable(doc, src);
-    expect(dst).not.toBe(src);
-    expect(readTableModel(doc, dst)).toEqual(readTableModel(doc, src));
-    // Mutating the clone must not touch the source (deep copy, not shared Y.Text).
-    setCellText(doc, dst, 0, 0, 'changed');
-    expect(readTableModel(doc, dst)!.rows[0][0]).toBe('changed');
-    expect(readTableModel(doc, src)!.rows[0][0]).toBe('a');
-  });
-});
-
 describe('cell + structure mutations', () => {
-  it('setCellText replaces a cell body', () => {
-    const id = createTable(doc, [['a', 'b'], ['c', 'd']]);
-    setCellText(doc, id, 1, 0, 'X');
-    expect(readTableModel(doc, id)!.rows[1][0]).toBe('X');
-  });
-
   it('setColumnWidth writes the px width', () => {
     const id = createTable(doc, [['a', 'b']]);
     setColumnWidth(doc, id, 1, 240);
@@ -102,12 +80,18 @@ describe('cell + structure mutations', () => {
     expect(readTableModel(doc, id)!.rows).toEqual([['a', 'b'], ['', '']]);
   });
 
-  it('addColumn appends an empty cell to every row + a default width', () => {
+  it('addColumn appends an empty cell to every row + an AUTO (0) width', () => {
     const id = createTable(doc, [['a'], ['b']]);
     addColumn(doc, id);
     const m = readTableModel(doc, id)!;
     expect(m.rows).toEqual([['a', ''], ['b', '']]);
-    expect(m.columns).toEqual([DEFAULT_COLUMN_WIDTH, DEFAULT_COLUMN_WIDTH]);
+    expect(m.columns).toEqual([0, 0]);
+  });
+
+  it('GFM import creates all-AUTO columns (w=0)', () => {
+    const { text } = importGfmTables(doc, '| A | B |\n| --- | --- |\n| 1 | 2 |', 't');
+    const id = [...text.matchAll(TABLE_ANCHOR_RE)][0][2];
+    expect(readTableModel(doc, id)!.columns).toEqual([0, 0]);
   });
 
   it('removeRow drops a row', () => {
@@ -128,41 +112,6 @@ describe('cell + structure mutations', () => {
 describe('tableAnchor', () => {
   it('builds the transclusion anchor', () => {
     expect(tableAnchor('My table', 'abc')).toBe('![My table](table:abc)');
-  });
-});
-
-describe('reconcileTables (anchor ↔ model lifecycle)', () => {
-  it('deletes a model whose anchor is gone (orphan model cleanup)', () => {
-    const id = createTable(doc, [['a']]);
-    // content has NO anchor for it → model is orphaned.
-    reconcileTables(doc, 'some text without anchors');
-    expect(getTablesMap(doc).has(id)).toBe(false);
-  });
-
-  it('keeps a model that still has its anchor', () => {
-    const id = createTable(doc, [['a']]);
-    reconcileTables(doc, `intro ${tableAnchor('t', id)} outro`);
-    expect(getTablesMap(doc).has(id)).toBe(true);
-  });
-
-  it('clones the model for a DUPLICATED anchor and rewrites content to the new id', () => {
-    const id = createTable(doc, [['a']]);
-    const content = `${tableAnchor('t', id)}\n\n${tableAnchor('t', id)}`;
-    const { content: rewritten, changed } = reconcileTables(doc, content);
-    expect(changed).toBe(true);
-    // Two distinct ids now exist (one original + one clone).
-    expect(getTablesMap(doc).size).toBe(2);
-    // The rewritten content references two different ids.
-    const ids = [...rewritten.matchAll(/\(table:([^)]+)\)/g)].map((m) => m[1]);
-    expect(ids.length).toBe(2);
-    expect(new Set(ids).size).toBe(2);
-  });
-
-  it('is a no-op (changed=false) when anchors and models already match 1:1', () => {
-    const id = createTable(doc, [['a']]);
-    const content = tableAnchor('t', id);
-    const { changed } = reconcileTables(doc, content);
-    expect(changed).toBe(false);
   });
 });
 

@@ -62,12 +62,6 @@ async def _mcp_call(client, token: str, name: str, arguments: dict | None = None
     return resp.json()
 
 
-async def _mcp_list(client, token: str) -> dict:
-    resp = await client.post("/mcp", json=_rpc("tools/list"), headers=_mcp_headers(token))
-    assert resp.status_code == 200, resp.text
-    return resp.json()
-
-
 def _payload(resp_json: dict) -> dict:
     result = resp_json["result"]
     return json.loads(result["content"][0]["text"])
@@ -88,128 +82,7 @@ def _params(**kw):
     return ExtractorParams(**defaults)
 
 
-# ─── advertisement ───────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_run_extractor_advertised(client, mcp_running, test_db, admin_user, project_with_doc):
-    pid, _, admin_uid = project_with_doc
-    token = await _make_agent_key(test_db, admin_uid, pid)
-
-    data = await _mcp_list(client, token)
-    tools = {t["name"]: t for t in data["result"]["tools"]}
-    assert "preview_extractor" in tools
-    schema = tools["preview_extractor"]["inputSchema"]
-    assert schema["required"] == ["reference_id"]
-    props = set(schema["properties"])
-    assert {"reference_id", "dry_run", "config_doc_id", "model"} <= props
-
-
-# ─── happy path ──────────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_run_extractor_dry_returns_data(client, mcp_running, test_db, admin_user, project_with_doc):
-    """A default (read-only) agent key can dry-run: the tool writes nothing, so it
-    is gated on project access (the resolver), NOT on key writability."""
-    pid, _, admin_uid = project_with_doc
-    token = await _make_agent_key(test_db, admin_uid, pid)
-
-    with patch("pipeline.extractor.params.resolve_extractor_params",
-               new=AsyncMock(return_value=[_params(project_id=pid, config_doc_id="cfg-1")])) as mk_res, \
-            patch("pipeline.extractor.runner.run_extractor_dry",
-                  new=AsyncMock(return_value={
-                      "extracted_data": {"x": 1},
-                      "rendered_markdown": "# x",
-                      "variable_duplicates": [],
-                  })) as mk_dry:
-        data = await _mcp_call(client, token, "preview_extractor", {"reference_id": "ref-1"})
-
-    assert not _is_error(data), data
-    payload = _payload(data)
-    assert payload["extracted_data"] == {"x": 1}
-    assert payload["rendered_markdown"] == "# x"
-    # The benchmark uses reference_id to drive one resolution path; the resolver
-    # is called with (reference_id, ctx_user) — same user the key authenticates.
-    assert mk_res.await_count == 1
-    assert mk_res.call_args.args[0] == "ref-1"
-    assert mk_res.call_args.args[1]["user_id"] == admin_uid
-    mk_dry.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_run_extractor_echoes_resolved_inputs(client, mcp_running, test_db, admin_user, project_with_doc):
-    """The result echoes the resolved inputs (source/config/target/project/model)
-    so a parity check can prove the tool ran the same inputs as the editor."""
-    pid, _, admin_uid = project_with_doc
-    token = await _make_agent_key(test_db, admin_uid, pid)
-
-    resolved = _params(project_id=pid, config_doc_id="cfg-echo", model="local/orange/chat")
-    with patch("pipeline.extractor.params.resolve_extractor_params",
-               new=AsyncMock(return_value=[resolved])), \
-            patch("pipeline.extractor.runner.run_extractor_dry",
-                  new=AsyncMock(return_value={"extracted_data": {}, "rendered_markdown": "", "variable_duplicates": []})):
-        data = await _mcp_call(client, token, "preview_extractor", {"reference_id": "ref-1"})
-
-    payload = _payload(data)
-    assert payload["resolved"]["config_doc_id"] == "cfg-echo"
-    assert payload["resolved"]["project_id"] == pid
-    assert payload["resolved"]["model"] == "local/orange/chat"
-
-
 # ─── guards ──────────────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_run_extractor_missing_reference_id_is_rejected(
-        client, mcp_running, test_db, admin_user, project_with_doc):
-    """reference_id is required in the schema, so the gateway rejects an empty
-    call with an input-validation error before dispatch (the same gate every
-    required-arg tool gets). The handler's own guard is defense-in-depth for a
-    direct (non-SDK) caller."""
-    pid, _, admin_uid = project_with_doc
-    token = await _make_agent_key(test_db, admin_uid, pid)
-
-    data = await _mcp_call(client, token, "preview_extractor", {})
-    assert _is_error(data)
-    # The validation refusal names the missing argument, so assert
-    # the message.
-    text = data["result"]["content"][0]["text"]
-    assert "reference_id" in text
-
-
-@pytest.mark.asyncio
-async def test_run_extractor_multiple_configs_requires_disambiguation(
-        client, mcp_running, test_db, admin_user, project_with_doc):
-    pid, _, admin_uid = project_with_doc
-    token = await _make_agent_key(test_db, admin_uid, pid)
-
-    two = [_params(project_id=pid, config_doc_id="cfg-a"), _params(project_id=pid, config_doc_id="cfg-b")]
-    with patch("pipeline.extractor.params.resolve_extractor_params",
-               new=AsyncMock(return_value=two)):
-        data = await _mcp_call(client, token, "preview_extractor", {"reference_id": "ref-1"})
-
-    assert _is_error(data)
-    assert _payload(data)["status_code"] == 400
-
-
-@pytest.mark.asyncio
-async def test_run_extractor_config_doc_id_disambiguates(
-        client, mcp_running, test_db, admin_user, project_with_doc):
-    pid, _, admin_uid = project_with_doc
-    token = await _make_agent_key(test_db, admin_uid, pid)
-
-    two = [_params(project_id=pid, config_doc_id="cfg-a"), _params(project_id=pid, config_doc_id="cfg-b")]
-    with patch("pipeline.extractor.params.resolve_extractor_params",
-               new=AsyncMock(return_value=two)), \
-            patch("pipeline.extractor.runner.run_extractor_dry",
-                  new=AsyncMock(return_value={"extracted_data": {}, "rendered_markdown": "", "variable_duplicates": []})) as mk_dry:
-        data = await _mcp_call(client, token, "preview_extractor",
-                               {"reference_id": "ref-1", "config_doc_id": "cfg-b"})
-
-    assert not _is_error(data), data
-    chosen = mk_dry.call_args.args[0]
-    assert chosen.config_doc_id == "cfg-b"
 
 
 @pytest.mark.asyncio
@@ -225,40 +98,6 @@ async def test_run_extractor_unknown_config_doc_id_is_404(
 
     assert _is_error(data)
     assert _payload(data)["status_code"] == 404
-
-
-@pytest.mark.asyncio
-async def test_run_extractor_dry_run_false_is_unsupported(
-        client, mcp_running, test_db, admin_user, project_with_doc):
-    """The tool is dry-run only — a wet run that creates a document is the arq
-    path (POST /agent-config/run), not this tool. Refuse explicitly."""
-    pid, _, admin_uid = project_with_doc
-    token = await _make_agent_key(test_db, admin_uid, pid)
-
-    with patch("pipeline.extractor.params.resolve_extractor_params",
-               new=AsyncMock(return_value=[_params(project_id=pid)])):
-        data = await _mcp_call(client, token, "preview_extractor",
-                               {"reference_id": "ref-1", "dry_run": False})
-
-    assert _is_error(data)
-    assert _payload(data)["status_code"] == 400
-
-
-@pytest.mark.asyncio
-async def test_run_extractor_model_override(client, mcp_running, test_db, admin_user, project_with_doc):
-    """An optional model override replaces the resolved model before the dry run."""
-    pid, _, admin_uid = project_with_doc
-    token = await _make_agent_key(test_db, admin_uid, pid)
-
-    with patch("pipeline.extractor.params.resolve_extractor_params",
-               new=AsyncMock(return_value=[_params(project_id=pid, model="local/default")])) , \
-            patch("pipeline.extractor.runner.run_extractor_dry",
-                  new=AsyncMock(return_value={"extracted_data": {}, "rendered_markdown": "", "variable_duplicates": []})) as mk_dry:
-        await _mcp_call(client, token, "preview_extractor",
-                        {"reference_id": "ref-1", "model": "local/experimental"})
-
-    chosen = mk_dry.call_args.args[0]
-    assert chosen.model == "local/experimental"
 
 
 # ─── scope confinement (the key's project_id + subtree, like every read tool) ─

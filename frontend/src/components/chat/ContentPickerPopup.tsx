@@ -35,9 +35,13 @@ const POPUP_ESTIMATED_HEIGHT = 380;
 // lists ALL project references (cross-doc included), fetched on open. The
 // /references endpoint hard-caps at limit ≤ 1000 with no server title filter;
 // the picker filters client-side. When the response hits the cap the list is
-// truncated to the newest N (server order = created_at DESC) — surfaced via a
+// truncated (server order = host parent_id, NOT recency) — surfaced via a
 // non-blocking notice (no-silent-degradation: an absent ref must not look like
 // "no such ref").
+// INVARIANT: the anchor document's own + ancestors' refs are fetched separately
+// (?document_id=, uncapped by the project page) and merged in. Why: the nearest
+// refs must always head the list; the capped project page dropped them when the
+// project held >1000 refs.
 const REFS_LIMIT = 1000;
 
 type Tab = 'documents' | 'references';
@@ -71,10 +75,14 @@ export function ContentPickerPopup({ sessionId, selectedDocIds, selectedRefIds, 
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
-    apiClient.get(`/references?project_id=${projectId}&limit=${REFS_LIMIT}`)
-      .then((refs: Reference[]) => {
+    const anchorRefs: Promise<Reference[]> = anchorDocId
+      ? apiClient.get(`/references?document_id=${anchorDocId}&limit=${REFS_LIMIT}`)
+      : Promise.resolve([]);
+    Promise.all([apiClient.get(`/references?project_id=${projectId}&limit=${REFS_LIMIT}`), anchorRefs])
+      .then(([refs, nearRefs]: [Reference[], Reference[]]) => {
         if (cancelled) return;
-        setProjectReferences(refs);
+        const seen = new Set(refs.map(r => r.reference_id));
+        setProjectReferences([...refs, ...nearRefs.filter(r => !seen.has(r.reference_id))]);
         setRefsTruncated(refs.length >= REFS_LIMIT);
       })
       .catch(() => {
@@ -87,7 +95,7 @@ export function ContentPickerPopup({ sessionId, selectedDocIds, selectedRefIds, 
       });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot fetch on open; the popup (un)mounts on close. t/references deliberately read fresh.
-  }, [projectId]);
+  }, [projectId, anchorDocId]);
 
   const [activeTab, setActiveTab] = useState<Tab>(initialTab ?? 'documents');
   const [searchQuery, setSearchQuery] = useState('');

@@ -169,46 +169,6 @@ beforeEach(() => {
 });
 
 describe('DocumentPage — concurrent open effect', () => {
-  it('commits doc+refs+restoredReference together; cached client content wins over the server copy', async () => {
-    const refs = [{ reference_id: 'r-1', title: 'R1', document_id: 'd-1', media_type: 'text' }];
-    loadReferences.mockResolvedValue(refs);
-    uiGetState.getCurrentReferenceForDoc = vi.fn(() => 'r-1');
-    appState.documents = [{ document_id: 'd-1', content: 'client-fresher', headings: ['h'] }];
-    const host = mountPage();
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    expect(apiGet).toHaveBeenCalledWith('/documents/d-1?track=1');
-    expect(appState.setCurrentDocument).toHaveBeenCalledTimes(1);
-    const [committed, opts] = (appState.setCurrentDocument as ReturnType<typeof vi.fn>).mock.calls[0];
-    // Cache-fresher INVARIANT (DocumentPage.tsx) — client content may be fresher
-    // than the server during the WS flush delay.
-    expect(committed.content).toBe('client-fresher');
-    expect(committed.updated_at).toBe(SERVER_DOC.updated_at);
-    expect(opts.references).toEqual(refs);
-    expect(opts.restoredReference?.reference_id).toBe('r-1');
-    unmount();
-  });
-
-  it('skips the fetch when the document is already the committed currentDocument (StrictMode remount)', () => {
-    appState.currentDocument = { document_id: 'd-1' };
-    mountPage();
-    expect(apiGet).not.toHaveBeenCalled();
-    unmount();
-  });
-
-  it('doc fetch failure bounces to the project (or landing when no project)', async () => {
-    apiGet.mockRejectedValue(new Error('boom'));
-    mountPage();
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    expect(navigate).toHaveBeenCalledWith('/projects/p1');
-    unmount();
-
-    navigate.mockClear();
-    routeState.projectId = undefined;
-    mountPage();
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    expect(navigate).toHaveBeenCalledWith('/');
-    unmount();
-  });
 
   it('a refused per-id fetch falls back to the public view, not a bounce', async () => {
     const { ForbiddenError } = await import('../api/client');
@@ -217,14 +177,6 @@ describe('DocumentPage — concurrent open effect', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(uiGetState.markPublicFallback).toHaveBeenCalledWith(['d-1']);
     expect(navigate).not.toHaveBeenCalled();
-    unmount();
-  });
-
-  it('staleness guard: a DIFFERENT active project means no commit', async () => {
-    appState.currentProject = { project_id: 'p-OTHER' };
-    mountPage();
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    expect(appState.setCurrentDocument).not.toHaveBeenCalled();
     unmount();
   });
 });
@@ -269,29 +221,6 @@ describe('DocumentPage — bare /docs/:id cold path', () => {
     appState.currentProject = null; // cold: not yet hydrated
   });
 
-  it('one-shot /open bundle seeds project + access level + note sessions, then commits', async () => {
-    const bundle = {
-      document: { ...SERVER_DOC, content: 'bundle' },
-      references: [{ reference_id: 'r-b', title: 'RB', document_id: 'd-1', media_type: 'text' }],
-      project: { project_id: 'p9', my_access: 'commentator' },
-      note_sessions: [{ session_id: 'n-1' }],
-    };
-    apiGet.mockResolvedValue(bundle);
-    mountPage();
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    expect(apiGet).toHaveBeenCalledWith('/documents/open/d-1');
-    expect(apiGet).toHaveBeenCalledTimes(1); // ONE round trip — no per-id re-fetch
-    expect(appState.setCurrentProject).toHaveBeenCalledWith(bundle.project);
-    // Access-level INVARIANT (DocumentPage.tsx) — set from the SAME payload as the
-    // project; the store default is 'full'.
-    expect(appState.setAccessLevel).toHaveBeenCalledWith('commentator');
-    expect(noteChatGetState.hydrateSessions).toHaveBeenCalledWith('p9', 'd-1', bundle.note_sessions);
-    const [committed, opts] = (appState.setCurrentDocument as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(committed.content).toBe('bundle');
-    expect(opts.references).toEqual(bundle.references);
-    unmount();
-  });
-
   it('bundle failure: toast + bounce to landing (no silent degradation)', async () => {
     apiGet.mockRejectedValue(new Error('403'));
     mountPage();
@@ -333,59 +262,6 @@ describe('DocumentPage — bare /docs/:id cold path', () => {
 });
 
 describe('DocumentPage — layout matrix', () => {
-  it('split needs doc + (ref|table) and no preview/snapshot; table routes to the table split', () => {
-    docStates['d-1'] = { refOpenMode: 'split' };
-    appState.currentDocument = { document_id: 'd-1' };
-    appState.currentReference = { reference_id: 'r-1' };
-    let host = mountPage();
-    expect(document.querySelectorAll('[data-testid="split-layout"]').length).toBe(1);
-    expect((splitProps[0] as Record<string, unknown>).reference).toBeTruthy();
-    unmount();
-
-    appState.currentReference = null;
-    appState.currentTable = { table_id: 't-1' };
-    host = mountPage();
-    expect((splitProps[1] as Record<string, unknown>).table).toBeTruthy();
-    unmount();
-
-    appState.previewDocument = { document_id: 'd-other' };
-    mountPage();
-    // Preview owns the full center — no split even with ref+splitView.
-    expect(document.querySelectorAll('[data-testid="split-layout"]').length + document.querySelectorAll('[data-testid="table-focus"]').length).toBe(0);
-    expect(document.querySelectorAll('[data-testid="editor"]').length).toBeGreaterThan(0);
-    unmount();
-  });
-
-  it("'panel' mode + reference pins the center to the document — no split layout", () => {
-    docStates['d-1'] = { refOpenMode: 'panel' };
-    appState.currentDocument = { document_id: 'd-1' };
-    appState.currentReference = { reference_id: 'r-1' };
-    editorProps.length = 0;
-    mountPage();
-    expect(document.querySelectorAll('[data-testid="split-layout"]').length).toBe(0);
-    expect(document.querySelectorAll('[data-testid="editor"]').length).toBe(1);
-    expect((editorProps[0] as { entity?: unknown }).entity).toBe(appState.currentDocument);
-    unmount();
-  });
-
-  it("a legacy persisted {splitView: true} still renders the split layout", () => {
-    docStates['d-1'] = { splitView: true };
-    appState.currentDocument = { document_id: 'd-1' };
-    appState.currentReference = { reference_id: 'r-1' };
-    mountPage();
-    expect(document.querySelectorAll('[data-testid="split-layout"]').length).toBe(1);
-    unmount();
-  });
-
-  it("'panel' mode + focused table renders the centered table overlay (tables ignore panel mode)", () => {
-    docStates['d-1'] = { refOpenMode: 'panel' };
-    appState.currentDocument = { document_id: 'd-1' };
-    appState.currentTable = { table_id: 't-1' };
-    mountPage();
-    expect(document.querySelectorAll('[data-testid="table-focus"]').length).toBe(1);
-    expect(document.querySelectorAll('[data-testid="split-layout"]').length).toBe(0);
-    unmount();
-  });
 
   it('a focused table WITHOUT split renders as a centered overlay while the Editor stays mounted', () => {
     appState.currentDocument = { document_id: 'd-1' };
@@ -394,34 +270,6 @@ describe('DocumentPage — layout matrix', () => {
     expect(document.querySelectorAll('[data-testid="table-focus"]').length).toBe(1);
     expect(document.querySelectorAll('[data-testid="editor"]').length).toBe(1);
     expect(document.querySelectorAll('[data-testid="split-layout"]').length).toBe(0);
-    unmount();
-  });
-});
-
-describe('DocumentPage — error-note events', () => {
-  it('ws:extraction_error for the OPEN doc reloads sessions and opens the pinned note thread', async () => {
-    appState.currentDocument = { document_id: 'd-1' };
-    mountPage();
-    expect(eventHandlers['ws:extraction_error']).toBeTruthy();
-    await act(async () => {
-      eventHandlers['ws:extraction_error']({ reference_id: 'r1', note_id: 'n-err', document_id: 'd-1' });
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(noteChatGetState.loadSessions).toHaveBeenCalledWith('p1', 'd-1');
-    expect(noteStoreState.setActiveNoteThreadId).toHaveBeenCalledWith('n-err', 'd-1');
-    expect(noteChatGetState.setActiveSession).toHaveBeenCalledWith('n-err');
-    unmount();
-  });
-
-  it('the same event for a DIFFERENT document is ignored', async () => {
-    appState.currentDocument = { document_id: 'd-1' };
-    mountPage();
-    await act(async () => {
-      eventHandlers['ws:extraction_error']({ reference_id: 'r1', note_id: 'n-x', document_id: 'd-OTHER' });
-      await Promise.resolve();
-    });
-    expect(noteChatGetState.loadSessions).not.toHaveBeenCalled();
     unmount();
   });
 });

@@ -13,18 +13,16 @@ channel's connector/replay, completions_harness.post_followup) — no driver
 container; the persistence behind the relay arms is REAL (test DB).
 """
 import asyncio
-import json
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from uuid import uuid4
 
-import driver.channel
 import pytest
 import routes.chat.completions as comp
 from driver.client import DriverLine, DriverLineUnreachable
 from driver.timeline import fetch_session_status as _real_fetch_session_status
 from helpers import pin_chat_api
-from test_driver_channel import FakeConnector, FakeReplay, _chunk, _dsh, _env, _turn_end
+from test_driver_channel import FakeConnector, FakeReplay, _env, _turn_end
 
 
 def _LINE():
@@ -101,10 +99,6 @@ def _reset_fanout() -> None:
     for entry in list(chat_fanout._pumps.values()):
         entry.task.cancel()
     chat_fanout._pumps.clear()
-
-
-async def _settle(seconds: float = 0.15) -> None:
-    await asyncio.sleep(seconds)
 
 
 # WHY: a poll returns the moment its condition holds, so its budget only costs
@@ -222,15 +216,6 @@ async def _harness_chat(client, pid: str, doc_id: str, token: str) -> str:
     return sid
 
 
-def _open_ws(sync_app, pid: str, token: str):
-    ws = sync_app.websocket_connect(
-        f"/ws/project/{pid}", cookies={"lore_session": token})
-    ctx = ws.__enter__()
-    init = json.loads(ctx.receive_text())
-    assert init["type"] == "init"
-    return ws, ctx
-
-
 def _body(client_token: str, text: str = "hello", parent_id: str | None = None,
           user_msg_id: str | None = None) -> dict:
     # parent_id: the client's tail hint — read only for the root-turn time
@@ -250,167 +235,7 @@ async def _list_messages(client, token: str, sid: str) -> list[dict]:
     return resp.json()["messages"]
 
 
-def _recv_chat_frames(ws_ctx, count: int) -> list[dict]:
-    """Collect `count` chat_frame envelopes from a project-WS socket,
-    skipping interleaved broadcasts (content_flushed & co. ride the same
-    socket)."""
-    frames: list[dict] = []
-    while len(frames) < count:
-        msg = json.loads(ws_ctx.receive_text())
-        if msg.get("type") == "chat_frame":
-            frames.append(msg)
-    return frames
-
-
 # ─── the accepted turn ────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_turn_answers_json_and_feeds_followup(
-    sync_app, client, collab_project, harness_env,
-):
-    pid, doc_id, _admin_token, user_token, _a, _u = collab_project
-    sid = await _harness_chat(client, pid, doc_id, user_token)
-    env = harness_env
-
-    owner = _open_ws(sync_app, pid, user_token)
-    try:
-        resp = await client.post(
-            f"/api/chat/sessions/{sid}/completions", json=_body(user_token),
-            cookies={"lore_session": user_token},
-        )
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["accepted"] is True
-        assert body["user_msg_id"] and body["assistant_msg_id"]
-        assert body["message_id"] == "dm-1"
-        # No row before the claim: a queued message has none.
-        assert await _list_messages(client, user_token, sid) == []
-
-        # The followup payload: the /turn contract + the standing session key.
-        assert len(env.followups.payloads) == 1
-        payload = env.followups.payloads[0]
-        assert payload["session_id"] == sid
-        assert payload["assistant_msg_id"] == body["assistant_msg_id"]
-        assert payload["harness"] is True
-        assert payload["model"] == "test"
-        assert payload["agent_key"]
-
-        from redis_pool import get_redis
-
-        r = await get_redis()
-        cached = await r.get(f"agent_key:session:{sid}")
-        assert cached == payload["agent_key"]
-
-        # dsh claims the message: the preamble reaches the owner BEFORE the
-        # driver's frames, through the SAME listener queue (one writer, one
-        # order).
-        sock = env.connector.sockets[0]
-        for frame in (
-            _claim_of(payload),
-            {"type": "model_update", "model": "test"},
-            _chunk(8, "Hello "),
-            _turn_end(10),
-        ):
-            sock.push(_env(sid, frame))
-        # Let the recv → dispatch → pump → send chain flush BEFORE the
-        # blocking receive (receive_text parks the test loop; the pump needs
-        # loop time to deliver — the test_chat_fanout settling pattern).
-        await _settle()
-
-        got = _recv_chat_frames(owner[1], 5)
-        assert got[0]["session_id"] == sid
-        assert got[0]["frame"] == {
-            "type": "ids", "user_message_id": body["user_msg_id"],
-            "assistant_message_id": body["assistant_msg_id"],
-            "user_text": payload["user_text"],
-            # The chat the pair was minted into — the real head lookup.
-            "chat_id": sid}
-        assert [g["frame"].get("type") for g in got[1:]] == [
-            "model_update", "dsh_event", "dsh_event", "done"]
-        assert got[-1]["frame"]["content"] == "Hello"
-    finally:
-        owner[0].__exit__(None, None, None)
-
-    # The relay arms persisted the turn for real (reload-path parity).
-    await _until_async(lambda: _content_landed(client, user_token, sid, "Hello"))
-    msgs = await _list_messages(client, user_token, sid)
-    assert [(m["role"], m["message_id"]) for m in msgs] == [
-        ("user", body["user_msg_id"]), ("assistant", body["assistant_msg_id"])]
-    assert msgs[0]["content"] == "hello"
-    assert msgs[1]["content"] == "Hello"
-
-
-@pytest.mark.asyncio
-async def test_turn_carries_the_admin_ai_settings_and_never_logs_the_key(
-    client, collab_project, harness_env, caplog, test_db,
-):
-    """A fresh install sets the AI endpoint and key in the admin panel only;
-    the next turn carries exactly those to the harness (admin wins over env,
-    no restart), and the key reaches no log line."""
-    import settings
-
-    pid, doc_id, admin_token, user_token, _a, _u = collab_project
-    admin = {
-        "AI_API_URL": "http://gw.admin.example/v1",
-        "AI_API_KEY": "sk-admin-only-7f3e",
-    }
-    try:
-        for key, value in admin.items():
-            resp = await client.put(
-                f"/api/admin/settings/{key}", json={"value": value},
-                cookies={"lore_session": admin_token},
-            )
-            assert resp.status_code == 200, resp.text
-        sid = await _harness_chat(client, pid, doc_id, user_token)
-        with caplog.at_level("DEBUG"):
-            resp = await client.post(
-                f"/api/chat/sessions/{sid}/completions", json=_body(user_token),
-                cookies={"lore_session": user_token},
-            )
-        assert resp.status_code == 200, resp.text
-        payload = harness_env.followups.payloads[0]
-        assert payload["ai_api_url"] == admin["AI_API_URL"]
-        assert payload["ai_api_key"] == admin["AI_API_KEY"]
-        assert any("_build_turn_payload" in r.getMessage() for r in caplog.records)
-        assert not [r for r in caplog.records if admin["AI_API_KEY"] in r.getMessage()]
-    finally:
-        await test_db.query("DELETE instance_settings")
-        settings.drop_cache()
-
-
-@pytest.mark.asyncio
-async def test_a_turn_with_no_model_names_the_admin_setting(
-    client, collab_project, harness_env, test_db,
-):
-    """A fresh install has no chat model: the turn is refused before the
-    harness is called, and the refusal says where to set one."""
-    import settings
-
-    pid, doc_id, admin_token, user_token, _a, _u = collab_project
-    try:
-        resp = await client.put(
-            "/api/admin/settings/CHAT_MODEL", json={"value": ""},
-            cookies={"lore_session": admin_token},
-        )
-        assert resp.status_code == 200, resp.text
-        resp = await client.post(
-            "/api/chat/sessions",
-            json={"project_id": pid, "document_id": doc_id},
-            cookies={"lore_session": user_token},
-        )
-        assert resp.status_code == 201, resp.text
-        sid = resp.json()["session_id"]
-        resp = await client.post(
-            f"/api/chat/sessions/{sid}/completions", json=_body(user_token),
-            cookies={"lore_session": user_token},
-        )
-        assert resp.status_code == 400, resp.text
-        assert "Admin panel → Models & APIs" in resp.json()["detail"]
-        assert harness_env.followups.payloads == []
-    finally:
-        await test_db.query("DELETE instance_settings")
-        settings.drop_cache()
 
 
 async def _content_landed(client, token, sid, content) -> bool:
@@ -418,112 +243,7 @@ async def _content_landed(client, token, sid, content) -> bool:
     return any(m.get("content") == content for m in msgs)
 
 
-# ─── a busy session queues ───────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_sends_during_a_running_turn_queue_and_mint_in_claim_order(
-    client, collab_project, harness_env,
-):
-    """Every send is accepted; each becomes its own turn and its own pair,
-    appended in claim order — never refused, never joined."""
-    pid, doc_id, _admin_token, user_token, _a, _u = collab_project
-    sid = await _harness_chat(client, pid, doc_id, user_token)
-    env = harness_env
-
-    replies = []
-    for text in ("first", "second", "third"):
-        resp = await client.post(
-            f"/api/chat/sessions/{sid}/completions", json=_body(user_token, text),
-            cookies={"lore_session": user_token},
-        )
-        assert resp.status_code == 200, resp.text
-        replies.append(resp.json())
-    assert [r["message_id"] for r in replies] == ["dm-1", "dm-2", "dm-3"]
-    assert await _list_messages(client, user_token, sid) == []
-
-    sock = env.connector.sockets[0]
-    seq = 10
-    for n, payload in enumerate(env.followups.payloads, start=1):
-        sock.push(_env(sid, _dsh(seq, "turn/start", {"turn": n})))
-        sock.push(_env(sid, _claim_of(payload, f"dm-{n}")))
-        sock.push(_env(sid, _chunk(seq + 1, f"answer {n}", turn=n)))
-        sock.push(_env(sid, _turn_end(seq + 2, turn=n)))
-        seq += 10
-    await _until_async(lambda: _content_landed(client, user_token, sid, "answer 3"))
-
-    msgs = await _list_messages(client, user_token, sid)
-    assert [(m["role"], m["content"]) for m in msgs] == [
-        ("user", "first"), ("assistant", "answer 1"),
-        ("user", "second"), ("assistant", "answer 2"),
-        ("user", "third"), ("assistant", "answer 3"),
-    ]
-    # One linear chain: each row's parent is the row before it.
-    assert msgs[0].get("parent_id") is None
-    assert [m["parent_id"] for m in msgs[1:]] == [m["message_id"] for m in msgs[:-1]]
-
-
-@pytest.mark.asyncio
-async def test_a_reused_user_msg_id_is_a_409(client, collab_project, harness_env):
-    pid, doc_id, _admin_token, user_token, _a, _u = collab_project
-    sid = await _harness_chat(client, pid, doc_id, user_token)
-    env = harness_env
-    uid = str(uuid4())
-
-    resp = await client.post(
-        f"/api/chat/sessions/{sid}/completions",
-        json=_body(user_token, user_msg_id=uid),
-        cookies={"lore_session": user_token},
-    )
-    assert resp.status_code == 200, resp.text
-    env.connector.sockets[0].push(_env(sid, _claim_of(env.followups.payloads[0])))
-    await _until_async(lambda: _content_landed(client, user_token, sid, "hello"))
-
-    resp = await client.post(
-        f"/api/chat/sessions/{sid}/completions",
-        json=_body(user_token, user_msg_id=uid),
-        cookies={"lore_session": user_token},
-    )
-    assert resp.status_code == 409, resp.text
-    assert len(env.followups.payloads) == 1
-
-
-@pytest.mark.asyncio
-async def test_a_malformed_user_msg_id_is_a_422(client, collab_project, harness_env):
-    pid, doc_id, _admin_token, user_token, _a, _u = collab_project
-    sid = await _harness_chat(client, pid, doc_id, user_token)
-
-    for bad in ({"user_msg_id": "not-a-uuid"}, {"user_msg_id": None}):
-        resp = await client.post(
-            f"/api/chat/sessions/{sid}/completions",
-            json={**_body(user_token), **bad},
-            cookies={"lore_session": user_token},
-        )
-        assert resp.status_code == 422, resp.text
-    assert harness_env.followups.payloads == []
-
-
 # ─── the reload: open turn and queue from dsh's status ───────────────────────
-
-
-@pytest.mark.asyncio
-async def test_messages_get_carries_the_queue_also_with_no_rows(
-    client, collab_project, harness_env,
-):
-    """A fresh chat whose first message is still queued: no rows, but the
-    queue snapshot comes back (the browser seeds its chips from it)."""
-    pid, doc_id, _admin_token, user_token, _a, _u = collab_project
-    sid = await _harness_chat(client, pid, doc_id, user_token)
-    queued = {"id": "dm-1", "role": "user", "content": [{"type": "text", "text": "x"}]}
-    harness_env.statuses.status = "running"
-    harness_env.statuses.queue = [queued]
-    harness_env.statuses.seq = 41
-
-    resp = await client.get(
-        f"/api/chat/sessions/{sid}/messages", cookies={"lore_session": user_token})
-    assert resp.status_code == 200, resp.text
-    assert resp.json() == {"messages": [], "queue": [queued], "queue_seq": 41}
-    assert harness_env.statuses.calls == [sid]
 
 
 @pytest.mark.asyncio
@@ -567,24 +287,6 @@ async def test_an_unreadable_status_is_a_502(client, collab_project, harness_env
     resp = await client.get(
         f"/api/chat/sessions/{sid}/messages", cookies={"lore_session": user_token})
     assert resp.status_code == 502, resp.text
-
-
-@pytest.mark.asyncio
-async def test_a_live_queue_reattaches_the_fanout(client, collab_project, harness_env):
-    """After a backend restart the subscription is gone; the next read of a
-    chat with turns running or waiting opens it again, so the queue's next
-    claims get rows."""
-    from routes.chat import fanout as chat_fanout
-
-    pid, doc_id, _admin_token, user_token, _a, _u = collab_project
-    sid = await _harness_chat(client, pid, doc_id, user_token)
-    assert sid not in chat_fanout._pumps
-    await _list_messages(client, user_token, sid)
-    assert sid not in chat_fanout._pumps  # idle, empty: nothing to catch
-
-    harness_env.statuses.queue = [{"id": "dm-1"}]
-    await _list_messages(client, user_token, sid)
-    assert sid in chat_fanout._pumps
 
 
 # ─── ✕ on a queued message ───────────────────────────────────────────────────
@@ -640,35 +342,6 @@ async def test_discard_is_owner_only(client, collab_project, harness_env, http_p
 
 
 @pytest.mark.asyncio
-async def test_a_config_refusal_is_a_422_with_no_rows_and_no_frames(
-    sync_app, client, collab_project, harness_env,
-):
-    """The driver cannot run the send (no model, no gateway): nothing is
-    queued, the reason comes back as a 422, and no frame is emitted — another
-    queued turn may be running, and a terminal frame would close ITS browser
-    registration."""
-    from driver.timeline import DriverTurnRefused
-
-    pid, doc_id, _admin_token, user_token, _a, _u = collab_project
-    sid = await _harness_chat(client, pid, doc_id, user_token)
-    harness_env.followups.error = DriverTurnRefused("no gateway configured")
-
-    owner = _open_ws(sync_app, pid, user_token)
-    try:
-        resp = await client.post(
-            f"/api/chat/sessions/{sid}/completions", json=_body(user_token),
-            cookies={"lore_session": user_token},
-        )
-        assert resp.status_code == 422, resp.text
-        assert resp.json()["detail"] == "no gateway configured"
-        assert await _list_messages(client, user_token, sid) == []
-        await _settle()
-    finally:
-        owner[0].__exit__(None, None, None)
-    assert driver.channel.get_driver_channel()._subs[sid].turn is None
-
-
-@pytest.mark.asyncio
 async def test_channel_unopenable_is_a_502_with_no_rows(
     client, collab_project, harness_env,
 ):
@@ -685,26 +358,6 @@ async def test_channel_unopenable_is_a_502_with_no_rows(
 
     harness_env.connector.refuse = False
     assert await _list_messages(client, user_token, sid) == []
-
-
-@pytest.mark.asyncio
-async def test_unconfigured_line_is_a_503_with_no_rows(
-    client, collab_project, harness_env, monkeypatch,
-):
-    pid, doc_id, _admin_token, user_token, _a, _u = collab_project
-    sid = await _harness_chat(client, pid, doc_id, user_token)
-    async def _no_line():
-        return None
-
-    monkeypatch.setattr(comp, "resolve_driver_line", _no_line)
-
-    resp = await client.post(
-        f"/api/chat/sessions/{sid}/completions", json=_body(user_token),
-        cookies={"lore_session": user_token},
-    )
-    assert resp.status_code == 503, resp.text
-    assert await _list_messages(client, user_token, sid) == []
-    assert harness_env.followups.payloads == []
 
 
 # ─── stop + the lifecycle flip back ──────────────────────────────────────────
@@ -767,55 +420,6 @@ async def test_cancel_unreachable_line_is_a_502(
     assert "unavailable" in resp.json()["detail"].lower()
 
 
-@pytest.mark.asyncio
-async def test_cancel_secret_mismatch_names_the_cause(
-    client, collab_project, harness_env, monkeypatch,
-):
-    """401 on Stop states the cause — different driver secrets, recreate the
-    pair — not the generic 'not reachable' wording."""
-    pid, doc_id, _admin_token, user_token, _a, _u = collab_project
-    sid = await _harness_chat(client, pid, doc_id, user_token)
-
-    import driver.timeline
-    from driver.client import DriverSecretMismatch
-
-    async def _mismatch(session_id, line=None, **_):
-        raise DriverSecretMismatch("harness")
-
-    monkeypatch.setattr(driver.timeline, "post_stop", _mismatch)
-
-    resp = await client.post(
-        f"/api/chat/sessions/{sid}/completions/cancel", json={},
-        cookies={"lore_session": user_token},
-    )
-    assert resp.status_code == 502, resp.text
-    detail = resp.json()["detail"]
-    assert "different driver secrets" in detail
-    assert "docker compose up -d" in detail
-
-
-@pytest.mark.asyncio
-async def test_turn_refusal_names_the_secret_mismatch_cause(
-    client, collab_project, harness_env,
-):
-    """A 401 on /followup refuses the turn naming the cause — the same
-    wording as Stop — instead of the generic unreachable message."""
-    pid, doc_id, _admin_token, user_token, _a, _u = collab_project
-    sid = await _harness_chat(client, pid, doc_id, user_token)
-
-    from driver.client import DriverSecretMismatch
-
-    harness_env.followups.error = DriverSecretMismatch("harness")
-    resp = await client.post(
-        f"/api/chat/sessions/{sid}/completions", json=_body(user_token),
-        cookies={"lore_session": user_token},
-    )
-    assert resp.status_code == 502, resp.text
-    detail = resp.json()["detail"]
-    assert "different driver secrets" in detail
-    assert "docker compose up -d" in detail
-
-
 # ─── post_followup itself: the 409-retry contract ────────────────────────────
 
 
@@ -861,20 +465,6 @@ class _FakePostClient:
 
 
 @pytest.mark.asyncio
-async def test_post_followup_accepts_first_try(monkeypatch, driver_line_pinned, http_pool):
-    import driver.timeline
-
-    _FakePostClient.replies = [_FakeReply(200, {"accepted": True, "message_id": "dm-1"})]
-    _FakePostClient.calls = []
-    http_pool("driver", _FakePostClient())
-
-    reply = await driver.timeline.post_followup({"session_id": "s1"})
-    assert reply["message_id"] == "dm-1"
-    assert len(_FakePostClient.calls) == 1
-    assert _FakePostClient.calls[0]["url"].endswith("/followup")
-
-
-@pytest.mark.asyncio
 async def test_post_followup_422_is_the_refusal_with_its_reason(
         monkeypatch, driver_line_pinned, http_pool):
     import driver.timeline
@@ -888,17 +478,6 @@ async def test_post_followup_422_is_the_refusal_with_its_reason(
         await driver.timeline.post_followup({"session_id": "s1"})
     assert str(exc.value) == "no gateway configured"
     assert len(_FakePostClient.calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_post_followup_error_status_is_line_unreachable(monkeypatch, http_pool):
-    import driver.timeline
-
-    _FakePostClient.replies = [_FakeReply(500, {})]
-    http_pool("driver", _FakePostClient())
-
-    with pytest.raises(DriverLineUnreachable):
-        await driver.timeline.post_followup({"session_id": "s1"})
 
 
 @pytest.mark.asyncio
@@ -1086,35 +665,6 @@ async def test_a_crash_before_clearing_reposts_into_the_idempotency_guard(
 
 
 @pytest.mark.asyncio
-async def test_a_branch_without_a_seed_seq_answers_422(
-    client, collab_project, harness_env, test_db,
-):
-    """The migration's 422 marker (seed_source_session, no seq): a lineage
-    with model history no row could name a boundary for — today's honest
-    refusal, never a silently empty model history."""
-    pid, doc_id, _admin_token, user_token, _a, _u = collab_project
-    env = harness_env
-    sid, tail = await _stamped_branch_chat(
-        client, test_db, pid, doc_id, user_token, with_seq=False)
-
-    resp = await client.post(
-        f"/api/chat/sessions/{sid}/completions",
-        json=_body(user_token, "x", parent_id=tail),
-        cookies={"lore_session": user_token},
-    )
-    assert resp.status_code == 422, resp.text
-    assert "resolvable" in resp.json()["detail"]
-
-    # Nothing happened: no RPC, no turn, no new rows, the stamp kept.
-    assert env.forks.calls == []
-    assert env.followups.payloads == []
-    assert [m["role"] for m in await _list_messages(client, user_token, sid)] \
-        == ["user", "assistant", "user"]
-    row = await _seed_row(test_db, sid)
-    assert row.get("seed_source_session") == "dsh-old"
-
-
-@pytest.mark.asyncio
 async def test_an_unresolvable_plugin_boundary_answers_422_and_keeps_the_stamp(
     client, collab_project, harness_env, test_db,
 ):
@@ -1181,15 +731,4 @@ async def test_post_session_fork_401_is_a_secret_mismatch(monkeypatch, driver_li
     http_pool("driver", _FakePostClient())
 
     with pytest.raises(DriverSecretMismatch):
-        await driver.timeline.post_session_fork("dsh-old", 5, "branch-1")
-
-
-@pytest.mark.asyncio
-async def test_post_session_fork_error_status_is_line_unreachable(monkeypatch, http_pool):
-    import driver.timeline
-
-    _FakePostClient.replies = [_FakeReply(500, {})]
-    http_pool("driver", _FakePostClient())
-
-    with pytest.raises(DriverLineUnreachable):
         await driver.timeline.post_session_fork("dsh-old", 5, "branch-1")

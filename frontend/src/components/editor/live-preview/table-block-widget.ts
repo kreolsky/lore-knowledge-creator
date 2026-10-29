@@ -19,7 +19,7 @@
  * shape is unchanged (only column widths are patched).
  *
  * INVARIANT: the live Y.Doc is resolved by the view's ENTITY, never the focused slot
- * (getViewEntity/tableHostEntity → subscribeEntityHandle; legacy no-entity hosts get a
+ * (getViewEntity → subscribeEntityHandle; hosts without a `viewEntity` provider get a
  * one-shot slot read). Why: the slot follows FOCUS, so in split view at read time it is
  * null or the OTHER column's handle — binding it renders the wrong ydoc; identity is the
  * only correct address here. A null handle (mount race) renders a transient empty state,
@@ -35,18 +35,21 @@
  * no nested cell EditorViews, no column-resize handles, no add/delete toolbar, and no
  * `claimNestedView` — every write path is closed so a preview can never mutate state.
  */
-import { WidgetType, EditorView, keymap } from '@codemirror/view';
+import { WidgetType, EditorView, ViewPlugin, keymap } from '@codemirror/view';
 import { EditorState, Prec, Compartment } from '@codemirror/state';
 import { insertNewlineAndIndent } from '@codemirror/commands';
 import * as Y from 'yjs';
 import { subscribeEntityHandle } from '../../../collab/active-handle-registry';
-import { claimNestedView, getActiveHandle, getViewEntity } from '../../../editor/active-editor';
+import { claimNestedView, getActiveHandle, getEditorView, getViewEntity } from '../../../editor/active-editor';
+import { createArmedAction } from '../../../hooks/useArmedAction';
+import { selectionFeedPlugin } from '../../../editor/editor-observer';
 import { createYjsExtension } from '../../../collab/yjs-binding';
 import { editableCellExtensions } from '../render-bundle';
-import { revealAtCursor } from './effects';
-import { tableDocSource, tableHostEntity } from './table-doc-source';
+import { linkContextChanged, revealAtCursor } from './effects';
+import { selectImageAt } from './widgets';
+import { tableDocSource, viewEntity } from './table-doc-source';
 import { renderCellStatic, isPlainCellText } from './cell-static-render';
-import { useUIStore } from '../../../store/ui-store';
+import { ESTIMATED_ROW_HEIGHT, TABLE_WRAP_PADDING } from './table-widget';
 import { t } from '../../../i18n';
 import {
   getTablesMap,
@@ -63,9 +66,6 @@ import {
   tableAnchor,
   type TableModel,
 } from './table-block-model';
-
-const ESTIMATED_ROW_HEIGHT = 38;
-const WRAP_PADDING = 8;
 
 // Toolbar icons (vanilla DOM widget → inline SVG). Confluence-style table row/column
 // glyphs (fill-based, 16-viewBox), rendered at 15px in currentColor.
@@ -109,6 +109,31 @@ export function requestTableFocus(tableId: string): void {
   pendingFocusTableId = tableId;
 }
 
+/** Cell editor host → its click mount path (`ensureCellEditor`), so a drag hovering a
+ * never-focused cell can mount it (drop-target.editorDropPoint). WeakMap: a structural
+ * rebuild replaces the host, and the dead one must be collectable. */
+const lazyCellMounters = new WeakMap<HTMLElement, () => EditorView | null>();
+
+/** Mount (or return) the cell editor of a placeholder host; null for a host that is
+ * stale after a rebuild or belongs to no editable cell. */
+export function mountLazyCell(host: Element): EditorView | null {
+  const mount = lazyCellMounters.get(host as HTMLElement);
+  return mount ? mount() : null;
+}
+
+/** Relays a host's embed-map refresh (`linkContextChanged`, dispatched to the host view
+ * only) into its mounted cell editors. WHY: a cell renders the same embeds; without the
+ * relay an image dropped into a cell before the map knew its reference stays raw text
+ * until the next selection change. */
+export const cellLinkContextRelay = ViewPlugin.define((view) => ({
+  update(update) {
+    if (!update.transactions.some((tr) => tr.effects.some((e) => e.is(linkContextChanged)))) return;
+    for (const el of view.dom.querySelectorAll('.cm-table-block-cell-editor > .cm-editor')) {
+      EditorView.findFromDOM(el as HTMLElement)?.dispatch({ effects: linkContextChanged.of(null) });
+    }
+  },
+}));
+
 export class TableBlockWidget extends WidgetType {
   private unobserve: (() => void) | null = null;
   /** Entity-handle late-bind subscription — dropped once bound or on destroy. */
@@ -136,16 +161,16 @@ export class TableBlockWidget extends WidgetType {
   private renderedRowCount = 2;
   /** Last rendered column count (cheap-shape short-circuit in `render`). */
   private lastColCount = 0;
-  // SYSTEM: armed-action — double-click-to-confirm for the table delete buttons. The
-  // toolbar is plain DOM (not React), so useArmedAction cannot apply; this mirrors its
-  // logic (L24–42) in vanilla form. State lives on the INSTANCE (not buildToolbar's local
-  // scope) because buildToolbar is re-invoked on every structural change (incl. collaborative
-  // edits), so the armed visual must survive and be re-applied from instance state.
-  private armedRow = false;
-  private armedCol = false;
-  private rowArmTimer: ReturnType<typeof setTimeout> | undefined;
-  private colArmTimer: ReturnType<typeof setTimeout> | undefined;
-  private static readonly ARM_TIMEOUT = 2000;
+  // see SYSTEM: armed-action — the delete buttons hold the pattern's non-React core
+  // (createArmedAction), keyed 'row' | 'col': the toolbar is plain DOM (not React), so
+  // the hook cannot apply. The core lives on the INSTANCE (not buildToolbar's local
+  // scope) because buildToolbar is re-invoked on every structural change (incl.
+  // collaborative edits), so the armed visual must survive and be re-applied from
+  // instance state.
+  private readonly armedAction = createArmedAction<'row' | 'col'>(2000, (armed) => {
+    this.setBtnArmed('row', armed === 'row');
+    this.setBtnArmed('col', armed === 'col');
+  });
 
   constructor(readonly tableId: string, readonly label: string) {
     super();
@@ -180,7 +205,7 @@ export class TableBlockWidget extends WidgetType {
       // (shape miss → the destructive "remove anchor?" affordance on a healthy
       // table; removeAnchor would cut the ref text while deleteTable no-ops on the
       // doc ydoc).
-      const entityId = view.state.facet(tableHostEntity) ?? getViewEntity(view);
+      const entityId = getViewEntity(view);
       if (entityId) {
         // WHY: the subscription lives for the WIDGET's lifetime, not just until the
         // first bind — a REPLACED entity handle (re-join landing a new ydoc for the
@@ -191,8 +216,8 @@ export class TableBlockWidget extends WidgetType {
           this.attachDoc(handle.ydoc);
         });
       } else {
-        // No registered entity (legacy hosts): one-shot slot read exactly as before —
-        // blank until a remount if the handle has not landed yet.
+        // No `viewEntity` provider (PublicEditor, nested transclusion views): one-shot
+        // slot read — blank until a remount if the handle has not landed yet.
         const ydoc = getActiveHandle()?.ydoc ?? null;
         if (ydoc) this.attachDoc(ydoc);
       }
@@ -254,17 +279,17 @@ export class TableBlockWidget extends WidgetType {
     this.tableEl = this.buildTable(model);
     this.renderedRowCount = shape.rows;
     this.lastColCount = shape.cols;
-    // No toolbar on a read-only host (preview) — the add/delete/resize affordances are
-    // all write paths and have no place in a pure viewer.
+    // No toolbar on a read-only host (preview) — the add/delete/resize
+    // affordances are all write paths and have no place in a pure viewer.
     if (this.readOnly) {
-      wrap.replaceChildren(this.tableEl);
+      wrap.replaceChildren(this.buildScroller(this.tableEl));
     } else {
       this.toolbarEl = this.buildToolbar();
-      wrap.replaceChildren(this.tableEl, this.toolbarEl);
+      wrap.replaceChildren(this.buildScroller(this.tableEl), this.toolbarEl);
     }
     this.scheduleDeferredRenders();
     // New cell editors mount and lay out over the next frame — re-measure so CM6 reserves
-    // the table's real height (see the cellActiveViewListener INVARIANT on overflow/clicks).
+    // the table's real height (see the cellMeasureListener WHY on overflow/clicks).
     requestAnimationFrame(() => {
       this.view?.requestMeasure();
       this.syncToolbarWidth();
@@ -276,10 +301,27 @@ export class TableBlockWidget extends WidgetType {
    * WHY not `width: fit-content` on the wrap: it collapsed the CM6 block widget to zero
    * height (the table vanished). Instead the wrap stays full width and the toolbar is
    * sized to the table's rendered width, so its right-aligned buttons meet the table edge.
+   * Clamped to the scroller's visible width — an overflowing fixed table must not push
+   * the buttons off-screen (the toolbar never scrolls with the table).
    */
   private syncToolbarWidth(): void {
     if (!this.toolbarEl || !this.tableEl) return;
-    this.toolbarEl.style.width = `${this.tableEl.offsetWidth}px`;
+    const visible = this.tableEl.parentElement?.clientWidth ?? Number.MAX_SAFE_INTEGER;
+    this.toolbarEl.style.width = `${Math.min(this.tableEl.offsetWidth, visible)}px`;
+  }
+
+  /**
+   * Horizontal scroller around the TABLE only. WHY: fixed px widths that sum
+   * past the document column must scroll INSIDE the
+   * block, never widen the page. overflow-y is explicit — with only overflow-x
+   * set it computes to auto and adds an inner vertical scrollbar, which breaks
+   * block-widget height measurement. The toolbar stays OUTSIDE.
+   */
+  private buildScroller(table: HTMLTableElement): HTMLElement {
+    const scroller = document.createElement('div');
+    scroller.className = 'cm-table-block-scroll';
+    scroller.appendChild(table);
+    return scroller;
   }
 
   private applyColumnWidths(widths: number[]): void {
@@ -287,7 +329,9 @@ export class TableBlockWidget extends WidgetType {
     if (!cols) return;
     widths.forEach((w, i) => {
       const col = cols[i] as HTMLTableColElement | undefined;
-      if (col) col.style.width = `${w}px`;
+      // 0 = AUTO: CLEAR the width, never skip — a reset of a previously fixed
+      // column must drop its old px, or the col element keeps rendering it.
+      if (col) col.style.width = w === 0 ? '' : `${w}px`;
     });
   }
 
@@ -298,7 +342,7 @@ export class TableBlockWidget extends WidgetType {
     const colgroup = document.createElement('colgroup');
     for (const w of model.columns) {
       const col = document.createElement('col');
-      col.style.width = `${w}px`;
+      col.style.width = w === 0 ? '' : `${w}px`; // 0 = AUTO → empty width
       colgroup.appendChild(col);
     }
     table.appendChild(colgroup);
@@ -380,6 +424,10 @@ export class TableBlockWidget extends WidgetType {
       const v = this.ensureCellEditor(row, col);
       if (!v) return;
       e.preventDefault();
+      // A press on an image selects it whole — the same gesture the mounted cell's image
+      // widget handles itself; the placeholder copy it replaced had no handler.
+      const img = document.elementFromPoint(e.clientX, e.clientY)?.closest('.cm-image-embed');
+      if (img && v.contentDOM.contains(img)) { selectImageAt(v, img); return; }
       const pos = v.posAtCoords({ x: e.clientX, y: e.clientY }, false) ?? v.state.doc.length;
       v.focus();
       v.dispatch({ selection: { anchor: pos } });
@@ -402,11 +450,20 @@ export class TableBlockWidget extends WidgetType {
     if (deferred) this.deferredRenders.push(`${row}:${col}`);
     cell.appendChild(editorHost);
     this.cellHosts.set(`${row}:${col}`, editorHost);
+    lazyCellMounters.set(editorHost, () => (
+      this.cellHosts.get(`${row}:${col}`) === editorHost ? this.ensureCellEditor(row, col) : null
+    ));
 
     if (tag === 'th') {
       const handle = document.createElement('div');
       handle.className = 'cm-table-block-col-resize';
       handle.addEventListener('mousedown', (e) => this.startColResize(e, col, cell));
+      // Double-click = back to auto (an equal share of the free width).
+      handle.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (this.doc) setColumnWidth(this.doc, this.tableId, col, 0);
+      });
       cell.appendChild(handle);
     }
     return cell;
@@ -443,6 +500,8 @@ export class TableBlockWidget extends WidgetType {
         doc: ytext.toString(),
         extensions: [
           editableCellExtensions(),
+          // A cell belongs to its host's entity (image drop, paste placement).
+          viewEntity.of(this.view ? getViewEntity(this.view) : null),
           revealComp.of(revealAtCursor.of(false)),
           EditorView.domEventHandlers({
             // WHY echo the selection: the live-preview StateFields rebuild on
@@ -450,39 +509,40 @@ export class TableBlockWidget extends WidgetType {
             // facet-only toggle would leave the decorations stale (formatting stuck
             // revealed). Re-setting the current range forces the rebuild that re-reads
             // revealAtCursor.
-            focus: (_e, v) => { v.dispatch({ effects: revealComp.reconfigure(revealAtCursor.of(true)), selection: v.state.selection }); return false; },
-            blur: (_e, v) => { v.dispatch({ effects: revealComp.reconfigure(revealAtCursor.of(false)), selection: v.state.selection }); return false; },
+            // Claimed on the DOM focus event, like the document (editor-extension-bundle):
+            // the cell is the active editor before anything it dispatches is published.
+            focus: (_e, v) => { claimNestedView(v); v.dispatch({ effects: revealComp.reconfigure(revealAtCursor.of(true)), selection: v.state.selection }); return false; },
+            // WHY deferred: any dispatch re-checks focus, so a synchronous one here reports
+            // focus loss mid-transfer — before focus lands in the image toolbar's field,
+            // which then closed under the click. CM6 defers its own focus notice the same way.
+            blur: (_e, v) => {
+              setTimeout(() => {
+                if (v.dom.isConnected && !v.hasFocus) v.dispatch({ effects: revealComp.reconfigure(revealAtCursor.of(false)), selection: v.state.selection });
+              }, 0);
+              return false;
+            },
           }),
           createYjsExtension(ytext),
           this.cellNavKeymap(row, col),
-          this.cellActiveViewListener(),
+          this.cellMeasureListener(),
         ],
       }),
     });
     this.cellViews.set(key, view);
     // A newly-mounted editor lays out over the next frame — re-measure so CM6 reserves the
-    // cell's real height (see the cellActiveViewListener INVARIANT on overflow/clicks).
+    // cell's real height (see the cellMeasureListener WHY on overflow/clicks).
     this.view?.requestMeasure();
     return view;
   }
 
-  /**
-   * Register the focused cell as the ACTIVE editor view so the document's shared UI —
-   * the selection formatting toolbar (reads getEditorView() + UI-store selectionEmpty) —
-   * targets this cell. On blur, restore the outer document view so the toolbar follows
-   * focus back. Without this the toolbar never appears for a cell (its view is unknown).
-   */
-  private cellActiveViewListener() {
+  /** Re-measures the host when a cell's geometry changes. The cell's ACTIVE-editor claim
+   * is its focus handler (ensureCellEditor); blur hands nothing back, exactly like the
+   * document — focus moving into the toolbar's size field keeps the cell active, and
+   * whichever editor takes focus next claims it itself (teardownCells covers a cell view
+   * that dies while active). */
+  private cellMeasureListener() {
     const outer = this.view;
     return EditorView.updateListener.of((update) => {
-      const cellView = update.view;
-      if (update.focusChanged) {
-        if (cellView.hasFocus) claimNestedView(cellView);
-        else if (outer) claimNestedView(outer);
-      }
-      if ((update.selectionSet || update.focusChanged) && cellView.hasFocus) {
-        useUIStore.getState().setSelectionEmpty(cellView.state.selection.main.empty);
-      }
       // WHY: a cell's height can grow AFTER the block widget was first measured
       // (yCollab fills/wraps content asynchronously). CM6 reserves block-widget height from a
       // one-time DOM measure, so without forcing a re-measure the grown table overflows its  Why: CM6 measures block-widget height once; yCollab fills content async and a cell can grow later, so without a forced re-measure the table overflows its reserved height.
@@ -507,7 +567,6 @@ export class TableBlockWidget extends WidgetType {
     return Prec.highest(keymap.of([
       { key: 'Tab', run: () => this.tabNext(row, col),
         shift: () => this.tabPrev(row, col) },
-      { key: 'Enter', run: insertNewlineAndIndent },
       { key: 'Shift-Enter', run: insertNewlineAndIndent },
     ]));
   }
@@ -515,13 +574,12 @@ export class TableBlockWidget extends WidgetType {
   /** Tab: next cell (wrapping row→row). Tab on the last (bottom-right) cell exits the table. */
   private tabNext(row: number, col: number): boolean {
     if (!this.doc) return true;
-    const model = readTableModel(this.doc, this.tableId);
-    if (!model) return true;
-    const cols = model.columns.length;
+    const shape = readTableShape(this.doc, this.tableId);
+    if (!shape) return true;
     let c = col + 1;
     let r = row;
-    if (c >= cols) { c = 0; r += 1; }
-    if (r >= model.rows.length) { this.exitAfterTable(); return true; }
+    if (c >= shape.cols) { c = 0; r += 1; }
+    if (r >= shape.rows) { this.exitAfterTable(); return true; }
     this.focusCell(r, c);
     return true;
   }
@@ -529,12 +587,11 @@ export class TableBlockWidget extends WidgetType {
   /** Shift-Tab: previous cell (wrapping row→row); no-op at the first cell. */
   private tabPrev(row: number, col: number): boolean {
     if (!this.doc) return true;
-    const model = readTableModel(this.doc, this.tableId);
-    if (!model) return true;
-    const cols = model.columns.length;
+    const shape = readTableShape(this.doc, this.tableId);
+    if (!shape) return true;
     let c = col - 1;
     let r = row;
-    if (c < 0) { c = cols - 1; r -= 1; }
+    if (c < 0) { c = shape.cols - 1; r -= 1; }
     if (r < 0) return true;
     this.focusCell(r, c);
     return true;
@@ -569,6 +626,12 @@ export class TableBlockWidget extends WidgetType {
   }
 
   private teardownCells(): void {
+    // An active cell view about to die hands the slot to its host. WHY the plugin check:
+    // a host mid-destroy (document switch) has dropped its plugins — never reactivate it.
+    const active = getEditorView();
+    if (active && [...this.cellViews.values()].includes(active) && this.view?.plugin(selectionFeedPlugin)) {
+      claimNestedView(this.view);
+    }
     for (const view of this.cellViews.values()) view.destroy();
     this.cellViews.clear();
     this.cellHosts.clear();
@@ -656,48 +719,38 @@ export class TableBlockWidget extends WidgetType {
     bar.appendChild(mk(ICON_DELETE_COL, t('tableDeleteColumn'),
       () => this.onDeleteButton('col'), { dataAct: ACT_DELETE_COL }));
     // disarm-on-mouseleave mirrors useArmedAction's React usage (e.g. RefCard onMouseLeave);
-    // leaving an armed button cancels the pending confirmation.
-    bar.querySelector(`[data-act="${ACT_DELETE_ROW}"]`)?.addEventListener('mouseleave', () => this.disarm('row'));
-    bar.querySelector(`[data-act="${ACT_DELETE_COL}"]`)?.addEventListener('mouseleave', () => this.disarm('col'));
+    // leaving an armed button cancels the pending confirmation. Only the button whose
+    // key is armed disarms — the other kind's arm survives.
+    const disarmIfArmed = (kind: 'row' | 'col') => {
+      if (this.armedAction.armed === kind) this.armedAction.disarm();
+    };
+    bar.querySelector(`[data-act="${ACT_DELETE_ROW}"]`)?.addEventListener('mouseleave', () => disarmIfArmed('row'));
+    bar.querySelector(`[data-act="${ACT_DELETE_COL}"]`)?.addEventListener('mouseleave', () => disarmIfArmed('col'));
     // Re-apply the armed visual from instance state onto THIS bar (not this.toolbarEl,
     // which still points at the previous toolbar until render() reassigns it after we
     // return). A collaborative structural edit rebuilds this toolbar mid-arm, so without
     // this a red button would reset to idle.
-    if (this.armedRow) {
-      const b = bar.querySelector(`[data-act="${ACT_DELETE_ROW}"]`);
-      if (b) b.className = BTN_ARMED;
-    }
-    if (this.armedCol) {
-      const b = bar.querySelector(`[data-act="${ACT_DELETE_COL}"]`);
+    const armed = this.armedAction.armed;
+    if (armed) {
+      const b = bar.querySelector(`[data-act="${armed === 'row' ? ACT_DELETE_ROW : ACT_DELETE_COL}"]`);
       if (b) b.className = BTN_ARMED;
     }
     return bar;
   }
 
   /**
-   * Armed delete handler: first activation arms the button (turns it solid red), second
-   * activation executes the delete and disarms. The minimum row/column guard runs BEFORE
-   * arming so a no-op delete (last row/column) never shows a misleading armed state;
-   * doDelete* keeps its own guard as a defensive second check.
+   * Armed delete handler (see SYSTEM: armed-action): first activation arms the
+   * button (turns it solid red), second activation executes the delete and
+   * disarms. The minimum row/column guard runs BEFORE arming so a no-op delete
+   * (last row/column) never shows a misleading armed state; doDelete* keeps its
+   * own guard as a defensive second check.
    */
   private onDeleteButton(kind: 'row' | 'col'): void {
-    if (kind === 'row') {
-      if (!this.armedRow) {
-        if (!this.canDelete('row')) return;
-        this.arm('row');
-        return;
-      }
-      this.disarm('row');
-      this.doDeleteRow();
-    } else {
-      if (!this.armedCol) {
-        if (!this.canDelete('col')) return;
-        this.arm('col');
-        return;
-      }
-      this.disarm('col');
-      this.doDeleteColumn();
-    }
+    if (this.armedAction.armed !== kind && !this.canDelete(kind)) return;
+    this.armedAction.handleClick(
+      kind,
+      kind === 'row' ? () => this.doDeleteRow() : () => this.doDeleteColumn(),
+    );
   }
 
   /**
@@ -726,48 +779,18 @@ export class TableBlockWidget extends WidgetType {
     if (btn) btn.className = armed ? BTN_ARMED : BTN_IDLE;
   }
 
-  /**
-   * Arm a delete button: mutual-disarm the other kind (two red buttons never coexist),
-   * set the flag, start the auto-disarm timer, and apply the armed class.
-   */
-  private arm(kind: 'row' | 'col'): void {
-    this.disarm(kind === 'row' ? 'col' : 'row');
-    if (kind === 'row') {
-      this.armedRow = true;
-      this.rowArmTimer = setTimeout(() => this.disarm('row'), TableBlockWidget.ARM_TIMEOUT);
-    } else {
-      this.armedCol = true;
-      this.colArmTimer = setTimeout(() => this.disarm('col'), TableBlockWidget.ARM_TIMEOUT);
-    }
-    this.setBtnArmed(kind, true);
-  }
-
-  /** Disarm a delete button: clear flag + timer and revert the armed class. */
-  private disarm(kind: 'row' | 'col'): void {
-    if (kind === 'row') {
-      if (!this.armedRow) return;
-      this.armedRow = false;
-      if (this.rowArmTimer) { clearTimeout(this.rowArmTimer); this.rowArmTimer = undefined; }
-    } else {
-      if (!this.armedCol) return;
-      this.armedCol = false;
-      if (this.colArmTimer) { clearTimeout(this.colArmTimer); this.colArmTimer = undefined; }
-    }
-    this.setBtnArmed(kind, false);
-  }
-
   private doDeleteRow(): void {
     if (!this.doc || !this.canDelete('row')) return;
-    const model = readTableModel(this.doc, this.tableId);
-    if (!model) return; // lost a race — next observe tick retries
-    removeRow(this.doc, this.tableId, Math.min(this.activeCell.row, model.rows.length - 1));
+    const shape = readTableShape(this.doc, this.tableId);
+    if (!shape) return; // lost a race — next observe tick retries
+    removeRow(this.doc, this.tableId, Math.min(this.activeCell.row, shape.rows - 1));
   }
 
   private doDeleteColumn(): void {
     if (!this.doc || !this.canDelete('col')) return;
-    const model = readTableModel(this.doc, this.tableId);
-    if (!model) return; // lost a race — next observe tick retries
-    removeColumn(this.doc, this.tableId, Math.min(this.activeCell.col, model.columns.length - 1));
+    const shape = readTableShape(this.doc, this.tableId);
+    if (!shape) return; // lost a race — next observe tick retries
+    removeColumn(this.doc, this.tableId, Math.min(this.activeCell.col, shape.cols - 1));
   }
 
   /** Orphan anchor (no model / broken model) → explicit inline error + remove affordance. */
@@ -818,9 +841,8 @@ export class TableBlockWidget extends WidgetType {
 
   destroy(): void {
     this.teardownCells();
-    // Clear armed timers so a pending auto-disarm never fires on a dead widget.
-    if (this.rowArmTimer) { clearTimeout(this.rowArmTimer); this.rowArmTimer = undefined; }
-    if (this.colArmTimer) { clearTimeout(this.colArmTimer); this.colArmTimer = undefined; }
+    // Drop the armed core's timer so a pending auto-disarm never fires on a dead widget.
+    this.armedAction.dispose();
     this.unobserve?.();
     this.unobserve = null;
     this.unsubEntity?.();
@@ -847,6 +869,6 @@ export class TableBlockWidget extends WidgetType {
     // (and requestMeasure re-runs it). Materializing the full model (all cell strings) here
     // would allocate O(cells) per pass. The row count is cached at render time and is all the
     // estimate needs; before first render it falls back to 2 rows.
-    return this.renderedRowCount * ESTIMATED_ROW_HEIGHT + WRAP_PADDING;
+    return this.renderedRowCount * ESTIMATED_ROW_HEIGHT + TABLE_WRAP_PADDING;
   }
 }

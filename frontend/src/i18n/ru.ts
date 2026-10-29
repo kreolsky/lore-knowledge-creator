@@ -138,6 +138,11 @@ export const ru: Record<TranslationKey, string> = {
   fileTooLargePdf: 'PDF-файл должен быть менее {limit} МБ',
   fileTooLargeMarkdown: 'Текстовый файл должен быть менее {limit} МБ',
   unsupportedFileType: 'Неподдерживаемый тип файла: {name}',
+  dropImageIntoReferenceUnsupported: 'Изображение можно перетащить только в документ',
+  imageSize: 'Ширина изображения',
+  imageSizePlaceholder: '300, 50% или 500x400',
+  imageSizeInvalid: 'Ширина — в пикселях или процентах, например 300 или 50%',
+  removeImageEmbed: 'Убрать изображение',
   insert: 'Вставить',
   insertFileBelowCursorConfirm: 'Вставить содержимое файла под курсором?',
   importingFile: 'Импорт файла…',
@@ -285,6 +290,8 @@ export const ru: Record<TranslationKey, string> = {
 
   // compact layout
   compactToggleTree: 'Документы',
+  sidebarPin: 'Закрепить панель',
+  sidebarUnpin: 'Скрывать панель',
   compactOpenPanel: 'Открыть панель',
 
   // chat

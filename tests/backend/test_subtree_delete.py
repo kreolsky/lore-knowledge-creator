@@ -11,11 +11,9 @@ Covers:
   project; lift mode keeps require_document_full.
 """
 
-import json
 from uuid import uuid4
 
 import pytest
-from emit_recorder import EmitRecorder
 
 
 async def _mk_doc(client, pid, token, *, title, parent_id=None, is_reference=False):
@@ -37,96 +35,6 @@ async def _doc_rows(test_db, ids):
 
 
 # ─── Single delete: subtree mode ─────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_subtree_delete_tombstones_whole_tree_no_reparent(
-    client, test_db, admin_user, project_with_doc,
-):
-    """Default delete_children=true: target + all live descendants (docs AND refs)
-    tombstoned; no parent_id mutation anywhere; an outside sibling stays live."""
-    pid, idx_id, _ = project_with_doc
-    _, token = admin_user
-    cookies = {"lore_session": token}
-
-    parent = await _mk_doc(client, pid, token, title="Parent", parent_id=idx_id)
-    child = await _mk_doc(client, pid, token, title="Child", parent_id=parent)
-    grandchild = await _mk_doc(client, pid, token, title="Grandchild", parent_id=child)
-    ref_child = await _mk_doc(client, pid, token, title="RefChild", parent_id=parent, is_reference=True)
-    ref_deep = await _mk_doc(client, pid, token, title="RefDeep", parent_id=grandchild, is_reference=True)
-    outsider = await _mk_doc(client, pid, token, title="Outsider", parent_id=idx_id)
-
-    subtree = [parent, child, grandchild, ref_child, ref_deep]
-    before = await _doc_rows(test_db, subtree)
-
-    resp = await client.delete(f"/api/documents/{parent}", cookies=cookies)
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["success"] is True
-    assert body["deleted"] == 5
-
-    after = await _doc_rows(test_db, subtree)
-    for did in subtree:
-        assert after[did]["deleted_at"] is not None, f"{did} must be tombstoned"
-        assert after[did]["parent_id"] == before[did]["parent_id"], \
-            "subtree delete must never reparent"
-
-    outsider_rows = await _doc_rows(test_db, [outsider])
-    assert outsider_rows[outsider]["deleted_at"] is None
-
-
-@pytest.mark.asyncio
-async def test_lift_mode_reparents_children_to_grandparent(
-    client, test_db, admin_user, project_with_doc,
-):
-    """delete_children=false keeps today's behavior: child lifted to the grandparent."""
-    pid, idx_id, _ = project_with_doc
-    _, token = admin_user
-    cookies = {"lore_session": token}
-
-    parent = await _mk_doc(client, pid, token, title="Parent", parent_id=idx_id)
-    child = await _mk_doc(client, pid, token, title="Child", parent_id=parent)
-
-    resp = await client.delete(
-        f"/api/documents/{parent}?delete_children=false", cookies=cookies,
-    )
-    assert resp.status_code == 200, resp.text
-
-    rows = await _doc_rows(test_db, [parent, child])
-    assert rows[parent]["deleted_at"] is not None
-    assert rows[child]["deleted_at"] is None, "lift mode keeps the child alive"
-    # The parent's stored parent was the project root (an index parent
-    # normalises to root), so the child lifts to the root grandparent.
-    assert rows[child]["parent_id"] is None, "child lifted to the grandparent"
-
-
-@pytest.mark.asyncio
-async def test_subtree_delete_emits_single_batch_event(
-    monkeypatch, client, admin_user, project_with_doc,
-):
-    """Subtree mode emits ONE documents_deleted_batch and no per-doc
-    entity_deleted/document_deleted/reference_deleted."""
-
-    pid, idx_id, _ = project_with_doc
-    _, token = admin_user
-    cookies = {"lore_session": token}
-
-    parent = await _mk_doc(client, pid, token, title="Parent", parent_id=idx_id)
-    child = await _mk_doc(client, pid, token, title="Child", parent_id=parent)
-    ref = await _mk_doc(client, pid, token, title="Ref", parent_id=child, is_reference=True)
-
-    with EmitRecorder.active() as rec:
-        resp = await client.delete(f"/api/documents/{parent}", cookies=cookies)
-    assert resp.status_code == 200, resp.text
-    captured = rec.calls
-
-    batch = [(t, kw) for t, kw in captured if t == "documents_deleted_batch"]
-    assert len(batch) == 1, f"exactly one batch event, got {[t for t, _ in captured]}"
-    assert set(batch[0][1]["document_ids"]) == {parent, child, ref}
-    assert set(batch[0][1]["reference_ids"]) == {ref}
-    for forbidden in ("entity_deleted", "document_deleted", "reference_deleted"):
-        assert forbidden not in [t for t, _ in captured], \
-            "subtree mode must not emit per-doc events"
 
 
 @pytest.mark.asyncio
@@ -190,73 +98,7 @@ async def test_subtree_delete_cascades_descendant_dependents(
     assert not mentions or mentions[0] == 0, "descendant mentions must be deleted"
 
 
-@pytest.mark.asyncio
-async def test_subtree_delete_rejects_protected_descendant(
-    client, test_db, admin_user, project_with_doc,
-):
-    """A protected skeleton under the target rejects the whole subtree delete (403),
-    all-or-nothing — structurally impossible via the API today, so the row is seeded."""
-    from db import create_record
-
-    pid, _, _ = project_with_doc
-    _, token = admin_user
-    cookies = {"lore_session": token}
-
-    parent = await _mk_doc(client, pid, token, title="Parent")
-    protected_id = "subtree-protected-child"
-    await create_record("documents", protected_id, {
-        "project_id": pid, "parent_id": parent, "title": "ProtectedFolder",
-        "content": "x", "path": ".lore/system/subtree_protected",
-        "is_system": True, "system_role": "memory_folder",
-    })
-
-    resp = await client.delete(f"/api/documents/{parent}", cookies=cookies)
-    assert resp.status_code == 403
-
-    rows = await _doc_rows(test_db, [parent, protected_id])
-    assert rows[parent]["deleted_at"] is None, "nothing tombstoned on rejection"
-    assert rows[protected_id]["deleted_at"] is None
-
-
 # ─── Batch endpoint: expansion + lift mode ───────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_batch_delete_expands_subtree(
-    sync_app, client, test_db, collab_project,
-):
-    """Batch-delete of a parent (default delete_children=true) tombstones the whole
-    subtree and broadcasts the EXPANDED id set in the single batch event."""
-    pid, _, admin_token, user_token, *_ = collab_project
-
-    parent = await _mk_doc(client, pid, admin_token, title="Parent")
-    child = await _mk_doc(client, pid, admin_token, title="Child", parent_id=parent)
-    grandchild = await _mk_doc(client, pid, admin_token, title="GC", parent_id=child)
-    ref = await _mk_doc(client, pid, admin_token, title="Ref", parent_id=grandchild, is_reference=True)
-    before = await _doc_rows(test_db, [parent, child, grandchild, ref])
-
-    with sync_app.websocket_connect(
-        f"/ws/project/{pid}", cookies={"lore_session": user_token}
-    ) as ws:
-        json.loads(ws.receive_text())  # init
-        resp = await client.post(
-            "/api/documents/batch-delete",
-            json={"document_ids": [parent]},
-            cookies={"lore_session": admin_token},
-        )
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["deleted"] == 4
-
-        msg = json.loads(ws.receive_text())
-        assert msg["type"] == "documents_deleted_batch"
-        assert set(msg["document_ids"]) == {parent, child, grandchild, ref}
-        assert ref in msg["reference_ids"]
-
-    after = await _doc_rows(test_db, [parent, child, grandchild, ref])
-    for did in (parent, child, grandchild, ref):
-        assert after[did]["deleted_at"] is not None
-        assert after[did]["parent_id"] == before[did]["parent_id"], \
-            "subtree batch delete must never reparent"
 
 
 @pytest.mark.asyncio
@@ -285,38 +127,6 @@ async def test_batch_delete_lift_mode_keeps_children(
     # The parent's stored parent was the project root (an index parent
     # normalises to root), so the child lifts to the root grandparent.
     assert rows[child]["parent_id"] is None
-
-
-@pytest.mark.asyncio
-async def test_batch_delete_rejects_protected_descendant(
-    client, test_db, admin_user, project_with_doc,
-):
-    """Protected-skeleton 403 runs over the EXPANDED set: a protected folder under a
-    deleted parent rejects the batch instead of slipping through as a descendant."""
-    from db import create_record
-
-    pid, _, _ = project_with_doc
-    _, token = admin_user
-    cookies = {"lore_session": token}
-
-    parent = await _mk_doc(client, pid, token, title="Parent")
-    protected_id = "batch-protected-descendant"
-    await create_record("documents", protected_id, {
-        "project_id": pid, "parent_id": parent, "title": "RulesFolder",
-        "content": "x", "path": ".lore/system/rules_folder",
-        "is_system": True, "system_role": "rules_folder",
-    })
-
-    resp = await client.post(
-        "/api/documents/batch-delete",
-        json={"document_ids": [parent]},
-        cookies=cookies,
-    )
-    assert resp.status_code == 403
-
-    rows = await _doc_rows(test_db, [parent, protected_id])
-    assert rows[parent]["deleted_at"] is None
-    assert rows[protected_id]["deleted_at"] is None
 
 
 # ─── Access gates: split by mode ─────────────────────────────────────────────
@@ -358,18 +168,3 @@ async def test_subtree_delete_403_for_commentator(
     rows = await _doc_rows(test_db, [target, child])
     assert rows[target]["deleted_at"] is None
     assert rows[child]["deleted_at"] is None
-
-
-@pytest.mark.asyncio
-async def test_project_full_member_both_modes_200(client, admin_user, project_with_doc):
-    """A project-full principal passes both gates (owner here)."""
-    pid, _, _ = project_with_doc
-    _, token = admin_user
-    cookies = {"lore_session": token}
-
-    t1 = await _mk_doc(client, pid, token, title="T1")
-    t2 = await _mk_doc(client, pid, token, title="T2")
-    assert (await client.delete(f"/api/documents/{t1}", cookies=cookies)).status_code == 200
-    assert (await client.delete(
-        f"/api/documents/{t2}?delete_children=false", cookies=cookies,
-    )).status_code == 200

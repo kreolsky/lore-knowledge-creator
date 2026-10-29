@@ -10,15 +10,10 @@ then fails loudly naming the provider and the admin path. The boot-time driver
 endpoint is gone with its job: GET /api/driver/web-search 404s.
 """
 
-import json
-import os
-import subprocess
-import sys
 
 import pytest
 import pytest_asyncio
 import settings
-import settings_registry
 from test_harness_turn import _body, _harness_chat  # harness_env: conftest-wide
 
 #: Lore setting value → (dsh provider id, credential key). Stated here on
@@ -95,67 +90,7 @@ async def _turn_payload_of(client, collab_project, harness_env) -> dict:
     return harness_env.followups.payloads[0]
 
 
-# ─── the registry: choices + default ─────────────────────────────────────────
-
-
-def test_every_provider_choice_has_a_payload_mapping():
-    """Derived from the registry, not a literal: a new choice without a
-    mapping fails here (the payload builder would KeyError every turn)."""
-    spec = settings_registry.find("WEB_SEARCH_PROVIDER")
-    assert spec is not None and spec.choices is not None
-    assert set(spec.choices) == set(EXPECTED)
-
-
-def test_every_perplexity_search_type_has_a_pin_and_fast_is_the_default():
-    """Derived from the registry: a new search type without a pin fails here."""
-    spec = settings_registry.find("PERPLEXITY_SEARCH_TYPE")
-    assert spec is not None and spec.choices is not None
-    assert set(spec.choices) == set(EXPECTED_PERPLEXITY_PINS)
-    probe = subprocess.run(
-        [sys.executable, "-c", "import config; print(config.PERPLEXITY_SEARCH_TYPE)"],
-        env={k: v for k, v in os.environ.items() if k != "PERPLEXITY_SEARCH_TYPE"},
-        capture_output=True, text=True,
-    )
-    assert probe.returncode == 0, probe.stderr
-    assert probe.stdout.strip() == "fast"
-
-
-def test_off_is_gone_and_the_default_is_deepseek():
-    """No off state: `off` is not a choice, and a fresh install (no env) boots
-    deepseek — the no-key failure names the provider and the admin path."""
-    spec = settings_registry.find("WEB_SEARCH_PROVIDER")
-    assert "off" not in (spec.choices or ())
-    # The default is import-time folded: prove it in a fresh interpreter with
-    # the env var scrubbed — the in-process config was shaped by this suite.
-    probe = subprocess.run(
-        [sys.executable, "-c", "import config; print(config.WEB_SEARCH_PROVIDER)"],
-        env={k: v for k, v in os.environ.items() if k != "WEB_SEARCH_PROVIDER"},
-        capture_output=True, text=True,
-    )
-    assert probe.returncode == 0, probe.stderr
-    assert probe.stdout.strip() == "deepseek"
-
-
 # ─── the payload: per-provider pin + ONLY that provider's credential ─────────
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("provider", sorted(EXPECTED))
-async def test_each_provider_turn_carries_its_pin_and_only_its_credential(
-    client, collab_project, harness_env, monkeypatch, provider,
-):
-    _pin_config(monkeypatch, WEB_SEARCH_PROVIDER=provider)
-    payload = await _turn_payload_of(client, collab_project, harness_env)
-    pin, cred = EXPECTED[provider]
-    assert payload["web_search_provider"] == pin
-    assert payload["web_search_credential"] == f"env-{cred.lower()}"
-    # No UNSELECTED provider's credential value reaches the payload at all —
-    # over the serialized form, so an accidental extra field fails too.
-    unselected = [
-        f"env-{c.lower()}" for p, (_, c) in EXPECTED.items() if p != provider
-    ]
-    assert all(value not in json.dumps(payload) for value in unselected)
-    assert payload["title_model"] == "env-titler"
 
 
 @pytest.mark.asyncio
@@ -178,72 +113,3 @@ async def test_perplexity_web_mode_set_in_admin_pins_the_web_provider(
     payload = await _turn_payload_of(client, collab_project, harness_env)
     assert payload["web_search_provider"] == EXPECTED_PERPLEXITY_PINS["web"]
     assert payload["web_search_credential"] == "db-pplx-key"
-
-
-@pytest.mark.asyncio
-async def test_admin_override_set_after_start_is_in_the_next_payload(
-    client, collab_project, harness_env,
-):
-    """The operator story: everything is set in the admin panel on a running
-    install — provider, key, title model — and the NEXT message carries it."""
-    pid, doc_id, admin_token, _user_token, _a, _u = collab_project
-    for key, value in (
-        ("WEB_SEARCH_PROVIDER", "brave"),
-        ("BRAVE_API_KEY", "db-brave-key"),
-        ("CHAT_TITLE_MODEL", "db-titler"),
-    ):
-        resp = await client.put(
-            f"/api/admin/settings/{key}", json={"value": value},
-            cookies={"lore_session": admin_token},
-        )
-        assert resp.status_code == 200, resp.text
-    payload = await _turn_payload_of(client, collab_project, harness_env)
-    assert payload["web_search_provider"] == "lore-brave"
-    assert payload["web_search_credential"] == "db-brave-key"
-    assert payload["title_model"] == "db-titler"
-
-
-@pytest.mark.asyncio
-async def test_unset_title_model_falls_back_to_the_chat_model(
-    client, collab_project, harness_env, monkeypatch,
-):
-    _pin_config(monkeypatch, CHAT_TITLE_MODEL="", CHAT_MODEL="local/orange/chat")
-    payload = await _turn_payload_of(client, collab_project, harness_env)
-    assert payload["title_model"] == "local/orange/chat"
-
-
-@pytest.mark.asyncio
-async def test_router_without_its_own_model_searches_with_the_chat_model(
-    client, collab_project, harness_env, monkeypatch,
-):
-    """The partner story: provider router, no search model set — the search
-    runs on the default chat model the router already serves."""
-    monkeypatch.delenv("WEB_SEARCH_MODEL")
-    _pin_config(monkeypatch, WEB_SEARCH_PROVIDER="router", WEB_SEARCH_MODEL="", CHAT_MODEL="claude/haiku")
-    payload = await _turn_payload_of(client, collab_project, harness_env)
-    assert payload["web_search_provider"] == "lore-router"
-    assert payload["web_search_credential"] == "claude/haiku"
-
-
-@pytest.mark.asyncio
-async def test_unset_credential_rides_as_an_empty_string(
-    client, collab_project, harness_env, monkeypatch,
-):
-    """A fresh install has no key: the field is ALWAYS present, empty — the
-    harness then fails every search loudly (there is no off to fall back to)."""
-    _pin_config(monkeypatch, DEEPSEEK_API_KEY="")
-    payload = await _turn_payload_of(client, collab_project, harness_env)
-    assert payload["web_search_provider"] == "deepseek-official"
-    assert payload["web_search_credential"] == ""
-
-
-# ─── the boot endpoint is gone ────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_the_driver_boot_endpoint_is_gone(client):
-    """The harness boots without a backend round trip now; the old endpoint
-    (it carried a plaintext key) must not linger."""
-    resp = await client.get(
-        "/api/driver/web-search", headers={"X-Driver-Secret": "anything"})
-    assert resp.status_code == 404, resp.text

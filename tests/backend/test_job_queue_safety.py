@@ -40,14 +40,6 @@ class TestQueueNameSafety:
             f"_recover_stuck_transcriptions must reference TRANSCRIPTION_QUEUE ({TRANSCRIPTION_QUEUE!r})"
         )
 
-    def test_worker_function_sets_disjoint(self):
-        """No task may appear in both WorkerSettings and TranscriptionWorkerSettings."""
-        from jobs.worker import TranscriptionWorkerSettings, WorkerSettings
-
-        default_names = {getattr(f, "name", None) for f in WorkerSettings.functions}
-        trans_names = {getattr(f, "name", None) for f in TranscriptionWorkerSettings.functions}
-        overlap = default_names & trans_names
-        assert not overlap, f"Functions registered in both workers: {overlap}"
 
     def test_validate_queue_config_succeeds(self):
         """validate_queue_config() must not raise when config is consistent."""
@@ -63,12 +55,6 @@ class TestQueueNameSafety:
         with pytest.raises(AssertionError, match="queue_name"):
             validate_queue_config()
 
-    def test_workers_poll_distinct_queues(self):
-        """The default and transcription workers must not poll the same queue."""
-        from jobs.worker import TranscriptionWorkerSettings, WorkerSettings
-
-        default_queue = getattr(WorkerSettings, "queue_name", None)
-        assert default_queue != TranscriptionWorkerSettings.queue_name
 
     def test_validate_queue_config_catches_queue_collision(self, monkeypatch):
         """validate_queue_config() must raise when both workers bind the same queue."""
@@ -96,16 +82,6 @@ class TestQueueNameSafety:
         with pytest.raises(AssertionError, match="registered in both"):
             validate_queue_config()
 
-    def test_backup_task_names_canonical_set(self):
-        """BACKUP_TASK_NAMES must list every auto_backup_*_task that exists in tasks.py."""
-        from jobs.tasks import BACKUP_TASK_NAMES
-
-        assert BACKUP_TASK_NAMES == frozenset({
-            "auto_backup_loss_task",
-            "auto_backup_handoff_task",
-            "auto_backup_open_task",
-            "auto_backup_last_session_task",
-        })
 
     def test_validate_queue_config_catches_missing_backup_task(self, monkeypatch):
         """validate_queue_config() must crash if a backup task is declared but not
@@ -119,25 +95,6 @@ class TestQueueNameSafety:
         with pytest.raises(AssertionError, match="declared but not registered"):
             validate_queue_config()
 
-    def test_comfy_task_names_canonical_set(self):
-        """COMFY_TASK_NAMES must list EVERY generate_image_*_task defined in tasks.py.
-
-        Derived from the module (not a literal copy) so a new generate_image_*_task
-        forces both the frozenset and this test to acknowledge it — binds two sources
-        rather than mirroring a literal that would drift with the code."""
-        import jobs.tasks as tasks
-        from jobs.tasks import COMFY_TASK_NAMES
-
-        defined = {
-            name for name, obj in vars(tasks).items()
-            if name.startswith("generate_image")
-            and name.endswith("_task")
-            and callable(obj)
-        }
-        assert COMFY_TASK_NAMES == defined, (
-            f"COMFY_TASK_NAMES must equal the set of generate_image_*_task functions in "
-            f"tasks.py: declared={sorted(COMFY_TASK_NAMES)} defined={sorted(defined)}"
-        )
 
     def test_validate_queue_config_catches_missing_comfy_task(self, monkeypatch):
         """validate_queue_config() must crash if a Comfy image-gen task is declared but

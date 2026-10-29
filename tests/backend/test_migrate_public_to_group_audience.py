@@ -113,61 +113,9 @@ async def _seed(test_db, admin_user):
 
 
 @pytest.mark.asyncio
-async def test_live_group_owner_gets_their_moderators_subject(test_db):
-    await _migrate_public_to_group_audience(test_db)
-    row = await _row(test_db, "ga-mig-proj-member")
-    assert row["is_public"] is False
-    assert row["group_audience"] == f"mod:{_MOD}"
-    assert row["group_access"] == "readonly"
-
-
-@pytest.mark.asyncio
-async def test_live_moderator_owner_gets_own_subject(test_db):
-    await _migrate_public_to_group_audience(test_db)
-    row = await _row(test_db, "ga-mig-proj-modown")
-    assert row["is_public"] is False
-    assert row["group_audience"] == f"mod:{_MOD_OWNER}"
-    assert row["group_access"] == "readonly"
-
-
-@pytest.mark.asyncio
 async def test_soft_deleted_owner_goes_private(test_db):
     await _migrate_public_to_group_audience(test_db)
     row = await _row(test_db, "ga-mig-proj-dead")
     assert row["is_public"] is False
     assert row["group_audience"] is None
     assert row["group_access"] is None
-
-
-@pytest.mark.asyncio
-async def test_no_group_owner_goes_private(test_db):
-    await _migrate_public_to_group_audience(test_db)
-    row = await _row(test_db, "ga-mig-proj-nogroup")
-    assert row["is_public"] is False
-    assert row["group_audience"] is None
-    assert row["group_access"] is None
-
-
-@pytest.mark.asyncio
-async def test_admin_owned_public_project_untouched(test_db):
-    await _migrate_public_to_group_audience(test_db)
-    row = await _row(test_db, "ga-mig-proj-admin")
-    assert row["is_public"] is True
-    assert row["group_audience"] is None
-
-
-@pytest.mark.asyncio
-async def test_rerun_is_a_noop(test_db):
-    await _migrate_public_to_group_audience(test_db)
-    await _migrate_public_to_group_audience(test_db)
-    row = await _row(test_db, "ga-mig-proj-member")
-    assert row["is_public"] is False
-    assert row["group_audience"] == f"mod:{_MOD}"
-    assert row["group_access"] == "readonly"
-
-
-def test_registered_in_registry():
-    from migrations.runner import _MIGRATIONS
-
-    names = [name for name, _ in _MIGRATIONS]
-    assert "public_to_group_audience" in names

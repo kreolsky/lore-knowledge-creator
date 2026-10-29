@@ -136,6 +136,11 @@ export const en = {
   fileTooLargePdf: 'PDF file must be under {limit}MB',
   fileTooLargeMarkdown: 'Text file must be under {limit}MB',
   unsupportedFileType: 'Unsupported file type: {name}',
+  dropImageIntoReferenceUnsupported: 'Images can be dropped only into a document',
+  imageSize: 'Image width',
+  imageSizePlaceholder: '300, 50% or 500x400',
+  imageSizeInvalid: 'Width must be pixels or percent, e.g. 300 or 50%',
+  removeImageEmbed: 'Remove image',
   insert: 'Insert',
   insertFileBelowCursorConfirm: 'Insert file content below the cursor?',
   importingFile: 'Importing file…',
@@ -283,6 +288,8 @@ export const en = {
 
   // compact layout
   compactToggleTree: 'Documents',
+  sidebarPin: 'Pin panel',
+  sidebarUnpin: 'Auto-hide panel',
   compactOpenPanel: 'Open panel',
 
   // chat

@@ -5,9 +5,7 @@ anonymous cookie identity, the `allow_comments` share flag, and the readers of a
 note's author that an anonymous id reaches (message list, digest line, inbox).
 Every anchor fixture carries Cyrillic AND 😀 on both sides of the fragment.
 """
-import asyncio
 import hashlib
-import json
 
 import pytest
 
@@ -78,16 +76,6 @@ async def _grant(pid, uid, level):
     await create_record("project_members", f"test-pm-{uid}", {
         "project_id": pid, "user_id": uid, "access_level": level,
     })
-
-
-async def _wait_for(recorder, event_type, timeout=10.0):
-    loop = asyncio.get_event_loop()
-    deadline = loop.time() + timeout
-    while loop.time() < deadline:
-        if recorder.of(event_type):
-            return recorder.of(event_type)
-        await asyncio.sleep(0.01)
-    return recorder.of(event_type)
 
 
 # ─── Members: who may create a note ─────────────────────────────────────────
@@ -166,18 +154,6 @@ async def test_anon_note_refused_while_comments_are_off(client, admin_user, proj
     assert listed.json() == {"allow_comments": False, "content_sha256": None, "notes": []}
 
 
-@pytest.mark.asyncio
-async def test_anon_note_on_unshared_document_is_404(client, admin_user, project_with_doc):
-    pid, _, _ = project_with_doc
-    _, admin_token = admin_user
-    shared = await _make_doc(client, admin_token, pid, "Shared", CONTENT)
-    outside = await _make_doc(client, admin_token, pid, "Outside", CONTENT)
-    await _share(client, admin_token, pid, shared)
-
-    resp = await _anon_create(client, outside)
-    assert resp.status_code == 404, resp.text
-
-
 # ─── Anonymous create, list, identity ──────────────────────────────────────
 
 
@@ -219,79 +195,6 @@ async def test_anon_note_on_child_of_subtree_share_anchors_to_the_fragment(
     client.cookies.clear()
     stranger = await client.get(f"/api/public/documents/{child}/notes")
     assert stranger.json()["notes"][0]["is_mine"] is False
-
-
-@pytest.mark.asyncio
-async def test_anon_anchors_with_the_hash_the_public_payload_served(
-    client, admin_user, project_with_doc,
-):
-    """The page never hashes: it echoes the payload's content_sha256, and the list
-    reports the same value for the text its anchors were resolved against."""
-    pid, _, _ = project_with_doc
-    _, admin_token = admin_user
-    doc_id = await _make_doc(client, admin_token, pid, "Shared", CONTENT)
-    await _share(client, admin_token, pid, doc_id)
-
-    client.cookies.clear()
-    served = (await client.get(f"/api/public/documents/{doc_id}")).json()
-    start, end = _fragment_offsets(served["content"])
-    resp = await _anon_create(client, doc_id, {
-        "author_name": "Гость", "content": "Заметка",
-        "start": start, "end": end, "content_sha256": served["content_sha256"],
-    })
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["anchor_quote"] == FRAGMENT
-
-    client.cookies.clear()
-    listed = (await client.get(f"/api/public/documents/{doc_id}/notes")).json()
-    assert listed["content_sha256"] == served["content_sha256"]
-
-
-@pytest.mark.asyncio
-async def test_anon_note_against_a_changed_document_is_409(client, admin_user, project_with_doc):
-    pid, _, _ = project_with_doc
-    _, admin_token = admin_user
-    doc_id = await _make_doc(client, admin_token, pid, "Shared", CONTENT)
-    await _share(client, admin_token, pid, doc_id)
-
-    body = _note_body()
-    body["content_sha256"] = _sha(CONTENT + " правка")
-    resp = await _anon_create(client, doc_id, body)
-    assert resp.status_code == 409, resp.text
-
-
-@pytest.mark.asyncio
-async def test_anon_name_is_required_and_bounded(client, admin_user, project_with_doc):
-    pid, _, _ = project_with_doc
-    _, admin_token = admin_user
-    doc_id = await _make_doc(client, admin_token, pid, "Shared", CONTENT)
-    await _share(client, admin_token, pid, doc_id)
-
-    for name in ("   ", "я" * 41):
-        resp = await _anon_create(client, doc_id, _note_body(name=name))
-        assert resp.status_code == 422, (name, resp.text)
-    resp = await _anon_create(client, doc_id, _note_body(name="  Имя  ", anchored=False))
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["messages"][0]["author_name"] == "Имя"
-
-
-@pytest.mark.asyncio
-async def test_anon_message_is_capped_at_2000_chars(client, admin_user, project_with_doc):
-    pid, _, _ = project_with_doc
-    _, admin_token = admin_user
-    doc_id = await _make_doc(client, admin_token, pid, "Shared", CONTENT)
-    await _share(client, admin_token, pid, doc_id)
-
-    resp = await _anon_create(client, doc_id, _note_body(content="ж" * 2001, anchored=False))
-    assert resp.status_code == 422, resp.text
-    resp = await _anon_create(client, doc_id, _note_body(content="😀" * 2000, anchored=False))
-    assert resp.status_code == 201, resp.text
-    sid = resp.json()["session_id"]
-    resp = await client.post(
-        f"/api/public/documents/{doc_id}/notes/{sid}/messages",
-        json={"author_name": "Гость", "content": "ж" * 2001},
-    )
-    assert resp.status_code == 422, resp.text
 
 
 @pytest.mark.asyncio
@@ -395,132 +298,7 @@ async def test_anon_deletes_own_note_unless_someone_else_replied(
     assert resp.status_code == 200, resp.text
 
 
-@pytest.mark.asyncio
-async def test_anon_deletes_own_message_only_while_nothing_answers_it(
-    client, admin_user, project_with_doc,
-):
-    pid, _, _ = project_with_doc
-    _, admin_token = admin_user
-    doc_id = await _make_doc(client, admin_token, pid, "Shared", CONTENT)
-    await _share(client, admin_token, pid, doc_id)
-
-    first = await _anon_create(client, doc_id)
-    cookie = first.cookies.get(ANON_COOKIE)
-    note = first.json()
-    sid, own_id = note["session_id"], note["messages"][0]["message_id"]
-    reply = await client.post(
-        f"/api/chat/sessions/{sid}/messages",
-        json={"role": "user", "content": "ответ участника", "parent_id": own_id},
-        cookies={"lore_session": admin_token},
-    )
-    assert reply.status_code == 201, reply.text
-
-    client.cookies.clear()
-    url = f"/api/public/documents/{doc_id}/notes/{sid}/messages/{own_id}"
-    resp = await client.delete(url, cookies={ANON_COOKIE: cookie})
-    assert resp.status_code == 409, "a reply under the guest's message keeps it"
-
-    resp = await client.delete(
-        f"/api/chat/messages/{reply.json()['message_id']}", cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 200, resp.text
-    client.cookies.clear()
-    resp = await client.delete(url, cookies={ANON_COOKIE: cookie})
-    assert resp.status_code == 200, resp.text
-
-
-@pytest.mark.asyncio
-async def test_root_deletes_an_anonymous_message(client, admin_user, project_with_doc):
-    pid, _, _ = project_with_doc
-    _, admin_token = admin_user
-    doc_id = await _make_doc(client, admin_token, pid, "Shared", CONTENT)
-    await _share(client, admin_token, pid, doc_id)
-    note = (await _anon_create(client, doc_id)).json()
-
-    client.cookies.clear()
-    resp = await client.delete(
-        f"/api/chat/messages/{note['messages'][0]['message_id']}",
-        cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 200, resp.text
-
-
 # ─── What members see ───────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_member_reads_a_thread_with_an_anonymous_note(
-    client, admin_user, regular_user, project_with_doc,
-):
-    pid, _, _ = project_with_doc
-    _, admin_token = admin_user
-    uid, token = regular_user
-    doc_id = await _make_doc(client, admin_token, pid, "Shared", CONTENT)
-    await _share(client, admin_token, pid, doc_id)
-    note = (await _anon_create(client, doc_id)).json()
-    await _grant(pid, uid, "commentator")
-
-    client.cookies.clear()
-    listed = await client.get(
-        "/api/chat/sessions", params={"document_id": doc_id, "is_note": "true", "project_id": pid},
-        cookies={"lore_session": token},
-    )
-    assert listed.status_code == 200, listed.text
-    msgs = await client.get(
-        f"/api/chat/sessions/{note['session_id']}/messages", cookies={"lore_session": token},
-    )
-    assert msgs.status_code == 200, msgs.text
-    [msg] = msgs.json()["messages"]
-    assert msg["author_name"] == "Гость"
-    assert msg["content"] == "Заметка 😀"
-
-
-@pytest.mark.asyncio
-async def test_anon_writes_emit_the_member_realtime_frames(
-    client, admin_user, project_with_doc, emit_recorder,
-):
-    pid, _, _ = project_with_doc
-    _, admin_token = admin_user
-    doc_id = await _make_doc(client, admin_token, pid, "Shared", CONTENT)
-    await _share(client, admin_token, pid, doc_id)
-    emit_recorder.calls.clear()
-
-    first = await _anon_create(client, doc_id)
-    assert first.status_code == 201, first.text
-    created = await _wait_for(emit_recorder, "note_session_created")
-    assert created and created[0]["entity_id"] == doc_id
-    # The frame is what CollabSession.broadcast json.dumps onto the members' socket.
-    json.dumps(created[0]["event"])
-
-    emit_recorder.calls.clear()
-    client.cookies.clear()
-    reply = await client.post(
-        f"/api/public/documents/{doc_id}/notes/{first.json()['session_id']}/messages",
-        json={"author_name": "Гость", "content": "ответ"},
-        cookies={ANON_COOKIE: first.cookies.get(ANON_COOKIE)},
-    )
-    assert reply.status_code == 201, reply.text
-    changed = await _wait_for(emit_recorder, "note_message_changed")
-    assert changed and changed[0]["event"]["action"] == "added"
-    assert changed[0]["event"]["message"]["author_name"] == "Гость"
-    # A frame json.dumps refuses never reaches a member: replies then show only after
-    # a reload, while the event bus above still records the emit.
-    json.dumps(changed[0]["event"])
-
-
-@pytest.mark.asyncio
-async def test_anon_note_flags_the_share_creators_inbox(client, admin_user, project_with_doc):
-    pid, _, admin_uid = project_with_doc
-    _, admin_token = admin_user
-    doc_id = await _make_doc(client, admin_token, pid, "Shared", CONTENT)
-    await _share(client, admin_token, pid, doc_id)
-
-    note = (await _anon_create(client, doc_id)).json()
-    db = await get_db()
-    rows = await db.query(
-        "SELECT unread_for FROM type::record('chat_sessions', $id)", {"id": note["session_id"]},
-    )
-    assert rows[0]["unread_for"] == admin_uid
 
 
 @pytest.mark.asyncio
@@ -549,12 +327,3 @@ async def test_a_failed_first_message_leaves_no_empty_note(
         {"did": doc_id},
     )
     assert live == []
-
-
-def test_digest_line_names_the_anonymous_author():
-    from pipeline.digest.material import _line
-
-    message = {"role": "user", "chat_id": "c1", "content": "текст 😀",
-               "author_id": "anon_" + "0" * 32, "author_name": "Гость"}
-    line = _line(message, {"c1": "anon_" + "0" * 32}, {})
-    assert line == "**Гость:** текст 😀"

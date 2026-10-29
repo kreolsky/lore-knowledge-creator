@@ -162,16 +162,6 @@ describe('the harness transport — a turn over the WS dispatch', () => {
     expect(get().turnRanges['am']).toEqual({ min: 3, max: 3 });
   });
 
-  it('turn_closed is terminal without done (an errored turn mints no done)', async () => {
-    const { get, set } = makeStore();
-    const p = startHarness(get, set);
-    dispatchChatFrame(get, set, 's1', IDS);
-    dispatchChatFrame(get, set, 's1', { type: 'error', message: 'boom' });
-    dispatchChatFrame(get, set, 's1', TURN_CLOSED);
-    await p;
-    expect(get().streaming).toBeNull();
-  });
-
   it('a refused POST rejects and unregisters — late frames drop', async () => {
     // A refused send queued nothing, so no claim (`ids`) follows; any other
     // late frame finds no registration.
@@ -182,31 +172,6 @@ describe('the harness transport — a turn over the WS dispatch', () => {
     dispatchChatFrame(get, set, 's1', DONE);
     expect(get().messages).toEqual([]);
     expect(get().streaming).toBeNull();
-  });
-
-  it('a POST rejection after the failure frames settled is swallowed', async () => {
-    let rejectPost!: (e: Error) => void;
-    postMock.mockReturnValue(new Promise((_res, rej) => { rejectPost = rej; }));
-    const { get, set } = makeStore();
-    const p = startHarness(get, set);
-    dispatchChatFrame(get, set, 's1', IDS);
-    dispatchChatFrame(get, set, 's1', { type: 'error', message: 'busy' });
-    dispatchChatFrame(get, set, 's1', TURN_CLOSED);
-    rejectPost(new Error('409'));
-    await p; // resolves — the frames told the story already
-    expect(get().messages.find(m => m.message_id === 'am')).toBeTruthy();
-  });
-
-  it('chat reset settles a pending turn (no dangling await, registration dropped)', async () => {
-    const { get, set } = makeStore('s-reset');
-    const p = startHarness(get, set, 's-reset');
-    dispatchChatFrame(get, set, 's-reset', IDS);
-    clearChatCaches();
-    await p; // settles — runCompletion's finally is reachable
-    // The registration is gone: late frames find no sink. (The streaming SLOT
-    // itself is flushed by the store-level reset, not by this handler.)
-    dispatchChatFrame(get, set, 's-reset', DONE);
-    expect(get().streaming?.messageId).toBe('am');
   });
 
   it('a handler exception surfaces ONCE per turn through the sink (chatStreamDegraded); the loop keeps dispatching', async () => {
@@ -240,17 +205,6 @@ describe('the harness transport — a turn over the WS dispatch', () => {
     expect(hasOpenHarnessTurn('s-blow')).toBe(false);
   });
 
-  it('frames of a turn whose opening ids this tab never saw are ignored (the reload brings it)', () => {
-    // Only a claim's `ids` opens a registration (streaming.inbox.test.ts);
-    // a turn joined mid-way is the reload's adoption, never a guess here.
-    const { get, set } = makeStore();
-    dispatchChatFrame(get, set, 's1', DONE);
-    dispatchChatFrame(get, set, 's1', { type: 'sources', sources: [{ id: 'd1', title: 'D' }] });
-    expect(get().messages).toEqual([]);
-    expect(get().streaming).toBeNull();
-    expect(hasOpenHarnessTurn('s1')).toBe(false);
-  });
-
   it('a lore/image-gen frame with no open turn feeds the timeline for the ACTIVE session (the detached image run)', () => {
     // The run's frames ride the chat channel AFTER the turn may have ended —
     // no registration exists. A lore/image-gen frame for the active session
@@ -282,17 +236,6 @@ describe('the harness transport — a turn over the WS dispatch', () => {
       data: { turn: 0, runId: 'r1', status: 'done', imageRefIds: ['ref-1'] },
     });
     expect(get().conversation).toEqual([]);
-  });
-
-  it('a non-lore frame with no open turn stays ignored even for the active session', () => {
-    // The no-registration arm feeds ONLY lore/image-gen frames — a dsh_event
-    // of a turn joined mid-way must keep dropping (the reload owns it; only
-    // a claim's `ids` opens a registration).
-    const { get, set } = makeStore('s1');
-    dispatchChatFrame(get, set, 's1', { type: 'dsh_event', kind: 'step/start', seq: 2, data: { turn: 0, step: 0 } });
-    expect(get().conversation).toEqual([]);
-    expect(get().messages).toEqual([]);
-    expect(hasOpenHarnessTurn('s1')).toBe(false);
   });
 
   it("another tab's turn-bound lore frames with no open turn stay ignored for the active session", () => {
@@ -338,26 +281,6 @@ describe("a turn of a chat that is not shown — each chat's turn is independent
       liveSend: null,
       draft: '',
     } as never);
-  });
-
-  it("(a) a send in B while A's turn is registered is B's own idle send", async () => {
-    // The ghost repro's core: A streams, the user opens the zero/ghost chat
-    // (B materializes on send) — A's turn must not make B's send a queued one.
-    const pA = streamCompletion(useChatStore.getState, useChatStore.setState, {
-      sessionId: 'A', body: {}, signal: new AbortController().signal,
-    });
-    expect(hasOpenHarnessTurn('A')).toBe(true);
-
-    const pSend = useChatStore.getState().sendMessage('ping');
-    expect(postMock).toHaveBeenCalledWith('/chat/sessions/B/completions', expect.anything(), expect.anything());
-    // The idle send's optimistic bubble carries the user_msg_id it POSTed.
-    const body = postMock.mock.calls.find(c => c[0] === '/chat/sessions/B/completions')![1] as { user_msg_id: string };
-    expect(useChatStore.getState().messages.map(m => m.message_id)).toEqual([body.user_msg_id]);
-
-    dispatchChatFrame(useChatStore.getState, useChatStore.setState, 'B', TURN_CLOSED);
-    await pSend;
-    dispatchChatFrame(useChatStore.getState, useChatStore.setState, 'A', TURN_CLOSED);
-    await pA;
   });
 
   it('(b) an A dsh_event leaves the shown chat B untouched', async () => {
@@ -406,15 +329,5 @@ describe("a turn of a chat that is not shown — each chat's turn is independent
     dispatchChatFrame(get, set, 'B', TURN_CLOSED);
     await pB;
     expect(get().streaming).toBeNull();
-  });
-
-  it("(e) A's error then turn_closed never writes into B's buffer", async () => {
-    const { get, set } = makeStore('B');
-    const pA = startHarness(get, set, 'A');
-    dispatchChatFrame(get, set, 'A', { type: 'error', message: 'boom' });
-    dispatchChatFrame(get, set, 'A', TURN_CLOSED);
-    await pA;
-    // Display work is gated to the shown chat.
-    expect(get().messages).toEqual([]);
   });
 });

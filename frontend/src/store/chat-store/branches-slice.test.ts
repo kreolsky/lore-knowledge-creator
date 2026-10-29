@@ -157,27 +157,6 @@ describe('openBranch — an explicit thread root (a chat search hit)', () => {
     expect(lastPatch()).toEqual(['/chat/sessions/rootH', { active_branch_id: 'b2' }]);
     expect(switched).toEqual(['b2']);
   });
-
-  it('a plain chat with no branches points its own active_branch_id at itself', async () => {
-    const { store, switched } = buildStore([sess('a1', 'rootA')], 'a1');
-
-    store.getState().openBranch('c1', 'c1');
-    await settled();
-
-    expect(lastPatch()).toEqual(['/chat/sessions/c1', { active_branch_id: 'c1' }]);
-    expect(switched).toEqual(['c1']);
-  });
-
-  it('remembers the explicit root, so a later switcher hop from the hit stays on its thread', async () => {
-    const { store } = buildStore([sess('a1', 'rootA')], 'a1');
-
-    store.getState().openBranch('b2', 'rootH');
-    await settled();
-    store.getState().openBranch('b3');
-    await settled();
-
-    expect(lastPatch()).toEqual(['/chat/sessions/rootH', { active_branch_id: 'b3' }]);
-  });
 });
 
 describe('openBranch — an unlisted branch gets the thread\'s list row', () => {

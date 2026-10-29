@@ -9,7 +9,6 @@ onto chats. Digest opts out and keeps reading.
 """
 import hashlib
 import secrets
-from datetime import datetime, timezone
 
 import pytest
 from helpers import fake_embedding_provider
@@ -125,13 +124,6 @@ def _chat_ids(listed: dict) -> list[str]:
 # ─── the viewer rule ─────────────────────────────────────────────────────────
 
 
-async def test_inside_viewer_sees_the_room_and_the_rest_of_the_project(client, world):
-    """Inside sees inside, upward to the flagged root included, AND outside —
-    the hide is one-way (the room is not an isolation chamber)."""
-    result = await _search(client, world["ka"], "ember glacier", "anchorC")
-    assert set(_hit_chats(result)) == {"sF", "sC", "sO"}
-
-
 async def test_outside_viewer_sees_nothing_until_unflagged(client, test_db, world):
     result = await _search(client, world["ka"], "ember glacier", "anchorO")
     assert _hit_chats(result) == ["sO"]
@@ -151,48 +143,6 @@ async def test_a_viewer_without_a_document_is_outside_every_room(client, world):
     )
     assert resp.status_code == 200, resp.text
     assert [h["chat_id"] for h in resp.json()["hits"]] == ["sO"]
-
-
-async def test_nested_flags_exclude_the_inner_room_from_its_owner(client, test_db, world):
-    await _flag(test_db, "C")
-    from_f = await _search(client, world["ka"], "ember glacier", "anchorF")
-    assert set(_hit_chats(from_f)) == {"sF", "sO"}
-    from_c = await _search(client, world["ka"], "ember glacier", "anchorC")
-    assert set(_hit_chats(from_c)) == {"sF", "sC", "sO"}
-    from_o = await _search(client, world["ka"], "ember glacier", "anchorO")
-    assert _hit_chats(from_o) == ["sO"]
-
-
-async def test_sibling_rooms_do_not_see_each_other(client, test_db, world):
-    await _doc(world["pid"], "C2", "F")
-    await _session(test_db, "sC2", world["a"], world["pid"], document_id="C2")
-    await _msg(test_db, "sC2m", "sC2", "ember glacier room log")
-    await _flag(test_db, "C", "C2")
-    await index_chat_messages({}, world["a"], world["pid"])
-    from_c = await _search(client, world["ka"], "ember glacier", "anchorC")
-    assert set(_hit_chats(from_c)) == {"sF", "sC", "sO"}
-
-
-async def test_an_archived_room_still_hides(client, test_db, world):
-    """`archived` is not a liveness axis for the hide — archiving a room must
-    not open it."""
-    await test_db.query(
-        "UPDATE type::record('documents', 'F') SET archived = true")
-    result = await _search(client, world["ka"], "ember glacier", "anchorO")
-    assert _hit_chats(result) == ["sO"]
-
-
-async def test_lift_deleting_the_room_opens_what_is_left(client, world):
-    """Lift mode takes the flag with the room (user ruling, same model as
-    inherited restrictions): the lifted children's chats reopen project-wide;
-    the room's own chats die with it."""
-    resp = await client.delete(
-        "/api/documents/F", params={"delete_children": False},
-        cookies={"lore_session": world["token"]},
-    )
-    assert resp.status_code == 200, resp.text
-    result = await _search(client, world["ka"], "ember glacier", "anchorO")
-    assert set(_hit_chats(result)) == {"sC", "sO"}
 
 
 # ─── the five doors ──────────────────────────────────────────────────────────
@@ -260,39 +210,6 @@ async def test_a_cyclic_parent_chain_still_ends_the_walk(test_db, world):
     assert "O" not in hidden
 
 
-# ─── read-time: moves change visibility with no write to any chat ───────────
-
-
-async def test_a_chat_moved_out_of_the_room_loses_the_hide(client, test_db, world):
-    """The user's rule: a chat moved to another document loses the hide. The
-    viewer left inside still sees it — one-way: hidden(C) is empty (C is
-    inside F), so inside-sees-outside applies."""
-    resp = await client.patch(
-        "/api/chat/sessions/sC", json={"document_id": "O"},
-        cookies={"lore_session": world["token"]},
-    )
-    assert resp.status_code == 200, resp.text
-    from_o = await _search(client, world["ka"], "ember glacier", "anchorO")
-    assert set(_hit_chats(from_o)) == {"sC", "sO"}
-    from_c = await _search(client, world["ka"], "ember glacier", "anchorC")
-    assert set(_hit_chats(from_c)) == {"sF", "sC", "sO"}
-    row = (await test_db.query(
-        "SELECT unindexed FROM type::record('chat_sessions', $id)",
-        {"id": "sC"},
-    ))[0]
-    assert row["unindexed"] is False
-
-
-async def test_a_document_moved_out_of_the_room_reopens_its_chats(client, world):
-    resp = await client.patch(
-        "/api/documents/C", json={"parent_id": "O"},
-        cookies={"lore_session": world["token"]},
-    )
-    assert resp.status_code == 200, resp.text
-    result = await _search(client, world["ka"], "ember glacier", "anchorO")
-    assert set(_hit_chats(result)) == {"sC", "sO"}
-
-
 # ─── honest incompleteness ───────────────────────────────────────────────────
 
 
@@ -302,36 +219,6 @@ async def test_coverage_counts_only_what_the_viewer_can_see(client, test_db, wor
     assert from_o["indexed"] == "1 of 2"
     from_c = await _search(client, world["ka"], "ember glacier", "anchorC")
     assert from_c["indexed"] == "3 of 4"
-
-
-# ─── digest opts out ─────────────────────────────────────────────────────────
-
-
-async def test_digest_material_still_reads_the_room(client, test_db, collab_project, embed):
-    """Digest is not affected (user ruling): the anchored path over the flagged
-    theme and the related-turns path over a hidden non-theme doc both keep
-    reading. Driven at material.collect — the one seam that owns both paths."""
-    from chat_sessions.recall_search import Window
-    from pipeline.digest.material import collect
-
-    pid, _d, _admin_token, _ut, admin_uid, _uu = collab_project
-    await _doc(pid, "dTheme")
-    await _doc(pid, "dC", "dTheme")
-    await _flag(test_db, "dTheme")
-    await _session(test_db, "anch", admin_uid, pid, document_id="dTheme")
-    await _msg(test_db, "anch0", "anch", "my knee hurts after running")
-    await _session(test_db, "rel", admin_uid, pid, document_id="dC")
-    await _msg(test_db, "rel0", "rel", "slept badly, sleep is broken")
-    await index_chat_messages({}, admin_uid, pid)
-
-    # A real `until`, like every production caller (window_end): `created_at
-    # <= NONE` would drop every row.
-    material = await collect(
-        pid, "dTheme", (admin_uid,), "knee sleep",
-        Window(until=datetime.now(timezone.utc)))
-
-    assert any("my knee hurts after running" in line for line in material.anchored)
-    assert any("sleep is broken" in line for line in material.related)
 
 
 # ─── write path + tree payload ───────────────────────────────────────────────

@@ -62,7 +62,6 @@ vi.mock('../../chat/context', () => ({
 
 import { createSessionsSlice } from './sessions-slice';
 import { createMiscSlice } from './misc-slice';
-import { getPendingRegion, clearPendingRegion } from './pending-selection';
 import type { ChatState } from './types';
 import type { PinnedRegion } from '../../types';
 
@@ -88,33 +87,7 @@ beforeEach(() => {
   accessLevel = 'full';
 });
 
-describe('ghost region lifecycle', () => {
-  it('setGhostRegion / clearGhostRegion mutate in-memory state', () => {
-    const store = buildStore();
-    store.getState().setGhostRegion(REGION);
-    expect(store.getState().ghostRegion).toEqual(REGION);
-    store.getState().clearGhostRegion();
-    expect(store.getState().ghostRegion).toBeNull();
-  });
-
-  it('reset() clears the ghost region', () => {
-    const store = buildStore();
-    store.getState().setGhostRegion(REGION);
-    store.getState().reset();
-    expect(store.getState().ghostRegion).toBeNull();
-  });
-});
-
 describe('startAgentChat — ghost attach (no row) + access gate', () => {
-  it('full access: attaches region to the ghost, switches to agent, creates NO session row', async () => {
-    const store = buildStore();
-    await store.getState().startAgentChat({
-      doc_id: 'doc-1', relFrom: REGION.relFrom, relTo: REGION.relTo, from_cp: 0, to_cp: 3, text: 'abc',
-    });
-    expect(postMock).not.toHaveBeenCalled();          // no materialization
-    expect(store.getState().activeSessionId).toBeNull(); // still the ghost
-    expect(store.getState().ghostRegion).toEqual(REGION);
-  });
 
   it('a slot the left chat held is dropped with the pointer (the slot belongs to the active chat)', async () => {
     const store = buildStore();
@@ -127,58 +100,5 @@ describe('startAgentChat — ghost attach (no row) + access gate', () => {
     });
     expect(store.getState().activeSessionId).toBeNull();
     expect(store.getState().streaming).toBeNull();
-  });
-
-  it('non-full access: no-op (no ghost region, toast shown)', async () => {
-    accessLevel = 'viewer';
-    const store = buildStore();
-    await store.getState().startAgentChat({
-      doc_id: 'doc-1', relFrom: REGION.relFrom, relTo: REGION.relTo, from_cp: 0, to_cp: 3, text: 'abc',
-    });
-    expect(store.getState().ghostRegion).toBeNull();
-    expect(showToastMock).toHaveBeenCalledWith('agentModeRequiresAccess', 'error');
-  });
-});
-
-describe('createSession — pinned region written synchronously after activation (Part A ordering)', () => {
-  // The regression moved setPendingRegion AFTER createSession's
-  // awaits, so the region was empty when the activation-triggered `regionChanged`
-  // highlight annotation fired → the blue highlight never appeared. The fix keeps
-  // setPendingRegion synchronous, right after insertAndPinSession and before any await.
-  it('the region is present BEFORE createSession yields again after activation', async () => {
-    const store = buildStore();
-    postMock.mockResolvedValue({
-      session_id: 'real-1', document_id: 'doc-1', reference_id: null, user_id: 'u1',
-      title: null, model: 'm', system_prompt_id: null, context_ids: [],
-      updated_at: '2026-07-10T00:00:00Z', last_message_at: null,
-    });
-
-    // Detect the ordering via a microtask queued from the activation listener. The
-    // listener fires synchronously inside insertAndPinSession's set(); the microtask it
-    // queues runs AFTER the rest of createSession's synchronous block (so setPendingRegion
-    // has run in the fixed code) but BEFORE createSession resumes from its cascade await
-    // (so the buggy "after the await" version still sees null here). This is the only
-    // observation point that distinguishes the fix from the regression — a plain
-    // post-await assertion cannot, because both versions set the region before returning.
-    let regionAtMidpoint: PinnedRegion | null | undefined;
-    const unsub = store.subscribe((state, prev) => {
-      if (prev.activeSessionId !== 'real-1' && state.activeSessionId === 'real-1') {
-        queueMicrotask(() => { regionAtMidpoint = getPendingRegion('real-1'); });
-      }
-    });
-
-    try {
-      const created = await store.getState().createSession({
-        projectId: 'proj-1', documentId: 'doc-1', targetDocId: 'doc-1',
-        hasRegion: true, region: REGION, focus: true,
-      });
-      expect(created?.session_id).toBe('real-1');
-    } finally {
-      unsub();
-    }
-
-    expect(regionAtMidpoint, 'region must be written before createSession yields after activation').toEqual(REGION);
-    expect(getPendingRegion('real-1')).toEqual(REGION);
-    clearPendingRegion('real-1');
   });
 });

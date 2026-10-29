@@ -1010,6 +1010,11 @@ html.dark .download-menu[data-theme="blue"] > button:not(:hover) { color: var(--
   color: var(--accent-text);
   background: var(--surface);
 }
+/* Pin toggle: a bare icon on the bar — no fill on hover or when pinned. */
+.left-bar-tab--pin,
+.left-bar-tab--pin:hover {
+  background: transparent;
+}
 
 /* Bottom UserControls IconButtons must fill the bar like the tabs above.
    The bar grew 30→36px; IconButton's shared md size (w-[30px]) did not —
@@ -1271,6 +1276,19 @@ html.dark .right-panel--notes-thread input:not([type=checkbox]):not([type=radio]
   /* Claim the drag gesture so the browser doesn't scroll/select while resizing by touch. */
   touch-action: none;
 }
+/* Unpinned left panel: the resizer rides the floating panel's right edge. */
+.resizer--floating {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+}
+/* WHY: right:0 resolves to the panel's padding edge, so this line would sit inside the
+   panel's own border-r and draw a second pixel — the border is the only edge line. */
+.resizer--floating::before {
+  display: none;
+}
+
 .resizer::after {
   content: '';
   position: absolute;
@@ -1617,6 +1635,73 @@ html.dark .cm-color-swatch[style*="rgb(253, 214, 99)"] { background-color: var(-
   cursor: default;
 }
 
+/* Atomic block selected highlight — → see live-preview/atomic-delete-guard.ts */
+/* WHY a mark class: the replace+widget decorations belong to livePreviewField /
+   tableBlockField; this mark wraps the replaced content so the user sees what a
+   delete will remove while the block is selected whole. */
+.cm-atomic-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: var(--surface2);
+  border-radius: 0;
+}
+
+/* Image embed shell + resize handles — → see live-preview/widgets.ts (ImageWidget) */
+/* WHY the wrapper carries the size: a percent width on the img would resolve
+   against a shrink-to-fit wrapper; sized here, the box always equals the picture. */
+.cm-image-embed {
+  position: relative;
+  display: inline-block;
+  vertical-align: top;
+  max-width: 100%;
+  margin: 4px 0;
+}
+.cm-image-resize-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  touch-action: none;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 0;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.cm-image-resize-corner { right: -5px; bottom: -5px; cursor: nwse-resize; }
+.cm-image-resize-corner-top { right: -5px; top: -5px; cursor: nesw-resize; }
+.cm-image-resize-right { right: -5px; top: 50%; margin-top: -5px; cursor: ew-resize; }
+.cm-image-resize-bottom { bottom: -5px; left: 50%; margin-left: -5px; cursor: ns-resize; }
+.cm-image-embed:hover .cm-image-resize-handle { opacity: 1; }
+/* WHY CSS, not a toDOM gate: CM6 flips contenteditable with the editable facet
+   but never rebuilds an eq() widget, so a toDOM-time check sticks to load state. */
+.cm-content[contenteditable="false"] .cm-image-resize-handle { display: none; }
+
+/* Reference drag preview — → see references/refDragAdapter.ts (createDragGhost) */
+.ref-drag-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 10001;
+  pointer-events: none;
+  opacity: 0.85;
+  max-width: 160px;
+  padding: 4px 8px;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 0;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ref-drag-ghost:has(img) { padding: 0; }
+.ref-drag-ghost img { display: block; max-width: 120px; max-height: 120px; }
+/* WHY !important on every descendant: .cm-content forces cursor:text. */
+body.ref-drag-copy, body.ref-drag-copy * { cursor: copy !important; }
+body.ref-drag-none, body.ref-drag-none * { cursor: no-drop !important; }
+
 /* Rendered markdown table — → see live-preview/table-widget.ts → TableWidget */
 .cm-table-widget-wrap {
   /* WHY padding (not margin): CM6 measures block widgets via getBoundingClientRect,
@@ -1660,11 +1745,33 @@ html.dark .cm-color-swatch[style*="rgb(253, 214, 99)"] { background-color: var(-
   padding: 4px 0;
   position: relative; /* anchor for the absolutely-positioned custom caret */
 }
+/* Whole-table selection outline — set by the ViewPlugin in atomic-delete-guard.ts
+   when the selection covers the anchor line whole (the cm-atomic-selected mark
+   cannot reach a block widget's replaced line). Same token as the image selection. */
+.cm-table-block-wrap--selected .cm-table-block {
+  /* Drawn ON the table's own outer border (inset: the scroller clips anything outside). */
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+/* Horizontal scroller: an auto/fixed table wider than the document column scrolls
+   HERE, never widens the page. overflow-y is explicit — computed-to-auto would add
+   an inner vertical scrollbar and break block-widget height measurement. The
+   toolbar and select grip live OUTSIDE so they do not scroll away. */
+.cm-table-block-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
 .cm-table-block {
   border-collapse: collapse;
   font-size: 0.875em;
   line-height: inherit;
+  /* INVARIANT: column widths never change by themselves — only a user's resize
+     changes them. Why: table-layout:auto re-measured content on every focus change
+     (a live cell shows raw markdown, wider than the rendered placeholder), so a click
+     made columns jump. fixed: a px column keeps its width; auto columns (w=0 → empty
+     <col> width) split the remaining document width EQUALLY, independent of content. */
   table-layout: fixed;
+  width: 100%;
 }
 .cm-table-block th,
 .cm-table-block td {
@@ -1711,28 +1818,47 @@ html.dark .cm-color-swatch[style*="rgb(253, 214, 99)"] { background-color: var(-
   background: var(--surface2);
   position: relative; /* anchor for the column-resize handle */
 }
-/* Column-resize handle on the right border of each header cell. */
+/* Column-resize handle on the right border of each header cell: an invisible 9px hit
+   zone centered on the border — the border line itself stays as is. On hover a solid
+   accent bar sits ON the line at header height — 4px, the panel .resizer's hover
+   thickness. Double-click resets the column to
+   auto (w=0). */
 .cm-table-block-col-resize {
   position: absolute;
   top: 0;
-  right: -3px;
-  width: 7px;
+  right: -4.5px;
+  width: 9px;
   height: 100%;
   cursor: col-resize;
   user-select: none;
+  z-index: 1;
 }
-.cm-table-block-col-resize:hover {
+.cm-table-block-col-resize::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 50%;
+  width: 4px;
+  margin-left: -2px;
   background: var(--accent);
-  opacity: 0.4;
+  opacity: 0;
 }
+.cm-table-block-col-resize:hover::after { opacity: 1; }
 /* Compact icon toolbar just below the table, aligned to its right edge (outside the table).
    Button visuals are Tailwind utilities on the element itself (see buildToolbar). */
+/* Shown only while focus is inside THIS table (a cell editor) — otherwise it is
+   unclear which table the buttons act on. visibility, not display: the row keeps
+   its height, so focusing a cell never shifts the content below. Buttons act on
+   mousedown with preventDefault, so focus (and the bar) stays put on click. */
 .cm-table-block-toolbar {
+  visibility: hidden;
   display: flex;
   justify-content: flex-end;
   gap: 2px;
   margin-top: 3px;
 }
+.cm-table-block-wrap:focus-within .cm-table-block-toolbar { visibility: visible; }
 .cm-table-block-error {
   display: flex;
   align-items: center;

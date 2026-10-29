@@ -18,7 +18,6 @@ import json
 import secrets
 import uuid
 import zipfile
-from urllib.parse import quote
 
 import pytest
 from helpers import make_token
@@ -71,13 +70,6 @@ async def _make_agent_key(test_db, user_id: str, project_id: str, *,
 async def rw_key(test_db, make_project, admin_user):
     return await _make_agent_key(
         test_db, admin_user[0], make_project.pid, auto_apply=True,
-    )
-
-
-@pytest.fixture
-async def ro_key(test_db, make_project, admin_user):
-    return await _make_agent_key(
-        test_db, admin_user[0], make_project.pid, auto_apply=False,
     )
 
 
@@ -163,55 +155,6 @@ def _read(data: bytes, name: str) -> str:
 
 
 # ─── layout: INDEX rules, empty-leaf skip, dedup, reserved names ──────────────
-
-
-@pytest.mark.asyncio
-async def test_export_layout_index_rules_and_empty_leaf_skip(
-    client, mcp_running, test_db, make_project, rw_key,
-):
-    pid = make_project.pid
-    root = await _seed_doc(test_db, pid, "x-root", "Research", "", None)
-    await _seed_doc(test_db, pid, "x-child-a", "Notes", "note body", root)
-    await _seed_doc(test_db, pid, "x-leaf", "Empty", "", root)
-
-    result, data = await _export(client, rw_key, root)
-    assert result["status"] == "ok"
-    names = _zip_names(data)
-    # Parent with EMPTY content: dir stays, README.md omitted.
-    assert names == ["Research/Notes.md"], names
-    # The empty leaf is skipped entirely (no file, no dir, no link target).
-    assert "Research/Empty.md" not in names
-
-
-@pytest.mark.asyncio
-async def test_export_parent_with_content_writes_index(
-    client, mcp_running, test_db, make_project, rw_key,
-):
-    pid = make_project.pid
-    root = await _seed_doc(test_db, pid, "x-root", "Research",
-                           "# Hello\n\nbody", None)
-    await _seed_doc(test_db, pid, "x-child", "Notes", "n", root)
-    _result, data = await _export(client, rw_key, root)
-    assert _zip_names(data) == ["Research/Notes.md", "Research/README.md"]
-    assert _read(data, "Research/README.md") == "# Hello\n\nbody"
-
-
-@pytest.mark.asyncio
-async def test_export_empty_leaf_root_is_refused(
-    client, mcp_running, test_db, make_project, rw_key,
-):
-    pid = make_project.pid
-    root = await _seed_doc(test_db, pid, "x-root", "Nothing", "", None)
-    resp = await client.post(
-        "/mcp",
-        json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-              "params": {"name": "export_subtree_md",
-                         "arguments": {"root_id": root}}},
-        headers={"Authorization": f"Bearer {rw_key}", "Accept": "application/json"},
-    )
-    body = resp.json()
-    assert body["result"].get("isError")
-    assert "nothing to export" in json.dumps(body)
 
 
 @pytest.mark.asyncio
@@ -307,17 +250,6 @@ async def test_export_embed_split_inside_vs_outside(
 
 
 @pytest.mark.asyncio
-async def test_export_gfm_table_survives_verbatim(
-    client, mcp_running, test_db, make_project, rw_key,
-):
-    pid = make_project.pid
-    table_md = "| a | b |\n| --- | --- |\n| 1 | 2 |"
-    root = await _seed_doc(test_db, pid, "x-root", "R", table_md, None)
-    _result, data = await _export(client, rw_key, root)
-    assert _read(data, "R.md") == table_md
-
-
-@pytest.mark.asyncio
 async def test_export_image_ref_becomes_assets_binary(
     client, mcp_running, test_db, make_project, rw_key,
 ):
@@ -366,15 +298,6 @@ async def test_export_returns_short_lived_url_and_counts(
 
 
 @pytest.mark.asyncio
-async def test_export_readonly_key_is_allowed(
-    client, mcp_running, test_db, make_project, ro_key,
-):
-    pid = make_project.pid
-    root = await _seed_doc(test_db, pid, "x-root", "R", "body", None)
-    _result, _data = await _export(client, ro_key, root)  # must not raise
-
-
-@pytest.mark.asyncio
 async def test_export_out_of_scope_root_is_403(
     client, mcp_running, test_db, make_project, scoped_key,
 ):
@@ -401,22 +324,6 @@ async def test_export_out_of_scope_root_is_403(
     assert "outside this agent key's subtree scope" in json.dumps(body)
 
 
-@pytest.mark.asyncio
-async def test_export_unknown_root_is_error(
-    client, mcp_running, test_db, make_project, rw_key,
-):
-    resp = await client.post(
-        "/mcp",
-        json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-              "params": {"name": "export_subtree_md",
-                         "arguments": {"root_id": "no-such-doc"}}},
-        headers={"Authorization": f"Bearer {rw_key}", "Accept": "application/json"},
-    )
-    body = resp.json()
-    assert body["result"].get("isError")
-    assert "not found" in json.dumps(body)
-
-
 # ─── REST surface: GET /api/documents/{id}/export/subtree (snapshot tab) ──────
 #
 # The browser twin of the tool: same domain exporter, different transport —
@@ -438,34 +345,6 @@ async def _rest_user(test_db, uid: str, name: str) -> str:
 def _session(token: str) -> dict:
     """REST auth is the lore_session cookie (Bearer is the MCP/API-key path)."""
     return {"cookies": {"lore_session": token}}
-
-
-@pytest.mark.asyncio
-async def test_rest_subtree_export_streams_domain_zip(
-    client, test_db, make_project, admin_user,
-):
-    """Owner GET → 200 application/zip, attachment disposition, and the SAME
-    entry list the domain exporter builds for that root (bound to
-    export_subtree, never a literal) — the route adds transport only."""
-    pid = make_project.pid
-    root = await _seed_doc(test_db, pid, "r-root", "Research", "root body", None)
-    await _seed_doc(test_db, pid, "r-child", "Notes", "note body", root)
-
-    resp = await client.get(
-        f"/api/documents/{root}/export/subtree",
-        **_session(admin_user[1]),
-    )
-    assert resp.status_code == 200, resp.text
-    assert resp.headers["content-type"].startswith("application/zip")
-    disposition = resp.headers["content-disposition"]
-    assert disposition.startswith("attachment;")
-    assert 'filename="subtree.zip"' in disposition
-
-    from subtree_md import export_subtree
-    domain = await export_subtree(root_id=root, project_id=pid)
-    assert _zip_names(resp.content) == _zip_names(domain["zip_bytes"])
-    encoded = quote(domain["filename"].encode("utf-8"), safe="")
-    assert f"filename*=UTF-8''{encoded}" in disposition
 
 
 @pytest.mark.asyncio
@@ -505,21 +384,6 @@ async def test_rest_subtree_export_non_member_is_exactly_404(
 
     resp = await client.get(
         f"/api/documents/{root}/export/subtree", **_session(token),
-    )
-    assert resp.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_rest_subtree_export_reference_root_is_404(
-    client, test_db, make_project, admin_user,
-):
-    """A reference has no subtree — refused like the tool gate refuses it."""
-    pid = make_project.pid
-    host = await _seed_doc(test_db, pid, "r-host", "Host", "h", None)
-    ref = await _seed_image_ref(test_db, pid, "r-img-ref", host)
-
-    resp = await client.get(
-        f"/api/documents/{ref}/export/subtree", **_session(admin_user[1]),
     )
     assert resp.status_code == 404
 

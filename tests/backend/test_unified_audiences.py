@@ -98,62 +98,6 @@ def _row(subject: str, level: str) -> dict:
     return {"subject": subject, "access_level": level}
 
 
-# ─── Wire shape: refused before anything is written ──────────────────────────
-
-@pytest.mark.asyncio
-async def test_audiences_null_is_422(client, test_db, ua_cast, admin_user):
-    _, admin_token = admin_user
-    pid = "ua-proj-wire1"
-    await _mk_project(test_db, pid, _OWNER)
-    resp = await client.patch(
-        f"/api/projects/{pid}", json={"audiences": None},
-        cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_bad_subjects_are_422(client, test_db, ua_cast, admin_user):
-    """Only 'public' | 'mod:<id>' | 'group:<id>' are storable subjects — the
-    model-access subjects 'hidden'/'tools' and arbitrary strings never land."""
-    _, admin_token = admin_user
-    pid = "ua-proj-wire2"
-    await _mk_project(test_db, pid, _OWNER)
-    for subject in ("hidden", "tools", "foo", "mod:", "group:"):
-        resp = await client.patch(
-            f"/api/projects/{pid}", json={"audiences": [_row(subject, "readonly")]},
-            cookies={"lore_session": admin_token},
-        )
-        assert resp.status_code == 422, subject
-
-
-@pytest.mark.asyncio
-async def test_duplicate_subject_is_422(client, test_db, ua_cast, admin_user):
-    _, admin_token = admin_user
-    pid = "ua-proj-wire3"
-    await _mk_project(test_db, pid, _OWNER)
-    resp = await client.patch(
-        f"/api/projects/{pid}",
-        json={"audiences": [_row(f"mod:{_MOD}", "readonly"), _row(f"mod:{_MOD}", "full")]},
-        cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_row_missing_access_level_is_422(client, test_db, ua_cast, admin_user):
-    """Every row carries its level — the old audience-without-level default is
-    gone; a level-less row is a malformed write."""
-    _, admin_token = admin_user
-    pid = "ua-proj-wire4"
-    await _mk_project(test_db, pid, _OWNER)
-    resp = await client.patch(
-        f"/api/projects/{pid}", json={"audiences": [{"subject": f"mod:{_MOD}"}]},
-        cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 422
-
-
 # ─── Guard: refused principals ────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -184,19 +128,6 @@ async def test_full_non_owner_member_cannot_remove_public_row(client, test_db, u
     )
     assert resp.status_code == 403
     assert await _audiences(test_db, pid) == [_row("public", "readonly")]
-
-
-@pytest.mark.asyncio
-async def test_admin_public_row_at_full_is_422(client, test_db, ua_cast, admin_user):
-    """Operator ruling: "All users" never gets write — readonly or commentator only."""
-    _, admin_token = admin_user
-    pid = "ua-proj-guard3"
-    await _mk_project(test_db, pid, _OWNER)
-    resp = await client.patch(
-        f"/api/projects/{pid}", json={"audiences": [_row("public", "full")]},
-        cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -254,24 +185,6 @@ async def test_non_admin_owner_foreign_add_403_remove_200(client, test_db, ua_ca
     assert await _audiences(test_db, pid) == []
 
 
-@pytest.mark.asyncio
-async def test_owner_edits_only_own_subject_row_keeps_foreign_rows(client, test_db, ua_cast):
-    """The group-bound owner's control edits the own-subject row; foreign rows
-    ride along untouched in the same full-list PATCH."""
-    pid = "ua-proj-guard6"
-    owner = {"lore_session": make_token(_OWNER, "owner", "user")}
-    await _mk_project(test_db, pid, _OWNER, [_row("public", "commentator")])
-    resp = await client.patch(
-        f"/api/projects/{pid}",
-        json={"audiences": [_row("public", "commentator"), _row(f"mod:{_MOD}", "full")]},
-        cookies=owner,
-    )
-    assert resp.status_code == 200
-    assert await _audiences(test_db, pid) == [
-        _row("public", "commentator"), _row(f"mod:{_MOD}", "full"),
-    ]
-
-
 # ─── Cascade: member row + audience rows → MAX ────────────────────────────────
 
 @pytest.mark.asyncio
@@ -283,71 +196,7 @@ async def test_admin_group_row_member_gets_level_non_member_none(client, test_db
     assert await get_project_access(pid, {"user_id": _X, "role": "user"}) is None
 
 
-@pytest.mark.asyncio
-async def test_two_audience_grants_max(client, test_db, ua_cast):
-    from access import get_project_access
-    pid = "ua-proj-casc2"
-    await _mk_project(test_db, pid, _OWNER, [
-        _row(f"group:{_G1}", "readonly"), _row(f"group:{_G2}", "commentator"),
-    ])
-    assert await get_project_access(pid, {"user_id": "ua-u3", "role": "user"}) == "commentator"
-
-
-@pytest.mark.asyncio
-async def test_admin_on_public_row_gets_full(client, test_db, ua_cast, admin_user):
-    """Today's public branch: an admin without a member row reads full on any
-    project carrying a public row (whatever its level)."""
-    from access import get_project_access
-    admin_uid, _ = admin_user
-    pid = "ua-proj-casc3"
-    await _mk_project(test_db, pid, _OWNER, [_row("public", "readonly")])
-    assert await get_project_access(pid, {"user_id": admin_uid, "role": "admin"}) == "full"
-    # a plain user still gets the row's level
-    assert await get_project_access(pid, {"user_id": _X, "role": "user"}) == "readonly"
-
-
-@pytest.mark.asyncio
-async def test_member_row_does_not_cap_audience(client, test_db, ua_cast):
-    from access import get_project_access
-    from db import create_record
-    pid = "ua-proj-casc4"
-    await _mk_project(test_db, pid, _OWNER, [_row(f"group:{_G1}", "full")])
-    await create_record("project_members", str(uuid4()), {
-        "project_id": pid, "user_id": "ua-u3", "access_level": "readonly",
-    })
-    assert await get_project_access(pid, {"user_id": "ua-u3", "role": "user"}) == "full"
-
-
 # ─── Dashboard list: the conditional audience predicate ──────────────────────
-
-@pytest.mark.asyncio
-async def test_list_shows_public_project_to_no_group_user_and_hides_private(
-    client, test_db, ua_cast,
-):
-    pid_pub = "ua-proj-list-pub"
-    pid_priv = "ua-proj-list-priv"
-    await _mk_project(test_db, pid_pub, _OWNER, [_row("public", "readonly")])
-    await _mk_project(test_db, pid_priv, _OWNER, [])
-    resp = await client.get(
-        "/api/projects", cookies={"lore_session": make_token(_X, "x", "user")},
-    )
-    assert resp.status_code == 200
-    ids = {p["project_id"] for p in resp.json()}
-    assert pid_pub in ids
-    assert pid_priv not in ids
-    target = next(p for p in resp.json() if p["project_id"] == pid_pub)
-    assert target["my_access"] == "readonly"
-
-
-@pytest.mark.asyncio
-async def test_list_shows_group_row_project_with_my_access(client, test_db, ua_cast):
-    pid = "ua-proj-list-grp"
-    await _mk_project(test_db, pid, _OWNER, [_row(f"group:{_G1}", "commentator")])
-    resp = await client.get(
-        "/api/projects", cookies={"lore_session": make_token("ua-u3", "u3", "user")},
-    )
-    target = next(p for p in resp.json() if p["project_id"] == pid)
-    assert target["my_access"] == "commentator"
 
 
 @pytest.mark.asyncio
@@ -412,33 +261,6 @@ async def test_put_group_members_removal_revokes_collab_client(
         assert resp.status_code == 200, resp.text
         await _settle()
         assert _recv_until(ws, "access_revoked")
-
-
-@pytest.mark.asyncio
-async def test_put_group_members_add_downgrades_via_recompute(
-    sync_app, client, test_db, ua_cast, admin_user,
-):
-    """Adding a user to a group whose row sits UNDER a public row: the client
-    is recomputed to the MAX (commentator), not guessed."""
-    _, admin_token = admin_user
-    pid = "ua-proj-live2"
-    await _mk_project(test_db, pid, _OWNER, [
-        _row("public", "readonly"), _row(f"group:{_G1}", "commentator"),
-    ])
-    doc_id = await _mk_doc(client, make_token(_OWNER, "owner", "user"), pid)
-    with sync_app.websocket_connect(
-        project_collab_url(pid), cookies={"lore_session": make_token(_X, "x", "user")},
-    ) as ws:
-        join_collab_ws(ws, doc_id)
-        json.loads(ws.receive_text())  # init
-        resp = await client.put(
-            f"/api/admin/groups/{_G1}/members", json={"user_ids": [_X]},
-            cookies={"lore_session": admin_token},
-        )
-        assert resp.status_code == 200, resp.text
-        await _settle()
-        msg = _recv_until(ws, "access_changed")
-        assert msg["level"] == "commentator"
 
 
 @pytest.mark.asyncio

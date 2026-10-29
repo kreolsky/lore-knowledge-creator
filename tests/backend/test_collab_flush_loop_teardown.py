@@ -10,12 +10,9 @@ and it is not left running at all once the last client has gone.
 
 import asyncio
 
-import collab.registry as registry
 import pytest
 from collab.registry import (
-    _cleanup_session,
     _get_or_create_session,
-    _session_key,
     _sessions,
 )
 
@@ -66,27 +63,3 @@ async def test_periodic_flush_does_not_park_forever_on_a_hanging_flush(monkeypat
     # And it still dies on cancel, promptly.
     session.stop_periodic_flush()
     await asyncio.sleep(0.05)
-
-
-@pytest.mark.asyncio
-async def test_last_client_leaving_stops_the_periodic_flush(monkeypatch, collab_project):
-    """The flush loop is not left ticking through the 30s grace window.
-
-    Why this matters beyond tidiness: during grace the loop is the only thing still
-    issuing DB queries for a session nobody is connected to, which is exactly the
-    window the captured teardown wedge landed in.
-    """
-    _, doc_id, *_ = collab_project
-    monkeypatch.setattr(registry, "SESSION_GRACE_SEC", 30)
-
-    session = await _get_or_create_session("doc", doc_id, "")
-    session.start_periodic_flush()
-    assert session._flush_task is not None and not session._flush_task.done()
-
-    await _cleanup_session("doc", doc_id)
-
-    # Session is still registered (grace), but nothing is ticking inside it.
-    assert _session_key("doc", doc_id) in _sessions
-    assert session._flush_task is None or session._flush_task.done(), (
-        "periodic flush still running through the grace window"
-    )

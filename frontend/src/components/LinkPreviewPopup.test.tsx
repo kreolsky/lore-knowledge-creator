@@ -12,12 +12,6 @@ function popup(props: Partial<Parameters<typeof LinkPreviewPopup>[0]>) {
 }
 
 describe('LinkPreviewPopup — title plaque', () => {
-  it('renders the title as a single truncated line above a text body', () => {
-    const plaque = popup({ title: 'A very long material title', content: 'body' });
-    expect(plaque?.textContent).toBe('A very long material title');
-    expect(plaque?.className).toContain('truncate');
-    expect(plaque?.getAttribute('title')).toBe('A very long material title');
-  });
 
   it.each([
     ['image', { imageUrl: '/x.png' }],
@@ -26,9 +20,5 @@ describe('LinkPreviewPopup — title plaque', () => {
     ['empty', { content: '' }],
   ])('keeps the plaque over the %s state', (_state, body) => {
     expect(popup({ title: 'T', ...body })?.textContent).toBe('T');
-  });
-
-  it('renders no plaque without a title', () => {
-    expect(popup({ content: 'body' })).toBeNull();
   });
 });

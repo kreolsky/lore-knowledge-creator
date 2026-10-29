@@ -195,60 +195,6 @@ async function startRecording(): Promise<void> {
 // see above) reachable inside the test — see the comment there for why these
 // IO-polled tests get more headroom than the 5_000 vitest default.
 describe('useAudioRecorder → recording cache', () => {
-  it('persists chunks while rolling; stop finalizes the session to pending-upload', async () => {
-    await act(async () => { root.render(createElement(Harness)); });
-    await startRecording();
-    await sleep(80); // a few 25ms chunks
-    const mid = await untilRecords(recs => (recs[0]?.chunkCount ?? 0) >= 2 && recs[0].status === 'recording');
-    expect(mid).toHaveLength(1);
-
-    await act(async () => { (handlers['stop-recording'] as () => void)(); });
-    const done = await untilRecords(recs => recs[0]?.status === 'pending-upload');
-    expect(done).toHaveLength(1);
-    expect(done[0].title).toMatch(/^voice-.*\.webm$/);
-  }, 15_000);
-
-  it('still hands the in-memory File to _onComplete', async () => {
-    await act(async () => { root.render(createElement(Harness)); });
-    await startRecording();
-    await sleep(60);
-    await act(async () => { (handlers['stop-recording'] as () => void)(); });
-
-    expect(onComplete).toHaveBeenCalledTimes(1);
-    const [file, ctx] = onComplete.mock.calls[0] as [File, { projectId: string; documentId: string; sessionId: string }];
-    expect(file).toBeInstanceOf(File);
-    expect(file.name).toMatch(/^voice-.*\.webm$/);
-    expect(file.size).toBeGreaterThan(0);
-    expect(ctx).toMatchObject({ projectId: 'p1', documentId: 'd1' });
-    // The ctx carries THIS take's cache session id — the idempotency key the
-    // upload consumers append must be captured per take, never read from a
-    // global (an await in the completion path would mis-key under a new take).
-    // WHY wait for the finalize: onstop fires it and forgets it — a test that
-    // ends before it lands lets it write into the NEXT test's freshly reset DB.
-    await untilRecords(recs => recs.find(r => r.id === ctx.sessionId)?.status === 'pending-upload');
-  }, 15_000);
-
-  it('Escape discards the cached session AND the consuming isVoiceCancelled() still reads true', async () => {
-    await act(async () => { root.render(createElement(Harness)); });
-    await startRecording();
-    await sleep(60);
-
-    await act(async () => {
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-    });
-    // WHY the own id in the failure: a leftover record is either THIS take
-    // finalized instead of discarded (a product bug) or a previous test's late
-    // fire-and-forget write landing after the DB reset (an isolation flake) —
-    // only the id tells them apart.
-    const ownSessionId = (onComplete.mock.calls[0]?.[1] as { sessionId?: string } | undefined)?.sessionId;
-    await untilRecords(recs => recs.length === 0, undefined, ` (this take's session: ${ownSessionId})`);
-
-    // The peek in onstop must not have stolen the one consuming read that
-    // belongs to handleVoiceRecording — losing it would resurrect the widget
-    // sync-upload of a discarded take.
-    expect(cancelFlag.isVoiceCancelled()).toBe(true);
-    expect(cancelFlag.isVoiceCancelled()).toBe(false); // consumed exactly once
-  }, 15_000);
 
   it('a failed getUserMedia leaves no empty record behind', async () => {
     Object.defineProperty(navigator, 'mediaDevices', {

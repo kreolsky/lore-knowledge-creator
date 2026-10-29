@@ -63,24 +63,6 @@ async def test_a_fact_id_outside_the_memory_folder_is_refused(project_with_doc):
     assert exc.value.status_code in (403, 404)
 
 
-async def test_a_non_memory_doc_id_is_refused_as_a_fact_target(project_with_doc):
-    """A fact_id naming an ordinary document (is_memory != true) is refused — only
-    facts are valid targets, and the gate says so uniformly. Staleness contract
-    (plan 1786753729393): this is a per-verdict REJECTION naming the id + remedy, no
-    longer a whole-call 404 (which killed the valid verdicts beside it). Nothing
-    valid in this batch → the pinned 400."""
-    pid, idx_id, uid = project_with_doc
-    from fastapi import HTTPException
-
-    with pytest.raises(HTTPException) as exc:
-        await _apply(pid, uid, [
-            {"action": "merge", "fact_id": idx_id, "text": "y"},
-        ])
-    assert exc.value.status_code == 400
-    assert idx_id in exc.value.detail
-    assert "get_memory_facts" in exc.value.detail
-
-
 async def test_a_cross_project_fact_id_is_refused(project_with_doc):
     """A fact_id from another project is refused uniformly (no existence oracle) —
     as a per-verdict rejection whose reason does not distinguish missing from

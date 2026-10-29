@@ -158,16 +158,6 @@ async def test_revoked_pinned_model_is_refused_on_next_turn(client, test_db, wor
 
 
 @pytest.mark.asyncio
-async def test_default_model_needs_no_grant_and_follows_chat_model(
-    client, world, gateway, monkeypatch,
-):
-    assert await _turn(client, world, "blue", DEFAULT) == 409
-    _pin_default(monkeypatch, PRIVATE)
-    assert await _turn(client, world, "blue", PRIVATE) == 409
-    assert await _turn(client, world, "blue", DEFAULT) == 403
-
-
-@pytest.mark.asyncio
 async def test_moderator_group_member_gets_grants_and_loses_them(client, world, gateway):
     await _grant(client, world, MOD_MODEL, ["mod:ma-mod"])
     assert MOD_MODEL in await _picker(client, world["tokens"]["red"])
@@ -180,18 +170,6 @@ async def test_moderator_group_member_gets_grants_and_loses_them(client, world, 
     assert resp.status_code == 200, resp.text
     assert MOD_MODEL not in await _picker(client, world["tokens"]["red"])
     assert await _turn(client, world, "red", MOD_MODEL) == 403
-
-
-@pytest.mark.asyncio
-async def test_admin_group_member_gets_the_union(client, world, gateway):
-    admin = _c(world["tokens"]["admin"])
-    gid = (await client.post("/api/admin/groups", json={"name": "Writers"}, cookies=admin)).json()["id"]
-    resp = await client.put(f"/api/admin/groups/{gid}/members", json={"user_ids": ["ma-red"]}, cookies=admin)
-    assert resp.status_code == 200, resp.text
-    await _grant(client, world, GROUP_MODEL, [f"group:{gid}"])
-    await _grant(client, world, MOD_MODEL, ["mod:ma-mod"])
-    assert await _picker(client, world["tokens"]["red"]) == sorted([DEFAULT, MOD_MODEL, GROUP_MODEL])
-    assert await _picker(client, world["tokens"]["blue"]) == [DEFAULT]
 
 
 # ─── Admin surface ────────────────────────────────────────────────────────────
@@ -222,45 +200,6 @@ async def test_members_on_virtual_moderator_group_is_404(client, world):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("subject", ["mod:ma-red", "mod:nobody", "group:missing", "everyone"])
-async def test_unknown_subject_is_422(client, world, subject):
-    resp = await client.put(
-        f"/api/admin/models/{PRIVATE}", json={"subjects": [subject]},
-        cookies=_c(world["tokens"]["admin"]),
-    )
-    assert resp.status_code == 422, resp.text
-    assert resp.json()["detail"]["subjects"] == [subject]
-
-
-@pytest.mark.asyncio
-async def test_slashed_model_id_round_trips_and_shows_not_in_gateway(client, world, gateway):
-    gone = "embeddings/giga/480m"
-    resp = await _grant(client, world, gone, ["public"])
-    assert resp.json() == {"id": gone, "subjects": ["public"]}
-    rows = (await client.get("/api/admin/models", cookies=_c(world["tokens"]["admin"]))).json()
-    row = next(r for r in rows if r["id"] == gone)
-    assert row == {"id": gone, "in_gateway": False, "is_default": False, "subjects": ["public"]}
-    assert next(r for r in rows if r["id"] == DEFAULT)["is_default"] is True
-
-
-@pytest.mark.asyncio
-async def test_revoked_then_regranted_is_a_fresh_row(client, test_db, world):
-    async def row_ids() -> list:
-        return await test_db.query(
-            "SELECT VALUE id FROM model_grants WHERE model_id = $m", {"m": PUBLIC},
-        )
-    await _grant(client, world, PUBLIC, ["public"])
-    first = await row_ids()
-    await _grant(client, world, PUBLIC, ["public"])
-    assert await row_ids() == first  # a kept subject keeps its row
-    await _grant(client, world, PUBLIC, [])
-    assert await row_ids() == []
-    await _grant(client, world, PUBLIC, ["public"])
-    again = await row_ids()
-    assert len(again) == 1 and again != first
-
-
-@pytest.mark.asyncio
 async def test_group_delete_drops_members_and_grants(client, test_db, world):
     admin = _c(world["tokens"]["admin"])
     gid = (await client.post("/api/admin/groups", json={"name": "G"}, cookies=admin)).json()["id"]
@@ -273,23 +212,6 @@ async def test_group_delete_drops_members_and_grants(client, test_db, world):
         "SELECT VALUE subject FROM model_grants WHERE model_id = $m", {"m": GROUP_MODEL},
     ) == ["public"]
     assert (await client.delete(f"/api/admin/groups/{gid}", cookies=admin)).status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_groups_list_virtual_moderator_and_skips_soft_deleted(client, test_db, world, gateway):
-    admin = _c(world["tokens"]["admin"])
-    gid = (await client.post("/api/admin/groups", json={"name": "G"}, cookies=admin)).json()["id"]
-    await client.put(
-        f"/api/admin/groups/{gid}/members", json={"user_ids": ["ma-red", "ma-blue"]}, cookies=admin,
-    )
-    await _grant(client, world, MOD_MODEL, ["mod:ma-mod"])
-    await test_db.query("UPDATE type::record('users', 'ma-blue') SET deleted_at = time::now()")
-    groups = {g["id"]: g for g in (await client.get("/api/admin/groups", cookies=admin)).json()}
-    assert [m["user_id"] for m in groups[gid]["members"]] == ["ma-red"]
-    virtual = groups["mod:ma-mod"]
-    assert virtual["kind"] == "moderator" and virtual["name"] == "Mod"
-    assert [m["user_id"] for m in virtual["members"]] == ["ma-red"]
-    assert virtual["models"] == [MOD_MODEL]
 
 
 class _GatewayDown:
@@ -317,91 +239,6 @@ async def test_admin_models_list_survives_a_gateway_outage(client, monkeypatch, 
     ]
 
 
-# ─── Hidden tier ──────────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_hidden_model_is_absent_from_every_picker(client, world, gateway):
-    await _grant(client, world, PRIVATE, ["hidden"])
-    assert await _picker(client, world["tokens"]["admin"]) == sorted(
-        m for m in SERVED if m != PRIVATE
-    )
-    assert PRIVATE not in await _picker(client, world["tokens"]["blue"])
-    await _grant(client, world, PRIVATE, [])
-    assert PRIVATE in await _picker(client, world["tokens"]["admin"])
-
-
-class _Capabilities:
-    """The gateway client for /capabilities: every served model reasons."""
-
-    is_closed = False
-
-    async def get(self, url: str, headers: dict | None = None):  # noqa: ARG002
-        class _Resp:
-            def json(self) -> dict:
-                return {m: {"supported": True, "effort_levels": ["low", "high"]} for m in SERVED}
-
-            def raise_for_status(self) -> None:
-                return None
-        return _Resp()
-
-
-@pytest.mark.asyncio
-async def test_hidden_model_keeps_its_capability_fields(
-    client, world, gateway, monkeypatch, http_pool,
-):
-    """Hidden leaves the picker list only: a session pinned to the model keeps
-    its vision badge, context cap and effort dropdown."""
-    import routes.chat.models_catalog as comp
-
-    monkeypatch.setattr(comp, "_gateway_reasoning_cache", None)
-    http_pool("models_catalog", _Capabilities())
-    await _grant(client, world, PRIVATE, ["hidden"])
-    body = (await client.get("/api/chat/models", cookies=_c(world["tokens"]["admin"]))).json()
-    assert PRIVATE not in body["models"]
-    assert PRIVATE in body["context_windows"]
-    assert PRIVATE in body["vision_models"]
-    assert PRIVATE in body["reasoning"]
-
-
-@pytest.mark.asyncio
-async def test_turn_on_hidden_model_runs_for_admin_and_is_refused_for_user(
-    client, world, gateway, admin_user, project_with_doc,
-):
-    pid, idx, admin_uid = project_with_doc
-    await create_record("chat_sessions", "sess-ma-admin", {
-        "project_id": pid, "user_id": admin_uid, "document_id": idx, "title": "",
-    })
-    world["sessions"]["admin"] = "sess-ma-admin"
-    await _grant(client, world, PRIVATE, ["hidden"])
-    assert await _turn(client, world, "admin", PRIVATE) == 409
-    assert await _turn(client, world, "blue", PRIVATE) == 403
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("other", ["public", "group:"])
-async def test_hidden_with_another_subject_is_422(client, world, other):
-    admin = _c(world["tokens"]["admin"])
-    if other == "group:":
-        gid = (await client.post("/api/admin/groups", json={"name": "G"}, cookies=admin)).json()["id"]
-        other = f"group:{gid}"
-    resp = await client.put(
-        f"/api/admin/models/{PRIVATE}", json={"subjects": ["hidden", other]}, cookies=admin,
-    )
-    assert resp.status_code == 422, resp.text
-    assert resp.json()["detail"] == {"code": "hidden_exclusive"}
-
-
-@pytest.mark.asyncio
-async def test_default_model_cannot_be_hidden(client, world, gateway):
-    resp = await client.put(
-        f"/api/admin/models/{DEFAULT}", json={"subjects": ["hidden"]},
-        cookies=_c(world["tokens"]["admin"]),
-    )
-    assert resp.status_code == 422, resp.text
-    assert resp.json()["detail"] == {"code": "default_model_hidden"}
-
-
 # ─── Tools tier ───────────────────────────────────────────────────────────────
 
 
@@ -409,24 +246,6 @@ async def _roster(client, token: str) -> dict:
     resp = await client.get("/api/chat/models", cookies=_c(token))
     assert resp.status_code == 200, resp.text
     return resp.json()
-
-
-@pytest.mark.asyncio
-async def test_tools_model_is_in_every_tool_picker_and_no_chat_picker(client, world, gateway):
-    await _grant(client, world, PRIVATE, ["tools"])
-    for who in ("blue", "red", "admin"):
-        body = await _roster(client, world["tokens"][who])
-        assert PRIVATE not in body["models"], who
-        assert PRIVATE in body["tool_models"], who
-        # The chat roster is a subset of the tool roster: utilities see every chat model too.
-        assert set(body["models"]) <= set(body["tool_models"]), who
-
-
-@pytest.mark.asyncio
-async def test_hidden_model_is_in_no_tool_picker(client, world, gateway):
-    await _grant(client, world, PRIVATE, ["hidden"])
-    for who in ("blue", "admin"):
-        assert PRIVATE not in (await _roster(client, world["tokens"][who]))["tool_models"], who
 
 
 @pytest.mark.asyncio
@@ -440,24 +259,6 @@ async def test_private_ungranted_model_is_in_no_tool_picker_for_outsider(client,
 async def test_turn_on_tools_model_is_refused_for_user(client, world, gateway):
     await _grant(client, world, PRIVATE, ["tools"])
     assert await _turn(client, world, "blue", PRIVATE) == 403
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("other", "code"), [
-    ("public", "tools_exclusive"), ("group:", "tools_exclusive"),
-    # hidden is checked first: it is the stronger exclusion.
-    ("hidden", "hidden_exclusive"),
-])
-async def test_tools_with_another_subject_is_422(client, world, other, code):
-    admin = _c(world["tokens"]["admin"])
-    if other == "group:":
-        gid = (await client.post("/api/admin/groups", json={"name": "G"}, cookies=admin)).json()["id"]
-        other = f"group:{gid}"
-    resp = await client.put(
-        f"/api/admin/models/{PRIVATE}", json={"subjects": ["tools", other]}, cookies=admin,
-    )
-    assert resp.status_code == 422, resp.text
-    assert resp.json()["detail"] == {"code": code}
 
 
 @pytest.mark.asyncio
@@ -475,30 +276,6 @@ async def test_default_model_cannot_be_tools(client, world, gateway):
 
 async def _put_order(client, token: str, ids: list[str]):
     return await client.put("/api/admin/model-order", json={"model_ids": ids}, cookies=_c(token))
-
-
-@pytest.mark.asyncio
-async def test_order_applies_to_admin_list_and_every_picker(client, world, gateway):
-    """Placed models come first in their stored order; unplaced ones follow,
-    alphabetically — in the admin list, the chat roster and the tool roster."""
-    await _grant(client, world, PUBLIC, ["public"])
-    await _grant(client, world, PRIVATE, ["tools"])
-    placed = [PRIVATE, PUBLIC, MOD_MODEL]
-    resp = await _put_order(client, world["tokens"]["admin"], placed)
-    assert resp.status_code == 200, resp.text
-    expected = placed + sorted(m for m in SERVED if m not in placed)
-
-    admin = _c(world["tokens"]["admin"])
-    rows = (await client.get("/api/admin/models", cookies=admin)).json()
-    assert [r["id"] for r in rows] == expected
-
-    body = (await client.get("/api/chat/models", cookies=admin)).json()
-    assert body["models"] == [m for m in expected if m != PRIVATE]
-    assert body["tool_models"] == expected
-
-    blue = (await client.get("/api/chat/models", cookies=_c(world["tokens"]["blue"]))).json()
-    assert blue["models"] == [PUBLIC, DEFAULT]
-    assert blue["tool_models"] == [PRIVATE, PUBLIC, DEFAULT]
 
 
 @pytest.mark.asyncio

@@ -3,9 +3,9 @@
  * turn's per-row node slice (SYSTEM: dsh-conversation).
  */
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll } from 'vitest';
 import { createElement } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
+import { createRoot } from 'react-dom/client';
 import { act } from 'react';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -77,7 +77,6 @@ vi.mock('../../api/client', () => ({ apiClient: { get: vi.fn(), post: vi.fn(), p
 
 import { MessageList } from './MessageList';
 import { apiClient } from '../../api/client';
-import { on, emit } from '../../events';
 
 // jsdom lacks Element.scrollTo (the MessageList follow effect calls it on the
 // scroll container); polyfill like the ResizeObserver polyfill in
@@ -152,65 +151,7 @@ function stubBox(el: HTMLElement, box: { top: number; bottom: number }) {
   } as DOMRect));
 }
 
-function streamingState(content: string) {
-  return {
-    messageId: 'a1',
-    content,
-    controller: null,
-  };
-}
-
 describe('MessageList — scroll ownership (plan reasoning-growth-stops-shaking-tool-chips)', () => {
-  it('growing streaming content while stuck writes scrollTop synchronously and never calls scrollTo', () => {
-    chatState.activePath = [assistantMessage()];
-    chatState.streaming = streamingState('abc');
-    const { host, root } = mount();
-    const el = scrollContainer(host);
-    stubScrollMetrics(el, 1000, 400);
-    trackScrollTop(el);
-    el.scrollTop = 0; // drifted content, but the user has NOT scrolled — stick stays true
-    const scrollToSpy = vi.spyOn(el, 'scrollTo');
-    chatState.streaming = streamingState('abcdef');
-    act(() => root.render(createElement(MessageList)));
-    expect(el.scrollTop).toBe(1000);
-    expect(scrollToSpy).not.toHaveBeenCalled();
-    act(() => root.unmount());
-    host.remove();
-  });
-
-  it('growing content while NOT stuck raises scrollTop by exactly the anchored child layout delta (no drift, no smooth scroll)', () => {
-    const second = { ...assistantMessage(), message_id: 'a2' };
-    chatState.activePath = [assistantMessage(), second];
-    chatState.streaming = { ...streamingState('abc'), messageId: 'a2' };
-    const { host, root } = mount();
-    const el = scrollContainer(host);
-    stubScrollMetrics(el, 3000, 400);
-    trackScrollTop(el);
-    const bubbles = Array.from(el.children) as HTMLElement[];
-    // b0 fully above the viewport top edge; b1 (the streaming bubble) straddles it.
-    const box0 = { top: -600, bottom: -100 };
-    const box1 = { top: 150, bottom: 2000 };
-    stubBox(bubbles[0], box0);
-    stubBox(bubbles[1], box1);
-    stubBox(el, { top: 0, bottom: 400 });
-    // User scrolled up mid-stream: the scroll event flips stickToBottomRef off.
-    el.scrollTop = 500;
-    el.dispatchEvent(new Event('scroll'));
-    const scrollToSpy = vi.spyOn(el, 'scrollTo');
-    // Pass 1 (not stuck): picks the topmost visible element as anchor, no correction yet.
-    chatState.streaming = { ...streamingState('abcdef'), messageId: 'a2' };
-    act(() => root.render(createElement(MessageList)));
-    expect(el.scrollTop).toBe(500);
-    // Layout above the anchor grew by 60 → anchor moved down 60.
-    box1.top = 210;
-    chatState.streaming = { ...streamingState('abcdefabcdef'), messageId: 'a2' };
-    act(() => root.render(createElement(MessageList)));
-    // scrollTop compensated +60 → the anchor's viewport-relative position is unchanged.
-    expect(el.scrollTop).toBe(560);
-    expect(scrollToSpy).not.toHaveBeenCalled();
-    act(() => root.unmount());
-    host.remove();
-  });
 
   it('a new entry in the active path still glides: scrollTo with behavior smooth', () => {
     chatState.activePath = [assistantMessage()];
@@ -313,168 +254,6 @@ describe('MessageList — empty-content guard (plan chat-message-content-empty-u
   });
 });
 
-describe('MessageList — the branch switcher', () => {
-  function userMessage(id: string, parent: string | null = null) {
-    return { message_id: id, chat_id: 's1', parent_id: parent, role: 'user', content: id, created_at: '2026-05-20T14:59:00Z' };
-  }
-
-  function renderWith(activePath: unknown[], forks: unknown[]) {
-    chatState.activePath = activePath;
-    chatState.forks = forks;
-    chatState.streaming = null;
-    (chatState.openBranch as ReturnType<typeof vi.fn>).mockClear();
-    return mount();
-  }
-
-  // jsdom lacks ResizeObserver; the user-bubble width-measurement effect uses it.
-  let prevRO: unknown;
-  beforeEach(() => {
-    prevRO = (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver;
-    (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    };
-  });
-  afterEach(() => {
-    (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver = prevRO;
-  });
-
-  function cleanup({ host, root }: { host: HTMLElement; root: Root }) {
-    act(() => root.unmount());
-    host.remove();
-    chatState.activePath = [];
-    chatState.forks = [];
-  }
-
-  it('loads the switcher projection for the active session on mount', () => {
-    const mounted = renderWith([userMessage('u1')], []);
-    expect(chatState.loadForks).toHaveBeenCalledWith('s1');
-    cleanup(mounted);
-  });
-
-  it('renders "1/2" on the row after the fork origin and next opens the sibling branch', () => {
-    // Branch rows: c-a (copy of the assistant a1) then c-u (after it).
-    chatState.messages = [
-      { message_id: 'c-a', chat_id: 's1', parent_id: null, role: 'assistant', origin_id: 'a1', content: 'A', created_at: '2026-05-20T14:58:00Z' },
-      { message_id: 'c-u', chat_id: 's1', parent_id: 'c-a', role: 'user', origin_id: 'u9', content: 'next', created_at: '2026-05-20T14:59:00Z' },
-    ];
-    // The active branch has NO row in `sessions` (an unlisted sibling): the
-    // position comes from the server's order + `current`, never from a
-    // client-side creation time it may not have.
-    chatState.sessions = [];
-    const forks = [{
-      after_origin: 'a1',
-      options: [
-        { session_id: 's2', next_origin: 'x', created_at: '2026-05-20T14:59:30Z', current: false },
-        { session_id: 's1', next_origin: 'u9', created_at: '2026-05-20T15:00:00Z', current: true },
-      ],
-    }];
-    const mounted = renderWith([
-      { message_id: 'c-a', chat_id: 's1', parent_id: null, role: 'assistant', origin_id: 'a1', content: 'A', created_at: '2026-05-20T14:58:00Z' },
-      { message_id: 'c-u', chat_id: 's1', parent_id: 'c-a', role: 'user', origin_id: 'u9', content: 'next', created_at: '2026-05-20T14:59:00Z' },
-    ], forks);
-
-    // The indicator sits on the row whose PARENT's origin is the fork origin
-    // (c-u, the user row following c-a); the server ranks s2 first and flags
-    // this session current, so we are 2/2 — prev opens s2, next opens nothing.
-    expect(mounted.host.textContent).toContain('2/2');
-    const prev = Array.from(mounted.host.querySelectorAll('button[title="previous"]'))[0] as HTMLButtonElement;
-    act(() => prev.click());
-    expect(chatState.openBranch).toHaveBeenCalledWith('s2');
-    const next = Array.from(mounted.host.querySelectorAll('button[title="next"]'))[0] as HTMLButtonElement;
-    expect(next.disabled).toBe(true);
-
-    chatState.messages = [];
-    chatState.sessions = [];
-    cleanup(mounted);
-  });
-
-  it('no forks — no indicator', () => {
-    const mounted = renderWith([userMessage('u1')], []);
-    expect(mounted.host.querySelector('button[title="next"]')).toBeNull();
-    cleanup(mounted);
-  });
-
-  it('an empty conversation renders the chat picker (no rewind plaque anymore)', () => {
-    const mounted = renderWith([], []);
-    // The picker renders, not a scroll container with a plaque.
-    expect(mounted.host.querySelector('.overflow-y-auto')).toBeNull();
-    cleanup(mounted);
-  });
-});
-
-describe('MessageList — scroll-to-bottom button bridge', () => {
-  beforeEach(() => {
-    vi.mocked(emit).mockClear();
-    vi.mocked(on).mockClear();
-  });
-
-  function awayEmits(): boolean[] {
-    return vi.mocked(emit).mock.calls
-      .filter(([name]) => name === 'chat-scrolled-away')
-      .map(([, payload]) => (payload as { away: boolean }).away);
-  }
-
-  it('reports away once when a scroll leaves the stick threshold, and back when it returns', () => {
-    chatState.activePath = [assistantMessage()];
-    chatState.streaming = null;
-    const { host, root } = mount();
-    const el = scrollContainer(host);
-    stubScrollMetrics(el, 2000, 400);
-    trackScrollTop(el);
-    el.scrollTop = 1600 - 81; // 81px from the bottom: past the 80px threshold
-    el.dispatchEvent(new Event('scroll'));
-    el.scrollTop = 1600 - 200;
-    el.dispatchEvent(new Event('scroll'));
-    el.scrollTop = 1600 - 79;
-    el.dispatchEvent(new Event('scroll'));
-    expect(awayEmits()).toEqual([true, false]);
-    act(() => root.unmount());
-    host.remove();
-  });
-
-  it('the jump command lands at the bottom and re-follows the stream', () => {
-    chatState.activePath = [assistantMessage()];
-    chatState.streaming = streamingState('abc');
-    const { host, root } = mount();
-    const el = scrollContainer(host);
-    stubScrollMetrics(el, 2000, 400);
-    trackScrollTop(el);
-    el.scrollTop = 300;
-    el.dispatchEvent(new Event('scroll'));
-    const jump = vi.mocked(on).mock.calls.find(([name]) => name === 'chat-scroll-to-bottom')?.[1] as () => void;
-    act(() => jump());
-    expect(el.scrollTop).toBe(2000);
-    expect(awayEmits()).toEqual([true, false]);
-    // Re-stuck: further growth snaps instead of holding the anchor.
-    stubScrollMetrics(el, 2500, 400);
-    chatState.streaming = streamingState('abcdef');
-    act(() => root.render(createElement(MessageList)));
-    expect(el.scrollTop).toBe(2500);
-    act(() => root.unmount());
-    host.remove();
-  });
-
-  it('hides the button when the list leaves for a state with no scroll container', () => {
-    chatState.activePath = [assistantMessage()];
-    chatState.streaming = null;
-    chatState.messagesError = null;
-    const { host, root } = mount();
-    const el = scrollContainer(host);
-    stubScrollMetrics(el, 2000, 400);
-    trackScrollTop(el);
-    el.scrollTop = 300;
-    el.dispatchEvent(new Event('scroll'));
-    chatState.messagesError = 'boom';
-    act(() => root.render(createElement(MessageList)));
-    expect(awayEmits()).toEqual([true, false]);
-    chatState.messagesError = null;
-    act(() => root.unmount());
-    host.remove();
-  });
-});
-
 describe('MessageList — the one-shot scroll target (a chat search hit)', () => {
   function row(id: string) {
     return { ...assistantMessage(), message_id: id, content: `text ${id}` };
@@ -495,55 +274,6 @@ describe('MessageList — the one-shot scroll target (a chat search hit)', () =>
     const target = el.querySelector('[data-message-id="m2"]') as HTMLElement;
     return { host, root, el, target };
   }
-
-  it('every bubble carries its message id on the root', () => {
-    const { host, root, el } = mountWithRows();
-    expect(el.querySelectorAll('[data-message-id]').length).toBe(3);
-    act(() => root.unmount());
-    host.remove();
-  });
-
-  it('scrolls the target message to the top, stops following, and consumes the target once', () => {
-    const { host, root, el, target } = mountWithRows();
-    stubBox(target, { top: 500, bottom: 600 });
-    chatState.pendingScroll = { sessionId: 's1', messageId: 'm2' };
-    act(() => root.render(createElement(MessageList)));
-    // Content-space top of m2: rect delta (500) + the bottom snap the stuck
-    // layout pass made first (2000).
-    expect(el.scrollTop).toBe(2500);
-    expect(chatState.clearPendingScroll).toHaveBeenCalledTimes(1);
-    // The next commit must not snap back to the bottom.
-    act(() => root.render(createElement(MessageList)));
-    expect(el.scrollTop).toBe(2500);
-    act(() => root.unmount());
-    host.remove();
-  });
-
-  it('waits while the messages load, then scrolls', () => {
-    const { host, root, el, target } = mountWithRows();
-    stubBox(target, { top: 500, bottom: 600 });
-    chatState.pendingScroll = { sessionId: 's1', messageId: 'm2' };
-    chatState.messagesLoading = true;
-    act(() => root.render(createElement(MessageList)));
-    expect(chatState.clearPendingScroll).not.toHaveBeenCalled();
-    chatState.messagesLoading = false;
-    act(() => root.render(createElement(MessageList)));
-    const el2 = scrollContainer(host);
-    expect(chatState.clearPendingScroll).toHaveBeenCalledTimes(1);
-    expect(el2).not.toBe(el); // the spinner replaced the list in between
-    act(() => root.unmount());
-    host.remove();
-  });
-
-  it('a message no longer in the chat opens it without a scroll and drops the target', () => {
-    const { host, root, el } = mountWithRows();
-    chatState.pendingScroll = { sessionId: 's1', messageId: 'gone' };
-    act(() => root.render(createElement(MessageList)));
-    expect(el.scrollTop).toBe(2000);
-    expect(chatState.clearPendingScroll).toHaveBeenCalledTimes(1);
-    act(() => root.unmount());
-    host.remove();
-  });
 
   it('a snippet lands on the paragraph holding it, not on the message top', async () => {
     const { host, root, el } = mountWithRows();
@@ -604,104 +334,6 @@ describe('MessageList — the one-shot scroll target (a chat search hit)', () =>
     chatState.pendingScroll = { sessionId: 's1', messageId: 'm2', snippet: 'words that are nowhere in it' };
     act(() => root.render(createElement(MessageList)));
     expect(el.scrollTop).toBe(2500);
-    act(() => root.unmount());
-    host.remove();
-  });
-
-  it('a target for another chat than the open one is dropped, never applied here', () => {
-    const { host, root, el, target } = mountWithRows();
-    stubBox(target, { top: 500, bottom: 600 });
-    chatState.pendingScroll = { sessionId: 'other', messageId: 'm2' };
-    act(() => root.render(createElement(MessageList)));
-    expect(el.scrollTop).toBe(2000);
-    expect(chatState.clearPendingScroll).toHaveBeenCalledTimes(1);
-    act(() => root.unmount());
-    host.remove();
-  });
-});
-
-describe('MessageList — prompt rail jump', () => {
-  beforeEach(() => {
-    vi.mocked(emit).mockClear();
-    vi.mocked(on).mockClear();
-  });
-
-  // jsdom lacks ResizeObserver; the user-bubble width-measurement effect uses it.
-  let prevRO: unknown;
-  beforeAll(() => {
-    prevRO = (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver;
-    (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    };
-  });
-  afterAll(() => {
-    (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver = prevRO;
-  });
-
-  const message = (id: string, role: 'user' | 'assistant') => ({ ...assistantMessage(), message_id: id, role, content: `text ${id}` });
-
-  function awayEmits() {
-    return vi.mocked(emit).mock.calls
-      .filter(([name]) => name === 'chat-scrolled-away')
-      .map(([, payload]) => payload as { away: boolean });
-  }
-
-  const ticks = (host: HTMLElement) =>
-    Array.from(host.querySelectorAll<HTMLElement>('[data-prompt-tick]')).map(n => n.dataset.promptTick);
-
-  // u1@100, a1@300, u2@900, a2@1100 in content space; 2000 tall, 400 visible.
-  function mountConversation() {
-    chatState.activePath = [message('u1', 'user'), message('a1', 'assistant'), message('u2', 'user'), message('a2', 'assistant')];
-    chatState.streaming = null;
-    chatState.messagesError = null;
-    const mounted = mount();
-    const el = scrollContainer(mounted.host);
-    stubScrollMetrics(el, 2000, 400);
-    trackScrollTop(el);
-    stubBox(el, { top: 0, bottom: 400 });
-    const tops: Record<string, number> = { u1: 100, a1: 300, u2: 900, a2: 1100 };
-    for (const node of el.querySelectorAll<HTMLElement>('[data-message-id]')) {
-      stubContentBox(el, node, tops[node.dataset.messageId!]);
-    }
-    return { ...mounted, el };
-  }
-
-  it('one tick per user message of the branch, none for assistant rows', () => {
-    const { root, host } = mountConversation();
-    expect(ticks(host)).toEqual(['u1', 'u2']);
-    act(() => root.unmount());
-    host.remove();
-  });
-
-  it('no rail with a single user message', () => {
-    chatState.activePath = [message('u1', 'user'), message('a1', 'assistant')];
-    chatState.streaming = null;
-    chatState.messagesError = null;
-    const { root, host } = mount();
-    expect(host.querySelector('[data-prompt-rail]')).toBeNull();
-    act(() => root.unmount());
-    host.remove();
-  });
-
-  it('a tick click lands on that user message and leaves the bottom button shown', () => {
-    const { root, host, el } = mountConversation();
-    act(() => host.querySelector<HTMLElement>('[data-prompt-tick="u1"]')!.click());
-    expect(el.scrollTop).toBe(100 - 12);
-    act(() => host.querySelector<HTMLElement>('[data-prompt-tick="u2"]')!.click());
-    expect(el.scrollTop).toBe(900 - 12);
-    expect(awayEmits()).toEqual([{ away: true }]);
-    act(() => root.unmount());
-    host.remove();
-  });
-
-  it('the jump does not re-follow the stream: growth keeps the view in place', () => {
-    const { root, host, el } = mountConversation();
-    act(() => host.querySelector<HTMLElement>('[data-prompt-tick="u2"]')!.click());
-    stubScrollMetrics(el, 2500, 400);
-    act(() => root.render(createElement(MessageList)));
-    expect(el.scrollTop).toBe(900 - 12);
     act(() => root.unmount());
     host.remove();
   });

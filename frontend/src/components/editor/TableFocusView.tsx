@@ -10,7 +10,7 @@
  * local CM6 view whose doc text is exactly `tableAnchor(label, id)`. The live-preview
  * `tableBlockField` (in `renderExtensions()`) turns that single anchor into one
  * `TableBlockWidget`, which binds to the live ydoc by the view's ENTITY
- * (`tableHostEntity` facet → `subscribeEntityHandle`) — so cell
+ * (`viewEntity` facet → `subscribeEntityHandle`) — so cell
  * edits flow widget → ydoc.tables → collab → peers + the (hidden) inline editor. Why the
  * fallback over owning a second connection: it avoids a collab leave+rejoin (overlay flash,
  * presence reset, access race) on every table open/back, and reuses the exact binding the
@@ -34,8 +34,8 @@ import { Table, ArrowLeft } from 'lucide-react';
 import CodeMirrorEditor from './CodeMirrorEditor';
 import { editorExperience, renderExtensions } from './render-bundle';
 import { tableAnchor, getTablesMap } from './live-preview/table-block-model';
-import { tableHostEntity } from './live-preview/table-doc-source';
-import { claimFocus, getRoleView, setViewEntity } from '../../editor/active-editor';
+import { viewEntity } from './live-preview/table-doc-source';
+import { claimFocus, getRoleView } from '../../editor/active-editor';
 import { editableCompartment } from '../../editor/editor-plugins';
 import { getEntityHandle } from '../../collab/active-handle-registry';
 import { useAppStore } from '../../store/app-store';
@@ -85,10 +85,8 @@ export function TableFocusView({ table, hideBanner = false }: TableFocusViewProp
 
   const extensions = useMemo<Extension[]>(() => [
     editorExperience({ mode: 'document' }),
-    // Host identity for the table widget's entity late-bind: a FACET (not the
-    // view→entity registry) because this view's doc text IS the anchor — the widget's
-    // toDOM runs during view construction, before handleCreateView could register.
-    tableHostEntity.of(table.document_id),
+    // The entity this view renders: the table widget late-binds the DOCUMENT's ydoc.
+    viewEntity.of(table.document_id),
     renderExtensions(),
     // Shared compartment (same instance the document Editor uses); each EditorView resolves
     // it independently, so the focus view's editable never leaks into the document editor.
@@ -160,9 +158,6 @@ export function TableFocusView({ table, hideBanner = false }: TableFocusViewProp
 
   const handleCreateView = (view: EditorView) => {
     viewRef.current = view;
-    // Register the view's entity so the block widget late-binds the DOCUMENT's ydoc
-    // (getViewEntity → subscribeEntityHandle), not the focused slot.
-    setViewEntity(view, table.document_id);
     claimFocus({
       role: 'primary',
       isReference: false,

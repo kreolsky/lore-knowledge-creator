@@ -5,7 +5,7 @@
  */
 export { transcludeMap, linkContextChanged, isViewportCovered, scrollAnchorPlugin, transclusionDepth, revealAtCursor } from './effects';
 export type { TransclusionEntry, TransclusionKind } from './effects';
-export { parseSizeFromAlt } from './widgets';
+export { parseSizeFromAlt, setImageSize, imageEmbedParts, applyImageSize } from './widgets';
 export { resolveTransclusion } from './build-structural';
 export { livePreviewField, listLinePlugin, cursorLinePlugin, tableRenderField, tableBlockField, mathBlockRenderField, mermaidBlockRenderField } from './fields';
 export { validDocIds, validRefIds, projectRefIds, missingRefIds } from './link-validity';

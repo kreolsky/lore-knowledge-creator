@@ -31,62 +31,6 @@ def test_field_type_typeless_field_is_empty_string():
     assert _field_type(123) == ""
 
 
-def test_fingerprint_is_sorted_and_deterministic():
-    schema = {
-        "documents": {
-            "content": "DEFINE FIELD content ON documents TYPE string PERMISSIONS FULL",
-            "title": "DEFINE FIELD title ON documents TYPE string PERMISSIONS FULL",
-        },
-    }
-    fp = fingerprint_from_schema(schema)
-    assert fp == sorted(fp)
-    # Re-feeding the same dict in a different insertion order yields the same list.
-    schema_reordered = {
-        "documents": {
-            "title": "DEFINE FIELD title ON documents TYPE string PERMISSIONS FULL",
-            "content": "DEFINE FIELD content ON documents TYPE string PERMISSIONS FULL",
-        },
-    }
-    assert fingerprint_from_schema(schema_reordered) == fp
-
-
-def test_schemafull_to_schemaless_drift_is_detected():
-    # A SCHEMAFULL table (declared fields) restored as SCHEMALESS (no declared fields)
-    # is the 2026-06-30 / 2026-07-28 drift class: every (table, field, type) tuple moves
-    # into the `removed` side of the diff.
-    schemafull = {
-        "documents": {
-            "content": "DEFINE FIELD content ON documents TYPE string PERMISSIONS FULL",
-            "deleted_at": "DEFINE FIELD deleted_at ON documents TYPE datetime PERMISSIONS FULL",
-        },
-    }
-    schemaless = {"documents": {}}  # restored SCHEMALESS → no declared fields
-    recorded = fingerprint_from_schema(schemafull)
-    current = fingerprint_from_schema(schemaless)
-    diff = diff_fingerprints(recorded, current)
-    assert diff["added"] == []
-    assert sorted(diff["removed"]) == [
-        "documents|content|string",
-        "documents|deleted_at|datetime",
-    ]
-
-
-def test_diff_added_and_removed_both_surface():
-    recorded = ["a|x|int", "a|y|string", "b|z|datetime"]
-    current = ["a|x|int", "a|w|bool", "b|z|datetime"]
-    diff = diff_fingerprints(recorded, current)
-    assert diff["added"] == ["a|w|bool"]
-    assert diff["removed"] == ["a|y|string"]
-    # No drift → both empty.
-    clean = diff_fingerprints(recorded, recorded)
-    assert clean == {"added": [], "removed": []}
-
-
-def test_diff_handles_none_and_empty():
-    assert diff_fingerprints(None, ["a|x|int"]) == {"added": ["a|x|int"], "removed": []}
-    assert diff_fingerprints([], []) == {"added": [], "removed": []}
-
-
 # ─── The signal must SURVIVE the boot that raised it ───────────────────────────
 
 

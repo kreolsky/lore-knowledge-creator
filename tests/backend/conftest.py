@@ -299,25 +299,6 @@ def _user_hash() -> str:
     return _user_pass_hash
 
 
-# ─── Real-LLM gating (--runllm) ──────────────────────────────────────────────
-# WHY: the extractor e2e happy-path tests hit a real model. Default suite must
-# stay fast/offline, so these are opt-in via --runllm and auto-skip otherwise.
-def pytest_addoption(parser):
-    parser.addoption(
-        "--runllm",
-        action="store_true",
-        default=False,
-        help="run real-LLM extractor pipeline tests (needs local/orange/chat reachable)",
-    )
-
-
-def pytest_configure(config):
-    config.addinivalue_line(
-        "markers",
-        "llm: needs --runllm and a reachable LLM endpoint (local/orange/chat)",
-    )
-
-
 # WHY one shared loop for ALL async tests: the surrealdb SDK binds its WebSocket
 # (and a background _recv_task) to the event loop at connect time. pytest-asyncio
 # 0.24 runs each function test on a FRESH per-function loop, so every test opened a
@@ -333,12 +314,6 @@ def pytest_collection_modifyitems(config, items):  # noqa: ARG001
     for item in items:
         if item.get_closest_marker("asyncio") is not None:
             item.add_marker(pytest.mark.asyncio(loop_scope="session"), append=False)
-    # Skip @pytest.mark.llm tests unless --runllm is passed.
-    if not config.getoption("--runllm"):
-        skip_llm = pytest.mark.skip(reason="needs --runllm")
-        for item in items:
-            if "llm" in item.keywords:
-                item.add_marker(skip_llm)
 
 
 # Tables to clean between tests (order matters for edges first)
@@ -1209,51 +1184,3 @@ def _clear_sessions():
         except RuntimeError:
             pass
     _sessions.clear()
-
-
-# ─── Real-LLM probe (only evaluated when --runllm is set) ────────────────────
-
-
-@pytest_asyncio.fixture(scope="module")
-async def llm_probe(request):
-    """Ping the configured chat endpoint once; skip the module on failure.
-
-    WHY module scope: a single probe covers all `llm`-marked tests in a file so
-    a dead/unreachable model skips (not errors) the whole happy-path suite
-    instead of N timeouts. Only runs when --runllm is active.
-    """
-    if not request.config.getoption("--runllm"):
-        pytest.skip("needs --runllm")
-        return
-
-    from config import AI_API_KEY, AI_API_URL, CHAT_LLM_TIMEOUT_S, CHAT_MODEL
-
-    if not CHAT_MODEL:
-        pytest.skip("CHAT_MODEL not configured")
-        return
-
-    payload = {
-        "model": CHAT_MODEL,
-        "messages": [{"role": "user", "content": "Reply with the JSON: {\"ok\": true}"}],
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "probe",
-                "strict": True,
-                "schema": {
-                    "type": "object",
-                    "properties": {"ok": {"type": "boolean"}},
-                    "required": ["ok"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-    }
-    headers = {"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"}
-    try:
-        async with httpx.AsyncClient(timeout=CHAT_LLM_TIMEOUT_S) as client:
-            resp = await client.post(f"{AI_API_URL}/chat/completions", json=payload, headers=headers)
-            resp.raise_for_status()
-    except Exception as e:  # noqa: BLE001
-        pytest.skip(f"LLM endpoint {AI_API_URL} unreachable: {e}")
-

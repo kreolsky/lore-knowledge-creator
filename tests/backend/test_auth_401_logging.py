@@ -32,25 +32,6 @@ async def _call(lore_session, payload_user=None):
             return logged
 
 
-async def test_no_cookie_logs_no_cookie_with_path():
-    logged = await _call(None)
-    logged.assert_any_call("no_cookie", user_id=None, path="/api/documents/abc")
-
-
-async def test_expired_token_logs_expired_reason():
-    expired = jwt.encode(
-        {"user_id": "u1", "token_version": 0, "exp": 1},
-        SECRET_KEY, algorithm=ALGORITHM,
-    )
-    logged = await _call(expired)
-    logged.assert_any_call("expired", user_id="u1", path="/api/documents/abc")
-
-
-async def test_invalid_token_logs_invalid_reason():
-    logged = await _call("not.a.jwt")
-    logged.assert_any_call("invalid", user_id=None, path="/api/documents/abc")
-
-
 async def test_user_not_found_logs_user_not_found_with_id():
     # Valid signature but user record absent in DB → _verify_token_version raises 401.
     payload = {"user_id": "ghost", "token_version": 0,

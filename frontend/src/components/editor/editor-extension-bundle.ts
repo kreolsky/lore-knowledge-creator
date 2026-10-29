@@ -35,6 +35,7 @@ import { regionHighlightExtension, type RegionRange } from '../../editor/region-
 import { noteHighlightExtension } from '../../editor/note-highlight';
 import { makeNoteAnchorResolver } from './note-anchor-wiring';
 import { claimFocus, type FocusClaim } from '../../editor/active-editor';
+import { viewEntity } from './live-preview/table-doc-source';
 import { regionLostListener } from './region-agent-wiring';
 
 export interface EditorExtensionDeps {
@@ -50,7 +51,7 @@ export interface EditorExtensionDeps {
   activeItemRef: RefObject<(Document | Reference | null)>;
   /** Setter for the reference-isEmpty flag (observer-driven). */
   refIsEmptySetterRef: { current: (empty: boolean) => void };
-  /** Live deferred entity id — the live-headings extension writes under it. */
+  /** Live deferred entity id — the view's `viewEntity`; the live-headings extension writes under it. */
   activeItemIdRef: { current: string | undefined };
   /** Live snapshot-preview — disables live-headings + table-reconcile while previewing. */
   snapshotPreviewRef: { current: unknown };
@@ -99,6 +100,10 @@ export function buildEditorExtensions(deps: EditorExtensionDeps): Extension[] {
     // depth/reveal) — the SAME source of truth as table cells and nested views. The
     // document's render fields stay in the Mod-/ compartment below (entity-specific).
     editorExperience({ mode: 'document' }),
+    // WHY compute, not .of: this array is built once per <Editor> while the view remounts per
+    // entity (key={activeItemId}) — `.of(ref.current)` would freeze the first entity and route
+    // drops/pastes into another document's ydoc. A dep-less compute re-reads at each create.
+    viewEntity.compute([], () => deps.activeItemIdRef.current ?? null),
     listContinuationExtension,
     listNavExtension,
     // INVARIANT(data-loss): a fresh view starts NON-editable; only the editable

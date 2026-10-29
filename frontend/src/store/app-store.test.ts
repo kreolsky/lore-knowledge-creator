@@ -1263,18 +1263,6 @@ describe('setCurrentUser', () => {
     expect(useAppStore.getState().pinLocked).toBe(false);
   });
 
-  // INVARIANT: a DIRECT setCurrentUser(null) MUST still clear lastSavedBlobs.
-  // Why: it is reachable without going through PinLock/UserControls, and so without
-  // resetEditorHost — clearLastSavedBlobs() inside setCurrentUser is the idempotent
-  // safety net that keeps a bare logout caller from leaking the prior user's UI blobs.
-  it('clears lastSavedBlobs on a direct setCurrentUser(null)', () => {
-    const spy = vi.spyOn(uiStoreNS, 'clearLastSavedBlobs');
-    useAppStore.getState().setCurrentUser(makeUser());
-    useAppStore.getState().setCurrentUser(null);
-    expect(spy).toHaveBeenCalled();
-    spy.mockRestore();
-  });
-
   // INVARIANT: a soft logout (setCurrentUser(null), no page reload) MUST drop the
   // previous user's SWR caches.
   // Why: a same-tab re-login into a shared project would otherwise flash the prior

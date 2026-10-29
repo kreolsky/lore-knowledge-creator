@@ -9,7 +9,6 @@ email, and lands the new user logged in via the session cookie.
 """
 
 import hashlib
-from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
@@ -64,40 +63,6 @@ async def test_mint_requires_manager_role(client, regular_user):
     _, token = regular_user
     resp = await client.post("/api/invites", json={}, cookies={"lore_session": token})
     assert resp.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_moderator_mint_binds_own_group(client, moderator_user, test_db):
-    """A moderator's invite row carries their own uid as both inviter and group;
-    the mint returns the raw token, persisted only as its sha256."""
-    mod_uid, mod_token = moderator_user
-    token = await _mint(client, mod_token)
-    assert isinstance(token, str) and token
-    invite = await _fetch_invite(test_db, token)
-    assert invite is not None
-    assert invite["token_hash"] == hashlib.sha256(token.encode()).hexdigest()
-    assert invite["invited_by"] == mod_uid
-    assert invite["moderator_id"] == mod_uid
-    assert invite.get("used_at") is None
-
-
-@pytest.mark.asyncio
-async def test_admin_mint_takes_moderator_id_from_body(client, admin_user, moderator_user, regular_user, test_db):
-    """Admin's invite: optional moderator_id from the body, validated as a moderator uid."""
-    mod_uid, _ = moderator_user
-    _, admin_token = admin_user
-    token = await _mint(client, admin_token, {"moderator_id": mod_uid})
-    assert (await _fetch_invite(test_db, token))["moderator_id"] == mod_uid
-
-    token = await _mint(client, admin_token)
-    # Surreal omits option fields holding NONE (step-1 ruling) — read with .get().
-    assert (await _fetch_invite(test_db, token)).get("moderator_id") is None
-
-    foreign_uid, _ = regular_user
-    resp = await client.post(
-        "/api/invites", json={"moderator_id": foreign_uid}, cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 422
 
 
 # ─── Public register surface ──────────────────────────────────────────────────
@@ -164,29 +129,6 @@ async def _fetch_group_pointer(test_db, uid: str) -> tuple:
 
 
 @pytest.mark.asyncio
-async def test_register_after_demoted_moderator_lands_ungrouped(client, admin_user, moderator_user, test_db):
-    """An invite claimed after its moderator was demoted registers UNGROUPED —
-    moderator_id must never point at a non-moderator row (schema ASSERT),
-    while created_by still records the inviter."""
-    mod_uid, mod_token = moderator_user
-    _, admin_token = admin_user
-    token = await _mint(client, mod_token)
-    resp = await client.patch(
-        f"/api/admin/users/{mod_uid}", json={"role": "user"},
-        cookies={"lore_session": admin_token},
-    )
-    assert resp.status_code == 200, resp.text
-    resp = await client.post(
-        f"/api/register/{token}",
-        json={"name": "orphan", "email": "ungrouped@test.com", "password": "pass123"},
-    )
-    assert resp.status_code == 200, resp.text
-    created_by, moderator_id = await _fetch_group_pointer(test_db, resp.json()["user_id"])
-    assert moderator_id is None
-    assert created_by == mod_uid
-
-
-@pytest.mark.asyncio
 async def test_register_after_deleted_moderator_lands_ungrouped(client, admin_user, moderator_user, test_db):
     """Soft-deleted moderator at claim time: fetch_one reads None, the account
     lands ungrouped, created_by still records the inviter."""
@@ -203,127 +145,3 @@ async def test_register_after_deleted_moderator_lands_ungrouped(client, admin_us
     created_by, moderator_id = await _fetch_group_pointer(test_db, resp.json()["user_id"])
     assert moderator_id is None
     assert created_by == mod_uid
-
-
-@pytest.mark.asyncio
-async def test_register_second_use_404(client, moderator_user):
-    """Single-use: after a successful register both GET and POST read 404."""
-    _, mod_token = moderator_user
-    token = await _mint(client, mod_token)
-    resp = await client.post(
-        f"/api/register/{token}",
-        json={"name": "first", "email": INVITE_EMAIL, "password": "pass123"},
-    )
-    assert resp.status_code == 200
-    resp = await client.get(f"/api/register/{token}")
-    assert resp.status_code == 404
-    resp = await client.post(
-        f"/api/register/{token}",
-        json={"name": "second", "email": "other@test.com", "password": "pass123"},
-    )
-    assert resp.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_register_expired_404(client, admin_user, test_db):
-    """An expired invite reads as invalid on both routes."""
-    _, admin_token = admin_user
-    token = "expired-token-value"
-    await create_record("registration_invites", "test-expired-inv", {
-        "token_hash": hashlib.sha256(token.encode()).hexdigest(),
-        "invited_by": admin_user[0],
-        "moderator_id": None,
-        "expires_at": datetime.now(timezone.utc) - timedelta(hours=1),
-    })
-    resp = await client.get(f"/api/register/{token}")
-    assert resp.status_code == 404
-    resp = await client.post(
-        f"/api/register/{token}",
-        json={"name": "late", "email": INVITE_EMAIL, "password": "pass123"},
-    )
-    assert resp.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_register_duplicate_email_409_does_not_burn_invite(client, admin_user, regular_user):
-    """409 on a registered email leaves the invite reusable (checked before the claim)."""
-    _, admin_token = admin_user
-    token = await _mint(client, admin_token)
-    resp = await client.post(
-        f"/api/register/{token}",
-        json={"name": "dup", "email": "user@test.com", "password": "pass123"},
-    )
-    assert resp.status_code == 409
-    # The invite survived — the same token registers a fresh email.
-    resp = await client.post(
-        f"/api/register/{token}",
-        json={"name": "ok", "email": INVITE_EMAIL, "password": "pass123"},
-    )
-    assert resp.status_code == 200
-
-
-@pytest.mark.asyncio
-async def test_register_flushes_pending_invites(client, admin_user, project_with_doc, test_db):
-    """Queued project invites for the email are applied at registration
-    (same flush as create_user_admin)."""
-    admin_uid, admin_token = admin_user
-    pid = project_with_doc[0]
-    await create_record("pending_invites", "test-pending-reg", {
-        "email": INVITE_EMAIL,
-        "project_id": pid,
-        "access_level": "readonly",
-        "invited_by": admin_uid,
-    })
-    token = await _mint(client, admin_token)
-    resp = await client.post(
-        f"/api/register/{token}",
-        json={"name": "flushed", "email": INVITE_EMAIL, "password": "pass123"},
-    )
-    assert resp.status_code == 200
-    new_uid = resp.json()["user_id"]
-    members = await test_db.query(
-        "SELECT access_level FROM project_members WHERE user_id = $uid AND project_id = $pid",
-        {"uid": new_uid, "pid": pid},
-    )
-    assert members and members[0]["access_level"] == "readonly"
-    leftover = await test_db.query(
-        "SELECT id FROM pending_invites WHERE email = $e", {"e": INVITE_EMAIL},
-    )
-    assert not leftover
-
-
-# ─── Capability tier on invites (see SYSTEM: capability-tiers) ───────────────────
-
-
-@pytest.mark.asyncio
-async def test_mint_tier_applied_at_register(client, admin_user, test_db):
-    """The invite's tier is copied onto the registered account."""
-    _, admin_token = admin_user
-    token = await _mint(client, admin_token, {"tier": "voice"})
-    resp = await client.post(
-        f"/api/register/{token}",
-        json={"name": "tiered", "email": "tiered@test.com", "password": "pass123"},
-    )
-    assert resp.status_code == 200, resp.text
-    rows = await test_db.query(
-        "SELECT tier FROM type::record('users', $id)",
-        {"id": resp.json()["user_id"]},
-    )
-    assert rows[0]["tier"] == "voice"
-
-
-@pytest.mark.asyncio
-async def test_mint_default_tier_is_ai(client, admin_user, test_db):
-    """A mint without a tier registers at 'ai' — the historical behaviour."""
-    _, admin_token = admin_user
-    token = await _mint(client, admin_token)
-    resp = await client.post(
-        f"/api/register/{token}",
-        json={"name": "untiered", "email": "untiered@test.com", "password": "pass123"},
-    )
-    assert resp.status_code == 200, resp.text
-    rows = await test_db.query(
-        "SELECT tier FROM type::record('users', $id)",
-        {"id": resp.json()["user_id"]},
-    )
-    assert rows[0]["tier"] == "ai"

@@ -55,7 +55,6 @@ import { usePublicTransclusionSync } from '../hooks/usePublicTransclusionSync';
 import { useScrollToLine } from '../hooks/useScrollToLine';
 import { useTranslation } from '../i18n';
 import { mountView, unmountView } from '../editor/active-editor';
-import { selectionFeedExtension } from '../editor/editor-observer';
 import { noteHighlightExtension, notesChanged } from '../editor/note-highlight';
 import { publicNoteSurface } from '../editor/note-surface';
 import { buildKeymapExtension, readonlyNoteHotkeys } from './editor/hotkey-keymap';
@@ -106,7 +105,6 @@ export function buildPublicEditorExtensions(
     // Notes (comments on a public link). The state stays readOnly; this facet only
     // says the text shown IS the live payload, so a selection may take a note.
     publicNoteSurface.of(true),
-    selectionFeedExtension,
     // Only the `note` scope ever runs here (readonlyNoteHotkeys): the view is not
     // focusable, so the editor-scope bindings never see a key.
     buildKeymapExtension(),

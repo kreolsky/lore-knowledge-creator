@@ -8,8 +8,7 @@ complains — the model just emits a call that is refused.
 Everything else this file used to assert was a phrase search over the prompt
 ("offer", "save this", the section order). Those bind nothing: they make the wording
 immutable without making it correct, and they fail on every rewrite for tone. The
-prompt's OTHER derived bindings live where their second surface does — the transclusion
-schemes and the highlight palette in test_agent_editor_markup_prompt.py, the whole
+prompt's OTHER derived binding lives where its second surface does — the whole
 assembled prompt in the golden fixture (test_agent_config_loader.py).
 """
 

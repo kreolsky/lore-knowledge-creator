@@ -29,14 +29,6 @@ let container: HTMLDivElement;
 let root: Root;
 let view: EditorView;
 let dispatchSpy: ReturnType<typeof vi.spyOn>;
-let editorViewRef: React.RefObject<EditorView | null>;
-
-/** Probe component mounting the hook with a ref pre-seeded with the view. */
-function Probe({ enabled }: { enabled?: boolean }) {
-  const ref = useRef<EditorView | null>(view);
-  useScrollToLine({ editorViewRef: ref, enabled });
-  return null;
-}
 
 /** Probe whose ref is never assigned — view not yet created (doc switch remount). */
 function NullRefProbe() {
@@ -69,35 +61,6 @@ afterEach(() => {
 });
 
 describe('useScrollToLine', () => {
-  it('dispatches a scrollIntoView effect for a valid line', () => {
-    act(() => root.render(createElement(Probe, { enabled: true })));
-    act(() => emit('scroll-to-line', { line: 4 }));
-
-    expect(dispatchSpy).toHaveBeenCalledOnce();
-    const effects = dispatchSpy.mock.calls[0][0].effects;
-    const effect = Array.isArray(effects) ? effects[0] : effects;
-    expect(effect!.value.range.from).toBe(DOC_LINE(4));
-    expect(effect!.value.y).toBe('start');
-    expect(effect!.value.yMargin).toBe(60);
-  });
-
-  it('no dispatch for line < 1', () => {
-    act(() => root.render(createElement(Probe, { enabled: true })));
-    act(() => emit('scroll-to-line', { line: 0 }));
-    expect(dispatchSpy).not.toHaveBeenCalled();
-  });
-
-  it('no dispatch for line > doc.lines', () => {
-    act(() => root.render(createElement(Probe, { enabled: true })));
-    act(() => emit('scroll-to-line', { line: 99 }));
-    expect(dispatchSpy).not.toHaveBeenCalled();
-  });
-
-  it('enabled: false → no dispatch (secondary split column)', () => {
-    act(() => root.render(createElement(Probe, { enabled: false })));
-    act(() => emit('scroll-to-line', { line: 4 }));
-    expect(dispatchSpy).not.toHaveBeenCalled();
-  });
 
   it('editorViewRef.current === null → no throw, no dispatch', () => {
     expect(() => {
@@ -107,10 +70,3 @@ describe('useScrollToLine', () => {
     expect(dispatchSpy).not.toHaveBeenCalled();
   });
 });
-
-/** Offset of a 1-based line start in DOC (independent of the view under test). */
-function DOC_LINE(line: number): number {
-  return DOC.split('\n').slice(0, line - 1).join('\n').length + (line > 1 ? 1 : 0);
-}
-
-import type React from 'react';

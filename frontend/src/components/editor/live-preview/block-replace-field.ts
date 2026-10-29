@@ -38,10 +38,13 @@ export interface BlockReplaceOptions {
   /**
    * Expose the field's block ranges via `EditorView.atomicRanges`. Only for
    * ALWAYS-widget blocks whose raw text is never shown (table anchors): motion
-   * commands skip the hidden range as one unit and a delete that reaches it takes
-   * the whole atom. cursorSensitive fields (GFM table / math / mermaid) reveal raw
-   * markdown under the caret, so the caret MUST be able to enter them — they never
-   * set this.
+   * commands skip the hidden range as one unit and Shift+Arrow selects it whole.
+   * One-key deletes that reach the atom are SWALLOWED by atomic-delete-guard.ts
+   * (never a partial mangle, never a one-key whole delete); removal goes through
+   * a selection covering the atom whole («мы не удаляем таблицу/картинку одним
+   * символом — только выделив её целиком»). cursorSensitive fields (GFM table /
+   * math / mermaid) reveal raw markdown under the caret, so the caret MUST be
+   * able to enter them — they never set this.
    */
   atomic?: boolean;
 }

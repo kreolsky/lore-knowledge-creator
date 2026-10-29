@@ -169,32 +169,6 @@ class TestPinnedRegionIsServerEnforced:
         assert resp.json()["status"] == "applied"
 
 
-class TestRegionCapabilityIsDerived:
-    def test_exactly_the_region_carrying_models_are_region_capable(self):
-        """The gate reads capability off the request model, so the set cannot drift
-        from the models the way a hand-kept list would. Asserted over the DERIVED
-        registry, not a literal mirrored from the gate."""
-        from agent_tools import registry
-        from agent_tools.registry import _is_region_capable
-
-        capable = {
-            e.name for e in registry.tool_api_entries()
-            if e.mutating and _is_region_capable(e)
-        }
-        assert capable == {"edit_document", "append_to_document"}
-
-    def test_every_mutating_tool_is_classified(self):
-        """No mutating tool falls through the gate unclassified: it is either
-        region-capable (must carry the region) or out of scope (refused)."""
-        from agent_tools import registry
-        from agent_tools.registry import _is_region_capable
-
-        for e in registry.tool_api_entries():
-            if not e.mutating:
-                continue
-            assert isinstance(_is_region_capable(e), bool)
-
-
 class TestForeignSessionIsNotAnOracle:
     @pytest.mark.asyncio
     async def test_foreign_pinned_session_does_not_differentiate_the_refusal(

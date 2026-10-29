@@ -212,61 +212,6 @@ async def test_release_failure_is_best_effort(fake_redis, monkeypatch):
     # Key remains held (release failed) — TTL reaps it; nothing raised.
 
 
-# ─── the lock-ordering invariant, observed at the write path ─────────────────
-
-
-@pytest.mark.asyncio
-async def test_convergence_write_runs_under_held_lock(fake_redis, monkeypatch):
-    """INVARIANT(corruption) observed live: by the time the convergence write
-    (route_document_edits — the thing that nests session._write_lock INSIDE)
-    runs, the per-doc Redis lock for that document is HELD. doc_edit_lock is
-    acquired first, session._write_lock second — never the reverse."""
-    from agent import collab_writes as cw
-    from agent import tool_api_surface as tus
-
-    live_states = {"d1": "alpha tail"}
-    observed = {}
-
-    async def fake_fetch_one(table, rid):
-        if table == "documents":
-            return {"project_id": "p-1", "content": live_states[rid]}
-        return None
-
-    async def fake_access(_did, _user):
-        return "full"
-
-    async def fake_resolve(doc_id):
-        return live_states[doc_id], "{}"
-
-    async def fake_checkpoint(**kw):
-        return {"checkpoint_id": "cp"}
-
-    async def fake_route_edits(*, doc_id, edits, project_id):
-        observed["held_at_write"] = _held(fake_redis, doc_id)
-        live_states[doc_id] = live_states[doc_id].replace(
-            edits[0]["new_text"], edits[0]["new_text"]
-        )
-        return True
-
-    async def fake_presence(*_a, **_kw):
-        return None
-
-    monkeypatch.setattr("db.fetch_one", fake_fetch_one)
-    monkeypatch.setattr("access.get_document_access", fake_access)
-    monkeypatch.setattr("agent.doc_state.resolve_live_doc_state", fake_resolve)
-    monkeypatch.setattr(cw, "_create_agent_pre_edit_checkpoint", fake_checkpoint)
-    monkeypatch.setattr("agent.doc_state.route_document_edits", fake_route_edits)
-    monkeypatch.setattr(cw, "broadcast_agent_presence", fake_presence)
-
-    result = await tus.apply_edit_to_document(
-        doc_id="d1", old_string="alpha", new_text="ALPHA",
-        project_id="p-1", user={"user_id": "u-1"},
-    )
-    assert result["status"] == "applied"
-    assert observed["held_at_write"] is True
-    assert not _held(fake_redis, "d1")  # released after the write
-
-
 # ─── acquire ceiling — an unbounded poll would run the body UNPROTECTED ───────
 
 

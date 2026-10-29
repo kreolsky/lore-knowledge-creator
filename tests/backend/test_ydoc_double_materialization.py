@@ -56,6 +56,7 @@ async def _edit(doc_id: str, project_id: str, old: str, new: str) -> None:
     )
 
 
+# TEST-WHY: cross-process-contract — two no-session edits keep text intact over the real store; pinned by agent/doc_state.py.
 @pytest.mark.asyncio
 async def test_two_sequential_no_session_edits_do_not_corrupt(collab_project):
     """Second no-session edit on a fresh (no ydoc_state) doc keeps prior text intact."""
@@ -70,6 +71,7 @@ async def test_two_sequential_no_session_edits_do_not_corrupt(collab_project):
     assert await _db_content(doc_id) == "Hello [one] world [two]"
 
 
+# TEST-WHY: cross-process-contract — load() reconstruction equals documents.content over the real store; pinned by agent/doc_state.py.
 @pytest.mark.asyncio
 async def test_load_reconstructs_db_content_after_no_session_edit(collab_project):
     """After a no-session edit, load() (snapshot + log replay) must equal the

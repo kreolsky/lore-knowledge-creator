@@ -375,9 +375,9 @@ describe('sortReferencesByProximity', () => {
     const map = tree();
     const refs = [
       // unselected, owned by the anchor itself (distance 0), exact name match
-      makeRef({ reference_id: 'near', title: 'Alpha', document_id: 'anchor', updated_at: '2025-06-01T00:00:00Z' }),
+      makeRef({ reference_id: 'near', title: 'Alpha', document_id: 'anchor', created_at: '2025-06-01T00:00:00Z' }),
       // selected, owned by sibling (farther), non-matching title
-      makeRef({ reference_id: 'sel', title: 'Selected', document_id: 'sibling', updated_at: '2025-01-01T00:00:00Z' }),
+      makeRef({ reference_id: 'sel', title: 'Selected', document_id: 'sibling', created_at: '2025-01-01T00:00:00Z' }),
     ];
     const result = sortReferencesByProximity(refs, 'anchor', null, new Set(['sel']), map, 'alpha');
     expect(result.map(r => r.reference_id)).toEqual(['sel', 'near']);
@@ -399,9 +399,9 @@ describe('sortReferencesByProximity', () => {
   it('nearer parent docs come before farther ones (no query, none selected)', () => {
     const map = tree();
     const refs = [
-      makeRef({ reference_id: 'far', title: 'Far', document_id: 'sibling', updated_at: '2025-09-01T00:00:00Z' }),
-      makeRef({ reference_id: 'self', title: 'Self', document_id: 'anchor', updated_at: '2025-01-01T00:00:00Z' }),
-      makeRef({ reference_id: 'child', title: 'Child', document_id: 'child', updated_at: '2025-01-01T00:00:00Z' }),
+      makeRef({ reference_id: 'far', title: 'Far', document_id: 'sibling', created_at: '2025-09-01T00:00:00Z' }),
+      makeRef({ reference_id: 'self', title: 'Self', document_id: 'anchor', created_at: '2025-01-01T00:00:00Z' }),
+      makeRef({ reference_id: 'child', title: 'Child', document_id: 'child', created_at: '2025-01-01T00:00:00Z' }),
     ];
     const result = sortReferencesByProximity(refs, 'anchor', null, new Set(), map, '');
     // distance: self=0, child=2 (anchor→child... wait child is anchor's child)
@@ -412,8 +412,8 @@ describe('sortReferencesByProximity', () => {
   it('newest first within the same owning document (same distance)', () => {
     const map = tree();
     const refs = [
-      makeRef({ reference_id: 'old', title: 'R', document_id: 'anchor', updated_at: '2025-01-01T00:00:00Z' }),
-      makeRef({ reference_id: 'new', title: 'R', document_id: 'anchor', updated_at: '2025-06-01T00:00:00Z' }),
+      makeRef({ reference_id: 'old', title: 'R', document_id: 'anchor', created_at: '2025-01-01T00:00:00Z' }),
+      makeRef({ reference_id: 'new', title: 'R', document_id: 'anchor', created_at: '2025-06-01T00:00:00Z' }),
     ];
     const result = sortReferencesByProximity(refs, 'anchor', null, new Set(), map, '');
     expect(result.map(r => r.reference_id)).toEqual(['new', 'old']);
@@ -422,8 +422,8 @@ describe('sortReferencesByProximity', () => {
   it('query promotes name-match within a proximity tier', () => {
     const map = tree();
     const refs = [
-      makeRef({ reference_id: 'contains', title: 'X Alpha Y', document_id: 'anchor', updated_at: '2025-09-01T00:00:00Z' }),
-      makeRef({ reference_id: 'exact', title: 'Alpha', document_id: 'anchor', updated_at: '2025-01-01T00:00:00Z' }),
+      makeRef({ reference_id: 'contains', title: 'X Alpha Y', document_id: 'anchor', created_at: '2025-09-01T00:00:00Z' }),
+      makeRef({ reference_id: 'exact', title: 'Alpha', document_id: 'anchor', created_at: '2025-01-01T00:00:00Z' }),
     ];
     // Same distance (both owned by anchor); with query, exact match (tier 0) beats contains (tier 2)
     // even though contains is newer.
@@ -447,9 +447,9 @@ describe('sortReferencesByProximity', () => {
   it('anchorDocId === null: distance tier skipped (selected → anchor → name → date)', () => {
     const map = tree();
     const refs = [
-      makeRef({ reference_id: 'r1', title: 'R1', document_id: 'anchor', updated_at: '2025-01-01T00:00:00Z' }),
-      makeRef({ reference_id: 'r2', title: 'R2', document_id: 'sibling', updated_at: '2025-06-01T00:00:00Z' }),
-      makeRef({ reference_id: 'sel', title: 'Selected', document_id: 'child', updated_at: '2025-01-01T00:00:00Z' }),
+      makeRef({ reference_id: 'r1', title: 'R1', document_id: 'anchor', created_at: '2025-01-01T00:00:00Z' }),
+      makeRef({ reference_id: 'r2', title: 'R2', document_id: 'sibling', created_at: '2025-06-01T00:00:00Z' }),
+      makeRef({ reference_id: 'sel', title: 'Selected', document_id: 'child', created_at: '2025-01-01T00:00:00Z' }),
     ];
     // No anchor doc → no distance. Selected first, then anchor ref, then by date.
     const result = sortReferencesByProximity(refs, null, 'r2', new Set(['sel']), map, '');

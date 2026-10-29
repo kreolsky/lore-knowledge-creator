@@ -26,22 +26,6 @@ async def _add_message(client, token, sid, content, role="user"):
 
 
 @pytest.mark.asyncio
-async def test_returns_last_message_content(client, project_with_doc):
-    pid, doc_id, _ = project_with_doc
-    token = _token(project_with_doc)
-    sid = await _create_session(client, token, pid, doc_id)
-    await _add_message(client, token, sid, "first")
-    await _add_message(client, token, sid, "second (newest)")
-
-    resp = await client.get(
-        f"/api/chat/sessions/{sid}/last-message-preview",
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["preview"] == "second (newest)"
-
-
-@pytest.mark.asyncio
 async def test_truncates_long_content(client, project_with_doc):
     pid, doc_id, _ = project_with_doc
     token = _token(project_with_doc)

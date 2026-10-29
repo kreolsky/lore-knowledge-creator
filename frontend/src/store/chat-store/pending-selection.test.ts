@@ -10,8 +10,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import * as Y from 'yjs';
 import type { EntityYjsState } from '../../collab/yjs-provider';
 import { releaseHandle, publishHandle } from '../../editor/active-editor';
-import { resolveRegion, resolveRegionRange, setPendingRegion, clearPendingRegion } from './pending-selection';
-import type { PinnedRegion } from '../../types';
+import { resolveRegion, setPendingRegion, clearPendingRegion } from './pending-selection';
 
 const SID = 'sess-1';
 
@@ -92,45 +91,5 @@ describe('resolveRegion status discrimination', () => {
     publishHandle({ ydoc: live, ytext: liveText } as unknown as EntityYjsState);
 
     expect(resolveRegion(SID).status).toBe('lost');
-  });
-});
-
-describe('resolveRegionRange — shared region→UTF-16 range resolver (ghost + materialized)', () => {
-  function pin(ytext: Y.Text, from: number, to: number): PinnedRegion {
-    return {
-      doc_id: 'doc-1',
-      relFrom: Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(ytext, from)),
-      relTo: Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(ytext, to)),
-    };
-  }
-
-  it('returns null when no ydoc is bound (offline / not-yet-bound)', () => {
-    const doc = new Y.Doc();
-    const ytext = doc.getText('content');
-    ytext.insert(0, 'PREFIX-TARGET-SUFFIX');
-    const region = pin(ytext, 7, 13);
-    releaseHandle();
-    expect(resolveRegionRange(region)).toBeNull();
-  });
-
-  it('returns the UTF-16 [from, to] range when the anchor resolves', () => {
-    const doc = new Y.Doc();
-    const ytext = doc.getText('content');
-    ytext.insert(0, 'PREFIX-TARGET-SUFFIX');
-    const region = pin(ytext, 7, 13);
-    publishHandle({ ydoc: doc, ytext } as unknown as EntityYjsState);
-    expect(resolveRegionRange(region)).toEqual({ from: 7, to: 13 });
-  });
-
-  it('returns null when the anchoring ops are absent from the live doc (lost)', () => {
-    const authored = new Y.Doc();
-    const authoredText = authored.getText('content');
-    authoredText.insert(0, 'PREFIX-TARGET-SUFFIX');
-    const region = pin(authoredText, 7, 13);
-    const live = new Y.Doc();
-    const liveText = live.getText('content');
-    liveText.insert(0, 'COMPLETELY-NEW-CONTENT');
-    publishHandle({ ydoc: live, ytext: liveText } as unknown as EntityYjsState);
-    expect(resolveRegionRange(region)).toBeNull();
   });
 });

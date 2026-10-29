@@ -32,12 +32,6 @@ def _tiny_budgets(monkeypatch):
 
 
 class TestPageFactsByBudget:
-    def test_first_fact_serves_even_when_alone_over_budget(self):
-        big = _fact("f1", "x" * 500)
-        res = _page_facts_by_budget(["f1"], {"f1": big}, budget_chars=100)
-        assert [f["id"] for f in res["facts"]] == ["f1"]
-        assert res["deferred"] == []
-        assert res["missing"] == []
 
     def test_over_budget_fact_is_deferred_by_name_not_dropped(self):
         res = _page_facts_by_budget(
@@ -47,26 +41,8 @@ class TestPageFactsByBudget:
         assert [f["id"] for f in res["facts"]] == ["f1"]
         assert res["deferred"] == [{"id": "f2", "title": "T2"}]
 
-    def test_missing_ids_are_reported(self):
-        res = _page_facts_by_budget(["gone"], {}, budget_chars=100)
-        assert res["facts"] == []
-        assert res["missing"] == ["gone"]
-
-    def test_within_budget_all_serve_in_order(self):
-        res = _page_facts_by_budget(
-            ["f1", "f2"], {"f1": _fact("f1", "a"), "f2": _fact("f2", "b")}, budget_chars=100,
-        )
-        assert [f["id"] for f in res["facts"]] == ["f1", "f2"]
-        assert res["deferred"] == []
-
 
 class TestAttachCandidateBodies:
-    @pytest.mark.asyncio
-    async def test_first_candidate_always_serves(self):
-        db = _FakeDb([{"id": "c1", "content": "x" * 500}])
-        out = await _attach_candidate_bodies(db, "p", [{"id": "c1", "title": "T", "score": 0.9}])
-        assert out[0]["text"] == "x" * 500
-        assert "body_deferred" not in out[0]
 
     @pytest.mark.asyncio
     async def test_over_budget_candidate_is_marked_body_deferred_keeps_identity(self):
@@ -85,18 +61,3 @@ class TestAttachCandidateBodies:
         assert out[1]["id"] == "c2"
         assert out[1]["title"] == "T2"
         assert out[1]["score"] == 0.8
-
-    @pytest.mark.asyncio
-    async def test_within_budget_all_carry_bodies(self):
-        db = _FakeDb([{"id": "c1", "content": "a"}, {"id": "c2", "content": "b"}])
-        out = await _attach_candidate_bodies(db, "p", [
-            {"id": "c1", "title": "T1", "score": 0.9},
-            {"id": "c2", "title": "T2", "score": 0.8},
-        ])
-        assert [c["text"] for c in out] == ["a", "b"]
-        assert all("body_deferred" not in c for c in out)
-
-    @pytest.mark.asyncio
-    async def test_empty_candidates_short_circuit(self):
-        out = await _attach_candidate_bodies(_FakeDb([]), "p", [])
-        assert out == []

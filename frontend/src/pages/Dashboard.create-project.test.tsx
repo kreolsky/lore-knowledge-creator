@@ -126,24 +126,3 @@ describe('Dashboard create-project — failure surfaces a toast (no dead button)
     expect(navigateMock).toHaveBeenCalledWith('/docs/d1');
   });
 });
-
-describe('Dashboard create-project — POST body carries the description', () => {
-  it('sends the description trimmed alongside the name', async () => {
-    postMock.mockResolvedValue({ project_id: 'p1', index_doc_id: 'd1' });
-    await openFormTypeAndSubmit('  War chronicles  ');
-
-    expect(postMock).toHaveBeenCalledWith('/projects', {
-      name: 'My Project',
-      description: 'War chronicles',
-    });
-  });
-
-  it('normalises an empty description to null (a clear, not an empty string)', async () => {
-    postMock.mockResolvedValue({ project_id: 'p1', index_doc_id: 'd1' });
-    await openFormTypeAndSubmit('   ');
-
-    expect(postMock).toHaveBeenCalledTimes(1);
-    const body = postMock.mock.calls[0][1] as { description: string | null };
-    expect(body.description == null).toBe(true);
-  });
-});

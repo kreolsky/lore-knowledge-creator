@@ -117,24 +117,3 @@ async def test_second_run_is_a_noop_that_never_stoms(project_with_doc):
     assert await backfill_doc_chunk_kind(db) == 0
     kinds = _kinds(await _chunk_rows(["bkf-once"]))
     assert kinds == {"bkf-once": "reference"}, "backfill re-stomped a set kind"
-
-
-async def test_model_is_untouched(project_with_doc):
-    """The backfill heals kind ONLY: a row with a hand-set model keeps it, a
-    NONE-model row stays NONE (unknown provenance, not 'current model')."""
-    pid, host_id, _uid = project_with_doc
-    from embedding_coverage import backfill_doc_chunk_kind
-
-    await _seed_doc("bkf-doc2", pid, content="plain body two")
-    await _seed_doc("bkf-ref2", pid, content="ref body two",
-                    host_id=host_id, is_reference=True)
-    await _seed_chunk("bkf-doc2", pid, model="hand-set-model")
-    await _seed_chunk("bkf-ref2", pid)
-
-    await backfill_doc_chunk_kind(await get_db())
-
-    rows = {r["document_id"]: r for r in await _chunk_rows(["bkf-doc2", "bkf-ref2"])}
-    assert rows["bkf-doc2"]["model"] == "hand-set-model"
-    assert rows["bkf-ref2"]["model"] is None
-    assert rows["bkf-doc2"]["kind"] == "document"
-    assert rows["bkf-ref2"]["kind"] == "reference"

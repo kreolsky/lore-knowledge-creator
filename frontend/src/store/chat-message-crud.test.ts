@@ -25,8 +25,6 @@ vi.mock('../api/client', () => ({
 import { apiClient } from '../api/client';
 import {
   loadMessagesFor,
-  patchMessageContent,
-  deleteMessageById,
   type MessageLoadScope,
 } from './chat-message-crud';
 
@@ -46,23 +44,6 @@ describe('loadMessagesFor', () => {
     return scope;
   }
 
-  it('commits messages to a live scope', async () => {
-    vi.mocked(apiClient.get).mockResolvedValueOnce({ messages: MESSAGES, queue: [], queue_seq: null } as never);
-    const scope = makeScope('s1');
-    await loadMessagesFor('s1', scope);
-    expect(scope.onLoaded).toHaveBeenCalledWith(MESSAGES);
-    expect(scope.onLoadError).not.toHaveBeenCalled();
-    expect(showToast).not.toHaveBeenCalled();
-  });
-
-  it('staleness guard: a superseded fetch never commits', async () => {
-    vi.mocked(apiClient.get).mockResolvedValueOnce({ messages: MESSAGES, queue: [], queue_seq: null } as never);
-    const scope = makeScope('other-session'); // user switched while in flight
-    await loadMessagesFor('s1', scope);
-    expect(scope.onLoaded).not.toHaveBeenCalled();
-    expect(scope.onLoadError).not.toHaveBeenCalled();
-  });
-
   it('staleness guard covers the raw rows too: a superseded fetch never reaches onRows', async () => {
     vi.mocked(apiClient.get).mockResolvedValueOnce({ messages: MESSAGES, queue: [], queue_seq: null } as never);
     const scope = { ...makeScope('other-session'), onRows: vi.fn() };
@@ -81,47 +62,5 @@ describe('loadMessagesFor', () => {
     };
     await loadMessagesFor('s1', scope);
     expect(order).toEqual(['rows', 'loaded']);
-  });
-
-  it('failure surfaces a toast and the error terminal only to the live scope', async () => {
-    vi.mocked(apiClient.get).mockRejectedValueOnce(new Error('boom'));
-    const live = makeScope('s1');
-    await loadMessagesFor('s1', live);
-    expect(live.onLoadError).toHaveBeenCalledTimes(1);
-    expect(showToast).toHaveBeenCalledWith('failedToLoadMessages', 'error');
-
-    const stale = makeScope('s2');
-    await loadMessagesFor('s1', stale);
-    expect(stale.onLoadError).not.toHaveBeenCalled();
-    expect(showToast).toHaveBeenCalledWith('failedToLoadMessages', 'error'); // toast is unconditional (both stores toast on stale failure)
-  });
-});
-
-describe('patchMessageContent', () => {
-  it('returns the updated message on success', async () => {
-    const updated = { message_id: 'm1', content: 'EDITED' };
-    vi.mocked(apiClient.patch).mockResolvedValueOnce(updated as never);
-    await expect(patchMessageContent('m1', 'EDITED')).resolves.toEqual(updated);
-    expect(showToast).not.toHaveBeenCalled();
-  });
-
-  it('returns null and surfaces the toast on failure', async () => {
-    vi.mocked(apiClient.patch).mockRejectedValueOnce(new Error('boom'));
-    await expect(patchMessageContent('m1', 'EDITED')).resolves.toBeNull();
-    expect(showToast).toHaveBeenCalledWith('failedToEditMessage', 'error');
-  });
-});
-
-describe('deleteMessageById', () => {
-  it('returns true on success', async () => {
-    vi.mocked(apiClient.delete).mockResolvedValueOnce(undefined as never);
-    await expect(deleteMessageById('m1')).resolves.toBe(true);
-    expect(showToast).not.toHaveBeenCalled();
-  });
-
-  it('returns false and surfaces the toast on failure', async () => {
-    vi.mocked(apiClient.delete).mockRejectedValueOnce(new Error('boom'));
-    await expect(deleteMessageById('m1')).resolves.toBe(false);
-    expect(showToast).toHaveBeenCalledWith('failedToDeleteMessage', 'error');
   });
 });

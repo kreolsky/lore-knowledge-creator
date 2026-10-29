@@ -195,7 +195,6 @@ describe('openChatWithReference — existing session', () => {
 describe('openChatWithReference — no sessions', () => {
   it('opens a ref-scoped ghost (no POST); marks the ref as a context source', async () => {
     const { apiClient } = await import('../api/client');
-    const { useAppStore } = await import('./app-store');
     const ref = makeRef();
     (apiClient.get as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 

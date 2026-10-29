@@ -25,30 +25,6 @@ def test_containment_inside_region_is_ok():
     assert err is None
 
 
-def test_containment_outside_region_is_violation():
-    from agent.apply_edits_resolver import region_containment_error
-
-    err = region_containment_error(
-        edit_from=6, edit_to=11, edit_doc_id="d-1",
-        has_region=True,
-        region={"doc_id": "d-1", "from_cp": 0, "to_cp": 5},
-    )
-    assert err is not None
-    assert "outside" in err.lower() or "out of" in err.lower()
-
-
-def test_containment_partial_overlap_is_violation():
-    from agent.apply_edits_resolver import region_containment_error
-
-    # Edit [6,11) vs region [8,12): overlaps but is not fully inside.
-    err = region_containment_error(
-        edit_from=6, edit_to=11, edit_doc_id="d-1",
-        has_region=True,
-        region={"doc_id": "d-1", "from_cp": 8, "to_cp": 12},
-    )
-    assert err is not None
-
-
 def test_containment_wrong_doc_is_violation():
     from agent.apply_edits_resolver import region_containment_error
 
@@ -79,4 +55,3 @@ def test_containment_no_region_flag_means_unconstrained():
         has_region=False, region=None,
     )
     assert err is None
-

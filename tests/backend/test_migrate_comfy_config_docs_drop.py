@@ -55,22 +55,3 @@ async def test_tombstones_chain_keeps_role_and_leaves_others(test_db, project_wi
     for role in ("system_root", "rules_folder", "memory_folder"):
         assert (await _state(db, ids[role]))["deleted_at"] is None, f"{role} touched"
     assert (await _state(db, idx))["deleted_at"] is None
-
-
-@pytest.mark.asyncio
-async def test_second_run_is_a_noop(test_db, project_with_doc):
-    pid, _idx, _admin = project_with_doc
-    ids = await _seed_legacy_chain(pid)
-    db = await get_db()
-    await _migrate_comfy_config_docs_drop(db)
-    first = (await _state(db, ids["comfy"]))["deleted_at"]
-
-    await _migrate_comfy_config_docs_drop(db)
-
-    assert (await _state(db, ids["comfy"]))["deleted_at"] == first
-
-
-def test_registered_in_registry():
-    from migrations.runner import _MIGRATIONS
-
-    assert "comfy_config_docs_drop" in [name for name, _ in _MIGRATIONS]

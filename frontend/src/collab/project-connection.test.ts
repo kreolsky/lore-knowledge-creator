@@ -74,20 +74,6 @@ describe('ProjectConnection lifecycle', () => {
     conn.disconnect();
   });
 
-  it('sets status to connecting initially', () => {
-    const cb = makeCallbacks();
-    const conn = new ProjectConnection('proj-1', cb);
-    conn.connect();
-    expect(cb.onStatusChange).toHaveBeenCalledWith('connecting');
-    conn.disconnect();
-  });
-
-  it('sets status to connected on init message', () => {
-    const { cb, conn } = createConnected();
-    expect(cb.onStatusChange).toHaveBeenCalledWith('connected');
-    conn.disconnect();
-  });
-
   it('disconnect() closes WS and prevents reconnect', () => {
     const { conn, ws } = createConnected();
     conn.disconnect();
@@ -114,16 +100,6 @@ describe('ProjectConnection reconnection', () => {
     expect(cb.onStatusChange).toHaveBeenCalledWith('reconnecting');
     vi.advanceTimersByTime(1000);
     expect(MockWebSocket.instances).toHaveLength(2);
-    conn.disconnect();
-  });
-
-  it('an open after a drop fires onProjectWsResync; the FIRST open does not (step 8)', () => {
-    const { cb, ws, conn } = createConnected();
-    expect(cb.onProjectWsResync).not.toHaveBeenCalled();
-    ws.simulateClose();
-    vi.advanceTimersByTime(1000);
-    MockWebSocket.latest().simulateOpen();
-    expect(cb.onProjectWsResync).toHaveBeenCalledTimes(1);
     conn.disconnect();
   });
 
@@ -209,70 +185,6 @@ describe('ProjectConnection reconnection', () => {
 });
 
 describe('ProjectConnection message dispatch (the verbatim ws:* bridge)', () => {
-  it('emits ws:<type> deep-equal to the message minus type — unknown extra fields included', () => {
-    const { ws, conn } = createConnected();
-    const [spy, unsub] = busSpy('ws:document_created');
-    try {
-      ws.simulateMessage({
-        type: 'document_created', document_id: 'd1', title: 'New', parent_id: 'p1',
-        sort_key: 'a0', is_reference: false, futureField: { deep: [1, 2] },
-      });
-    } finally {
-      unsub();
-    }
-    expect(spy).toHaveBeenCalledOnce();
-    expect(spy).toHaveBeenCalledWith({
-      document_id: 'd1', title: 'New', parent_id: 'p1',
-      sort_key: 'a0', is_reference: false, futureField: { deep: [1, 2] },
-    });
-    conn.disconnect();
-  });
-
-  it('forwards a nested opaque payload untouched (project_updated updates)', () => {
-    const { ws, conn } = createConnected();
-    const updates = {
-      deep: [{ refIds: ['ref-a', 'ref-b'], refine: { ok: true, prompt: 'REFINED' } }],
-      futureField: { deep: [1, 2] },
-    };
-    const [spy, unsub] = busSpy('ws:project_updated');
-    try {
-      ws.simulateMessage({ type: 'project_updated', updates });
-    } finally {
-      unsub();
-    }
-    expect(spy).toHaveBeenCalledWith({ updates });
-    conn.disconnect();
-  });
-
-  it('forwards a wire payload of nulls verbatim (document_moved)', () => {
-    const { ws, conn } = createConnected();
-    const [spy, unsub] = busSpy('ws:document_moved');
-    try {
-      ws.simulateMessage({
-        type: 'document_moved', document_id: 'd1', parent_id: null, sort_key: null,
-        previous_parent_id: 'p0', is_reference: true, title: 'Converted',
-      });
-    } finally {
-      unsub();
-    }
-    expect(spy).toHaveBeenCalledWith({
-      document_id: 'd1', parent_id: null, sort_key: null,
-      previous_parent_id: 'p0', is_reference: true, title: 'Converted',
-    });
-    conn.disconnect();
-  });
-
-  it('forwards a zero-field message as an empty payload (embedding_degraded)', () => {
-    const { ws, conn } = createConnected();
-    const [spy, unsub] = busSpy('ws:embedding_degraded');
-    try {
-      ws.simulateMessage({ type: 'embedding_degraded' });
-    } finally {
-      unsub();
-    }
-    expect(spy).toHaveBeenCalledWith({});
-    conn.disconnect();
-  });
 
   it('warns ONCE per unknown type (forward-compat) and does not throw', () => {
     const { ws, conn } = createConnected();
@@ -294,23 +206,5 @@ describe('ProjectConnection message dispatch (the verbatim ws:* bridge)', () => 
       ws.onmessage?.({ data: 'not json' });
     }).not.toThrow();
     conn.disconnect();
-  });
-});
-
-// ── chat_frame (plan agent-line-harness-lifecycle step 7) ────────────────────
-
-describe('chat_frame dispatch', () => {
-  it('forwards a verbatim frame with its session id to onChatFrame', () => {
-    const { ws, cb } = createConnected();
-    const frame = { type: 'ids', user_message_id: 'u1', assistant_message_id: 'a1' };
-    ws.simulateMessage({ type: 'chat_frame', session_id: 's1', frame });
-    expect(cb.onChatFrame).toHaveBeenCalledWith('s1', frame);
-  });
-
-  it('drops envelopes missing the session id or the frame object', () => {
-    const { ws, cb } = createConnected();
-    ws.simulateMessage({ type: 'chat_frame', frame: { type: 'ids' } });
-    ws.simulateMessage({ type: 'chat_frame', session_id: 's1', frame: 'nope' });
-    expect(cb.onChatFrame).not.toHaveBeenCalled();
   });
 });

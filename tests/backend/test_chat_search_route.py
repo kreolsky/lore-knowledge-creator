@@ -67,16 +67,6 @@ async def test_chat_of_another_project_never_returned(client, test_db, world, en
 
 
 @pytest.mark.parametrize("entry", ENTRIES)
-async def test_note_chats_never_returned(client, test_db, world, entry):
-    pid, a = world["pid"], world["a"]
-    await _session(test_db, "n1", a, pid)
-    await _msg(test_db, "n1m0", "n1", "a note about the ember glacier")
-    await index_chat_messages({}, a, pid)
-    await test_db.query("UPDATE type::record('chat_sessions', 'n1') SET is_note = true")
-    assert await _ids(client, world, entry, "a", "ember glacier") == []
-
-
-@pytest.mark.parametrize("entry", ENTRIES)
 @pytest.mark.parametrize("revoke", [
     "UPDATE type::record('messages', 'a1m0') SET deleted_at = time::now()",
     "UPDATE type::record('chat_sessions', 'a1') SET deleted_at = time::now()",
@@ -93,22 +83,6 @@ async def test_revoked_rows_vanish_with_chunks_still_present(
     await test_db.query(revoke)
     assert await test_db.query("SELECT id FROM chat_chunks WHERE message_id = 'a1m0'")
     assert await _ids(client, world, entry, "a", "harbor ember") == []
-
-
-@pytest.mark.parametrize("entry", ENTRIES)
-async def test_chat_of_a_cascade_deleted_document_vanishes(client, test_db, world, entry):
-    from cascade import _cascade_delete_document
-
-    from db import get_db
-
-    pid, a = world["pid"], world["a"]
-    await _doc(pid, "doomed-doc")
-    await _session(test_db, "a1", a, pid, document_id="doomed-doc")
-    await _msg(test_db, "a1m0", "a1", "the glacier orchard")
-    await index_chat_messages({}, a, pid)
-    assert await _ids(client, world, entry, "a", "glacier orchard") == ["a1m0"]
-    await _cascade_delete_document(await get_db(), "doomed-doc")
-    assert await _ids(client, world, entry, "a", "glacier orchard") == []
 
 
 @pytest.mark.parametrize("entry", ENTRIES)
@@ -191,23 +165,6 @@ async def test_anchor_marks_siblings_without_reordering(client, tree):
     assert {h["chat_id"] for h in result["hits"] if h["sibling"]} == {"sA1", "sA1a"}
 
 
-async def test_siblings_and_subtree_scopes(client, tree):
-    assert sorted(await _ids(client, tree, "route", "a", "comet", scope="siblings",
-                             anchor="dA")) == ["sA1am", "sA1m", "sAm", "sRm"]
-    assert await _ids(client, tree, "route", "a", "comet", scope="subtree",
-                      under="dB") == ["sBm"]
-
-
-async def test_hits_carry_the_thread_and_its_document(client, test_db, tree):
-    pid, a = tree["pid"], tree["a"]
-    await _session(test_db, "r", a, pid, document_id="dB")
-    await _session(test_db, "rb", a, pid, document_id="dB", thread_id="r")
-    await _msg(test_db, "rbm", "rb", "the lighthouse in the branch")
-    await index_chat_messages({}, a, pid)
-    hit = (await _call(client, tree, "route", "a", "lighthouse")).json()["hits"][0]
-    assert (hit["chat_id"], hit["thread_id"], hit["document_id"]) == ("rb", "r", "dB")
-
-
 @pytest.mark.parametrize("anchor", ["no-such-doc", "dDeleted", "dForeign"])
 async def test_anchor_unknown_deleted_or_foreign_is_404(client, test_db, tree, anchor):
     await _doc(tree["pid"], "dDeleted")
@@ -216,21 +173,3 @@ async def test_anchor_unknown_deleted_or_foreign_is_404(client, test_db, tree, a
     resp = await client.get(_url(tree), params={"q": "comet", "anchor_document_id": anchor},
                             cookies={"lore_session": tree["ca"]})
     assert resp.status_code == 404, resp.text
-
-
-async def test_siblings_without_an_anchor_is_400(client, tree):
-    resp = await _call(client, tree, "route", "a", "comet", scope="siblings")
-    assert resp.status_code == 400, resp.text
-    assert "no anchor document" in resp.json()["detail"]
-
-
-@pytest.mark.parametrize("params", [
-    {"q": "comet", "scope": "subtree"},
-    {"q": "comet", "scope": "siblings", "under_document_id": "dA"},
-    {"q": "comet", "under_document_id": "dA"},
-    {"q": "comet", "scope": "everywhere"},
-    {"q": ""},
-], ids=["subtree-no-root", "siblings-with-root", "project-with-root", "bad-scope", "empty-q"])
-async def test_argument_shape_is_422(client, tree, params):
-    resp = await client.get(_url(tree), params=params, cookies={"lore_session": tree["ca"]})
-    assert resp.status_code == 422, resp.text

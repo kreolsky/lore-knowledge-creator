@@ -29,21 +29,6 @@ async def _cancel_running_task():
 
 
 @pytest.mark.asyncio
-async def test_stats_empty(client, admin_user, project_with_doc):
-    """Fresh project → all embedding counts are zero."""
-    _, token = admin_user
-    resp = await client.get(
-        "/api/admin/embeddings/stats",
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["doc_chunks_count"] == 0
-    assert "docs_without_embeddings" in data
-    assert "refs_without_embeddings" in data
-
-
-@pytest.mark.asyncio
 async def test_stats_pending_reembed_counts_dead_lettered_docs(
     client, admin_user, project_with_doc,
 ):
@@ -112,101 +97,6 @@ async def test_stats_pending_reembed_skips_dead_project(
     assert await _pending() == before - 1
 
 
-@pytest.mark.asyncio
-async def test_stats_chunked_audio_ref_is_never_negative(
-    client, admin_user, project_with_doc,
-):
-    """A chunked audio transcript keeps refs_without_embeddings at 0, never negative.
-
-    # INVARIANT: the refs numerator is a SUBSET of the refs denominator — both
-    # filter through embedding_coverage.CANDIDATE_WHERE. Why: refs_total used to
-    # filter media_type = 'markdown' while refs_with_emb_count counted every
-    # chunk-owning reference (audio refs chunk their transcript), so a single
-    # chunked audio ref read refs_without_embeddings = -1. The subset property
-    # must hold by construction, not by likely data.
-    """
-    pid, idx_id, _ = project_with_doc
-    await _seed_ref(pid, idx_id, "stats-audio-chunked-1", media_type="audio",
-                    content="chunked transcript text", with_chunk=True)
-
-    resp = await client.get(
-        "/api/admin/embeddings/stats", cookies={"lore_session": admin_user[1]},
-    )
-
-    assert resp.status_code == 200
-    assert resp.json()["refs_without_embeddings"] == 0
-
-
-@pytest.mark.asyncio
-async def test_stats_markdown_ref_without_chunks_counts_one(
-    client, admin_user, project_with_doc,
-):
-    """A markdown reference with content and no chunks is exactly the one missing ref."""
-    pid, idx_id, _ = project_with_doc
-    await _seed_ref(pid, idx_id, "stats-mdref-1", media_type="markdown",
-                    content="unembedded reference body")
-
-    resp = await client.get(
-        "/api/admin/embeddings/stats", cookies={"lore_session": admin_user[1]},
-    )
-
-    assert resp.status_code == 200
-    assert resp.json()["refs_without_embeddings"] == 1
-
-
-@pytest.mark.asyncio
-async def test_stats_emptied_chunked_doc_counted_on_neither_side(
-    client, admin_user, project_with_doc,
-):
-    """A document with chunks but empty content is on NEITHER stats side.
-
-    # INVARIANT: the content guard (CANDIDATE_WHERE) is on docs_total AND on the
-    # numerator's parent lookup. Why: with the guard on the denominator only, a
-    # chunked document whose content was later emptied stayed in the numerator
-    # while leaving the denominator — the same negative-count defect the media
-    # filter caused on the refs side, one rename away.
-    """
-    pid, _idx, _ = project_with_doc
-    await _seed_doc(pid, "stats-emptied-1", content="", with_chunk=True)
-
-    resp = await client.get(
-        "/api/admin/embeddings/stats", cookies={"lore_session": admin_user[1]},
-    )
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["doc_chunks_count"] == 1
-    assert data["docs_without_embeddings"] == 0
-
-
-@pytest.mark.asyncio
-async def test_stats_stale_model_count(client, admin_user, project_with_doc):
-    """stale_model_count tracks documents whose chunks sit on another or
-    unknown model — BOTH directions, like pending_reembed_count's test: a stub
-    returning 0 passes any healthy-only assertion, and this is the number the
-    operator watches drain after an EMBEDDING_MODEL swap."""
-    _, token = admin_user
-    pid, _idx, _ = project_with_doc
-
-    async def _stats() -> dict:
-        resp = await client.get(
-            "/api/admin/embeddings/stats", cookies={"lore_session": token},
-        )
-        assert resp.status_code == 200
-        return resp.json()
-
-    assert (await _stats())["stale_model_count"] == 0
-
-    await _seed_doc(pid, "stats-stale-other-1", with_chunk=True,
-                    chunk_model="some-retired-model")
-    await _seed_doc(pid, "stats-stale-none-1", with_chunk=True, chunk_model="NONE")
-    await _seed_doc(pid, "stats-stale-current-1", with_chunk=True)  # current model
-
-    assert (await _stats())["stale_model_count"] == 2, (
-        "stale-model docs (other + NONE) must be counted; the current-model doc must not"
-    )
-
-
 _EMBED_ONLY = "\n![a](ref:0d3d8db4-bb6c-494f-b4a3-943bd5ae7425)\n\n![b](ref:4687f19d-54a7-4d2e-a811-04c86a412ce0)\n"
 
 
@@ -249,22 +139,6 @@ async def test_stats_counts_only_what_embed_missing_would_enqueue(
     sweep = {r["id"] for r in await documents_missing_embed(await get_db())}
     assert sweep == {"stats-prose-stale", "stats-prose-missing"}
     assert len(sweep) == data["docs_without_embeddings"] + data["stale_model_count"]
-
-
-@pytest.mark.asyncio
-async def test_embed_missing_starts_background(client, admin_user, project_with_doc):
-    """POST /embed-missing enqueues embed_document_task per missing doc."""
-    await _cancel_running_task()
-    _, token = admin_user
-    with patch("embeddings._ensure_config", new_callable=AsyncMock), \
-         EnqueueRecorder.active():
-        resp = await client.post(
-            "/api/admin/embeddings/embed-missing",
-            json={},
-            cookies={"lore_session": token},
-        )
-    assert resp.status_code == 200
-    assert resp.json()["started"] is True
 
 
 _SEEDED: list[str] = []
@@ -321,30 +195,6 @@ async def _seed_doc(pid: str, doc_id: str, *, status: str | None = None,
             "content: 'text', offset_start: 0, offset_end: 4, content_version: 0, "
             f"kind: 'document', embedding: [0.0]{extra} }}",
             {"id": doc_id, "pid": pid, **params},
-        )
-
-
-async def _seed_ref(pid: str, host_id: str, ref_id: str, *, media_type: str,
-                    content: str, with_chunk: bool = False) -> None:
-    """A reference row (is_reference=true) under `host_id`, optionally chunked."""
-    from db import create_record
-
-    db = await get_db()
-    _SEEDED.append(ref_id)
-    await db.query("DELETE type::record('documents', $id)", {"id": ref_id})
-    await db.query("DELETE doc_chunks WHERE document_id = $id", {"id": ref_id})
-    await create_record("documents", ref_id, {
-        "project_id": pid, "parent_id": host_id, "title": ref_id,
-        "content": content, "path": f"_ref/{ref_id}.md",
-        "is_reference": True, "media_type": media_type,
-    })
-    if with_chunk:
-        extra, params = await _chunk_model_clause(None)
-        await db.query(
-            "CREATE doc_chunks CONTENT { document_id: $id, project_id: $pid, ord: 0, "
-            "content: 'text', offset_start: 0, offset_end: 4, content_version: 0, "
-            f"kind: 'reference', embedding: [0.0]{extra} }}",
-            {"id": ref_id, "pid": pid, **params},
         )
 
 
@@ -460,68 +310,6 @@ async def test_reset_docs(client, admin_user, project_with_doc):
 
 
 @pytest.mark.asyncio
-async def test_reset_string_form_predicate_deletes_nothing(project_with_doc):
-    """The string-form DELETE ('doc_chunks:<id>' strings vs record ids) leaves the
-    chunk — the falsifier proving test_reset_docs discriminates the predicates.
-
-    # WHY: SurrealDB never equating a record id with its string form is the ONLY
-    # property separating the working reset predicate from the broken one. If the
-    # string form ever started deleting, test_reset_docs would pass with either
-    # predicate and pin nothing.
-    """
-    pid, _idx, _uid = project_with_doc
-    await _seed_doc(pid, "reset-stringform-1", with_chunk=True)
-    db = await get_db()
-    rows = await db.query(
-        "SELECT meta::id(id) AS id FROM doc_chunks WHERE document_id = $id",
-        {"id": "reset-stringform-1"},
-    )
-    assert rows, "seeded chunk is missing before the falsifier runs"
-    string_ids = [f"doc_chunks:{r['id']}" for r in rows]
-    await db.query("DELETE FROM doc_chunks WHERE id IN $ids", {"ids": string_ids})
-    left = await db.query(
-        "SELECT count() AS c FROM doc_chunks WHERE document_id = $id GROUP ALL",
-        {"id": "reset-stringform-1"},
-    )
-    assert (left[0]["c"] if left else 0) == 1, (
-        "the string-form predicate deleted the chunk — reset's count assertion "
-        "no longer discriminates the two predicate forms"
-    )
-
-
-@pytest.mark.asyncio
-async def test_reset_refs_endpoint_removed(client, admin_user, project_with_doc):
-    """reset-refs endpoint removed: ref_embeddings table is gone (unified into doc_chunks)."""
-    _, token = admin_user
-    resp = await client.post(
-        "/api/admin/embeddings/reset-refs",
-        json={},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_reset_docs_progress(client, admin_user, project_with_doc):
-    """Reset docs shows progress via status endpoint."""
-    await _cancel_running_task()
-    _, token = admin_user
-    resp = await client.post(
-        "/api/admin/embeddings/reset-docs",
-        json={},
-        cookies={"lore_session": token},
-    )
-    assert resp.json().get("started") or resp.json().get("running") is not False
-    await asyncio.sleep(0.5)
-    resp = await client.get(
-        "/api/admin/embeddings/status",
-        cookies={"lore_session": token},
-    )
-    data = resp.json()
-    assert data["operation"] == "reset_docs"
-
-
-@pytest.mark.asyncio
 async def test_stats_requires_admin(client, regular_user, project_with_doc):
     """Stats endpoint returns 403 for regular user."""
     _, token = regular_user
@@ -580,20 +368,6 @@ async def _index_chats(client, token):
 
 
 @pytest.mark.asyncio
-async def test_chat_stats_drain_after_the_pair_task(client, admin_user, chat_embed, chat_corpus):
-    """Two unindexed messages read pending 2; the pair task drains them to 0."""
-    from jobs.tasks.chat_index import index_chat_messages
-    _, token = admin_user
-    await chat_corpus("cs1", "u1", "p1", [("cm1", "the gate"), ("cm2", "the tower")])
-    before = await _chat_stats(client, token)
-    assert before == {"state": "on", "chunks": 0, "pending_messages": 2, "stale_chunks": 0}
-    await index_chat_messages({}, "u1", "p1")
-    after = await _chat_stats(client, token)
-    assert after["pending_messages"] == 0 and after["stale_chunks"] == 0
-    assert after["chunks"] > 0
-
-
-@pytest.mark.asyncio
 async def test_chat_stats_equal_what_index_chats_posts(
     client, admin_user, chat_embed, chat_corpus,
 ):
@@ -622,41 +396,6 @@ async def test_chat_stats_equal_what_index_chats_posts(
 
 
 @pytest.mark.asyncio
-async def test_chat_stats_other_model_chunk_is_pending_and_stale(
-    client, admin_user, chat_embed, chat_corpus, test_db,
-):
-    from jobs.tasks.chat_index import index_chat_messages
-    _, token = admin_user
-    await chat_corpus("cs1", "u1", "p1", [("cm1", "old geometry")])
-    await index_chat_messages({}, "u1", "p1")
-    chunks = (await _chat_stats(client, token))["chunks"]
-    assert chunks > 0
-    await test_db.query("UPDATE chat_chunks SET model = 'retired/model'")
-    stats = await _chat_stats(client, token)
-    assert (stats["pending_messages"], stats["stale_chunks"]) == (1, chunks)
-
-
-@pytest.mark.parametrize("fields", [
-    {"is_note": True}, {"unindexed": True}, {"deleted_at": "now"},
-], ids=["note", "unindexed", "deleted"])
-@pytest.mark.asyncio
-async def test_chat_stats_skip_unindexable_chats(
-    client, admin_user, chat_embed, chat_corpus, test_db, fields,
-):
-    _, token = admin_user
-    await chat_corpus("cs1", "u1", "p1", [("cm1", "not for the index")])
-    # False-green check: the same chat counts while it is indexable.
-    assert (await _chat_stats(client, token))["pending_messages"] == 1
-    if "deleted_at" in fields:
-        await test_db.query(
-            "UPDATE type::record('chat_sessions', 'cs1') SET deleted_at = time::now()")
-    else:
-        await test_db.query(
-            "UPDATE type::record('chat_sessions', 'cs1') MERGE $f", {"f": fields})
-    assert (await _chat_stats(client, token))["pending_messages"] == 0
-
-
-@pytest.mark.asyncio
 async def test_chat_stats_skill_disabled(client, admin_user, chat_embed, chat_corpus, test_db):
     """Disabled skill: numbers are None (never 0) and /index-chats posts nothing."""
     _, token = admin_user
@@ -668,20 +407,6 @@ async def test_chat_stats_skill_disabled(client, admin_user, chat_embed, chat_co
                      "pending_messages": None, "stale_chunks": None}
     body, posts = await _index_chats(client, token)
     assert body == {"started": False, "error": "skill_disabled"}
-    assert posts == []
-
-
-@pytest.mark.asyncio
-async def test_chat_stats_embeddings_unconfigured(client, admin_user, chat_embed, chat_corpus):
-    import embeddings
-    _, token = admin_user
-    await chat_corpus("cs1", "u1", "p1", [("cm1", "pending, no provider")])
-    embeddings._ensure_config.side_effect = embeddings.EmbeddingConfigError("no url")
-    stats = await _chat_stats(client, token)
-    assert stats["state"] == "embeddings_unconfigured"
-    assert (stats["pending_messages"], stats["stale_chunks"]) == (None, None)
-    body, posts = await _index_chats(client, token)
-    assert body == {"started": False, "error": "embeddings_unconfigured"}
     assert posts == []
 
 

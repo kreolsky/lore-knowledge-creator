@@ -254,20 +254,6 @@ def fake_embedding_provider(monkeypatch, vector_of):
     return fake
 
 
-@contextlib.contextmanager
-def pinned_embedding_api(
-    url: str = "http://embedding.test", key: str = "test-key",
-):
-    """Context-manager twin of pin_embedding_api."""
-    import config
-
-    with patch.object(config, "EMBEDDING_API_URL", url), \
-         patch.object(config, "EMBEDDING_API_KEY", key), \
-         patch.object(config, "AI_API_URL", url), \
-         patch.object(config, "AI_API_KEY", key):
-        yield
-
-
 def pin_tool_gates(
     monkeypatch, *, sandbox: bool | None = None, comfy: bool | None = None,
 ) -> None:
@@ -336,27 +322,6 @@ def pin_comfy_prompt_model(monkeypatch, model: str = "test-refiner") -> None:
 
     monkeypatch.setattr(config, "COMFYUI_PROMPT_MODEL", model)
     monkeypatch.setattr(config, "CHAT_MODEL", model)
-
-
-@contextlib.contextmanager
-def pinned_tool_gates(
-    *, sandbox: bool | None = None, comfy: bool | None = None,
-):
-    """Context-manager twin of pin_tool_gates (for stacked `with patch(...)` sites)."""
-    import config
-
-    pins: list[tuple[str, object]] = []
-    if sandbox is not None:
-        pins += [
-            ("SANDBOX_SSH_HOST", "sandbox-test" if sandbox else ""),
-            ("SANDBOX_SSH_KEY_B64", "dGVzdC1rZXk=" if sandbox else ""),
-        ]
-    if comfy is not None:
-        pins.append(("COMFYUI_URL", "http://comfy-test" if comfy else ""))
-    with contextlib.ExitStack() as stack:
-        for name, value in pins:
-            stack.enter_context(patch.object(config, name, value))
-        yield
 
 
 # ─── Round-trip oracles ──────────────────────────────────────────────────────

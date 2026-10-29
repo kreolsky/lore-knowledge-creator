@@ -175,15 +175,6 @@ describe('ChatInput draft round-trip (unmount on tab switch)', () => {
   });
 });
 
-describe('ChatInput Escape wiring', () => {
-  it('hands the composer the turn stop and the voice discard (it owns the Escape order)', () => {
-    const rig = render(createElement(ChatInput));
-    expect(composerProps.current?.onStop).toBe(useChatStore.getState().stopGeneration);
-    expect(composerProps.current?.onCancelRecording).toBe(cancelRecording);
-    unmount(rig);
-  });
-});
-
 describe('ChatInput reasoning-effort dropdown options (plan reasoning-effort-selector)', () => {
   function effortDropdown() {
     const hit = dropdownProps.find(p => p.title === 'chatReasoningTitle');

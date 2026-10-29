@@ -1,11 +1,12 @@
 /** Generated-image thumbnail + shared full-image lightbox, split out of
  * MessageBubble.tsx (behavior-preserving). */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Download, Trash2 } from 'lucide-react';
 import { IconButton, Modal } from '../../../ui';
 import { useArmedAction } from '../../../../hooks/useArmedAction';
 import { useTranslation } from '../../../../i18n';
+import { useOutsideDrag } from '../../../../hooks/useOutsideDrag';
 import { referenceFileUrl, referenceThumbUrl } from '../../../../utils/reference-url';
 
 /**
@@ -20,11 +21,17 @@ import { referenceFileUrl, referenceThumbUrl } from '../../../../utils/reference
  *
  * The full-image URL is built by generatedImageUrl (below) — no filePath is
  * needed on the step.
+ *
+ * Dragged past the threshold onto an editable editor it inserts the image's
+ * `ref:` embed at the drop point (useOutsideDrag); a plain click still opens
+ * the lightbox.
  */
 export function GeneratedImageThumb({ imageRefId, onOpen }: { imageRefId: string; onOpen: () => void }) {
   const { t } = useTranslation();
   const [loaded, setLoaded] = useState(false);
   const [errored, setErrored] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  useOutsideDrag(buttonRef, imageRefId, !errored);
 
   if (errored) {
     return (
@@ -38,8 +45,10 @@ export function GeneratedImageThumb({ imageRefId, onOpen }: { imageRefId: string
   return (
     // eslint-disable-next-line react/forbid-elements
     <button
+      ref={buttonRef}
       type="button"
       onClick={onOpen}
+      onDragStart={(e) => e.preventDefault()}
       aria-label={t('viewGeneratedImage')}
       title={t('viewGeneratedImage')}
       className="block border border-border cursor-pointer hover:opacity-80 transition-opacity"

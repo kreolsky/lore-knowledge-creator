@@ -186,9 +186,14 @@ function ProjectCard({
         {/* No my_access = the viewer cannot enter (owner/member/public none of
          * those) — render NO link, just the disabled look with the reason;
          * a navigable link would always land on the error page. */}
+        {/* target=_blank: entering a project must NOT replace the admin list —
+         * the link hands the browser a new window (Link skips SPA navigation
+         * for non-_self targets), so the panel stays behind it. */}
         {project.my_access ? (
           <Link
             to={`/projects/${project.project_id}`}
+            target="_blank"
+            rel="noopener noreferrer"
             className="w-[22px] h-[22px] border-none bg-transparent text-text-muted flex items-center justify-center transition-all duration-150 hover:bg-surface3 hover:text-text"
             title={t('openProject')}
           >

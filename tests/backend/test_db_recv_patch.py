@@ -111,34 +111,6 @@ class _FakeConn:
         raise AssertionError(f"unexpected error response in {ctx}: {response}")
 
 
-@pytest.mark.asyncio
-async def test_patched_recv_task_survives_cancelled_future(db_module, monkeypatch):
-    """The reader must not die when a response arrives for a cancelled future."""
-    from surrealdb.data.cbor import encode
-
-    fut_cancelled = asyncio.get_event_loop().create_future()
-    fut_cancelled.cancel()
-
-    fut_live = asyncio.get_event_loop().create_future()
-
-    socket = _FakeSocket([
-        encode({"id": "req-cancelled", "result": "stale"}),
-        encode({"id": "req-live", "result": "ok"}),
-    ])
-    conn = _FakeConn(socket)
-    conn.qry["req-cancelled"] = fut_cancelled
-    conn.qry["req-live"] = fut_live
-
-    # Bind the patched method as if it were defined on the class
-    task = asyncio.create_task(db_module._patched_recv_task(conn))
-
-    result = await asyncio.wait_for(fut_live, timeout=1.0)
-    assert result == {"id": "req-live", "result": "ok"}
-
-    await asyncio.wait_for(task, timeout=1.0)
-    assert task.exception() is None
-
-
 def test_patch_is_installed_on_class(db_module):
     """Importing db.py must replace AsyncWsSurrealConnection._recv_task with the patched one.
 

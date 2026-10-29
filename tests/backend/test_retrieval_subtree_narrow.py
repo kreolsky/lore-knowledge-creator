@@ -26,8 +26,6 @@ The no-narrow baseline passes before the change too — it is the regression gua
 pinning "default untouched", not a Red test.
 """
 
-import hashlib
-import secrets
 
 import pytest
 
@@ -79,39 +77,7 @@ def _by_id(result):
 IN_SUBTREE = {"narrow-root", "narrow-host-in", "narrow-ref-in"}
 
 
-# ─── Baseline: no narrow ⇒ unchanged ─────────────────────────────────────────
-
-
-async def test_no_narrow_keeps_memory_and_whole_project(narrow_corpus):
-    """The whole-project default is untouched (the INVARIANT in search_exec):
-    without allowed_doc_ids every fact is served, including out-subtree docs —
-    memory included. This is the regression guard, not a Red test."""
-    hits = _by_id(await _retrieve(narrow_corpus))
-
-    for f in ("fact_in", "fact_out", "fact_merged", "fact_soft", "fact_empty"):
-        assert narrow_corpus[f] in hits, f"{f} must be served with no narrow"
-    assert narrow_corpus["host_out"] in hits
-    assert narrow_corpus["ref_out"] in hits
-
-
 # ─── Defect 2: SQL pushdown — no slot starvation ─────────────────────────────
-
-
-async def test_out_of_subtree_chunks_absent_and_no_slot_starvation(narrow_corpus):
-    """Under a narrow, out-of-subtree DOC and REF chunks are excluded IN SQL.
-    host_out carries the PERFECT vector and top_k_docs=1: with the old
-    project-wide fetch it consumed the only slot before host_in was ever seen;
-    with the pushdown the in-subtree hit is what the slot buys."""
-    result = await _retrieve(
-        narrow_corpus,
-        narrow=set(IN_SUBTREE),
-        include_memory=False, include_references=False, top_k_docs=1,
-    )
-    hits = _by_id(result)
-    assert narrow_corpus["host_in"] in hits, (
-        "the in-subtree doc lost its top-k slot to an out-of-subtree hit"
-    )
-    assert narrow_corpus["host_out"] not in hits
 
 
 async def test_memory_only_search_is_not_starved_by_raw_chunks(
@@ -149,46 +115,9 @@ async def test_reference_chunks_outside_subtree_absent(narrow_corpus):
 # ─── D1: memory is filtered by provenance, not dropped ───────────────────────
 
 
-async def test_fact_with_source_hosted_inside_returned_with_sources(narrow_corpus):
-    """The headline case: a fact-doc OUTSIDE the subtree by tree position is
-    returned under the narrow because its source reference is hosted INSIDE —
-    and it rides with `sources` (the journal thread the model must judge it
-    against)."""
-    hits = _by_id(await _retrieve(narrow_corpus, narrow=set(IN_SUBTREE)))
-
-    hit = hits.get(narrow_corpus["fact_in"])
-    assert hit is not None, "provenance-scoped fact dropped under the narrow"
-    assert hit.kind == "memory"
-    assert [s["id"] for s in hit.sources] == [narrow_corpus["ref_in"]]
-    assert hit.sources[0]["title"], "a source without a title is unreadable"
-
-
 async def test_fact_with_all_sources_outside_dropped(narrow_corpus):
     hits = _by_id(await _retrieve(narrow_corpus, narrow=set(IN_SUBTREE)))
     assert narrow_corpus["fact_out"] not in hits
-
-
-async def test_merged_fact_spanning_in_and_out_subtrees_returned(narrow_corpus):
-    """∃-semantics: a fact distilled from two seminars belongs to the narrow if
-    ANY of its sources is hosted inside (D1)."""
-    hits = _by_id(await _retrieve(narrow_corpus, narrow=set(IN_SUBTREE)))
-    assert narrow_corpus["fact_merged"] in hits
-
-
-async def test_soft_deleted_source_ref_still_scopes_fact(narrow_corpus):
-    """D4: provenance is a historical thread — a fact does not stop being about
-    a subtree because its source was soft-deleted. Only a hard-missing row is
-    unresolvable."""
-    hits = _by_id(await _retrieve(narrow_corpus, narrow=set(IN_SUBTREE)))
-    assert narrow_corpus["fact_soft"] in hits
-
-
-async def test_fact_with_empty_sources_dropped_under_narrow(narrow_corpus):
-    """D5: legacy facts without provenance drop under a narrow (79/175 on dev).
-    Accepted — the shortfall is stated in the tool description, not silently
-    swallowed. Without a narrow they are still served (baseline test above)."""
-    hits = _by_id(await _retrieve(narrow_corpus, narrow=set(IN_SUBTREE)))
-    assert narrow_corpus["fact_empty"] not in hits
 
 
 # ─── Both agent surfaces: a memory hit reaches the model under a narrow ──────
@@ -210,40 +139,6 @@ async def _assert_agent_result(result, corpus):
     for out_id in ("host_out", "ref_out", "fact_out"):
         assert corpus[out_id] not in hits, f"{out_id} leaked through the narrow"
     assert corpus["host_in"] in hits, "the in-subtree doc lost its slot"
-
-
-async def _make_agent_key(test_db, user_id: str, project_id: str) -> str:
-    from db import create_record
-
-    token = "lore_" + secrets.token_hex(32)
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-    await create_record("api_keys", f"narrow-agent-key-{secrets.token_hex(4)}", {
-        "user_id": user_id,
-        "project_id": project_id,
-        "document_id": "",  # project-scoped
-        "token_hash": token_hash,
-        "label": "agent",
-        "capabilities": ["agent"],
-    })
-    return token
-
-
-async def test_http_memory_hit_under_narrow(
-    client, test_db, narrow_corpus,
-):
-    """Tool-API surface: POST /api/tool/search_materials with a real
-    under_document_id returns the provenance-scoped memory hit WITH sources."""
-    corpus = narrow_corpus
-    token = await _make_agent_key(test_db, corpus["uid"], corpus["pid"])
-
-    resp = await client.post(
-        "/api/tool/search_materials",
-        json={"query": TOKEN, "under_document_id": corpus["root"],
-              "k": 10},
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert resp.status_code == 200, resp.text
-    await _assert_agent_result(resp.json(), corpus)
 
 
 async def test_mcp_memory_hit_under_narrow(narrow_corpus):

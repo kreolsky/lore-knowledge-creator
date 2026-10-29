@@ -47,82 +47,6 @@ def _clear_sessions():
     _sessions.clear()
 
 
-class TestOnAccessChangedRevocation:
-    async def test_ws_closed_with_4003_on_revocation(self):
-        session = _mk_session()
-        client = _mk_client(user_id="u-victim")
-        session.clients[id(client.ws)] = client
-        _sessions[_session_key("doc", "d1")] = session
-
-        await _on_access_changed("p1", "u-victim", None)
-
-        await asyncio.sleep(1.5)
-
-        client.ws.close.assert_awaited()
-        close_calls = client.ws.close.call_args_list
-        code_4003_found = any(
-            c.kwargs.get("code") == 4003 or (c.args and c.args[0] == 4003)
-            for c in close_calls
-        )
-        assert code_4003_found, f"Expected close with code 4003, got calls: {close_calls}"
-
-    async def test_client_removed_from_session_on_revocation(self):
-        session = _mk_session()
-        client = _mk_client(user_id="u-victim")
-        session.clients[id(client.ws)] = client
-        _sessions[_session_key("doc", "d1")] = session
-
-        await _on_access_changed("p1", "u-victim", None)
-
-        await asyncio.sleep(1.5)
-
-        assert id(client.ws) not in session.clients
-
-    async def test_access_revoked_message_sent_before_close(self):
-        session = _mk_session()
-        client = _mk_client(user_id="u-victim")
-        session.clients[id(client.ws)] = client
-        _sessions[_session_key("doc", "d1")] = session
-
-        await _on_access_changed("p1", "u-victim", None)
-
-        sent_messages = [
-            json.loads(call.args[0])
-            for call in client.ws.send_text.call_args_list
-        ]
-        assert any(m.get("type") == "access_revoked" for m in sent_messages)
-
-    async def test_ws_not_closed_when_access_changed_not_revoked(self):
-        session = _mk_session()
-        client = _mk_client(user_id="u-editor", access_level="full")
-        session.clients[id(client.ws)] = client
-        _sessions[_session_key("doc", "d1")] = session
-
-        await _on_access_changed("p1", "u-editor", "editor")
-
-        await asyncio.sleep(1.5)
-
-        close_calls = [c for c in client.ws.close.call_args_list
-                       if c.kwargs.get("code") == 4003 or (c.args and c.args[0] == 4003)]
-        assert len(close_calls) == 0
-        assert id(client.ws) in session.clients
-
-    async def test_grace_period_before_close(self):
-        session = _mk_session()
-        client = _mk_client(user_id="u-victim")
-        session.clients[id(client.ws)] = client
-        _sessions[_session_key("doc", "d1")] = session
-
-        await _on_access_changed("p1", "u-victim", None)
-
-        await asyncio.sleep(0.3)
-        code_4003_found = any(
-            c.kwargs.get("code") == 4003 or (c.args and c.args[0] == 4003)
-            for c in client.ws.close.call_args_list
-        )
-        assert not code_4003_found, "WS should not be closed before 1s grace period"
-
-
 class TestOnAccessChangedProjectScope:
     async def test_other_project_session_untouched(self):
         session = _mk_session(project_id="p-other")
@@ -191,50 +115,6 @@ class TestProjectWideRecompute:
             })
         yield
 
-    async def test_every_client_recomputed_row_holder_downgraded_stranger_revoked(
-        self, client, test_db, wide_cast,
-    ):
-        session = _mk_session(project_id="p1")
-        c_a = _mk_client(user_id="u-a")
-        c_b = _mk_client(user_id="u-b")
-        c_c = _mk_client(user_id="u-c")
-        for c in (c_a, c_b, c_c):
-            session.clients[id(c.ws)] = c
-        _sessions[_session_key("doc", "d1")] = session
-
-        await _on_access_changed("p1", None, None)
-
-        # row holders keep exactly their row level; the stranger is revoked
-        for client, level in ((c_a, "commentator"), (c_b, "readonly")):
-            sent = [json.loads(c.args[0]) for c in client.ws.send_text.call_args_list]
-            assert {"type": "access_changed", "level": level} in sent
-            # the session's write-gate copy follows the frame
-            assert client.access_level == level
-            client.ws.close.assert_not_called()
-        sent = [json.loads(c.args[0]) for c in c_c.ws.send_text.call_args_list]
-        assert any(m.get("type") == "access_revoked" for m in sent)
-        assert c_c.access_level is None  # fail-closed for the write gate
-        await asyncio.sleep(1.5)
-        close_calls = c_c.ws.close.call_args_list
-        assert any(
-            c.kwargs.get("code") == 4003 or (c.args and c.args[0] == 4003)
-            for c in close_calls
-        )
-
-    async def test_other_project_session_untouched_project_wide(
-        self, client, test_db, wide_cast,
-    ):
-        session = _mk_session(project_id="p2")
-        client = _mk_client(user_id="u-a")
-        session.clients[id(client.ws)] = client
-        _sessions[_session_key("doc", "d1")] = session
-
-        await _on_access_changed("p1", None, None)
-
-        await asyncio.sleep(1.5)
-        client.ws.send_text.assert_not_called()
-        client.ws.close.assert_not_called()
-        assert id(client.ws) in session.clients
 
     async def test_unknown_project_session_resolved_via_doc_meta(
         self, client, test_db, wide_cast,

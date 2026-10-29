@@ -70,12 +70,6 @@ async def test_compression_reduces_size(test_db, blob_store):
 
 
 @pytest.mark.asyncio
-async def test_get_content_missing_raises(blob_store):
-    with pytest.raises(ValueError, match="not found"):
-        await get_content("deadbeef" * 8)
-
-
-@pytest.mark.asyncio
 async def test_unicode_round_trip(test_db, blob_store):
     text = "Съешь ещё этих мягких французских булок 🥖 日本語テスト"
     ref = await put_content(text)

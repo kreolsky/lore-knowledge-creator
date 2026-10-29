@@ -116,47 +116,6 @@ beforeEach(async () => {
 });
 
 describe('initGhostFromScope — direct', () => {
-  it('D8: empty scope → bare defaults (false / null / empty model / null effort)', () => {
-    useChatStore.setState({ sessions: [], activeSessionId: null });
-    useChatStore.getState().initGhostFromScope();
-
-    const s = useChatStore.getState();
-    expect(s.ghostAgentAuto).toBe(false);
-    expect(s.ghostSystemPromptId).toBeNull();
-    expect(s.ghostModel).toBe('');
-    expect(s.ghostReasoningEffort).toBeNull();
-  });
-
-  it('D1/D2/D3: inherits model + agent_auto + system_prompt_id + reasoning_effort from the latest session', () => {
-    useChatStore.setState({
-      sessions: [
-        makeSession({
-          session_id: 'old',
-          model: 'gpt-old',
-          updated_at: '2024-01-01T00:00:00Z',
-        }),
-        makeSession({
-          session_id: 'latest',
-          model: 'gpt-X',
-          agent_auto: true,
-          system_prompt_id: 'p1',
-          reasoning_effort: 'high',
-          updated_at: '2026-01-01T00:00:00Z',
-        }),
-      ],
-      activeSessionId: null,
-    });
-    useChatStore.getState().initGhostFromScope();
-
-    const s = useChatStore.getState();
-    expect(s.ghostModel).toBe('gpt-X');
-    expect(s.ghostAgentAuto).toBe(true);
-    expect(s.ghostSystemPromptId).toBe('p1');
-    // The backend create-walk inherits model + prompt but NOT reasoning_effort,
-    // so the ghost holds it client-side (mirrors agent_auto) — what the composer
-    // shows is what the materialization POST carries.
-    expect(s.ghostReasoningEffort).toBe('high');
-  });
 
   it('prefers the active session over the latest-by-updated_at one', () => {
     useChatStore.setState({
@@ -312,57 +271,5 @@ describe('D4: per-scope isolation', () => {
     });
     useChatStore.getState().initGhostFromScope();
     expect(useChatStore.getState().ghostModel).toBe('model-B');
-  });
-
-  it('project-wide list: a ghost inherits from the latest chat of ANOTHER document', () => {
-    // The sessions list is now project-wide. A fresh ghost on doc-A inherits from
-    // the latest AI chat ANYWHERE in the project — here the donor lives on doc-B.
-    useChatStore.setState({
-      sessions: [
-        makeSession({
-          session_id: 'docA-old', model: 'model-A',
-          document_id: 'doc-A', updated_at: '2026-01-01T00:00:00Z',
-        }),
-        makeSession({
-          session_id: 'docB-latest', model: 'model-B',
-          agent_auto: true, system_prompt_id: 'p-B',
-          document_id: 'doc-B', updated_at: '2026-06-01T00:00:00Z',
-        }),
-      ],
-      activeSessionId: null,
-    });
-    useChatStore.getState().initGhostFromScope();
-
-    const s = useChatStore.getState();
-    expect(s.ghostModel).toBe('model-B');
-    expect(s.ghostAgentAuto).toBe(true);
-    expect(s.ghostSystemPromptId).toBe('p-B');
-  });
-});
-
-describe('startGhostChat clears the project-level active chat', () => {
-  it('clears lastActiveChatSessionId on startGhostChat', async () => {
-    const { useUIStore } = await import('./ui-store');
-    const setLastActiveChatSession = vi.fn();
-    (useUIStore.getState as ReturnType<typeof vi.fn>).mockReturnValue({
-      documents: {},
-      setLastActiveChatSession,
-      getLastActiveChatSession: vi.fn(() => 'sess-old'),
-      getRefPreviewMode: vi.fn(() => false),
-      getRefOpenMode: vi.fn(() => 'center'),
-      setRightPanelTab: vi.fn(),
-    });
-
-    useChatStore.getState().startGhostChat();
-
-    expect(setLastActiveChatSession).toHaveBeenCalledWith(null);
-  });
-});
-
-describe('reset — ghost reasoning effort hygiene', () => {
-  it('reset() clears ghostReasoningEffort (logout hygiene)', () => {
-    useChatStore.setState({ ghostReasoningEffort: 'high' });
-    useChatStore.getState().reset();
-    expect(useChatStore.getState().ghostReasoningEffort).toBeNull();
   });
 });

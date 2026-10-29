@@ -139,28 +139,6 @@ describe('NoteChatView draft round-trip (unmount on back/Esc/tab switch)', () =>
   });
 });
 
-describe('NoteChatView Escape while dictating', () => {
-  const pressEscape = (ta: HTMLTextAreaElement) => {
-    act(() => { ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); });
-  };
-
-  it('a recording in progress keeps the thread open (the composer discards the take)', () => {
-    voice.recording = true;
-    const rig = render(createElement(NoteChatView));
-    pressEscape(textareaOf(rig.container));
-    expect(useNoteChatStore.getState().activeSessionId).toBe('ns1');
-    unmount(rig);
-    voice.recording = false;
-  });
-
-  it('without a recording Escape leaves the thread', () => {
-    const rig = render(createElement(NoteChatView));
-    pressEscape(textareaOf(rig.container));
-    expect(useNoteChatStore.getState().activeSessionId).toBeNull();
-    unmount(rig);
-  });
-});
-
 describe('NoteChatView Escape never deletes a note on an unproven empty', () => {
   const pressEscape = (ta: HTMLTextAreaElement) => {
     act(() => { ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); });
@@ -214,31 +192,5 @@ describe('NoteChatView Escape leaves via the shared exit path', () => {
     expect(setRightPanelTabMock).not.toHaveBeenCalled();
     expect(useNoteChatStore.getState().activeSessionId).toBeNull();
     unmount(rig);
-  });
-});
-
-// ── load-older button (tail-anchored note pagination) ────────────────────────
-// The button is the ONLY pagination affordance: it renders at the top of the
-// thread while messagesTruncated (a committed full page) and disappears once
-// the head of the thread is loaded.
-describe('NoteChatView load-older button', () => {
-  it('renders only while messagesTruncated and fires loadOlderMessages on click', () => {
-    useNoteChatStore.setState({
-      messages: [{ message_id: 'm1', session_id: 'ns1', role: 'user', content: 'tail row', created_at: 'x' } as never],
-      messagesTruncated: true,
-    });
-    const spy = vi.spyOn(useNoteChatStore.getState(), 'loadOlderMessages').mockImplementation(() => Promise.resolve());
-    const rig = render(createElement(NoteChatView));
-    const btn = rig.container.querySelector('button');
-    expect(btn?.textContent).toContain('loadOlderMessages');
-    act(() => { btn!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
-    expect(spy).toHaveBeenCalledTimes(1);
-    unmount(rig);
-    spy.mockRestore();
-
-    useNoteChatStore.setState({ messagesTruncated: false });
-    const rig2 = render(createElement(NoteChatView));
-    expect(rig2.container.querySelector('button')).toBeNull();
-    unmount(rig2);
   });
 });

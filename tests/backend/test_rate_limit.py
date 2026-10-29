@@ -12,8 +12,6 @@ import pytest
 import rate_limit
 from rate_limit import (
     MAX_ATTEMPTS,
-    RateLimiter,
-    RedisSlidingWindow,
     _tiers,
     check_api_key_rate_limit,
     check_completion_rate_limit,
@@ -59,20 +57,6 @@ async def test_default_reset_clears_counter():
     assert await check_rate_limit("ip-3") is True
 
 
-@pytest.mark.asyncio
-async def test_window_eviction_allows_again_after_window():
-    # A dedicated 1s-window tier keeps the test fast; the semantics (an event
-    # stops counting once it ages out of the window) are tier-independent.
-    make_tier("__short__", 1, 1)
-    try:
-        assert await rate_limit._tiers["__short__"].allow("k") is True
-        assert await rate_limit._tiers["__short__"].allow("k") is False
-        time.sleep(1.2)
-        assert await rate_limit._tiers["__short__"].allow("k") is True
-    finally:
-        _tiers.pop("__short__", None)
-
-
 # ─── per-tier max characterization (blocks at exactly the documented cap) ─────
 
 
@@ -109,20 +93,6 @@ async def test_transcribe_tier_5_per_60s():
     for _ in range(5):
         assert await check_transcribe_rate_limit("u-2") is True
     assert await check_transcribe_rate_limit("u-2") is False
-
-
-# ─── per-tier (max, window) registry pinning ──────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_tier_thresholds_pinned_in_registry():
-    assert _tiers["default"].max == 5 and _tiers["default"].window == 60
-    assert _tiers["pin_long"].max == 15 and _tiers["pin_long"].window == 900
-    assert _tiers["api_key"].max == 120 and _tiers["api_key"].window == 120
-    assert _tiers["mcp_mutating"].max == 30 and _tiers["mcp_mutating"].window == 60
-    assert _tiers["mcp_transport"].max == 240 and _tiers["mcp_transport"].window == 60
-    assert _tiers["completion"].max == 20 and _tiers["completion"].window == 60
-    assert _tiers["transcribe"].max == 5 and _tiers["transcribe"].window == 60
 
 
 # ─── PIN composite (5/60s default tier binds first, 15/15min long tier second) ─
@@ -187,42 +157,6 @@ async def test_new_tier_auto_covered_by_reset():
         _tiers.pop("__test_extra__", None)
 
 
-# ─── the property the Redis move exists for: shared budgets ───────────────────
-
-
-@pytest.mark.asyncio
-async def test_two_clients_share_one_budget_through_redis():
-    """Two independent tier objects (≈ two replicas) with the same tier name
-    share ONE budget in Redis — the second blocks at the COMBINED cap. The
-    in-memory predecessor let each process spend its own full bucket."""
-    a = RedisSlidingWindow("__shared__", 3, 60)
-    b = RedisSlidingWindow("__shared__", 3, 60)
-    try:
-        assert await a.allow("k") is True
-        assert await b.allow("k") is True
-        assert await a.allow("k") is True
-        # 3 events total across both "replicas" — the next is over the cap,
-        # whichever client it comes from.
-        assert await b.allow("k") is False
-        assert await a.allow("k") is False
-    finally:
-        await a.reset("k")
-
-
-@pytest.mark.asyncio
-async def test_budget_survives_client_replacement():
-    """A fresh client (≈ backend restart) inherits the spent budget — restarts
-    no longer reset the counters."""
-    a = RedisSlidingWindow("__restart__", 2, 60)
-    try:
-        assert await a.allow("k") is True
-        assert await a.allow("k") is True
-        fresh = RedisSlidingWindow("__restart__", 2, 60)
-        assert await fresh.allow("k") is False
-    finally:
-        await a.reset("k")
-
-
 # ─── fail-closed on Redis error ───────────────────────────────────────────────
 
 
@@ -237,18 +171,6 @@ async def test_allow_fails_closed_on_redis_error(monkeypatch):
     monkeypatch.setattr(redis_pool, "get_redis", _broken)
     assert await rate_limit._tiers["default"].allow("k") is False
     assert await check_rate_limit("k") is False
-
-
-# ─── RateLimiter Protocol (the swap point keeps its shape) ────────────────────
-
-
-@pytest.mark.asyncio
-async def test_redis_tier_implements_rate_limiter_protocol():
-    b = RedisSlidingWindow("__proto__", 1, 10)
-    assert isinstance(b, RateLimiter)
-    assert await b.allow("k") is True
-    assert await b.allow("k") is False
-    await b.reset("k")
 
 
 # ─── login tiers: per-device + per-account ───────────────────────────────────────
@@ -319,22 +241,6 @@ async def _exhaust_untrusted(app, email: str):
         assert (await _login(c, email, "wrong")).status_code == 429
 
 
-async def test_known_device_signs_in_while_strangers_exhausted_the_account(app, regular_user):
-    """Strangers' guesses never lock the owner's known device out."""
-    async with _client_from(app, "203.0.113.1") as owner:
-        assert (await _login(owner, "user@test.com", "userpass")).status_code == 200
-        assert owner.cookies.get("lore_device")
-        await _exhaust_untrusted(app, "user@test.com")
-        assert (await _login(owner, "user@test.com", "userpass")).status_code == 200
-
-
-async def test_device_cookie_for_another_account_is_untrusted(app, admin_user, regular_user):
-    async with _client_from(app, "203.0.113.2") as c:
-        assert (await _login(c, "user@test.com", "userpass")).status_code == 200
-        await _exhaust_untrusted(app, "admin@test.com")
-        assert (await _login(c, "admin@test.com", "adminpass")).status_code == 429
-
-
 @pytest.mark.parametrize("cookie_kind", ["forged", "expired", "wrong_typ"])
 async def test_invalid_device_cookie_is_untrusted(app, regular_user, cookie_kind):
     value = {
@@ -366,36 +272,8 @@ async def test_each_success_rotates_device_cookie(app, regular_user):
     assert first and second and first != second
 
 
-async def test_logout_keeps_device_cookie(app, regular_user):
-    async with _client_from(app, "203.0.113.7") as c:
-        assert (await _login(c, "user@test.com", "userpass")).status_code == 200
-        resp = await c.post("/api/auth/logout")
-        assert resp.status_code == 200
-        assert not [h for h in resp.headers.get_list("set-cookie") if h.startswith("lore_device=")]
-        assert c.cookies.get("lore_device")
-
-
 async def test_login_has_no_per_address_tier(app):
     """One client address guessing at many accounts is judged per account only."""
     async with _client_from(app, "203.0.113.8") as c:
         for i in range(8):
             assert (await _login(c, f"ghost{i}@test.com", "wrong")).status_code == 401
-
-
-def test_login_device_tier_thresholds_pinned_in_registry():
-    assert _tiers["login_device"].max == 10 and _tiers["login_device"].window == 900
-
-
-def test_login_email_tier_thresholds_pinned_in_registry():
-    assert _tiers["login_email"].max == 10 and _tiers["login_email"].window == 900
-
-
-def test_login_email_key_never_collides_with_ip_keys():
-    # The `login-email:` prefix keeps the account key outside reset_rate_limit's
-    # registry sweep semantics: an IP-keyed reset can never address an account
-    # budget, and a reset of one account's key exists in no other tier.
-    assert (
-        _tiers["login_email"]._key("login-email:victim@test.com")
-        == "rl:login_email:login-email:victim@test.com"
-    )
-

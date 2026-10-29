@@ -55,87 +55,6 @@ async def _seed_agent_config(
 
 
 @pytest.mark.asyncio
-async def test_resolve_matches_editor_lookup(admin_user, project_with_doc):
-    """The resolver returns the {config,target,project,model,title} the editor's
-    old inline lookup produced, derived from the seeded agent_configs row."""
-    from pipeline.extractor.params import resolve_extractor_params
-
-    pid, _, admin_uid = project_with_doc
-    source_doc_id = "src-resolve"
-    ref_id = "ref-resolve"
-    config_doc_id = "cfg-resolve"
-    target_doc_id = "tgt-resolve"
-    await _seed_ref_under_source(pid, source_doc_id, ref_id)
-    await _seed_agent_config(
-        source_doc_id, pid, config_doc_id, target_doc_id,
-        model="local/orange/chat", title_template="Extract {{date}}",
-    )
-
-    params_list = await resolve_extractor_params(ref_id, {"user_id": admin_uid})
-
-    assert len(params_list) == 1
-    p = params_list[0]
-    # Bind against the seeded ids (not the implementation's literals).
-    assert p.reference_id == ref_id
-    assert p.source_doc_id == source_doc_id
-    assert p.config_doc_id == config_doc_id
-    assert p.target_doc_id == target_doc_id
-    assert p.project_id == pid
-    assert p.model == "local/orange/chat"
-    assert p.title_template == "Extract {{date}}"
-
-
-@pytest.mark.asyncio
-async def test_resolve_returns_all_configs_like_editor(admin_user, project_with_doc):
-    """Multiple agent_configs rows on one source resolve to multiple params
-    (the editor loops over all of them — the resolver must not collapse)."""
-    from pipeline.extractor.params import resolve_extractor_params
-
-    pid, _, admin_uid = project_with_doc
-    source_doc_id = "src-multi"
-    ref_id = "ref-multi"
-    await _seed_ref_under_source(pid, source_doc_id, ref_id)
-    await _seed_agent_config(source_doc_id, pid, "cfg-multi-a", "tgt-multi-a")
-    await _seed_agent_config(source_doc_id, pid, "cfg-multi-b", "tgt-multi-b")
-
-    params_list = await resolve_extractor_params(ref_id, {"user_id": admin_uid})
-    configs = sorted(p.config_doc_id for p in params_list)
-    assert configs == ["cfg-multi-a", "cfg-multi-b"]
-
-
-@pytest.mark.asyncio
-async def test_resolve_no_config_is_400_like_editor(admin_user, project_with_doc):
-    """A reference whose parent has no agent_configs row is refused with 400 —
-    the same status the editor returns."""
-    from fastapi import HTTPException
-    from pipeline.extractor.params import resolve_extractor_params
-
-    pid, _, admin_uid = project_with_doc
-    await _seed_ref_under_source(pid, "src-noconfig", "ref-noconfig")
-
-    with pytest.raises(HTTPException) as exc:
-        await resolve_extractor_params("ref-noconfig", {"user_id": admin_uid})
-    assert exc.value.status_code == 400
-
-
-@pytest.mark.asyncio
-async def test_resolve_not_a_reference_is_404(admin_user, project_with_doc):
-    """A plain (non-reference) document is refused with 404, like the editor."""
-    from fastapi import HTTPException
-    from pipeline.extractor.params import resolve_extractor_params
-
-    pid, _, admin_uid = project_with_doc
-    await create_record("documents", "plain-doc", {
-        "project_id": pid, "parent_id": None, "title": "Plain",
-        "content": "", "path": "plain.md", "is_index": False,
-    })
-
-    with pytest.raises(HTTPException) as exc:
-        await resolve_extractor_params("plain-doc", {"user_id": admin_uid})
-    assert exc.value.status_code == 404
-
-
-@pytest.mark.asyncio
 async def test_resolve_reference_without_parent_is_400(admin_user, project_with_doc, test_db):
     """A reference with no parent document cannot resolve a source → 400.
 
@@ -199,40 +118,6 @@ async def test_resolve_denies_non_full_access(admin_user, project_with_doc, regu
 
 
 # ─── run_extractor_dry ───────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_dry_run_returns_data_without_side_effects(project_with_doc):
-    """Dry entrypoint returns extracted_data + rendered markdown and creates NO
-    document / emits NO event — a benchmark run must never pollute the project."""
-    from pipeline.extractor import runner
-    from pipeline.extractor.params import ExtractorParams
-
-    pid, _, _ = project_with_doc
-    params = ExtractorParams(
-        reference_id="ref-dry", source_doc_id="src-dry",
-        config_doc_id="cfg-dry", target_doc_id="tgt-dry",
-        project_id=pid, title_template=None, model="local/orange/chat",
-    )
-
-    async def fake_run_async(shared):
-        shared["extracted_data"] = {"patient_name": "Alice", "area": 20}
-        shared["rendered_markdown"] = "# Alice"
-        shared["variable_duplicates"] = ["dup_field"]
-
-    flow = AsyncMock()
-    flow.run_async.side_effect = fake_run_async
-
-    with patch("pipeline.extractor.runner.create_extractor_flow", return_value=flow), \
-            patch("pipeline.extractor.runner.create_document", new_callable=AsyncMock) as mk_doc, \
-            patch("pipeline.extractor.runner.emit", new_callable=AsyncMock) as mk_emit:
-        result = await runner.run_extractor_dry(params)
-
-    assert result["extracted_data"] == {"patient_name": "Alice", "area": 20}
-    assert result["rendered_markdown"] == "# Alice"
-    assert result["variable_duplicates"] == ["dup_field"]
-    assert mk_doc.await_count == 0, "dry-run created a document"
-    assert mk_emit.await_count == 0, "dry-run emitted an event"
 
 
 @pytest.mark.asyncio

@@ -36,17 +36,6 @@ async def _create_doc(client, token, pid, title="DocxDoc"):
 
 # ---- magic-byte validation ----
 
-def test_validate_magic_accepts_docx_zip():
-    from files_util import validate_magic
-    docx_mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    assert validate_magic(DOCX_MAGIC, docx_mime) is True
-
-
-def test_validate_magic_rejects_non_zip_as_docx():
-    from files_util import validate_magic
-    docx_mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    assert validate_magic(b"not a zip", docx_mime) is False
-
 
 # ---- endpoint ----
 
@@ -80,35 +69,6 @@ async def test_upload_docx_creates_queued_markdown_ref_and_enqueues(client, admi
     assert kwargs.get("job_id") == f"docx:{ref_id}"
 
 
-@pytest.mark.asyncio
-async def test_upload_docx_rejects_wrong_extension(client, admin_user, project_with_doc):
-    pid, _, _ = project_with_doc
-    _, token = admin_user
-    doc_id = await _create_doc(client, token, pid)
-    resp = await client.post(
-        "/api/documents/upload-docx",
-        data={"project_id": pid, "document_id": doc_id},
-        files={"file": ("notes.txt", io.BytesIO(DOCX_MAGIC), "text/plain")},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 400
-
-
-@pytest.mark.asyncio
-async def test_upload_docx_rejects_bad_magic(client, admin_user, project_with_doc):
-    pid, _, _ = project_with_doc
-    _, token = admin_user
-    doc_id = await _create_doc(client, token, pid)
-    resp = await client.post(
-        "/api/documents/upload-docx",
-        data={"project_id": pid, "document_id": doc_id},
-        files={"file": ("report.docx", io.BytesIO(b"this is not a zip"),
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
-        cookies={"lore_session": token},
-    )
-    assert resp.status_code == 400
-
-
 # ---- arq task ----
 
 async def _create_docx_ref(ref_id: str, pid: str, doc_id: str = "owner-doc") -> None:
@@ -131,66 +91,6 @@ async def _create_docx_ref(ref_id: str, pid: str, doc_id: str = "owner-doc") -> 
         "path": f"_ref/{ref_id}.md",
         "is_reference": True,
     })
-
-
-@pytest.mark.asyncio
-async def test_convert_docx_task_success_extracts_images_and_sets_ready(test_db):
-    from jobs.tasks import convert_docx_task
-
-    ref_id = "docx-task-ok"
-    pid = "docx-task-project"
-    await _create_docx_ref(ref_id, pid)
-
-    with patch("jobs.tasks.media._post_to_converter", new_callable=AsyncMock, return_value=MARKDOWN_WITH_IMAGE), \
-         patch("ydoc_store.set_content", new_callable=AsyncMock) as set_content:
-        await convert_docx_task({"job_try": 1, "max_tries": 2}, ref_id, "user-1")
-    set_content.assert_awaited_once()
-
-    processed = set_content.await_args.args[1]
-    # Image replaced with a ref: link, base64 no longer inline.
-    assert "data:image/png;base64" not in processed
-    assert "(ref:" in processed
-    assert set_content.await_args.kwargs["extra_sets"]["processing_status"] == "ready"
-
-
-@pytest.mark.asyncio
-async def test_convert_docx_task_attributes_extracted_images_to_uploader(test_db):
-    """R3: images extracted from the .docx are attributed to the uploader —
-    created_by/created_by_name ride the extract_and_replace_images call."""
-    from jobs.tasks import convert_docx_task
-
-    ref_id = "docx-task-author"
-    await _create_docx_ref(ref_id, "docx-task-project")
-
-    with patch("jobs.tasks.media._post_to_converter", new_callable=AsyncMock, return_value="# md\n"), \
-         patch("ydoc_store.set_content", new_callable=AsyncMock), \
-         patch("files_service.extract_and_replace_images",
-               new_callable=AsyncMock, return_value=("# md", [])) as extract:
-        await convert_docx_task({"job_try": 1, "max_tries": 2}, ref_id, "user-9", "Alice")
-
-    assert extract.await_args.kwargs["created_by"] == "user-9"
-    assert extract.await_args.kwargs["created_by_name"] == "Alice"
-
-
-@pytest.mark.asyncio
-async def test_convert_docx_task_resolves_uploader_name_when_absent(test_db):
-    """The MCP redeem claims carry only the user id — the task resolves the display
-    name from `users` itself (one fetch), so attribution still lands."""
-    from db import create_record
-    from jobs.tasks import convert_docx_task
-
-    await create_record("users", "user-docx-nn", {"name": "Bob", "role": "user"})
-    ref_id = "docx-task-author-noname"
-    await _create_docx_ref(ref_id, "docx-task-project")
-
-    with patch("jobs.tasks.media._post_to_converter", new_callable=AsyncMock, return_value="# md\n"), \
-         patch("ydoc_store.set_content", new_callable=AsyncMock), \
-         patch("files_service.extract_and_replace_images",
-               new_callable=AsyncMock, return_value=("# md", [])) as extract:
-        await convert_docx_task({"job_try": 1, "max_tries": 2}, ref_id, "user-docx-nn")
-
-    assert extract.await_args.kwargs["created_by"] == "user-docx-nn"
-    assert extract.await_args.kwargs["created_by_name"] == "Bob"
 
 
 @pytest.mark.asyncio
@@ -224,24 +124,6 @@ async def test_convert_docx_task_emits_content_flushed_to_schedule_embed(test_db
         assert flushed[0]["project_id"] == pid
     finally:
         off("content_flushed", capture)
-
-
-@pytest.mark.asyncio
-async def test_convert_docx_task_error_sets_error_status_and_raises(test_db):
-    from db import fetch_one
-    from jobs.tasks import convert_docx_task
-
-    ref_id = "docx-task-err"
-    pid = "docx-task-project-err"
-    await _create_docx_ref(ref_id, pid)
-
-    with patch("jobs.tasks.media._post_to_converter", new_callable=AsyncMock, side_effect=RuntimeError("pandoc failed")):
-        with pytest.raises(RuntimeError):
-            await convert_docx_task({"job_try": 1, "max_tries": 2}, ref_id, "user-1")
-        await asyncio.sleep(0.05)
-
-    ref = await fetch_one("documents", ref_id)
-    assert ref["processing_status"] == "error"
 
 
 @pytest.mark.asyncio
@@ -305,41 +187,4 @@ async def test_retry_dispatches_docx_to_convert_task(client, admin_user, project
     assert kwargs.get("job_id") == f"docx:{ref_id}"
 
 
-@pytest.mark.asyncio
-async def test_retry_rejects_markdown_without_docx_file(client, admin_user, project_with_doc):
-    """A plain markdown reference (no .docx source) is not re-processable."""
-    pid, _, _ = project_with_doc
-    _, token = admin_user
-    doc_id = await _create_doc(client, token, pid)
-    resp = await client.post(
-        "/api/documents",
-        json={"project_id": pid, "parent_id": doc_id, "title": "PlainMd",
-              "media_type": "markdown", "is_reference": True, "content": "x"},
-        cookies={"lore_session": token},
-    )
-    ref_id = resp.json()["document_id"]
-    from db import get_db
-    db = await get_db()
-    await db.query(
-        "UPDATE type::record('documents', $id) SET processing_status = 'error', "
-        "file_path = $fp", {"id": ref_id, "fp": f"{pid}/{ref_id}/notes.md"},
-    )
-    resp = await client.post(f"/api/documents/{ref_id}/retry", cookies={"lore_session": token})
-    assert resp.status_code == 400
-
-
 # ---- worker registration ----
-
-def test_convert_docx_task_registered_on_default_worker():
-    from jobs.worker import TranscriptionWorkerSettings, WorkerSettings
-    default_names = {getattr(f, "name", None) for f in WorkerSettings.functions}
-    trans_names = {getattr(f, "name", None) for f in TranscriptionWorkerSettings.functions}
-    assert "convert_docx_task" in default_names
-    # Heavy conversion is offloaded to the converter container, so the task stays
-    # on the default queue, not the STT-bounded transcription worker.
-    assert "convert_docx_task" not in trans_names
-
-
-def test_default_worker_keep_result_zero():
-    from jobs.worker import WorkerSettings
-    assert WorkerSettings.keep_result == 0

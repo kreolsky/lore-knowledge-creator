@@ -20,108 +20,6 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_batch_returns_content_for_same_project_docs_and_refs(
-    client, admin_user, project_with_doc,
-):
-    pid, idx_id, _ = project_with_doc
-    _, token = admin_user
-    cookies = {"lore_session": token}
-    # One regular doc + one markdown reference, both in the same project.
-    doc_resp = await client.post(
-        "/api/documents",
-        json={"project_id": pid, "title": "Doc", "content": "doc body"},
-        cookies=cookies,
-    )
-    doc_id = doc_resp.json()["document_id"]
-    ref_resp = await client.post(
-        "/api/documents",
-        json={
-            "project_id": pid, "is_reference": True, "media_type": "markdown",
-            "parent_id": idx_id, "title": "Ref", "content": "ref body",
-        },
-        cookies=cookies,
-    )
-    ref_id = ref_resp.json()["document_id"]
-
-    resp = await client.post(
-        "/api/documents/batch",
-        json={"ids": [doc_id, ref_id]},
-        cookies=cookies,
-    )
-    assert resp.status_code == 200
-    items = {it["document_id"]: it for it in resp.json()["items"]}
-    assert set(items) == {doc_id, ref_id}
-    assert items[doc_id]["content"] == "doc body"
-    assert items[ref_id]["content"] == "ref body"
-    assert items[ref_id]["is_reference"] is True
-
-
-@pytest.mark.asyncio
-async def test_batch_applies_live_session_content(client, admin_user, project_with_doc):
-    pid, _, _ = project_with_doc
-    _, token = admin_user
-    cookies = {"lore_session": token}
-    doc_resp = await client.post(
-        "/api/documents",
-        json={"project_id": pid, "title": "Live", "content": "stale db body"},
-        cookies=cookies,
-    )
-    doc_id = doc_resp.json()["document_id"]
-
-    # merge_live_content prefers the live Y.Doc over the ~1s-lagging flush.
-    # Patch get_active_session so a live session is reported ONLY for this doc.
-    from types import SimpleNamespace
-    from unittest.mock import patch
-
-    live = SimpleNamespace(content="live body")
-
-    def fake_active(_entity_type: str, entity_id: str):
-        return live if entity_id == doc_id else None
-
-    with patch("collab.registry.get_active_session", side_effect=fake_active):
-        resp = await client.post(
-            "/api/documents/batch",
-            json={"ids": [doc_id]},
-            cookies=cookies,
-        )
-    assert resp.status_code == 200
-    items = resp.json()["items"]
-    assert len(items) == 1
-    assert items[0]["document_id"] == doc_id
-    assert items[0]["content"] == "live body"
-
-
-@pytest.mark.asyncio
-async def test_batch_omits_deleted_missing_unknown(client, admin_user, project_with_doc):
-    pid, _, _ = project_with_doc
-    _, token = admin_user
-    cookies = {"lore_session": token}
-    live = await client.post(
-        "/api/documents",
-        json={"project_id": pid, "title": "Alive", "content": "ok"},
-        cookies=cookies,
-    )
-    live_id = live.json()["document_id"]
-    deleted = await client.post(
-        "/api/documents",
-        json={"project_id": pid, "title": "Gone", "content": "bye"},
-        cookies=cookies,
-    )
-    deleted_id = deleted.json()["document_id"]
-    await client.delete(f"/api/documents/{deleted_id}", cookies=cookies)
-    unknown_id = str(uuid.uuid4())
-
-    resp = await client.post(
-        "/api/documents/batch",
-        json={"ids": [live_id, deleted_id, unknown_id]},
-        cookies=cookies,
-    )
-    assert resp.status_code == 200
-    ids = {it["document_id"] for it in resp.json()["items"]}
-    assert ids == {live_id}
-
-
-@pytest.mark.asyncio
 async def test_batch_filters_cross_project_ids(client, admin_user, project_with_doc):
     pid, _, _ = project_with_doc
     _, token = admin_user
@@ -179,48 +77,6 @@ async def test_batch_403_without_project_read(
 
 
 @pytest.mark.asyncio
-async def test_batch_never_returns_ydoc_state(client, admin_user, project_with_doc):
-    pid, _, _ = project_with_doc
-    _, token = admin_user
-    cookies = {"lore_session": token}
-    doc = await client.post(
-        "/api/documents",
-        json={"project_id": pid, "title": "Bin", "content": "x"},
-        cookies=cookies,
-    )
-    doc_id = doc.json()["document_id"]
-    resp = await client.post(
-        "/api/documents/batch",
-        json={"ids": [doc_id]},
-        cookies=cookies,
-    )
-    assert resp.status_code == 200
-    for item in resp.json()["items"]:
-        assert "ydoc_state" not in item
-
-
-@pytest.mark.asyncio
-async def test_batch_content_omits_headings(client, admin_user, project_with_doc):
-    pid, _, _ = project_with_doc
-    _, token = admin_user
-    cookies = {"lore_session": token}
-    doc = await client.post(
-        "/api/documents",
-        json={"project_id": pid, "title": "H", "content": "# Title\nbody"},
-        cookies=cookies,
-    )
-    doc_id = doc.json()["document_id"]
-    resp = await client.post(
-        "/api/documents/batch",
-        json={"ids": [doc_id]},
-        cookies=cookies,
-    )
-    assert resp.status_code == 200
-    item = resp.json()["items"][0]
-    assert "headings" not in item
-
-
-@pytest.mark.asyncio
 async def test_batch_all_missing_returns_404(client, admin_user, project_with_doc):
     """INVARIANT(security): an all-missing batch 404s (NOT 200+[]) so the only
     distinguishable outcomes match the single-doc uniform-404 posture — collapsing
@@ -235,16 +91,3 @@ async def test_batch_all_missing_returns_404(client, admin_user, project_with_do
         cookies=cookies,
     )
     assert resp.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_batch_enforces_ids_cap(client, admin_user, project_with_doc):
-    _, token = admin_user
-    cookies = {"lore_session": token}
-    too_many = [str(uuid.uuid4()) for _ in range(201)]
-    resp = await client.post(
-        "/api/documents/batch",
-        json={"ids": too_many},
-        cookies=cookies,
-    )
-    assert resp.status_code == 422

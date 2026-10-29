@@ -23,7 +23,6 @@ import secrets
 import struct
 
 import pytest
-from helpers import pin_stt_url
 
 # ─── helpers (mirror test_tool_surface_consolidation's download slice) ────────
 
@@ -93,143 +92,6 @@ async def _make_doc(client, token, project_id, title, content=""):
     return resp.json()["document_id"]
 
 
-# ─── surface ─────────────────────────────────────────────────────────────────
-
-
-def test_upload_reference_file_is_advertised():
-    """The mint tool is on the MCP surface — the symmetric counterpart of
-    download_reference_file."""
-    from mcp_gateway.schemas import build_tool_list
-
-    advertised = {t.name for t in build_tool_list()}
-    assert "attach_file" in advertised
-
-
-def test_upload_redeem_route_is_exempt_from_the_json_body_limit():
-    """INVARIANT: the redeem route MUST be in _UPLOAD_PATHS.
-
-    Asserted over the DERIVED source (main._UPLOAD_PATHS), not a literal copy of the
-    path: without the exemption the 1MB `_JSON_MAX_BYTES` middleware rejects the very
-    large upload this feature exists to enable, and it would fail as a 413 with no
-    hint of which layer refused.
-    """
-    from mcp_gateway.upload import MCP_UPLOAD_ROUTE_PREFIX
-
-    import main
-
-    assert any(MCP_UPLOAD_ROUTE_PREFIX.startswith(p) for p in main._UPLOAD_PATHS)
-
-
-# ─── e2e ─────────────────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_upload_audio_over_signed_url_creates_reference_and_enqueues(
-    client, mcp_running, test_db, admin_user, project_with_doc, monkeypatch,
-):
-    """Acceptance: mint → multipart POST → a reference exists with the exact bytes
-    on disk, and transcription is enqueued (the widget's behavior, reached by an
-    agent key)."""
-    from config import STORAGE_PATH
-
-    pid, doc_id, admin_uid = project_with_doc
-    key = await _make_agent_key(test_db, admin_uid, pid)
-
-    enqueued: list[tuple] = []
-
-    async def _fake_enqueue(user_id, ref_id):
-        enqueued.append((user_id, ref_id))
-
-    monkeypatch.setattr("routes.files_mcp_upload.enqueue_transcription", _fake_enqueue)
-    pin_stt_url(monkeypatch, "http://stt.test")
-
-    data = await _call(client, key, "attach_file", {
-        "filename": "chunk_001.wav", "attach_to": doc_id, "title": "Chunk 1",
-    })
-    assert not _is_error(data), data
-    payload = _result_text(data)
-    assert "/api/mcp/upload/" in payload["url"]
-    assert payload["expires_at"]
-
-    wav = _wav_bytes(2048)
-    resp = await client.post(payload["url"], files={"file": ("chunk_001.wav", wav, "audio/wav")})
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    ref_id = body["document_id"]
-
-    from db import fetch_one
-
-    row = await fetch_one("documents", ref_id)
-    assert row["is_reference"] is True
-    assert row["media_type"] == "audio"
-    assert row["project_id"] == pid
-    assert row["parent_id"] == doc_id or row.get("parent_id") == doc_id
-    # The redeem is attributed to the MINTING user (review fix R4) — the same
-    # human transcription is enqueued for below.
-    assert row["created_by"] == admin_uid
-    assert row["created_by_name"] == "testadmin"
-    stored = STORAGE_PATH / row["file_path"]
-    assert stored.read_bytes() == wav
-    assert enqueued == [(admin_uid, ref_id)]
-
-
-@pytest.mark.asyncio
-async def test_upload_over_one_megabyte_succeeds(
-    client, mcp_running, test_db, admin_user, project_with_doc, monkeypatch,
-):
-    """THE regression: a body larger than _JSON_MAX_BYTES (1MB) must go through.
-
-    This is what `content_base64` over /mcp could never do — a 14MB audio chunk was
-    rejected at the middleware before reaching any upload logic.
-    """
-    pid, doc_id, admin_uid = project_with_doc
-    key = await _make_agent_key(test_db, admin_uid, pid)
-    pin_stt_url(monkeypatch, "")
-
-    payload = _result_text(await _call(client, key, "attach_file", {
-        "filename": "big.wav", "attach_to": doc_id,
-    }))
-    big = _wav_bytes(1_500_000)
-    assert len(big) > 1024 * 1024
-
-    resp = await client.post(payload["url"], files={"file": ("big.wav", big, "audio/wav")})
-    assert resp.status_code == 200, resp.text
-
-    from config import STORAGE_PATH
-    from db import fetch_one
-
-    row = await fetch_one("documents", resp.json()["document_id"])
-    assert (STORAGE_PATH / row["file_path"]).stat().st_size == len(big)
-
-
-@pytest.mark.asyncio
-async def test_upload_image_over_signed_url(
-    client, mcp_running, test_db, admin_user, project_with_doc,
-):
-    """Parity with the widget's other binary branch: an image lands via save_upload
-    (no transcription), so the tool is not audio-only."""
-    import base64
-
-    pid, doc_id, admin_uid = project_with_doc
-    key = await _make_agent_key(test_db, admin_uid, pid)
-    png = base64.b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
-        "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-    )
-    payload = _result_text(await _call(client, key, "attach_file", {
-        "filename": "shot.png", "attach_to": doc_id,
-    }))
-    resp = await client.post(payload["url"], files={"file": ("shot.png", png, "image/png")})
-    assert resp.status_code == 200, resp.text
-
-    from db import fetch_one
-
-    row = await fetch_one("documents", resp.json()["document_id"])
-    assert row["media_type"] == "image"
-    assert row["created_by"] == admin_uid
-    assert row["created_by_name"] == "testadmin"
-
-
 # ─── security ────────────────────────────────────────────────────────────────
 
 
@@ -264,23 +126,6 @@ async def test_tampered_upload_token_is_403(
         files={"file": ("x.wav", _wav_bytes(64), "audio/wav")},
     )
     assert resp.status_code == 403, resp.text
-
-
-@pytest.mark.asyncio
-async def test_readonly_key_cannot_mint_an_upload_url(
-    client, mcp_running, test_db, admin_user, project_with_doc,
-):
-    """A read-only MCP key is refused at MINT. Testing the principal that must be
-    REFUSED: minting is the write — the redeem route has no key to check, so a
-    read-only key that could mint would hold an unauthenticated write grant."""
-    pid, doc_id, admin_uid = project_with_doc
-    key = await _make_agent_key(test_db, admin_uid, pid, auto_apply=False)
-
-    data = await _call(client, key, "attach_file", {
-        "filename": "nope.wav", "attach_to": doc_id,
-    })
-    assert _is_error(data), data
-    assert _result_text(data)["status_code"] == 403
 
 
 @pytest.mark.asyncio

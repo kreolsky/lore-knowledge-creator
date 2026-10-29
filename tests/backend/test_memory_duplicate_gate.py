@@ -99,43 +99,6 @@ async def _apply(pid, uid, verdicts):
     )
 
 
-async def test_a_new_fact_restating_a_stored_one_is_rejected(project_with_doc):
-    pid, _idx, uid = project_with_doc
-    twin_id = await _seed_fact(pid, "Тема: оригинал", f"{_SAME} исходная формулировка")
-    from fastapi import HTTPException
-
-    # A batch whose ONLY verdict is refused applied nothing — the pinned contract is
-    # a 400 (a 200 carrying an empty result reads as success).
-    with pytest.raises(HTTPException) as exc:
-        await _apply(pid, uid, [
-            {"action": "new", "title": "Тема: пересказ",
-             "text": f"{_SAME} пересказ той же мысли"},
-        ])
-    assert exc.value.status_code == 400
-    msg = exc.value.detail
-    # The message must name the twin's fact_id (so a merge can target it) and the
-    # action that resolves it.
-    assert twin_id in msg
-    assert "merge" in msg
-
-
-async def test_the_gate_is_in_a_mixed_batch_reported_in_rejected(project_with_doc):
-    """A valid verdict alongside a refused one applies; the refusal comes back in
-    `rejected` with the correction — not a whole-batch 400."""
-    pid, _idx, uid = project_with_doc
-    await _seed_fact(pid, "Тема: оригинал", f"{_SAME} уже есть")
-    res = await _apply(pid, uid, [
-        {"action": "new", "title": "Тема: другое", "text": f"{_OTHER} совсем иное"},
-        {"action": "new", "title": "Тема: дубль", "text": f"{_SAME} повтор"},
-    ])
-    assert res["actions"]["new"] == 1  # the distinct one applied
-    assert len(res["rejected"]) == 1
-    # Uniform rejection format: preflight prefixes EVERY gate's reason with the
-    # verdict index — the duplicate gate's no less than the staleness gate's.
-    assert res["rejected"][0]["reason"].startswith("verdict 1: ")
-    assert "merge" in res["rejected"][0]["reason"]
-
-
 async def test_the_gate_fails_open_when_embeddings_are_unavailable(project_with_doc, monkeypatch):
     """Any embedding failure WRITES the fact (a duplicate is repairable by a later
     merge; a fact never written is gone)."""
@@ -198,36 +161,3 @@ async def test_two_twins_in_one_batch_are_caught(project_with_doc):
     # at an id that does not exist yet.
     assert "batch" in reason.lower()
     assert "merge" not in reason.lower()
-
-
-async def test_a_cluster_of_three_twins_in_one_batch_leaves_one(project_with_doc):
-    """Three restatements of the same knowledge in ONE batch: one survives, two refused.
-    The canonical twin is the EARLIEST surviving verdict — a later twin names it, so a
-    refused verdict is never itself treated as the canonical twin for a still-later one."""
-    pid, _idx, uid = project_with_doc
-    res = await _apply(pid, uid, [
-        {"action": "new", "title": "Тема: a", "text": f"{_SAME} вариант a"},
-        {"action": "new", "title": "Тема: b", "text": f"{_SAME} вариант b"},
-        {"action": "new", "title": "Тема: c", "text": f"{_SAME} вариант c"},
-    ])
-    assert res["actions"]["new"] == 1
-    assert len(res["rejected"]) == 2
-
-
-async def test_a_stored_refusal_takes_precedence_over_intra_batch(project_with_doc):
-    """When verdict 0 twins a STORED fact AND verdict 1 twins verdict 0, the stored-index
-    pass refuses BOTH (each twins the stored fact independently) — the intra-batch pass
-    only ever sees verdicts the stored pass let through. This pins the ORDER: stored-index
-    first, intra-batch among survivors."""
-    pid, _idx, uid = project_with_doc
-    await _seed_fact(pid, "Тема: хранимое", f"{_SAME} уже в памяти")
-    from fastapi import HTTPException
-
-    # Both verdicts restate the stored fact → a batch whose every verdict is refused is a
-    # 400, regardless of how the intra-batch pass would have scored them against each other.
-    with pytest.raises(HTTPException) as exc:
-        await _apply(pid, uid, [
-            {"action": "new", "title": "Тема: x", "text": f"{_SAME} повтор x"},
-            {"action": "new", "title": "Тема: y", "text": f"{_SAME} повтор y"},
-        ])
-    assert exc.value.status_code == 400

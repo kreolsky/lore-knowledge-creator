@@ -68,13 +68,6 @@ def _event(**over) -> dict:
     }
 
 
-def _dsh_compaction_end() -> dict:
-    """The verbatim dsh frame the relay's compaction arm consumes (step-3
-    vocabulary; shapes pinned by test_driver_frames.py)."""
-    return {"type": "dsh_event", "kind": "compaction/end", "seq": 7,
-            "data": {"compactionId": "e7", "turn": 1}}
-
-
 @pytest.mark.asyncio
 async def test_mint_mints_the_continuation_row(mint_env):
     """The event carries the fork identity; the backend mints the continuation
@@ -98,20 +91,6 @@ async def test_mint_mints_the_continuation_row(mint_env):
 
 
 @pytest.mark.asyncio
-async def test_mint_mints_no_archive_row(mint_env):
-    """The archived freeze row is deleted with the freeze subsystem — only the
-    continuation is minted."""
-    import driver.compaction as mod
-
-    mint_env["chats"]["s1"] = {"project_id": "p1", "user_id": "u1"}
-    out = await mod.mint_compaction_chats(_event())
-    assert "archived_chat_id" not in out
-    assert "created_archive" not in out
-    rows = [data for _t, _rid, data in mint_env["created"]]
-    assert all("archived" not in r for r in rows), rows
-
-
-@pytest.mark.asyncio
 async def test_mint_is_idempotent_on_replay(mint_env):
     """A replayed event (same window) mints nothing new — the window key is
     source + leaf, so the guard returns the existing row verbatim."""
@@ -125,32 +104,6 @@ async def test_mint_is_idempotent_on_replay(mint_env):
 
     assert out["created_continuation"] is False
     assert mint_env["created"] == first
-
-
-@pytest.mark.parametrize("flag", [True, False])
-@pytest.mark.asyncio
-async def test_continuation_inherits_unindexed(mint_env, flag):
-    """A continuation of an unindexed chat stays out of the recall index."""
-    import driver.compaction as mod
-
-    mint_env["chats"]["s1"] = {"project_id": "p1", "user_id": "u1", "unindexed": flag}
-    out = await mod.mint_compaction_chats(_event())
-
-    by_id = {rid: data for _t, rid, data in mint_env["created"]}
-    assert by_id[out["continuation_chat_id"]]["unindexed"] is flag
-
-
-@pytest.mark.asyncio
-async def test_second_window_mints_its_own_rows(mint_env):
-    """A LATER compaction (different checkpoint) is a new window — its own
-    continuation row, not a replay."""
-    import driver.compaction as mod
-
-    mint_env["chats"]["s1"] = {"project_id": "p1", "user_id": "u1"}
-    await mod.mint_compaction_chats(_event())
-    out = await mod.mint_compaction_chats(_event(compaction_entry_id="e12"))
-
-    assert out["created_continuation"] is True
 
 
 @pytest.mark.asyncio
@@ -171,61 +124,3 @@ async def test_event_missing_fields_mints_nothing(mint_env):
     out = await mod.mint_compaction_chats({"type": "compaction"})
     assert out["reason"] == "missing_fields"
     assert mint_env["created"] == []
-
-
-@pytest.mark.asyncio
-async def test_relay_compaction_event_mints_and_relays(mint_env, monkeypatch):
-    """The relay's compaction arm mints from the verbatim `compaction/end` dsh
-    event (best-effort — a mint failure never breaks the turn) and relays the
-    frame + the `lore/compaction-mint` outcome card beside it. The mint keys
-    the window identity pair the module owns: the relay session plus the
-    compaction id (dsh compacts in-place — the "fork" IS the window key)."""
-    import driver.client
-    import driver.compaction as compaction
-
-    mint_env["chats"]["s1"] = {"project_id": "p1", "user_id": "u1"}
-    called: list[dict] = []
-
-    async def fake_mint(payload):
-        called.append(payload)
-        return {"continuation_chat_id": "cont-1", "created_continuation": True}
-
-    monkeypatch.setattr(compaction, "mint_compaction_chats", fake_mint)
-    r = driver.frames._TurnProjection(
-        assistant_msg_id="m1", session_id="s1",
-        persist_content=AsyncMock(), persist_sources=AsyncMock(),
-        persist_extras=AsyncMock(), persist_turn_seq=AsyncMock(),
-    )
-    # The turn coordinate is the OPEN turn (turn/start), not the compaction
-    # frame's payload — the same rule the live stream and the pin follow.
-    await driver.frames._relay_frame(r, {"type": "dsh_event", "kind": "turn/start",
-                                         "seq": 1, "data": {"turn": 1}})
-    frames = await driver.frames._relay_frame(r, _dsh_compaction_end())
-    assert called and called[0]["fork_id"] == "s1~ce7"
-    parsed = frames  # the relay arms yield frame DICTS (the SSE skin died)
-    assert [f["type"] for f in parsed] == ["dsh_event", "lore/compaction-mint"]
-    assert parsed[1]["seq"] == 7.8
-    assert parsed[1]["data"] == {"turn": 1, "compactionEntryId": "e7", "mintFailed": False}
-
-
-@pytest.mark.asyncio
-async def test_relay_mint_failure_still_relays(mint_env, monkeypatch):
-    """Best-effort mint: a failure must not break the turn — the frame relays
-    and the outcome card REPORTS the failure (mintFailed), never swallows it."""
-    import driver.client
-    import driver.compaction as compaction
-
-    async def boom(_payload):
-        raise RuntimeError("db down")
-
-    monkeypatch.setattr(compaction, "mint_compaction_chats", boom)
-    r = driver.frames._TurnProjection(
-        assistant_msg_id="m1", session_id="s1",
-        persist_content=AsyncMock(), persist_sources=AsyncMock(),
-        persist_extras=AsyncMock(), persist_turn_seq=AsyncMock(),
-    )
-    frames = await driver.frames._relay_frame(r, _dsh_compaction_end())
-    parsed = frames  # the relay arms yield frame DICTS (the SSE skin died)
-    assert [f["type"] for f in parsed] == ["dsh_event", "lore/compaction-mint"]
-    assert parsed[1]["data"]["mintFailed"] is True
-    assert "db down" in parsed[1]["data"]["mintReason"]

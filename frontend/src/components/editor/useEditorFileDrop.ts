@@ -1,25 +1,33 @@
 /**
- * File-drop import for the document editor (drag a .docx/text file into the body).
+ * File-drop import for the document editor (drag an image/.docx/text file into
+ * the body).
  *
  * Owns the pending-drop/importing state, the drop type-guard, and the
- * confirm→upload→insert flow. Editor.tsx keeps computing the editable gate
- * (it lives with the collab state) and passes it in via a ref-read getter.
+ * confirm→upload→insert flow. Every dropped file lands AT the drop position
+ * (dropInsertSpec): image embeds inline, block content (table anchor,
+ * imported markdown) on its own line. An IMAGE dropped over a table cell
+ * targets the CELL's editor (editorDropPoint mounts a lazy cell) at its drawn
+ * width (dropEmbedForView); .docx/text/CSV always target the HOST document —
+ * a table inside a cell is not a thing. Editor.tsx keeps computing the
+ * editable gate (it lives with the collab state) and passes it in via a
+ * ref-read getter.
  */
-// SYSTEM: editor — file-drop import (drag a .docx/text file into the body).
+// SYSTEM: editor — file-drop import (drag an image/.docx/text file into the body).
 
 import { useState, useRef, useCallback, useMemo } from 'react';
 import type React from 'react';
 import type { EditorView } from '@codemirror/view';
-import { makeFileDropExtension } from '../../editor/file-drop-handler';
+import { makeFileDropExtension, type FileDropCoords } from '../../editor/file-drop-handler';
 import { useTranslation } from '../../i18n';
 import { useAppStore } from '../../store/app-store';
 import { apiClient } from '../../api/client';
+import { uploadReferenceFile } from '../../api/reference-upload';
 import type { Document, Reference } from '../../types';
-import { getEntityHandle } from '../../collab/active-handle-registry';
-import { getActiveHandle, getViewEntity } from '../../editor/active-editor';
+import { entityYdoc, getViewEntity } from '../../editor/active-editor';
+import { dropEmbedForView, dropInsertSpec, editorDropPoint, spliceAt } from './drop-target';
 import { createTable, tableAnchor, normalizeTableLabel } from '../editor/live-preview/table-block-model';
 import { sniffDelimiter, parseCsv, MAX_TABLE_IMPORT_ROWS, MAX_TABLE_IMPORT_COLS, MAX_TABLE_IMPORT_CELLS } from '../editor/live-preview/csv-table';
-import { isTableFile, MAX_MARKDOWN_SIZE_MB } from '../references/ref-utils';
+import { createTempRef, isImageFile, isTableFile, MAX_IMAGE_SIZE_MB, MAX_MARKDOWN_SIZE_MB } from '../references/ref-utils';
 
 export interface DropGuard {
   isReadonly: boolean;
@@ -55,8 +63,9 @@ export function useEditorFileDrop({
   pendingDropRef.current = pendingDrop;
 
   // CSV/TSV → inline table at the drop position. Parsed locally (no upload modal, no
-  // round-trip); creates the table model + splices the `![label](table:id)` anchor at the
-  // drop line end (mirrors paste's importGfmTables). System: table-block.
+  // round-trip); creates the table model + splices the `![label](table:id)` anchor at
+  // the drop position on its own line (dropInsertSpec; mirrors paste's
+  // importGfmTables). System: table-block.
   const handleTableInsert = useCallback(async (file: File, pos: number) => {
     const view = editorViewRef.current;
     // ARCH (split view): the table lands in the DROP VIEW'S entity ydoc — the focused
@@ -65,8 +74,7 @@ export function useEditorFileDrop({
     // WHY: a KNOWN entity whose handle has not landed must fail loudly here (toast),
     // never import into the slot's foreign ydoc — model and anchor would land in
     // different ydocs.
-    const entityId = view ? getViewEntity(view) : null;
-    const ydoc = entityId ? getEntityHandle(entityId)?.ydoc : getActiveHandle()?.ydoc;
+    const ydoc = view ? entityYdoc(view) : undefined;
     if (!view || !ydoc) {
       useAppStore.getState().showToast(t('csvImportFailed'), 'error');
       return;
@@ -91,14 +99,8 @@ export function useEditorFileDrop({
       }
       const label = normalizeTableLabel(file.name.replace(/\.(csv|tsv)$/i, ''));
       const id = createTable(ydoc, matrix);
-      const line = view.state.doc.lineAt(pos);
       const anchor = tableAnchor(label, id);
-      const insertText = `\n${anchor}`;
-      view.dispatch({
-        changes: { from: line.to, insert: insertText },
-        selection: { anchor: line.to + insertText.length },
-      });
-      view.focus();
+      spliceAt(view, dropInsertSpec(view.state.doc, pos, anchor, 'block'));
     } catch (err) {
       console.error('CSV/TSV table drop failed', err);
       useAppStore.getState().showToast(t('csvImportFailed'), 'error');
@@ -107,16 +109,85 @@ export function useEditorFileDrop({
   const handleTableInsertRef = useRef(handleTableInsert);
   handleTableInsertRef.current = handleTableInsert;
 
+  // Image drop: upload as an image reference hosted by the DROP VIEW'S document,
+  // then insert the `![title](ref:id)` embed INLINE at the drop position. No
+  // confirmation modal — the drop itself is the intent.
+  // ARCH (split view): same identity rule as the table path — the host is the
+  // drop view's entity, never the focused slot's item (a table cell is
+  // registered to its host's entity at mount). A drop onto an open REFERENCE
+  // (split column or center) is refused with a toast: a reference cannot host
+  // references.
+  const handleImageDrop = useCallback(async (file: File, view: EditorView, pos: number) => {
+    const store = useAppStore.getState();
+    // Resolve the drop view's item: the registered entity is a document_id or a
+    // reference_id; an unregistered view falls back to the slot item (the same
+    // fallback scope as the table path).
+    const entityId = getViewEntity(view);
+    const host: Document | Reference | null = entityId
+      ? store.documents.find(d => d.document_id === entityId)
+        ?? store.references.find(r => r.reference_id === entityId)
+        ?? null
+      : activeItemRef.current;
+    if (!host || 'reference_id' in host) {
+      store.showToast(t('dropImageIntoReferenceUnsupported'), 'error');
+      return;
+    }
+    const project = store.currentProject;
+    // A missing/mismatched project means a switch race — fail loudly rather
+    // than parent the reference into another project's document.
+    if (!project || project.project_id !== host.project_id) {
+      store.showToast(t('failedToUpload'), 'error');
+      return;
+    }
+    if (file.size > MAX_IMAGE_SIZE_MB * 1024 * 1024) {
+      store.showToast(t('fileTooLargeImage', { limit: String(MAX_IMAGE_SIZE_MB) }));
+      return;
+    }
+    const { tempId, tempRef } = createTempRef(project, host, file.name, 'image');
+    store.addReference(tempRef);
+    try {
+      const ref = await uploadReferenceFile(project.project_id, host.document_id, file);
+      // WHY: insert the embed only AFTER the reference is in the store —
+      // ImageWidget resolves `ref:id` through the references list
+      // (transcludeMap), so inserting first would flash the raw `![…](ref:…)`
+      // text for a frame.
+      store.replaceReference(tempId, ref);
+      // The drop view may be gone after the async upload (a cell torn down by a
+      // rebuild): never dispatch into it — the reference stays, the toast says so.
+      if (!view.dom.isConnected) {
+        store.showToast(t('failedToUpload'), 'error');
+        return;
+      }
+      const embed = dropEmbedForView(view, `![${file.name}](ref:${ref.reference_id})`, true, ref.file_meta?.width);
+      spliceAt(view, dropInsertSpec(view.state.doc, pos, embed, 'inline'));
+    } catch (err) {
+      console.error('image drop upload failed', err);
+      store.showToast(t('failedToUpload'), 'error');
+      store.updateReference(tempId, { processing_status: 'error' });
+    }
+  }, [t]);
+  const handleImageDropRef = useRef(handleImageDrop);
+  handleImageDropRef.current = handleImageDrop;
+
   // INVARIANT: client-side type guard is permissive — final validation is  Why: the client guard is permissive (rejects only obvious binary) to avoid a useless round-trip; final validation is server-side via is_text_bytes.
   // server-side via is_text_bytes. We only reject obvious binary (not docx and
   // not text-ish MIME) to avoid a useless upload round-trip. CSV/TSV is handled
   // by a dedicated local-parse path (no modal).
-  const handleEditorFileDrop = useCallback((file: File, pos: number) => {
+  const handleEditorFileDrop = useCallback((file: File, coords: FileDropCoords) => {
     const { isReadonly: ro, editable: ed } = getDropGuard();
     if (ro || !ed) return; // readonly/offline viewers don't insert
     const name = file.name.toLowerCase();
     if (isTableFile(name)) {
-      void handleTableInsertRef.current(file, pos); // fire-and-forget; toasts handle errors
+      void handleTableInsertRef.current(file, coords.hostPos); // fire-and-forget; toasts handle errors
+      return;
+    }
+    if (file.type.startsWith('image/') || isImageFile(name)) {
+      // Routed AFTER the guard, so a read-only drop mounts no cell; no editor
+      // under the pointer ⇒ the host view at hostPos.
+      const host = editorViewRef.current;
+      const target = editorDropPoint(coords.x, coords.y)
+        ?? (host ? { view: host, pos: coords.hostPos } : null);
+      if (target) void handleImageDropRef.current(file, target.view, target.pos); // fire-and-forget; toasts handle errors
       return;
     }
     const isDocx = name.endsWith('.docx');
@@ -129,12 +200,14 @@ export function useEditorFileDrop({
       );
       return;
     }
-    setPendingDrop({ file, pos });
+    // .docx/text always lands in the HOST view — a table inside a cell is not a thing.
+    setPendingDrop({ file, pos: coords.hostPos });
   }, [t, getDropGuard]);
   const handleEditorFileDropRef = useRef(handleEditorFileDrop);
   handleEditorFileDropRef.current = handleEditorFileDrop;
 
-  // Confirm → upload → insert below drop position.
+  // Confirm → upload → insert at the drop position (block: own line per
+  // dropInsertSpec).
   const handleConfirmImport = useCallback(async () => {
     const drop = pendingDropRef.current;
     const item = activeItemRef.current;
@@ -153,13 +226,7 @@ export function useEditorFileDrop({
       form.append('project_id', projectId);
       form.append('document_id', docId);
       const { markdown } = await apiClient.upload('/documents/extract-text', form) as { markdown: string };
-      const line = view.state.doc.lineAt(drop.pos);
-      const insertText = `\n${markdown}`;
-      view.dispatch({
-        changes: { from: line.to, insert: insertText },
-        selection: { anchor: line.to + insertText.length },
-      });
-      view.focus();
+      spliceAt(view, dropInsertSpec(view.state.doc, drop.pos, markdown, 'block'));
       setPendingDrop(null);
     } catch (err) {
       console.error('file-drop import failed', err);
@@ -173,7 +240,7 @@ export function useEditorFileDrop({
   // Bound to a ref-read wrapper so the extension can live in the once-created
   // cmExtensions array while always invoking the latest handler.
   const fileDropExtension = useMemo(
-    () => makeFileDropExtension((file, pos) => handleEditorFileDropRef.current(file, pos)),
+    () => makeFileDropExtension((file, coords) => handleEditorFileDropRef.current(file, coords)),
     [],
   );
 

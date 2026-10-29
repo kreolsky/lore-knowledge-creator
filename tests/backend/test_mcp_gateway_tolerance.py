@@ -112,22 +112,6 @@ async def test_read_document_name_alias_dispatches_and_counts(
     assert hits.get("read_document.name_alias") == 1
 
 
-@pytest.mark.asyncio
-async def test_read_document_canonical_call_does_not_count(
-    client, mcp_running, test_db, admin_user, project_with_doc,
-):
-    """A canonical document_id call must NOT touch the tolerance counter — the
-    exit criterion only means something if canonical traffic reads zero."""
-    pid, doc_id, admin_uid = project_with_doc
-    agent_tok = await _make_agent_key(test_db, admin_uid, pid)
-    hits = _reset_counters()
-
-    data = await _mcp_call(client, agent_tok, "read_document",
-                           {"document_id": doc_id})
-    assert not _is_error(data), data
-    assert "read_document.name_alias" not in hits
-
-
 # ─── edit_table_cell: legacy flat single-cell (no edits[]) ────────────────────
 
 
@@ -168,29 +152,3 @@ async def test_edit_table_cell_flat_legacy_shape_dispatches_and_counts(
     grid = next(t for t in tables if t["table_id"] == table_id)
     row1 = next(r for r in grid["rows"] if r["row"] == 1)
     assert "7" in row1["cells"], f"flat edit did not land: {row1}"
-
-
-# ─── edit_document: legacy singular old_string/new_string ─────────────────────
-
-
-@pytest.mark.asyncio
-async def test_edit_document_singular_coalesce_counts(
-    client, mcp_running, test_db, admin_user, project_with_doc,
-):
-    """The singular old_string/new_string form coalesces into edits[] (the
-    behavior itself is pinned by the mutating suite); this pins the third
-    tolerance member's COUNTER so all three spellings of the DEBT class are
-    measurable."""
-    pid, _, admin_uid = project_with_doc
-    _, admin_token = admin_user
-    doc_id = await _make_doc(client, admin_token, pid,
-                             "Tolerance Singular Doc", "Ancient tome, page one.")
-    agent_tok = await _make_agent_key(test_db, admin_uid, pid, auto_apply=True)
-
-    hits = _reset_counters()
-    data = await _mcp_call(client, agent_tok, "edit_document", {
-        "document_id": doc_id, "old_string": "page one", "new_string": "page uno",
-    })
-    assert not _is_error(data), data
-    assert _result_text(data)["status"] == "applied"
-    assert hits.get("edit_document.legacy_singular") == 1

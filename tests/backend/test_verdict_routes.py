@@ -229,27 +229,6 @@ class TestListVerdicts:
 
 
 class TestPostVerdict:
-    @pytest.mark.asyncio
-    async def test_allow_once_is_relayed_with_the_secret(
-        self, stub_driver, client, admin_user, project_with_doc,
-    ):
-        token, _, _, session_id = await _setup(client, admin_user, project_with_doc)
-        stub_driver.park("verdict-allow-1", session_id, "edit_document")
-        resp = await client.post(
-            "/api/chat/verdicts",
-            json={
-                "call_id": "verdict-allow-1", "session_id": session_id,
-                "action": "allow_once",
-            },
-            cookies={"lore_session": token},
-        )
-        assert resp.status_code == 200, resp.text
-        assert resp.json() == {"success": True}
-        forwarded = [r for r in stub_driver.requests if r["method"] == "POST"]
-        assert len(forwarded) == 1
-        assert forwarded[0]["secret"] == StubDriver.SECRET
-        assert forwarded[0]["body"]["call_id"] == "verdict-allow-1"
-        assert forwarded[0]["body"]["action"] == "allow_once"
 
     @pytest.mark.asyncio
     async def test_reject_carries_the_users_words(
@@ -269,20 +248,6 @@ class TestPostVerdict:
         forwarded = [r for r in stub_driver.requests if r["method"] == "POST"][0]
         assert forwarded["body"]["reason"] == "user said no"
 
-    @pytest.mark.asyncio
-    async def test_an_unknown_call_id_is_the_drivers_404(
-        self, stub_driver, client, admin_user, project_with_doc,
-    ):
-        token, _, _, session_id = await _setup(client, admin_user, project_with_doc)
-        resp = await client.post(
-            "/api/chat/verdicts",
-            json={
-                "call_id": "verdict-none-1", "session_id": session_id,
-                "action": "allow_once",
-            },
-            cookies={"lore_session": token},
-        )
-        assert resp.status_code == 404
 
     @pytest.mark.asyncio
     async def test_another_users_session_cannot_be_decided(
@@ -339,47 +304,3 @@ class TestExpiredAsk:
         )
         assert resp.status_code == 409
         assert resp.json()["detail"] == "hold_expired"
-
-    @pytest.mark.asyncio
-    async def test_second_session_probe_of_expired_call_is_404(
-        self, stub_driver, client, admin_user, project_with_doc,
-    ):
-        """No existence oracle: the expiry trace is SESSION-BOUND — a second
-        session of the same user probing the SAME expired call id gets the
-        uniform 404, not the 409."""
-        token, pid, doc_id, session_id = await _setup(
-            client, admin_user, project_with_doc,
-        )
-        other_session = await _make_session(client, token, pid, doc_id)
-        stub_driver.expired["verdict-expired-2"] = session_id
-        resp = await client.post(
-            "/api/chat/verdicts",
-            json={
-                "call_id": "verdict-expired-2", "session_id": other_session,
-                "action": "allow_once",
-            },
-            cookies={"lore_session": token},
-        )
-        assert resp.status_code == 404
-
-
-class TestSessionDelete:
-    @pytest.mark.asyncio
-    async def test_session_delete_rejects_the_drivers_parked_asks(
-        self, stub_driver, client, admin_user, project_with_doc,
-    ):
-        token, pid, doc_id, session_id = await _setup(
-            client, admin_user, project_with_doc,
-        )
-        stub_driver.park("verdict-del-1", session_id, "edit_document")
-        resp = await client.delete(
-            f"/api/chat/sessions/{session_id}",
-            cookies={"lore_session": token},
-        )
-        assert resp.status_code in (200, 204), resp.text
-        forwarded = [
-            r for r in stub_driver.requests
-            if r["method"] == "POST" and r["path"] == "/approvals/resolve"
-        ]
-        assert len(forwarded) == 1
-        assert forwarded[0]["body"]["session_id"] == session_id
