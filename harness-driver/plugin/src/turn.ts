@@ -206,15 +206,16 @@ function routeScaffoldFor(provider: RouteName, baseURL: string): LoreRouteScaffo
 /** The user-message content for one turn: the mapped prompt blocks plus the
  * catalog upsert that must land BEFORE the followup. EVERY turn upserts (the
  * entry's `maxTokens` is the router-sourced output cap — see
- * ensureModelEntry); on image turns the same entry also declares image
- * capability (pi-ai's `[text]` input default would otherwise make the harness
- * refuse the attachment before it is attached); whenever the gateway
- * advertises effort levels the entry also carries the `reasoningEfforts`
- * declaration (an undeclared level dies in dsh before network I/O); the
- * entry lands under `provider`'s route section with its scaffold, and its
- * `compat` rides verbatim when the router's entry carries one. A missing
- * settings seam fails LOUD on every turn — the cap is not optional
- * metadata. */
+ * ensureModelEntry); on image turns AND on vision-model turns (`vision`, the
+ * turn's own caps resolve) the same entry also declares image capability —
+ * pi-ai's `[text]` input default would otherwise refuse an image block before
+ * it is attached, and a tool result image arrives on turns whose own prompt
+ * carried none; whenever the gateway advertises effort levels the entry also
+ * carries the `reasoningEfforts` declaration (an undeclared level dies in dsh
+ * before network I/O); the entry lands under `provider`'s route section with
+ * its scaffold, and its `compat` rides verbatim when the router's entry
+ * carries one. A missing settings seam fails LOUD on every turn — the cap is
+ * not optional metadata. */
 export async function prepareUserContent(
   prompt: unknown,
   saveImage: SaveImage,
@@ -223,6 +224,7 @@ export async function prepareUserContent(
   contextWindow: number,
   maxOutputTokens: number,
   effortLevels: readonly string[] | null,
+  vision: boolean = false,
   scaffold: LoreRouteScaffold | null = null,
   compat: Record<string, unknown> | null = null,
   provider: string = PROVIDER,
@@ -232,7 +234,7 @@ export async function prepareUserContent(
     throw new Error('the settings service is not composed — cannot declare the model catalog entry')
   }
   await ensureModelEntry(
-    settings, model, contextWindow, maxOutputTokens, images > 0, effortLevels,
+    settings, model, contextWindow, maxOutputTokens, images > 0 || vision, effortLevels,
     false, scaffold, compat, provider,
   )
   return blocks
@@ -421,6 +423,10 @@ async function buildTurnPrep(ctx: Context, map: SessionMap, body: Record<string,
       ? body.document_id : null,
     region: (body.region && typeof body.region === 'object')
       ? body.region as Record<string, unknown> : null,
+    // The turn's own caps resolve — the view_chat_image gate reads it off the
+    // merged turn ctx (tools.ts), the same roster the catalog upsert declares
+    // from (one source, caps.ts).
+    vision: caps.vision,
   }
   const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : [])
   const prep: TurnPrep = {
@@ -471,7 +477,7 @@ async function buildTurnPrep(ctx: Context, map: SessionMap, body: Record<string,
     )
     const blocks = await prepareUserContent(
       body.prompt, saveImage, ctx.get('settings'), model, cap, maxOut,
-      caps.effortLevels, route, caps.compat, provider)
+      caps.effortLevels, caps.vision, route, caps.compat, provider)
     // After the chat model's own upsert (which carries the route scaffold);
     // the titler runs after the turn's first request, so this lands first.
     // The TITLE model resolves its OWN route off the same gateway — its api

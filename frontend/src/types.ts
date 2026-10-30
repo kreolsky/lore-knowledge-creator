@@ -177,6 +177,12 @@ export interface Document {
   // across the boundary just changes what sees it). Absent = false. Drives the
   // doc-tree privacy mark + the Access-tab checkbox.
   chats_unindexed?: boolean;
+  // True ⇒ chats hosted in this document's subtree are not LISTED while the
+  // open document is outside the subtree (decided at READ time CLIENT-side in
+  // useSortedSessions/SearchPanel, from this same tree row). Independent of
+  // chats_unindexed: each flag governs one surface (list vs content search).
+  // Absent = false. Drives the doc-tree EyeOff mark + the Access-tab checkbox.
+  chats_unlisted?: boolean;
   // Caller's own non-internal key capabilities on this doc (server-derived,
   // plan "glimmering-knitting-pebble"). Omitted when no key exists. Drives the
   // doc-tree key indicator and ParentPickerPopup's reparent warning.
@@ -506,9 +512,15 @@ export interface ChatSession {
   document_title?: string | null;
   // WHY: a reference-scoped chat's parent IS the reference (ref: prefix),
   // never its owning document — even when created in split view. reference_title is
-  // the reference's OWN title (backend serializer). Why: the chat's identity is the
-  // entity it was created on (a recurring user rule).
+  // the reference's OWN title (backend serializer). Why: the chat's identity is
+  // the entity it was created on (a recurring user rule).
   reference_title?: string | null;
+  // ARCH (plan chats-unlisted-subtree): the DOCUMENT whose subtree hosts the
+  // chat — the reference's parent for a reference chat, document_id itself
+  // for a doc chat, null for a doc-less chat. Server-authored from the ref
+  // map; the client cannot derive it (references load per open document
+  // only). Read by the chats_unlisted list projection.
+  host_document_id?: string | null;
   user_id: string;
   title: string;
   model: string;

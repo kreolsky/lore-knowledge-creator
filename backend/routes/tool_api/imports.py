@@ -32,7 +32,7 @@ import os
 import re
 
 import settings
-from agent.context import get_agent_context
+from agent.context import get_agent_context, owned_session_row
 from api_key_auth import agent_author_name
 
 # docx_convert is a stateless leaf (imports only config + httpx) — importing it at
@@ -137,30 +137,30 @@ async def _decode_base64(content_base64: str) -> bytes:
 
 
 async def _resolve_attachment(
-    ctx: dict, index: int, filename: str,
+    ctx: dict, message_id: str, index: int, filename: str,
 ) -> tuple[str, str]:
-    """Resolve `attachment_index` (an image attached to the current chat turn) to
-    (content_base64, filename). In-chat-agent ONLY — `attachment_index` is never
-    advertised over MCP and MCP sets no session_id.
+    """Resolve `message_id` + `attachment_index` (one image attached to a chat
+    message) to (content_base64, filename). In-chat-agent ONLY — the address is
+    never advertised over MCP and MCP sets no session_id.
 
-    # ARCH: the attachment is
-    # resolved here in the DURABLE backend, not in the dsh driver's transient prompt
-    # state. Why: tsx-watch over the macOS Docker bind mount silently missed the
-    # driver edit, breaking the feature with a confusing 422 — a resolution that
-    # depends on the driver's live reload is too fragile. The backend resolves from
-    # the persisted user message (messages.images via ctx["session_id"], set from
-    # X-Agent-Session-Id) so a missed reload can't silently regress it. The resolved
-    # bytes then flow through the EXISTING binary path (_create_binary_reference) —
-    # no new business logic.
+    # ARCH: the attachment is resolved here in the DURABLE backend, not in the
+    # dsh driver's transient prompt state. Why: tsx-watch over the macOS Docker
+    # bind mount silently missed the driver edit, breaking the feature with a
+    # confusing 422 — a resolution that depends on the driver's live reload is
+    # too fragile. The backend resolves from the persisted message row so a
+    # missed reload can't silently regress it. The resolved bytes then flow
+    # through the EXISTING binary path (_create_binary_reference) — no new
+    # business logic.
 
-    # WHY (which message): the model only ever sees the LAST user turn's
-    # images (_build_last_user_prompt), so "latest user message WITH images" is
-    # exactly the model's attachment. Why the images-non-empty filter: a mid-turn
-    # 2nd plain-text user message would otherwise shadow the image-bearing turn.
-    # The user message is persisted before the agent turn fires, so `images` is
-    # present here.
+    # WHY (which message): the model ADDRESSES the message by id — the prompt
+    # marker (`[attached images: message_id=…, count=N …]`, completions_turn)
+    # for image turns, an `images: N` recall read or `view_chat_image` meta for
+    # everything the prompt no longer carries. Admission is the chat-recall
+    # pack's ONE chain (`admit_chat_message`, own_conversation=True): the
+    # calling conversation is admitted wholesale (any turn, any branch), every
+    # other message runs the recall wall — the off-switch included.
     """
-    from db import get_db
+    from routes.tool_api.chat_recall import admit_chat_message
 
     session_id = ctx.get("session_id")
     # INVARIANT(security): only an internal key (the in-app assistant) reads chat
@@ -173,38 +173,36 @@ async def _resolve_attachment(
             detail="attachment_index is only available in a chat session (in-chat agent)",
         )
     # INVARIANT(security): attachments are read only from a session the caller
-    # OWNS. Why: the messages query below keys on the raw X-Agent-Session-Id
-    # value — without this check a caller tagging another user's session id
-    # silently imported THAT user's attached images (cross-user image read).
-    # Refused with the same 400 the absent header gets: "not a resolvable chat
-    # session of yours" is one condition with several spellings, and none may
-    # leak what the other session holds.
-    from agent.context import owned_session_row
-
+    # OWNS. Why: the admission below keys the own-conversation arm on the raw
+    # X-Agent-Session-Id value — without this check a caller tagging another
+    # user's session id silently imported THAT user's attached images
+    # (cross-user image read). Refused with the same 400 the absent header
+    # gets: "not a resolvable chat session of yours" is one condition with
+    # several spellings, and none may leak what the other session holds.
     if await owned_session_row(ctx) is None:
         raise HTTPException(
             status_code=400,
             detail="attachment_index is only available in a chat session (in-chat agent)",
         )
+    from db import get_db
+
     db = await get_db()
-    rows = await db.query(
-        # WHY select created_at: SurrealDB requires ORDER BY fields be in the
-        # projection (same constraint as the messages-preview query).
-        "SELECT images, created_at FROM messages "
-        "WHERE chat_id = $sid AND role = 'user' AND deleted_at IS NONE "
-        "AND array::len(images ?? []) > 0 "
-        "ORDER BY created_at DESC LIMIT 1",
-        {"sid": session_id},
-    )
-    images = (rows[0].get("images") if rows else None) or []
+    admitted = await admit_chat_message(db, ctx, message_id, own_conversation=True)
+    images = admitted.images
     if index < 0 or index >= len(images):
         raise HTTPException(
             status_code=400,
             detail=f"attachment_index {index} is out of range (0..{max(0, len(images) - 1)})",
         )
     data_uri = images[index]
-    if not isinstance(data_uri, str) or not data_uri.startswith("data:"):
+    if not isinstance(data_uri, str):
         raise HTTPException(status_code=400, detail="Attached image is not a valid data URI")
+    # A linked (HTTPS) image is stored as a URL only — Lore never fetches it
+    # (SSRF); same rule as view_chat_image's `unavailable` arm, stated as a 400
+    # because the caller asked for a save, not a look.
+    if not data_uri.startswith("data:"):
+        raise HTTPException(status_code=400,
+                            detail="image is a link, not stored in Lore")
     header, sep, payload = data_uri.partition(",")
     if not sep or "base64" not in header:
         raise HTTPException(status_code=400, detail="Attached image is not a base64 data URI")
@@ -214,7 +212,7 @@ async def _resolve_attachment(
     # the single-source ext map and enforces the project's jpg-not-jpeg convention
     # (image/jpeg → "jpg"); the subtype fallback covers a mime with no ext entry.
     ext = IMAGE_EXT_BY_MIME.get(mime) or (mime.split("/")[1] if "/" in mime else "bin")
-    # WHY: on the attachment_index path the extension ALWAYS comes from the
+    # WHY: on the attachment path the extension ALWAYS comes from the
     # data-URI mime; a model-supplied `filename` contributes its STEM ONLY.
     # Why: the model cannot see the bytes, so its filename is always a GUESS, while
     # the backend ALREADY KNOWS the true mime (the persisted data-URI header). A
@@ -225,7 +223,7 @@ async def _resolve_attachment(
     # signal — the change stays inside _resolve_attachment.
     # Example: character_art.png + jpeg bytes → character_art.jpg.
     stem = os.path.splitext(os.path.basename((filename or "").strip()))[0]
-    resolved_filename = f"{stem}.{ext}" if stem else f"attachment-{index}.{ext}"
+    resolved_filename = f"{stem}.{ext}" if stem else f"chat-image-{index}.{ext}"
     return payload, resolved_filename
 
 
@@ -554,7 +552,8 @@ async def tool_import_file(
 
     Plan tool-surface-consolidation Step 2b: merges upload_document +
     upload_reference. D2: authored text is NOT an input (use create_document) —
-    only `content_base64` / `sandbox_path` / `attachment_index` reach the pipeline.
+    only `content_base64` / `sandbox_path` / `message_id` + `attachment_index`
+    reach the pipeline.
     """
     user = ctx["user"]
     access = await get_project_access(ctx["project_id"], user)
@@ -567,17 +566,18 @@ async def tool_import_file(
     # internal parameter — only the surface input is gone.
     content_base64: str | None = None
     filename = body.filename
-    # Resolution order: attachment_index (in-chat image) → sandbox_path (workspace
-    # file). Each produces (content, content_base64) with exactly one populated; the
-    # XOR model validator guarantees only one input form was supplied.
+    # Resolution order: message_id + attachment_index (a stored chat image) →
+    # sandbox_path (a workspace file). Each produces (content, content_base64)
+    # with exactly one populated; the XOR model validator guarantees only one
+    # input form was supplied.
     content: str | None = None
     if body.attachment_index is not None:
-        # Resolve the attached image's bytes here (durable), then let the existing
-        # binary path handle it. attachment_index only makes sense for a reference
-        # (an image is never a document); a non-reference call is rejected below by
-        # binary_allowed=False, so this stays consistent.
+        # Resolve the addressed image's bytes here (durable), then let the
+        # existing binary path handle it. The attachment form only makes sense
+        # for a reference (an image is never a document); a non-reference call
+        # is rejected below by binary_allowed=False, so this stays consistent.
         content_base64, filename = await _resolve_attachment(
-            ctx, body.attachment_index, filename,
+            ctx, body.message_id or "", body.attachment_index, filename,
         )
     elif body.sandbox_path is not None:
         # Resolve the workspace file via SFTP (console gate rides inside

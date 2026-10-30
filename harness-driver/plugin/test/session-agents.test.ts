@@ -130,7 +130,7 @@ function prep(text: string, over: Partial<TurnPrep> = {}): TurnPrep {
       loreSessionId: 'lore-x', agentKey: 'k', mutating: new Set(), holdable: new Set(),
       regionTools: new Set(),
     },
-    requestCtx: { messageId: `a-${text}`, applyMode: 'confirm', document_id: null, region: null },
+    requestCtx: { messageId: `a-${text}`, applyMode: 'confirm', document_id: null, region: null, vision: false },
     claim: {
       user_msg_id: `u-${text}`, assistant_msg_id: `a-${text}`, user_text: text,
       images: [], files: [], sources: [], warnings: [],
@@ -363,7 +363,7 @@ test('each claim swaps in ITS prep: model, prompt, time ground, request ctx', as
   await send(h, 's-prep', 'B', prep('B', {
     model: 'm2', selection: { provider: 'mock', model: 'm2' }, systemPrompt: 'SYSTEM two',
     timeStamps: ['[stamp two]'],
-    requestCtx: { messageId: 'a-B', applyMode: 'auto', document_id: 'doc-2', region: { start: 7 } },
+    requestCtx: { messageId: 'a-B', applyMode: 'auto', document_id: 'doc-2', region: { start: 7 }, vision: false },
   }))
   g.open()
   await until(settled('s-prep'), 'both turns')

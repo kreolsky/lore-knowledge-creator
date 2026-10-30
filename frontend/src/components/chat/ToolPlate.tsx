@@ -21,7 +21,7 @@
  * `border-radius: 0` preserved.
  */
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 
 export interface Props {
@@ -97,6 +97,20 @@ export function ToolPlate({
     else if (autoCollapse && trigger) setExpanded(false);
   }, [autoCollapse, trigger, expandWhen]);
 
+  // WHY: the capped body follows a streaming tail to the bottom, but only
+  // while the reader is already there — scrolling up stops the follow,
+  // scrolling back to the bottom resumes it.
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const followRef = useRef(true);
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (el && isStreaming && followRef.current) el.scrollTop = el.scrollHeight;
+  });
+  const handleBodyScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+  };
+
   // Tone → Tailwind utilities (no new CSS class — utilities only, per styling.md).
   // failed: amber left-border on the BODY + amber header icon/title. noop: the
   // whole plate muted. border-radius stays 0 (the project-wide rule; no rounded-*).
@@ -155,6 +169,8 @@ export function ToolPlate({
           <div
             className={`bg-surface2 ${bodyTone} p-2 text-text-muted max-h-[min(400px,50vh)] overflow-auto`}
             onClick={handleBodyClick}
+            onScroll={handleBodyScroll}
+            ref={bodyRef}
           >
             {children}
           </div>

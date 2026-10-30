@@ -22,9 +22,15 @@ IMPORT_FILE_TOOL: dict = {
             "\"reference\" to attach the result to a host document (parent_id) as "
             "a reference; otherwise (default) it lands as a new document under "
             "parent_id. Pass `sandbox_path` for a file you produced in the "
-            "sandbox console, or `attachment_index` for an image attached to your "
-            "current message. Applies immediately. For very large files prefer "
-            "the upload widget.\n"
+            "sandbox console, or `message_id` + `attachment_index` for an image "
+            "attached to a chat message — its address is the "
+            "`[attached images: message_id=…, count=N]` marker under the current "
+            "message, an `images: N` marker on a chat-recall read, or "
+            "`view_chat_image`'s meta (the index is the same 0-based index "
+            "view_chat_image serves). For an image from another chat, view it with "
+            "`view_chat_image` first and save that one with the same "
+            "`message_id` and `index`. Applies immediately. For very large files "
+            "prefer the upload widget.\n"
             # The create-vs-upload boundary
             # is "text I authored" → create_document (may propose); "bytes I am
             # importing" → import_file (applies immediately). Plain `content`
@@ -33,7 +39,7 @@ IMPORT_FILE_TOOL: dict = {
             # content_base64 is
             # NOT an input — you cannot see file bytes, so never emit base64 into
             # this call. Bytes arrive only via sandbox_path (a file you produced)
-            # or attachment_index (an image the user attached).
+            # or message_id + attachment_index (a stored chat image).
             # To share a bundle of sandbox files (e.g. a built web page), pack it
             # with `python -m zipfile -c out.zip <paths…>` — the console has NO
             # zip binary, python's stdlib is the route — then import the .zip as
@@ -49,7 +55,9 @@ IMPORT_FILE_TOOL: dict = {
                     "description": (
                         "Source filename. A .md/.markdown suffix on a text file runs "
                         "markdown normalize; the extension picks image vs audio for "
-                        "binary, and .zip means a downloadable archive reference."
+                        "binary, and .zip means a downloadable archive reference. "
+                        "On the chat-image path only the STEM is used — the "
+                        "extension comes from the stored image."
                     ),
                 },
                 "node_type": {
@@ -68,22 +76,31 @@ IMPORT_FILE_TOOL: dict = {
                     "description": (
                         "A file already in your sandbox workspace (e.g. a report "
                         "you generated, a chart you plotted). Mutually exclusive with "
-                        "attachment_index. This is the ONLY way to import a file you "
-                        "produced — you cannot see file bytes, so never emit base64. "
-                        "To share several files at once, pack them with "
-                        "`python -m zipfile -c out.zip <paths…>` (no zip binary on "
-                        "the console) and pass the .zip here."
+                        "message_id + attachment_index. This is the ONLY way to "
+                        "import a file you produced — you cannot see file bytes, so "
+                        "never emit base64. To share several files at once, pack "
+                        "them with `python -m zipfile -c out.zip <paths…>` (no zip "
+                        "binary on the console) and pass the .zip here."
+                    ),
+                },
+                "message_id": {
+                    "type": "string",
+                    "description": (
+                        "With attachment_index (mutually exclusive with "
+                        "sandbox_path): the message carrying the image to save. "
+                        "Take it from the `[attached images: message_id=…]` marker "
+                        "under the current message, an `images: N` marker on a "
+                        "chat-recall read, or `view_chat_image`'s meta."
                     ),
                 },
                 "attachment_index": {
                     "type": "integer",
                     "minimum": 0,
                     "description": (
-                        "INTERNAL (in-chat agent only): 0-based index of an image "
-                        "attached to your current message, in order of appearance. "
-                        "The driver resolves it to that image's bytes — use this to "
-                        "import an attached image. Mutually exclusive with "
-                        "sandbox_path."
+                        "With message_id: the image's 0-based position among that "
+                        "message's images (the same index `view_chat_image` "
+                        "serves). One image per call — save several with several "
+                        "calls."
                     ),
                 },
                 "title": {

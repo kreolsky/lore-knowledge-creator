@@ -114,10 +114,27 @@ class ToolListMyChats(BaseModel):
 class ToolReadMyChat(BaseModel):
     """`read_my_chat` body — one visible chat from its first turn, in pages of
     whole turns. A message cut by the page budget is finished through
-    `search_my_chats` (`message_id` + `offset`), never by counting characters."""
+    `search_my_chats` (`message_id` + `offset`), never by counting characters.
 
-    chat_id: str = Field(min_length=1)
+    `chat_id` omitted ⇒ the caller's CURRENT session — the fallback read for
+    messages the prompt no longer carries (chats started before the image
+    marker, compacted history). Only the OMISSION opens it: an explicit
+    `chat_id` inside the calling conversation keeps today's 404 (sibling
+    branches are not addressable).
+    """
+
+    chat_id: str | None = Field(default=None, min_length=1)
     from_turn: int = Field(default=0, ge=0)
+
+
+class ToolViewChatImage(BaseModel):
+    """`view_chat_image` body — one image attached to a message of the caller's
+    visible other chats. `message_id` comes from a served `images: N` marker
+    (`read_my_chat` or a window read of `search_my_chats`); `index` is the
+    image's 0-based position among that message's images."""
+
+    message_id: str = Field(min_length=1)
+    index: int = Field(ge=0)
 
 
 class ToolSandboxBash(BaseModel):
@@ -531,9 +548,14 @@ class ToolImportFile(BaseModel):
     # conditional normalize_markdown.
 
     # Exactly one input form: `sandbox_path` (a workspace file, console-only) OR
-    # `attachment_index` (an attached image, in-chat agent only). Binary
-    # image/audio/archive (.zip) requires node_type="reference" (a binary is
-    # never a document).
+    # `message_id` + `attachment_index` (a stored chat image, in-chat agent
+    # only). The former "latest message" default of `attachment_index` is
+    # REMOVED (operator ruling: old calls are not needed) — an image is
+    # ADDRESSED by its message id (the prompt's `[attached images: …]` marker,
+    # an `images: N` recall read, or `view_chat_image`), so an
+    # `attachment_index` without `message_id` is a 422 that names the fix.
+    # Binary image/audio/archive (.zip) requires node_type="reference" (a
+    # binary is never a document).
 
     # `content_base64` LEAVES the
     # agent surface — zero calls in all of telemetry, and unreachable in practice
@@ -547,7 +569,8 @@ class ToolImportFile(BaseModel):
 
     # Auto-only on BOTH surfaces (no ProposalKind): the bytes are user-supplied
     # data, not a text edit to confirm. Console-only props (`sandbox_path`,
-    # `attachment_index`) are agent-only (import_file is off the MCP surface).
+    # `message_id`, `attachment_index`) are agent-only (import_file is off the
+    # MCP surface).
     """
 
     filename: str = ""
@@ -556,6 +579,10 @@ class ToolImportFile(BaseModel):
     # word names the kind on every tool). The row column stays is_reference.
     node_type: Literal["document", "reference"] = "document"
     sandbox_path: str | None = None
+    # `message_id` + `attachment_index` address ONE stored chat image: the id
+    # of the message carrying it, and the image's 0-based position among that
+    # message's images (the same indexing `view_chat_image` serves).
+    message_id: str | None = None
     attachment_index: int | None = None
     title: str = ""
     # parent_id is BOTH placements, discriminated by node_type: the tree parent
@@ -567,13 +594,25 @@ class ToolImportFile(BaseModel):
 
     @model_validator(mode="after")
     def _require_one_input_form(self) -> "ToolImportFile":
+        # XOR: `sandbox_path` (a workspace file, console-only) OR `message_id` +
+        # `attachment_index` (a stored chat image, in-chat agent only). The
+        # latest-message default is gone, so `attachment_index` alone is
+        # refused here with the fix named — the 422 is the safety net for any
+        # old skill/prompt doc still teaching the bare index.
         has_path = self.sandbox_path is not None
+        has_msg = self.message_id is not None
         has_idx = self.attachment_index is not None
-        if has_path + has_idx != 1:
+        if has_path == (has_msg or has_idx):
             raise ValueError(
                 "Provide exactly one of `sandbox_path` (a workspace file, "
-                "console-only) or `attachment_index` (an attached image, "
-                "in-chat agent only)"
+                "console-only) or `message_id` + `attachment_index` (a chat "
+                "image, in-chat agent only)"
+            )
+        if not has_path and has_msg != has_idx:
+            raise ValueError(
+                "`attachment_index` requires `message_id` (from the prompt's "
+                "`[attached images: …]` marker, an `images: N` recall read, or "
+                "`view_chat_image`) — the latest-message default is gone"
             )
         # D4-consistency: a reference attaches to a host (parent_id). Mirrors
         # create_document's invariant (creates.py — a reference requires a

@@ -3,9 +3,12 @@
 The search half and its live-row predicate live in chat_sessions.recall_search,
 shared with the person's own chat-search route; this handler adds the key auth,
 the off-switch, the calling conversation's exclusion and anchor, the window read,
-and the skill pack's list (whole-chat find) and read (whole-chat paging) tools
-over the SAME predicate.
+and the skill pack's list (whole-chat find), read (whole-chat paging) and
+view_chat_image (one attached image) tools over the SAME predicate.
 """
+import re
+from typing import NamedTuple
+
 from agent.context import get_agent_context, owned_session_row
 from chat_sessions.conversation import conversation_session_ids
 from chat_sessions.recall import chat_recall_disabled
@@ -21,12 +24,21 @@ from chat_sessions.recall_search import (
 from fastapi import Body, Depends, HTTPException
 
 from db import get_db
-from models import ToolListMyChats, ToolReadMyChat, ToolSearchMyChats
+from models import (
+    ToolListMyChats,
+    ToolReadMyChat,
+    ToolSearchMyChats,
+    ToolViewChatImage,
+)
 from routes.tool_api_telemetry import track_agent_tool
 from scope import subtree_doc_ids
 
 CHAT_RECALL_WINDOW_CHARS = 8000
 CHAT_READ_PAGE_CHARS = 30000
+# The per-image view cap, in DECODED bytes — the same figure the driver's image
+# admission uses (dsh DEFAULT_MAX_IMAGE_BYTES, the min read_image honours), so
+# what this route serves always fits what saveImage will accept.
+VIEW_CHAT_IMAGE_MAX_BYTES = 20 * 1024 * 1024
 
 
 def _require_in_app_agent(ctx: dict) -> None:
@@ -92,11 +104,23 @@ async def _current_conversation(db, ctx: dict) -> tuple[set[str], str | None]:
 # ─── window read ─────────────────────────────────────────────────────────────
 
 
+def _image_marker(m: dict) -> dict:
+    """The `images: N` marker for one served message — a COUNT, never bytes or
+    URLs: the text results stay cheap and the agent learns an image exists
+    without seeing it (the pixels are asked for with `view_chat_image`)."""
+    n = m.get("n_images") or 0
+    return {"images": n} if n > 0 else {}
+
+
 async def _session_chain(db, chat_id: str) -> list[dict]:
     """The session's messages in parent_id order. Deleted rows are walked (a
-    deleted row never splits the chain) and dropped from the result."""
+    deleted row never splits the chain) and dropped from the result. Image
+    COUNTS ride along (`array::len`, computed in the DB so a data-URI payload
+    never enters a text read) for the `images: N` marker."""
     rows = await db.query(
-        f"SELECT {MESSAGE_FIELDS}, deleted_at FROM messages WHERE chat_id = $cid",
+        f"SELECT {MESSAGE_FIELDS}, deleted_at, "
+        "IF images IS NONE THEN 0 ELSE array::len(images) END AS n_images "
+        "FROM messages WHERE chat_id = $cid",
         {"cid": chat_id},
     ) or []
     ids = {r["id"] for r in rows}
@@ -149,6 +173,7 @@ def _window_messages(window: list[dict], hit_id: str, offset: int) -> tuple[list
         "message_id": m["id"], "role": m["role"], "created_at": iso(m.get("created_at")),
         "content": served[m["id"]],
         **({"truncated": True} if len(served[m["id"]]) < len(m["content"]) else {}),
+        **_image_marker(m),
     } for m in window if m["id"] in served]
     return out, next_offset
 
@@ -278,24 +303,45 @@ async def tool_read_my_chat(
     ctx: dict = Depends(get_agent_context),
 ):
     """Read one of the caller's other chats whole, from its first turn, in pages
-    of whole turns. Refused while the admin disabled the `chat-recall` skill;
-    a chat outside the visible set is a uniform 404 — no existence oracle."""
+    of whole turns — or, with `chat_id` omitted, the caller's CURRENT session:
+    the fallback read for messages the prompt no longer carries (chats started
+    before the image marker, compacted history). Refused while the admin
+    disabled the `chat-recall` skill; a chat outside the visible set is a
+    uniform 404 — no existence oracle (an explicit `chat_id` inside the calling
+    conversation included: sibling branches are not addressable, only the
+    OMISSION reads the current session)."""
     _require_in_app_agent(ctx)
     db = await get_db()
     if await chat_recall_disabled(db):
         raise HTTPException(status_code=403,
                             detail="chat-recall is disabled by the administrator")
-    user_id, project_id = ctx["user"]["user_id"], ctx["project_id"]
-    exclude, anchor = await _current_conversation(db, ctx)
-    chat = (await visible_sessions(db, user_id, project_id, exclude,
-                                   viewer_doc_id=anchor)).get(body.chat_id)
-    if not chat:
-        raise HTTPException(status_code=404, detail="chat not found")
-    turns = _turns(await _session_chain(db, body.chat_id))
+    if body.chat_id is None:
+        # ARCH: the current-session arm — the ONE read of the calling
+        # conversation the pack allows, addressed by OMISSION and not by id:
+        # the session is the caller's own (`owned_session_row`, the same
+        # ownership predicate every X-Agent-Session-Id consumer uses), so the
+        # visible-set wall is meaningless here, while an explicit chat_id
+        # inside `exclude` must keep today's 404 (a sibling branch is a
+        # different transcript).
+        chat_id = ctx.get("session_id") or ""
+        session = await owned_session_row(ctx) if chat_id else None
+        if not session:
+            raise HTTPException(status_code=404, detail="chat not found")
+        chat = {"title": session.get("title") or "",
+                "document_id": session.get("document_id")}
+    else:
+        user_id, project_id = ctx["user"]["user_id"], ctx["project_id"]
+        exclude, anchor = await _current_conversation(db, ctx)
+        chat_id = body.chat_id
+        chat = (await visible_sessions(db, user_id, project_id, exclude,
+                                       viewer_doc_id=anchor)).get(chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail="chat not found")
+    turns = _turns(await _session_chain(db, chat_id))
     page, next_turn = _read_page(turns, body.from_turn)
     result: dict = {
-        "chat_id": body.chat_id, "chat_title": chat["title"],
-        "document_id": chat["document_id"], "total_turns": len(turns),
+        "chat_id": chat_id, "chat_title": chat["title"],
+        "document_id": chat.get("document_id"), "total_turns": len(turns),
         "turns": page,
     }
     if next_turn is not None:
@@ -358,8 +404,147 @@ def _message_row(m: dict, content: str) -> dict:
     row: dict = {
         "message_id": m["id"], "role": m["role"],
         "created_at": iso(m.get("created_at")), "content": content,
+        **_image_marker(m),
     }
     if len(content) < len(m["content"]):
         row["truncated"] = True
         row["next_offset"] = len(content)
     return row
+
+
+# ─── view: one attached image of a visible message ────────────────────────────
+
+# The write-side admission (routes/chat/serializers.py `_validate_image_url`)
+# lets in data URIs (`data:image/<subtype>;base64,<payload>`) and HTTPS URLs
+# only; this parse mirrors that shape for the SERVED read.
+_VIEW_IMAGE_DATA_URI_RE = re.compile(
+    r"^data:(image/[a-z+]+);base64,(.+)$", re.IGNORECASE | re.DOTALL)
+
+
+@track_agent_tool("view_chat_image")
+async def tool_view_chat_image(
+    body: ToolViewChatImage = Body(...),
+    ctx: dict = Depends(get_agent_context),
+):
+    """One image attached to a message of the caller's other chats — the image
+    follows the text under the pack's EXISTING visibility predicate: what
+    `read_my_chat` cannot see, this cannot see either (uniform 404, no
+    existence oracle). Refused while the admin disabled the `chat-recall` skill,
+    like the rest of the pack.
+
+    # INVARIANT(security): admission is the SAME predicate chain as the pack's reads.
+    # Why: a byte route behind a weaker gate than the text reads would re-open
+    #     what the pack's wall exists to close. The chain lives ONCE in
+    #     `admit_chat_message` (own_conversation=False here — the calling
+    #     conversation stays today's 404); error details carry no image data
+    #     (the proxy forwards `buf.slice(0, 300)` to the model).
+    """
+    _require_in_app_agent(ctx)
+    db = await get_db()
+    admitted = await admit_chat_message(db, ctx, body.message_id,
+                                        own_conversation=False)
+    if body.index >= len(admitted.images):
+        raise HTTPException(status_code=404, detail="image not found")
+    return _view_image_result(admitted.images[body.index], body, admitted)
+
+
+def _conversation_sessions(ids: set[str]) -> dict[str, dict]:
+    """A sessions-dict SHAPE over the conversation's session ids — `live_rows`
+    and `_admitted_images` key on the ids only; the meta is never read on the
+    own-conversation arm (import_file needs no title)."""
+    return {sid: {"title": "", "root": sid, "document_id": None} for sid in ids}
+
+
+class AdmittedChatMessage(NamedTuple):
+    """One admitted chat message: its live row, its images, its chat title."""
+
+    hit: dict
+    images: list[str]
+    chat_title: str
+
+
+async def admit_chat_message(
+    db, ctx: dict, message_id: str, *, own_conversation: bool,
+) -> AdmittedChatMessage:
+    """The pack's ONE admission chain for one chat message and its images —
+    `tool_view_chat_image` and `import_file`'s attachment path call THIS,
+    never a re-stated copy of the chain.
+
+    `own_conversation=False` (view): the calling conversation stays invisible —
+    today's uniform 404. `own_conversation=True` (import): a message of the
+    calling conversation (any turn, any branch) is admitted FIRST, without the
+    chat-recall off-switch — the prompt's image marker addresses exactly that
+    conversation (today's attachment path never consulted the switch either);
+    every other message then runs the recall wall verbatim (off-switch →
+    `visible_sessions(viewer_doc_id=anchor)` → `live_rows`).
+
+    # INVARIANT(security): the off-switch and the visible-session wall are the
+    #     recall pack's whole boundary.
+    #     Why: an image read behind a weaker gate than the text reads would
+    #     re-open what the wall closes. A message outside the admitted
+    #     sessions is a uniform 404 (no existence oracle), a dead message
+    #     included: deleting a session soft-deletes its messages first
+    #     (chat_sessions.delete), and `live_rows` re-checks `deleted_at IS
+    #     NONE` on every read — so a deleted branch of the calling
+    #     conversation is a 404 even on the own-conversation arm.
+    """
+    user_id, project_id = ctx["user"]["user_id"], ctx["project_id"]
+    exclude, anchor = await _current_conversation(db, ctx)
+    sessions: dict = {}
+    hit: dict | None = None
+    if own_conversation and exclude:
+        sessions = _conversation_sessions(exclude)
+        hit = (await live_rows(db, {message_id}, sessions)).get(message_id)
+    if hit is None:
+        if await chat_recall_disabled(db):
+            raise HTTPException(status_code=403,
+                                detail="chat-recall is disabled by the administrator")
+        sessions = await visible_sessions(db, user_id, project_id, exclude,
+                                          viewer_doc_id=anchor)
+        hit = (await live_rows(db, {message_id}, sessions)).get(message_id)
+    if hit is None:
+        raise HTTPException(status_code=404, detail="message not found")
+    images = await _admitted_images(db, message_id, sessions)
+    return AdmittedChatMessage(
+        hit, images, sessions.get(hit["chat_id"], {}).get("title") or "",
+    )
+
+
+async def _admitted_images(db, message_id: str, sessions: dict) -> list[str]:
+    """`messages.images` of the ADMITTED message. `live_rows` selects
+    MESSAGE_FIELDS only, so the images are re-read here keyed by the admitted
+    id, re-stating `deleted_at IS NONE AND chat_id IN $sids`; the images array
+    is written only at create (MessageCreate / the driver claim / branch
+    copies), so the served marker and this read cannot diverge (no TOCTOU)."""
+    rows = await db.query(
+        "SELECT images FROM messages "
+        "WHERE meta::id(id) = $mid AND deleted_at IS NONE AND chat_id IN $sids",
+        {"mid": message_id, "sids": sorted(sessions)},
+    ) or []
+    return (rows[0].get("images") if rows else None) or []
+
+
+def _view_image_result(
+    url: str, body: ToolViewChatImage, admitted: AdmittedChatMessage,
+) -> dict:
+    """The served image: a stored data URI as `{image: {media_type, data}}`
+    under the view cap; a linked (HTTPS) image answers `unavailable` with NO
+    URL — Lore stores the link, never the bytes, never fetches it (SSRF)."""
+    if not url.startswith("data:"):
+        return {"unavailable": "image is a link, not stored in Lore",
+                "chat_id": admitted.hit["chat_id"], "message_id": body.message_id,
+                "index": body.index}
+    match = _VIEW_IMAGE_DATA_URI_RE.match(url)
+    if not match:
+        raise HTTPException(status_code=400, detail="image is not a valid data URI")
+    media_type, data = match.group(1).lower(), match.group(2)
+    # Decoded size (base64 length overstates it ~4/3x): the cap names what the
+    # DRIVER will admit, and that side sees decoded bytes.
+    if (len(data) - data.count("=")) * 3 // 4 > VIEW_CHAT_IMAGE_MAX_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"image is over the {VIEW_CHAT_IMAGE_MAX_BYTES}-byte "
+                   f"({VIEW_CHAT_IMAGE_MAX_BYTES // 1024 // 1024} MiB) view limit")
+    return {"image": {"media_type": media_type, "data": data},
+            "chat_id": admitted.hit["chat_id"], "message_id": body.message_id,
+            "index": body.index, "chat_title": admitted.chat_title}

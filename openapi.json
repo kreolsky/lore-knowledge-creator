@@ -1520,6 +1520,17 @@
             ],
             "title": "Chats Unindexed"
           },
+          "chats_unlisted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chats Unlisted"
+          },
           "content": {
             "anyOf": [
               {
@@ -3302,7 +3313,7 @@
         "type": "object"
       },
       "ToolImportFile": {
-        "description": "import_file body — import a FILE as a new document or reference.\n\n# Plain `content` (authored text) is REMOVED from this surface. Authored\n# text goes to create_document (which may propose); importing bytes applies\n# immediately. The boundary the model observes: \"text I authored\" →\n# create_document; \"bytes I am importing\" → import_file. `_import_document`'s\n# internal `content` parameter is retained — `_resolve_sandbox_path` produces\n# it for a text/.md file read from the workspace (a FILE import, not authored\n# text), so sandbox .md files still flow through the shared text gate +\n# conditional normalize_markdown.\n\n# Exactly one input form: `sandbox_path` (a workspace file, console-only) OR\n# `attachment_index` (an attached image, in-chat agent only). Binary\n# image/audio/archive (.zip) requires node_type=\"reference\" (a binary is\n# never a document).\n\n# `content_base64` LEAVES the\n# agent surface — zero calls in all of telemetry, and unreachable in practice\n# (the agent can only produce bytes via the sandbox, where sandbox_path is\n# explicitly preferred by the tool's own description). It is removed from the\n# schema, the model, and the XOR validator. `_import_document`'s INTERNAL\n# `content_base64` parameter STAYS — `_resolve_sandbox_path` produces it for\n# binary/.docx workspace files. A model cannot emit multi-MB base64 into a tool\n# call; the byte channels are sandbox_path (produced) and attachment_index\n# (persisted), neither of which the model authors.\n\n# Auto-only on BOTH surfaces (no ProposalKind): the bytes are user-supplied\n# data, not a text edit to confirm. Console-only props (`sandbox_path`,\n# `attachment_index`) are agent-only (import_file is off the MCP surface).",
+        "description": "import_file body — import a FILE as a new document or reference.\n\n# Plain `content` (authored text) is REMOVED from this surface. Authored\n# text goes to create_document (which may propose); importing bytes applies\n# immediately. The boundary the model observes: \"text I authored\" →\n# create_document; \"bytes I am importing\" → import_file. `_import_document`'s\n# internal `content` parameter is retained — `_resolve_sandbox_path` produces\n# it for a text/.md file read from the workspace (a FILE import, not authored\n# text), so sandbox .md files still flow through the shared text gate +\n# conditional normalize_markdown.\n\n# Exactly one input form: `sandbox_path` (a workspace file, console-only) OR\n# `message_id` + `attachment_index` (a stored chat image, in-chat agent\n# only). The former \"latest message\" default of `attachment_index` is\n# REMOVED (operator ruling: old calls are not needed) — an image is\n# ADDRESSED by its message id (the prompt's `[attached images: …]` marker,\n# an `images: N` recall read, or `view_chat_image`), so an\n# `attachment_index` without `message_id` is a 422 that names the fix.\n# Binary image/audio/archive (.zip) requires node_type=\"reference\" (a\n# binary is never a document).\n\n# `content_base64` LEAVES the\n# agent surface — zero calls in all of telemetry, and unreachable in practice\n# (the agent can only produce bytes via the sandbox, where sandbox_path is\n# explicitly preferred by the tool's own description). It is removed from the\n# schema, the model, and the XOR validator. `_import_document`'s INTERNAL\n# `content_base64` parameter STAYS — `_resolve_sandbox_path` produces it for\n# binary/.docx workspace files. A model cannot emit multi-MB base64 into a tool\n# call; the byte channels are sandbox_path (produced) and attachment_index\n# (persisted), neither of which the model authors.\n\n# Auto-only on BOTH surfaces (no ProposalKind): the bytes are user-supplied\n# data, not a text edit to confirm. Console-only props (`sandbox_path`,\n# `message_id`, `attachment_index`) are agent-only (import_file is off the\n# MCP surface).",
         "properties": {
           "attachment_index": {
             "anyOf": [
@@ -3319,6 +3330,17 @@
             "default": "",
             "title": "Filename",
             "type": "string"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
           },
           "node_type": {
             "default": "document",
@@ -3589,12 +3611,19 @@
         "type": "object"
       },
       "ToolReadMyChat": {
-        "description": "`read_my_chat` body — one visible chat from its first turn, in pages of\nwhole turns. A message cut by the page budget is finished through\n`search_my_chats` (`message_id` + `offset`), never by counting characters.",
+        "description": "`read_my_chat` body — one visible chat from its first turn, in pages of\nwhole turns. A message cut by the page budget is finished through\n`search_my_chats` (`message_id` + `offset`), never by counting characters.\n\n`chat_id` omitted ⇒ the caller's CURRENT session — the fallback read for\nmessages the prompt no longer carries (chats started before the image\nmarker, compacted history). Only the OMISSION opens it: an explicit\n`chat_id` inside the calling conversation keeps today's 404 (sibling\nbranches are not addressable).",
         "properties": {
           "chat_id": {
-            "minLength": 1,
-            "title": "Chat Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Id"
           },
           "from_turn": {
             "default": 0,
@@ -3603,9 +3632,6 @@
             "type": "integer"
           }
         },
-        "required": [
-          "chat_id"
-        ],
         "title": "ToolReadMyChat",
         "type": "object"
       },
@@ -3980,6 +4006,27 @@
           "new_value"
         ],
         "title": "ToolTableCellEdit",
+        "type": "object"
+      },
+      "ToolViewChatImage": {
+        "description": "`view_chat_image` body — one image attached to a message of the caller's\nvisible other chats. `message_id` comes from a served `images: N` marker\n(`read_my_chat` or a window read of `search_my_chats`); `index` is the\nimage's 0-based position among that message's images.",
+        "properties": {
+          "index": {
+            "minimum": 0.0,
+            "title": "Index",
+            "type": "integer"
+          },
+          "message_id": {
+            "minLength": 1,
+            "title": "Message Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "index"
+        ],
+        "title": "ToolViewChatImage",
         "type": "object"
       },
       "TransferProjectOwner": {
@@ -15717,7 +15764,7 @@
     },
     "/api/tool/import_file": {
       "post": {
-        "description": "Import a FILE as a new document (node_type=\"document\", the default) or\nreference (node_type=\"reference\", attached to parent_id = the host).\n\nAuto-only (applies directly on both surfaces — no ProposalKind): the bytes are\nuser-supplied data, not a text edit to confirm. Binary image/audio/archive\nrequires node_type=\"reference\" (a binary is never a document); the error names\nthe fix.\nReversible in the Lore History panel for a document body / markdown reference;\nbinary references are deleted separately.\n\nPlan tool-surface-consolidation Step 2b: merges upload_document +\nupload_reference. D2: authored text is NOT an input (use create_document) —\nonly `content_base64` / `sandbox_path` / `attachment_index` reach the pipeline.",
+        "description": "Import a FILE as a new document (node_type=\"document\", the default) or\nreference (node_type=\"reference\", attached to parent_id = the host).\n\nAuto-only (applies directly on both surfaces — no ProposalKind): the bytes are\nuser-supplied data, not a text edit to confirm. Binary image/audio/archive\nrequires node_type=\"reference\" (a binary is never a document); the error names\nthe fix.\nReversible in the Lore History panel for a document body / markdown reference;\nbinary references are deleted separately.\n\nPlan tool-surface-consolidation Step 2b: merges upload_document +\nupload_reference. D2: authored text is NOT an input (use create_document) —\nonly `content_base64` / `sandbox_path` / `message_id` + `attachment_index`\nreach the pipeline.",
         "operationId": "tool_import_file_api_tool_import_file_post",
         "parameters": [
           {
@@ -16499,7 +16546,7 @@
     },
     "/api/tool/read_my_chat": {
       "post": {
-        "description": "Read one of the caller's other chats whole, from its first turn, in pages\nof whole turns. Refused while the admin disabled the `chat-recall` skill;\na chat outside the visible set is a uniform 404 — no existence oracle.",
+        "description": "Read one of the caller's other chats whole, from its first turn, in pages\nof whole turns — or, with `chat_id` omitted, the caller's CURRENT session:\nthe fallback read for messages the prompt no longer carries (chats started\nbefore the image marker, compacted history). Refused while the admin\ndisabled the `chat-recall` skill; a chat outside the visible set is a\nuniform 404 — no existence oracle (an explicit `chat_id` inside the calling\nconversation included: sibling branches are not addressable, only the\nOMISSION reads the current session).",
         "operationId": "tool_read_my_chat_api_tool_read_my_chat_post",
         "parameters": [
           {
@@ -16599,8 +16646,7 @@
                 "$ref": "#/components/schemas/ToolReadMyChat"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -17931,6 +17977,137 @@
           }
         },
         "summary": "Tool Search My Chats",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
+    "/api/tool/view_chat_image": {
+      "post": {
+        "description": "One image attached to a message of the caller's other chats — the image\nfollows the text under the pack's EXISTING visibility predicate: what\n`read_my_chat` cannot see, this cannot see either (uniform 404, no\nexistence oracle). Refused while the admin disabled the `chat-recall` skill,\nlike the rest of the pack.",
+        "operationId": "tool_view_chat_image_api_tool_view_chat_image_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolViewChatImage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool View Chat Image",
         "tags": [
           "tool-api"
         ]

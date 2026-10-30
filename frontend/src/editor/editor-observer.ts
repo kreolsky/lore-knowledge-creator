@@ -60,6 +60,21 @@ function publishSelection(update: ViewUpdate): void {
  * (render-bundle) for the document and the editable cell; `setFocusedView` checks for it. */
 export const selectionFeedPlugin = ViewPlugin.define(() => ({ update: publishSelection }));
 
+/** An editable table cell's share of `editor-doc-changed`. WHY: cell text lives in the
+ * table model, not in the host view, so the host observer never sees a cell edit — an
+ * image dropped only into a cell was never re-scanned for its reference and stayed raw. */
+export const cellDocChangedFeed = ViewPlugin.define(() => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return {
+    update(update: ViewUpdate) {
+      if (!update.docChanged) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => emit('editor-doc-changed'), 500);
+    },
+    destroy() { clearTimeout(timer); },
+  };
+});
+
 export function createObserverExtension(deps: ObserverDeps): Extension {
   return ViewPlugin.define((view) => {
     let docChangedTimer: ReturnType<typeof setTimeout> | undefined;

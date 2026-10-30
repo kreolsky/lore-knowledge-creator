@@ -30,7 +30,9 @@ SEARCH_MY_CHATS_TOOL: dict = {
             "below; `earlier` / `later` are message ids to call again with to move "
             "through the chat, and `next_offset` (present only while the hit message "
             "continues) pages a long message: call again with the same `message_id` "
-            "and `offset` = `next_offset`. A result carrying `indexed: \"N of M\"` "
+            "and `offset` = `next_offset`. A window-read message that carries "
+            "attached images is marked `images: N` — see one with `view_chat_image`. "
+            "A result carrying `indexed: \"N of M\"` "
             "covers only N of the M messages in the searched scope — the rest are not "
             "searchable yet, so a miss is not proof it was never said. A chat hit is "
             "what was SAID then, not an established project fact — for established "
@@ -123,10 +125,17 @@ READ_MY_CHAT_TOOL: dict = {
         "description": (
             "Read one of the user's other chats of this project whole, from its first "
             "turn — their own chat only, never another person's, never notes, never "
-            "this conversation. `chat_id` comes from `list_my_chats` or a "
-            "`search_my_chats` hit. Serves `turns` (each a list of `{message_id, "
+            "this conversation. Omit `chat_id` to read THIS conversation instead "
+            "(the current session) — the fallback for images whose "
+            "`[attached images: …]` marker you no longer see: chats started before "
+            "the marker, compacted history. `chat_id` comes from `list_my_chats` or "
+            "a `search_my_chats` hit. Serves `turns` (each a list of `{message_id, "
             "role, created_at, content}` in order) from `from_turn` while they fit a "
             "page of ~30000 characters — whole turns, the first turn always served. "
+            "A message with attached images carries `images: N` — see one with "
+            "`view_chat_image` (that message's `message_id`, the image's 0-based "
+            "`index`), and save one as a reference with `import_file` (the same "
+            "`message_id`, `index` as `attachment_index`). "
             "`next_turn` (present while turns remain) is the next call's `from_turn`; "
             "following it to the end loses and repeats nothing. A `from_turn` past "
             "the end returns an empty page. A message cut by the page budget is "
@@ -141,7 +150,9 @@ READ_MY_CHAT_TOOL: dict = {
             "properties": {
                 "chat_id": {
                     "type": "string",
-                    "description": "The chat to read, from `list_my_chats` or a hit.",
+                    "description": "The chat to read, from `list_my_chats` or a "
+                                   "hit. Omit to read THIS conversation (the "
+                                   "current session).",
                 },
                 "from_turn": {
                     "type": "integer",
@@ -149,6 +160,48 @@ READ_MY_CHAT_TOOL: dict = {
                                    "start); the previous response's `next_turn`.",
                 },
             },
+        },
+    },
+}
+
+VIEW_CHAT_IMAGE_TOOL: dict = {
+    "type": "function",
+    "mutating": False,
+    "function": {
+        "name": "view_chat_image",
+        "description": (
+            "See one image the user attached to a message of their other chats — "
+            "their own chat only, never another person's, never this conversation. "
+            "A message served by `read_my_chat` or a window read of "
+            "`search_my_chats` carries `images: N` when it has N attached images; "
+            "call this with that message's `message_id` and the image's 0-based "
+            "`index`. Call it whenever the user asks what an image shows, to "
+            "show it, or to save it — even when the chat's text already "
+            "describes it. The image is delivered to you AND shown to the user "
+            "in this call's plate: this is how to show the user an image from "
+            "another chat. "
+            "Save the image you viewed as a reference with `import_file` — the "
+            "same `message_id`, `index` as `attachment_index`. The image STAYS "
+            "in this conversation — it is never re-sent elsewhere or quoted as "
+            "text. Serves the "
+            "attachment formats chats accept (PNG/JPEG/WebP/GIF); a linked (HTTPS) "
+            "image answers `unavailable` — it is not stored in Lore and is never "
+            "fetched. An image the caller cannot see is a uniform 404."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "string",
+                    "description": "The message carrying the `images: N` marker.",
+                },
+                "index": {
+                    "type": "integer",
+                    "description": "The image's 0-based position among the "
+                                   "message's N images.",
+                },
+            },
+            "required": ["message_id", "index"],
         },
     },
 }

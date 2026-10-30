@@ -58,7 +58,11 @@ def serialize_session(
     API surface:
       - Unified context_ids array (insertion order preserved)
       - reference_id: computed READ-only when document_id points to a ref-doc
-      - document_id: ref-doc id is mapped to its parent (owning document)
+      - document_id: emitted VERBATIM — a reference chat keeps the ref-doc id
+        (its identity is the entity it was created on); it is NOT remapped
+      - host_document_id: the document whose subtree hosts the chat — the
+        reference's parent for a reference chat, document_id itself for a doc
+        chat, null for a doc-less chat (plan chats-unlisted-subtree)
 
     Note display:
       - For note sessions, derived display fields (first/last message preview,
@@ -164,6 +168,13 @@ def _stamp_reference_identity(
         out["reference_id"] = did_raw
         out["reference_title"] = ref_entry.get("title")
         out["document_title"] = None
+        # ARCH (plan chats-unlisted-subtree): host_document_id = the
+        # reference's PARENT (read from the ref map — zero new queries), so
+        # the client's chats_unlisted subtree filter, which walks the
+        # DOCUMENT tree, sees this chat under its owning document. The client
+        # cannot resolve the owner itself: references load per open document
+        # only, and the project tree payload excludes them.
+        out["host_document_id"] = ref_entry.get("parent_id")
         return
     out["reference_id"] = None
     out["reference_title"] = None
@@ -173,6 +184,9 @@ def _stamp_reference_identity(
     # serializer stays pure); create/update callers pass None → the field is None
     # and the client falls back to its document tree.
     out["document_title"] = (document_titles or {}).get(out.get("document_id"))
+    # A doc chat's host is its own document; a doc-less chat has none (null —
+    # never hidden by the chats_unlisted filter).
+    out["host_document_id"] = did_raw
 
 
 def _stamp_note_display(out: dict, previews_by_session_id: dict | None) -> None:

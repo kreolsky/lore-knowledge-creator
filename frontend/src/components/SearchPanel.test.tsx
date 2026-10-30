@@ -64,6 +64,7 @@ beforeEach(async () => {
   }));
   chatState = {
     sessions: [],
+    activeSessionId: null,
     setActiveSession: vi.fn((id: string | null) => { chatState.activeSessionId = id; }),
     openBranch: vi.fn(),
     setPendingScroll: vi.fn(),
@@ -101,6 +102,8 @@ beforeEach(async () => {
   appState = {
     currentProject: { project_id: 'p1' },
     currentDocument: null,
+    // Flat tree rows — the chats_unlisted title-hit projection reads them.
+    documents: [],
   };
   uiState = {
     searchQuery: 'vertigo',

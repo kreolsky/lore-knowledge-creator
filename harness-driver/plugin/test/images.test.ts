@@ -466,6 +466,24 @@ test('an image turn upserts the capability entry, then returns the blocks', asyn
   assert.equal(blocks[1]!.type, 'image')
 })
 
+test('a vision-model turn declares image input even without prompt images', async () => {
+  // The catalog fix (plan chat-recall-images): a tool-result image arrives on
+  // a turn whose own prompt carried none, so the declaration follows the
+  // model's roster vision bit — one source with the view_chat_image gate.
+  const s = store()
+  const settings = fakeSettings()
+  await prepareUserContent(
+    'plain text', s.saveImage, settings, 'm/x', 128000, 65536, null, true,
+  )
+  assert.equal(settings.updates.length, 1)
+  assert.deepEqual(settings.updates[0]!.patch, {
+    providers: { lore: { models: [{
+      id: 'm/x', input: ['text', 'image'],
+      contextWindow: 128000, maxTokens: 65536,
+    }] } },
+  })
+})
+
 test('a turn without a settings seam fails loudly, not silently — text-only too', async () => {
   const s = store()
   await assert.rejects(

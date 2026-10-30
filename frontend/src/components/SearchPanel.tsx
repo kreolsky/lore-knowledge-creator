@@ -6,7 +6,7 @@
  * openBranch, setPendingScroll.
  * Events emitted: navigate-to-reference, navigate-to-document, open-right-panel. */
 
-import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { Search, Sparkles, MessagesSquare } from 'lucide-react';
 import { useAppStore } from '../store/app-store';
 import { useUIStore } from '../store/ui-store';
@@ -15,6 +15,7 @@ import { isChatScopeLoaded, markChatScopeLoaded } from '../chat/scope-tracker';
 import { apiClient, ForbiddenError } from '../api/client';
 import { emit } from '../events';
 import { formatDate } from '../utils/format';
+import { listHiddenDocIds } from '../utils/document-sort';
 import { ChatSearchHit, ChatSession, SearchMode, SearchResult, SearchSnapshot, SemanticSearchHit } from '../types';
 import { FieldInput, FieldCheckbox, Button, ListPill, PillList } from './ui';
 import { useTranslation } from '../i18n';
@@ -61,6 +62,8 @@ export function SearchPanel() {
   const mode = useUIStore(s => s.searchMode);
   const setSearchMode = useUIStore(s => s.setSearchMode);
   const chatSessions = useChatStore(s => s.sessions);
+  const activeSessionId = useChatStore(s => s.activeSessionId);
+  const documents = useAppStore(s => s.documents);
 
   const { t } = useTranslation();
   // WHY a snapshot: opening a chat hit swaps the right panel to the chat tab,
@@ -296,7 +299,21 @@ export function SearchPanel() {
   // chats not yet indexed; the loaded chat list covers all three, with no request.
   // A chat in both groups stays in both — the title row opens the chat, the
   // content row scrolls to the message.
-  const titleHits = mode === 'chats' && !showHint ? filterSessionsByTitle(chatSessions, query) : [];
+  // ARCH (plan chats-unlisted-subtree): the chats_unlisted list projection applies
+  // to the TITLE hits only — this group is the chat list by another door. CONTENT
+  // hits (server recall) stay the search flag's domain: unlisted ≠ unfindable.
+  // The ACTIVE chat keeps its title row until switched away (same exemption as
+  // useSortedSessions).
+  const titleHits = useMemo(() => {
+    if (mode !== 'chats' || showHint) return [];
+    const hidden = listHiddenDocIds(documents, currentDocument?.document_id ?? null);
+    const listed = hidden.size === 0
+      ? chatSessions
+      : chatSessions.filter(s => s.session_id === activeSessionId
+        || !s.host_document_id
+        || !hidden.has(s.host_document_id));
+    return filterSessionsByTitle(listed, query);
+  }, [mode, showHint, chatSessions, activeSessionId, documents, currentDocument, query]);
   const activeResults = { fulltext: results, semantic: semanticHits, chats: chatHits }[mode];
   const showEmpty = !loading && !error && !showHint && activeResults.length === 0 && titleHits.length === 0;
 

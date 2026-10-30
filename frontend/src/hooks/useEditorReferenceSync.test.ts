@@ -67,7 +67,7 @@ const metaRef = (id: string) => ({
 /** A minimal editor-view spy with the fields the hook touches: dispatch + a doc the
  * lazy-fetch effect can read (`view.state.doc.toString()`). */
 function spyView(dispatch = vi.fn()): { dispatch: ReturnType<typeof vi.fn> } {
-  return { dispatch, state: { doc: { toString: () => '' } } } as never;
+  return { dispatch, state: { doc: { toString: () => '' }, facet: () => null } } as never;
 }
 const doc = (id: string, title = id, content?: string) => ({
   document_id: id, title, project_id: 'p', ...(content !== undefined ? { content } : {}),

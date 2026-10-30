@@ -30,6 +30,10 @@ class PatchDocument(BaseModel):
     # WHY option-with-None (not bare bool): None = leave unchanged, the same
     # contract as every other field here.
     chats_unindexed: bool | None = None
+    # List-hide twin of chats_unindexed (plan chats-unlisted-subtree) — each
+    # flag governs one surface (content search vs chat list); setting one
+    # never sets the other.
+    chats_unlisted: bool | None = None
 
 
 class ReorderDocument(BaseModel):

@@ -260,12 +260,18 @@ async def test_import_file_zip_creates_file_reference(
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# attachment_index — backend resolves an attached chat image (in-chat agent only)
+# message_id + attachment_index — the backend resolves ONE addressed chat image
+# (any message of the calling conversation, or any message the chat-recall wall
+# admits). Plan chat-image-import.
 # ════════════════════════════════════════════════════════════════════════════
+
+
+_PNG_URI = f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode()}"
 
 
 async def _seed_user_message_with_images(
     test_db, session_id, msg_id, images, *, user_id, project_id, content="add this",
+    **session_fields,
 ):
     """Insert an OWNED chat session row plus a user message row carrying `images`
     (data-URI list), mirroring how a chat turn persists attachments (chat_id =
@@ -275,11 +281,77 @@ async def _seed_user_message_with_images(
 
     await create_record("chat_sessions", session_id, {
         "user_id": user_id, "project_id": project_id, "title": "",
+        **session_fields,
     })
+    await _seed_message(test_db, msg_id, session_id, content, images)
+
+
+async def _seed_message(test_db, msg_id, chat_id, content, images):
+    """One user message row in an EXISTING session (the session row is not
+    re-created — the world seed already owns it)."""
+    from db import create_record
+
     await test_db.query("DELETE type::record('messages', $id)", {"id": msg_id})
     await create_record("messages", msg_id, {
-        "chat_id": session_id, "role": "user", "content": content, "images": images,
+        "chat_id": chat_id, "role": "user", "content": content, "images": images,
     })
+
+
+async def _seed_attachment_world(
+    client, test_db, admin_user, regular_user, project_with_doc,
+):
+    """The admission world: the caller's CURRENT session (an older image
+    message + a newer plain one), an OTHER chat with an image, and another
+    user's chat — plus the keys to ask from each side of every wall."""
+    from db import create_record
+
+    pid, _, admin_uid = project_with_doc
+    _, token = admin_user
+    other_uid, _ = regular_user
+    await create_record("project_members", "test-pm-att-world", {
+        "project_id": pid, "user_id": other_uid, "access_level": "full",
+    })
+    world = {
+        "pid": pid,
+        "host": await _make_doc(client, token, pid, "AttWorldHost"),
+        "ka": await _make_internal_key(test_db, admin_uid, pid),
+        "kext": await _make_agent_key(test_db, admin_uid, pid),
+    }
+    # the calling conversation: an image-bearing OLDER turn, then a plain turn
+    await _seed_user_message_with_images(
+        test_db, "sCur", "mOld", [_PNG_URI, _PNG_URI],
+        user_id=admin_uid, project_id=pid,
+    )
+    await test_db.query(
+        "CREATE type::record('messages', 'mNew') CONTENT "
+        "{chat_id: 'sCur', role: 'user', content: 'plain follow-up', "
+        "parent_id: 'mOld'}")
+    # an OTHER chat of the same user (visible to recall)
+    await _seed_user_message_with_images(
+        test_db, "sOther", "mOther", [_PNG_URI],
+        user_id=admin_uid, project_id=pid,
+    )
+    # another user's chat
+    await _seed_user_message_with_images(
+        test_db, "sB", "mB", [_PNG_URI],
+        user_id=other_uid, project_id=pid,
+    )
+    return world
+
+
+async def _import_attached(client, token, message_id, index=0, session_id="sCur",
+                           status=200, host=None, omit_message_id=False):
+    body = {
+        "filename": "pic.png", "node_type": "reference",
+        "parent_id": host, "attachment_index": index,
+    }
+    if not omit_message_id:
+        body["message_id"] = message_id
+    resp = await client.post("/api/tool/import_file", json=body, headers={
+        "Authorization": f"Bearer {token}", "X-Agent-Session-Id": session_id,
+    })
+    assert resp.status_code == status, resp.text
+    return resp.json()
 
 
 @pytest.mark.asyncio
@@ -288,12 +360,13 @@ async def test_attachment_index_refuses_a_foreign_session(
 ):
     """attachment_index resolves images via X-Agent-Session-Id: a session id
     the caller does not OWN (foreign user's real session, or no session row at
-    all) must be refused before any message is read — the messages query used
-    to run on the raw header value, silently importing another user's
-    attachment (cross-user image read). Refused with the SAME 400 the absent
-    header gets: "not a resolvable chat session of yours" is one condition
-    with several spellings, and none of them may leak what the other session
-    holds."""
+    all) must be refused before any message is read — the admission keys the
+    own-conversation arm on the raw header value, so without this check a
+    caller tagging another user's session id would silently import THAT user's
+    attached image (cross-user image read). Refused with the SAME 400 the
+    absent header gets: "not a resolvable chat session of yours" is one
+    condition with several spellings, and none of them may leak what the other
+    session holds."""
     from db import create_record
 
     pid, _, admin_uid = project_with_doc
@@ -306,27 +379,141 @@ async def test_attachment_index_refuses_a_foreign_session(
     other_tok = await _make_internal_key(test_db, other_uid, pid)
 
     session_id = "test-att-session-foreign"
-    data_uri = f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode()}"
     await create_record("chat_sessions", session_id, {
         "user_id": admin_uid, "project_id": pid, "title": "",
     })
     await create_record("messages", "test-att-msg-foreign", {
-        "chat_id": session_id, "role": "user", "content": "x", "images": [data_uri],
+        "chat_id": session_id, "role": "user", "content": "x", "images": [_PNG_URI],
     })
 
     resp = await client.post("/api/tool/import_file", json={
         "filename": "pic.png", "node_type": "reference", "parent_id": host,
-        "attachment_index": 0,
+        "message_id": "test-att-msg-foreign", "attachment_index": 0,
     }, headers={**_hdr(other_tok), "X-Agent-Session-Id": session_id})
     assert resp.status_code == 400, resp.text
     assert "chat session" in resp.json()["detail"]
 
 
+# TEST-WHY: refused-principal — every wall the chat-image admission owes: the recall wall (hidden subtree, unindexed, another user, dead message/branch), the off-switch (403 for other chats, never for the calling conversation), the in-chat gates (external key, foreign header), the link refusal, and the 422 that names the fix for the removed latest-message default.
+@pytest.mark.parametrize(
+    ("case", "status", "detail"),
+    [
+        pytest.param("other-chat", 200, None, id="other-visible-chat-created"),
+        pytest.param("hidden-subtree", 404, "message not found",
+                     id="viewer-outside-chats-unindexed-subtree"),
+        pytest.param("other-user", 404, "message not found",
+                     id="another-users-message"),
+        pytest.param("deleted-message", 404, "message not found",
+                     id="deleted-message"),
+        pytest.param("unindexed-chat", 404, "message not found",
+                     id="unindexed-chat"),
+        pytest.param("deleted-branch", 404, "message not found",
+                     id="deleted-branch-of-own-conversation"),
+        pytest.param("recall-off-other", 403, "chat-recall is disabled",
+                     id="recall-disabled-other-chat"),
+        pytest.param("recall-off-own", 200, None,
+                     id="recall-disabled-own-conversation-still-created"),
+        pytest.param("https-link", 400, "image is a link, not stored in Lore",
+                     id="https-image-is-never-fetched"),
+        pytest.param("index-out-of-range", 400, "out of range",
+                     id="index-out-of-range"),
+        pytest.param("missing-message-id", 422, "requires `message_id`",
+                     id="attachment-index-without-message-id"),
+        pytest.param("external-key", 400, "only available in a chat session",
+                     id="non-internal-key"),
+    ],
+)
+async def test_attachment_admission(client, test_db, admin_user, regular_user, project_with_doc, case, status, detail):
+    """The admission contract of `import_file(message_id, attachment_index)`,
+    one parametrized arm each: the calling conversation is admitted wholesale
+    (off-switch included — today's attachment path never consulted it either),
+    every other message runs the chat-recall wall verbatim; a linked image is
+    never fetched; the bare `attachment_index` (removed latest-message
+    default) is a 422 naming the fix."""
+    w = await _seed_attachment_world(
+        client, test_db, admin_user, regular_user, project_with_doc)
+    admin_uid, admin_tok = admin_user
+    message_id, index, key = "mOther", 0, w["ka"]
+    if case == "hidden-subtree":
+        f = await _make_doc(client, admin_tok, w["pid"], "AttFlagged")
+        c = await _make_doc(client, admin_tok, w["pid"], "AttHidden", parent_id=f)
+        await test_db.query(
+            "UPDATE type::record('documents', $id) SET chats_unindexed = true",
+            {"id": f})
+        await _seed_user_message_with_images(
+            test_db, "sHid", "mHid", [_PNG_URI],
+            user_id=admin_uid, project_id=w["pid"], content="hidden",
+            document_id=c,
+        )
+        message_id = "mHid"
+    elif case == "other-user":
+        message_id = "mB"
+    elif case == "deleted-message":
+        await test_db.query(
+            "UPDATE type::record('messages', 'mOther') SET deleted_at = time::now()")
+    elif case == "unindexed-chat":
+        await test_db.query(
+            "UPDATE type::record('chat_sessions', 'sOther') SET unindexed = true")
+    elif case == "deleted-branch":
+        # a branch of the calling conversation, deleted like delete_session
+        # does: messages first, then the session row
+        await _seed_user_message_with_images(
+            test_db, "sBranch", "mBranch", [_PNG_URI],
+            user_id=admin_uid, project_id=w["pid"], content="branch",
+            thread_id="sCur",
+        )
+        await test_db.query(
+            "UPDATE messages SET deleted_at = time::now() "
+            "WHERE chat_id = 'sBranch' AND deleted_at IS NONE")
+        await test_db.query(
+            "UPDATE type::record('chat_sessions', 'sBranch') "
+            "SET deleted_at = time::now()")
+        message_id = "mBranch"
+    elif case in ("recall-off-other", "recall-off-own"):
+        await test_db.query(
+            "CREATE instance_skills CONTENT {name: 'chat-recall', enabled: false, "
+            "updated_by: 'admin'}")
+        if case == "recall-off-own":
+            message_id = "mOld"
+    elif case == "https-link":
+        await _seed_message(test_db, "mLink", "sCur", "a link",
+                            ["https://example.com/pic.png"])
+        message_id = "mLink"
+    elif case == "index-out-of-range":
+        message_id, index = "mOld", 5
+    elif case == "missing-message-id":
+        result = await _import_attached(
+            client, key, "mOther", status=422, host=w["host"],
+            omit_message_id=True)
+        assert "message_id" in str(result["detail"])
+        return
+    elif case == "external-key":
+        key = w["kext"]
+        message_id = "mOld"
+    try:
+        result = await _import_attached(
+            client, key, message_id, index=index, status=status, host=w["host"])
+    finally:
+        if case in ("recall-off-other", "recall-off-own"):
+            await test_db.query(
+                "DELETE instance_skills WHERE name = 'chat-recall'")
+    if status == 200:
+        assert result["status"] == "applied"
+        ref = await _read_doc(client, admin_tok, result["reference_id"])
+        assert ref["media_type"] == "image"
+        assert (ref.get("file_meta") or {}).get("mime_type") == "image/png"
+    else:
+        # the refused arms are exactly the in-chat 400s, the off-switch 403,
+        # the uniform 404s and the contract 422 — never a 5xx, never a leak
+        assert status in (400, 403, 404, 422)
+        assert detail in str(result["detail"])
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # D1 (plan internal-agent-surface-reconciliation): the BYTES decide the type on
-# the attachment_index path — the model cannot see the bytes, so its filename
-# guess may never override the mime the backend already holds (the data-URI
-# header). The model's filename contributes its STEM only.
+# the attachment path — the model cannot see the bytes, so its filename guess
+# may never override the mime the backend already holds (the data-URI header).
+# The model's filename contributes its STEM only.
 # ════════════════════════════════════════════════════════════════════════════
 
 
@@ -334,10 +521,13 @@ async def test_attachment_index_refuses_a_foreign_session(
 async def test_import_file_attachment_index_webp_creates_reference(
     client, test_db, admin_user, project_with_doc,
 ):
-    """D1+D2: a webp attachment (the format the frontend emits for chat images)
-    resolves to an image reference. Before D2 the .webp extension died as
-    'Unsupported binary type' (stdlib mimetypes has no webp); before D1 the model's
-    filename guess overrode the known mime → magic mismatch → 400."""
+    """The addressing contract + D1+D2: an OLDER message of the calling
+    conversation (a plain-text turn follows it — the removed latest-message
+    default would have found nothing) is imported by id; a webp attachment
+    (the format the frontend emits for chat images) resolves to an image
+    reference. Before D2 the .webp extension died as 'Unsupported binary
+    type'; before D1 the model's filename guess overrode the known mime →
+    magic mismatch → 400."""
     pid, _, admin_uid = project_with_doc
     _, token = admin_user
     host = await _make_doc(client, token, pid, "WebpHost")
@@ -346,23 +536,24 @@ async def test_import_file_attachment_index_webp_creates_reference(
     # Minimal RIFF….WEBP — validate_magic keys off the RIFF magic + image/webp.
     webp = b"RIFF\x1a\x00\x00\x00WEBP" + b"\x00" * 32
     session_id = "test-att-webp"
-    data_uri = f"data:image/webp;base64,{base64.b64encode(webp).decode()}"
     await _seed_user_message_with_images(
-        test_db, session_id, "test-att-msg-webp", [data_uri],
-        user_id=admin_uid, project_id=pid,
+        test_db, session_id, "test-att-msg-old",
+        [_PNG_URI, f"data:image/webp;base64,{base64.b64encode(webp).decode()}"],
+        user_id=admin_uid, project_id=pid, content="two pictures",
     )
+    await test_db.query(
+        "CREATE type::record('messages', 'test-att-msg-new') CONTENT "
+        "{chat_id: $sid, role: 'user', content: 'plain follow-up', "
+        "parent_id: 'test-att-msg-old'}",
+        {"sid": session_id})
 
     resp = await client.post("/api/tool/import_file", json={
         "filename": "shot.webp", "node_type": "reference", "parent_id": host,
-        "attachment_index": 0,
+        "message_id": "test-att-msg-old", "attachment_index": 1,
     }, headers={**_hdr(agent_tok), "X-Agent-Session-Id": session_id})
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["status"] == "applied"
     ref = await _read_doc(client, token, data["reference_id"])
     assert ref["media_type"] == "image"
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# exactly-one-input-form XOR (sandbox_path / attachment_index)
-# ════════════════════════════════════════════════════════════════════════════
+    assert (ref.get("file_meta") or {}).get("mime_type") == "image/webp"

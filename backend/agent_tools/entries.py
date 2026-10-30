@@ -20,6 +20,7 @@ from agent_tools.specs.chat_recall import (
     LIST_MY_CHATS_TOOL,
     READ_MY_CHAT_TOOL,
     SEARCH_MY_CHATS_TOOL,
+    VIEW_CHAT_IMAGE_TOOL,
 )
 from agent_tools.specs.media import (
     GENERATE_IMAGE_TOOL,
@@ -75,6 +76,7 @@ from models import (
     ToolSaveSkill,
     ToolSearch,
     ToolSearchMyChats,
+    ToolViewChatImage,
 )
 
 # ─── The public base surface (pi + tool_api + mcp) ────────────────────────────
@@ -292,8 +294,8 @@ register(ToolEntry(
     handler_path="routes.tool_api.skills:tool_save_skill",
     surfaces=_AGENT_HTTP,
 ))
-# search_my_chats + the list/read pair: agent-only, the chat-recall skill's pack
-# (see specs/chat_recall.py ARCH).
+# search_my_chats + the list/read pair + the image view: agent-only, the
+# chat-recall skill's pack (see specs/chat_recall.py ARCH).
 register(ToolEntry(
     spec=SEARCH_MY_CHATS_TOOL, request_model=ToolSearchMyChats,
     handler_path="routes.tool_api.chat_recall:tool_search_my_chats",
@@ -307,5 +309,10 @@ register(ToolEntry(
 register(ToolEntry(
     spec=READ_MY_CHAT_TOOL, request_model=ToolReadMyChat,
     handler_path="routes.tool_api.chat_recall:tool_read_my_chat",
+    surfaces=_AGENT_HTTP,
+))
+register(ToolEntry(
+    spec=VIEW_CHAT_IMAGE_TOOL, request_model=ToolViewChatImage,
+    handler_path="routes.tool_api.chat_recall:tool_view_chat_image",
     surfaces=_AGENT_HTTP,
 ))

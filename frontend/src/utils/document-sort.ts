@@ -60,6 +60,59 @@ function nameMatchTier(title: string, query: string): NameMatchTier {
   return 2;
 }
 
+// ARCH (plan chats-unlisted-subtree): the chats_unlisted list-hide set — the
+// union of subtree(F) over every document F flagged `chats_unlisted` while the
+// OPEN document is outside it ("inside" = F is the open doc or one of its
+// ancestors). A CLIENT mirror of the backend recall rule (hidden_doc_ids in
+// chat_sessions/recall_search.py): read-time and viewer-relative, never
+// denormalized onto chats, so a subtree move changes the list with no writes.
+// No open document (project root view) ⇒ outside every F. The walk has NO depth
+// cap (a cap fails OPEN — chats below it would leak into the list) and stops on
+// revisit, so a cyclic parent_id still terminates.
+// INVARIANT: pure over the same flat `documents` rows the tree and the Access
+// tab read. Why: one input set means the chat list, SearchPanel title hits and
+// the EyeOff mark can never disagree about who is flagged.
+export function listHiddenDocIds(documents: Document[], currentDocId: string | null): Set<string> {
+  const flagged = documents.filter(d => d.chats_unlisted).map(d => d.document_id);
+  if (flagged.length === 0) return new Set();
+
+  const parentMap = buildParentMap(documents);
+
+  const inside = new Set<string>();
+  if (currentDocId) {
+    let cur: string | null = currentDocId;
+    while (cur && !inside.has(cur)) {
+      inside.add(cur);
+      cur = parentMap.get(cur) ?? null;
+    }
+  }
+
+  const childrenMap = new Map<string, string[]>();
+  for (const [id, parent] of parentMap) {
+    if (parent !== null) {
+      const siblings = childrenMap.get(parent) ?? [];
+      siblings.push(id);
+      childrenMap.set(parent, siblings);
+    }
+  }
+
+  const hidden = new Set<string>();
+  for (const root of flagged) {
+    if (inside.has(root) || hidden.has(root)) continue;
+    hidden.add(root);
+    const stack = [root];
+    while (stack.length > 0) {
+      const node = stack.pop()!;
+      for (const child of childrenMap.get(node) ?? []) {
+        if (hidden.has(child)) continue;
+        hidden.add(child);
+        stack.push(child);
+      }
+    }
+  }
+  return hidden;
+}
+
 // ARCH: Sort key priority — Name Match (tier 0/1/2) > Proximity (tree steps) > Recency (updated_at DESC)
 export function sortDocuments(
   docs: Document[],

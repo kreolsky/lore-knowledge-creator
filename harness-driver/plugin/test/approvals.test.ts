@@ -29,6 +29,7 @@ function tctx(loreSessionId: string): TurnToolCtx {
     holdable: new Set(['edit_document']),
     regionTools: new Set(),
     region: null,
+    vision: false,
   }
 }
 

@@ -1,4 +1,4 @@
-/** Generated-image thumbnail + shared full-image lightbox, split out of
+/** Agent-step image thumbnail + shared full-image lightbox, split out of
  * MessageBubble.tsx (behavior-preserving). */
 
 import { useEffect, useRef, useState } from 'react';
@@ -7,11 +7,13 @@ import { IconButton, Modal } from '../../../ui';
 import { useArmedAction } from '../../../../hooks/useArmedAction';
 import { useTranslation } from '../../../../i18n';
 import { useOutsideDrag } from '../../../../hooks/useOutsideDrag';
-import { referenceFileUrl, referenceThumbUrl } from '../../../../utils/reference-url';
+import { referenceFileUrl } from '../../../../utils/reference-url';
 
 /**
- * The generated-image thumbnail inside a generate_image agent-step chip. Click →
- * invokes onOpen (the parent opens the SHARED pin lightbox at this index). A
+ * The thumbnail of an image-bearing agent-step chip — the generate_image plate
+ * and the view_chat_image plate share it, so both chips look and behave alike.
+ * Click → invokes onOpen (the parent opens the SHARED lightbox, rendered
+ * OUTSIDE the plate: a click inside the plate body collapses the plate). A
  * failed thumbnail fetch surfaces an explicit error placeholder (no-silent-
  * degradation — reuses the image-error pattern from the message bubble).
  *
@@ -19,19 +21,22 @@ import { referenceFileUrl, referenceThumbUrl } from '../../../../utils/reference
  * prop Button/IconButton cannot express this layout, matching the ToolPlate
  * disclosure-header precedent.
  *
- * The full-image URL is built by generatedImageUrl (below) — no filePath is
- * needed on the step.
- *
- * Dragged past the threshold onto an editable editor it inserts the image's
- * `ref:` embed at the drop point (useOutsideDrag); a plain click still opens
- * the lightbox.
+ * With `dragRefId` (a stored reference), dragged past the threshold onto an
+ * editable editor it inserts the image's `ref:` embed at the drop point
+ * (useOutsideDrag); a plain click still opens the lightbox.
  */
-export function GeneratedImageThumb({ imageRefId, onOpen }: { imageRefId: string; onOpen: () => void }) {
+export function ImageThumb({ src, label, alt, onOpen, dragRefId }: {
+  src: string;
+  label: string;
+  alt: string;
+  onOpen: () => void;
+  dragRefId?: string;
+}) {
   const { t } = useTranslation();
   const [loaded, setLoaded] = useState(false);
   const [errored, setErrored] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
-  useOutsideDrag(buttonRef, imageRefId, !errored);
+  useOutsideDrag(buttonRef, dragRefId ?? '', dragRefId !== undefined && !errored);
 
   if (errored) {
     return (
@@ -49,16 +54,16 @@ export function GeneratedImageThumb({ imageRefId, onOpen }: { imageRefId: string
       type="button"
       onClick={onOpen}
       onDragStart={(e) => e.preventDefault()}
-      aria-label={t('viewGeneratedImage')}
-      title={t('viewGeneratedImage')}
+      aria-label={label}
+      title={label}
       className="block border border-border cursor-pointer hover:opacity-80 transition-opacity"
     >
       {!loaded && (
         <div className="w-[180px] h-[135px] bg-surface2 animate-pulse" />
       )}
       <img
-        src={referenceThumbUrl(imageRefId)}
-        alt={t('generatedImage')}
+        src={src}
+        alt={alt}
         onLoad={() => setLoaded(true)}
         onError={() => setErrored(true)}
         className={`max-w-[180px] max-h-[180px] object-contain ${loaded ? 'block' : 'hidden'}`}

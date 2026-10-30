@@ -19,7 +19,9 @@ import { MarkdownContent } from '../../MarkdownContent';
 import { VerdictCard } from '../../VerdictCard';
 import { HaltCard } from './halt-card';
 import { AgentStepIcon, genPhaseLabel } from './agent-steps';
-import { GeneratedImageThumb, ImageLightbox, generatedImageUrl } from './image-lightbox';
+import { ImageThumb, ImageLightbox, generatedImageUrl } from './image-lightbox';
+import { referenceThumbUrl } from '../../../../utils/reference-url';
+import { ViewChatImagePlate } from './view-chat-image';
 import { useTranslation } from '../../../../i18n';
 import { apiClient } from '../../../../api/client';
 import { useAppStore } from '../../../../store/app-store';
@@ -60,7 +62,7 @@ function resultText(content: unknown): string {
 
 /** The one tool chip: a running call renders as the running plate, a settled
  * one as the call's name + args gist with the result's text inside. */
-function ToolCallNode({ data, isStreaming }: { data: unknown; isStreaming: boolean }) {
+function ToolCallNode({ data, isStreaming, selfOpening }: { data: unknown; isStreaming: boolean; selfOpening: boolean }) {
   const { t } = useTranslation();
   const root = (typeof data === 'object' && data !== null ? data : {}) as Record<string, unknown>;
   const block = root.root as Record<string, unknown> | undefined;
@@ -83,6 +85,9 @@ function ToolCallNode({ data, isStreaming }: { data: unknown; isStreaming: boole
   } catch { gist = argsRaw; }
   const isError = settled && block.isError === true;
   const body = settled ? resultText(block.content) : '';
+  // The ONE tool whose text block is a JSON contract, not prose: the meta the
+  // plugin's render published — it draws its own image plate.
+  if (settled && name === 'view_chat_image') return <ViewChatImagePlate text={body} isError={isError} defaultExpanded={selfOpening} />;
   return (
     <ToolPlate
       icon={<AgentStepIcon outcome={isError ? 'failed' : undefined} />}
@@ -95,8 +100,8 @@ function ToolCallNode({ data, isStreaming }: { data: unknown; isStreaming: boole
         : <span>{name}</span>}
       tone={isError ? 'failed' : undefined}
       ariaLabel={isError ? `${t('agentStepFailed')}: ${name}` : undefined}
-      defaultExpanded={isStreaming && !settled}
-      autoCollapse={settled}
+      defaultExpanded={selfOpening || (isStreaming && !settled)}
+      autoCollapse={settled && !selfOpening}
       isStreaming={isStreaming && !settled}
     >
       {body
@@ -235,7 +240,7 @@ function HaltNode({ data, nodes, self, onContinue }: {
  * so the plate hides the ids in the page-wide deleted set (useDeletedRefIds:
  * own optimistic deletes + every reference delete event, from any surface or
  * tab). The reload path re-derives liveness server-side (`deletedByUser`). */
-function ImageGenNode({ data }: { data: unknown }) {
+function ImageGenNode({ data, selfOpening }: { data: unknown; selfOpening: boolean }) {
   const { t } = useTranslation();
   const d = (typeof data === 'object' && data !== null ? data : {}) as Record<string, unknown>;
   const [openIndex, setOpenIndex] = useState<number | null>(null);
@@ -322,7 +327,7 @@ function ImageGenNode({ data }: { data: unknown }) {
       )}
       <ToolPlate
         icon={<AgentStepIcon />}
-        defaultExpanded
+        defaultExpanded={selfOpening}
         // The harness tool chip's header shape (see ToolCallNode): the label is
         // a protected zone, the title ellipsizes. Without the truncate a long
         // image title wraps the header onto a second line.
@@ -342,7 +347,14 @@ function ImageGenNode({ data }: { data: unknown }) {
               {ids.length > 0 && (
                 <div className="flex flex-wrap gap-1">
                   {ids.map((id, i) => (
-                    <GeneratedImageThumb key={id} imageRefId={id} onOpen={() => setOpenIndex(i)} />
+                    <ImageThumb
+                      key={id}
+                      src={referenceThumbUrl(id)}
+                      label={t('viewGeneratedImage')}
+                      alt={t('generatedImage')}
+                      dragRefId={id}
+                      onOpen={() => setOpenIndex(i)}
+                    />
                   ))}
                 </div>
               )}
@@ -416,10 +428,10 @@ function TurnNode({ node, nodes, isStreaming, onContinue, only }: {
   const { t } = useTranslation();
   switch (node.kind) {
     case 'assistant-step': return <AssistantStepNode data={node.data} isStreaming={isStreaming} only={only} />;
-    case 'tool-call': return <ToolCallNode data={node.data} isStreaming={isStreaming} />;
+    case 'tool-call': return <ToolCallNode data={node.data} isStreaming={isStreaming} selfOpening={opensItself(node)} />;
     case 'verdict-ask': return <VerdictAskNode data={node.data} nodes={nodes} />;
     case 'halt': return <HaltNode data={node.data} nodes={nodes} self={node} onContinue={onContinue} />;
-    case 'image-gen': return <ImageGenNode data={node.data} />;
+    case 'image-gen': return <ImageGenNode data={node.data} selfOpening={opensItself(node)} />;
     case 'compaction-mint': return <CompactionMintNode data={node.data} />;
     case 'turn-error': {
       const d = (typeof node.data === 'object' && node.data !== null ? node.data : {}) as Record<string, unknown>;
@@ -484,14 +496,20 @@ function isFailedToolCall(node: TurnNodeLike): boolean {
   return root?.kind === 'tool-result' && root.isError === true;
 }
 
-function isImageRun(node: TurnNodeLike): boolean {
+/** Chips that open THEMSELVES and hold their process group open: their
+ * result is an image the person came to see, so a folded chip or group would
+ * hide the answer. The ONE source of both: TurnNode hands `opensItself` to the
+ * chip's plate, ProcessGroupNode reads it over its members. */
+const SELF_OPENING_TOOLS = new Set(['generate_image', 'view_chat_image']);
+
+function opensItself(node: TurnNodeLike): boolean {
   if (node.kind === 'image-gen') return true;
   if (node.kind !== 'tool-call') return false;
   const d = (typeof node.data === 'object' && node.data !== null ? node.data : {}) as Record<string, unknown>;
   // A settled call carries its name on `call`, a pending one on the block.
   const block = d.root as Record<string, unknown> | undefined;
   const call = block?.call as Record<string, unknown> | null | undefined;
-  return (call?.name ?? block?.name) === 'generate_image';
+  return SELF_OPENING_TOOLS.has(String(call?.name ?? block?.name ?? ''));
 }
 
 /** One dsh process group as one collapsible plate over its member chips. */
@@ -507,11 +525,12 @@ function ProcessGroupNode({ info, members, nodes, isStreaming, onContinue, after
   // A failure inside a collapsed group must still show on its header — the
   // no-silent-degradation rule.
   const failed = members.some(isFailedToolCall);
-  // WHY: an image run (generating, done or failed) keeps its group open — the
-  // images chip opens itself, and a folded group would hide it. The run is
-  // detached and its card lands after the turn closed the group, so the
-  // launching call already holds the group open (no fold-then-reopen blink).
-  const holdsImage = members.some(isImageRun);
+  // WHY: a self-opening chip (an image run — generating, done or failed — or a
+  // viewed chat image) keeps its group open, and a folded group would hide it.
+  // An image run is detached and its card lands after the turn closed the
+  // group, so the launching call already holds the group open (no
+  // fold-then-reopen blink).
+  const holdsOpen = members.some(opensItself);
   return (
     // WHY: a group between paragraphs of the answer gets a 24px gap above
     // (my-1's 4px + pt-5) so it does not run into the text; a group opening
@@ -525,7 +544,7 @@ function ProcessGroupNode({ info, members, nodes, isStreaming, onContinue, after
         defaultExpanded={isStreaming && !info.closed}
         autoCollapse
         collapseWhen={info.closed}
-        expandWhen={holdsImage}
+        expandWhen={holdsOpen}
         isStreaming={isStreaming}
       >
         {members.map(node => (

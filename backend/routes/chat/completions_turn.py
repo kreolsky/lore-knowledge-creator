@@ -284,7 +284,7 @@ def _turn_time_stamps(
 
 
 async def _build_last_user_prompt(
-    body_messages: list, vision_ok: bool = True,
+    body_messages: list, vision_ok: bool = True, user_msg_id: str | None = None,
 ) -> str | list:
     """Build the LAST user turn's content in its multimodal shape — RAW user
     text, plus only the attached files' workspace paths (_prompt_text).
@@ -299,15 +299,23 @@ async def _build_last_user_prompt(
     non-vision model) image parts are stripped entirely; the caller surfaces a
     warning so the drop is never silent.
 
+    On image turns the text part ends with the `[attached images: …]` marker
+    naming the send's message id (`user_msg_id` — the id the persisted user row
+    takes): the address `import_file(message_id, attachment_index)` resolves.
+    Emitted also when `vision_ok` is False (the image is stripped from the
+    prompt but still importable from the stored row), and NEVER written to the
+    stored row (its `content` stays what the person typed).
+
     # WHY no time stamps here: they ride `AgentTurnPlan.time_stamps` — see
     # ARCH in harness-driver/plugin/src/time-stamps.ts.
     """
     if not body_messages:
         return ""
     last = body_messages[-1]
+    n_images = len(last.images or [])
     if last.images and vision_ok:
-        return await _multimodal_parts(last)
-    return _prompt_text(last)
+        return await _multimodal_parts(last, user_msg_id=user_msg_id)
+    return _prompt_text(last, message_id=user_msg_id, n_images=n_images)
 
 
 def _human_size(size: int) -> str:
@@ -319,25 +327,41 @@ def _human_size(size: int) -> str:
     return f"{size / (1024 * 1024):.1f} MB"
 
 
-def _prompt_text(last) -> str:
+def _prompt_text(last, message_id: str | None = None, n_images: int = 0) -> str:
     """The last user turn's text part: the raw text, then the attached files'
-    workspace paths when the person dropped any.
+    workspace paths when the person dropped any, then — on image turns — the
+    one-line address marker that lets the agent save an attached image
+    (`import_file(message_id, attachment_index)`, resolved from the stored row).
 
     # WHY here and not in the stored row: `user_text` (the bubble) stays what the
-    # person typed; only the model needs the paths, and it needs them on the turn
-    # they were sent with — the files are working material for THAT request.
+    # person typed; only the model needs the paths/marker, and it needs them on
+    # the turn they were sent with — the files are working material for THAT
+    # request, and the image address is importable material of the SAME request.
+    # WHY the marker only with a message_id: the id is the send's
+    # `user_msg_id` (the id the persisted row takes); without one (older
+    # callers, no-id stubs) the text is byte-identical to the pre-marker
+    # prompt. The count is the ATTACHED count — import reads the stored images
+    # array, so an image normalization later drops from vision stays counted
+    # (and addressable).
     """
     # WHY getattr: bare SimpleNamespace test stubs of a message predate `files`
     # (same defence as the vision_ok getattr below); ChatMessage always has it.
     files = getattr(last, "files", None)
-    if not files:
-        return last.content
-    lines = [f"- {f.path} ({f.name}, {f.mime}, {_human_size(f.size)})" for f in files]
-    block = "Attached files (in your sandbox workspace):\n" + "\n".join(lines)
-    return f"{last.content}\n\n{block}" if last.content else block
+    text = last.content
+    if files:
+        lines = [f"- {f.path} ({f.name}, {f.mime}, {_human_size(f.size)})" for f in files]
+        block = "Attached files (in your sandbox workspace):\n" + "\n".join(lines)
+        text = f"{text}\n\n{block}" if text else block
+    if n_images and message_id:
+        marker = (
+            f"[attached images: message_id={message_id}, count={n_images} — "
+            "save one with import_file(message_id, attachment_index)]"
+        )
+        text = f"{text}\n\n{marker}" if text else marker
+    return text
 
 
-async def _multimodal_parts(last) -> list[dict]:
+async def _multimodal_parts(last, user_msg_id: str | None = None) -> list[dict]:
     """The multimodal ContentPart[] for the last user turn: raw text part
     first, normalized image parts after (attachments stay last).
 
@@ -349,7 +373,8 @@ async def _multimodal_parts(last) -> list[dict]:
     # against — this path just does two orders of magnitude more work.
     """
     parts: list[dict] = [
-        {"type": "text", "text": _prompt_text(last)}
+        {"type": "text", "text": _prompt_text(last, message_id=user_msg_id,
+                                              n_images=len(last.images))}
     ]
     n_imgs = 0
     # Settings resolve BEFORE the thread hop — the thread has no loop to await on
@@ -547,7 +572,13 @@ async def _build_turn_prompt(*, body: CompletionRequest, ctx) -> str | list:
     # post-gate ctx, so attachments pass. Production always carries the field
     # (build_context sets it), so the default never masks a missing gate read.
     vision_ok = getattr(ctx, "vision_ok", True)
-    prompt = await _build_last_user_prompt(body.messages, vision_ok=vision_ok)
+    # The send's user row id — the address the image marker names. getattr for
+    # the same SimpleNamespace-stub reason as vision_ok.
+    user_msg_id = getattr(body, "user_msg_id", None)
+    prompt = await _build_last_user_prompt(
+        body.messages, vision_ok=vision_ok,
+        user_msg_id=str(user_msg_id) if user_msg_id else None,
+    )
     return _merge_context_images(prompt, ctx)
 
 

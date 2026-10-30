@@ -227,6 +227,15 @@ async def update_document_command(document_id: str, body: PatchDocument) -> dict
             "UPDATE type::record('documents', $id) SET chats_unindexed = $flag",
             {"id": document_id, "flag": body.chats_unindexed},
         )
+    if body.chats_unlisted is not None:
+        # The list-hide twin (documents.chats_unlisted, plan
+        # chats-unlisted-subtree) — a plain column write; the hide is a
+        # CLIENT read-time projection over the project tree, so nothing else
+        # is updated here when it flips.
+        await db.query(
+            "UPDATE type::record('documents', $id) SET chats_unlisted = $flag",
+            {"id": document_id, "flag": body.chats_unlisted},
+        )
     if body.content is not None:
         auto_backup = await _apply_content_update(db, document_id, project_id, body.content)
     updated = await fetch_one("documents", document_id)

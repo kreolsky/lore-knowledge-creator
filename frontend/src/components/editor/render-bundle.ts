@@ -28,7 +28,7 @@ import { languages } from '@codemirror/language-data';
 import { markdownExtensions } from '../../editor/markdown-config';
 import { headingHighlight, bareUrlPlugin, linkClickExtension } from '../../editor/editor-plugins';
 import { copyHandlerExtension } from '../../editor/copy-handler';
-import { selectionFeedPlugin } from '../../editor/editor-observer';
+import { selectionFeedPlugin, cellDocChangedFeed } from '../../editor/editor-observer';
 import { cellLinkContextRelay } from './live-preview/table-block-widget';
 import { codeHighlightStyle } from '../../editor/code-highlight';
 import { ligaturePlugin } from './ligature-plugin';
@@ -277,6 +277,7 @@ export function editorExperience(opts: {
       // active view and re-derive on its events. Never on the static placeholder above —
       // it renders offscreen and would write the global UI store on every render.
       selectionFeedPlugin,
+      cellDocChangedFeed,
       cellThemeOverride,
     );
     return ext;

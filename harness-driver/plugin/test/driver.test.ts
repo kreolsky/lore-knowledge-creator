@@ -1108,12 +1108,14 @@ test('the tool ctx splits: standing survives between turns, the request half doe
     'standing alone answers nothing — a tool call outside a turn still errors (plan Decision)')
   stampTurnRequestCtx('dsh-ctx', {
     messageId: 'm1', applyMode: 'confirm', document_id: null, region: null,
+    vision: true,
   })
   const merged = loreTurnCtxFor('dsh-ctx')
   assert.ok(merged, 'both halves present → the merged turn ctx')
   assert.equal(merged!.loreSessionId, 'lore-1')
   assert.equal(merged!.messageId, 'm1')
   assert.equal(merged!.applyMode, 'confirm')
+  assert.equal(merged!.vision, true, 'the vision bit rides the request half')
   clearTurnRequestCtx('dsh-ctx')
   assert.equal(loreTurnCtxFor('dsh-ctx'), undefined,
     'the request half is cleared at the turn end')
@@ -1121,6 +1123,7 @@ test('the tool ctx splits: standing survives between turns, the request half doe
   // re-registered (it is session-scoped — one registration, many turns).
   stampTurnRequestCtx('dsh-ctx', {
     messageId: 'm2', applyMode: 'auto', document_id: 'doc-1', region: { start: 0 },
+    vision: false,
   })
   const next = loreTurnCtxFor('dsh-ctx')!
   assert.equal(next.messageId, 'm2')

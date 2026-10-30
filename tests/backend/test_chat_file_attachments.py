@@ -136,6 +136,40 @@ async def test_prompt_names_the_attached_files():
     )
 
 
+# TEST-WHY: recurring-regression — the attachment-addressing path (completions_turn → import_file) regressed twice already (imports.py D1); the marker is the delivery half of the address contract.
+@pytest.mark.asyncio
+async def test_prompt_marks_attached_images_with_the_message_id():
+    """Image turns: the text part ends with the one-line address marker naming
+    the send's user_msg_id and the attached count — the id
+    `import_file(message_id, attachment_index)` resolves. Without images the
+    prompt is byte-identical to the pre-marker text; with vision off the image
+    parts are stripped but the marker stays (the image is still importable
+    from the stored row)."""
+    from routes.chat.completions_turn import _build_last_user_prompt
+
+    from models.chat import ChatMessage
+
+    assert await _build_last_user_prompt(
+        [ChatMessage(role="user", content="hello")], user_msg_id="ignored"
+    ) == "hello"
+
+    mid = "3f2a2b5e-1111-4d33-9d6f-0a1b2c3d4e5f"
+    with_images = ChatMessage(
+        role="user", content="look at these",
+        images=["data:image/png;base64,AAAA", "data:image/png;base64,BBBB"],
+    )
+    parts = await _build_last_user_prompt([with_images], user_msg_id=mid)
+    assert parts[0]["type"] == "text"
+    assert parts[0]["text"].endswith(
+        f"[attached images: message_id={mid}, count=2 — "
+        "save one with import_file(message_id, attachment_index)]"
+    )
+    assert parts[0]["text"].startswith("look at these\n\n")
+    stripped = await _build_last_user_prompt(
+        [with_images], vision_ok=False, user_msg_id=mid)
+    assert stripped == parts[0]["text"]
+
+
 @pytest.mark.asyncio
 async def test_claim_persists_files_and_the_message_list_returns_them(test_db):
     from driver.persistence import _mint_claim_rows

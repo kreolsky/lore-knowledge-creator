@@ -4,11 +4,12 @@ import { useMemo } from 'react';
 import { useChatStore } from '../../store/chat-store';
 import { useUIStore } from '../../store/ui-store';
 import { useAppStore } from '../../store/app-store';
-import { buildParentMap, treeDistance, PROJECT_ROOT } from '../../utils/document-sort';
+import { buildParentMap, treeDistance, PROJECT_ROOT, listHiddenDocIds } from '../../utils/document-sort';
 import type { ChatSession } from '../../types';
 
 /**
- * Returns ALL sessions ordered for the chat empty-list. Two modes:
+ * Returns the sessions LISTED from the open document, ordered for the chat
+ * empty-list. Two modes:
  *
  * - Recency (default): last USER message time DESC. The chat-store's optimistic
  *   send already sets last_message_at to the user-msg `now`, matching the backend
@@ -18,6 +19,15 @@ import type { ChatSession } from '../../types';
  *   last-user-msg DESC. A reference-scoped chat's document_id is its ref-doc (its
  *   parent in the tree), so it ranks by its owning branch — consistent with the
  *   ChatRow `ref:` label. Doc-less sessions rank via PROJECT_ROOT (finite).
+ *
+ * ARCH (plan chats-unlisted-subtree): a CLIENT projection, not a server filter —
+ * the list is fetched once per project and document switches do not re-fetch, so
+ * a server filter keyed on the open document would go stale on the first
+ * navigation. A session whose host_document_id lies in a `chats_unlisted`
+ * subtree, viewed from OUTSIDE it, leaves the list (doc-less sessions are never
+ * hidden; they have no subtree). The ACTIVE session is exempt ("leave it until
+ * switched"): it stays listed until the user switches away — a reload restoring
+ * a hidden chat as active is then exempt the same way.
  *
  * ARCH: the recency fallback is
  * `created_at`, NEVER `updated_at`. Why: auto_title / update_session bump
@@ -31,11 +41,21 @@ import type { ChatSession } from '../../types';
  */
 export function useSortedSessions() {
   const sessions = useChatStore(s => s.sessions);
+  const activeSessionId = useChatStore(s => s.activeSessionId);
   const currentDocId = useAppStore(s => s.currentDocument?.document_id) ?? null;
   const documents = useAppStore(s => s.documents);
   const sortByProximity = useUIStore(s => s.getChatSortByProximity(currentDocId));
 
   return useMemo(() => {
+    // chats_unlisted projection — hidden subtree hosts drop out, the ACTIVE
+    // session stays, doc-less sessions (host null/absent) are never hidden.
+    const hiddenDocIds = listHiddenDocIds(documents, currentDocId);
+    const visible = hiddenDocIds.size === 0
+      ? sessions
+      : sessions.filter(s => s.session_id === activeSessionId
+        || !s.host_document_id
+        || !hiddenDocIds.has(s.host_document_id));
+
     // Last user message, falling back to the immutable created_at.
     const recencyOf = (s: ChatSession): string => s.last_message_at ?? s.created_at;
     const byRecencyDesc = (a: ChatSession, b: ChatSession) =>
@@ -51,11 +71,11 @@ export function useSortedSessions() {
         // Tiebreak: recency DESC within a proximity tier.
         return recencyOf(b).localeCompare(recencyOf(a));
       };
-      return [...sessions].sort(byProximity);
+      return [...visible].sort(byProximity);
     }
 
-    return [...sessions].sort(byRecencyDesc);
-  }, [sessions, sortByProximity, currentDocId, documents]);
+    return [...visible].sort(byRecencyDesc);
+  }, [sessions, activeSessionId, sortByProximity, currentDocId, documents]);
 }
 
 /**

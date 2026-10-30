@@ -355,6 +355,19 @@ DEFINE FIELD IF NOT EXISTS archived     ON documents TYPE option<bool> DEFAULT f
 -- and deliberately NOT backfilled — same SCHEMAFULL UPDATE trap as `archived`
 -- above; the reader asks `chats_unindexed = true`, so NONE counts as false.
 DEFINE FIELD IF NOT EXISTS chats_unindexed ON documents TYPE option<bool> DEFAULT false;
+-- ARCH (plan chats-unlisted-subtree): `chats_unlisted` hides this
+-- document's subtree's chats from the chat LIST while the open document is
+-- OUTSIDE the subtree — same read-time, subtree-wide, viewer-relative rule
+-- as `chats_unindexed` above, but for the list surface, and INDEPENDENT of
+-- it (each flag governs one surface; setting one never sets the other). The
+-- server never filters by it: the list is fetched once per project and
+-- re-projected by the client on every document switch (useSortedSessions),
+-- so the flag travels in the project tree payload and the hide is a client
+-- projection. option<bool> DEFAULT false and deliberately NOT backfilled —
+-- same SCHEMAFULL UPDATE trap as `archived` above; readers treat NONE as
+-- false. No index: unlike idx_documents_chats_unindexed, the server never
+-- SELECTs by chats_unlisted.
+DEFINE FIELD IF NOT EXISTS chats_unlisted ON documents TYPE option<bool> DEFAULT false;
 -- Document inbox (SYSTEM: inbox): the unread
 -- flag on a reference that arrived from OUTSIDE (a widget key or an MCP key over
 -- the gateway). `unread_for` = the RECIPIENT user id (the key owner). Written

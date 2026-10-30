@@ -2,6 +2,7 @@
 
 import { Component } from 'react';
 import type { ReactNode, ErrorInfo } from 'react';
+import { sendTelemetry } from '../../telemetry/telemetry';
 
 interface Props {
   children: ReactNode;
@@ -20,6 +21,11 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('[ErrorBoundary]', error, info.componentStack);
+    sendTelemetry({
+      category: 'client',
+      kind: 'render-crash',
+      detail: { message: error.message, path: window.location.pathname, stack: info.componentStack?.slice(0, 2000) },
+    });
   }
 
   render() {
