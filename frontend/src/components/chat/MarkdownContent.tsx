@@ -10,8 +10,7 @@
  *   https://lore.local/l/<type>/<id> form (an allowlisted destination dsh
  *   renders as a real anchor); the delegated click handler below and
  *   EditorLinkPreview's href-derived branch decode it via parseInAppLink.
- *   Fenced code keeps the literal scheme. An internal IMAGE `![alt](ref:ID)`
- *   becomes the reference's file URL on this origin, which dsh renders.
+ *   Fenced code keeps the literal scheme.
  * - mermaid — absent from dsh's ui-primitives; ```mermaid fence segments
  *   render through editor/mermaid-render.ts (shared with the editor).
  *
@@ -26,7 +25,6 @@ import { renderMermaid, getCachedMermaid } from '../../editor/mermaid-render';
 import { useTranslation } from '../../i18n';
 import { emit } from '../../events';
 import { parseInAppLink } from '../../utils/in-app-link';
-import { referenceFileUrl } from '../../utils/reference-url';
 
 interface Props {
   content: string;
@@ -120,28 +118,21 @@ function splitSegments(src: string): Segment[] {
 }
 
 // Internal links in PROSE segments only: `[alt](doc:ID)` → the lore.local
-// form; an internal IMAGE `![alt](ref:ID)` → the reference's file on THIS
-// origin, an http(s) destination dsh renders as a real image (its own preview,
-// lightbox and failed-load alt line). alt without nested brackets covers the
-// internal-link shapes we emit. Fenced code is never touched by construction —
-// the rewrite runs on prose segment text alone. Accepted, recorded: the
-// literal inside inline code and 4-space-indented code IS rewritten too
-// (visible as the rewritten form there).
+// form. The optional leading `!` keeps IMAGES unwritten (an internal id must
+// not become an <img> that fetches lore.local — dsh unwraps it to alt text);
+// alt without nested brackets covers the internal-link shapes we emit. Fenced
+// code is never touched by construction — the rewrite runs on prose segment
+// text alone. Accepted, recorded: the literal inside inline code and
+// 4-space-indented code IS rewritten too (visible as the lore.local form
+// there).
 // WHY: a scheme-less destination (`[t](id)`, `[t](<id>)`) is a document link — the
 // agent's bootstrap prompt spells document links as the bare id, and the editor's
 // docLink pattern (link-patterns.ts) reads `doc:` as optional. No ':' '/' '#' '?'
 // keeps http(s)/mailto/anchors/paths out of the bare arm.
-// WHY the file route with a placeholder basename: the route resolves by
-// reference id and reads the basename only as the download name (see
-// generatedImageUrl); access is the route's own gate, and a deleted reference
-// fails the load into dsh's alt line, never a blank.
 const INTERNAL_LINK_RE = /(!?)\[([^[\]]*)\]\((?:(doc|ref):([^)\s]+)|<?([^)\s<>:/#?]+)>?)\)/g;
 function rewriteInternalLinks(text: string): string {
-  return text.replace(INTERNAL_LINK_RE, (match, image: string, alt: string, type?: string, id?: string, bareId?: string) => {
-    if (!image) return `[${alt}](https://lore.local/l/${type ?? 'doc'}/${id ?? bareId})`;
-    if (type !== 'ref' || !id) return match;
-    return `![${alt}](${window.location.origin}${referenceFileUrl(id, 'image')})`;
-  });
+  return text.replace(INTERNAL_LINK_RE, (match, image: string, alt: string, type?: string, id?: string, bareId?: string) =>
+    image ? match : `[${alt}](https://lore.local/l/${type ?? 'doc'}/${id ?? bareId})`);
 }
 
 // ─── click delegation ───────────────────────────────────────────────────
