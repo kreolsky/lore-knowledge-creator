@@ -2,6 +2,7 @@
 
 import logging
 
+import settings
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from model_access import own_group_subject
@@ -141,6 +142,11 @@ async def me(request: Request, response: Response, user: dict = Depends(get_curr
         # Page PIN lock (SYSTEM: page-lock): ALWAYS a list (NONE = no locks) —
         # the frontend types it string[], never string[] | null.
         user["locked_doc_ids"] = list(db_user.get("locked_doc_ids") or []) if db_user else []
+        # Page PIN lock grace (same SYSTEM): LIVE settings read, so an admin
+        # change lands on the next /me probe. Deliberately NOT on the
+        # login/register payloads — absent grace on the client means the
+        # fail-safe immediate PIN re-lock.
+        user["page_lock_grace_s"] = await settings.get("PAGE_LOCK_GRACE_S")
         tv = (db_user.get("token_version") or 0) if db_user else 0
         # ARCH: /me answers with the DB role (fresh even when the JWT claim is
         # stale — a role flip takes effect without re-login), and with capability

@@ -19,6 +19,9 @@ export type SessionSlice = Pick<
   | 'projects'
   | 'pinLocked'
   | 'unlockedDocIds'
+  | 'pageLockLeftAt'
+  | 'stampPageLockLeft'
+  | 'clearPageLockLeft'
   | 'toast'
   | 'setUsers'
   | 'setProjects'
@@ -44,6 +47,11 @@ export function createSessionSlice(set: AppSet): SessionSlice {
     // INVARIANT(security): cleared on logout and on the app PIN lock. Why: a page opened
     // by PIN must not stay open for whoever finds the tab locked or signed out.
     unlockedDocIds: [],
+    // INVARIANT(security): cleared on logout and on the app PIN lock, inline with
+    // unlockedDocIds above. Why: a stamp only WIDENS what unlockedDocIds already exposes,
+    // so it must never outlive that set's clears. This is the slice's OWN state — no
+    // logout-handler registration (the registry is for other modules' caches).
+    pageLockLeftAt: {},
     toast: null,
 
     setUsers: (users) => set({ users }),
@@ -59,7 +67,7 @@ export function createSessionSlice(set: AppSet): SessionSlice {
       if (!user) {
         clearLastSavedBlobs();
         clearUserScopedCaches();
-        set({ currentUser: null, pinLocked: false, unlockedDocIds: [] });
+        set({ currentUser: null, pinLocked: false, unlockedDocIds: [], pageLockLeftAt: {} });
       } else {
         set({ currentUser: user });
       }
@@ -68,10 +76,39 @@ export function createSessionSlice(set: AppSet): SessionSlice {
       // WHY: the lock replaces the whole tree, tearing down the collab provider — the
       // row names that trigger next to the provider's own `disconnect`.
       sendTelemetry({ category: 'collab', kind: 'pin-lock', detail: { locked } });
-      set(locked ? { pinLocked: true, unlockedDocIds: [] } : { pinLocked: false });
+      set(locked ? { pinLocked: true, unlockedDocIds: [], pageLockLeftAt: {} } : { pinLocked: false });
     },
-    addUnlockedDocId: (docId) => set(s => (s.unlockedDocIds.includes(docId) ? {} : { unlockedDocIds: [...s.unlockedDocIds, docId] })),
+    // PIN success is presence: besides opening the id, it ends the id's grace window
+    // (a re-PIN after a lapsed window must open the page — the stamp never survives it).
+    addUnlockedDocId: (docId) => set(s => {
+      const hasId = s.unlockedDocIds.includes(docId);
+      const hasStamp = s.pageLockLeftAt[docId] !== undefined;
+      if (hasId && !hasStamp) return {};
+      const pageLockLeftAt = { ...s.pageLockLeftAt };
+      delete pageLockLeftAt[docId];
+      return hasId ? { pageLockLeftAt } : { unlockedDocIds: [...s.unlockedDocIds, docId], pageLockLeftAt };
+    }),
     setUnlockedDocIds: (docIds) => set({ unlockedDocIds: docIds }),
+    // Stamp-if-ABSENT (the guard lives here, not in callers): a later navigation must not
+    // freshen an already-running window — the window counts from the FIRST leave.
+    stampPageLockLeft: ids => set(s => {
+      let next: Record<string, number> | null = null;
+      for (const id of ids) {
+        if (s.pageLockLeftAt[id] !== undefined) continue;
+        if (!next) next = { ...s.pageLockLeftAt };
+        next[id] = Date.now();
+      }
+      return next ? { pageLockLeftAt: next } : {};
+    }),
+    clearPageLockLeft: ids => set(s => {
+      let next: Record<string, number> | null = null;
+      for (const id of ids) {
+        if (s.pageLockLeftAt[id] === undefined) continue;
+        if (!next) next = { ...s.pageLockLeftAt };
+        delete next[id];
+      }
+      return next ? { pageLockLeftAt: next } : {};
+    }),
 
     showToast: (message, type = 'error', options) =>
       set({ toast: { message, type, persistent: options?.persistent } }),

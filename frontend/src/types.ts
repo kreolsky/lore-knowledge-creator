@@ -39,6 +39,10 @@ export interface User {
   /** Pages this user PIN-locked for themselves (SYSTEM: page-lock). /me always sends a
    * list; other User producers (login, admin lists) omit it — read as `?? []`. */
   locked_doc_ids?: string[];
+  /** Page-lock grace window, seconds (SYSTEM: page-lock): a PIN-opened page re-locks this
+   * long after the tab leaves it. /me always sends it (fresh read of PAGE_LOCK_GRACE_S);
+   * login/register omit it — read as `?? null` (fail-safe PIN). 0 = re-lock on leave. */
+  page_lock_grace_s?: number;
   /** Provenance: uid of the account creator (creating manager / invite's invited_by). */
   created_by?: string | null;
   /** Group head (a moderator's uid) — legal only on role='user' rows; null otherwise. */

@@ -148,11 +148,18 @@ export interface AppState {
   setPinLocked: (locked: boolean) => void;
 
   // PIN-locked pages opened by PIN in this tab (SYSTEM: page-lock) — a set, so a locked
-  // page under a locked page needs each PIN once. In-memory only; DocumentPage drops an id
-  // when the open page leaves its subtree, so leaving re-locks.
+  // page under a locked page needs each PIN once. In-memory only; it is the "opened at
+  // least once" set and is NEVER dropped on navigation — leaving a page instead stamps
+  // `pageLockLeftAt`, and the gate re-locks once the admin-set grace window lapses.
   unlockedDocIds: string[];
   addUnlockedDocId: (docId: string) => void;
   setUnlockedDocIds: (docIds: string[]) => void;
+  // Page-lock grace window (SYSTEM: page-lock): per doc id, the ms epoch when the tab
+  // LEFT that page's subtree (away-ness began). In-memory only; presence deletes stamps.
+  pageLockLeftAt: Record<string, number>;
+  /** Stamp-if-ABSENT: a later leave must not freshen an already-running window. */
+  stampPageLockLeft: (ids: string[]) => void;
+  clearPageLockLeft: (ids: string[]) => void;
 
   // One-shot request: focus the editor rendering this entity id once it becomes
   // editable, whatever its role. Set after creating a reference so the user can

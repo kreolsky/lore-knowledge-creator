@@ -212,6 +212,9 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
   const floating = !compact && !sidebarPinned;
   // INVARIANT: while floating only hoverOpen changes — the per-project sidebarOpen is never written.
   // Why: re-pinning must restore the docked state the user had before unpinning.
+  // INVARIANT: floating hover NEVER switches tabs — pointer-enter only OPENS the panel in its
+  // last tab; a tab changes by click alone. Why: hover-driving the tab made the doc tree flip
+  // to the TOC whenever the cursor grazed the tab strip ("self-switching" bug).
   const [hoverOpen, setHoverOpen] = useState(false);
   const hoverCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -240,7 +243,7 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
         || sidebarResizer.resizerRef.current?.classList.contains('dragging');
       if (held) scheduleHoverClose();
       else { hoverCloseTimer.current = null; setHoverOpen(false); }
-    }, 250);
+    }, 500);
   }, [cancelHoverClose, sidebarResizer.resizerRef]);
   useEffect(() => cancelHoverClose, [cancelHoverClose]);
 
@@ -341,7 +344,6 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
       key={entry.tab}
       className={`left-bar-tab ${sidebarIsOpen && effectiveSidebarTab === entry.tab ? 'active' : ''}`}
       onClick={() => handleSidebarTabClick(entry.tab)}
-      onPointerEnter={floating ? () => setSidebarTab(entry.tab) : undefined}
       title={entry.title}
     >
       {entry.icon}
@@ -444,6 +446,19 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
                     className="resizer resizer--floating transition-[left] duration-150"
                     style={{ left: `calc(100% + ${sidebarResizer.width}px)` }}
                     ref={sidebarResizer.resizerRef}
+                  />
+                )}
+                {/* Grace strip: invisible 20px hover-hold zone hugging the open panel's right
+                    edge. A child of shell-left, so the cursor stepping just off the panel onto
+                    it never fires shell-left's pointerleave — the close timer only arms once
+                    the strip is cleared too. Fixed 20px (not a % of the live width) so the
+                    zone feels the same however wide the panel was dragged. z-12 = the floating
+                    aside's plane; the resizer (z-14) still rides above it. */}
+                {floating && sidebarResizer.isOpen && (
+                  <div
+                    data-testid="sidebar-grace-zone"
+                    className="absolute top-0 bottom-0 w-[20px] z-[12] transition-[left] duration-150"
+                    style={{ left: `calc(100% + ${sidebarResizer.width}px)` }}
                   />
                 )}
               </div>

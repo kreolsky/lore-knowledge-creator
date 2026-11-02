@@ -2,9 +2,9 @@
 
 A user marks some of their pages (e.g. a diary) as locked; the agent in that
 user's chats / MCP keys cannot read or find them (read gate + search filter +
-chat-context drop), and the UI shows a PIN screen instead of the editor
-(frontend, client step of the plan). Protection level: against casual eyes,
-NOT against a determined person with DevTools.
+chat-context drop), and the UI shows a PIN screen instead of the editor.
+Protection level: against casual eyes, NOT against a determined person with
+DevTools.
 
 The lock is PERSONAL: stored on the user (`users.locked_doc_ids`), not on the
 document. Other members see the page as before; hiding from them is RBAC's

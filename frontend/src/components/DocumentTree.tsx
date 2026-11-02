@@ -31,7 +31,7 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useDocumentRoute } from '../hooks/useDocumentRoute';
 import { useHoverPreview } from '../hooks/useHoverPreview';
 import { useGearMenu } from '../hooks/useGearMenu';
-import { hiddenBranchIds, pruneLockedBranches } from '../utils/page-lock';
+import { effectiveUnlockedDocIds, hiddenBranchIds, pruneLockedBranches } from '../utils/page-lock';
 import { useSiblingDragReorder, treeDragAdapter } from '../hooks/useSiblingDragReorder';
 import { TREE_INDENT } from '../hooks/treeDropTarget';
 import { keyIconClassFromCapabilities } from '../utils/key-icon';
@@ -329,12 +329,18 @@ export function DocumentTree({ onDelete, onCreateChild, onChangeParent, canEdit 
   const { t } = useTranslation();
   const { documentId } = useDocumentRoute();
   const { currentProject, documentTree: fullTree } = useAppStore(useShallow(s => ({ currentProject: s.currentProject, documentTree: s.documentTree })));
-  // Page PIN lock (SYSTEM: page-lock): every reader below sees the PRUNED tree.
+  // Page PIN lock (SYSTEM: page-lock): every reader below sees the PRUNED tree. The
+  // unlock set is the EFFECTIVE one (same predicate as the gate), so during a grace
+  // window a branch shows exactly while its page renders open — never longer.
   const lockedIds = useAppStore(s => s.currentUser?.locked_doc_ids ?? EMPTY_IDS);
-  const unlockedDocIds = useAppStore(s => s.unlockedDocIds);
+  const unlockState = useAppStore(useShallow(s => ({
+    currentUser: s.currentUser,
+    unlockedDocIds: s.unlockedDocIds,
+    pageLockLeftAt: s.pageLockLeftAt,
+  })));
   const documentTree = useMemo(
-    () => pruneLockedBranches(fullTree, hiddenBranchIds(lockedIds, unlockedDocIds)),
-    [fullTree, lockedIds, unlockedDocIds],
+    () => pruneLockedBranches(fullTree, hiddenBranchIds(lockedIds, effectiveUnlockedDocIds(unlockState, Date.now()))),
+    [fullTree, lockedIds, unlockState],
   );
   const currentReference = useAppStore(s => s.currentReference);
   const currentDocument = useAppStore(s => s.currentDocument);

@@ -239,19 +239,31 @@ export function DocumentPage() {
 
   const lockedBy = useAppStore(selectOpenPageLockedBy);
   const openDocId = currentDocument?.document_id ?? documentId;
-  // WHY: leaving a page's SUBTREE re-locks it (a PIN opens one visit of the page and its
-  // children — the tree shows them only while it holds); so does leaving the editor
-  // (unmount to /cabinet, /projects).
+  // WHY: leaving a page's SUBTREE starts that page's grace window (a PIN opens the page
+  // and its children — the tree shows them while the window holds; a lapsed window or a
+  // reload re-locks). So does leaving the editor entirely (unmount to /cabinet, /projects).
+  // The id itself is NOT dropped — the stamp is the leave marker the gate reads.
   useEffect(() => {
     const store = useAppStore.getState();
     const held = store.unlockedDocIds;
     if (!held?.length || !openDocId) return;
-    const kept = held.filter(id => isInSubtreeOf(store.documents, openDocId, id));
-    if (kept.length !== held.length) store.setUnlockedDocIds(kept);
+    const dropped = held.filter(id => !isInSubtreeOf(store.documents, openDocId, id));
+    if (dropped.length) store.stampPageLockLeft(dropped);
   }, [openDocId]);
+  // Presence clears away-ness: once the gate renders the open page open (PIN entered or
+  // the grace window still holding), the open chain's stamps are deleted — so the NEXT
+  // leave starts a fresh window, not the remainder of an old one.
+  useEffect(() => {
+    if (lockedBy !== null) return;
+    const store = useAppStore.getState();
+    const held = store.unlockedDocIds;
+    if (!held?.length || !openDocId) return;
+    const present = held.filter(id => isInSubtreeOf(store.documents, openDocId, id));
+    if (present.length) store.clearPageLockLeft(present);
+  }, [lockedBy, openDocId]);
   useEffect(() => () => {
     const store = useAppStore.getState();
-    if (store.unlockedDocIds?.length) store.setUnlockedDocIds([]);
+    if (store.unlockedDocIds?.length) store.stampPageLockLeft(store.unlockedDocIds);
   }, []);
 
   const currentReference = useAppStore(s => s.currentReference);

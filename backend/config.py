@@ -113,6 +113,23 @@ MAX_ARCHIVE_SIZE_MB = setting(
     help="Upload limit for agent-shared .zip archives (import_file sandbox_path).",
 )  # Upload limit for agent-shared .zip archives (import_file sandbox_path)
 
+# ─── Page lock (SYSTEM: page-lock) ────────────────────────────────────────────
+# The UI-leg knob of the page PIN lock: after the user leaves a PIN-unlocked
+# page's subtree, the unlock survives this many seconds before the PIN screen
+# returns. The window lives in the tab session only (reload/close re-locks);
+# the agent/MCP read gates stay keyed on users.locked_doc_ids and open
+# NOTHING within it. 0 = off, exactly the pre-grace immediate re-lock.
+_section("storage", "Page lock")
+PAGE_LOCK_GRACE_S = setting(
+    "PAGE_LOCK_GRACE_S", int, default=120, min=0, max=3600,
+    label="Page-lock grace window, s",
+    help="How long a page unlocked by its PIN stays unlocked after the user "
+         "leaves it, before the PIN screen returns. 0 re-locks the moment "
+         "they leave. The window never survives a reload or logout. Reaches "
+         "clients on their next /api/auth/me (a reload, cold load or the "
+         "post-login probe), not instantly.",
+)  # Grace window served to clients on /me (auth.py)
+
 # DOCX→Markdown conversion is offloaded to the stateless `converter` container
 # (Pandoc, later swappable for ML engines). Internal Docker-network address —
 # wiring between Lore's own required components, not configuration (see the
