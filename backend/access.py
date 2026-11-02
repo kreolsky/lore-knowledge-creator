@@ -247,11 +247,15 @@ async def can_write_note(principal: dict, document_id: str) -> bool:
     A principal is `{"kind": "user", "user": <user>}` or `{"kind": "anonymous",
     "share": <resolve_share context>}` — the guest tier plugs in as another kind.
 
-    # INVARIANT(security): one check for every note writer (member: full or commentator; anonymous: allow_comments on the covering share).
+    # INVARIANT(security): one check for every note writer (member: full or commentator; anonymous: allow_comments on the covering share), never on an html page.
     # Why: notes are the one write a non-editor makes; a second, per-surface
     # check would drift, and readonly members and comments-off links must stay
-    # read-only on every surface. Any other principal kind is refused.
+    # read-only on every surface. Any other principal kind is refused. An html
+    # page has no text to anchor a note to and no surface shows notes on it.
     """
+    meta = await fetch_doc_meta(document_id)
+    if meta is not None and meta.get("media_type") == "html":
+        return False
     kind = principal.get("kind")
     if kind == "user":
         return await get_document_access(document_id, principal["user"]) in _NOTE_WRITER_LEVELS

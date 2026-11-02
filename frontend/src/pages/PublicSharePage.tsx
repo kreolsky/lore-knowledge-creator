@@ -43,7 +43,7 @@
  * readonly is structural, not maintained by hand.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertCircle, FileText, List, MessageSquare, Paperclip } from 'lucide-react';
 import {
@@ -66,6 +66,7 @@ import { useAppStore } from '../store/app-store';
 import { useUIStore, ORPHAN_KEY, type RightTab } from '../store/ui-store';
 import { setPublicFileContext } from '../utils/reference-url';
 import { docUrl } from '../utils/routing';
+import { declaredColorScheme } from '../utils/page-color-scheme';
 import { useTranslation } from '../i18n';
 import { Button } from '../components/ui';
 import { useEvent } from '../hooks/useEvent';
@@ -284,6 +285,19 @@ export function PublicSharePage(
   usePublicDocSocket(documentId, allowComments || isHtmlPage, bumpPage);
   const fetchPageUrl = useCallback(() => publicArtifactUrlByDoc(documentId), [documentId]);
 
+  // A dashboard that declares its own scheme is shown in it; leaving the page (or this
+  // surface) restores the viewer's theme. WHY no persistence concern: ui-store skips
+  // saving prefs while isPublicShare is set, so the forced theme never reaches the profile.
+  const pageSource = useAppStore(s => (isHtmlPage ? s.currentDocument?.content ?? null : null));
+  const pageScheme = useMemo(() => (pageSource ? declaredColorScheme(pageSource) : null), [pageSource]);
+  useEffect(() => {
+    if (!pageScheme) return;
+    const ui = useUIStore.getState();
+    const prevTheme = ui.theme;
+    ui.setTheme(pageScheme);
+    return () => useUIStore.getState().setTheme(prevTheme);
+  }, [pageScheme]);
+
   const storedRightTab = useUIStore(s => s.documents[ORPHAN_KEY]?.rightPanelTab);
   const noteThreadOpen = usePublicNotesStore(s => !!s.activeNoteId || !!s.draft);
 
@@ -321,6 +335,8 @@ export function PublicSharePage(
 
   // ── Left-tab set: doc-scope hides the `docs` tab (single root only); subtree
   //    shows both. Right-tab set: refs only.
+  // A dashboard (html page) is shown bare: no right panel, and on a single-page share
+  // no left rail at all — only the header. Inside a subtree the tree stays, without a TOC.
   const leftTabs: LeftTabEntry[] = [
     ...(scope === 'subtree' ? [{
       tab: 'docs' as const,
@@ -328,12 +344,12 @@ export function PublicSharePage(
       title: t('tabDocuments'),
       renderPanel: () => <Sidebar />,
     }] : []),
-    { tab: 'toc', icon: <List size={15} />, title: t('tabTableOfContents'), renderPanel: () => <TableOfContents /> },
+    ...(isHtmlPage ? [] : [{ tab: 'toc' as const, icon: <List size={15} />, title: t('tabTableOfContents'), renderPanel: () => <TableOfContents /> }]),
   ];
 
-  const rightTabs: RightTabEntry[] = [
+  const rightTabs: RightTabEntry[] = isHtmlPage ? [] : [
     { tab: 'refs', icon: <Paperclip size={15} />, title: t('tabReferences'), renderPanel: () => <ReferencesPanel /> },
-    ...(allowComments && !isHtmlPage ? [{
+    ...(allowComments ? [{
       tab: 'notes' as const,
       icon: <MessageSquare size={15} />,
       title: t('tabNotes'),

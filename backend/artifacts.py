@@ -116,7 +116,10 @@ def html_node_sentence() -> str:
         "source rides `content` — or, for a page you build in the sandbox, "
         "import the .html file with import_file instead of re-sending it; edit "
         "it with edit_document str_replace; a "
-        f"page over {ARTIFACT_MAX_HTML_BYTES // 1024} KiB is refused."
+        f"page over {ARTIFACT_MAX_HTML_BYTES // 1024} KiB is refused. "
+        'Declare the page\'s design in its head: `<meta name="color-scheme" '
+        'content="dark">` for a dark design, `content="light"` for a light '
+        "one — the viewer shows the page in that theme."
     )
 
 

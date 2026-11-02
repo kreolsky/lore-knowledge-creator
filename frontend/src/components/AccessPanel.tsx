@@ -59,6 +59,7 @@ export function AccessPanel() {
         <GeneralAccessSection
           projectId={project.project_id}
           docId={docId}
+          isHtmlPage={currentDocument?.media_type === 'html'}
         />
         {docId && <ChatsPrivacySection docId={docId} />}
         {docId && (
@@ -123,10 +124,11 @@ function applyOptimistic(shares: DocumentShare[], actions: ShareAction[]): Docum
 
 
 function GeneralAccessSection({
-  projectId, docId,
+  projectId, docId, isHtmlPage,
 }: {
   projectId: string;
   docId: string | null;
+  isHtmlPage: boolean;
 }) {
   const { t } = useTranslation();
   const showToast = useAppStore(s => s.showToast);
@@ -248,16 +250,18 @@ function GeneralAccessSection({
                 onChange={() => { void handleToggle('shared'); }}
                 label={t('accessShareThisDoc')}
               />
-              <FieldCheckbox
+              {/* WHY: a dashboard (html page) has no children and nothing to annotate,
+                  so its share offers neither a subtree nor comments. */}
+              {!isHtmlPage && <FieldCheckbox
                 checked={view.subtree}
                 disabled={view.subtreeDisabled || busy}
                 onChange={() => { void handleToggle('subtree'); }}
                 label={t('accessIncludeSubtree')}
                 title={t('accessIncludeSubtreeHint')}
-              />
+              />}
             </div>
 
-            {ownShare && (
+            {ownShare && !isHtmlPage && (
               <div className="mt-1.5">
                 <FieldCheckbox
                   checked={!!ownShare.allow_comments}
