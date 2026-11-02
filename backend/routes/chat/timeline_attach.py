@@ -31,20 +31,36 @@ logger = logging.getLogger(__name__)
 # only against the session's OWN log (dsh id = Lore id; a seeded branch's
 # log carries the copied prefix under the SAME seqs), so the per-session stamp map below is the whole
 # pairing (an unseeded branch reads its seed source's log instead — see
-# _fetch_session_turns). Rows whose stamp does not resolve (a pre-harness
-# turn, an abnormally ended turn) keep no `frames` key and the
-# client renders what the row carries.
+# _fetch_session_turns). An abnormally ended turn has no stamp (no `turn/end`
+# reached the row) and pairs by its halt's stored `anchor_seq` instead — the
+# turn holding a frame at exactly that seq, never a turn a stamp already
+# claimed. Rows that resolve neither way (a pre-harness turn, a halt stored
+# before the anchor was) keep no `frames` key and the client renders what the
+# row carries.
 def _assign_frames_by_stamp(assistants: list[dict], turns: list[dict]) -> None:
     """Key each assistant row to its turn by the driver's own id — the row's
     `driver_seq` over the projection's per-turn `end_seq`, within THIS
-    session's own log (the per-session stamp map)."""
+    session's own log (the per-session stamp map) — and a halted unstamped
+    row by its halt's `anchor_seq`."""
     by_seq: dict[int, dict] = {}
     for t in turns:
         s = t.get("end_seq")
         if isinstance(s, int) and not isinstance(s, bool):
             by_seq[s] = t
+    claimed = {id(by_seq[r["driver_seq"]]) for r in assistants if r.get("driver_seq") in by_seq}
     for r in assistants:
         t = by_seq.get(r.get("driver_seq"))
+        if t is None and r.get("driver_seq") is None:
+            t = _turn_at_halt_anchor(r, turns, claimed)
+            if t is not None:
+                # WHY: the dead turn's log closer is the /stop our own breach
+                # sent, so its `lore/halt` says "aborted"; the row's halt column
+                # carries the real reason and is minted in its place
+                # (attach_reload_lore_mints).
+                t = {**t, "frames": [
+                    f for f in t.get("frames") or []
+                    if not (isinstance(f, dict) and f.get("type") == "lore/halt")
+                ]}
         if t is not None:
             # The replay of a NON-live session ends every closed turn with a
             # seq-anchored `turn_closed` (plugin entries.ts `terminals`) —
@@ -55,6 +71,36 @@ def _assign_frames_by_stamp(assistants: list[dict], turns: list[dict]) -> None:
                 f for f in t.get("frames") or []
                 if not (isinstance(f, dict) and f.get("type") == "turn_closed")
             ]
+
+
+def _turn_at_halt_anchor(row: dict, turns: list[dict], claimed: set[int]) -> dict | None:
+    """The replayed turn a halted unstamped row died in: the one carrying a
+    frame at the halt's `anchor_seq` (the last seq the live projection relayed
+    for that turn). None for a row with no halt/anchor or no unclaimed match."""
+    halt = row.get("halt")
+    anchor = halt.get("anchor_seq") if isinstance(halt, dict) else None
+    if not isinstance(anchor, int) or isinstance(anchor, bool):
+        return None
+    for t in turns:
+        if id(t) in claimed:
+            continue
+        # INVARIANT(corruption): a halted row takes only the turn holding a
+        # frame at EXACTLY its anchor seq, and never a turn a stamp claimed.
+        # Why: whatever a turn showed before it died stays on reload — but a
+        # looser match would show one turn's tool calls under another's answer.
+        if any(isinstance(f, dict) and f.get("seq") == anchor for f in t.get("frames") or []):
+            claimed.add(id(t))
+            return t
+    return None
+
+
+def _open_turn_is_dead(assistants: list[dict], turns: list[dict]) -> bool:
+    """A trailing open turn a halted row takes by its anchor is that row's
+    dead turn, never a running one to hand to another row."""
+    return any(
+        r.get("driver_seq") is None and _turn_at_halt_anchor(r, turns[-1:], set()) is not None
+        for r in assistants
+    )
 
 
 def _log_shows_open_turn(turns: list[dict]) -> bool:
@@ -83,7 +129,7 @@ def _mark_open_turn(
     # card the open frames would render TWO records for one turn; the halt
     # column is the splitter, mirroring entries.ts's emitting branch.
     """
-    if not _log_shows_open_turn(turns):
+    if not _log_shows_open_turn(turns) or _open_turn_is_dead(assistants, turns):
         if running:
             _mark_running_turn(assistants)
         return
@@ -228,10 +274,10 @@ async def _attach_timeline(
 
     A note thread never runs a turn — no driver read. A thread with no
     assistant row reads only the status (its first message may be queued).
-    Rows the log has no turn for (threads predating
-    the harness, an abnormally ended turn that never wrote `turn/end`) keep the Lore row exactly as it is: no `frames`
-    key from the replay — and the reload mints add exactly what the row owns
-    (the `halt` column's card at the log tail; a gen_steps image run whose
+    An abnormally ended turn (no stamp) takes its frames by its halt's anchor;
+    rows the log has no turn for (pre-harness, a halt with no stored anchor)
+    keep no `frames` key — and the reload mints add exactly what the row owns
+    (the `halt` card at its anchor, else at the log tail; a gen_steps image run whose
     dispatching call the replay carries). The client feeds the rows' frames
     to the assembler, so the mints ride the same input as the replay.
     """

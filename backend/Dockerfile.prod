@@ -8,6 +8,10 @@ COPY backend/requirements.txt .
 RUN pip install --no-cache-dir --retries 10 --timeout 60 -r requirements.txt
 COPY backend/ .
 COPY surreal/ /surreal/
+# Pinned artifact libraries (SYSTEM: artifact-serve): fetch + sha256-verify
+# into /opt/artifact_lib — OUTSIDE /app, which dev/gray bind-mount over. A
+# mismatch fails the build (backend/artifact_lib/fetch.py).
+RUN python artifact_lib/fetch.py
 # WHY: the release version is baked into the image, not declared in .env. With a
 # moving tag (`stable`) a .env-declared version can disagree with the digest
 # actually pulled; a self-reported version is what makes the moving tag safe to

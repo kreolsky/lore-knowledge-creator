@@ -8,13 +8,14 @@ logger = logging.getLogger(__name__)
 
 
 async def thumbnail_task(ctx, project_id: str, ref_id: str, rel_path: str) -> None:
+    from files_util import resolve_stored_file
     from thumbnails import generate_thumbnail, get_thumb_path, warm_model_variant
 
-    from config import STORAGE_PATH as _SP
-
-    abs_path = (_SP / rel_path).resolve()
-    if not abs_path.is_file():
-        logger.warning("Thumbnail task: source file missing: %s", rel_path)
+    # Containment via the single stored-file resolver: a rel_path escaping
+    # STORAGE_PATH is refused + logged, never thumbnailed.
+    abs_path = resolve_stored_file(rel_path)
+    if abs_path is None:
+        logger.warning("Thumbnail task: source file missing or outside storage: %s", rel_path)
         return
     thumb_path = get_thumb_path(project_id, ref_id)
     await asyncio.to_thread(generate_thumbnail, abs_path, thumb_path)

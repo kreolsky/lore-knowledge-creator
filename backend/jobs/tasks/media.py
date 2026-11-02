@@ -15,7 +15,7 @@ from pathlib import Path
 import http_clients
 
 import event_bus
-from config import STORAGE_PATH
+from jobs.tasks._transcript_landing import land_transcript
 from models import is_ref_row
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,6 @@ async def transcribe_task(ctx, user_id: str, reference_id: str) -> None:
 
     from db import fetch_one, get_db
     from jobs.tasks._dead_letter import dead_letter
-    from ydoc_store import set_content
 
     ref = await fetch_one("documents", reference_id)
     if not ref or ref.get("deleted_at") or not is_ref_row(ref):
@@ -83,12 +82,13 @@ async def transcribe_task(ctx, user_id: str, reference_id: str) -> None:
         await _fail_early()
         return
 
-    abs_path = (STORAGE_PATH / rel_path).resolve()
-    if not abs_path.is_relative_to(STORAGE_PATH.resolve()):
-        logger.error("Path traversal attempt in ref %s: %s", reference_id, rel_path)
-        await _fail_early()
-        return
-    if not abs_path.is_file():
+    # Containment via the single stored-file resolver: missing-or-outside is
+    # one refused case, logged.
+    from files_util import resolve_stored_file
+
+    abs_path = resolve_stored_file(rel_path)
+    if abs_path is None:
+        logger.error("Transcribe source missing or outside storage for ref %s: %s", reference_id, rel_path)
         await _fail_early()
         return
 
@@ -102,32 +102,12 @@ async def transcribe_task(ctx, user_id: str, reference_id: str) -> None:
         # shape convert_docx_task's _mark_error set the precedent for).
         await dead_letter(_fail_early(), e)
 
-    ref = await fetch_one("documents", reference_id)
-    if not ref or ref.get("deleted_at") or not is_ref_row(ref):
+    # Success tail (re-fetch guard + set_content + content_flushed +
+    # transcription_complete, user_id riding the completion event) — the ONE
+    # home is land_transcript, shared with the widget extract path.
+    if not await land_transcript(reference_id, transcription, user_id=user_id):
         return
-
-    # INVARIANT(corruption): Worker has no live collab session — must use set_content which
-    # persists AND publishes the Yjs update to the backplane ydoc:{id} channel.
-    # Why: the worker holds no editors; a plain DB UPDATE would leave every open editor
-    # showing stale text. set_content is the only path that writes Surreal AND fans the
-    # update to the web replica, whose live CollabSession broadcasts to editors.
-    await set_content(reference_id, transcription, persist=True, extra_sets={"processing_status": "ready"})
-    # set_content does NOT emit content_flushed (it is also called mid-flush by
-    # paths that emit their own), so a worker write would never schedule an embed. Emit
-    # here, once per worker write, the way _finalize_content_mutation does for the REST
-    # path — embeddings._on_content_flushed (subscribed eagerly) then debounces.
-    # Not "exactly once" globally: with a live editor open, the web replica applies this
-    # write off the backplane, marks the session dirty and its flush emits its own
-    # content_flushed. The trailing debounce collapses the pair into one embed, so the
-    # duplicate is harmless — but do not add a second emit here on that assumption.
-    await event_bus.emit("content_flushed", entity_type="doc", entity_id=reference_id,
-                         project_id=ref.get("project_id", ""))
-
     logger.info("Transcription done: %s", reference_id)
-    await event_bus.emit("transcription_complete",
-                         reference_id=reference_id,
-                         project_id=ref.get("project_id", ""),
-                         user_id=user_id)
 
 
 async def _convert_upload_task(ctx, reference_id: str, user_id: str,
@@ -185,8 +165,10 @@ async def _convert_upload_task(ctx, reference_id: str, user_id: str,
         await _mark_error()
         return
 
-    abs_path = (STORAGE_PATH / rel_path).resolve()
-    if not abs_path.is_relative_to(STORAGE_PATH.resolve()) or not abs_path.is_file():
+    from files_util import resolve_stored_file
+
+    abs_path = resolve_stored_file(rel_path)
+    if abs_path is None:
         logger.error("convert_upload: bad/missing file for ref %s: %s", reference_id, rel_path)
         await _mark_error()
         return

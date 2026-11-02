@@ -32,7 +32,6 @@ from surrealdb import AsyncSurreal
 
 from access import (
     get_doc_project_id,
-    require_document_full,
     require_document_read,
     require_project_full,
     require_project_read,
@@ -56,8 +55,8 @@ from models import (
     PatchReference,
     ReferenceMetaResponse,
     ResolveReferencesRequest,
-    is_ref_row,
 )
+from routes._guards import require_reference
 from ydoc_store import set_content
 
 router = APIRouter()
@@ -88,21 +87,9 @@ def _serialize_ref(row: dict, viewer_id: str | None = None) -> dict:
     return out
 
 
-async def _require_ref_access(reference_id: str, user: dict, *, write: bool = False) -> dict:
-    """Fetch reference, validate is_reference flag, check project access.
-
-    # ARCH: Shared guard for all reference endpoints — eliminates repeated
-    # fetch → check is_reference → require_project_* boilerplate.
-    """
-    ref = await fetch_one("documents", reference_id)
-    if not ref or not is_ref_row(ref):
-        raise HTTPException(status_code=404, detail="Reference not found")
-    if write:
-        await require_document_full(reference_id, user)
-    else:
-        await require_document_read(reference_id, user)
-    return ref
-
+# The reference-entity guard (fetch → uniform 404 on non-reference rows →
+# require_document_*) lives in routes/_guards.require_reference — shared with
+# the files surface; this module calls it directly.
 
 async def _apply_content_patch(db, ref: dict, reference_id: str, new_content: str, pid: str) -> None:
     """Persist a REST content PATCH, ignoring the redundant echo while a collab session owns the doc.
@@ -153,7 +140,7 @@ async def _apply_archived_patch(db, reference_id: str, archived: bool, pid: str)
     Emits reference_updated (routed by project_ws.py) so every open client dims-in-place
     (archive) or re-fetches (restore — see useReferenceEvents). No content_flushed /
     reference_renamed: archived is a presentational flag, not a content/reparent change.
-    The caller's _require_ref_access(write=True) already gated write access.
+    The caller's require_reference(write=True) already gated write access.
     """
     await db.query(
         "UPDATE type::record('documents', $id) SET archived = $a, updated_at = time::now()",
@@ -400,14 +387,14 @@ async def resolve_references(
 
 @router.get("/api/references/{reference_id}")
 async def get_reference(reference_id: str, user: dict = Depends(get_current_user)):
-    ref = await _require_ref_access(reference_id, user)
+    ref = await require_reference(reference_id, user)
     return _serialize_ref(ref, viewer_id=user["user_id"])
 
 
 @router.get("/api/references/{reference_id}/links")
 async def get_reference_links(reference_id: str, user: dict = Depends(get_current_user)):
     """First-circle entities linked from this reference's content."""
-    ref = await _require_ref_access(reference_id, user)
+    ref = await require_reference(reference_id, user)
     # ARCH: prefer live-session content over the DB row (mirrors get_document_links /
     # export_document / chat/context.py) — the DB lags the in-memory Y.Doc by the ~1s
     # flush. References use collab entity_type "doc" (see RELATE below / line ~182).
@@ -443,7 +430,7 @@ async def create_reference(body: CreateReference, user: dict = Depends(get_curre
 
 @router.patch("/api/references/{reference_id}")
 async def patch_reference(reference_id: str, body: PatchReference, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
-    ref = await _require_ref_access(reference_id, user, write=True)
+    ref = await require_reference(reference_id, user, write=True)
     pid = ref.get("project_id", "")
 
     # WHY: content applies LAST — the empty-wipe guard inside it raises 409,
@@ -496,7 +483,7 @@ async def delete_references_batch(
 @router.delete("/api/references/{reference_id}")
 async def delete_reference(reference_id: str, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
     """Soft-delete a single reference-document and cascade-clean related entities."""
-    ref = await _require_ref_access(reference_id, user, write=True)
+    ref = await require_reference(reference_id, user, write=True)
     from cascade import _cascade_delete_document
     pid = ref.get("project_id", "")
     await _cascade_delete_document(db, reference_id)

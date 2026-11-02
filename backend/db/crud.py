@@ -170,3 +170,30 @@ async def soft_delete(table: str, uid: str) -> None:
         f"UPDATE type::record('{table}', $id) SET deleted_at = time::now()",
         {"id": uid},
     )
+
+
+async def tombstone_many(table: str, uids: list[str]) -> None:
+    """Bulk soft-delete many records of one table by id (record-targeted).
+
+    The ONE bulk-tombstone statement (documents.delete subtree/batch,
+    cascade.py's reference-documents and chat_sessions sweeps share it).
+
+    # WHY: a `WHERE id IN [list]` filter scans the whole table and its read set
+    # conflicts with any concurrent write to that table (surrealkv checks the
+    # read set at commit — the embed worker's per-reference status write then
+    # fails the delete after minutes of scanning), so the tombstone targets
+    # records exactly like soft_delete does: `$rids.map` builds one
+    # `type::record` per id (`Iterate Record`), and a missing id is a no-op
+    # (pinned by test_documents_references.py).
+    """
+    if not uids:
+        return
+    # H-2: Validate table name before f-string embedding
+    validate_record_id(table)
+    db = await get_db()
+    await db.query(
+        f"UPDATE $rids.map(|$x| type::record('{table}', $x)) "
+        "SET deleted_at = time::now() WHERE deleted_at IS NONE",
+        {"rids": uids},
+        idempotent=True,
+    )

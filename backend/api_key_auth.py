@@ -41,7 +41,7 @@ from fastapi import HTTPException
 from rate_limit import check_api_key_rate_limit
 
 from access import get_project_access
-from db import extract_id, fetch_one, get_db
+from db import extract_id, fetch_one, get_db, parse_iso
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +135,7 @@ async def resolve_api_key(
     expires_at = key.get("expires_at")
     if expires_at:
         if isinstance(expires_at, str):
-            expires_at = datetime.fromisoformat(expires_at)
+            expires_at = parse_iso(expires_at)
         if expires_at < datetime.now(timezone.utc):
             raise HTTPException(status_code=401, detail="API key expired")
 

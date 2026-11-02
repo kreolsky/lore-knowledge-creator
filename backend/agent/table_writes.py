@@ -144,40 +144,24 @@ async def route_tables_mutation(
     anchor is unchanged so mentions/rebuild are skipped, but `content_flushed` is
     still emitted (cell text feeds embeddings/search via `expand_tables`).
 
-    Live session present: mutate `session.ydoc` inside `_write_lock` (mirrors
-    `apply_external_content_change`) — broadcasts locally then fans out to other
-    replicas via `ydoc_store.publish_doc_update`. No live session: load the
-    persisted Y.Doc, mutate, publish (append-log + backplane), emit
-    `content_flushed`.
+    Resolves the live session / Y.Doc itself (no dims or checkpoint needed),
+    wraps the cell write in a `mutate` callback and rides
+    `_tables_convergence_tail` — the ONE convergence tail shared with the
+    structural applies.
     """
     from collab.registry import get_active_session
-    from collab.sync import MSG_SYNC, create_update_message, wrap_binary
 
     from table_serialize import set_table_cell
     from ydoc_store import load as load_ydoc
-    from ydoc_store import publish_doc_update
 
     session = get_active_session("doc", doc_id)
-    if session is not None:
-        async with session._write_lock:
-            set_table_cell(session.ydoc, table_id, row, col, new_value)
-            update = session.ydoc.get_update()
-            session._dirty = True
-            resync_msg = wrap_binary(doc_id, MSG_SYNC, create_update_message(update))
-        await session.broadcast_binary(resync_msg)
-        await publish_doc_update(doc_id, update)
-        session._updates_since_compact += 1
-        return
+    doc = session.ydoc if session is not None else await load_ydoc(doc_id)
 
-    doc = await load_ydoc(doc_id)
-    set_table_cell(doc, table_id, row, col, new_value)
-    update = doc.get_update()
-    await publish_doc_update(doc_id, update)
+    def _mutate(d):
+        set_table_cell(d, table_id, row, col, new_value)
 
-    await event_bus.emit(
-        "content_flushed",
-        entity_type="doc",
-        entity_id=doc_id,
+    await _tables_convergence_tail(
+        doc_id=doc_id, doc=doc, session=session, mutate=_mutate,
         project_id=project_id,
     )
 
@@ -343,25 +327,29 @@ def _reject_table_overflow(rows_matrix: list[list[str]]) -> None:
                 )
 
 
-async def _route_tables_structural(
+async def _tables_convergence_tail(
     *, doc_id: str, doc, session, mutate, project_id: str | None,
 ) -> None:
-    """Convergence tail for a STRUCTURAL table mutation (add_rows / add_column /
-    create_table). The structural analog of `route_tables_mutation` (the cell-edit
-    path): runs the `mutate(doc)` callback under the live session's `_write_lock`
-    (broadcast + publish) or on the pre-loaded Y.Doc (publish + `content_flushed`).
+    """The ONE convergence tail for EVERY `tables`-subtree mutation — the
+    structural applies (add_rows / add_column / create_table via
+    `_apply_tables_tool`) AND the cell-edit path (`route_tables_mutation`).
+    Runs the `mutate(doc)` callback under
+    the live session's `_write_lock` (broadcast + publish) or on the
+    pre-loaded Y.Doc (publish + `content_flushed`).
 
-    The doc + session are PRE-RESOLVED by the caller (`_resolve_doc_and_state`) so this
-    tail never reloads the Y.Doc — ONE load per apply, not three (the apply function
-    read content + tables_json from the same instance for dims + checkpoint).
+    The doc + session are PRE-RESOLVED by the caller (`_resolve_doc_and_state`
+    for the structural applies; `route_tables_mutation` resolves its own) so this
+    tail never reloads the Y.Doc — ONE load per apply, not three (the apply
+    function read content + tables_json from the same instance for dims +
+    checkpoint).
 
-    # WHY: the callback runs its structural primitive inside ONE `doc.transaction()`
-    # so the broadcast update carries the whole change in one frame (no ragged
-    # intermediate — matches apply_tables_json / add_table_rows INVARIANT).
-    # Why: one transaction makes the broadcast atomic — replicas see the whole
-    # structural change in one frame, never a ragged intermediate. The anchor is
+    # WHY: the callback runs its whole mutation in ONE broadcast frame —
+    # structural callbacks wrap their primitive in ONE `doc.transaction()` so the
+    # update carries the entire change (no ragged intermediate — matches
+    # apply_tables_json / add_table_rows INVARIANT).
+    # Why: replicas never see a ragged intermediate. The anchor is
     # unchanged for add_rows/add_column (mentions/rebuild skipped, `content_flushed`
-    # still emitted); create_table also splices a content anchor inside the SAME callback
+    # still emitted); create_table also splices a content anchor inside the SAME
     # transaction — a table anchor is NOT a `[[link]]`, so mention rebuild stays skipped.
     """
     from collab.sync import MSG_SYNC, create_update_message, wrap_binary
@@ -391,6 +379,48 @@ async def _route_tables_structural(
     )
 
 
+async def _apply_tables_tool(
+    *, doc_id: str, project_id: str, user: dict, scope_root: str | None,
+    inside_lock,
+) -> dict:
+    """The structural applies' shared frame (add_table_rows / add_table_column /
+    create_table): full-access gate → per-doc edit lock → ONE doc load
+    (`_resolve_doc_and_state`) → the tool middle (`inside_lock(doc, content,
+    tables_json) -> (table_id, preview, mutate)`: validate against the live
+    dims, mint ids, build the checkpoint preview + the mutation callback) →
+    pre-edit checkpoint → `_tables_convergence_tail` → presence broadcast.
+
+    # INVARIANT(security): identical shape to `apply_edit_table_cell` — full-access
+    # gate, pre-edit checkpoint, presence broadcast. Why: tables must carry the
+    # same RBAC / checkpoint / broadcast guarantees as document edits.
+    # ORDER: `inside_lock`'s validations run BEFORE the checkpoint, so a refused
+    # validation leaves no checkpoint row and the row untouched.
+    """
+    from scope import gate_mutation_target
+
+    await gate_mutation_target(
+        user=user, doc_id=doc_id, project_id=project_id, scope_root=scope_root,
+    )
+
+    from doc_edit_lock import edit_lock
+
+    async with edit_lock(doc_id):
+        doc, session, content, tables_json = await _resolve_doc_and_state(doc_id)
+        table_id, preview, mutate = inside_lock(doc, content, tables_json)
+        await collab_writes._create_agent_pre_edit_checkpoint(
+            document_id=doc_id,
+            content=content,
+            tables_json=tables_json,
+            original_preview=preview,
+        )
+        await _tables_convergence_tail(
+            doc_id=doc_id, doc=doc, session=session, mutate=mutate,
+            project_id=project_id,
+        )
+    await collab_writes.broadcast_agent_presence(doc_id, user.get("user_id"))
+    return {"status": "applied", "document_id": doc_id, "table_id": table_id}
+
+
 async def apply_add_table_rows(
     *,
     doc_id: str,
@@ -413,16 +443,7 @@ async def apply_add_table_rows(
         raise HTTPException(status_code=400, detail="No rows supplied")
     _reject_table_overflow(rows_matrix)
 
-    from scope import gate_mutation_target
-
-    await gate_mutation_target(
-        user=user, doc_id=doc_id, project_id=project_id, scope_root=scope_root,
-    )
-
-    from doc_edit_lock import edit_lock
-
-    async with edit_lock(doc_id):
-        doc, session, content, tables_json = await _resolve_doc_and_state(doc_id)
+    def _inside_lock(doc, content, tables_json):
         _n_rows, n_cols = _dims_from_tables_json(tables_json, table_id)
         for row in rows_matrix:
             if len(row) > n_cols:
@@ -433,23 +454,18 @@ async def apply_add_table_rows(
                         "row_len": len(row),
                     },
                 )
-        await collab_writes._create_agent_pre_edit_checkpoint(
-            document_id=doc_id,
-            content=content,
-            tables_json=tables_json,
-            original_preview=f"{table_id} +{len(rows_matrix)} rows",
-        )
 
         def _mutate(d):
             from table_serialize import add_table_rows
 
             add_table_rows(d, table_id, rows_matrix, width=n_cols)
 
-        await _route_tables_structural(
-            doc_id=doc_id, doc=doc, session=session, mutate=_mutate, project_id=project_id,
-        )
-    await collab_writes.broadcast_agent_presence(doc_id, user.get("user_id"))
-    return {"status": "applied", "document_id": doc_id, "table_id": table_id}
+        return table_id, f"{table_id} +{len(rows_matrix)} rows", _mutate
+
+    return await _apply_tables_tool(
+        doc_id=doc_id, project_id=project_id, user=user, scope_root=scope_root,
+        inside_lock=_inside_lock,
+    )
 
 
 async def apply_add_table_column(
@@ -477,16 +493,7 @@ async def apply_add_table_column(
     if values:
         _reject_table_overflow([values])
 
-    from scope import gate_mutation_target
-
-    await gate_mutation_target(
-        user=user, doc_id=doc_id, project_id=project_id, scope_root=scope_root,
-    )
-
-    from doc_edit_lock import edit_lock
-
-    async with edit_lock(doc_id):
-        doc, session, content, tables_json = await _resolve_doc_and_state(doc_id)
+    def _inside_lock(doc, content, tables_json):
         n_rows, n_cols = _dims_from_tables_json(tables_json, table_id)
         resolved_index = n_cols if at_index is None else at_index
         if resolved_index < 0 or resolved_index > n_cols:
@@ -496,12 +503,6 @@ async def apply_add_table_column(
                     "error": "at_index out of range", "n_cols": n_cols, "at_index": at_index,
                 },
             )
-        await collab_writes._create_agent_pre_edit_checkpoint(
-            document_id=doc_id,
-            content=content,
-            tables_json=tables_json,
-            original_preview=f"{table_id} +1 col @ {resolved_index}",
-        )
 
         def _mutate(d):
             from table_serialize import add_table_column
@@ -510,11 +511,12 @@ async def apply_add_table_column(
                 d, table_id, at_index=resolved_index, header=header, values=values, n_rows=n_rows,
             )
 
-        await _route_tables_structural(
-            doc_id=doc_id, doc=doc, session=session, mutate=_mutate, project_id=project_id,
-        )
-    await collab_writes.broadcast_agent_presence(doc_id, user.get("user_id"))
-    return {"status": "applied", "document_id": doc_id, "table_id": table_id}
+        return table_id, f"{table_id} +1 col @ {resolved_index}", _mutate
+
+    return await _apply_tables_tool(
+        doc_id=doc_id, project_id=project_id, user=user, scope_root=scope_root,
+        inside_lock=_inside_lock,
+    )
 
 
 async def apply_create_table(
@@ -545,6 +547,7 @@ async def apply_create_table(
 
     from fastapi import HTTPException
     from pycrdt import Text
+    from textmatch import _section_end_offset
 
     from table_serialize import create_table_entry, table_anchor
 
@@ -552,17 +555,7 @@ async def apply_create_table(
         raise HTTPException(status_code=400, detail="create_table requires rows (rows[0] = header)")
     _reject_table_overflow(rows_matrix)
 
-    from scope import gate_mutation_target
-
-    await gate_mutation_target(
-        user=user, doc_id=doc_id, project_id=project_id, scope_root=scope_root,
-    )
-
-    from doc_edit_lock import edit_lock
-    from textmatch import _section_end_offset
-
-    async with edit_lock(doc_id):
-        doc, session, content, tables_json = await _resolve_doc_and_state(doc_id)
+    def _inside_lock(doc, content, tables_json):
         # Pre-validate the section against the apply-start content (404 on unknown —
         # self-correct in-turn, before any checkpoint). The offset itself is re-resolved
         # against LIVE content inside the mutation callback (TOCTOU-safe under the lock).
@@ -573,13 +566,6 @@ async def apply_create_table(
                 raise HTTPException(status_code=404, detail=str(exc))
         table_id = str(uuid4())
         label_resolved = label or "Table"
-
-        await collab_writes._create_agent_pre_edit_checkpoint(
-            document_id=doc_id,
-            content=content,
-            tables_json=tables_json,
-            original_preview=f"create_table {label_resolved} ({len(rows_matrix)} rows)",
-        )
 
         # WHY: the offset is resolved against LIVE content inside the callback (under the
         # session write lock / on the freshly-loaded doc) so a concurrent collab edit
@@ -603,9 +589,13 @@ async def apply_create_table(
                 content_text.insert(byte_offset, anchor_text)
                 create_table_entry(d, table_id, rows_matrix)
 
-        await _route_tables_structural(
-            doc_id=doc_id, doc=doc, session=session, mutate=_splice_and_build,
-            project_id=project_id,
+        return (
+            table_id,
+            f"create_table {label_resolved} ({len(rows_matrix)} rows)",
+            _splice_and_build,
         )
-    await collab_writes.broadcast_agent_presence(doc_id, user.get("user_id"))
-    return {"status": "applied", "document_id": doc_id, "table_id": table_id}
+
+    return await _apply_tables_tool(
+        doc_id=doc_id, project_id=project_id, user=user, scope_root=scope_root,
+        inside_lock=_inside_lock,
+    )

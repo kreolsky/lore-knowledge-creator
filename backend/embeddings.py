@@ -33,6 +33,25 @@ from models.references import is_ref_row
 logger = logging.getLogger(__name__)
 
 
+# The model + dimension legs of every doc_chunks cosine fetch — the ONE
+# fragment, shared by this module's memory ranking (_rank_memory_chunks) and
+# retrieval's per-kind fetch (retrieval._kind_chunk_query imports it), so a
+# row one path accepts can never be omitted by the other.
+# WHY (model = $model OR model IS NONE): NONE is "unknown, pre-column"
+# provenance, not "wrong" — excluding it would blank search on every project
+# for the ~48 h the stale-model sweep needs to drain post-deploy. A row
+# stamped with ANOTHER model is KNOWN-stale: its vector lives in another
+# model's space, its cosine against this query is noise.
+# WHY array::len(embedding) = $dim: vector::similarity::cosine RAISES on
+# mixed lengths — the guard turns a crash into an omission for the drain
+# window and for any future swap that changes the dimension (all vectors are
+# 1024-dim today; the guard is for the swap that changes that).
+MODEL_DIM_GUARD_SQL = (
+    "AND (model = $model OR model IS NONE) "
+    "AND array::len(embedding) = $dim "
+)
+
+
 class EmbeddingConfigError(RuntimeError):
     pass
 
@@ -236,7 +255,9 @@ def _unchanged(
 
 
 async def _fetch_reembed_parent(db, entity_id: str) -> dict | None:
-    """The live parent row for a re-embed, or None (missing or soft-deleted).
+    """The live parent row for a re-embed, or None (missing, soft-deleted, or
+    an html artifact: page source is not corpus text;
+    its markup must not pollute embeddings, so the re-embed exits here).
 
     `is_memory`/`is_reference` feed the chunk's kind label (`_chunk_kind`); the
     legacy `mem` select was never read here and is gone."""
@@ -247,11 +268,15 @@ async def _fetch_reembed_parent(db, entity_id: str) -> dict | None:
         # retired fact returns no row here and the caller exits at `if parent is
         # None` — anything that re-embeds it would resurrect a ghost vector next
         # to the fact that replaced it.
-        "SELECT content, content_version, is_memory, is_reference, title FROM documents "
+        "SELECT content, content_version, is_memory, is_reference, media_type, title FROM documents "
         "WHERE meta::id(id) = $id AND deleted_at IS NONE",
         {"id": entity_id},
     )
-    return parent[0] if parent else None
+    if not parent:
+        return None
+    if (parent[0].get("media_type") or "") == "html":
+        return None
+    return parent[0]
 
 
 def _chunk_kind(parent: dict) -> str:
@@ -684,11 +709,8 @@ async def _rank_memory_chunks(
     `cap` limits the rows transferred (ORDER BY sim DESC is computed over every
     chunk, no vector index yet, but only the top `cap` leave the DB).
 
-    The model + dimension legs mirror retrieval's per-kind fetch exactly
-    (`(model = $model OR model IS NONE)` — NONE is "unknown, pre-column"
-    provenance, not wrong; `array::len(embedding) = $dim` because cosine RAISES
-    on mixed lengths — a wrong-dimension row is omitted, never crashes the
-    gate)."""
+    The model + dimension legs are the shared MODEL_DIM_GUARD_SQL fragment —
+    the same one retrieval's per-kind fetch uses (see the constant's WHY)."""
     excluded = set(exclude)
     mem_ids = [
         r["id"] for r in (await db.query(
@@ -704,8 +726,7 @@ async def _rank_memory_chunks(
         for row in (await db.query(
             "SELECT document_id, vector::similarity::cosine(embedding, $q) AS sim "
             "FROM doc_chunks WHERE document_id IN $ids "
-            "AND (model = $model OR model IS NONE) "
-            "AND array::len(embedding) = $dim "
+            + MODEL_DIM_GUARD_SQL +
             "ORDER BY sim DESC LIMIT $cap",
             {"ids": mem_ids, "q": query_vec, "model": model,
              "dim": len(query_vec), "cap": cap},

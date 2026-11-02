@@ -29,6 +29,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from db import parse_iso
+
 # ARCH: project itself is a virtual root above all documents — disconnected
 # subtrees still have a finite distance via the project node (mirrors
 # document-sort.ts PROJECT_ROOT).
@@ -87,7 +89,7 @@ def _ts(value) -> float:
         dt = value
     elif isinstance(value, str) and value:
         try:
-            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            dt = parse_iso(value)
         except ValueError:
             return 0.0
     else:

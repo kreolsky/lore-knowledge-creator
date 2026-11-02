@@ -5,6 +5,21 @@ shared with the person's own chat-search route; this handler adds the key auth,
 the off-switch, the calling conversation's exclusion and anchor, the window read,
 and the skill pack's list (whole-chat find), read (whole-chat paging) and
 view_chat_image (one attached image) tools over the SAME predicate.
+
+# ARCH (dsh comparison, recorded per the rented-brain rule): dsh already ships
+# cross-session query machinery — `ctx.sessionQuery`, consumed by
+# vendor/dsh/packages/context/session-reference (@label mentions turned into
+# bounded read-only snapshots of other DSH sessions as untrusted background
+# context) and the experimental agent-team session-query. This layer is NOT a
+# relay of that: it answers over LORE chat rows, and the deltas dsh cannot
+# state are the reason it exists here — (1) branch chains: a Lore chat is a
+# continuation lineage (compacted_from), resolved via
+# conversation_session_ids, not one dsh session id; (2) scope anchor + viewer
+# gating: a subtree-scoped key anchors recall at a document subtree
+# (require_scope_document) and visible_sessions gates to sessions the CALLER
+# may see; (3) in-app-only key policy: _require_in_app_agent closes the
+# person's chat corpus to external/user-minted keys — dsh has no Lore key
+# policy to enforce.
 """
 import re
 from typing import NamedTuple

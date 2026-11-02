@@ -10,8 +10,8 @@ from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Re
 
 from access import get_project_access
 from auth import get_current_user
-from db import fetch_one
 from routes.api_keys import get_api_key_context
+from scope import resolve_search_subtree
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -93,46 +93,16 @@ async def semantic_search(
     """
     ctx = await _resolve_project_access(project_id, user, api_key_ctx)
 
-    # Subtree narrow — the same contract the agent executor applies
-    # (search_exec ARCH(under_document_id)); kept literal there and here (under
-    # the extract threshold), so change BOTH or neither.
-    # WHY: the key's scope (scope_root on a Bearer key ctx) is a CEILING — a
-    # requested narrow may only narrow further (key_subtree ∩ requested), never
-    # widen. An unknown/cross-project/deleted root is a uniform 404 (no
-    # existence oracle); out-of-scope is a 403 naming the remedy.
+    # Subtree narrow — the single home (scope.resolve_search_subtree) pins the
+    # contract the agent executor also applies (search_exec ARCH(under_document_id)):
+    # uniform 404 on an unknown/cross-project/deleted root (no existence oracle),
+    # the key's scope (scope_root on a Bearer key ctx) as a CEILING — a requested
+    # narrow may only narrow further (key_subtree ∩ requested), never widen — and
+    # out_of_scope_detail as the ONE producer of every 403 detail.
     scope_root = (ctx.get("scope_root") or "").strip() or None
-    allowed: Optional[set] = None
-    if scope_root:
-        from scope import subtree_doc_ids
-
-        allowed = set(await subtree_doc_ids(scope_root, ctx["project_id"]))
-    under = (under_document_id or "").strip() or None
-    if under:
-        from scope import in_subtree, out_of_scope_detail, subtree_doc_ids
-
-        root_row = await fetch_one("documents", under)
-        if (
-            not root_row
-            or root_row.get("deleted_at")
-            or root_row.get("project_id") != ctx["project_id"]
-        ):
-            raise HTTPException(status_code=404, detail="Search root document not found")
-        if scope_root and not await in_subtree(scope_root, under):
-            raise HTTPException(status_code=403, detail=out_of_scope_detail(scope_root))
-        requested = set(await subtree_doc_ids(under, ctx["project_id"]))
-        # Intersect, never replace; an empty intersection is an ERROR — coercing
-        # it to `None` would silently turn an impossible narrow into a
-        # whole-project search.
-        allowed = requested if allowed is None else allowed & requested
-        if not allowed:
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "The requested subtree holds no documents inside this "
-                    f"key's subtree scope (root {scope_root}). Retry with an "
-                    "under_document_id inside that scope."
-                ),
-            )
+    allowed: Optional[set] = await resolve_search_subtree(
+        under_document_id, ctx["project_id"], scope_root,
+    )
 
     try:
         from retrieval import retrieve_context

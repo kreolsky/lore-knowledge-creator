@@ -9,10 +9,23 @@ from db.pool import get_db
 from db.records import extract_id
 
 
-async def get_ancestor_ids(doc_id: str, project_id: str | None = None) -> list[str]:
+async def get_ancestor_ids(
+    doc_id: str,
+    project_id: str | None = None,
+    *,
+    include_deleted_stop: bool = False,
+    max_depth: int | None = 50,
+) -> list[str]:
     """Walk up the document parent chain, returning all IDs including doc_id.
 
-    Stops at soft-deleted ancestors (they break the chain).
+    Stops at soft-deleted ancestors (they break the chain) — or, with
+    ``include_deleted_stop=True``, appends the FIRST soft-deleted node and then
+    stops (the move/cycle guards' membership semantics). A dangling parent_id
+    (missing row) is not appended — every caller probes only live-row ids.
+    ``seen`` guards a cyclic parent_id by dedupe only (a repeat ends the walk;
+    routes/references.py keeps-first on repeats). ``max_depth=None`` is the
+    corruption-guard shape: a cap could let a >50-deep move escape the
+    INVARIANT(corruption) cycle check.
 
     # ARCH: walks parent_id by primary key — O(tree depth), NOT O(project size).
     # A full-project scan was ~10x slower on a 144-doc project (Fix 2, perf audit):
@@ -25,10 +38,10 @@ async def get_ancestor_ids(doc_id: str, project_id: str | None = None) -> list[s
     # WHY: depth limit caps the sequential DB round-trips on pathologically
     # deep trees. Why: each level is one PK lookup; 50 bounds the worst case while
     # real trees (depth ≤ ~5) cost only a few ms.
-    _MAX_ANCESTOR_DEPTH = 50
     ids: list[str] = []
+    seen: set[str] = set()
     current: str | None = doc_id
-    while current and len(ids) < _MAX_ANCESTOR_DEPTH:
+    while current and current not in seen and (max_depth is None or len(ids) < max_depth):
         rows = await db.query(
             "SELECT parent_id, deleted_at FROM type::record('documents', $id)",
             {"id": current},
@@ -37,7 +50,10 @@ async def get_ancestor_ids(doc_id: str, project_id: str | None = None) -> list[s
         if not isinstance(row, dict):
             break
         if row.get("deleted_at") is not None:
+            if include_deleted_stop:
+                ids.append(current)
             break
+        seen.add(current)
         ids.append(current)
         parent_raw = row.get("parent_id")
         current = extract_id(parent_raw) if parent_raw else None

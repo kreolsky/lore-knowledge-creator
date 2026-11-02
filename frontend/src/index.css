@@ -955,10 +955,10 @@ html.dark .download-menu[data-theme="blue"] > button:not(:hover) { color: var(--
   font-family: inherit;
 }
 /* WHY: on a phone-width viewport the theme's 2rem side gutter eats ~20% of the line;
-   halve it. Gated on the store's compactLayout (single source: COMPACT_LAYOUT_QUERY). */
+   cut it to a quarter. Gated on the store's compactLayout (single source: COMPACT_LAYOUT_QUERY). */
 .editor-content--compact .cm-editor .cm-scroller {
-  padding-left: 1rem;
-  padding-right: 1rem;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
 }
 /* WHY: the Refs-tab quick preview is a narrow side column; the theme's 2rem side
    gutter is roughly halved there. Centre and split editors keep the full gutter. */
@@ -1276,17 +1276,12 @@ html.dark .right-panel--notes-thread input:not([type=checkbox]):not([type=radio]
   /* Claim the drag gesture so the browser doesn't scroll/select while resizing by touch. */
   touch-action: none;
 }
-/* Unpinned left panel: the resizer rides the floating panel's right edge. */
+/* Unpinned left panel: the resizer rides the floating panel's outer right edge
+   (left is set inline from the panel width). */
 .resizer--floating {
   position: absolute;
   top: 0;
   bottom: 0;
-  right: 0;
-}
-/* WHY: right:0 resolves to the panel's padding edge, so this line would sit inside the
-   panel's own border-r and draw a second pixel — the border is the only edge line. */
-.resizer--floating::before {
-  display: none;
 }
 
 .resizer::after {

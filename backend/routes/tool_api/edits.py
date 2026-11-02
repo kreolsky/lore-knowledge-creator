@@ -37,6 +37,22 @@ from routes.tool_api_telemetry import track_agent_tool
 from scope import gate_mutation_target
 
 
+def _refuse_html_target(target: dict, tool: str) -> None:
+    """Markdown-shaped tools refuse an html artifact row.
+
+    The row's content is page source: a markdown append or a `![t](table:id)`
+    anchor injected into it corrupts the page. edit_document str_replace is
+    the html edit surface — its path skips the markdown passes and enforces
+    the artifact size cap instead (agent/tool_api_surface.py).
+    """
+    if (target.get("media_type") or "") == "html":
+        raise HTTPException(
+            status_code=422,
+            detail=f"{tool} is a markdown operation — an html artifact is "
+                   "edited with edit_document (str_replace on the page source)",
+        )
+
+
 @track_agent_tool("edit_document")
 async def tool_edit_document(
     body: ToolEditDocument, ctx: dict = Depends(get_agent_context),
@@ -100,12 +116,11 @@ async def tool_edit_table_cell(
     covered by the text-region advisory lock).
     """
     user = ctx["user"]
-    # M7: shared fetch+RBAC+scope gate (gates both apply modes at the route).
     target, _ = await gate_mutation_target(
         user=user, doc_id=body.document_id,
         project_id=ctx["project_id"], scope_root=ctx.get("scope_root"),
     )
-
+    _refuse_html_target(target, "edit_table_cell")
     decision = await _resolve_apply_or_force(
         ctx, ui_preference=body.apply.value,
         is_system=bool(target.get("is_system")),
@@ -268,6 +283,7 @@ async def tool_append_document(
         user=user, doc_id=body.document_id,
         project_id=ctx["project_id"], scope_root=ctx.get("scope_root"),
     )
+    _refuse_html_target(target, "append_to_document")
 
     decision = await _resolve_apply_or_force(
         ctx, ui_preference=body.apply.value,
@@ -300,6 +316,7 @@ async def tool_create_table(
         user=user, doc_id=body.document_id,
         project_id=ctx["project_id"], scope_root=ctx.get("scope_root"),
     )
+    _refuse_html_target(target, "create_table")
     decision = await _resolve_apply_or_force(
         ctx, ui_preference=body.apply.value,
         is_system=bool(target.get("is_system")),
@@ -323,6 +340,7 @@ async def tool_add_table_rows(
         user=user, doc_id=body.document_id,
         project_id=ctx["project_id"], scope_root=ctx.get("scope_root"),
     )
+    _refuse_html_target(target, "add_table_rows")
     decision = await _resolve_apply_or_force(
         ctx, ui_preference=body.apply.value,
         is_system=bool(target.get("is_system")),
@@ -346,6 +364,7 @@ async def tool_add_table_column(
         user=user, doc_id=body.document_id,
         project_id=ctx["project_id"], scope_root=ctx.get("scope_root"),
     )
+    _refuse_html_target(target, "add_table_column")
     decision = await _resolve_apply_or_force(
         ctx, ui_preference=body.apply.value,
         is_system=bool(target.get("is_system")),

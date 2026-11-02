@@ -81,6 +81,29 @@ async def test_set_content_persist_writes_ydoc_state(collab_project, _clear_sess
     assert str(rebuilt.get("content", type=Text)) == "Persisted via REST"
 
 
+# TEST-WHY: data-loss — set_content(persist=True) wrote raw anchor-form text to documents.content while every other writer persisted expand_tables(doc), leaving table text invisible to embeddings/search.
+@pytest.mark.asyncio
+async def test_set_content_persist_writes_gfm_read_model(collab_project, _clear_sessions):
+    """set_content(persist=True) must persist documents.content as the GFM
+    read-model (tables inlined as pipe text) — the Y.Doc text keeps the anchor."""
+    import json as _json
+
+    from table_serialize import expand_tables
+    from ydoc_store import load, set_content
+
+    _, doc_id, *_ = collab_project
+    tables_payload = _json.dumps({"t1": {"columns": [160, 240], "rows": [["a", "b"], ["c", "d"]]}})
+
+    await set_content(doc_id, "Intro\n\n![t](table:t1)", persist=True, tables_json=tables_payload)
+
+    row = await _db_content(doc_id)
+    doc = await load(doc_id)
+    assert "![t](table:t1)" not in row, f"row holds the raw anchor form: {row!r}"
+    assert "| --- |" in row
+    assert row == expand_tables(doc)
+    assert str(doc.get("content", type=Text)) == "Intro\n\n![t](table:t1)"
+
+
 @pytest.mark.asyncio
 async def test_set_content_persist_prunes_update_log(collab_project, _clear_sessions):
     """set_content(persist=True) must DELETE stale ydoc_updates."""

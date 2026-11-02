@@ -9,7 +9,7 @@ them here.
 from asyncssh import SFTPNoSuchFile
 from fastapi import HTTPException
 
-from access import get_project_access
+from access import require_full_project_access
 
 from .transport import (
     _sftp_read_checked,
@@ -107,19 +107,20 @@ def _require_console_key(ctx: dict) -> None:
 
 
 async def _require_full_project_access(ctx: dict) -> None:
-    """Gate the console on full (Owner/Editor) access to the acting project.
+    """Gate the console on full project access (the write level of this
+    codebase's vocabulary: full / commentator / readonly).
 
     # INVARIANT(security): a mutating tool runs only for a caller with FULL project
     # access — the console is no exception. Why: `sandbox_bash` is in MUTATING_TOOLS
-    # and every other member already refuses below 'full' (`access != "full"` → 403
-    # in edits.py / _common.py); the console shipped as the only one without the
-    # check, so a commentator — typically an outside reviewer invited to one document
-    # — got arbitrary code execution plus the box's unrestricted outbound network.
+    # and every other member already refuses below 'full' (access
+    # .require_full_project_access, promoted from here); the console shipped as the
+    # only one without the check, so a commentator — typically an outside reviewer
+    # invited to one document — got arbitrary code execution plus the box's
+    # unrestricted outbound network.
     # This is a SEPARATE question from _require_console_key: the key states who you
     # are and how it was minted, never what you may do inside this project. Both must
     # hold.
     """
-    if await get_project_access(ctx["project_id"], ctx["user"]) != "full":
-        raise HTTPException(
-            status_code=403, detail="Full project access required to use the sandbox",
-        )
+    await require_full_project_access(
+        ctx["project_id"], ctx["user"], "use the sandbox",
+    )

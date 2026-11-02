@@ -3,6 +3,8 @@ reaches internal services an external MCP client cannot. Pure data — imports
 nothing from the agent package (leaf).
 """
 
+from artifacts import html_import_sentence
+
 # import_file is agent-ONLY now (the in-chat
 # agent keeps it with sandbox_path / attachment_index — there the driver reads the
 # file, so D1 already holds). It was the LAST entry of AGENT_TOOLS; moved OUT so the
@@ -46,6 +48,7 @@ IMPORT_FILE_TOOL: dict = {
             # a reference; the user gets a downloadable archive.
             "Binary image/audio/archive is not a document — set "
             "node_type=\"reference\" for those."
+            + html_import_sentence()
         ),
         "parameters": {
             "type": "object",

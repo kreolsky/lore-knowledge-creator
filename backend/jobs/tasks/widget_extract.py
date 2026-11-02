@@ -14,7 +14,7 @@ import logging
 from pathlib import Path
 
 import event_bus
-from config import STORAGE_PATH
+from jobs.tasks._transcript_landing import land_transcript
 from models import is_ref_row
 
 logger = logging.getLogger(__name__)
@@ -23,16 +23,13 @@ logger = logging.getLogger(__name__)
 def _resolve_stored_audio(ref: dict) -> Path | None:
     """The reference's stored audio as an absolute path INSIDE STORAGE_PATH.
 
-    Path validation verbatim from transcribe_task — a ref row's file_path is
-    stored data, never trusted outside STORAGE_PATH. None = unusable.
+    A ref row's file_path is stored data, never trusted outside STORAGE_PATH;
+    containment is the single stored-file resolver (files_util) — the same home
+    transcribe_task uses. None = unusable.
     """
-    rel_path = ref.get("file_path", "")
-    if not rel_path:
-        return None
-    abs_path = (STORAGE_PATH / rel_path).resolve()
-    if not abs_path.is_relative_to(STORAGE_PATH.resolve()) or not abs_path.is_file():
-        return None
-    return abs_path
+    from files_util import resolve_stored_file
+
+    return resolve_stored_file(ref.get("file_path", ""))
 
 
 def _make_failure_recorder(db, reference_id: str, pid: str, landed: dict):
@@ -84,9 +81,6 @@ async def _stt_phase(db, reference_id: str, ref: dict, record_failure) -> str | 
     Status writes mirror transcribe_task so the reference panel shows exactly
     the states a widget_upload shows.
     """
-    from db import fetch_one
-    from ydoc_store import set_content
-
     await db.query(
         "UPDATE type::record('documents', $id) SET "
         "file_meta.extract.status = 'transcribing', processing_status = 'processing'",
@@ -108,22 +102,11 @@ async def _stt_phase(db, reference_id: str, ref: dict, record_failure) -> str | 
 
     transcription = await _transcribe_stored(abs_path, reference_id, record_failure)
 
-    ref = await fetch_one("documents", reference_id)
-    if not ref or ref.get("deleted_at") or not is_ref_row(ref):
+    # Success tail = land_transcript with emit_complete=False (the NAMED
+    # divergence — see its docstring): transcription_complete is the wet hook's
+    # trigger, and this surface is DRY.
+    if not await land_transcript(reference_id, transcription, emit_complete=False):
         return None
-
-    # INVARIANT(corruption): worker write via set_content — persists AND
-    # publishes to editors (module docstring).
-    # Why: a plain DB UPDATE here would leave open editors stale; the
-    # content_flushed emit below also schedules the transcript's embed.
-    await set_content(reference_id, transcription, persist=True,
-                      extra_sets={"processing_status": "ready"})
-    await event_bus.emit("content_flushed", entity_type="doc", entity_id=reference_id,
-                         project_id=ref.get("project_id", ""))
-    # WHY: this task NEVER emits transcription_complete — that event is the wet
-    # hook's trigger (on_transcription_complete enqueues extract_task, which
-    # CREATES a child document). Emitting it here would run the wet extraction
-    # too, producing the exact document this surface promises not to make.
     return transcription
 
 

@@ -441,6 +441,10 @@ async def request_id_middleware(request: Request, call_next):
 _DEFAULT_CORS_ORIGINS = "http://localhost:5173,http://localhost:5174,http://frontend:5173"
 
 _cors_raw = os.environ.get("CORS_ORIGINS", "")
+# Whether CORS_ORIGINS came from the environment (vs the dev fallback below) —
+# routes/artifact_serve.check_artifact_origin_config refuses an ARTIFACT_ORIGIN
+# deploy whose frame-ancestors would silently be the localhost fallback.
+_cors_raw_env_set = bool(_cors_raw)
 if not _cors_raw:
     logging.getLogger(__name__).warning(
         "CORS_ORIGINS not set — defaulting to localhost dev origins"
@@ -455,6 +459,15 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
+
+# Boot-frozen validation of the artifact/app host split (see SYSTEM:
+# artifact-serve — refuses startup on an unset CORS_ORIGINS or a
+# sibling-subdomain ARTIFACT_ORIGIN — both would couple the cookieless
+# artifact origin back to the app's session). The host-split middleware +
+# router are wired with the other routers below.
+from routes.artifact_serve import check_artifact_origin_config
+
+check_artifact_origin_config(_CORS_ORIGINS, cors_env_set=bool(_cors_raw_env_set))
 
 
 # ARCH: CSRF defense-in-depth — reject mutating requests with foreign Origin.
@@ -596,6 +609,16 @@ async def json_body_size_limit(request: Request, call_next):
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
+from routes.artifact_serve import ArtifactHostMiddleware
+from routes.artifact_serve import router as artifact_serve_router
+
+# Host-split for the artifact origin (SYSTEM: artifact-serve): on the artifact
+# host only /a/* and /lib/* exist; on any other host they 404. Registered as a
+# plain ASGI middleware (no BaseHTTPMiddleware task group) beside the WS guard
+# below; it never inspects or rewrites responses, it only 404s paths on the
+# wrong host.
+app.add_middleware(ArtifactHostMiddleware)
+
 app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(chat.router)
@@ -617,6 +640,7 @@ app.include_router(checkpoints.router)
 app.include_router(references.router)
 app.include_router(public_notes.router)
 app.include_router(public_share.router)
+app.include_router(artifact_serve_router)
 app.include_router(public_preview.router)
 # Public change-ping WS — see routes/public_ws.py. Registered beside the other
 # WS routers; the module import itself subscribes its _bus_on handlers at

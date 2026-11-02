@@ -122,8 +122,8 @@ export const ChatRow = memo(function ChatRow({ session, isActive, onSelect, onDe
   // navigates to the REFERENCE (navigate-to-reference), never its owning document.
   const emitNavigate = () => {
     if (!parentClickable || !parentDocId) return;
-    if (isRef) emit('navigate-to-reference', { referenceId: parentDocId });
-    else emit('navigate-to-document', { documentId: parentDocId });
+    if (isRef) emit('navigate-to-reference', { referenceId: parentDocId, via: 'chat' });
+    else emit('navigate-to-document', { documentId: parentDocId, via: 'chat' });
   };
 
   const handleParentClick = (e: React.MouseEvent) => {

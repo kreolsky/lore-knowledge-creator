@@ -12,6 +12,7 @@
 from fastapi import HTTPException
 
 import db as db_mod
+import event_bus
 from db import extract_id, fetch_doc_meta, fetch_one
 
 # Rank for the cascade max: a user may hold several concurrent grants (member
@@ -106,6 +107,23 @@ async def recompute_project_access(project_id: str, user_id: str) -> str | None:
     )
 
 
+async def emit_access_changed_recomputed(project_id: str, user_id: str | None) -> None:
+    """Emit access_changed carrying the RECOMPUTED level — never a guessed one.
+
+    The single emit companion of recompute_project_access. `user_id` names the
+    member whose grant moved (the level is recomputed from live rows — a
+    removed member row may leave a group or public grant underneath, so the
+    written row level is never the answer); `user_id=None` is the project-wide
+    signal: audience/grant writes name no single user, so every connected
+    client recomputes its own level. Subscribers: collab WS notify
+    (collab/events.py) + per-session agent-key revocation (agent/keys.py).
+    """
+    access = await recompute_project_access(project_id, user_id) if user_id else None
+    await event_bus.emit(
+        "access_changed", project_id=project_id, user_id=user_id, access=access,
+    )
+
+
 async def is_project_root(project: dict, user: dict) -> bool:
     """Whether the user is a project root: the owner, or an admin with a
     project_members row.
@@ -149,6 +167,30 @@ async def require_project_read(project_id: str, user: dict) -> None:
     access = await get_project_access(project_id, user)
     if access is None:
         raise HTTPException(status_code=404, detail="Project not found")
+
+
+async def require_full_project_access(
+    project_id: str, user: dict, verb: str | None = None,
+) -> None:
+    """Raise 403 unless user holds FULL project access — the Tool-API write gate.
+
+    Unlike require_project_full (the REST surfaces, where a no-access project
+    404-masks as not found), this gate states the shortfall flat: a
+    third-party model reading "Full project access required to create" can
+    correct itself on the next turn; a 404 it cannot. `verb` names the refused
+    action ("create", "save a skill", …); None keeps the bare message.
+
+    # INVARIANT(security): a MUTATING Tool-API tool runs only for a caller with
+    # FULL project access. Why: a commentator — typically an outside reviewer
+    # invited to one document — must not reach any write path. Promoted from
+    # routes/tool_api/sandbox/files.py, where the console shipped as the only
+    # mutating tool without the check.
+    """
+    if await get_project_access(project_id, user) != "full":
+        raise HTTPException(
+            status_code=403,
+            detail="Full project access required" + (f" to {verb}" if verb else ""),
+        )
 
 
 async def get_doc_project_id(document_id: str) -> str | None:

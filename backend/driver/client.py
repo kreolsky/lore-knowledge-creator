@@ -53,6 +53,7 @@ from dataclasses import dataclass
 import http_clients
 import httpx
 import settings
+from fastapi import HTTPException
 
 import config
 from models.tools import RegionRef
@@ -110,6 +111,25 @@ class DriverSecretMismatch(DriverLineUnreachable):
 
     def __init__(self, line_name: str) -> None:
         super().__init__(line_name, "HTTP 401 — driver secret mismatch")
+
+
+def driver_refusal(exc: DriverLineUnreachable, *, hint: str = "") -> HTTPException:
+    """The ONE HTTP wording for a driver-line refusal (all 502).
+
+    Class dispatch, caller-blind: a DriverSecretMismatch names its cause
+    (the CAUSE constant) whatever the catching site names; any other
+    DriverLineUnreachable gets the line-unavailable wording, plus the
+    caller's `hint` when setup paths want the enable-the-service sentence.
+    Sites may catch the PARENT class — the dispatch still returns a named
+    502 for a secret mismatch instead of a bare 500. The frontend parses
+    none of these strings.
+    """
+    if isinstance(exc, DriverSecretMismatch):
+        return HTTPException(status_code=502, detail=DriverSecretMismatch.CAUSE)
+    detail = f"Agent line unavailable — the {exc.line_name} service is not reachable."
+    if hint:
+        detail = f"{detail} {hint}"
+    return HTTPException(status_code=502, detail=detail)
 
 
 async def resolve_driver_line() -> DriverLine | None:

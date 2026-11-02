@@ -38,21 +38,25 @@ export const WS_EVENT_TYPES = [
 
 export type WsEventKey = `ws:${(typeof WS_EVENT_TYPES)[number]}`;
 
+// Where a person chose a document from. Present ⇒ the open is counted as a
+// human access (SYSTEM: telemetry, access.ts); absent ⇒ not counted.
+export type AccessVia = 'tree' | 'link' | 'search' | 'links_panel' | 'chat' | 'url';
+
 export interface EventMap {
   // ── Navigation ──
   // restore = "reopen the document as it was" — its remembered last-opened
   // reference. The tree is the ONLY restoring source. Default (omitted) = open
   // the document BODY — app-store.focusDocument owns that decision.
-  'navigate-to-document': { documentId: string; restore?: true };
+  'navigate-to-document': { documentId: string; restore?: true; via?: AccessVia };
   // sourceDocId: null = the jump has NO return point (goto-parent from the panel /
   // chat plaque) — the tree must not keep the doc we left highlighted as the
   // reference's source. Omitted = today's behaviour (source = the doc we navigate from).
-  'navigate-to-reference': { referenceId: string; stayInContext?: boolean; sourceDocId?: string | null; scrollToOffset?: number };
+  'navigate-to-reference': { referenceId: string; stayInContext?: boolean; sourceDocId?: string | null; scrollToOffset?: number; via?: AccessVia };
   'scroll-to-line': { line: number };
   'scroll-to-note-in-editor': { noteId: string };
 
   // ── WS bridge: project tree (wire field names, verbatim) ──
-  'ws:document_created': { document_id: string; title: string; parent_id: string | null; sort_key: string | null; is_reference?: boolean };
+  'ws:document_created': { document_id: string; title: string; parent_id: string | null; sort_key: string | null; is_reference?: boolean; media_type?: string | null };
   'ws:document_renamed': { document_id: string; title: string };
   // previous_parent_id lets the OLD host recognize the move concerns it;
   // is_reference (the node's FINAL kind) + title let a second client move the
@@ -138,7 +142,7 @@ export interface EventMap {
   'create-note-from-editor': { noteId: string };
 
   // ── Editor ──
-  'show-link-suggestions': { pos: number; coords: { top: number; lineTop: number; left: number } | null; editorView: EditorView };
+  'show-link-suggestions': { pos: number; coords: { top: number; lineTop: number; left: number } | null; editorView: EditorView; labelPos?: number | null };
   'editor-selection-change': { empty: boolean };
   'editor-doc-changed': void;
   // see SYSTEM: selection-region-agent — the user clicked the Bot icon on the selection

@@ -32,8 +32,10 @@ from files_util import (
     PDF_MIME,
     detect_media_type,
     is_text_bytes,
+    resolve_stored_file,
     save_audio_upload,
     save_upload,
+    upload_convert_core,
     validate_magic,
 )
 from markdown_normalize import normalize_markdown
@@ -44,18 +46,14 @@ from transcription import enqueue_transcription, transcribe_audio
 import event_bus
 from access import (
     require_document_full,
-    require_document_read,
     require_project_full,
 )
 from auth import get_current_user
-from config import (
-    AUDIO_MIMES,
-    STORAGE_PATH,
-)
-from db import extract_id, fetch_one, get_db, serialize_record
+from config import AUDIO_MIMES
+from db import extract_id, get_db, serialize_record
 from event_bus import emit
-from jobs import pool as jobs_pool
 from models import is_ref_row
+from routes._guards import guard_row, require_reference
 from routes.files_serve import _serve_reference_file, _serve_thumbnail
 
 router = APIRouter()
@@ -254,7 +252,12 @@ async def _existing_or_new_audio_ref(
         ref_id = extract_id(existing["id"])
         if existing.get("processing_status") == "ready":
             return {"text": existing.get("content") or "", "reference_id": ref_id}
-        file_path = STORAGE_PATH / existing["file_path"]
+        # Containment via the single stored-file resolver: a replayed row's
+        # file_path is stored data — an outside-storage path is
+        # refused with the serve path's wording, never transcribed from disk.
+        file_path = resolve_stored_file(existing["file_path"])
+        if file_path is None:
+            raise HTTPException(status_code=404, detail="Reference file is missing on disk")
     return ref_id, file_path
 
 
@@ -312,20 +315,14 @@ async def upload_and_transcribe(
 @router.get("/api/files/{reference_id}/thumb")
 async def serve_thumbnail(reference_id: str, user: dict = Depends(get_current_user)):
     """Serve WebP thumbnail for an image reference, generating on demand if missing."""
-    ref = await fetch_one("documents", reference_id)
-    if not ref or not is_ref_row(ref):
-        raise HTTPException(status_code=404, detail="Reference not found")
-    await require_document_read(reference_id, user)
+    ref = await require_reference(reference_id, user)
     return await _serve_thumbnail(ref, reference_id)
 
 
 @router.get("/api/files/{reference_id}/{filename}")
 async def serve_file(reference_id: str, filename: str, user: dict = Depends(get_current_user)):
     """Serve a stored reference file (authenticated)."""
-    ref = await fetch_one("documents", reference_id)
-    if not ref or not is_ref_row(ref):
-        raise HTTPException(status_code=404, detail="Reference not found")
-    await require_document_read(reference_id, user)
+    ref = await require_reference(reference_id, user)
     return await _serve_reference_file(ref, filename)
 
 
@@ -392,6 +389,30 @@ async def serve_mcp_staged_download(token: str):
     )
 
 
+def _purge_reference_files(reference_id: str, rel_path: str) -> None:
+    """Remove a reference's stored binary, its thumbnail, and the ref dir
+    when left empty."""
+    # INVARIANT(security): the unlink goes through the single stored-file
+    # resolver (files_util.resolve_stored_file). Why: a file_path column is
+    # stored data, not a trusted path — a rel_path escaping STORAGE_PATH must
+    # skip ALL disk work (file, thumb, dir) with a log, never become an
+    # arbitrary-file deleter; the caller's row delete proceeds either way.
+    abs_path = resolve_stored_file(rel_path)
+    if abs_path is None:
+        logger.warning(
+            "Skipping file delete for ref %s: missing or outside storage: %s",
+            reference_id, rel_path,
+        )
+        return
+    abs_path.unlink()
+    ref_dir = abs_path.parent
+    thumb_path = ref_dir / "_thumb.webp"
+    if thumb_path.is_file():
+        thumb_path.unlink()
+    if ref_dir.is_dir() and not any(ref_dir.iterdir()):
+        ref_dir.rmdir()
+
+
 @router.delete("/api/references/{reference_id}/file")
 @router.delete("/api/documents/{reference_id}/file", include_in_schema=False)
 async def delete_reference_file(reference_id: str, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
@@ -400,22 +421,11 @@ async def delete_reference_file(reference_id: str, user: dict = Depends(get_curr
     A reference left with no text at all is deleted whole (`reference_deleted`
     in the response tells the caller which of the two happened).
     """
-    ref = await fetch_one("documents", reference_id)
-    if not ref or not is_ref_row(ref):
-        raise HTTPException(status_code=404, detail="Reference not found")
-    await require_document_full(reference_id, user)
+    ref = await require_reference(reference_id, user, write=True)
 
     rel_path = ref.get("file_path", "")
     if rel_path:
-        abs_path = STORAGE_PATH / rel_path
-        if abs_path.is_file():
-            abs_path.unlink()
-        ref_dir = abs_path.parent
-        thumb_path = ref_dir / "_thumb.webp"
-        if thumb_path.is_file():
-            thumb_path.unlink()
-        if ref_dir.is_dir() and not any(ref_dir.iterdir()):
-            ref_dir.rmdir()
+        _purge_reference_files(reference_id, rel_path)
 
     pid = ref.get("project_id", "")
     # INVARIANT(data-loss): a reference with neither file nor text is deleted whole;
@@ -446,10 +456,7 @@ async def delete_reference_file(reference_id: str, user: dict = Depends(get_curr
 @router.get("/api/documents/{reference_id}/status", include_in_schema=False)
 async def get_reference_status(reference_id: str, user: dict = Depends(get_current_user)):
     """Poll processing status of a reference-document."""
-    ref = await fetch_one("documents", reference_id)
-    if not ref or not is_ref_row(ref):
-        raise HTTPException(status_code=404, detail="Reference not found")
-    await require_document_read(reference_id, user)
+    ref = await require_reference(reference_id, user)
     return {
         "processing_status": ref.get("processing_status"),
         "content": ref.get("content", ""),
@@ -469,9 +476,9 @@ async def retry_processing(reference_id: str, user: dict = Depends(get_current_u
     # see SYSTEM: capability-tiers — the audio arm re-enqueues STT, so it is
     # 'voice'-gated (a base account cannot restart a transcription).
     """
-    ref = await fetch_one("documents", reference_id)
-    if not ref or not is_ref_row(ref):
-        raise HTTPException(status_code=404, detail="Reference not found")
+    ref = await guard_row(
+        "documents", reference_id, not_found="Reference not found", ok=is_ref_row,
+    )
     await require_voice_for_audio_ref(ref, user)
     await require_document_full(reference_id, user)
     return await reprocess_reference(reference_id, ref, user_id=user.get("user_id", ""))
@@ -609,6 +616,9 @@ async def upload_docx_reference(
     Conversion (Pandoc, images→refs, formulas→LaTeX) runs async in convert_docx_task;
     the client gets a queued reference immediately and polls /status (or receives the
     reference_status_changed WS event). The raw .docx is stored so retries can re-run.
+    The store+enqueue tail is files_util.upload_convert_core, shared with the MCP
+    token redeem's docx branch and the upload-pdf route; THIS route owns the widget's
+    edge checks (.docx extension, MAX_DOCX_SIZE_MB) before it.
     """
     await require_project_full(project_id, user)
 
@@ -619,21 +629,13 @@ async def upload_docx_reference(
     max_docx_mb = await settings.get("MAX_DOCX_SIZE_MB")
     if len(data) > max_docx_mb * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"File too large (max {max_docx_mb}MB)")
-    if not validate_magic(data, DOCX_MIME):
-        raise HTTPException(status_code=400, detail="File content is not a valid .docx")
 
-    ref_title = title or file.filename
-    ref_id, result = await save_upload(
-        data, DOCX_MIME, file.filename, project_id, document_id,
-        title=ref_title, media_type="markdown", processing_status="queued",
-        created_by=user.get("user_id"), created_by_name=user.get("name"),
+    _, result = await upload_convert_core(
+        data, file.filename, project_id, document_id,
+        title=title or file.filename,
+        ext=".docx", mime=DOCX_MIME, task="convert_docx_task",
+        user_id=user.get("user_id"), user_name=user.get("name"),
     )
-
-    # The uploader rides the task so extracted images are attributed too
-    # (create_reference_row callers must pass what they have — plan rule).
-    await jobs_pool.enqueue("convert_docx_task", ref_id, user.get("user_id", ""),
-                  user.get("name"), job_id=f"docx:{ref_id}")
-
     return result
 
 
@@ -648,11 +650,13 @@ async def upload_pdf_reference(
 ):
     """Upload a .pdf, create a queued markdown reference, and enqueue conversion.
 
-    Mirrors upload_docx_reference end to end: conversion (pymupdf4llm in the same
-    converter container, images→refs, min-side + dedup filters there) runs async
-    in convert_pdf_task; the client gets a queued reference immediately and polls
-    /status (or receives the reference_status_changed WS event). The raw .pdf is
-    stored so retries can re-run. Own size cap: MAX_PDF_SIZE_MB, not the docx one.
+    Mirrors upload_docx_reference end to end through the SAME core
+    (files_util.upload_convert_core, .pdf its named parameters): conversion
+    (pymupdf4llm in the same converter container, images→refs, min-side +
+    dedup filters there) runs async in convert_pdf_task; the client gets a
+    queued reference immediately and polls /status (or receives the
+    reference_status_changed WS event). The raw .pdf is stored so retries can
+    re-run. Own size cap: MAX_PDF_SIZE_MB, not the docx one.
     """
     await require_project_full(project_id, user)
 
@@ -663,19 +667,11 @@ async def upload_pdf_reference(
     max_pdf_mb = await settings.get("MAX_PDF_SIZE_MB")
     if len(data) > max_pdf_mb * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"File too large (max {max_pdf_mb}MB)")
-    if not validate_magic(data, PDF_MIME):
-        raise HTTPException(status_code=400, detail="File content is not a valid .pdf")
 
-    ref_title = title or file.filename
-    ref_id, result = await save_upload(
-        data, PDF_MIME, file.filename, project_id, document_id,
-        title=ref_title, media_type="markdown", processing_status="queued",
-        created_by=user.get("user_id"), created_by_name=user.get("name"),
+    _, result = await upload_convert_core(
+        data, file.filename, project_id, document_id,
+        title=title or file.filename,
+        ext=".pdf", mime=PDF_MIME, task="convert_pdf_task",
+        user_id=user.get("user_id"), user_name=user.get("name"),
     )
-
-    # The uploader rides the task so extracted images are attributed too
-    # (create_reference_row callers must pass what they have — plan rule).
-    await jobs_pool.enqueue("convert_pdf_task", ref_id, user.get("user_id", ""),
-                  user.get("name"), job_id=f"pdf:{ref_id}")
-
     return result

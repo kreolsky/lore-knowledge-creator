@@ -21,6 +21,7 @@ from surrealdb import AsyncSurreal
 from access import require_document_full, require_document_read
 from auth import get_current_user
 from db import (
+    build_set_clause,
     fetch_many,
     fetch_one,
     get_db,
@@ -30,6 +31,7 @@ from db import (
 from deps import json_safe
 from event_bus import emit
 from models import CreateCheckpoint, PatchCheckpoint
+from routes._guards import guard_row
 
 logger = logging.getLogger(__name__)
 
@@ -87,9 +89,7 @@ async def get_checkpoint(checkpoint_id: str, user: dict = Depends(get_current_us
     Resolves content from blob (content_ref) when available, falls back to
     inline content for legacy rows. Read-access guard enforced.
     """
-    cp = await fetch_one("checkpoints", checkpoint_id)
-    if not cp:
-        raise HTTPException(status_code=404, detail="Checkpoint not found")
+    cp = await guard_row("checkpoints", checkpoint_id, not_found="Checkpoint not found")
     await require_document_read(cp.get("document_id", ""), user)
 
     # Resolve via the single shared helper — inline fallback for legacy rows,
@@ -154,9 +154,7 @@ async def create_checkpoint(body: CreateCheckpoint, user: dict = Depends(get_cur
 @router.post("/api/checkpoints/{checkpoint_id}/restore")
 async def restore_checkpoint(checkpoint_id: str, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
     """Restore document content from a checkpoint, creating a safety backup first."""
-    checkpoint = await fetch_one("checkpoints", checkpoint_id)
-    if not checkpoint:
-        raise HTTPException(status_code=404, detail="Checkpoint not found")
+    checkpoint = await guard_row("checkpoints", checkpoint_id, not_found="Checkpoint not found")
     await require_document_full(checkpoint["document_id"], user)
     return await restore_checkpoint_command(db, checkpoint_id, checkpoint)
 
@@ -164,9 +162,7 @@ async def restore_checkpoint(checkpoint_id: str, user: dict = Depends(get_curren
 @router.patch("/api/checkpoints/{checkpoint_id}")
 async def patch_checkpoint(checkpoint_id: str, body: PatchCheckpoint, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
     """Update checkpoint label and/or comment."""
-    cp = await fetch_one("checkpoints", checkpoint_id)
-    if not cp:
-        raise HTTPException(status_code=404, detail="Checkpoint not found")
+    cp = await guard_row("checkpoints", checkpoint_id, not_found="Checkpoint not found")
     await require_document_full(cp.get("document_id", ""), user)
     # Build one dynamic UPDATE from the provided fields instead of two
     # sequential UPDATEs (label/comment can both be set in a single round-trip).
@@ -176,7 +172,7 @@ async def patch_checkpoint(checkpoint_id: str, body: PatchCheckpoint, user: dict
     if body.comment is not None:
         updates["comment"] = body.comment
     if updates:
-        set_clause = ", ".join(f"{k} = ${k}" for k in updates)
+        set_clause = build_set_clause(updates)
         params = {"id": checkpoint_id, **updates}
         await db.query(
             f"UPDATE type::record('checkpoints', $id) SET {set_clause}",
@@ -201,9 +197,7 @@ async def patch_checkpoint(checkpoint_id: str, body: PatchCheckpoint, user: dict
 @router.delete("/api/checkpoints/{checkpoint_id}")
 async def delete_checkpoint(checkpoint_id: str, user: dict = Depends(get_current_user)):
     """Soft-delete a checkpoint."""
-    cp = await fetch_one("checkpoints", checkpoint_id)
-    if not cp:
-        raise HTTPException(status_code=404, detail="Checkpoint not found")
+    cp = await guard_row("checkpoints", checkpoint_id, not_found="Checkpoint not found")
     await require_document_full(cp.get("document_id", ""), user)
     await soft_delete("checkpoints", checkpoint_id)
     return {"success": True}
@@ -212,9 +206,7 @@ async def delete_checkpoint(checkpoint_id: str, user: dict = Depends(get_current
 @router.get("/api/checkpoints/{checkpoint_id}/validate")
 async def validate_checkpoint(checkpoint_id: str, user: dict = Depends(get_current_user)):
     """Verify checkpoint content integrity against stored SHA-256 hash."""
-    cp = await fetch_one("checkpoints", checkpoint_id)
-    if not cp:
-        raise HTTPException(status_code=404, detail="Checkpoint not found")
+    cp = await guard_row("checkpoints", checkpoint_id, not_found="Checkpoint not found")
     await require_document_read(cp.get("document_id", ""), user)
 
     return await validate_checkpoint_integrity(checkpoint_id, record=cp)

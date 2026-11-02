@@ -75,22 +75,28 @@ def test_same_input_twice_byte_identical():
 # ─── context: vision gate ─────────────────────────────────────────────────────
 
 
-def _ctx_image_ref(monkeypatch, tmp_path, *, ref_id, content="a map", mime="image/png"):
+def _ctx_image_ref(monkeypatch, *, ref_id, content="a map", mime="image/png"):
     from routes.chat import context as ctx_module
+
+    from config import STORAGE_PATH
 
     # The on-disk bytes must really be in `mime`'s format — a WebP reference whose
     # file is secretly a PNG would not exercise the transcode path at all.
+    # TEST-WHY: seeded under the REAL storage — context resolves image refs via
+    # files_util.resolve_stored_file (rot-epic step 2); routes.chat.context has
+    # no STORAGE_PATH attribute to patch anymore (stale patch target).
     fmt = {"image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WEBP"}[mime]
-    img = tmp_path / f"{ref_id}.png"
+    rel = f"model-variant-ctx/{uuid4().hex[:8]}/{ref_id}.png"
+    img = STORAGE_PATH / rel
+    img.parent.mkdir(parents=True, exist_ok=True)
     img.write_bytes(_save_bytes(Image.new("RGB", (900, 700), (7, 8, 9)), fmt))
-    monkeypatch.setattr(ctx_module, "STORAGE_PATH", tmp_path)
 
     async def fake_fetch_one(table, rid):
         if table == "documents" and rid == ref_id:
             return {"id": f"documents:{rid}", "deleted_at": None,
                     "project_id": "proj-1", "content": content, "title": "T",
                     "is_reference": True, "media_type": "image",
-                    "file_path": f"{ref_id}.png", "file_meta": {"mime_type": mime}}
+                    "file_path": rel, "file_meta": {"mime_type": mime}}
         return None
 
     async def fake_get_db():
@@ -109,7 +115,7 @@ async def test_non_vision_model_strips_image_and_warns(monkeypatch, tmp_path):
 
     from models import CompletionRequest
 
-    _ctx_image_ref(monkeypatch, tmp_path, ref_id="ref-strip")
+    _ctx_image_ref(monkeypatch, ref_id="ref-strip")
     _patch_vision(monkeypatch, False)
 
     body = CompletionRequest(

@@ -26,6 +26,7 @@ import { LinkSuggestionsPopup } from '../components/editor/LinkSuggestionsPopup'
 import { EditorLinkPreview } from '../components/editor/EditorLinkPreview';
 import { ProjectShell, type ProjectShellHandle, type RightTabEntry, type LeftTabEntry } from '../components/ProjectShell';
 import { useAppStore } from '../store/app-store';
+import { selectOpenPageLocked, PAGE_BOUND_TABS } from '../utils/page-lock';
 import { useUIStore, useDocState, ORPHAN_KEY, type RightTab } from '../store/ui-store';
 import { readRefOpenMode, refIsScope } from '../store/ui-store/documents-slice';
 import { searchModeOnOpen } from '../store/ui-store/search-slice';
@@ -120,7 +121,17 @@ export function ProjectPage() {
   // allowedRightTabs); undefined reads as allowed (an old payload predating
   // the flags must not hide chat).
   const canAi = useAppStore(s => s.currentUser?.can_ai) !== false;
-  const allowedTabs = allowedRightTabs(accessLevel, canAi);
+  // An html page carries no notes (anchors address prose, a page is markup), so its
+  // Notes tab is not offered and a stored 'notes' falls back like a role-forbidden tab.
+  const isHtmlPage = useAppStore(s => s.currentDocument?.media_type === 'html');
+  // INVARIANT(security): a PIN-locked page not yet opened by PIN offers only the
+  // project-level tabs (chat, search, settings); every page-bound tab drops and a stored
+  // one falls back like a role-forbidden tab. Why: operator request — everything bound
+  // to the page (notes, refs, history, links, access, find) stays behind the PIN like its text.
+  const pageLocked = useAppStore(selectOpenPageLocked);
+  const allowedTabs = allowedRightTabs(accessLevel, canAi)
+    .filter(tab => !(isHtmlPage && tab === 'notes')
+      && !(pageLocked && (PAGE_BOUND_TABS as readonly string[]).includes(tab)));
   // Ephemeral search overlay (see documents-slice INVARIANT): while alive for the
   // current doc (panel open), search renders + highlights as active instead of the
   // stored tab. allowedRightTabs includes 'search' for every role, so the overlay
@@ -328,6 +339,8 @@ export function ProjectPage() {
 
   const handlePanelDragEnter = useCallback((e: React.DragEvent) => {
     if (!e.dataTransfer.types.includes('Files')) return;
+    // WHY: a locked page has no Refs tab to reveal (page-bound tabs filter above).
+    if (pageLocked) return;
     if (effectiveTab === 'chat') {
       shellRef.current?.openRightPanel('chat');
       return;
@@ -341,7 +354,7 @@ export function ProjectPage() {
     }
     if (effectiveTab !== 'refs') shellRef.current?.openRightPanel('refs');
     else shellRef.current?.openRightPanel();
-  }, [effectiveTab, activeNoteThreadId]);
+  }, [effectiveTab, activeNoteThreadId, pageLocked]);
 
   // ── Tab entries (full-mode: all role-permitted tabs) ─────────────────────
   const leftTabs: LeftTabEntry[] = [
@@ -358,14 +371,16 @@ export function ProjectPage() {
       renderPanel: () => <ChatPanel />,
     });
   }
-  rightTabs.push({
-    tab: 'refs',
-    icon: <Paperclip size={15} />,
-    title: t('tabReferences'),
-    renderPanel: () => <ReferencesPanel />,
-    className: inboxCounts.refs > 0 ? 'refs-tab-unread' : undefined,
-  });
-  if (accessLevel !== 'readonly') {
+  if (allowedTabs.includes('refs')) {
+    rightTabs.push({
+      tab: 'refs',
+      icon: <Paperclip size={15} />,
+      title: t('tabReferences'),
+      renderPanel: () => <ReferencesPanel />,
+      className: inboxCounts.refs > 0 ? 'refs-tab-unread' : undefined,
+    });
+  }
+  if (allowedTabs.includes('notes')) {
     rightTabs.push({
       tab: 'notes',
       icon: <MessageSquare size={15} />,
@@ -379,11 +394,13 @@ export function ProjectPage() {
       ].filter(Boolean).join(' ') || undefined,
     });
   }
-  if (!isReference && accessLevel === 'full') {
+  if (!isReference && allowedTabs.includes('checkpoint')) {
     rightTabs.push({ tab: 'checkpoint', icon: <Archive size={15} />, title: t('tabHistory'), renderPanel: () => <HistoryPanel /> });
   }
-  rightTabs.push({ tab: 'links', icon: <ArrowDownLeft size={18} />, title: t('tabLinks'), renderPanel: () => <LinksPanel /> });
-  if (!isReference && accessLevel === 'full') {
+  if (allowedTabs.includes('links')) {
+    rightTabs.push({ tab: 'links', icon: <ArrowDownLeft size={18} />, title: t('tabLinks'), renderPanel: () => <LinksPanel /> });
+  }
+  if (!isReference && allowedTabs.includes('access')) {
     // Access tab — full-only, hidden when a reference is open. Tinted by the
     // strongest active external access (red/yellow/blue) via useAccessTabState.
     rightTabs.push({

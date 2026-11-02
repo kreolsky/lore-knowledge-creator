@@ -54,6 +54,7 @@ from db.crud import (  # noqa: F401
     fetch_many,
     fetch_one,
     soft_delete,
+    tombstone_many,
 )
 from db.pool import (  # noqa: F401
     DBPool,
@@ -67,9 +68,12 @@ from db.pool import (  # noqa: F401
 from db.records import (  # noqa: F401
     SAFE_ID_RE,
     _fmt_datetime,
+    build_set_clause,
     coerce_record_ids,
     extract_id,
     is_record_id,
+    iso_str,
+    parse_iso,
     record_refs,
     serialize_record,
     validate_record_id,

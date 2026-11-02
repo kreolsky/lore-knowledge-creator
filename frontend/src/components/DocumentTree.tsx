@@ -11,7 +11,7 @@
 
 import type React from 'react';
 import { memo, useState, useRef, useCallback, useMemo } from 'react';
-import { FileText, Trash2, Plus, ChevronRight, ChevronDown, Pencil, BookOpen, Menu, FolderUp, ShieldCheck, EyeOff } from 'lucide-react';
+import { FileText, Trash2, Plus, ChevronRight, ChevronDown, Pencil, BookOpen, Menu, FolderUp, ShieldCheck, EyeOff, AppWindow } from 'lucide-react';
 import { useAppStore } from '../store/app-store';
 import { useUIStore } from '../store/ui-store';
 import { useInboxStore } from '../store/inbox-store';
@@ -31,12 +31,14 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useDocumentRoute } from '../hooks/useDocumentRoute';
 import { useHoverPreview } from '../hooks/useHoverPreview';
 import { useGearMenu } from '../hooks/useGearMenu';
+import { hiddenBranchIds, pruneLockedBranches } from '../utils/page-lock';
 import { useSiblingDragReorder, treeDragAdapter } from '../hooks/useSiblingDragReorder';
 import { TREE_INDENT } from '../hooks/treeDropTarget';
 import { keyIconClassFromCapabilities } from '../utils/key-icon';
 import s from './Sidebar.module.css';
 
 const SHIFT_OFFSET = 40;
+const EMPTY_IDS: string[] = [];
 
 const DocumentTreeItem = memo(function DocumentTreeItem({
   doc,
@@ -150,7 +152,7 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
           if (isRenaming) return;
           const wasViewingSnapshot = !!useAppStore.getState().snapshotPreview;
           if (doc.document_id !== documentId || scopeReference) {
-            emit('navigate-to-document', { documentId: doc.document_id, restore: true });
+            emit('navigate-to-document', { documentId: doc.document_id, restore: true, via: 'tree' });
           } else if (wasViewingSnapshot) {
             // WHY: collab manages content in CM6, not in the store — currentDocument.content
             // is stale. Refetch to get actual content for the remounted editor.
@@ -187,7 +189,8 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
           <div className="flex items-center shrink-0 text-text-dim">
             <span className="w-3" />
             <span className={`doc-icon ${keyIconClassFromCapabilities(doc.key_capabilities, doc.public_share)}`}>
-              <FileText size={14} />
+              {/* An html page is a leaf by the server's leaf rule, so only this arm needs it. */}
+              {doc.media_type === 'html' ? <AppWindow size={14} /> : <FileText size={14} />}
             </span>
           </div>
         )}
@@ -325,7 +328,14 @@ interface DocumentTreeProps {
 export function DocumentTree({ onDelete, onCreateChild, onChangeParent, canEdit }: DocumentTreeProps) {
   const { t } = useTranslation();
   const { documentId } = useDocumentRoute();
-  const { currentProject, documentTree } = useAppStore(useShallow(s => ({ currentProject: s.currentProject, documentTree: s.documentTree })));
+  const { currentProject, documentTree: fullTree } = useAppStore(useShallow(s => ({ currentProject: s.currentProject, documentTree: s.documentTree })));
+  // Page PIN lock (SYSTEM: page-lock): every reader below sees the PRUNED tree.
+  const lockedIds = useAppStore(s => s.currentUser?.locked_doc_ids ?? EMPTY_IDS);
+  const unlockedDocIds = useAppStore(s => s.unlockedDocIds);
+  const documentTree = useMemo(
+    () => pruneLockedBranches(fullTree, hiddenBranchIds(lockedIds, unlockedDocIds)),
+    [fullTree, lockedIds, unlockedDocIds],
+  );
   const currentReference = useAppStore(s => s.currentReference);
   const currentDocument = useAppStore(s => s.currentDocument);
   const referenceSourceDocId = useAppStore(s => s.referenceSourceDocId);
@@ -513,7 +523,7 @@ export function DocumentTree({ onDelete, onCreateChild, onChangeParent, canEdit 
       case ' ': {
         e.preventDefault();
         if (focused) {
-          emit('navigate-to-document', { documentId: focused, restore: true });
+          emit('navigate-to-document', { documentId: focused, restore: true, via: 'tree' });
         }
         break;
       }
@@ -554,7 +564,7 @@ export function DocumentTree({ onDelete, onCreateChild, onChangeParent, canEdit 
             } ${
               inboxMarks.flagged.has(currentProject.index_doc_id) ? 'inbox-unread' : ''
             }`}
-            onClick={() => emit('navigate-to-document', { documentId: currentProject.index_doc_id!, restore: true })}
+            onClick={() => emit('navigate-to-document', { documentId: currentProject.index_doc_id!, restore: true, via: 'tree' })}
           >
             <span className="doc-icon">
               <BookOpen size={14} />

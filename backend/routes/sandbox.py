@@ -81,8 +81,9 @@ async def restart_sandbox(
 ):
     """Reset the caller's sandbox environment, keeping their files.
 
-    Guarded by full project access: 'full' is Owner/Editor in this codebase's
-    vocabulary. Commentator/readonly are rejected — resetting a work environment is
+    Guarded by full project access ('full' is the write level of this
+    codebase's access vocabulary: full / commentator / readonly).
+    Commentator/readonly are rejected — resetting a work environment is
     not a commenting privilege.
     """
     from routes.tool_api.sandbox.lifecycle import restart_workspace

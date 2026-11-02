@@ -518,7 +518,7 @@ export function ReferencesPanel() {
       emit('reset-reference-banner');
       return;
     }
-    emit('navigate-to-reference', { referenceId: ref.reference_id, stayInContext: true });
+    emit('navigate-to-reference', { referenceId: ref.reference_id, stayInContext: true, via: 'links_panel' });
   }, [currentReference?.reference_id, currentDocument?.document_id]);
 
   // see SYSTEM: inbox — opening the refs tab while flagged references exist
@@ -579,7 +579,7 @@ export function ReferencesPanel() {
             pinRightPanel(documentId, 'refs');
             useAppStore.getState().setPendingReference(panelRef);
             useAppStore.setState({ referenceSourceDocId: null });
-            emit('navigate-to-document', { documentId });
+            emit('navigate-to-document', { documentId, via: 'links_panel' });
           }}
           onChangeParent={(r, rect) => setRefParentPicker({ reference: r, anchorRect: rect })}
           onArchive={handleArchive}

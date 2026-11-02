@@ -42,7 +42,7 @@ describe('onBrokenLinkClick — a Set miss is rechecked with the server', () => 
     onBrokenLinkClick(entry('ref'), 'r-far');
     await settle();
     off('navigate-to-reference', nav);
-    expect(nav).toHaveBeenCalledWith({ referenceId: 'r-far' });
+    expect(nav).toHaveBeenCalledWith({ referenceId: 'r-far', via: 'link' });
     expect(toast).not.toHaveBeenCalled();
   });
 

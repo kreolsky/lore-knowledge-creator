@@ -33,25 +33,11 @@ from agent.search_exec import (  # noqa: F401
     search_materials_tool,
 )
 from agent.structure_exec import get_project_structure_tool  # noqa: F401
-from db import extract_id, fetch_one
+from db import extract_id, fetch_one, iso_str
+from deps import extract_headings
 from models import is_ref_row
 
 logger = logging.getLogger(__name__)
-
-
-def _iso(value) -> str | None:
-    """Serialize a SurrealDB datetime/value to an ISO string for JSON transport.
-
-    SurrealDB 2.0 returns Python `datetime`; raw values fail json.dumps. Accepts
-    datetime, ISO strings, or None. (backend.md — no precedent to copy.)"""
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value
-    try:
-        return value.isoformat()
-    except AttributeError:
-        return str(value)
 
 
 @dataclass
@@ -116,6 +102,17 @@ async def _read_gate_error(
         # being swallowed into a fake scope-403 — no silent degradation of an access
         # decision (a DB error must never masquerade as an access denial).
         return exc.detail
+    # INVARIANT(security): the page-lock refusal runs AFTER RBAC + scope, and its
+    # text MUST NOT contain "not found" / "not in this project" (scope.py INVARIANT —
+    # dispatch._raise_for_soft_error would mis-map it to a uniform 404). Why: the
+    # lock is the OWNER's personal hide (SYSTEM: page-lock), not an access change —
+    # the doc exists and the user may hold access; the agent is told it is locked,
+    # which stays a 403 and lets a model report the lock instead of hunting for a
+    # page that "vanished".
+    from page_lock import locked_doc_ids
+
+    if resolved in await locked_doc_ids(user["user_id"]):
+        return "This page is locked by the user"
     return None
 
 
@@ -185,8 +182,8 @@ def _build_read_result(
         "total_chars": len(full_content),
         "is_reference": is_ref_row(doc),
         "parent_id": extract_id(doc.get("parent_id")) if doc.get("parent_id") else None,
-        "created_at": _iso(doc.get("created_at")),
-        "updated_at": _iso(doc.get("updated_at")),
+        "created_at": iso_str(doc.get("created_at"), passthrough_str=True),
+        "updated_at": iso_str(doc.get("updated_at"), passthrough_str=True),
         "media_type": doc.get("media_type"),
         "processing_status": doc.get("processing_status"),
         "has_file": bool(doc.get("file_path")),
@@ -197,6 +194,30 @@ def _build_read_result(
         # The ONLY "there is more" signal: absent ⇒ complete document in hand.
         result["next_offset"] = start + len(content)
     return result
+
+
+# WHY(200): a heading index is a jump table, not a second copy of the document —
+# past this many entries the tail is COUNTED in `sections_hidden`, never dropped
+# silently.
+READ_SECTIONS_MAX: int = 200
+
+
+def _build_sections_field(full_content: str) -> tuple[list[dict], int]:
+    """The `sections` jump table of a SLICED read: every H1–H4 heading of the
+    WHOLE buffer with the `offset` of its heading line, so the model can page
+    straight to a section instead of reading the document front to back.
+
+    Offsets are code-point positions in the same buffer `content` slices, so
+    `read_document(offset=section.offset)` starts exactly at that heading.
+    """
+    line_starts = [0]
+    for line in full_content.split("\n"):
+        line_starts.append(line_starts[-1] + len(line) + 1)
+    items = [
+        {"heading": h["text"], "level": h["level"], "offset": line_starts[h["line"] - 1]}
+        for h in extract_headings(full_content)
+    ]
+    return items[:READ_SECTIONS_MAX], max(0, len(items) - READ_SECTIONS_MAX)
 
 
 async def _attach_read_sidecars(
@@ -234,6 +255,13 @@ async def _attach_read_sidecars(
     # agent sees what a `ref:<id>` anchor resolves to and can reuse an existing
     # image without a separate listing call. Always returned (not gated by tables).
     result["references"] = await _build_references_field(resolved)
+    # WHY: present on EVERY page of a sliced read and on no unsliced one — its
+    # presence depends on the document being longer than the window, never on
+    # `offset` (same rule as the sibling fields above).
+    if "next_offset" in result or result["offset"] > 0:
+        result["sections"], hidden = _build_sections_field(full_content)
+        if hidden:
+            result["sections_hidden"] = hidden
     _warn_if_sidecars_outweigh_slice(resolved, result, result["content"])
 
 
@@ -269,9 +297,13 @@ async def _read_document_exec(
     full_content, _tables_json = await doc_state.resolve_live_doc_state(target.resolved)
     # The slice window is a config constant; the hard
     # ceiling stays a settings read.
+    # WHY: `table_id` without `limit` asks for the grid alone — a zero-length
+    # slice at `offset` (still contiguous, `next_offset` kept while text
+    # remains), so fetching a table never re-sends the text the model already has.
+    grid_only = table_id is not None and limit is None
     result = _build_read_result(
         target.doc, target.resolved, full_content, offset=offset, limit=limit,
-        slice_chars=config.AGENT_READ_SLICE_CHARS,
+        slice_chars=0 if grid_only else config.AGENT_READ_SLICE_CHARS,
         max_chars=await settings.get("AGENT_READ_MAX_CHARS"),
     )
     await _attach_read_sidecars(
@@ -298,6 +330,8 @@ def _warn_if_sidecars_outweigh_slice(doc_id: str, result: dict, content: str) ->
     is the live tripwire for the DEBT above (per-page sidecars); it observes and
     never alters the response.
     """
+    if not content:
+        return  # WHY: an empty slice is a grid-only read — the sidecar IS the answer.
     tables_field = result.get("tables")
     references = result.get("references") or []
     grids_requested = any("rows" in entry for entry in tables_field or [])
@@ -348,7 +382,7 @@ async def _build_references_field(doc_id: str) -> list[dict]:
             "media_type": r.get("media_type"),
             "processing_status": r.get("processing_status"),
             "has_file": bool(r.get("file_path")),
-            "created_at": _iso(r.get("created_at")),
+            "created_at": iso_str(r.get("created_at"), passthrough_str=True),
         })
     return out
 

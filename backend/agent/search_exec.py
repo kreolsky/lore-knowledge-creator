@@ -9,7 +9,6 @@ directly and forward `mode` themselves.
 import logging
 
 import settings
-from fastapi import HTTPException
 
 # The stop-word set, stop-word stripper and snippet-anchor ladder live in
 # textmatch.py (shared with the UI search route — agent layering must not be
@@ -27,8 +26,9 @@ from textmatch import (
 )
 
 from access import get_document_access
-from db import extract_id, fetch_one, get_db
+from db import extract_id, get_db
 from models import is_ref_row
+from scope import resolve_search_subtree
 
 logger = logging.getLogger(__name__)
 
@@ -71,80 +71,6 @@ def _rrf_merge(direct: list[dict], semantic: list[dict], k_const: int = 60) -> l
     return [meta[d] for d in ordered]
 
 
-async def _resolve_under_root(
-    project_id: str, scope_root: str | None, under: str,
-) -> None:
-    """Validate ONE typed subtree root as a live in-scope id, or raise.
-
-    Existence + same-project first (uniform 404, no existence oracle — same
-    policy as gate_mutation_target), then the key's ceiling: a real
-    out-of-scope id is a permission answer (403 naming the remedy), not a
-    spelling one.
-    """
-    from scope import in_subtree, out_of_scope_detail
-
-    root_row = await fetch_one("documents", under)
-    if (
-        not root_row
-        or root_row.get("deleted_at")
-        or root_row.get("project_id") != project_id
-    ):
-        raise HTTPException(404, "Search root document not found")
-    if scope_root and not await in_subtree(scope_root, under):
-        raise HTTPException(403, out_of_scope_detail(scope_root))
-
-
-async def _intersect_scope_ceiling(
-    scope_root: str | None, allowed: set[str] | None, under: str, project_id: str,
-) -> set[str]:
-    """Fold the requested subtree into the key's scope ceiling.
-
-    # INVARIANT(security): the key's scope is the ceiling — intersect, never replace. An
-    # empty intersection is an ERROR. Why: coercing it to the `allowed = None`
-    # "do not filter" sentinel would silently turn an impossible narrow into a
-    # whole-project search.
-    """
-    from scope import out_of_scope_detail, subtree_doc_ids
-
-    requested = set(await subtree_doc_ids(under, project_id))
-    allowed = requested if allowed is None else allowed & requested
-    if not allowed:
-        # scope.out_of_scope_detail(empty_intersection=True) is the ONE producer
-        # of this text (no hand-written near-copy — the recovery tail cannot
-        # drift between the doc-target and search-narrow variants).
-        raise HTTPException(403, out_of_scope_detail(scope_root, empty_intersection=True))
-    return allowed
-
-
-async def _resolve_search_scope(
-    project_id: str, scope_root: str | None, under_document_id: str | None,
-) -> set[str] | None:
-    """Resolve the search narrow: the `allowed` subtree id set.
-
-    None ⇒ whole project; a set ⇒ subtree only. Raises the narrow's 404/403
-    contract (uniform 404, scope ceiling 403, empty-intersection 403 naming
-    the remedy).
-
-    # WHY: search covers the WHOLE project by default; it narrows to a
-    # subtree ONLY when explicitly asked. Why: a default subtree narrow
-    # silently drops project memory (`.lore/system/memory` is outside every
-    # user subtree), and a model that cannot see what it is missing reports
-    # absence instead of widening.
-    """
-    from scope import subtree_doc_ids
-
-    allowed: set[str] | None = None
-    if scope_root:
-        allowed = set(await subtree_doc_ids(scope_root, project_id))
-    under = (under_document_id or "").strip() or None
-    if under:
-        await _resolve_under_root(project_id, scope_root, under)
-        allowed = await _intersect_scope_ceiling(
-            scope_root, allowed, under, project_id,
-        )
-    return allowed
-
-
 def _build_direct_hit(r: dict, *, snippet: str) -> dict:
     """One direct-layer hit, shaped for the fusion input. The kind label is
     authoritative here — see the memory-labelling note in the direct loop."""
@@ -165,6 +91,14 @@ def _build_direct_hit(r: dict, *, snippet: str) -> dict:
         "snippet": snippet,
         "source": "direct",
     }
+
+
+# The html-artifact content gate: an html row's content
+# is page source — it is found by its TITLE alone, never by its markup. Every
+# content predicate in this module reuses THIS fragment so a future arm cannot
+# forget it. Verified on surreal v3.3.5 (gray, 2026-10-30): `NONE != 'html'`
+# evaluates true, so plain rows (media_type NONE) pass untouched.
+_HTML_CONTENT_GATE = "(media_type != 'html')"
 
 
 async def _union_candidate_rows(
@@ -191,9 +125,9 @@ async def _union_candidate_rows(
     try:
         cand_rows = await db.query(
             select_cands
-            + "AND ((title @0@ $qfts OR content @1@ $qfts) "
+            + "AND ((title @0@ $qfts OR (" + _HTML_CONTENT_GATE + " AND content @1@ $qfts)) "
             "OR string::lowercase(title ?? '') CONTAINS string::lowercase($q) "
-            "OR string::lowercase(content ?? '') CONTAINS string::lowercase($q)) "
+            "OR (" + _HTML_CONTENT_GATE + " AND string::lowercase(content ?? '') CONTAINS string::lowercase($q))) "
             "LIMIT 200",
             {"pid": project_id, "q": query, "qfts": qfts, **scope_params},
         )
@@ -234,10 +168,11 @@ def _contains_pred() -> str:
     guards the NONE-content row: content is option<string>, and
     string::lowercase(NONE) raises InternalError; the layer-wide except would
     then disable the whole lexical layer for one empty doc (F7 — a live
-    failure, not a hypothesis)."""
+    failure, not a hypothesis). The html gate rides the content arm: a page's
+    source is not searchable text (title still matches)."""
     return (
         "AND (string::lowercase(title ?? '') CONTAINS string::lowercase($q) "
-        "OR string::lowercase(content ?? '') CONTAINS string::lowercase($q)) "
+        "OR (" + _HTML_CONTENT_GATE + " AND string::lowercase(content ?? '') CONTAINS string::lowercase($q))) "
     )
 
 
@@ -581,7 +516,9 @@ async def _assemble_search_result(
 # the subtree are dropped before merge (post-filter; no body leak). An
 # empty/None scope_root leaves whole-project behavior intact.
 #
-# ARCH(under_document_id): the model-facing subtree narrow. `allowed` is ALWAYS
+# ARCH(under_document_id): the model-facing subtree narrow. The narrow itself
+# resolves in scope.resolve_search_subtree — the single home, shared with the
+# public search routes. `allowed` is ALWAYS
 # the intersection key_subtree ∩ requested_subtree — the key's scope is the
 # ceiling, so a narrow can only narrow further, never widen. An out-of-scope or
 # unknown root is an ERROR naming the remedy (never empty hits, which a model
@@ -614,8 +551,8 @@ async def _search_materials_exec(
     embeddings lag) + semantic retrieval, fused via RRF, deduped by parent_id,
     per-doc access-filtered. The ARCH notes live above the def.
     """
-    allowed = await _resolve_search_scope(
-        project_id, scope_root, under_document_id,
+    allowed = await resolve_search_subtree(
+        under_document_id, project_id, scope_root,
     )
     # Per-layer degradation signals — each layer owns its catch and appends a
     # `search_degraded:<layer>` warning; the assembled result turns them into a
@@ -642,11 +579,42 @@ async def _search_materials_exec(
             allowed=allowed, warnings=warnings,
         )
 
-    return await _assemble_search_result(
+    result = await _assemble_search_result(
         user=user, query=query, qlower=qlower,
         exact=exact, direct=direct, semantic=semantic, k=k,
         warnings=warnings,
     )
+    await _attach_outlines(db, project_id, result["hits"])
+    return result
+
+
+async def _attach_outlines(db, project_id: str, hits: list[dict]) -> None:
+    """Give each document/reference hit its stored heading outline — the
+    document's preview, so the model can judge a hit without opening it.
+
+    # WHY: the outline rides only the FIRST hit of a document (several chunks of
+    # one document may hit) and never a memory hit (a fact's body is already its
+    # compressed form). One select over the already access-filtered ids — the
+    # stored columns, never a content pull (ARCH on doc_outline).
+    """
+    ids = sorted({h["doc_id"] for h in hits if h.get("kind") != "memory"})
+    if not ids:
+        return
+    rows = await db.query(
+        "SELECT meta::id(id) AS id, outline, outline_hidden FROM documents "
+        "WHERE project_id = $pid AND deleted_at IS NONE AND meta::id(id) IN $ids",
+        {"pid": project_id, "ids": ids},
+    )
+    outlines = {r["id"]: r for r in rows or [] if isinstance(r, dict) and r.get("outline")}
+    seen: set[str] = set()
+    for h in hits:
+        row = outlines.get(h["doc_id"])
+        if row is None or h["doc_id"] in seen or h.get("kind") == "memory":
+            continue
+        seen.add(h["doc_id"])
+        h["outline"] = row["outline"]
+        if row.get("outline_hidden"):
+            h["outline_hidden"] = row["outline_hidden"]
 
 
 async def _filter_accessible(hits: list[dict], user: dict) -> list[dict]:
@@ -658,9 +626,20 @@ async def _filter_accessible(hits: list[dict], user: dict) -> list[dict]:
     # snippet leak through the agent search layer.
     # Filter SEQUENTIALLY — never asyncio.gather: surrealdb-py multiplexes one WS
     # conn, so concurrent get_document_access calls contend (backend.md).
+
+    # Page PIN lock (see SYSTEM: page-lock) — the user's PIN-locked pages are
+    # invisible to agent search: the locked set is fetched ONCE per call (never
+    # per hit) and every hit whose doc_id is in it drops before the RBAC pass.
+    # Memory hits never match (their doc_id is a .lore/system/memory doc, not a
+    # user page).
     """
+    from page_lock import locked_doc_ids
+
+    locked = await locked_doc_ids(user["user_id"]) if hits else set()
     out: list[dict] = []
     for h in hits:
+        if h["doc_id"] in locked:
+            continue
         if await get_document_access(h["doc_id"], user):
             out.append(h)
     return out

@@ -19,7 +19,7 @@ import { listHiddenDocIds } from '../utils/document-sort';
 import { ChatSearchHit, ChatSession, SearchMode, SearchResult, SearchSnapshot, SemanticSearchHit } from '../types';
 import { FieldInput, FieldCheckbox, Button, ListPill, PillList } from './ui';
 import { useTranslation } from '../i18n';
-import { filterSessionsByTitle } from './chat/useSortedSessions';
+import { filterSessionsByTitle, useChatListPosition } from './chat/useSortedSessions';
 
 // The chat-search route's 403 while the administrator switched the chat-recall
 // skill off — told apart from "No access to this project" by its detail.
@@ -304,16 +304,17 @@ export function SearchPanel() {
   // hits (server recall) stay the search flag's domain: unlisted ≠ unfindable.
   // The ACTIVE chat keeps its title row until switched away (same exemption as
   // useSortedSessions).
+  const { positionDocId, pageLocked } = useChatListPosition();
   const titleHits = useMemo(() => {
     if (mode !== 'chats' || showHint) return [];
-    const hidden = listHiddenDocIds(documents, currentDocument?.document_id ?? null);
+    const hidden = listHiddenDocIds(documents, positionDocId);
     const listed = hidden.size === 0
       ? chatSessions
-      : chatSessions.filter(s => s.session_id === activeSessionId
+      : chatSessions.filter(s => (!pageLocked && s.session_id === activeSessionId)
         || !s.host_document_id
         || !hidden.has(s.host_document_id));
     return filterSessionsByTitle(listed, query);
-  }, [mode, showHint, chatSessions, activeSessionId, documents, currentDocument, query]);
+  }, [mode, showHint, chatSessions, activeSessionId, documents, positionDocId, pageLocked, query]);
   const activeResults = { fulltext: results, semantic: semanticHits, chats: chatHits }[mode];
   const showEmpty = !loading && !error && !showHint && activeResults.length === 0 && titleHits.length === 0;
 
@@ -451,8 +452,8 @@ export function SearchPanel() {
               key={key}
               variant="plain"
               onClick={() => {
-                if (isRef) emit('navigate-to-reference', { referenceId: r.reference_id! });
-                else emit('navigate-to-document', { documentId: r.document_id! });
+                if (isRef) emit('navigate-to-reference', { referenceId: r.reference_id!, via: 'search' });
+                else emit('navigate-to-document', { documentId: r.document_id!, via: 'search' });
               }}
             >
               <div className="flex items-center justify-between gap-2">

@@ -45,20 +45,30 @@ def _fake_db(rows_200: list[dict], captured: list | None = None):
 
 
 async def _run_exec(monkeypatch, rows_200, *, under, scope_root=None,
-                    subtree_map=None, in_subtree_ret=True, root_row="valid"):
+                    subtree_map=None, in_subtree_ret=True):
     """Drive _search_materials_exec with a faked DB + scope, returning (result,
-    captured_params). `subtree_map` maps a root id → its subtree ids list;
-    `root_row="valid"` seeds an existing same-project root, None = unknown id,
-    a dict = that exact row."""
+    captured_params). `subtree_map` maps a root id → its subtree ids list. The
+    under root is a REAL row (created via create_record): scope's
+    resolve_search_subtree reads it through the real fetch_one, so the narrow
+    validates a row that exists, not a stub of the module that reads it."""
     from unittest.mock import AsyncMock, patch
 
     from agent.readonly_executors import _search_materials_exec
 
+    from db import create_record
     from retrieval import RetrievalResult
 
+    if under:
+        await create_record("documents", under, {
+            "project_id": "p1", "parent_id": None, "title": "Root",
+            "content": "", "path": f"under-{under}",
+        })
+
     captured: list = []
-    # scope.subtree_doc_ids / in_subtree / fetch_one are imported at call time
-    # inside the executor — patch the scope/db module attributes they resolve from.
+    # The narrow lives in scope.resolve_search_subtree (moved from
+    # agent/search_exec.py) — patch the scope module attributes it resolves
+    # from (subtree_doc_ids / in_subtree) plus the executor's own db/access
+    # seams.
     async def _subtree_stub(root, _pid):
         if subtree_map is None:
             return [root]
@@ -67,18 +77,12 @@ async def _run_exec(monkeypatch, rows_200, *, under, scope_root=None,
     async def _in_subtree_stub(_root, _doc):
         return in_subtree_ret
 
-    async def _fetch_one(_table, doc_id):
-        if root_row == "valid":
-            return {"id": doc_id, "project_id": "p1", "deleted_at": None}
-        return root_row
-
     with patch("retrieval.retrieve_context",
                new=AsyncMock(return_value=RetrievalResult(hits=[]))), \
          patch("agent.search_exec.get_db",
                return_value=_fake_db(rows_200, captured)), \
          patch("agent.search_exec.get_document_access",
                new=AsyncMock(return_value=True)), \
-         patch("agent.search_exec.fetch_one", new=_fetch_one), \
          patch("scope.subtree_doc_ids", new=_subtree_stub), \
          patch("scope.in_subtree", new=_in_subtree_stub):
         result = await _search_materials_exec(
@@ -92,13 +96,13 @@ async def _run_exec(monkeypatch, rows_200, *, under, scope_root=None,
 
 
 @pytest.mark.asyncio
-async def test_request_outside_key_subtree_is_error_not_empty(monkeypatch):
+async def test_request_outside_key_subtree_is_error_not_empty(monkeypatch, test_db):
     """A request naming a document OUTSIDE the key's subtree is a 403 carrying
     scope.out_of_scope_detail (names the remedy) — NEVER an empty hits array,
     which a model reads as 'the project holds nothing about this'."""
     with pytest.raises(HTTPException) as ei:
         await _run_exec(
-            monkeypatch, [], under="U", scope_root="K",
+            monkeypatch, [], under="root-outside", scope_root="K",
             subtree_map={"K": ["K", "k1"]}, in_subtree_ret=False,
         )
     assert ei.value.status_code == 403
@@ -106,15 +110,15 @@ async def test_request_outside_key_subtree_is_error_not_empty(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_empty_intersection_is_error_not_whole_project(monkeypatch):
+async def test_empty_intersection_is_error_not_whole_project(monkeypatch, test_db):
     """A legitimately EMPTY intersection must be an error — it must never be
     coerced into the `allowed = None` 'do not filter' sentinel (`subtree_doc_ids`
     returns [] for unscoped; a falsy-set bug here would turn an impossible narrow
     into a whole-project search)."""
     with pytest.raises(HTTPException) as ei:
         await _run_exec(
-            monkeypatch, [], under="U", scope_root="K",
-            subtree_map={"K": ["K", "k1"], "U": ["U", "u1"]},
+            monkeypatch, [], under="root-disjoint", scope_root="K",
+            subtree_map={"K": ["K", "k1"], "root-disjoint": ["root-disjoint", "u1"]},
             in_subtree_ret=True,
         )
     assert ei.value.status_code == 403

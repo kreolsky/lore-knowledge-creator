@@ -17,7 +17,8 @@ from db import (
     extract_id,
     fetch_one,
     get_db,
-    validate_record_id,
+    record_refs,
+    tombstone_many,
 )
 from models import is_ref_row
 
@@ -99,6 +100,24 @@ async def delete_document_command(document_id: str, *, delete_children: bool = T
     return await _delete_lift(db, project_id, document_id, doc)
 
 
+def _lift_children_task(db, dead_id: str, grandparent_id):
+    """The ONE lift-mode reparent statement (single-delete and batch share it):
+    move a soft-deleted doc's live non-reference children to their grandparent.
+
+    Returns the query task so the caller gathers it with its other writes.
+    WHY: only non-reference children are reparented; references are
+    cascade-deleted with the parent (parity across both modes).
+    Why: reparenting a reference would steal it from the cascade's
+    `is_reference = true` read, leaking a ghost reference entry on the client.
+    """
+    return db.query(
+        "UPDATE documents SET parent_id = $gp, updated_at = time::now() "
+        "WHERE parent_id = $did AND is_reference = false AND deleted_at IS NONE",
+        {"gp": grandparent_id, "did": dead_id},
+        idempotent=True,
+    )
+
+
 async def _delete_lift(db, project_id: str | None, document_id: str, doc: dict | None) -> dict:
     """Lift-mode body of delete_document_command (see its docstring for mode)."""
     write_tasks: list = [
@@ -110,12 +129,7 @@ async def _delete_lift(db, project_id: str | None, document_id: str, doc: dict |
     ]
     if doc:
         grandparent_id = doc.get("parent_id")
-        write_tasks.append(db.query(
-            "UPDATE documents SET parent_id = $gp, updated_at = time::now() "
-            "WHERE parent_id = $did AND is_reference = false AND deleted_at IS NONE",
-            {"gp": grandparent_id, "did": document_id},
-            idempotent=True,
-        ))
+        write_tasks.append(_lift_children_task(db, document_id, grandparent_id))
 
     cascade_task = asyncio.ensure_future(_cascade_cleanup_document(db, document_id))
     write_tasks.append(cascade_task)
@@ -130,23 +144,13 @@ async def _delete_lift(db, project_id: str | None, document_id: str, doc: dict |
 
 
 async def _tombstone_subtree(db, docs: dict[str, dict]) -> None:
-    # Bulk tombstone (bound record refs, idempotent) + concurrent per-id cascade.
-    # Post-tombstone each cleanup's own "live ref children" read returns empty —
-    # harmless: every descendant id still gets its chunks/checkpoints/mentions/
-    # chats/messages cleaned via the direct branches
+    # Bulk tombstone (db.tombstone_many — the WHY lives there) + concurrent
+    # per-id cascade. Post-tombstone each cleanup's own "live ref children" read
+    # returns empty — harmless: every descendant id still gets its
+    # chunks/checkpoints/mentions/chats/messages cleaned via the direct branches
     # (cascade is idempotent per cascade.py INVARIANT).
     write_tasks: list = [
-        # WHY: a `WHERE id IN [list]` filter scans the whole table and its read set
-        # conflicts with any concurrent write to that table (the embed worker's
-        # per-reference status write then fails the delete after minutes of
-        # scanning), so the tombstone targets records like cascade.py does.
-        # A missing id is a no-op (pinned by test_documents_references.py).
-        db.query(
-            "UPDATE $rids.map(|$x| type::record('documents', $x)) "
-            "SET deleted_at = time::now() WHERE deleted_at IS NONE",
-            {"rids": list(docs.keys())},
-            idempotent=True,
-        ),
+        tombstone_many("documents", list(docs.keys())),
     ]
     write_tasks.extend(
         asyncio.ensure_future(_cascade_cleanup_document(db, did)) for did in docs
@@ -187,27 +191,45 @@ async def _delete_subtree(db, project_id: str | None, document_id: str) -> dict:
     return {"success": True, "deleted": len(docs)}
 
 
-async def _collect_live_docs(document_ids: list[str]) -> dict[str, dict]:
-    """Live (non-deleted) rows for the batch, keyed by id.
+async def _collect_live_docs(
+    document_ids: list[str],
+    columns: tuple[str, ...] | list[str] = DOC_BATCH_DELETE_COLUMNS,
+    *,
+    idempotent: bool = True,
+    require_project: bool = True,
+) -> dict[str, dict]:
+    """Live (non-deleted) rows for the given ids, keyed by id — the ONE
+    live-row collector (subtree delete, batch delete, and the cross-project
+    move's subtree sweep share it).
 
-    # WHY the interpolated record-ref in-clause stays: reads take no conflicting
-    # write locks, so this SELECT has none of the scan-class conflict the tombstone
-    # UPDATE had; switching it to a $rids.map form would ripple for no benefit.
+    Divergences between the callers are named parameters: `columns`
+    (delete needs the access-probe set; move needs path/title/flag columns),
+    `require_project` (delete drops rows without a project_id — its batch
+    IDOR guard dereferences `d["project_id"]`; move never reads a subtree
+    row's project_id), `idempotent` (delete classifies the read retryable,
+    move does not).
+
+    # WHY the record-ref in-clause is built by db.records.record_refs: reads take
+    # no conflicting write locks, so this SELECT has none of the scan-class
+    # conflict the tombstone UPDATE had (the $rids.map-vs-per-id split is
+    # record_refs' docstring).
     """
     db = await get_db()
-    in_clause = ",".join(
-        f"type::record('documents','{validate_record_id(d)}')" for d in document_ids
-    )
+    in_clause, params = record_refs("documents", document_ids)
     rows = await db.query(
-        f"SELECT {', '.join(DOC_BATCH_DELETE_COLUMNS)} FROM documents "
+        f"SELECT {', '.join(columns)} FROM documents "
         f"WHERE id IN [{in_clause}] AND deleted_at IS NONE",
-        idempotent=True,
+        params,
+        idempotent=idempotent,
     )
     docs: dict[str, dict] = {}
     for r in (rows or []):
         did = extract_id(r.get("id"))
-        if did and r.get("project_id"):
-            docs[did] = r
+        if not did:
+            continue
+        if require_project and not r.get("project_id"):
+            continue
+        docs[did] = r
     return docs
 
 
@@ -257,25 +279,11 @@ async def _execute_batch_delete(
     write_tasks: list = []
     cascade_tasks = {did: asyncio.ensure_future(_cascade_cleanup_document(db, did)) for did in docs}
     write_tasks.extend(cascade_tasks.values())
-    # Bulk soft-delete in one statement (record-targeted — see _delete_subtree WHY).
-    write_tasks.append(db.query(
-        "UPDATE $rids.map(|$x| type::record('documents', $x)) "
-        "SET deleted_at = time::now() WHERE deleted_at IS NONE",
-        {"rids": list(docs.keys())},
-        idempotent=True,
-    ))
+    # Bulk soft-delete in one statement (db.tombstone_many — record-targeted).
+    write_tasks.append(tombstone_many("documents", list(docs.keys())))
     if not delete_children:
         for did, d in docs.items():
-            write_tasks.append(db.query(
-                # WHY: only non-reference children are reparented; references are
-                # cascade-deleted with the parent (parity with delete_document_command).
-                # Why: reparenting a reference would steal it from the cascade's
-                # `is_reference = true` read, leaking a ghost reference entry on the client.
-                "UPDATE documents SET parent_id = $gp, updated_at = time::now() "
-                "WHERE parent_id = $did AND is_reference = false AND deleted_at IS NONE",
-                {"gp": d.get("parent_id"), "did": did},
-                idempotent=True,
-            ))
+            write_tasks.append(_lift_children_task(db, did, d.get("parent_id")))
     await asyncio.gather(*write_tasks)
     return cascade_tasks
 

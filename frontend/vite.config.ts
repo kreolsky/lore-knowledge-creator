@@ -115,7 +115,18 @@ export default defineConfig({
     // WHY: the Dockerized e2e harness reaches the dev server by compose service
     // name (Host: frontend). Vite's host check rejects unknown hosts with 403 —
     // allow the service name so E2E_BASE_URL=http://frontend:5173 works.
-    allowedHosts: ['frontend', 'localhost'],
+    // WHY CORS_ORIGINS: an install reached through a LAN name (a reverse proxy
+    // forwarding Host) declares that origin there already — the dev server
+    // accepts exactly the hosts the backend accepts, with no second list.
+    allowedHosts: [
+      'frontend',
+      'localhost',
+      ...(process.env.CORS_ORIGINS ?? '')
+        .split(',')
+        .map((o) => o.trim())
+        .filter(Boolean)
+        .map((o) => new URL(o).hostname),
+    ],
     // INFRA WIRING, not configuration: the dev proxy targets the backend by
     // its compose service name (plan component-wiring-not-settings step 2) —
     // nothing runs on the host, so there is no host-run fallback anymore.

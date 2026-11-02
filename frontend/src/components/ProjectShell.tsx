@@ -423,7 +423,7 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
                 </div>
 
                 <aside
-                  className={`${s.sidebar} ${compact ? 'flex-1 min-w-0 !w-auto !max-w-none' : ''} ${floating ? `${s.sidebarFloating} transition-[width] duration-150 ${sidebarResizer.isOpen ? 'border-r border-border-soft' : ''}` : ''}`}
+                  className={`${s.sidebar} ${compact ? 'flex-1 min-w-0 !w-auto !max-w-none' : ''} ${floating ? `${s.sidebarFloating} transition-[width] duration-150` : ''}`}
                   style={compact ? undefined : {
                     width: sidebarResizer.isOpen ? sidebarResizer.width : 0,
                     minWidth: sidebarResizer.isOpen ? undefined : 0,
@@ -435,10 +435,17 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
                   {leftTabs.map(entry => effectiveSidebarTab === entry.tab ? (
                     <Fragment key={entry.tab}>{entry.renderPanel()}</Fragment>
                   ) : null)}
-                  {floating && sidebarResizer.isOpen && (
-                    <div className="resizer resizer--floating" ref={sidebarResizer.resizerRef} />
-                  )}
                 </aside>
+                {/* WHY: a sibling of the aside, not its child — the aside clips overflow, which cut
+                    the hover bar and grab zone in half. Sits on the aside's outer edge and is the
+                    only edge line, exactly like the pinned resizer. */}
+                {floating && sidebarResizer.isOpen && (
+                  <div
+                    className="resizer resizer--floating transition-[left] duration-150"
+                    style={{ left: `calc(100% + ${sidebarResizer.width}px)` }}
+                    ref={sidebarResizer.resizerRef}
+                  />
+                )}
               </div>
             </div>
           )}

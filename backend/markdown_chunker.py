@@ -14,6 +14,8 @@ import hashlib
 import re
 from dataclasses import dataclass
 
+from markdown_grammar import EMBED_RE
+
 from deps import extract_headings
 from transclusion_grammar import parse_target
 
@@ -42,10 +44,9 @@ class Chunk:
     heading_path: tuple[str, ...] = ()
 
 
-# A transclusion embed node `![alt](target)` — same shape as documents.service.
-# Kept local to avoid importing the heavier documents.service module into the
-# embedding hot path.
-_EMBED_NODE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+# The embed-node grammar lives in markdown_grammar (EMBED_RE) — the shared,
+# DB-free home (kept out of documents.service so the chunker never imports the
+# heavier module into the embedding hot path).
 
 # Sentence end: one or more sentence-final punctuation, then whitespace. The
 # boundary is accepted only if the token before it is not a known abbreviation
@@ -373,7 +374,7 @@ def _strip_transclusions(text: str) -> str:
     external image / data URI is not a transclusion and is left intact."""
     def _repl(m: re.Match) -> str:
         return "" if parse_target(m.group(2)) is not None else m.group(0)
-    return _EMBED_NODE_RE.sub(_repl, text)
+    return EMBED_RE.sub(_repl, text)
 
 
 def _breadcrumb_text(title: str, chunk: Chunk) -> str:

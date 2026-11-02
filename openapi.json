@@ -2896,7 +2896,8 @@
             "enum": [
               "markdown",
               "audio",
-              "image"
+              "image",
+              "html"
             ],
             "title": "Media Type",
             "type": "string"
@@ -2905,7 +2906,8 @@
             "default": "document",
             "enum": [
               "document",
-              "reference"
+              "reference",
+              "html"
             ],
             "title": "Node Type",
             "type": "string"
@@ -4406,6 +4408,43 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/a/{document_id}": {
+      "get": {
+        "operationId": "serve_artifact_a__document_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Serve Artifact"
+      }
+    },
     "/api/admin/embeddings/embed-missing": {
       "post": {
         "description": "Enqueue an embed for every document that has no chunks or whose last embed failed.",
@@ -6805,6 +6844,124 @@
         "summary": "Change Email"
       }
     },
+    "/api/cabinet/locked-docs/{doc_id}": {
+      "post": {
+        "description": "Add a page to the caller's PIN-locked set. Requires an account PIN and\nper-doc access; returns the whole set.",
+        "operationId": "lock_document_api_cabinet_locked_docs__doc_id__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "doc_id",
+            "required": true,
+            "schema": {
+              "title": "Doc Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Lock Document"
+      }
+    },
+    "/api/cabinet/locked-docs/{doc_id}/remove": {
+      "post": {
+        "description": "Remove a page from the caller's PIN-locked set. The body's PIN is\nverified with the same rate limiter as verify-pin (shared `pin:` budget —\nbrute-forcing this endpoint is brute-forcing the PIN).",
+        "operationId": "unlock_document_api_cabinet_locked_docs__doc_id__remove_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "doc_id",
+            "required": true,
+            "schema": {
+              "title": "Doc Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyPinRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unlock Document"
+      }
+    },
     "/api/cabinet/name": {
       "patch": {
         "description": "Change display name. No confirmation needed.",
@@ -9133,6 +9290,60 @@
           }
         },
         "summary": "Patch Document"
+      }
+    },
+    "/api/documents/{document_id}/artifact-url": {
+      "get": {
+        "description": "Signed short-lived artifact URL (any project read access).",
+        "operationId": "document_artifact_url_api_documents__document_id__artifact_url_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Document Artifact Url"
       }
     },
     "/api/documents/{document_id}/backlinks": {
@@ -11663,7 +11874,7 @@
     },
     "/api/projects/{project_id}/sandbox/restart": {
       "post": {
-        "description": "Reset the caller's sandbox environment, keeping their files.\n\nGuarded by full project access: 'full' is Owner/Editor in this codebase's\nvocabulary. Commentator/readonly are rejected — resetting a work environment is\nnot a commenting privilege.",
+        "description": "Reset the caller's sandbox environment, keeping their files.\n\nGuarded by full project access ('full' is the write level of this\ncodebase's access vocabulary: full / commentator / readonly).\nCommentator/readonly are rejected — resetting a work environment is\nnot a commenting privilege.",
         "operationId": "restart_sandbox_api_projects__project_id__sandbox_restart_post",
         "parameters": [
           {
@@ -12014,6 +12225,44 @@
           }
         },
         "summary": "Public Document"
+      }
+    },
+    "/api/public/documents/{document_id}/artifact-url": {
+      "get": {
+        "description": "Signed short-lived artifact URL for a guest, through the ONLY public\nfunnel (`_require_doc` — resolve_share + membership; a doc outside any\nlive share 404s here exactly like every other public read).",
+        "operationId": "public_document_artifact_url_api_public_documents__document_id__artifact_url_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Public Document Artifact Url"
       }
     },
     "/api/public/documents/{document_id}/files/{reference_id}/thumb": {
@@ -13131,7 +13380,7 @@
     },
     "/api/references/upload-docx": {
       "post": {
-        "description": "Upload a .docx, create a queued markdown reference, and enqueue conversion.\n\nConversion (Pandoc, images→refs, formulas→LaTeX) runs async in convert_docx_task;\nthe client gets a queued reference immediately and polls /status (or receives the\nreference_status_changed WS event). The raw .docx is stored so retries can re-run.",
+        "description": "Upload a .docx, create a queued markdown reference, and enqueue conversion.\n\nConversion (Pandoc, images→refs, formulas→LaTeX) runs async in convert_docx_task;\nthe client gets a queued reference immediately and polls /status (or receives the\nreference_status_changed WS event). The raw .docx is stored so retries can re-run.\nThe store+enqueue tail is files_util.upload_convert_core, shared with the MCP\ntoken redeem's docx branch and the upload-pdf route; THIS route owns the widget's\nedge checks (.docx extension, MAX_DOCX_SIZE_MB) before it.",
         "operationId": "upload_docx_reference_api_references_upload_docx_post",
         "parameters": [
           {
@@ -13241,7 +13490,7 @@
     },
     "/api/references/upload-pdf": {
       "post": {
-        "description": "Upload a .pdf, create a queued markdown reference, and enqueue conversion.\n\nMirrors upload_docx_reference end to end: conversion (pymupdf4llm in the same\nconverter container, images→refs, min-side + dedup filters there) runs async\nin convert_pdf_task; the client gets a queued reference immediately and polls\n/status (or receives the reference_status_changed WS event). The raw .pdf is\nstored so retries can re-run. Own size cap: MAX_PDF_SIZE_MB, not the docx one.",
+        "description": "Upload a .pdf, create a queued markdown reference, and enqueue conversion.\n\nMirrors upload_docx_reference end to end through the SAME core\n(files_util.upload_convert_core, .pdf its named parameters): conversion\n(pymupdf4llm in the same converter container, images→refs, min-side +\ndedup filters there) runs async in convert_pdf_task; the client gets a\nqueued reference immediately and polls /status (or receives the\nreference_status_changed WS event). The raw .pdf is stored so retries can\nre-run. Own size cap: MAX_PDF_SIZE_MB, not the docx one.",
         "operationId": "upload_pdf_reference_api_references_upload_pdf_post",
         "parameters": [
           {
@@ -18451,6 +18700,52 @@
           }
         },
         "summary": "Widget Upload"
+      }
+    },
+    "/lib/{name_version}/{file_path}": {
+      "get": {
+        "operationId": "serve_lib_lib__name_version___file_path__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name_version",
+            "required": true,
+            "schema": {
+              "title": "Name Version",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "file_path",
+            "required": true,
+            "schema": {
+              "title": "File Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Serve Lib"
       }
     }
   }

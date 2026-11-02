@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException
 
-from db import get_ancestor_ids, get_descendant_ids
+from db import fetch_one, get_ancestor_ids, get_descendant_ids
 
 
 def out_of_scope_detail(scope_root: str, *, empty_intersection: bool = False) -> str:
@@ -185,6 +185,80 @@ async def subtree_doc_ids(scope_root: str | None, project_id: str) -> list[str]:
     return [scope_root] + await get_descendant_ids(scope_root, project_id)
 
 
+async def _validate_under_root(
+    project_id: str, scope_root: str | None, under: str,
+) -> None:
+    """Validate ONE typed subtree root as a live in-scope id, or raise.
+
+    Existence + same-project first (uniform 404, no existence oracle — same
+    policy as gate_mutation_target), then the key's ceiling: a real
+    out-of-scope id is a permission answer (403 naming the remedy), not a
+    spelling one.
+    """
+    root_row = await fetch_one("documents", under)
+    if (
+        not root_row
+        or root_row.get("deleted_at")
+        or root_row.get("project_id") != project_id
+    ):
+        raise HTTPException(404, "Search root document not found")
+    if scope_root and not await in_subtree(scope_root, under):
+        raise HTTPException(403, out_of_scope_detail(scope_root))
+
+
+async def _intersect_scope_ceiling(
+    scope_root: str | None, allowed: set[str] | None, under: str, project_id: str,
+) -> set[str]:
+    """Fold the requested subtree into the key's scope ceiling.
+
+    # INVARIANT(security): the key's scope is the ceiling — intersect, never replace. An
+    # empty intersection is an ERROR. Why: coercing it to the `allowed = None`
+    # "do not filter" sentinel would silently turn an impossible narrow into a
+    # whole-project search.
+    """
+    requested = set(await subtree_doc_ids(under, project_id))
+    allowed = requested if allowed is None else allowed & requested
+    if not allowed:
+        # out_of_scope_detail(empty_intersection=True) is the ONE producer
+        # of this text (no hand-written near-copy — the recovery tail cannot
+        # drift between the doc-target and search-narrow variants).
+        raise HTTPException(403, out_of_scope_detail(scope_root, empty_intersection=True))
+    return allowed
+
+
+async def resolve_search_subtree(
+    under: str | None, project_id: str, scope_root: str | None,
+) -> set[str] | None:
+    """Resolve a search's subtree narrow: the `allowed` id set.
+
+    None ⇒ whole project; a set ⇒ subtree only. `under` is normalized here
+    (strip / empty → None). Raises the narrow's 404/403 contract (uniform 404,
+    scope ceiling 403, empty-intersection 403 naming the remedy).
+
+    The ONE home of the search narrow, shared by the three search surfaces:
+    the agent executor (agent/search_exec.py), the public semantic-search route
+    (routes/search.py) and the title search (routes/projects.py — cookie
+    `require_project_read` only, so it passes `scope_root=None`: no key
+    ceiling, behaviour preserved). Moved verbatim from agent/search_exec.py.
+
+    # WHY: search covers the WHOLE project by default; it narrows to a
+    # subtree ONLY when explicitly asked. Why: a default subtree narrow
+    # silently drops project memory (`.lore/system/memory` is outside every
+    # user subtree), and a model that cannot see what it is missing reports
+    # absence instead of widening.
+    """
+    allowed: set[str] | None = None
+    if scope_root:
+        allowed = set(await subtree_doc_ids(scope_root, project_id))
+    under = (under or "").strip() or None
+    if under:
+        await _validate_under_root(project_id, scope_root, under)
+        allowed = await _intersect_scope_ceiling(
+            scope_root, allowed, under, project_id,
+        )
+    return allowed
+
+
 def resolve_scoped_parent(scope_root: str | None, parent_id: str | None) -> str | None:
     """Resolve the effective parent for an agent create/move under scope.
 
@@ -206,6 +280,7 @@ __all__ = [
     "in_subtree",
     "require_doc_in_scope",
     "out_of_scope_detail",
+    "resolve_search_subtree",
     "subtree_doc_ids",
     "resolve_scoped_parent",
 ]

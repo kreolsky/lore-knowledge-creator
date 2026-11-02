@@ -23,29 +23,15 @@ from collab.session import (
     ConnectedClient,
 )
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from ws_utils import authenticate_project_ws
 
-from access import get_document_access, get_project_access
-from auth import validate_ws_token
+from access import get_document_access
 from db import fetch_one
 from deps import MAX_WS_MESSAGE_SIZE
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-async def _authenticate_project_ws(ws: WebSocket, project_id: str) -> tuple[dict, str] | None:
-    user = await validate_ws_token(ws)
-    if user is None:
-        await ws.close(code=4001, reason="Unauthorized")
-        return None
-
-    access = await get_project_access(project_id, user)
-    if access is None:
-        await ws.close(code=4003, reason="No project access")
-        return None
-
-    return user, access
 
 
 async def _handle_join(
@@ -183,7 +169,8 @@ async def _route_binary_message(
 
 @router.websocket("/ws/collab/project/{project_id}")
 async def collab_project_ws(ws: WebSocket, project_id: str):
-    auth = await _authenticate_project_ws(ws, project_id)
+    # Auth prologue shared with the notification socket (ws_utils).
+    auth = await authenticate_project_ws(ws, project_id)
     if auth is None:
         return
 

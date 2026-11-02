@@ -45,6 +45,7 @@ export function LinkSuggestionsPopup() {
   // only; the store slice stays ancestor-scoped for the panel's depth-sorted display.
   const [projectReferences, setProjectReferences] = useState<Reference[]>([]);
   const [insertPos, setInsertPos] = useState<number | null>(null);
+  const [labelPos, setLabelPos] = useState<number | null>(null);
   const [coords, setCoords] = useState<{ top: number; lineTop: number; left: number } | null>(null);
   // Final position decided post-measure (popup height varies by tab/results); flips above the
   // anchored line when there's no room below. null until the first layout pass.
@@ -150,8 +151,9 @@ export function LinkSuggestionsPopup() {
   }, [isOpen]);
 
   // Listen for show-link-suggestions event
-  useEvent('show-link-suggestions', useCallback((detail: { pos: number; coords: { top: number; lineTop: number; left: number } | null; editorView: EditorView }) => {
+  useEvent('show-link-suggestions', useCallback((detail: { pos: number; coords: { top: number; lineTop: number; left: number } | null; editorView: EditorView; labelPos?: number | null }) => {
     setInsertPos(detail.pos);
+    setLabelPos(detail.labelPos ?? null);
     setCoords(detail.coords);
     setLayout(null);
     setSearchQuery('');
@@ -201,13 +203,20 @@ export function LinkSuggestionsPopup() {
     setLayout(prev => (prev && prev.top === top && prev.left === left ? prev : { top, left }));
   }, [isOpen, isActive, coords, currentMode, linkItems.length]);
 
-  const handleInsertLink = (targetId: string) => {
+  // An external link has no title — the URL itself is the anchor text.
+  const linkTitle = (item: { id: string; label: string }) => (isExternalMode ? item.id : item.label);
+
+  const handleInsertLink = (targetId: string, title: string) => {
     insertedRef.current = true;
     const targetView = targetViewRef.current ?? getEditorView();
     if (insertPos !== null && targetView) {
+      // WHY: link patterns read the anchor as `[^\]]+`, so brackets in a title would end it early.
+      const label = labelPos === null ? '' : title.replace(/[[\]]/g, '');
+      const changes = [{ from: insertPos, to: insertPos, insert: targetId }];
+      if (labelPos !== null) changes.push({ from: labelPos, to: labelPos, insert: label });
       targetView.dispatch({
-        changes: { from: insertPos, to: insertPos, insert: targetId },
-        selection: { anchor: insertPos + targetId.length + 1 },
+        changes,
+        selection: { anchor: insertPos + label.length + targetId.length + 1 },
       });
       targetView.focus();
     }
@@ -311,7 +320,7 @@ export function LinkSuggestionsPopup() {
               }
               if (e.key === 'Enter') {
                 e.preventDefault();
-                if (linkItems.length > 0) handleInsertLink(linkItems[clampedIndex].id);
+                if (linkItems.length > 0) handleInsertLink(linkItems[clampedIndex].id, linkTitle(linkItems[clampedIndex]));
               }
             }}
           />
@@ -320,7 +329,7 @@ export function LinkSuggestionsPopup() {
           {linkItems.map((item, i) => (
             <button
               key={item.id}
-              onClick={() => handleInsertLink(item.id)}
+              onClick={() => handleInsertLink(item.id, linkTitle(item))}
               className={`link-suggest-item${i === clampedIndex ? ' selected' : ''}`}
               // INVARIANT: scroll-to-active only on keyboard nav, never on mouse hover/edge.
               // Why: hovering up from the trigger button scrolled the list and hid the first

@@ -29,6 +29,7 @@ import logging
 import time
 from typing import Any
 
+from access_counts import count_access, doc_ref
 from fastapi import HTTPException
 
 from telemetry_store import clamp_detail, record_telemetry_events
@@ -102,6 +103,61 @@ def result_shape_of(result: Any) -> dict:
     }
 
 
+# The ranked doc_ids of a search kept on its raw row — enough for exposure →
+# selection analysis without blowing the detail cap.
+MAX_HIT_IDS = 20
+
+# Mutating document tools whose ok call counts as an `edit` of `document_id`.
+_EDIT_TOOLS = frozenset({
+    "edit_document", "append_to_document", "edit_table_cell", "add_table_rows",
+    "add_table_column", "create_table", "rename_document", "move_document",
+})
+
+
+def hit_ids_of(result: Any) -> dict:
+    """The document ids a search returned, in rank order, deduped, ≤MAX_HIT_IDS.
+
+    Derived from the handler's own return value, like result_shape_of. Memory
+    hits are not documents and are left out. A result without `hits` contributes
+    nothing.
+    """
+    if not isinstance(result, dict) or not isinstance(result.get("hits"), list):
+        return {}
+    ids: list[str] = []
+    for h in result["hits"]:
+        did = h.get("doc_id") if isinstance(h, dict) else None
+        if did and h.get("kind") != "memory" and did not in ids:
+            ids.append(did)
+    return {"hit_ids": ids[:MAX_HIT_IDS]}
+
+
+def access_rows_of(detail: dict, ctx: dict) -> list[dict]:
+    """The object_access_daily increments one finished tool call earns.
+
+    ok calls only: a first-page read_document (offset absent/0) → `read`;
+    search_materials → `exposure` per hit id; a mutating document tool → `edit`.
+    Later pages of a read are NOT a new read, and neither is a grid-only table
+    fetch (`table_id` without `limit`): the agent received no text.
+    """
+    project_id = ctx.get("project_id")
+    if detail["outcome"] != "ok" or not project_id:
+        return []
+    tool, args = detail["tool"], detail.get("args") or {}
+    base = {"project_id": project_id, "actor": "agent", "user_id": ctx.get("user_id") or ""}
+    doc_id = args.get("document_id")
+    if tool == "search_materials":
+        return [{**base, "object_ref": doc_ref(d), "kind": "exposure"}
+                for d in detail.get("hit_ids") or []]
+    # WHY: a grid-only fetch would otherwise inflate document read counts with
+    # reads that carried no content.
+    got_text = not args.get("table_id") or args.get("limit")
+    if tool == "read_document" and doc_id and not args.get("offset") and got_text:
+        return [{**base, "object_ref": doc_ref(doc_id), "kind": "read"}]
+    if tool in _EDIT_TOOLS and doc_id:
+        return [{**base, "object_ref": doc_ref(doc_id), "kind": "edit"}]
+    return []
+
+
 def build_detail(
     tool: str, body: Any, outcome: dict, latency_ms: int, ctx: dict,
 ) -> dict:
@@ -128,6 +184,7 @@ def build_detail(
         # A bounded read contributes total_chars + truncated here; every other
         # tool contributes nothing (see result_shape_of).
         **(outcome.get("result_shape") or {}),
+        **(outcome.get("hit_ids") or {}),
         "tool": tool,
         "outcome": "ok" if outcome["ok"] else "error",
         "http_status": outcome["status"],
@@ -175,13 +232,16 @@ def _spawn(detail: dict, ctx: dict) -> None:
     INVARIANT: a telemetry failure MUST NOT break a tool call. The inner insert is
     wrapped so any exception is logged + swallowed; the task is held in a module set
     and discarded on completion (success or failure). Why: this runs on the tool-call hot path, so a raise would 500 the call.
+    The object_access_daily rollup runs inside the same try, after the insert.
 
     The only callers run inside the FastAPI event loop (the async handler wrapper) so
     a running loop is always present; create_task therefore never raises RuntimeError.
     """
     async def _run() -> None:
         try:
+            access_rows = access_rows_of(detail, ctx)
             await _insert(detail, ctx)
+            await count_access(access_rows)
         except Exception:
             logger.warning("agent_tool telemetry record failed", exc_info=True)
 
@@ -234,6 +294,7 @@ def track_agent_tool(tool_name: str):
                 if isinstance(result, dict):
                     outcome["result_status"] = result.get("status")
                     outcome["result_shape"] = result_shape_of(result)
+                    outcome["hit_ids"] = hit_ids_of(result)
                 return result
             except Exception as e:
                 _classify_failure(outcome, e)

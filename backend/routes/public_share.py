@@ -66,12 +66,11 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
-from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 from share_guard import is_unshareable_by_ancestry
 
-from db import extract_id, fetch_one, get_ancestor_ids, get_db
+from db import extract_id, fetch_one, get_ancestor_ids, get_db, iso_str
 from deps import extract_headings
 from models import is_ref_row
 from routes.files_serve import (
@@ -253,12 +252,9 @@ async def _token_to_root(token: str) -> str:
 
 
 def _iso_or_none(v) -> str | None:
-    """Normalize a DB date cell to an ISO string (datetime → isoformat, str passes)."""
-    if isinstance(v, datetime):
-        return v.isoformat()
-    if isinstance(v, str):
-        return v
-    return None
+    # Thin alias over the single home (db.iso_str) keeping the local name —
+    # datetime → ISO, stored str passes, anything else None.
+    return iso_str(v, passthrough_str=True)
 
 
 def _build_public_tree_nodes(rows: list[dict], root_id: str) -> list[dict]:
@@ -287,6 +283,8 @@ def _build_public_tree_nodes(rows: list[dict], root_id: str) -> list[dict]:
             "title": r.get("title") or "",
             "parent_id": parent_id,
             "sort_key": r.get("sort_key"),
+            # The public tree icon + the page branch key off it (html = a page).
+            "media_type": r.get("media_type"),
             # WHY expose dates: dates of already-published documents are no
             # disclosure beyond the content itself, and a blog built on this
             # surface needs them for ordering and feeds. ISO strings only, no
@@ -314,7 +312,7 @@ async def _handle_tree(document_id: str) -> dict:
         # that built `doc_ids`. Without this filter they leak into the public tree and
         # render as document nodes (reported bug). Mirrors the authed tree query
         # (projects.py: "AND is_reference = false"). References have their own panel.
-        "SELECT id, title, parent_id, sort_key, created_at, updated_at FROM documents "
+        "SELECT id, title, parent_id, sort_key, media_type, created_at, updated_at FROM documents "
         "WHERE project_id = $pid AND deleted_at IS NONE "
         "AND is_reference = false AND meta::id(id) IN $ids ORDER BY sort_key",
         {"pid": ctx["project_id"], "ids": ctx["doc_ids"]},
@@ -386,7 +384,7 @@ async def _handle_document(document_id: str) -> dict:
     await _require_doc(document_id)
     db = await get_db()
     rows = await db.query(
-        "SELECT id, title, content FROM documents "
+        "SELECT id, title, content, media_type FROM documents "
         "WHERE id = type::record('documents', $id) AND deleted_at IS NONE",
         {"id": document_id},
     )
@@ -397,6 +395,7 @@ async def _handle_document(document_id: str) -> dict:
     return {
         "document_id": document_id,
         "title": row.get("title") or "",
+        "media_type": row.get("media_type"),
         "content": content,
         # The guest echoes this back when anchoring a note (routes/public_notes.py):
         # it binds the offsets to exactly the text served here. Minted server-side

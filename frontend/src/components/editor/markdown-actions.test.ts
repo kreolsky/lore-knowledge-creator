@@ -181,11 +181,13 @@ describe('inlineCode (toggleInlineMarker `)', () => {
 // ── createLink ───────────────────────────────────────────────────────────────
 
 describe('createLink', () => {
-  it('returns false on empty selection', () => {
+  // TEST-WHY: pure-logic-edge — the empty-selection branch must still land the cursor inside the parens for the suggestions popup.
+  it('inserts an empty link at the cursor on empty selection', () => {
     const view = createView('hello', 3);
     const result = markdownActionRegistry.createLink(view);
-    expect(result).toBe(false);
-    expect(docText(view)).toBe('hello');
+    expect(result).toBe(true);
+    expect(docText(view)).toBe('hel[]()lo');
+    expect(view.state.selection.main.head).toBe(6);
   });
 });
 

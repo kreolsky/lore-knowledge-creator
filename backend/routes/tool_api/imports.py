@@ -32,8 +32,10 @@ import os
 import re
 
 import settings
+from agent.collab_writes import create_document_via_collab
 from agent.context import get_agent_context, owned_session_row
 from api_key_auth import agent_author_name
+from artifacts import artifact_enabled
 
 # docx_convert is a stateless leaf (imports only config + httpx) — importing it at
 # module level matches routes.files and keeps `post_docx_to_converter` patchable by
@@ -54,7 +56,7 @@ from files_util import (
 from markdown_normalize import normalize_markdown
 from tiers import require_tier, require_voice_for_audio_ref
 
-from access import get_project_access
+from access import require_full_project_access
 from models import ToolImportFile, ToolReprocessReference, is_ref_row
 from routes.tool_api._common import (
     _refuse_unconfirmable,
@@ -408,6 +410,48 @@ async def _create_binary_reference(
     return {"status": "applied", "reference_id": ref_id, "doc_id": ref_id}
 
 
+_HTML_SUFFIXES = (".html", ".htm")
+
+
+async def _import_html_page(
+    text: str, *, is_reference: bool, title: str, parent_id: str | None,
+    project_id: str, user: dict, scope_root: str | None,
+) -> dict:
+    """An imported .html/.htm file becomes an html artifact leaf, never markdown.
+
+    The markdown passes (normalize, base64-image extraction) are skipped — they
+    would rewrite the page's data: URIs.
+    """
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="content is empty")
+    if not artifact_enabled():
+        raise HTTPException(
+            status_code=422,
+            detail="artifact hosting is not configured — html pages cannot be "
+                   "imported on this instance",
+        )
+    if is_reference:
+        raise HTTPException(
+            status_code=422,
+            detail="an html file imports as an interactive page, not a "
+                   "reference — omit node_type and pass parent_id",
+        )
+    if not parent_id:
+        raise HTTPException(
+            status_code=422,
+            detail="an html page is a leaf — pass parent_id (the document it "
+                   "goes under)",
+        )
+    created = await create_document_via_collab(
+        title=title, content=text, parent_id=parent_id, project_id=project_id,
+        user=user, scope_root=scope_root, media_type="html",
+    )
+    return {
+        "status": "applied", "doc_id": created["doc_id"],
+        "sort_key": created.get("sort_key"), "image_references": [],
+    }
+
+
 async def _import_document(
     *,
     is_reference: bool,
@@ -556,9 +600,7 @@ async def tool_import_file(
     reach the pipeline.
     """
     user = ctx["user"]
-    access = await get_project_access(ctx["project_id"], user)
-    if access != "full":
-        raise HTTPException(status_code=403, detail="Full project access required to create")
+    await require_full_project_access(ctx["project_id"], user, "create")
     # content_base64 is no longer a tool input (the model cannot author
     # bytes). It is produced INTERNALLY by the two byte channels: attachment_index
     # (an attached chat image) and sandbox_path (a workspace file, which may also
@@ -591,6 +633,20 @@ async def tool_import_file(
     # for a document, host for a reference) — discriminated here so the shared
     # executor keeps its internal parameter shape unchanged.
     is_reference = body.node_type == "reference"
+    # INVARIANT: an imported html file is a page or a refusal — it never lands as
+    # a markdown row. Why: raw markup in a markdown body renders as broken source,
+    # pollutes search and embeddings, and is useless as text (there is no
+    # html→markdown conversion); an install without artifact hosting says so
+    # instead of degrading silently. Gated here, not in _import_document: the
+    # executor is shared with the upload widget, whose .html behaviour this
+    # tool's page route must not change.
+    if content is not None and filename.strip().lower().endswith(_HTML_SUFFIXES):
+        return await _import_html_page(
+            content, is_reference=is_reference,
+            title=(body.title or "").strip() or _default_title(filename),
+            parent_id=body.parent_id, project_id=ctx["project_id"], user=user,
+            scope_root=ctx.get("scope_root"),
+        )
     return await _import_document(
         is_reference=is_reference,
         binary_allowed=is_reference,
@@ -628,12 +684,7 @@ async def tool_reprocess_reference(
     from db import fetch_one
 
     user = ctx["user"]
-    access = await get_project_access(ctx["project_id"], user)
-    if access != "full":
-        raise HTTPException(
-            status_code=403,
-            detail="Full project access required to reprocess a reference",
-        )
+    await require_full_project_access(ctx["project_id"], user, "reprocess a reference")
     ref = await fetch_one("documents", body.reference_id)
     if not ref or not is_ref_row(ref):
         raise HTTPException(status_code=404, detail="Reference not found")
@@ -651,11 +702,11 @@ async def tool_reprocess_reference(
     # Validate (image refusal, retryable state, file type) BEFORE the apply gate so a
     # confirm-mode call does not propose a reprocess that could never apply.
     await validate_reprocessable(ref)
-    return await _propose_or_apply_reprocess(ctx, body, access, ref, user)
+    return await _propose_or_apply_reprocess(ctx, body, ref, user)
 
 
 async def _propose_or_apply_reprocess(
-    ctx: dict, body: ToolReprocessReference, access: str, ref: dict, user: dict,
+    ctx: dict, body: ToolReprocessReference, ref: dict, user: dict,
 ) -> dict:
     """Resolve apply-mode for a validated reprocess: auto runs the core directly;
     confirm refuses with the ask signal (409 confirmation_required) — the wipe is

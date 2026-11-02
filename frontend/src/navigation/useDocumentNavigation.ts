@@ -11,6 +11,7 @@ import { useNavigate } from 'react-router-dom';
 import { useUIStore } from '../store/ui-store';
 import { useEvent } from '../hooks/useEvent';
 import { openDocument } from './open-document';
+import { reportOpen } from '../telemetry/access';
 
 export function useDocumentNavigation(): void {
   const navigate = useNavigate();
@@ -19,8 +20,9 @@ export function useDocumentNavigation(): void {
   // Both handlers fire on the bus; this one must early-return so the public
   // surface's in-place hydrate is the only one that runs (and because the store
   // lookups in openDocument assume the authed documents/currentProject state).
-  useEvent('navigate-to-document', useCallback(({ documentId, restore }) => {
+  useEvent('navigate-to-document', useCallback(({ documentId, restore, via }) => {
     if (isPublicShare) return;
+    if (via) reportOpen(documentId, via);
     openDocument(documentId, { restore, navigate });
   }, [navigate, isPublicShare]));
 }

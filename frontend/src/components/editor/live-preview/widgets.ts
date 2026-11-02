@@ -368,8 +368,8 @@ function buildTransclusionHeader(
   titleEl.addEventListener('click', (e) => {
     e.stopPropagation();
     e.preventDefault();
-    if (kind === 'doc') emit('navigate-to-document', { documentId: entityId });
-    else emit('navigate-to-reference', { referenceId: entityId });
+    if (kind === 'doc') emit('navigate-to-document', { documentId: entityId, via: 'link' });
+    else emit('navigate-to-reference', { referenceId: entityId, via: 'link' });
   });
 
   const header = document.createElement('div');
@@ -549,8 +549,8 @@ export class TransclusionLinkWidget extends WidgetType {
     a.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      if (this.kind === 'doc') emit('navigate-to-document', { documentId: this.entityId });
-      else emit('navigate-to-reference', { referenceId: this.entityId });
+      if (this.kind === 'doc') emit('navigate-to-document', { documentId: this.entityId, via: 'link' });
+      else emit('navigate-to-reference', { referenceId: this.entityId, via: 'link' });
     });
     return a;
   }

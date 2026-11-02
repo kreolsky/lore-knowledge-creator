@@ -22,7 +22,11 @@ import settings
 
 from config import count_tokens_approx
 from db import get_db
-from embeddings import EmbeddingConfigError, embed_texts
+from embeddings import (
+    MODEL_DIM_GUARD_SQL,
+    EmbeddingConfigError,
+    embed_texts,
+)
 from models import is_ref_row
 
 logger = logging.getLogger(__name__)
@@ -250,15 +254,9 @@ async def _kind_chunk_query(
 ) -> list[dict]:
     """One kind's top-`top_k` chunks by cosine.
 
-    # WHY (model = $model OR model IS NONE): NONE is "unknown, pre-column"
-    # provenance, not "wrong" — excluding it would blank search on every
-    # project for the ~48 h the stale-model sweep needs to drain post-deploy.
-    # A row stamped with ANOTHER model is KNOWN-stale: its vector lives in
-    # another model's space, its cosine against this query is noise.
-    # WHY array::len(embedding) = $dim: vector::similarity::cosine RAISES on
-    # mixed lengths — the guard turns a crash into an omission for the drain
-    # window and for any future swap that changes the dimension (all vectors
-    # are 1024-dim today; the guard is for the swap that changes that).
+    The model + dimension legs are the shared MODEL_DIM_GUARD_SQL fragment
+    (embeddings.py — the ONE source of their WHY, shared with the memory
+    ranking so the two fetches can never disagree on a row).
     # DEBT: archived refs remain in doc_chunks and are still citable by the agent
     # (the vector search does NOT exclude archived refs). If "archived = don't cite"
     # is ever wanted, add an `archived != true` guard here (joined on the parent
@@ -272,8 +270,7 @@ async def _kind_chunk_query(
         "vector::similarity::cosine(embedding, $q) AS score "
         "FROM doc_chunks "
         "WHERE project_id = $pid AND kind = $kind "
-        "AND (model = $model OR model IS NONE) "
-        "AND array::len(embedding) = $dim "
+        + MODEL_DIM_GUARD_SQL
         + scope
         + "ORDER BY score DESC LIMIT $top_k",
         {"q": query_vec, "pid": project_id, "kind": kind, "model": model,

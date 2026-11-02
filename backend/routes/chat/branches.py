@@ -15,7 +15,6 @@ See SYSTEM: chat-sessions (entry: sessions.py).
 # would couple it to a module the tests do not patch.
 """
 import logging
-from datetime import datetime
 from uuid import uuid4
 
 from chat_sessions.conversation import origin_of
@@ -25,7 +24,7 @@ from fastapi import Depends, HTTPException
 from surrealdb import AsyncSurreal
 
 from auth import get_current_user
-from db import create_record, fetch_one, get_db
+from db import create_record, fetch_one, get_db, iso_str
 from models import BranchCreate
 from routes.chat._router import router
 from routes.chat.sessions import _require_session_access
@@ -319,10 +318,9 @@ async def list_forks(
     if not sess_rows:
         return []
 
-    def _iso(created: object) -> str:
-        return created.isoformat() if isinstance(created, datetime) else ""
-
-    created_at = {str(r["id"]): _iso(r.get("created_at")) for r in sess_rows}
+    created_at = {
+        str(r["id"]): iso_str(r.get("created_at"), default="") for r in sess_rows
+    }
     rows = await db.query(
         "SELECT meta::id(id) AS mid, chat_id, parent_id, origin_id, created_at "
         "FROM messages WHERE chat_id IN $sids AND deleted_at IS NONE",

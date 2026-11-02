@@ -588,7 +588,7 @@ TURN_PROGRESS_GRACE_S = setting(
 # approval pause moves this ceiling like the deadline); worst-case wall =
 # TURN_MAX_WALL_S + TURN_HOLD_MAX_S.
 TURN_MAX_WALL_S = setting(
-    "TURN_MAX_WALL_S", float, default=1800.0, min=1,
+    "TURN_MAX_WALL_S", float, default=3600.0, min=1,
     label="Turn hard wall, s",
     help="Absolute ceiling from turn start; even a progress-making turn breaches "
          "at it.",
@@ -1127,6 +1127,31 @@ SANDBOX_EXTERNAL_AGENT_KEY = setting(
     label="External agent CLI key",
     help="Model credential delivered per run to a foreign agent CLI that "
          "asked for it (sandbox_bash with_external_agent_key).",
+)
+
+
+# ─── HTML artifacts (SYSTEM: artifact-serve) ─────────────────────────────────
+# The SEPARATE cookieless origin agent-written html pages are served from.
+# A REGISTRABLE DOMAIN, never a subdomain of the app
+# host: a page on art.<host> can set cookies on .<host> (cookie tossing /
+# session fixation) and is same-site for the samesite="lax" session cookie on
+# top-level GETs — CSRF origin checks do not cover that, so the split is
+# registrable-domain-level by design. The startup guard
+# (artifacts.check_artifact_origin_config) refuses a sibling
+# subdomain for exactly this reason.
+# Optional feature, precedent SANDBOX_ENABLED above: unset = the html sentence
+# is not rendered into the create_document description and node_type="html" is
+# refused with 422 — a valid deploy, not an error.
+_section("tools", "HTML artifacts")
+ARTIFACT_ORIGIN = setting(
+    "ARTIFACT_ORIGIN", str, default="", effect="restart",
+    label="Artifact origin",
+    help="Origin (https://<registrable domain>) that serves agent-written "
+         "interactive pages, e.g. https://lore-usercontent.example.com. Must "
+         "be a SECOND registrable domain, never a subdomain of the app host. "
+         "Empty = artifacts are not served and create_document refuses "
+         "node_type=html. Restart-only: the host-split middleware, the CSP "
+         "and the startup checks are boot-frozen.",
 )
 
 

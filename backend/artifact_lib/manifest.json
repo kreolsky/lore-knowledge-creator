@@ -1,0 +1,48 @@
+{
+  "libs": [
+    {
+      "name": "echarts",
+      "version": "5.6.0",
+      "files": [
+        {
+          "path": "echarts.min.js",
+          "sha256": "bf4a223524e40b77c304bec67e1222cf551f14880cf42c69dc046558e11c07b1",
+          "url": "https://cdnjs.cloudflare.com/ajax/libs/echarts/5.6.0/echarts.min.js"
+        }
+      ]
+    },
+    {
+      "name": "d3",
+      "version": "7.9.0",
+      "files": [
+        {
+          "path": "d3.min.js",
+          "sha256": "f2094bbf6141b359722c4fe454eb6c4b0f0e42cc10cc7af921fc158fceb86539",
+          "url": "https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"
+        }
+      ]
+    },
+    {
+      "name": "Chart.js",
+      "version": "4.5.0",
+      "files": [
+        {
+          "path": "chart.umd.js",
+          "sha256": "b7929ad4d5323b8244f85d79bba0b3d1495e66f79a2f0023be7f4de5ba4fbac8",
+          "url": "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.umd.js"
+        }
+      ]
+    },
+    {
+      "name": "mermaid",
+      "version": "11.6.0",
+      "files": [
+        {
+          "path": "mermaid.min.js",
+          "sha256": "3a93016a73dc82ba890d919f9bbb176f3da9d98341650c0b517f2595cc68fef8",
+          "url": "https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.6.0/mermaid.min.js"
+        }
+      ]
+    }
+  ]
+}

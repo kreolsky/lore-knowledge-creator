@@ -8,7 +8,9 @@
  * dsh-shape state machine: match on one lore event kind, start from that
  * single event, and materialize one visible chat node anchored at the
  * event's own seq (the producer-minted anchor+offset placement — see the
- * placement INVARIANT in lore-events.ts).
+ * placement INVARIANT in lore-events.ts). A fact dsh's log already states
+ * but dsh renders no node for is matched on dsh's own events instead — no
+ * lore event is minted for it (the interrupted reply).
  *
  * The node data is the fact WITHOUT the placement coordinate: `turn` is the
  * assembler's location input, and the node carries placement through its own
@@ -25,6 +27,8 @@ import type {
 // index.ts — the chatNode helper is the ONE node builder, shared with dsh's
 // own definitions.
 import { chatNode } from '../../packages/client/ui-chat/src/client/conversation-nodes/common.ts'
+// Relative into the workspace, the same way index.ts reaches expandAssistantStream.
+import { assembleAssistantStream } from '../../packages/llm/llm/src/assistant-stream.ts'
 import type {
   LoreCompactionMintEventData, LoreHaltEventData, LoreImageGenEventData,
   LoreVerdictAskEventData,
@@ -41,6 +45,8 @@ declare module '../../packages/client/ui-chat/src/client/contract/chat-nodes.ts'
     'halt': HaltChatData
     /** Whether the backend minted the continuation chat row for one compaction. */
     'compaction-mint': CompactionMintChatData
+    /** The text a failed model attempt had already streamed. */
+    'interrupted-reply': InterruptedReplyChatData
   }
 }
 
@@ -83,6 +89,12 @@ export interface CompactionMintChatData {
   readonly mintFailed: boolean
   readonly mintReason?: string
   readonly tokensBefore?: number
+}
+
+/** The interrupted reply's render payload: the text blocks the failed
+ * attempt streamed, joined; its reasoning is dropped. */
+export interface InterruptedReplyChatData {
+  readonly text: string
 }
 
 /** Strip the placement coordinate; the rest is the node's render payload. */
@@ -163,12 +175,46 @@ export const compactionMintDefinition: ConversationNodeDefinition<CompactionMint
       : chatNode(context, 'compaction-mint', anchor(context), context.state),
 }
 
+function attemptText(stream: unknown): string {
+  if (!Array.isArray(stream)) return ''
+  return assembleAssistantStream(stream).interruptedBlocks()
+    .flatMap(block => block.type === 'text' ? [block.text] : [])
+    .join('\n\n')
+}
+
+/** One model attempt cut off by a failed stream. dsh logs the partial stream
+ * as `assistant/attempt` and deliberately renders no chat node for it, so the
+ * typed text would vanish at the error. Identity: the attempt event itself —
+ * one node per failed attempt, started by that single event and located at
+ * its step. A cancel settles an `interrupted` message instead, which dsh
+ * renders — no attempt, no node here. */
+export const interruptedReplyDefinition: ConversationNodeDefinition<InterruptedReplyChatData> = {
+  kind: 'interrupted-reply',
+  target: 'chat',
+  match: event => event.type === 'assistant/attempt'
+    ? { id: `attempt:${event.seq}`, role: 'start' }
+    : null,
+  start: (_context, match) => ({ text: attemptText(match.event.data.stream) }),
+  // INVARIANT: text a failed attempt already printed is NEVER hidden — not by a
+  // retry, a settled reply, a Stop or a reload; whatever was output stays.
+  // Why: operator ruling — the whole point is that typed text never vanishes.
+  update: context => context.state,
+  // WHY: the attempt waits for the frame so the stream `end` that follows it
+  // retires the transient text first — the default 'immediate' would paint
+  // this node beside the still-live chunks.
+  publication: () => 'animation-frame',
+  buildViewNode: (context: ConversationNodeContext<InterruptedReplyChatData>) =>
+    context.state === undefined || context.state.text === ''
+      ? null
+      : chatNode(context, 'interrupted-reply', anchor(context), context.state),
+}
+
 function anchor(context: ConversationNodeContext<unknown>): number {
   return context.start?.event.seq ?? context.matches[0]?.event.seq ?? 0
 }
 
 /**
- * Register the four Lore-owned conversation Definitions.
+ * Register the Lore-owned conversation Definitions.
  * @param ctx - the bare conversation context the bundle built.
  */
 export function registerLoreNodes(ctx: Context): void {
@@ -176,4 +222,5 @@ export function registerLoreNodes(ctx: Context): void {
   ctx.uiConversation.events.register(verdictAskDefinition)
   ctx.uiConversation.events.register(haltDefinition)
   ctx.uiConversation.events.register(compactionMintDefinition)
+  ctx.uiConversation.events.register(interruptedReplyDefinition)
 }

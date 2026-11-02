@@ -9,9 +9,9 @@ the session's OWN log (dsh id = Lore id; a seeded branch's log carries the
 copied prefix under the SAME seqs), the per-session stamp map is the whole
 pairing — no lineage walk (the log can hold no other branch's turns, and a
 seq never restarts inside one log). A branch whose own log does not exist yet
-reads its seed source's log cut at the seed boundary instead. Rows whose
-stamp does not resolve (a pre-harness turn, an abnormally ended turn) keep no
-`frames` key.
+reads its seed source's log cut at the seed boundary instead. An abnormally
+ended turn (no stamp) pairs by its halt's anchor seq; rows that resolve
+neither way (a pre-harness turn) keep no `frames` key.
 
 Step 3 (plan lore-renders-dsh-conversation) adds the reload LORE MINTS: the
 backend-product facts the verbatim replay cannot state — the halt column's
@@ -68,6 +68,43 @@ async def test_unstamped_row_mid_chain_gets_nothing_and_breaks_nothing():
     assert a1["frames"] == [_dsh(1, "assistant/message")]
     assert ab.get("frames") is None
     assert a3["frames"] == [_dsh(2, "assistant/message")]
+
+
+# TEST-WHY: recurring-regression — a turn that died without turn/end lost its whole timeline on reload (prod 2026-10-31, deadline breach).
+@pytest.mark.asyncio
+async def test_halted_row_takes_its_dead_turn_by_anchor_and_never_a_stamped_one():
+    """A halted unstamped row pairs with the turn holding its anchor seq —
+    closed by dsh's closers (an unstamped end_seq) or still open — and a halt
+    whose anchor sits in a STAMPED turn takes nothing."""
+    a1 = row("a1", seq=5, created="1")
+    dead = {**row("dead", created="2"), "halt": {"reason": "turn_timeout", "anchor_seq": 9}}
+    stray = {**row("stray", created="3"), "halt": {"reason": "error", "anchor_seq": 2}}
+    turns = [
+        {"end_seq": 5, "frames": [_dsh(2, "assistant/message")]},
+        {"end_seq": 10, "frames": [_dsh(7, "tool/call"), _dsh(9, "tool/result")]},
+    ]
+    _assign_frames_by_stamp([a1, dead, stray], turns)
+    assert a1["frames"] == [_dsh(2, "assistant/message")]
+    assert dead["frames"] == [_dsh(7, "tool/call"), _dsh(9, "tool/result")]
+    assert stray.get("frames") is None
+
+    open_dead = {**row("od"), "halt": {"reason": "turn_timeout", "anchor_seq": 21}}
+    _assign_frames_by_stamp([open_dead], [{"frames": [_dsh(20, "tool/call"), _dsh(21, "tool/result")]}])
+    assert open_dead["frames"] == [_dsh(20, "tool/call"), _dsh(21, "tool/result")]
+
+
+# TEST-WHY: recurring-regression — the dead turn's card showed the /stop closer's "aborted" instead of the stored turn_timeout.
+@pytest.mark.asyncio
+async def test_dead_turn_card_carries_the_rows_reason_not_the_stop_closers():
+    from driver.frames import attach_reload_lore_mints
+    dead = {**row("dead"), "halt": {"reason": "turn_timeout", "anchor_seq": 9, "turn": 1}}
+    closer_halt = {"type": "lore/halt", "seq": 10.7, "data": {"reason": "aborted"}}
+    turns = [{"end_seq": 10, "frames": [_dsh(9, "tool/result"), _dsh(10, "turn/end"), closer_halt]}]
+    _assign_frames_by_stamp([dead], turns)
+    await attach_reload_lore_mints([dead], tail_seq=10, session_id="s")
+    halts = [(f["seq"], f["data"]["reason"]) for f in dead["frames"] if f.get("type") == "lore/halt"]
+    assert halts == [(9.7, "turn_timeout")]
+    assert [f["seq"] for f in dead["frames"]] == [9, 9.7, 10]
 
 
 @pytest.mark.asyncio

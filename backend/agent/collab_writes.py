@@ -8,6 +8,8 @@ this module OWNS its names.
 import logging
 from uuid import uuid4
 
+from artifacts import ARTIFACT_MAX_HTML_BYTES
+
 import event_bus
 from agent import doc_state
 
@@ -99,11 +101,18 @@ async def create_document_via_collab(
     user: dict,
     scope_root: str | None = None,
     is_system: bool = False,
+    media_type: str = "markdown",
 ) -> dict:
     """Single source of truth for agent-driven document creation (PR4 R3).
 
     `is_system` marks the row as reserved system infrastructure (grouped in the
     tree apart from user documents).
+
+    `media_type="html"`: the row is an interactive page
+    leaf — the markdown passes (remote-image reject, list-spacing normalize,
+    placeholder unwrap) are SKIPPED (the body is page source, not markdown),
+    the artifact size cap applies, and the mention/embed finalize tail is
+    skipped (a page cannot navigate; embeddings skip html rows).
 
     Validates title + content cap, normalizes list spacing, validates the parent,
     derives a unique path (preserving the sort_key invariant), creates the row,
@@ -132,17 +141,30 @@ async def create_document_via_collab(
     from config import MAX_PROPOSAL_NEW_TEXT_CHARS
     from scope import require_doc_in_scope, resolve_scoped_parent
 
+    is_html = media_type == "html"
     title = (title or "").strip()
     if not title:
         raise HTTPException(status_code=400, detail="title is required")
-    if len(content) > MAX_PROPOSAL_NEW_TEXT_CHARS:
-        raise HTTPException(status_code=413, detail="Content too large")
-    # Reject remote image URLs in authored text (degradation — no server-side
-    # fetch; name the fix). Shared with the edit/append convergence path.
-    doc_state.reject_remote_images(content)
-    # Unwrap `(<id>)` placeholder-bracket destinations — one of the three agent
-    # write sites for the unwrap (create).
-    content = unwrap_placeholder_brackets(normalize_list_spacing(content))
+    if is_html:
+        # WHY its own cap, NOT MAX_PROPOSAL_NEW_TEXT_CHARS: that is the
+        # markdown chat-payload bound (100k chars, below 256 KiB — it would
+        # shadow the artifact limit on every create); the artifact cap is the
+        # honest ceiling — read_document returns the whole body before every
+        # edit (256 KiB ≈ 60k tokens; 1 MiB ≈ 250k per read).
+        if len(content.encode("utf-8")) > ARTIFACT_MAX_HTML_BYTES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"html artifact exceeds the {ARTIFACT_MAX_HTML_BYTES // 1024} KiB cap",
+            )
+    else:
+        if len(content) > MAX_PROPOSAL_NEW_TEXT_CHARS:
+            raise HTTPException(status_code=413, detail="Content too large")
+        # Reject remote image URLs in authored text (degradation — no server-side
+        # fetch; name the fix). Shared with the edit/append convergence path.
+        doc_state.reject_remote_images(content)
+        # Unwrap `(<id>)` placeholder-bracket destinations — one of the three agent
+        # write sites for the unwrap (create).
+        content = unwrap_placeholder_brackets(normalize_list_spacing(content))
     # T5: under a scoped key, a missing parent defaults to the subtree root and an
     # explicit parent must lie inside the subtree (the wall cannot be bypassed by
     # choosing an out-of-scope parent).
@@ -161,6 +183,8 @@ async def create_document_via_collab(
         "title": title, "content": content, "is_reference": False,
         "is_system": is_system,
     }
+    if is_html:
+        payload["media_type"] = "html"
     try:
         await create_with_unique_path(
             doc_id, payload, project_id=project_id, title=title,
@@ -187,7 +211,9 @@ async def create_document_via_collab(
     # both — _finalize_content_mutation also rebuilds mentions/backlinks (which the
     # primitive does not), and the trailing debounce collapses the pair into one
     # embed (same reasoning jobs/tasks.py records for its own double emit).
-    if content:
+    # html artifacts skip the tail: mentions are gated off at the rebuild
+    # chokepoint anyway and embeddings skip html rows — no read model to update.
+    if content and not is_html:
         await doc_state.finalize_content_mutation(doc_id, content, project_id)
     return {"doc_id": doc_id, "sort_key": payload.get("sort_key")}
 

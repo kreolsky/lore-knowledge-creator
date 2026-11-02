@@ -116,6 +116,41 @@ function pairDistance(a: number, pitch: number, lens: Lens, start: number): numb
   return clear + (slotThickness(Math.abs(a - centre), radius) + slotThickness(Math.abs(a + 1 - centre), radius)) / 2;
 }
 
+/** Window offset of tick x from `focus` in radius units, stretched per side to the window's edge. */
+function focusOffset(x: number, lens: Lens, start: number, focus: number): number {
+  const radius = (lens.size - 1) / 2;
+  if (x === focus) return 0;
+  const reach = x < focus ? focus - start : start + lens.size - 1 - focus;
+  return reach === 0 ? radius + 2 : Math.abs(x - focus) * radius / reach;
+}
+
+/**
+ * The window's pair distances (a = start-1 .. start+size-1) with the hump on `focus`.
+ * WHY rescaled to the centred sum: ticks outside the window must keep their y whatever
+ * the focus, so the window's total height may not change — only how it is shared.
+ */
+function focusedDistances(count: number, pitch: number, lens: Lens, start: number, focus: number): Map<number, number> {
+  const { compressed, stride } = lens;
+  const radius = (lens.size - 1) / 2;
+  const raw = new Map<number, number>();
+  let centred = 0;
+  let focused = 0;
+  for (let a = start - 1; a < start + lens.size && a < count; a++) {
+    const d0 = focusOffset(a, lens, start, focus);
+    const d1 = focusOffset(a + 1, lens, start, focus);
+    const gap = Math.max(d0, d1);
+    const share = gap > radius + 1 || radius === 0 ? 0 : Math.min(1, (radius + 1 - gap) / radius);
+    const clear = (stride * compressed - HAIRLINE) * (1 - share) + (pitch - TICK_THICKNESS) * share;
+    const d = clear + (slotThickness(d0, radius) + slotThickness(d1, radius)) / 2;
+    raw.set(a, d);
+    focused += d;
+    centred += pairDistance(a, pitch, lens, start);
+  }
+  const k = focused > 0 ? centred / focused : 1;
+  raw.forEach((d, a) => raw.set(a, d * k));
+  return raw;
+}
+
 /** The lens for `count` ticks that do not fit `height` at full `pitch`. */
 export function lensFor(count: number, pitch: number, height: number): Lens {
   let radius = LENS_RADIUS;
@@ -147,19 +182,21 @@ export function lensFor(count: number, pitch: number, height: number): Lens {
  * or drops — a smooth lens re-snapped every tick per pixel of pointer travel and shimmered.
  */
 export function windowLayout(
-  count: number, pitch: number, lens: Lens, start: number,
+  count: number, pitch: number, lens: Lens, start: number, focus = start + (lens.size - 1) / 2,
 ): { centres: number[]; edges: number[]; thickness: number[] } {
-  const centres = [lens.compressed / 2 + pairDistance(-1, pitch, lens, start) - lens.compressed];
-  for (let a = 0; a < count - 1; a++) centres.push(centres[a] + pairDistance(a, pitch, lens, start));
-  const height = centres[count - 1] + pairDistance(count - 1, pitch, lens, start) - lens.compressed / 2;
+  const dist = focusedDistances(count, pitch, lens, start, focus);
+  const at = (a: number) => dist.get(a) ?? pairDistance(a, pitch, lens, start);
+  const centres = [lens.compressed / 2 + at(-1) - lens.compressed];
+  for (let a = 0; a < count - 1; a++) centres.push(centres[a] + at(a));
+  const height = centres[count - 1] + at(count - 1) - lens.compressed / 2;
   const edges = [0, ...centres.slice(1).map((c, i) => (centres[i] + c) / 2), height];
   const radius = (lens.size - 1) / 2;
-  const thickness = centres.map((_, i) => slotThickness(Math.abs(i - start - radius), radius));
+  const thickness = centres.map((_, i) => slotThickness(focusOffset(i, lens, start, focus), radius));
   return { centres, edges, thickness };
 }
 
-export function windowEdges(count: number, pitch: number, lens: Lens, start: number): number[] {
-  return windowLayout(count, pitch, lens, start).edges;
+export function windowEdges(count: number, pitch: number, lens: Lens, start: number, focus?: number): number[] {
+  return windowLayout(count, pitch, lens, start, focus).edges;
 }
 
 /** The tick whose span holds y. */
@@ -188,11 +225,11 @@ export function followWindow(
     for (const i of shift === 0 ? [prev] : [prev - shift, prev + shift]) {
       if (i < 0 || i >= count) continue;
       const start = centredStart(count, lens, i);
-      if (tickAt(windowEdges(count, pitch, lens, start), y) === i) return { start, index: i };
+      if (tickAt(windowEdges(count, pitch, lens, start, i), y) === i) return { start, index: i };
     }
   }
   const start = centredStart(count, lens, prev);
-  return { start, index: tickAt(windowEdges(count, pitch, lens, start), y) };
+  return { start, index: tickAt(windowEdges(count, pitch, lens, start, prev), y) };
 }
 
 /** Height of the message list area the rail sits in; 0 until measured. */
@@ -353,7 +390,7 @@ export function PromptRail({ items, containerRef, onJump }: Props) {
   const focus = indexOf(hoverId ?? currentId);
   const windowStart = lens ? centredStart(count, lens, focus) : 0;
   const { centres, edges } = lens
-    ? windowLayout(count, tick.pitch, lens, windowStart)
+    ? windowLayout(count, tick.pitch, lens, windowStart, focus)
     : {
       centres: Array.from({ length: count }, (_, i) => (i + 0.5) * tick.pitch),
       edges: Array.from({ length: count + 1 }, (_, i) => i * tick.pitch),
@@ -366,7 +403,14 @@ export function PromptRail({ items, containerRef, onJump }: Props) {
   const glide = tracking ? '' : 'transition-[top,height] duration-150';
   const hairline = Math.max(1, Math.round(dpr)) / dpr;
   // The bell around the focus tick; an unlensed rail spreads it over LENS_RADIUS.
-  const bellAt = (i: number) => lensBell(Math.abs(i - focus), lens ? (lens.size - 1) / 2 : LENS_RADIUS);
+  // WHY stretched per side: at a rail end the window is clamped, so the bell reaches its far edge
+  // instead of spending half its hump past the end.
+  const bellAt = (i: number) => {
+    if (!lens) return lensBell(Math.abs(i - focus), LENS_RADIUS);
+    const radius = (lens.size - 1) / 2;
+    const reach = i < focus ? focus - windowStart : windowStart + lens.size - 1 - focus;
+    return reach === 0 ? 0 : lensBell(Math.abs(i - focus) * radius / reach, radius);
+  };
   // INVARIANT: the current prompt's tick is always at least full thickness and current length (scaled at rest), in the window or not.
   // Why: it is "where I am" — operator decision, it must never thin out of sight.
   const thicknessOf = (i: number, isCurrent: boolean) => {
@@ -412,7 +456,7 @@ export function PromptRail({ items, containerRef, onJump }: Props) {
     const index = followed ? followed.index : tickAt(edges, y);
     setTracking(true);
     // The centres of the layout this move draws: the followed window's, not the one on screen.
-    const drawn = lens && followed ? windowLayout(count, tick.pitch, lens, followed.start).centres : centres;
+    const drawn = lens && followed ? windowLayout(count, tick.pitch, lens, followed.start, followed.index).centres : centres;
     const { a, t } = segmentAt(drawn, y);
     const rowA = rowRefs.current.get(items[a].id);
     const rowB = rowRefs.current.get(items[a + 1].id);

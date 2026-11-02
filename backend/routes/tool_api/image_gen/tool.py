@@ -20,7 +20,7 @@ from driver.frames import resolve_image_gen_anchor
 from fastapi import Depends, HTTPException
 from tiers import require_tier
 
-from access import get_project_access
+from access import require_full_project_access
 from db import fetch_one
 from jobs import pool as jobs_pool
 from models import ToolGenerateImage, is_ref_row
@@ -159,8 +159,7 @@ async def tool_generate_image(
     if doc.get("project_id") != ctx["project_id"]:
         raise HTTPException(status_code=404, detail="Document not found")
     # Full project access to create a reference.
-    if await get_project_access(ctx["project_id"], ctx["user"]) != "full":
-        raise HTTPException(status_code=403, detail="Full project access required")
+    await require_full_project_access(ctx["project_id"], ctx["user"])
 
     # WHY: an image generated while the chat's working document is itself a
     # reference attaches to that reference's PARENT, never to the reference.

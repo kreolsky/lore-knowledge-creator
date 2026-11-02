@@ -28,9 +28,9 @@ from model_access import (
 from pydantic import BaseModel, Field
 from surrealdb import AsyncSurreal
 
+from access import emit_access_changed_recomputed
 from auth import require_admin
 from db import create_record, get_db, run_in_transaction
-from event_bus import emit
 from routes.chat import gateway_model_ids
 
 logger = logging.getLogger(__name__)
@@ -284,7 +284,7 @@ async def delete_group(
         "DELETE type::record('groups', $id)",
     ], {"id": group_id, "subject": subject})
     for pid in pids or []:
-        await emit("access_changed", project_id=pid, user_id=None, access=None)
+        await emit_access_changed_recomputed(pid, None)
     return {"success": True}
 
 
@@ -319,5 +319,5 @@ async def put_group_members(
         {"subject": group_subject(group_id)},
     )
     for pid in rows or []:
-        await emit("access_changed", project_id=pid, user_id=None, access=None)
+        await emit_access_changed_recomputed(pid, None)
     return await _single_group(db, group_id)

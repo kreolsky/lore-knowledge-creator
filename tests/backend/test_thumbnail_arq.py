@@ -14,27 +14,29 @@ import pytest
 @pytest.mark.asyncio
 async def test_thumbnail_task_generates_file():
     """thumbnail_task generates a thumbnail file on disk."""
-    import tempfile
-    from pathlib import Path
+    from uuid import uuid4
 
     from PIL import Image
+    from thumbnails import get_thumb_path
 
+    from config import STORAGE_PATH
     from jobs.tasks import thumbnail_task
 
-    with tempfile.TemporaryDirectory() as tmp:
-        src = Path(tmp) / "test.png"
-        img = Image.new("RGB", (400, 300), color=(255, 0, 0))
-        img.save(src, "PNG")
+    # TEST-WHY: stale patch target — thumbnail_task resolves its source through
+    # files_util.resolve_stored_file (rot-epic step 2), bound to the REAL
+    # STORAGE_PATH at import; the former config/thumbnails.STORAGE_PATH patches
+    # stopped reaching it, so the source must be a REAL contained file.
+    rel = f"thumb-arq-{uuid4().hex[:8]}/test.png"
+    src = STORAGE_PATH / rel
+    src.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (400, 300), color=(255, 0, 0)).save(src, "PNG")
 
-        with patch("config.STORAGE_PATH", Path(tmp)):
-            with patch("thumbnails.STORAGE_PATH", Path(tmp)):
-                with patch("thumbnails.get_thumb_path", return_value=Path(tmp) / "_thumb.webp"):
-                    await thumbnail_task({}, "proj", "ref", "test.png")
+    await thumbnail_task({}, "proj-thumb-arq", "ref-thumb-arq", rel)
 
-        thumb = Path(tmp) / "_thumb.webp"
-        assert thumb.is_file()
-        result = Image.open(thumb)
-        assert result.format == "WEBP"
+    thumb = get_thumb_path("proj-thumb-arq", "ref-thumb-arq")
+    assert thumb.is_file()
+    result = Image.open(thumb)
+    assert result.format == "WEBP"
 
 
 @pytest.mark.asyncio

@@ -23,10 +23,9 @@ from collab.registry import get_active_session
 from fastapi import HTTPException
 
 import event_bus
-from db import extract_id, fetch_one, get_db, validate_record_id
-from documents.delete import _collect_subtree_ids
+from db import extract_id, fetch_one, get_ancestor_ids, get_db, record_refs
+from documents.delete import _collect_live_docs, _collect_subtree_ids
 from documents.service import (
-    ancestor_chain,
     assert_no_cycle,
     assert_parent_valid,
     effective_parent_id,
@@ -40,8 +39,8 @@ from scope import require_doc_in_scope, resolve_scoped_parent
 
 # Rows needed for the refusal checks + path re-derivation + the event split.
 _MOVE_COLUMNS = (
-    "id, project_id, parent_id, title, path, is_reference, "
-    "is_system, is_memory, is_index"
+    "id", "project_id", "parent_id", "title", "path", "is_reference",
+    "is_system", "is_memory", "is_index",
 )
 
 
@@ -57,22 +56,20 @@ def _is_project_anchor(doc: dict | None) -> bool:
     )
 
 
-async def _collect_live_subtree(db, document_id: str) -> dict[str, dict]:
-    """Live subtree rows for the move (docs AND references), keyed by id."""
+async def _collect_live_subtree(document_id: str) -> dict[str, dict]:
+    """Live subtree rows for the move (docs AND references), keyed by id.
+
+    Thin wrapper over delete._collect_live_docs (the one live-row collector):
+    expand the subtree, then collect the move's column set. Divergences vs the
+    delete member are the named parameters — columns, no project_id
+    requirement (the move never dereferences a subtree row's project_id), no
+    idempotent retry classification (member-faithful, not a judgement).
+    """
+    db = await get_db()
     subtree_ids = await _collect_subtree_ids(db, document_id)
-    in_clause = ",".join(
-        f"type::record('documents','{validate_record_id(d)}')" for d in subtree_ids
+    return await _collect_live_docs(
+        subtree_ids, _MOVE_COLUMNS, require_project=False, idempotent=False,
     )
-    rows = await db.query(
-        f"SELECT {_MOVE_COLUMNS} FROM documents "
-        f"WHERE id IN [{in_clause}] AND deleted_at IS NONE"
-    )
-    docs: dict[str, dict] = {}
-    for r in (rows or []):
-        did = extract_id(r.get("id"))
-        if did:
-            docs[did] = r
-    return docs
 
 
 async def _validate_move(
@@ -146,13 +143,13 @@ async def _rewrite_documents(
     """
     plain_ids = await _rederive_colliding_paths(db, docs, target_project_id)
     if plain_ids:
-        plain_clause = ",".join(
-            f"type::record('documents','{validate_record_id(d)}')" for d in plain_ids
-        )
+        # record_refs binds the ids as query params; the UPDATE keeps the
+        # WHERE id IN [...] shape.
+        plain_clause, params = record_refs("documents", plain_ids)
         await db.query(
             f"UPDATE documents SET project_id = $pid, updated_at = time::now() "
             f"WHERE id IN [{plain_clause}]",
-            {"pid": target_project_id},
+            {"pid": target_project_id, **params},
         )
     new_key = await top_sibling_key(target_project_id, parent_id)
     await db.query(
@@ -271,7 +268,7 @@ async def move_document_to_project_command(
             status_code=400, detail="Document is already in the target project",
         )
 
-    docs = await _collect_live_subtree(db, document_id)
+    docs = await _collect_live_subtree(document_id)
     if not docs:
         raise HTTPException(status_code=404, detail="Document not found")
     parent_id = await _validate_move(db, docs, target_project_id, parent_id)
@@ -321,6 +318,17 @@ async def _load_move_target(document_id: str, project_id: str) -> dict:
     return target
 
 
+async def _has_live_children(document_id: str) -> bool:
+    """Whether any live row parents to `document_id` (the conversion fence)."""
+    db_check = await get_db()
+    kids = await db_check.query(
+        "SELECT VALUE id FROM documents "
+        "WHERE parent_id = $id AND deleted_at IS NONE LIMIT 1",
+        {"id": document_id},
+    )
+    return bool(kids)
+
+
 async def _resolve_final_kind(
     target: dict, document_id: str, node_type: str | None,
 ) -> bool:
@@ -328,10 +336,20 @@ async def _resolve_final_kind(
     that cannot hold.
 
     node_type omitted = KEEP the kind. A stated kind equal to the current one
-    is a plain move (no conversion edges fire). The four conversion refusals
+    is a plain move (no conversion edges fire). The five conversion refusals
     all run BEFORE any UPDATE — a refused conversion leaves the row untouched.
     """
     is_reference = is_ref_row(target)
+    # html artifacts: an html REFERENCE is not a thing,
+    # and an html page does not convert into a tree document either — kind is
+    # fixed at birth for the media kind. A plain move (node_type omitted)
+    # stays legal: the page travels as the leaf it is.
+    if node_type is not None and (target.get("media_type") or "") == "html":
+        raise HTTPException(
+            status_code=422,
+            detail="An html artifact's kind is fixed — move it without "
+                   "node_type, or recreate it as the other kind",
+        )
     final_is_reference = is_reference if node_type is None else (
         node_type == "reference"
     )
@@ -345,23 +363,16 @@ async def _resolve_final_kind(
             detail="A file-backed reference cannot become a tree document — "
                    "bytes are not a document; the text already lives in its body",
         )
-    if converting and final_is_reference:
-        db_check = await get_db()
-        kids = await db_check.query(
-            "SELECT VALUE id FROM documents "
-            "WHERE parent_id = $id AND deleted_at IS NONE LIMIT 1",
-            {"id": document_id},
+    if converting and final_is_reference and await _has_live_children(document_id):
+        # assert_parent_valid rejects a reference parent, and the schema
+        # events (documents_parent_check) forbid it at the DB layer — the
+        # children would be orphaned by the conversion. Refuse whole.
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot convert a document with children into a "
+                   "reference — a reference cannot be a parent; move or "
+                   "delete the children first",
         )
-        if kids:
-            # assert_parent_valid rejects a reference parent, and the schema
-            # events (documents_parent_check) forbid it at the DB layer — the
-            # children would be orphaned by the conversion. Refuse whole.
-            raise HTTPException(
-                status_code=422,
-                detail="Cannot convert a document with children into a "
-                       "reference — a reference cannot be a parent; move or "
-                       "delete the children first",
-            )
     return final_is_reference
 
 
@@ -408,14 +419,20 @@ async def _assert_not_into_memory(
 ) -> None:
     """400 when a document from outside the Memory subtree is moved into it."""
     memory_root = memory_folder_id(project_id)
-    if memory_root not in await ancestor_chain(new_parent):
+    # include_deleted_stop + max_depth=None: the move guards'
+    # membership semantics (the soft-deleted boundary node counts, no depth cap).
+    if memory_root not in await get_ancestor_ids(
+        new_parent, include_deleted_stop=True, max_depth=None,
+    ):
         return
     # INVARIANT: the Memory folder and its cards are not a re-parent destination
     # for a document that is not already memory; moves INSIDE memory stay legal.
     # Why: a plain document filed under Memory silently becomes memory the agent
     # retrieves, while the consolidation run's key is scoped to the Memory folder
     # and reorganizes cards within it.
-    if memory_root in await ancestor_chain(document_id):
+    if memory_root in await get_ancestor_ids(
+        document_id, include_deleted_stop=True, max_depth=None,
+    ):
         return
     raise HTTPException(
         status_code=400,

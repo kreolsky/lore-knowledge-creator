@@ -37,6 +37,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { attachEventsChannel, createSessionEventTap, loadWs, relayAssistantStream } from './ws-events.ts'
 import { createSessionStreamBaselines } from './stream-baselines.ts'
 import { registerLoreApprovalBridge } from './approvals.ts'
+import { registerNoRetryAfterText } from './no-retry-after-text.ts'
 import { disposeLoreTools, loreTurnCtxFor } from './tools.ts'
 import { disposeSessionAgents } from './session-agents.ts'
 import { SessionMap } from './sessions.ts'
@@ -81,6 +82,8 @@ export function apply(ctx: Context): void {
   // The approval bridge: dsh's approval/request waterfall is answered
   // by the parked question the verdict endpoints below resolve.
   registerLoreApprovalBridge(ctx, loreTurnCtxFor)
+  // A chat-turn request that failed after printing reply text is not retried.
+  registerNoRetryAfterText(ctx, loreTurnCtxFor)
   // The standing event channel rides the SAME server and the SAME secret
   // gate; ws resolves lazily (see ws-events.ts's loadWs ARCH) — a missing ws
   // logs loudly, and the turn is refused (no delivery path) rather than run

@@ -13,7 +13,7 @@ from chat_sessions.recall_search import (
     visible_sessions,
 )
 
-from db import fetch_many, get_db
+from db import fetch_many, get_db, iso_str
 from jobs.tasks.chat_index import indexing_state, plan_chat_index
 from models import resolve_message_author
 
@@ -142,14 +142,10 @@ async def _references(db, theme_doc_id: str, window: Window) -> list[str]:
 
 
 def _reference_heading(row: dict, names: dict[str, str]) -> str:
-    parts = [names.get(row.get("created_by") or ""), _iso_date(row.get("created_at"))]
+    parts = [names.get(row.get("created_by") or ""), iso_str(row.get("created_at"), default="", date_only=True)]
     signed = ", ".join(p for p in parts if p)
     title = row.get("title") or "Reference"
     return f"{title} — {signed}" if signed else title
-
-
-def _iso_date(value: object) -> str:
-    return value.date().isoformat() if isinstance(value, datetime) else ""
 
 
 async def _author_names(user_ids: set[str]) -> dict[str, str]:

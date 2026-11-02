@@ -6,7 +6,8 @@
  *      live in the settings panel's AudienceSection). Read-only by invariant
  *      for everyone-except-owner; the backend enforces owner-only
  *      mint/revoke.
- *   2. Private chats — the document's subtree chat hide (access/ChatsPrivacySection).
+ *   2. Privacy — the personal page PIN lock, then the document's subtree chat hide
+ *      (access/ChatsPrivacySection).
  *   3. Move — move the current document to another project.
  *   4. Inbox — per-(user × document) arrival-notify toggles (SYSTEM: inbox).
  *   5. API — widget/agent keys + transcription agent config for the current

@@ -38,7 +38,7 @@ from agent.tools import MUTATING_TOOLS, agent_toolset
 from driver.client import (
     DriverLine,
     DriverLineUnreachable,
-    DriverSecretMismatch,
+    driver_refusal,
     resolve_driver_line,
 )
 from fastapi import Depends, HTTPException
@@ -207,13 +207,8 @@ async def _fail_pre_stream_setup(
     # A NAMED failure carries a named status — the same wording family the
     # in-turn failure frames give, never a bare 500.
     if isinstance(exc, DriverLineUnreachable):
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                f"Agent line unavailable — the {exc.line_name} service is not "
-                "reachable. Enable the agent service to chat."
-            ),
-        ) from exc
+        raise driver_refusal(
+            exc, hint="Enable the agent service to chat.") from exc
     raise exc
 
 
@@ -278,9 +273,10 @@ async def _lazy_seed_branch_session(db, session: dict, session_id: str) -> None:
             source_dsh_id=seed_session, seq=seed_seq, new_lore_id=session_id)
     except timeline.DriverForkUnresolvable:
         raise HTTPException(status_code=422, detail="branch point not resolvable")
-    except DriverSecretMismatch as exc:
-        raise HTTPException(
-            status_code=502, detail=DriverSecretMismatch.CAUSE) from exc
+    except DriverLineUnreachable as exc:
+        # Parent-class catch: a secret mismatch names its cause, a down line
+        # on fork is a named 502 instead of the bare 500 it was before.
+        raise driver_refusal(exc) from exc
     await db.query(
         "UPDATE type::record('chat_sessions', $id) "
         "SET seed_source_session = NONE, seed_source_seq = NONE",
@@ -369,19 +365,8 @@ async def cancel_completion(
     try:
         reply = await post_stop(
             session.get("compacted_from") or session_id, return_queue=True)
-    except DriverSecretMismatch as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=DriverSecretMismatch.CAUSE,
-        ) from exc
     except DriverLineUnreachable as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                f"Agent line unavailable — the {exc.line_name} service "
-                "is not reachable."
-            ),
-        ) from exc
+        raise driver_refusal(exc) from exc
     return {"cancelled": True, "returned": reply.get("returned") or []}
 
 
@@ -401,15 +386,6 @@ async def discard_queued(
     try:
         removed = await timeline.post_inbox_discard(
             session.get("compacted_from") or session_id, body.message_id)
-    except DriverSecretMismatch as exc:
-        raise HTTPException(
-            status_code=502, detail=DriverSecretMismatch.CAUSE) from exc
     except DriverLineUnreachable as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                f"Agent line unavailable — the {exc.line_name} service "
-                "is not reachable."
-            ),
-        ) from exc
+        raise driver_refusal(exc) from exc
     return {"removed": removed}

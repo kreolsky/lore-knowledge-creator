@@ -47,11 +47,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertCircle, FileText, List, MessageSquare, Paperclip } from 'lucide-react';
 import {
-  publicTreeByDoc, publicDocumentByDoc, publicReferencesByDoc,
+  publicTreeByDoc, publicDocumentByDoc, publicReferencesByDoc, publicArtifactUrlByDoc,
   type PublicTreeNode,
 } from '../api/public-share';
 import { ProjectShell, type ProjectShellHandle, type LeftTabEntry, type RightTabEntry } from '../components/ProjectShell';
 import { PublicEditor } from '../components/PublicEditor';
+import { ArtifactFrame } from '../components/editor/ArtifactFrame';
 import { EditorLinkPreview } from '../components/editor/EditorLinkPreview';
 import { Sidebar } from '../components/Sidebar';
 import { TableOfContents } from '../components/TableOfContents';
@@ -85,6 +86,7 @@ function treeNodesToDocuments(nodes: PublicTreeNode[]): Document[] {
     path: '',
     is_index: false,
     sort_key: n.sort_key ?? undefined,
+    media_type: n.media_type,
     created_at: now,
     updated_at: now,
   }));
@@ -159,6 +161,7 @@ export function PublicSharePage(
       project_id: '',
       parent_id: existing?.parent_id ?? null,
       title: docResp.title,
+      media_type: docResp.media_type,
       content: docResp.content,
       path: '',
       is_index: false,
@@ -273,7 +276,13 @@ export function PublicSharePage(
   // the next flush); the hook answers with the refetch the old 5 s poll ran.
   // The socket opens only while comments are on: the channel exists for notes.
   const allowComments = usePublicNotesStore(s => s.allowComments);
-  usePublicDocSocket(documentId, allowComments);
+  // An html page (no Yjs here) reloads its frame off the same ping, comments or not.
+  const isHtmlPage = useAppStore(s => s.currentDocument?.document_id === documentId
+    && s.currentDocument.media_type === 'html');
+  const [pageChangeSeq, setPageChangeSeq] = useState(0);
+  const bumpPage = useCallback(() => setPageChangeSeq(n => n + 1), []);
+  usePublicDocSocket(documentId, allowComments || isHtmlPage, bumpPage);
+  const fetchPageUrl = useCallback(() => publicArtifactUrlByDoc(documentId), [documentId]);
 
   const storedRightTab = useUIStore(s => s.documents[ORPHAN_KEY]?.rightPanelTab);
   const noteThreadOpen = usePublicNotesStore(s => !!s.activeNoteId || !!s.draft);
@@ -324,7 +333,7 @@ export function PublicSharePage(
 
   const rightTabs: RightTabEntry[] = [
     { tab: 'refs', icon: <Paperclip size={15} />, title: t('tabReferences'), renderPanel: () => <ReferencesPanel /> },
-    ...(allowComments ? [{
+    ...(allowComments && !isHtmlPage ? [{
       tab: 'notes' as const,
       icon: <MessageSquare size={15} />,
       title: t('tabNotes'),
@@ -348,7 +357,9 @@ export function PublicSharePage(
             <p className="text-ui-base">{t('publicDocUnavailable')}</p>
           </div>
         </div>
-      ) : <PublicEditor />)}
+      ) : isHtmlPage
+        ? <ArtifactFrame key={documentId} fetchUrl={fetchPageUrl} changeSeq={pageChangeSeq} />
+        : <PublicEditor />)}
       userControlsVariant="minimal"
       rightPanelDocId={null}
       rightPanelReady={true}

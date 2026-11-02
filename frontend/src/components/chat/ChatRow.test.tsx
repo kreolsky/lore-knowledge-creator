@@ -97,7 +97,7 @@ describe('ChatRow — parent navigation payload', () => {
     act(() => {
       span.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     });
-    expect(emitMock).toHaveBeenCalledWith('navigate-to-document', { documentId: 'doc-9' });
+    expect(emitMock).toHaveBeenCalledWith('navigate-to-document', { documentId: 'doc-9', via: 'chat' });
     act(() => root.unmount());
   });
 
@@ -109,7 +109,7 @@ describe('ChatRow — parent navigation payload', () => {
     act(() => {
       span.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     });
-    expect(emitMock).toHaveBeenCalledWith('navigate-to-reference', { referenceId: 'ref-1' });
+    expect(emitMock).toHaveBeenCalledWith('navigate-to-reference', { referenceId: 'ref-1', via: 'chat' });
     expect(emitMock).not.toHaveBeenCalledWith('navigate-to-document', expect.anything());
     act(() => root.unmount());
   });

@@ -98,17 +98,17 @@ export function LinksPanel() {
   // ── Handlers ──
   const handleBacklinkClick = (bl: BacklinkItem) => {
     if (bl.source_type === 'ref') {
-      emit('navigate-to-reference', { referenceId: bl.reference_id! });
+      emit('navigate-to-reference', { referenceId: bl.reference_id!, via: 'links_panel' });
     } else {
-      emit('navigate-to-document', { documentId: bl.document_id! });
+      emit('navigate-to-document', { documentId: bl.document_id!, via: 'links_panel' });
     }
   };
 
   const handleOutgoingClick = (link: OutgoingLink) => {
     if (link.type === 'doc') {
-      emit('navigate-to-document', { documentId: link.target });
+      emit('navigate-to-document', { documentId: link.target, via: 'links_panel' });
     } else if (link.type === 'ref') {
-      emit('navigate-to-reference', { referenceId: link.target.replace(/^ref:/, '') });
+      emit('navigate-to-reference', { referenceId: link.target.replace(/^ref:/, ''), via: 'links_panel' });
     } else {
       window.open(link.target, '_blank', 'noopener');
     }

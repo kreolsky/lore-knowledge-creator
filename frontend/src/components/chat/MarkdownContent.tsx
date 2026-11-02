@@ -151,8 +151,8 @@ function handleInAppLinkClick(e: React.MouseEvent<HTMLDivElement>) {
   // parent doc). Why: both point at the same object; without stayInContext the handler
   // navigates to the parent doc and the per-document chat scope switches (long-standing
   // bug). Mirrors Sources.handleRefClick.
-  if (type === 'ref') emit('navigate-to-reference', { referenceId: id, stayInContext: true });
-  else if (type === 'doc') emit('navigate-to-document', { documentId: id });
+  if (type === 'ref') emit('navigate-to-reference', { referenceId: id, stayInContext: true, via: 'chat' });
+  else if (type === 'doc') emit('navigate-to-document', { documentId: id, via: 'chat' });
 }
 
 // ─── wrapper ────────────────────────────────────────────────────────────

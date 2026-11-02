@@ -14,6 +14,7 @@ import event_bus
 from auth import get_current_user
 from db import create_record, fetch_one, get_db, run_in_transaction
 from models import MessageCreate, MessageUpdate
+from routes._guards import guard_row
 from routes.chat._router import router
 from routes.chat.serializers import (
     PREVIEW_CONTENT_MAX,
@@ -326,9 +327,7 @@ async def update_message(message_id: str, body: MessageUpdate, user: dict = Depe
     member row) may edit (see `backend/access.py:can_modify_note_message`). The
     root is resolved via `_is_project_owner` (is_project_root, NOT access_level).
     """
-    msg = await fetch_one("messages", message_id)
-    if not msg:
-        raise HTTPException(status_code=404, detail="Message not found")
+    msg = await guard_row("messages", message_id, not_found="Message not found")
     session = await _require_session_access(msg["chat_id"], user)
     if session.get("is_note") is True:
         from access import can_modify_note_message
@@ -491,9 +490,7 @@ async def delete_message_branch(message_id: str, user: dict = Depends(get_curren
     backend/access.py:can_modify_note_message. AI chat (is_note=False) is
     REFUSED (400): a branch session only appends — there is no branch surgery.
     """
-    msg = await fetch_one("messages", message_id)
-    if not msg:
-        raise HTTPException(status_code=404, detail="Message not found")
+    msg = await guard_row("messages", message_id, not_found="Message not found")
     session = await _require_session_access(msg["chat_id"], user)
     # ARCH: an AI chat's rows only ever APPEND —
     # there is no message delete. A branch is abandoned by leaving it (the

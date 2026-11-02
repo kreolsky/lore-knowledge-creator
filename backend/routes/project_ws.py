@@ -13,22 +13,17 @@ broadcast).
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from ws_utils import authenticate_project_ws, receive_loop
 
-from access import get_project_access
-from auth import validate_ws_token
-from deps import MAX_WS_MESSAGE_SIZE
 from event_bus import on as _bus_on
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-HEARTBEAT_TIMEOUT_SEC = 90
 
 
 # ── Session registry ────────────────────────────────────────────────────────
@@ -106,33 +101,18 @@ def _get_or_create(project_id: str) -> ProjectSession:
     return _sessions[project_id]
 
 
-# ── Auth ────────────────────────────────────────────────────────────────────
-
-async def _authenticate(ws: WebSocket, project_id: str) -> dict | None:
-    """Validate WS token and project read access. Returns user dict or None.
-
-    ARCH: Auth before accept — validate_ws_token checks token_version against DB.
-    """
-    user = await validate_ws_token(ws)
-    if user is None:
-        await ws.close(code=4001, reason="Unauthorized")
-        return None
-    access = await get_project_access(project_id, user)
-    if access is None:
-        await ws.close(code=4003, reason="No project access")
-        return None
-    return user
-
-
 # ── WebSocket endpoint ──────────────────────────────────────────────────────
 
 @router.websocket("/ws/project/{project_id}")
 async def project_ws(ws: WebSocket, project_id: str):
     """Lightweight WS for project-level notifications (tree changes, lifecycle)."""
-    # ARCH: Auth before accept — reject unauthenticated connections without allocating resources (H-5).
-    user = await _authenticate(ws, project_id)
-    if user is None:
+    # ARCH: Auth before accept — reject unauthenticated connections without
+    # allocating resources (H-5). Prologue shared with the collab socket
+    # (ws_utils.authenticate_project_ws); the access level is unused here.
+    auth = await authenticate_project_ws(ws, project_id)
+    if auth is None:
         return
+    user, _access = auth
     await ws.accept()
 
     if project_id not in _sessions and len(_sessions) >= MAX_PROJECT_SESSIONS:
@@ -145,15 +125,7 @@ async def project_ws(ws: WebSocket, project_id: str):
                  project_id, user.get("name", ""), len(session.clients))
     await ws.send_text(json.dumps({"type": "init"}))
     try:
-        while True:
-            try:
-                raw = await asyncio.wait_for(ws.receive_text(), timeout=HEARTBEAT_TIMEOUT_SEC)
-                if len(raw.encode("utf-8")) > MAX_WS_MESSAGE_SIZE:
-                    await ws.close(code=4009, reason="Message too large")
-                    break
-            except asyncio.TimeoutError:
-                await ws.close(code=4008, reason="Heartbeat timeout")
-                break
+        await receive_loop(ws)
     except WebSocketDisconnect:
         pass  # WHY: expected lifecycle — client disconnect is the normal end of a WS session.
     except Exception:

@@ -88,6 +88,9 @@ export function buildPublicTransclusionMap(
   }
 
   for (const doc of documents) {
+    // An html page is never inlined: with no entry the resolver returns null, so
+    // `![t](doc:<page>)` renders as a link (the page lives in its own frame).
+    if (doc.media_type === 'html') continue;
     // The open doc carries content (PublicSharePage merges it in on doc
     // select); siblings only have tree metadata. Seed LOADING for siblings —
     // the hook lazily fetches bodies for docs the editor text actually embeds.

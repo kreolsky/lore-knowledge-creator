@@ -18,6 +18,7 @@ from tiers import require_tier
 from access import require_digest_editor, require_project_full, resolve_digest_subjects
 from auth import get_current_user
 from db import (
+    build_set_clause,
     create_record,
     extract_id,
     fetch_one,
@@ -27,6 +28,7 @@ from db import (
 )
 from jobs import pool as jobs_pool
 from models import AgentConfigCreate, AgentRunRequest
+from routes._guards import guard_row
 
 router = APIRouter(prefix="/api")
 
@@ -131,7 +133,7 @@ async def upsert_agent_config(
     existing = live or revived
     if existing:
         config_id = extract_id(existing[0].get("id"))
-        assignments = ", ".join(f"{name} = ${name}" for name in fields)
+        assignments = build_set_clause(fields)
         await db.query(
             f"UPDATE type::record('agent_configs', $id) SET {assignments}, deleted_at = NONE",
             {"id": config_id, **fields},
@@ -148,9 +150,7 @@ async def delete_agent_config(
     config_id: str,
     user=Depends(get_current_user),
 ):
-    config = await fetch_one("agent_configs", config_id)
-    if not config:
-        raise HTTPException(status_code=404, detail="Agent config not found")
+    config = await guard_row("agent_configs", config_id, not_found="Agent config not found")
     await require_project_full(config.get("project_id", ""), user)
     await soft_delete("agent_configs", config_id)
     return {"ok": True}
@@ -192,9 +192,9 @@ async def run_agent(
 
 
 async def _run_digest_binding(config_id: str, user: dict) -> dict:
-    config = await fetch_one("agent_configs", config_id)
-    if not config or config.get("deleted_at"):
-        raise HTTPException(status_code=404, detail="Agent config not found")
+    config = await guard_row(
+        "agent_configs", config_id, not_found="Agent config not found",
+    )
     project_id = extract_id(config.get("project_id", ""))
     # Launch consent, as for the extractor above: the digest then writes its own report.
     await require_project_full(project_id, user)

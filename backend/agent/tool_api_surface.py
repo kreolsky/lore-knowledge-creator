@@ -21,12 +21,16 @@
 """
 import logging
 
+from artifacts import ARTIFACT_MAX_HTML_BYTES
+from fastapi import HTTPException
+
 from agent.apply_edits_resolver import (
     RegionContainmentReject,
     _resolve_validate_apply_edits,
     region_containment_error,
 )
 from agent.collab_writes import broadcast_agent_presence
+from agent.doc_state import resolve_live_doc_state
 from config import AGENT_EDIT_MAX_CHARS
 from models import RegionRef
 
@@ -88,15 +92,13 @@ async def apply_edits_to_document(
       {status:"applied", doc_id, applied:<n>, skipped:[{index, at_cp, reason}], checkpoint:<bool>}
       All-skipped → {status:"applied", noop:true, doc_id, applied:0, skipped:[…], checkpoint:false}
     """
-    from fastapi import HTTPException
-
     if not edits:
         raise HTTPException(status_code=400, detail="No edits supplied")
 
     # M7: shared fetch+RBAC+scope gate (was inlined here + at the tool_api routes).
     from scope import gate_mutation_target
 
-    await gate_mutation_target(
+    target, _ = await gate_mutation_target(
         user=user, doc_id=doc_id, project_id=project_id, scope_root=scope_root,
     )
 
@@ -105,18 +107,45 @@ async def apply_edits_to_document(
         if isinstance(e.get("new_string"), str) and len(e["new_string"]) > AGENT_EDIT_MAX_CHARS:
             raise HTTPException(status_code=413, detail="Replacement text too large")
 
-    from markdown_normalize import normalize_list_spacing, unwrap_placeholder_brackets
+    # html artifacts: the page source is HTML, not
+    # markdown — the normalize/unwrap passes below are markdown grammar and
+    # would reflow it. Instead the edit path enforces the artifact size cap
+    # (create's ceiling): read_document returns the whole body before every
+    # edit, so a page grown past it must be refused, not silently served at
+    # ~250k tokens per read.
+    is_html = (target.get("media_type") or "") == "html"
+    if is_html:
+        live, _ = await resolve_live_doc_state(doc_id)
+        # WHY bytes, not chars: the cap is a byte ceiling (create counts UTF-8
+        # bytes) — a char count lets a Cyrillic page grow to ~2x the limit.
+        delta = sum(
+            len((e.get("new_string") or "").encode("utf-8"))
+            - len((e.get("old_string") or "").encode("utf-8"))
+            for e in edits
+        )
+        if len(live.encode("utf-8")) + delta > ARTIFACT_MAX_HTML_BYTES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"html artifact exceeds the {ARTIFACT_MAX_HTML_BYTES // 1024} KiB "
+                       "cap — shrink the page before editing further",
+            )
+        normalized = edits
+    else:
+        from markdown_normalize import (
+            normalize_list_spacing,
+            unwrap_placeholder_brackets,
+        )
 
-    # Normalize each edit's new_string spacing once (mirrors the single-edit normalize),
-    # then unwrap `(<id>)` placeholder-bracket destinations — one of the three agent
-    # write sites for the unwrap (batch edit executor; append converges onto it).
-    normalized = [
-        {
-            "old_string": e["old_string"],
-            "new_string": unwrap_placeholder_brackets(normalize_list_spacing(e["new_string"])),
-        }
-        for e in edits
-    ]
+        # Normalize each edit's new_string spacing once (mirrors the single-edit normalize),
+        # then unwrap `(<id>)` placeholder-bracket destinations — one of the three agent
+        # write sites for the unwrap (batch edit executor; append converges onto it).
+        normalized = [
+            {
+                "old_string": e["old_string"],
+                "new_string": unwrap_placeholder_brackets(normalize_list_spacing(e["new_string"])),
+            }
+            for e in edits
+        ]
 
     from doc_edit_lock import edit_lock
 

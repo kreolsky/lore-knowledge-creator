@@ -21,6 +21,6 @@ describe('navigateToDocKeepingChat', () => {
 
   it('emits navigate-to-document for the destination doc', () => {
     navigateToDocKeepingChat('doc-dest');
-    expect(emitMock).toHaveBeenCalledWith('navigate-to-document', { documentId: 'doc-dest' });
+    expect(emitMock).toHaveBeenCalledWith('navigate-to-document', { documentId: 'doc-dest', via: 'chat' });
   });
 });

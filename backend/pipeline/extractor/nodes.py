@@ -132,24 +132,10 @@ class SetupNode(AsyncNode):
         }
 
     async def post_async(self, shared, prep_res, exec_res):
-        shared["transcription_text"] = exec_res["transcription_text"]
-        shared["variables"] = exec_res["variables"]
-        shared["variable_types"] = exec_res["variable_types"]
-        shared["variable_enums"] = exec_res["variable_enums"]
-        shared["variable_kinds"] = exec_res["variable_kinds"]
-        shared["variable_defaults"] = exec_res["variable_defaults"]
-        shared["variable_separators"] = exec_res["variable_separators"]
-        shared["variable_duplicates"] = exec_res["variable_duplicates"]
-        shared["refine_fields"] = exec_res["refine_fields"]
-        shared["calculations"] = exec_res["calculations"]
-        shared["template_string"] = exec_res["template_string"]
-        shared["instructions_string"] = exec_res["instructions_string"]
-        shared["typography"] = exec_res["typography"]
-        shared["ranges"] = exec_res["ranges"]
-        shared["source_doc_title"] = exec_res["source_doc_title"]
-        shared["reference_title"] = exec_res["reference_title"]
-        shared["pipeline_config"] = exec_res["pipeline_config"]
-        shared["child_docs"] = exec_res["child_docs"]
+        # exec_res IS the shared payload — the dict exec_async builds exists to
+        # land in shared wholesale (its key set is the downstream nodes' read
+        # surface), so a key-by-key copy would be sync by hand.
+        shared.update(exec_res)
 
 
 class ExtractionNode(AsyncNode):

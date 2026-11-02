@@ -98,7 +98,7 @@ describe('linkClickExtension — read-only (revealAtCursor=false)', () => {
     const view = makeView('[Doc](doc:abc)', [revealAtCursor.of(false)]);
     click(view, 2); // offset inside the visible "Doc" label
     expect(emit).toHaveBeenCalledTimes(1);
-    expect(emit).toHaveBeenCalledWith('navigate-to-document', { documentId: 'abc' });
+    expect(emit).toHaveBeenCalledWith('navigate-to-document', { documentId: 'abc', via: 'link' });
     view.destroy();
   });
 
@@ -140,7 +140,7 @@ describe('linkClickExtension — editable (revealAtCursor default true)', () => 
   it('navigates on Cmd+click (meta path, first click)', () => {
     const view = makeView('[Doc](doc:abc)');
     click(view, 2, { meta: true });
-    expect(emit).toHaveBeenCalledWith('navigate-to-document', { documentId: 'abc' });
+    expect(emit).toHaveBeenCalledWith('navigate-to-document', { documentId: 'abc', via: 'link' });
     view.destroy();
   });
 });
@@ -209,7 +209,7 @@ describe('linkClickExtension — gesture gate (a drag/selection gesture is not a
     const view = makeView('[Doc](doc:abc)', [revealAtCursor.of(false)]);
     click(view, 2, { x: 4, press: { x: 0 } });
     expect(emit).toHaveBeenCalledTimes(1);
-    expect(emit).toHaveBeenCalledWith('navigate-to-document', { documentId: 'abc' });
+    expect(emit).toHaveBeenCalledWith('navigate-to-document', { documentId: 'abc', via: 'link' });
     view.destroy();
   });
 
@@ -230,7 +230,7 @@ describe('linkClickExtension — gesture gate (a drag/selection gesture is not a
     view.dispatch({ selection: { anchor: 1, head: 4 } }); // CM6 selects the word on the 2nd mousedown
     click(view, 2, { x: 0, detail: 2 });
     expect(emit).toHaveBeenCalledTimes(1);
-    expect(emit).toHaveBeenCalledWith('navigate-to-document', { documentId: 'abc' });
+    expect(emit).toHaveBeenCalledWith('navigate-to-document', { documentId: 'abc', via: 'link' });
     view.destroy();
   });
 
@@ -367,7 +367,7 @@ describe('linkClickExtension — rendered GFM table', () => {
     const view = tableView(DOC);
     const link = view.contentDOM.querySelectorAll('td')[2].querySelector('[data-src-off]')!;
     click(view, 0, { target: link, press: {} });
-    expect(emit).toHaveBeenCalledWith('navigate-to-document', { documentId: 'abc' });
+    expect(emit).toHaveBeenCalledWith('navigate-to-document', { documentId: 'abc', via: 'link' });
     view.destroy();
   });
 

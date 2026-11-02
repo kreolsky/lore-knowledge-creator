@@ -55,6 +55,13 @@ def record_refs(table: str, ids: list[str], prefix: str = "id") -> tuple[str, di
     either; only per-id record refs work. This is the single builder for that
     idiom. The table and every id pass validate_record_id, and the ids ride
     query params — id bytes never reach query text.
+
+    Why per-id refs and not the `$rids.map(...)` binding the record-targeted
+    UPDATEs use: a `WHERE id IN [...]` UPDATE scans the whole table and its
+    read set conflicts with any concurrent write to it, so writes target
+    records directly (`UPDATE $rids.map(...) SET ...`, e.g. delete.py's
+    tombstone); a SELECT's IN-clause takes no conflicting write locks, and
+    the per-id form keeps every id a bound param here.
     """
     validate_record_id(table)
     params: dict[str, str] = {}
@@ -64,6 +71,70 @@ def record_refs(table: str, ids: list[str], prefix: str = "id") -> tuple[str, di
         params[f"{prefix}{n}"] = rid
         refs.append(f"type::record('{table}', ${prefix}{n})")
     return ", ".join(refs), params
+
+
+def build_set_clause(updates: dict, *, none_as_NONE: bool = False) -> str:
+    """One param-bound SET clause from an updates dict: `k = $k` parts, ", "-joined.
+
+    Single home of the per-route set_parts/assignments builders.
+    Keys are always code-chosen column names (Pydantic fields or hardcoded
+    literals), never user input — the same injection posture every copy had.
+    Divergence the copies carried, named: with none_as_NONE a None VALUE writes
+    `k = NONE` (unbinds the column) and the caller binds only its non-None
+    params; without it every value rides a $k param. Time columns
+    (`updated_at = time::now()`) and revivor suffixes stay at the callers —
+    they are SQL the caller appends, not part of the mapping.
+    """
+    parts: list[str] = []
+    for k, v in updates.items():
+        if none_as_NONE and v is None:
+            parts.append(f"{k} = NONE")
+        else:
+            parts.append(f"{k} = ${k}")
+    return ", ".join(parts)
+
+
+def iso_str(
+    value: object,
+    *,
+    default: str | None = None,
+    passthrough_str: bool = False,
+    date_only: bool = False,
+) -> str | None:
+    """Serialize a stored datetime cell to an ISO string for JSON transport.
+
+    Why single-homed: SurrealDB 2.0 returns Python `datetime` and raw values
+    fail json.dumps, so every surface grew the same local `_iso`.
+    The divergences between surfaces are NAMED parameters, never silently
+    picked:
+      default — what a non-datetime, non-passthrough cell yields ("" for the
+        digest/branch shapes, None for the optional-column shapes)
+      passthrough_str — a stored string passes through instead of hitting
+        `default` (public_share/readonly_executors/recall_search kept it)
+      date_only — date granularity (digest material lines) instead of the
+        full datetime
+    Surreal cells are datetime | str | None, so any other scalar yields
+    `default` like every other non-datetime cell.
+    """
+    if isinstance(value, datetime):
+        return value.date().isoformat() if date_only else value.isoformat()
+    if passthrough_str and isinstance(value, str):
+        return value
+    return default
+
+
+def parse_iso(value: str) -> datetime:
+    """Parse a stored field's ISO string to a datetime (Z suffix tolerated).
+
+    Single home of the `datetime.fromisoformat(v.replace("Z", "+00:00"))` arm
+    in the stored-cell coercions (doc_proximity._ts, jobs thinning,
+    api_key_auth expiry, completions_turn._parse_utc_datetime).
+    Python 3.11+ parses a trailing Z natively, so the replace is
+    belt-and-braces — same result either way. Callers own the
+    coercion shape around it (datetime passthrough, naive→UTC, fallbacks):
+    this is the parse primitive only.
+    """
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 def is_record_id(value) -> bool:

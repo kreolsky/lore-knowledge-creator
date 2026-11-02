@@ -9,7 +9,7 @@
  * //       to the ring buffer + the next pagehide sendBeacon.
  */
 
-export type TelemetryCategory = 'collab' | 'perf' | 'client';
+export type TelemetryCategory = 'collab' | 'perf' | 'client' | 'access';
 
 export interface TelemetryEventInput {
   category: TelemetryCategory;

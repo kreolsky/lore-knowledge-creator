@@ -91,7 +91,7 @@ const REF: LinkTypeEntry = {
   },
   extractId(urlText) { return urlText.replace('ref:', ''); },
   validate(id) { return validRefIds.has(id) || projectRefIds.has(id); },
-  action(id) { emit('navigate-to-reference', { referenceId: id }); },
+  action(id) { emit('navigate-to-reference', { referenceId: id, via: 'link' }); },
   decorationClass: 'cm-ref-link',
   brokenTooltip: () => t('linkBrokenReference'),
   // WHY: the Sets are a client snapshot of the project's refs; a miss there is not a
@@ -126,7 +126,7 @@ const DOC: LinkTypeEntry = {
   },
   extractId(urlText) { return urlText; },
   validate(id) { return validDocIds.has(id); },
-  action(id) { emit('navigate-to-document', { documentId: id }); },
+  action(id) { emit('navigate-to-document', { documentId: id, via: 'link' }); },
   decorationClass: 'cm-doc-link',
   brokenTooltip: () => t('linkBrokenDocument'),
 };

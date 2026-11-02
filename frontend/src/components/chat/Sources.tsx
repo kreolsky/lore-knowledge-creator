@@ -4,6 +4,7 @@ import { memo, useCallback } from 'react';
 import { FileText, BookOpen, Link2 } from 'lucide-react';
 import { ChatSource } from '../../types';
 import { emit } from '../../events';
+import type { EventMap } from '../../events/event-types';
 import { navigateToDocKeepingChat } from '../../chat/navigate';
 import { useAppStore } from '../../store/app-store';
 import { encodeLinkId } from '../../utils/in-app-link';
@@ -28,7 +29,8 @@ export const Sources = memo(function Sources({ sources }: Props) {
       referenceId: source.id,
       stayInContext: true,
       scrollToOffset: source.offset_start,
-    } as { referenceId: string; stayInContext?: boolean; scrollToOffset?: number });
+      via: 'chat',
+    } as EventMap['navigate-to-reference']);
   }, []);
 
   if (!sources.length) return null;

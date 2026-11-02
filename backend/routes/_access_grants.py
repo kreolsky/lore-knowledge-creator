@@ -13,8 +13,7 @@ from uuid import uuid4
 
 from surrealdb import AsyncSurreal
 
-import event_bus
-from access import get_user_by_email, recompute_project_access
+from access import emit_access_changed_recomputed, get_user_by_email
 from db import create_record, extract_id, get_db, record_refs
 
 
@@ -133,7 +132,4 @@ async def _apply_grant(
         })
     # RECOMPUTED, never the written row level: a group audience or public grant
     # may sit underneath and hold the effective level higher.
-    await event_bus.emit(
-        "access_changed", project_id=project_id, user_id=target_uid,
-        access=await recompute_project_access(project_id, target_uid),
-    )
+    await emit_access_changed_recomputed(project_id, target_uid)

@@ -18,11 +18,14 @@ export type SessionSlice = Pick<
   | 'users'
   | 'projects'
   | 'pinLocked'
+  | 'unlockedDocIds'
   | 'toast'
   | 'setUsers'
   | 'setProjects'
   | 'setCurrentUser'
   | 'setPinLocked'
+  | 'addUnlockedDocId'
+  | 'setUnlockedDocIds'
   | 'showToast'
   | 'clearToast'
 >;
@@ -38,6 +41,9 @@ export function createSessionSlice(set: AppSet): SessionSlice {
     projects: [],
     // INVARIANT(security): must clear on logout. Why: a leftover pin lock would lock the next user out of the shared client.
     pinLocked: false,
+    // INVARIANT(security): cleared on logout and on the app PIN lock. Why: a page opened
+    // by PIN must not stay open for whoever finds the tab locked or signed out.
+    unlockedDocIds: [],
     toast: null,
 
     setUsers: (users) => set({ users }),
@@ -53,7 +59,7 @@ export function createSessionSlice(set: AppSet): SessionSlice {
       if (!user) {
         clearLastSavedBlobs();
         clearUserScopedCaches();
-        set({ currentUser: null, pinLocked: false });
+        set({ currentUser: null, pinLocked: false, unlockedDocIds: [] });
       } else {
         set({ currentUser: user });
       }
@@ -62,8 +68,10 @@ export function createSessionSlice(set: AppSet): SessionSlice {
       // WHY: the lock replaces the whole tree, tearing down the collab provider — the
       // row names that trigger next to the provider's own `disconnect`.
       sendTelemetry({ category: 'collab', kind: 'pin-lock', detail: { locked } });
-      set({ pinLocked: locked });
+      set(locked ? { pinLocked: true, unlockedDocIds: [] } : { pinLocked: false });
     },
+    addUnlockedDocId: (docId) => set(s => (s.unlockedDocIds.includes(docId) ? {} : { unlockedDocIds: [...s.unlockedDocIds, docId] })),
+    setUnlockedDocIds: (docIds) => set({ unlockedDocIds: docIds }),
 
     showToast: (message, type = 'error', options) =>
       set({ toast: { message, type, persistent: options?.persistent } }),

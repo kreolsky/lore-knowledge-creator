@@ -331,10 +331,12 @@ function toggleQuote(view: EditorView): boolean {
   return true;
 }
 
-/** Wrap selected text as a markdown link and show link suggestions. */
+/**
+ * Wrap selected text as a markdown link and show link suggestions. With no selection,
+ * insert an empty `[]()` — the picked target's title becomes the anchor text.
+ */
 function createLink(view: EditorView): boolean {
   const { from, to, empty } = view.state.selection.main;
-  if (empty) return false;
 
   const selectedText = view.state.sliceDoc(from, to);
   const linkText = `[${selectedText}]()`;
@@ -348,6 +350,7 @@ function createLink(view: EditorView): boolean {
   const coords = view.coordsAtPos(cursorPos);
   emit('show-link-suggestions', {
     pos: cursorPos, coords: coords ? { top: coords.bottom, lineTop: coords.top, left: coords.left } : null, editorView: view,
+    labelPos: empty ? from + 1 : null,
   });
   return true;
 }

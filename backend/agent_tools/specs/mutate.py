@@ -3,7 +3,13 @@ AGENT_TOOLS (MUTATE_TOOLS) — create/edit/append/move_document/rename_document
 + the table tools + the subtree zip import. Pure data — imports nothing from
 the agent package (leaf; the subtree spec dict comes from the sibling
 specs/subtree.py data module).
+
+The create_document html sentence is RENDERED from config + the artifact
+library manifest (artifacts.html_node_sentence) so an install
+without artifact hosting never advertises node_type="html" in prose.
 """
+from artifacts import html_node_sentence
+
 from agent_tools.specs.subtree import IMPORT_SUBTREE_MD_TOOL
 
 MUTATE_TOOLS: list[dict] = [
@@ -18,13 +24,15 @@ MUTATE_TOOLS: list[dict] = [
                 "null = the project root), or the HOST of a `node_type`="
                 "\"reference\" leaf (visible from it and its descendants, cannot "
                 "itself have children). For a leaf whose content comes from a "
-                "file, use `import_file`. In confirmation mode the call is held for the user's approval; it applies on approval, or returns `rejected` with the user's feedback if declined."
+                "file, use `import_file`."
+                + html_node_sentence()
+                + " In confirmation mode the call is held for the user's approval; it applies on approval, or returns `rejected` with the user's feedback if declined."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "title": {"type": "string"},
-                    "content": {"type": "string", "description": "Full markdown body."},
+                    "content": {"type": "string", "description": "Full markdown body (or the whole HTML file for node_type=\"html\")."},
                     "parent_id": {
                         "type": ["string", "null"],
                         "description": (
@@ -36,14 +44,16 @@ MUTATE_TOOLS: list[dict] = [
                     },
                     "node_type": {
                         "type": "string",
-                        "enum": ["document", "reference"],
+                        "enum": ["document", "reference", "html"],
                         "default": "document",
                         "description": (
                             "The kind of node to create: \"document\" (default) = "
                             "a tree document; \"reference\" = a leaf attached to "
-                            "parent_id (the host). media_type is derived "
-                            "server-side, so an audio/image node with no file is "
-                            "unexpressible."
+                            "parent_id (the host); \"html\" = an interactive page "
+                            "leaf (one self-contained HTML file; served only when "
+                            "artifact hosting is configured). media_type is "
+                            "derived server-side, so an audio/image node with no "
+                            "file is unexpressible."
                         ),
                     },
                     # Normalize carries the .md

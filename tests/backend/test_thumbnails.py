@@ -1,6 +1,7 @@
 """Tests for thumbnail generation and GET /api/files/{ref_id}/thumb endpoint."""
 
 import io
+import logging
 
 import pytest
 from test_files import _make_doc
@@ -86,3 +87,31 @@ async def test_delete_file_also_deletes_thumbnail(client, admin_user, project_wi
     )
     assert resp.status_code == 200
     assert not thumb_path.exists(), "Thumbnail should be deleted alongside original"
+
+
+# TEST-WHY: cross-process-contract — the thumbnail task resolves an enqueue-supplied rel_path on the shared storage volume; the pin holds the containment refusal (warning log, nothing read, no thumb written) for a rel_path that escapes STORAGE_PATH, which the task happily thumbnailed before the files_util.resolve_stored_file join (audit 2026-11-01, finding 2). The outside file is REAL (a valid PNG planted beside the storage root) so the pin cannot green through the "source file missing" branch.
+@pytest.mark.asyncio
+async def test_thumbnail_task_refuses_rel_path_outside_storage(caplog):
+    import os
+
+    from thumbnails import get_thumb_path
+
+    from config import STORAGE_PATH
+    from jobs.tasks.thumbnails import thumbnail_task
+
+    marker = STORAGE_PATH.parent / f"trav-marker-{os.getpid()}.png"
+    marker.write_bytes(_make_valid_png())
+    thumb = get_thumb_path("trav-proj", "trav-ref")
+    thumb.unlink(missing_ok=True)  # a prior red run may have left one behind
+    try:
+        with caplog.at_level(logging.WARNING, logger="jobs.tasks.thumbnails"):
+            await thumbnail_task({}, "trav-proj", "trav-ref", f"../{marker.name}")
+        logged = [r.getMessage() for r in caplog.records]
+        assert any(f"../{marker.name}" in m for m in logged), (
+            "an outside-storage rel_path must be refused with a log line"
+        )
+        assert not thumb.exists(), (
+            "no thumbnail may be written from an outside-storage file"
+        )
+    finally:
+        marker.unlink(missing_ok=True)

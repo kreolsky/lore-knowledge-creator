@@ -33,7 +33,7 @@ import { SnapshotPreviewBanner } from './editor/SnapshotPreviewBanner';
 import { PreviewDocumentBanner } from './editor/PreviewDocumentBanner';
 import { CollabPresenceChips } from './editor/CollabPresenceChips';
 import { ReferenceMediaBar } from './editor/ReferenceMediaBar';
-import { mountView, type EditorRole, setRoleView } from '../editor/active-editor';
+import { mountView, unmountView, type EditorRole, setRoleView } from '../editor/active-editor';
 import { positionCacheGet } from '../editor/position-cache';
 import { editableCompartment } from '../editor/editor-plugins';
 import { useEditorAutosave } from '../hooks/useEditorAutosave';
@@ -55,6 +55,10 @@ import { useNotesChangedDispatch } from './editor/note-anchor-wiring';
 import { buildPreviewExtensions } from './editor/preview-editor-extensions';
 import { EditorReferenceBar } from './editor/EditorReferenceBar';
 import { useEntitySwitchPhase } from '../editor/entity-switch-phase';
+import { apiClient } from '../api/client';
+import { ArtifactFrame, useYtextChangeSeq, type ArtifactUrl } from './editor/ArtifactFrame';
+import { ArtifactToolbar } from './editor/ArtifactToolbar';
+import { buildHtmlSourceExtensions } from './editor/html-source-extensions';
 
 // ─── Editor ───────────────────────────────────────────────────────────────────
 
@@ -268,6 +272,36 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
     [cmExtensions, snapshotPreview],
   );
 
+  // ── html page (media_type 'html'): sandboxed frame, or its source on demand ──
+  // The collab join above runs for a page like for any document; the frame reloads
+  // off the joined ytext, and the Source view binds to it through the same compartments.
+  const isHtmlPage = !isReference && (activeItem as Document | null)?.media_type === 'html';
+  const [htmlSourceFor, setHtmlSourceFor] = useState<string | null>(null);
+  const htmlSource = isHtmlPage && htmlSourceFor === activeItemId;
+  const htmlCmExtensions = useMemo(
+    () => buildHtmlSourceExtensions(yjsCompartment.current),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  const htmlChangeSeq = useYtextChangeSeq(
+    isHtmlPage && liveForCurrent ? collabConnectionRef.current?.ytext ?? null : null,
+  );
+  const fetchArtifactUrl = useCallback(
+    (): Promise<ArtifactUrl> => apiClient.get(`/documents/${activeItemId}/artifact-url`),
+    [activeItemId],
+  );
+  const toggleHtmlSource = () => {
+    if (htmlSource) {
+      // The Source view unmounts with the toggle; drop it from every registry so the
+      // collab binding and the editor slots never act on a destroyed view.
+      const view = editorViewRef.current;
+      editorViewRef.current = null;
+      setRoleView(roleRef.current, null, view ?? undefined);
+      unmountView(view ?? undefined);
+    }
+    setHtmlSourceFor(htmlSource ? null : activeItemId ?? null);
+  };
+
   // INVARIANT: editor is online-only — input accepted iff collab is connected
   // AND the machine is live for the entity being rendered AND user has write access.
   // Why: ws.send() is a no-op on a closed socket and CRDT state is re-synced on
@@ -437,12 +471,35 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
             <div className="flex items-center justify-center h-full text-text-dim text-ui-base">
               {t('loading')}
             </div>
+          ) : isHtmlPage && !htmlSource ? (
+            <div className="flex flex-col h-full w-full">
+              <ArtifactToolbar
+                projectId={(activeItem as Document).project_id}
+                documentId={activeItemId!}
+                canEdit={!isReadonly}
+                source={false}
+                onToggleSource={toggleHtmlSource}
+              />
+              <div className="flex-1 min-h-0">
+                <ArtifactFrame key={activeItemId} fetchUrl={fetchArtifactUrl} changeSeq={htmlChangeSeq} />
+              </div>
+            </div>
           ) : (
-            <div className="relative h-full w-full">
+            <div className={isHtmlPage ? 'flex flex-col h-full w-full' : 'relative h-full w-full'}>
+              {isHtmlPage && (
+                <ArtifactToolbar
+                  projectId={(activeItem as Document).project_id}
+                  documentId={activeItemId!}
+                  canEdit={!isReadonly}
+                  source
+                  onToggleSource={toggleHtmlSource}
+                />
+              )}
+              <div className={isHtmlPage ? 'relative flex-1 min-h-0' : 'contents'}>
               <CodeMirrorEditor
-                key={activeItemId}
+                key={isHtmlPage ? `${activeItemId}:source` : activeItemId}
                 doc={activeItem.content || ''}
-                extensions={cmExtensions}
+                extensions={isHtmlPage ? htmlCmExtensions : cmExtensions}
                 initialCursor={savedCursor}
                 onReady={handleEditorReady}
                 onCreateView={handleCreateEditor}
@@ -466,6 +523,7 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
                   onRetry={() => projectCollab?.connect()}
                 />
               )}
+              </div>
             </div>
           )}
         </div>

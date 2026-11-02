@@ -7688,6 +7688,239 @@ function registerTurnProcess(ctx) {
 	ctx.uiConversation.events.register(turnProcessDefinition);
 }
 //#endregion
+//#region ../packages/util/crypto/src/index.ts
+/**
+* Random v4 UUID, minted from `crypto.getRandomValues`.
+* @returns the UUID string.
+*/
+function randomUUID() {
+	const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+	const hex = Array.from(bytes, (byte, index) => {
+		return (index === 6 ? byte & 15 | 64 : index === 8 ? byte & 63 | 128 : byte).toString(16).padStart(2, "0");
+	}).join("");
+	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+//#endregion
+//#region ../packages/llm/llm/src/message.ts
+/** Message value types, identity, and immutable construction helpers. */
+/**
+* Create one identified message and freeze it before publication.
+* @param input - complete role, content, and source for a new message.
+* @returns an immutable message with a fresh stable identity.
+*/
+function createMessage(input) {
+	return deepFreeze(structuredClone({
+		...input,
+		id: brandString(randomUUID())
+	}));
+}
+/**
+* Create one identified model-produced assistant message and freeze it before publication.
+* @param input - complete content plus the provider, model, and optional replay state for a new assistant message.
+* @returns an immutable assistant message with fixed role/source tags and a fresh stable identity.
+*/
+function createAssistantMessage(input) {
+	return createMessage({
+		role: "assistant",
+		content: input.content,
+		source: {
+			kind: "model",
+			...input.source
+		}
+	});
+}
+//#endregion
+//#region ../packages/llm/llm/src/assembler.ts
+/**
+* Incremental chunk-to-message assembler. This is the single canonical assembly
+* algorithm used by the agent loop to build an assistant message from a chunk
+* stream while logging the raw chunks for replay fidelity.
+*
+* @module @deepseek-ai/dsh-llm/assembler
+*/
+/**
+* Incrementally assembles raw {@link StreamChunk}s into complete
+* {@link ContentBlock}s and a final assistant {@link Message}.
+*
+* The agent loop feeds it while logging raw chunks for replay fidelity, then
+* reads `blocks()` / `message()` / `usage` / `finish` once the stream ends,
+* or `interruptedBlocks()` when cancellation cut the stream short.
+*
+* Tolerant of delta-only protocols (no block-start/end); deltas arriving for
+* an index already closed by `block-end` are ignored (malformed stream) so a
+* misbehaving adapter cannot grow memory or corrupt a completed block.
+*/
+var BlockAssembler = class {
+	partials = /* @__PURE__ */ new Map();
+	order = [];
+	_usage;
+	_finish;
+	_replayState;
+	/**
+	* Feed one chunk into the assembly state.
+	* @param chunk - the next raw chunk, in stream order.
+	*/
+	push(chunk) {
+		switch (chunk.type) {
+			case "block-start":
+				if (!this.partials.has(chunk.index)) {
+					this.order.push(chunk.index);
+					this.partials.set(chunk.index, {
+						blockType: chunk.blockType,
+						text: "",
+						toolCallArguments: ""
+					});
+				}
+				return;
+			case "text-delta":
+			case "reasoning-delta": {
+				const partial = this.ensure(chunk.index, chunk.type === "text-delta" ? "text" : "reasoning");
+				if (partial.block) return;
+				partial.text += chunk.text;
+				return;
+			}
+			case "tool-call-delta": {
+				const partial = this.ensure(chunk.index, "tool-call");
+				if (partial.block) return;
+				partial.toolCallId = chunk.id;
+				if (chunk.name) partial.toolCallName = chunk.name;
+				partial.toolCallArguments += chunk.argumentsDelta;
+				return;
+			}
+			case "block-end": {
+				const partial = this.ensure(chunk.index, chunk.block.type);
+				if (partial.block) return;
+				partial.block = chunk.block;
+				return;
+			}
+			case "usage":
+				this._usage = chunk.usage;
+				return;
+			case "finish":
+				this._finish = chunk.reason;
+				this._replayState = chunk.replayState;
+				return;
+			default: return assertNever(chunk, "BlockAssembler.push");
+		}
+	}
+	ensure(index, blockType) {
+		let partial = this.partials.get(index);
+		if (!partial) {
+			partial = {
+				blockType,
+				text: "",
+				toolCallArguments: ""
+			};
+			this.partials.set(index, partial);
+			this.order.push(index);
+		}
+		return partial;
+	}
+	assemble(partial, index) {
+		if (partial.block) return partial.block;
+		switch (partial.blockType) {
+			case "text": return {
+				type: "text",
+				text: partial.text
+			};
+			case "reasoning": return {
+				type: "reasoning",
+				text: partial.text
+			};
+			case "tool-call": return {
+				type: "tool-call",
+				id: partial.toolCallId ?? brandString(`call-${index}`),
+				name: partial.toolCallName ?? "",
+				arguments: partial.toolCallArguments
+			};
+			default: throw new Error(`cannot assemble incomplete block of type "${partial.blockType}"`);
+		}
+	}
+	/** Invariant accessor: every index in `order` has a partial. */
+	mustGet(index) {
+		const partial = this.partials.get(index);
+		if (!partial) throw new Error(`BlockAssembler invariant violated: no partial for index ${index}`);
+		return partial;
+	}
+	/**
+	* The one shared keep/drop decision over all seen blocks: max-token
+	* truncation drops tool calls that cannot be executed safely. Emitted blocks
+	* and replay metadata both derive from this result, so they cannot disagree.
+	*/
+	assembled() {
+		const all = this.order.map((index) => this.assemble(this.mustGet(index), index));
+		const kept = this.finish.kind === "max-tokens" ? all.map((block) => block.type !== "tool-call") : void 0;
+		const blocks = kept === void 0 ? all : all.filter((_, position) => kept[position]);
+		const envelope = this._replayState;
+		if (envelope?.blocks === void 0) return {
+			blocks,
+			replay: envelope
+		};
+		if (envelope.blocks.length !== all.length) return {
+			blocks,
+			replay: void 0
+		};
+		return {
+			blocks,
+			replay: kept === void 0 || blocks.length === all.length ? envelope : {
+				response: envelope.response,
+				blocks: envelope.blocks.filter((_, position) => kept[position])
+			}
+		};
+	}
+	/**
+	* Assemble all blocks seen so far, in stream order.
+	* @returns one block per seen index, except that max-token truncation drops
+	*   tool calls that cannot be executed safely; an open block assembles from
+	*   its accumulated deltas (an unknown block type never closed by `block-end` throws).
+	*/
+	blocks() {
+		return this.assembled().blocks;
+	}
+	/**
+	* Assemble the prefix an interrupted stream can safely finalize: closed and
+	* open text/reasoning blocks with non-whitespace content, in stream order.
+	* Tool calls are omitted because interruption precedes dispatch; retaining
+	* one would require a fabricated result. Open unknown blocks are also omitted.
+	* @returns the kept blocks; empty when nothing streamed before the interruption.
+	*/
+	interruptedBlocks() {
+		return this.order.map((index) => {
+			const partial = this.mustGet(index);
+			const type = partial.block?.type ?? partial.blockType;
+			if (type !== "text" && type !== "reasoning") return void 0;
+			return this.assemble(partial, index);
+		}).filter((block) => (block?.type === "text" || block?.type === "reasoning") && block.text.trim() !== "");
+	}
+	/** Usage from the `usage` chunk; undefined until one arrives. */
+	get usage() {
+		return this._usage;
+	}
+	/** Finish reason from the `finish` chunk; `{kind: 'stop'}` when the stream ended without one. */
+	get finish() {
+		return this._finish ?? { kind: "stop" };
+	}
+	/**
+	* Replay metadata from the terminal finish chunk, if any, with per-block
+	* entries pruned in step with {@link blocks}. Undefined when the envelope's
+	* entries do not align with the emitted blocks.
+	*/
+	get replayState() {
+		return this.assembled().replay;
+	}
+	/**
+	* The assembled assistant message.
+	* @param source - provider/model attribution (without the `kind` tag) for the assembled message.
+	* @returns a frozen assistant-role message over `blocks()` (same open-block assembly rules).
+	*/
+	message(source) {
+		return createAssistantMessage({
+			content: this.blocks(),
+			source
+		});
+	}
+};
+//#endregion
 //#region ../packages/llm/llm/src/assistant-stream.ts
 /**
 * Lossless compact representation of one model-stream attempt, plus record-level
@@ -7766,6 +7999,48 @@ function lastAssistantStreamChunk(stream, type) {
 		const record = stream[index];
 		if (record.type === "chunk" && record.chunk.type === type) return record.chunk;
 	}
+}
+/**
+* Feed one compact stream into a {@link BlockAssembler} without materializing members.
+* Each run contributes one delta carrying its joined fragments, which assembles the same
+* blocks as the original per-member deltas because assembly only concatenates them;
+* raw chunks are pushed as recorded. The records are trusted, not validated: validate a
+* stream read at a durable boundary with {@link expandAssistantStream} first.
+* @param stream - compact records from one durable Assistant settlement.
+* @param assembler - assembler to feed; a fresh one by default.
+* @returns the same assembler after every record was pushed.
+*/
+function assembleAssistantStream(stream, assembler = new BlockAssembler()) {
+	for (const record of stream) switch (record.type) {
+		case "chunk":
+			assembler.push(record.chunk);
+			break;
+		case "text-chunks":
+			assembler.push({
+				type: "text-delta",
+				index: record.index,
+				text: record.texts.join("")
+			});
+			break;
+		case "reasoning-chunks":
+			assembler.push({
+				type: "reasoning-delta",
+				index: record.index,
+				text: record.texts.join("")
+			});
+			break;
+		case "tool-call-chunks":
+			assembler.push({
+				type: "tool-call-delta",
+				index: record.index,
+				id: record.id,
+				...record.name === void 0 ? {} : { name: record.name },
+				argumentsDelta: record.args.join("")
+			});
+			break;
+		default: assertNever(record, "assembleAssistantStream");
+	}
+	return assembler;
 }
 function validateRecord(value) {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError("Assistant stream record must be an object");
@@ -8732,11 +9007,33 @@ const compactionMintDefinition = {
 	update: (context) => context.state,
 	buildViewNode: (context) => context.state === void 0 ? null : chatNode(context, "compaction-mint", anchor(context), context.state)
 };
+function attemptText(stream) {
+	if (!Array.isArray(stream)) return "";
+	return assembleAssistantStream(stream).interruptedBlocks().flatMap((block) => block.type === "text" ? [block.text] : []).join("\n\n");
+}
+/** One model attempt cut off by a failed stream. dsh logs the partial stream
+* as `assistant/attempt` and deliberately renders no chat node for it, so the
+* typed text would vanish at the error. Identity: the attempt event itself —
+* one node per failed attempt, started by that single event and located at
+* its step. A cancel settles an `interrupted` message instead, which dsh
+* renders — no attempt, no node here. */
+const interruptedReplyDefinition = {
+	kind: "interrupted-reply",
+	target: "chat",
+	match: (event) => event.type === "assistant/attempt" ? {
+		id: `attempt:${event.seq}`,
+		role: "start"
+	} : null,
+	start: (_context, match) => ({ text: attemptText(match.event.data.stream) }),
+	update: (context) => context.state,
+	publication: () => "animation-frame",
+	buildViewNode: (context) => context.state === void 0 || context.state.text === "" ? null : chatNode(context, "interrupted-reply", anchor(context), context.state)
+};
 function anchor(context) {
 	return context.start?.event.seq ?? context.matches[0]?.event.seq ?? 0;
 }
 /**
-* Register the four Lore-owned conversation Definitions.
+* Register the Lore-owned conversation Definitions.
 * @param ctx - the bare conversation context the bundle built.
 */
 function registerLoreNodes(ctx) {
@@ -8744,6 +9041,7 @@ function registerLoreNodes(ctx) {
 	ctx.uiConversation.events.register(verdictAskDefinition);
 	ctx.uiConversation.events.register(haltDefinition);
 	ctx.uiConversation.events.register(compactionMintDefinition);
+	ctx.uiConversation.events.register(interruptedReplyDefinition);
 }
 //#endregion
 //#region src/index.ts
@@ -8789,7 +9087,8 @@ function registerLoreNodes(ctx) {
 */
 /**
 * Build one conversation engine with dsh's own node definitions installed,
-* plus Lore's four own cards (image-gen, verdict-ask, halt, compaction-mint).
+* plus Lore's own cards (image-gen, verdict-ask, halt, compaction-mint,
+* interrupted-reply).
 * @returns the feed/read surface; each instance owns its own context.
 */
 function createLoreConversation() {

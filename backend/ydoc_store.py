@@ -278,9 +278,10 @@ async def set_content(entity_id: str, new_content: str, *, persist: bool = False
     (``textmatch.minimal_splice_text``), so anchors on unchanged text survive.
 
     Returns the resulting Yjs update bytes for broadcast.
-    When persist=True, also writes ydoc_state + content to DB and prunes the
-    update log — equivalent to a full compaction. Use this when no active
-    collab session exists (REST apply paths).
+    When persist=True, also writes ydoc_state + content to DB (content as the
+    GFM read-model — expand_tables(doc), never the raw anchor-form text) and
+    prunes the update log — equivalent to a full compaction. Use this when no
+    active collab session exists (REST apply paths).
     extra_sets: optional dict of additional SET fields merged into the UPDATE
                 (e.g. {"processing_status": "ready"}).
     tables_json: when not None, rebuild the ``tables`` Yjs subtree from the captured
@@ -304,7 +305,13 @@ async def set_content(entity_id: str, new_content: str, *, persist: bool = False
     if persist:
         db = await get_db()
         set_parts = "content = $c, ydoc_state = $state, updated_at = time::now()"
-        params: dict = {"id": entity_id, "c": new_content, "state": snapshot}
+        # INVARIANT(persisted): documents.content is the GFM read-model —
+        # expand_tables(doc), never the raw anchor-form new_content.
+        # Why: embeddings/search read the row, not the Y.Doc; persisting anchors made
+        # table text invisible to them while the other writers (flush, compaction,
+        # the no-session surgical edit) already persisted the expansion — see the
+        # read-model contract in documents/update.py.
+        params: dict = {"id": entity_id, "c": expand_tables(doc), "state": snapshot}
         if extra_sets:
             for k, v in extra_sets.items():
                 set_parts += f", {k} = ${k}"

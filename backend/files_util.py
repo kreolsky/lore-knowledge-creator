@@ -83,6 +83,27 @@ async def sweep_tmp_uploads() -> None:
         logger.warning("Temp-upload sweep failed", exc_info=True)
 
 
+def resolve_stored_file(rel: str) -> Path | None:
+    """Resolve a STORED rel_path (a `file_path`/rel_path column value) under
+    STORAGE_PATH, or None when the resolved path escapes the storage root or
+    is not a file.
+
+    # ARCH (security): the single containment home for every stored-file
+    # reader — resolve() FIRST so a `..` segment is normalized before any
+    # check, then is_relative_to(STORAGE_PATH.resolve()), then is_file (the
+    # jobs/tasks/media.py shape). The None cases carry no HTTP/log semantics:
+    # each caller refuses its own way (a 404, a skip+log, a warning frame).
+    Builders of NEW paths (tmp dirs, thumbnails, staging) are not members —
+    they construct, not resolve.
+    """
+    abs_path = (STORAGE_PATH / rel).resolve()
+    if not abs_path.is_relative_to(STORAGE_PATH.resolve()):
+        return None
+    if not abs_path.is_file():
+        return None
+    return abs_path
+
+
 MAGIC_SIGNATURES: list[tuple[bytes, set[str]]] = [
     (b"\xff\xd8\xff", {"image/jpeg"}),
     (b"\x89PNG", {"image/png"}),
@@ -324,6 +345,15 @@ async def remux_stream_copy_inplace(path: Path) -> bool:
         return True
 
 
+async def _adts_to_m4a(data: bytes, original_name: str) -> tuple[bytes, str, str]:
+    """The ADTS remux landing both audio normalizers share: remuxed bytes in a
+    real M4A container + the (mime, filename) pair — stem kept, extension
+    forced to .m4a."""
+    remuxed = await remux_adts_to_m4a(data)
+    stem = re.sub(r"\.[^.]+$", "", original_name) or original_name
+    return remuxed, "audio/mp4", f"{stem}.m4a"
+
+
 async def normalize_audio_upload(data: bytes, mime: str, original_name: str) -> tuple[bytes, str, str]:
     """Remux raw ADTS-AAC uploads into a real M4A; pass every other audio through unchanged.
 
@@ -332,9 +362,7 @@ async def normalize_audio_upload(data: bytes, mime: str, original_name: str) -> 
     """
     if not _is_adts_aac(data):
         return data, mime, original_name
-    remuxed = await remux_adts_to_m4a(data)
-    stem = re.sub(r"\.[^.]+$", "", original_name) or original_name
-    return remuxed, "audio/mp4", f"{stem}.m4a"
+    return await _adts_to_m4a(data, original_name)
 
 
 async def stream_upload_to_tmp(file: UploadFile, max_bytes: int, limit_mb: int) -> tuple[Path, bytes]:
@@ -381,10 +409,9 @@ async def normalize_audio_upload_path(
     """
     if _is_adts_aac(head):
         data = await asyncio.to_thread(tmp_path.read_bytes)
-        remuxed = await remux_adts_to_m4a(data)
+        remuxed, out_mime, out_name = await _adts_to_m4a(data, original_name)
         await asyncio.to_thread(tmp_path.write_bytes, remuxed)
-        stem = re.sub(r"\.[^.]+$", "", original_name) or original_name
-        return tmp_path, "audio/mp4", f"{stem}.m4a"
+        return tmp_path, out_mime, out_name
     # ARCH: WebM seekability. MediaRecorder emits WebM with NO Duration element,
     # so the browser reports `duration === Infinity` until the whole file is
     # buffered — the seek bar is dead and the total time unknown (AudioPlayer.tsx).
@@ -554,6 +581,41 @@ async def save_upload(
         await jobs_pool.enqueue("thumbnail_task", project_id, ref_id, relative_path,
                       job_id=f"thumb:{ref_id}")
 
+    return ref_id, result
+
+
+async def upload_convert_core(
+    data: bytes, original_name: str, project_id: str, document_id: str | None,
+    title: str, *, ext: str, mime: str, task: str,
+    user_id: str | None = None, user_name: str | None = None,
+) -> tuple[str, dict]:
+    """Upload tail shared by the three convert-upload entry points: the widget's
+    upload-docx route and the MCP token redeem's docx branch (routes/files.py,
+    routes/files_mcp_upload.py — .docx/Pandoc) and the widget's upload-pdf route
+    (routes/files.py — .pdf/pymupdf4llm). The named divergences are parameters:
+    ``ext`` (labels the 400 magic detail and the job-id prefix), ``mime`` (the
+    magic target), ``task`` (the arq conversion task name; the converter
+    branches on the stored file's extension). Magic-check the ORIGINAL bytes,
+    store them as a queued markdown reference, enqueue async conversion
+    (images→refs, formulas→LaTeX). The original is kept so retries can re-run
+    (converter output is not stable across versions).
+
+    The entry points own their edge checks BEFORE this call — the widget docx:
+    .docx extension + MAX_DOCX_SIZE_MB; the redeem: the shared per-kind cap on
+    the parser-tracked part size (D-A in files_mcp_upload); the widget pdf:
+    .pdf extension + MAX_PDF_SIZE_MB. The uploader (user_id) rides the task so
+    images extracted from the source are attributed too (create_reference_row
+    callers must pass what they have — plan rule).
+    """
+    if not validate_magic(data, mime):
+        raise HTTPException(status_code=400, detail=f"File content is not a valid {ext}")
+    ref_id, result = await save_upload(
+        data, mime, original_name, project_id, document_id,
+        title=title, media_type="markdown", processing_status="queued",
+        created_by=user_id, created_by_name=user_name,
+    )
+    await jobs_pool.enqueue(task, ref_id, user_id or "", user_name,
+                  job_id=f"{ext.lstrip('.')}:{ref_id}")
     return ref_id, result
 
 

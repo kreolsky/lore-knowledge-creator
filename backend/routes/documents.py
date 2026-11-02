@@ -41,6 +41,7 @@ from models import (
     ReorderDocument,
     is_ref_row,
 )
+from routes._guards import guard_row
 
 router = APIRouter()
 
@@ -353,9 +354,7 @@ async def get_document_links(
     document_id: str, user: dict = Depends(get_current_user)
 ):
     """Return first-circle entities explicitly linked from this document's body."""
-    doc = await fetch_one("documents", document_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
+    doc = await guard_row("documents", document_id, not_found="Document not found")
     await require_document_read(document_id, user)
     # ARCH: prefer live-session content over the DB row so the cascade matches what
     # the chat completion path sees (chat/context.py) and export_document — the DB

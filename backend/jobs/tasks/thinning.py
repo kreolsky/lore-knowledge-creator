@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
+from db import parse_iso
+
 logger = logging.getLogger(__name__)
 
 
@@ -86,7 +88,7 @@ async def thin_auto_checkpoints_task(ctx) -> None:
 
             created_at = row.get("created_at")
             if isinstance(created_at, str):
-                created_at = datetime.fromisoformat(created_at)
+                created_at = parse_iso(created_at)
             if created_at and created_at.tzinfo is None:
                 created_at = created_at.replace(tzinfo=timezone.utc)
             if created_at is None:

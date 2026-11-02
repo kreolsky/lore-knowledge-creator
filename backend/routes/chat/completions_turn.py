@@ -21,7 +21,7 @@ from agent_config import build_prompt_and_skill_docs
 import access
 import db
 from config import CHAT_MAX_AGENT_CONTEXT_CHARS
-from db import extract_id, fetch_one
+from db import extract_id, fetch_one, parse_iso
 from models import CompletionRequest, is_ref_row
 from routes.chat.serializers import _validate_image_url
 
@@ -216,7 +216,7 @@ def _parse_utc_datetime(value) -> datetime | None:
         dt = value
     elif isinstance(value, str):
         try:
-            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            dt = parse_iso(value)
         except ValueError:
             return None
     else:

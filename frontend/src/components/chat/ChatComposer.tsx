@@ -164,7 +164,7 @@ export function ChatComposer({
       >
         <div className="flex flex-col h-full">
           {/* Top area: AI controls + shared attachment chips + warnings */}
-          <div className="px-3 pt-3">
+          <div className="px-3 pt-2">
             {topControls}
             <AttachmentChips images={images} onRemove={onRemoveImage} files={files} onRemoveFile={onRemoveFile} />
             {warnings}

@@ -4,9 +4,9 @@
 # lazily inside the handler, matching every other domain module here.
 """
 from agent.context import get_agent_context
-from fastapi import Body, Depends, HTTPException
+from fastapi import Body, Depends
 
-from access import get_project_access
+from access import require_full_project_access
 from models import (
     ToolApplyMemoryVerdicts,
     ToolConsolidateMemory,
@@ -96,23 +96,18 @@ async def tool_reopen_consolidation(
     from memory.task_builder import resolve_consolidation_host
 
     user = ctx["user"]
-    access = await get_project_access(ctx["project_id"], user)
-    if access != "full":
-        raise HTTPException(
-            status_code=403,
-            detail="Full project access required to reopen a consolidation",
-        )
+    await require_full_project_access(ctx["project_id"], user, "reopen a consolidation")
     # Validate the target (uniform 404, no existence oracle) BEFORE proposing — parity
     # with reprocess's validate-before-propose: a confirm-mode call must not propose a
     # reopen that could never apply.
     await resolve_consolidation_host(
         project_id=ctx["project_id"], target_doc_id=body.target_doc_id,
     )
-    return await _propose_or_apply_reopen(ctx, body, access, user)
+    return await _propose_or_apply_reopen(ctx, body, user)
 
 
 async def _propose_or_apply_reopen(
-    ctx: dict, body: ToolReopenConsolidation, access: str, user: dict,
+    ctx: dict, body: ToolReopenConsolidation, user: dict,
 ) -> dict:
     """Resolve apply-mode for a validated reopen: auto clears directly; confirm holds
     with the ask signal (409 confirmation_required) — moving the run cursor stays

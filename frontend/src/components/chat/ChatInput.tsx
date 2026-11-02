@@ -471,7 +471,7 @@ export function ChatInput() {
   const topControls = (
     <>
       {(currentDocId || activeSessionId) && (
-        <div className="flex justify-between items-center gap-3 mb-2 flex-wrap">
+        <div className="flex justify-between items-center gap-3 mb-1 flex-wrap">
           <div className="flex gap-3">
             <div ref={contentPickerRef}>
               <Button

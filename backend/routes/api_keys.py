@@ -22,15 +22,14 @@ from db import (
     soft_delete,
 )
 from models import ApiKeyResponse, CreateApiKey, RenameApiKey
+from routes._guards import guard_row
 
 router = APIRouter()
 
 
 async def _require_own_key(key_id: str, user: dict) -> dict:
     """Fetch API key and verify ownership. Raises 404/403."""
-    key = await fetch_one("api_keys", key_id)
-    if not key:
-        raise HTTPException(status_code=404, detail="API key not found")
+    key = await guard_row("api_keys", key_id, not_found="API key not found")
     if key["user_id"] != user["user_id"]:
         raise HTTPException(status_code=403, detail="Not your API key")
     return key
@@ -57,9 +56,7 @@ async def list_api_keys(
     db: AsyncSurreal = Depends(get_db),
 ):
     """List active API keys for current user and document."""
-    doc = await fetch_one("documents", document_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
+    await guard_row("documents", document_id, not_found="Document not found")
     await require_document_full(document_id, user)
 
     # INVARIANT(security): internal (agent-minted) keys never appear in user-facing lists —
@@ -112,9 +109,7 @@ async def create_api_key(
                    "(it is the MCP gateway's per-key write ceiling, unused on the widget surface)",
         )
 
-    doc = await fetch_one("documents", body.document_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
+    doc = await guard_row("documents", body.document_id, not_found="Document not found")
     await require_document_full(body.document_id, user)
 
     if "agent" in body.capabilities:

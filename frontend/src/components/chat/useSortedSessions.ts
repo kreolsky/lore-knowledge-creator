@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import { useChatStore } from '../../store/chat-store';
 import { useUIStore } from '../../store/ui-store';
 import { useAppStore } from '../../store/app-store';
+import { selectOpenPageLockedBy, LOCK_PENDING } from '../../utils/page-lock';
 import { buildParentMap, treeDistance, PROJECT_ROOT, listHiddenDocIds } from '../../utils/document-sort';
 import type { ChatSession } from '../../types';
 
@@ -39,20 +40,41 @@ import type { ChatSession } from '../../types';
  * DEBT: list shows newest 200; server pagination pending — Why deferred: no user
  * near the cap yet. ChatEmptyList renders this same set as one scrolling list.
  */
+/**
+ * Where the chats_unlisted projection stands. An open page gated by a PIN lock — its own
+ * or a locked ancestor's (SYSTEM: page-lock) — is viewed from the LOCKING page's parent,
+ * and the active-session exemption is off.
+ */
+// INVARIANT(security): before the PIN, chats listed only inside the locked page's own
+// flagged subtree stay out of the chat list and the title search — the active one too.
+// Why: operator request — the lock screen must not hand out the page's private chats;
+// standing on the parent keeps an unlisted ANCESTOR subtree's chats, the lock is per page.
+export function useChatListPosition(): { positionDocId: string | null; pageLocked: boolean } {
+  const currentDocId = useAppStore(s => s.currentDocument?.document_id) ?? null;
+  const lockedBy = useAppStore(selectOpenPageLockedBy);
+  // The LOCKING page's parent (it may be an ancestor of the open page); PENDING stands
+  // at the project root — outside every flagged subtree, the safe side.
+  const lockParentId = useAppStore(s => (lockedBy && lockedBy !== LOCK_PENDING
+    ? s.documents.find(d => d.document_id === lockedBy)?.parent_id ?? null
+    : null));
+  return { positionDocId: lockedBy ? lockParentId : currentDocId, pageLocked: !!lockedBy };
+}
+
 export function useSortedSessions() {
   const sessions = useChatStore(s => s.sessions);
   const activeSessionId = useChatStore(s => s.activeSessionId);
   const currentDocId = useAppStore(s => s.currentDocument?.document_id) ?? null;
+  const { positionDocId, pageLocked } = useChatListPosition();
   const documents = useAppStore(s => s.documents);
   const sortByProximity = useUIStore(s => s.getChatSortByProximity(currentDocId));
 
   return useMemo(() => {
     // chats_unlisted projection — hidden subtree hosts drop out, the ACTIVE
     // session stays, doc-less sessions (host null/absent) are never hidden.
-    const hiddenDocIds = listHiddenDocIds(documents, currentDocId);
+    const hiddenDocIds = listHiddenDocIds(documents, positionDocId);
     const visible = hiddenDocIds.size === 0
       ? sessions
-      : sessions.filter(s => s.session_id === activeSessionId
+      : sessions.filter(s => (!pageLocked && s.session_id === activeSessionId)
         || !s.host_document_id
         || !hiddenDocIds.has(s.host_document_id));
 
@@ -75,7 +97,7 @@ export function useSortedSessions() {
     }
 
     return [...visible].sort(byRecencyDesc);
-  }, [sessions, activeSessionId, sortByProximity, currentDocId, documents]);
+  }, [sessions, activeSessionId, sortByProximity, currentDocId, positionDocId, pageLocked, documents]);
 }
 
 /**

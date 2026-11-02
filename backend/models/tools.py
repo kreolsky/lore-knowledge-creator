@@ -190,10 +190,12 @@ class ToolCreateDocument(BaseModel):
     # and as an INTERNAL derived field (the create_reference primitive +
     # apply_tool_proposal re-routing use it); media_type stays server-derived,
     # so a node CLAIMING to be audio/image with no file is unexpressible.
-    node_type: Literal["document", "reference"] = "document"
+    # "html": an interactive page leaf — served from the
+    # artifact origin, refused at the handler unless ARTIFACT_ORIGIN is set.
+    node_type: Literal["document", "reference", "html"] = "document"
     apply: ToolApply = ToolApply.confirm
     is_reference: bool = False
-    media_type: Literal["markdown", "audio", "image"] = "markdown"
+    media_type: Literal["markdown", "audio", "image", "html"] = "markdown"
     source_url: str | None = None
     # normalize_markdown opt-in. Default False
     # — agent-authored markdown must NOT be reflowed (it would rewrite text the

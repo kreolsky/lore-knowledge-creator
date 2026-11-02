@@ -39,6 +39,7 @@ from files_util import (
     classify_upload_kind,
     save_audio_upload,
     save_upload,
+    upload_convert_core,
     validate_magic,
 )
 from inbox import KIND_REF, mark_arrived
@@ -54,7 +55,6 @@ from transcription import enqueue_transcription
 
 import event_bus
 from db import fetch_one
-from jobs import pool as jobs_pool
 from ydoc_store import set_content
 
 router = APIRouter()
@@ -476,21 +476,16 @@ async def _store_audio(file: UploadFile, claims: dict, mime: str,
 async def _store_docx(data: bytes, claims: dict, original_name: str,
                       title: str, *, created_by: str | None = None,
                       created_by_name: str | None = None) -> tuple[str, dict]:
-    """.docx branch — parity with the widget upload-docx route: store the ORIGINAL,
-    create a queued markdown reference, enqueue async conversion. The original is kept
-    so retries can re-run (Pandoc output is not stable across versions)."""
-
-    if not validate_magic(data, DOCX_MIME):
-        raise HTTPException(status_code=400, detail="File content is not a valid .docx")
-    ref_id, result = await save_upload(
-        data, DOCX_MIME, original_name, claims["project_id"], claims["document_id"],
-        title=title, media_type="markdown", processing_status="queued",
-        created_by=created_by, created_by_name=created_by_name,
+    """.docx branch — the shared convert tail (files_util.upload_convert_core,
+    .docx its named parameters): store the ORIGINAL, create a queued markdown
+    reference, enqueue async conversion. The original is kept so retries can
+    re-run (Pandoc output is not stable across versions). Extension + size cap
+    are the redeem's shared pre-dispatch checks (D-A), not this branch's."""
+    return await upload_convert_core(
+        data, original_name, claims["project_id"], claims["document_id"],
+        title, ext=".docx", mime=DOCX_MIME, task="convert_docx_task",
+        user_id=claims["user_id"], user_name=created_by_name,
     )
-    # The name rides the task so images extracted from the docx are attributed too.
-    await jobs_pool.enqueue("convert_docx_task", ref_id, claims["user_id"], created_by_name,
-                  job_id=f"docx:{ref_id}")
-    return ref_id, result
 
 
 async def _store_markdown(data: bytes, claims: dict, original_name: str,

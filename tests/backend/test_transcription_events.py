@@ -7,13 +7,24 @@ the Redis backplane (it has no live collab session).
 """
 
 import asyncio
+from contextlib import nullcontext
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 
 async def _create_audio_ref(ref_id: str, pid: str) -> None:
+    from config import STORAGE_PATH
     from db import create_record
+
+    # TEST-WHY: stale patch target — transcribe_task resolves its source through
+    # files_util.resolve_stored_file since step 5, which only yields a path for a
+    # REAL file inside STORAGE_PATH; the former patch of
+    # jobs.tasks.media.STORAGE_PATH has been AttributeError-red since.
+    abs_path = STORAGE_PATH / pid / ref_id / "audio.webm"
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+    abs_path.write_bytes(b"\x1aE\xdf\xa3" + b"\x00" * 64)
+
     await create_record("documents", ref_id, {
         "project_id": pid,
         "parent_id": "some-doc",
@@ -21,7 +32,7 @@ async def _create_audio_ref(ref_id: str, pid: str) -> None:
         "media_type": "audio",
         "content": "",
         "processing_status": "queued",
-        "file_path": "fake/path/audio.webm",
+        "file_path": f"{pid}/{ref_id}/audio.webm",
         "path": f"_ref/{ref_id}.md",
         "is_reference": True,
     })
@@ -53,7 +64,8 @@ async def test_transcribe_task_emits_content_flushed_to_schedule_embed(test_db):
     try:
         with patch("transcription.transcribe_audio", new_callable=AsyncMock, return_value="Hello world"), \
              patch("ydoc_store.set_content", new_callable=AsyncMock), \
-             patch("jobs.tasks.media.STORAGE_PATH"):
+             nullcontext():  # retired STORAGE_PATH seam — kept as a placeholder so the
+            # own-mock lines above stay diff-stable (line-granular test-why gate)
             await transcribe_task({"job_try": 1, "max_tries": 2}, "test-user", ref_id)
             await asyncio.sleep(0.05)  # drain fire-and-forget emit
 
@@ -88,7 +100,8 @@ async def test_transcribe_task_dead_letters_on_first_failure(test_db):
     on("transcription_error", capture)
     try:
         with patch("transcription.transcribe_audio", new_callable=AsyncMock, side_effect=RuntimeError("STT failed")), \
-             patch("jobs.tasks.media.STORAGE_PATH"):
+             nullcontext():  # retired STORAGE_PATH seam — kept as a placeholder so the
+            # own-mock line above stays diff-stable (line-granular test-why gate)
             with pytest.raises(RuntimeError):
                 await transcribe_task({"job_try": 1, "max_tries": 2}, "test-user", ref_id)
             await asyncio.sleep(0.05)  # drain fire-and-forget emit

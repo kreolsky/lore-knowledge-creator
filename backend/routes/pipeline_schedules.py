@@ -25,6 +25,7 @@ from access import require_digest_editor, require_project_full
 from auth import get_current_user
 from db import create_record, fetch_one, get_db, serialize_record, soft_delete
 from models import PipelineScheduleCreate, PipelineSchedulePatch
+from routes._guards import guard_row
 
 router = APIRouter(prefix="/api")
 
@@ -33,9 +34,9 @@ async def _load_owned_schedule(schedule_id: str, user: dict) -> dict:
     """Load a schedule and enforce full access on ITS project — uniform 404 on
     missing/soft-deleted/cross-project ids (no existence oracle), the
     load_owned_proposal discipline."""
-    row = await fetch_one("pipeline_schedules", schedule_id)
-    if not row or row.get("deleted_at"):
-        raise HTTPException(status_code=404, detail="Schedule not found")
+    row = await guard_row(
+        "pipeline_schedules", schedule_id, not_found="Schedule not found",
+    )
     await require_project_full(row.get("project_id", ""), user)
     return row
 

@@ -19,11 +19,9 @@ from dataclasses import dataclass, field
 import driver.client
 import settings
 from chat_sessions.serialize import build_ref_map
+from files_util import resolve_stored_file
 from thumbnails import get_or_render_model_variant
 
-from config import (
-    STORAGE_PATH,
-)
 from db import fetch_one, get_db, get_descendant_ids
 from models import CompletionRequest, is_ref_row
 from routes.chat.serializers import _validate_image_url
@@ -177,6 +175,24 @@ async def _pin_row(
     return as_ref
 
 
+async def _drop_locked_context_ids(context_ids: list[str], session: dict) -> list[str]:
+    """Page PIN lock (see SYSTEM: page-lock) — the chat-session owner's
+    PIN-locked pages never ride the prompt (not even as a pinned scope): a
+    locked title anchor would steer the agent into read_document, which the
+    read gate refuses anyway. The drop is keyed on session["user_id"] (the
+    session owner — the lock is personal, another member pinning the same
+    page pins it normally)."""
+    session_user = session.get("user_id")
+    if not context_ids or not session_user:
+        return context_ids
+    from page_lock import locked_doc_ids
+
+    locked = await locked_doc_ids(session_user)
+    if not locked:
+        return context_ids
+    return [i for i in context_ids if i not in locked]
+
+
 # ARCH: no system-prompt injection happens in build_context. The persona enters the agent
 # prompt via exactly ONE injection point —
 # build_agent_system_prompt(selected_persona_id) — threaded from
@@ -207,7 +223,7 @@ async def build_context(body: CompletionRequest, project_id: str | None, session
     """
     result = ContextResult(system_prefix=[], sources=[], vision_ok=await _resolve_vision_ok(body, session))
     # ARCH: unified context_ids; split via single ref_map call for prompt formatting.
-    context_ids = list(body.context_ids or [])
+    context_ids = await _drop_locked_context_ids(list(body.context_ids or []), session)
     primary_did = session.get("document_id")
     agent_target = await _resolve_agent_target(session, project_id)
     db_for_refmap = await get_db()
@@ -281,10 +297,12 @@ async def _format_ref_doc(ref: dict, ref_id: str, project_id: str | None,
     sink = image_parts if image_parts is not None else None
 
     if media_type == "image" and ref.get("file_path"):
-        file_full = STORAGE_PATH / ref["file_path"]
+        # Containment via the single stored-file resolver: an outside-storage
+        # file_path is simply not deliverable (the missing-file warning path).
+        file_full = resolve_stored_file(ref["file_path"])
         max_image_mb = await settings.get("MAX_IMAGE_SIZE_MB")
         max_bytes = max_image_mb * 1024 * 1024
-        if file_full.is_file() and file_full.stat().st_size <= max_bytes:
+        if file_full is not None and file_full.stat().st_size <= max_bytes:
             if not vision_ok:
                 # Non-vision model: do not deliver the image (would 400/hallucinate).
                 warnings.append({"code": "image_not_delivered", "id": ref_id,
@@ -316,7 +334,7 @@ async def _format_ref_doc(ref: dict, ref_id: str, project_id: str | None,
                     "text": f'[Context — image reference "{ref_title}" (id: {ref_id})]',
                 })
                 sink.append({"type": "image_url", "image_url": {"url": data_uri}})
-        elif file_full.is_file():
+        elif file_full is not None:
             logger.warning("Reference image too large for chat: %s (%d bytes, limit %d MB)", ref_id, file_full.stat().st_size, max_image_mb)
             system_prefix.append({"role": "system", "content": scope})
         else:

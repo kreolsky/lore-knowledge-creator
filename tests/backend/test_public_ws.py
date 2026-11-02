@@ -258,13 +258,14 @@ class TestCapsAndLimits:
     async def test_oversized_message_closes_4009(
         self, sync_app, client, admin_user, project_with_doc, monkeypatch,
     ):
-        from routes import public_ws
+        from deps import MAX_WS_MESSAGE_SIZE
 
-        monkeypatch.setattr(public_ws, "MAX_WS_MESSAGE_SIZE", 8)
         pid, _, _ = project_with_doc
         _, token = admin_user
         doc, _ = await _shared_doc(client, token, pid)
         async with _connect(sync_app, f"/ws/public/doc/{doc}") as (ws, reader):
             assert await reader.wait_frame() == {"type": "init"}
-            ws.send_text("x" * 9)
+            # The real cap (no mock): one frame over deps.MAX_WS_MESSAGE_SIZE —
+            # the constant the shared receive loop (ws_utils) enforces.
+            ws.send_text("x" * (MAX_WS_MESSAGE_SIZE + 1))
             assert await reader.wait_close() == 4009

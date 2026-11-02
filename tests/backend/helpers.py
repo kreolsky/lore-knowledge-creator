@@ -273,6 +273,20 @@ def pin_tool_gates(
         monkeypatch.setattr(config, "COMFYUI_URL", "http://comfy-test" if comfy else "")
 
 
+def pin_artifact_origin(
+    monkeypatch, origin: str = "https://lore-usercontent.test",
+) -> str:
+    """Pin artifact hosting via its config BASE key (the pin_tool_gates
+    pattern): every artifacts.* consumer (gate, mint, middleware, CSP)
+    re-derives the origin at call time through config, so ONE pin serves the
+    whole seam. Empty string pins the "hosting not configured" deploy.
+    """
+    import config
+
+    monkeypatch.setattr(config, "ARTIFACT_ORIGIN", origin)
+    return origin
+
+
 #: A small marked workflow: sampler 3 [lore:seed], prompt 6 [lore:prompt],
 #: latent 88 [lore:size] [lore:batch] (linked width/height, like the shipped
 #: graph), SaveImage 90.

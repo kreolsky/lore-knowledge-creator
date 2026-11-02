@@ -109,6 +109,27 @@ async def test_readonly_user_cannot_edit(client, test_db, admin_user, regular_us
     assert "original text" in rd.json()["content"]
 
 
+# TEST-WHY: refused-principal — the Tool-API full-access gate was ten hand-copied 403 raises with drifting messages (audit C2); access.require_full_project_access is the single producer now, and the 403 detail is the one string a third-party model reads to correct itself — pinned here at one member site.
+@pytest.mark.asyncio
+async def test_commentator_create_document_403_detail(client, test_db, admin_user, regular_user, project_with_doc):
+    """A commentator's agent key is refused by the unified full-access gate,
+    verb-suffixed message intact (behaviour-identical to the hand-copied raises)."""
+    pid, _, _ = project_with_doc
+    _, admin_tok = admin_user
+    user_uid, _ = regular_user
+    await _add_member(test_db, pid, user_uid, "commentator")
+    doc_id = await _make_doc(client, admin_tok, pid, "CommentaryHost", "text")
+    agent_tok = await _make_agent_key(test_db, user_uid, pid)
+
+    resp = await client.post(
+        "/api/tool/create_document",
+        json={"title": "Refused", "content": "x", "parent_id": doc_id, "apply": "auto"},
+        headers=_hdr(agent_tok),
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "Full project access required to create"
+
+
 @pytest.mark.asyncio
 async def test_cross_project_doc_rejected(client, test_db, admin_user, project_with_doc):
     pid, _, admin_uid = project_with_doc

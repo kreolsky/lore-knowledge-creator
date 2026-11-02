@@ -13,7 +13,7 @@ from cp_store import (
 from fastapi import HTTPException
 
 import event_bus
-from db import extract_id, fetch_one, serialize_record
+from db import build_set_clause, extract_id, fetch_one, serialize_record
 from deps import json_safe
 
 logger = logging.getLogger(__name__)
@@ -112,10 +112,7 @@ async def _write_before_restore_backup(
         # set_content), so this branch never writes documents.content.  Why: content has exactly one writer (apply_external_content_change / set_content); checkpoints no longer double-write derived text — they delegate, so single-writer literally holds on both branches.
         # INVARIANT(persisted): no inline content — text lives only in content_ref.  Why: the checkpoint row stores body text only via content_ref (a pointer), never an inline content field — keeping the heavy text out of the row avoids duplicating it and matches the single-writer content shape.
         backup_id = extract_id(backup_row["id"])
-        backup_set = (
-            ", ".join(f"{k} = ${k}" for k in backup_fields)
-            + ", created_at = time::now()"
-        )
+        backup_set = build_set_clause(backup_fields) + ", created_at = time::now()"
         await db.query(
             f"UPDATE type::record('checkpoints', $bid) SET {backup_set}",
             {"bid": backup_id, **backup_fields},

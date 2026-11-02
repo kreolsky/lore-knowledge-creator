@@ -377,10 +377,20 @@ async def test_round_trip_export_then_import(
     src = kids["Src"]["id"]
     src_content = await _content_of(test_db, src)
     # The exported relative link re-imports as a mention edge; the GFM table
-    # re-imports as a table block.
+    # re-imports as a table block: the row (the GFM read-model) inlines the
+    # pipe table, while the persisted Y.Doc keeps the anchor + tables map.
     assert f"[link]({kids['Leaf']['id']})" in src_content
-    anchor = re.search(r"!\[Table\]\(table:([^)]+)\)", src_content)
-    assert anchor, src_content
+    assert "| h1 |" in src_content and "| --- |" in src_content
+    from pycrdt import Map, Text
+
+    from ydoc_store import load
+
+    src_doc = await load(src)
+    anchor = re.search(
+        r"!\[Table\]\(table:([^)]+)\)", str(src_doc.get("content", type=Text)),
+    )
+    assert anchor, "no table anchor in the persisted Y.Doc"
+    assert anchor.group(1) in src_doc.get("tables", type=Map)
     from db import extract_id
 
     edges = await test_db.query(

@@ -73,7 +73,6 @@ export default tseslint.config(
       'src/components/ParentPickerPopup.tsx', // link-suggest-item buttons (same pattern as LinkSuggestionsPopup)
       'src/components/ReferencesPanel.tsx', // file input type="file" (hidden)
       'src/components/ApiKeyManager.tsx',  // copy button + API key input
-      'src/components/PinLockScreen.tsx',  // PIN input (special styling)
       'src/pages/ProjectPage.tsx',        // resizer drag handles
       'src/components/ProjectShell.tsx',  // tab-bar buttons + resizer handles (shared chrome extracted from ProjectPage)
       'src/components/SectionShell.tsx',  // tab-bar buttons + resizer (same chrome as ProjectShell, section surfaces)

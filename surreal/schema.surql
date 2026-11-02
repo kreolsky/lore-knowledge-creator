@@ -21,6 +21,14 @@ DEFINE FIELD IF NOT EXISTS email         ON users TYPE option<string>;
 DEFINE FIELD OVERWRITE role          ON users TYPE string ASSERT $value IN ['admin', 'moderator', 'user'];
 DEFINE FIELD IF NOT EXISTS password_hash ON users TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS pin_hash      ON users TYPE option<string>;
+-- locked_doc_ids: the user's PERSONAL page-PIN-lock set (SYSTEM: page-lock,
+-- backend/page_lock.py). Ids of documents THIS user locked behind their account
+-- PIN; other members are unaffected (hiding from them is RBAC's job, not this
+-- field). option<array<string>>, no default, deliberately NOT backfilled —
+-- same SCHEMAFULL-UPDATE trap as `archived` on documents (:356-365): every
+-- consumer reads NONE as "no locks".
+DEFINE FIELD IF NOT EXISTS locked_doc_ids ON users TYPE option<array<string>>;
+DEFINE FIELD IF NOT EXISTS locked_doc_ids[*] ON users TYPE string;
 DEFINE FIELD IF NOT EXISTS user_facts    ON users TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS timezone      ON users TYPE option<string>;
 -- created_by: which admin created the account (the moderator's group is the
@@ -135,6 +143,23 @@ DEFINE FIELD IF NOT EXISTS client_ts  ON telemetry_event TYPE option<datetime>;-
 DEFINE FIELD IF NOT EXISTS created_at ON telemetry_event TYPE datetime DEFAULT time::now();
 DEFINE INDEX IF NOT EXISTS idx_telemetry_cat_time ON telemetry_event FIELDS category, created_at;
 DEFINE INDEX IF NOT EXISTS idx_telemetry_user ON telemetry_event FIELDS user_id;
+
+-- ─── Object access rollup (durable significance counters) ───────────────────
+-- ARCH: one counter per (project_id, object_ref, day, actor, kind, user_id); the
+-- record id IS that array, so a count is one UPSERT … SET count += 1 (see
+-- backend/access_counts.py). Never purged — unlike telemetry_event.
+-- object_ref: 'doc:<id>' (documents AND references), 'chat:<id>', 'mem:<id>'.
+-- A reader of chat: rows MUST apply the chats wall (owner only).
+
+DEFINE TABLE IF NOT EXISTS object_access_daily SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS project_id ON object_access_daily TYPE string;
+DEFINE FIELD IF NOT EXISTS object_ref ON object_access_daily TYPE string;
+DEFINE FIELD IF NOT EXISTS day        ON object_access_daily TYPE string;      -- YYYY-MM-DD, UTC
+DEFINE FIELD IF NOT EXISTS actor      ON object_access_daily TYPE string ASSERT $value IN ['human','agent'];
+DEFINE FIELD IF NOT EXISTS kind       ON object_access_daily TYPE string ASSERT $value IN ['open','read','exposure','edit'];
+DEFINE FIELD IF NOT EXISTS user_id    ON object_access_daily TYPE string;
+DEFINE FIELD IF NOT EXISTS count      ON object_access_daily TYPE int DEFAULT 0;
+DEFINE INDEX IF NOT EXISTS idx_oad_project_day ON object_access_daily FIELDS project_id, day;
 
 -- ─── Projects ─────────────────────────────────────────────────────────────────
 
@@ -862,8 +887,8 @@ DEFINE FIELD IF NOT EXISTS outline_hidden ON documents TYPE option<int>;
 -- backend/migrations/migrate_2026_05_refactor.py, and it has not been run on every
 -- environment — prod still carries them. Check INFO FOR DB per environment before
 -- assuming; do not restate "were dropped" here.
--- INVARIANT: documents.parent_id of any document points to a non-reference
--- document (or NONE). Enforced by route handlers AND by the
+-- INVARIANT: documents.parent_id of any document points to a non-reference,
+-- non-html-artifact document (or NONE). Enforced by route handlers AND by the
 -- documents_parent_check event below (defense in depth — the event THROW does
 -- abort the CREATE/UPDATE in SurrealDB v3.0.2, verified empirically).
 
@@ -871,11 +896,14 @@ DEFINE FIELD IF NOT EXISTS outline_hidden ON documents TYPE option<int>;
 DEFINE FIELD IF NOT EXISTS is_reference      ON documents TYPE bool DEFAULT false;
 -- WHY: OVERWRITE rather than IF NOT EXISTS — the ASSERT list gained 'file'
 -- (agent-shared .zip archives land as media_type 'file' via the import_file
--- sandbox_path bridge). OVERWRITE re-applies the widened vocabulary on every boot;
--- IF NOT EXISTS would leave older DBs on the 3-value list and 500 every file-ref
--- create. Same precedent as processing_status below.
+-- sandbox_path bridge) and later 'html' (agent-written interactive pages,
+-- a documents row with media_type='html' is an artifact
+-- leaf rendered from a separate cookieless origin). OVERWRITE re-applies the
+-- widened vocabulary on every boot; IF NOT EXISTS would leave older DBs on the
+-- 3-value list and 500 every file-ref create. Same precedent as
+-- processing_status below.
 DEFINE FIELD OVERWRITE media_type        ON documents TYPE option<string>
-    ASSERT $value = NONE OR $value IN ['markdown', 'audio', 'image', 'file'];
+    ASSERT $value = NONE OR $value IN ['markdown', 'audio', 'image', 'file', 'html'];
 DEFINE FIELD IF NOT EXISTS source_url        ON documents TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS file_path         ON documents TYPE option<string>;
 -- WHY: FLEXIBLE — file_meta sub-fields vary by media_type (image has width/
@@ -914,18 +942,29 @@ DEFINE INDEX IF NOT EXISTS idx_documents_parent
 DEFINE INDEX IF NOT EXISTS idx_documents_parent_only
     ON documents FIELDS parent_id, is_reference, deleted_at;
 
--- Parent-check event: a document's parent must not itself be a reference.
+-- Parent-check event: a document's parent must not itself be a reference,
+-- and must not be an html artifact leaf (only markdown/NONE rows may have
+-- children — an artifact is a terminal page).
 -- SurrealDB v3 cannot express cross-record conditions in ASSERT, so we use a
 -- table-level event that THROWs on violation. Verified: THROW inside the event
 -- aborts the CREATE/UPDATE — the record is not persisted, and the driver
 -- surfaces the error as a string return that create_record() raises.
-DEFINE EVENT IF NOT EXISTS documents_parent_check ON documents
+-- WHY OVERWRITE rather than IF NOT EXISTS: existing DBs already carry the
+-- pre-html event, and IF NOT EXISTS never redefines it — the html-parent THROW
+-- would simply never fire there. OVERWRITE replaces the definition in place
+-- (verified on gray, surreal v3.3.5, 2026-10-30: one event before, one after,
+-- body swapped — no REMOVE EVENT fallback needed). Same precedent as the
+-- media_type ASSERT above.
+DEFINE EVENT OVERWRITE documents_parent_check ON documents
     WHEN $event = 'CREATE' OR $event = 'UPDATE'
     THEN {
         IF $after.parent_id != NONE {
-            LET $parent = (SELECT is_reference FROM type::record('documents', $after.parent_id))[0];
+            LET $parent = (SELECT is_reference, media_type FROM type::record('documents', $after.parent_id))[0];
             IF $parent.is_reference = true {
                 THROW 'Reference documents cannot be parents';
+            };
+            IF $parent.media_type = 'html' {
+                THROW 'HTML artifacts cannot be parents';
             };
         };
     };

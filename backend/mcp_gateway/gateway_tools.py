@@ -84,7 +84,7 @@ async def _authorize_upload_mint(document_id: str, ctx: dict) -> None:
     # which likewise binds authorization at mint. Kept as ONE function so the chain
     # cannot be partially applied by a future second mint path.
     """
-    from access import get_project_access
+    from access import require_full_project_access
     from db import fetch_one
     from mcp_gateway.dispatch import _require_writable
     from scope import require_doc_in_scope
@@ -117,8 +117,7 @@ async def _authorize_upload_mint(document_id: str, ctx: dict) -> None:
             detail="A file attaches to a document, not to another attached node — "
                    "pass the host document's id as attach_to",
         )
-    if await get_project_access(ctx["project_id"], ctx["user"]) != "full":
-        raise HTTPException(status_code=403, detail="Full project access required to create")
+    await require_full_project_access(ctx["project_id"], ctx["user"], "create")
     await require_doc_in_scope(ctx.get("scope_root"), document_id)
 
 

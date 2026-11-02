@@ -15,6 +15,8 @@ tools (gated first, then always-served).
 The base entries iterate the spec LISTS (READ_TOOLS + MUTATE_TOOLS) so the
 declaration never drifts from the spec constants' own order.
 """
+from artifacts import html_node_sentence
+
 from agent_tools.registry import ToolEntry, register
 from agent_tools.specs.chat_recall import (
     LIST_MY_CHATS_TOOL,
@@ -126,8 +128,9 @@ _MCP_MUTATING_DESCRIPTIONS: dict[str, str] = {
         "existing image in the text, write `![alt|800x600](ref:<document_id>)` using an "
         "id from `references[]` or `attach_file`'s POST response — never embed file "
         "bytes or base64 in text (files live on nodes, not in the buffer). Remote "
-        "image URLs are not supported inline; attach the file and reference it by id. "
-        "Read-write key: applies immediately, reversible in the Lore History panel."
+        "image URLs are not supported inline; attach the file and reference it by id."
+        + html_node_sentence()
+        + " Read-write key: applies immediately, reversible in the Lore History panel."
     ),
     "edit_table_cell": (
         "Edit one or more table cells as one atomic batch (edits: "

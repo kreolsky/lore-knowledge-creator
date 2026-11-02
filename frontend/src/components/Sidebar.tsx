@@ -121,10 +121,10 @@ export function Sidebar() {
   // Subscribing is harmless (the bus is in-memory only without a socket).
 
   // Project WS: real-time tree updates from other users
-  useEvent('ws:document_created', useCallback(({ document_id: docId, title, parent_id: parentId, sort_key: sortKey }) => {
+  useEvent('ws:document_created', useCallback(({ document_id: docId, title, parent_id: parentId, sort_key: sortKey, media_type: mediaType }) => {
     const docs = useAppStore.getState().documents;
     if (docs.some(d => d.document_id === docId)) return;
-    setDocuments([...docs, { document_id: docId, title, parent_id: parentId, is_index: false, sort_key: sortKey ?? undefined } as typeof docs[0]]);
+    setDocuments([...docs, { document_id: docId, title, parent_id: parentId, is_index: false, sort_key: sortKey ?? undefined, media_type: mediaType ?? undefined } as typeof docs[0]]);
     if (parentId && useUIStore.getState().collapsedDocIds.includes(parentId)) {
       useUIStore.getState().toggleDocExpanded(parentId);
     }

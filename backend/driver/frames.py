@@ -778,17 +778,27 @@ def _int_or_none(value: object) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
+def _insert_by_seq(frames: list, frame: dict) -> list:
+    """`frames` with `frame` placed before the first frame of a higher seq."""
+    at = next((i for i, f in enumerate(frames)
+               if isinstance(f, dict) and isinstance(f.get("seq"), (int, float))
+               and f["seq"] > frame["seq"]), len(frames))
+    return [*frames[:at], frame, *frames[at:]]
+
+
 def _attach_halt_mints(
     assistants: list[dict], *, tail_seq: int | None,
 ) -> None:
     """Mint `lore/halt` onto the qualifying rows — see the placement INVARIANT
     in attach_reload_lore_mints."""
-    # The qualifier: halt column present, no resolved turn (no frames were
-    # assigned — dsh's own turn-error node renders those).
+    # The qualifier: halt column present, and no turn resolved BY STAMP (a
+    # stamped turn's frames carry dsh's own turn-error node). An unstamped row
+    # paired by its anchor keeps its dead turn's frames and takes its card
+    # among them.
     halt_rows = [
         row for row in assistants
         if isinstance(row.get("halt"), dict)
-        and row.get("frames") is None
+        and (row.get("frames") is None or row.get("driver_seq") is None)
     ]
     halt_rows.sort(key=lambda r: r.get("created_at") or "")
     taken: dict[int, str] = {}
@@ -810,8 +820,8 @@ def _attach_halt_mints(
             )
             continue
         taken[anchor] = _row_identity(row)
-        row["frames"] = [_lore_event(
-            "lore/halt", anchor, _halt_mint_data(row["halt"], _int_or_none(row["halt"].get("turn"))))]
+        row["frames"] = _insert_by_seq(row.get("frames") or [], _lore_event(
+            "lore/halt", anchor, _halt_mint_data(row["halt"], _int_or_none(row["halt"].get("turn")))))
     tail = _int_or_none(tail_seq)
     if not legacy or tail is None:
         return

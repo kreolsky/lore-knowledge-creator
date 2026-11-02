@@ -31,7 +31,7 @@
  * ONLY inside effects/callbacks, never at render time — PublicSharePage.test
  * mocks the store module with a minimal surface.
  */
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { ReconnectController } from '../collab/reconnect-controller';
 import { isAuthCloseCode } from '../collab/ws-close-codes';
 import { publicDocIsBehind, usePublicNotesStore } from '../store/public-notes-store';
@@ -42,6 +42,7 @@ export class PublicDocSocket {
   private ws: WebSocket | null = null;
   private documentId: string;
   private onLost: () => void;
+  private onChanged: () => void;
   private reconnect = new ReconnectController();
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private running = false;
@@ -51,9 +52,10 @@ export class PublicDocSocket {
   private deferred = false;
   private firstOpen = true;
 
-  constructor(documentId: string, onLost: () => void) {
+  constructor(documentId: string, onLost: () => void, onChanged: () => void = () => {}) {
     this.documentId = documentId;
     this.onLost = onLost;
+    this.onChanged = onChanged;
   }
 
   connect() {
@@ -126,6 +128,8 @@ export class PublicDocSocket {
       return;
     }
     this.running = true;
+    // An html page refreshes its frame off the same coalesced refetch.
+    this.onChanged();
     void (async () => {
       try {
         const docId = usePublicNotesStore.getState().documentId;
@@ -172,19 +176,22 @@ export class PublicDocSocket {
 
 /**
  * Open the change-ping socket for `documentId`. A no-op while `enabled` is
- * false (comments off — the channel exists for notes, and the server refuses
- * with 4003 anyway). Re-runs on a documentId change: a close + open per
+ * false (comments off on a non-page document — the channel exists for notes
+ * and html pages, and the server refuses anything else with 4003). `onChanged`
+ * runs on every coalesced refetch (the html frame's reload signal). Re-runs on a documentId change: a close + open per
  * in-subtree click, and never before the first list (allowComments turns true
  * only when the first load() returns). StrictMode-safe: the re-entry guard in
  * connect() plus the intentional disconnect in cleanup leave exactly one open
  * socket after a double mount.
  */
-export function usePublicDocSocket(documentId: string, enabled: boolean): void {
+export function usePublicDocSocket(documentId: string, enabled: boolean, onChanged?: () => void): void {
+  const onChangedRef = useRef(onChanged);
+  onChangedRef.current = onChanged;
   useEffect(() => {
     if (!enabled) return;
     const sock = new PublicDocSocket(documentId, () => {
       usePublicNotesStore.getState().setLiveLost(true);
-    });
+    }, () => onChangedRef.current?.());
     // A fresh connection is a fresh chance: clear the give-up banner state.
     usePublicNotesStore.getState().setLiveLost(false);
     sock.connect();

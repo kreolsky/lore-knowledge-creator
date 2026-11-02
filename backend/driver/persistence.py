@@ -18,28 +18,17 @@ from db import get_db, run_in_transaction
 logger = logging.getLogger(__name__)
 
 
-def _coerce_edits(args: dict) -> list[dict]:
-    """Normalize edit_document args to the batch `edits[]` shape. Primary read is
-    `args["edits"]`; a lone legacy top-level old_string/new_string folds to a
-    one-element list (shim for callers predating the batch schema)."""
-    edits = args.get("edits")
-    if not edits and args.get("old_string") is not None:
-        edits = [{"old_string": args.get("old_string", ""),
-                  "new_string": args.get("new_string", "")}]
-    return [
-        {"old_string": e.get("old_string", ""), "new_string": e.get("new_string", "")}
-        for e in (edits or [])
-    ]
-
-
 def _coerce_table_edits(args: dict) -> list[dict]:
-    """Normalize edit_table_cell args to the batch ``edits[]`` shape (the table-cell
-    analog of ``_coerce_edits``). Primary read is ``args["edits"]``; a lone legacy
-    top-level ``{table_id, row, column, old_value, new_value}`` folds to a one-element
-    list (shim for callers predating the batch schema). Per-cell addressing advertises
-    ``column`` (header name) only; ``col`` is a dispatch-only numeric fallback and is
-    threaded here too so a legacy numeric-only proposal still resolves (the apply resolver
-    prefers ``column`` when both are present)."""
+    """Normalize edit_table_cell args to the batch ``edits[]`` shape (the
+    table-cell analog of the edit_document coalescer — the LIVE one is the
+    inline arm at mcp_gateway/dispatch.py; no dead twin is kept here).
+    Primary read is ``args["edits"]``; a lone legacy top-level
+    ``{table_id, row, column, old_value, new_value}`` folds to a one-element
+    list (shim for callers predating the batch schema). Per-cell addressing
+    advertises ``column`` (header name) only; ``col`` is a dispatch-only
+    numeric fallback and is threaded here too so a legacy numeric-only
+    proposal still resolves (the apply resolver prefers ``column`` when both
+    are present)."""
     edits = args.get("edits")
     if not edits and args.get("table_id") is not None:
         edits = [{

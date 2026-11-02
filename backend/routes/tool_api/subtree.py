@@ -17,7 +17,7 @@ from agent.context import get_agent_context
 from fastapi import Body, Depends, HTTPException
 from subtree_md import export_subtree, import_subtree_zip
 
-from access import get_document_access, get_project_access
+from access import get_document_access, require_full_project_access
 from db import fetch_one
 from models import ToolExportSubtreeMd, ToolImportSubtreeMd, is_ref_row
 from routes.tool_api_telemetry import track_agent_tool
@@ -26,7 +26,8 @@ from scope import require_doc_in_scope, resolve_scoped_parent
 
 async def _gate_export_root(root_id: str, ctx: dict) -> None:
     """404 (missing/deleted/cross-project/reference root) → per-doc RBAC on
-    the root → the subtree scope ceiling — the read-executor gate order."""
+    the root → the subtree scope ceiling → the page-lock gate — the
+    read-executor gate order."""
     root = await fetch_one("documents", root_id)
     if (
         not root or root.get("deleted_at")
@@ -37,6 +38,15 @@ async def _gate_export_root(root_id: str, ctx: dict) -> None:
     if not await get_document_access(root_id, ctx["user"]):
         raise HTTPException(status_code=403, detail="No access to this document")
     await require_doc_in_scope(ctx.get("scope_root"), root_id)
+    # Page PIN lock (see SYSTEM: page-lock) — export is a full-content read of
+    # the root page, so a locked root is refused like read_document would (the
+    # text never reaches the staged zip). Locked CHILDREN inside an exported
+    # unlocked root are the plan's named Not-doing (per-page lock, no subtree
+    # semantics either way).
+    from page_lock import locked_doc_ids
+
+    if root_id in await locked_doc_ids(ctx["user"]["user_id"]):
+        raise HTTPException(status_code=403, detail="This page is locked by the user")
 
 
 async def _stage_export(result: dict) -> tuple[str, str]:
@@ -161,10 +171,7 @@ async def tool_import_subtree_md(
     so parent validity, the scope wall and unique paths are its own gates.
     """
     user = ctx["user"]
-    if await get_project_access(ctx["project_id"], user) != "full":
-        raise HTTPException(
-            status_code=403, detail="Full project access required to create",
-        )
+    await require_full_project_access(ctx["project_id"], user, "create")
     parent_id = resolve_scoped_parent(ctx.get("scope_root"), body.parent_id)
     if parent_id:
         await _validate_import_parent(parent_id, ctx)

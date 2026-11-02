@@ -16,7 +16,7 @@ from security_log import log_security
 from surrealdb import AsyncSurreal
 
 from auth import bump_token_version, get_current_user, set_session_cookie
-from db import get_db, serialize_record
+from db import fetch_one, get_db, serialize_record
 from models import (
     UpdateProfileEmail,
     UpdateProfileName,
@@ -133,6 +133,11 @@ async def change_pin(
     db: AsyncSurreal = Depends(get_db),
 ):
     """Set, change, or remove 4-digit PIN."""
+    # INVARIANT(security): setting/changing/removing the PIN does NOT ask for the
+    # current one — even while PIN-locked pages exist (SYSTEM: page-lock).
+    # Why: operator decision — the cabinet (behind the login) is the deliberate
+    # unconfirmed reset path; the page lock guards against casual eyes, not a
+    # person at an unlocked session.
     if body.pin is not None and not _PIN_RE.match(body.pin):
         raise HTTPException(status_code=422, detail="PIN must be exactly 4 digits")
     pin_hash = hash_secret(body.pin) if body.pin else None
@@ -166,3 +171,96 @@ async def verify_pin(
     else:
         log_security("pin_verify_failed", user_id=user["user_id"])
     return {"valid": valid}
+
+
+async def _load_pin_hash(db: AsyncSurreal, user_id: str) -> str | None:
+    """The caller's stored pin_hash, or None (no PIN set / user gone)."""
+    rows = await db.query(
+        "SELECT pin_hash FROM type::record('users', $id)",
+        {"id": user_id},
+    )
+    if not rows or not rows[0]:
+        return None
+    return rows[0].get("pin_hash")
+
+
+async def _load_locked_doc_ids(db: AsyncSurreal, user_id: str) -> list[str]:
+    """The caller's locked set as a list (NONE = empty)."""
+    rows = await db.query(
+        "SELECT locked_doc_ids FROM type::record('users', $id)",
+        {"id": user_id},
+    )
+    if not rows or not rows[0]:
+        return []
+    return list(rows[0].get("locked_doc_ids") or [])
+
+
+async def _save_locked_doc_ids(db: AsyncSurreal, user_id: str, ids: list[str]) -> list[str]:
+    """Persist the locked set (deduped, order-stable) and return it."""
+    ids = list(dict.fromkeys(ids))
+    await db.query(
+        "UPDATE type::record('users', $id) SET locked_doc_ids = $ids, updated_at = time::now()",
+        {"id": user_id, "ids": ids},
+    )
+    return ids
+
+
+# ─── Page PIN lock (SYSTEM: page-lock, backend/page_lock.py) ─────────────────
+# The lock is PERSONAL (stored on the user) and per page, NOT per subtree:
+# children of a locked page are unaffected. Locking requires an account PIN;
+# unlocking (un-marking) re-verifies it through the SAME verify_secret +
+# check_pin_rate_limit pair as verify-pin — the account PIN is the only secret.
+
+
+@router.post("/api/cabinet/locked-docs/{doc_id}")
+async def lock_document(
+    doc_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncSurreal = Depends(get_db),
+):
+    """Add a page to the caller's PIN-locked set. Requires an account PIN and
+    per-doc access; returns the whole set."""
+    if not await _load_pin_hash(db, user["user_id"]):
+        raise HTTPException(
+            status_code=422, detail="Set a PIN in the cabinet first",
+        )
+    from access import get_document_access
+
+    doc = await fetch_one("documents", doc_id)
+    if not doc or doc.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not await get_document_access(doc_id, user):
+        raise HTTPException(status_code=403, detail="No access to this document")
+    ids = await _load_locked_doc_ids(db, user["user_id"])
+    if doc_id not in ids:
+        ids.append(doc_id)
+        ids = await _save_locked_doc_ids(db, user["user_id"], ids)
+    log_security("page_locked", user_id=user["user_id"], document_id=doc_id)
+    return {"locked_doc_ids": ids}
+
+
+@router.post("/api/cabinet/locked-docs/{doc_id}/remove")
+async def unlock_document(
+    doc_id: str,
+    body: VerifyPinRequest,
+    user: dict = Depends(get_current_user),
+    db: AsyncSurreal = Depends(get_db),
+):
+    """Remove a page from the caller's PIN-locked set. The body's PIN is
+    verified with the same rate limiter as verify-pin (shared `pin:` budget —
+    brute-forcing this endpoint is brute-forcing the PIN)."""
+    rate_key = f"pin:{user['user_id']}"
+    if not await check_pin_rate_limit(rate_key):
+        raise HTTPException(status_code=429, detail="Too many attempts. Try again later.")
+    pin_hash = await _load_pin_hash(db, user["user_id"])
+    if not pin_hash or not verify_secret(body.pin, pin_hash):
+        log_security("pin_verify_failed", user_id=user["user_id"])
+        raise HTTPException(status_code=403, detail="Wrong PIN")
+    await reset_rate_limit(rate_key)
+    ids = await _load_locked_doc_ids(db, user["user_id"])
+    if doc_id in ids:
+        ids = await _save_locked_doc_ids(
+            db, user["user_id"], [i for i in ids if i != doc_id],
+        )
+    log_security("page_unlocked", user_id=user["user_id"], document_id=doc_id)
+    return {"locked_doc_ids": ids}

@@ -266,6 +266,19 @@ def _slugify(title: str) -> str:
     return f"{slug}.md"
 
 
+async def _create_index_doc(index_doc_id: str, pid: str) -> None:
+    """The project index doc row — identical for the exists/new branches (sync
+    by construction: one create_document call, not two hand-kept copies)."""
+    await create_document(index_doc_id, {
+        "project_id": pid,
+        "parent_id": None,
+        "title": "project_context.md",
+        "content": "",
+        "path": "project_context.md",
+        "is_index": True,
+    })
+
+
 async def main():
     await apply_schema()
     db = await get_db()
@@ -323,14 +336,7 @@ async def main():
             if idx_rows:
                 index_doc_id = extract_id(idx_rows[0]["id"])
             else:
-                await create_document(index_doc_id, {
-                    "project_id": pid,
-                    "parent_id": None,
-                    "title": "project_context.md",
-                    "content": "",
-                    "path": "project_context.md",
-                    "is_index": True,
-                })
+                await _create_index_doc(index_doc_id, pid)
                 await db.query(
                     "UPDATE type::record('projects', $pid) SET index_doc_id = $idx, project_context = ''",
                     {"idx": index_doc_id, "pid": pid},
@@ -345,14 +351,7 @@ async def main():
                 "project_context": "",
                 "index_doc_id": index_doc_id,
             })
-            await create_document(index_doc_id, {
-                "project_id": pid,
-                "parent_id": None,
-                "title": "project_context.md",
-                "content": "",
-                "path": "project_context.md",
-                "is_index": True,
-            })
+            await _create_index_doc(index_doc_id, pid)
             print(f"  [+] Project '{proj['name']}' ({pid})")
 
         # Add members (skip if already exists)

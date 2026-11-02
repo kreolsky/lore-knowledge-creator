@@ -4,6 +4,8 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { Editor } from '../components/Editor';
 import { SplitEditorLayout } from '../components/editor/SplitEditorLayout';
 import { TableFocusView } from '../components/editor/TableFocusView';
+import { PageLockScreen } from '../components/PageLockScreen';
+import { isInSubtreeOf, selectOpenPageLockedBy, LOCK_PENDING } from '../utils/page-lock';
 import { useAppStore } from '../store/app-store';
 import { useDocState, useUIStore } from '../store/ui-store';
 import { readRefOpenMode } from '../store/ui-store/documents-slice';
@@ -16,9 +18,13 @@ import { clearLocalDocsForEntity } from '../collab/local-doc-persistence';
 import { clearRecordingsForDocument } from '../utils/recording-cache';
 import { useEvent } from '../hooks/useEvent';
 import { useDocumentRoute } from '../hooks/useDocumentRoute';
+import { reportOpen } from '../telemetry/access';
 import { isBareDocRoute } from '../utils/routing';
 import { t } from '../i18n';
 import type { ChatSession, Document, Project, Reference } from '../types';
+
+// The path this page load entered on; cleared once its open is reported.
+let urlEntryPath: string | null = window.location.pathname;
 
 export function DocumentPage() {
   const { projectId, documentId } = useDocumentRoute();
@@ -58,6 +64,13 @@ export function DocumentPage() {
     if (useAppStore.getState().currentDocument?.document_id === documentId) {
       if (projectId) void useNoteChatStore.getState().ensureSessions(projectId, documentId);
       return;
+    }
+    // WHY: only the document the page load ENTERED on counts as `url` (first load,
+    // reload), once — an in-app open can also reach this fetch path and is already
+    // counted at its emitter; clearing the path dedupes StrictMode double effects.
+    if (pathnameRef.current === urlEntryPath) {
+      urlEntryPath = null;
+      reportOpen(documentId, 'url');
     }
     let cancelled = false;
 
@@ -224,6 +237,23 @@ export function DocumentPage() {
     });
   }, [currentProject?.project_id, currentDocument?.document_id]));
 
+  const lockedBy = useAppStore(selectOpenPageLockedBy);
+  const openDocId = currentDocument?.document_id ?? documentId;
+  // WHY: leaving a page's SUBTREE re-locks it (a PIN opens one visit of the page and its
+  // children — the tree shows them only while it holds); so does leaving the editor
+  // (unmount to /cabinet, /projects).
+  useEffect(() => {
+    const store = useAppStore.getState();
+    const held = store.unlockedDocIds;
+    if (!held?.length || !openDocId) return;
+    const kept = held.filter(id => isInSubtreeOf(store.documents, openDocId, id));
+    if (kept.length !== held.length) store.setUnlockedDocIds(kept);
+  }, [openDocId]);
+  useEffect(() => () => {
+    const store = useAppStore.getState();
+    if (store.unlockedDocIds?.length) store.setUnlockedDocIds([]);
+  }, []);
+
   const currentReference = useAppStore(s => s.currentReference);
   const currentTable = useAppStore(s => s.currentTable);
   const previewDocument = useAppStore(s => s.previewDocument);
@@ -244,6 +274,16 @@ export function DocumentPage() {
   const tableInSplit = splitActive && !!currentTable;
   const tableFocusCentered = !!currentTable && !!currentDocument
     && !previewDocument && !snapshotPreview && !splitActive;
+
+  // INVARIANT(security): a PIN-gated page (own or ancestor lock) renders the LOCKING page's PIN screen and NO <Editor>.
+  // Why: the editor mounting for a locked page is the page shown without the PIN.
+  // The gate (selectOpenPageLockedBy) sits above BOTH the split and the plain branch, so
+  // no layout joins its collab session; a PENDING gate (parent chain not loaded yet)
+  // renders an empty pane, not the editor.
+  // Gated on the COMMITTED document: the pre-commit nav path moves currentDocument
+  // before the URL, and the Editor renders currentDocument, not the param.
+  if (lockedBy === LOCK_PENDING) return <div className="flex-1 bg-bg" />;
+  if (lockedBy) return <PageLockScreen key={lockedBy} docId={lockedBy} />;
 
   if (splitActive) {
     return tableInSplit

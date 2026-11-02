@@ -27,6 +27,8 @@ export interface PublicTreeNode {
   title: string;
   parent_id: string | null;
   sort_key?: string | null;
+  /** 'html' ⇒ a page (sandboxed frame); absent/null = markdown. */
+  media_type?: string | null;
   /** ISO-8601 — nothing reads them yet in the FE; the type documents the payload
    *  (external consumers, e.g. the blog PoC, order and feed off these). */
   created_at?: string | null;
@@ -44,6 +46,7 @@ export interface PublicTreeResponse {
 export interface PublicDocumentResponse {
   document_id: string;
   title: string;
+  media_type?: string | null;
   content: string;
   /** Live Yjs tables subtree (JSON) — seeds the public Editor's table widgets.
    *  Null when no live state exists (legacy/no-tables doc); the editor then renders
@@ -76,6 +79,10 @@ export async function publicTreeByDoc(documentId: string): Promise<PublicTreeRes
 }
 export async function publicDocumentByDoc(documentId: string): Promise<PublicDocumentResponse> {
   return apiClient.get(`/public/documents/${documentId}`);
+}
+/** Signed short-lived URL of a published html page (same mint as the member route). */
+export async function publicArtifactUrlByDoc(documentId: string): Promise<{ url: string; expires_in: number }> {
+  return apiClient.get(`/public/documents/${documentId}/artifact-url`);
 }
 export async function publicReferencesByDoc(documentId: string): Promise<Reference[]> {
   const data = await apiClient.get(`/public/documents/${documentId}/references`);

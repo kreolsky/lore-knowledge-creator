@@ -105,7 +105,7 @@ async def create_document_command(
     )
     await event_bus.emit("document_created", project_id=body.project_id, document_id=doc_id,
                          title=title, parent_id=parent_id, is_reference=body.is_reference,
-                         sort_key=payload.get("sort_key"))
+                         sort_key=payload.get("sort_key"), media_type=payload.get("media_type"))
     record = await fetch_one("documents", doc_id)
     return serialize_record(record, "document_id") if record else {
         "document_id": doc_id,

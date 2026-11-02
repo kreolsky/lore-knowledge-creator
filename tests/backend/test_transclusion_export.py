@@ -1,6 +1,7 @@
 """SYSTEM: transclusion — export inlining of document / text-reference embeds."""
 
 from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 import pytest
 from documents.service import _inline_ref_images, _inline_transclusions
@@ -73,24 +74,36 @@ def _img_ref(mime, path="f/x.bin"):
 
 
 @pytest.mark.asyncio
-async def test_image_ref_is_base64_inlined(tmp_path, monkeypatch):
-    import config
-    f = tmp_path / "x.png"
+async def test_image_ref_is_base64_inlined():
+    # TEST-WHY: stale patch target — _inline_ref_images reads the stored file
+    # through files_util.resolve_stored_file (rot-epic step 5), bound to the
+    # REAL STORAGE_PATH at import; patching config.STORAGE_PATH stopped
+    # redirecting it, so the ref file must be seeded really contained.
+    from config import STORAGE_PATH
+
+    rel = f"transcl-export/{uuid4().hex[:8]}/x.png"
+    f = STORAGE_PATH / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
     f.write_bytes(b"\x89PNG\r\n")
-    monkeypatch.setattr(config, "STORAGE_PATH", tmp_path)
-    fake = AsyncMock(return_value=_img_ref("image/png", "x.png"))
+    fake = AsyncMock(return_value=_img_ref("image/png", rel))
     with patch("documents.service.fetch_one", fake):
         out = await _inline_ref_images("![p](ref:img1)", _PROJ)
     assert out.startswith("![p](data:image/png;base64,")
 
 
 @pytest.mark.asyncio
-async def test_audio_ref_is_dropped_not_base64(tmp_path, monkeypatch):
-    import config
-    f = tmp_path / "a.webm"
+async def test_audio_ref_is_dropped_not_base64():
+    # TEST-WHY: same stale-patch repair as the image test above — the audio
+    # bytes must sit inside the REAL storage for resolve_stored_file to see
+    # them (an unresolvable ref is left verbatim, which is the passing-by-
+    # accident shape this test used to catch).
+    from config import STORAGE_PATH
+
+    rel = f"transcl-export/{uuid4().hex[:8]}/a.webm"
+    f = STORAGE_PATH / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
     f.write_bytes(b"audio-bytes")
-    monkeypatch.setattr(config, "STORAGE_PATH", tmp_path)
-    fake = AsyncMock(return_value=_img_ref("audio/webm", "a.webm"))
+    fake = AsyncMock(return_value=_img_ref("audio/webm", rel))
     with patch("documents.service.fetch_one", fake):
         out = await _inline_ref_images("x ![voice](ref:aud1) y", _PROJ)
     assert "base64" not in out

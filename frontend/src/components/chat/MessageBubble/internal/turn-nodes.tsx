@@ -403,6 +403,19 @@ function CompactionMintNode({ data }: { data: unknown }) {
   );
 }
 
+/** The text a failed model attempt had already streamed, kept where it was
+ * typed and labelled as cut off — the turn's error card renders below it. */
+function InterruptedReplyNode({ data }: { data: unknown }) {
+  const { t } = useTranslation();
+  const d = (typeof data === 'object' && data !== null ? data : {}) as Record<string, unknown>;
+  return (
+    <>
+      <MarkdownContent content={String(d.text ?? '')} streaming={false} />
+      <div className="text-xs text-text-dim my-1">{t('chatReplyInterrupted')}</div>
+    </>
+  );
+}
+
 /** The neutral fallback chip — ANY kind without a dedicated renderer, labelled
  * by its kind. Adding a renderer for a kind is an improvement, never the
  * condition for being visible (the assembler decides visibility upstream). */
@@ -433,6 +446,7 @@ function TurnNode({ node, nodes, isStreaming, onContinue, only }: {
     case 'halt': return <HaltNode data={node.data} nodes={nodes} self={node} onContinue={onContinue} />;
     case 'image-gen': return <ImageGenNode data={node.data} selfOpening={opensItself(node)} />;
     case 'compaction-mint': return <CompactionMintNode data={node.data} />;
+    case 'interrupted-reply': return <InterruptedReplyNode data={node.data} />;
     case 'turn-error': {
       const d = (typeof node.data === 'object' && node.data !== null ? node.data : {}) as Record<string, unknown>;
       // WHY: dsh blanks an AUTH failure's message deliberately (a provider auth
@@ -562,7 +576,7 @@ function ProcessGroupNode({ info, members, nodes, isStreaming, onContinue, after
 const MIN_GROUP_MEMBERS = 2;
 
 function staysOutOfGroup(node: TurnNodeLike, nodes: TurnNodeLike[]): boolean {
-  if (node.kind === 'halt') return true;
+  if (node.kind === 'halt' || node.kind === 'interrupted-reply') return true;
   if (node.kind !== 'verdict-ask') return false;
   const d = (typeof node.data === 'object' && node.data !== null ? node.data : {}) as Record<string, unknown>;
   return !isDecidedVerdict(String(d.callId ?? ''), nodes);
@@ -577,10 +591,11 @@ export function TurnNodes({ nodes, isStreaming, onContinue }: {
   isStreaming: boolean;
   onContinue?: () => void;
 }) {
-  // INVARIANT: a pending verdict ask and a halt card never fold into a group —
-  // they render at their own place, the rest of their group folds around them.
+  // INVARIANT: a pending verdict ask, a halt card and an error-cut reply never
+  // fold into a group — they render at their own place, the group folds around them.
   // Why: a pending decision or a halt must be seen (and answered) without
-  // opening anything; a settled verdict is a plain record and folds.
+  // opening anything, and a cut-off reply is the answer's text, not process;
+  // a settled verdict is a plain record and folds.
   const outside = new Set(nodes.filter(n => staysOutOfGroup(n, nodes)).map(n => n.key));
   const members = new Map<string, TurnNodeLike[]>();
   for (const node of nodes) {

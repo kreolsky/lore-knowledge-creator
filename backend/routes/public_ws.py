@@ -38,13 +38,13 @@ dev vite likewise (frontend/vite.config.ts) — /ws/public/doc/{id} rides both.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from ws_utils import receive_loop
 
-from deps import MAX_WS_MESSAGE_SIZE
+from db import fetch_one
 from event_bus import on as _bus_on
 from routes.public_share import _require_doc, clear_doc_ids_cache
 
@@ -52,7 +52,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-HEARTBEAT_TIMEOUT_SEC = 90
 # Caps: a global and a per-doc ceiling on anonymous sockets. 4029 is
 # deliberately NOT in the frontend AUTH_CLOSE_CODES (ws-close-codes.ts): a full
 # doc is transient, and the client's own reconnect backoff is the retry.
@@ -72,12 +71,18 @@ class _PublicClient:
     stored project_id is the revalidation filter (events carry project_id, not
     doc sets)."""
 
-    __slots__ = ("ws", "doc_id", "project_id")
+    __slots__ = ("ws", "doc_id", "project_id", "is_page")
 
-    def __init__(self, ws: WebSocket, doc_id: str, project_id: str):
+    def __init__(self, ws: WebSocket, doc_id: str, project_id: str, is_page: bool = False):
         self.ws = ws
         self.doc_id = doc_id
         self.project_id = project_id
+        self.is_page = is_page
+
+
+async def _is_html_page(doc_id: str) -> bool:
+    row = await fetch_one("documents", doc_id)
+    return bool(row) and (row.get("media_type") or "") == "html"
 
 
 _registry: dict[str, dict[int, _PublicClient]] = {}
@@ -115,7 +120,7 @@ async def _recheck(client: _PublicClient) -> bool:
     Returns True when the socket may keep receiving pings. The HTTPException
     from _require_doc (uniform 404 — no existence oracle for anonymous callers)
     maps to close 4004; a share that still resolves but lost allow_comments
-    closes 4003 (the channel exists for notes); anything else is a server-side
+    closes 4003 (the channel exists for notes, and for an html page); anything else is a server-side
     fault → 1011.
     """
     try:
@@ -129,7 +134,7 @@ async def _recheck(client: _PublicClient) -> bool:
         await _close(client, 1011, "Internal error")
         _drop(client)
         return False
-    if not ctx["allow_comments"]:
+    if not ctx["allow_comments"] and not client.is_page:
         await _close(client, 4003, "Comments off")
         _drop(client)
         return False
@@ -214,7 +219,7 @@ _bus_on("project_deleted", _on_revalidate)
 
 @router.websocket("/ws/public/doc/{document_id}")
 async def public_doc_ws(ws: WebSocket, document_id: str):
-    """Anonymous change-ping socket for ONE shared document (comments-on only)."""
+    """Anonymous change-ping socket for ONE shared document (comments on, or an html page)."""
     # WHY accept first: see ARCH(accept-then-refuse) in the module docstring —
     # the refusal codes must be browser-visible, and a pre-accept close is a
     # 1006 handshake failure in every real browser.
@@ -228,10 +233,12 @@ async def public_doc_ws(ws: WebSocket, document_id: str):
         logger.exception("public ws access check failed for %s", document_id)
         await ws.close(code=1011, reason="Internal error")
         return
-    if not ctx["allow_comments"]:
-        # The channel exists for notes: a comments-off share has nothing to
-        # ping (the page opens the socket only when comments are on — same
-        # gate as the old poll).
+    # WHY: the channel exists for notes AND for an html page — a page has no
+    # notes, and the ping is the only way its frame learns of an edit (the
+    # guest has no Yjs). A page never changes kind (move refuses conversion),
+    # so the flag is read once here, not per ping.
+    is_page = await _is_html_page(document_id)
+    if not ctx["allow_comments"] and not is_page:
         await ws.close(code=4003, reason="Comments off")
         return
     per_doc = _registry.setdefault(document_id, {})
@@ -240,19 +247,11 @@ async def public_doc_ws(ws: WebSocket, document_id: str):
             _registry.pop(document_id, None)
         await ws.close(code=4029, reason="Too many sockets")
         return
-    client = _PublicClient(ws, document_id, str(ctx["project_id"]))
+    client = _PublicClient(ws, document_id, str(ctx["project_id"]), is_page)
     per_doc[id(ws)] = client
     await ws.send_text(json.dumps({"type": "init"}))
     try:
-        while True:
-            try:
-                raw = await asyncio.wait_for(ws.receive_text(), timeout=HEARTBEAT_TIMEOUT_SEC)
-                if len(raw.encode("utf-8")) > MAX_WS_MESSAGE_SIZE:
-                    await ws.close(code=4009, reason="Message too large")
-                    break
-            except asyncio.TimeoutError:
-                await ws.close(code=4008, reason="Heartbeat timeout")
-                break
+        await receive_loop(ws)
     except WebSocketDisconnect:
         pass  # WHY: expected lifecycle — client disconnect is the normal end of a WS session.
     finally:

@@ -49,6 +49,7 @@ shapes that are valid CommonMark but mangled by Lore's live CM6 renderer
 """
 
 import re
+from collections.abc import Callable
 
 _FENCE_OPEN = re.compile(r"^(\s*)(`{3,}|~{3,})")
 _FENCE_ONLY = re.compile(r"^(`{3,}|~{3,})\s*$")
@@ -56,6 +57,62 @@ _LIST_ITEM = re.compile(r"^\s*([-*+]|\d+\.)\s+\S")
 _QUOTE = re.compile(r"^(\s*)>\s?(.*)$")
 _UNDERLINE_OR_RULE = re.compile(r"(=+|-+|_{3,}|\*{3,})")
 _INLINE_CODE = re.compile(r"`[^`]*`")
+
+
+def _fence_aware(content: str, transform: Callable[[str], str]) -> str:
+    """Apply `transform` to every line OUTSIDE ``` fenced code blocks; fence
+    opener/closer and in-fence lines are copied through verbatim.
+
+    The ONE fence-aware line loop — strip_markdown_escapes,
+    normalize_list_spacing and unwrap_placeholder_brackets share it (each was a
+    hand copy before).
+
+    WHY the closer is matched against the LSTRIPPED line: an indented closing
+    fence (≤3 spaces is valid CommonMark) must be recognized — _FENCE_ONLY is
+    anchored at column 0 and would otherwise miss it, latching in_fence true
+    and skipping the transform for the rest of the document on the standalone
+    call paths that never pre-dedent (normalize_markdown runs _dedent_fences
+    first; the standalone entries do not).
+    """
+    out: list[str] = []
+    in_fence = False
+    fence_char = ""
+    for line in content.split("\n"):
+        if not in_fence:
+            m = _FENCE_OPEN.match(line)
+            if m:
+                in_fence = True
+                fence_char = m.group(2)[0]
+                out.append(line)
+                continue
+        else:
+            out.append(line)
+            stripped = line.lstrip()
+            if _FENCE_ONLY.match(stripped) and stripped[:1] == fence_char:
+                in_fence = False
+            continue
+        out.append(transform(line))
+    return "\n".join(out)
+
+
+def _apply_outside_inline_code(line: str, transform: Callable[[str], str]) -> str:
+    """Apply `transform` to the gaps BETWEEN `` `…` `` inline-code spans, copying
+    each span verbatim.
+
+    The ONE inline-code-aware line applier — _strip_escapes_line and
+    _unwrap_placeholders_line share it. Why: backslashes and bracketed
+    destinations inside inline code are literal CommonMark (prose ABOUT the
+    syntax, e.g. `` `\.dot` ``, `` `[text](<id>)` ``) and must survive
+    unchanged (mirrors the _INLINE_CODE handling in _looks_like_table).
+    """
+    chunks: list[str] = []
+    last = 0
+    for m in _INLINE_CODE.finditer(line):
+        chunks.append(transform(line[last:m.start()]))
+        chunks.append(m.group(0))  # inline-code span: copy verbatim
+        last = m.end()
+    chunks.append(transform(line[last:]))
+    return "".join(chunks)
 
 # A link reference definition line (`[label]: destination`) — the form the PDF
 # converter emits for embedded images (`[img-<hash>]: data:image/png;base64,…`).
@@ -390,8 +447,8 @@ def normalize_markdown(content: str) -> str:
 def strip_markdown_escapes(content: str) -> str:
     r"""Strip defensive backslash escapes (Pandoc/Word export noise) from Markdown.
 
-    Imported ``.md`` and DOCX→md (Pandoc) documents carry escapes like ``\-``, ``\[``,
-    ``\]``, ``\\``, ``\_``, ``\.``, ``\#``, ``\=``, ``\<``, ``\>``, ``\~`` that render
+    Imported ``.md`` and DOCX→md (Pandoc) documents carry escapes like ``\-``,
+    ``\[``, ``\]``, ``\\``, ``\_``, ``\.``, ``\#``, ``\=``, ``\<``, ``\>``, ``\~`` that render
     as visible stray backslashes in Lore's CM6 editor. This replaces every ``\X``
     (``X`` = ASCII punctuation) with the single char ``X``. A backslash before a
     non-punctuation char is an invalid CommonMark escape and stays literal — e.g.
@@ -400,59 +457,19 @@ def strip_markdown_escapes(content: str) -> str:
     # WHY a single left-to-right pass: Python ``re`` matches non-overlapping and
     # consumes BOTH chars of ``\X``, so the emitted punctuation is never re-scanned
     # and a backslash run collapses correctly (``\\`` → ``\``).
-    # INVARIANT: code backslashes are literal.  Why: outside code a backslash is an escape to collapse; inside fenced/inline code it's literal text, so those spans are copied unchanged or the code's content would be corrupted. Two contexts are copied through
-    # UNCHANGED: (1) lines inside ``` fenced code blocks; (2) inline-code spans
-    # (`` `…` ``) within a prose line — stripping only the gaps between spans
-    # (mirrors the ``_INLINE_CODE`` handling in ``_looks_like_table``). The fence
-    # tracker reuses ``normalize_list_spacing``'s pattern, including the lstripped
-    # closer recognition so an indented closing fence (≤3 spaces, valid CommonMark)
-    # is handled on the standalone call paths (no pre-dedent there). Idempotent on
-    # realistic import content: the output contains no ``\punct`` sequence outside
-    # fenced code and inline-code spans.
+    # INVARIANT: code backslashes are literal.  Why: outside code a backslash is an escape to collapse; inside fenced/inline code it's literal text, so those spans are copied unchanged or the code's content would be corrupted. Both contexts
+    # are preserved by the shared homes: _fence_aware copies fenced blocks
+    # through, _apply_outside_inline_code copies `` `…` `` spans through.
+    # Idempotent on realistic import content: the output contains no ``\punct``
+    # sequence outside fenced code and inline-code spans.
     """
-    lines = content.split("\n")
-    out: list[str] = []
-    in_fence = False
-    fence_char = ""
-    for line in lines:
-        if not in_fence:
-            m = _FENCE_OPEN.match(line)
-            if m:
-                in_fence = True
-                fence_char = m.group(2)[0]
-                out.append(line)
-                continue
-        else:
-            out.append(line)
-            # Match the closer against the lstripped line so an indented closing
-            # fence (≤3 spaces is valid CommonMark) is recognized — _FENCE_ONLY is
-            # anchored at column 0 and would otherwise miss it, latching in_fence
-            # true and skipping stripping for the rest of the document on the
-            # standalone call paths that never pre-dedent (mirrors
-            # normalize_list_spacing).
-            stripped = line.lstrip()
-            if _FENCE_ONLY.match(stripped) and stripped[:1] == fence_char:
-                in_fence = False
-            continue
-        out.append(_strip_escapes_line(line))
-    return "\n".join(out)
+    return _fence_aware(content, _strip_escapes_line)
 
 
 def _strip_escapes_line(line: str) -> str:
-    r"""Strip ``\punct`` escapes from one line, preserving inline-code spans verbatim.
-
-    Splits the line on `` `…` `` spans (``_INLINE_CODE``) and applies the escape
-    strip only to the gaps between them — backslashes inside inline code are literal
-    CommonMark and must not be touched (e.g. `` `\.dot` `` stays `` `\.dot` ``).
-    """
-    chunks: list[str] = []
-    last = 0
-    for m in _INLINE_CODE.finditer(line):
-        chunks.append(_STRIP_ESCAPE.sub(r"\1", line[last:m.start()]))
-        chunks.append(m.group(0))  # inline-code span: copy verbatim
-        last = m.end()
-    chunks.append(_STRIP_ESCAPE.sub(r"\1", line[last:]))
-    return "".join(chunks)
+    r"""Strip ``\punct`` escapes from one line, preserving inline-code spans
+    verbatim (the gaps ride _apply_outside_inline_code)."""
+    return _apply_outside_inline_code(line, lambda gap: _STRIP_ESCAPE.sub(r"\1", gap))
 
 
 # Collapses the run of spaces immediately AFTER a list marker (-, *, +, N.) and
@@ -477,35 +494,12 @@ def normalize_list_spacing(content: str) -> str:
 
     Leading indentation (nesting depth) is preserved verbatim. Idempotent.
     """
-    lines = content.split("\n")
-    out: list[str] = []
-    in_fence = False
-    fence_char = ""
-    for line in lines:
-        if not in_fence:
-            m = _FENCE_OPEN.match(line)
-            if m:
-                in_fence = True
-                fence_char = m.group(2)[0]
-                out.append(line)
-                continue
-        else:
-            out.append(line)
-            # Match the closer against the lstripped line so an indented closing
-            # fence (≤3 spaces is valid CommonMark) is recognized. _FENCE_ONLY is
-            # anchored at column 0 and would otherwise miss it, latching in_fence
-            # true and skipping normalization for the rest of the document on the
-            # standalone call paths (export / agent / extractor) that never
-            # pre-dedent — unlike normalize_markdown, which runs _dedent_fences first.
-            stripped = line.lstrip()
-            if _FENCE_ONLY.match(stripped) and stripped[:1] == fence_char:
-                in_fence = False
-            continue
+    def _line(line: str) -> str:
         # Collapse marker→content spaces, then task-marker→content spaces.
         line = _MARKER_SPACES.sub(r"\1\2 ", line)
-        line = _TASK_SPACES.sub(r"\1 ", line)
-        out.append(line)
-    return "\n".join(out)
+        return _TASK_SPACES.sub(r"\1 ", line)
+
+    return _fence_aware(content, _line)
 
 
 # A link destination the agent copied out of a prompt placeholder verbatim:
@@ -517,12 +511,9 @@ _PLACEHOLDER_DEST_RE = re.compile(r"\(<((?:ref:|table:)?[a-zA-Z0-9_\-]+)>\)")
 
 
 def _unwrap_placeholders_line(line: str) -> str:
-    """Unwrap placeholder destinations on one line, preserving inline-code spans.
-
-    Splits the line on `` `…` `` spans (``_INLINE_CODE``) and unwraps only the gaps
-    between them — a span like `` `[text](<id>)` `` is prose ABOUT the syntax and
-    must survive verbatim (mirrors ``_strip_escapes_line``).
-    """
+    """Unwrap placeholder destinations on one line, preserving inline-code spans
+    (the gaps ride _apply_outside_inline_code — a span like `` `[text](<id>)` ``
+    is prose ABOUT the syntax and must survive verbatim)."""
     from db import SAFE_ID_RE
 
     def _repl(m: re.Match) -> str:
@@ -533,14 +524,9 @@ def _unwrap_placeholders_line(line: str) -> str:
                 break
         return f"({m.group(1)})" if SAFE_ID_RE.match(body) else m.group(0)
 
-    chunks: list[str] = []
-    last = 0
-    for m in _INLINE_CODE.finditer(line):
-        chunks.append(_PLACEHOLDER_DEST_RE.sub(_repl, line[last:m.start()]))
-        chunks.append(m.group(0))  # inline-code span: copy verbatim
-        last = m.end()
-    chunks.append(_PLACEHOLDER_DEST_RE.sub(_repl, line[last:]))
-    return "".join(chunks)
+    return _apply_outside_inline_code(
+        line, lambda gap: _PLACEHOLDER_DEST_RE.sub(_repl, gap),
+    )
 
 
 def unwrap_placeholder_brackets(content: str) -> str:
@@ -561,27 +547,9 @@ def unwrap_placeholder_brackets(content: str) -> str:
     # WHY: called at the AGENT write sites only (the three normalize_list_spacing
     # agent entries), never import/extractor/export — this is an agent-authoring
     # defect; export is the output side.
-    # Fence-aware (lines inside ``` blocks are copied through untouched) and
-    # inline-code-aware (prose ABOUT the syntax inside backticks survives).
+    # Fence-aware and inline-code-aware via the shared homes (_fence_aware +
+    # _apply_outside_inline_code): lines inside ``` blocks and spans inside
+    # backticks are copied through untouched.
     Idempotent.
     """
-    lines = content.split("\n")
-    out: list[str] = []
-    in_fence = False
-    fence_char = ""
-    for line in lines:
-        if not in_fence:
-            m = _FENCE_OPEN.match(line)
-            if m:
-                in_fence = True
-                fence_char = m.group(2)[0]
-                out.append(line)
-                continue
-        else:
-            out.append(line)
-            stripped = line.lstrip()
-            if _FENCE_ONLY.match(stripped) and stripped[:1] == fence_char:
-                in_fence = False
-            continue
-        out.append(_unwrap_placeholders_line(line))
-    return "\n".join(out)
+    return _fence_aware(content, _unwrap_placeholders_line)

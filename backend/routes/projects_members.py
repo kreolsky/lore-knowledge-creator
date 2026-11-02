@@ -27,8 +27,7 @@ from project_members_service import (
 )
 from surrealdb import AsyncSurreal
 
-import event_bus
-from access import recompute_project_access, require_project_owner
+from access import emit_access_changed_recomputed, require_project_owner
 from auth import get_current_user, require_user_manager_role
 from db import fetch_one, get_db
 from models import (
@@ -38,6 +37,7 @@ from models import (
     SetProjectMember,
     TransferProjectOwner,
 )
+from routes._guards import guard_row
 from routes.projects import router
 
 
@@ -83,10 +83,7 @@ async def set_project_member(
     )
     # RECOMPUTED level (a group/public grant may hold the effective level above
     # the row just written) — same contract as every member-mutation emit here.
-    await event_bus.emit(
-        "access_changed", project_id=project_id, user_id=body.user_id,
-        access=await recompute_project_access(project_id, body.user_id),
-    )
+    await emit_access_changed_recomputed(project_id, body.user_id)
     return {"success": True}
 
 
@@ -107,9 +104,7 @@ async def transfer_project_owner(
     # (access.is_project_root) key on it, so a second writer would be a
     # privilege-escalation path.
     """
-    project = await fetch_one("projects", project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = await guard_row("projects", project_id, not_found="Project not found")
     await require_moderator_scope(db, user, project, body.user_id)
     old_owner_id = project.get("owner_id")
     if body.user_id == old_owner_id:
@@ -122,9 +117,9 @@ async def transfer_project_owner(
     )
     # The event every member mutation emits: collab WS notify + per-session
     # agent-key revocation — both wanted for an ownership change.
-    await event_bus.emit("access_changed", project_id=project_id, user_id=body.user_id, access="full")
+    await emit_access_changed_recomputed(project_id, body.user_id)
     if old_owner_id:
-        await event_bus.emit("access_changed", project_id=project_id, user_id=old_owner_id, access="full")
+        await emit_access_changed_recomputed(project_id, old_owner_id)
     return {"owner_id": body.user_id, "owner_name": target.get("name")}
 
 
@@ -148,10 +143,7 @@ async def remove_project_member(
     # RECOMPUTED, never a guessed None: the removed row may leave a group
     # audience or public grant, in which case the user still holds access and
     # must be downgraded to it, not evicted.
-    await event_bus.emit(
-        "access_changed", project_id=project_id, user_id=user_id,
-        access=await recompute_project_access(project_id, user_id),
-    )
+    await emit_access_changed_recomputed(project_id, user_id)
     return {"success": True}
 
 
@@ -182,9 +174,7 @@ async def _silent_invite(
 @router.get("/api/projects/{project_id}/members")
 async def get_members(project_id: str, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
     """Owner-only: list real + pending members for the project."""
-    project = await fetch_one("projects", project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = await guard_row("projects", project_id, not_found="Project not found")
     await require_project_owner(project, user)
     return {
         "members": await list_members_full(
@@ -202,9 +192,7 @@ async def invite_member(
     group, or a moderator) invites roster emails only — 403 outside the group,
     nothing queued (require_group_scoped_invite); admin and no-group owners
     keep the silent free-text invite."""
-    project = await fetch_one("projects", project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = await guard_row("projects", project_id, not_found="Project not found")
     await require_project_owner(project, user)
     await require_group_scoped_invite(db, owner=user, email=body.email)
     return await _silent_invite(
@@ -219,19 +207,14 @@ async def patch_member(
     db: AsyncSurreal = Depends(get_db),
 ):
     """Owner-only: change a member's role."""
-    project = await fetch_one("projects", project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = await guard_row("projects", project_id, not_found="Project not found")
     await require_project_owner(project, user)
     if not await set_member_level(
         db, project_id=project_id, user_id=user_id, access_level=body.access_level,
     ):
         raise HTTPException(status_code=404, detail="Member not found")
     # RECOMPUTED level — see set_project_member.
-    await event_bus.emit(
-        "access_changed", project_id=project_id, user_id=user_id,
-        access=await recompute_project_access(project_id, user_id),
-    )
+    await emit_access_changed_recomputed(project_id, user_id)
     return {"success": True}
 
 
@@ -241,9 +224,7 @@ async def remove_member(
     db: AsyncSurreal = Depends(get_db),
 ):
     """Owner-only: remove a member. Owner cannot remove themselves (400)."""
-    project = await fetch_one("projects", project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = await guard_row("projects", project_id, not_found="Project not found")
     await require_project_owner(project, user)
     # INVARIANT: Owner is implicit, not a member row — cannot self-remove.
     # Why: owner role is the manager; self-removal would orphan the project.
@@ -251,10 +232,7 @@ async def remove_member(
         raise HTTPException(status_code=400, detail="Owner cannot be removed; transfer ownership instead")
     await delete_member(db, project_id=project_id, user_id=user_id)
     # RECOMPUTED, never a guessed None — see remove_project_member.
-    await event_bus.emit(
-        "access_changed", project_id=project_id, user_id=user_id,
-        access=await recompute_project_access(project_id, user_id),
-    )
+    await emit_access_changed_recomputed(project_id, user_id)
     return {"success": True}
 
 
@@ -269,9 +247,7 @@ async def cancel_pending_invite(
 
     Unknown email is a no-op 200 (no enumeration signal).
     """
-    project = await fetch_one("projects", project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project = await guard_row("projects", project_id, not_found="Project not found")
     # WHY: require_project_owner before any DB lookup — no timing/body signal
     # that would let a non-owner enumerate pending invite emails.  Why: gating the owner check before any DB query closes the enumeration side-channel — a non-owner must learn nothing (timing, error shape, body) about pending invites.
     await require_project_owner(project, user)

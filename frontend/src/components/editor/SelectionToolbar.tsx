@@ -16,6 +16,7 @@ import { on, off } from '../../events';
 import { useEditorView } from '../../editor/active-editor';
 import { useTranslation } from '../../i18n';
 import { Button } from '../ui';
+import { isHtmlSourceView } from './html-source-extensions';
 
 interface ActiveStyles {
   headingLevel: number;
@@ -296,6 +297,8 @@ export default function SelectionToolbar() {
 
   const view = getEditorView();
   if (!visible || !view || !(canEdit || canNoteOnly)) return null;
+  // An html page's source: markdown formatting would corrupt the markup, and a page has no notes.
+  if (isHtmlSourceView(view)) return null;
 
   // WHY: formatting writes through the view, so it is offered only on a view that takes
   // input — a full member's editor that is not editable yet (collab joining) or any more

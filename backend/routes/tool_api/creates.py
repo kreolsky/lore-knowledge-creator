@@ -8,9 +8,9 @@
 """
 from agent.context import get_agent_context
 from api_key_auth import agent_author_name
+from artifacts import artifact_enabled
 from fastapi import Depends, HTTPException
 
-from access import get_project_access
 from models import ToolCreateDocument
 from routes.tool_api._common import (
     _apply_create_document_direct,
@@ -26,9 +26,11 @@ async def tool_create_document(
     body: ToolCreateDocument, ctx: dict = Depends(get_agent_context),
 ):
     user = ctx["user"]
-    access = await get_project_access(ctx["project_id"], user)
-    if access != "full":
-        raise HTTPException(status_code=403, detail="Full project access required to create")
+    # No early access check here: the ONE full-access gate runs inside
+    # _apply_create_document_direct / _apply_create_reference_direct (the
+    # shared primitives skills.py also calls). A non-full principal with an
+    # otherwise-invalid body gets the 422 (placement/kind) first — refused
+    # either way, nothing written before the gate.
     # Placement contract: the
     # three cases split on PRESENCE, read from model_fields_set — omitted =
     # invalid, explicit null = deliberate project root, an id = that parent. The
@@ -61,6 +63,24 @@ async def tool_create_document(
             )
         body.is_reference = True
         body.media_type = "markdown"
+    elif body.node_type == "html":
+        # html artifacts: an interactive page LEAF. The
+        # optional-feature gate mirrors SANDBOX_ENABLED — unset ARTIFACT_ORIGIN
+        # deploy simply does not serve the kind.
+        if not artifact_enabled():
+            raise HTTPException(
+                status_code=422,
+                detail="artifact hosting is not configured — html pages "
+                       "cannot be created on this instance",
+            )
+        if not body.parent_id:
+            raise HTTPException(
+                status_code=422,
+                detail="node_type=\"html\" requires parent_id (the page is a "
+                       "leaf under it)",
+            )
+        body.is_reference = False
+        body.media_type = "html"
     else:
         body.is_reference = False
 
@@ -71,7 +91,8 @@ async def tool_create_document(
     # `content` path: a caller importing a .md file's text now passes it as
     # create_document(content=…, normalize=True) instead of upload(content=…).
     content = body.content
-    if body.normalize and content:
+    # normalize is a MARKDOWN capability — never reflow an html page's source.
+    if body.normalize and content and body.node_type != "html":
         from markdown_normalize import normalize_markdown
 
         content = normalize_markdown(content)
@@ -102,4 +123,5 @@ async def tool_create_document(
         title=body.title, content=content, parent_id=body.parent_id,
         project_id=ctx["project_id"], user=user,
         scope_root=ctx.get("scope_root"),
+        media_type=body.media_type,
     )

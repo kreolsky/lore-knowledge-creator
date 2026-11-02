@@ -36,6 +36,9 @@ export interface User {
   email: string;
   role: Role;
   has_pin: boolean;
+  /** Pages this user PIN-locked for themselves (SYSTEM: page-lock). /me always sends a
+   * list; other User producers (login, admin lists) omit it — read as `?? []`. */
+  locked_doc_ids?: string[];
   /** Provenance: uid of the account creator (creating manager / invite's invited_by). */
   created_by?: string | null;
   /** Group head (a moderator's uid) — legal only on role='user' rows; null otherwise. */
@@ -159,6 +162,8 @@ export interface Document {
   content: string;
   path: string;
   is_index: boolean;
+  // 'html' ⇒ an agent-written page rendered in a sandboxed frame; absent = markdown.
+  media_type?: string | null;
   // Fractional sort key for sibling order within the tree (newest-first base order).
   // Optional: partial docs from WS create events may arrive before the key is known.
   sort_key?: string;

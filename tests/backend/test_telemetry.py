@@ -126,20 +126,68 @@ def test_clamp_detail_drops_only_large_values_keeps_short_ones():
 
 
 async def test_retention_deletes_old_rows(test_db):
-    from jobs.tasks import TELEMETRY_RETENTION_DAYS, telemetry_retention_task
+    from jobs.tasks import (
+        AGENT_TOOL_RETENTION_DAYS,
+        TELEMETRY_RETENTION_DAYS,
+        telemetry_retention_task,
+    )
     await test_db.query("DELETE telemetry_event WHERE user_id = 'u-ret'")
     # Old row (beyond the retention window) + fresh row. The age derives from the
     # constant so this test stays valid if the window changes (it did: 30d → 90d).
+    # agent_tool keeps the longer window: a row past the general window survives,
+    # a row past its own window does not.
     old_age = TELEMETRY_RETENTION_DAYS + 10
+    tool_old_age = AGENT_TOOL_RETENTION_DAYS + 10
     await test_db.query(
         "INSERT INTO telemetry_event "
         f"[{{ category: 'perf', kind: 'rtt', user_id: 'u-ret', detail: {{}}, "
         f"   created_at: time::now() - {old_age}d }}, "
         f" {{ category: 'perf', kind: 'rtt', user_id: 'u-ret', detail: {{}}, "
-        f"   created_at: time::now() }}]",
+        f"   created_at: time::now() }}, "
+        f" {{ category: 'agent_tool', kind: 'call', user_id: 'u-ret', detail: {{}}, "
+        f"   created_at: time::now() - {old_age}d }}, "
+        f" {{ category: 'agent_tool', kind: 'call', user_id: 'u-ret', detail: {{}}, "
+        f"   created_at: time::now() - {tool_old_age}d }}, "
+        f" {{ category: 'access', kind: 'open', user_id: 'u-ret', detail: {{}}, "
+        f"   created_at: time::now() - {old_age}d }}, "
+        f" {{ category: 'access', kind: 'open', user_id: 'u-ret', detail: {{}}, "
+        f"   created_at: time::now() - {tool_old_age}d }}]",
     )
     before = await _count(test_db, user_id="u-ret")
-    assert before == 2
+    assert before == 6
     await telemetry_retention_task(None)
     after = await _count(test_db, user_id="u-ret")
-    assert after == 1
+    assert after == 3
+    kept = await test_db.query(
+        "SELECT category FROM telemetry_event WHERE user_id = 'u-ret' ORDER BY category"
+    )
+    assert [r["category"] for r in kept] == ["access", "agent_tool", "perf"]
+
+
+# TEST-WHY: refused-principal — an `access` open for a document the caller cannot read must not write a durable count.
+async def test_access_open_counts_only_readable_documents(client, admin_user, regular_user, project_with_doc, test_db):
+    pid, doc_id, _ = project_with_doc
+    await test_db.query("DELETE object_access_daily WHERE project_id = $pid", {"pid": pid})
+    event = {"category": "access", "kind": "open", "entity_id": doc_id, "detail": {"via": "tree"}}
+
+    # A non-member: access is denied, the raw row is accepted, the rollup gains nothing.
+    from access import get_document_access
+    denied = await get_document_access(doc_id, {"user_id": regular_user[0], "role": "user"})
+    assert denied is None
+    resp = await client.post(
+        "/api/telemetry", json={"events": [event]}, cookies={"lore_session": regular_user[1]},
+    )
+    assert resp.status_code == 200
+    rows = await test_db.query("SELECT * FROM object_access_daily WHERE project_id = $pid", {"pid": pid})
+    assert rows == []
+
+    # The owner: one `open` under the document's own project.
+    resp = await client.post(
+        "/api/telemetry", json={"events": [{**event, "project_id": "spoofed"}]},
+        cookies={"lore_session": admin_user[1]},
+    )
+    assert resp.status_code == 200
+    rows = await test_db.query("SELECT * FROM object_access_daily WHERE project_id = $pid", {"pid": pid})
+    assert [(r["object_ref"], r["actor"], r["kind"], r["user_id"], r["count"]) for r in rows] == [
+        (f"doc:{doc_id}", "human", "open", admin_user[0], 1),
+    ]

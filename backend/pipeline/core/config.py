@@ -307,21 +307,16 @@ async def _get_variables_raw(
     When ``dup_sink`` is a list, duplicated keys in the variables doc are appended to it.
     Raises ValueError if variables doc not found.
     """
-    var_names = ["variables", "values"]
-
     if rows is None:
         rows = await fetch_child_rows(config_doc_id)
 
-    for row in rows:
-        title = (row.get("title") or "").strip().lower()
-        content = row.get("content") or ""
-        row_id = row.get("id", "?")
-        if title in [n.lower() for n in var_names]:
-            return _parse_yaml_from_code_block(
-                content, doc_label=f"variables document {row_id}", dup_sink=dup_sink
-            )
-
-    raise ValueError(f"No 'variables' child found under config doc {config_doc_id}")
+    row = _child_row(rows, "variables", "values")
+    if row is None:
+        raise ValueError(f"No 'variables' child found under config doc {config_doc_id}")
+    return _parse_yaml_from_code_block(
+        row.get("content") or "",
+        doc_label=f"variables document {row.get('id', '?')}", dup_sink=dup_sink,
+    )
 
 
 async def parse_pipeline_config_from_doc(config_doc_id: str) -> dict:
@@ -369,6 +364,21 @@ async def fetch_child_rows(config_doc_id: str) -> list[dict]:
     return rows or []
 
 
+def _child_row(rows: list[dict], *titles: str) -> dict | None:
+    """First child row whose stripped lowercased title is one of ``titles``.
+
+    The single normalization every config-child lookup shares ((title or
+    "").strip().lower() against lowercased names, first match wins);
+    resolve_child_docs is deliberately NOT a member — it consumes every row
+    (a collect-all, no titles to find).
+    """
+    wanted = {t.lower() for t in titles}
+    for row in rows:
+        if (row.get("title") or "").strip().lower() in wanted:
+            return row
+    return None
+
+
 async def resolve_child_docs(
     config_doc_id: str,
     *,
@@ -404,15 +414,12 @@ async def resolve_template_doc(
     if rows is None:
         rows = await fetch_child_rows(config_doc_id)
 
-    for row in rows:
-        title = (row.get("title") or "").strip().lower()
-        if title == "template":
-            content = row.get("content") or ""
-            return _extract_template_from_code_block(content)
-
-    raise ValueError(
-        f"No 'template' child document found under config doc {config_doc_id}"
-    )
+    row = _child_row(rows, "template")
+    if row is None:
+        raise ValueError(
+            f"No 'template' child document found under config doc {config_doc_id}"
+        )
+    return _extract_template_from_code_block(row.get("content") or "")
 
 
 async def resolve_variables_sections(
@@ -620,26 +627,24 @@ async def resolve_typography_doc(
     if rows is None:
         rows = await fetch_child_rows(config_doc_id)
 
-    for row in rows:
-        if (row.get("title") or "").strip().lower() != "typography":
-            continue
-        content = (row.get("content") or "").strip()
-        if not content:
-            return {}
-        try:
-            parsed = _parse_yaml_from_code_block(content)
-        except ValueError:
-            logger.warning("[typography] unparseable content in config %s", config_doc_id)
-            return {}
-        table = parsed.get("replacements", parsed)
-        if not isinstance(table, dict):
-            return {}
-        return {
-            str(k): str(v) for k, v in table.items()
-            if isinstance(k, str) and k.strip()
-        }
-
-    return {}
+    row = _child_row(rows, "typography")
+    if row is None:
+        return {}
+    content = (row.get("content") or "").strip()
+    if not content:
+        return {}
+    try:
+        parsed = _parse_yaml_from_code_block(content)
+    except ValueError:
+        logger.warning("[typography] unparseable content in config %s", config_doc_id)
+        return {}
+    table = parsed.get("replacements", parsed)
+    if not isinstance(table, dict):
+        return {}
+    return {
+        str(k): str(v) for k, v in table.items()
+        if isinstance(k, str) and k.strip()
+    }
 
 
 # `ranges` row keys (see SYSTEM: extractor). Condition keys gate matching
@@ -778,15 +783,13 @@ async def resolve_ranges_doc(
     if rows is None:
         rows = await fetch_child_rows(config_doc_id)
 
-    for row in rows:
-        if (row.get("title") or "").strip().lower() != "ranges":
-            continue
-        content = (row.get("content") or "").strip()
-        if not content:
-            return {}
-        return _ranges_tables_from_content(content, config_doc_id, rejected_sink)
-
-    return {}
+    row = _child_row(rows, "ranges")
+    if row is None:
+        return {}
+    content = (row.get("content") or "").strip()
+    if not content:
+        return {}
+    return _ranges_tables_from_content(content, config_doc_id, rejected_sink)
 
 
 def _ranges_tables_from_content(
@@ -1097,15 +1100,10 @@ async def resolve_instructions_doc(
     Looks for child docs titled "instructions".
     Returns instructions string, or empty string if not found.
     """
-    inst_names = ["instructions"]
-
     if rows is None:
         rows = await fetch_child_rows(config_doc_id)
 
-    for row in rows:
-        title = (row.get("title") or "").strip().lower()
-        content = row.get("content") or ""
-        if title in [n.lower() for n in inst_names]:
-            return content.strip()
-
-    return ""
+    row = _child_row(rows, "instructions")
+    if row is None:
+        return ""
+    return (row.get("content") or "").strip()

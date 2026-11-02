@@ -128,7 +128,8 @@ export interface LoreConversation {
 
 /**
  * Build one conversation engine with dsh's own node definitions installed,
- * plus Lore's four own cards (image-gen, verdict-ask, halt, compaction-mint).
+ * plus Lore's own cards (image-gen, verdict-ask, halt, compaction-mint,
+ * interrupted-reply).
  * @returns the feed/read surface; each instance owns its own context.
  */
 export function createLoreConversation(): LoreConversation {

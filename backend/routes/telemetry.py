@@ -14,9 +14,11 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+from access_counts import count_access, doc_ref
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
+from access import get_doc_project_id, get_project_access
 from auth import get_current_user
 from telemetry_store import clamp_detail, record_telemetry_events
 
@@ -85,4 +87,31 @@ async def ingest_telemetry(body: TelemetryBatch, user: dict = Depends(get_curren
         # One acceptable swallow: diagnostics ingest must never 500 a client.
         logger.warning("telemetry insert failed (dropped %d rows)", len(rows), exc_info=True)
         return {"accepted": 0}
+    try:
+        await count_access(await _human_access_rows(events, user))
+    except Exception:
+        logger.warning("access rollup failed", exc_info=True)
     return {"accepted": accepted}
+
+
+async def _human_access_rows(events: list[TelemetryEvent], user: dict) -> list[dict]:
+    """object_access_daily increments for `access/open` events on readable documents.
+
+    INVARIANT(security): an open is counted only for a document the caller can read,
+    and under the document's OWN project, never the client-sent project_id. Why: the
+    body is attacker-controllable; otherwise any member could write counts for ids
+    outside their reach. Document access IS project access (see get_document_access),
+    so the project lookup doubles as the check. Serial awaits — no gather on the conn.
+    """
+    rows: list[dict] = []
+    for ev in events:
+        if ev.category != "access" or ev.kind != "open" or not ev.entity_id:
+            continue
+        project_id = await get_doc_project_id(ev.entity_id)
+        if project_id is None or not await get_project_access(project_id, user):
+            continue
+        rows.append({
+            "project_id": project_id, "object_ref": doc_ref(ev.entity_id),
+            "actor": "human", "kind": "open", "user_id": user["user_id"],
+        })
+    return rows

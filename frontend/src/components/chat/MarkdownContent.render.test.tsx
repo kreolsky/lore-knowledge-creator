@@ -74,7 +74,7 @@ describe('MarkdownContent — the Lore wrapper contract', () => {
       return a;
     });
     fireEvent.click(anchor);
-    expect(emit).toHaveBeenCalledWith('navigate-to-document', { documentId: '1169966b-afe4-4bfd-b532-5187f3ba1a30' });
+    expect(emit).toHaveBeenCalledWith('navigate-to-document', { documentId: '1169966b-afe4-4bfd-b532-5187f3ba1a30', via: 'chat' });
   });
 
   it('http, mailto and anchor links are not rewritten to the document form', async () => {

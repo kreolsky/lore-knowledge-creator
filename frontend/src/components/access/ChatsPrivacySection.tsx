@@ -1,5 +1,7 @@
 /**
- * Subtree chat privacy — the Access-tab checkboxes for `documents.chats_unindexed`
+ * Privacy section of the Access tab. First the personal page PIN lock
+ * (access/PageLockToggle, SYSTEM: page-lock), then the subtree chat privacy
+ * checkboxes for `documents.chats_unindexed`
  * (search hide) and `documents.chats_unlisted` (list hide). Storage-wise two
  * independent columns (each governs one surface), but the UI GATES them like the
  * General-access Share/Include-subtree pair (operator 2026-10-30): the list hide
@@ -19,6 +21,7 @@ import { useAppStore } from '../../store/app-store';
 import { apiClient } from '../../api/client';
 import { FieldCheckbox, SectionHeader } from '../ui';
 import { useTranslation } from '../../i18n';
+import { PageLockToggle } from './PageLockToggle';
 import type { Document } from '../../types';
 
 type ChatsFlagField = 'chats_unindexed' | 'chats_unlisted';
@@ -72,6 +75,7 @@ export function ChatsPrivacySection({ docId }: { docId: string }) {
       />
       <div className="px-3.5">
         <div className="flex flex-col gap-1.5 mt-1">
+          <PageLockToggle docId={docId} />
           <FieldCheckbox
             checked={checkedUnindexed}
             onChange={(v) => { void flip('chats_unindexed', v); }}

@@ -132,12 +132,15 @@ async def me(request: Request, response: Response, user: dict = Depends(get_curr
     """
     try:
         rows = await db.query(
-            "SELECT pin_hash, token_version, role, moderator_id, tier "
+            "SELECT pin_hash, token_version, role, moderator_id, tier, locked_doc_ids "
             "FROM type::record('users', $id)",
             {"id": user["user_id"]},
         )
         db_user = rows[0] if rows else {}
         user["has_pin"] = bool(db_user and db_user.get("pin_hash"))
+        # Page PIN lock (SYSTEM: page-lock): ALWAYS a list (NONE = no locks) —
+        # the frontend types it string[], never string[] | null.
+        user["locked_doc_ids"] = list(db_user.get("locked_doc_ids") or []) if db_user else []
         tv = (db_user.get("token_version") or 0) if db_user else 0
         # ARCH: /me answers with the DB role (fresh even when the JWT claim is
         # stale — a role flip takes effect without re-login), and with capability

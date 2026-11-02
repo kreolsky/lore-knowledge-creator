@@ -19,7 +19,7 @@ import asyncio
 
 from surrealdb import AsyncSurreal
 
-from db import validate_record_id
+from db import tombstone_many, validate_record_id
 
 
 async def _cascade_cleanup_document(db: AsyncSurreal, document_id: str) -> list[str]:
@@ -97,17 +97,9 @@ async def _cascade_cleanup_document(db: AsyncSurreal, document_id: str) -> list[
             {"rids": ref_doc_ids},
             idempotent=True,
         ))
-        # WHY: a `WHERE id IN [list]` filter scans the whole table and its read set
-        # conflicts with any concurrent write to that table (surrealkv checks the
-        # read set at commit — the embed worker's per-reference status write then
-        # fails the cascade after minutes of scanning), so the cascade targets
-        # records: `Iterate Record` per id. A missing id is a no-op.
-        write_tasks.append(db.query(
-            "UPDATE $rids.map(|$x| type::record('documents', $x)) "
-            "SET deleted_at = time::now() WHERE deleted_at IS NONE",
-            {"rids": ref_doc_ids},
-            idempotent=True,
-        ))
+        # Record-targeted bulk tombstone (the scan-class WHY is
+        # db.tombstone_many's docstring).
+        write_tasks.append(tombstone_many("documents", ref_doc_ids))
         # Cascade chat_sessions anchored to those reference-documents.
         write_tasks.append(db.query(
             "UPDATE chat_sessions SET deleted_at = time::now() "
@@ -123,12 +115,7 @@ async def _cascade_cleanup_document(db: AsyncSurreal, document_id: str) -> list[
             {"cids": chat_ids},
             idempotent=True,
         ))
-        write_tasks.append(db.query(
-            "UPDATE $cids.map(|$x| type::record('chat_sessions', $x)) "
-            "SET deleted_at = time::now() WHERE deleted_at IS NONE",
-            {"cids": chat_ids},
-            idempotent=True,
-        ))
+        write_tasks.append(tombstone_many("chat_sessions", chat_ids))
 
     await asyncio.gather(*write_tasks)
     return ref_doc_ids

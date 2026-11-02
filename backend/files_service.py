@@ -18,10 +18,10 @@ import re
 
 import settings
 from fastapi import HTTPException
-from files_util import save_upload, validate_magic
+from files_util import resolve_stored_file, save_upload, validate_magic
 from transcription import enqueue_transcription
 
-from config import IMAGE_MIMES, STORAGE_PATH
+from config import IMAGE_MIMES
 from db import fetch_one, get_db, serialize_record
 from event_bus import emit
 from jobs import pool as jobs_pool
@@ -72,11 +72,12 @@ async def resolve_reference_file(
     rel_path = ref.get("file_path", "")
     if not rel_path:
         raise HTTPException(status_code=404, detail="No file attached")
-    abs_path = (STORAGE_PATH / rel_path).resolve()
-    if not abs_path.is_relative_to(STORAGE_PATH.resolve()):
-        logger.error("Path traversal in reference %s file_path: %s", ref_id, rel_path)
-        raise HTTPException(status_code=404, detail="Reference not found")
-    if not abs_path.is_file():
+    # Containment via the single stored-file resolver: missing-or-outside is ONE
+    # refused case — a 404 with the honest degradation wording of the reachable
+    # (missing) case.
+    abs_path = resolve_stored_file(rel_path)
+    if abs_path is None:
+        logger.error("Unusable stored file for reference %s: %s", ref_id, rel_path)
         raise HTTPException(status_code=404, detail="Reference file is missing on disk")
     mime = (
         ref.get("file_meta", {}).get("mime_type")

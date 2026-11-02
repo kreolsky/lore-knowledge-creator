@@ -13,7 +13,7 @@ from content_hash import hash_content
 from fastapi import HTTPException
 
 import embeddings
-from db import extract_id, fetch_one, get_ancestor_ids
+from db import extract_id, fetch_one, get_ancestor_ids, iso_str
 from jobs.tasks.chat_index import index_coverage
 from scope import subtree_doc_ids
 
@@ -37,7 +37,9 @@ class Window(NamedTuple):
 
 
 def iso(value: object) -> str:
-    return value.isoformat() if isinstance(value, datetime) else str(value or "")
+    # Thin alias over the single home (db.iso_str) keeping this module's public
+    # name for chat_recall's imports — same shape: str passthrough, "" default.
+    return iso_str(value, default="", passthrough_str=True)
 
 
 async def _outer_flagged_roots(db, project_id: str, viewer_doc_id: str | None) -> set[str]:

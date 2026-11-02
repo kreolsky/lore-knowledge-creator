@@ -17,5 +17,5 @@ import { useUIStore } from '../store/ui-store';
 
 export function navigateToDocKeepingChat(documentId: string): void {
   useUIStore.getState().pinRightPanel(documentId, 'chat');
-  emit('navigate-to-document', { documentId });
+  emit('navigate-to-document', { documentId, via: 'chat' });
 }

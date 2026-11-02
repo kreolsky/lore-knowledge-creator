@@ -14,6 +14,7 @@ from surrealdb import AsyncSurreal
 from textmatch import anchor_pattern, fts_operand
 
 from access import (
+    emit_access_changed_recomputed,
     get_project_access,
     is_instance_admin,
     is_project_root,
@@ -23,6 +24,7 @@ from access import (
 )
 from auth import get_current_user, require_user_manager_role
 from db import (
+    build_set_clause,
     fetch_one,
     get_db,
     run_in_transaction,
@@ -37,6 +39,7 @@ from models import (
     PatchProject,
     is_ref_row,
 )
+from scope import resolve_search_subtree
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -412,7 +415,7 @@ async def get_project(project_id: str, user: dict = Depends(get_current_user), d
     doc_rows = await db.query(
         "SELECT id, project_id, parent_id, title, path, is_index, sort_key, "
         "is_system, system_role, created_at, updated_at, chats_unindexed, "
-        "chats_unlisted "
+        "chats_unlisted, media_type "
         "FROM documents WHERE project_id = $pid AND deleted_at IS NONE "
         "AND is_reference = false ORDER BY is_index DESC, sort_key ASC, id ASC",
         {"pid": project_id},
@@ -503,6 +506,13 @@ _SEARCH_PROJECTION = (
     "FROM documents "
 )
 
+# The html-artifact content gate: an html row's content
+# is page source — it is found by its TITLE alone, never by its markup. Every
+# content predicate in this module reuses THIS fragment so a future arm cannot
+# forget it. Verified on surreal v3.3.5 (gray, 2026-10-30): `NONE != 'html'`
+# evaluates true, so plain rows (media_type NONE) pass untouched.
+_HTML_CONTENT_GATE = "(media_type != 'html')"
+
 
 async def _contains_scan(
     db: AsyncSurreal, project_id: str, q_lower: str,
@@ -516,7 +526,7 @@ async def _contains_scan(
         + scope_clause +
         "AND ("
         "  string::contains(string::lowercase(title), $q) "
-        "  OR string::contains(string::lowercase(content ?? ''), $q)"
+        "  OR (" + _HTML_CONTENT_GATE + " AND string::contains(string::lowercase(content ?? ''), $q))"
         ") "
         "ORDER BY updated_at DESC LIMIT 50",
         {"pid": project_id, "q": q_lower, **(scope_params or {})},
@@ -559,22 +569,16 @@ async def search_documents(
     await require_project_read(project_id, user)
     q_lower = q.lower()
 
-    under = (under_document_id or "").strip() or None
+    # Subtree narrow via the single home (scope.resolve_search_subtree). The
+    # title search is cookie `require_project_read` only, so scope_root=None:
+    # no key ceiling, just the uniform root 404 + the subtree enumeration —
+    # behaviour preserved (plan ruling).
+    under_allowed = await resolve_search_subtree(under_document_id, project_id, None)
     scope_clause = ""
     scope_params: dict = {}
-    if under:
-        root_row = await fetch_one("documents", under)
-        if (
-            not root_row
-            or root_row.get("deleted_at")
-            or root_row.get("project_id") != project_id
-        ):
-            raise HTTPException(404, "Search root document not found")
-        from scope import subtree_doc_ids
-
-        allowed = set(await subtree_doc_ids(under, project_id))
+    if under_allowed is not None:
         scope_clause = "AND meta::id(id) IN $allowed "
-        scope_params = {"allowed": list(allowed)}
+        scope_params = {"allowed": list(under_allowed)}
 
     # ARCH(match-count): every returned card is ANCHORED — match_count counts the
     # anchor pattern (whole query verbatim, else the snippet-anchor ladder
@@ -591,7 +595,7 @@ async def search_documents(
                     _SEARCH_PROJECTION +
                     "WHERE project_id = $pid AND deleted_at IS NONE "
                     + scope_clause +
-                    "AND (title @0@ $q OR content @1@ $q) "
+                    "AND (title @0@ $q OR (" + _HTML_CONTENT_GATE + " AND content @1@ $q)) "
                     "ORDER BY updated_at DESC LIMIT 50",
                     {"pid": project_id, "q": operand, **scope_params},
                 )
@@ -613,8 +617,12 @@ async def search_documents(
         title = doc.get("title", "")
         content = doc.get("content", "") or ""
         title_lower = title.lower()
-        content_lower = content.lower()
-        blob = f"{title_lower} {content_lower}"
+        # html artifacts: a row that came in by title is
+        # matched on TITLE ONLY — its page source is not searchable text, so
+        # neither the literal match nor the anchor ladder reads it.
+        is_html = (doc.get("media_type") or "") == "html"
+        content_lower = "" if is_html else content.lower()
+        blob = f"{title_lower} {content_lower}".strip()
         if q_lower in blob:
             pattern: str | None = q_lower
         elif exact:
@@ -633,7 +641,7 @@ async def search_documents(
             "document_id": doc["document_id"],
             "title": title,
             "match_count": match_count,
-            "snippet": _build_snippet(content, pattern),
+            "snippet": None if is_html else _build_snippet(content, pattern),
             "created_at": doc.get("created_at"),
             "updated_at": doc.get("updated_at"),
         }
@@ -749,15 +757,10 @@ async def patch_project(project_id: str, body: PatchProject, user: dict = Depend
             raise HTTPException(status_code=404, detail="Project not found")
         await _guard_audiences(project, updates["audiences"], user)
     if updates:
-        set_parts = []
-        params: dict = {"id": project_id}
-        for k, v in updates.items():
-            if v is None:
-                set_parts.append(f"{k} = NONE")
-            else:
-                set_parts.append(f"{k} = ${k}")
-                params[k] = v
-        set_clause = ", ".join(set_parts)
+        # none_as_NONE: an unset option column is UNBOUND (k = NONE), so params
+        # carry only the non-None values — see db.build_set_clause.
+        set_clause = build_set_clause(updates, none_as_NONE=True)
+        params: dict = {"id": project_id, **{k: v for k, v in updates.items() if v is not None}}
         await db.query(
             f"UPDATE type::record('projects', $id) SET {set_clause}",
             params,
@@ -770,7 +773,7 @@ async def patch_project(project_id: str, body: PatchProject, user: dict = Depend
         # is the pre-existing gap where an audience removal reached nobody
         # until reload.
         if "audiences" in updates:
-            await emit("access_changed", project_id=project_id, user_id=None, access=None)
+            await emit_access_changed_recomputed(project_id, None)
     updated = await fetch_one("projects", project_id)
     result = serialize_record(updated, "project_id") if updated else {}
     result["my_access"] = await get_project_access(project_id, user)

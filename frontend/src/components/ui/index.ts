@@ -15,3 +15,4 @@ export { ListPill } from './ListPill';
 export { PillList } from './PillList';
 export { RowActions } from './RowActions';
 export { SegmentedControl } from './SegmentedControl';
+export { PinDigitsInput } from './PinDigitsInput';

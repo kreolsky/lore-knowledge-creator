@@ -31,7 +31,7 @@ routes/tool_api/__init__.py wires them onto the shared router.
 """
 from fastapi import HTTPException
 
-from access import get_project_access
+from access import require_full_project_access
 from models import ToolEditDocument, ToolEditTableCell
 
 # ─── Write-mode resolution ────────────────────────────────────────────────────
@@ -171,22 +171,23 @@ def _body_to_table_edits(body: ToolEditTableCell) -> list[dict]:
 
 async def _apply_create_document_direct(
     *, title: str, content: str, parent_id: str | None, project_id: str, user: dict,
-    scope_root: str | None = None,
+    scope_root: str | None = None, media_type: str = "markdown",
 ) -> dict:
     """Create a document via the shared primitive (sort_key invariant preserved).
 
     PR4 R3: the create body lives in ONE place —
     `agent.tool_api_surface.create_document_via_collab`. The access
     check stays here (the Tool-API direct path uses project access).
+    `media_type` rides the primitive's own kind handling ("html" = the
+    artifact leaf passes).
     """
-    access = await get_project_access(project_id, user)
-    if access != "full":
-        raise HTTPException(status_code=403, detail="Full project access required to create")
+    await require_full_project_access(project_id, user, "create")
     from agent.collab_writes import create_document_via_collab
 
     created = await create_document_via_collab(
         title=title, content=content, parent_id=parent_id,
         project_id=project_id, user=user, scope_root=scope_root,
+        media_type=media_type,
     )
     return {"status": "applied", "doc_id": created["doc_id"]}
 
@@ -201,9 +202,7 @@ async def _apply_create_reference_direct(
     `author_name` (S1): the DISPLAY-axis byline — the making agent key's label
     (api_key_auth.agent_author_name at the surface). None keeps the user's name.
     """
-    access = await get_project_access(project_id, user)
-    if access != "full":
-        raise HTTPException(status_code=403, detail="Full project access required to create")
+    await require_full_project_access(project_id, user, "create")
     from agent.collab_writes import create_reference_via_collab
 
     created = await create_reference_via_collab(

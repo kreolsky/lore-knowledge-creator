@@ -315,3 +315,113 @@ test('the live stream continues correctly after an out-of-band mint', () => {
   assert.ok(after, 'the event streamed after the mint rendered no node')
   assert.equal(after.location.kind, 'session', 'the mint rewound the location cursor')
 })
+
+/** The fixture up to the second step's start — the step whose reply the model
+ * was streaming when the stream failed. */
+function failingStepInputs(): { inputs: any[]; stream: any[]; text: string; next: number; time: number } {
+  const all = loadFixture()
+  const reply = all.map(input => input.event)
+    .filter(event => event.type === 'assistant/message').at(-1)
+  assert.ok(reply, 'the fixture has no settled reply to cut off')
+  const inputs = all.filter(input => input.event.seq < reply.seq)
+  assert.equal(inputs.at(-1)!.event.type, 'step/start', 'the fixture reply does not open its own step')
+  // A stream cut mid-flight: the deltas arrived, the block-ends and the finish did not.
+  const stream = reply.data.stream.filter((record: any) =>
+    record.type !== 'chunk' || record.chunk.type === 'block-start')
+  const text = reply.data.message.content
+    .filter((block: any) => block.type === 'text').map((block: any) => block.text).join('\n\n')
+  return { inputs, stream, text, next: reply.seq, time: reply.time }
+}
+
+function dshEvent(type: string, seq: number, time: number, data: object, surfaceOp?: string): any {
+  return { type: 'event', event: { type, seq, time, data, ...surfaceOp === undefined ? {} : { surfaceOp } } }
+}
+
+/** The error ending dsh logs once the failed attempt's retries are exhausted. */
+function errorEnd(seq: number, time: number): any[] {
+  return [
+    dshEvent('step/end', seq, time, { turn: 1, step: 2 }),
+    dshEvent('turn/end', seq + 1, time, { turn: 1, reason: { kind: 'error', error: { message: 'upstream 502' } } }),
+  ]
+}
+
+function interrupted(nodes: readonly any[]): any[] {
+  return nodes.filter(node => node.kind === 'interrupted-reply' && node.visibility === 'visible')
+}
+
+// TEST-WHY: recurring-regression — the reply text typed before an API error vanished from the chat, live and on reload.
+test('a reply cut off by an API error stays at its step, above the error card', () => {
+  const { inputs, stream, text, next, time } = failingStepInputs()
+  const attempt = dshEvent('assistant/attempt', next, time, { turn: 1, step: 2, stream })
+  const tail = [attempt, ...errorEnd(next + 1, time)]
+
+  const reloaded = createLoreConversation()
+  reloaded.replaceWindow([...inputs, ...tail], false)
+  const nodes = reloaded.nodes()
+  const cut = interrupted(nodes)
+  assert.equal(cut.length, 1, 'the cut-off reply rendered no node (or more than one)')
+  assert.equal(cut[0].data.text, text, 'the node does not carry the typed text without its reasoning')
+  assert.equal(cut[0].anchorSeq, next, 'the node is not anchored at the failed attempt')
+  assert.equal(cut[0].location.kind, 'step', 'the node is not located at its step')
+  assert.equal(cut[0].location.step.step, 2, 'the node sits at the wrong step')
+  const errorIndex = nodes.findIndex(node => node.kind === 'turn-error')
+  assert.ok(errorIndex > nodes.indexOf(cut[0]), 'the error card does not sit below the cut-off reply')
+
+  // The live stream assembles the same node in the same place as the reload.
+  const streamed = createLoreConversation()
+  streamed.replaceWindow(inputs, false)
+  for (const input of tail) streamed.append(input)
+  assert.deepEqual(placed(interrupted(streamed.nodes())), placed(cut))
+})
+
+// TEST-WHY: recurring-regression — the cut-off text vanished at the retry, so a Stop during the backoff left nothing after a reload.
+test('every cut-off attempt stays through retries and the reply that finally settled', () => {
+  const { inputs, stream, next, time } = failingStepInputs()
+  const retry = (seq: number, n: number) => dshEvent('llm/retry', seq, time, {
+    turn: 1, step: 2, retryId: 'retry-1', retry: n, maxRetries: 5, delayMs: 1000,
+    error: { message: 'upstream 502' },
+  })
+  const reply = loadFixture().find(input => input.event.seq === next)!.event
+  const tail = [
+    dshEvent('assistant/attempt', next, time, { turn: 1, step: 2, stream }),
+    retry(next + 1, 1),
+    dshEvent('assistant/attempt', next + 2, time, { turn: 1, step: 2, stream }),
+    retry(next + 3, 2),
+    dshEvent('assistant/message', next + 4, time, reply.data, 'append'),
+  ]
+  // The live path reads the nodes after EVERY event, as the screen does.
+  const live = createLoreConversation()
+  live.replaceWindow(inputs, false)
+  const counts = tail.map(input => { live.append(input); return interrupted(live.nodes()).length })
+  assert.deepEqual(counts, [1, 1, 2, 2, 2], 'a cut-off attempt disappeared on the way')
+  const nodes = live.nodes()
+  const reloaded = createLoreConversation()
+  reloaded.replaceWindow([...inputs, ...tail], false)
+  assert.deepEqual(placed(interrupted(reloaded.nodes())), placed(interrupted(nodes)),
+    'a reload does not show the same cut-off attempts')
+  const settledIndex = nodes.findIndex(node => node.kind === 'assistant-step' && node.anchorSeq === next + 4)
+  assert.ok(settledIndex > nodes.indexOf(interrupted(nodes).at(-1)), 'the settled reply is not below the cut-off attempts')
+})
+
+// TEST-WHY: recurring-regression — only an error-cut reply with text gets the node; a cancel already renders through dsh.
+test('no cut-off node for a reasoning-only attempt or a cancelled reply', () => {
+  const { inputs, stream, next, time } = failingStepInputs()
+  const reasoningOnly = stream.filter((record: any) =>
+    record.type === 'reasoning-chunks' || (record.type === 'chunk' && record.chunk.blockType === 'reasoning'))
+  const thinking = createLoreConversation()
+  thinking.replaceWindow([
+    ...inputs, dshEvent('assistant/attempt', next, time, { turn: 1, step: 2, stream: reasoningOnly }),
+    ...errorEnd(next + 1, time),
+  ], false)
+  assert.equal(interrupted(thinking.nodes()).length, 0, 'a reasoning-only attempt rendered a cut-off reply')
+
+  const reply = loadFixture().find(input => input.event.seq === next)!.event
+  const cancelled = createLoreConversation()
+  cancelled.replaceWindow([
+    ...inputs, dshEvent('assistant/message', next, time, { ...reply.data, stream, interrupted: true }, 'append'),
+  ], false)
+  const nodes = cancelled.nodes()
+  assert.equal(interrupted(nodes).length, 0, 'a cancelled reply rendered a second, cut-off copy')
+  assert.ok(nodes.some(node => node.kind === 'assistant-step' && node.visibility === 'visible'),
+    'the cancelled reply itself did not render')
+})

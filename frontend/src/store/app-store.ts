@@ -147,6 +147,13 @@ export interface AppState {
   pinLocked: boolean;
   setPinLocked: (locked: boolean) => void;
 
+  // PIN-locked pages opened by PIN in this tab (SYSTEM: page-lock) — a set, so a locked
+  // page under a locked page needs each PIN once. In-memory only; DocumentPage drops an id
+  // when the open page leaves its subtree, so leaving re-locks.
+  unlockedDocIds: string[];
+  addUnlockedDocId: (docId: string) => void;
+  setUnlockedDocIds: (docIds: string[]) => void;
+
   // One-shot request: focus the editor rendering this entity id once it becomes
   // editable, whatever its role. Set after creating a reference so the user can
   // keep typing without clicking into it.

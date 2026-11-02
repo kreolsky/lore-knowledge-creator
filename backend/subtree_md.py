@@ -40,11 +40,16 @@ from agent import doc_state
 from agent.collab_writes import create_document_via_collab
 from collab.registry import get_active_session
 from fastapi import HTTPException
-from files_util import mime_for_filename, save_upload, validate_magic
+from files_util import (
+    mime_for_filename,
+    resolve_stored_file,
+    save_upload,
+    validate_magic,
+)
+from markdown_grammar import EMBED_RE
 from markdown_normalize import normalize_list_spacing, normalize_markdown
 
 import event_bus
-from config import STORAGE_PATH
 from db import (
     SAFE_ID_RE,
     fetch_one,
@@ -133,12 +138,16 @@ class ExportNode:
     is_dir: bool
     #: zip-relative DIRECTORY this doc's file lives in ("" for the zip root).
     dir_path: str
-    #: zip-relative FILE path (`Title.md` leaf / `Title/README.md` parent).
+    #: zip-relative FILE path (`Title.md` leaf / `Title/README.md` parent;
+    #: `Title.html` for an html artifact leaf).
     file_path: str
     #: zip-relative assets dir for this doc's inline images (a LEAF shares its
     #: parent dir's bucket — a file cannot own a directory).
     assets_dir: str
     content: str = ""
+    #: html artifact leaf: content is served VERBATIM (no link translation,
+    #: no spacing normalize — the body is page source, not markdown).
+    is_html: bool = False
 
 
 async def _read_doc_content(doc_id: str, row: dict) -> str:
@@ -161,7 +170,7 @@ async def _subtree_children(
     refs, params = record_refs("documents", ids)
     rows = await db.query(
         "SELECT meta::id(id) AS id, parent_id, project_id, title, content, "
-        f"is_reference FROM documents WHERE id IN [{refs}] AND deleted_at IS NONE",
+        f"is_reference, media_type FROM documents WHERE id IN [{refs}] AND deleted_at IS NONE",
         params,
     )
     by_id = {r["id"]: r for r in (rows or [])}
@@ -186,13 +195,16 @@ async def _subtree_children(
 async def _visit_export_node(row: dict, dir_path: str, *, children: dict,
                              plan: dict, dedup: _Dedup) -> None:
     """Name one doc and recurse: a parent becomes `Title/` + `README.md`, a
-    leaf `Title.md`; an empty leaf is skipped entirely."""
+    leaf `Title.md` (an html artifact leaf `Title.html`); an empty leaf is
+    skipped entirely."""
     doc_id = str(row["id"])
     kids = children.get(doc_id, [])
     content = await _read_doc_content(doc_id, row)
     if not kids and not content.strip():
         return  # empty leaf: skipped entirely
     stem = dedup.unique(dir_path, _stem_for(row.get("title") or ""))
+    is_html = (row.get("media_type") or "") == "html"
+    ext = "html" if is_html else "md"
     if kids:
         node_dir = f"{dir_path}{stem}/"
         plan[doc_id] = ExportNode(
@@ -206,9 +218,10 @@ async def _visit_export_node(row: dict, dir_path: str, *, children: dict,
     else:
         plan[doc_id] = ExportNode(
             doc_id=doc_id, title=row.get("title") or "Untitled",
-            is_dir=False, dir_path=dir_path, file_path=f"{dir_path}{stem}.md",
+            is_dir=False, dir_path=dir_path,
+            file_path=f"{dir_path}{stem}.{ext}",
             assets_dir=f"{dir_path}_assets" if dir_path else "_assets",
-            content=content,
+            content=content, is_html=is_html,
         )
 
 
@@ -231,8 +244,8 @@ async def plan_export(root_id: str, project_id: str) -> dict[str, ExportNode]:
 
 # ─── export: content translation ──────────────────────────────────────────────
 
-_EMBED_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
-# The lookbehind keeps the pass off image syntax — `![alt](...)` is the embed
+# The embed-node grammar lives in markdown_grammar (EMBED_RE); the lookbehind
+# below keeps the link pass off image syntax — `![alt](...)` is the embed
 # pass's grammar; a plain link never starts with the bang.
 _LINK_RE = re.compile(r"(?<!\!)\[([^\]]*)\]\(([^)]+)\)")
 _DIMS_RE = re.compile(r"\|\d+x\d+$")
@@ -258,8 +271,8 @@ def _read_stored_bytes(row: dict) -> bytes | None:
     rel_path = row.get("file_path", "")
     if not rel_path:
         return None
-    abs_path = (STORAGE_PATH / rel_path).resolve()
-    if not abs_path.is_relative_to(STORAGE_PATH.resolve()) or not abs_path.is_file():
+    abs_path = resolve_stored_file(rel_path)
+    if abs_path is None:
         return None
     return abs_path.read_bytes()
 
@@ -326,7 +339,13 @@ async def _embed_replacement(alt: str, target: str, node: ExportNode,
         return None
     tid = parsed["id"]
     if parsed["scheme"] in ("doc", "bare-doc") and tid in plan:
-        return f"![{alt}]({_rel_link(node.dir_path, plan[tid].file_path)})"
+        target_node = plan[tid]
+        link = _rel_link(node.dir_path, target_node.file_path)
+        if target_node.is_html:
+            # An html artifact is not embeddable md — degrade the embed to a
+            # relative LINK to the exported .html file.
+            return f"[{alt}]({link})"
+        return f"![{alt}]({link})"
 
     row = await _cached_row(row_cache, tid)
     if row is None or row.get("deleted_at") or row.get("project_id") != project_id:
@@ -342,6 +361,10 @@ async def _embed_replacement(alt: str, target: str, node: ExportNode,
             return ""
         body = row.get("content")
         return body if (body and body.strip()) else None
+    if (row.get("media_type") or "") == "html":
+        # An html row OUTSIDE the exported subtree never inlines its markup —
+        # the alt text stands in (a dangling relative link is worse).
+        return alt or (row.get("title") or "")
     body = row.get("content") or ""
     return body if body.strip() else None
 
@@ -376,17 +399,13 @@ async def _translate_content(content: str, node: ExportNode,
     onto the folder layout."""
     content = normalize_list_spacing(content)
 
-    embed_out: list[str] = []
-    pos = 0
-    for m in _EMBED_RE.finditer(content):
-        embed_out.append(content[pos:m.start()])
+    async def _embed_sub(m: re.Match) -> str:
         repl = await _embed_replacement(
             m.group(1), m.group(2), node, plan, project_id, row_cache, assets,
         )
-        embed_out.append(m.group(0) if repl is None else repl)
-        pos = m.end()
-    embed_out.append(content[pos:])
-    content = "".join(embed_out)
+        return m.group(0) if repl is None else repl
+
+    content = await _sub_async(EMBED_RE, _embed_sub, content)
 
     def _link_sub(m: re.Match) -> str:
         repl = _link_replacement(m.group(1), m.group(2), node, plan)
@@ -404,6 +423,10 @@ async def export_subtree(*, root_id: str, project_id: str) -> dict:
     row_cache: dict = {}
     assets = _AssetSink()
     for node in plan.values():
+        if node.is_html:
+            # html artifact leaf: VERBATIM page source — no link translation,
+            # no spacing normalize.
+            continue
         node.content = await _translate_content(
             node.content, node, plan, project_id, row_cache, assets,
         )
@@ -792,8 +815,9 @@ def _find_asset_by_name(root: _ZipTree, filename: str) -> str | None:
 
 
 async def _sub_async(pattern: re.Pattern, repl, text: str) -> str:
-    """regex.sub with an ASYNC repl — matches are awaited in order (the repl
-    imports binaries; sequential keeps the shared Surreal connection happy)."""
+    """regex.sub with an ASYNC repl — matches are awaited in order. Both users
+    (import embeds pull binaries, export embeds resolve rows) must stay
+    sequential: concurrent awaits contend on the shared Surreal connection."""
     out: list[str] = []
     pos = 0
     for m in pattern.finditer(text):
@@ -869,7 +893,7 @@ async def _rewrite_embeds(
             return m.group(0)
         return m.group(0)
 
-    text = await _sub_async(_EMBED_RE, _embed_repl, text)
+    text = await _sub_async(EMBED_RE, _embed_repl, text)
     return await _rewrite_wiki_embeds(text, doc, root, index, assets,
                                       asset_host, _asset_record)
 

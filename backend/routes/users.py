@@ -14,7 +14,7 @@ from model_access import drop_moderator_grants
 from password import hash_secret
 from surrealdb import AsyncSurreal
 
-import event_bus
+from access import emit_access_changed_recomputed
 from auth import (
     bump_token_version,
     get_current_user,
@@ -22,7 +22,14 @@ from auth import (
     require_user_manager,
     require_user_manager_role,
 )
-from db import create_record, fetch_one, get_db, serialize_record, soft_delete
+from db import (
+    build_set_clause,
+    create_record,
+    fetch_one,
+    get_db,
+    serialize_record,
+    soft_delete,
+)
 from models import (
     USER_MANAGER_ROLES,
     CreateUserAdmin,
@@ -151,9 +158,7 @@ async def _emit_audience_recomputes(
             {"s": subject},
         )
         for pid in rows or []:
-            await event_bus.emit(
-                "access_changed", project_id=pid, user_id=None, access=None,
-            )
+            await emit_access_changed_recomputed(pid, None)
 
 
 async def _apply_user_updates(db: AsyncSurreal, user_id: str, updates: dict) -> dict:
@@ -165,10 +170,9 @@ async def _apply_user_updates(db: AsyncSurreal, user_id: str, updates: dict) -> 
         )
         if dup:
             raise HTTPException(status_code=409, detail="Email already in use")
-    set_parts = [f"{k} = ${k}" for k in updates]
-    set_parts.append("updated_at = time::now()")
+    set_clause = build_set_clause(updates) + ", updated_at = time::now()"
     rows = await db.query(
-        f"UPDATE type::record('users', $id) SET {', '.join(set_parts)} RETURN AFTER",
+        f"UPDATE type::record('users', $id) SET {set_clause} RETURN AFTER",
         {"id": user_id, **updates},
     )
     if not rows:
@@ -314,8 +318,7 @@ async def update_user(user_id: str, body: UpdateUser, current_user: dict = Depen
     if not updates:
         raise HTTPException(status_code=400, detail="Nothing to update")
     # NOTE: set_clause keys are hardcoded ("user_facts", "timezone"), not user input — safe from injection
-    set_parts = [f"{k} = ${k}" for k in updates] + ["updated_at = time::now()"]
-    set_clause = ", ".join(set_parts)
+    set_clause = build_set_clause(updates) + ", updated_at = time::now()"
     rows = await db.query(
         f"UPDATE type::record('users', $id) SET {set_clause} RETURN AFTER",
         {"id": user_id, **updates},

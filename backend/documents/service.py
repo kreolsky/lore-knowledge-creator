@@ -24,10 +24,18 @@ from cp_store import (
     resolve_checkpoint_content,
 )
 from fastapi import HTTPException
+from markdown_grammar import EMBED_RE
 from sort_keys import key_before, key_between
 
 import event_bus
-from db import create_record, extract_id, fetch_one, get_db, record_refs
+from db import (
+    create_record,
+    extract_id,
+    fetch_one,
+    get_ancestor_ids,
+    get_db,
+    record_refs,
+)
 from models import is_ref_row
 from transclusion_grammar import NON_DOC_TARGET
 
@@ -294,12 +302,64 @@ async def live_doc_ids(db, doc_ids: set[str]) -> set[str]:
 
 _REF_IMG_PATTERN = re.compile(r"!\[([^\]]*)\]\(ref:([^)]+)\)")
 
-# SYSTEM: transclusion — export inlining. Matches every embed node `![alt](target)`;
+# SYSTEM: transclusion — export inlining. The embed-node grammar lives in
+# markdown_grammar (EMBED_RE): it matches every embed node `![alt](target)`;
 # the target may be `ref:<id>`, `doc:<id>` or a bare document id. Text embeds (text
 # references + documents) are replaced with the source's content as a native text block;
 # image references are left for _inline_ref_images (base64). External image URLs are
 # left untouched.
-_EMBED_PATTERN = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+
+
+async def _ref_embed_text(rec: dict | None, project_id: str) -> str | None:
+    """The `ref:<id>` branch of embed resolution: walls + media rules.
+
+    None = leave the embed verbatim (image refs stay for the base64 pass,
+    out-of-project/deleted/untextful refs never inline).
+    """
+    if not rec or not is_ref_row(rec):
+        return None
+    # INVARIANT(security): a by-id target outside the reading document's
+    # project is skipped. Why: doc:/ref: embeds survive cross-project
+    # subtree moves (documents/move.py), so without the wall an exporter
+    # would inline the BODY of a document the reading project's members
+    # cannot open. Project equality is the wall — per-target access
+    # resolution is deliberately absent (small trusted group; N×4
+    # round-trips on the export path otherwise, audit N4).
+    if rec.get("project_id") != project_id:
+        return None
+    # INVARIANT: a soft-deleted ref/doc never inlines into export. Why: the
+    # editor band hides deleted sources, so export must match the live view.
+    if rec.get("deleted_at"):
+        return None
+    # INVARIANT: mirror the editor's refToEntry — an image ref renders as an
+    # image (leave for the base64 pass). Why: ANY other ref with text content
+    # (a text reference, or an audio/video ref carrying a transcription)
+    # inlines as text — the user sees the transcription in the editor band,
+    # so export must keep it; only image refs and media-without-text are
+    # non-text.
+    if rec.get("media_type") == "image":
+        return None
+    body = rec.get("content")
+    return body if (body and body.strip()) else None
+
+
+async def _doc_embed_text(rec: dict | None, project_id: str, tid: str) -> str | None:
+    """The `doc:<id>`/bare-id branch of embed resolution: walls + html degrade."""
+    if not rec:
+        return None
+    # INVARIANT(security): same wall as the ref branch — a by-id target
+    # outside the reading document's project is skipped (Why: see the ref
+    # branch above).
+    if rec.get("project_id") != project_id:
+        return None
+    if rec.get("deleted_at") or is_ref_row(rec):
+        return None
+    # html artifacts: page source never inlines into
+    # a markdown export — the embed degrades to a plain link naming the
+    # page (mirrors the editor's transclusion resolver returning null).
+    if (rec.get("media_type") or "") == "html":
+        return f"[{rec.get('title') or tid}](doc:{tid})"
+    return rec.get("content") or ""
 
 
 async def _inline_transclusions(content: str, project_id: str) -> str:
@@ -317,32 +377,10 @@ async def _inline_transclusions(content: str, project_id: str) -> str:
     async def _resolve_text(target: str) -> str | None:
         if target.startswith("ref:"):
             rec = await fetch_one("documents", target[4:])
-            if not rec or not is_ref_row(rec):
-                return None
-            # INVARIANT(security): a by-id target outside the reading document's
-            # project is skipped. Why: doc:/ref: embeds survive cross-project
-            # subtree moves (documents/move.py), so without the wall an exporter
-            # would inline the BODY of a document the reading project's members
-            # cannot open. Project equality is the wall — per-target access
-            # resolution is deliberately absent (small trusted group; N×4
-            # round-trips on the export path otherwise, audit N4).
-            if rec.get("project_id") != project_id:
-                return None
-            # INVARIANT: a soft-deleted ref/doc never inlines into export. Why: the
-            # editor band hides deleted sources, so export must match the live view.
-            if rec.get("deleted_at"):
-                return None
-            # INVARIANT: mirror the editor's refToEntry — an image ref renders as an
-            # image (leave for the base64 pass); ANY other ref with text content (a text
-            # reference, or an audio/video ref carrying a transcription) inlines as text.  Why: export mirrors the editor's refToEntry — images stay for the base64 pass, while text/audio/video refs carrying a transcription inline their text so export keeps what the user sees.
-            # Why: the user sees the transcription in the editor band, so export must keep
-            # it; only image refs and media-without-text are non-text.
-            if rec.get("media_type") == "image":
-                return None
-            body = rec.get("content")
-            return body if (body and body.strip()) else None
+            return await _ref_embed_text(rec, project_id)
         if target.startswith("doc:"):
-            rec = await fetch_one("documents", target[4:])
+            tid = target[4:]
+            rec = await fetch_one("documents", tid)
         elif target.startswith("table:"):
             # A `table:` anchor is a doc-local table, never a document. In export it is
             # already GFM-expanded upstream; guard here so a stray anchor is left verbatim
@@ -351,21 +389,13 @@ async def _inline_transclusions(content: str, project_id: str) -> str:
         elif NON_DOC_TARGET.match(target):
             return None
         else:
-            rec = await fetch_one("documents", target)
-        if not rec:
-            return None
-        # INVARIANT(security): same wall as the ref branch — a by-id target
-        # outside the reading document's project is skipped (Why: see the ref
-        # branch above).
-        if rec.get("project_id") != project_id:
-            return None
-        if rec.get("deleted_at") or is_ref_row(rec):
-            return None
-        return rec.get("content") or ""
+            tid = target
+            rec = await fetch_one("documents", tid)
+        return await _doc_embed_text(rec, project_id, tid)
 
     # Resolve sequentially — these share the global Surreal connection (no gather).
     replacements: dict[str, str | None] = {}
-    for m in _EMBED_PATTERN.finditer(content):
+    for m in EMBED_RE.finditer(content):
         target = m.group(2)
         if target not in replacements:
             replacements[target] = await _resolve_text(target)
@@ -374,7 +404,7 @@ async def _inline_transclusions(content: str, project_id: str) -> str:
         text = replacements.get(m.group(2))
         return m.group(0) if text is None else text
 
-    return _EMBED_PATTERN.sub(_repl, content)
+    return EMBED_RE.sub(_repl, content)
 
 
 async def _inline_ref_images(content: str, project_id: str) -> str:
@@ -395,7 +425,7 @@ async def _inline_ref_images(content: str, project_id: str) -> str:
     import base64
     import mimetypes as _mimetypes
 
-    from config import STORAGE_PATH
+    from files_util import resolve_stored_file
 
     ref_ids = {m.group(2) for m in _REF_IMG_PATTERN.finditer(content)}
     if not ref_ids:
@@ -417,8 +447,8 @@ async def _inline_ref_images(content: str, project_id: str) -> str:
         rel_path = ref.get("file_path", "")
         if not rel_path:
             continue
-        abs_path = (STORAGE_PATH / rel_path).resolve()
-        if not abs_path.is_relative_to(STORAGE_PATH.resolve()) or not abs_path.is_file():
+        abs_path = resolve_stored_file(rel_path)
+        if abs_path is None:
             continue
         mime = ref.get("file_meta", {}).get("mime_type") or _mimetypes.guess_type(str(abs_path))[0] or "application/octet-stream"
         if not mime.startswith("image/"):
@@ -598,7 +628,11 @@ async def assert_parent_valid(parent_id: str | None, project_id: str) -> dict | 
     Enforces the full parent invariant set:
       - 404 if the parent is missing/deleted (no dangling parent_id);
       - 404 if the parent belongs to a different project (cross-project);
-      - 400 if the parent is a reference document.
+      - 400 if the parent is a reference document;
+      - 400 if the parent is an html artifact (leaf rule:
+        only media_type='markdown' or NONE may have children — a page is a
+        terminal node; the schema event documents_parent_check enforces the
+        same at the DB layer).
 
     # INVARIANT(persisted): documents.parent_id never points at an is_reference=true row, never
     # crosses projects, and never dangles.  Why: a dangling or cross-project parent breaks the tree and a reference-as-parent inverts the derived/real relationship; the schema event (documents_parent_check) is the DB-level fence, and this guard surfaces its failure as a friendly HTTP error. The schema-level documents_parent_check
@@ -622,26 +656,11 @@ async def assert_parent_valid(parent_id: str | None, project_id: str) -> dict | 
         raise HTTPException(
             status_code=400, detail="Reference documents cannot be parents",
         )
+    if (parent.get("media_type") or "") == "html":
+        raise HTTPException(
+            status_code=400, detail="HTML artifacts cannot be parents",
+        )
     return parent
-
-
-async def ancestor_chain(doc_id: str) -> list[str]:
-    """Return the ancestor ids of `doc_id` (inclusive of itself), root-first.
-
-    Used for the move cycle check (a doc may not become its own descendant).
-    Bounded by SurrealDB's depth; a missing parent short-circuits to root.
-    """
-    chain: list[str] = []
-    current = doc_id
-    seen: set[str] = set()
-    while current and current not in seen:
-        seen.add(current)
-        chain.append(current)
-        row = await fetch_one("documents", current)
-        if not row:
-            break
-        current = row.get("parent_id") or ""
-    return chain
 
 
 async def assert_no_cycle(document_id: str, new_parent_id: str | None) -> None:
@@ -658,7 +677,12 @@ async def assert_no_cycle(document_id: str, new_parent_id: str | None) -> None:
         raise HTTPException(
             status_code=400, detail="A document cannot be its own parent",
         )
-    if document_id in await ancestor_chain(new_parent_id):
+    # include_deleted_stop + max_depth=None: membership semantics of the cycle
+    # guard (the soft-deleted boundary node counts; no depth cap —
+    # a cap could let a >50-deep move escape this corruption guard).
+    if document_id in await get_ancestor_ids(
+        new_parent_id, include_deleted_stop=True, max_depth=None,
+    ):
         raise HTTPException(
             status_code=400,
             detail="Cannot move a document into its own subtree (cycle)",

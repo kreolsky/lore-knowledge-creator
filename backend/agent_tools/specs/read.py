@@ -29,7 +29,9 @@ READ_TOOLS: list[dict] = [
                 "it is absent). Each hit "
                 "carries a `kind`: `memory` hits are distilled facts the project "
                 "already established (served whole, prefer them over raw material); "
-                "`document` / `reference` hits are raw excerpts. A `memory` hit also "
+                "`document` / `reference` hits are raw excerpts, and the first hit of a "
+                "document carries its `outline` (the headings) — judge from it whether "
+                "the document is worth opening. A `memory` hit also "
                 "carries `sources` — the reference ids the fact was distilled from. "
                 # WHY: the route to `sources` is triggered by an answer the model
                 # presents as detailed or grounded, NOT only by a verbatim quote.
@@ -174,7 +176,10 @@ READ_TOOLS: list[dict] = [
                 "`total_chars` and — while content remains — `next_offset`; re-call "
                 "with `offset` = `next_offset` to page. `next_offset` ABSENT means "
                 "you hold the whole document, so never conclude it ends where a "
-                "slice ends. Table blocks appear in `content` as opaque anchors like "
+                "slice ends. A sliced read also carries `sections` (every heading of the "
+                "WHOLE document with its `offset`) — page straight to the section you "
+                "need with `offset` = its offset instead of reading from the start. "
+                "Table blocks appear in `content` as opaque anchors like "
                 "![label](table:id) — do NOT edit_document across them; `tables` "
                 "indexes them (derived from the WHOLE document even when `content` "
                 "is sliced) and edit_table_cell edits a cell. "
@@ -206,7 +211,9 @@ READ_TOOLS: list[dict] = [
                         "type": "string",
                         "description": (
                             "Optional: return ONLY this table's full grid (overrides "
-                            "tables mode). Use the table_id from the index."
+                            "tables mode). Use the table_id from the index. Without "
+                            "`limit` the text is NOT re-sent (`content` is empty) — "
+                            "fetch a table this way instead of re-reading the document."
                         ),
                     },
                     # Read-path spill bound: the content slice window.

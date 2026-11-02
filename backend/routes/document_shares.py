@@ -35,7 +35,8 @@ from surrealdb import AsyncSurreal
 import event_bus
 from access import ensure_owner_for_doc, require_project_owner
 from auth import get_current_user
-from db import create_record, fetch_one, get_db, serialize_record
+from db import build_set_clause, create_record, fetch_one, get_db, serialize_record
+from routes._guards import guard_row
 from routes.public_share import _find_share_row
 
 router = APIRouter()
@@ -72,9 +73,7 @@ async def _ensure_full_for_doc(project_id: str, document_id: str, user: dict) ->
     stay owner-only via ensure_owner_for_doc.
     """
     from access import get_project_access
-    project = await fetch_one("projects", project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    await guard_row("projects", project_id, not_found="Project not found")
     if await get_project_access(project_id, user) != "full":
         raise HTTPException(status_code=403, detail="Write access required")
     doc = await fetch_one("documents", document_id)
@@ -211,11 +210,11 @@ async def update_share(
     # Uniform 404 for missing / already-deleted rows — no existence oracle.
     if not rows or rows[0].get("deleted_at") is not None:
         raise HTTPException(status_code=404, detail="Share not found")
-    project = await fetch_one("projects", rows[0]["project_id"])
-    if not project:
-        raise HTTPException(status_code=404, detail="Share not found")
+    project = await guard_row(
+        "projects", rows[0]["project_id"], not_found="Share not found",
+    )
     await require_project_owner(project, user)
-    assignments = ", ".join(f"{k} = ${k}" for k in sets)
+    assignments = build_set_clause(sets)
     await db.query(
         f"UPDATE type::record('document_shares', $id) SET {assignments} "
         "WHERE deleted_at IS NONE",
@@ -243,9 +242,9 @@ async def delete_share(share_id: str, user: dict = Depends(get_current_user), db
     )
     if not rows:
         raise HTTPException(status_code=404, detail="Share not found")
-    project = await fetch_one("projects", rows[0]["project_id"])
-    if not project:
-        raise HTTPException(status_code=404, detail="Share not found")
+    project = await guard_row(
+        "projects", rows[0]["project_id"], not_found="Share not found",
+    )
     await require_project_owner(project, user)
     await db.query(
         "UPDATE type::record('document_shares', $id) SET deleted_at = time::now() "

@@ -58,6 +58,35 @@ def _patch_common(monkeypatch, ctx_module, *, fetch_one_impl=None):
         monkeypatch.setattr(ctx_module, "fetch_one", fetch_one_impl)
 
 
+def _seed_stored_image(data: bytes, name: str) -> str:
+    """Write image bytes under the REAL storage, return the stored rel path.
+
+    TEST-WHY: stale patch target — build_context resolves image refs through
+    files_util.resolve_stored_file (rot-epic step 2), bound to the REAL
+    STORAGE_PATH at import; routes.chat.context no longer carries a
+    STORAGE_PATH attribute to patch (AttributeError-red since).
+    """
+    from config import STORAGE_PATH
+
+    rel = f"ctx-prop/{uuid4().hex[:8]}/{name}"
+    p = STORAGE_PATH / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(data)
+    return rel
+
+
+def _real_png_bytes() -> bytes:
+    # The vision path renders the model variant through PIL — the bytes must
+    # be a REAL image, not a PNG-header stub.
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (900, 700), (7, 8, 9)).save(buf, "PNG")
+    return buf.getvalue()
+
+
 async def test_build_context_returns_warning_for_missing_doc(monkeypatch):
     """Document that fails to fetch produces context_fetch_failed warning."""
     from routes.chat import context as ctx_module
@@ -130,26 +159,21 @@ async def test_build_context_drops_reference_from_wrong_project(monkeypatch):
     assert dropped[0]["detail"] == "wrong project"
 
 
-async def test_build_context_routes_image_ref_bytes_to_image_parts(monkeypatch, tmp_path):
+async def test_build_context_routes_image_ref_bytes_to_image_parts(monkeypatch):
     """Regression (Stage 9): an image reference must populate ctx.image_parts with
     an image_url data-URI part so the bytes reach the model via the `prompt`
     channel. The reference text framing still rides system_prefix as a text
     {role:'system'} message."""
     from routes.chat import context as ctx_module
 
-    # Real small PNG-ish file under a stubbed STORAGE_PATH.
-    img_bytes = b"\x89PNG\r\n\x1a\nIMAGE-CTX-MARKER"
-    img_file = tmp_path / "ref.png"
-    img_file.write_bytes(img_bytes)
-
-    monkeypatch.setattr(ctx_module, "STORAGE_PATH", tmp_path)
+    img_rel = _seed_stored_image(_real_png_bytes(), "ref.png")
 
     async def fake_fetch_one(table, rid):
         if table == "documents" and rid == "ref-img":
             return {"id": f"documents:{rid}", "deleted_at": None,
                     "project_id": "proj-1", "content": "a map of the realm",
                     "title": "Realm Map", "is_reference": True,
-                    "media_type": "image", "file_path": "ref.png",
+                    "media_type": "image", "file_path": img_rel,
                     "file_meta": {"mime_type": "image/png"}}
         return None
 
@@ -182,7 +206,7 @@ async def test_build_context_routes_image_ref_bytes_to_image_parts(monkeypatch, 
     assert not any(m.get("role") == "user" for m in result.system_prefix)
 
 
-async def test_build_context_image_ref_too_large_emits_no_image_part(monkeypatch, tmp_path):
+async def test_build_context_image_ref_too_large_emits_no_image_part(monkeypatch):
     """A too-large image file falls back to text-only — no image_url part is added
     to image_parts (matches today's degraded behavior)."""
     from routes.chat import context as ctx_module
@@ -190,17 +214,14 @@ async def test_build_context_image_ref_too_large_emits_no_image_part(monkeypatch
     import config
 
     big = b"\0" * (config.MAX_IMAGE_SIZE_MB * 1024 * 1024 + 10)
-    img_file = tmp_path / "big.png"
-    img_file.write_bytes(big)
-
-    monkeypatch.setattr(ctx_module, "STORAGE_PATH", tmp_path)
+    img_rel = _seed_stored_image(big, "big.png")
 
     async def fake_fetch_one(table, rid):
         if table == "documents" and rid == "ref-big":
             return {"id": f"documents:{rid}", "deleted_at": None,
                     "project_id": "proj-1", "content": "big map",
                     "title": "Big Map", "is_reference": True,
-                    "media_type": "image", "file_path": "big.png",
+                    "media_type": "image", "file_path": img_rel,
                     "file_meta": {"mime_type": "image/png"}}
         return None
 
@@ -224,24 +245,21 @@ async def test_build_context_image_ref_too_large_emits_no_image_part(monkeypatch
     assert not any("big map" in t for t in sys_texts), sys_texts
 
 
-async def test_build_context_image_ref_empty_content_uses_image_framing(monkeypatch, tmp_path):
+async def test_build_context_image_ref_empty_content_uses_image_framing(monkeypatch):
     """An image reference with no text content but a readable image file must get
     image-aware system framing ('Describe and discuss the image') — NOT the generic
     'currently empty' fallback, which contradicts the image being delivered. The
     image still populates image_parts."""
     from routes.chat import context as ctx_module
 
-    img_file = tmp_path / "ref.png"
-    img_file.write_bytes(b"\x89PNG\r\n\x1a\nEMPTY-CONTENT-IMG")
-
-    monkeypatch.setattr(ctx_module, "STORAGE_PATH", tmp_path)
+    img_rel = _seed_stored_image(_real_png_bytes(), "ref.png")
 
     async def fake_fetch_one(table, rid):
         if table == "documents" and rid == "ref-empty":
             return {"id": f"documents:{rid}", "deleted_at": None,
                     "project_id": "proj-1", "content": "",
                     "title": "Silent Map", "is_reference": True,
-                    "media_type": "image", "file_path": "ref.png",
+                    "media_type": "image", "file_path": img_rel,
                     "file_meta": {"mime_type": "image/png"}}
         return None
 

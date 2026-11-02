@@ -9,7 +9,7 @@ import re
 
 from surrealdb import AsyncSurreal
 
-from db import get_db, validate_record_id
+from db import get_db, record_refs, validate_record_id
 from models import is_ref_row
 
 
@@ -79,6 +79,28 @@ async def _rebuild_mentions(
 
 
 async def rebuild_doc_mentions(db: AsyncSurreal, table: str, entity_id: str, content: str) -> list[str]:
+    """Rebuild mention edges for one source row — EXCEPT an html artifact.
+
+    # INVARIANT: an html artifact row carries NO mention edges. Why: a page
+    # cannot navigate, so a document id in its JS or in
+    # page text that happens to look like `[t](<id>)` is not a link; existing
+    # edges are CLEARED, not kept, so the row can never hold a stale set.
+    # Gated HERE, at the single rebuild chokepoint, so the flush pipeline,
+    # the agent finalize tail and any future writer share one rule.
+    """
+    if table == "documents":
+        rows = await db.query(
+            "SELECT VALUE media_type FROM type::record('documents', $id)",
+            {"id": entity_id},
+        )
+        if rows and rows[0] == "html":
+            await db.query(
+                "BEGIN TRANSACTION; "
+                "DELETE doc_mentions WHERE in = type::record('documents', $id); "
+                "COMMIT TRANSACTION",
+                {"id": entity_id},
+            )
+            return []
     return await _rebuild_mentions(db, table, "doc_mentions", entity_id, content, exclude_self=True)
 
 
@@ -87,10 +109,11 @@ async def _filter_alive(table: str, ids: list[str]) -> list[str]:
     if not ids:
         return []
     db = await get_db()
-    in_clause = ",".join(f"type::record('{table}','{validate_record_id(i)}')" for i in ids)
+    in_clause, params = record_refs(table, ids)
     rows = await db.query(
         f"SELECT VALUE meta::id(id) FROM {table} "
-        f"WHERE id IN [{in_clause}] AND deleted_at IS NONE"
+        f"WHERE id IN [{in_clause}] AND deleted_at IS NONE",
+        params,
     )
     return list(rows or [])
 

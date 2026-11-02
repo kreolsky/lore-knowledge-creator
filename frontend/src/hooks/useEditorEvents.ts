@@ -16,6 +16,7 @@ import { resolveReferenceNav } from './resolveReferenceNav';
 import { refIsScope } from '../store/ui-store/documents-slice';
 import { openDocument } from '../navigation/open-document';
 import { findNoteAnchorRange } from '../editor/note-highlight';
+import { reportOpen } from '../telemetry/access';
 
 interface UseEditorEventsParams {
   editorViewRef: React.RefObject<EditorView | null>;
@@ -35,7 +36,7 @@ export function useEditorEvents({ editorViewRef, currentDocument, enabled = true
   // WHY: Uses pendingReference to survive DocumentPage's async setCurrentDocument call.
   // WHY: When the ref is already in the store (typical case — click on a card in the open panel),
   // commit it synchronously. The blocking REST round-trip caused a visible pause before opening.  Why: pendingReference survives the async setCurrentDocument so a ref click isn't lost; if the ref is already in the store it commits synchronously to skip the pause.
-  useEvent('navigate-to-reference', useCallback(async ({ referenceId, scrollToOffset, ...options }: EventMap['navigate-to-reference']) => {
+  useEvent('navigate-to-reference', useCallback(async ({ referenceId, scrollToOffset, via, ...options }: EventMap['navigate-to-reference']) => {
     if (!enabled) return;
     useAppStore.getState().clearPreviewDocument();
     const view = editorViewRef.current;
@@ -55,6 +56,7 @@ export function useEditorEvents({ editorViewRef, currentDocument, enabled = true
       ? await store.hydrateReference(inStore)
       : await store.hydrateReference(referenceId);
     if (!ref) return;
+    if (via) reportOpen(referenceId, via);
 
     if (scrollToOffset && view) {
       setTimeout(() => {

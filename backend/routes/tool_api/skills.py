@@ -26,7 +26,7 @@ from agent.context import get_agent_context
 from agent_skills import frontmatter_name
 from fastapi import Depends, HTTPException
 
-from access import get_project_access
+from access import require_full_project_access
 from db import get_db
 from models import ToolSaveSkill
 from models.tools import SKILL_FILE_MAX_BYTES, SKILL_FILE_PATH_RE
@@ -279,12 +279,7 @@ async def tool_save_skill(
     the Spec child and the file children together.
     """
     project_id = ctx["project_id"]
-    access = await get_project_access(project_id, ctx["user"])
-    if access != "full":
-        raise HTTPException(
-            status_code=403,
-            detail="Full project access required to save a skill",
-        )
+    await require_full_project_access(project_id, ctx["user"], "save a skill")
     tools = _validated_pack(body.tools)
     _refuse_shipped_name(body.name)
     if (await _resolve_apply_or_force(
