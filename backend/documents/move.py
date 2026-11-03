@@ -19,6 +19,7 @@ See SYSTEM: documents (entry: backend/documents/__init__.py).
 import asyncio
 
 from agent_config_seed import memory_folder_id
+from artifacts import is_artifact_row
 from collab.registry import get_active_session
 from fastapi import HTTPException
 
@@ -344,7 +345,7 @@ async def _resolve_final_kind(
     # and an html page does not convert into a tree document either — kind is
     # fixed at birth for the media kind. A plain move (node_type omitted)
     # stays legal: the page travels as the leaf it is.
-    if node_type is not None and (target.get("media_type") or "") == "html":
+    if node_type is not None and is_artifact_row(target):
         raise HTTPException(
             status_code=422,
             detail="An html artifact's kind is fixed — move it without "

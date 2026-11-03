@@ -12,7 +12,7 @@
  * ping is the same the old 5 s poll ran (plus after the guest's own write).
  * No collab: the guest never edits the text.
  *
- * ARCH (plan "public-document-ids"): the page is now keyed on the document's own
+ * ARCH: the page is keyed on the document's own
  * uuid (a `documentId` prop), NOT a share token. The funnel is re-keyed:
  * publicTreeByDoc/publicDocumentByDoc/publicReferencesByDoc hit the canonical
  * /api/public/documents/{id}/* surface; the legacy /s/:token route resolves the
@@ -37,10 +37,10 @@
  * URL is NOT a credential: knowing it never grants access (a live document_shares
  * row is still required). Referrer-Policy:no-referrer is injected on mount.
  *
- * ARCH (plan "public-share-reuse-readonly-layout"): deleted the parallel
- * TreeRow/RefCard/NoteCard/static-markdown render that previously lived here.
- * The page now reuses the real components — visual parity with authenticated
- * readonly is structural, not maintained by hand.
+ * ARCH: the parallel TreeRow/RefCard/NoteCard/static-markdown render that
+ * previously lived here is deleted. The page reuses the real components —
+ * visual parity with authenticated readonly is structural, not maintained by
+ * hand.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -66,7 +66,8 @@ import { useAppStore } from '../store/app-store';
 import { useUIStore, ORPHAN_KEY, type RightTab } from '../store/ui-store';
 import { setPublicFileContext } from '../utils/reference-url';
 import { docUrl } from '../utils/routing';
-import { declaredColorScheme } from '../utils/page-color-scheme';
+import { declaredColorScheme } from '../utils/artifact-color-scheme';
+import { isArtifactDoc } from '../utils/artifact';
 import { useTranslation } from '../i18n';
 import { Button } from '../components/ui';
 import { useEvent } from '../hooks/useEvent';
@@ -277,26 +278,27 @@ export function PublicSharePage(
   // the next flush); the hook answers with the refetch the old 5 s poll ran.
   // The socket opens only while comments are on: the channel exists for notes.
   const allowComments = usePublicNotesStore(s => s.allowComments);
-  // An html page (no Yjs here) reloads its frame off the same ping, comments or not.
-  const isHtmlPage = useAppStore(s => s.currentDocument?.document_id === documentId
-    && s.currentDocument.media_type === 'html');
-  const [pageChangeSeq, setPageChangeSeq] = useState(0);
-  const bumpPage = useCallback(() => setPageChangeSeq(n => n + 1), []);
-  usePublicDocSocket(documentId, allowComments || isHtmlPage, bumpPage);
-  const fetchPageUrl = useCallback(() => publicArtifactUrlByDoc(documentId), [documentId]);
+  // An artifact (no Yjs here) reloads its frame off the same ping, comments or not.
+  const isArtifact = useAppStore(s => s.currentDocument?.document_id === documentId
+    && isArtifactDoc(s.currentDocument));
+  const [artifactChangeSeq, setArtifactChangeSeq] = useState(0);
+  const bumpArtifact = useCallback(() => setArtifactChangeSeq(n => n + 1), []);
+  usePublicDocSocket(documentId, allowComments || isArtifact, bumpArtifact);
+  const fetchArtifactUrl = useCallback(() => publicArtifactUrlByDoc(documentId), [documentId]);
 
-  // A dashboard that declares its own scheme is shown in it; leaving the page (or this
-  // surface) restores the viewer's theme. WHY no persistence concern: ui-store skips
-  // saving prefs while isPublicShare is set, so the forced theme never reaches the profile.
-  const pageSource = useAppStore(s => (isHtmlPage ? s.currentDocument?.content ?? null : null));
-  const pageScheme = useMemo(() => (pageSource ? declaredColorScheme(pageSource) : null), [pageSource]);
+  // An artifact that declares its own scheme is shown in it; leaving the page (or
+  // this surface) restores the viewer's theme. WHY no persistence concern:
+  // ui-store skips saving prefs while isPublicShare is set, so the forced theme
+  // never reaches the profile.
+  const artifactSource = useAppStore(s => (isArtifact ? s.currentDocument?.content ?? null : null));
+  const artifactScheme = useMemo(() => (artifactSource ? declaredColorScheme(artifactSource) : null), [artifactSource]);
   useEffect(() => {
-    if (!pageScheme) return;
+    if (!artifactScheme) return;
     const ui = useUIStore.getState();
     const prevTheme = ui.theme;
-    ui.setTheme(pageScheme);
+    ui.setTheme(artifactScheme);
     return () => useUIStore.getState().setTheme(prevTheme);
-  }, [pageScheme]);
+  }, [artifactScheme]);
 
   const storedRightTab = useUIStore(s => s.documents[ORPHAN_KEY]?.rightPanelTab);
   const noteThreadOpen = usePublicNotesStore(s => !!s.activeNoteId || !!s.draft);
@@ -335,8 +337,9 @@ export function PublicSharePage(
 
   // ── Left-tab set: doc-scope hides the `docs` tab (single root only); subtree
   //    shows both. Right-tab set: refs only.
-  // A dashboard (html page) is shown bare: no right panel, and on a single-page share
-  // no left rail at all — only the header. Inside a subtree the tree stays, without a TOC.
+  // An artifact is shown bare: no right panel, and on a single-page share no
+  // left rail at all — only the header. Inside a subtree the tree stays,
+  // without a TOC.
   const leftTabs: LeftTabEntry[] = [
     ...(scope === 'subtree' ? [{
       tab: 'docs' as const,
@@ -344,10 +347,10 @@ export function PublicSharePage(
       title: t('tabDocuments'),
       renderPanel: () => <Sidebar />,
     }] : []),
-    ...(isHtmlPage ? [] : [{ tab: 'toc' as const, icon: <List size={15} />, title: t('tabTableOfContents'), renderPanel: () => <TableOfContents /> }]),
+    ...(isArtifact ? [] : [{ tab: 'toc' as const, icon: <List size={15} />, title: t('tabTableOfContents'), renderPanel: () => <TableOfContents /> }]),
   ];
 
-  const rightTabs: RightTabEntry[] = isHtmlPage ? [] : [
+  const rightTabs: RightTabEntry[] = isArtifact ? [] : [
     { tab: 'refs', icon: <Paperclip size={15} />, title: t('tabReferences'), renderPanel: () => <ReferencesPanel /> },
     ...(allowComments ? [{
       tab: 'notes' as const,
@@ -373,8 +376,8 @@ export function PublicSharePage(
             <p className="text-ui-base">{t('publicDocUnavailable')}</p>
           </div>
         </div>
-      ) : isHtmlPage
-        ? <ArtifactFrame key={documentId} fetchUrl={fetchPageUrl} changeSeq={pageChangeSeq} />
+      ) : isArtifact
+        ? <ArtifactFrame key={documentId} fetchUrl={fetchArtifactUrl} changeSeq={artifactChangeSeq} />
         : <PublicEditor />)}
       userControlsVariant="minimal"
       rightPanelDocId={null}

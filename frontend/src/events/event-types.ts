@@ -131,6 +131,14 @@ export interface EventMap {
   'collab-note-updated': { action: string; session_id: string; [key: string]: unknown };
   'collab-note-deleted': { sessionId: string };
 
+  // ── Shares ──
+  // See SYSTEM: public-share. Emitted by the four share writers in
+  // api/public-share.ts after a successful write (ONE chokepoint). The Access
+  // panel, its tab-tint hook and the artifact toolbar refetch their own view
+  // of the share list. documentId rides only when the writer knows it; a
+  // subscriber must never require it (revoke/patch know only the share id).
+  'shares:changed': { documentId?: string };
+
   // ── UI panels ──
   'open-right-panel': void;
   // ARCH: carries the live editor selection so FindReplacePanel can seed the

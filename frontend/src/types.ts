@@ -43,6 +43,10 @@ export interface User {
    * long after the tab leaves it. /me always sends it (fresh read of PAGE_LOCK_GRACE_S);
    * login/register omit it — read as `?? null` (fail-safe PIN). 0 = re-lock on leave. */
   page_lock_grace_s?: number;
+  /** Artifact Source-view byte cap (see SYSTEM: artifact-serve): the human writer's
+   *  refusal ceiling from /me; login/register omit it — read as `?? null`
+   *  (no client-side filter; the server cap still refuses every writer). */
+  artifact_max_bytes?: number;
   /** Provenance: uid of the account creator (creating manager / invite's invited_by). */
   created_by?: string | null;
   /** Group head (a moderator's uid) — legal only on role='user' rows; null otherwise. */

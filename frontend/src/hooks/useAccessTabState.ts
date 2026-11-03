@@ -8,7 +8,7 @@
  *   blue   — a widget-only key lives on this doc
  *   none   — no external access
  *
- * ARCH (plan "iridescent-wibbling-heron", item 8): human members do NOT drive
+ * ARCH: human members do NOT drive
  * the color (decided) — only the external/anonymous surface does. The tint is
  * cosmetic; access is still enforced server-side. Re-fetches on doc/project
  * change; tolerates load failure by falling back to 'none' (no silent
@@ -17,6 +17,7 @@
 import { useEffect, useState } from 'react';
 import { apiClient } from '../api/client';
 import { listShares } from '../api/public-share';
+import { useEvent } from './useEvent';
 
 export type AccessTabTint = 'none' | 'blue' | 'yellow' | 'red';
 
@@ -31,6 +32,10 @@ export function useAccessTabState(
   hasAudience: boolean,
 ): AccessTabTint {
   const [tint, setTint] = useState<AccessTabTint>('none');
+  // A share minted/revoke elsewhere (artifact toolbar Publish, Access panel)
+  // must recolor the tab here too — bump a revision into the fetch deps.
+  const [sharesRev, setSharesRev] = useState(0);
+  useEvent('shares:changed', () => { setSharesRev(r => r + 1); });
 
   useEffect(() => {
     if (!docId || !projectId) { setTint('none'); return; }
@@ -64,7 +69,7 @@ export function useAccessTabState(
       }
     })();
     return () => { cancelled = true; };
-  }, [docId, projectId, hasAudience]);
+  }, [docId, projectId, hasAudience, sharesRev]);
 
   return tint;
 }

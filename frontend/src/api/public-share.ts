@@ -4,7 +4,7 @@
  * doc/subtree, plus the owner-facing mint/list/revoke wrappers used by the
  * Access tab.
  *
- * ARCH (plan "iridescent-wibbling-heron"): the anonymous endpoints carry the
+ * ARCH: the anonymous endpoints carry the
  * share token in the URL path (NOT a header) — the public page URL IS the link
  * (/s/:token). The token never round-trips through the API client's auth path:
  * the public router returns 404 (not 401) for invalid/expired tokens, so
@@ -14,11 +14,18 @@
  * `allow_comments` — the public* note calls below (backend routes/public_notes.py).
  * The public Editor reads `tables_json` from `publicDocumentByDoc` to seed its table
  * widgets (mirrors snapshot-preview seeding).
+ *
+ * ARCH: the four owner-side writers (create/revoke/scope/comments) each emit
+ * `shares:changed` on the frontend EventBus after success — ONE chokepoint, so
+ * every share view (Access panel, tab tint, artifact toolbar) refetches without
+ * knowing who wrote. The backend `share_changed` bus event is a different,
+ * server-side channel and is not touched here.
  */
 // ARCH: apiClient is safe for public endpoints — they return 404 on bad tokens,
 // never 401, so the redirect-on-401 guard in client.ts cannot misfire.
 
 import { apiClient } from './client';
+import { emit } from '../events';
 import type { HeadingItem, Reference } from '../types';
 
 /** A node in the public tree payload (subtree-scope; doc-scope = root only). */
@@ -189,21 +196,26 @@ export interface CreatedShare {
 export async function createShare(
   projectId: string, documentId: string, scope: 'doc' | 'subtree',
 ): Promise<CreatedShare> {
-  return apiClient.post(`/projects/${projectId}/documents/${documentId}/shares`, { scope });
+  const created = await apiClient.post(`/projects/${projectId}/documents/${documentId}/shares`, { scope });
+  emit('shares:changed', { documentId });
+  return created;
 }
 export async function listShares(projectId: string, documentId: string): Promise<SharesListResponse> {
   return apiClient.get(`/projects/${projectId}/documents/${documentId}/shares`);
 }
 export async function revokeShare(shareId: string): Promise<void> {
   await apiClient.delete(`/shares/${shareId}`);
+  emit('shares:changed', {});
 }
 
 /** Atomically change a share's scope (doc ↔ subtree). Owner-only server-side. */
 export async function updateShareScope(shareId: string, scope: 'doc' | 'subtree'): Promise<void> {
   await apiClient.patch(`/shares/${shareId}`, { scope });
+  emit('shares:changed', {});
 }
 
 /** Turn comments on a public link on or off. Owner-only server-side. */
 export async function updateShareComments(shareId: string, allowComments: boolean): Promise<void> {
   await apiClient.patch(`/shares/${shareId}`, { allow_comments: allowComments });
+  emit('shares:changed', {});
 }

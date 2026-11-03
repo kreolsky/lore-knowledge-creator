@@ -8,7 +8,7 @@ this module OWNS its names.
 import logging
 from uuid import uuid4
 
-from artifacts import ARTIFACT_MAX_HTML_BYTES
+import artifacts
 
 import event_bus
 from agent import doc_state
@@ -117,9 +117,11 @@ async def create_document_via_collab(
     Validates title + content cap, normalizes list spacing, validates the parent,
     derives a unique path (preserving the sort_key invariant), creates the row,
     and emits `document_created` with sort_key so the client tree inserts
-    correctly. Both the Tool-API direct path (`_apply_create_document_direct`)
-    and the chat proposal apply path (`_apply_create_proposal`) delegate here, so
-    the two create entry points can never drift on invariants.
+    correctly. The Tool-API create paths (direct apply and the confirm-mode
+    retry — a confirm call is refused with 409 `confirmation_required` at the
+    boundary and the driver retries the approved call through the same direct
+    path) both land here, so the two entry points can never drift on
+    invariants.
 
     # ARCH: when `scope_root` is set, a missing
     # parent_id defaults to the subtree root (the new doc lands INSIDE the wall),
@@ -141,21 +143,12 @@ async def create_document_via_collab(
     from config import MAX_PROPOSAL_NEW_TEXT_CHARS
     from scope import require_doc_in_scope, resolve_scoped_parent
 
-    is_html = media_type == "html"
+    is_artifact = media_type == artifacts.ARTIFACT_MEDIA_TYPE
     title = (title or "").strip()
     if not title:
         raise HTTPException(status_code=400, detail="title is required")
-    if is_html:
-        # WHY its own cap, NOT MAX_PROPOSAL_NEW_TEXT_CHARS: that is the
-        # markdown chat-payload bound (100k chars, below 256 KiB — it would
-        # shadow the artifact limit on every create); the artifact cap is the
-        # honest ceiling — read_document returns the whole body before every
-        # edit (256 KiB ≈ 60k tokens; 1 MiB ≈ 250k per read).
-        if len(content.encode("utf-8")) > ARTIFACT_MAX_HTML_BYTES:
-            raise HTTPException(
-                status_code=422,
-                detail=f"html artifact exceeds the {ARTIFACT_MAX_HTML_BYTES // 1024} KiB cap",
-            )
+    if is_artifact:
+        artifacts.assert_artifact_size(len(content.encode("utf-8")))
     else:
         if len(content) > MAX_PROPOSAL_NEW_TEXT_CHARS:
             raise HTTPException(status_code=413, detail="Content too large")
@@ -183,8 +176,8 @@ async def create_document_via_collab(
         "title": title, "content": content, "is_reference": False,
         "is_system": is_system,
     }
-    if is_html:
-        payload["media_type"] = "html"
+    if is_artifact:
+        payload["media_type"] = artifacts.ARTIFACT_MEDIA_TYPE
     try:
         await create_with_unique_path(
             doc_id, payload, project_id=project_id, title=title,
@@ -199,6 +192,9 @@ async def create_document_via_collab(
         project_id=project_id, document_id=doc_id, title=title,
         parent_id=stored_parent, is_reference=False,
         sort_key=payload.get("sort_key"),
+        # WHY: the tree row a client appends from this frame is what Editor reads
+        # media_type from; without it a fresh page opens as text until a reload.
+        media_type=payload.get("media_type"),
     )
     # WHY: a create that CARRIES a body runs the same finalize tail as an edit —
     # mentions rebuilt, `content_flushed` emitted.
@@ -213,7 +209,7 @@ async def create_document_via_collab(
     # embed (same reasoning jobs/tasks.py records for its own double emit).
     # html artifacts skip the tail: mentions are gated off at the rebuild
     # chokepoint anyway and embeddings skip html rows — no read model to update.
-    if content and not is_html:
+    if content and not is_artifact:
         await doc_state.finalize_content_mutation(doc_id, content, project_id)
     return {"doc_id": doc_id, "sort_key": payload.get("sort_key")}
 
@@ -235,9 +231,9 @@ async def create_reference_via_collab(
     Mirrors `create_document_via_collab` for the reference variant: validates the
     title, then delegates the canonical row build + `reference_created` emit to
     `create_reference_row` (the shared creation chokepoint) with host_id = document_id.
-    Both the Tool-API direct path (`_apply_create_reference_direct`) and the chat
-    proposal apply path (`_apply_create_proposal` create_reference branch) delegate
-    here so the two entry points can never drift on invariants.
+    The Tool-API reference paths (direct apply and the confirm-mode retry — see
+    the 409 note on `create_document_via_collab`) both land here so the two
+    entry points can never drift on invariants.
 
     # ARCH (subtree-scoped agent keys): the host document must be inside the
     # subtree (a reference attaches to its host — the wall covers the anchor too).

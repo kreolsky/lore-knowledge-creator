@@ -16,15 +16,16 @@ from __future__ import annotations
 
 import logging
 import mimetypes
-import os
 
 import artifacts
 from artifacts import (
     ARTIFACT_LIB_ROOT,
     ARTIFACT_URL_TTL_S,
     artifact_enabled,
-    check_artifact_origin_config,
+    frame_ancestors,
     is_artifact_path,
+    is_artifact_row,
+    lib_entry,
     mint_artifact_url,
     on_artifact_host,
     verify_artifact_token,
@@ -39,12 +40,6 @@ from access import require_document_read
 from auth import get_current_user
 from db import fetch_one
 from routes.public_share import _require_doc
-
-__all__ = [
-    "router",
-    "ArtifactHostMiddleware",
-    "check_artifact_origin_config",
-]
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -110,30 +105,17 @@ async def _refuse(scope, send) -> None:
 # ─── Response headers ─────────────────────────────────────────────────────────
 
 
-def _cors_origins() -> list[str]:
-    """The CORS origin list, resolved exactly as main.py resolves it.
-
-    frame-ancestors must name every origin a browser reaches the app from,
-    or the embedded frame blanks — the same env var, the same dev fallback
-    (imported lazily from its one owner; no second copy of the constant).
-    """
-    raw = os.environ.get("CORS_ORIGINS", "")
-    if not raw:
-        from main import _DEFAULT_CORS_ORIGINS
-
-        raw = _DEFAULT_CORS_ORIGINS
-    return [o.strip() for o in raw.split(",") if o.strip()]
-
-
-def _artifact_response_headers(cors_origins: list[str]) -> dict[str, str]:
+def _artifact_response_headers() -> dict[str, str]:
     """The /a/* response headers. No third-party host appears anywhere.
 
     Why `sandbox` in the header (not only the iframe attribute): the
     attribute does not apply when /a/<id> is opened top-level from a copied
     URL — the header sandboxes the page everywhere. `connect-src 'none'`
     shuts the v1 page off the network entirely; libraries load from this
-    same origin's /lib/ only.
+    same origin's /lib/ only. frame-ancestors comes from the ONE list
+    main.py resolved at boot (artifacts.configure_artifact_host).
     """
+    origins = frame_ancestors()
     lib = f"{artifacts.artifact_origin()}/lib/"
     csp = (
         "sandbox allow-scripts; "
@@ -145,7 +127,7 @@ def _artifact_response_headers(cors_origins: list[str]) -> dict[str, str]:
         "connect-src 'none'; "
         "form-action 'none'; "
         "base-uri 'none'; "
-        f"frame-ancestors {' '.join(cors_origins)};"
+        f"frame-ancestors {' '.join(origins)};"
     )
     return {
         "Content-Security-Policy": csp,
@@ -155,12 +137,12 @@ def _artifact_response_headers(cors_origins: list[str]) -> dict[str, str]:
     }
 
 
-def _forbidden_response(cors_origins: list[str]) -> Response:
+def _forbidden_response() -> Response:
     return Response(
         content=_FORBIDDEN_PAGE,
         status_code=403,
         media_type="text/html; charset=utf-8",
-        headers=_artifact_response_headers(cors_origins),
+        headers=_artifact_response_headers(),
     )
 
 
@@ -168,24 +150,21 @@ def _forbidden_response(cors_origins: list[str]) -> Response:
 
 
 async def _serve_artifact(document_id: str, request: Request) -> Response:
-    cors_origins = _cors_origins()
-
     token = request.query_params.get("t", "")
     if not verify_artifact_token(document_id, token):
         log_security("artifact_token_rejected", document_id=document_id)
-        return _forbidden_response(cors_origins)
+        return _forbidden_response()
     row = await fetch_one("documents", document_id)
-    if (not row or row.get("deleted_at")
-            or (row.get("media_type") or "") != "html"):
+    if not is_artifact_row(row) or row.get("deleted_at"):
         log_security("artifact_row_refused", document_id=document_id)
-        return _forbidden_response(cors_origins)
+        return _forbidden_response()
     # Live collab content wins over the flushed row — an unflushed edit in the
     # Source toggle still serves (the editor's own merge rule).
     content = merge_live_content(row, document_id).get("content") or ""
     return Response(
         content=content,
         media_type="text/html; charset=utf-8",
-        headers=_artifact_response_headers(cors_origins),
+        headers=_artifact_response_headers(),
     )
 
 
@@ -197,11 +176,7 @@ async def _serve_lib(name_version: str, file_path: str) -> Response:
     # the filesystem is reachable only through the pinned list, so no path
     # traversal reaches it (defense in depth: the resolved path is also
     # containment-checked against ARTIFACT_LIB_ROOT).
-    entry = None
-    for lib in artifacts._manifest().get("libs", []):
-        if f"{lib['name']}@{lib['version']}" == name_version:
-            entry = lib
-            break
+    entry = lib_entry(name_version)
     if entry is None or file_path not in {f["path"] for f in entry.get("files", [])}:
         raise HTTPException(status_code=404, detail="Not Found")
     root = (ARTIFACT_LIB_ROOT / name_version).resolve()
@@ -220,18 +195,21 @@ async def _serve_lib(name_version: str, file_path: str) -> Response:
 
 
 async def _artifact_url_for(document_id: str) -> dict:
-    """Shared mint body: row checks + the signed URL. 404/422 vocabulary:
+    """Shared mint body: row checks + the signed URL. 404/422/501 vocabulary:
 
-    404 missing/deleted (uniform), 422 non-artifact row, 422 hosting off.
+    404 missing/deleted (uniform), 422 non-artifact row, 501 hosting unset.
+    501 (not 422) is the client's "not configured" signal: a STATUS needs no
+    body parsing and covers the guest, who has no /me to ask — and the
+    client does not retry it (api/client.ts retries only 502/503).
     """
     if not artifact_enabled():
         raise HTTPException(
-            status_code=422, detail="artifact hosting is not configured",
+            status_code=501, detail="artifact hosting is not configured",
         )
     row = await fetch_one("documents", document_id)
     if not row or row.get("deleted_at"):
         raise HTTPException(status_code=404, detail="Document not found")
-    if (row.get("media_type") or "") != "html":
+    if not is_artifact_row(row):
         raise HTTPException(
             status_code=422, detail="Document is not an html artifact",
         )

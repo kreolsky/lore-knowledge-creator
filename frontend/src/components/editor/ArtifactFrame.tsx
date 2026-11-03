@@ -34,8 +34,10 @@ const RELOAD_DEBOUNCE_MS = 1000;
 // Re-mint this long before the token lapses, so the check lands while it is still valid.
 const EXPIRY_MARGIN_S = 30;
 
+// Hosting-off contract: the mint routes answer 501 when hosting is unset — a
+// status needs no body parsing and covers the guest too (who has no /me).
 function isUnconfigured(err: unknown): boolean {
-  return err instanceof HttpError && err.status === 422 && err.detail.includes('not configured');
+  return err instanceof HttpError && err.status === 501;
 }
 
 interface ArtifactFrameProps {
@@ -49,6 +51,10 @@ export function ArtifactFrame({ fetchUrl, changeSeq }: ArtifactFrameProps) {
   const { t } = useTranslation();
   const [state, setState] = useState<FrameState>({ kind: 'loading' });
   const [reloadSeq, setReloadSeq] = useState(0);
+  // WHY: minting the URL is fast; the page's own load (scripts, the
+  // self-hosted /lib/ bundles) can take seconds, so the spinner stays over the
+  // frame until its first load event.
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
   const navigatedRef = useRef(false);
   // Load events seen by the CURRENT iframe element, keyed by its URL (the element is
   // keyed by URL too, so a late event from a replaced element never counts here).
@@ -104,6 +110,7 @@ export function ArtifactFrame({ fetchUrl, changeSeq }: ArtifactFrameProps) {
   const handleLoad = (url: string) => {
     if (loadsRef.current.url !== url) return;
     loadsRef.current.count += 1;
+    if (loadsRef.current.count === 1) setLoadedUrl(url);
     if (loadsRef.current.count > 1) {
       navigatedRef.current = true;
       setState({ kind: 'error', reason: 'navigated' });
@@ -129,8 +136,8 @@ export function ArtifactFrame({ fetchUrl, changeSeq }: ArtifactFrameProps) {
               onLoad={() => handleLoad(state.url)}
             />
           )}
-          {state.kind === 'loading' && (
-            <div className="absolute inset-0 flex items-center justify-center">
+          {(state.kind === 'loading' || (state.kind === 'ready' && loadedUrl !== state.url)) && (
+            <div className="absolute inset-0 flex items-center justify-center bg-bg" data-artifact-loading>
               <div className="w-6 h-6 border-2 border-text-dim border-t-transparent animate-spin" />
             </div>
           )}

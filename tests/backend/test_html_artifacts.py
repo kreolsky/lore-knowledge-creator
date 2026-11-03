@@ -14,7 +14,7 @@ import time
 import zipfile
 
 import pytest
-from helpers import pin_artifact_origin
+from helpers import pin_artifact_cap, pin_artifact_origin
 
 TEST_ORIGIN = "https://lore-usercontent.test"
 ARTIFACT_HOST = {"host": "lore-usercontent.test"}
@@ -255,13 +255,15 @@ async def test_artifact_url_mint_access(client, test_db, admin_user, regular_use
         f"/api/public/documents/{html_id}/artifact-url",
     )).status_code == 404
 
-    # Hosting-unset is a NAMED refusal (an explicit error state), and a
-    # non-artifact row is refused too.
+    # Hosting-unset is a NAMED refusal (an explicit error state — 501, the
+    # client's not-configured signal: a status needs no body parsing and
+    # covers the guest, who has no /me), and a non-artifact row is refused
+    # with 422.
     pin_artifact_origin(monkeypatch, "")
     resp = await client.get(
         f"/api/documents/{html_id}/artifact-url", cookies={"lore_session": admin_token},
     )
-    assert resp.status_code == 422 and "not configured" in resp.text
+    assert resp.status_code == 501 and "not configured" in resp.text
     pin_artifact_origin(monkeypatch)
     plain = await _make_doc(client, admin_token, pid, "Plain2", "x")
     resp = await client.get(
@@ -306,7 +308,7 @@ async def test_html_agent_surface_and_rules(client, test_db, admin_user, project
     # Hosting-unset: the tool refuses with the named 422 and the description
     # sentence renders empty; the served enum keeps the kind unconditionally.
     from agent_tools.specs.mutate import MUTATE_TOOLS
-    from artifacts import ARTIFACT_MAX_HTML_BYTES, html_node_sentence
+    from artifacts import html_node_sentence
 
     pin_artifact_origin(monkeypatch, "")
     resp = await _create_html(client, agent_key, pid, None, "D", PAGE)
@@ -353,13 +355,18 @@ async def test_html_agent_surface_and_rules(client, test_db, admin_user, project
     }, headers=_hdr(agent_key))).status_code == 422
 
     # Size cap: create past the cap is a named 422; an edit crossing it too.
+    # The cap is pinned SMALL through the artifacts module (helpers.
+    # pin_artifact_cap) — every writer reads it at call time, so ONE pin
+    # covers create and edit growth without posting multi-MiB bodies over
+    # the HTTP test path.
+    cap = pin_artifact_cap(monkeypatch, 300 * 1024)
     assert (await _create_html(
         client, agent_key, pid, parent, "Huge",
-        "<p>" + "x" * (ARTIFACT_MAX_HTML_BYTES + 1) + "</p>",
+        "<p>" + "x" * (cap + 1) + "</p>",
     )).status_code == 422
     near_id = (await _create_html(
         client, agent_key, pid, parent, "Near",
-        "<p>" + "a" * (ARTIFACT_MAX_HTML_BYTES - 100) + "</p>",
+        "<p>" + "a" * (cap - 100) + "</p>",
     )).json()["doc_id"]
     resp = await client.post("/api/tool/edit_document", json={
         "document_id": near_id,

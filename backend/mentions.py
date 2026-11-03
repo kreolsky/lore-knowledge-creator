@@ -7,6 +7,7 @@
 
 import re
 
+from artifacts import ARTIFACT_MEDIA_TYPE
 from surrealdb import AsyncSurreal
 
 from db import get_db, record_refs, validate_record_id
@@ -93,7 +94,7 @@ async def rebuild_doc_mentions(db: AsyncSurreal, table: str, entity_id: str, con
             "SELECT VALUE media_type FROM type::record('documents', $id)",
             {"id": entity_id},
         )
-        if rows and rows[0] == "html":
+        if rows and rows[0] == ARTIFACT_MEDIA_TYPE:
             await db.query(
                 "BEGIN TRANSACTION; "
                 "DELETE doc_mentions WHERE in = type::record('documents', $id); "

@@ -442,7 +442,7 @@ _DEFAULT_CORS_ORIGINS = "http://localhost:5173,http://localhost:5174,http://fron
 
 _cors_raw = os.environ.get("CORS_ORIGINS", "")
 # Whether CORS_ORIGINS came from the environment (vs the dev fallback below) —
-# routes/artifact_serve.check_artifact_origin_config refuses an ARTIFACT_ORIGIN
+# artifacts.configure_artifact_host refuses an ARTIFACT_ORIGIN
 # deploy whose frame-ancestors would silently be the localhost fallback.
 _cors_raw_env_set = bool(_cors_raw)
 if not _cors_raw:
@@ -462,12 +462,13 @@ app.add_middleware(
 
 # Boot-frozen validation of the artifact/app host split (see SYSTEM:
 # artifact-serve — refuses startup on an unset CORS_ORIGINS or a
-# sibling-subdomain ARTIFACT_ORIGIN — both would couple the cookieless
-# artifact origin back to the app's session). The host-split middleware +
-# router are wired with the other routers below.
-from routes.artifact_serve import check_artifact_origin_config
+# sibling-subdomain ARTIFACT_ORIGIN, both would couple the cookieless
+# artifact origin back to the app's session) + the ONE frame-ancestors
+# list for /a/* responses. The host-split middleware + router are wired
+# with the other routers below.
+import artifacts
 
-check_artifact_origin_config(_CORS_ORIGINS, cors_env_set=bool(_cors_raw_env_set))
+artifacts.configure_artifact_host(_CORS_ORIGINS, cors_env_set=bool(_cors_raw_env_set))
 
 
 # ARCH: CSRF defense-in-depth — reject mutating requests with foreign Origin.

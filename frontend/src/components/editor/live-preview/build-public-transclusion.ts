@@ -29,6 +29,7 @@
 import type { Document, Reference } from '../../../types';
 import type { TransclusionEntry } from './effects';
 import { referenceFileUrl } from '../../../utils/reference-url';
+import { isArtifactDoc } from '../../../utils/artifact';
 
 /**
  * Build the next-state transclude map for the public viewer.
@@ -88,9 +89,9 @@ export function buildPublicTransclusionMap(
   }
 
   for (const doc of documents) {
-    // An html page is never inlined: with no entry the resolver returns null, so
+    // An artifact is never inlined: with no entry the resolver returns null, so
     // `![t](doc:<page>)` renders as a link (the page lives in its own frame).
-    if (doc.media_type === 'html') continue;
+    if (isArtifactDoc(doc)) continue;
     // The open doc carries content (PublicSharePage merges it in on doc
     // select); siblings only have tree metadata. Seed LOADING for siblings —
     // the hook lazily fetches bodies for docs the editor text actually embeds.

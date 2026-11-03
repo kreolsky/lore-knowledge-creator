@@ -8,8 +8,9 @@
  * CM6 extension wiring lives in ./editor submodules: editor-extension-bundle
  * (the live extension array + Mod-/ raw mode), region-agent-wiring
  * (pinned-region highlight + auto-unpin), preview-editor-extensions (the
- * snapshot-preview overrides). The position cache is ../editor/position-cache;
- * the transclusion map is ./editor/live-preview.
+ * snapshot-preview overrides), useArtifactView + ArtifactPane + artifact-
+ * source-extensions (the html artifact's Page/Source wiring). The position
+ * cache is ../editor/position-cache; the transclusion map is ./editor/live-preview.
  *
  * Position cache: module-level Map persists cursor+scroll across remounts within the session.
  * Save strategy: the CRDT is the only write door — checkpoints flush pending ydoc
@@ -33,7 +34,7 @@ import { SnapshotPreviewBanner } from './editor/SnapshotPreviewBanner';
 import { PreviewDocumentBanner } from './editor/PreviewDocumentBanner';
 import { CollabPresenceChips } from './editor/CollabPresenceChips';
 import { ReferenceMediaBar } from './editor/ReferenceMediaBar';
-import { mountView, unmountView, type EditorRole, setRoleView } from '../editor/active-editor';
+import { mountView, type EditorRole, setRoleView } from '../editor/active-editor';
 import { positionCacheGet } from '../editor/position-cache';
 import { editableCompartment } from '../editor/editor-plugins';
 import { useEditorAutosave } from '../hooks/useEditorAutosave';
@@ -55,10 +56,9 @@ import { useNotesChangedDispatch } from './editor/note-anchor-wiring';
 import { buildPreviewExtensions } from './editor/preview-editor-extensions';
 import { EditorReferenceBar } from './editor/EditorReferenceBar';
 import { useEntitySwitchPhase } from '../editor/entity-switch-phase';
-import { apiClient } from '../api/client';
-import { ArtifactFrame, useYtextChangeSeq, type ArtifactUrl } from './editor/ArtifactFrame';
-import { ArtifactToolbar } from './editor/ArtifactToolbar';
-import { buildHtmlSourceExtensions } from './editor/html-source-extensions';
+import { ArtifactFrame } from './editor/ArtifactFrame';
+import { ArtifactPane } from './editor/ArtifactPane';
+import { useArtifactView } from './editor/useArtifactView';
 
 // ─── Editor ───────────────────────────────────────────────────────────────────
 
@@ -84,6 +84,9 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
   const previewDocument = useAppStore(s => s.previewDocument);
   const snapshotPreview = useAppStore(s => s.snapshotPreview);
   const accessLevel = useAppStore(s => s.accessLevel);
+  // WHY: the project id comes from the store, not the active item — a tree row
+  // appended from a ws:document_created frame carries no project_id.
+  const currentProjectId = useAppStore(s => s.currentProject?.project_id);
   const isReadonly = accessLevel !== 'full' || !!previewDocument;
   const previewScrollOffset = useAppStore(s => s.previewScrollOffset);
   // WHY: useDeferredValue keeps the urgent commit (banner colors, RefCard
@@ -272,35 +275,18 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
     [cmExtensions, snapshotPreview],
   );
 
-  // ── html page (media_type 'html'): sandboxed frame, or its source on demand ──
-  // The collab join above runs for a page like for any document; the frame reloads
-  // off the joined ytext, and the Source view binds to it through the same compartments.
-  const isHtmlPage = !isReference && (activeItem as Document | null)?.media_type === 'html';
-  const [htmlSourceFor, setHtmlSourceFor] = useState<string | null>(null);
-  const htmlSource = isHtmlPage && htmlSourceFor === activeItemId;
-  const htmlCmExtensions = useMemo(
-    () => buildHtmlSourceExtensions(yjsCompartment.current),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
-  );
-  const htmlChangeSeq = useYtextChangeSeq(
-    isHtmlPage && liveForCurrent ? collabConnectionRef.current?.ytext ?? null : null,
-  );
-  const fetchArtifactUrl = useCallback(
-    (): Promise<ArtifactUrl> => apiClient.get(`/documents/${activeItemId}/artifact-url`),
-    [activeItemId],
-  );
-  const toggleHtmlSource = () => {
-    if (htmlSource) {
-      // The Source view unmounts with the toggle; drop it from every registry so the
-      // collab binding and the editor slots never act on a destroyed view.
-      const view = editorViewRef.current;
-      editorViewRef.current = null;
-      setRoleView(roleRef.current, null, view ?? undefined);
-      unmountView(view ?? undefined);
-    }
-    setHtmlSourceFor(htmlSource ? null : activeItemId ?? null);
-  };
+  // ── artifact (media_type 'html'): sandboxed frame, or its source on demand ──
+  // The wiring (toggle + registry teardown, Source extensions with the byte
+  // cap, frame change seq, URL mint) lives in ./editor/useArtifactView; the
+  // toolbar-once layout is ./editor/ArtifactPane.
+  const {
+    isArtifact, artifactSource, artifactCmExtensions, artifactChangeSeq,
+    fetchArtifactUrl, toggleArtifactSource,
+  } = useArtifactView({
+    activeItem, activeItemId, isReference,
+    yjsCompartment, liveForCurrent, collabConnectionRef,
+    editorViewRef, roleRef,
+  });
 
   // INVARIANT: editor is online-only — input accepted iff collab is connected
   // AND the machine is live for the entity being rendered AND user has write access.
@@ -434,6 +420,42 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
 
   const cmEditMode = !snapshotPreview;
 
+  // The CM6 block is built ONCE per render and placed either in the artifact
+  // pane's body (Source view) or in the plain markdown wrapper. The key keeps
+  // its `:source` suffix for the Source view so the CM instance still remounts
+  // on the Page/Source toggle (fresh extensions, fresh compartments).
+  const editorBlock = (
+    <>
+      <CodeMirrorEditor
+        key={artifactSource ? `${activeItemId}:source` : activeItemId}
+        doc={activeItem.content || ''}
+        extensions={artifactSource ? artifactCmExtensions : cmExtensions}
+        initialCursor={savedCursor}
+        onReady={handleEditorReady}
+        onCreateView={handleCreateEditor}
+        className="editor-cm editor-cm--pending"
+      />
+      <span
+        className={`collab-status-dot collab-status-dot--${collabStatus}`}
+        title={t(`collabStatus_${collabStatus}`)}
+      />
+      {/* INVARIANT: overlay covers the CM6 area whenever editing is disabled by
+         connection state. Why: a top-bar toast is dismissible and easy to miss;
+         users typing into a "stuck" editor under the assumption their input
+         will queue is the failure mode this overlay prevents. Sidebar/header
+         stay interactive — only the editor surface is locked. */}
+      {!isReadonly && !overlayHidden && (
+        <EditorOfflineOverlay
+          status={collabStatus}
+          collabReady={liveForCurrent}
+          reconnectAttempts={reconnectInfo.attempts}
+          maxAttempts={reconnectInfo.max}
+          onRetry={() => projectCollab?.connect()}
+        />
+      )}
+    </>
+  );
+
   return (
     <div className="flex-1 overflow-hidden flex flex-col bg-bg relative" data-switch-phase={switchPhase.state.phase}>
       <CollabPresenceChips />
@@ -471,60 +493,20 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
             <div className="flex items-center justify-center h-full text-text-dim text-ui-base">
               {t('loading')}
             </div>
-          ) : isHtmlPage && !htmlSource ? (
-            <div className="flex flex-col h-full w-full">
-              <ArtifactToolbar
-                projectId={(activeItem as Document).project_id}
-                documentId={activeItemId!}
-                canEdit={!isReadonly}
-                source={false}
-                onToggleSource={toggleHtmlSource}
-              />
-              <div className="flex-1 min-h-0">
-                <ArtifactFrame key={activeItemId} fetchUrl={fetchArtifactUrl} changeSeq={htmlChangeSeq} />
-              </div>
-            </div>
+          ) : isArtifact ? (
+            <ArtifactPane
+              projectId={currentProjectId!}
+              documentId={activeItemId!}
+              canEdit={!isReadonly}
+              source={artifactSource}
+              onToggleSource={toggleArtifactSource}
+            >
+              {artifactSource ? editorBlock : (
+                <ArtifactFrame key={activeItemId} fetchUrl={fetchArtifactUrl} changeSeq={artifactChangeSeq} />
+              )}
+            </ArtifactPane>
           ) : (
-            <div className={isHtmlPage ? 'flex flex-col h-full w-full' : 'relative h-full w-full'}>
-              {isHtmlPage && (
-                <ArtifactToolbar
-                  projectId={(activeItem as Document).project_id}
-                  documentId={activeItemId!}
-                  canEdit={!isReadonly}
-                  source
-                  onToggleSource={toggleHtmlSource}
-                />
-              )}
-              <div className={isHtmlPage ? 'relative flex-1 min-h-0' : 'contents'}>
-              <CodeMirrorEditor
-                key={isHtmlPage ? `${activeItemId}:source` : activeItemId}
-                doc={activeItem.content || ''}
-                extensions={isHtmlPage ? htmlCmExtensions : cmExtensions}
-                initialCursor={savedCursor}
-                onReady={handleEditorReady}
-                onCreateView={handleCreateEditor}
-                className="editor-cm editor-cm--pending"
-              />
-              <span
-                className={`collab-status-dot collab-status-dot--${collabStatus}`}
-                title={t(`collabStatus_${collabStatus}`)}
-              />
-              {/* INVARIANT: overlay covers the CM6 area whenever editing is disabled by
-                 connection state. Why: a top-bar toast is dismissible and easy to miss;
-                 users typing into a "stuck" editor under the assumption their input
-                 will queue is the failure mode this overlay prevents. Sidebar/header
-                 stay interactive — only the editor surface is locked. */}
-              {!isReadonly && !overlayHidden && (
-                <EditorOfflineOverlay
-                  status={collabStatus}
-                  collabReady={liveForCurrent}
-                  reconnectAttempts={reconnectInfo.attempts}
-                  maxAttempts={reconnectInfo.max}
-                  onRetry={() => projectCollab?.connect()}
-                />
-              )}
-              </div>
-            </div>
+            <div className="relative h-full w-full">{editorBlock}</div>
           )}
         </div>
       </div>

@@ -21,6 +21,7 @@ import { apiClient } from '../api/client';
 import { emit } from '../events';
 import { useEvent } from '../hooks/useEvent';
 import { ancestorIds } from '../utils/document-ancestors';
+import { isArtifactDoc } from '../utils/artifact';
 import { Button } from './ui';
 import { DocumentTreeNode } from '../types';
 import { useTranslation } from '../i18n';
@@ -189,8 +190,8 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
           <div className="flex items-center shrink-0 text-text-dim">
             <span className="w-3" />
             <span className={`doc-icon ${keyIconClassFromCapabilities(doc.key_capabilities, doc.public_share)}`}>
-              {/* An html page is a leaf by the server's leaf rule, so only this arm needs it. */}
-              {doc.media_type === 'html' ? <AppWindow size={14} /> : <FileText size={14} />}
+              {/* An artifact is a leaf by the server's leaf rule, so only this arm needs it. */}
+              {isArtifactDoc(doc) ? <AppWindow size={14} /> : <FileText size={14} />}
             </span>
           </div>
         )}

@@ -147,6 +147,12 @@ async def me(request: Request, response: Response, user: dict = Depends(get_curr
         # login/register payloads — absent grace on the client means the
         # fail-safe immediate PIN re-lock.
         user["page_lock_grace_s"] = await settings.get("PAGE_LOCK_GRACE_S")
+        # Artifact Source-view byte cap (see SYSTEM: artifact-serve): the
+        # human writer's refusal ceiling, read through the module at call
+        # time so the ONE owner (and a test pin) is authoritative.
+        from artifacts import ARTIFACT_MAX_HTML_BYTES
+
+        user["artifact_max_bytes"] = ARTIFACT_MAX_HTML_BYTES
         tv = (db_user.get("token_version") or 0) if db_user else 0
         # ARCH: /me answers with the DB role (fresh even when the JWT claim is
         # stale — a role flip takes effect without re-login), and with capability

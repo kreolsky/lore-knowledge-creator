@@ -31,6 +31,8 @@ import {
   type DocumentShare, type InheritedFrom,
 } from '../api/public-share';
 import { docUrl } from '../utils/routing';
+import { isArtifactDoc } from '../utils/artifact';
+import { useEvent } from '../hooks/useEvent';
 import { Button, FieldCheckbox, SectionHeader, Dropdown, Modal } from './ui';
 import ApiKeyManager from './ApiKeyManager';
 import { ParentPickerPopup } from './ParentPickerPopup';
@@ -59,7 +61,7 @@ export function AccessPanel() {
         <GeneralAccessSection
           projectId={project.project_id}
           docId={docId}
-          isHtmlPage={currentDocument?.media_type === 'html'}
+          isArtifact={isArtifactDoc(currentDocument)}
         />
         {docId && <ChatsPrivacySection docId={docId} />}
         {docId && (
@@ -124,11 +126,11 @@ function applyOptimistic(shares: DocumentShare[], actions: ShareAction[]): Docum
 
 
 function GeneralAccessSection({
-  projectId, docId, isHtmlPage,
+  projectId, docId, isArtifact,
 }: {
   projectId: string;
   docId: string | null;
-  isHtmlPage: boolean;
+  isArtifact: boolean;
 }) {
   const { t } = useTranslation();
   const showToast = useAppStore(s => s.showToast);
@@ -136,19 +138,35 @@ function GeneralAccessSection({
   const [shares, setShares] = useState<DocumentShare[]>([]);
   const [inheritedFrom, setInheritedFrom] = useState<InheritedFrom | null>(null);
   const [busy, setBusy] = useState(false);
+  // WHY: refreshes overlap (mount, shares:changed, a toggle's own re-sync), so
+  // only the LATEST request may write — an earlier list resolving last would
+  // otherwise leave the panel on a stale plaque.
+  const refreshSeqRef = useRef(0);
+  // True while this panel's own write batch runs: each writer emits
+  // shares:changed, and a mid-batch refetch would overwrite the optimistic
+  // state with an intermediate server list; the batch re-syncs at its end.
+  const ownBatchRef = useRef(false);
 
   const refreshShares = useCallback(async () => {
+    const seq = ++refreshSeqRef.current;
     if (!docId) { setShares([]); setInheritedFrom(null); return; }
     try {
       const data = await listShares(projectId, docId);
+      if (seq !== refreshSeqRef.current) return;
       setShares(data.shares);
       setInheritedFrom(data.inherited_from);
     } catch {
-      showToast(t('failedToLoadShares'));
+      if (seq === refreshSeqRef.current) showToast(t('failedToLoadShares'));
     }
   }, [docId, projectId, showToast, t]);
 
   useEffect(() => { refreshShares(); }, [refreshShares]);
+
+  // Another surface (the artifact toolbar's Publish, the tab-tint hook) changed
+  // this doc's shares — re-read the server list so this panel never shows a
+  // stale plaque. The payload's documentId is a hint only; the refetch is
+  // cheap and always honest.
+  useEvent('shares:changed', () => { if (!ownBatchRef.current) void refreshShares(); });
 
   // INVARIANT(security): the whole anonymous-share section is root-only.
   // Why: user decision — share-link management (list/mint/revoke/scope) is a
@@ -176,6 +194,7 @@ function GeneralAccessSection({
     if (!plan.actions.length) return;
     setShares(applyOptimistic(shares, plan.actions));
     setBusy(true);
+    ownBatchRef.current = true;
     let didCreate = false;
     try {
       for (const a of plan.actions) {
@@ -194,6 +213,7 @@ function GeneralAccessSection({
     } catch {
       showToast(t('accessShareScopeError'), 'error');
     } finally {
+      ownBatchRef.current = false;
       setBusy(false);
       await refreshShares();
     }
@@ -209,11 +229,13 @@ function GeneralAccessSection({
     const next = !ownShare.allow_comments;
     setShares(shares.map(s => (s.share_id === ownShare.share_id ? { ...s, allow_comments: next } : s)));
     setBusy(true);
+    ownBatchRef.current = true;
     try {
       await updateShareComments(ownShare.share_id, next);
     } catch {
       showToast(t('accessShareCommentsError'), 'error');
     } finally {
+      ownBatchRef.current = false;
       setBusy(false);
       await refreshShares();
     }
@@ -250,9 +272,9 @@ function GeneralAccessSection({
                 onChange={() => { void handleToggle('shared'); }}
                 label={t('accessShareThisDoc')}
               />
-              {/* WHY: a dashboard (html page) has no children and nothing to annotate,
-                  so its share offers neither a subtree nor comments. */}
-              {!isHtmlPage && <FieldCheckbox
+              {/* WHY: an artifact (html page) has no children and nothing to
+                  annotate, so its share offers neither a subtree nor comments. */}
+              {!isArtifact && <FieldCheckbox
                 checked={view.subtree}
                 disabled={view.subtreeDisabled || busy}
                 onChange={() => { void handleToggle('subtree'); }}
@@ -261,7 +283,7 @@ function GeneralAccessSection({
               />}
             </div>
 
-            {ownShare && !isHtmlPage && (
+            {ownShare && !isArtifact && (
               <div className="mt-1.5">
                 <FieldCheckbox
                   checked={!!ownShare.allow_comments}

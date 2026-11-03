@@ -1064,6 +1064,7 @@ export const en = {
   artifactCopyLink: 'copy',
   artifactRevoke: 'revoke',
   artifactPublishFailed: 'Could not change the page publication',
+  artifactTooLarge: 'The page source is over the {max} cap — the change was not applied.',
 } as const;
 
 export type TranslationKey = keyof typeof en;

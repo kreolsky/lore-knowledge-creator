@@ -21,7 +21,8 @@
 """
 import logging
 
-from artifacts import ARTIFACT_MAX_HTML_BYTES
+import artifacts
+from artifacts import is_artifact_row
 from fastapi import HTTPException
 
 from agent.apply_edits_resolver import (
@@ -110,11 +111,9 @@ async def apply_edits_to_document(
     # html artifacts: the page source is HTML, not
     # markdown — the normalize/unwrap passes below are markdown grammar and
     # would reflow it. Instead the edit path enforces the artifact size cap
-    # (create's ceiling): read_document returns the whole body before every
-    # edit, so a page grown past it must be refused, not silently served at
-    # ~250k tokens per read.
-    is_html = (target.get("media_type") or "") == "html"
-    if is_html:
+    # on the GROWN page (create's ceiling — artifacts.assert_artifact_size).
+    is_artifact = is_artifact_row(target)
+    if is_artifact:
         live, _ = await resolve_live_doc_state(doc_id)
         # WHY bytes, not chars: the cap is a byte ceiling (create counts UTF-8
         # bytes) — a char count lets a Cyrillic page grow to ~2x the limit.
@@ -123,12 +122,7 @@ async def apply_edits_to_document(
             - len((e.get("old_string") or "").encode("utf-8"))
             for e in edits
         )
-        if len(live.encode("utf-8")) + delta > ARTIFACT_MAX_HTML_BYTES:
-            raise HTTPException(
-                status_code=422,
-                detail=f"html artifact exceeds the {ARTIFACT_MAX_HTML_BYTES // 1024} KiB "
-                       "cap — shrink the page before editing further",
-            )
+        artifacts.assert_artifact_size(len(live.encode("utf-8")) + delta)
         normalized = edits
     else:
         from markdown_normalize import (

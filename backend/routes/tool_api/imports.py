@@ -35,7 +35,7 @@ import settings
 from agent.collab_writes import create_document_via_collab
 from agent.context import get_agent_context, owned_session_row
 from api_key_auth import agent_author_name
-from artifacts import artifact_enabled
+from artifacts import ARTIFACT_MEDIA_TYPE, assert_artifact_creatable
 
 # docx_convert is a stateless leaf (imports only config + httpx) — importing it at
 # module level matches routes.files and keeps `post_docx_to_converter` patchable by
@@ -424,27 +424,13 @@ async def _import_html_page(
     """
     if not text.strip():
         raise HTTPException(status_code=400, detail="content is empty")
-    if not artifact_enabled():
-        raise HTTPException(
-            status_code=422,
-            detail="artifact hosting is not configured — html pages cannot be "
-                   "imported on this instance",
-        )
-    if is_reference:
-        raise HTTPException(
-            status_code=422,
-            detail="an html file imports as an interactive page, not a "
-                   "reference — omit node_type and pass parent_id",
-        )
-    if not parent_id:
-        raise HTTPException(
-            status_code=422,
-            detail="an html page is a leaf — pass parent_id (the document it "
-                   "goes under)",
-        )
+    # The create gates (hosting configured, parent given, never a reference)
+    # run HERE at the tool boundary, in ONE wording shared with
+    # create_document (see artifacts.assert_artifact_creatable).
+    assert_artifact_creatable(parent_id, is_reference)
     created = await create_document_via_collab(
         title=title, content=text, parent_id=parent_id, project_id=project_id,
-        user=user, scope_root=scope_root, media_type="html",
+        user=user, scope_root=scope_root, media_type=ARTIFACT_MEDIA_TYPE,
     )
     return {
         "status": "applied", "doc_id": created["doc_id"],

@@ -21,6 +21,7 @@ import http_clients
 import httpx
 import settings
 from agent_config_seed import is_help_doc_id
+from artifacts import is_artifact_row
 from markdown_chunker import Chunk, _breadcrumb_text, _chunk_hash, chunk_markdown
 
 from config import EMBEDDING_CONCURRENCY
@@ -274,7 +275,7 @@ async def _fetch_reembed_parent(db, entity_id: str) -> dict | None:
     )
     if not parent:
         return None
-    if (parent[0].get("media_type") or "") == "html":
+    if is_artifact_row(parent[0]):
         return None
     return parent[0]
 

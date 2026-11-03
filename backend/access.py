@@ -9,6 +9,7 @@
 # require_admin_or_project_full stays the admin-override management gate. A
 # document inherits its project's access level.
 
+from artifacts import is_artifact_row
 from fastapi import HTTPException
 
 import db as db_mod
@@ -254,7 +255,7 @@ async def can_write_note(principal: dict, document_id: str) -> bool:
     # page has no text to anchor a note to and no surface shows notes on it.
     """
     meta = await fetch_doc_meta(document_id)
-    if meta is not None and meta.get("media_type") == "html":
+    if is_artifact_row(meta):
         return False
     kind = principal.get("kind")
     if kind == "user":

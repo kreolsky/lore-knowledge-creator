@@ -26,9 +26,11 @@ import { useDocumentRoute } from '../hooks/useDocumentRoute';
 import { DeleteModal } from './DeleteModal';
 import { ParentPickerPopup } from './ParentPickerPopup';
 import { DocumentTree } from './DocumentTree';
-import { DocumentTreeNode } from '../types';
+import type { Document, DocumentTreeNode } from '../types';
 import { docUrl } from '../utils/routing';
 import { useTranslation } from '../i18n';
+
+const TREE_REFETCH_DEBOUNCE_MS = 300;
 
 export function Sidebar() {
   const { t } = useTranslation();
@@ -121,14 +123,45 @@ export function Sidebar() {
   // Subscribing is harmless (the bus is in-memory only without a socket).
 
   // Project WS: real-time tree updates from other users
+  // INVARIANT: a created document is re-read from the project tree, never kept as
+  // the partial row the frame carries. Why: the open document IS its tree row
+  // (openDocument commits it, DocumentPage skips the re-fetch), and a frame cannot
+  // carry the tree-derived fields (inherited public_share / key_capabilities) or
+  // every emitter's full column set — a fresh page opened as text, with no publish
+  // control, until a reload. The partial row stays as the instant paint.
+  const treeRefetchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(treeRefetchTimer.current), []);
+  const scheduleTreeRefetch = useCallback(() => {
+    if (isPublicShare || !projectId) return;
+    clearTimeout(treeRefetchTimer.current);
+    // WHY: an agent run creates documents in bursts — one tree read per burst.
+    treeRefetchTimer.current = setTimeout(() => {
+      apiClient.get(`/projects/${projectId}`).then((data) => {
+        if (useAppStore.getState().currentProject?.project_id !== projectId) return;
+        setDocuments(data.documents);
+        // A document opened from the partial row before this read landed gets its full row.
+        const cur = useAppStore.getState().currentDocument;
+        const full = cur && !cur.project_id
+          ? (data.documents as Document[]).find(d => d.document_id === cur.document_id)
+          : undefined;
+        if (cur && full) useAppStore.getState().setCurrentDocument({ ...full, content: cur.content });
+      }).catch((err) => {
+        console.error('Failed to refetch the document tree', err);
+        useAppStore.getState().showToast(tRef.current('failedToLoadTree'), 'error');
+      });
+    }, TREE_REFETCH_DEBOUNCE_MS);
+  }, [projectId, setDocuments, isPublicShare]);
+
   useEvent('ws:document_created', useCallback(({ document_id: docId, title, parent_id: parentId, sort_key: sortKey, media_type: mediaType }) => {
     const docs = useAppStore.getState().documents;
-    if (docs.some(d => d.document_id === docId)) return;
-    setDocuments([...docs, { document_id: docId, title, parent_id: parentId, is_index: false, sort_key: sortKey ?? undefined, media_type: mediaType ?? undefined } as typeof docs[0]]);
-    if (parentId && useUIStore.getState().collapsedDocIds.includes(parentId)) {
-      useUIStore.getState().toggleDocExpanded(parentId);
+    if (!docs.some(d => d.document_id === docId)) {
+      setDocuments([...docs, { document_id: docId, title, parent_id: parentId, is_index: false, sort_key: sortKey ?? undefined, media_type: mediaType ?? undefined } as typeof docs[0]]);
+      if (parentId && useUIStore.getState().collapsedDocIds.includes(parentId)) {
+        useUIStore.getState().toggleDocExpanded(parentId);
+      }
     }
-  }, [setDocuments]));
+    scheduleTreeRefetch();
+  }, [setDocuments, scheduleTreeRefetch]));
 
   useEvent('ws:document_renamed', useCallback(({ document_id: docId, title }) => {
     const docs = useAppStore.getState().documents;
@@ -209,15 +242,7 @@ export function Sidebar() {
   // arrived here. Refetch the whole tree (GET /projects/:id) instead of
   // patching rows: the moved subtree may be large, the payload carries full
   // rows (sort_key, is_system, …), and one RTT reuses the canonical listing.
-  useEvent('ws:documents_moved_in', useCallback(() => {
-    if (isPublicShare || !projectId) return;
-    apiClient.get(`/projects/${projectId}`).then((data) => {
-      setDocuments(data.documents);
-    }).catch((err) => {
-      console.error('Failed to refetch tree after documents moved in', err);
-      useAppStore.getState().showToast(t('failedToLoadTree'), 'error');
-    });
-  }, [projectId, setDocuments, isPublicShare, t]));
+  useEvent('ws:documents_moved_in', scheduleTreeRefetch);
 
   useEvent('open-create-doc', useCallback(({ parentId }: { parentId?: string }) => {
     // PUBLIC: no write affordances on /s/:token — and the authed POST /documents

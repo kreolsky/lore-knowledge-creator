@@ -10,6 +10,7 @@
 """
 import settings
 from agent.context import get_agent_context
+from artifacts import is_artifact_row
 from fastapi import Depends, HTTPException
 from textmatch import _section_end_offset
 
@@ -45,7 +46,7 @@ def _refuse_html_target(target: dict, tool: str) -> None:
     the html edit surface — its path skips the markdown passes and enforces
     the artifact size cap instead (agent/tool_api_surface.py).
     """
-    if (target.get("media_type") or "") == "html":
+    if is_artifact_row(target):
         raise HTTPException(
             status_code=422,
             detail=f"{tool} is a markdown operation — an html artifact is "

@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import logging
 
+from artifacts import is_artifact_row
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from ws_utils import receive_loop
 
@@ -71,18 +72,13 @@ class _PublicClient:
     stored project_id is the revalidation filter (events carry project_id, not
     doc sets)."""
 
-    __slots__ = ("ws", "doc_id", "project_id", "is_page")
+    __slots__ = ("ws", "doc_id", "project_id", "is_artifact")
 
-    def __init__(self, ws: WebSocket, doc_id: str, project_id: str, is_page: bool = False):
+    def __init__(self, ws: WebSocket, doc_id: str, project_id: str, is_artifact: bool = False):
         self.ws = ws
         self.doc_id = doc_id
         self.project_id = project_id
-        self.is_page = is_page
-
-
-async def _is_html_page(doc_id: str) -> bool:
-    row = await fetch_one("documents", doc_id)
-    return bool(row) and (row.get("media_type") or "") == "html"
+        self.is_artifact = is_artifact
 
 
 _registry: dict[str, dict[int, _PublicClient]] = {}
@@ -134,7 +130,7 @@ async def _recheck(client: _PublicClient) -> bool:
         await _close(client, 1011, "Internal error")
         _drop(client)
         return False
-    if not ctx["allow_comments"] and not client.is_page:
+    if not ctx["allow_comments"] and not client.is_artifact:
         await _close(client, 4003, "Comments off")
         _drop(client)
         return False
@@ -233,12 +229,12 @@ async def public_doc_ws(ws: WebSocket, document_id: str):
         logger.exception("public ws access check failed for %s", document_id)
         await ws.close(code=1011, reason="Internal error")
         return
-    # WHY: the channel exists for notes AND for an html page — a page has no
-    # notes, and the ping is the only way its frame learns of an edit (the
-    # guest has no Yjs). A page never changes kind (move refuses conversion),
-    # so the flag is read once here, not per ping.
-    is_page = await _is_html_page(document_id)
-    if not ctx["allow_comments"] and not is_page:
+    # WHY: the channel exists for notes AND for an html artifact — a page has
+    # no notes, and the ping is the only way its frame learns of an edit (the
+    # guest has no Yjs). An artifact never changes kind (move refuses
+    # conversion), so the flag is read once here, not per ping.
+    is_artifact = is_artifact_row(await fetch_one("documents", document_id))
+    if not ctx["allow_comments"] and not is_artifact:
         await ws.close(code=4003, reason="Comments off")
         return
     per_doc = _registry.setdefault(document_id, {})
@@ -247,7 +243,7 @@ async def public_doc_ws(ws: WebSocket, document_id: str):
             _registry.pop(document_id, None)
         await ws.close(code=4029, reason="Too many sockets")
         return
-    client = _PublicClient(ws, document_id, str(ctx["project_id"]), is_page)
+    client = _PublicClient(ws, document_id, str(ctx["project_id"]), is_artifact)
     per_doc[id(ws)] = client
     await ws.send_text(json.dumps({"type": "init"}))
     try:

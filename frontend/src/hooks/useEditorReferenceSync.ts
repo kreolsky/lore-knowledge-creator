@@ -10,6 +10,7 @@ import { useAppStore } from '../store/app-store';
 import { useEvent } from './useEvent';
 import { useTranslation } from '../i18n';
 import { apiClient } from '../api/client';
+import { isArtifactDoc } from '../utils/artifact';
 import { fetchContentBatch } from '../api/content-batch';
 import { Reference } from '../types';
 import { fetchReferences } from '../editor/editor-utils';
@@ -340,9 +341,9 @@ export function useEditorReferenceSync({ editorViewRef }: UseEditorReferenceSync
     // keystroke (storeDocuments change) right after a content_flushed reload doesn't wipe the
     // fetched content back to loading (Task 8 × Task 5 ownership contract).
     for (const doc of storeDocuments) {
-      // An html page is never inlined: with no entry the resolver returns null, so
+      // An artifact is never inlined: with no entry the resolver returns null, so
       // `![t](doc:<page>)` renders as a link (the page lives in its own frame).
-      if (doc.media_type === 'html') continue;
+      if (isArtifactDoc(doc)) continue;
       const next: TransclusionEntry = doc.content && doc.content.trim()
         ? { kind: 'doc', source: 'doc', title: doc.title, content: doc.content }
         : { kind: 'doc', source: 'doc', title: doc.title };

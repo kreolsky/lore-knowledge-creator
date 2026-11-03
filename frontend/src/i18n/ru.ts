@@ -1062,4 +1062,5 @@ export const ru: Record<TranslationKey, string> = {
   artifactCopyLink: 'копировать',
   artifactRevoke: 'отозвать',
   artifactPublishFailed: 'Не удалось изменить публикацию страницы',
+  artifactTooLarge: 'Исходник страницы превышает лимит {max} — изменение не применено.',
 };

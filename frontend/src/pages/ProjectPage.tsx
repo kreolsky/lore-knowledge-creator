@@ -27,6 +27,7 @@ import { EditorLinkPreview } from '../components/editor/EditorLinkPreview';
 import { ProjectShell, type ProjectShellHandle, type RightTabEntry, type LeftTabEntry } from '../components/ProjectShell';
 import { useAppStore } from '../store/app-store';
 import { selectOpenPageLocked, PAGE_BOUND_TABS } from '../utils/page-lock';
+import { isArtifactDoc } from '../utils/artifact';
 import { useUIStore, useDocState, ORPHAN_KEY, type RightTab } from '../store/ui-store';
 import { readRefOpenMode, refIsScope } from '../store/ui-store/documents-slice';
 import { searchModeOnOpen } from '../store/ui-store/search-slice';
@@ -121,16 +122,17 @@ export function ProjectPage() {
   // allowedRightTabs); undefined reads as allowed (an old payload predating
   // the flags must not hide chat).
   const canAi = useAppStore(s => s.currentUser?.can_ai) !== false;
-  // An html page carries no notes (anchors address prose, a page is markup), so its
-  // Notes tab is not offered and a stored 'notes' falls back like a role-forbidden tab.
-  const isHtmlPage = useAppStore(s => s.currentDocument?.media_type === 'html');
+  // An artifact (html page) carries no notes (anchors address prose, a page is
+  // markup), so its Notes tab is not offered and a stored 'notes' falls back
+  // like a role-forbidden tab.
+  const isArtifact = useAppStore(s => isArtifactDoc(s.currentDocument));
   // INVARIANT(security): a PIN-locked page not yet opened by PIN offers only the
   // project-level tabs (chat, search, settings); every page-bound tab drops and a stored
   // one falls back like a role-forbidden tab. Why: operator request — everything bound
   // to the page (notes, refs, history, links, access, find) stays behind the PIN like its text.
   const pageLocked = useAppStore(selectOpenPageLocked);
   const allowedTabs = allowedRightTabs(accessLevel, canAi)
-    .filter(tab => !(isHtmlPage && tab === 'notes')
+    .filter(tab => !(isArtifact && tab === 'notes')
       && !(pageLocked && (PAGE_BOUND_TABS as readonly string[]).includes(tab)));
   // Ephemeral search overlay (see documents-slice INVARIANT): while alive for the
   // current doc (panel open), search renders + highlights as active instead of the

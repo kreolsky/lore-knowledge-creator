@@ -38,6 +38,7 @@ from urllib.parse import quote, unquote
 import settings
 from agent import doc_state
 from agent.collab_writes import create_document_via_collab
+from artifacts import is_artifact_row
 from collab.registry import get_active_session
 from fastapi import HTTPException
 from files_util import (
@@ -203,8 +204,8 @@ async def _visit_export_node(row: dict, dir_path: str, *, children: dict,
     if not kids and not content.strip():
         return  # empty leaf: skipped entirely
     stem = dedup.unique(dir_path, _stem_for(row.get("title") or ""))
-    is_html = (row.get("media_type") or "") == "html"
-    ext = "html" if is_html else "md"
+    is_artifact = is_artifact_row(row)
+    ext = "html" if is_artifact else "md"
     if kids:
         node_dir = f"{dir_path}{stem}/"
         plan[doc_id] = ExportNode(
@@ -221,7 +222,7 @@ async def _visit_export_node(row: dict, dir_path: str, *, children: dict,
             is_dir=False, dir_path=dir_path,
             file_path=f"{dir_path}{stem}.{ext}",
             assets_dir=f"{dir_path}_assets" if dir_path else "_assets",
-            content=content, is_html=is_html,
+            content=content, is_html=is_artifact,
         )
 
 
@@ -361,7 +362,7 @@ async def _embed_replacement(alt: str, target: str, node: ExportNode,
             return ""
         body = row.get("content")
         return body if (body and body.strip()) else None
-    if (row.get("media_type") or "") == "html":
+    if is_artifact_row(row):
         # An html row OUTSIDE the exported subtree never inlines its markup —
         # the alt text stands in (a dangling relative link is worse).
         return alt or (row.get("title") or "")

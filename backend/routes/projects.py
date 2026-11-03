@@ -4,6 +4,7 @@
 import logging
 from uuid import uuid4
 
+from artifacts import ARTIFACT_CONTENT_GATE, is_artifact_row
 from documents.service import last_doc_rule, live_doc_ids
 from fastapi import APIRouter, Depends, HTTPException, Query
 from model_access import PUBLIC_SUBJECT, own_group_subject, user_subjects
@@ -506,13 +507,6 @@ _SEARCH_PROJECTION = (
     "FROM documents "
 )
 
-# The html-artifact content gate: an html row's content
-# is page source — it is found by its TITLE alone, never by its markup. Every
-# content predicate in this module reuses THIS fragment so a future arm cannot
-# forget it. Verified on surreal v3.3.5 (gray, 2026-10-30): `NONE != 'html'`
-# evaluates true, so plain rows (media_type NONE) pass untouched.
-_HTML_CONTENT_GATE = "(media_type != 'html')"
-
 
 async def _contains_scan(
     db: AsyncSurreal, project_id: str, q_lower: str,
@@ -526,7 +520,7 @@ async def _contains_scan(
         + scope_clause +
         "AND ("
         "  string::contains(string::lowercase(title), $q) "
-        "  OR (" + _HTML_CONTENT_GATE + " AND string::contains(string::lowercase(content ?? ''), $q))"
+        "  OR (" + ARTIFACT_CONTENT_GATE + " AND string::contains(string::lowercase(content ?? ''), $q))"
         ") "
         "ORDER BY updated_at DESC LIMIT 50",
         {"pid": project_id, "q": q_lower, **(scope_params or {})},
@@ -595,7 +589,7 @@ async def search_documents(
                     _SEARCH_PROJECTION +
                     "WHERE project_id = $pid AND deleted_at IS NONE "
                     + scope_clause +
-                    "AND (title @0@ $q OR (" + _HTML_CONTENT_GATE + " AND content @1@ $q)) "
+                    "AND (title @0@ $q OR (" + ARTIFACT_CONTENT_GATE + " AND content @1@ $q)) "
                     "ORDER BY updated_at DESC LIMIT 50",
                     {"pid": project_id, "q": operand, **scope_params},
                 )
@@ -620,8 +614,8 @@ async def search_documents(
         # html artifacts: a row that came in by title is
         # matched on TITLE ONLY — its page source is not searchable text, so
         # neither the literal match nor the anchor ladder reads it.
-        is_html = (doc.get("media_type") or "") == "html"
-        content_lower = "" if is_html else content.lower()
+        is_artifact = is_artifact_row(doc)
+        content_lower = "" if is_artifact else content.lower()
         blob = f"{title_lower} {content_lower}".strip()
         if q_lower in blob:
             pattern: str | None = q_lower
@@ -641,7 +635,7 @@ async def search_documents(
             "document_id": doc["document_id"],
             "title": title,
             "match_count": match_count,
-            "snippet": None if is_html else _build_snippet(content, pattern),
+            "snippet": None if is_artifact else _build_snippet(content, pattern),
             "created_at": doc.get("created_at"),
             "updated_at": doc.get("updated_at"),
         }

@@ -18,6 +18,7 @@ import logging
 import re
 from urllib.parse import quote
 
+from artifacts import is_artifact_row
 from cp_store import (
     BLOB_UNAVAILABLE_DETAIL,
     BlobUnavailable,
@@ -357,7 +358,7 @@ async def _doc_embed_text(rec: dict | None, project_id: str, tid: str) -> str | 
     # html artifacts: page source never inlines into
     # a markdown export — the embed degrades to a plain link naming the
     # page (mirrors the editor's transclusion resolver returning null).
-    if (rec.get("media_type") or "") == "html":
+    if is_artifact_row(rec):
         return f"[{rec.get('title') or tid}](doc:{tid})"
     return rec.get("content") or ""
 
@@ -656,7 +657,7 @@ async def assert_parent_valid(parent_id: str | None, project_id: str) -> dict | 
         raise HTTPException(
             status_code=400, detail="Reference documents cannot be parents",
         )
-    if (parent.get("media_type") or "") == "html":
+    if is_artifact_row(parent):
         raise HTTPException(
             status_code=400, detail="HTML artifacts cannot be parents",
         )

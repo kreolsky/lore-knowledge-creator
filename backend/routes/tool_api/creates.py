@@ -8,7 +8,7 @@
 """
 from agent.context import get_agent_context
 from api_key_auth import agent_author_name
-from artifacts import artifact_enabled
+from artifacts import ARTIFACT_MEDIA_TYPE, assert_artifact_creatable
 from fastapi import Depends, HTTPException
 
 from models import ToolCreateDocument
@@ -64,23 +64,16 @@ async def tool_create_document(
         body.is_reference = True
         body.media_type = "markdown"
     elif body.node_type == "html":
-        # html artifacts: an interactive page LEAF. The
-        # optional-feature gate mirrors SANDBOX_ENABLED — unset ARTIFACT_ORIGIN
-        # deploy simply does not serve the kind.
-        if not artifact_enabled():
-            raise HTTPException(
-                status_code=422,
-                detail="artifact hosting is not configured — html pages "
-                       "cannot be created on this instance",
-            )
-        if not body.parent_id:
-            raise HTTPException(
-                status_code=422,
-                detail="node_type=\"html\" requires parent_id (the page is a "
-                       "leaf under it)",
-            )
+        # html artifacts: an interactive page LEAF. The create gates
+        # (hosting configured, parent given, never a reference) run HERE at
+        # the boundary — before the apply-mode resolution below — so a
+        # confirm-mode call is refused up front instead of being parked on
+        # the approval card and retried into a create that can never apply
+        # (see artifacts.assert_artifact_creatable). The server derives the
+        # row kind from node_type and overwrites whatever the body carried.
         body.is_reference = False
-        body.media_type = "html"
+        body.media_type = ARTIFACT_MEDIA_TYPE
+        assert_artifact_creatable(body.parent_id, body.is_reference)
     else:
         body.is_reference = False
 

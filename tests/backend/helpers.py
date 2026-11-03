@@ -287,6 +287,20 @@ def pin_artifact_origin(
     return origin
 
 
+def pin_artifact_cap(monkeypatch, n_bytes: int) -> int:
+    """Pin the artifact size ceiling small (the pin_artifact_origin pattern):
+    every writer (create, import_file, edit growth) reads
+    artifacts.ARTIFACT_MAX_HTML_BYTES at call time, so ONE pin sizes every
+    refusal without posting multi-MiB bodies over the HTTP test path — the
+    1 MiB tool-JSON cap would refuse such bodies before the artifact cap
+    could.
+    """
+    import artifacts
+
+    monkeypatch.setattr(artifacts, "ARTIFACT_MAX_HTML_BYTES", n_bytes)
+    return n_bytes
+
+
 #: A small marked workflow: sampler 3 [lore:seed], prompt 6 [lore:prompt],
 #: latent 88 [lore:size] [lore:batch] (linked width/height, like the shipped
 #: graph), SaveImage 90.

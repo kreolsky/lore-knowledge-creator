@@ -9,6 +9,7 @@ directly and forward `mode` themselves.
 import logging
 
 import settings
+from artifacts import ARTIFACT_CONTENT_GATE
 
 # The stop-word set, stop-word stripper and snippet-anchor ladder live in
 # textmatch.py (shared with the UI search route — agent layering must not be
@@ -93,14 +94,6 @@ def _build_direct_hit(r: dict, *, snippet: str) -> dict:
     }
 
 
-# The html-artifact content gate: an html row's content
-# is page source — it is found by its TITLE alone, never by its markup. Every
-# content predicate in this module reuses THIS fragment so a future arm cannot
-# forget it. Verified on surreal v3.3.5 (gray, 2026-10-30): `NONE != 'html'`
-# evaluates true, so plain rows (media_type NONE) pass untouched.
-_HTML_CONTENT_GATE = "(media_type != 'html')"
-
-
 async def _union_candidate_rows(
     db, *, select_cands: str, contains_pred: str,
     project_id: str, query: str, scope_params: dict, warnings: list[str],
@@ -125,9 +118,9 @@ async def _union_candidate_rows(
     try:
         cand_rows = await db.query(
             select_cands
-            + "AND ((title @0@ $qfts OR (" + _HTML_CONTENT_GATE + " AND content @1@ $qfts)) "
+            + "AND ((title @0@ $qfts OR (" + ARTIFACT_CONTENT_GATE + " AND content @1@ $qfts)) "
             "OR string::lowercase(title ?? '') CONTAINS string::lowercase($q) "
-            "OR (" + _HTML_CONTENT_GATE + " AND string::lowercase(content ?? '') CONTAINS string::lowercase($q))) "
+            "OR (" + ARTIFACT_CONTENT_GATE + " AND string::lowercase(content ?? '') CONTAINS string::lowercase($q))) "
             "LIMIT 200",
             {"pid": project_id, "q": query, "qfts": qfts, **scope_params},
         )
@@ -172,7 +165,7 @@ def _contains_pred() -> str:
     source is not searchable text (title still matches)."""
     return (
         "AND (string::lowercase(title ?? '') CONTAINS string::lowercase($q) "
-        "OR (" + _HTML_CONTENT_GATE + " AND string::lowercase(content ?? '') CONTAINS string::lowercase($q))) "
+        "OR (" + ARTIFACT_CONTENT_GATE + " AND string::lowercase(content ?? '') CONTAINS string::lowercase($q))) "
     )
 
 

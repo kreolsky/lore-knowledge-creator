@@ -2,8 +2,8 @@
 """Fetch the pinned artifact libraries and verify their sha256 (build-time).
 
 Run by BOTH backend Dockerfiles after the source COPY — the artifacts are
-served from a SEPARATE cookieless origin (SYSTEM: artifact-serve, plan
-html-artifacts) and must be self-hosted: no page may load a third-party CDN.
+served from a SEPARATE cookieless origin (SYSTEM: artifact-serve) and must
+be self-hosted: no page may load a third-party CDN.
 
 Files land OUTSIDE /app, in /opt/artifact_lib/<name>@<version>/<path>:
 dev/gray bind-mount ./backend over /app (docker-compose.yml), so anything a
@@ -22,8 +22,8 @@ import sys
 import urllib.request
 from pathlib import Path
 
-#: MUST equal routes/artifact_serve.py ARTIFACT_LIB_ROOT (kept a literal here:
-#: the build stage must not import app code to learn a path).
+#: MUST equal artifacts.py ARTIFACT_LIB_ROOT (kept a literal here: the build
+#: stage must not import app code to learn a path).
 DEST_ROOT = Path("/opt/artifact_lib")
 
 MANIFEST = Path(__file__).resolve().parent / "manifest.json"
