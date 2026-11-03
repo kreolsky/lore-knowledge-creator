@@ -1,5 +1,5 @@
 /** Unified download menu — one trigger ("Download ▾") opening a dropdown with
- * pdf / docx / markdown export items (driven by useDocumentExport → backend
+ * pdf / docx / markdown (or, for an html page, html) export items (driven by useDocumentExport → backend
  * `/api/documents/{id}/export`) plus an optional raw original-file item for
  * references that carry an uploaded file, and an optional `*.zip` subtree
  * item (live subtree archive via `/export/subtree`, caller-gated by `subtree`).
@@ -42,7 +42,8 @@ interface Props {
   checkpointId?: string;
   /** Export formats offered, defaults to all. A PDF reference passes
    *  ['docx', 'md']: its `original` item already IS a .pdf, and a second pdf
-   *  rebuilt from the recognized text is the wrong file to hand back. */
+   *  rebuilt from the recognized text is the wrong file to hand back. An html
+   *  page passes ['html']: one format ⇒ a direct-download button, no dropdown. */
   exportFormats?: ExportFormat[];
   /** Icon-only trigger (IconButton, title = download) — for icon rows like the
    *  chat header / right-panel plaque, where a labelled button does not fit. */
@@ -65,13 +66,21 @@ export function DownloadMenu({ documentId, hasText, original, theme = 'default',
 
   const busy = exportingFormat !== null;
 
-  // Single-option case (no text to export, just the raw original file): skip
-  // the dropdown entirely and download directly on click. Renders the same
+  const showSubtree = subtree && !checkpointId;
+  // Single-option case: exactly one item would be in the menu — the raw original
+  // file (no text to export), or one export format (an html page offers only
+  // *.html). Skip the dropdown and download directly on click. Renders the same
   // Button used as the multi-option trigger (not an <a>) so the surrounding
   // theme CSS (.reference-viewer-banner button:hover / .download-menu[data-theme]
   // > button:hover) still applies — an <a> wouldn't match those `button` selectors.
-  if (!hasText && original) {
-    const downloadOriginal = () => {
+  const soleFormat = hasText && !original && !showSubtree && exportFormats.length === 1 ? exportFormats[0] : null;
+  if ((!hasText && original) || soleFormat) {
+    const downloadDirect = () => {
+      if (soleFormat) {
+        if (!busy) exportFormat(documentId, soleFormat, checkpointId);
+        return;
+      }
+      if (!original) return;
       const a = document.createElement('a');
       a.href = original.url;
       a.download = original.name;
@@ -80,13 +89,13 @@ export function DownloadMenu({ documentId, hasText, original, theme = 'default',
     return (
       <div className="download-menu" data-theme={theme}>
         {iconOnly ? (
-          <IconButton size="sm" title={t('download')} onClick={downloadOriginal}>
+          <IconButton size="sm" title={t('download')} onClick={downloadDirect} disabled={busy}>
             <Download size={14} />
           </IconButton>
         ) : (
-          <Button variant="ghost" size="sm" onClick={downloadOriginal}>
+          <Button variant="ghost" size="sm" onClick={downloadDirect} disabled={busy}>
             <Download size={13} />
-            {t('download')}
+            {busy ? <span className="animate-pulse">{t('infoExporting')}</span> : t('download')}
           </Button>
         )}
       </div>
@@ -130,7 +139,7 @@ export function DownloadMenu({ documentId, hasText, original, theme = 'default',
               {exportingFormat === fmt ? <span className="animate-pulse">{t('infoExporting')}</span> : `*.${fmt}`}
             </div>
           ))}
-          {subtree && !checkpointId && (
+          {showSubtree && (
             <div
               role="button"
               tabIndex={0}

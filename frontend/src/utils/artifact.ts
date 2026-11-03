@@ -4,6 +4,7 @@
  * `media_type === 'html'`; in code the kind is "artifact", never "page"
  * (SYSTEM: page-lock owns "page" for ANY document).
  */
+import type { ExportFormat } from '../hooks/useDocumentExport';
 
 /** Whether a doc row is an html artifact (a missing media_type = plain doc). */
 export function isArtifactDoc(
@@ -11,3 +12,7 @@ export function isArtifactDoc(
 ): boolean {
   return (doc?.media_type ?? '') === 'html';
 }
+
+/** An artifact downloads only as its own html source — the markdown export
+ *  formats would run html through the markdown pipeline and mangle it. */
+export const ARTIFACT_EXPORT_FORMATS: ExportFormat[] = ['html'];

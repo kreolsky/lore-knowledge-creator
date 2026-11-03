@@ -45,7 +45,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, FileText, List, MessageSquare, Paperclip } from 'lucide-react';
+import { AlertCircle, FileText, List, StickyNote, Paperclip } from 'lucide-react';
 import {
   publicTreeByDoc, publicDocumentByDoc, publicReferencesByDoc, publicArtifactUrlByDoc,
   type PublicTreeNode,
@@ -354,7 +354,7 @@ export function PublicSharePage(
     { tab: 'refs', icon: <Paperclip size={15} />, title: t('tabReferences'), renderPanel: () => <ReferencesPanel /> },
     ...(allowComments ? [{
       tab: 'notes' as const,
-      icon: <MessageSquare size={15} />,
+      icon: <StickyNote size={15} />,
       title: t('tabNotes'),
       renderPanel: () => <PublicNotesPanel />,
       // Same chrome as the member surface: the tab turns yellow while a note is open.

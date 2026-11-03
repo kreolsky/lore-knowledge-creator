@@ -1,6 +1,6 @@
 /**
  * Toolbar over an artifact (html page) in the window: the Page/Source switch
- * (members who may edit) and the one-click publication (project owner) —
+ * (members who may edit), the html download (every reader) and the one-click publication (project owner) —
  * "Publish", or once a link exists "Published · copy · revoke". Publication is
  * the ordinary doc-scope document_shares link (see SYSTEM: public-share); this
  * is a second trigger for it, not a second mechanism.
@@ -11,7 +11,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Globe } from 'lucide-react';
-import { Button } from '../ui';
+import { Button, DownloadMenu } from '../ui';
 import { useAppStore } from '../../store/app-store';
 import { useIsProjectOwner } from '../../hooks/useIsProjectOwner';
 import { useEvent } from '../../hooks/useEvent';
@@ -20,6 +20,7 @@ import { deriveShareState } from '../access/share-state';
 import { copyWithToast } from '../chat/shared/copy';
 import { docUrl } from '../../utils/routing';
 import { useTranslation } from '../../i18n';
+import { ARTIFACT_EXPORT_FORMATS } from '../../utils/artifact';
 
 interface ArtifactToolbarProps {
   projectId: string;
@@ -38,6 +39,7 @@ export function ArtifactToolbar({ projectId, documentId, canEdit, source, onTogg
           {source ? t('artifactShowPage') : t('artifactShowSource')}
         </Button>
       )}
+      <DownloadMenu documentId={documentId} hasText exportFormats={ARTIFACT_EXPORT_FORMATS} />
       <div className="flex-1" />
       <PublishControl projectId={projectId} documentId={documentId} />
     </div>

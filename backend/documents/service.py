@@ -478,8 +478,38 @@ async def _inline_ref_images(content: str, project_id: str) -> str:
     return _REF_IMG_PATTERN.sub(_repl, content)
 
 
+async def _checkpoint_export_content(document_id: str, checkpoint_id: str) -> str:
+    """A snapshot's content for export — read-only history, never the collab session."""
+    cp = await fetch_one("checkpoints", checkpoint_id)
+    if not cp or cp.get("document_id") != document_id:
+        raise HTTPException(status_code=404, detail="Checkpoint not found")
+    # Export the snapshot via the single shared helper. A post-nullout row
+    # whose blob is gone has no inline fallback → BlobUnavailable → 502 (the
+    # frontend DownloadMenu already surfaces a toast on non-200 export responses).
+    try:
+        return await resolve_checkpoint_content(cp)
+    except BlobUnavailable:
+        logger.warning("Blob resolution failed for checkpoint %s export", checkpoint_id, exc_info=True)
+        raise HTTPException(status_code=502, detail=BLOB_UNAVAILABLE_DETAIL)
+
+
+def _attachment_response(export_bytes: bytes, media_type: str, title: str, ext: str):
+    """Binary download response with an RFC 5987 UTF-8 filename."""
+    from starlette.responses import Response as StarletteResponse
+
+    ascii_fallback = f"document.{ext}"
+    encoded_name = quote(title.encode("utf-8"), safe="")
+    content_disposition = f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{encoded_name}.{ext}"
+    return StarletteResponse(
+        content=export_bytes,
+        media_type=media_type,
+        headers={"Content-Disposition": content_disposition},
+    )
+
+
 async def export_document(document_id: str, format: str = "pdf", checkpoint_id: str | None = None):
-    """Export document content as PDF, DOCX (via converter) or Markdown (raw).
+    """Export document content as PDF, DOCX (via converter), Markdown (raw) or,
+    for an html page (artifact), its html source verbatim.
 
     Reads live content from an active collab session (ydoc_store) first,
     falling back to the DB row. Returns a binary Starlette Response with
@@ -491,8 +521,8 @@ async def export_document(document_id: str, format: str = "pdf", checkpoint_id: 
     GET /api/checkpoints/{id}), and never touches the collab session. Used by the
     History panel Download menu while a snapshot preview is open.
     """
-    if format not in ("pdf", "docx", "md"):
-        raise HTTPException(status_code=400, detail="format must be pdf, docx or md")
+    if format not in ("pdf", "docx", "md", "html"):
+        raise HTTPException(status_code=400, detail="format must be pdf, docx, md or html")
 
     record = await fetch_one("documents", document_id)
     if not record:
@@ -500,31 +530,33 @@ async def export_document(document_id: str, format: str = "pdf", checkpoint_id: 
     if record.get("deleted_at"):
         raise HTTPException(status_code=404, detail="Document not found")
 
+    is_artifact = is_artifact_row(record)
+    # INVARIANT: an html page downloads only as html, a markdown document never as html.
+    # Why: the markdown pipeline (normalizer, transclusion, converter) mangles html
+    # source into a broken .md/.pdf/.docx — the page's only faithful file is itself.
+    if is_artifact != (format == "html"):
+        raise HTTPException(status_code=400, detail="an html page exports only as html; html is for pages only")
+    title = record.get("title", "document")
+
+    from collab.registry import get_active_session
+    session = None if checkpoint_id else get_active_session("doc", document_id)
     if checkpoint_id:
-        # Export the snapshot, not the live document. The snapshot is read-only
-        # historical content — never consult the active collab session for it.
-        cp = await fetch_one("checkpoints", checkpoint_id)
-        if not cp or cp.get("document_id") != document_id:
-            raise HTTPException(status_code=404, detail="Checkpoint not found")
-        # Export the snapshot via the single shared helper. A post-nullout row
-        # whose blob is gone has no inline fallback → BlobUnavailable → 502 (the
-        # frontend DownloadMenu already surfaces a toast on non-200 export responses).
-        try:
-            content = await resolve_checkpoint_content(cp)
-        except BlobUnavailable:
-            logger.warning("Blob resolution failed for checkpoint %s export", checkpoint_id, exc_info=True)
-            raise HTTPException(status_code=502, detail=BLOB_UNAVAILABLE_DETAIL)
+        content = await _checkpoint_export_content(document_id, checkpoint_id)
+    elif is_artifact:
+        # Live session content over the row, the same rule as merge_live_content
+        # (the artifact frame's source), so the downloaded file is the page on screen.
+        content = (session.content if session else record.get("content")) or ""
     else:
         content = record.get("content") or ""
-
-        from collab.registry import get_active_session
-        session = get_active_session("doc", document_id)
         if session and session.clients:
             # Live branch: session.content holds raw `![label](table:id)` anchors; expand
             # them from the session's Doc. The DB branch above is already expanded (flush /
             # compact persist the GFM form), so it needs no expansion here.
             from table_serialize import expand_tables
             content = expand_tables(session.ydoc)
+
+    if is_artifact:
+        return _attachment_response(content.encode("utf-8"), "text/html; charset=utf-8", title, "html")
 
     # see SYSTEM: markdown content normalize — export entry point. Collapse irregular
     # post-marker spacing so EVERY exported document (esp. raw `md`, handed to the user
@@ -541,44 +573,29 @@ async def export_document(document_id: str, format: str = "pdf", checkpoint_id: 
     content = await _inline_transclusions(content, record["project_id"])
     content = await _inline_ref_images(content, record["project_id"])
 
-    title = record.get("title", "document")
-    ext = format
-
     if format == "md":
-        export_bytes = content.encode("utf-8")
-        media_type = "text/markdown; charset=utf-8"
-    else:
-        import http_clients
-        from docx_convert import WEB_CONVERTER_TIMEOUT
+        return _attachment_response(content.encode("utf-8"), "text/markdown; charset=utf-8", title, "md")
 
-        from config import CONVERTER_URL, EXPORT_CONVERTER_TIMEOUT_S
+    import http_clients
+    from docx_convert import WEB_CONVERTER_TIMEOUT
 
-        # The shared "docx" pool client (web timeout) with the export's own
-        # longer per-request budget — the pool must not pin the export latency.
-        client = http_clients.get_http_client("docx", timeout=WEB_CONVERTER_TIMEOUT)
-        resp = await client.post(
-            f"{CONVERTER_URL}/export",
-            data={"markdown": content, "format": format},
-            timeout=EXPORT_CONVERTER_TIMEOUT_S,
-        )
-        if resp.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"Export failed: {resp.text[:200]}")
-        export_bytes = resp.content
-        media_type = (
-            "application/pdf" if format == "pdf"
-            else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        )
+    from config import CONVERTER_URL, EXPORT_CONVERTER_TIMEOUT_S
 
-    ascii_fallback = f"document.{ext}"
-    encoded_name = quote(title.encode("utf-8"), safe="")
-    content_disposition = f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{encoded_name}.{ext}"
-
-    from starlette.responses import Response as StarletteResponse
-    return StarletteResponse(
-        content=export_bytes,
-        media_type=media_type,
-        headers={"Content-Disposition": content_disposition},
+    # The shared "docx" pool client (web timeout) with the export's own
+    # longer per-request budget — the pool must not pin the export latency.
+    client = http_clients.get_http_client("docx", timeout=WEB_CONVERTER_TIMEOUT)
+    resp = await client.post(
+        f"{CONVERTER_URL}/export",
+        data={"markdown": content, "format": format},
+        timeout=EXPORT_CONVERTER_TIMEOUT_S,
     )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Export failed: {resp.text[:200]}")
+    media_type = (
+        "application/pdf" if format == "pdf"
+        else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    return _attachment_response(resp.content, media_type, title, format)
 
 
 # --- Unique-path creation helpers ---------------------------------------------
@@ -623,7 +640,9 @@ async def generate_path_for_title(project_id: str, title: str) -> str:
     return path
 
 
-async def assert_parent_valid(parent_id: str | None, project_id: str) -> dict | None:
+async def assert_parent_valid(
+    parent_id: str | None, project_id: str, *, for_reference: bool = False,
+) -> dict | None:
     """Validate a create/move target parent in a SINGLE fetch.
 
     Enforces the full parent invariant set:
@@ -633,7 +652,8 @@ async def assert_parent_valid(parent_id: str | None, project_id: str) -> dict | 
       - 400 if the parent is an html artifact (leaf rule:
         only media_type='markdown' or NONE may have children — a page is a
         terminal node; the schema event documents_parent_check enforces the
-        same at the DB layer).
+        same at the DB layer). `for_reference=True` lifts this one: an
+        artifact may HOST references (a voice note recorded on the page).
 
     # INVARIANT(persisted): documents.parent_id never points at an is_reference=true row, never
     # crosses projects, and never dangles.  Why: a dangling or cross-project parent breaks the tree and a reference-as-parent inverts the derived/real relationship; the schema event (documents_parent_check) is the DB-level fence, and this guard surfaces its failure as a friendly HTTP error. The schema-level documents_parent_check
@@ -657,7 +677,7 @@ async def assert_parent_valid(parent_id: str | None, project_id: str) -> dict | 
         raise HTTPException(
             status_code=400, detail="Reference documents cannot be parents",
         )
-    if is_artifact_row(parent):
+    if is_artifact_row(parent) and not for_reference:
         raise HTTPException(
             status_code=400, detail="HTML artifacts cannot be parents",
         )

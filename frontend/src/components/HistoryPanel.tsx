@@ -26,6 +26,7 @@ import { getEntityHandle } from '../collab/active-handle-registry';
 import { serializeTables } from './editor/live-preview/table-block-model';
 import { useListCapacity } from './chat/useListCapacity';
 import { useSwipePager } from '../hooks/useSwipePager';
+import { isArtifactDoc, ARTIFACT_EXPORT_FORMATS } from '../utils/artifact';
 
 type TimelineEntry =
   | { kind: 'snapshot'; data: Checkpoint }
@@ -361,7 +362,7 @@ export function HistoryPanel() {
           <Plus size={13} />
           {t('saveSnapshot')}
         </Button>
-        <DownloadMenu documentId={currentDocId!} hasText theme={selectedId ? 'green' : 'default'} checkpointId={selectedId ?? undefined} subtree={!selectedId && hasChildren} />
+        <DownloadMenu documentId={currentDocId!} hasText theme={selectedId ? 'green' : 'default'} checkpointId={selectedId ?? undefined} subtree={!selectedId && hasChildren} exportFormats={isArtifactDoc(currentDocument) ? ARTIFACT_EXPORT_FORMATS : undefined} />
       </div>
 
       {/* Timeline (overflow-hidden: capacity fits exactly; swipe owns paging) */}

@@ -191,7 +191,7 @@ async def get_document_history(document_id: str, user: dict = Depends(get_curren
 
 @router.get("/api/documents/{document_id}/export")
 async def export_document_endpoint(document_id: str, format: str = "pdf", checkpoint_id: str | None = None, user: dict = Depends(get_current_user)):
-    """Export document content as PDF, DOCX or Markdown.
+    """Export document content as PDF, DOCX, Markdown, or an html page as html.
 
     Rendering (live/collab content resolution, transclusion inlining, converter)
     lives in documents.service.export_document; this route enforces read access

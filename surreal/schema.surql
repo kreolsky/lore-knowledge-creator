@@ -888,7 +888,9 @@ DEFINE FIELD IF NOT EXISTS outline_hidden ON documents TYPE option<int>;
 -- environment — prod still carries them. Check INFO FOR DB per environment before
 -- assuming; do not restate "were dropped" here.
 -- INVARIANT: documents.parent_id of any document points to a non-reference,
--- non-html-artifact document (or NONE). Enforced by route handlers AND by the
+-- non-html-artifact document (or NONE); a REFERENCE may be hosted by an html artifact.
+-- Why: a voice note / attachment recorded on an open artifact belongs to it, while the
+-- page itself stays a tree leaf (no child documents). Enforced by route handlers AND by the
 -- documents_parent_check event below (defense in depth — the event THROW does
 -- abort the CREATE/UPDATE in SurrealDB v3.0.2, verified empirically).
 
@@ -963,7 +965,7 @@ DEFINE EVENT OVERWRITE documents_parent_check ON documents
             IF $parent.is_reference = true {
                 THROW 'Reference documents cannot be parents';
             };
-            IF $parent.media_type = 'html' {
+            IF $parent.media_type = 'html' AND $after.is_reference != true {
                 THROW 'HTML artifacts cannot be parents';
             };
         };

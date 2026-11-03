@@ -400,6 +400,7 @@ def _check_reference_edges(
 
 async def _validate_destination(
     document_id: str, new_parent: str, project_id: str, scope_root: str | None,
+    is_reference: bool,
 ) -> None:
     """Cycle guard + parent validity + scope wall for a non-root destination."""
     # Cycle guard: the new parent must not be the doc itself or one of its
@@ -411,7 +412,7 @@ async def _validate_destination(
     # Reuse the single create/move parent invariant helper (404 missing/
     # cross-project, 400 reference parent). Also re-checks scope: a scoped key
     # may not move a doc to a parent outside its sandbox.
-    await assert_parent_valid(new_parent, project_id)
+    await assert_parent_valid(new_parent, project_id, for_reference=is_reference)
     await require_doc_in_scope(scope_root, new_parent)
 
 
@@ -541,7 +542,9 @@ async def _resolve_move_destination(
     final_is_reference = await _resolve_final_kind(target, document_id, node_type)
     _check_reference_edges(final_is_reference, new_parent, after_id)
     if new_parent is not None:
-        await _validate_destination(document_id, new_parent, project_id, scope_root)
+        await _validate_destination(
+            document_id, new_parent, project_id, scope_root, final_is_reference,
+        )
     return new_parent, final_is_reference
 
 

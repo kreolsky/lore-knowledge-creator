@@ -9402,7 +9402,7 @@
     },
     "/api/documents/{document_id}/export": {
       "get": {
-        "description": "Export document content as PDF, DOCX or Markdown.\n\nRendering (live/collab content resolution, transclusion inlining, converter)\nlives in documents.service.export_document; this route enforces read access\nthen delegates.",
+        "description": "Export document content as PDF, DOCX, Markdown, or an html page as html.\n\nRendering (live/collab content resolution, transclusion inlining, converter)\nlives in documents.service.export_document; this route enforces read access\nthen delegates.",
         "operationId": "export_document_endpoint_api_documents__document_id__export_get",
         "parameters": [
           {

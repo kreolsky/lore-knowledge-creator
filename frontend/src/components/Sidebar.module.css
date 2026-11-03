@@ -12,13 +12,15 @@
   z-index: 2;
 }
 
-/* Unpinned: the panel floats over the editor, right of the tab strip. */
+/* Unpinned: the panel floats over the editor, right of the tab strip.
+   WHY z-14: above the snapshot/reference viewer banners (z-13), which would otherwise
+   paint over the floating panel's top rows. */
 .sidebarFloating {
   position: absolute;
   top: 0;
   bottom: 0;
   left: 100%;
-  z-index: 12;
+  z-index: 14;
 }
 
 .sidebarDocs {

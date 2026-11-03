@@ -9,7 +9,7 @@ import { useAppStore } from '../store/app-store';
 import { useTranslation } from '../i18n';
 import { parseContentDispositionFilename } from '../utils/content-disposition';
 
-export type ExportFormat = 'pdf' | 'docx' | 'md';
+export type ExportFormat = 'pdf' | 'docx' | 'md' | 'html';
 
 /** Internal busy tag: a format from the ?format= export, or the subtree zip
  *  (a different endpoint — hence NOT in ExportFormat, which feeds ?format=). */
