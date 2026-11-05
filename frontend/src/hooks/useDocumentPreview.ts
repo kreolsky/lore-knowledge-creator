@@ -13,6 +13,9 @@ import { getPublicFileContext } from '../utils/reference-url';
 import { createResourceCache } from '../api/swr-cache';
 import { registerLogoutHandler } from '../store/logout-handlers';
 import { registerEditorHostReset } from '../components/editor/editor-host';
+import { useAppStore } from '../store/app-store';
+import { selectDocLockedBy } from '../utils/page-lock';
+import { t } from '../i18n';
 
 const previewCache = createResourceCache<string>(50);
 
@@ -74,11 +77,16 @@ export function fetchDocumentContent(docId: string): Promise<string> {
   });
 }
 
-export function useDocumentPreview(docId: string | null): {
+export function useDocumentPreview(requestedId: string | null): {
   content: string | undefined;
   error: boolean;
   loading: boolean;
 } {
+  // INVARIANT(security): a page behind its PIN (own or an ancestor's lock) neither fetches
+  // nor reads the cache for a preview; the popup says it is locked.
+  // Why: operator request — a hover must not hand out what the PIN screen protects.
+  const locked = useAppStore(s => !!requestedId && selectDocLockedBy(s, requestedId) !== null);
+  const docId = locked ? null : requestedId;
   // INVARIANT: both state fields carry the id they describe, and a result is read only when
   // its id still matches the requested docId. Why: state outlives a docId change by one
   // render (the effect runs after paint), so an id-less `content` painted document A's body
@@ -119,5 +127,6 @@ export function useDocumentPreview(docId: string | null): {
 
   // Derived, never inferred by the consumer: a cache hit fills `entry` in the useState
   // initializer, so `loading` is already false on the first paint (no spinner flash).
+  if (locked) return { content: t('pageLockedTitle'), error: false, loading: false };
   return { content, error, loading: docId != null && content === undefined && !error };
 }

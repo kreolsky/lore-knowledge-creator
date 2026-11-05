@@ -25,7 +25,7 @@ import { on, off } from '../../events';
 import { useTranslation } from '../../i18n';
 import { referenceFileUrl } from '../../utils/reference-url';
 import { FieldInput } from '../ui';
-import { selectedAtomicRange } from './live-preview/atomic-delete-guard';
+import { releaseSelectedImage, selectedAtomicRange } from './live-preview/atomic-delete-guard';
 import { applyImageSize, applyImageSuffix, imageEmbedParts, parseSizeFromAlt, SIZE_SUFFIX_RE } from './live-preview/widgets';
 
 const ICON_SIZE = 15;
@@ -57,9 +57,9 @@ function imageEmbedElement(view: EditorView, from: number): HTMLElement | null {
 
 /** Reads the selection → panel payload, or null when the selection is not exactly one image. */
 function readPanel(view: EditorView): ImagePanel | null {
-  // Images only (tableId === null): selectedAtomicRange also matches a whole-selected table.
+  // Images only: selectedAtomicRange also matches a whole-selected table.
   const range = selectedAtomicRange(view.state);
-  if (!range || range.tableId !== null) return null;
+  if (range?.kind !== 'image') return null;
   const parts = imageEmbedParts(view.state.doc.sliceString(range.from, range.to));
   if (!parts) return null;
   const { width, height } = parseSizeFromAlt(parts.alt);
@@ -169,16 +169,20 @@ export default function ImageToolbar() {
   // Click outside dismisses — except inside any editor: there the selection
   // feed decides (clicking ANOTHER image re-selects and re-shows; clicking text
   // collapses the selection and hides via the selectionEmpty path).
+  // WHY capture: an image and a table cell stop their press from reaching the document.
   useEffect(() => {
     if (!panel) return;
     const onDown = (e: MouseEvent) => {
       if (barRef.current?.contains(e.target as Node)) return;
+      // The size field owned focus, so the view's own blur has already passed.
+      const view = getEditorView();
+      if (view && barRef.current?.contains(document.activeElement)) releaseSelectedImage(view);
       if ((e.target as Element | null)?.closest?.('.cm-editor')) return;
       hide();
     };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [panel, hide]);
+    document.addEventListener('mousedown', onDown, true);
+    return () => document.removeEventListener('mousedown', onDown, true);
+  }, [panel, hide, getEditorView]);
 
   // Final position post-measure: inside the image's top-left corner, clamped
   // to the viewport.

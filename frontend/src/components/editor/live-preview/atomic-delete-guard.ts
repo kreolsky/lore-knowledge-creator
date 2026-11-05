@@ -2,7 +2,7 @@
  * Atomic blocks — images and table anchors as whole objects in the document editor.
  *
  * SYSTEM: atomic-delete-guard — transaction guard + whole-object selection
- * affordances for atomic embeds (ImageWidget ranges + tableBlockField anchors).
+ * affordances for atomic objects (`atomicObjectField`: image embeds and table anchors).
  *
  * PINNED USER RULE (verbatim): «мы не удаляем таблицу/картинку одним символом —
  * только выделив её целиком» — a table/image is never deleted by a single character,
@@ -14,6 +14,7 @@
  *  - `atomicDeleteGuard` — an `EditorState.transactionFilter` guarding BOTH:
  *     - DROPS a one-key delete (any `delete.*` user event) whose change overlaps
  *       or line-joins into a guarded range while the START selection is empty.
+ *       Removing an empty line beside a table joins nothing and passes.
  *     - REWRITES an input/paste/drop/complete transaction (every `input.*` user
  *       event except `input.type.compose`) that would glue text onto a table
  *       anchor LINE: the anchor line's text stays byte-identical, the inserted
@@ -30,21 +31,17 @@
  *    composed text exists (compose transactions are never rewritten, so the IME
  *    text must never start at the edge).
  *  - `atomicSelectedField` — a `cm-atomic-selected` mark decoration over every
- *    guarded range fully covered by a non-empty selection (reaches inline image
- *    widget DOM; a table's block widget is outlined by the plugin below).
- *  - `atomicImageSelectedPlugin` — toggles `.cm-image-embed--selected` on image embeds.
- *  - `atomicTableSelectedPlugin` — toggles `.cm-table-block-wrap--selected` on
- *    the table widget DOM whose anchor range the selection covers whole (a mark
- *    cannot reach a block widget's replaced line).
+ *    guarded range fully covered by a non-empty selection. It does not reach a
+ *    replaced widget; the frame is the plugin below.
+ *  - `atomicFramePlugin` — toggles the kind's selected class on the object's DOM.
  *  - `atomicKeymap` — keyboard contract of a whole-selected image or table:
  *    Enter opens a line after it (never deletes it), Esc collapses to its end.
+ *  - `atomicFocusRelease` — a view losing focus collapses its whole-selected image.
  */
-// see SYSTEM: live-preview — guarded ranges are read from livePreviewField
-// (ImageWidget) and tableBlockField (anchors) directly, NOT via the
-// EditorView.atomicRanges facet: the facet also carries checkboxes (whose delete
-// contract is the opposite — Backspace removes them whole) and its values are
-// `view => RangeSet` providers, awkward to read from a state-only transaction
-// filter.
+// see SYSTEM: live-preview — guarded ranges are read from atomicObjectField directly,
+// NOT via the EditorView.atomicRanges facet: the facet also carries checkboxes (whose
+// delete contract is the opposite — Backspace removes them whole) and its values are
+// `view => RangeSet` providers, awkward to read from a state-only transaction filter.
 
 import { syntaxTree } from '@codemirror/language';
 import { Decoration, DecorationSet, EditorView, ViewPlugin, keymap, type ViewUpdate } from '@codemirror/view';
@@ -58,15 +55,11 @@ import {
   type Text,
   type TransactionSpec,
 } from '@codemirror/state';
-import { livePreviewField, tableBlockField } from './fields';
-import { ImageWidget } from './widgets';
-// WHY direct import despite the module cycle (atomic-delete-guard →
-// table-block-widget → render-bundle → atomic-delete-guard): TableBlockWidget is
-// only instanceof-checked INSIDE function bodies, never at module-eval time, so
-// the cycle resolves the same way as the documented live-preview one.
-import { TableBlockWidget } from './table-block-widget';
+import { atomicObjectField } from './fields';
 
 // ─── Guarded ranges ───────────────────────────────────────────────────────────
+
+export type AtomicKind = 'image' | 'table';
 
 export interface GuardedRange {
   from: number;
@@ -78,11 +71,7 @@ export interface GuardedRange {
    * Inline image embeds keep single-character deletes around them legal.
    */
   lineBlock: boolean;
-  /**
-   * The `tables` id when this range is a table anchor (null for images) — the
-   * selection ViewPlugin maps it onto the widget's `data-table-id` DOM.
-   */
-  tableId: string | null;
+  kind: AtomicKind;
 }
 
 /**
@@ -93,36 +82,27 @@ export function widgetOf(dec: Decoration): unknown {
   return (dec as unknown as { spec: { widget?: unknown } }).spec.widget;
 }
 
+/** The atomic kind a decoration was built with (`spec.atomicKind`). */
+function kindOf(dec: Decoration): AtomicKind {
+  return (dec as unknown as { spec: { atomicKind: AtomicKind } }).spec.atomicKind;
+}
+
 /**
- * Guarded atomic ranges in `state`: ImageWidget replaces (livePreviewField) plus
- * table-block anchors (tableBlockField). Reads both fields with `false` so a state
- * without them (plain-text mode, unit harnesses) yields no guards instead of throwing.
+ * Guarded atomic ranges in `state`, from atomicObjectField. Read with `false` so a state
+ * without it (plain-text mode, unit harnesses) yields no guards instead of throwing.
  */
 export function guardedAtomicRanges(state: EditorState): GuardedRange[] {
   const out: GuardedRange[] = [];
-
-  const live = state.field(livePreviewField, false);
-  if (live) {
-    live.between(0, state.doc.length, (from, to, dec) => {
-      if (widgetOf(dec) instanceof ImageWidget) out.push({ from, to, lineBlock: false, tableId: null });
-    });
-  }
-
-  const blocks = state.field(tableBlockField, false);
-  if (blocks) {
-    blocks.decs.between(0, state.doc.length, (from, to, dec) => {
-      const widget = widgetOf(dec);
-      const tableId = widget instanceof TableBlockWidget ? widget.tableId : null;
-      out.push({ from, to, lineBlock: true, tableId });
-    });
-  }
-
+  state.field(atomicObjectField, false)?.between(0, state.doc.length, (from, to, dec) => {
+    const kind = kindOf(dec);
+    out.push({ from, to, kind, lineBlock: kind === 'table' });
+  });
   return out;
 }
 
 /**
  * The guarded range the main selection EXACTLY equals (a whole-selected image or
- * table), or null. Image-only callers filter `tableId === null`.
+ * table), or null. Image-only callers check `kind`.
  */
 export function selectedAtomicRange(state: EditorState): GuardedRange | null {
   const sel = state.selection.main;
@@ -130,7 +110,7 @@ export function selectedAtomicRange(state: EditorState): GuardedRange | null {
   return guardedAtomicRanges(state).find((g) => sel.from === g.from && sel.to === g.to) ?? null;
 }
 
-/** The guarded range containing `pos`, or null. Image-only callers filter `tableId === null`. */
+/** The guarded range containing `pos`, or null. Image-only callers check `kind`. */
 export function atomicRangeAt(state: EditorState, pos: number): GuardedRange | null {
   // WHY half-open: touching embeds share a boundary (`![a]…![b]…`) and posAtDOM yields
   // a widget's START — a closed range resolves the second image to the first.
@@ -152,6 +132,20 @@ function hitsGuard(doc: Text, from: number, to: number, g: GuardedRange): boolea
   if (from === g.to && to > from && g.to < doc.length && doc.sliceString(g.to, g.to + 1) === '\n') return true;
   if (to === g.from && from < to && g.from > 0 && doc.sliceString(g.from - 1, g.from) === '\n') return true;
   return false;
+}
+
+/**
+ * Is the deleted span only line breaks, with one side of it an empty line? Nothing
+ * joins then: every anchor stays alone on its line.
+ * INVARIANT: an empty line next to a table is deletable from the line itself and from
+ * the table's edge, and two tables can stand with no line between them.
+ * Why: the operator rejected a blank line that no key can remove.
+ */
+function removesEmptyLine(doc: Text, from: number, to: number): boolean {
+  if (!/^\n+$/.test(doc.sliceString(from, to))) return false;
+  const emptyBefore = from === 0 || doc.sliceString(from - 1, from) === '\n';
+  const emptyAfter = to === doc.length || doc.sliceString(to, to + 1) === '\n';
+  return emptyBefore || emptyAfter;
 }
 
 /**
@@ -198,7 +192,7 @@ function keptAnchorLineDeletes(
 /**
  * INVARIANT: a local input transaction never changes a table anchor LINE's text
  * unless its start selection covers the anchor whole (typing over a selected
- * table replaces it). Why: the anchor line is whole-line-replaced by the block
+ * table replaces it). Why: the anchor line is whole-line-replaced by the
  * widget, so text glued onto it is silently HIDDEN — characters vanish for the
  * user until plain-text mode.
  *
@@ -269,7 +263,8 @@ function rewriteAnchorLineInput(tr: Transaction, guards: GuardedRange[]): Transa
   const cs = ChangeSet.of(changes, doc.length);
   const caret = after
     ? cs.mapPos(insertAt, 1) // past the break + inserted text
-    : cs.mapPos(insertAt, -1) + insertText.length; // before the trailing break
+    // before the trailing break, whether it was added here or the input carried it
+    : cs.mapPos(insertAt, -1) + insertText.length - (insertText.endsWith('\n') ? 1 : 0);
   return {
     changes,
     selection: { anchor: caret },
@@ -302,7 +297,7 @@ export const atomicDeleteGuard = EditorState.transactionFilter.of((tr) => {
     const doc = tr.startState.doc;
     let drop = false;
     tr.changes.iterChanges((fromA, toA) => {
-      if (drop || fromA === toA) return;
+      if (drop || fromA === toA || removesEmptyLine(doc, fromA, toA)) return;
       for (const g of guards) {
         if (hitsGuard(doc, fromA, toA, g)) {
           drop = true;
@@ -349,6 +344,36 @@ export const atomicCompositionGuard = EditorView.domEventHandlers({
   },
 });
 
+// ─── Focus leaving a selected image ───────────────────────────────────────────
+
+/**
+ * Collapses `view`'s whole-selected image once focus has settled outside the view.
+ * WHY deferred: a blur fires mid-transfer, before focus has landed anywhere.
+ * WHY activeElement, not view.hasFocus: hasFocus is also false after switching to another
+ * window, and that leaves activeElement on the content DOM — coming back keeps the selection.
+ * The image toolbar works on the selected image and a modal hands focus back on close
+ * (the preview lightbox), so focus inside either keeps the selection.
+ */
+export function releaseSelectedImage(view: EditorView): void {
+  setTimeout(() => {
+    if (!view.dom.isConnected) return;
+    const active = (view.root as Document | ShadowRoot).activeElement;
+    if (active === view.contentDOM || active?.closest('.selection-toolbar, [role="dialog"]')) return;
+    const g = selectedAtomicRange(view.state);
+    // INVARIANT: любой клик вне картинки, даже если она в таблице, снимает выделение с картинки.
+    // Why: every table cell is its own view with its own selection, so a click in another
+    // cell leaves the image selected and the next press on it opens the preview at once.
+    if (g?.kind === 'image') view.dispatch({ selection: { anchor: g.to } });
+  }, 0);
+}
+
+export const atomicFocusRelease = EditorView.domEventHandlers({
+  blur(_event, view) {
+    releaseSelectedImage(view);
+    return false;
+  },
+});
+
 // ─── Selected-block highlight ─────────────────────────────────────────────────
 
 function buildAtomicSelected(state: EditorState): DecorationSet {
@@ -365,8 +390,7 @@ function buildAtomicSelected(state: EditorState): DecorationSet {
 
 /**
  * `cm-atomic-selected` mark over each guarded range fully covered by the
- * selection. The mark does not reach a replaced widget: images are framed by
- * atomicImageSelectedPlugin, block-replaced tables by atomicTableSelectedPlugin.
+ * selection. The mark does not reach a replaced widget: atomicFramePlugin frames it.
  */
 export const atomicSelectedField = StateField.define<DecorationSet>({
   create(state) { return buildAtomicSelected(state); },
@@ -380,25 +404,20 @@ export const atomicSelectedField = StateField.define<DecorationSet>({
   provide: (f) => EditorView.decorations.from(f),
 });
 
-// ─── Whole-table selection outline + Esc ──────────────────────────────────────
+// ─── Whole-object frame + Esc ─────────────────────────────────────────────────
+
+const FRAME_CLASS = { image: 'cm-image-embed--selected', table: 'cm-table-block-wrap--selected' };
+const OBJECT_SELECTOR: Record<string, AtomicKind> = { '.cm-image-embed': 'image', '.cm-table-block-wrap': 'table' };
 
 /**
- * Toggles `.cm-table-block-wrap--selected` on the table widget DOM whose anchor
- * range the selection covers whole. WHY a ViewPlugin toggling by `data-table-id`
- * and not a widget spec flag: a selected flag in the spec would force a new
- * widget instance per select, and on DOM reuse CM6 never calls `destroy()` on
- * the old stateful instance (Yjs observers, cell views would leak). The class is
- * re-derived from state on every selection/doc/viewport change, so an
- * evicted-and-remounted widget regains its outline.
+ * Toggles the kind's selected class on each object fully covered by the selection: the
+ * frame, the visible handles and the zoom-in cursor key on it.
+ * WHY a ViewPlugin and not a widget spec flag: a selected flag in the spec would force a
+ * new widget instance per select, and on DOM reuse CM6 never calls `destroy()` on the old
+ * stateful instance (Yjs observers, cell views would leak). Re-derived on any transaction
+ * and viewport change, so a widget rebuilt or evicted-and-remounted regains its frame.
  */
-/**
- * Toggles `.cm-image-embed--selected` on each image widget fully covered by the
- * selection: the frame, the visible handles and the zoom-in cursor key on it.
- * WHY the widget's own DOM, not the mark: the frame must not depend on the mark
- * reaching the replaced widget. Re-derived on any transaction, so a widget rebuilt
- * by a decoration pass regains its frame.
- */
-export const atomicImageSelectedPlugin = ViewPlugin.fromClass(
+export const atomicFramePlugin = ViewPlugin.fromClass(
   class {
     private hadSelected = false;
 
@@ -413,52 +432,21 @@ export const atomicImageSelectedPlugin = ViewPlugin.fromClass(
       const selected = new Set<number>();
       if (!sel.empty) {
         for (const g of guardedAtomicRanges(view.state)) {
-          if (g.tableId === null && sel.from <= g.from && sel.to >= g.to) selected.add(g.from);
+          if (sel.from <= g.from && sel.to >= g.to) selected.add(g.from);
         }
       }
       // Nothing selected now or before → skip the DOM scan: runs on every keystroke.
       if (!selected.size && !this.hadSelected) return;
       this.hadSelected = selected.size > 0;
-      view.contentDOM.querySelectorAll<HTMLElement>('.cm-image-embed').forEach((el) => {
-        // A nested transclusion view owns its images.
-        if (el.closest('.cm-editor') !== view.dom) return;
-        let pos = -1;
-        try { pos = view.posAtDOM(el); } catch { /* detached */ }
-        el.classList.toggle('cm-image-embed--selected', selected.has(pos));
-      });
-    }
-  },
-);
-
-export const atomicTableSelectedPlugin = ViewPlugin.fromClass(
-  class {
-    private prevSelected = new Set<string>();
-
-    constructor(view: EditorView) { this.sync(view); }
-
-    update(u: ViewUpdate) {
-      if (u.selectionSet || u.docChanged || u.viewportChanged
-          || syntaxTree(u.state) !== syntaxTree(u.startState)) {
-        this.sync(u.view);
+      for (const [selector, kind] of Object.entries(OBJECT_SELECTOR)) {
+        view.contentDOM.querySelectorAll<HTMLElement>(selector).forEach((el) => {
+          // A nested view owns its objects.
+          if (el.closest('.cm-editor') !== view.dom) return;
+          let pos = -1;
+          try { pos = view.posAtDOM(el); } catch { /* detached */ }
+          el.classList.toggle(FRAME_CLASS[kind], selected.has(pos));
+        });
       }
-    }
-
-    private sync(view: EditorView) {
-      const sel = view.state.selection.main;
-      const selected = new Set<string>();
-      for (const g of guardedAtomicRanges(view.state)) {
-        if (g.tableId && sel.from <= g.from && sel.to >= g.to) selected.add(g.tableId);
-      }
-      // No tables and nothing previously outlined → skip the DOM scan entirely:
-      // this runs on every keystroke in every document editor.
-      if (!selected.size && !this.prevSelected.size) return;
-      this.prevSelected = selected;
-      view.dom.querySelectorAll('[data-table-id]').forEach((el) => {
-        el.classList.toggle(
-          'cm-table-block-wrap--selected',
-          selected.has(el.getAttribute('data-table-id') ?? ''),
-        );
-      });
     }
   },
 );

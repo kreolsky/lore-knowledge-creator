@@ -185,17 +185,12 @@ export interface Document {
   // with system_role === 'system_prompt') by parent_id — not by role tag.
   is_system?: boolean;
   system_role?: string | null;
-  // True ⇒ chats rooted in this document's subtree are hidden from chat recall
-  // called outside the subtree (decided at READ time server-side, so a move
-  // across the boundary just changes what sees it). Absent = false. Drives the
-  // doc-tree privacy mark + the Access-tab checkbox.
+  // True ⇒ chats rooted in this document's subtree are hidden outside it: from
+  // chat recall (decided server-side) and from the chat list (decided client-side
+  // in useSortedSessions/SearchPanel), both at READ time, so a move across the
+  // boundary just changes what sees it. Absent = false. Drives the doc-tree
+  // EyeOff mark + the Access-tab checkbox.
   chats_unindexed?: boolean;
-  // True ⇒ chats hosted in this document's subtree are not LISTED while the
-  // open document is outside the subtree (decided at READ time CLIENT-side in
-  // useSortedSessions/SearchPanel, from this same tree row). Independent of
-  // chats_unindexed: each flag governs one surface (list vs content search).
-  // Absent = false. Drives the doc-tree EyeOff mark + the Access-tab checkbox.
-  chats_unlisted?: boolean;
   // Caller's own non-internal key capabilities on this doc (server-derived,
   // plan "glimmering-knitting-pebble"). Omitted when no key exists. Drives the
   // doc-tree key indicator and ParentPickerPopup's reparent warning.
@@ -528,11 +523,11 @@ export interface ChatSession {
   // the reference's OWN title (backend serializer). Why: the chat's identity is
   // the entity it was created on (a recurring user rule).
   reference_title?: string | null;
-  // ARCH (plan chats-unlisted-subtree): the DOCUMENT whose subtree hosts the
+  // ARCH: the DOCUMENT whose subtree hosts the
   // chat — the reference's parent for a reference chat, document_id itself
   // for a doc chat, null for a doc-less chat. Server-authored from the ref
   // map; the client cannot derive it (references load per open document
-  // only). Read by the chats_unlisted list projection.
+  // only). Read by the chats_unindexed list projection.
   host_document_id?: string | null;
   user_id: string;
   title: string;

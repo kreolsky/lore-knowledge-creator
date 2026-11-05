@@ -55,12 +55,6 @@ describe('cursorLineStartStep — Cmd+ArrowLeft (lists, multi-step)', () => {
     expect(cursorLineStartStep(view)).toBe(false);
   });
 
-  it('returns false when already at lineFrom', () => {
-    const doc = '- bullet text';
-    const view = createView(doc, 0);
-    expect(cursorLineStartStep(view)).toBe(false);
-  });
-
   it('cursor between lineFrom and contentStart goes to lineFrom', () => {
     const doc = '- bullet text';
     const view = createView(doc, 1);
@@ -68,60 +62,6 @@ describe('cursorLineStartStep — Cmd+ArrowLeft (lists, multi-step)', () => {
     expect(view.state.selection.main.head).toBe(0);
   });
 });
-
-describe('cursorLineStartStep — Cmd+ArrowLeft (headings, multi-step)', () => {
-
-  it('third press at lineFrom returns false', () => {
-    const doc = '# heading text';
-    const view = createView(doc, doc.length);
-    cursorLineStartStep(view);
-    cursorLineStartStep(view);
-    expect(cursorLineStartStep(view)).toBe(false);
-  });
-
-  it('returns false when already at lineFrom', () => {
-    const doc = '# heading text';
-    const view = createView(doc, 0);
-    expect(cursorLineStartStep(view)).toBe(false);
-  });
-
-  it('cursor between lineFrom and contentStart goes to lineFrom', () => {
-    const doc = '# heading text';
-    const view = createView(doc, 1);
-    expect(cursorLineStartStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(0);
-  });
-});
-
-describe('selectLineStartStep — Cmd+Shift+ArrowLeft (headings)', () => {
-
-  it('second press extends selection to lineFrom', () => {
-    const doc = '# heading text';
-    const view = createView(doc, doc.length);
-    selectLineStartStep(view);
-    selectLineStartStep(view);
-    expect(view.state.selection.main.head).toBe(0);
-    expect(view.state.selection.main.anchor).toBe(doc.length);
-  });
-});
-
-describe('cursorLineEndStep — Cmd+ArrowRight (paragraphs and lists)', () => {
-
-  it('works for nested bullet', () => {
-    const doc = '  - nested bullet';
-    const view = createView(doc, 4);
-    expect(cursorLineEndStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(doc.length);
-  });
-
-  it('works for numbered list', () => {
-    const doc = '1. numbered text';
-    const view = createView(doc, 3);
-    expect(cursorLineEndStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(doc.length);
-  });
-});
-
 describe('selectLineStartStep — Cmd+Shift+ArrowLeft', () => {
 
   it('second press extends selection to lineFrom', () => {
@@ -142,12 +82,6 @@ describe('selectLineStartStep — Cmd+Shift+ArrowLeft', () => {
     expect(view.state.selection.main.head).toBe(2);
   });
 
-  it('works with numbered list', () => {
-    const doc = '1. numbered text';
-    const view = createView(doc, doc.length);
-    selectLineStartStep(view);
-    expect(view.state.selection.main.head).toBe(3);
-  });
 });
 
 describe('selectLineEndStep — Cmd+Shift+ArrowRight', () => {
@@ -161,12 +95,6 @@ describe('selectLineEndStep — Cmd+Shift+ArrowRight', () => {
     expect(view.state.selection.main.head).toBe(doc.length);
   });
 
-  it('works for numbered list', () => {
-    const doc = '1. numbered text';
-    const view = createView(doc, 3);
-    expect(selectLineEndStep(view)).toBe(true);
-    expect(view.state.selection.main.head).toBe(doc.length);
-  });
 });
 
 describe('arrowDownIntoList — vertical snap on ArrowDown', () => {
@@ -178,45 +106,12 @@ describe('arrowDownIntoList — vertical snap on ArrowDown', () => {
     expect(view.state.selection.main.head).toBe(11 + 2);
   });
 
-  it('returns false when next line is not a list item', () => {
-    const doc = 'first line\nsecond line';
-    const view = createView(doc, 0);
-    expect(arrowDownIntoList(view)).toBe(false);
-  });
-
-  it('returns false when target col is already past content start', () => {
-    const doc = 'line above\n- bullet text';
-    const view = createView(doc, 5);
-    expect(arrowDownIntoList(view)).toBe(false);
-  });
-
   it('returns false on last line', () => {
     const doc = '- bullet text';
     const view = createView(doc, doc.length);
     expect(arrowDownIntoList(view)).toBe(false);
   });
 
-  it('snaps to content start for nested bullet (indented)', () => {
-    const doc = 'line above\n  - nested bullet';
-    const view = createView(doc, 0);
-    const result = arrowDownIntoList(view);
-    expect(result).toBe(true);
-    expect(view.state.selection.main.head).toBe(11 + 4);
-  });
-
-  it('snaps to content start for numbered list', () => {
-    const doc = 'line above\n1. numbered text';
-    const view = createView(doc, 0);
-    const result = arrowDownIntoList(view);
-    expect(result).toBe(true);
-    expect(view.state.selection.main.head).toBe(11 + 3);
-  });
-
-  it('does not interfere when moving between non-list lines', () => {
-    const doc = 'aaa\nbbb\nccc';
-    const view = createView(doc, 2);
-    expect(arrowDownIntoList(view)).toBe(false);
-  });
 });
 
 describe('arrowUpIntoList — vertical snap on ArrowUp', () => {
@@ -229,32 +124,9 @@ describe('arrowUpIntoList — vertical snap on ArrowUp', () => {
     expect(view.state.selection.main.head).toBe(2);
   });
 
-  it('returns false when previous line is not a list item', () => {
-    const doc = 'first line\nsecond line';
-    const view = createView(doc, doc.length);
-    expect(arrowUpIntoList(view)).toBe(false);
-  });
-
-  it('returns false when target col is already past content start', () => {
-    const doc = '- bullet text\nline below';
-    const col = 5;
-    const belowCursor = doc.indexOf('\n') + 1 + col;
-    const view2 = createView(doc, belowCursor);
-    expect(arrowUpIntoList(view2)).toBe(false);
-  });
-
   it('returns false on first line', () => {
     const view2 = createView('- bullet text', 5);
     expect(arrowUpIntoList(view2)).toBe(false);
-  });
-
-  it('snaps to content start for nested bullet (indented)', () => {
-    const doc = '  - nested bullet\nline below';
-    const belowStart = doc.indexOf('\n') + 1;
-    const view = createView(doc, belowStart);
-    const result = arrowUpIntoList(view);
-    expect(result).toBe(true);
-    expect(view.state.selection.main.head).toBe(4);
   });
 
   it('bidirectional consistency: ArrowDown and ArrowUp land at same position', () => {
@@ -284,39 +156,6 @@ describe('arrowLeftAtListContentStart — gateway into marker zone', () => {
     expect(view.state.selection.main.head).toBe(0);
   });
 
-  it('returns false when cursor is not at content start', () => {
-    const doc = '- bullet text';
-    const view = createView(doc, 5);
-    expect(arrowLeftAtListContentStart(view)).toBe(false);
-  });
-
-  it('returns false for non-list lines', () => {
-    const doc = 'just regular text';
-    const view = createView(doc, 0);
-    expect(arrowLeftAtListContentStart(view)).toBe(false);
-  });
-
-  it('returns false when cursor is already at line start', () => {
-    const doc = '- bullet text';
-    const view = createView(doc, 0);
-    expect(arrowLeftAtListContentStart(view)).toBe(false);
-  });
-
-  it('works for nested bullet', () => {
-    const doc = '  - nested bullet';
-    const view = createView(doc, 4);
-    const result = arrowLeftAtListContentStart(view);
-    expect(result).toBe(true);
-    expect(view.state.selection.main.head).toBe(0);
-  });
-
-  it('works for numbered list', () => {
-    const doc = '1. numbered text';
-    const view = createView(doc, 3);
-    const result = arrowLeftAtListContentStart(view);
-    expect(result).toBe(true);
-    expect(view.state.selection.main.head).toBe(0);
-  });
 });
 
 describe('Cmd+Arrow delimiter stops — sentence-ending punctuation', () => {

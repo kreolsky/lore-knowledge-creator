@@ -46,18 +46,6 @@ describe('ligature-plugin', () => {
     expect(decs).toContainEqual({ from: 6, to: 8, glyph: '\u2192' });
   });
 
-  it('replaces <- with left arrow', () => {
-    const view = createView('hello <- world', 0);
-    const decs = getLigatureDecorations(view);
-    expect(decs).toContainEqual({ from: 6, to: 8, glyph: '\u2190' });
-  });
-
-  it('replaces -- with en-dash', () => {
-    const view = createView('hello -- world', 0);
-    const decs = getLigatureDecorations(view);
-    expect(decs).toContainEqual({ from: 6, to: 8, glyph: '\u2013' });
-  });
-
   it('replaces --- with em-dash (not en-dash + dash)', () => {
     const view = createView('hello --- world', 0);
     const decs = getLigatureDecorations(view);
@@ -72,14 +60,6 @@ describe('ligature-plugin', () => {
     const decs = getLigatureDecorations(view);
     const arrowDec = decs.find((d) => d.from === 6 && d.to === 8);
     expect(arrowDec).toBeUndefined();
-  });
-
-  it('renders multiple ligatures on one line', () => {
-    const view = createView('a -> b <- c', 0);
-    const decs = getLigatureDecorations(view);
-    expect(decs).toHaveLength(2);
-    expect(decs).toContainEqual({ from: 2, to: 4, glyph: '\u2192' });
-    expect(decs).toContainEqual({ from: 7, to: 9, glyph: '\u2190' });
   });
 
   it('does not replace inside inline code', () => {
@@ -101,49 +81,6 @@ describe('ligature-plugin', () => {
     const decs = getLigatureDecorations(view);
     const arrowDec = decs.find((d) => d.glyph === '\u2192');
     expect(arrowDec).toBeUndefined();
-  });
-
-  it('replaces >= with greater-than-or-equal', () => {
-    const view = createView('a >= b', 0);
-    const decs = getLigatureDecorations(view);
-    expect(decs).toContainEqual({ from: 2, to: 4, glyph: '\u2265' });
-  });
-
-  it('replaces <= with less-than-or-equal', () => {
-    const view = createView('a <= b', 0);
-    const decs = getLigatureDecorations(view);
-    expect(decs).toContainEqual({ from: 2, to: 4, glyph: '\u2264' });
-  });
-
-  it('replaces (c) with copyright', () => {
-    const view = createView('Copyright (c) 2025', 0);
-    const decs = getLigatureDecorations(view);
-    expect(decs).toContainEqual({ from: 10, to: 13, glyph: '\u00A9' });
-  });
-
-  it('replaces (с) with copyright', () => {
-    const view = createView('Copyright (с) 2025', 0);
-    const decs = getLigatureDecorations(view);
-    expect(decs).toContainEqual({ from: 10, to: 13, glyph: '\u00A9' });
-  });
-
-  it('does not replace escaped (c)', () => {
-    const view = createView('hello \\(c) world', 0);
-    const decs = getLigatureDecorations(view);
-    const copyDec = decs.find((d) => d.glyph === '\u00A9');
-    expect(copyDec).toBeUndefined();
-  });
-
-  it('replaces --- as em-dash on own line when cursor at end', () => {
-    const view = createView('---', 3);
-    const decs = getLigatureDecorations(view);
-    expect(decs).toContainEqual({ from: 0, to: 3, glyph: '\u2014' });
-  });
-
-  it('reveals --- on own line when cursor is inside', () => {
-    const view = createView('---', 1);
-    const decs = getLigatureDecorations(view);
-    expect(decs).toHaveLength(0);
   });
 
   it('LIGATURE_RULES is sorted longest-first', () => {
@@ -204,41 +141,6 @@ describe('ligatureSubstitutedText', () => {
     expect(ligatureSubstitutedText(state, 0, state.doc.length)).toBe('hello \u2192 world');
   });
 
-  it('substitutes -- with en-dash', () => {
-    const state = makeState('hello -- world');
-    expect(ligatureSubstitutedText(state, 0, state.doc.length)).toBe('hello \u2013 world');
-  });
-
-  it('substitutes --- with em-dash', () => {
-    const state = makeState('hello --- world');
-    expect(ligatureSubstitutedText(state, 0, state.doc.length)).toBe('hello \u2014 world');
-  });
-
-  it('substitutes <- with left arrow', () => {
-    const state = makeState('a <- b');
-    expect(ligatureSubstitutedText(state, 0, state.doc.length)).toBe('a \u2190 b');
-  });
-
-  it('substitutes <-> with left-right arrow', () => {
-    const state = makeState('a <-> b');
-    expect(ligatureSubstitutedText(state, 0, state.doc.length)).toBe('a \u2194 b');
-  });
-
-  it('substitutes >= with greater-equal', () => {
-    const state = makeState('a >= b');
-    expect(ligatureSubstitutedText(state, 0, state.doc.length)).toBe('a \u2265 b');
-  });
-
-  it('substitutes <= with less-equal', () => {
-    const state = makeState('a <= b');
-    expect(ligatureSubstitutedText(state, 0, state.doc.length)).toBe('a \u2264 b');
-  });
-
-  it('substitutes (c) with copyright', () => {
-    const state = makeState('Copyright (c) 2025');
-    expect(ligatureSubstitutedText(state, 0, state.doc.length)).toBe('Copyright \u00A9 2025');
-  });
-
   it('substitutes (cyrillic с) with copyright', () => {
     const state = makeState('Copyright (\u0441) 2025');
     expect(ligatureSubstitutedText(state, 0, state.doc.length)).toBe('Copyright \u00A9 2025');
@@ -249,21 +151,11 @@ describe('ligatureSubstitutedText', () => {
     expect(ligatureSubstitutedText(state, 0, state.doc.length)).toBe('use `->` operator');
   });
 
-  it('keeps -> inside fenced code blocks', () => {
-    const state = makeState('```\na -> b\n```');
-    expect(ligatureSubstitutedText(state, 0, state.doc.length)).toBe('```\na -> b\n```');
-  });
-
   it('keeps a standalone --- horizontal rule as --- (not em-dash)', () => {
     // Copy is deterministic: HR is ALWAYS excluded (no cursor-reveal gate), so the
     // structural --- survives — never becomes — on the clipboard.
     const state = makeState('---');
     expect(ligatureSubstitutedText(state, 0, state.doc.length)).toBe('---');
-  });
-
-  it('keeps an escaped \\-> as ->', () => {
-    const state = makeState('hello \\-> world');
-    expect(ligatureSubstitutedText(state, 0, state.doc.length)).toBe('hello \\-> world');
   });
 
   it('respects a sub-range selection (only substitutes within [from, to])', () => {

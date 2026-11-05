@@ -80,9 +80,7 @@ async def _run_exec(monkeypatch, rows_200, *, under, scope_root=None,
     with patch("retrieval.retrieve_context",
                new=AsyncMock(return_value=RetrievalResult(hits=[]))), \
          patch("agent.search_exec.get_db",
-               return_value=_fake_db(rows_200, captured)), \
-         patch("agent.search_exec.get_document_access",
-               new=AsyncMock(return_value=True)), \
+                return_value=_fake_db(rows_200, captured)), \
          patch("scope.subtree_doc_ids", new=_subtree_stub), \
          patch("scope.in_subtree", new=_in_subtree_stub):
         result = await _search_materials_exec(

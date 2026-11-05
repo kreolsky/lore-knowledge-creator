@@ -253,10 +253,22 @@ export function useEditorFileDrop({
     }
   }, [t]);
 
+  // A pasted image is a drop at the caret: same guard, same upload, same embed.
+  const handleEditorImagePaste = useCallback((images: File[], view: EditorView, pos: number) => {
+    const { isReadonly: ro, editable: ed } = getDropGuard();
+    if (ro || !ed) return;
+    void handleImageDropRef.current(images, view, pos); // fire-and-forget; toasts handle errors
+  }, [getDropGuard]);
+  const handleEditorImagePasteRef = useRef(handleEditorImagePaste);
+  handleEditorImagePasteRef.current = handleEditorImagePaste;
+
   // Bound to a ref-read wrapper so the extension can live in the once-created
   // cmExtensions array while always invoking the latest handler.
   const fileDropExtension = useMemo(
-    () => makeFileDropExtension((files, coords) => handleEditorFileDropRef.current(files, coords)),
+    () => makeFileDropExtension(
+      (files, coords) => handleEditorFileDropRef.current(files, coords),
+      (images, view, pos) => handleEditorImagePasteRef.current(images, view, pos),
+    ),
     [],
   );
 

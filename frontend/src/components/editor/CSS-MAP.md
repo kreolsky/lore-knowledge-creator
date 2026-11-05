@@ -52,7 +52,7 @@ need ancestor selectors (`.editor-cm`, `.editor-content`) that exist outside CM6
 
 | Selector | Why in index.css |
 |----------|------------------|
-| `.cm-atomic-selected` | Selection-state mark over atomic blocks (image embeds, table anchors) |
+| `.cm-atomic-selected` | Mark over a whole-selected object; it does not reach the replaced widget |
 
 **Source:** `live-preview/atomic-delete-guard.ts` → `atomicSelectedField`
 
@@ -70,10 +70,11 @@ need ancestor selectors (`.editor-cm`, `.editor-content`) that exist outside CM6
 
 | Selector | Why in index.css |
 |----------|------------------|
-| `.cm-table-block-wrap--selected` | Selection-state outline drawn on the table inside the wrap (ViewPlugin in `atomic-delete-guard.ts` toggles it — a mark decoration cannot reach a block widget's replaced line) |
-| `.cm-table-block-scroll` | Scroller around the table; `overflow-y: hidden` must be explicit (computed auto breaks block-widget height measurement) |
-| `.cm-table-block` | `table-layout: auto; width: 100%` — content-driven widths; `<col>` px is a hint for fixed columns |
-| `.cm-table-block-col-resize` (+ `::after`) | Invisible resize hit zone (9px) with a 4px accent bar (panel resizer thickness) over the border on hover; `:hover` chain — same rationale as `.cm-image-resize-handle` |
+| `.cm-table-block-box` | Table-sized box inside the wrap; inline width from `applyColumnWidths`, holds the scroller and the frame |
+| `.cm-table-block-frame` | Same frame as the image's, 3px radius included: the accent line shows only on `--selected` (ViewPlugin in `atomic-delete-guard.ts`); hover and `:focus-within` show the controls only; holds the top-right scale control, which reuses `.cm-image-resize-handle` |
+| `.cm-table-block-scroll` | Scroller around the table; `overflow-y: hidden` must be explicit (computed auto breaks widget height measurement) |
+| `.cm-table-block` | `table-layout: fixed; width: 100%` while any column is auto; an all-px table gets its sum as inline width |
+| `.cm-table-block-col-resize` | Square column control on the header cell's right border, reuses `.cm-image-resize-handle`; shown on hover, `:focus-within` and `--selected` |
 
 **Source:** `live-preview/table-block-widget.ts` → `TableBlockWidget.toDOM()`
 

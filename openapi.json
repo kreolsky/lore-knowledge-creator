@@ -1520,17 +1520,6 @@
             ],
             "title": "Chats Unindexed"
           },
-          "chats_unlisted": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Chats Unlisted"
-          },
           "content": {
             "anyOf": [
               {

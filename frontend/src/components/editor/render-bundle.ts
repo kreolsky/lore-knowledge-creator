@@ -42,13 +42,14 @@ import {
   listLinePlugin,
   cursorLinePlugin,
   tableRenderField,
-  tableBlockField,
+  atomicObjectField,
+  atomicTables,
   mathBlockRenderField,
   mermaidBlockRenderField,
   transclusionDepth,
   revealAtCursor,
 } from './live-preview';
-import { atomicDeleteGuard, atomicSelectedField, atomicImageSelectedPlugin, atomicTableSelectedPlugin, atomicCompositionGuard, atomicKeymap } from './live-preview/atomic-delete-guard';
+import { atomicDeleteGuard, atomicSelectedField, atomicFramePlugin, atomicCompositionGuard, atomicKeymap, atomicFocusRelease } from './live-preview/atomic-delete-guard';
 import { dropCaret } from './drop-caret';
 
 /**
@@ -70,7 +71,8 @@ export function liveFields({ tableBlock }: { tableBlock: boolean }): Extension {
     listLinePlugin,
     cursorLinePlugin,
     tableRenderField,
-    ...(tableBlock ? [tableBlockField, cellLinkContextRelay] : []),
+    atomicObjectField,
+    ...(tableBlock ? [atomicTables.of(true), cellLinkContextRelay] : []),
     mathBlockRenderField,
     mermaidBlockRenderField,
     headingHighlight,
@@ -81,12 +83,13 @@ export function liveFields({ tableBlock }: { tableBlock: boolean }): Extension {
 }
 
 /** The atomic-block group (input/delete guard, selected highlight, whole-table
- * selection affordances, composition pre-empt, Enter/Esc on a selected object) — ONE
+ * selection affordances, composition pre-empt, Enter/Esc on a selected object, image
+ * release on focus loss) — ONE
  * mount for every EDITABLE surface: the document and a table cell. The table parts
- * read tableBlockField with `false`, so in a cell (no table objects) they are inert.
+ * key on the range kind, so in a cell (no table objects) they are inert.
  * Read-only nested views never edit and do not mount it. */
 function atomicBlocks(): Extension {
-  return [atomicDeleteGuard, atomicSelectedField, atomicImageSelectedPlugin, atomicTableSelectedPlugin, atomicCompositionGuard, atomicKeymap];
+  return [atomicDeleteGuard, atomicSelectedField, atomicFramePlugin, atomicCompositionGuard, atomicKeymap, atomicFocusRelease];
 }
 
 /** Document-editor alias: the full visual group (with table block objects), toggled by Mod-/.

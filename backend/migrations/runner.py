@@ -41,6 +41,7 @@ from migrations.migrate_chat_branches_to_sessions import (
     _migrate_chat_branches_to_sessions,
 )
 from migrations.migrate_chat_lifecycle_drop import _migrate_chat_lifecycle_drop
+from migrations.migrate_chats_hide_fold import _migrate_chats_hide_fold
 from migrations.migrate_comfy_config_docs_drop import _migrate_comfy_config_docs_drop
 from migrations.migrate_document_access_drop import _migrate_document_access_drop
 from migrations.migrate_index_children_to_root import (
@@ -110,6 +111,8 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     # No dependency.
     ("web_search_off_drop", _migrate_web_search_off_drop),
     ("turn_timeout_override_fold", _migrate_turn_timeout_override_fold),
+    # The list hide folds into the one chat hide. No dependency.
+    ("chats_hide_fold", _migrate_chats_hide_fold),
     # Legacy chat trees → branch sessions: every
     # AI chat self-threads; non-active leaf lineages are carved into their own
     # sessions stamped for the lazy /session-fork seed. Reads and writes Lore

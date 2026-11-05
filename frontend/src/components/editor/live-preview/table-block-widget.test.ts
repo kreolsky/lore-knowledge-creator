@@ -6,7 +6,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import * as Y from 'yjs';
 import type { EditorView } from '@codemirror/view';
-import { EditorState } from '@codemirror/state';
+import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView as EV } from '@codemirror/view';
 import { createTable, tableAnchor } from './table-block-model';
 import { editorExperience, renderExtensions } from '../render-bundle';
@@ -22,7 +22,9 @@ vi.mock('mermaid', () => ({
 
 const mounted: { view: EditorView; parent: HTMLElement }[] = [];
 
-function mountTable(opts?: { readOnly?: boolean }): { view: EditorView; parent: HTMLElement; doc: Y.Doc; id: string } {
+const editableSlot = new Compartment();
+
+function mountTable(opts?: { readOnly?: boolean; commentator?: boolean }): { view: EditorView; parent: HTMLElement; doc: Y.Doc; id: string } {
   const ydoc = new Y.Doc();
   const id = createTable(ydoc, [['a', 'b'], ['c', 'd']]);
   const parent = document.createElement('div');
@@ -38,6 +40,7 @@ function mountTable(opts?: { readOnly?: boolean }): { view: EditorView; parent: 
         ...(opts?.readOnly
           ? [EditorState.readOnly.of(true), EV.editable.of(false)]
           : []),
+        editableSlot.of(EV.editable.of(!opts?.commentator)),
       ],
     }),
   });
@@ -62,5 +65,32 @@ describe('TableBlockWidget — selection outline + read-only hosts', () => {
     const line = view.state.doc.lineAt(at);
     view.dispatch({ selection: { anchor: line.from, head: line.to } });
     expect(wrap.classList.contains('cm-table-block-wrap--selected')).toBe(true);
+  });
+});
+
+const press = (el: Element) => el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+const firstCell = (parent: HTMLElement) => parent.querySelector('td') as HTMLElement;
+const cellEditors = (parent: HTMLElement) => parent.querySelectorAll('.cm-table-block-cell-editor .cm-editor');
+
+describe('TableBlockWidget — a host that is not editable', () => {
+  // TEST-WHY: refused-principal — a commentator's host is editable-false but not readOnly, the principal that must be refused a cell editor and every toolbar write.
+  it('a commentator is denied the cell editor and the toolbar', () => {
+    const { parent } = mountTable({ commentator: true });
+    press(firstCell(parent));
+    expect(cellEditors(parent)).toHaveLength(0);
+    const rows = parent.querySelectorAll('tr').length;
+    parent.querySelectorAll('.cm-table-block-toolbar button').forEach(press);
+    expect(parent.querySelectorAll('tr')).toHaveLength(rows);
+  });
+
+  // TEST-WHY: refused-principal — access dropping while a cell is open must leave no live editor, since the eq() widget is never rebuilt.
+  it('a mounted cell editor is denied once editability is lost', async () => {
+    document.elementFromPoint = () => null; // jsdom has no layout; the mount path asks.
+    const { view, parent } = mountTable();
+    press(firstCell(parent));
+    expect(cellEditors(parent)).toHaveLength(1);
+    view.dispatch({ effects: editableSlot.reconfigure(EV.editable.of(false)) });
+    await Promise.resolve();
+    expect(cellEditors(parent)).toHaveLength(0);
   });
 });

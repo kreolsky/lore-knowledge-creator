@@ -32,6 +32,7 @@
 import { syntaxTree } from '@codemirror/language';
 import { EditorView, keymap } from '@codemirror/view';
 import { EditorSelection, Prec, type EditorState, type Extension } from '@codemirror/state';
+import { guardedAtomicRanges } from './live-preview/atomic-delete-guard';
 
 const LIST_MARKER_RE = /^(\s*(?:[-*]|\d+\.)\s+(?:\[[ xX]\]\s+)?)/;
 
@@ -143,6 +144,13 @@ function trimTrailingSpaceBack(state: EditorState, pos: number, lineFrom: number
   return p;
 }
 
+/** WHY: waypoints scan raw text, and a hidden image or table anchor is raw text too; a stop
+ * inside one would park the caret in an atom. */
+const outsideAtoms = (state: EditorView['state'], points: number[]): number[] => {
+  const atoms = guardedAtomicRanges(state);
+  return points.filter((p) => !atoms.some((g) => p > g.from && p < g.to));
+};
+
 // Build waypoints in document order (ascending). Cmd+→ picks the smallest > pos;
 // Cmd+← picks the largest < pos. Duplicates are deduplicated. This gives a clean
 // monotonic stepping that collapses to fewer stops when waypoints coincide
@@ -160,7 +168,7 @@ function endWaypoints(view: EditorView, pos: number): number[] {
   if (visEnd > line.from && visEnd <= line.to) points.add(visEnd);
   for (const p of delimiterWaypointsRight(line, scanFrom)) if (p > line.from && p <= line.to) points.add(p);
   points.add(line.to);
-  return Array.from(points).sort((a, b) => a - b);
+  return outsideAtoms(state, Array.from(points).sort((a, b) => a - b));
 }
 
 function startWaypoints(view: EditorView, pos: number): number[] {
@@ -177,7 +185,7 @@ function startWaypoints(view: EditorView, pos: number): number[] {
   if (contentStart !== null && contentStart > line.from) points.add(contentStart);
   for (const p of delimiterWaypointsLeft(line, contentStart ?? line.from)) if (p >= line.from && p <= line.to) points.add(p);
   if (visStart >= line.from && visStart <= line.to) points.add(visStart);
-  return Array.from(points).sort((a, b) => a - b);
+  return outsideAtoms(state, Array.from(points).sort((a, b) => a - b));
 }
 
 function nextRight(points: number[], pos: number): number | null {

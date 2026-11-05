@@ -60,7 +60,7 @@ export function Modal({ open, onClose, title, width = 420, children, footer, clo
     if (focusable.length === 0) return;
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
-    if (e.shiftKey && document.activeElement === first) {
+    if (e.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) {
       e.preventDefault();
       last.focus();
     } else if (!e.shiftKey && document.activeElement === last) {
@@ -75,12 +75,16 @@ export function Modal({ open, onClose, title, width = 420, children, footer, clo
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
       onKeyDown={handleKeyDown}
     >
+      {/* WHY: tabIndex -1 — a click on a non-focusable part of the dialog (its frame,
+          an image) lands focus here instead of on <body>, which sits outside the
+          overlay's onKeyDown, so Escape and the Tab trap keep working. */}
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="bg-surface border border-border rounded-[14px] max-w-[calc(100vw-32px)] shadow-[0_24px_64px_rgba(0,0,0,0.3)] flex flex-col overflow-hidden"
+        tabIndex={-1}
+        className="bg-surface border border-border rounded-[14px] max-w-[calc(100vw-32px)] shadow-[0_24px_64px_rgba(0,0,0,0.3)] flex flex-col overflow-hidden outline-none"
         style={{ width }}
       >
         <div className="flex items-center py-4 px-5 border-b border-border-soft gap-2">

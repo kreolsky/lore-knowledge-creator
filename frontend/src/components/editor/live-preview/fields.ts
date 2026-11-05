@@ -20,14 +20,14 @@ import {
   ViewPlugin,
   ViewUpdate,
 } from '@codemirror/view';
-import { EditorState, Range, RangeSetBuilder, StateField } from '@codemirror/state';
+import { EditorState, Facet, Range, RangeSetBuilder, StateField } from '@codemirror/state';
 import { findSingleLineDisplayMath, findBlockMath } from '../math-render';
-import { linkContextChanged, revealAtCursor } from './effects';
-import { BlockMathWidget, CheckboxWidget, ImageWidget, MermaidWidget } from './widgets';
+import { linkContextChanged, revealAtCursor, transcludeMap } from './effects';
+import { BlockMathWidget, CheckboxWidget, ImageWidget, MermaidWidget, parseSizeFromAlt } from './widgets';
 import { TableWidget } from './table-widget';
 import { TableBlockWidget } from './table-block-widget';
 import { parseTarget, extractEmbedFromImageNode } from './transclusion-grammar';
-import { buildStructuralDecorations } from './build-structural';
+import { buildStructuralDecorations, resolveTransclusion } from './build-structural';
 import { buildListLineDecorations, buildCursorLineDecorations } from './build-line';
 import { getListNestingLevel, getListIndent } from './list-indent';
 import { blockReplaceField, type BlockReplaceState } from './block-replace-field';
@@ -38,19 +38,16 @@ import { widgetOf } from './atomic-delete-guard';
 
 // ─── Structural StateField ────────────────────────────────────────────────────
 
-// WHY: Filter the structural decoration set down to the inline ATOMIC widgets —
-// CheckboxWidget and ImageWidget replace ranges — then surface them via
-// EditorView.atomicRanges. Cursor commands (cursorLeft, moveByChar, Home/End)
-// jump over the widget instead of landing inside its replaced range; Shift+Arrow
+// WHY: Filter the structural decoration set down to CheckboxWidget replace ranges, then
+// surface them via EditorView.atomicRanges. Cursor commands (cursorLeft, moveByChar,
+// Home/End) jump over the widget instead of landing inside its replaced range; Shift+Arrow
 // selects the atom whole in one step. Implicit Decoration.replace atomicity is
-// browser-inconsistent at line-end boundaries; the explicit facet makes the
-// contract uniform. (Table-block anchors register the same facet via
-// blockReplaceField's `atomic` option.)
-function inlineAtomicRanges(decs: DecorationSet): DecorationSet {
+// browser-inconsistent at line-end boundaries; the explicit facet makes the contract
+// uniform. (Images and table anchors register the same facet via atomicObjectField.)
+function checkboxAtomicRanges(decs: DecorationSet): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   decs.between(0, Number.MAX_SAFE_INTEGER, (from, to, dec) => {
-    const widget = widgetOf(dec);
-    if (widget instanceof CheckboxWidget || widget instanceof ImageWidget) builder.add(from, to, dec);
+    if (widgetOf(dec) instanceof CheckboxWidget) builder.add(from, to, dec);
   });
   return builder.finish();
 }
@@ -67,7 +64,7 @@ export const livePreviewField = StateField.define<DecorationSet>({
   },
   provide: (f) => [
     EditorView.decorations.from(f),
-    EditorView.atomicRanges.of(view => inlineAtomicRanges(view.state.field(f))),
+    EditorView.atomicRanges.of(view => checkboxAtomicRanges(view.state.field(f))),
   ],
 });
 
@@ -158,49 +155,50 @@ function buildTableDecorationsWithBounds(state: EditorState): BlockReplaceState 
 }
 
 /** Table block replacement — separate from livePreviewPlugin (ViewPlugin). */
-/** Table block replacement — separate from livePreviewPlugin (ViewPlugin). */
 export const tableRenderField = blockReplaceField(buildTableDecorationsWithBounds, {
   cursorSensitive: true,
 });
 
-// ─── Table block object rendering (StateField) ────────────────────────────────
-// WHY: a `![label](table:id)` transclusion anchor is replaced by a block widget that
-// renders the doc-local `tables` Yjs subtree. Same multi-line Decoration.replace pattern
-// as tableRenderField (CM6 line-break restriction → StateField, never ViewPlugin). The
-// block range spans whole lines so a leading space cannot orphan a 1-char `.cm-line`
-// (charWidth-collapse scroll-jump, see tableRenderField).
+// ─── Atomic objects (StateField) ──────────────────────────────────────────────
+// ARCH: images and table anchors are ONE kind of thing: a widget always rendered over text
+// that is never revealed. Both are INLINE, inside a real `.cm-line`, never `block: true`:
+// CM6 then gives them the same caret, click placement and arrow stops, and neither needs a
+// navigation layer of its own. `lineBlock` in atomic-delete-guard.ts keeps a table anchor
+// alone on its line. A table range spans the whole line so a leading space cannot orphan a
+// 1-char `.cm-line` (charWidth-collapse scroll-jump, see tableRenderField).
 
-// INVARIANT: the table block widget is ALWAYS rendered (no reveal-raw-on-cursor like
-// tableRenderField/GFM). Why: its cells are `contenteditable` — editing happens IN the
-// widget, so collapsing it to raw text on cursor would make editing impossible. The raw
-// `![label](table:id)` anchor is never shown. The same invariant is why this field is
-// ATOMIC (`atomic: true`): the hidden anchor text must never receive a caret or a
-// partial edit — motion skips it as one unit. One-key deletes that reach the anchor
-// (from either edge, or a line join into/out of its line) are SWALLOWED by
-// atomic-delete-guard.ts — PINNED USER RULE: «мы не удаляем таблицу/картинку одним
-// символом — только выделив её целиком» (we never delete a table/image with a single
-// character — only by selecting it whole). Removal = a selection covering the anchor
-// whole + Backspace/Delete, or the widget's own controls. Why not the cursorSensitive
-// siblings: they reveal raw markdown under the caret, so their ranges must stay enterable.
-function buildTableBlockDecorations(state: EditorState): DecorationSet {
+/** Does this surface render table objects? Cells and nested views do not: a table object
+ * never recurses inside another. */
+export const atomicTables = Facet.define<boolean, boolean>({ combine: (values) => values.some(Boolean) });
+
+function buildAtomicObjects(state: EditorState): DecorationSet {
   const ranges: Range<Decoration>[] = [];
+  const tables = state.facet(atomicTables);
 
   syntaxTree(state).iterate({
     enter(node) {
+      // WHY: a Link without a URL is a literal bracket span; the structural walk does not
+      // descend into it, so an embed there stays text.
+      if (node.name === 'Link' && !node.node.getChild('URL')) return false;
       if (node.name !== 'Image') return;
       const embed = extractEmbedFromImageNode(node.node, state);
       if (!embed) return;
-      const parsed = parseTarget(embed.urlText);
-      if (!parsed || parsed.scheme !== 'table') return;
 
-      const blockFrom = state.doc.lineAt(node.from).from;
-      const blockTo = state.doc.lineAt(node.to).to;
-      ranges.push(
-        Decoration.replace({
-          widget: new TableBlockWidget(parsed.id, embed.alt),
-          block: true,
-        }).range(blockFrom, blockTo),
-      );
+      const target = parseTarget(embed.urlText);
+      if (target?.scheme === 'table') {
+        if (!tables) return false;
+        ranges.push(
+          Decoration.replace({ widget: new TableBlockWidget(target.id, embed.alt), atomicKind: 'table' })
+            .range(state.doc.lineAt(node.from).from, state.doc.lineAt(node.to).to),
+        );
+        return false;
+      }
+
+      const resolved = resolveTransclusion(embed.urlText);
+      if (resolved?.kind !== 'image') return;
+      const { width, height } = parseSizeFromAlt(embed.alt);
+      const widget = new ImageWidget(transcludeMap.get(resolved.id)?.imageUrl as string, width, height);
+      ranges.push(Decoration.replace({ widget, atomicKind: 'image' }).range(node.from, node.to));
       return false;
     },
   });
@@ -208,10 +206,37 @@ function buildTableBlockDecorations(state: EditorState): DecorationSet {
   return Decoration.set(ranges, true);
 }
 
-export const tableBlockField = blockReplaceField(
-  (state) => ({ decs: buildTableBlockDecorations(state), bounds: [] }),
-  { cursorSensitive: false, atomic: true },
-);
+/**
+ * WHY apart from livePreviewField: that field rebuilds on every selection, which would make
+ * a new table widget instance per caret step.
+ * WHY linkContextChanged: an image's URL lives in transcludeMap.
+ */
+// WHY: an atomic object is ALWAYS rendered (no reveal-raw-on-cursor like
+// tableRenderField/GFM). Why: a table's cells are nested editors — editing happens IN the
+// widget, so collapsing it to raw text on cursor would make editing impossible. The raw
+// anchor is never shown, and an image's source stays editable in plain-text mode (Mod-/).
+// The same invariant is why this field is ATOMIC: the hidden text must never receive a
+// caret or a partial edit — motion skips it as one unit. One-key deletes that reach it are
+// SWALLOWED by atomic-delete-guard.ts — PINNED USER RULE: «мы не удаляем таблицу/картинку
+// одним символом — только выделив её целиком» (we never delete a table/image with a single
+// character — only by selecting it whole). Removal = a selection covering it whole +
+// Backspace/Delete, or the widget's own controls.
+export const atomicObjectField = StateField.define<DecorationSet>({
+  create: buildAtomicObjects,
+  update(decs, tr) {
+    if (tr.docChanged || tr.effects.some(e => e.is(linkContextChanged))
+        || syntaxTree(tr.state) !== syntaxTree(tr.startState)) {
+      return buildAtomicObjects(tr.state);
+    }
+    return decs;
+  },
+  provide: (f) => [
+    EditorView.decorations.from(f),
+    // CM6 atomicity is strict-containment: caret stops at the range EDGES stay legal, so
+    // traversal is never trapped at document boundaries.
+    EditorView.atomicRanges.of(view => view.state.field(f)),
+  ],
+});
 
 // ─── Math block rendering (StateField) ───────────────────────────────────────
 // WHY: Block math ($$...$$) spans multiple lines → must use StateField for

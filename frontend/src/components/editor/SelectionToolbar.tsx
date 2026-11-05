@@ -160,9 +160,8 @@ export default function SelectionToolbar() {
     if (from === to) { hide(); return; }
     // An exactly-one-image selection belongs to the ImageToolbar (the atomic
     // block's own bar): formatting actions are meaningless on a replaced widget.
-    // Images only (tableId === null): a whole-selected TABLE is not this bar's case.
-    const g = selectedAtomicRange(view.state);
-    if (g && g.tableId === null) { hide(); return; }
+    // WHY: a whole-selected object has nothing to format; an image has its own bar.
+    if (selectedAtomicRange(view.state)) { hide(); return; }
     const a = computeAnchor(view);
     if (!a) return;
     setAnchor(a);

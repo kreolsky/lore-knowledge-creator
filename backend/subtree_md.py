@@ -25,6 +25,7 @@ pointing outside the subtree, empty leaves, non-inline attachments.
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import mimetypes
 import posixpath
@@ -290,7 +291,7 @@ class _AssetSink:
         #: points at the same file.
         self._by_ref: dict[tuple[str, str], str] = {}
 
-    def add(self, node: ExportNode, ref_id: str, ref_row: dict) -> str | None:
+    async def add(self, node: ExportNode, ref_id: str, ref_row: dict) -> str | None:
         """Stage one image ref's binary under the node's assets dir; returns
         the link-relative name (`_assets/pic.png`), or None when the binary is
         unreadable (the embed then stays verbatim)."""
@@ -300,7 +301,9 @@ class _AssetSink:
         seen = self._by_ref.get((base, ref_id))
         if seen is not None:
             return seen
-        data = _read_stored_bytes(ref_row)
+        # WHY to_thread: the disk read of an image binary blocks the event
+        # loop for its whole duration, and export runs in the web process.
+        data = await asyncio.to_thread(_read_stored_bytes, ref_row)
         if data is None:
             return None
         meta = ref_row.get("file_meta") or {}
@@ -354,7 +357,7 @@ async def _embed_replacement(alt: str, target: str, node: ExportNode,
     if row.get("is_reference"):
         media = row.get("media_type")
         if media == "image":
-            rel = assets.add(node, tid, row)
+            rel = await assets.add(node, tid, row)
             if rel is None:
                 return None
             return f"![{_strip_dims(alt)}]({rel})"
@@ -418,6 +421,22 @@ async def _translate_content(content: str, node: ExportNode,
 # ─── export: zip build + entry point ──────────────────────────────────────────
 
 
+def _build_zip_bytes(entries: dict[str, bytes]) -> bytes:
+    """Deflate the export entries into zip bytes — a SYNC helper by design.
+
+    # WHY: ZIP_DEFLATED over a whole subtree is seconds of CPU; the caller
+    # runs it via asyncio.to_thread so the web process's event loop stays
+    # free (the image reads in _AssetSink.add are offloaded for the same
+    # reason). Entry order is deterministic (sorted) so two exports of the
+    # same rows yield identical entry names and bytes — only the zip's
+    # timestamps differ, which is why drives compare entries, not hashes."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name in sorted(entries):
+            zf.writestr(name, entries[name])
+    return buf.getvalue()
+
+
 async def export_subtree(*, root_id: str, project_id: str) -> dict:
     """Subtree → zip bytes + counts. Caller owns auth, scope and staging."""
     plan = await plan_export(root_id, project_id)
@@ -446,13 +465,10 @@ async def export_subtree(*, root_id: str, project_id: str) -> dict:
             status_code=413, detail=f"Export too large (max {max_mb}MB)",
         )
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for name in sorted(entries):
-            zf.writestr(name, entries[name])
+    zip_bytes = await asyncio.to_thread(_build_zip_bytes, entries)
     return {
         "root_id": root_id,
-        "zip_bytes": buf.getvalue(),
+        "zip_bytes": zip_bytes,
         "filename": f"{sanitize_name(plan[root_id].title)}.zip",
         "documents": len(plan),
         "files": len(entries),

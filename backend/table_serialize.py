@@ -48,6 +48,9 @@ import re
 # the widget render a different width on restore than the editor authored.
 # Guarded by table-block-model.test.ts (asserts equality with the frontend constant).
 DEFAULT_COLUMN_WIDTH = 160
+# WHY: mirrors the frontend `AUTO_COLUMN_WIDTH` — no stored px, the column takes an equal
+# share of the free width. New tables start here, so they fill the document column.
+AUTO_COLUMN_WIDTH = 0
 
 
 def _escape_cell(text: str) -> str:
@@ -194,7 +197,7 @@ def add_table_column(
     ``doc.transaction()`` (the backend primitive for the agent ``add_table_column`` tool).
 
     Mirrors frontend ``addColumn`` (table-block-model.ts): inserts one
-    ``{ w: DEFAULT_COLUMN_WIDTH }`` into ``columns`` and one cell Map into EVERY existing
+    column (px in a frozen table, AUTO otherwise) and one cell Map into EVERY existing
     row at ``at_index``. Row 0 (the header) gets ``header``; data row ``i`` gets
     ``values[i-1]`` or empty (``values`` is 0-based over DATA rows, so it is offset by the
     header row). ``at_index`` in ``[0, n_cols]`` is validated by the caller.
@@ -212,10 +215,13 @@ def add_table_column(
     rows_root = table.get("rows")
     if cols_root is None or rows_root is None:
         return
+    # WHY: a frozen table (every column px) renders at the sum of its columns; an AUTO
+    # column there would flip it back to full width, a size change nobody asked for.
+    frozen = all(int(c["w"]) != AUTO_COLUMN_WIDTH for c in cols_root)
     with doc.transaction():
         col = Map()
         cols_root.insert(at_index, col)
-        col["w"] = DEFAULT_COLUMN_WIDTH
+        col["w"] = DEFAULT_COLUMN_WIDTH if frozen else AUTO_COLUMN_WIDTH
         for r in range(n_rows):
             row = rows_root[r]
             cell = Map()
@@ -257,7 +263,7 @@ def create_table_entry(doc, table_id: str, rows_matrix: list[list[str]]) -> None
         for _i in range(width):
             c = Map()
             cols.append(c)
-            c["w"] = DEFAULT_COLUMN_WIDTH
+            c["w"] = AUTO_COLUMN_WIDTH
         rows_root = Array()
         table["rows"] = rows_root
         for row in rows_matrix:
@@ -479,7 +485,7 @@ def import_gfm_tables(markdown: str, label: str = "Table") -> tuple[str, str]:
             table_id = uuid.uuid4().hex
             width = max(len(r) for r in matrix)
             tables[table_id] = {
-                "columns": [DEFAULT_COLUMN_WIDTH] * width,
+                "columns": [AUTO_COLUMN_WIDTH] * width,
                 "rows": matrix,
             }
             out.append(table_anchor(label, table_id))

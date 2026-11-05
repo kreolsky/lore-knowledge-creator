@@ -1,5 +1,5 @@
 /**
- * Editable table block — CM6 replace-decoration widget (steps 3-5 + cell-editor pivot).
+ * Editable table block — CM6 inline replace-decoration widget.
  *
  * SYSTEM: table-block — frontend render entry point. Replaces a `![label](table:id)`
  * transclusion anchor with a table whose CELLS are each a nested, editable CM6 EditorView
@@ -7,10 +7,9 @@
  * `tables` Yjs subtree (see `table-block-model.ts`).
  *
  * ARCH: each cell is a nested EditorView running `editableCellExtensions()` — the SAME
- * live-preview markdown rendering as the document, plus the native thick caret. This
- * replaced the earlier contenteditable cells, which could not render markdown and needed a
- * bespoke caret. yCollab keeps each cell's content synced to its Y.Text, so the widget
- * itself only manages table STRUCTURE (rows/columns/widths), never cell text.
+ * live-preview markdown rendering as the document, plus the native thick caret. yCollab keeps each cell's content
+ * synced to its Y.Text, so the widget itself only manages table STRUCTURE
+ * (rows/columns/widths), never cell text.
  *
  * INVARIANT: the widget rebuilds its cell editors ONLY on a structural change (row/column
  * count). Content edits flow through yCollab in place — re-rendering on every keystroke
@@ -34,6 +33,7 @@
  * editor's. When `state.readOnly` is true (preview), the widget renders STATIC cells:
  * no nested cell EditorViews, no column-resize handles, no add/delete toolbar, and no
  * `claimNestedView` — every write path is closed so a preview can never mutate state.
+ * A viewer or commentator has `readOnly` false: their gate is the editable facet (`canEdit`).
  */
 import { WidgetType, EditorView, ViewPlugin, keymap } from '@codemirror/view';
 import { EditorState, Prec, Compartment } from '@codemirror/state';
@@ -45,8 +45,10 @@ import { createArmedAction } from '../../../hooks/useArmedAction';
 import { selectionFeedPlugin } from '../../../editor/editor-observer';
 import { createYjsExtension } from '../../../collab/yjs-binding';
 import { editableCellExtensions } from '../render-bundle';
+import { caretHold } from '../thick-cursor';
 import { linkContextChanged, revealAtCursor } from './effects';
-import { selectImageAt } from './widgets';
+import { canEditView, selectImageAt, startObjectDrag } from './widgets';
+import { atomicRangeAt } from './atomic-delete-guard';
 import { tableDocSource, viewEntity } from './table-doc-source';
 import { renderCellStatic, isPlainCellText } from './cell-static-render';
 import { ESTIMATED_ROW_HEIGHT, TABLE_WRAP_PADDING } from './table-widget';
@@ -58,6 +60,10 @@ import {
   readColumnWidths,
   getCellText,
   setColumnWidth,
+  setColumnWidths,
+  scaleColumnWidths,
+  AUTO_COLUMN_WIDTH,
+  MIN_COLUMN_WIDTH,
   addRow,
   addColumn,
   removeRow,
@@ -121,12 +127,23 @@ export function mountLazyCell(host: Element): EditorView | null {
   return mount ? mount() : null;
 }
 
+/** Wrap → its widget, so a host's editability drop can reach the mounted cells. */
+const widgetsByWrap = new WeakMap<HTMLElement, TableBlockWidget>();
+
 /** Relays a host's embed-map refresh (`linkContextChanged`, dispatched to the host view
  * only) into its mounted cell editors. WHY: a cell renders the same embeds; without the
  * relay an image dropped into a cell before the map knew its reference stays raw text
  * until the next selection change. */
 export const cellLinkContextRelay = ViewPlugin.define((view) => ({
   update(update) {
+    if (update.startState.facet(EditorView.editable) && !update.state.facet(EditorView.editable)) {
+      // WHY a microtask: dropping a focused cell publishes the focus slot, and its subscribers must not run inside this host's update.
+      queueMicrotask(() => {
+        for (const wrap of view.dom.querySelectorAll<HTMLElement>('.cm-table-block-wrap')) {
+          widgetsByWrap.get(wrap)?.dropCellEditors();
+        }
+      });
+    }
     if (!update.transactions.some((tr) => tr.effects.some((e) => e.is(linkContextChanged)))) return;
     for (const el of view.dom.querySelectorAll('.cm-table-block-cell-editor > .cm-editor')) {
       EditorView.findFromDOM(el as HTMLElement)?.dispatch({ effects: linkContextChanged.of(null) });
@@ -140,6 +157,7 @@ export class TableBlockWidget extends WidgetType {
   private unsubEntity: (() => void) | null = null;
   private tableEl: HTMLTableElement | null = null;
   private toolbarEl: HTMLElement | null = null;
+  private boxEl: HTMLElement | null = null;
   private wrap: HTMLElement | null = null;
   private doc: Y.Doc | null = null;
   private view: EditorView | null = null;
@@ -157,7 +175,7 @@ export class TableBlockWidget extends WidgetType {
   private eagerRendersLeft = 0;
   /** Last focused cell — target for delete-row / delete-column controls. */
   private activeCell = { row: 0, col: 0 };
-  /** Last rendered row count (for `estimatedHeight`, which CM6 calls on every measure pass). */
+  /** Last rendered row count (for `estimatedHeight`, which CM6's height map reads). */
   private renderedRowCount = 2;
   /** Last rendered column count (cheap-shape short-circuit in `render`). */
   private lastColCount = 0;
@@ -182,12 +200,23 @@ export class TableBlockWidget extends WidgetType {
 
   ignoreEvent(): boolean { return true; }
 
+  /** WHY: the caret stands beside the table, its height, not the wrap's, which also holds
+   * the toolbar row. CM6's own hook, so the caret layer needs no table knowledge. */
+  coordsAt(dom: HTMLElement, pos: number): { left: number; right: number; top: number; bottom: number } | null {
+    const box = dom.querySelector('.cm-table-block-box')?.getBoundingClientRect();
+    if (!box) return null;
+    const x = pos > 0 ? box.right : box.left;
+    return { left: x, right: x, top: box.top, bottom: box.bottom };
+  }
+
   toDOM(view: EditorView): HTMLElement {
     this.view = view;
     const wrap = document.createElement('div');
     wrap.className = 'cm-table-block-wrap';
     wrap.setAttribute('data-table-id', this.tableId);
     this.wrap = wrap;
+    widgetsByWrap.set(wrap, this);
+    wrap.addEventListener('mousedown', (e) => this.placeCaretBeside(e));
     // WHY: prefer the facet doc (snapshot preview's captured tables) over the live
     // handle so a preview renders ITS table state, not the editor's current one.  Why: a snapshot preview must show the captured tables, not the live editor's current mutation, so the facet doc wins over getActiveHandle().
     this.doc = view.state.facet(tableDocSource);
@@ -231,6 +260,33 @@ export class TableBlockWidget extends WidgetType {
     return wrap;
   }
 
+  /**
+   * A press on the wrap's empty part (padding, the toolbar row) places the document's caret
+   * beside the table: before it from above the box, after it otherwise.
+   * WHY by hand: `ignoreEvent` is true, so CM6 drops this press.
+   * WHY the whole scroller is excluded: it holds the cells, which take their own presses,
+   * and its own scrollbar, whose drag must not move the caret.
+   */
+  private placeCaretBeside(e: MouseEvent): void {
+    const view = this.view;
+    if (!view || e.button !== 0 || !this.canEdit()) return;
+    if ((e.target as HTMLElement).closest('.cm-table-block-scroll, .cm-image-resize-handle, button')) return;
+    const range = atomicRangeAt(view.state, view.posAtDOM(e.currentTarget as HTMLElement));
+    if (!range) return;
+    e.preventDefault();
+    const above = this.boxEl && e.clientY < this.boxEl.getBoundingClientRect().top;
+    view.focus();
+    view.dispatch({ selection: { anchor: above ? range.from : range.to } });
+  }
+
+  /** Editability dropped: mounted cells go back to placeholders. A no-op if it returned. */
+  dropCellEditors(): void {
+    if (this.canEdit() || this.cellViews.size === 0) return;
+    this.teardownCells();
+    this.tableEl = null; // WHY: render() otherwise sees the same shape and keeps the dead hosts.
+    this.render();
+  }
+
   /** Bind the live ydoc: attach the whole-map observer, then render. */
   private attachDoc(doc: Y.Doc): void {
     this.doc = doc;
@@ -268,7 +324,6 @@ export class TableBlockWidget extends WidgetType {
     if (this.tableEl && shape.rows === this.renderedRowCount && this.lastColCount === shape.cols) {
       const widths = readColumnWidths(this.doc, this.tableId);
       if (widths) this.applyColumnWidths(widths);
-      this.syncToolbarWidth(); // column resize changes table width — keep the toolbar pinned
       return;
     }
     // Structural change → rebuild cell editors (materialize the model once here).
@@ -281,33 +336,18 @@ export class TableBlockWidget extends WidgetType {
     this.lastColCount = shape.cols;
     // No toolbar on a read-only host (preview) — the add/delete/resize
     // affordances are all write paths and have no place in a pure viewer.
+    this.boxEl = this.buildBox(this.tableEl);
     if (this.readOnly) {
-      wrap.replaceChildren(this.buildScroller(this.tableEl));
+      wrap.replaceChildren(this.boxEl);
     } else {
       this.toolbarEl = this.buildToolbar();
-      wrap.replaceChildren(this.buildScroller(this.tableEl), this.toolbarEl);
+      wrap.replaceChildren(this.boxEl, this.toolbarEl);
     }
+    this.applyColumnWidths(model.columns);
     this.scheduleDeferredRenders();
     // New cell editors mount and lay out over the next frame — re-measure so CM6 reserves
     // the table's real height (see the cellMeasureListener WHY on overflow/clicks).
-    requestAnimationFrame(() => {
-      this.view?.requestMeasure();
-      this.syncToolbarWidth();
-    });
-  }
-
-  /**
-   * Pin the toolbar to the table's RIGHT edge without shrinking the widget wrap.
-   * WHY not `width: fit-content` on the wrap: it collapsed the CM6 block widget to zero
-   * height (the table vanished). Instead the wrap stays full width and the toolbar is
-   * sized to the table's rendered width, so its right-aligned buttons meet the table edge.
-   * Clamped to the scroller's visible width — an overflowing fixed table must not push
-   * the buttons off-screen (the toolbar never scrolls with the table).
-   */
-  private syncToolbarWidth(): void {
-    if (!this.toolbarEl || !this.tableEl) return;
-    const visible = this.tableEl.parentElement?.clientWidth ?? Number.MAX_SAFE_INTEGER;
-    this.toolbarEl.style.width = `${Math.min(this.tableEl.offsetWidth, visible)}px`;
+    requestAnimationFrame(() => this.view?.requestMeasure());
   }
 
   /**
@@ -315,7 +355,7 @@ export class TableBlockWidget extends WidgetType {
    * past the document column must scroll INSIDE the
    * block, never widen the page. overflow-y is explicit — with only overflow-x
    * set it computes to auto and adds an inner vertical scrollbar, which breaks
-   * block-widget height measurement. The toolbar stays OUTSIDE.
+   * widget height measurement. The toolbar stays OUTSIDE.
    */
   private buildScroller(table: HTMLTableElement): HTMLElement {
     const scroller = document.createElement('div');
@@ -324,15 +364,63 @@ export class TableBlockWidget extends WidgetType {
     return scroller;
   }
 
+  /** The table's frame box: scroller + selection frame + whole-table scale control. The
+   * frame sits outside the scroller, which would clip it. */
+  private buildBox(table: HTMLTableElement): HTMLElement {
+    const box = document.createElement('div');
+    box.className = 'cm-table-block-box';
+    box.appendChild(this.buildScroller(table));
+    if (this.readOnly) return box;
+    const frame = document.createElement('div');
+    frame.className = 'cm-table-block-frame';
+    const control = document.createElement('div');
+    control.className = 'cm-image-resize-handle cm-image-resize-corner-top cm-table-block-scale';
+    this.bindResize(control, (base, dx) => (
+      scaleColumnWidths(base, base.reduce((sum, w) => sum + w, 0) + dx)
+    ));
+    // Double-click = every column back to auto: full width, equal columns.
+    control.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const widths = this.doc && this.canEdit() ? readColumnWidths(this.doc, this.tableId) : null;
+      if (this.doc && widths) {
+        setColumnWidths(this.doc, this.tableId, widths.map(() => AUTO_COLUMN_WIDTH));
+        this.redrawCaret();
+      }
+    });
+    frame.appendChild(control);
+    box.appendChild(frame);
+    return box;
+  }
+
+  /**
+   * The one width rule. ALL columns px ⇒ table, box and toolbar are `<sum>px` wide. ANY auto
+   * column ⇒ CSS 100%, autos split the rest, floored by `min-width`: under fixed layout an
+   * auto column otherwise collapses to 0 once the px columns fill the document.
+   */
   private applyColumnWidths(widths: number[]): void {
-    const cols = this.tableEl?.querySelectorAll('col');
-    if (!cols) return;
+    const table = this.tableEl;
+    if (!table) return;
+    const cols = table.querySelectorAll('col');
     widths.forEach((w, i) => {
       const col = cols[i] as HTMLTableColElement | undefined;
       // 0 = AUTO: CLEAR the width, never skip — a reset of a previously fixed
       // column must drop its old px, or the col element keeps rendering it.
-      if (col) col.style.width = w === 0 ? '' : `${w}px`;
+      if (col) col.style.width = w === AUTO_COLUMN_WIDTH ? '' : `${w}px`;
     });
+    const sum = widths.reduce((total, w) => total + w, 0);
+    const autos = widths.filter((w) => w === AUTO_COLUMN_WIDTH).length;
+    table.style.width = autos === 0 ? `${sum}px` : '';
+    // WHY the extra px: collapsed outer borders render the table 1px past its columns. A
+    // box of exactly `sum` would give every frozen table a scrollbar, a floor of exactly
+    // `sum + autos * MIN` would leave the auto column 1px under the minimum.
+    table.style.minWidth = autos === 0 ? '' : `${sum + autos * MIN_COLUMN_WIDTH + 1}px`;
+    const boxWidth = autos === 0 ? `${sum + 1}px` : '';
+    if (this.boxEl) this.boxEl.style.width = boxWidth;
+    // WHY min(): a plain px width enters .cm-content's min-content and widens the whole
+    // document; the percentage drops that contribution, so the table scrolls inside itself.
+    if (this.wrap) this.wrap.style.width = autos === 0 ? `min(100%, ${sum + 1}px)` : '';
+    if (this.toolbarEl) this.toolbarEl.style.width = boxWidth;
   }
 
   private buildTable(model: TableModel): HTMLTableElement {
@@ -340,11 +428,7 @@ export class TableBlockWidget extends WidgetType {
     table.className = 'cm-table-block';
 
     const colgroup = document.createElement('colgroup');
-    for (const w of model.columns) {
-      const col = document.createElement('col');
-      col.style.width = w === 0 ? '' : `${w}px`; // 0 = AUTO → empty width
-      colgroup.appendChild(col);
-    }
+    for (let c = 0; c < model.columns.length; c++) colgroup.appendChild(document.createElement('col'));
     table.appendChild(colgroup);
 
     const thead = document.createElement('thead');
@@ -411,7 +495,8 @@ export class TableBlockWidget extends WidgetType {
     // (the long-standing "click below text does nothing / focus leaks" bug). This focus
     // stability is also what makes the cell's thick caret render — it only draws on focus.
     cell.addEventListener('mousedown', (e) => {
-      if (e.button !== 0) return;
+      // WHY before stopPropagation: a link in a static cell reaches the host's link handler.
+      if (e.button !== 0 || !this.canEdit()) return;
       e.stopPropagation();
       const target = e.target as HTMLElement;
       if (target.closest('.cm-table-block-col-resize')) return;
@@ -456,13 +541,18 @@ export class TableBlockWidget extends WidgetType {
 
     if (tag === 'th') {
       const handle = document.createElement('div');
-      handle.className = 'cm-table-block-col-resize';
-      handle.addEventListener('mousedown', (e) => this.startColResize(e, col, cell));
+      handle.className = 'cm-image-resize-handle cm-table-block-col-resize';
+      this.bindResize(handle, (base, dx) => (
+        base.map((w, i) => (i === col ? Math.max(MIN_COLUMN_WIDTH, w + dx) : w))
+      ));
       // Double-click = back to auto (an equal share of the free width).
       handle.addEventListener('dblclick', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (this.doc) setColumnWidth(this.doc, this.tableId, col, 0);
+        if (this.doc && this.canEdit()) {
+          setColumnWidth(this.doc, this.tableId, col, 0);
+          this.redrawCaret();
+        }
       });
       cell.appendChild(handle);
     }
@@ -479,6 +569,10 @@ export class TableBlockWidget extends WidgetType {
    * (row/column change) or when the cell gains focus.
    */
   private ensureCellEditor(row: number, col: number): EditorView | null {
+    // INVARIANT(security): a host that is not editable never mounts a cell editor.
+    // Why: a commentator's host has `readOnly` false and a nested editor is editable by
+    // default, so a mounted cell accepts typing the server drops and the local mirror keeps.
+    if (!this.canEdit()) return null;
     const key = `${row}:${col}`;
     const existing = this.cellViews.get(key);
     if (existing) return existing;
@@ -543,13 +637,13 @@ export class TableBlockWidget extends WidgetType {
   private cellMeasureListener() {
     const outer = this.view;
     return EditorView.updateListener.of((update) => {
-      // WHY: a cell's height can grow AFTER the block widget was first measured
-      // (yCollab fills/wraps content asynchronously). CM6 reserves block-widget height from a
+      // WHY: a cell's height can grow AFTER the widget was first measured
+      // (yCollab fills/wraps content asynchronously). CM6 reserves the line's height from a
       // one-time DOM measure, so without forcing a re-measure the grown table overflows its  Why: CM6 measures block-widget height once; yCollab fills content async and a cell can grow later, so without a forced re-measure the table overflows its reserved height.
       // reserved box and rows below the first overlap — and steal clicks for the next document
       // line. Re-measure the OUTER view when a cell's GEOMETRY changes. Why only geometryChanged,
       // not docChanged: a content edit that does not change the cell's height needs no re-measure,
-      // and firing requestMeasure on every keystroke re-runs the outer editor's full block-widget
+      // and firing requestMeasure on every keystroke re-runs the outer editor's full
       // measurement pass (O(doc)) — a per-keystroke cost that compounds across tables. CM6 sets
       // geometryChanged precisely when a cell's measured height actually changes.
       if (update.geometryChanged) outer?.requestMeasure();
@@ -562,6 +656,8 @@ export class TableBlockWidget extends WidgetType {
    * INVARIANT: Enter does not create a table row and Tab does not create a cell.
    * Why: rows/columns are added exclusively through the bottom-right toolbar buttons;
    * keystrokes stay inside the focused cell.
+   * WHY no arrow into a cell from the document and no Esc out of one: operator ruling, a
+   * cell is entered by click and left by Tab or click.
    */
   private cellNavKeymap(row: number, col: number) {
     return Prec.highest(keymap.of([
@@ -670,22 +766,68 @@ export class TableBlockWidget extends WidgetType {
     this.scheduleDeferredRenders();
   }
 
-  /** Drag a header-cell border to set the column width (writes `w` to the model). */
-  private startColResize(e: MouseEvent, col: number, th: HTMLElement): void {
+  /** WHY read per gesture: CM6 flips the editable facet without rebuilding an eq() widget,
+   * so the `readOnly` captured at mount says nothing about a commentator. */
+  private canEdit(): boolean {
+    return this.view ? canEditView(this.view) : false;
+  }
+
+  /** Stored widths with every auto column measured: what a drag starts from.
+   * WHY edges are rounded, not widths: rounding each width accumulates, and the first
+   * move of a drag would jump by the error. */
+  private frozenWidths(): number[] | null {
+    const widths = this.doc ? readColumnWidths(this.doc, this.tableId) : null;
+    const heads = this.tableEl?.querySelectorAll('thead th');
+    return widths?.map((w, i) => {
+      const rect = heads?.[i]?.getBoundingClientRect();
+      return w || (rect ? Math.round(rect.right) - Math.round(rect.left) : 0);
+    }) ?? null;
+  }
+
+  /**
+   * Shared column-border / scale-control drag: `next` maps the drag-start widths and the
+   * cursor delta to the whole width array, so dragging back restores the start exactly.
+   * WHY frozen on the first MOVE, not on mousedown: a double-click must write only its reset.
+   * WHY the caret is held for the drag: it may stand at the table's edge, which moves under
+   * it; it comes back at the new edge on release.
+   */
+  private startResize(e: PointerEvent, next: (base: number[], dx: number) => number[]): void {
+    if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
+    if (!this.canEdit()) return;
     const startX = e.clientX;
-    const startW = th.getBoundingClientRect().width;
-    const onMove = (ev: MouseEvent) => {
-      const w = Math.max(40, Math.round(startW + (ev.clientX - startX)));
-      if (this.doc) setColumnWidth(this.doc, this.tableId, col, w);
+    let base: number[] | null = null;
+    let held = false;
+    const end = () => {
+      document.body.style.cursor = '';
+      if (held) this.redrawCaret();
     };
-    const onUp = () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    document.body.style.cursor = 'col-resize';
+    startObjectDrag(e, {
+      onStart: () => {
+        held = true;
+        this.view?.dispatch({ effects: caretHold.of(true) });
+        base = this.frozenWidths();
+      },
+      onMove: (ev) => {
+        if (this.doc && base) setColumnWidths(this.doc, this.tableId, next(base, ev.clientX - startX));
+      },
+      onEnd: end,
+      onCancel: end,
+    });
+  }
+
+  /** WHY the mousedown too: a prevented pointerdown still fires it, and the press would
+   * reach the cell, or start a text selection. */
+  private bindResize(el: HTMLElement, next: (base: number[], dx: number) => number[]): void {
+    el.addEventListener('pointerdown', (e) => this.startResize(e, next));
+    el.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); });
+  }
+
+  /** The table's edge moved with no CM6 change: the document's caret must be redrawn. */
+  private redrawCaret(): void {
+    this.view?.dispatch({ effects: caretHold.of(false) });
   }
 
   /**
@@ -707,7 +849,7 @@ export class TableBlockWidget extends WidgetType {
       b.innerHTML = svg;
       if (opts?.dataAct) b.dataset.act = opts.dataAct;
       // mousedown + preventDefault: keep the focused cell (so `activeCell` stays valid).
-      b.addEventListener('mousedown', (e) => { e.preventDefault(); onClick(); });
+      b.addEventListener('mousedown', (e) => { e.preventDefault(); if (this.canEdit()) onClick(); });
       return b;
     };
     bar.appendChild(mk(ICON_INSERT_ROW, t('tableInsertRowBelow'),
@@ -806,7 +948,7 @@ export class TableBlockWidget extends WidgetType {
     btn.type = 'button';
     btn.className = 'cm-table-block-remove';
     btn.textContent = t('tableBlockRemove');
-    btn.addEventListener('mousedown', (e) => { e.preventDefault(); this.removeAnchor(); });
+    btn.addEventListener('mousedown', (e) => { e.preventDefault(); if (this.canEdit()) this.removeAnchor(); });
     box.appendChild(btn);
     return box;
   }
@@ -848,7 +990,7 @@ export class TableBlockWidget extends WidgetType {
     this.unsubEntity?.();
     this.unsubEntity = null;
     // INVARIANT(data-loss) (CM6 eviction/reuse): destroy() MUST drop the cached DOM —
-    // CM6 drops a block widget's DOM on viewport eviction and REUSES the same instance
+    // CM6 drops a widget's DOM on viewport eviction and REUSES the same instance
     // on scroll-back (eq matches), calling toDOM again on a fresh wrap. With tableEl
     // still set, render() takes the same-shape widths-only fast path against the STALE
     // detached node and returns without appending anything — the anchor line renders
@@ -862,10 +1004,11 @@ export class TableBlockWidget extends WidgetType {
     // make the scrollbar jump on scroll-back.
     this.tableEl = null;
     this.toolbarEl = null;
+    this.boxEl = null;
   }
 
   get estimatedHeight(): number {
-    // WHY cached, not readTableModel: CM6 invokes this getter during every measurement pass
+    // WHY cached, not readTableModel: CM6's height map invokes this getter
     // (and requestMeasure re-runs it). Materializing the full model (all cell strings) here
     // would allocate O(cells) per pass. The row count is cached at render time and is all the
     // estimate needs; before first render it falls back to 2 rows.

@@ -416,7 +416,7 @@ async def get_project(project_id: str, user: dict = Depends(get_current_user), d
     doc_rows = await db.query(
         "SELECT id, project_id, parent_id, title, path, is_index, sort_key, "
         "is_system, system_role, created_at, updated_at, chats_unindexed, "
-        "chats_unlisted, media_type "
+        "media_type "
         "FROM documents WHERE project_id = $pid AND deleted_at IS NONE "
         "AND is_reference = false ORDER BY is_index DESC, sort_key ASC, id ASC",
         {"pid": project_id},

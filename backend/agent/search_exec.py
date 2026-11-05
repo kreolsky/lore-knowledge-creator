@@ -26,7 +26,7 @@ from textmatch import (
     strip_stop_words as _strip_stop_words,
 )
 
-from access import get_document_access
+from access import get_project_access
 from db import extract_id, get_db
 from models import is_ref_row
 from scope import resolve_search_subtree
@@ -456,7 +456,7 @@ async def _semantic_layer(
 
 
 async def _assemble_search_result(
-    *, user: dict, query: str, qlower: str, exact: bool,
+    *, db, project_id: str, user: dict, query: str, qlower: str, exact: bool,
     direct: list[dict], semantic: list[dict], k: int, warnings: list[str],
 ) -> dict:
     """Fuse the layers, access-filter, and assemble the model-facing result.
@@ -466,7 +466,7 @@ async def _assemble_search_result(
     # mode → the direct list as ranked by rank_rows (no semantic layer ran).
     """
     fused = direct if exact else _rrf_merge(direct, semantic)
-    accessible = await _filter_accessible(fused, user)
+    accessible = await _filter_accessible(db, project_id, fused, user)
     merged = accessible[: max(k, await settings.get("AGENT_SEARCH_DIRECT_K"))]
     if exact and not merged and qlower:
         # No-silent-degradation (S3.2): an empty `exact` result must not read as
@@ -573,7 +573,7 @@ async def _search_materials_exec(
         )
 
     result = await _assemble_search_result(
-        user=user, query=query, qlower=qlower,
+        db=db, project_id=project_id, user=user, query=query, qlower=qlower,
         exact=exact, direct=direct, semantic=semantic, k=k,
         warnings=warnings,
     )
@@ -610,15 +610,29 @@ async def _attach_outlines(db, project_id: str, hits: list[dict]) -> None:
             h["outline_hidden"] = row["outline_hidden"]
 
 
-async def _filter_accessible(hits: list[dict], user: dict) -> list[dict]:
-    """Drop hits the user lacks per-doc access to.
+async def _filter_accessible(db, project_id: str, hits: list[dict], user: dict) -> list[dict]:
+    """Drop hits the user cannot read — ONE project check + ONE row pass.
 
-    # WHY: a search snippet IS a read — gate it with the SAME per-doc check as
-    # read_document (get_document_access != None), NOT mere project membership.
-    # Why: a Viewer/Commentator with project access must not see a private doc's
-    # snippet leak through the agent search layer.
-    # Filter SEQUENTIALLY — never asyncio.gather: surrealdb-py multiplexes one WS
-    # conn, so concurrent get_document_access calls contend (backend.md).
+    # WHY: a search snippet IS a read, but the gate is the PROJECT, not a
+    # per-hit get_document_access: document access IS project access
+    # (INVARIANT(security), access.py — no per-document override) and every
+    # hit of one search belongs to the searched project. One get_project_access
+    # answers the RBAC question for all hits at once.
+    #
+    # The row pass keeps what project access cannot see, in one record-targeted
+    # SELECT over the hit ids (project_id = $pid AND deleted_at IS NONE):
+    # - a STALE chunk — doc_chunks.project_id can lag a move after a crash
+    #   (backend/documents/move.py), so a semantic candidate's doc row may live
+    #   in another project: no row → drop;
+    # - a soft-deleted document.
+    # Both are stricter than the old per-doc check, which resolved the doc's
+    # CURRENT project (a moved-out doc stayed a hit for a user who can read
+    # the new project too) — accepted (plan perf-quick-wins, step 2).
+    #
+    # WHY the `$ids.map(|$x| type::record(...))` targeting (tombstone_many's
+    # form, db/crud.py) and NOT `meta::id(id) IN $ids` (the _attach_outlines
+    # form): on gray 30 ids took 1.4 ms vs 10.1 ms with identical rows — a
+    # missing id and a foreign project both yield no row.
 
     # Page PIN lock (see SYSTEM: page-lock) — the user's PIN-locked pages are
     # invisible to agent search: the locked set is fetched ONCE per call (never
@@ -628,14 +642,21 @@ async def _filter_accessible(hits: list[dict], user: dict) -> list[dict]:
     """
     from page_lock import locked_doc_ids
 
-    locked = await locked_doc_ids(user["user_id"]) if hits else set()
-    out: list[dict] = []
-    for h in hits:
-        if h["doc_id"] in locked:
-            continue
-        if await get_document_access(h["doc_id"], user):
-            out.append(h)
-    return out
+    if not hits:
+        return []
+    locked = await locked_doc_ids(user["user_id"])
+    if not await get_project_access(project_id, user):
+        return []
+    ids = sorted({h["doc_id"] for h in hits if h["doc_id"] not in locked})
+    if not ids:
+        return []
+    rows = await db.query(
+        "SELECT meta::id(id) AS id FROM $ids.map(|$x| type::record('documents', $x)) "
+        "WHERE project_id = $pid AND deleted_at IS NONE",
+        {"ids": ids, "pid": project_id},
+    )
+    readable = {r["id"] for r in rows or [] if isinstance(r, dict) and r.get("id")}
+    return [h for h in hits if h["doc_id"] not in locked and h["doc_id"] in readable]
 
 
 async def search_materials_tool(

@@ -8,7 +8,7 @@
  * ARCH (fallback path, resolved by the Task-0 spike): the document `<Editor>` stays mounted
  * (it owns the collab handle + publishes it via useEditorCollab). This view is a SEPARATE
  * local CM6 view whose doc text is exactly `tableAnchor(label, id)`. The live-preview
- * `tableBlockField` (in `renderExtensions()`) turns that single anchor into one
+ * `atomicObjectField` (in `renderExtensions()`) turns that single anchor into one
  * `TableBlockWidget`, which binds to the live ydoc by the view's ENTITY
  * (`viewEntity` facet → `subscribeEntityHandle`) — so cell
  * edits flow widget → ydoc.tables → collab → peers + the (hidden) inline editor. Why the
@@ -106,9 +106,9 @@ export function TableFocusView({ table, hideBanner = false }: TableFocusViewProp
     }),
   ], []);
 
-  // Gate editability on access level. Cell edits write the live ydoc; Yjs re-syncs the
-  // whole doc on reconnect, so a brief disconnect does not lose table edits (unlike plain
-  // text input the offline overlay guards) — gating on access level alone is correct here.
+  // Gate editability on access level; cells read this facet (`canEdit` in the widget).
+  // Unlike the document's editor this host stays editable while disconnected: Yjs re-syncs
+  // the whole doc on reconnect, so a brief disconnect does not lose table edits.
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;

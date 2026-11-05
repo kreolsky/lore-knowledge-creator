@@ -46,12 +46,23 @@ async def test_embed_failure_logging_merge_candidates(test_db, project_with_doc,
 # ─── 2. FTS fallback reports degraded recall ────────────────────────────────
 
 
-async def test_fts_disjunct_failure_appends_degraded_warning():
+async def test_fts_disjunct_failure_appends_degraded_warning(test_db):
     """When the FTS disjunct fails and the layer falls back to CONTAINS-only, the
     result must carry `search_degraded:fts` — the stemmer's inflected matches are
     GONE from recall and the model has to know that, exactly as the semantic and
-    direct layer catches already report themselves."""
+    direct layer catches already report themselves.
+
+    The access pass runs REAL (project p1 owned by u1 — the owner path resolves
+    'full' with no member query); only the db seam carrying the candidate
+    queries is faked."""
     from agent.search_exec import _search_materials_exec
+
+    from db import create_record
+
+    await create_record("projects", "p1", {
+        "name": "b1", "status": "active", "project_context": "",
+        "index_doc_id": "", "owner_id": "u1",
+    })
 
     async def fake_query(stmt, params=None):
         s = stmt.lower()
@@ -59,8 +70,12 @@ async def test_fts_disjunct_failure_appends_degraded_warning():
             raise RuntimeError("simulated: FTS index absent")
         if "limit 200" in s:
             return [{"id": "d1", "title": "doc", "content": "body",
-                     "is_reference": False, "parent_id": None, "is_memory": False,
-                     "updated_at": None, "sort_key": ""}]
+                      "is_reference": False, "parent_id": None, "is_memory": False,
+                      "updated_at": None, "sort_key": ""}]
+        if "$ids.map" in s:
+            # _filter_accessible's row pass (record-targeted SELECT over the
+            # hit ids) — every id asked about is readable and in-project.
+            return [{"id": i} for i in params.get("ids", [])]
         if "parent_id from documents" in s:
             return [{"id": "d1", "parent_id": None}]
         return []
@@ -68,9 +83,7 @@ async def test_fts_disjunct_failure_appends_degraded_warning():
     from retrieval import RetrievalResult
 
     with patch("retrieval.retrieve_context", new=AsyncMock(return_value=RetrievalResult(hits=[]))), \
-         patch("agent.search_exec.get_db") as gdb, \
-         patch("agent.search_exec.get_document_access",
-               new=AsyncMock(return_value=True)):
+         patch("agent.search_exec.get_db") as gdb:
         gdb.return_value.query = fake_query
         result = await _search_materials_exec(
             project_id="p1", user={"user_id": "u1"}, query="body", k=5,

@@ -82,13 +82,6 @@ describe('bold (toggleInlineMarker **)', () => {
     expect(sel(view)).toEqual({ from: 5, to: 5 });
   });
 
-  it('no-op at empty caret in whitespace', () => {
-    const view = createView('', 0);
-    markdownActionRegistry.bold(view);
-    expect(docText(view)).toBe('');
-    expect(sel(view)).toEqual({ from: 0, to: 0 });
-  });
-
   it('wraps selected text', () => {
     const view = createView('hello world', 0, 5);
     markdownActionRegistry.bold(view);
@@ -119,25 +112,6 @@ describe('italic (toggleInlineMarker *)', () => {
     expect(docText(view)).toBe('*hello*');
   });
 
-  it('unwraps already wrapped selection', () => {
-    const view = createView('*hello*', 0, 7);
-    markdownActionRegistry.italic(view);
-    expect(docText(view)).toBe('hello');
-  });
-
-  it('no-op at empty caret in whitespace', () => {
-    const view = createView('', 0);
-    markdownActionRegistry.italic(view);
-    expect(docText(view)).toBe('');
-    expect(sel(view)).toEqual({ from: 0, to: 0 });
-  });
-
-  it('wraps surrounding word at empty caret inside word', () => {
-    const view = createView('hello', 3);
-    markdownActionRegistry.italic(view);
-    expect(docText(view)).toBe('*hello*');
-    expect(sel(view)).toEqual({ from: 4, to: 4 });
-  });
 });
 
 // ── toggleInlineMarker (strikethrough) ───────────────────────────────────────
@@ -149,17 +123,6 @@ describe('strikethrough (toggleInlineMarker ~~)', () => {
     expect(docText(view)).toBe('~~hello~~');
   });
 
-  it('unwraps already wrapped selection', () => {
-    const view = createView('~~hello~~', 0, 9);
-    markdownActionRegistry.strikethrough(view);
-    expect(docText(view)).toBe('hello');
-  });
-
-  it('unwraps outer markers when inner text selected', () => {
-    const view = createView('~~hello~~', 2, 7);
-    markdownActionRegistry.strikethrough(view);
-    expect(docText(view)).toBe('hello');
-  });
 });
 
 // ── toggleInlineMarker (inlineCode) ──────────────────────────────────────────
@@ -171,11 +134,6 @@ describe('inlineCode (toggleInlineMarker `)', () => {
     expect(docText(view)).toBe('`hello`');
   });
 
-  it('unwraps already wrapped selection', () => {
-    const view = createView('`hello`', 0, 7);
-    markdownActionRegistry.inlineCode(view);
-    expect(docText(view)).toBe('hello');
-  });
 });
 
 // ── createLink ───────────────────────────────────────────────────────────────

@@ -102,7 +102,7 @@ beforeEach(async () => {
   appState = {
     currentProject: { project_id: 'p1' },
     currentDocument: null,
-    // Flat tree rows — the chats_unlisted title-hit projection reads them.
+    // Flat tree rows — the chats_unindexed title-hit projection reads them.
     documents: [],
   };
   uiState = {

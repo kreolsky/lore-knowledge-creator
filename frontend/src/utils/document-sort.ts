@@ -60,8 +60,8 @@ function nameMatchTier(title: string, query: string): NameMatchTier {
   return 2;
 }
 
-// ARCH (plan chats-unlisted-subtree): the chats_unlisted list-hide set — the
-// union of subtree(F) over every document F flagged `chats_unlisted` while the
+// ARCH: the chat list-hide set — the
+// union of subtree(F) over every document F flagged `chats_unindexed` while the
 // OPEN document is outside it ("inside" = F is the open doc or one of its
 // ancestors). A CLIENT mirror of the backend recall rule (hidden_doc_ids in
 // chat_sessions/recall_search.py): read-time and viewer-relative, never
@@ -73,7 +73,7 @@ function nameMatchTier(title: string, query: string): NameMatchTier {
 // tab read. Why: one input set means the chat list, SearchPanel title hits and
 // the EyeOff mark can never disagree about who is flagged.
 export function listHiddenDocIds(documents: Document[], currentDocId: string | null): Set<string> {
-  const flagged = documents.filter(d => d.chats_unlisted).map(d => d.document_id);
+  const flagged = documents.filter(d => d.chats_unindexed).map(d => d.document_id);
   if (flagged.length === 0) return new Set();
 
   const parentMap = buildParentMap(documents);

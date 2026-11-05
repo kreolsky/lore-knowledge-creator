@@ -21,10 +21,10 @@ import type { ChatSession } from '../../types';
  *   parent in the tree), so it ranks by its owning branch — consistent with the
  *   ChatRow `ref:` label. Doc-less sessions rank via PROJECT_ROOT (finite).
  *
- * ARCH (plan chats-unlisted-subtree): a CLIENT projection, not a server filter —
+ * ARCH: a CLIENT projection, not a server filter —
  * the list is fetched once per project and document switches do not re-fetch, so
  * a server filter keyed on the open document would go stale on the first
- * navigation. A session whose host_document_id lies in a `chats_unlisted`
+ * navigation. A session whose host_document_id lies in a `chats_unindexed`
  * subtree, viewed from OUTSIDE it, leaves the list (doc-less sessions are never
  * hidden; they have no subtree). The ACTIVE session is exempt ("leave it until
  * switched"): it stays listed until the user switches away — a reload restoring
@@ -41,7 +41,7 @@ import type { ChatSession } from '../../types';
  * near the cap yet. ChatEmptyList renders this same set as one scrolling list.
  */
 /**
- * Where the chats_unlisted projection stands. An open page gated by a PIN lock — its own
+ * Where the chats_unindexed projection stands. An open page gated by a PIN lock — its own
  * or a locked ancestor's (SYSTEM: page-lock) — is viewed from the LOCKING page's parent,
  * and the active-session exemption is off.
  */
@@ -69,7 +69,7 @@ export function useSortedSessions() {
   const sortByProximity = useUIStore(s => s.getChatSortByProximity(currentDocId));
 
   return useMemo(() => {
-    // chats_unlisted projection — hidden subtree hosts drop out, the ACTIVE
+    // chats_unindexed projection — hidden subtree hosts drop out, the ACTIVE
     // session stays, doc-less sessions (host null/absent) are never hidden.
     const hiddenDocIds = listHiddenDocIds(documents, positionDocId);
     const visible = hiddenDocIds.size === 0

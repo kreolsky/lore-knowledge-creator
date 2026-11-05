@@ -3,7 +3,9 @@
  * input latency, attributed freezes.
  *
  * see SYSTEM: telemetry. Rows:
- *   load             one per page load, sent once LCP has settled or the tab hides
+ *   load             one per page load, sent once LCP has settled or the tab hides; carries
+ *                    ws_ms (first collab socket, connect to open) and editable_ms (page
+ *                    start to the editor accepting input, absent for a read-only user)
  *   doc-switch       a tree or link open until the new document's text is painted
  *   interaction      windowed aggregate of click and keydown latency
  *   slow-interaction raw row past LONGTASK_MS
@@ -52,6 +54,8 @@ interface LoadSample {
   fcp?: number;
   lcp?: number;
   textMs?: number;
+  wsMs?: number;
+  editableMs?: number;
   docKb?: number;
   entityId?: string;
 }
@@ -74,6 +78,8 @@ function reportLoad(): void {
       fcp: sample.fcp,
       lcp: sample.lcp,
       text_ms: sample.textMs,
+      ws_ms: sample.wsMs,
+      editable_ms: sample.editableMs,
       doc_kb: sample.docKb,
       js_files: js.length,
       js_transfer_kb: kb(js.reduce((sum, r) => sum + r.transferSize, 0)),
@@ -145,6 +151,23 @@ export function markContentShown(view: object, entityId: string, chars: number):
       load.entityId = entityId;
     }
   });
+}
+
+/** A sample still describing the page on screen, not a load the user navigated away from. */
+function loadOfThisPage(): LoadSample | null {
+  return load && load.path === location.pathname ? load : null;
+}
+
+/** The page's first collab socket opened, `ms` after its first connect attempt. */
+export function markCollabSocketOpen(ms: number): void {
+  const sample = loadOfThisPage();
+  if (sample && sample.wsMs === undefined) sample.wsMs = Math.round(ms);
+}
+
+/** The editor accepts input for the first time since the page started. */
+export function markEditable(): void {
+  const sample = loadOfThisPage();
+  if (sample && sample.editableMs === undefined) sample.editableMs = Math.round(performance.now());
 }
 
 // ─── Input latency ──────────────────────────────────────────────────────────

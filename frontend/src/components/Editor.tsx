@@ -41,7 +41,7 @@ import { useEditorAutosave } from '../hooks/useEditorAutosave';
 import { useEditorPosition } from '../hooks/useEditorPosition';
 import { useEditorReferenceSync } from '../hooks/useEditorReferenceSync';
 import { useEditorEvents } from '../hooks/useEditorEvents';
-import { markContentShown } from '../telemetry/page-perf';
+import { markContentShown, markEditable } from '../telemetry/page-perf';
 import { useAnchorScroll } from '../hooks/useAnchorScroll';
 import { useEditorHotkeys } from '../hooks/useEditorHotkeys';
 import { useImageReferenceNav } from '../hooks/useImageReferenceNav';
@@ -303,6 +303,7 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
     const view = editorViewRef.current;
     if (!view) return;
     view.dispatch({ effects: editableCompartment.reconfigure(EditorView.editable.of(editable)) });
+    if (editable) markEditable();
     // One-shot: focus the editor when it becomes editable after a programmatic
     // entity open that requested focus (e.g. creating a reference). The remount's
     // view.focus() doesn't stick because contenteditable is false during collab join.

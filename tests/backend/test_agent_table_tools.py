@@ -307,7 +307,7 @@ def test_create_table_entry_builds_model_and_returns_width():
     matrix = [["Name", "Role"], ["Aragorn", "Ranger"], ["Legolas", "Elf"]]
     create_table_entry(doc, "newid", matrix)
     grid = read_table_grid(doc, "newid")
-    assert grid["columns"] == [160, 160]
+    assert grid["columns"] == [0, 0]
     assert grid["rows"] == matrix
 
 

@@ -168,9 +168,9 @@ def _stamp_reference_identity(
         out["reference_id"] = did_raw
         out["reference_title"] = ref_entry.get("title")
         out["document_title"] = None
-        # ARCH (plan chats-unlisted-subtree): host_document_id = the
+        # ARCH: host_document_id = the
         # reference's PARENT (read from the ref map — zero new queries), so
-        # the client's chats_unlisted subtree filter, which walks the
+        # the client's chats_unindexed subtree filter, which walks the
         # DOCUMENT tree, sees this chat under its owning document. The client
         # cannot resolve the owner itself: references load per open document
         # only, and the project tree payload excludes them.
@@ -185,7 +185,7 @@ def _stamp_reference_identity(
     # and the client falls back to its document tree.
     out["document_title"] = (document_titles or {}).get(out.get("document_id"))
     # A doc chat's host is its own document; a doc-less chat has none (null —
-    # never hidden by the chats_unlisted filter).
+    # never hidden by the chats_unindexed list filter).
     out["host_document_id"] = did_raw
 
 

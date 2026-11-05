@@ -3,9 +3,8 @@
  *
  * ARCH: CM6 forbids Decoration.replace that spans multiple lines inside a
  * ViewPlugin (line-break restriction), so block-replace decorations MUST live
- * in a StateField. Several live-preview block types (table, table-block, math,
- * mermaid) share the same `update()` shape: rebuild on `docChanged` or
- * tree-change; when `cursorSensitive`, additionally rebuild when the cursor
+ * in a StateField. Several live-preview types (table, math, mermaid) share the
+ * same `update()` shape: rebuild on `docChanged` or tree-change; when `cursorSensitive`, additionally rebuild when the cursor
  * enters/leaves any tracked bound (so the raw markdown can be revealed while
  * the caret is inside, then hidden again). This factory centralises that shape.
  *
@@ -15,8 +14,7 @@
  * `bounds` array is returned empty (`[]`) and the selection branch is skipped —
  * the array exists but is unused. The factory does NOT accept a plain
  * DecorationSet return; that would fork the state type and re-introduce the
- * duplication the factory exists to remove. Callers that ignore bounds
- * (tableBlock) simply never read them.
+ * duplication the factory exists to remove.
  */
 // SYSTEM: block-replace-field — shared StateField factory for multi-line block decorations
 
@@ -35,18 +33,6 @@ export interface BlockReplaceBuild {
 
 export interface BlockReplaceOptions {
   cursorSensitive: boolean;
-  /**
-   * Expose the field's block ranges via `EditorView.atomicRanges`. Only for
-   * ALWAYS-widget blocks whose raw text is never shown (table anchors): motion
-   * commands skip the hidden range as one unit and Shift+Arrow selects it whole.
-   * One-key deletes that reach the atom are SWALLOWED by atomic-delete-guard.ts
-   * (never a partial mangle, never a one-key whole delete); removal goes through
-   * a selection covering the atom whole («мы не удаляем таблицу/картинку одним
-   * символом — только выделив её целиком»). cursorSensitive fields (GFM table /
-   * math / mermaid) reveal raw markdown under the caret, so the caret MUST be
-   * able to enter them — they never set this.
-   */
-  atomic?: boolean;
 }
 
 /**
@@ -61,7 +47,7 @@ export function blockReplaceField(
   build: BlockReplaceBuild,
   options: BlockReplaceOptions,
 ): StateField<BlockReplaceState> {
-  const { cursorSensitive, atomic } = options;
+  const { cursorSensitive } = options;
   return StateField.define<BlockReplaceState>({
     create(state) { return build(state); },
     update(state, tr) {
@@ -77,16 +63,6 @@ export function blockReplaceField(
       }
       return state;
     },
-    provide: (f) =>
-      atomic
-        ? [
-            EditorView.decorations.from(f, v => v.decs),
-            // Every range in this field is a whole-block replace of hidden anchor
-            // text — all of them are atoms. CM6 atomicity is strict-containment:
-            // caret stops at the range EDGES stay legal, so traversal is never
-            // trapped at document boundaries.
-            EditorView.atomicRanges.of(view => view.state.field(f).decs),
-          ]
-        : EditorView.decorations.from(f, v => v.decs),
+    provide: (f) => EditorView.decorations.from(f, v => v.decs),
   });
 }

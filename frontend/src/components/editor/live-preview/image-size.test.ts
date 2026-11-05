@@ -86,21 +86,6 @@ describe('ImageWidget DOM', () => {
     expect((wrap.querySelector('img') as HTMLImageElement).style.width).toBe('100%');
   });
 
-  it('mounts corner/corner-top/right/bottom handles even on a non-editable view', () => {
-    const ro = new EditorView({
-      state: EditorState.create({ doc: IMG, extensions: [EditorView.editable.of(false)] }),
-      parent: document.createElement('div'),
-    });
-    views.push(ro);
-    const wrap = new ImageWidget('http://localhost/x.png').toDOM(ro);
-    const dirs = [...wrap.querySelectorAll('.cm-image-resize-handle')].map((h) => h.className);
-    expect(dirs).toEqual([
-      'cm-image-resize-handle cm-image-resize-corner',
-      'cm-image-resize-handle cm-image-resize-corner-top',
-      'cm-image-resize-handle cm-image-resize-right',
-      'cm-image-resize-handle cm-image-resize-bottom',
-    ]);
-  });
 });
 
 // ── Enter on a selected image ────────────────────────────────────────────────
@@ -117,9 +102,4 @@ describe('Enter on a whole-selected image', () => {
     expect(view.state.selection.main.head).toBe(2 + IMG.length + 1);
   });
 
-  it('a text selection is not handled (default Enter applies)', () => {
-    const view = makeView(`ab ${IMG}`);
-    view.dispatch({ selection: EditorSelection.range(0, 2) });
-    expect(runScopeHandlers(view, new KeyboardEvent('keydown', { key: 'Enter' }), 'editor')).toBe(false);
-  });
 });

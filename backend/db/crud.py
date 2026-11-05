@@ -54,14 +54,39 @@ async def create_record(table: str, uid: str, data: dict) -> dict:
     return first
 
 
+# Heavy columns fetch_one must not transfer, keyed by table (the `SELECT * OMIT`
+# convention and its reasoning: routes/chat/messages.py _MESSAGE_LIST_SELECT).
+# Table-keyed, not a conditional at call sites: every fetch_one caller of the
+# table benefits and no call site carries table knowledge. OMIT over a
+# hand-enumerated projection (cf. the registries below) drops exactly the heavy
+# column and auto-includes the rest, so a future schema add cannot be silently
+# lost.
+_FETCH_ONE_OMITS: dict[str, str] = {
+    # INVARIANT(corruption): documents.ydoc_state — the multi-KB CRDT snapshot —
+    # never comes back from fetch_one; it used to ride every document guard and
+    # read only for serialize_record to strip it (db/records.py). Why: no
+    # fetch_one caller needs the column — its only reader loads it with its own
+    # SELECT (ydoc_store.load), and no code writes a fetched document row back
+    # whole; a future caller gets None silently, so ydoc_store.load is the ONLY
+    # door to a document's ydoc_state.
+    "documents": "OMIT ydoc_state",
+}
+
+
 async def fetch_one(table: str, uid: str) -> dict | None:
-    """Fetch a single record by UUID. Returns None if not found or soft-deleted."""
+    """Fetch a single record by UUID. Returns None if not found or soft-deleted.
+
+    A table in _FETCH_ONE_OMITS drops its heavy column from the SELECT.
+    """
     # H-2: Validate table name before f-string embedding
     validate_record_id(table)
     db = await get_db()
+    omit = _FETCH_ONE_OMITS.get(table)
+    select = f"SELECT * {omit}" if omit else "SELECT *"
     rows = await db.query(
-        f"SELECT * FROM type::record('{table}', $id)",
+        f"{select} FROM type::record('{table}', $id)",
         {"id": uid},
+        site=f"fetch_one:{table}",
     )
     if not rows:
         return None
@@ -117,10 +142,10 @@ async def fetch_doc_meta(doc_id: str) -> dict | None:
 
     # ARCH: access checks and parent/flag reads (get_doc_project_id,
     # get_document_access) only need project_id / is_reference / parent_id, but
-    # fetch_one('documents', id) pulls the multi-KB ydoc_state CRDT snapshot AND
-    # the full content body on every such check. This projected SELECT omits both,
-    # eliminating the largest per-access transfer. Returns None if not found or
-    # soft-deleted — same contract as fetch_one.
+    # fetch_one('documents', id) pulls the full content body on every such check
+    # (ydoc_state it already omits — _FETCH_ONE_OMITS above). This projected
+    # SELECT omits both, eliminating the largest per-access transfer. Returns
+    # None if not found or soft-deleted — same contract as fetch_one.
     """
     validate_record_id(doc_id)
     db = await get_db()

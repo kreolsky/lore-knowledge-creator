@@ -14,6 +14,7 @@ See SYSTEM: documents (entry: backend/documents/__init__.py).
 #   `from routes.documents import _...` private reach-through.
 """
 
+import asyncio
 import logging
 import re
 from urllib.parse import quote
@@ -456,8 +457,14 @@ async def _inline_ref_images(content: str, project_id: str) -> str:
             # Non-image media (audio/video): skip — drop the embed from the export.
             drop_ids.add(ref_id)
             continue
-        b64 = base64.b64encode(abs_path.read_bytes()).decode("ascii")
-        data_uris[ref_id] = f"data:{mime};base64,{b64}"
+        def _read_data_uri() -> str:
+            b64 = base64.b64encode(abs_path.read_bytes()).decode("ascii")
+            return f"data:{mime};base64,{b64}"
+
+        # WHY to_thread: the disk read + base64 of an image binary is
+        # disk+CPU work per embed; off the event loop, like the export
+        # offloads in subtree_md.
+        data_uris[ref_id] = await asyncio.to_thread(_read_data_uri)
 
     def _repl(m: re.Match) -> str:
         if m.group(2) in drop_ids:

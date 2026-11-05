@@ -194,9 +194,9 @@ export function selectImageAt(view: EditorView, el: Node): void {
   try { pos = view.posAtDOM(el); } catch { return; }
   // posAtDOM yields -1 for a node outside the editor content.
   if (pos < 0) return;
-  // Images only (tableId === null): guardedAtomicRanges also yields table anchors.
+  // Images only: guardedAtomicRanges also yields table anchors.
   const atom = atomicRangeAt(view.state, pos);
-  if (atom && atom.tableId === null) {
+  if (atom?.kind === 'image') {
     view.dispatch({ selection: EditorSelection.range(atom.from, atom.to) });
   }
 }
@@ -204,8 +204,47 @@ export function selectImageAt(view: EditorView, el: Node): void {
 /** True when the main selection is exactly the image node rendered by `el`. */
 function isImageSelected(view: EditorView, el: Node): boolean {
   const range = selectedAtomicRange(view.state);
-  if (!range || range.tableId !== null) return false;
+  if (range?.kind !== 'image') return false;
   try { return view.posAtDOM(el) === range.from; } catch { return false; }
+}
+
+/** Live per gesture: CM6 never rebuilds an eq() widget when editability flips. */
+export function canEditView(view: EditorView): boolean {
+  return !view.state.readOnly && view.state.facet(EditorView.editable);
+}
+
+/**
+ * The drag of an atomic object's handle: pointer capture on the pressed handle, so a drag
+ * outside the window still ends. `onStart` runs at the first real move, so a double-click
+ * starts nothing; storage stays with the caller.
+ */
+export function startObjectDrag(e: PointerEvent, handlers: {
+  onStart?: () => void;
+  onMove: (ev: PointerEvent) => void;
+  onEnd: () => void;
+  onCancel: () => void;
+}): void {
+  const handle = e.currentTarget as HTMLElement;
+  let started = false;
+  const onMove = (ev: PointerEvent) => {
+    if (!started) {
+      if (ev.clientX === e.clientX && ev.clientY === e.clientY) return;
+      started = true;
+      handlers.onStart?.();
+    }
+    handlers.onMove(ev);
+  };
+  const detach = () => {
+    handle.removeEventListener('pointermove', onMove);
+    handle.removeEventListener('pointerup', onUp);
+    handle.removeEventListener('pointercancel', onCancel);
+  };
+  const onUp = () => { detach(); handlers.onEnd(); };
+  const onCancel = () => { detach(); handlers.onCancel(); };
+  try { handle.setPointerCapture(e.pointerId); } catch { /* detached DOM — listeners below still bound */ }
+  handle.addEventListener('pointermove', onMove);
+  handle.addEventListener('pointerup', onUp);
+  handle.addEventListener('pointercancel', onCancel);
 }
 
 /** Past this travel (px) a press-release is not a click. */
@@ -300,7 +339,7 @@ export class ImageWidget extends WidgetType {
       if (e.button !== 0) return;
       // Same live re-check as CheckboxWidget's click: a stale handle must never
       // edit a read-only view.
-      if (view.state.readOnly || !view.state.facet(EditorView.editable)) return;
+      if (!canEditView(view)) return;
       e.preventDefault();
       e.stopPropagation();
       // Select the image first: the text caret disappears (a non-empty
@@ -316,31 +355,24 @@ export class ImageWidget extends WidgetType {
       // in a cell and in the document alike. No layout (0) ⇒ unclamped.
       const cap = wrap.parentElement ? Math.floor(contentBoxWidth(wrap.parentElement)) : 0;
       const capped = (v: number) => (cap > 0 ? Math.min(cap, v) : v);
-      const onMove = (ev: PointerEvent) => {
-        if (dir !== 'bottom') w = capped(Math.max(24, Math.round(rect.width + ev.clientX - startX)));
-        if (dir === 'bottom') h = Math.max(24, Math.round(rect.height + ev.clientY - startY));
-        setImageBox(wrap, img, `${w}px`, isCorner(dir) ? undefined : `${h}px`);
-      };
-      const detach = () => {
-        handle.removeEventListener('pointermove', onMove);
-        handle.removeEventListener('pointerup', onUp);
-        handle.removeEventListener('pointercancel', onCancel);
-      };
       const restore = () => { setImageBox(wrap, img, prev.w || undefined, prev.h || undefined); };
-      const onUp = () => {
-        detach();
+      const onEnd = () => {
         let pos: number;
         try { pos = view.posAtDOM(wrap); } catch { restore(); return; }
-        // Images only (tableId === null): guardedAtomicRanges also yields table anchors.
+        // Images only: guardedAtomicRanges also yields table anchors.
         const atom = pos >= 0 ? atomicRangeAt(view.state, pos) : null;
         const suffix = isCorner(dir) ? String(w) : `${w}x${h}`;
-        if (!atom || atom.tableId !== null || !applyImageSuffix(view, atom.from, atom.to, suffix)) restore();
+        if (atom?.kind !== 'image' || !applyImageSuffix(view, atom.from, atom.to, suffix)) restore();
       };
-      const onCancel = () => { detach(); restore(); };
-      try { handle.setPointerCapture(e.pointerId); } catch { /* detached DOM — listeners below still bound */ }
-      handle.addEventListener('pointermove', onMove);
-      handle.addEventListener('pointerup', onUp);
-      handle.addEventListener('pointercancel', onCancel);
+      startObjectDrag(e, {
+        onMove: (ev) => {
+          if (dir !== 'bottom') w = capped(Math.max(24, Math.round(rect.width + ev.clientX - startX)));
+          if (dir === 'bottom') h = Math.max(24, Math.round(rect.height + ev.clientY - startY));
+          setImageBox(wrap, img, `${w}px`, isCorner(dir) ? undefined : `${h}px`);
+        },
+        onEnd,
+        onCancel: restore,
+      });
     });
     return handle;
   }

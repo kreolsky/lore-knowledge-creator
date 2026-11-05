@@ -3,12 +3,17 @@
  *
  * INVARIANT: mid-session reconnects under <graceMs> must not raise the blocking overlay.
  * Why: transient blips recover on the first retry; flashing a full-screen blocker
- * interrupts typing. Initial connect (never-been-ready) and a real 'offline' propagate
- * immediately — there is no prior good state to protect, and offline is a real problem
+ * interrupts typing. A real 'offline' propagates immediately — offline is a real problem
  * the user must see.
+ *
+ * INVARIANT: an initial connect under <initialDelayMs> must not raise the overlay either.
+ * Why: on a normal link it finishes within a few hundred ms, and the document's text is
+ * already on screen, so the overlay only flashes a blur over it. Input stays blocked for
+ * that window by the editor's own `editable` gate, not by this overlay.
  */
 
 export const OVERLAY_GRACE_MS = 1500;
+export const INITIAL_OVERLAY_DELAY_MS = 300;
 
 export interface OverlayGraceController {
   /**
@@ -27,10 +32,11 @@ export interface OverlayGraceController {
 export function createOverlayGrace(
   onHiddenChange: (hidden: boolean) => void,
   graceMs: number = OVERLAY_GRACE_MS,
+  initialDelayMs: number = INITIAL_OVERLAY_DELAY_MS,
 ): OverlayGraceController {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let hasBeenReady = false;
-  let hidden = true; // start hidden; the initial-connecting branch reveals it at once
+  let hidden = true; // start hidden; a connect that outlasts its delay reveals it
 
   const clear = () => {
     if (timer !== null) { clearTimeout(timer); timer = null; }
@@ -53,17 +59,11 @@ export function createOverlayGrace(
         return;
       }
       // Not ready, not offline → connecting/reconnecting (or a mid-switch join window).
-      if (!hasBeenReady) {
-        // Initial connect: nothing to protect — show immediately.
-        clear();
-        set(false);
-        return;
-      }
-      // Mid-session drop: delay revealing the blocker by the grace window. If `ready`
-      // returns before the timer fires, update(ready=true) cancels it and the overlay
-      // never appears.
+      // Delay revealing the blocker. If `ready` returns before the timer fires,
+      // update(ready=true) cancels it and the overlay never appears.
       if (timer === null) {
-        timer = setTimeout(() => { timer = null; set(false); }, graceMs);
+        const delay = hasBeenReady ? graceMs : initialDelayMs;
+        timer = setTimeout(() => { timer = null; set(false); }, delay);
       }
     },
     dispose(): void {

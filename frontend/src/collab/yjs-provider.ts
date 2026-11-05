@@ -24,6 +24,7 @@ import { ReconnectController, MAX_RECONNECT_ATTEMPTS } from './reconnect-control
 import { isAuthCloseCode } from './ws-close-codes';
 import { logCollabEvent, watchDeadDoc } from './collab-log';
 import { recordRtt, recordAckLatency, recordSyncLatency, recordRecovered } from '../telemetry/perf';
+import { markCollabSocketOpen } from '../telemetry/page-perf';
 import {
   MSG_AWARENESS,
   MSG_SYNC,
@@ -126,6 +127,7 @@ export class YjsProjectProvider {
 
   // ── Telemetry timing state (see collab-log.ts / perf.ts) ──────────────
   private _everConnected = false;
+  private _firstConnectTs: number | null = null;
   private _lastCloseTs: number | null = null;
   // Visibility snapshot taken at socket close. WHY: the ambient telemetry `wasHidden`
   // resets on every emit, so by the time `recovered` fires it has lost the signal — a
@@ -175,6 +177,7 @@ export class YjsProjectProvider {
       attempt: this.reconnectController.attempts,
     });
 
+    this._firstConnectTs ??= performance.now();
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     this.ws = new WebSocket(`${proto}//${location.host}/ws/collab/project/${this.projectId}`);
     this.ws.binaryType = 'arraybuffer';
@@ -185,6 +188,7 @@ export class YjsProjectProvider {
       logCollabEvent('yjs', 'open', undefined, {
         outageMs: this._lastCloseTs !== null ? Date.now() - this._lastCloseTs : undefined,
       });
+      if (!this._everConnected) markCollabSocketOpen(performance.now() - this._firstConnectTs!);
       this._everConnected = true;
       // A fresh socket means every entity needs a (re)join — the entity's own stored type
       // drives it. Entities still loading their local mirror are skipped here and join

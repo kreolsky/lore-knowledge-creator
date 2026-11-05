@@ -11,7 +11,7 @@
 
 import type React from 'react';
 import { memo, useState, useRef, useCallback, useMemo } from 'react';
-import { FileText, Trash2, Plus, ChevronRight, ChevronDown, Pencil, BookOpen, Menu, FolderUp, ShieldCheck, EyeOff, AppWindow } from 'lucide-react';
+import { FileText, Trash2, Plus, ChevronRight, ChevronDown, Pencil, BookOpen, Menu, FolderUp, EyeOff, AppWindow } from 'lucide-react';
 import { useAppStore } from '../store/app-store';
 import { useUIStore } from '../store/ui-store';
 import { useInboxStore } from '../store/inbox-store';
@@ -217,27 +217,14 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
           <>
             {/* Subtree chat privacy mark — shown to EVERY access level (the room
              * being private is public knowledge; the toggle lives in the Access
-             * tab). Same idea as ChatRow's unindexed metaIcon: green ShieldCheck. */}
+             * tab). A PIN lock is personal and deliberately carries no mark. */}
             {doc.chats_unindexed && (
               <span
                 data-chats-private-mark
-                className="shrink-0 text-green"
+                className="shrink-0 text-text-dim"
                 title={t('docChatsUnindexedMark')}
               >
-                <ShieldCheck size={14} aria-label={t('docChatsUnindexedMark')} />
-              </span>
-            )}
-            {/* Chats-unlisted mark — beside the privacy mark, shown to EVERY
-             * access level like it (the room being private is public knowledge;
-             * the toggle lives in the Access tab). Dim EyeOff: hidden from the
-             * LIST, not from search. */}
-            {doc.chats_unlisted && (
-              <span
-                data-chats-unlisted-mark
-                className="shrink-0 text-text-dim"
-                title={t('docChatsUnlistedMark')}
-              >
-                <EyeOff size={14} aria-label={t('docChatsUnlistedMark')} />
+                <EyeOff size={14} aria-label={t('docChatsUnindexedMark')} />
               </span>
             )}
             <span

@@ -36,22 +36,29 @@ export function effectiveUnlockedDocIds(
   });
 }
 
-export function selectOpenPageLockedBy(s: LockState): string | null {
-  const id = s.currentDocument?.document_id;
+/** The OUTERMOST locked, not-PIN-opened page on `docId`'s parent chain, or null. */
+export function selectDocLockedBy(s: Omit<LockState, 'currentDocument'>, docId: string): string | null {
   const locked = s.currentUser?.locked_doc_ids;
-  if (!id || !locked || locked.length === 0) return null;
-  if (!s.documents.some(d => d.document_id === id)) return LOCK_PENDING;
+  if (!locked || locked.length === 0) return null;
   const unlocked = effectiveUnlockedDocIds(s, Date.now());
   const parents = buildParentMap(s.documents);
   const seen = new Set<string>();
   let outermost: string | null = null;
-  let cur: string | null = id;
+  let cur: string | null = docId;
   while (cur && !seen.has(cur)) {
     if (locked.includes(cur) && !unlocked.includes(cur)) outermost = cur;
     seen.add(cur);
     cur = parents.get(cur) ?? null;
   }
   return outermost;
+}
+
+export function selectOpenPageLockedBy(s: LockState): string | null {
+  const id = s.currentDocument?.document_id;
+  const locked = s.currentUser?.locked_doc_ids;
+  if (!id || !locked || locked.length === 0) return null;
+  if (!s.documents.some(d => d.document_id === id)) return LOCK_PENDING;
+  return selectDocLockedBy(s, id);
 }
 
 export function selectOpenPageLocked(s: LockState): boolean {

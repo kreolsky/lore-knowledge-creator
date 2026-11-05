@@ -1631,9 +1631,8 @@ html.dark .cm-color-swatch[style*="rgb(253, 214, 99)"] { background-color: var(-
 }
 
 /* Atomic block selected highlight — → see live-preview/atomic-delete-guard.ts */
-/* WHY a mark class: the replace+widget decorations belong to livePreviewField /
-   tableBlockField; this mark wraps the replaced content so the user sees what a
-   delete will remove while the block is selected whole. */
+/* A mark over a whole-selected object; it does not reach a replaced widget, the frame
+   is atomicFramePlugin's. */
 .cm-atomic-selected {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
@@ -1656,6 +1655,15 @@ html.dark .cm-color-swatch[style*="rgb(253, 214, 99)"] { background-color: var(-
 .cm-editor .cm-content .cm-image-embed ::selection {
   background-color: transparent !important;
 }
+/* An inline table sits in the document's native selection range; a whole-selected object
+   shows its frame, never tinted cells. A focused cell keeps its own selection. */
+.cm-editor .cm-content .cm-table-block-wrap--selected:not(:focus-within) ::selection {
+  background-color: transparent !important;
+}
+/* WHY a stacking order: the frame and handles overhang the box, and the next image in a
+   row, later in the DOM, paints over them. Selected outranks a hovered neighbour. */
+.cm-image-embed:hover { z-index: 1; }
+.cm-image-embed--selected { z-index: 2; }
 .cm-image-embed img { cursor: pointer; }
 .cm-image-embed--selected img,
 .cm-content[contenteditable="false"] .cm-image-embed img { cursor: zoom-in; }
@@ -1759,25 +1767,58 @@ body.ref-drag-none, body.ref-drag-none * { cursor: no-drop !important; }
 
 /* ── Table block object — editable persisted table (live-preview/table-block-widget.ts) ── */
 .cm-table-block-wrap {
-  /* Same padding-not-margin rationale as .cm-table-widget-wrap (CM6 block measurement). */
+  /* Inline-block in its .cm-line, as .cm-image-embed: the line's empty part stays the
+     line's, so a press there places the caret. Same padding-not-margin rationale as
+     .cm-table-widget-wrap. No side padding: the .cm-line carries it. */
+  display: inline-block;
+  vertical-align: top;
+  width: 100%;
+  max-width: 100%;
   padding: 4px 0;
-  position: relative; /* anchor for the absolutely-positioned custom caret */
+  box-sizing: border-box;
+  position: relative;
+  /* WHY: .cm-content is a flex item with min-width:auto, so a table's width would stretch
+     a narrow document up to its max-width and scroll the page, not the block. */
+  contain: inline-size;
 }
-/* Whole-table selection outline — set by the ViewPlugin in atomic-delete-guard.ts
-   when the selection covers the anchor line whole (the cm-atomic-selected mark
-   cannot reach a block widget's replaced line). Same token as the image selection. */
-.cm-table-block-wrap--selected .cm-table-block {
-  /* Drawn ON the table's own outer border (inset: the scroller clips anything outside). */
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+/* The table's own box inside the wrap: width comes from applyColumnWidths
+   (`<sum>px`, or empty = 100%). max-width keeps a wide table scrolling in the document. */
+.cm-table-block-box {
+  position: relative;
+  max-width: 100%;
 }
+/* Same frame as .cm-image-embed--selected::after, painted over the table and outside the
+   scroller, which clips. WHY a radius: the image frame's operator exception to the
+   no-rounded-corners rule, extended to this frame on operator request. Only a whole-selected table shows the line;
+   hover reveals the controls, as on an image. */
+.cm-table-block-frame {
+  position: absolute;
+  z-index: 2;
+  inset: -1px;
+  border: 2px solid transparent;
+  border-radius: 3px;
+  pointer-events: none;
+}
+.cm-table-block-wrap--selected .cm-table-block-frame { border-color: var(--accent); }
+.cm-table-block-frame .cm-image-resize-handle { pointer-events: auto; }
+.cm-table-block-wrap:hover .cm-table-block-frame .cm-image-resize-handle,
+.cm-table-block-wrap:focus-within .cm-table-block-frame .cm-image-resize-handle,
+.cm-table-block-wrap--selected .cm-table-block-frame .cm-image-resize-handle { opacity: 1; }
+.cm-table-block-scale { cursor: ew-resize; }
+/* WHY CSS: see the .cm-image-resize-handle rule — a widget never rebuilds on an editable flip. */
+.cm-content[contenteditable="false"] .cm-table-block-frame,
+.cm-content[contenteditable="false"] .cm-table-block-toolbar { display: none; }
 /* Horizontal scroller: an auto/fixed table wider than the document column scrolls
    HERE, never widens the page. overflow-y is explicit — computed-to-auto would add
-   an inner vertical scrollbar and break block-widget height measurement. The
-   toolbar and select grip live OUTSIDE so they do not scroll away. */
+   an inner vertical scrollbar and break widget height measurement. The
+   toolbar lives OUTSIDE so they do not scroll away. */
 .cm-table-block-scroll {
   overflow-x: auto;
   overflow-y: hidden;
+  /* WHY: room for the last column's control, half of which overhangs the table edge; the
+     scroller would clip it. Paired so the table's available width stays the box's. */
+  margin-right: -6px;
+  padding-right: 6px;
 }
 .cm-table-block {
   border-collapse: collapse;
@@ -1787,7 +1828,9 @@ body.ref-drag-none, body.ref-drag-none * { cursor: no-drop !important; }
      changes them. Why: table-layout:auto re-measured content on every focus change
      (a live cell shows raw markdown, wider than the rendered placeholder), so a click
      made columns jump. fixed: a px column keeps its width; auto columns (w=0 → empty
-     <col> width) split the remaining document width EQUALLY, independent of content. */
+     <col> width) split the remaining document width EQUALLY, independent of content.
+     width:100% applies only while a column is auto: an all-px table gets its sum inline
+     (applyColumnWidths), or the browser rescales every column to fill the line. */
   table-layout: fixed;
   width: 100%;
 }
@@ -1836,33 +1879,20 @@ body.ref-drag-none, body.ref-drag-none * { cursor: no-drop !important; }
   background: var(--surface2);
   position: relative; /* anchor for the column-resize handle */
 }
-/* Column-resize handle on the right border of each header cell: an invisible 9px hit
-   zone centered on the border — the border line itself stays as is. On hover a solid
-   accent bar sits ON the line at header height — 4px, the panel .resizer's hover
-   thickness. Double-click resets the column to
-   auto (w=0). */
+/* Column-resize control: the image's square handle (.cm-image-resize-handle) centred on
+   the right border of each header cell. Visible with the table's frame, no hover state.
+   Double-click resets the column to auto (w=0). z-index: above the frame's line. */
 .cm-table-block-col-resize {
-  position: absolute;
-  top: 0;
-  right: -4.5px;
-  width: 9px;
-  height: 100%;
+  top: 50%;
+  right: -5px;
+  margin-top: -5px;
   cursor: col-resize;
   user-select: none;
-  z-index: 1;
+  z-index: 3;
 }
-.cm-table-block-col-resize::after {
-  content: '';
-  position: absolute;
-  top: 2px;
-  bottom: 2px;
-  left: 50%;
-  width: 4px;
-  margin-left: -2px;
-  background: var(--accent);
-  opacity: 0;
-}
-.cm-table-block-col-resize:hover::after { opacity: 1; }
+.cm-table-block-wrap:hover .cm-table-block-col-resize,
+.cm-table-block-wrap:focus-within .cm-table-block-col-resize,
+.cm-table-block-wrap--selected .cm-table-block-col-resize { opacity: 1; }
 /* Compact icon toolbar just below the table, aligned to its right edge (outside the table).
    Button visuals are Tailwind utilities on the element itself (see buildToolbar). */
 /* Shown only while focus is inside THIS table (a cell editor) — otherwise it is
@@ -1875,6 +1905,9 @@ body.ref-drag-none, body.ref-drag-none * { cursor: no-drop !important; }
   justify-content: flex-end;
   gap: 2px;
   margin-top: 3px;
+  /* Inline width = the table's sum; a narrow table's buttons must not overflow left. */
+  max-width: 100%;
+  min-width: max-content;
 }
 .cm-table-block-wrap:focus-within .cm-table-block-toolbar { visibility: visible; }
 .cm-table-block-error {

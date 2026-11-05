@@ -41,7 +41,7 @@ const LORE_CLIP_MARK = '<!--lore-clipboard-->';
 /** The rendered `<img>` of the whole-selected image embed, or null for any other selection. */
 function selectedImageElement(view: EditorView): HTMLImageElement | null {
   const range = selectedAtomicRange(view.state);
-  if (!range || range.tableId !== null) return null;
+  if (range?.kind !== 'image') return null;
   for (const img of view.contentDOM.querySelectorAll<HTMLImageElement>('img:not(.cm-widgetBuffer)')) {
     let pos: number;
     try { pos = view.posAtDOM(img); } catch { continue; }

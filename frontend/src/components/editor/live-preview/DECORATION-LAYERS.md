@@ -7,16 +7,16 @@ syntax tree. Each layer owns a disjoint set of node types, preventing range conf
 
 | # | Extension | Type | File | Target Nodes | Decoration Types |
 |---|-----------|------|------|-------------|-----------------|
-| 1 | `livePreviewField` | StateField | `build-structural.ts` | HeaderMark, EmphasisMark, StrikethroughMark, CodeMark, QuoteMark, HorizontalRule, ListMark, TaskMarker, InlineCode, Link, Image, InlineMath, FencedCode (copy button) | replace, mark, widget |
-| 2 | `livePreviewPlugin` | ViewPlugin | `build-line.ts` | Blockquote, HorizontalRule (line), FencedCode (line bg), ListItem (indent) | line |
+| 1 | `livePreviewField` | StateField | `build-structural.ts` | HeaderMark, EmphasisMark, StrikethroughMark, CodeMark, QuoteMark, HorizontalRule, ListMark, TaskMarker, InlineCode, Link, Image (not image embeds or `table:`), InlineMath, FencedCode (copy button) | replace, mark, widget |
+| 2 | `listLinePlugin`, `cursorLinePlugin` | ViewPlugin | `build-line.ts` | Blockquote, HorizontalRule (line), FencedCode (line bg), ListItem (indent) | line |
 | 3 | `tableRenderField` | StateField | `fields.ts` | Table | replace (block) |
 | 4 | `mathBlockRenderField` | StateField | `fields.ts` | BlockMath ($$...$$) | replace (block) |
-| 5 | `tableBlockField` | StateField | `fields.ts` | Image (`table:` target) | replace (block) |
-| 6 | `atomicSelectedField` | StateField | `atomic-delete-guard.ts` | mark overlay on fully-selected ranges of 1 (image embeds) and 5 | mark |
+| 5 | `atomicObjectField` | StateField | `fields.ts` | Image (image embed, `table:` target) | replace (inline, atomic) |
+| 6 | `atomicSelectedField` | StateField | `atomic-delete-guard.ts` | mark overlay on fully-selected ranges of 5 | mark |
 | 7 | `dropCaretField` (via `dropCaret()`) | StateField | `../drop-caret.ts` | none — position-driven | widget (point) |
 
-`tableBlockField` owns `![label](table:id)` anchors exclusively — `build-structural.ts`
-early-returns on a `table:` Image so the two never decorate the same range.
+`atomicObjectField` owns image embeds and `![label](table:id)` anchors exclusively —
+`build-structural.ts` early-returns on them so the two never decorate the same range.
 
 ## Atomic blocks (image embeds + table anchors)
 
@@ -28,8 +28,8 @@ One rule for both, «мы не удаляем таблицу/картинку о
   table anchors never revealed either (layer 5 is cursor-insensitive). Raw source is
   editable only in plain-text mode (Mod-/ detaches the whole render group).
 - **Atomic motion.** Both register `EditorView.atomicRanges` (layer 1 via
-  `inlineAtomicRanges` for Checkbox+Image widgets; layer 5 via `blockReplaceField`
-  `atomic: true`) — arrows jump over the block, Shift+Arrow selects it whole.
+  `checkboxAtomicRanges` for Checkbox widgets; layer 5 via `atomicObjectField`)
+  — arrows jump over the block, Shift+Arrow selects it whole.
 - **Guarded deletes.** `atomicDeleteGuard` (a transaction filter in
   `atomic-delete-guard.ts`, mounted inside `renderExtensions()`) drops any `delete.*`
   user event whose change overlaps a guarded range or line-joins into/out of a

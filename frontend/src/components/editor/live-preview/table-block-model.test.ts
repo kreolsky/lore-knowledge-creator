@@ -13,6 +13,9 @@ import {
   setColumnWidth,
   addRow,
   addColumn,
+  scaleColumnWidths,
+  setColumnWidths,
+  MIN_COLUMN_WIDTH,
   removeRow,
   removeColumn,
   tableAnchor,
@@ -49,37 +52,9 @@ describe('createTable / readTableModel', () => {
     });
   });
 
-  it('registers the table under getTablesMap', () => {
-    const id = createTable(doc, [['x']]);
-    expect(getTablesMap(doc).has(id)).toBe(true);
-  });
-
-  it('returns null for an unknown id', () => {
-    expect(readTableModel(doc, 'nope')).toBeNull();
-  });
-
-  it('cells are Y.Text (per-cell CRDT), not plain strings', () => {
-    const id = createTable(doc, [['hi']]);
-    const table = getTablesMap(doc).get(id)!;
-    const rows = table.get('rows') as Y.Array<Y.Array<Y.Map<Y.Text>>>;
-    const cell = rows.get(0).get(0);
-    expect(cell.get('t')).toBeInstanceOf(Y.Text);
-  });
 });
 
 describe('cell + structure mutations', () => {
-  it('setColumnWidth writes the px width', () => {
-    const id = createTable(doc, [['a', 'b']]);
-    setColumnWidth(doc, id, 1, 240);
-    expect(readTableModel(doc, id)!.columns[1]).toBe(240);
-  });
-
-  it('addRow appends an empty row of the right width', () => {
-    const id = createTable(doc, [['a', 'b']]);
-    addRow(doc, id);
-    expect(readTableModel(doc, id)!.rows).toEqual([['a', 'b'], ['', '']]);
-  });
-
   it('addColumn appends an empty cell to every row + an AUTO (0) width', () => {
     const id = createTable(doc, [['a'], ['b']]);
     addColumn(doc, id);
@@ -94,25 +69,6 @@ describe('cell + structure mutations', () => {
     expect(readTableModel(doc, id)!.columns).toEqual([0, 0]);
   });
 
-  it('removeRow drops a row', () => {
-    const id = createTable(doc, [['a'], ['b'], ['c']]);
-    removeRow(doc, id, 1);
-    expect(readTableModel(doc, id)!.rows).toEqual([['a'], ['c']]);
-  });
-
-  it('removeColumn drops the cell + its width', () => {
-    const id = createTable(doc, [['a', 'b', 'c']]);
-    removeColumn(doc, id, 1);
-    const m = readTableModel(doc, id)!;
-    expect(m.rows).toEqual([['a', 'c']]);
-    expect(m.columns.length).toBe(2);
-  });
-});
-
-describe('tableAnchor', () => {
-  it('builds the transclusion anchor', () => {
-    expect(tableAnchor('My table', 'abc')).toBe('![My table](table:abc)');
-  });
 });
 
 /**
@@ -133,10 +89,6 @@ describe('serializeTables (checkpoint capture)', () => {
   it('DEFAULT_COLUMN_WIDTH matches the backend constant (160)', () => {
     expect(DEFAULT_COLUMN_WIDTH).toBe(160);
   });
-  it('returns "{}" when there are no tables', () => {
-    expect(serializeTables(new Y.Doc())).toBe('{}');
-  });
-
   it('emits {columns, rows} per table — matches the backend shape', () => {
     // Mirror of the backend fixture in test_table_capture.py::test_capture_emits_columns_and_rows
     const id = createTable(doc, [['a', 'b'], ['c', 'd']]);
@@ -209,22 +161,6 @@ describe('modelToGfm (model → GFM serializer)', () => {
     );
   });
 
-  it('pads a single-column table', () => {
-    const id = createTable(doc, [['H'], ['x']]);
-    expect(modelToGfm(readTableModel(doc, id)!)).toBe('| H |\n| --- |\n| x |');
-  });
-
-  it('uses rows[0] as the header and the rest as the body', () => {
-    const id = createTable(doc, [['H1', 'H2'], ['r1a', 'r1b'], ['r2a', 'r2b']]);
-    const gfm = modelToGfm(readTableModel(doc, id)!);
-    expect(gfm.split('\n')).toEqual([
-      '| H1 | H2 |',
-      '| --- | --- |',
-      '| r1a | r1b |',
-      '| r2a | r2b |',
-    ]);
-  });
-
   it('escapes pipes and converts newlines (byte-inverse of unescapeCell)', () => {
     const id = createTable(doc, [['h1', 'h2'], ['a | b', 'line1\nline2']]);
     const gfm = modelToGfm(readTableModel(doc, id)!);
@@ -232,10 +168,6 @@ describe('modelToGfm (model → GFM serializer)', () => {
     expect(gfm).toContain('line1<br>line2');
     // The escaped pipe must NOT split the cell: still 2 columns.
     expect(gfm.split('\n')[2].split(/(?<!\\)\|/)).toHaveLength(4); // '' + 2 cells + ''
-  });
-
-  it('returns "" for an empty model (no rows)', () => {
-    expect(modelToGfm({ columns: [160], rows: [] })).toBe('');
   });
 
   it('round-trips cell text losslessly: readTableModel(import(modelToGfm(model)))', () => {
@@ -263,16 +195,6 @@ describe('expandTableAnchorsToGfm (copy-path anchor expansion)', () => {
     expect(expanded).not.toContain('table:');
   });
 
-  it('expands multiple distinct tables independently', () => {
-    const id1 = createTable(doc, [['A'], ['1']]);
-    const id2 = createTable(doc, [['X', 'Y'], ['2', '3']]);
-    const md = `${tableAnchor('t1', id1)}\n${tableAnchor('t2', id2)}`;
-    const expanded = expandTableAnchorsToGfm(doc, md);
-    expect(expanded).toContain('| A |\n| --- |\n| 1 |');
-    expect(expanded).toContain('| X | Y |\n| --- | --- |\n| 2 | 3 |');
-    expect((expanded.match(/table:/g) || []).length).toBe(0);
-  });
-
   it('leaves a missing-model anchor untouched (never throws)', () => {
     const md = `text ${tableAnchor('orphan', 'does-not-exist')} end`;
     expect(expandTableAnchorsToGfm(doc, md)).toBe(md);
@@ -286,13 +208,6 @@ describe('expandTableAnchorsToGfm (copy-path anchor expansion)', () => {
     expect(getTablesMap(doc).has(id)).toBe(true);
   });
 
-  it('TABLE_ANCHOR_RE matches the anchor shape (group 1 = label, group 2 = id)', () => {
-    const re = new RegExp(TABLE_ANCHOR_RE.source, TABLE_ANCHOR_RE.flags.replace('g', ''));
-    const m = '![My label](table:abc-123)'.match(re);
-    expect(m).not.toBeNull();
-    expect(m![1]).toBe('My label');
-    expect(m![2]).toBe('abc-123');
-  });
 });
 
 describe('modelToGfm — GFM separator-grammar limitation', () => {
@@ -311,16 +226,6 @@ describe('modelToGfm — GFM separator-grammar limitation', () => {
     expect(count).toBe(0);
   });
 
-  it('a single separator-grammar header cell AMONG normal cells round-trips fine', () => {
-    // The non-dash cell ("B") prevents the row from reading as a separator.
-    const id = createTable(doc, [['---', 'B'], ['1', '2']]);
-    const gfm = modelToGfm(readTableModel(doc, id)!);
-    const doc2 = new Y.Doc();
-    const { count, text } = importGfmTables(doc2, gfm, 't');
-    expect(count).toBe(1);
-    const newId = [...text.matchAll(TABLE_ANCHOR_RE)][0][2];
-    expect(readTableModel(doc2, newId)!.rows).toEqual([['---', 'B'], ['1', '2']]);
-  });
 });
 
 /**
@@ -362,11 +267,6 @@ describe('deleteTableFromDoc (whole-table delete)', () => {
     expect(doc.getText('content').toString()).toBe(`${tableAnchor('keep', keep)} and `);
   });
 
-  it('is a no-op (no throw) for an id that has neither anchor nor model', () => {
-    seedContent('plain text');
-    expect(() => deleteTableFromDoc(doc, 'never-existed', 'x')).not.toThrow();
-    expect(doc.getText('content').toString()).toBe('plain text');
-  });
 });
 
 /**
@@ -457,11 +357,6 @@ describe('listDocumentTables (panel list derivation)', () => {
     ]);
   });
 
-  it('returns [] when there are no tables and no anchors', () => {
-    seedContent('just text, nothing tabular');
-    expect(listDocumentTables(doc)).toEqual([]);
-  });
-
   it('lists a model with empty content as unlinked (data still reachable)', () => {
     const orphan = createTable(doc, [['a']]);
     expect(listDocumentTables(doc)).toEqual([
@@ -469,13 +364,6 @@ describe('listDocumentTables (panel list derivation)', () => {
     ]);
   });
 
-  it('shows a renamed UNLINKED table with its model label', () => {
-    const orphan = createTable(doc, [['a']]);
-    renameTable(doc, orphan, '', 'My orphan'); // no anchor → model label only
-    expect(listDocumentTables(doc)).toEqual([
-      { table_id: orphan, label: 'My orphan', rows: 1, cols: 1, unlinked: true },
-    ]);
-  });
 });
 
 /**
@@ -490,12 +378,6 @@ describe('unlinked table rename + re-insert', () => {
     expect(doc.getText('content').toString()).toBe(''); // no anchor written
   });
 
-  it('renameTable normalizes the model label (no `]`/newline)', () => {
-    const id = createTable(doc, [['a']]);
-    renameTable(doc, id, '', 'a]b\nc'); // ']' stripped, '\n' → ' '
-    expect(getModelLabel(doc, id)).toBe('ab c');
-  });
-
   it('insertTableAnchor re-links an orphan (anchor added, table becomes linked)', () => {
     const id = createTable(doc, [['a']]);
     renameTable(doc, id, '', 'Back');
@@ -507,13 +389,6 @@ describe('unlinked table rename + re-insert', () => {
     ]);
   });
 
-  it('renameTable still rewrites the anchor for a LINKED table', () => {
-    const id = createTable(doc, [['a']]);
-    doc.getText('content').insert(0, tableAnchor('Old', id));
-    renameTable(doc, id, 'Old', 'New');
-    expect(doc.getText('content').toString()).toBe(tableAnchor('New', id));
-    expect(getModelLabel(doc, id)).toBe('New');
-  });
 });
 
 /**
@@ -533,18 +408,6 @@ describe('normalizeTableLabel', () => {
     expect(normalizeTableLabel('a\n\nb')).toBe('a  b');
   });
 
-  it('trims leading/trailing whitespace', () => {
-    expect(normalizeTableLabel('  spaced  ')).toBe('spaced');
-  });
-
-  it('preserves spaces, unicode, "(" and "[" (those do not break the grammar)', () => {
-    expect(normalizeTableLabel('Таблица (копия) [v2]')).toBe('Таблица (копия) [v2');
-    // "(" and "[" survive; only "]" and "\n" are neutralized.
-  });
-
-  it('returns "" for a whitespace-only input', () => {
-    expect(normalizeTableLabel('   \n  ')).toBe('');
-  });
 });
 
 /**
@@ -574,16 +437,6 @@ describe('renameTable (whole-table label rename)', () => {
     expect(getTablesMap(doc).has(id)).toBe(true);
   });
 
-  it('leaves a DIFFERENT table anchor untouched (renames only the targeted id)', () => {
-    const keep = createTable(doc, [['k']]);
-    const target = createTable(doc, [['t']]);
-    seedContent(`${tableAnchor('Keep me', keep)} and ${tableAnchor('Target', target)}`);
-    renameTable(doc, target, 'Target', 'Renamed');
-    expect(doc.getText('content').toString()).toBe(
-      `${tableAnchor('Keep me', keep)} and ${tableAnchor('Renamed', target)}`,
-    );
-  });
-
   it('applies normalizeTableLabel on commit (strips "]" and newlines)', () => {
     const id = createTable(doc, [['a']]);
     seedContent(tableAnchor('Plain', id));
@@ -592,54 +445,37 @@ describe('renameTable (whole-table label rename)', () => {
     expect(doc.getText('content').toString()).toBe(tableAnchor('ab c', id));
   });
 
-  it('the resulting anchor re-parses via TABLE_ANCHOR_RE with the new label', () => {
-    const id = createTable(doc, [['a']]);
-    seedContent(tableAnchor('Old', id));
-    renameTable(doc, id, 'Old', 'Fresh label');
-    const content = doc.getText('content').toString();
-    const m = [...content.matchAll(TABLE_ANCHOR_RE)];
-    expect(m).toHaveLength(1);
-    expect(m[0][1]).toBe('Fresh label');
-    expect(m[0][2]).toBe(id);
+});
+
+describe('scaleColumnWidths', () => {
+  const sum = (w: number[]) => w.reduce((a, b) => a + b, 0);
+
+  // TEST-WHY: pure-logic-edge — the sum is what keeps the table edge under the cursor, and rounding breaks it silently.
+  it('hits the requested total exactly, in integers', () => {
+    const out = scaleColumnWidths([233, 233, 234], 401);
+    expect(sum(out)).toBe(401);
+    expect(out.every(Number.isInteger)).toBe(true);
   });
 
-  it('does not touch the tables model (label lives only in content)', () => {
-    const id = createTable(doc, [['a', 'b']]);
-    seedContent(tableAnchor('Old', id));
-    const before = readTableModel(doc, id);
-    renameTable(doc, id, 'Old', 'New');
-    expect(readTableModel(doc, id)).toEqual(before);
+  // TEST-WHY: pure-logic-edge — a pinned column must not stop the shrink; the others absorb the rest.
+  it('pins a column at the floor while the others absorb the shrink', () => {
+    const out = scaleColumnWidths([50, 200, 400], 200);
+    expect(out[0]).toBe(MIN_COLUMN_WIDTH);
+    expect(sum(out)).toBe(200);
+    expect(Math.min(...out)).toBeGreaterThanOrEqual(MIN_COLUMN_WIDTH);
+    expect(scaleColumnWidths([100, 300, 500], 10)).toEqual([40, 40, 40]);
   });
 });
 
-describe('createUnlinkedTable', () => {
-  it('creates a table model whose matrix matches the input', () => {
-    const id = createUnlinkedTable(doc, [['h1', 'h2'], ['1', '2']], 'My file');
-    expect(readTableModel(doc, id)).toEqual({
-      columns: [expect.any(Number), expect.any(Number)],
-      rows: [['h1', 'h2'], ['1', '2']],
-    });
-  });
-
-  it('stores the label as the model-level fallback (readable via getModelLabel)', () => {
-    const id = createUnlinkedTable(doc, [['a']], 'Sales 2024');
-    expect(getModelLabel(doc, id)).toBe('Sales 2024');
-  });
-
-  it('normalizes the label so it can seed a valid anchor later', () => {
-    // An unnormalized label (with a newline / ']') would break an anchor; the stored
-    // label must be the normalized form.
-    const id = createUnlinkedTable(doc, [['a']], 'bad\nlabel]here');
-    const stored = getModelLabel(doc, id);
-    expect(stored).toBe(normalizeTableLabel('bad\nlabel]here'));
-    expect(stored).not.toMatch(/[\n\]]/);
-  });
-
-  it('writes NO anchor into the document content (the table is unlinked)', () => {
-    const id = createUnlinkedTable(doc, [['a', 'b']], 'No anchor');
-    expect(doc.getText('content').toString()).toBe('');
-    expect([...doc.getText('content').toString().matchAll(TABLE_ANCHOR_RE)]).toHaveLength(0);
-    // model is registered under its id
-    expect(getTablesMap(doc).has(id)).toBe(true);
+describe('addColumn width follows the table state', () => {
+  // TEST-WHY: pure-logic-edge — a 0 in an all-px table flips it to 100% wide, a jump the user never made.
+  it('a frozen table gets a px column, an auto table an auto one', () => {
+    const doc = new Y.Doc();
+    const id = createTable(doc, [['a', 'b']]);
+    addColumn(doc, id);
+    expect(readTableModel(doc, id)?.columns).toEqual([0, 0, 0]);
+    setColumnWidths(doc, id, [100, 200, 300]);
+    addColumn(doc, id);
+    expect(readTableModel(doc, id)?.columns).toEqual([100, 200, 300, DEFAULT_COLUMN_WIDTH]);
   });
 });

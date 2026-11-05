@@ -1,5 +1,5 @@
 /**
- * Subtree chat privacy — the doc-tree half: the row carries a green mark while
+ * Subtree chat privacy — the doc-tree half: the row carries an EyeOff mark while
  * `chats_unindexed` is set, at every access level; the toggle is NOT in the
  * tree (it lives in the Access tab, access/ChatsPrivacySection).
  */

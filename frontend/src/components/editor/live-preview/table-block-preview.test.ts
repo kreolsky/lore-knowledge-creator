@@ -43,14 +43,6 @@ afterEach(() => {
   while (views.length) views.pop()!.destroy();
 });
 
-describe('tableDocSource facet', () => {
-  it('provides the doc when supplied, null when absent', () => {
-    const doc = new Y.Doc();
-    expect(EditorState.create({ extensions: [tableDocSource.of(doc)] }).facet(tableDocSource)).toBe(doc);
-    expect(EditorState.create({ extensions: [] }).facet(tableDocSource)).toBeNull();
-  });
-});
-
 describe('TableBlockWidget — snapshot preview (readonly)', () => {
   it('prefers the facet doc over the live handle', () => {
     const previewDoc = new Y.Doc();

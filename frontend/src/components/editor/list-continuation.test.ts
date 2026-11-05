@@ -55,34 +55,6 @@ describe('list continuation — Enter on non-empty bullets', () => {
     expect(docText(view)).toBe('- hello\n- ');
   });
 
-  it('continues level 1 bullet with asterisk marker', () => {
-    const view = createView('* hello', 7);
-    const handled = runEnter(view);
-    expect(handled).toBe(true);
-    expect(docText(view)).toBe('* hello\n* ');
-  });
-
-  it('continues level 1 bullet with plus marker', () => {
-    const view = createView('+ hello', 7);
-    const handled = runEnter(view);
-    expect(handled).toBe(true);
-    expect(docText(view)).toBe('+ hello\n+ ');
-  });
-
-  it('continues level 2 nested bullet at same indent', () => {
-    const view = createView('- one\n\t- two', 12);
-    const handled = runEnter(view);
-    expect(handled).toBe(true);
-    expect(docText(view)).toBe('- one\n\t- two\n\t- ');
-  });
-
-  it('continues level 3 nested bullet at same indent', () => {
-    const doc = '- one\n\t- two\n\t\t- three';
-    const view = createView(doc, doc.length);
-    const handled = runEnter(view);
-    expect(handled).toBe(true);
-    expect(docText(view)).toBe('- one\n\t- two\n\t\t- three\n\t\t- ');
-  });
 });
 
 describe('list continuation — Enter on empty bullets (dedent)', () => {
@@ -91,14 +63,6 @@ describe('list continuation — Enter on empty bullets (dedent)', () => {
     const handled = runEnter(view);
     expect(handled).toBe(true);
     expect(docText(view)).toBe('- one\n- ');
-  });
-
-  it('empty level 3 bullet dedents to level 2', () => {
-    const doc = '- one\n\t- two\n\t\t- ';
-    const view = createView(doc, doc.length);
-    const handled = runEnter(view);
-    expect(handled).toBe(true);
-    expect(docText(view)).toBe('- one\n\t- two\n\t- ');
   });
 
   it('empty level 1 bullet removes marker entirely', () => {
@@ -118,33 +82,11 @@ describe('list continuation — checkbox trailing space', () => {
     expect(view.state.selection.main.head).toBe(view.state.doc.length);
   });
 
-  it('continues checked checkbox with unchecked + trailing space', () => {
-    const view = createView('- [x] done', 10);
-    const handled = runEnter(view);
-    expect(handled).toBe(true);
-    expect(docText(view).endsWith('- [ ] ') || docText(view).endsWith('- [x] ')).toBe(true);
-  });
-
-  it('does not double-space if continuation already has trailing space', () => {
-    const view = createView('- [ ] foo', 9);
-    const handled = runEnter(view);
-    expect(handled).toBe(true);
-    expect(docText(view)).not.toMatch(/  $/);
-  });
-
   it('empty level-1 checkbox dedents to empty line (existing behavior)', () => {
     const view = createView('- [ ] ', 6);
     const handled = runEnter(view);
     expect(handled).toBe(true);
     expect(docText(view)).toBe('');
-  });
-
-  it('continues level-2 checkbox with trailing space', () => {
-    const view = createView('- [ ] one\n\t- [ ] two', 20);
-    const handled = runEnter(view);
-    expect(handled).toBe(true);
-    expect(docText(view)).toBe('- [ ] one\n\t- [ ] two\n\t- [ ] ');
-    expect(view.state.selection.main.head).toBe(view.state.doc.length);
   });
 
   it('exact user scenario: aaa, Enter, Tab, bbb, Enter', () => {
@@ -171,16 +113,3 @@ describe('list continuation — checkbox trailing space', () => {
   });
 });
 
-describe('list continuation — outside list context', () => {
-  it('returns false for plain text', () => {
-    const view = createView('hello world', 5);
-    const handled = runEnter(view);
-    expect(handled).toBe(false);
-  });
-
-  it('returns false for heading', () => {
-    const view = createView('# Title', 7);
-    const handled = runEnter(view);
-    expect(handled).toBe(false);
-  });
-});

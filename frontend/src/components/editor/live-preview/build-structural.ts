@@ -39,13 +39,11 @@ function resolveLinkCls(cls: string, urlText: string): string {
 import {
   CheckboxWidget,
   BulletWidget,
-  ImageWidget,
   TransclusionWidget,
   TransclusionLinkWidget,
   FileRefWidget,
   CopyButtonWidget,
   InlineMathWidget,
-  parseSizeFromAlt,
 } from './widgets';
 
 /**
@@ -66,8 +64,7 @@ export interface ReplaceRange {
   widget?: WidgetType;
   // ARCH: when true, the decoration is a CM6 block widget (renders between
   // lines, not inside a .cm-line) — used by standalone transclusion lines to
-  // render gaplessly without the editor line-height strut. Mirrors the table
-  // block widget in fields.ts.
+  // render gaplessly without the editor line-height strut.
   block?: boolean;
 }
 
@@ -329,39 +326,21 @@ export function buildStructuralDecorations(state: EditorState): DecorationSet {
         const revealFrom = hasOuterBrackets ? node.from - 1 : node.from;
         const revealTo = hasOuterBrackets ? node.to + 1 : node.to;
 
-        // ARCH: an image embed (`![alt](ref:id)` resolving to an image) is an ATOMIC
-        // BLOCK: its ImageWidget is ALWAYS rendered — the raw text is never revealed,
-        // not even under the caret. Motion jumps over the range as one unit
-        // (inlineAtomicRanges facet in fields.ts), a press on the widget selects it
-        // whole (ImageWidget mousedown), and one-key deletes are swallowed
-        // (atomic-delete-guard.ts). Raw source (alt, size suffix) stays editable in
-        // plain-text mode (Mod-/). All other Image/Link nodes keep the
-        // reveal-on-cursor editing affordance below.
         const embed = node.name === 'Image'
           ? extractEmbedFromImageNode(node.node, state, children)
           : null;
-        const isAtomicImageEmbed =
-          !!embed && resolveTransclusion(embed.urlText)?.kind === 'image';
+        // Image embeds and `table:` anchors are owned by atomicObjectField (fields.ts): always
+        // rendered, never revealed. Skip ALL inline processing here.
+        if (embed && (resolveTransclusion(embed.urlText)?.kind === 'image'
+            || parseTarget(embed.urlText)?.scheme === 'table')) return false;
 
-        if (!isAtomicImageEmbed && isCursorIn(revealFrom, revealTo)) return false;
+        if (isCursorIn(revealFrom, revealTo)) return false;
 
         if (node.name === 'Image') {
           if (embed) {
             const { urlText, alt } = embed;
-            // `table:` anchors are owned by `tableBlockField` (block replace) — skip ALL
-            // inline processing here so a revealed anchor (cursor on the line) shows its
-            // raw `![label](table:id)` text instead of half-hidden link brackets.
-            if (parseTarget(urlText)?.scheme === 'table') return false;
             const resolved = resolveTransclusion(urlText);
             if (resolved) {
-              if (resolved.kind === 'image') {
-                // ImageWidget path — ref:<id> image references. The URL now lives in the
-                // unified transcludeMap (kind:'ref-image', carries imageUrl).
-                const { width, height } = parseSizeFromAlt(alt);
-                const imgUrl = transcludeMap.get(resolved.id)?.imageUrl;
-                replaceRanges.push({ from: node.from, to: node.to, widget: new ImageWidget(imgUrl!, width, height) });
-                return false;
-              }
               if (resolved.kind === 'file') {
                 // see SYSTEM: transclusion — a file ref (agent-shared archive) has no
                 // text body: the embed is a compact download card, never a band.
@@ -381,8 +360,7 @@ export function buildStructuralDecorations(state: EditorState): DecorationSet {
               const widget = new TransclusionWidget(entry, resolved.id, kind, depth);
               // ARCH: standalone lines (only the embed + surrounding whitespace on
               // the line) render as a CM6 block widget — gapless, no line-height
-              // strut, fills .cm-content width. Mirrors the table block widget
-              // (fields.ts). Whole-line range avoids the orphan-line charWidth
+              // strut, fills .cm-content width. Whole-line range avoids the orphan-line charWidth
               // scroll-jump bug; block-range cursor reveal preserves
               // body-click-to-edit-raw (clicking the band lands the cursor in
               // range → rebuild hides the widget → raw syntax shown).

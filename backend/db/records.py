@@ -206,8 +206,9 @@ def serialize_record(record: dict, id_field: str) -> dict:
     for k, v in record.items():
         # INVARIANT(corruption): ydoc_state is an internal CRDT snapshot (raw bytes) — it must
         # never reach an API response: JSON serialization can't UTF-8-decode it,
-        # and clients have no use for it.  Why: ydoc_state is raw CRDT bytes the client can't decode or use; leaking it would ship a multi-KB binary that breaks JSON serialization, so it's stripped at the single outbound seam. Stripped here, the single outbound
-        # boundary. Why: SELECT * (fetch_one) pulls it in; see ydoc_store.
+        # and clients have no use for it.  Why: ydoc_state is raw CRDT bytes the client can't decode or use; leaking it would ship a multi-KB binary that breaks JSON serialization, so it's stripped at the single outbound
+        # boundary. Why: SELECT * paths still pull it in (fetch_many, list reads) —
+        # fetch_one OMITS it (crud._FETCH_ONE_OMITS); see ydoc_store.
         if k == "ydoc_state":
             continue
         if k == "id":

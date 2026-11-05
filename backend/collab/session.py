@@ -364,24 +364,29 @@ class CollabSession:
             return
 
         for msg, excludes in pending:
+            # Serialize once per message, not once per client — a fanout to N
+            # clients paid N identical json.dumps of the same payload.
+            if isinstance(msg, bytes):
+                payload: bytes | str = msg
+            else:
+                # INVARIANT: a non-serializable payload must be dropped, not
+                # raised — one bad broadcast must never kill the batch task.  Why: one malformed broadcast must not abort the whole batch task
+                try:
+                    payload = json.dumps(msg)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Dropping non-serializable broadcast payload for entity=%s",
+                        self.entity_id,
+                    )
+                    continue
             for ws_id, client in list(self.clients.items()):
                 if client.ws in excludes:
                     continue
                 try:
-                    if isinstance(msg, bytes):
-                        await client.ws.send_bytes(msg)
+                    if isinstance(payload, bytes):
+                        await client.ws.send_bytes(payload)
                     else:
-                        try:
-                            text = json.dumps(msg)
-                        except (TypeError, ValueError):
-                            # INVARIANT: a non-serializable payload must be dropped, not
-                            # raised — one bad broadcast must never kill the batch task.  Why: one malformed broadcast must not abort the whole batch task
-                            logger.warning(
-                                "Dropping non-serializable broadcast payload for entity=%s",
-                                self.entity_id,
-                            )
-                            continue
-                        await client.ws.send_text(text)
+                        await client.ws.send_text(payload)
                 except Exception as exc:
                     # WHY: a failed send means the client is gone — drop it and close;
                     # count it so a persistent send problem is visible on /api/health.
@@ -547,7 +552,13 @@ class CollabSession:
             self.ydoc.apply_update(update_bytes)
         self._dirty = True
         wrapped = wrap_binary(self.entity_id, MSG_SYNC, bytes([MSG_SYNC, MSG_SYNC_UPDATE]) + update_bytes)
-        await self.broadcast_binary(wrapped)
+        # WHY queue_broadcast, not a direct broadcast_binary: the backplane listener
+        # awaits every handler inline (backplane._listener), so one slow client's
+        # send_bytes here would stall delivery on EVERY channel this replica serves.
+        # Queuing moves the send onto the session's batch task. NOT a batching gain —
+        # _flush_batch still sends frame by frame; the cost is up to BATCH_INTERVAL
+        # (~50 ms) of extra latency on backplane-delivered frames.
+        self.queue_broadcast(wrapped)
 
     async def subscribe_backplane(self) -> None:
         if self._backplane_subscribed:

@@ -372,7 +372,9 @@ DEFINE FIELD IF NOT EXISTS system_role ON documents TYPE option<string>;
 -- 'position', but no such field exists"), which crash-looped the backend at startup.
 DEFINE FIELD IF NOT EXISTS archived     ON documents TYPE option<bool> DEFAULT false;
 -- ARCH: `chats_unindexed` hides this
--- document's subtree's chats from chat recall called OUTSIDE the subtree —
+-- document's subtree's chats from chat recall called OUTSIDE the subtree, and
+-- from the chat LIST while the open document is outside it (a client projection,
+-- useSortedSessions: the list is fetched once per project) —
 -- read-time, subtree-wide, viewer-relative (the flag is NEVER copied onto
 -- chats, so moving a chat or a subtree across the boundary changes visibility
 -- with no write). Digest opts out and keeps reading; the indexer ignores it
@@ -380,18 +382,11 @@ DEFINE FIELD IF NOT EXISTS archived     ON documents TYPE option<bool> DEFAULT f
 -- and deliberately NOT backfilled — same SCHEMAFULL UPDATE trap as `archived`
 -- above; the reader asks `chats_unindexed = true`, so NONE counts as false.
 DEFINE FIELD IF NOT EXISTS chats_unindexed ON documents TYPE option<bool> DEFAULT false;
--- ARCH (plan chats-unlisted-subtree): `chats_unlisted` hides this
--- document's subtree's chats from the chat LIST while the open document is
--- OUTSIDE the subtree — same read-time, subtree-wide, viewer-relative rule
--- as `chats_unindexed` above, but for the list surface, and INDEPENDENT of
--- it (each flag governs one surface; setting one never sets the other). The
--- server never filters by it: the list is fetched once per project and
--- re-projected by the client on every document switch (useSortedSessions),
--- so the flag travels in the project tree payload and the hide is a client
--- projection. option<bool> DEFAULT false and deliberately NOT backfilled —
--- same SCHEMAFULL UPDATE trap as `archived` above; readers treat NONE as
--- false. No index: unlike idx_documents_chats_unindexed, the server never
--- SELECTs by chats_unlisted.
+-- DEBT: `chats_unlisted` is dead: no code reads or writes it, `chats_unindexed`
+-- governs the chat list too. Why deferred: DEFAULT false stored it on rows, and
+-- with the field removed SCHEMAFULL refuses every UPDATE of such a row ("Found
+-- field 'chats_unlisted', but no such field exists"), while the table-wide
+-- UNSET that would clear them dies on legacy rows (see `archived` above).
 DEFINE FIELD IF NOT EXISTS chats_unlisted ON documents TYPE option<bool> DEFAULT false;
 -- Document inbox (SYSTEM: inbox): the unread
 -- flag on a reference that arrived from OUTSIDE (a widget key or an MCP key over
@@ -707,6 +702,10 @@ REMOVE INDEX IF EXISTS idx_messages_chat_entry ON messages;
 REMOVE FIELD IF EXISTS entry_id ON messages;
 DEFINE INDEX IF NOT EXISTS idx_messages_chat ON messages FIELDS chat_id;
 DEFINE INDEX IF NOT EXISTS idx_messages_chat_deleted ON messages FIELDS chat_id, deleted_at;
+-- The non-owner leaf-delete guard scans parent_id (has-live-reply check in
+-- _soft_delete_leaf_guarded, backend/routes/chat/messages.py); the owner
+-- cascade walks a pre-loaded map, not this query.
+DEFINE INDEX IF NOT EXISTS idx_messages_parent ON messages FIELDS parent_id, deleted_at CONCURRENTLY;
 
 -- ─── Agent Configs ──────────────────────────────────────────────────────────
 

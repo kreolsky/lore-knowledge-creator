@@ -299,9 +299,9 @@ export function SearchPanel() {
   // chats not yet indexed; the loaded chat list covers all three, with no request.
   // A chat in both groups stays in both — the title row opens the chat, the
   // content row scrolls to the message.
-  // ARCH (plan chats-unlisted-subtree): the chats_unlisted list projection applies
+  // ARCH: the chats_unindexed list projection applies
   // to the TITLE hits only — this group is the chat list by another door. CONTENT
-  // hits (server recall) stay the search flag's domain: unlisted ≠ unfindable.
+  // hits come filtered by server recall under the same flag.
   // The ACTIVE chat keeps its title row until switched away (same exemption as
   // useSortedSessions).
   const { positionDocId, pageLocked } = useChatListPosition();

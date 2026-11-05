@@ -23,6 +23,7 @@ from subtree_md import export_subtree
 from surrealdb import AsyncSurreal
 
 from access import (
+    access_memo,
     get_doc_project_id,
     require_document_full,
     require_document_read,
@@ -96,22 +97,9 @@ async def _open_bundle_project(project_id: str, user: dict) -> dict | None:
     return project
 
 
-@router.get("/api/documents/open/{document_id}")
-async def open_document(document_id: str, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
-    """One-shot cold-open bundle: {document, references, note_sessions, project}.
-
-    ARCH(plan "public-document-ids"): the bare-URL cold path (/docs/<id>) no
-    longer carries project_id in the URL. DocumentPage fires document +
-    references + note-sessions CONCURRENTLY (see its ARCH note — the prior
-    waterfall committed the document ref-less and flickered). Three of those four
-    need project_id, which reading off the document response would serialize —
-    reinstating exactly the flicker that ARCH forbids. This endpoint returns the
-    whole bundle in one RTT, preserving the concurrent-commit invariant. In-app
-    nav keeps the per-id calls (project_id is already in the store), so this is
-    an entry-path-only addition.
-
-    Reuses the canonical handlers (each keeps its own access check) — the value
-    is one HTTP round trip, not eliding the per-resource guards.
+async def _open_bundle(document_id: str, user: dict, db: AsyncSurreal) -> dict:
+    """The four cold-open fetches behind open_document (its docstring is the
+    endpoint's contract; each handler keeps its own access check).
     """
     # Deferred imports: route modules cross-import widely; avoid import cycles.
     from routes.chat.sessions_list import list_sessions
@@ -143,6 +131,32 @@ async def open_document(document_id: str, user: dict = Depends(get_current_user)
         "note_sessions": note_sessions,
         "project": project,
     }
+
+
+@router.get("/api/documents/open/{document_id}")
+async def open_document(document_id: str, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
+    """One-shot cold-open bundle: {document, references, note_sessions, project}.
+
+    ARCH(plan "public-document-ids"): the bare-URL cold path (/docs/<id>) no
+    longer carries project_id in the URL. DocumentPage fires document +
+    references + note-sessions CONCURRENTLY (see its ARCH note — the prior
+    waterfall committed the document ref-less and flickered). Three of those four
+    need project_id, which reading off the document response would serialize —
+    reinstating exactly the flicker that ARCH forbids. This endpoint returns the
+    whole bundle in one RTT, preserving the concurrent-commit invariant. In-app
+    nav keeps the per-id calls (project_id is already in the store), so this is
+    an entry-path-only addition.
+
+    Reuses the canonical handlers (each keeps its own access check) — the value
+    is one HTTP round trip, not eliding the per-resource guards.
+    """
+    # WHY the memo block: this handler resolves the SAME (project_id, user)
+    # FOUR times (get_document, _open_bundle_project, list_references,
+    # list_sessions) and writes no access rows — record_doc_open touches only
+    # last_accessed pointers. The block is THIS read-only handler only; member
+    # mutations must keep re-resolving live rows — see access.access_memo.
+    with access_memo():
+        return await _open_bundle(document_id, user, db)
 
 
 @router.post("/api/documents/batch")

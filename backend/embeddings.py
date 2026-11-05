@@ -83,6 +83,32 @@ _embed_semaphore = asyncio.Semaphore(EMBEDDING_CONCURRENCY)
 # (_on_worker_shutdown), since embed_texts runs in both processes.
 
 
+async def _post_embed_batch(
+    client: httpx.AsyncClient, api_url: str, api_key: str, model: str,
+    batch: list[str], timeout_s: float,
+) -> list[list[float]]:
+    """One batch POST, gated by the shared _embed_semaphore — one call's batches
+    fly CONCURRENTLY under the SAME semaphore, so the provider-side cap
+    EMBEDDING_CONCURRENCY (and thus provider load) is unchanged; only the
+    caller's latency shrinks. Returns the batch's vectors in input order
+    (sorted by the provider's `index` marker — the response array's own order
+    is not guaranteed)."""
+    async with _embed_semaphore:
+        resp = await client.post(
+            f"{api_url}/embeddings",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={"model": model, "input": batch},
+            timeout=timeout_s,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    embeddings_sorted = sorted(data["data"], key=lambda d: d["index"])
+    return [d["embedding"] for d in embeddings_sorted]
+
+
 async def embed_texts(
     texts: list[str], *, instruction: str | None = None,
 ) -> list[list[float]]:
@@ -110,26 +136,26 @@ async def embed_texts(
     payload_inputs = (
         [f"Instruct: {instruction}\nQuery: {t}" for t in texts] if instruction else texts
     )
-    results: list[list[float]] = []
     client = http_clients.get_http_client("embeddings", timeout=timeout_s)
-    for i in range(0, len(payload_inputs), batch_size):
-        batch = payload_inputs[i:i + batch_size]
-        async with _embed_semaphore:
-            resp = await client.post(
-                f"{api_url}/embeddings",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={"model": model, "input": batch},
-                timeout=timeout_s,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
-        embeddings_sorted = sorted(data["data"], key=lambda d: d["index"])
-        results.extend(d["embedding"] for d in embeddings_sorted)
-    return results
+    batches = [
+        payload_inputs[i:i + batch_size]
+        for i in range(0, len(payload_inputs), batch_size)
+    ]
+    # WHY plain asyncio.gather + explicit sibling cancel, NOT TaskGroup: TaskGroup
+    # wraps a batch failure in ExceptionGroup, which slips past
+    # `except httpx.HTTPStatusError` in _embed_texts_resilient — the 429/5xx
+    # fail-fast contract would become an unsolved crash. Gather propagates the
+    # bare error; the cancel loop keeps a failed call from straggling POSTs that
+    # still hold _embed_semaphore slots.
+    tasks = [asyncio.create_task(_post_embed_batch(client, api_url, api_key, model, b, timeout_s)) for b in batches]
+    try:
+        batch_results = await asyncio.gather(*tasks)
+    except BaseException:
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+    return [emb for res in batch_results for emb in res]
 
 
 async def _embed_texts_resilient(

@@ -35,10 +35,14 @@ import { uuid } from '../../../utils/uuid';
  * width inside a `table-layout: fixed` table — auto columns split the free
  * width equally, never by content (widths must not move by themselves). "Auto" is the absence of a
  * measurement, so nothing computed from one client's font metrics is ever
- * written to the shared model. New tables, imports and added columns start auto;
- * dragging a border turns a column fixed (writes px), double-click turns it back.
+ * written to the shared model. New tables and imports start all-auto, full width.
+ * The first drag freezes EVERY column to px (`setColumnWidths`), and an all-px table is
+ * exactly as wide as its columns; a double-click turns a column back to auto.
  */
 export const AUTO_COLUMN_WIDTH = 0;
+
+/** Narrowest column a drag can produce, in px. */
+export const MIN_COLUMN_WIDTH = 40;
 
 /**
  * Default FIXED column width in px — the restore fallback for captured tables
@@ -226,6 +230,44 @@ export function setColumnWidth(doc: Y.Doc, id: string, col: number, width: numbe
   if (colMap) colMap.set('w', width);
 }
 
+/** Write a whole width array in one transaction; only changed values, indices past the
+ * table (a peer removed a column mid-drag) are ignored. */
+export function setColumnWidths(doc: Y.Doc, id: string, widths: number[]): void {
+  const table = getTablesMap(doc).get(id);
+  if (!table) return;
+  const columns = getColumns(table);
+  doc.transact(() => {
+    widths.forEach((width, i) => {
+      const colMap = i < columns.length ? columns.get(i) : undefined;
+      if (colMap && colMap.get('w') !== width) colMap.set('w', width);
+    });
+  });
+}
+
+/**
+ * Scale widths proportionally to `total`. A column reaching `MIN_COLUMN_WIDTH` pins there
+ * and the others absorb the rest, so the smallest column does not stop a shrink. Integers
+ * summing exactly to `max(total, n * MIN)`: the rounding remainder goes to the widest
+ * column, which keeps the table edge under the cursor.
+ */
+export function scaleColumnWidths(widths: number[], total: number): number[] {
+  const target = Math.max(Math.round(total), widths.length * MIN_COLUMN_WIDTH);
+  const pinned = new Set<number>();
+  let scale = 0;
+  for (let settled = false; !settled;) {
+    const free = widths.filter((_, i) => !pinned.has(i));
+    const freeSum = free.reduce((sum, w) => sum + w, 0);
+    scale = freeSum > 0 ? (target - pinned.size * MIN_COLUMN_WIDTH) / freeSum : 0;
+    const below = widths.flatMap((w, i) => (!pinned.has(i) && w * scale < MIN_COLUMN_WIDTH ? [i] : []));
+    below.forEach((i) => pinned.add(i));
+    settled = below.length === 0;
+  }
+  const scaled = widths.map((w, i) => (pinned.has(i) ? MIN_COLUMN_WIDTH : Math.round(w * scale)));
+  const widest = scaled.indexOf(Math.max(...scaled));
+  scaled[widest] += target - scaled.reduce((sum, w) => sum + w, 0);
+  return scaled;
+}
+
 export function addRow(doc: Y.Doc, id: string, at?: number): void {
   const table = getTablesMap(doc).get(id);
   if (!table) return;
@@ -244,8 +286,10 @@ export function addColumn(doc: Y.Doc, id: string, at?: number): void {
   const columns = getColumns(table);
   const rows = getRows(table);
   const index = at ?? columns.length;
+  // WHY: a 0 in an all-px table flips it back to 100% wide, a size change nobody asked for.
+  const frozen = columns.length > 0 && columns.toArray().every((c) => c.get('w') !== AUTO_COLUMN_WIDTH);
   doc.transact(() => {
-    columns.insert(index, [makeColumn(AUTO_COLUMN_WIDTH)]);
+    columns.insert(index, [makeColumn(frozen ? DEFAULT_COLUMN_WIDTH : AUTO_COLUMN_WIDTH)]);
     rows.forEach((row) => row.insert(index, [makeCell('')]));
   });
 }

@@ -18,6 +18,7 @@
  *      which paints over element backgrounds (visible inside code blocks / inline code).
  */
 
+import { StateEffect, StateField } from '@codemirror/state';
 import { EditorView, layer, RectangleMarker, ViewPlugin, type ViewUpdate } from '@codemirror/view';
 
 // WHY border-left (not background width): at fractional devicePixelRatio
@@ -37,12 +38,15 @@ type CaretRect = { left: number; top: number; bottom: number } | null;
 const validCoords = (c: CaretRect): CaretRect => (c && c.bottom - c.top > 0 ? c : null);
 
 // WHY: restart blink animation on every cursor move so the cursor is always
-// immediately visible when placed. Handles same-position clicks where the layer
-// reuses the existing DOM element (same coords → marker.eq() → no replacement).
+// immediately visible when placed. The layer reuses the existing DOM element, moved
+// (marker.update) or left alone (marker.eq), so the blink phase would carry over.
 const cursorBlinkReset = ViewPlugin.fromClass(class {
   update(update: ViewUpdate) {
     if (!update.selectionSet && !update.focusChanged) return;
-    const layerEl = update.view.dom.querySelector('.cm-thick-cursor-layer');
+    // INVARIANT: the reset addresses this view's OWN layer, a direct child of its scroller.
+    // Why: a mounted table cell is a nested editor with its own layer, earlier in the DOM,
+    // so a plain query reset the cell and the document's caret moved mid-blink, hidden.
+    const layerEl = update.view.scrollDOM.querySelector(':scope > .cm-thick-cursor-layer');
     if (!layerEl) return;
     for (const el of layerEl.children) {
       const htmlEl = el as HTMLElement;
@@ -53,7 +57,20 @@ const cursorBlinkReset = ViewPlugin.fromClass(class {
   }
 });
 
+/**
+ * `true` pauses the caret, `false` resumes it and redraws at the current coordinates.
+ * WHY: a widget can move the edge the caret stands at with no CM6 change: a table resize
+ * writes widths to Yjs, so nothing else tells this layer its marker went stale.
+ */
+export const caretHold = StateEffect.define<boolean>();
+
+const caretHeld = StateField.define<boolean>({
+  create: () => false,
+  update: (held, tr) => tr.effects.reduce((value, e) => (e.is(caretHold) ? e.value : value), held),
+});
+
 export const thickCursorLayer = [
+  caretHeld,
   layer({
     above: true,
     class: 'cm-thick-cursor-layer',
@@ -62,9 +79,10 @@ export const thickCursorLayer = [
       update.selectionSet ||
       update.viewportChanged ||
       update.geometryChanged ||
-      update.focusChanged,
+      update.focusChanged ||
+      update.transactions.some(tr => tr.effects.some(e => e.is(caretHold))),
     markers: view => {
-      if (!view.hasFocus) return [];
+      if (!view.hasFocus || view.state.field(caretHeld)) return [];
       const markers: RectangleMarker[] = [];
       const rect = view.scrollDOM.getBoundingClientRect();
       for (const range of view.state.selection.ranges) {

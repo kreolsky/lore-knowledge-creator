@@ -9,6 +9,9 @@
 # require_admin_or_project_full stays the admin-override management gate. A
 # document inherits its project's access level.
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+
 from artifacts import is_artifact_row
 from fastapi import HTTPException
 
@@ -20,6 +23,41 @@ from db import extract_id, fetch_doc_meta, fetch_one
 # row, several audience rows); the effective level is the highest, never the
 # first match.
 _ACCESS_RANK = {"readonly": 1, "commentator": 2, "full": 3}
+
+# The open-bundle access memo. ContextVar → request-task-local by construction
+# (no locking); None = no active block and get_project_access runs every check,
+# exactly as before.
+_access_memo: ContextVar[dict[tuple[str, str], str | None] | None] = ContextVar(
+    "access_memo", default=None,
+)
+
+
+@contextmanager
+def access_memo():
+    """Scope in which get_project_access answers repeated (project_id, user_id)
+    checks from ONE cached resolution.
+
+    # WHY scoped to the read-only open_document bundle and nothing wider: a
+    # cold /api/documents/open/{id} resolves the same (project_id, user) FOUR
+    # times (get_document, _open_bundle_project, list_references,
+    # list_sessions), one member query each. NOT request-global and NOT in
+    # get_current_user: member mutations re-resolve access mid-request
+    # (recompute_project_access feeds the collab write gate), and a memo
+    # active there would serve the PRE-mutation level to the same request's
+    # later checks. The caller owns the guarantee that no access row changes
+    # inside the block (open_document writes only last_accessed pointers).
+    """
+    memo: dict[tuple[str, str], str | None] = {}
+    token = _access_memo.set(memo)
+    try:
+        yield memo
+    finally:
+        _access_memo.reset(token)
+        # WHY the clear besides the reset: a task spawned inside the block
+        # holds a context COPY the reset cannot reach but the SAME dict —
+        # after this block that copy must read an EMPTY memo, never a level
+        # resolved before the block ended.
+        memo.clear()
 
 
 def max_access(*levels: str | None) -> str | None:
@@ -36,7 +74,21 @@ async def get_project_access(project_id: str, user: dict) -> str | None:
     """Determine the current user's access level for a project.
 
     Returns 'full', 'commentator', 'readonly', or None (no access / not found).
+    Inside an access_memo() block, a repeated (project_id, user_id) answers
+    from one cached resolution (see access_memo for the scope ruling).
     """
+    key = (project_id, user["user_id"])
+    memo = _access_memo.get()
+    if memo is not None and key in memo:
+        return memo[key]
+    level = await _resolve_project_access(project_id, user)
+    if memo is not None:
+        memo[key] = level
+    return level
+
+
+async def _resolve_project_access(project_id: str, user: dict) -> str | None:
+    """The uncached resolution get_project_access memoizes."""
     project = await fetch_one("projects", project_id)
     if not project:
         return None
