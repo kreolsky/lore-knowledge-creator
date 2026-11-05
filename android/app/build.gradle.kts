@@ -1,3 +1,6 @@
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -6,6 +9,10 @@ plugins {
     alias(libs.plugins.hilt)
     alias(libs.plugins.kotlin.serialization)
 }
+
+// WHY a stamp in the version: builds reach the phone by hand, and only the time
+// of the build tells which one is installed.
+val buildStamp: String = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
 
 android {
     namespace = "com.lore.voicenotes"
@@ -16,7 +23,7 @@ android {
         minSdk = 29
         targetSdk = 35
         versionCode = 1
-        versionName = "0.0.1"
+        versionName = "0.1 ($buildStamp)"
     }
 
     buildTypes {
@@ -42,6 +49,25 @@ android {
         compose = true
         buildConfig = true
     }
+
+    testOptions {
+        unitTests {
+            // Robolectric migration test serves the app's merged assets
+            isIncludeAndroidResources = true
+        }
+    }
+
+    sourceSets {
+        // Room schemas double as debug assets: Robolectric's MigrationTestHelper
+        // reads them from the (merged app) asset manager — AGP merges no test
+        // sourceSet assets for local unit tests. Debug builds only.
+        getByName("debug").assets.srcDir("$projectDir/schemas")
+    }
+}
+
+ksp {
+    // Export Room schemas per version for MigrationTestHelper
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 dependencies {
@@ -92,4 +118,10 @@ dependencies {
 
     // Serialization (type-safe navigation)
     implementation(libs.serialization.json)
+
+    // Unit tests (Robolectric + Room migration test)
+    testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.ext.junit)
+    testImplementation(libs.room.testing)
 }

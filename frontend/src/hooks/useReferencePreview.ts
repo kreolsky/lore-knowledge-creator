@@ -18,6 +18,7 @@ import { Reference } from '../types';
 import { referenceFileUrl } from '../utils/reference-url';
 import { createResourceCache } from '../api/swr-cache';
 import { registerLogoutHandler } from '../store/logout-handlers';
+import { registerEditorHostReset } from '../components/editor/editor-host';
 
 export interface RefPreview {
   /** The reference's title — the preview plaque for refs absent from the store. */
@@ -40,6 +41,7 @@ export function clearRefPreviewCache() {
 // cache hit. clear() also refuses the settle write of any fetch still in
 // flight across the logout (the primitive's generation guard).
 registerLogoutHandler(clearRefPreviewCache);
+registerEditorHostReset('project', clearRefPreviewCache);
 
 /** Evict a single cache entry. Called on WS reference_update / reference_delete so a
  *  stale body is never served (no-silent-degradation): the preview cache is now the

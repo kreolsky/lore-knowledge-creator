@@ -1,11 +1,12 @@
 /**
  * Effects, module-level maps, and utilities shared across live-preview modules.
  *
- * No internal live-preview dependencies — only CM6 core imports.
+ * No internal live-preview dependencies — only CM6 core imports and the editor-host reset registry.
  */
 import { syntaxTree } from '@codemirror/language';
 import { ViewPlugin, ViewUpdate } from '@codemirror/view';
 import { StateEffect, Facet } from '@codemirror/state';
+import { registerEditorHostReset } from '../editor-host';
 
 // SYSTEM: transclusion — nesting-depth of the current EditorView.
 // INVARIANT: transclusion renders at most one nesting level — the main editor is
@@ -79,6 +80,7 @@ export const transcludeMap = new Map<string, TransclusionEntry>();
 export function clearTranscludeMap(): void {
   transcludeMap.clear();
 }
+registerEditorHostReset('project', clearTranscludeMap);
 
 /**
  * Dispatched once after the transclude map and/or link-validity sets change so

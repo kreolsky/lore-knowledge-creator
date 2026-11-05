@@ -81,6 +81,19 @@ export function spliceAt(view: EditorView, spec: { from: number; insert: string 
   view.focus();
 }
 
+/** Width of each image of a several-images drop: three fit one line. */
+const DROP_ROW_WIDTH = '33%';
+
+/** The embeds of one drop as a single line. Several images in the document are sized
+ * to sit in a row; in a table cell each already holds its drawn width. */
+export function dropImageRow(view: EditorView, embeds: string[], several: boolean): string {
+  if (!several || view.dom.closest('.cm-table-block')) return embeds.join('');
+  return embeds.map((embed) => {
+    const parts = imageEmbedParts(embed);
+    return parts ? `![${setImageSize(parts.alt, DROP_ROW_WIDTH)}](${parts.url})` : embed;
+  }).join('');
+}
+
 /** An embed written by a DROP into `view`: an image landing in a table CELL is stored
  * at its drawn width, `|min(naturalWidth, cell content width)` px (unknown natural ⇒
  * the cell width). WHY cell-only: a column width is document data, the document

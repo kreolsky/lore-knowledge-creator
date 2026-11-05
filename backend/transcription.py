@@ -20,7 +20,8 @@ logger = logging.getLogger(__name__)
 
 # WHY: mimetypes.guess_type returns video/webm for .webm — we need audio/* MIME types for the STT API
 _EXT_TO_MIME: dict[str, str] = {
-    ".webm": "audio/webm", ".ogg": "audio/ogg", ".opus": "audio/opus", ".wav": "audio/wav",
+    ".webm": "audio/webm", ".ogg": "audio/ogg", ".oga": "audio/ogg", ".opus": "audio/opus",
+    ".wav": "audio/wav",
     ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".mp4": "audio/mp4",
 }
 

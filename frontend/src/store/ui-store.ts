@@ -2,9 +2,6 @@
 // ARCH: All UI state persisted server-side in user_preferences table (SurrealDB).
 // ARCH: composed from slices (ui-store/*-slice.ts) following the chat-store pattern — the
 //       store file owns only persistence + the documents map; each feature area is a slice.
-//       The former "580-line god store" DEBT was paid down in the debt-paydown W6 round; the
-//       selector-migration risk it deferred on was handled by keeping every action name and
-//       state key identical across the split (no consumer changed).
 // ARCH: Per-project state: PUT /api/preferences/{projectId} (debounced).
 // ARCH: Global state (theme, panel widths): PUT /api/preferences/_global (immediate).
 // ARCH: Right-panel state (tab, open/closed) + per-tab entity (chat session, selected reference)
@@ -18,6 +15,7 @@
 import { create } from 'zustand';
 import { Language, SearchDocMode, SearchMode, SearchResult, SearchSnapshot } from '../types';
 import { apiClient } from '../api/client';
+import { registerEditorHostReset } from '../components/editor/editor-host';
 import type { EditorPosition } from '../editor/position-cache';
 import { createPublicShareSlice } from './ui-store/public-share-slice';
 import { createSearchSlice } from './ui-store/search-slice';
@@ -219,6 +217,7 @@ export function clearLastSavedBlobs() {
   // leakage from one test polluting the next test's spy.
   if (_saveUITimeout) { clearTimeout(_saveUITimeout); _saveUITimeout = null; }
 }
+registerEditorHostReset('user', clearLastSavedBlobs);
 
 export interface UIState {
   sidebarTab: 'docs' | 'toc';

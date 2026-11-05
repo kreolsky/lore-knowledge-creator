@@ -11,12 +11,13 @@ import { nestedRenderExtensions } from '../render-bundle';
 import { copyWithToast } from '../../chat/shared/copy';
 import { COPY_ICON, CHECK_ICON } from '../../../utils/copy-icons';
 import { formatFileSize } from '../../references/ref-utils';
+import { registerEditorHostReset } from '../editor-host';
 import type { TransclusionEntry } from './effects';
 // WHY direct import despite the module cycle (widgets → atomic-delete-guard →
 // fields → widgets): atomicRangeAt is only called INSIDE function bodies, never
 // at module-eval time, so the cycle resolves the same way as the documented
 // live-preview one.
-import { atomicRangeAt } from './atomic-delete-guard';
+import { atomicRangeAt, selectedAtomicRange } from './atomic-delete-guard';
 
 // ─── Checkbox widget ──────────────────────────────────────────────────────────
 
@@ -180,6 +181,7 @@ export const widgetHeightCache = new Map<string, number>();
 export function clearWidgetHeightCache(): void {
   widgetHeightCache.clear();
 }
+registerEditorHostReset('project', clearWidgetHeightCache);
 
 // ─── Image widget ─────────────────────────────────────────────────────────────
 
@@ -198,6 +200,16 @@ export function selectImageAt(view: EditorView, el: Node): void {
     view.dispatch({ selection: EditorSelection.range(atom.from, atom.to) });
   }
 }
+
+/** True when the main selection is exactly the image node rendered by `el`. */
+function isImageSelected(view: EditorView, el: Node): boolean {
+  const range = selectedAtomicRange(view.state);
+  if (!range || range.tableId !== null) return false;
+  try { return view.posAtDOM(el) === range.from; } catch { return false; }
+}
+
+/** Past this travel (px) a press-release is not a click. */
+const CLICK_SLOP_PX = 4;
 
 type ResizeDir = 'corner' | 'corner-top' | 'right' | 'bottom';
 const RESIZE_DIRS: readonly ResizeDir[] = ['corner', 'corner-top', 'right', 'bottom'];
@@ -221,7 +233,9 @@ function setImageBox(wrap: HTMLElement, img: HTMLImageElement, width?: string, h
  * ATOMIC BLOCK: the raw `![alt](ref:id)` text is never revealed (build-structural
  * renders this widget under every caret position). A plain press selects exactly
  * the node's range — the selection Delete then removes (atomic-delete-guard.ts
- * swallows one-key deletes) and the selection the step-2 toolbar keys on.
+ * swallows one-key deletes) and the selection the image toolbar keys on.
+ * A click on the already selected image, or any click in a non-editable view,
+ * opens the preview instead (ImagePreviewHost).
  */
 export class ImageWidget extends WidgetType {
   constructor(
@@ -243,11 +257,25 @@ export class ImageWidget extends WidgetType {
     // Select the whole node on press: preventDefault keeps the browser (and CM6 —
     // via stopPropagation) from placing a caret inside the hidden embed text; the
     // explicit view.focus() preserves what the prevented default did for us.
+    let press: { x: number; y: number; opensPreview: boolean } | null = null;
     img.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return;
       e.preventDefault();
       e.stopPropagation();
+      // WHY read before selecting: afterwards every press looks like "already selected".
+      // Live facet, not a toDOM value: eq() keeps this DOM when editability flips.
+      const opensPreview = !view.state.facet(EditorView.editable) || isImageSelected(view, wrap);
+      press = { x: e.clientX, y: e.clientY, opensPreview };
       selectImageAt(view, wrap);
+    });
+    // WHY click, not mousedown: a press that travels is a drag start, not a preview.
+    img.addEventListener('click', (e) => {
+      const started = press;
+      press = null;
+      if (!started?.opensPreview) return;
+      if (Math.hypot(e.clientX - started.x, e.clientY - started.y) > CLICK_SLOP_PX) return;
+      e.stopPropagation();
+      emit('editor-image-preview', { src: this.src, element: wrap, editorView: view });
     });
     wrap.appendChild(img);
     // WHY always mounted: the view is usually NOT editable yet at first render

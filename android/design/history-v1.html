@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>LORE VOICE — история v1</title>
+<style>
+/* Same frame, shapes and Lore dark tokens as layout v5.
+   Rule of the screen: nothing horizontal-draggable lives inside a swipeable row.
+   The scrubber sits in the bar above navigation, or on the recording screen. */
+:root{
+  color-scheme:dark;
+  --bg:#1e1e1e; --surface:#262626; --surface2:#2e2e2e; --surface3:#434343;
+  --border:#363636; --text:#cacaca; --muted:#929292; --dim:#696969; --strong:#f0f0f0;
+  --accent:#5847d1; --accent-text:#8f84f5; --purple-tint:#2a2740;
+  --red:#f87171; --green:#4ade80; --amber:#f59e0b; --blue:#60a5fa;
+  --page:#141414; --device:#0c0c0c;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--text);font-family:var(--sans)}
+button{font:inherit;color:inherit;cursor:pointer;padding:0;border:0;background:none}
+button:focus-visible{outline:2px solid var(--accent-text);outline-offset:2px}
+
+.page{max-width:760px;margin:auto;padding-block:32px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;gap:24px}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+h1{margin:6px 0 0;font-size:28px;line-height:1.2;font-weight:600;letter-spacing:-.02em;color:var(--strong);text-wrap:balance}
+.board{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start}
+.phone-wrap{display:flex;flex-direction:column;align-items:center;gap:12px}
+.cap{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:11px}
+.cap b{color:var(--text);font-size:12px}
+
+.phone{width:min(100%,300px);aspect-ratio:9/16;min-height:0;padding:9px;border-radius:38px;background:var(--device);box-shadow:0 0 0 1px var(--border),0 18px 48px #00000080}
+.phone--21{width:min(100%,288px);aspect-ratio:9/21;border-radius:40px}
+.screen{height:100%;border-radius:29px;overflow:hidden;position:relative;display:flex;flex-direction:column;background:var(--bg);color:var(--text);user-select:none}
+.topline{flex:none;height:20px;margin:18px 15px 0;display:flex;align-items:center;justify-content:flex-end}
+.sys{font-size:10px;letter-spacing:1px;color:var(--muted)}
+.view{flex:1;min-height:0;display:flex;flex-direction:column}
+
+h2{margin:10px 15px 8px;font-size:22px;line-height:28px;font-weight:600;letter-spacing:-.01em;color:var(--strong)}
+.rows{flex:1;min-height:0;overflow-y:auto;touch-action:pan-y;scrollbar-width:none}
+.empty{padding:40px 15px;text-align:center;color:var(--muted);font-size:13px}
+
+/* Row */
+.swipe{position:relative;overflow:hidden;border-top:1px solid var(--border);transition:height .2s ease-out}
+.swipe:last-child{border-bottom:1px solid var(--border)}
+.under{position:absolute;inset:0;display:none;align-items:center;gap:6px;padding:0 18px;font-size:12px;font-weight:700}
+.under svg{width:17px;height:17px}
+.under.del{display:flex;justify-content:flex-end;background:#f8717124;color:var(--red)}
+.under.send{display:flex;justify-content:flex-start;background:var(--purple-tint);color:var(--accent-text)}
+.fg{position:relative;display:flex;align-items:center;gap:10px;padding:9px 6px 9px 12px;background:var(--bg);touch-action:pan-y}
+.fg.back{transition:transform .18s ease-out}
+
+.play{flex:none;width:38px;height:38px;border-radius:50%;background:var(--surface2);border:1px solid var(--border);color:var(--text);display:grid;place-items:center}
+.play svg{width:16px;height:16px}
+.play.on{background:var(--accent);border-color:var(--accent);color:var(--strong)}
+.play:disabled{color:var(--dim);background:transparent;cursor:default}
+.body{flex:1;min-width:0;display:grid;gap:1px;text-align:left}
+.when{font-size:13px;line-height:18px;font-weight:600;color:var(--strong);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.on-air .when{color:var(--accent-text)}
+.meta{font-size:11px;line-height:15px;color:var(--muted);font-variant-numeric:tabular-nums}
+.line{font-size:12px;line-height:17px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.line.s-amber{color:var(--amber)}.line.s-blue{color:var(--blue)}.line.s-red{color:var(--red)}
+.icon{flex:none;width:38px;height:38px;border-radius:50%;display:grid;place-items:center;color:var(--muted)}
+.icon svg{width:17px;height:17px}
+.icon.done{color:var(--green)}
+
+/* Bar above navigation: holds the scrubber, outside every swipeable row. */
+.bar{flex:none;background:var(--surface);border-top:1px solid var(--border);padding:7px 6px 7px 12px;display:flex;align-items:center;gap:10px}
+.bar .play{width:34px;height:34px}
+.bar-mid{flex:1;min-width:0;display:grid;gap:1px}
+.bar-top{display:flex;justify-content:space-between;gap:8px;font-size:11px;line-height:15px}
+.bar-top b{font-weight:600;color:var(--strong);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.time{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+
+input[type=range]{--p:0%;appearance:none;-webkit-appearance:none;display:block;width:100%;height:18px;margin:0;background:none;cursor:pointer}
+input[type=range]::-webkit-slider-runnable-track{height:3px;border-radius:2px;background:linear-gradient(to right,var(--accent-text) var(--p),var(--surface3) var(--p))}
+input[type=range]::-moz-range-track{height:3px;border-radius:2px;background:linear-gradient(to right,var(--accent-text) var(--p),var(--surface3) var(--p))}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;margin-top:-4.500px;border-radius:50%;background:var(--strong)}
+input[type=range]::-moz-range-thumb{width:12px;height:12px;border:0;border-radius:50%;background:var(--strong)}
+
+/* Recording screen */
+.head{flex:none;display:flex;align-items:center;gap:6px;padding:6px 15px 8px 6px}
+.head .icon{color:var(--text)}
+.head-text{min-width:0;display:grid}
+.player{flex:none;display:flex;align-items:center;gap:12px;margin:0 15px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:12px}
+.player .play{width:46px;height:46px;background:var(--accent);border-color:var(--accent);color:var(--strong)}
+.player .play svg{width:20px;height:20px}
+.player .play:disabled{background:var(--surface2);border-color:var(--border);color:var(--dim)}
+.player-mid{flex:1;min-width:0}
+.times{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.text{flex:1;min-height:0;overflow-y:auto;margin-top:12px;padding:0 15px 12px;font-size:14px;line-height:21px;color:var(--text);user-select:text;scrollbar-width:none}
+.text p{margin:0 0 10px}
+.text .s-amber{color:var(--amber)}.text .s-blue{color:var(--blue)}.text .s-red{color:var(--red)}
+/* Copy and share take no strip of their own: small and floating over the text.
+   The text keeps a void under its end, so the last line scrolls clear above them. */
+.view{position:relative}
+.actions{position:absolute;right:12px;bottom:10px;display:flex;gap:8px}
+.actions .icon{background:var(--surface2);border:1px solid var(--surface3);color:var(--text);box-shadow:0 4px 12px #00000080;transition:color .16s,border-color .16s}
+.actions .icon.done{color:var(--green);border-color:var(--green)}
+.text.floating{padding-bottom:60px}
+
+.nav{flex:none;background:var(--surface);border-top:1px solid var(--border);display:grid;grid-template-columns:repeat(3,1fr);padding:8px 7px 10px}
+.nav div{color:var(--dim);display:flex;flex-direction:column;align-items:center;gap:3px;font-size:9px;font-weight:750}
+.nav div.active{color:var(--accent-text)}
+.nav svg{width:19px;height:19px}
+/* Failed uploads stay counted here until they leave the phone. */
+.nav .history{position:relative}
+.badge{position:absolute;top:-4px;left:calc(50% + 4px);min-width:16px;height:16px;padding:0 4px;display:none;place-items:center;border-radius:8px;background:var(--red);color:var(--bg);font-size:10px;font-weight:800;box-shadow:0 0 0 2px var(--surface)}
+.badge.on{display:grid}
+
+/* Delete keeps a way back: the row returns until the bar leaves. */
+.snack{position:absolute;left:10px;right:10px;z-index:6;display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:40px;padding:0 6px 0 12px;background:var(--surface3);color:var(--strong);border-radius:10px;font-size:12px;box-shadow:0 8px 20px #00000080}
+.snack button{height:32px;padding:0 10px;color:var(--accent-text);font-weight:800;font-size:12px}
+
+.nudge{animation:nudge .26s ease-in-out}
+@keyframes nudge{25%{translate:-3px 0}75%{translate:3px 0}}
+
+@media(max-width:640px){.board{grid-template-columns:1fr;gap:26px}}
+@media(prefers-reduced-motion:reduce){.nudge{animation:none}.swipe,.fg.back{transition:none}}
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <div class="eyebrow">Lore Voice · история v1</div>
+    <h1>История записей в тёмной теме Lore</h1>
+  </header>
+  <section class="board" id="board"></section>
+</main>
+
+<script>
+const I = {
+  play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.500v13a1 1 0 0 0 1.500.860l10.500-6.500a1 1 0 0 0 0-1.720L9.500 4.640A1 1 0 0 0 8 5.500z"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6.500" y="5" width="4" height="14" rx="1"/><rect x="13.500" y="5" width="4" height="14" rx="1"/></svg>',
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V5a2 2 0 0 1 2-2h9a1 1 0 0 1 1 1v1"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.400" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.500 4.500 4.500L19 7.500"/></svg>',
+  close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>',
+  back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5m6-6-6 6 6 6"/></svg>',
+  share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.800" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="2.500"/><circle cx="6" cy="12" r="2.500"/><circle cx="18" cy="19" r="2.500"/><path d="m8.300 10.800 7.400-4.400M8.300 13.200l7.400 4.400"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.800" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7"/></svg>',
+  send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.800" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3m0 0L7 8m5-5 5 5"/><path d="M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></svg>',
+};
+const NAV = `<div class="nav" aria-hidden="true">
+  <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0m-7 7v3m-4 0h8"/></svg>Запись</div>
+  <div class="active history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 2.600-6.400L3 8M3 3v5h5m4-1v5l3 2"/></svg>История<span class="badge"></span></div>
+  <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19 13a7 7 0 0 0 0-2l2-1-2-3-2 1-2-1-.4-2h-4L10 7 8 8 6 7l-2 3 2 1v2l-2 1 2 3 2-1 2 1 .5 2h4l.5-2 2-1 2 1 2-3z"/></svg>Настройки</div>
+</div>`;
+
+const STATUS = {
+  pending_upload: ['На устройстве', 's-amber'],
+  upload_failed: ['Не отправлено', 's-red'],
+  queued: ['В очереди', 's-amber'],
+  processing: ['Распознаётся', 's-blue'],
+  failed: ['Не распознано', 's-red'],
+};
+const TEXT = [
+  'Здесь полный текст транскрибации. Он выделяется как обычный текст, поэтому можно скопировать и отдельный фрагмент.',
+  'Круглая кнопка внизу копирует весь текст целиком. Под концом текста оставлено пустое место, поэтому его можно дотянуть выше кнопок.',
+  'Длинный текст прокручивается сам, а плеер сверху и кнопки снизу остаются на месте.',
+];
+const sampleRows = () => [
+  { id: 1, when: 'Сегодня, 17:12', dur: 272, doc: '01', status: 'ready', audio: true },
+  { id: 2, when: 'Сегодня, 11:40', dur: 95, doc: '02', status: 'processing', audio: true },
+  { id: 3, when: 'Вчера, 19:03', dur: 1860, doc: '01', status: 'ready', audio: true },
+  { id: 4, when: 'Вчера, 09:15', dur: 48, doc: '03', status: 'failed', audio: true },
+  { id: 5, when: '2 ноя, 14:22', dur: 640, doc: '01', status: 'upload_failed', audio: true },
+  { id: 6, when: '28 окт, 16:05', dur: 312, doc: '02', status: 'ready', audio: false },
+];
+
+const fmt = s => String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+const SWIPE_SLOP = 8, SWIPE_RESEND = 0.38, SWIPE_DELETE = 0.51, COPIED_MS = 1500, UNDO_MS = 4000;
+
+function mount({ tall, caption, route, onAir, position, playing }) {
+  const wrap = document.createElement('div');
+  wrap.className = 'phone-wrap';
+  wrap.innerHTML = `<div class="phone"><div class="screen"><div class="topline"><span class="sys">●●● ◖ ▰</span></div><div class="view"></div><div class="dock"></div>${NAV}</div></div><div class="cap">${caption}</div>`;
+  document.getElementById('board').appendChild(wrap);
+  wrap.querySelector('.phone').classList.toggle('phone--21', tall);
+  const screen = wrap.querySelector('.screen'), view = wrap.querySelector('.view'), dock = wrap.querySelector('.dock');
+
+  const st = { rows: sampleRows(), route, onAir, position, playing };
+  const row = id => st.rows.find(r => r.id === id);
+  const onAirRow = () => row(st.onAir);
+
+  const playButton = r => {
+    const on = st.onAir === r.id && st.playing;
+    return `<button class="play${on ? ' on' : ''}" data-play="${r.id}" aria-label="${on ? 'Пауза' : 'Прослушать'}" ${r.audio ? '' : 'disabled'}>${on ? I.pause : I.play}</button>`;
+  };
+  const rangeFor = r => `<input class="seek" id="seek-${tall ? 'b' : 'a'}-${r.id}" type="range" min="0" max="${r.dur}" value="${st.onAir === r.id ? st.position : 0}" aria-label="Перемотка">`;
+
+  const rowHtml = r => {
+    const s = STATUS[r.status];
+    const line = s ? `<span class="line ${s[1]}">${s[0]}</span>` : `<span class="line">${TEXT[0]}</span>`;
+    const copy = r.status === 'ready' ? `<button class="icon" data-copy="${r.id}" aria-label="Скопировать текст">${I.copy}</button>` : '';
+    return `<div class="swipe${st.onAir === r.id ? ' on-air' : ''}" data-id="${r.id}">
+      <div class="under"></div>
+      <div class="fg">
+        ${playButton(r)}
+        <button class="body" data-open="${r.id}"><span class="when">${r.when}</span><span class="meta">${fmt(r.dur)} · документ ${r.doc}</span>${line}</button>
+        ${copy}
+      </div>
+    </div>`;
+  };
+
+  const renderList = () => {
+    view.innerHTML = `<h2>История</h2><div class="rows">${st.rows.length ? st.rows.map(rowHtml).join('') : '<div class="empty">Записей пока нет</div>'}</div>`;
+  };
+  const renderDetail = r => {
+    const s = STATUS[r.status];
+    const body = s ? `<p class="${s[1]}">${s[0]}</p>` : TEXT.map(t => `<p>${t}</p>`).join('');
+    const actions = s ? '' : `<div class="actions"><button class="icon" data-copy="${r.id}" aria-label="Скопировать текст">${I.copy}</button><button class="icon" data-share aria-label="Поделиться">${I.share}</button></div>`;
+    view.innerHTML = `<div class="head"><button class="icon" data-back aria-label="Назад">${I.back}</button><div class="head-text"><span class="when">${r.when}</span><span class="meta">Документ ${r.doc}</span></div></div>
+      <div class="player">${playButton(r)}<div class="player-mid">${rangeFor(r)}<div class="times"><span class="now">${fmt(st.onAir === r.id ? st.position : 0)}</span><span>${fmt(r.dur)}</span></div></div></div>
+      <div class="text${s ? '' : ' floating'}">${body}</div>${actions}`;
+  };
+  const renderDock = () => {
+    const r = onAirRow();
+    if (!r || st.route === r.id) { dock.innerHTML = ''; return; }
+    dock.innerHTML = `<div class="bar">${playButton(r)}<div class="bar-mid"><div class="bar-top"><b>${r.when}</b><span class="time"><span class="now">${fmt(st.position)}</span> / ${fmt(r.dur)}</span></div>${rangeFor(r)}</div><button class="icon" data-stop aria-label="Закрыть плеер">${I.close}</button></div>`;
+  };
+  const paintSeek = () => {
+    screen.querySelectorAll('.seek').forEach(el => {
+      const r = onAirRow();
+      if (!r) return;
+      if (document.activeElement !== el || !el.matches(':active')) el.value = st.position;
+      el.style.setProperty('--p', st.position / r.dur * 100 + '%');
+    });
+    screen.querySelectorAll('.now').forEach(el => { el.textContent = fmt(st.position); });
+  };
+  const render = () => {
+    if (st.route === 'list') renderList();
+    else renderDetail(row(st.route));
+    renderDock();
+    paintSeek();
+    const failed = st.rows.filter(r => r.status === 'upload_failed').length, badge = wrap.querySelector('.badge');
+    badge.textContent = failed;
+    badge.classList.toggle('on', failed > 0);
+  };
+
+  const toggle = id => {
+    if (st.onAir === id) st.playing = !st.playing;
+    else { st.onAir = id; st.position = 0; st.playing = true; }
+    render();
+  };
+  const stopPlayer = () => { st.onAir = null; st.playing = false; st.position = 0; };
+  setInterval(() => {
+    const r = onAirRow();
+    if (!r || !st.playing) return;
+    st.position = Math.min(st.position + 1, r.dur);
+    if (st.position === r.dur) { st.playing = false; render(); return; }
+    paintSeek();
+  }, 1000);
+
+  const nudge = el => { el.classList.remove('nudge'); void el.offsetWidth; el.classList.add('nudge'); };
+  let snackTimer = null;
+  const dropSnack = () => { clearTimeout(snackTimer); screen.querySelector('.snack')?.remove(); };
+  const snack = (text, action, onAction) => {
+    dropSnack();
+    const el = document.createElement('div');
+    el.className = 'snack';
+    el.style.bottom = (wrap.querySelector('.nav').offsetHeight + dock.offsetHeight + 8) + 'px';
+    el.innerHTML = `<span>${text}</span>${action ? `<button>${action}</button>` : ''}`;
+    screen.appendChild(el);
+    if (action) el.querySelector('button').onclick = () => { dropSnack(); onAction(); };
+    snackTimer = setTimeout(dropSnack, UNDO_MS);
+  };
+
+  const remove = id => {
+    const i = st.rows.findIndex(r => r.id === id), [gone] = st.rows.splice(i, 1);
+    if (st.onAir === id) stopPlayer();
+    render();
+    snack('Запись удалена', 'Вернуть', () => { st.rows.splice(i, 0, gone); render(); });
+  };
+  const resend = id => {
+    const r = row(id);
+    r.status = 'queued';
+    render();
+    setTimeout(() => { r.status = 'processing'; render(); }, 1800);
+    setTimeout(() => { r.status = 'ready'; render(); }, 4200);
+  };
+
+  // Swipe: starts anywhere on the row, the play and copy buttons included. A tap stays a tap
+  // until the finger crosses the slop; past it the gesture belongs to the row.
+  let drag = null, swallowClick = false;
+  view.addEventListener('pointerdown', e => {
+    const fg = e.target.closest('.fg');
+    if (fg) drag = { fg, x: e.clientX, y: e.clientY, id: e.pointerId, dx: 0, live: false };
+  });
+  view.addEventListener('pointermove', e => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (!drag.live) {
+      if (Math.abs(dy) > SWIPE_SLOP) { drag = null; return; }
+      if (Math.abs(dx) < SWIPE_SLOP) return;
+      drag.live = true;
+      drag.fg.setPointerCapture?.(e.pointerId);
+    }
+    drag.dx = dx;
+    drag.fg.style.transform = `translateX(${dx}px)`;
+    const under = drag.fg.previousElementSibling;
+    under.className = 'under ' + (dx < 0 ? 'del' : 'send');
+    under.innerHTML = dx < 0 ? `Удалить ${I.trash}` : `${I.send} Отправить заново`;
+  });
+  const endDrag = () => {
+    if (!drag) return;
+    const { fg, dx, live } = drag;
+    drag = null;
+    if (!live) return;
+    swallowClick = true;
+    setTimeout(() => { swallowClick = false; }, 0);
+    const id = Number(fg.parentElement.dataset.id);
+    const commit = Math.abs(dx) > fg.offsetWidth * (dx < 0 ? SWIPE_DELETE : SWIPE_RESEND);
+    fg.classList.add('back');
+    if (commit && dx < 0) {
+      fg.style.transform = `translateX(${-fg.offsetWidth}px)`;
+      setTimeout(() => remove(id), 180);
+      return;
+    }
+    fg.style.transform = '';
+    setTimeout(() => {
+      fg.classList.remove('back');
+      fg.previousElementSibling.className = 'under';
+      if (commit) resend(id);
+    }, 180);
+  };
+  view.addEventListener('pointerup', endDrag);
+  view.addEventListener('pointercancel', endDrag);
+
+  screen.addEventListener('click', e => {
+    if (swallowClick) { e.stopPropagation(); return; }
+    const t = e.target.closest('button');
+    if (!t) return;
+    if (t.dataset.play) return toggle(Number(t.dataset.play));
+    if (t.dataset.open) { dropSnack(); st.route = Number(t.dataset.open); return render(); }
+    if ('back' in t.dataset) { st.route = 'list'; return render(); }
+    if ('stop' in t.dataset) { stopPlayer(); return render(); }
+    if (t.dataset.copy) {
+      t.classList.add('done');
+      t.innerHTML = I.check;
+      setTimeout(() => { t.classList.remove('done'); t.innerHTML = I.copy; }, COPIED_MS);
+      return;
+    }
+    if ('share' in t.dataset) nudge(t);
+  }, true);
+
+  screen.addEventListener('input', e => {
+    if (!e.target.matches('.seek')) return;
+    const id = Number(e.target.id.split('-')[2]);
+    if (st.onAir !== id) { st.onAir = id; st.playing = false; }
+    st.position = Number(e.target.value);
+    paintSeek();
+  });
+
+  render();
+}
+
+mount({ tall: false, caption: '<b>9:16</b> список, идёт прослушивание', route: 'list', onAir: 1, position: 72, playing: true });
+mount({ tall: true, caption: '<b>9:21</b> запись и текст', route: 3, onAir: null, position: 0, playing: false });
+</script>
+</body>
+</html>

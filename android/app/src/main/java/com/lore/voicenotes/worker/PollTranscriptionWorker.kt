@@ -23,14 +23,18 @@ class PollTranscriptionWorker @AssistedInject constructor(
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
-        repository.pollAndUpdate()
-        return Result.success()
+        val stillPending = repository.pollAndUpdate()
+        return if (stillPending) Result.retry() else Result.success()
     }
 
     companion object {
         private const val WORK_NAME = "poll_transcriptions"
 
-        /** Enqueue a one-time poll with exponential backoff. */
+        /**
+         * Enqueue a one-time poll with linear backoff (15 s x attempt). The worker
+         * retries while pending rows remain; REPLACE means a fresh enqueue (app
+         * start, upload) cancels any outstanding backoff wait at once.
+         */
         fun enqueue(context: Context) {
             val request = OneTimeWorkRequestBuilder<PollTranscriptionWorker>()
                 .setConstraints(
@@ -39,7 +43,7 @@ class PollTranscriptionWorker @AssistedInject constructor(
                         .build()
                 )
                 .setInitialDelay(5, TimeUnit.SECONDS)
-                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 5, TimeUnit.SECONDS)
+                .setBackoffCriteria(BackoffPolicy.LINEAR, 15, TimeUnit.SECONDS)
                 .build()
 
             WorkManager.getInstance(context)

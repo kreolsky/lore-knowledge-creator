@@ -27,7 +27,7 @@
  * guarded focused-slot claim). Every clear carries the previous-match guard.
  *
  * Lives in `editor/` with type-only imports of collab so CM6 widgets can import it without
- * the cycle table-block-widget → editor-host → widgets → render-bundle → table-block-widget.
+ * an import cycle through the collab layer.
  */
 // SYSTEM: active-editor — focused/root view, focused role + handle, role views, view→entity
 

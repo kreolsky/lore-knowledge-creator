@@ -317,13 +317,17 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
 
   // ── Right-tab-bar width CSS var (Header reads it for layout margin) ─────
   const rightTabBarRef = useRef<HTMLDivElement>(null);
+  const rightTabCount = rightTabs.length;
+  // WHY the deps: this effect forces a layout and writes to <html>, which invalidates style
+  // for the whole page, so it runs only when the bar's width can change: the panel opening
+  // or closing (a closed bar and an open one differ), the tab count, compact.
   useLayoutEffect(() => {
     const el = rightTabBarRef.current;
     if (!el) return;
     const w = el.offsetWidth;
     document.documentElement.style.setProperty('--right-tab-bar-w', `${w}px`);
     return () => { document.documentElement.style.removeProperty('--right-tab-bar-w'); };
-  });
+  }, [compact, rightIsOpen, rightTabCount]);
 
   const memberThreadOpen = useNoteStore(s => !!s.activeNoteThreadId);
   const threadOpen = notesThreadOpen ?? memberThreadOpen;

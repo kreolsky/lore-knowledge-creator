@@ -16,17 +16,17 @@ interface Props {
    *  prop is required precisely so it cannot be mounted where the session is
    *  unknown. */
   user: User;
+  /** Rendered while prefs load, so a cold load keeps the spinner the session probe
+   *  already showed instead of blanking the screen for one prefs round-trip. */
+  fallback: React.ReactNode;
   children: React.ReactNode;
 }
 
-export function AuthGuard({ user, children }: Props) {
+export function AuthGuard({ user, fallback, children }: Props) {
   const setCurrentUser = useAppStore(s => s.setCurrentUser);
-  // No optimistic start (part C's seed, deleted): the guard used to seed `checking`
-  // from the in-memory app-store because remounting the shell on a cross-branch
-  // route change (/projects/:id ↔ /docs/:id) re-ran it and returned null for a
-  // frame. SessionRoute now keeps this guard mounted across crossings, so the seed
-  // had nothing left to soften. Children still wait for prefs so the theme never
-  // flashes unstyled — that gate is what `checking` is now for.
+  // No optimistic start: SessionRoute keeps this guard mounted across crossings, so
+  // it runs once per session. Children wait for prefs so the theme never flashes
+  // unstyled — that gate is what `checking` is for.
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
@@ -71,6 +71,6 @@ export function AuthGuard({ user, children }: Props) {
     };
   }, [setCurrentUser, user]);
 
-  if (checking) return null;
+  if (checking) return <>{fallback}</>;
   return <>{children}</>;
 }

@@ -22,6 +22,7 @@
 
 import type { EditorView } from '@codemirror/view';
 import { useUIStore } from '../store/ui-store';
+import { registerEditorHostReset } from '../components/editor/editor-host';
 
 /** scroll = char offset of the top visible line; scrollOffset = its pixels above the edge (absent in older records → 0). */
 export interface EditorPosition { cursor: number; scroll: number; scrollOffset?: number }
@@ -45,6 +46,7 @@ export function flushPositionCache(): void {
 export function clearPositionCache(): void {
   positionCache.clear();
 }
+registerEditorHostReset('user', clearPositionCache);
 
 export function positionCacheSet(id: string, pos: EditorPosition): void {
   positionCache.delete(id); // move to end (Map preserves insertion order)

@@ -5,7 +5,7 @@
  *   - size field prefill from the `|…` suffix; Enter applies (50% percent, ''
  *     clears) through ONE transaction that re-selects the node (toolbar stays)
  *   - invalid input → inline error, doc untouched
- *   - Delete removes the embed NODE only; Download anchors the reference's file
+ *   - Download anchors the reference's file
  *
  * Harness: real EditorView + markdown parser + renderExtensions() in jsdom
  * (atomic-delete-guard.test.ts pattern) + store mocks (SelectionToolbar.test

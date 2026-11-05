@@ -28,7 +28,7 @@ const AGGREGATE_WINDOW_MS = 10_000;
 //      clock artifact, not a real slowdown — drop it so max/percentiles stay meaningful.
 //      sync-slow/recovered are operation-bracketed and legitimately long — NOT capped here.
 export const PERF_SANITY_CAP_MS = 60_000;
-const isPlausiblePerfMs = (ms: number): boolean => ms >= 0 && ms <= PERF_SANITY_CAP_MS;
+export const isPlausiblePerfMs = (ms: number): boolean => ms >= 0 && ms <= PERF_SANITY_CAP_MS;
 
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;

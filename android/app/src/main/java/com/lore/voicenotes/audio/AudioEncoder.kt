@@ -36,6 +36,9 @@ class AudioEncoder(private val outputFile: File) {
         muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
     }
 
+    /** Encoded duration so far; PTS counts samples, so this is sample-exact. */
+    val durationMs: Long get() = presentationTimeUs / 1_000
+
     fun addSamples(pcm: ShortArray) {
         // ARCH: Native byte order is critical — MediaCodec expects little-endian PCM.
         val bytes = ByteBuffer.allocateDirect(pcm.size * 2).order(java.nio.ByteOrder.nativeOrder())

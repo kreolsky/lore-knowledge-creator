@@ -24,6 +24,7 @@ import ImageToolbar from '../components/editor/ImageToolbar';
 import { FindReplacePanel } from '../components/editor/FindReplacePanel';
 import { LinkSuggestionsPopup } from '../components/editor/LinkSuggestionsPopup';
 import { EditorLinkPreview } from '../components/editor/EditorLinkPreview';
+import { ImagePreviewHost } from '../components/editor/ImagePreviewHost';
 import { ProjectShell, type ProjectShellHandle, type RightTabEntry, type LeftTabEntry } from '../components/ProjectShell';
 import { useAppStore } from '../store/app-store';
 import { selectOpenPageLocked, PAGE_BOUND_TABS } from '../utils/page-lock';
@@ -445,6 +446,7 @@ export function ProjectPage() {
             <ImageToolbar />
             <LinkSuggestionsPopup />
             <EditorLinkPreview />
+            <ImagePreviewHost />
           </>
         }
       />

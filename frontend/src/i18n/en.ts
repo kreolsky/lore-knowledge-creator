@@ -148,7 +148,7 @@ export const en = {
   imageSize: 'Image width',
   imageSizePlaceholder: '300, 50% or 500x400',
   imageSizeInvalid: 'Width must be pixels or percent, e.g. 300 or 50%',
-  removeImageEmbed: 'Remove image',
+  imagePreview: 'Image',
   insert: 'Insert',
   insertFileBelowCursorConfirm: 'Insert file content below the cursor?',
   importingFile: 'Importing file…',

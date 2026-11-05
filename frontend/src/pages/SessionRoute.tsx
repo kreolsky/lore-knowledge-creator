@@ -1,12 +1,11 @@
 /**
- * SessionRoute — the /* session decider (plan "route-unification-single-shell").
+ * SessionRoute — the /* session decider.
  *
  * ONE route element owns every authed and public surface except `/` and
  * `/s/:token` (both stay outside so a cold landing visit pays no probe —
  * LandingPage runs its own /auth/me bounce). Crossing /projects/:id ↔ /docs/:id
  * is an INNER route change here: the shell, the guard and this probe all stay
- * mounted, where the old top-level sibling split remounted the whole authed shell
- * per crossing.
+ * mounted.
  *
  *   - session (probe /auth/me → 200) → AuthGuard (fed the probe's user — this is
  *     the ONE /auth/me a cold authed load pays) → Layout → inner <Routes>:
@@ -20,20 +19,18 @@
  *   - error (5xx / network / timeout) → explicit retry screen. This phase can
  *     gate the whole app because it only ever fires cold: the probe runs once
  *     per mount, and a blip during a live session never re-probes. This is the
- *     ONLY handling of a cold 5xx — AuthGuard's lenient ServiceUnavailableError
- *     branch (render children + toast) is gone with its fetch.
+ *     ONLY handling of a cold 5xx.
  *
  * ARCH: the session probe uses apiClient.probe() (NOT get) so a 401 resolves to
  * {ok:false} instead of triggering apiClient's redirect-on-401 guard — that guard
  * would kick an anonymous visitor off /docs/:id. The probe runs on mount and on
  * each retry; in-tree navigation (any path inside /*) reuses the resolved phase.
  *
- * ARCH (plan "post-public-document-ids-fixes"): the probe distinguishes 401
- * (truly anonymous → public surface) from 5xx / network / timeout (couldn't
- * verify → explicit `error` phase + retry, NOT the public surface). A 500 while
- * a member holds a live cookie must NOT silently render the read-only view —
- * that would violate the no-silent-degradation rule and hide a real outage
- * behind stale UX.
+ * ARCH: the probe distinguishes 401 (truly anonymous → public surface) from 5xx /
+ * network / timeout (couldn't verify → explicit `error` phase + retry, NOT the
+ * public surface). A 500 while a member holds a live cookie must NOT silently
+ * render the read-only view — that would violate the no-silent-degradation rule
+ * and hide a real outage behind stale UX.
  *
  * ARCH: a malformed :documentId is never rejected client-side. /docs/:documentId
  * cannot collide with /projects, /admin, or /s (distinct path segments), so any
@@ -41,15 +38,18 @@
  * `sys-{role}-{project_id}`, including the whole agent-config subtree) — reaches
  * the resolver, which 404s uniformly for unknown ids (no existence oracle).
  *
- * Chunking (ARCH: every page is route-split): this module is probe-sized and
- * lazily mounted by App; every page below (Dashboard, EditorRoutes — which
- * statically owns ProjectPage + DocumentPage and their editor graph — Admin,
- * Cabinet, PublicSharePage) stays React.lazy so the landing bundle never regains
- * the editor and the light authed surfaces (/projects list, /cabinet, /admin)
- * never download it either.
+ * ARCH: this module is probe-sized and statically linked into the entry, so the
+ * probe starts at the first commit. Every page below it (Dashboard, EditorRoutes —
+ * which statically owns ProjectPage + DocumentPage and their editor graph — Admin,
+ * Cabinet, PublicSharePage) stays lazy so the landing bundle never gains the editor
+ * and the light authed surfaces (/projects list, /cabinet, /admin) never download
+ * it either. A cold editor load must not suspend on the way: when the probe proves
+ * a session on an editor-shell URL, the module is loaded BEFORE the authed phase is
+ * set and the phase carries it, so the spinner already on screen is the only frame
+ * and the page's own fetches start as soon as the chunk arrives.
  */
 
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState, type ComponentType } from 'react';
 import { Navigate, Route, Routes, useParams } from 'react-router-dom';
 import { apiClient } from '../api/client';
 import type { User } from '../types';
@@ -57,13 +57,16 @@ import { AuthGuard } from '../components/AuthGuard';
 import { Layout } from '../components/Layout';
 import { Button } from '../components/ui';
 import { useTranslation } from '../i18n';
+import { isEditorShell } from '../utils/routing';
 
 const Dashboard = lazy(() => import('./Dashboard').then(m => ({ default: m.Dashboard })));
 const AdminPage = lazy(() => import('./AdminPage').then(m => ({ default: m.AdminPage })));
 const CabinetPage = lazy(() => import('./CabinetPage').then(m => ({ default: m.CabinetPage })));
 // The editor routes (/projects/:id, /docs/:id, legacy nested) are one statically
 // linked chunk with the whole editor graph — see EditorRoutes' ARCH. Lazy HERE
-// only so /projects, /cabinet and /admin never download it.
+// only so /projects, /cabinet and /admin never download it. This path serves a
+// session that did not start on an editor URL; a cold editor load goes through
+// loadEditorForColdOpen and renders it only after that load failed.
 const EditorRoutes = lazy(() => import('./EditorRoutes').then(m => ({ default: m.EditorRoutes })));
 // Lazy: PublicSharePage pulls PublicEditor + CM6 render path; only the anonymous
 // branch needs it.
@@ -83,13 +86,10 @@ const ANONYMOUS_STATUS = 401;
 // frees the network resource and routes to the `error` phase (retryable).
 const PROBE_TIMEOUT_MS = 8000;
 
-// No cross-mount memo of the verdict (part C's compensation, deleted): a memo
-// existed only because the old top-level sibling split REMOUNTED the decider on
-// every /projects/:id ↔ /docs/:id crossing, and softening that remount beat fixing
-// it. SessionRoute now stays mounted across crossings; it unmounts only for `/`
-// and `/s/:token`, a full page transition where a fresh probe is the honest cost.
-// Caching a session verdict past its response would keep a cached security
-// decision alive for zero remaining benefit.
+// No cross-mount memo of the verdict: SessionRoute stays mounted across crossings
+// and unmounts only for `/` and `/s/:token`, a full page transition where a fresh
+// probe is the honest cost. Caching a session verdict past its response would keep
+// a cached security decision alive for zero remaining benefit.
 
 // data-testid: this spinner's markup is shared with the lazy-chunk Suspense
 // fallbacks, so the cross-branch e2e frame probe has to be able to count THIS one
@@ -110,9 +110,21 @@ function RouteLoading() {
  *  degradation, the exact failure this file's ARCH forbids. */
 type Phase =
   | { kind: 'probing' }
-  | { kind: 'authed'; user: User }
+  | { kind: 'authed'; user: User; editor: ComponentType | null }
   | { kind: 'anonymous' }
   | { kind: 'error' };
+
+/** The editor module for a session proven on an editor-shell URL, loaded before the
+ *  authed phase commits; null elsewhere, so /projects, /cabinet and /admin never
+ *  download the editor graph. Runs only after the probe's verdict: an anonymous
+ *  visitor is not charged for it.
+ *  A failed chunk also yields null: the route then falls back to the lazy path,
+ *  whose own rejection reaches the ErrorBoundary. The session verdict stays what
+ *  the probe said, a chunk failure must not read as `error` or `anonymous`. */
+async function loadEditorForColdOpen(): Promise<ComponentType | null> {
+  if (!isEditorShell(window.location.pathname)) return null;
+  return import('./EditorRoutes').then(m => m.EditorRoutes, () => null);
+}
 
 /** The anonymous branch's ONE public surface: /docs/:documentId → the read-only
  * published view (or PublicSharePage's error state if the document is not
@@ -147,15 +159,17 @@ export function SessionRoute() {
     const timeoutId = window.setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
 
     apiClient.probe('/auth/me', controller.signal)
-      .then((r) => {
+      .then(async (r) => {
         if (settled) return;
         // A 200 whose body did not parse is NOT a verified session: the guard's
         // contract is a real user, and inventing one would be exactly the silent
         // degradation the error phase exists to prevent.
-        const verdict: Phase = r.ok
-          ? (r.data ? { kind: 'authed', user: r.data as User } : { kind: 'error' })
-          : r.status === ANONYMOUS_STATUS ? { kind: 'anonymous' } : { kind: 'error' };
-        setPhase(verdict);
+        if (r.ok && r.data) {
+          const editor = await loadEditorForColdOpen();
+          if (!settled) setPhase({ kind: 'authed', user: r.data as User, editor });
+          return;
+        }
+        setPhase(!r.ok && r.status === ANONYMOUS_STATUS ? { kind: 'anonymous' } : { kind: 'error' });
       })
       .catch(() => {
         // AbortError (timeout/unmount), TypeError (network), or any other throw —
@@ -199,9 +213,12 @@ export function SessionRoute() {
     // Full session/prefs/refresh parity for EVERY authed surface, /docs/:id
     // included: AuthGuard bootstraps the session from the user THIS probe already
     // fetched (no second /auth/me, no 401-redirect risk), and Layout gates on
-    // pinLocked, which the old top-level /docs/:id sibling bypassed entirely.
+    // pinLocked.
+    // WHY one pick per phase: phase.editor never changes while authed, so this
+    // component's identity is stable and a later render cannot remount the editor.
+    const Editor = phase.editor ?? EditorRoutes;
     return (
-      <AuthGuard user={phase.user}>
+      <AuthGuard user={phase.user} fallback={<RouteLoading />}>
         <Layout>
           <Routes>
             <Route path="/projects" element={<Suspense fallback={<RouteLoading />}><Dashboard /></Suspense>} />
@@ -211,7 +228,7 @@ export function SessionRoute() {
                 DocumentPage statically linked), mounted behind ONE route element
                 so /projects/:id ↔ /docs/:id crossings are inner route changes
                 with no chunk boundary to suspend on. */}
-            <Route path="*" element={<Suspense fallback={<RouteLoading />}><EditorRoutes /></Suspense>} />
+            <Route path="*" element={<Suspense fallback={<RouteLoading />}><Editor /></Suspense>} />
           </Routes>
         </Layout>
       </AuthGuard>

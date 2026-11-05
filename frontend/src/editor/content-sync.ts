@@ -14,6 +14,7 @@ import { useAppStore } from '../store/app-store';
 import { t } from '../i18n';
 import { invalidatePreviewCache } from '../hooks/useDocumentPreview';
 import { invalidateLinkCache } from '../api/links';
+import { registerEditorHostReset } from '../components/editor/editor-host';
 
 export type Item = Document | Reference;
 
@@ -32,6 +33,7 @@ export function clearCheckpointDedup(entityId: string) {
 export function clearAllCheckpointDedup() {
   lastCheckpointContent.clear();
 }
+registerEditorHostReset('user', clearAllCheckpointDedup);
 
 /** Read content from CM6 view. Returns null if view is gone. */
 export function readEditorContent(

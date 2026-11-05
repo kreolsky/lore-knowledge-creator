@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Lore Voice</string>
+
+    <string name="nav_record">Запись</string>
+    <string name="nav_history">История</string>
+    <string name="nav_settings">Настройки</string>
+
+    <string name="record_start">Начать запись</string>
+    <string name="record_stop">Завершить запись</string>
+    <string name="record_cancel_hold">Отменить запись, удерживайте</string>
+    <string name="record_source_mic">Микрофон</string>
+    <string name="record_source_system">Звук системы</string>
+    <string name="record_upload_file">Загрузить аудио</string>
+    <string name="record_mic_permission_required">Требуется разрешение на микрофон</string>
+    <string name="record_mic_only">Только микрофон</string>
+    <string name="record_no_audio_access">Нет доступа к звуку</string>
+    <string name="record_saved">Сохранено</string>
+    <string name="record_canceled">Отменено</string>
+    <string name="record_not_saved">Не сохранено</string>
+    <string name="record_upload_failed_count">Не отправлено: %1$d</string>
+    <string name="record_doc_add">Добавить документ</string>
+
+    <string name="history_title">История</string>
+    <string name="history_empty">Записей пока нет</string>
+    <string name="history_delete">Удалить</string>
+    <string name="history_resend">Отправить заново</string>
+    <string name="history_deleted">Запись удалена</string>
+    <string name="history_undo">Вернуть</string>
+    <string name="history_play">Прослушать</string>
+    <string name="history_pause">Пауза</string>
+    <string name="history_copy">Скопировать текст</string>
+    <string name="history_today">Сегодня</string>
+    <string name="history_yesterday">Вчера</string>
+    <string name="history_row_document">документ %1$s</string>
+    <string name="player_seek">Перемотка</string>
+    <string name="player_close">Закрыть плеер</string>
+
+    <string name="status_on_device">На устройстве</string>
+    <string name="status_queued">В очереди</string>
+    <string name="status_processing">Распознаётся</string>
+    <string name="status_ready">Распознано</string>
+    <string name="status_failed">Не распознано</string>
+    <string name="status_upload_failed">Не отправлено</string>
+
+    <string name="detail_back">Назад</string>
+    <string name="detail_share">Поделиться</string>
+    <string name="detail_document">Документ %1$s</string>
+
+    <string name="settings_title">Настройки</string>
+    <string name="settings_keys_title">Ключи документов</string>
+    <string name="settings_no_keys">Нет ключей. Добавьте ключ, полученный в Lore.</string>
+    <string name="settings_add_title">Добавить ключ</string>
+    <string name="settings_key_label">Ключ (base64)</string>
+    <string name="settings_key_placeholder">Вставьте ключ в формате base64…</string>
+    <string name="settings_version">Версия %1$s</string>
+    <string name="settings_add_key">Добавить</string>
+    <string name="settings_paste">Из буфера</string>
+    <string name="settings_key_added">Ключ добавлен</string>
+    <string name="settings_key_duplicate">Ключ уже добавлен — выбран</string>
+    <string name="settings_key_invalid">Неверный ключ</string>
+    <string name="settings_delete_key">Удалить ключ</string>
+    <string name="settings_move_up">Переместить выше</string>
+    <string name="settings_move_down">Переместить ниже</string>
+    <string name="settings_project">Проект: %1$s</string>
+    <string name="settings_no_value">—</string>
+
+    <string name="notification_recording_channel">Запись</string>
+    <string name="notification_recording">Идёт запись…</string>
+    <string name="notification_upload">Отправка записи</string>
+</resources>

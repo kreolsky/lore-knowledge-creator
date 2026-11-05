@@ -12,6 +12,7 @@ import { apiClient } from '../api/client';
 import { getPublicFileContext } from '../utils/reference-url';
 import { createResourceCache } from '../api/swr-cache';
 import { registerLogoutHandler } from '../store/logout-handlers';
+import { registerEditorHostReset } from '../components/editor/editor-host';
 
 const previewCache = createResourceCache<string>(50);
 
@@ -27,6 +28,7 @@ export function clearPreviewCache() {
 // cache hit. clear() also refuses the settle write of any fetch still in
 // flight across the logout (the primitive's generation guard).
 registerLogoutHandler(clearPreviewCache);
+registerEditorHostReset('project', clearPreviewCache);
 
 export function invalidatePreviewCache(docId: string) {
   previewCache.invalidate(docId);

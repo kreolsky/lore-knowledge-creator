@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>LORE VOICE — layout v5</title>
+<style>
+/* Geometry carried from layout v3(1) unchanged. Palette: Lore dark theme tokens,
+   frontend/src/index.css, html.dark. Single dark world by decision. */
+:root{
+  color-scheme:dark;
+  --bg:#1e1e1e; --surface:#262626; --surface2:#2e2e2e; --surface3:#434343;
+  --border:#363636; --text:#cacaca; --muted:#929292; --dim:#696969; --strong:#f0f0f0;
+  --accent:#5847d1; --accent-text:#8f84f5; --red:#f87171; --green:#4ade80; --amber:#f59e0b;
+  --page:#141414; --device:#0c0c0c;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --hold:470ms; --ring:1400ms;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--text);font-family:var(--sans)}
+button{font:inherit;cursor:pointer}
+button:focus-visible{outline:2px solid var(--accent-text);outline-offset:2px}
+
+.page{max-width:760px;margin:auto;padding-block:32px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;gap:24px}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+h1{margin:6px 0 0;font-size:28px;line-height:1.2;font-weight:600;letter-spacing:-.02em;color:var(--strong);text-wrap:balance}
+.board{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start}
+.phone-wrap{display:flex;flex-direction:column;align-items:center;gap:12px}
+.cap{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:11px}
+.cap b{color:var(--text);font-size:12px}
+
+.phone{width:min(100%,300px);aspect-ratio:9/16;padding:9px;border-radius:38px;background:var(--device);box-shadow:0 0 0 1px var(--border),0 18px 48px #00000080}
+.phone--21{width:min(100%,288px);aspect-ratio:9/21;border-radius:40px}
+.screen{height:100%;border-radius:29px;overflow:hidden;position:relative;display:flex;flex-direction:column;padding:18px 15px 0;background:var(--bg);color:var(--text);user-select:none}
+
+.topline{height:20px;display:flex;align-items:center;justify-content:flex-end}
+.sys{font-size:10px;letter-spacing:1px;color:var(--muted)}
+
+/* The timer slot is the only text above the controls.
+   Its top lines up with the first document tab. */
+.state{align-self:flex-start;margin-top:10px;font-size:56px;font-weight:400;line-height:1;letter-spacing:-.02em;color:var(--red);font-variant-numeric:tabular-nums;white-space:nowrap;visibility:hidden}
+.live .state{visibility:visible}
+/* After stop or cancel the same slot holds one word for 2 s, then clears.
+   It never blocks anything: starting the next recording replaces it at once. */
+/* Saved: the final time stays at full size, green, with the word under it. */
+.state.saved{visibility:visible;color:var(--green)}
+.word{display:none;margin-top:6px;font-size:15px;line-height:20px;font-weight:500;color:var(--green)}
+.state.saved+.word{display:block}
+/* Canceled: the time is gone, only the word. */
+.state.canceled{visibility:visible;font-size:15px;line-height:40px;font-weight:500;letter-spacing:0;color:var(--amber)}
+
+.sources{position:absolute;z-index:4;left:0;bottom:210px;display:flex;flex-direction:column;gap:7px}
+.source{width:40px;height:40px;border:1px solid var(--border);border-left:0;border-radius:0 10px 10px 0;padding:0;background:var(--surface);color:var(--muted);display:grid;place-items:center;transition:.16s}
+.source svg{width:17px;height:17px}
+/* On and off must read at a glance: solid accent against an empty tab with a struck-out icon. */
+.source[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--strong)}
+.source[aria-pressed="false"]{background:transparent;color:var(--dim)}
+.source .slash{display:none}
+.source[aria-pressed="false"] .slash{display:block}
+
+.doc-tabs{position:absolute;z-index:4;right:0;top:48px;display:grid;grid-template-columns:42px;gap:7px;width:42px}
+/* Tap unrolls the tab leftward from the edge with the document title, as much as fits, for 2 s.
+   Starting a recording rolls it back at once, and it stays closed while recording. */
+.doc-tab{justify-self:end;display:flex;align-items:center;height:40px;width:42px;padding:0;border:1px solid var(--border);border-right:0;border-radius:10px 0 0 10px;background:var(--surface);color:var(--muted);font-size:10px;font-weight:800;overflow:hidden;transition:width .18s ease-out,background .16s,opacity .16s}
+.doc-tab .name{flex:1 1 0;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-align:left;font-size:12px;font-weight:600;opacity:0;transition:opacity .12s}
+.doc-tab .num{flex:none;width:41px;text-align:center}
+.doc-tab.open{width:210px;box-shadow:-4px 4px 14px #00000066}
+.doc-tab.open .name{opacity:1;padding-left:12px}
+.doc-tab[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--strong)}
+.live .source,.live .doc-tab{cursor:default}
+.live .doc-tab,.live .source[aria-pressed="false"]{opacity:.45}
+
+.stage{position:relative;flex:1;min-height:258px;display:flex;align-items:flex-end;justify-content:center;padding-bottom:0}
+.dial{position:relative;width:230px;height:230px;flex:none;display:grid;place-items:center;transform:translateY(22px);pointer-events:none}
+.record{pointer-events:auto;position:relative;z-index:2;width:116px;height:116px;padding:0;border:0;border-radius:50%;background:var(--accent);color:var(--strong);display:grid;place-items:center;box-shadow:0 10px 24px #5847d140;transition:background .18s}
+.record svg{width:34px;height:34px}
+.record .stop{display:none}
+.live .record{background:var(--red);color:var(--bg);box-shadow:0 0 0 6px #f871711f,0 10px 24px #f8717130}
+.live .record .mic{display:none}
+.live .record .stop{display:block}
+.eq{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:0;overflow:visible;transition:opacity .18s}
+.live .eq{opacity:1}
+.eq line{stroke:var(--red);stroke-width:4;stroke-linecap:round;stroke-dasharray:2 16;animation:grow .55s ease-in-out infinite alternate}
+.eq line:nth-child(2n){animation-duration:.82s}
+.eq line:nth-child(3n){animation-duration:.68s}
+@keyframes grow{to{stroke-dasharray:14 16}}
+
+/* Saved only: the equalizer turns green, makes one turn and fades. Cancel shows just the word.
+   It sits behind a live record button and blocks nothing. */
+.ring-saved .eq{opacity:1;animation:confirm var(--ring) ease-out forwards}
+.ring-saved .eq line{stroke:var(--green)}
+@keyframes confirm{70%{opacity:1}100%{opacity:0;rotate:270deg}}
+
+/* A failed upload stays on screen until the recording leaves the phone. The line lives in the
+   timer slot, gives way to the timer and to the saved word, and leads to History. */
+.fail{display:none;position:absolute;z-index:3;left:15px;top:48px;height:40px;align-items:center;gap:7px;color:var(--red);font-size:15px;font-weight:600;background:none;border:0;padding:0}
+.fail svg{width:16px;height:16px}
+.has-failed .fail{display:flex}
+.live .fail,.state.saved~.fail,.state.canceled~.fail{display:none}
+.badge{position:absolute;top:-4px;left:calc(50% + 4px);min-width:16px;height:16px;padding:0 4px;display:none;place-items:center;border-radius:8px;background:var(--red);color:var(--bg);font-size:10px;font-weight:800;box-shadow:0 0 0 2px var(--surface)}
+.has-failed .badge{display:grid}
+.has-failed .nav .history::after{display:none}
+
+.picker{display:grid;gap:6px;justify-items:start}
+.seg{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.seg button{border:0;background:var(--surface);color:var(--muted);padding:8px 14px;font-size:13px;font-weight:600}
+.seg button+button{border-left:1px solid var(--border)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--strong)}
+
+/* A refused tap answers with a nudge instead of a sentence. */
+.nudge{animation:nudge .26s ease-in-out}
+@keyframes nudge{25%{translate:-3px 0}75%{translate:3px 0}}
+
+/* Cancel exists only while recording and fires on a hold, the fill shows the hold. */
+.cancel{position:absolute;z-index:3;left:32px;bottom:6px;width:44px;height:44px;padding:0;border-radius:50%;border:1px solid var(--surface3);background:var(--surface2);color:var(--text);display:none;place-items:center;overflow:hidden;touch-action:none}
+.live .cancel{display:grid}
+.cancel svg{position:relative;width:17px;height:17px}
+.cancel .fill{position:absolute;inset:0;background:var(--red);transform:scaleY(0);transform-origin:bottom;transition:transform .1s linear}
+.cancel.holding{color:var(--bg);border-color:var(--red)}
+.cancel.holding .fill{transform:scaleY(1);transition:transform var(--hold) linear}
+
+.upload{height:43px;flex:none;margin:0 0 9px;border:1px dashed var(--surface3);border-radius:12px;background:transparent;color:var(--text);display:flex;align-items:center;justify-content:center;gap:8px;font-size:11px;font-weight:800}
+.upload svg{width:16px;height:16px}
+.live .upload{visibility:hidden}
+.nav{margin:0 -15px;background:var(--surface);border-top:1px solid var(--border);display:grid;grid-template-columns:repeat(3,1fr);padding:8px 7px 10px}
+.nav div{color:var(--dim);display:flex;flex-direction:column;align-items:center;gap:3px;font-size:9px;font-weight:750}
+.nav div.active{color:var(--accent-text)}
+.nav svg{width:19px;height:19px}
+/* Upload runs in the background; its only trace on this screen is a dot on History. */
+.nav .history{position:relative}
+.nav .history::after{content:"";position:absolute;top:0;left:calc(50% + 6px);width:7px;height:7px;border-radius:50%;background:var(--accent-text);box-shadow:0 0 0 2px var(--surface);opacity:0;transition:opacity .16s}
+.sending .nav .history::after{opacity:1}
+
+.tokens{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px 18px;margin:0;padding:0;list-style:none}
+.tokens li{display:grid;grid-template-columns:18px 1fr;gap:1px 9px;align-items:center;font-size:12px}
+.tokens i{grid-row:span 2;width:18px;height:18px;border-radius:50%;box-shadow:inset 0 0 0 1px #ffffff24}
+.tokens span{color:var(--muted);font-family:var(--mono);font-size:11px}
+
+@media(max-width:640px){.board{grid-template-columns:1fr;gap:26px}}
+@media(prefers-reduced-motion:reduce){@keyframes confirm{100%{opacity:0}}.nudge{animation:none}.eq line{animation:none;stroke-dasharray:9 16}.cancel.holding .fill{transition-duration:.01s}}
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <div class="eyebrow">Lore Voice · layout v5</div>
+    <h1>Экран записи в тёмной теме Lore</h1>
+  </header>
+
+  <div class="picker">
+    <span class="eyebrow" id="fail-label">Сбой отправки</span>
+    <div class="seg" role="group" aria-labelledby="fail-label">
+      <button id="fail-on" data-set-fail="on" aria-pressed="true">Показать</button>
+      <button id="fail-off" data-set-fail="off" aria-pressed="false">Скрыть</button>
+    </div>
+  </div>
+
+  <section class="board" id="board"></section>
+
+  <ul class="tokens" aria-label="Цвета из тёмной темы Lore">
+    <li><i style="background:var(--bg)"></i>Фон экрана<span>--bg</span></li>
+    <li><i style="background:var(--surface)"></i>Ярлычки, навигация<span>--surface</span></li>
+    <li><i style="background:var(--accent)"></i>Запись, выбранное, включённое<span>--accent</span></li>
+    <li><i style="background:var(--red)"></i>Идёт запись, сбой<span>--red</span></li>
+    <li><i style="background:var(--green)"></i>Сохранено<span>--green</span></li>
+    <li><i style="background:var(--amber)"></i>Отменено<span>--amber</span></li>
+  </ul>
+</main>
+
+<template id="phone-tpl">
+  <div class="phone-wrap">
+    <div class="phone">
+      <div class="screen">
+        <div class="topline"><span class="sys">●●● ◖ ▰</span></div>
+        <div class="state" role="status">00:00</div>
+        <div class="word">Сохранено</div>
+        <button class="fail" aria-label="Открыть историю"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v5m0 3.500v.010M10.300 3.900 2.500 18a2 2 0 0 0 1.700 3h15.600a2 2 0 0 0 1.700-3L13.700 3.900a2 2 0 0 0-3.400 0z"/></svg>Не отправлено: 1</button>
+
+        <div class="sources" aria-label="Источники записи">
+          <button class="source mic-src" aria-pressed="true" aria-label="Микрофон"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.500" width="6" height="11" rx="3"/><path d="M5.500 11a6.500 6.500 0 0 0 13 0M12 17.500V21m-3 0h6"/><path class="slash" d="M3.500 3.500l17 17"/></svg></button>
+          <button class="source sys-src" aria-pressed="false" aria-label="Звук системы"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.500h3.500L12 6v12l-4.500-3.500H4z"/><path d="M15.500 9.500a4 4 0 0 1 0 5M18 7a7.500 7.500 0 0 1 0 10"/><path class="slash" d="M3.500 3.500l17 17"/></svg></button>
+        </div>
+        <div class="doc-tabs" aria-label="Документы">
+          <button class="doc-tab" data-doc aria-pressed="true" aria-label="Документ 1"><span class="name">Длинный заголовок документа, который не помещается целиком</span><span class="num">01</span></button>
+          <button class="doc-tab" data-doc aria-pressed="false" aria-label="Документ 2"><span class="name">Заголовок документа</span><span class="num">02</span></button>
+          <button class="doc-tab" data-doc aria-pressed="false" aria-label="Документ 3"><span class="name">Короткий</span><span class="num">03</span></button>
+          <button class="doc-tab" aria-pressed="false" aria-label="Добавить документ"><span class="num">＋</span></button>
+        </div>
+
+        <div class="stage">
+          <button class="cancel" aria-label="Отменить запись, удерживайте"><span class="fill"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+          <div class="dial">
+            <svg class="eq" viewBox="0 0 230 230" aria-hidden="true"></svg>
+            <button class="record" aria-label="Начать запись">
+              <svg class="mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="13" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3m-4 0h8"/></svg>
+              <svg class="stop" viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <input class="file" type="file" accept="audio/*" hidden>
+        <button class="upload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3m0 0L7 8m5-5 5 5"/><path d="M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></svg>Загрузить готовый файл</button>
+        <div class="nav" aria-hidden="true">
+          <div class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0m-7 7v3m-4 0h8"/></svg>Запись</div>
+          <div class="history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 2.600-6.400L3 8M3 3v5h5m4-1v5l3 2"/></svg>История<span class="badge">1</span></div>
+          <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19 13a7 7 0 0 0 0-2l2-1-2-3-2 1-2-1-.4-2h-4L10 7 8 8 6 7l-2 3 2 1v2l-2 1 2 3 2-1 2 1 .5 2h4l.5-2 2-1 2 1 2-3z"/></svg>Настройки</div>
+        </div>
+      </div>
+    </div>
+    <div class="cap"></div>
+  </div>
+</template>
+
+<script>
+const HOLD_MS = 470; // A third faster than the 700 ms of layout v4.
+const SEND_MS = 4000; // Mock stand-in for the background upload.
+const FLASH_MS = 2000;
+const PEEK_MS = 2000;
+const fmt = s => String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+
+function drawEq(svg) {
+  for (let i = 0; i < 40; i++) {
+    const a = i * Math.PI / 20, r0 = 58, r1 = 74;
+    const l = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    l.setAttribute('x1', 115 + Math.sin(a) * r0);
+    l.setAttribute('y1', 115 - Math.cos(a) * r0);
+    l.setAttribute('x2', 115 + Math.sin(a) * r1);
+    l.setAttribute('y2', 115 - Math.cos(a) * r1);
+    l.style.animationDelay = -(i % 10) * 0.08 + 's';
+    svg.appendChild(l);
+  }
+}
+
+function mount({ tall, caption, startAt }) {
+  const wrap = document.getElementById('phone-tpl').content.firstElementChild.cloneNode(true);
+  document.getElementById('board').appendChild(wrap);
+  const phone = wrap.querySelector('.phone');
+  phone.classList.toggle('phone--21', tall);
+  wrap.querySelector('.cap').innerHTML = caption;
+  const $ = s => wrap.querySelector(s);
+  const state = $('.state'), cancel = $('.cancel'), record = $('.record');
+  let seconds = 0, timer = null, flashTimer = null, sending = 0;
+
+  const isLive = () => phone.classList.contains('live');
+  const nudge = el => {
+    el.classList.remove('nudge');
+    void el.offsetWidth;
+    el.classList.add('nudge');
+  };
+  const clearFlash = () => {
+    clearTimeout(flashTimer);
+    state.classList.remove('saved', 'canceled');
+    phone.classList.remove('ring-saved');
+  };
+  const flash = (kind, text) => {
+    clearFlash();
+    if (kind === 'saved') phone.classList.add('ring-saved');
+    state.classList.add(kind);
+    if (text) state.textContent = text;
+    flashTimer = setTimeout(clearFlash, FLASH_MS);
+  };
+  let peekTimer = null;
+  const closePeek = () => {
+    clearTimeout(peekTimer);
+    wrap.querySelectorAll('.doc-tab.open').forEach(x => x.classList.remove('open'));
+  };
+  const start = from => {
+    closePeek();
+    clearFlash();
+    seconds = from;
+    phone.classList.add('live');
+    state.textContent = fmt(seconds);
+    record.setAttribute('aria-label', 'Завершить запись');
+    timer = setInterval(() => { seconds++; state.textContent = fmt(seconds); }, 1000);
+  };
+  const stop = () => {
+    clearInterval(timer);
+    phone.classList.remove('live');
+    record.setAttribute('aria-label', 'Начать запись');
+  };
+  // Never blocks recording: each upload is its own background job.
+  const send = () => {
+    sending++;
+    phone.classList.add('sending');
+    setTimeout(() => {
+      sending--;
+      phone.classList.toggle('sending', sending > 0);
+    }, SEND_MS);
+  };
+
+  record.onclick = () => {
+    if (!isLive()) return start(0);
+    stop();
+    flash('saved');
+    send();
+  };
+
+  let holdTimer = null, fired = false;
+  const holdStart = () => {
+    fired = false;
+    cancel.classList.add('holding');
+    holdTimer = setTimeout(() => {
+      fired = true;
+      cancel.classList.remove('holding');
+      stop();
+      flash('canceled', 'Отменено');
+    }, HOLD_MS);
+  };
+  const holdEnd = () => {
+    if (holdTimer === null) return;
+    clearTimeout(holdTimer);
+    holdTimer = null;
+    cancel.classList.remove('holding');
+    if (!fired) nudge(cancel);
+  };
+  cancel.addEventListener('pointerdown', holdStart);
+  ['pointerup', 'pointerleave', 'pointercancel', 'blur'].forEach(e => cancel.addEventListener(e, holdEnd));
+  cancel.addEventListener('keydown', e => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); holdStart(); } });
+  cancel.addEventListener('keyup', holdEnd);
+
+  wrap.querySelectorAll('.source').forEach(b => b.onclick = () => {
+    if (isLive()) return;
+    const next = b.getAttribute('aria-pressed') !== 'true';
+    b.setAttribute('aria-pressed', next);
+    if (!wrap.querySelector('.source[aria-pressed="true"]')) {
+      b.setAttribute('aria-pressed', 'true');
+      nudge(b);
+    }
+  });
+  const peek = b => {
+    closePeek();
+    b.classList.add('open');
+    peekTimer = setTimeout(() => b.classList.remove('open'), PEEK_MS);
+  };
+  wrap.querySelectorAll('[data-doc]').forEach(b => b.onclick = () => {
+    if (isLive()) return;
+    clearFlash();
+    wrap.querySelectorAll('[data-doc]').forEach(x => x.setAttribute('aria-pressed', x === b));
+    peek(b);
+  });
+  $('.upload').onclick = () => $('.file').click();
+  $('.file').onchange = e => { if (e.target.files[0]) send(); };
+
+  drawEq($('.eq'));
+  if (startAt !== null) start(startAt);
+}
+
+const showFail = on => document.querySelectorAll('.phone').forEach(p => p.classList.toggle('has-failed', on));
+document.querySelectorAll('[data-set-fail]').forEach(b => b.onclick = () => {
+  showFail(b.dataset.setFail === 'on');
+  document.querySelectorAll('[data-set-fail]').forEach(x => x.setAttribute('aria-pressed', x === b));
+});
+
+mount({ tall: false, caption: '<b>9:16</b> ожидание', startAt: null });
+mount({ tall: true, caption: '<b>9:21</b> идёт запись', startAt: 47 });
+showFail(true);
+</script>
+</body>
+</html>

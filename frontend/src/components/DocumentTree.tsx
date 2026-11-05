@@ -36,10 +36,27 @@ import { effectiveUnlockedDocIds, hiddenBranchIds, pruneLockedBranches } from '.
 import { useSiblingDragReorder, treeDragAdapter } from '../hooks/useSiblingDragReorder';
 import { TREE_INDENT } from '../hooks/treeDropTarget';
 import { keyIconClassFromCapabilities } from '../utils/key-icon';
+import { deriveTreeHighlight, highlightForRow, type TreeHighlight } from '../utils/tree-highlight';
 import s from './Sidebar.module.css';
 
 const SHIFT_OFFSET = 40;
 const EMPTY_IDS: string[] = [];
+
+const sameIds = (a: Set<string>, b: Set<string>) => a.size === b.size && [...a].every(id => b.has(id));
+
+/** What a row's handlers read at event time; see the row-memo INVARIANT on DocumentTreeItem. */
+interface TreeOpenState {
+  documentId: string | undefined;
+  scopeReference: unknown;
+}
+
+// WHY: module level, because useHoverPreview's handleHover depends on this function's
+// identity. An inline arrow gave `onDocHover` a new identity on every container render.
+function treePopupLeft(rect: DOMRect): number {
+  const sidebarEl = document.querySelector('.sidebar') as HTMLElement | null;
+  const sidebarRight = sidebarEl ? sidebarEl.getBoundingClientRect().right : rect.right;
+  return Math.min(sidebarRight + 16, window.innerWidth - PREVIEW_WIDTH - 12);
+}
 
 const DocumentTreeItem = memo(function DocumentTreeItem({
   doc,
@@ -49,6 +66,8 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
   onChangeParent,
   canEdit = true,
   inboxMarks,
+  highlight,
+  readOpenState,
   onDocHover,
   onDocHoverLeave,
 }: {
@@ -62,17 +81,18 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
    * container (stable useMemo identity) and handed down verbatim, so the row
    * memo INVARIANT holds: no row subscribes to the shared summary slice. */
   inboxMarks?: { flagged: Set<string>; muted: Set<string> },
+  highlight: TreeHighlight,
+  readOpenState: () => TreeOpenState,
   onDocHover: (docId: string, titleEl: HTMLElement) => void,
   onDocHoverLeave: (e?: React.MouseEvent) => void,
 }) {
   const { t } = useTranslation();
-  const { documentId } = useDocumentRoute();
-  // INVARIANT: a row NEVER subscribes to the flat `documents` array.
+  // INVARIANT: a row NEVER subscribes to the flat `documents` array, the open document, a reference or the route.
   // Why: the subscription is a reference compare, so every `setDocuments` re-rendered
   // every row and defeated this component's own `memo` — the create/delete flash. The
   // one consumer (handleRenameSubmit) reads the live list at call time instead; rows
   // re-render through the `doc` prop, whose identity patchTree already preserves.
-  const { currentReference, currentDocument, setCurrentDocument, setDocuments, referenceSourceDocId, snapshotPreview } = useAppStore(useShallow(s => ({ currentReference: s.currentReference, currentDocument: s.currentDocument, setCurrentDocument: s.setCurrentDocument, setDocuments: s.setDocuments, referenceSourceDocId: s.referenceSourceDocId, snapshotPreview: s.snapshotPreview })));
+  // Highlight state arrives as `highlight`; handlers read the rest through `readOpenState`.
   const isExpanded = !useUIStore(s => s.collapsedDocIds.includes(doc.document_id));
   const toggleDocExpanded = useUIStore(s => s.toggleDocExpanded);
   const [isRenaming, setIsRenaming] = useState(false);
@@ -83,29 +103,10 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
 
   const children = doc.children;
   const hasChildren = children.length > 0;
-  // INVARIANT: highlight keys off the route param when present, else the open
-  // doc's id. Why: on /s/:token the URL is the token (no /docs/:id param), so
-  // `documentId` is undefined and the selected sub-doc got no plaque. Authed is
-  // unaffected — there `documentId === currentDocument.document_id`.
-  const activeDocId = documentId ?? currentDocument?.document_id;
-  // Panel quick preview: the open reference is NOT the tree's scope — read it
-  // through the ONE projection so the current document stays active and no
-  // ref-parent/ref-source plaque fires while the ref shows in the Refs tab.
-  const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocument?.document_id ?? ''], s.compactLayout));
-  const scopeReference = refIsScope(refOpenMode) ? currentReference : null;
-  const isActive = doc.document_id === activeDocId && !scopeReference;
-  const isRefParent = !!scopeReference && doc.document_id === scopeReference.document_id;
-  // INVARIANT: a row is never both the reference's source and its parent — the
-  // parent plaque (blue) wins. Why: both `active` and `ref-parent` on one row
-  // lets the later `.active .doc-item-actions` rule paint a gray plate under the
-  // buttons of a blue row (reference opened from its own parent doc).
-  const isRefSource = !!scopeReference && !isRefParent && (
-    (!!referenceSourceDocId && doc.document_id === referenceSourceDocId) ||
-    (!referenceSourceDocId && doc.document_id === activeDocId)
-  );
-  // INVARIANT: Snapshot-parent highlight hides while a reference is open.
-  // Why: reference viewer takes visual precedence over snapshot preview.
-  const isSnapshotParent = !!snapshotPreview && !scopeReference && doc.document_id === snapshotPreview.document_id;
+  const isActive = doc.document_id === highlight.activeId;
+  const isRefParent = doc.document_id === highlight.refParentId;
+  const isRefSource = doc.document_id === highlight.refSourceId;
+  const isSnapshotParent = doc.document_id === highlight.snapshotParentId;
 
   const startRename = () => {
     if (!canEdit) return;
@@ -121,8 +122,9 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
     if (useAppStore.getState().accessLevel !== 'full') return;
     try {
       const updatedDoc = await apiClient.patch(`/documents/${doc.document_id}`, { title: trimmed });
-      setDocuments(useAppStore.getState().documents.map(d => d.document_id === doc.document_id ? updatedDoc : d));
-      if (doc.document_id === documentId) {
+      const { setDocuments, setCurrentDocument, documents } = useAppStore.getState();
+      setDocuments(documents.map(d => d.document_id === doc.document_id ? updatedDoc : d));
+      if (doc.document_id === readOpenState().documentId) {
         setCurrentDocument(updatedDoc);
       }
       setIsRenaming(false);
@@ -152,6 +154,7 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
         onClick={() => {
           if (isRenaming) return;
           const wasViewingSnapshot = !!useAppStore.getState().snapshotPreview;
+          const { documentId, scopeReference } = readOpenState();
           if (doc.document_id !== documentId || scopeReference) {
             emit('navigate-to-document', { documentId: doc.document_id, restore: true, via: 'tree' });
           } else if (wasViewingSnapshot) {
@@ -303,6 +306,8 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
               onChangeParent={onChangeParent}
               canEdit={canEdit}
               inboxMarks={inboxMarks}
+              highlight={highlightForRow(highlight, child.document_id)}
+              readOpenState={readOpenState}
               onDocHover={onDocHover}
               onDocHoverLeave={onDocHoverLeave}
             />
@@ -347,11 +352,23 @@ export function DocumentTree({ onDelete, onCreateChild, onChangeParent, canEdit 
   const currentDocument = useAppStore(s => s.currentDocument);
   const referenceSourceDocId = useAppStore(s => s.referenceSourceDocId);
   const snapshotPreview = useAppStore(s => s.snapshotPreview);
-  // Same projection as DocumentTreeItem: in 'panel' quick preview the reference
-  // takes part in nothing but its own tab, so the tree (incl. the project-index
-  // row) highlights as if no reference were open.
+  // Panel quick preview: the open reference is NOT the tree's scope — read it
+  // through the ONE projection so the current document stays active and no
+  // ref-parent/ref-source plaque fires while the ref shows in the Refs tab. That
+  // covers the project-index row too.
   const scopeRefOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocument?.document_id ?? ''], s.compactLayout));
   const scopeReference = refIsScope(scopeRefOpenMode) ? currentReference : null;
+  const hasScopeReference = !!scopeReference;
+  const scopeReferenceDocId = scopeReference?.document_id;
+  const openDocId = currentDocument?.document_id;
+  const snapshotDocId = snapshotPreview?.document_id;
+  const highlight = useMemo(
+    () => deriveTreeHighlight(documentTree, { routeDocId: documentId, openDocId, hasScopeReference, scopeReferenceDocId, referenceSourceDocId, snapshotDocId }),
+    [documentTree, documentId, openDocId, hasScopeReference, scopeReferenceDocId, referenceSourceDocId, snapshotDocId],
+  );
+  const openStateRef = useRef<TreeOpenState>({ documentId, scopeReference });
+  openStateRef.current = { documentId, scopeReference };
+  const readOpenState = useCallback(() => openStateRef.current, []);
   const collapsedDocIds = useUIStore(s => s.collapsedDocIds);
   const toggleDocExpanded = useUIStore(s => s.toggleDocExpanded);
   const expandDocs = useUIStore(s => s.expandDocs);
@@ -365,7 +382,7 @@ export function DocumentTree({ onDelete, onCreateChild, onChangeParent, canEdit 
   // is already visible under it. Ancestors are derived on the client from the
   // tree (plan decision) — the backend summary is flat per-document only.
   const inboxSummary = useInboxStore(s => s.summary);
-  const inboxMarks = useMemo(() => {
+  const nextInboxMarks = useMemo(() => {
     const flagged = new Set<string>();
     for (const [docId, counts] of Object.entries(inboxSummary)) {
       if (counts.notes + counts.refs > 0) flagged.add(docId);
@@ -385,6 +402,14 @@ export function DocumentTree({ onDelete, onCreateChild, onChangeParent, canEdit 
     walk(documentTree);
     return { flagged, muted };
   }, [inboxSummary, documentTree, collapsedDocIds]);
+  // WHY: the inputs get a new identity without changing a mark (a first open adds
+  // content to the tree, a collapse changes the list), and new sets would re-render
+  // every row. The ref keeps the identity the row memo depends on.
+  const inboxMarksRef = useRef(nextInboxMarks);
+  if (!sameIds(inboxMarksRef.current.flagged, nextInboxMarks.flagged) || !sameIds(inboxMarksRef.current.muted, nextInboxMarks.muted)) {
+    inboxMarksRef.current = nextInboxMarks;
+  }
+  const inboxMarks = inboxMarksRef.current;
 
   const treeRef = useRef<HTMLDivElement>(null);
   // INVARIANT: focusedIdRef tracks the currently focused doc ID for roving tabindex.
@@ -421,14 +446,7 @@ export function DocumentTree({ onDelete, onCreateChild, onChangeParent, canEdit 
   const { content: hoverContent, error: hoverError, loading: hoverLoading } = useDocumentPreview(hoverDocId);
   const hoverTitle = useDocumentTitle(hoverDocId);
 
-  const hover = useHoverPreview({
-    shiftOffset: SHIFT_OFFSET,
-    getPopupLeft: (rect) => {
-      const sidebarEl = document.querySelector('.sidebar') as HTMLElement | null;
-      const sidebarRight = sidebarEl ? sidebarEl.getBoundingClientRect().right : rect.right;
-      return Math.min(sidebarRight + 16, window.innerWidth - PREVIEW_WIDTH - 12);
-    },
-  });
+  const hover = useHoverPreview({ shiftOffset: SHIFT_OFFSET, getPopupLeft: treePopupLeft });
 
   // WHY no isPublicShare gate here (was previously early-return): the public
   // path now works because `fetchDocumentContent` (called transitively via
@@ -547,27 +565,20 @@ export function DocumentTree({ onDelete, onCreateChild, onChangeParent, canEdit 
         className={s.sidebarDocs}
         onKeyDown={handleTreeKeyDown}
       >
-        {currentProject?.index_doc_id && (() => {
-          // See DocumentTreeItem INVARIANT: fall back to the open doc's id when the
-          // route param is absent (/s/:token has no /docs/:id param).  Why: public-share routes carry no /docs/:id param, so without the fallback the tree couldn't identify the open doc and would highlight no row.
-          const activeDocId = documentId ?? currentDocument?.document_id;
-          return (
+        {currentProject?.index_doc_id && (
           <div
             role="treeitem"
-            aria-selected={activeDocId === currentProject.index_doc_id && !scopeReference}
+            aria-selected={highlight.activeId === currentProject.index_doc_id}
             tabIndex={-1}
             data-doc-id={currentProject.index_doc_id}
             className={`doc-item doc-item-context ${
-              (activeDocId === currentProject.index_doc_id && !scopeReference) ? 'active' : ''
+              highlight.activeId === currentProject.index_doc_id ? 'active' : ''
             } ${
-              !!scopeReference && currentProject.index_doc_id !== scopeReference.document_id && (
-                (!!referenceSourceDocId && currentProject.index_doc_id === referenceSourceDocId) ||
-                (!referenceSourceDocId && currentProject.index_doc_id === activeDocId)
-              ) ? 'active' : ''
+              highlight.refSourceId === currentProject.index_doc_id ? 'active' : ''
             } ${
-              !!scopeReference && currentProject.index_doc_id === scopeReference?.document_id ? 'ref-parent' : ''
+              highlight.refParentId === currentProject.index_doc_id ? 'ref-parent' : ''
             } ${
-              !!snapshotPreview && !scopeReference && currentProject.index_doc_id === snapshotPreview.document_id ? 'snapshot-parent' : ''
+              highlight.snapshotParentId === currentProject.index_doc_id ? 'snapshot-parent' : ''
             } ${
               inboxMarks.flagged.has(currentProject.index_doc_id) ? 'inbox-unread' : ''
             }`}
@@ -578,8 +589,7 @@ export function DocumentTree({ onDelete, onCreateChild, onChangeParent, canEdit 
             </span>
             <span className="doc-label">{t('projectContext')}</span>
           </div>
-          );
-        })()}
+        )}
         {documentTree.map((doc) => (
           <DocumentTreeItem
             key={doc.document_id}
@@ -589,6 +599,8 @@ export function DocumentTree({ onDelete, onCreateChild, onChangeParent, canEdit 
             onChangeParent={onChangeParent}
             canEdit={canEdit}
             inboxMarks={inboxMarks}
+            highlight={highlightForRow(highlight, doc.document_id)}
+            readOpenState={readOpenState}
             onDocHover={handleDocHover}
             onDocHoverLeave={hover.handleHoverLeave}
           />

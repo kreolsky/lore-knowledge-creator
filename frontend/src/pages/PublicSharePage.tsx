@@ -54,6 +54,7 @@ import { ProjectShell, type ProjectShellHandle, type LeftTabEntry, type RightTab
 import { PublicEditor } from '../components/PublicEditor';
 import { ArtifactFrame } from '../components/editor/ArtifactFrame';
 import { EditorLinkPreview } from '../components/editor/EditorLinkPreview';
+import { ImagePreviewHost } from '../components/editor/ImagePreviewHost';
 import { Sidebar } from '../components/Sidebar';
 import { TableOfContents } from '../components/TableOfContents';
 import { ReferencesPanel } from '../components/ReferencesPanel';
@@ -398,6 +399,7 @@ export function PublicSharePage(
         // renders nothing otherwise — the page is readonly).
         <>
           <EditorLinkPreview />
+          <ImagePreviewHost />
           <SelectionToolbar />
           <PublicNoteConnector open={effectiveRightTab === 'notes'} />
         </>

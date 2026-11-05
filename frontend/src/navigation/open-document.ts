@@ -19,6 +19,7 @@
 
 import type { NavigateFunction } from 'react-router-dom';
 import { useAppStore } from '../store/app-store';
+import { markDocOpenStart } from '../telemetry/page-perf';
 import { docUrl } from '../utils/routing';
 
 export function openDocument(
@@ -33,6 +34,7 @@ export function openDocument(
   // re-navigating (no blink). Every other case (incl. same-doc-nothing-focused,
   // which returns 'navigate') runs the normal path.
   if (!restore && state.focusDocument(docId) === 'stayed') return;
+  markDocOpenStart(docId);
   state.setCurrentDocument(doc);
   if (state.currentProject) {
     // Canonical /docs/<id> URL (plan "public-document-ids") — one shape for

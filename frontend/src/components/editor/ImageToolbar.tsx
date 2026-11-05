@@ -3,9 +3,8 @@
  * to SelectionToolbar. Shown while the main selection EQUALS one ImageWidget
  * range (a press on the image or Shift+Arrow selects exactly that; see
  * selectedAtomicRange in atomic-delete-guard.ts). Size field (`300` ⇒ px,
- * `50%` ⇒ percent, empty clears the suffix), Delete (removes the node — NOT
- * the reference), Download (the reference's original file URL). Pinned inside
- * the image's top-left corner.
+ * `50%` ⇒ percent, empty clears the suffix), Download (the reference's original
+ * file URL). Pinned inside the image's top-left corner.
  *
  * Gated like every writer of the block: full access, not a public share, a
  * view that takes input (same check as getDropGuard / CheckboxWidget) —
@@ -17,7 +16,7 @@ import type React from 'react';
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { EditorView } from '@codemirror/view';
-import { Download, Trash2 } from 'lucide-react';
+import { Download } from 'lucide-react';
 import { useUIStore } from '../../store/ui-store';
 import { useAppStore } from '../../store/app-store';
 import { useEditorView } from '../../editor/active-editor';
@@ -220,15 +219,6 @@ export default function ImageToolbar() {
     setSizeError(false);
   };
 
-  const deleteEmbed = () => {
-    if (!panel) return;
-    // Removes the EMBED NODE only — the reference and its file stay in the
-    // project (their actions live on the reference surfaces).
-    view.dispatch({ changes: { from: panel.from, to: panel.to } });
-    view.focus();
-    hide();
-  };
-
   return createPortal(
     <div
       ref={barRef}
@@ -251,14 +241,6 @@ export default function ImageToolbar() {
           if (e.key === 'Enter') { e.preventDefault(); applySize(); }
         }}
       />
-      <button
-        className="sel-toolbar-btn"
-        title={t('removeImageEmbed')}
-        aria-label={t('removeImageEmbed')}
-        onClick={deleteEmbed}
-      >
-        <Trash2 size={ICON_SIZE} />
-      </button>
       {panel.fileUrl && (
         <a
           className="sel-toolbar-btn"

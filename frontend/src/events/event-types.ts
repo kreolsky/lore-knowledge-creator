@@ -153,6 +153,8 @@ export interface EventMap {
   'show-link-suggestions': { pos: number; coords: { top: number; lineTop: number; left: number } | null; editorView: EditorView; labelPos?: number | null };
   'editor-selection-change': { empty: boolean };
   'editor-doc-changed': void;
+  // An image was clicked for preview. `element` is the embed; `editorView` the view rendering it.
+  'editor-image-preview': { src: string; element: HTMLElement; editorView: EditorView };
   // see SYSTEM: selection-region-agent — the user clicked the Bot icon on the selection
   // toolbar. Carries the pinned region: doc_id, a Yjs RelativePosition JSON pair
   // (survives edits), and the live code-point offsets + text snapshot. The chat
@@ -176,6 +178,7 @@ export interface EventMap {
   'open-create-doc': { parentId?: string };
   'document-deleted': { documentId: string };
   'breadcrumb-start-rename': void;
+  'editor-focus-request': void;
 
   // ── Recording ──
   'start-recording': void;

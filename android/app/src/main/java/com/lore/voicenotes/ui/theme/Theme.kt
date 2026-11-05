@@ -5,19 +5,25 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 
 private val DarkColorScheme = darkColorScheme(
-    primary = LorePrimary,
-    secondary = LoreSecondary,
-    tertiary = LoreAccent,
-    background = LoreDark,
+    primary = LoreAccent,
+    onPrimary = LoreStrong,
+    secondary = LoreMuted,
+    onSecondary = LoreBg,
+    tertiary = LoreAccentText,
+    onTertiary = LoreBg,
+    background = LoreBg,
+    onBackground = LoreText,
     surface = LoreSurface,
-    surfaceVariant = LoreSurfaceVariant,
-    error = LoreError,
-    onPrimary = LoreDark,
-    onSecondary = LoreDark,
-    onBackground = LorePrimary,
-    onSurface = LorePrimary,
-    onSurfaceVariant = LoreSecondary,
-    onError = LoreDark,
+    onSurface = LoreText,
+    surfaceVariant = LoreSurface2,
+    onSurfaceVariant = LoreMuted,
+    surfaceContainer = LoreSurface,
+    surfaceContainerHigh = LoreSurface2,
+    surfaceContainerHighest = LoreSurface3,
+    outline = LoreBorder,
+    outlineVariant = LoreBorder,
+    error = LoreRed,
+    onError = LoreBg,
 )
 
 @Composable

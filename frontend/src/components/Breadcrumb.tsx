@@ -3,7 +3,7 @@
 import { Fragment, useState, useRef, useEffect, useCallback } from 'react';
 import { AccessLevel } from '../types';
 import { useEvent } from '../hooks/useEvent';
-import { useEditorView } from '../editor/active-editor';
+import { emit } from '../events';
 import { useTranslation } from '../i18n';
 import b from './Breadcrumb.module.css';
 
@@ -23,7 +23,6 @@ interface BreadcrumbProps {
 
 export function Breadcrumb({ projectName, ancestors, documentTitle, isReference, accessLevel, onProjectClick, onAncestorClick, onDocumentRename, onDocumentReveal }: BreadcrumbProps) {
   const { t } = useTranslation();
-  const getEditorView = useEditorView();
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -50,7 +49,7 @@ export function Breadcrumb({ projectName, ancestors, documentTitle, isReference,
     }
     setIsRenaming(false);
     if (focusEditor) {
-      requestAnimationFrame(() => getEditorView()?.focus());
+      requestAnimationFrame(() => emit('editor-focus-request'));
     }
   };
 

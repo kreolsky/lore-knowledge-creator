@@ -32,6 +32,7 @@
  *  - `atomicSelectedField` — a `cm-atomic-selected` mark decoration over every
  *    guarded range fully covered by a non-empty selection (reaches inline image
  *    widget DOM; a table's block widget is outlined by the plugin below).
+ *  - `atomicImageSelectedPlugin` — toggles `.cm-image-embed--selected` on image embeds.
  *  - `atomicTableSelectedPlugin` — toggles `.cm-table-block-wrap--selected` on
  *    the table widget DOM whose anchor range the selection covers whole (a mark
  *    cannot reach a block widget's replaced line).
@@ -364,9 +365,8 @@ function buildAtomicSelected(state: EditorState): DecorationSet {
 
 /**
  * `cm-atomic-selected` mark over each guarded range fully covered by the
- * selection — the visual answer to "what will Delete remove". Mark decorations
- * wrap the replaced content, so the class reaches the inline image widget's DOM;
- * block-replaced table lines cannot carry it (see atomicTableSelectedPlugin).
+ * selection. The mark does not reach a replaced widget: images are framed by
+ * atomicImageSelectedPlugin, block-replaced tables by atomicTableSelectedPlugin.
  */
 export const atomicSelectedField = StateField.define<DecorationSet>({
   create(state) { return buildAtomicSelected(state); },
@@ -391,6 +391,45 @@ export const atomicSelectedField = StateField.define<DecorationSet>({
  * re-derived from state on every selection/doc/viewport change, so an
  * evicted-and-remounted widget regains its outline.
  */
+/**
+ * Toggles `.cm-image-embed--selected` on each image widget fully covered by the
+ * selection: the frame, the visible handles and the zoom-in cursor key on it.
+ * WHY the widget's own DOM, not the mark: the frame must not depend on the mark
+ * reaching the replaced widget. Re-derived on any transaction, so a widget rebuilt
+ * by a decoration pass regains its frame.
+ */
+export const atomicImageSelectedPlugin = ViewPlugin.fromClass(
+  class {
+    private hadSelected = false;
+
+    constructor(view: EditorView) { this.sync(view); }
+
+    update(u: ViewUpdate) {
+      if (u.transactions.length > 0 || u.viewportChanged) this.sync(u.view);
+    }
+
+    private sync(view: EditorView) {
+      const sel = view.state.selection.main;
+      const selected = new Set<number>();
+      if (!sel.empty) {
+        for (const g of guardedAtomicRanges(view.state)) {
+          if (g.tableId === null && sel.from <= g.from && sel.to >= g.to) selected.add(g.from);
+        }
+      }
+      // Nothing selected now or before → skip the DOM scan: runs on every keystroke.
+      if (!selected.size && !this.hadSelected) return;
+      this.hadSelected = selected.size > 0;
+      view.contentDOM.querySelectorAll<HTMLElement>('.cm-image-embed').forEach((el) => {
+        // A nested transclusion view owns its images.
+        if (el.closest('.cm-editor') !== view.dom) return;
+        let pos = -1;
+        try { pos = view.posAtDOM(el); } catch { /* detached */ }
+        el.classList.toggle('cm-image-embed--selected', selected.has(pos));
+      });
+    }
+  },
+);
+
 export const atomicTableSelectedPlugin = ViewPlugin.fromClass(
   class {
     private prevSelected = new Set<string>();

@@ -3,7 +3,9 @@
  * the body).
  *
  * Owns the pending-drop/importing state, the drop type-guard, and the
- * confirm→upload→insert flow. Every dropped file lands AT the drop position
+ * confirm→upload→insert flow. Several images dropped at once land together, in
+ * drop order; any other multi-file drop takes the first file only. Every dropped
+ * file lands AT the drop position
  * (dropInsertSpec): image embeds inline, block content (table anchor,
  * imported markdown) on its own line. An IMAGE dropped over a table cell
  * targets the CELL's editor (editorDropPoint mounts a lazy cell) at its drawn
@@ -24,7 +26,7 @@ import { apiClient } from '../../api/client';
 import { uploadReferenceFile } from '../../api/reference-upload';
 import type { Document, Reference } from '../../types';
 import { entityYdoc, getViewEntity } from '../../editor/active-editor';
-import { dropEmbedForView, dropInsertSpec, editorDropPoint, spliceAt } from './drop-target';
+import { dropEmbedForView, dropImageRow, dropInsertSpec, editorDropPoint, spliceAt } from './drop-target';
 import { createTable, tableAnchor, normalizeTableLabel } from '../editor/live-preview/table-block-model';
 import { sniffDelimiter, parseCsv, MAX_TABLE_IMPORT_ROWS, MAX_TABLE_IMPORT_COLS, MAX_TABLE_IMPORT_CELLS } from '../editor/live-preview/csv-table';
 import { createTempRef, isImageFile, isTableFile, MAX_IMAGE_SIZE_MB, MAX_MARKDOWN_SIZE_MB } from '../references/ref-utils';
@@ -109,15 +111,15 @@ export function useEditorFileDrop({
   const handleTableInsertRef = useRef(handleTableInsert);
   handleTableInsertRef.current = handleTableInsert;
 
-  // Image drop: upload as an image reference hosted by the DROP VIEW'S document,
-  // then insert the `![title](ref:id)` embed INLINE at the drop position. No
+  // Image drop: upload as image references hosted by the DROP VIEW'S document,
+  // then insert the `![title](ref:id)` embeds INLINE at the drop position. No
   // confirmation modal — the drop itself is the intent.
   // ARCH (split view): same identity rule as the table path — the host is the
   // drop view's entity, never the focused slot's item (a table cell is
   // registered to its host's entity at mount). A drop onto an open REFERENCE
   // (split column or center) is refused with a toast: a reference cannot host
   // references.
-  const handleImageDrop = useCallback(async (file: File, view: EditorView, pos: number) => {
+  const handleImageDrop = useCallback(async (files: File[], view: EditorView, pos: number) => {
     const store = useAppStore.getState();
     // Resolve the drop view's item: the registered entity is a document_id or a
     // reference_id; an unregistered view falls back to the slot item (the same
@@ -139,32 +141,39 @@ export function useEditorFileDrop({
       store.showToast(t('failedToUpload'), 'error');
       return;
     }
-    if (file.size > MAX_IMAGE_SIZE_MB * 1024 * 1024) {
-      store.showToast(t('fileTooLargeImage', { limit: String(MAX_IMAGE_SIZE_MB) }));
-      return;
-    }
-    const { tempId, tempRef } = createTempRef(project, host, file.name, 'image');
-    store.addReference(tempRef);
-    try {
-      const ref = await uploadReferenceFile(project.project_id, host.document_id, file);
-      // WHY: insert the embed only AFTER the reference is in the store —
-      // ImageWidget resolves `ref:id` through the references list
-      // (transcludeMap), so inserting first would flash the raw `![…](ref:…)`
-      // text for a frame.
-      store.replaceReference(tempId, ref);
-      // The drop view may be gone after the async upload (a cell torn down by a
-      // rebuild): never dispatch into it — the reference stays, the toast says so.
-      if (!view.dom.isConnected) {
-        store.showToast(t('failedToUpload'), 'error');
-        return;
+    const uploadOne = async (file: File): Promise<string | null> => {
+      if (file.size > MAX_IMAGE_SIZE_MB * 1024 * 1024) {
+        store.showToast(t('fileTooLargeImage', { limit: String(MAX_IMAGE_SIZE_MB) }));
+        return null;
       }
-      const embed = dropEmbedForView(view, `![${file.name}](ref:${ref.reference_id})`, true, ref.file_meta?.width);
-      spliceAt(view, dropInsertSpec(view.state.doc, pos, embed, 'inline'));
-    } catch (err) {
-      console.error('image drop upload failed', err);
-      store.showToast(t('failedToUpload'), 'error');
-      store.updateReference(tempId, { processing_status: 'error' });
-    }
+      const { tempId, tempRef } = createTempRef(project, host, file.name, 'image');
+      store.addReference(tempRef);
+      try {
+        const ref = await uploadReferenceFile(project.project_id, host.document_id, file);
+        // WHY: insert the embed only AFTER the reference is in the store —
+        // ImageWidget resolves `ref:id` through the references list
+        // (transcludeMap), so inserting first would flash the raw `![…](ref:…)`
+        // text for a frame.
+        store.replaceReference(tempId, ref);
+        // The drop view may be gone after the async upload (a cell torn down by a
+        // rebuild): never dispatch into it — the reference stays, the toast says so.
+        if (!view.dom.isConnected) {
+          store.showToast(t('failedToUpload'), 'error');
+          return null;
+        }
+        return dropEmbedForView(view, `![${file.name}](ref:${ref.reference_id})`, true, ref.file_meta?.width);
+      } catch (err) {
+        console.error('image drop upload failed', err);
+        store.showToast(t('failedToUpload'), 'error');
+        store.updateReference(tempId, { processing_status: 'error' });
+        return null;
+      }
+    };
+    const embeds = (await Promise.all(files.map(uploadOne))).filter((e) => e !== null);
+    if (embeds.length === 0 || !view.dom.isConnected) return;
+    // WHY one splice after all uploads: drop order survives upload order, and one
+    // undo removes the whole drop.
+    spliceAt(view, dropInsertSpec(view.state.doc, pos, dropImageRow(view, embeds, files.length > 1), 'inline'));
   }, [t]);
   const handleImageDropRef = useRef(handleImageDrop);
   handleImageDropRef.current = handleImageDrop;
@@ -173,21 +182,28 @@ export function useEditorFileDrop({
   // server-side via is_text_bytes. We only reject obvious binary (not docx and
   // not text-ish MIME) to avoid a useless upload round-trip. CSV/TSV is handled
   // by a dedicated local-parse path (no modal).
-  const handleEditorFileDrop = useCallback((file: File, coords: FileDropCoords) => {
+  const handleEditorFileDrop = useCallback((files: File[], coords: FileDropCoords) => {
     const { isReadonly: ro, editable: ed } = getDropGuard();
     if (ro || !ed) return; // readonly/offline viewers don't insert
-    const name = file.name.toLowerCase();
-    if (isTableFile(name)) {
-      void handleTableInsertRef.current(file, coords.hostPos); // fire-and-forget; toasts handle errors
-      return;
-    }
-    if (file.type.startsWith('image/') || isImageFile(name)) {
+    const isImage = (f: File) => f.type.startsWith('image/') || isImageFile(f.name.toLowerCase());
+    const images = files.filter(isImage);
+    if (images.length > 0) {
+      // A mixed drop keeps its images and names what it left out.
+      for (const skipped of files.filter((f) => !isImage(f))) {
+        useAppStore.getState().showToast(t('unsupportedFileType', { name: skipped.name }), 'error');
+      }
       // Routed AFTER the guard, so a read-only drop mounts no cell; no editor
       // under the pointer ⇒ the host view at hostPos.
       const host = editorViewRef.current;
       const target = editorDropPoint(coords.x, coords.y)
         ?? (host ? { view: host, pos: coords.hostPos } : null);
-      if (target) void handleImageDropRef.current(file, target.view, target.pos); // fire-and-forget; toasts handle errors
+      if (target) void handleImageDropRef.current(images, target.view, target.pos); // fire-and-forget; toasts handle errors
+      return;
+    }
+    const file = files[0];
+    const name = file.name.toLowerCase();
+    if (isTableFile(name)) {
+      void handleTableInsertRef.current(file, coords.hostPos); // fire-and-forget; toasts handle errors
       return;
     }
     const isDocx = name.endsWith('.docx');
@@ -240,7 +256,7 @@ export function useEditorFileDrop({
   // Bound to a ref-read wrapper so the extension can live in the once-created
   // cmExtensions array while always invoking the latest handler.
   const fileDropExtension = useMemo(
-    () => makeFileDropExtension((file, coords) => handleEditorFileDropRef.current(file, coords)),
+    () => makeFileDropExtension((files, coords) => handleEditorFileDropRef.current(files, coords)),
     [],
   );
 

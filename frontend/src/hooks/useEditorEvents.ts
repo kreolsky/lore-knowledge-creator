@@ -12,6 +12,7 @@ import { useEvent } from './useEvent';
 import type { EventMap } from '../events/event-types';
 import { useScrollToLine } from './useScrollToLine';
 import { firstVisibleLine, positionCacheSet } from '../editor/position-cache';
+import { getEditorView } from '../editor/active-editor';
 import { resolveReferenceNav } from './resolveReferenceNav';
 import { refIsScope } from '../store/ui-store/documents-slice';
 import { openDocument } from '../navigation/open-document';
@@ -134,6 +135,12 @@ export function useEditorEvents({ editorViewRef, currentDocument, enabled = true
     if (!enabled) return;
     useNoteStore.getState().setConnectedNoteId(noteId);
   }, [enabled]));
+
+  // WHY an event, not an import in the Header's Breadcrumb: Breadcrumb is in the entry bundle and
+  // active-editor carries CodeMirror and Yjs. With no Editor mounted there is no subscriber and no
+  // view to focus. Not gated on `enabled`: the focused view may be either column, and a second
+  // focus() from the other column's listener changes nothing.
+  useEvent('editor-focus-request', () => getEditorView()?.focus());
 }
 
 import type React from 'react';

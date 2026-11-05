@@ -150,7 +150,7 @@ export const ru: Record<TranslationKey, string> = {
   imageSize: 'Ширина изображения',
   imageSizePlaceholder: '300, 50% или 500x400',
   imageSizeInvalid: 'Ширина — в пикселях или процентах, например 300 или 50%',
-  removeImageEmbed: 'Убрать изображение',
+  imagePreview: 'Изображение',
   insert: 'Вставить',
   insertFileBelowCursorConfirm: 'Вставить содержимое файла под курсором?',
   importingFile: 'Импорт файла…',

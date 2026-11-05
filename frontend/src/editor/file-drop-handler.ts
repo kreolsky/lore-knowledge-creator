@@ -9,7 +9,7 @@
  * file as TEXT into the cell. Capture on the root fires first; stopPropagation
  * closes the nested path for files.
  *
- * A FACTORY taking `onDrop(file, {hostPos, x, y})`: opening a React confirmation
+ * A FACTORY taking `onDrop(files, {hostPos, x, y})`: opening a React confirmation
  * modal can't happen inside a plain CM6 extension (useEditorFileDrop supplies it).
  * hostPos is the host document position (selection-head fallback); routing into
  * a table CELL is resolved later from x/y (drop-target.editorDropPoint).
@@ -29,17 +29,17 @@ export interface FileDropCoords {
   y: number;
 }
 
-export function makeFileDropExtension(onDrop: (file: File, coords: FileDropCoords) => void): Extension {
+export function makeFileDropExtension(onDrop: (files: File[], coords: FileDropCoords) => void): Extension {
   return ViewPlugin.define((view) => {
     const onDragOver = (e: DragEvent) => { if (hasFiles(e)) e.preventDefault(); };
     const handleDrop = (e: DragEvent) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
       e.stopPropagation();
-      const file = e.dataTransfer?.files?.[0];
-      if (!file) return;
+      const files = Array.from(e.dataTransfer?.files ?? []);
+      if (files.length === 0) return;
       const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
-      onDrop(file, { hostPos: pos ?? view.state.selection.main.head, x: e.clientX, y: e.clientY });
+      onDrop(files, { hostPos: pos ?? view.state.selection.main.head, x: e.clientX, y: e.clientY });
     };
     view.dom.addEventListener('dragover', onDragOver, true);
     view.dom.addEventListener('drop', handleDrop, true);

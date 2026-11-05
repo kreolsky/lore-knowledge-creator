@@ -3,7 +3,7 @@
  * POST /api/telemetry (the queryable telemetry_event table).
  *
  * // SYSTEM: telemetry — first-party diagnostics channel. Producers: collab-log.ts
- * //         (reconnects) and perf.ts (lags/latency).
+ * //         (reconnects), perf.ts (lags/latency) and page-perf.ts (load, switch, input).
  * // ARCH: REST is independent of the collab WS, so events still reach the server
  * //       during a WS-only outage (the common case). Total network drop falls back
  * //       to the ring buffer + the next pagehide sendBeacon.
@@ -40,8 +40,15 @@ let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let wasHiddenSinceLast = false;
 let listenersBound = false;
 
+// WHY the entry's hashed name: it names the frontend build with no build arg, and dynamic
+// chunk names live inside the entry, so any frontend change moves it. Undefined in dev.
+const BUILD = typeof document === 'undefined'
+  ? undefined
+  : document.querySelector<HTMLScriptElement>('script[type="module"][src*="/assets/"]')?.src.split('/').pop();
+
 function ambientDetail(): Record<string, unknown> {
   const out: Record<string, unknown> = { session_id: SESSION_ID };
+  if (BUILD) out.build = BUILD;
   if (typeof document !== 'undefined') {
     out.visibility = document.visibilityState;
     out.wasHidden = wasHiddenSinceLast;

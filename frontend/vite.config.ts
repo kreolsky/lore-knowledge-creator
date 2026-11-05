@@ -15,15 +15,14 @@ export default defineConfig({
     tailwindcss(),
     react(),
     {
-      // ARCH (plan: vite-e2e-report-isolation, D2): block transforms of anything
+      // ARCH: block transforms of anything
       // under e2e/.out. Playwright's outputDir (traces/video/screenshots/storage-state) still lives
       // inside the Vite-served root. server.watch.ignored (below) stops the file
       // watcher from re-triggering, but NOT the css-analysis / @tailwindcss/vite
       // content scan from pulling those assets into the module graph on transform
       // (the playwright-logo.svg ENOENT class of bug). Returning empty content for
-      // any id under e2e/.out/** neutralizes the module-graph path. D1 moved the
-      // HTML report itself out of the root; this guards the residual in-root artifacts.
-      // See .kilo/plans/1783883552954-vite-e2e-report-isolation.md.
+      // any id under e2e/.out/** neutralizes the module-graph path. The HTML
+      // report itself lives outside the root; this guards the residual in-root artifacts.
       name: 'block-e2e-out-artifacts',
       load(id) {
         if (id.includes('/e2e/.out/') || id.includes('\\e2e\\.out\\')) return '';
@@ -74,16 +73,21 @@ export default defineConfig({
     sourcemap: false,
     rollupOptions: {
       output: {
-        // ARCH (plan: reference-loading-acceleration, Phase 3.3): split the
-        // editor's heavy vendor deps into stable, cacheable chunks. mermaid is
-        // intentionally ABSENT — it's dynamically imported (Phase 3.2) so Rollup
-        // keeps it in its own async chunk; pinning it here would drag katex +
+        // ARCH: split the editor's heavy vendor deps into stable, cacheable
+        // chunks. mermaid is intentionally ABSENT — it's dynamically imported so
+        // Rollup keeps it in its own async chunk; pinning it here would drag katex +
         // turndown into every mermaid render. Function form (not object) because
         // y-protocols has no root entry — only subpaths (y-protocols/awareness).
         manualChunks(id) {
           if (!id.includes('node_modules')) return;
+          // WHY: mermaid carries its own nested katex; the bare package-name rule below
+          // would pull that second copy into the always-preloaded markdown chunk.
+          if (/[\\/]mermaid[\\/]node_modules[\\/]/.test(id)) return;
           if (/[\\/]node_modules[\\/](react|react-dom|react-router-dom|zustand)[\\/]/.test(id)) return 'vendor';
-          if (id.includes('@codemirror/') || id.includes('@lezer/')) return 'codemirror';
+          // INVARIANT: an allowlist of the editor core, never every @codemirror/@lezer id.
+          // Why: @codemirror/language-data loads each language by dynamic import; pinning
+          // those packages here preloads all of them for every visitor and voids the import.
+          if (/[\\/]@codemirror[\\/](state|view|language|commands|search|autocomplete|lang-markdown)[\\/]|[\\/]@lezer[\\/](common|highlight|lr|markdown)[\\/]/.test(id)) return 'codemirror';
           if (/[\\/]node_modules[\\/](yjs|y-codemirror\.next|y-protocols)[\\/]/.test(id)) return 'collab';
           if (/[\\/]node_modules[\\/](katex|turndown|turndown-plugin-gfm)[\\/]/.test(id)) return 'markdown';
         },
@@ -108,9 +112,9 @@ export default defineConfig({
     port: 5173,
     // WHY: Playwright's outputDir (traces/video/screenshots/storage-state) is under
     // e2e/.out, inside the Vite-served root. Never watch e2e artifacts — the
-    // block-e2e-out-artifacts load hook (D2, plugins above) additionally guards the
-    // transform/scan path. The HTML report itself was moved OUT of the root (D1,
-    // playwright.config.ts) so it no longer lands here at all.
+    // block-e2e-out-artifacts load hook (plugins above) additionally guards the
+    // transform/scan path. The HTML report itself lives OUTSIDE the root
+    // (playwright.config.ts), so it never lands here at all.
     watch: { ignored: ['**/e2e/.out/**'] },
     // WHY: the Dockerized e2e harness reaches the dev server by compose service
     // name (Host: frontend). Vite's host check rejects unknown hosts with 403 —
@@ -128,8 +132,7 @@ export default defineConfig({
         .map((o) => new URL(o).hostname),
     ],
     // INFRA WIRING, not configuration: the dev proxy targets the backend by
-    // its compose service name (plan component-wiring-not-settings step 2) —
-    // nothing runs on the host, so there is no host-run fallback anymore.
+    // its compose service name — nothing runs on the host, so there is no host-run fallback.
     // WHY changeOrigin false: the backend's same-host Origin guard compares the
     // Origin with the Host it receives; a rewritten Host (backend:8001) 403s every
     // write from a page opened at an address not in CORS_ORIGINS (an IP, a LAN name).

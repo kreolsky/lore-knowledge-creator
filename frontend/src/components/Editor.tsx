@@ -41,6 +41,7 @@ import { useEditorAutosave } from '../hooks/useEditorAutosave';
 import { useEditorPosition } from '../hooks/useEditorPosition';
 import { useEditorReferenceSync } from '../hooks/useEditorReferenceSync';
 import { useEditorEvents } from '../hooks/useEditorEvents';
+import { markContentShown } from '../telemetry/page-perf';
 import { useAnchorScroll } from '../hooks/useAnchorScroll';
 import { useEditorHotkeys } from '../hooks/useEditorHotkeys';
 import { useImageReferenceNav } from '../hooks/useImageReferenceNav';
@@ -336,6 +337,10 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
   // then lurch. Bound to a view, not the ref: a stale timer must not reveal a successor.
   const revealEditor = useCallback((view: EditorView | null) => {
     view?.dom.parentElement?.classList.remove('editor-cm--pending');
+    const item = activeItemRef.current;
+    if (view && item && roleRef.current === 'primary') {
+      markContentShown(view, 'reference_id' in item ? item.reference_id : item.document_id, view.state.doc.length);
+    }
   }, []);
 
   const handleCreateEditor = useCallback((view: EditorView) => {

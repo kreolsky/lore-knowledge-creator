@@ -48,7 +48,7 @@ import {
   transclusionDepth,
   revealAtCursor,
 } from './live-preview';
-import { atomicDeleteGuard, atomicSelectedField, atomicTableSelectedPlugin, atomicCompositionGuard, atomicKeymap } from './live-preview/atomic-delete-guard';
+import { atomicDeleteGuard, atomicSelectedField, atomicImageSelectedPlugin, atomicTableSelectedPlugin, atomicCompositionGuard, atomicKeymap } from './live-preview/atomic-delete-guard';
 import { dropCaret } from './drop-caret';
 
 /**
@@ -86,7 +86,7 @@ export function liveFields({ tableBlock }: { tableBlock: boolean }): Extension {
  * read tableBlockField with `false`, so in a cell (no table objects) they are inert.
  * Read-only nested views never edit and do not mount it. */
 function atomicBlocks(): Extension {
-  return [atomicDeleteGuard, atomicSelectedField, atomicTableSelectedPlugin, atomicCompositionGuard, atomicKeymap];
+  return [atomicDeleteGuard, atomicSelectedField, atomicImageSelectedPlugin, atomicTableSelectedPlugin, atomicCompositionGuard, atomicKeymap];
 }
 
 /** Document-editor alias: the full visual group (with table block objects), toggled by Mod-/.

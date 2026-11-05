@@ -1651,8 +1651,30 @@ html.dark .cm-color-swatch[style*="rgb(253, 214, 99)"] { background-color: var(-
   max-width: 100%;
   margin: 4px 0;
 }
+/* Native selection (theme.ts, !important) tints a selected picture; images only. */
+.cm-editor .cm-content .cm-image-embed::selection,
+.cm-editor .cm-content .cm-image-embed ::selection {
+  background-color: transparent !important;
+}
+.cm-image-embed img { cursor: pointer; }
+.cm-image-embed--selected img,
+.cm-content[contenteditable="false"] .cm-image-embed img { cursor: zoom-in; }
+/* WHY a radius here: explicit operator exception to the no-rounded-corners rule,
+   limited to this frame.
+   WHY a pseudo-element, not outline: an outline may paint over the handles; this
+   stacks under them. inset -1px centres the 2px line on the box edge, under the
+   centre of the 10px handles. */
+.cm-image-embed--selected::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border: 2px solid var(--accent);
+  border-radius: 3px;
+  pointer-events: none;
+}
 .cm-image-resize-handle {
   position: absolute;
+  z-index: 1;
   width: 10px;
   height: 10px;
   touch-action: none;
@@ -1666,7 +1688,8 @@ html.dark .cm-color-swatch[style*="rgb(253, 214, 99)"] { background-color: var(-
 .cm-image-resize-corner-top { right: -5px; top: -5px; cursor: nesw-resize; }
 .cm-image-resize-right { right: -5px; top: 50%; margin-top: -5px; cursor: ew-resize; }
 .cm-image-resize-bottom { bottom: -5px; left: 50%; margin-left: -5px; cursor: ns-resize; }
-.cm-image-embed:hover .cm-image-resize-handle { opacity: 1; }
+.cm-image-embed:hover .cm-image-resize-handle,
+.cm-image-embed--selected .cm-image-resize-handle { opacity: 1; }
 /* WHY CSS, not a toDOM gate: CM6 flips contenteditable with the editable facet
    but never rebuilds an eq() widget, so a toDOM-time check sticks to load state. */
 .cm-content[contenteditable="false"] .cm-image-resize-handle { display: none; }

@@ -79,8 +79,10 @@ frontend/tsconfig.tsbuildinfo
 .db-snapshots/
 backups/
 
-# Local DB / cache data (bind-mounts; never commit)
-data/
+# Local DB / cache data (bind-mounts; never commit). Anchored to the repo
+# root: an unanchored data/ also swallowed the android app's data/ source
+# package, silently keeping its new files out of commits.
+/data/
 
 # Claude transient scheduler lock
 .claude/scheduled_tasks.lock

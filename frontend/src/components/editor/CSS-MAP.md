@@ -61,7 +61,8 @@ need ancestor selectors (`.editor-cm`, `.editor-content`) that exist outside CM6
 | Selector | Why in index.css |
 |----------|------------------|
 | `.cm-image-embed` | Widget DOM styling — positioned wrapper for the bottom-edge resize handle |
-| `.cm-image-resize-handle` | Hover-revealed drag tab; `:hover`-chain on the wrapper (EditorView.theme can't cross the two elements) |
+| `.cm-image-embed--selected` (+ `::after`) | Image selection frame under the handles (3px radius — operator exception); class from `atomicImageSelectedPlugin` |
+| `.cm-image-resize-handle` | Hover- or selection-revealed drag tab; `:hover`-chain on the wrapper (EditorView.theme can't cross the two elements) |
 
 **Source:** `live-preview/widgets.ts` → `ImageWidget.toDOM()`
 
