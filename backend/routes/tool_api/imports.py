@@ -50,6 +50,7 @@ from files_util import (
     is_text_bytes,
     mime_for_filename,
     normalize_audio_upload,
+    resolve_audio_type,
     save_upload,
     validate_magic,
 )
@@ -381,8 +382,7 @@ async def _create_binary_reference(
         max_audio_mb = await settings.get("MAX_AUDIO_SIZE_MB")
         if len(data) > max_audio_mb * 1024 * 1024:
             raise HTTPException(status_code=413, detail=f"File too large (max {max_audio_mb}MB)")
-        if not validate_magic(data, mime):
-            raise HTTPException(status_code=400, detail="File content does not match declared type")
+        mime, original_name = resolve_audio_type(data, mime, original_name)
         data, mime, original_name = await normalize_audio_upload(data, mime, original_name)
         ref_id, _result = await save_upload(
             data, mime, original_name, project_id, document_id,

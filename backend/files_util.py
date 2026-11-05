@@ -204,6 +204,40 @@ def validate_magic(data: bytes, claimed_mime: str) -> bool:
     return False
 
 
+def _sniff_audio(head: bytes) -> tuple[str, str] | None:
+    """(mime, extension) of the audio container the head bytes show, None if not audio."""
+    if head[:4] == b"\x1aE\xdf\xa3":
+        return "audio/webm", ".webm"
+    if head[:4] == b"OggS":
+        return "audio/ogg", ".ogg"
+    if head[4:8] == b"ftyp":
+        return "audio/mp4", ".m4a"
+    if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+        return "audio/wav", ".wav"
+    if head[:3] == b"ID3" or _is_mpeg_sync(head):
+        return "audio/mpeg", ".mp3"
+    return None
+
+
+def resolve_audio_type(head: bytes, mime: str, original_name: str) -> tuple[str, str]:
+    """The (mime, filename) an audio upload is stored under.
+
+    # INVARIANT: an audio file is accepted when its bytes are audio, whatever its
+    # extension says; only bytes that are not audio are refused.
+    # Why: the operator ruled the mismatch refusal needlessly strict after a .opus
+    # that was really WebM failed from the app. The stored name takes the real
+    # extension because the type sent to STT is read from it.
+    """
+    if validate_magic(head, mime):
+        return mime, original_name
+    sniffed = _sniff_audio(head)
+    if sniffed is None:
+        logger.warning("Audio upload rejected — magic mismatch: MIME=%s, header=%s", mime, head.hex())
+        raise HTTPException(status_code=400, detail="File content does not match declared type")
+    real_mime, extension = sniffed
+    return real_mime, f"{os.path.splitext(original_name)[0]}{extension}"
+
+
 # mime → extension for image references (image-gen output naming). Sibling of
 # detect_image_mime; kept here so magic detection + extension mapping live together.
 # WHY the keys are exactly IMAGE_MIMES: detect_image_mime only returns members of
@@ -442,9 +476,7 @@ async def save_audio_upload(
     max_audio_mb = await settings.get("MAX_AUDIO_SIZE_MB")
     tmp_path, head = await stream_upload_to_tmp(file, max_audio_mb * 1024 * 1024, max_audio_mb)
     try:
-        if not validate_magic(head, mime):
-            logger.warning("Audio upload rejected — magic mismatch: MIME=%s, header=%s", mime, head.hex())
-            raise HTTPException(status_code=400, detail="File content does not match declared type")
+        mime, original_name = resolve_audio_type(head, mime, original_name)
         tmp_path, mime, original_name = await normalize_audio_upload_path(tmp_path, head, mime, original_name)
         ref_id, result = await save_upload(
             None, mime, original_name, project_id, document_id,

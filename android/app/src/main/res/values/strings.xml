@@ -53,6 +53,9 @@
     <string name="settings_add_title">Добавить ключ</string>
     <string name="settings_key_label">Ключ (base64)</string>
     <string name="settings_key_placeholder">Вставьте ключ в формате base64…</string>
+    <string name="settings_journal_title">Журнал отправки</string>
+    <string name="settings_journal_empty">Отправок пока не было</string>
+    <string name="settings_journal_copy">Скопировать журнал</string>
     <string name="settings_version">Версия %1$s</string>
     <string name="settings_add_key">Добавить</string>
     <string name="settings_paste">Из буфера</string>

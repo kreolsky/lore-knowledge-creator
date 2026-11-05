@@ -143,23 +143,33 @@ class TranscriptionRepository @Inject constructor(
         if (attempt >= 2) dao.markUploadFailed(id, null)
         val file = row.localFilePath?.let(::File)?.takeIf { it.exists() && it.length() > 0L }
         if (file == null) {
+            UploadLog.write(context, "row $id: no local file at ${row.localFilePath}")
             dao.markUploadFailed(id, null)
             return UploadOutcome.NoFile
         }
         val config = decode(key)
         if (config == null) {
+            UploadLog.write(context, "row $id: key ${row.keyId} cannot be decoded")
             dao.markUploadFailed(id, null)
             return UploadOutcome.Permanent(null)
         }
         return try {
             // Streaming, not readBytes: a long recording must not sit in memory.
             val body = file.asRequestBody((row.mimeType ?: "audio/mp4").toMediaType())
+            UploadLog.write(
+                context,
+                "row $id try $attempt key ${row.keyId}: name=\"${row.title}\" " +
+                    "mime=${row.mimeType} size=${file.length()} head=${fileHeadHex(file)}",
+            )
             val part = MultipartBody.Part.createFormData("file", row.title, body)
             val response = api.upload(config, part)
+            UploadLog.write(context, "row $id: OK reference=${response.referenceId} status=${response.status}")
             dao.updateReference(id, response.referenceId, TranscriptionEntity.STATUS_QUEUED)
             UploadOutcome.Success
         } catch (e: HttpException) {
             val code = e.code()
+            val detail = e.response()?.errorBody()?.string()?.take(500)
+            UploadLog.write(context, "row $id: HTTP $code $detail")
             if (code in 400..499 && code != 408 && code != 429) {
                 dao.markUploadFailed(id, code)
                 UploadOutcome.Permanent(code)
@@ -168,7 +178,8 @@ class TranscriptionRepository @Inject constructor(
                 if (attempt >= 1) dao.markUploadFailed(id, null)
                 UploadOutcome.Retryable
             }
-        } catch (_: IOException) {
+        } catch (e: IOException) {
+            UploadLog.write(context, "row $id: network error $e")
             if (attempt >= 1) {
                 dao.markUploadFailed(id, null)
                 UploadKickWorker.enqueue(context)

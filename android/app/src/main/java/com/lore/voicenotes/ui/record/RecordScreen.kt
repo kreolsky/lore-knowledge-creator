@@ -95,6 +95,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.lore.voicenotes.R
+import com.lore.voicenotes.data.repository.UploadLog
 import com.lore.voicenotes.audio.AudioCaptureService
 import com.lore.voicenotes.data.local.DocumentKeyEntity
 import com.lore.voicenotes.data.repository.AddKeyResult
@@ -320,6 +321,7 @@ fun RecordScreen(
             if (cursor.moveToFirst() && nameIdx >= 0) cursor.getString(nameIdx) else null
         } ?: "upload.m4a"
         val mime = resolveMime(cr, uri, filename)
+        UploadLog.write(context, "picked: name=\"$filename\" reported=${cr.getType(uri)} resolved=$mime")
         // The stream copy happens off the main thread in the view model.
         viewModel.uploadFile(uri, filename, mime)
     }

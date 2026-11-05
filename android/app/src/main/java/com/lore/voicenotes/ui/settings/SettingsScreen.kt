@@ -1,5 +1,6 @@
 package com.lore.voicenotes.ui.settings
 
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.foundation.border
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentPaste
@@ -29,17 +31,51 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.lore.voicenotes.BuildConfig
 import com.lore.voicenotes.R
+import com.lore.voicenotes.data.repository.UploadLog
 import com.lore.voicenotes.ui.theme.LoreAccent
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+
+/** The upload journal, readable and copyable: the phone has no adb. */
+@Composable
+private fun UploadJournal() {
+    val context = LocalContext.current
+    val journal by produceState("") {
+        value = withContext(Dispatchers.IO) { UploadLog.read(context) }
+    }
+    Spacer(Modifier.height(24.dp))
+    Text(stringResource(R.string.settings_journal_title), style = MaterialTheme.typography.titleMedium)
+    Spacer(Modifier.height(8.dp))
+    SelectionContainer {
+        Text(
+            journal.ifEmpty { stringResource(R.string.settings_journal_empty) },
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
+        )
+    }
+    Spacer(Modifier.height(8.dp))
+    Button(
+        enabled = journal.isNotEmpty(),
+        onClick = {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("Lore Voice upload journal", journal))
+        },
+    ) {
+        Text(stringResource(R.string.settings_journal_copy))
+    }
+}
 
 @Composable
 fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
@@ -133,6 +169,7 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
             )
         }
 
+        UploadJournal()
         Spacer(Modifier.height(24.dp))
         Text(
             stringResource(R.string.settings_version, BuildConfig.VERSION_NAME),

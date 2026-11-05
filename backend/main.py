@@ -20,9 +20,14 @@ from urllib.parse import urlsplit
 import settings  # noqa: E402 — load-bearing bus-subscription import (see above)
 from embedding_coverage import LIVE_PROJECTS_SQL
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from http_clients import close_all as _close_http_clients
 from mcp_gateway.staging import sweep_staging
 from mcp_gateway.upload import MCP_UPLOAD_ROUTE_PREFIX
@@ -32,6 +37,7 @@ from pipeline.digest.triggers import (
 from pipeline.extractor.runner import on_transcription_complete
 from redis_pool import close_redis
 from security_log import log_security
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import HTTPConnection
 from starlette.requests import Request as _StarletteRequest
 
@@ -418,6 +424,24 @@ def _make_error_response(request: Request, rid: str, exc: Exception) -> JSONResp
     )
 
 
+# Statuses a signed-out visitor or a poller hits in normal use; logging them would
+# bury the refusals somebody has to read.
+_ROUTINE_REFUSALS = frozenset({401, 404})
+
+
+# ARCH: one log line for every refusal, at the two handlers below, so a new route is
+# covered without remembering to log. The client gets only an HTTP status, nginx only
+# a status and a size, so without this line the reason exists nowhere on the server.
+def _log_refusal(conn: HTTPConnection, status: int, detail: object) -> None:
+    if status < 400 or status in _ROUTINE_REFUSALS:
+        return
+    logger.warning(
+        "Request refused (request_id=%s %s %s): %s %r",
+        getattr(conn.state, "request_id", None),
+        conn.scope.get("method", "WS"), conn.url.path, status, detail,
+    )
+
+
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
     rid = request.headers.get(REQUEST_ID_HEADER) or str(uuid.uuid4())
@@ -491,6 +515,7 @@ async def csrf_origin_check(request: Request, call_next):
             return await call_next(request)
         origin = request.headers.get("origin")
         if origin and origin not in _CORS_ORIGINS and not _same_host(origin, request):
+            _log_refusal(request, 403, f"Origin not allowed: {origin}")
             return JSONResponse(status_code=403, content={"detail": "Origin not allowed"})
     return await call_next(request)
 
@@ -691,3 +716,20 @@ app.router.routes.append(_StarletteRoute("/mcp/", endpoint=_mcp_asgi, methods=["
 async def uncaught_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     rid = getattr(request.state, "request_id", None) or str(uuid.uuid4())
     return _make_error_response(request, rid, exc)
+
+
+# WHY StarletteHTTPException: it is the base class, so this also sees the routing 405
+# and FastAPI's HTTPException. The response stays FastAPI's own, the log is the addition.
+@app.exception_handler(StarletteHTTPException)
+async def logged_http_exception_handler(request: Request, exc: StarletteHTTPException) -> Response:
+    _log_refusal(request, exc.status_code, exc.detail)
+    return await http_exception_handler(request, exc)
+
+
+# INVARIANT(security): log only where validation failed and why, never the `input` of
+# errors().
+# Why: `input` holds the submitted value, a password included.
+@app.exception_handler(RequestValidationError)
+async def logged_validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    _log_refusal(request, 422, [(e["loc"], e["msg"]) for e in exc.errors()])
+    return await request_validation_exception_handler(request, exc)
