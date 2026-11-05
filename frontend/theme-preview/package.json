@@ -1,0 +1,18 @@
+{
+  "name": "lore-theme-preview",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "check:colors": "node verify.mjs --colors-only",
+    "check:dom": "node verify-dom.mjs",
+    "verify": "node verify.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "jsdom": "28.1.0",
+    "playwright": "1.62.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  }
+}

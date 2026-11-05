@@ -1,0 +1,5 @@
+.tools/
+.build/
+qa/
+screenshots/
+node_modules/
