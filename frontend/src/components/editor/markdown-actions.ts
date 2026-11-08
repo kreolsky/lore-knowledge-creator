@@ -22,7 +22,7 @@ import { refIsScope } from '../../store/ui-store/documents-slice';
 import { buildNoteAnchor } from '../../collab/note-anchor-wire';
 import { voiceWidgetField, voiceWidgetStart, voiceWidgetRecognizing } from './voice-widget';
 import { preserveCursorFromLineEnd, snapSelectionToLineEnd } from './cursor-preserve';
-import { createTable, tableAnchor } from './live-preview/table-block-model';
+import { createTable, INSERT_TABLE_WIDTH, tableAnchor } from './live-preview/table-block-model';
 import { requestTableFocus } from './live-preview/table-block-widget';
 import { createMarkdownReference } from '../references/create-markdown-reference';
 import { agentAction } from './markdown-actions-agent';
@@ -755,7 +755,7 @@ function openFind(view: EditorView): boolean {
 function insertTable(view: EditorView): boolean {
   const handle = getActiveHandle();
   if (!handle?.ydoc) return false;
-  const id = createTable(handle.ydoc, [['', ''], ['', '']]);
+  const id = createTable(handle.ydoc, [['', ''], ['', '']], INSERT_TABLE_WIDTH);
   requestTableFocus(id); // focus the first cell when the widget mounts
   const anchor = tableAnchor(t('tableBlockUntitled'), id);
   const { from, to } = view.state.selection.main;

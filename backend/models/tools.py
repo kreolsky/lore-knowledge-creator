@@ -40,6 +40,18 @@ class ToolReadDocument(BaseModel):
     limit: int | None = Field(default=None, ge=1)
 
 
+class ToolGetLinks(BaseModel):
+    """`get_links` body — the typed-edges read, same service as /edges.
+
+    `kinds` is a Literal-bounded list so a misspelled kind is a 422 the loop
+    self-corrects from (same policy as ToolSearch.mode); absent = the ONE
+    default the /edges route also uses (mention,transclusion,attachment).
+    """
+    document_id: str
+    direction: Literal["in", "out", "both"] = "both"
+    kinds: list[Literal["mention", "transclusion", "attachment", "note", "chat-context"]] | None = None
+
+
 class ToolSearch(BaseModel):
     query: str = Field(min_length=1, max_length=500)
     # mode routes the layers: `semantic` (default) = union predicate + embeddings +

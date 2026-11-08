@@ -168,6 +168,11 @@ async def apply_edits_to_document(
             result = await _resolve_validate_apply_edits(
                 doc_id=doc_id, edits=normalized, project_id=project_id,
                 region_check=region_check,
+                # A pipe table the agent AUTHORS in new_text becomes a table
+                # object — markdown bodies only (the html-artifact branch above
+                # keeps the page source verbatim). The skip rule inside keeps
+                # partial/fenced/mid-line splices as text.
+                convert_tables=not is_artifact,
             )
         except RegionContainmentReject as exc:
             # A pinned-region edit escaping the fragment is rejected hard — 409

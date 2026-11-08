@@ -50,18 +50,84 @@ class TestDiffMentions:
         await session.flush_to_db()
 
         resp = await client.get(
-            f"/api/documents/{targets[0]}/backlinks", cookies={"lore_session": admin_token}
+            f"/api/documents/{targets[0]}/edges", params={"direction": "in"},
+            cookies={"lore_session": admin_token},
         )
-        backlinks_0 = resp.json().get("backlinks", [])
+        backlinks_0 = resp.json()["edges"]
         assert not any(bl["document_id"] == doc_id for bl in backlinks_0), \
             "Removed link should not have backlink"
 
         resp = await client.get(
-            f"/api/documents/{targets[1]}/backlinks", cookies={"lore_session": admin_token}
+            f"/api/documents/{targets[1]}/edges", params={"direction": "in"},
+            cookies={"lore_session": admin_token},
         )
-        backlinks_1 = resp.json().get("backlinks", [])
+        backlinks_1 = resp.json()["edges"]
         assert any(bl["document_id"] == doc_id for bl in backlinks_1), \
             "Kept link should still have backlink"
+
+        # Typed edges (plan typed-edges): a link AND an embed of the same target
+        # are TWO edges after a real flush; kinds survive the round-trip.
+        both_kinds = f"![E]({targets[0]}) [L]({targets[0]})"
+        set_session_text(session, both_kinds)
+        session._dirty = True
+        await session.flush_to_db()
+
+        resp = await client.get(
+            f"/api/documents/{doc_id}/edges",
+            params={"direction": "out"},
+            cookies={"lore_session": admin_token},
+        )
+        assert resp.status_code == 200, resp.text
+        out_edges = resp.json()["edges"]
+        t0_kinds = {e["kind"] for e in out_edges if e["document_id"] == targets[0]}
+        assert t0_kinds == {"mention", "transclusion"}, out_edges
+        assert all(e["broken"] is False for e in out_edges), out_edges
+        # The default kind set excludes note/chat-context.
+        assert all(e["kind"] in ("mention", "transclusion", "attachment") for e in out_edges)
+
+        # A `ref:`-only edit rebuilds: pairs include ref: targets where the old
+        # bare-id detector (extract_doc_mentions) rejected them.
+        from mentions import extract_content_edges, extract_doc_mentions
+
+        assert extract_content_edges("[x](ref:abc123)") == [("abc123", "mention")]
+        assert extract_doc_mentions("[x](ref:abc123)") == []
+
+        # Legacy rows written before the kind backfill coalesce NONE → 'mention'.
+        # Simulated exactly as a legacy DB reaches that state: the source's
+        # typed edges are cleared, the field is removed, kind-less edges are
+        # written, the field is re-defined (what startup schema apply does to
+        # pre-field rows — SurrealDB DEFAULT never retro-fills). DEFINE in
+        # finally: this test shares the schema with the rest of the suite — a
+        # failure between REMOVE and DEFINE would leave doc_mentions without
+        # `kind` and break every later kinded RELATE. RELATE endpoints use the
+        # backtick record form (as the production rebuild does): this SurrealDB
+        # version rejects `type::record(...)` calls parsed inline as edge
+        # endpoints. REMOVE FIELD alone is NOT the legacy state: it drops the
+        # definition, not the stored values, so the typed edges must be deleted
+        # too or `transclusion` survives the round-trip.
+        test_db = await get_db()
+        await test_db.query("REMOVE FIELD kind ON doc_mentions")
+        try:
+            await test_db.query(
+                f"DELETE doc_mentions WHERE in = documents:`{doc_id}`; "
+                f"RELATE documents:`{doc_id}`->doc_mentions->documents:`{targets[0]}`; "
+                f"RELATE documents:`{doc_id}`->doc_mentions->documents:`{targets[1]}`"
+            )
+        finally:
+            await test_db.query(
+                "DEFINE FIELD OVERWRITE kind ON doc_mentions TYPE string DEFAULT 'mention' "
+                "ASSERT $value IN ['mention', 'transclusion']"
+            )
+        resp = await client.get(
+            f"/api/documents/{doc_id}/edges",
+            params={"direction": "out"},
+            cookies={"lore_session": admin_token},
+        )
+        assert resp.status_code == 200, resp.text
+        coalesced = resp.json()["edges"]
+        assert coalesced, "legacy rows stay readable"
+        assert {e["kind"] for e in coalesced} == {"mention"}, coalesced
+        assert {e["document_id"] for e in coalesced} == {targets[0], targets[1]}, coalesced
 
 
 # ─── Fix 5: Skip flush when only trailing whitespace differs ─────────────

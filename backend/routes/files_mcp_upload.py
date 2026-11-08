@@ -43,6 +43,7 @@ from files_util import (
     validate_magic,
 )
 from inbox import KIND_REF, mark_arrived
+from markdown_normalize import normalize_markdown
 from mcp_gateway.staging import (
     STAGE_UPLOAD_KIND,
     new_artifact_id,
@@ -55,6 +56,7 @@ from transcription import enqueue_transcription
 
 import event_bus
 from db import fetch_one
+from table_serialize import import_gfm_tables
 from ydoc_store import set_content
 
 router = APIRouter()
@@ -493,8 +495,6 @@ async def _store_markdown(data: bytes, claims: dict, original_name: str,
                           created_by_name: str | None = None) -> tuple[str, dict]:
     """Markdown branch — the file IS the text (D5: md → itself). Store the original
     and set the derived content to the (normalized) file text."""
-    from markdown_normalize import normalize_markdown
-
     text = data.decode("utf-8", errors="replace")
     ref_id, result = await save_upload(
         data, "text/markdown", original_name, claims["project_id"], claims["document_id"],
@@ -508,7 +508,12 @@ async def _store_markdown(data: bytes, claims: dict, original_name: str,
     # NONE, so the reference's first collab open seeds a Y.Doc that diverges
     # from the stored body the moment anything else persists state.
     normalized = normalize_markdown(text)
-    await set_content(ref_id, normalized, persist=True)
+    # GFM tables → objects (this branch IS markdown by dispatch, so the markdown
+    # predicate holds by construction). The row was born EMPTY by save_upload,
+    # so there is no anchor-form window at all.
+    converted, tables_json = import_gfm_tables(normalized)
+    await set_content(ref_id, converted, persist=True,
+                      tables_json=tables_json if tables_json != "{}" else None)
     # INVARIANT: a post-create content write emits content_flushed at the write
     # site. Why: save_upload created the row with EMPTY content (the primitive's
     # non-empty guard correctly skipped it — a binary/markdown upload enqueues

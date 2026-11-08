@@ -988,7 +988,7 @@ async def import_subtree_zip(
     import leaves no partial subtree); A — create every doc row EMPTY (one
     creation factory, so parent validity, the scope wall and unique paths are
     the shared create path's own gates); B — write final content per doc
-    (normalize → GFM tables → asset refs → link rewriting) through set_content
+    (normalize → asset refs → link rewriting → GFM tables) through set_content
     + the mention rebuild, so links and edges exist only once every node does
     (the help-seeder batch pattern).
 
@@ -1023,9 +1023,10 @@ async def _apply_imported_content(
     index: list[_StemEntry], assets: _AssetImporter, *,
     parent_id: str | None, project_id: str,
 ) -> None:
-    """Pass B: write each doc's final content (normalize → GFM tables → asset
-    refs → link rewriting) through set_content + the mention rebuild, so links
-    and edges exist only once every node does (the help-seeder batch pattern).
+    """Pass B: write each doc's final content (normalize → asset refs → link
+    rewriting → GFM tables LAST) through set_content + the mention rebuild, so
+    links and edges exist only once every node does (the help-seeder batch
+    pattern).
 
     The size/remote-image gates repeat the prevalidation belt-fashion on the
     exact bytes that reach the writer."""
@@ -1039,12 +1040,15 @@ async def _apply_imported_content(
                 413, detail=f"File too large (max {max_md_mb}MB): {doc.title}.md",
             )
         text = normalize_markdown(doc.text)
-        text, tables_json = import_gfm_tables(text)
         asset_host = _host_for_dir(paths, doc, parent_id)
         text = await _rewrite_content(
             text, doc, root, paths, index, assets, asset_host,
         )
         doc_state.reject_remote_images(text)
+        # GFM tables → objects LAST: _rewrite_content emits `![alt|WxH](ref:id)`
+        # embeds whose `|` is the sized-image separator, and the remote-image
+        # guard reads text — a cell moved into the model is invisible to both.
+        text, tables_json = import_gfm_tables(text)
         await _finalize_imported_doc(doc, text, tables_json, project_id)
 
 
@@ -1094,11 +1098,16 @@ async def _finalize_imported_doc(doc: _ImportDoc, text: str,
                                  tables_json: str, project_id: str) -> None:
     """Write one imported doc's final content + mention edges — the seeder's
     refresh tail: the ONE canonical content writer, then the mention rebuild
-    and the embed debounce signal."""
+    (on the EXPANDED body — a converted cell's `[t](<id>)` link lives in the
+    tables model and is invisible in anchor-form text) and the embed debounce
+    signal."""
     await set_content(doc.doc_id, text, persist=True,
                       tables_json=tables_json if tables_json != "{}" else None)
+    from ydoc_store import load as load_ydoc
+
+    expanded = expand_tables(await load_ydoc(doc.doc_id))
     db = await get_db()
-    await rebuild_doc_mentions(db, "documents", doc.doc_id, text)
-    if text.strip():
+    await rebuild_doc_mentions(db, "documents", doc.doc_id, expanded)
+    if expanded.strip():
         await event_bus.emit("content_flushed", entity_type="doc",
                              entity_id=doc.doc_id, project_id=project_id)

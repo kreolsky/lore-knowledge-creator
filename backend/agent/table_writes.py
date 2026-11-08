@@ -306,11 +306,17 @@ def _dims_from_tables_json(tables_json: str, table_id: str) -> tuple[int, int]:
     return len(rows), n_cols
 
 
-def _reject_table_overflow(rows_matrix: list[list[str]]) -> None:
+def reject_table_overflow(rows_matrix: list[list[str]]) -> None:
     """Reject any cell exceeding ``AGENT_TABLE_MAX_CELL_CHARS`` (resource bound — each
     cell is a Y.Text built inside one ``doc.transaction()``; an unbounded cell balloons
     the CRDT update + broadcast + persistence). No-silent-degradation: 400, not silent
-    truncation. The outer row count is already capped by the model ``max_length``."""
+    truncation. The outer row count is already capped by the model ``max_length``.
+
+    # Public (no underscore): the collab create factories (agent.collab_writes)
+    # reuse it for agent-AUTHORED bodies that convert on create
+    # (``check_cell_cap``). File imports never call it — they are bounded by
+    # their file-size cap upstream instead, so the same ``.md`` behaves
+    # identically on every import route."""
     from fastapi import HTTPException
 
     from config import AGENT_TABLE_MAX_CELL_CHARS
@@ -347,10 +353,10 @@ async def _tables_convergence_tail(
     # structural callbacks wrap their primitive in ONE `doc.transaction()` so the
     # update carries the entire change (no ragged intermediate — matches
     # apply_tables_json / add_table_rows INVARIANT).
-    # Why: replicas never see a ragged intermediate. The anchor is
-    # unchanged for add_rows/add_column (mentions/rebuild skipped, `content_flushed`
-    # still emitted); create_table also splices a content anchor inside the SAME
-    # transaction — a table anchor is NOT a `[[link]]`, so mention rebuild stays skipped.
+    # Why: replicas never see a ragged intermediate. The anchor is unchanged for
+    # add_rows/add_column; create_table splices its anchor in the SAME
+    # transaction — a table anchor is NOT a `[[link]]`, so mentions stay skipped
+    # (imported/agent-created tables rebuild cell links at THEIR write sites, on EXPANDED text).
     """
     from collab.sync import MSG_SYNC, create_update_message, wrap_binary
 
@@ -441,7 +447,7 @@ async def apply_add_table_rows(
 
     if not rows_matrix:
         raise HTTPException(status_code=400, detail="No rows supplied")
-    _reject_table_overflow(rows_matrix)
+    reject_table_overflow(rows_matrix)
 
     def _inside_lock(doc, content, tables_json):
         _n_rows, n_cols = _dims_from_tables_json(tables_json, table_id)
@@ -489,9 +495,9 @@ async def apply_add_table_column(
     from fastapi import HTTPException
 
     if header is not None:
-        _reject_table_overflow([[header]])
+        reject_table_overflow([[header]])
     if values:
-        _reject_table_overflow([values])
+        reject_table_overflow([values])
 
     def _inside_lock(doc, content, tables_json):
         n_rows, n_cols = _dims_from_tables_json(tables_json, table_id)
@@ -553,7 +559,7 @@ async def apply_create_table(
 
     if not rows_matrix:
         raise HTTPException(status_code=400, detail="create_table requires rows (rows[0] = header)")
-    _reject_table_overflow(rows_matrix)
+    reject_table_overflow(rows_matrix)
 
     def _inside_lock(doc, content, tables_json):
         # Pre-validate the section against the apply-start content (404 on unknown —

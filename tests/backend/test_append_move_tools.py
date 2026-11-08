@@ -98,7 +98,8 @@ async def test_append_to_empty_doc_unwraps_placeholder_bracket_link_destinations
 
     captured: dict = {}
 
-    async def fake_route(*, doc_id, new_content, project_id):
+    async def fake_route(*, doc_id, new_content, project_id, tables_json=None,
+                         finalize_body=None):
         captured["content"] = new_content
         return True
 

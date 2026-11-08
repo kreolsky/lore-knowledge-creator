@@ -1879,6 +1879,17 @@
             ],
             "title": "Description"
           },
+          "links_show_sessions": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Links Show Sessions"
+          },
           "name": {
             "anyOf": [
               {
@@ -3517,6 +3528,51 @@
           "fact_id"
         ],
         "title": "ToolGetFactHistory",
+        "type": "object"
+      },
+      "ToolGetLinks": {
+        "description": "`get_links` body — the typed-edges read, same service as /edges.\n\n`kinds` is a Literal-bounded list so a misspelled kind is a 422 the loop\nself-corrects from (same policy as ToolSearch.mode); absent = the ONE\ndefault the /edges route also uses (mention,transclusion,attachment).",
+        "properties": {
+          "direction": {
+            "default": "both",
+            "enum": [
+              "in",
+              "out",
+              "both"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          },
+          "kinds": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "mention",
+                    "transclusion",
+                    "attachment",
+                    "note",
+                    "chat-context"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kinds"
+          }
+        },
+        "required": [
+          "document_id"
+        ],
+        "title": "ToolGetLinks",
         "type": "object"
       },
       "ToolGetMemoryFacts": {
@@ -10658,10 +10714,10 @@
         "summary": "Document Artifact Url"
       }
     },
-    "/api/documents/{document_id}/backlinks": {
+    "/api/documents/{document_id}/edges": {
       "get": {
-        "description": "Return documents that link to this document via doc_mentions edges.",
-        "operationId": "get_document_backlinks_api_documents__document_id__backlinks_get",
+        "description": "Typed edges of a document OR reference — both directions, every relation\nkind the product shows as a link (plan typed-edges).\n\n`direction` = in|out|both; `kinds` = comma-separated filter, default\n`mention,transclusion,attachment` (note/chat-context are opt-in). Document\npeers carry {document_id, title, is_reference, source_type, broken\n(outgoing stored edges only), updated_at}; note/chat peers carry session_id\n+ label (chat-context = the viewer's OWN chats). The same service answers\nthe agent's get_links tool — one function, one default.",
+        "operationId": "get_document_edges_api_documents__document_id__edges_get",
         "parameters": [
           {
             "in": "path",
@@ -10670,6 +10726,32 @@
             "schema": {
               "title": "Document Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "direction",
+            "required": false,
+            "schema": {
+              "default": "both",
+              "title": "Direction",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kinds",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kinds"
             }
           },
           {
@@ -10709,7 +10791,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Get Document Backlinks"
+        "summary": "Get Document Edges"
       }
     },
     "/api/documents/{document_id}/export": {
@@ -12148,7 +12230,7 @@
         "summary": "Get Project"
       },
       "patch": {
-        "description": "Update project fields (name, description, status, audiences, project_context, ref_image_preview). Requires full access or admin.",
+        "description": "Update project fields (name, description, status, audiences, project_context, ref_image_preview, links_show_sessions). Requires full access or admin.",
         "operationId": "patch_project_api_projects__project_id__patch",
         "parameters": [
           {
@@ -17072,6 +17154,137 @@
           }
         },
         "summary": "Tool Get Fact History",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
+    "/api/tool/get_links": {
+      "post": {
+        "description": "Typed links of a document — both directions, every kind (plan typed-edges).\n\nDelegates to the SAME service the /edges route reads (one function, one\ndefault kind set); the executor applies the read gates (same-project, RBAC,\nscope ceiling, page lock) and the service walls the peers.",
+        "operationId": "tool_get_links_api_tool_get_links_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolGetLinks"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Get Links",
         "tags": [
           "tool-api"
         ]

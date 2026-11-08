@@ -219,7 +219,7 @@ async def last_message_preview(session_id: str, user: dict = Depends(get_current
 
     INVARIANT: string::slice(content, 0, PREVIEW_CONTENT_MAX) truncates server-side.
     Why: message bodies may embed large image data URLs — never transfer the full
-    body for a preview (PREVIEW_CONTENT_MAX = 2000; mirrors _note_previews' SQL
+    body for a preview (PREVIEW_CONTENT_MAX = 2000; mirrors note_previews' SQL
     truncation, which also uses the constant).
     """
     await _require_session_access(session_id, user)

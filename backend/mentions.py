@@ -10,18 +10,28 @@ import re
 from artifacts import ARTIFACT_MEDIA_TYPE
 from surrealdb import AsyncSurreal
 
-from db import get_db, record_refs, validate_record_id
+from db import (
+    SAFE_ID_RE,
+    get_db,
+    record_refs,
+    validate_record_id,
+)
 from models import is_ref_row
+from transclusion_grammar import SCHEME_TABLE
+
+# The stored edge-kind vocabulary (plan typed-edges). Content-derived kinds live
+# on doc_mentions.kind; field-backed kinds (attachment/note/chat-context) are
+# PROJECTED at read time by edges.py and never stored.
+KIND_MENTION = "mention"
+KIND_TRANSCLUSION = "transclusion"
+STORED_EDGE_KINDS = (KIND_MENTION, KIND_TRANSCLUSION)
 
 
 def extract_doc_mentions(content: str) -> list[str]:
-    from db import SAFE_ID_RE
-
     # WHY: the lookahead is projected at import time from the canonical SCHEME_TABLE
     #   (is_doc_mention == False prefixes) instead of hand-written, so it cannot drift.
     #   Colon-form prefixes mean a bare doc-id that merely starts with a scheme word
     #   (e.g. `httpfoo`) is correctly captured, matching parse_target.
-    from transclusion_grammar import SCHEME_TABLE
     _reject_prefixes = "|".join(
         p for p, _is_transclusion, is_doc_mention in SCHEME_TABLE if not is_doc_mention
     )
@@ -37,25 +47,64 @@ def extract_doc_mentions(content: str) -> list[str]:
 
 def extract_ref_mentions(content: str) -> list[str]:
     """Extract reference IDs from `[text](ref:id)` and `![alt](ref:id)` markdown patterns."""
-    from db import SAFE_ID_RE
     pattern = r'!?\[(?:[^\]]*)\]\(ref:([^)]+)\)'
     raw = set(re.findall(pattern, content))
     return [m for m in raw if SAFE_ID_RE.match(m)]
 
 
+def extract_content_edges(content: str) -> list[tuple[str, str]]:
+    """(target_id, kind) pairs for every doc/ref link and embed in content.
+
+    # ARCH: the ONE edge extractor (plan typed-edges) — kind comes from the
+    # leading `!` ('transclusion') vs its absence ('mention'); the same target
+    # may appear under BOTH kinds (two edges). The doc-form lookahead stays
+    # projected from SCHEME_TABLE (see extract_doc_mentions) and the ref: form
+    # is matched separately because SCHEME_TABLE classifies `ref:` as
+    # is_doc_mention == False. A superset of extract_doc_mentions +
+    # extract_ref_mentions (which stay for resolve_first_circle's doc/ref split):
+    # every id the pair produced before still produces a pair, now with its kind.
+    """
+    _reject_prefixes = "|".join(
+        p for p, _is_transclusion, is_doc_mention in SCHEME_TABLE if not is_doc_mention
+    )
+    doc_pattern = re.compile(
+        r'(!?)\[(?:[^\]]+)\]\((?!' + _reject_prefixes + r')(?:doc:)?([^)]+)\)'
+    )
+    ref_pattern = re.compile(r'(!?)\[(?:[^\]]*)\]\(ref:([^)]+)\)')
+    pairs: list[tuple[str, str]] = []
+    for m in doc_pattern.finditer(content):
+        if SAFE_ID_RE.match(m.group(2)):
+            pairs.append((m.group(2), KIND_TRANSCLUSION if m.group(1) else KIND_MENTION))
+    for m in ref_pattern.finditer(content):
+        if SAFE_ID_RE.match(m.group(2)):
+            pairs.append((m.group(2), KIND_TRANSCLUSION if m.group(1) else KIND_MENTION))
+    # Same (target, kind) from two syntaxes (e.g. bare + doc:) is ONE edge.
+    return list(dict.fromkeys(pairs))
+
+
+def content_edge_pairs(content: str, *, exclude: str) -> set[tuple[str, str]]:
+    """extract_content_edges as the flush/registry pair CACHE seed: the set
+    with self-edges removed. Why one helper: the flush detector and the
+    session-creation seed must build the SAME set or a reopen+flush rebuilds
+    forever (plan typed-edges)."""
+    return {
+        (tid, kind) for tid, kind in extract_content_edges(content) if tid != exclude
+    }
+
+
 async def _rebuild_mentions(
     db: AsyncSurreal, source_table: str, edge_table: str, source_id: str, content: str,
     *, exclude_self: bool = False,
-) -> list[str]:
-    """Delete old mention edges and recreate them atomically."""
+) -> list[tuple[str, str]]:
+    """Delete old mention edges and recreate them (with kind) atomically."""
     # WHY: both `[t](doc:id)` and `[t](ref:id)` links create doc_mentions edges.
     # Why: references are rows in the documents table, so a referenced entity must see
     # its incoming links too — omitting ref mentions left every reference with empty
     # backlinks even when several documents linked to it. Edge target is documents:id
     # for both kinds; dedup since a target may be linked as both.
-    mention_ids = list(dict.fromkeys(extract_doc_mentions(content) + extract_ref_mentions(content)))
+    pairs = extract_content_edges(content)
     if exclude_self:
-        mention_ids = [m for m in mention_ids if m != source_id]
+        pairs = [(tid, kind) for tid, kind in pairs if tid != source_id]
     safe_id = validate_record_id(source_id)
     # INVARIANT(data-loss): mention rebuild is all-or-nothing — never delete old edges
     # without committing the new ones. Why: a mid-batch RELATE failure used to
@@ -70,17 +119,22 @@ async def _rebuild_mentions(
         "BEGIN TRANSACTION",
         f"DELETE {edge_table} WHERE in = type::record('{source_table}', '{safe_id}')",
     ]
-    for mid in mention_ids:
+    for mid, kind in pairs:
         stmts.append(
             f"RELATE {source_table}:`{safe_id}`->{edge_table}->documents:`{validate_record_id(mid)}`"
+            f" CONTENT {{ kind: '{kind}' }}"
         )
     stmts.append("COMMIT TRANSACTION")
     await db.query("; ".join(stmts))
-    return mention_ids
+    return pairs
 
 
-async def rebuild_doc_mentions(db: AsyncSurreal, table: str, entity_id: str, content: str) -> list[str]:
+async def rebuild_doc_mentions(
+    db: AsyncSurreal, table: str, entity_id: str, content: str,
+) -> list[tuple[str, str]]:
     """Rebuild mention edges for one source row — EXCEPT an html artifact.
+
+    Returns the rebuilt (target_id, kind) pairs.
 
     # INVARIANT: an html artifact row carries NO mention edges. Why: a page
     # cannot navigate, so a document id in its JS or in

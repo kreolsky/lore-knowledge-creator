@@ -342,6 +342,7 @@ async def create_project(body: CreateProject, user: dict = Depends(get_current_u
         "owner_id": user["user_id"],
         "audiences": [],
         "ref_image_preview": True,
+        "links_show_sessions": False,
     }
     result["my_access"] = "full"
     # The creator is the owner by construction (see the INVARIANT above).
@@ -765,7 +766,7 @@ async def _guard_audiences(project: dict, new_audiences: list[dict], user: dict)
 
 @router.patch("/api/projects/{project_id}")
 async def patch_project(project_id: str, body: PatchProject, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
-    """Update project fields (name, description, status, audiences, project_context, ref_image_preview). Requires full access or admin."""
+    """Update project fields (name, description, status, audiences, project_context, ref_image_preview, links_show_sessions). Requires full access or admin."""
     await require_admin_or_project_full(project_id, user)
     updates = body.model_dump(exclude_unset=True)
     if "audiences" in updates:

@@ -80,9 +80,12 @@ async def _cascade_cleanup_document(db: AsyncSurreal, document_id: str) -> list[
         # WHY: same class as the documents UPDATE below — a `WHERE in = … OR out = …`
         # filter scans the whole edge table, so the graph delete targets the endpoint
         # records (`Iterate Record` per edge).
+        # INVARIANT(persisted): only the deleted document's OUTGOING edges go; its
+        # incoming edges are kept so their sources render it as a broken link.
+        # Why: a document that pointed at a deleted one must show the broken link
+        # (edges.py marks a gone out-target broken) instead of silently losing the row.
         db.query(
-            "DELETE type::record('documents', $id)->doc_mentions, "
-            "type::record('documents', $id)<-doc_mentions",
+            "DELETE type::record('documents', $id)->doc_mentions",
             {"id": safe_did},
             idempotent=True,
         ),

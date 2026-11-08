@@ -328,7 +328,6 @@ export const en = {
   orSelectTextHint: 'Or select text and press {hotkey} to pin a note.',
   thread: 'thread',
   deleteNote: 'Delete Note',
-  backlinks: 'Backlinks',
   noteBelongsToDocument: 'Belongs to document',
   noteBelongsToReference: 'Belongs to reference',
   noteUnavailableInPreview: 'Notes are unavailable in quick preview — open the reference in split or center mode to add notes',
@@ -381,7 +380,15 @@ export const en = {
 
   // backlinks panel
   noDocsLinkHere: 'No documents link here.',
-  failedToLoadBacklinks: 'Failed to load backlinks.',
+  failedToLoadLinks: 'Failed to load links.',
+  edgeKindMention: 'Mentions',
+  edgeKindTransclusion: 'Embeds',
+  edgeKindAttachment: 'Materials',
+  edgeKindNote: 'Notes',
+  edgeKindChat: 'My chats',
+  brokenLink: 'Deleted document',
+  brokenLinkHint: 'The linked document was deleted',
+  untitledLink: 'Untitled',
 
   // compact layout
   compactToggleTree: 'Documents',
@@ -1064,9 +1071,10 @@ export const en = {
   settingsVoiceFixed: 'Specific document',
   settingsVoiceFixedDesc: 'All voice messages are saved to the selected document, regardless of which document is open.',
   settingsVoiceDesc: 'Where new voice recordings are saved by default.',
-  settingsImagePreviewTitle: 'Image previews',
-  settingsImagePreviewDesc: 'How images are shown in the references panel — for every member of the project.',
+  settingsDisplayTitle: 'Display',
+  settingsDisplayDesc: 'How the project panels look — for every member of the project.',
   settingsImagePreviewLabel: 'Show images as a preview gallery',
+  settingsLinksShowSessionsLabel: 'Show notes and my chats in the links panel',
   settingsChange: 'Change',
   settingsClear: 'Clear',
   settingsSelectDocument: 'Select document',

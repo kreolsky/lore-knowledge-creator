@@ -16,6 +16,7 @@ import {
   scaleColumnWidths,
   setColumnWidths,
   MIN_COLUMN_WIDTH,
+  birthColumnWidths,
   removeRow,
   removeColumn,
   tableAnchor,
@@ -45,9 +46,9 @@ describe('createTable / readTableModel', () => {
   it('creates a table from a cell-body matrix and reads it back', () => {
     const id = createTable(doc, [['a', 'b'], ['c', 'd']]);
     expect(typeof id).toBe('string');
-    // New columns are AUTO (w=0, content-driven) — see AUTO_COLUMN_WIDTH.
+    // Born fixed, proportional to text length — see birthColumnWidths.
     expect(readTableModel(doc, id)).toEqual({
-      columns: [0, 0],
+      columns: [422, 422],
       rows: [['a', 'b'], ['c', 'd']],
     });
   });
@@ -55,18 +56,20 @@ describe('createTable / readTableModel', () => {
 });
 
 describe('cell + structure mutations', () => {
-  it('addColumn appends an empty cell to every row + an AUTO (0) width', () => {
+  // TEST-WHY: pure-logic-edge — a born-fixed table gets a px column, never a 0 that flips it to 100% wide.
+  it('addColumn appends an empty cell to every row + a px width in a born-fixed table', () => {
     const id = createTable(doc, [['a'], ['b']]);
     addColumn(doc, id);
     const m = readTableModel(doc, id)!;
     expect(m.rows).toEqual([['a', ''], ['b', '']]);
-    expect(m.columns).toEqual([0, 0]);
+    expect(m.columns).toEqual([844, DEFAULT_COLUMN_WIDTH]);
   });
 
-  it('GFM import creates all-AUTO columns (w=0)', () => {
+  // TEST-WHY: pure-logic-edge — the GFM import birth path writes the birth formula, not auto columns.
+  it('GFM import creates birth-width columns', () => {
     const { text } = importGfmTables(doc, '| A | B |\n| --- | --- |\n| 1 | 2 |', 't');
     const id = [...text.matchAll(TABLE_ANCHOR_RE)][0][2];
-    expect(readTableModel(doc, id)!.columns).toEqual([0, 0]);
+    expect(readTableModel(doc, id)!.columns).toEqual([422, 422]);
   });
 
 });
@@ -467,11 +470,33 @@ describe('scaleColumnWidths', () => {
   });
 });
 
+// BYTE-IDENTICAL BACKEND TWIN: tests/backend/test_table_serialize.py BIRTH_WIDTH_FIXTURE
+// (the containers do not mount each other's trees). A case changed HERE changes THERE.
+const BIRTH_WIDTH_FIXTURE: [string, string[][], number[]][] = [
+  ['empty-2x2-equal', [['', ''], ['', '']], [422, 422]],
+  ['narrow-hash-wide-text', [['#', 'Description'], ['1', 'a'.repeat(100)]], [59, 785]],
+  ['names', [['Name', 'Role'], ['Aragorn', 'Ranger'], ['Legolas', 'Elf']], [454, 390]],
+  ['multiline-longest-trimmed-line', [['a\nbbbbbb  ', 'cc']], [563, 281]],
+  ['ragged-row', [['x', 'y', 'z'], ['only']], [338, 253, 253]],
+  ['remainder-to-widest-first', [['a', 'b', 'c']], [282, 281, 281]],
+  ['code-points-not-bytes', [['ёжик', 'ab']], [482, 362]],
+  ['too-many-columns-floor-at-min', [Array(25).fill('x')], Array(25).fill(40)],
+];
+
+describe('birthColumnWidths', () => {
+  // TEST-WHY: pure-logic-edge — pins the birth-width formula and its byte agreement with the backend twin.
+  it.each(BIRTH_WIDTH_FIXTURE)('%s', (_case, matrix, expected) => {
+    expect(birthColumnWidths(matrix)).toEqual(expected);
+  });
+});
+
 describe('addColumn width follows the table state', () => {
   // TEST-WHY: pure-logic-edge — a 0 in an all-px table flips it to 100% wide, a jump the user never made.
   it('a frozen table gets a px column, an auto table an auto one', () => {
     const doc = new Y.Doc();
     const id = createTable(doc, [['a', 'b']]);
+    setColumnWidth(doc, id, 0, 0);
+    setColumnWidth(doc, id, 1, 0);
     addColumn(doc, id);
     expect(readTableModel(doc, id)?.columns).toEqual([0, 0, 0]);
     setColumnWidths(doc, id, [100, 200, 300]);

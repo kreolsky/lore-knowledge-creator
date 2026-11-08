@@ -17,6 +17,7 @@ from documents.update import (
     reorder_document_command,
     update_document_command,
 )
+from edges import collect_edges, parse_edge_kinds
 from fastapi import APIRouter, Depends, HTTPException, Response
 from history_service import list_history as _list_history
 from subtree_md import export_subtree
@@ -30,7 +31,7 @@ from access import (
     require_project_full,
 )
 from auth import get_current_user
-from db import extract_id, fetch_many, fetch_one, get_db, serialize_record
+from db import fetch_one, get_db, serialize_record
 from deps import extract_headings
 from mentions import resolve_first_circle
 from models import (
@@ -309,54 +310,32 @@ async def reorder_document(
     return await reorder_document_command(document_id, body.after_id)
 
 
-@router.get("/api/documents/{document_id}/backlinks")
-async def get_document_backlinks(
-    document_id: str, user: dict = Depends(get_current_user),
-    db: AsyncSurreal = Depends(get_db),
+@router.get("/api/documents/{document_id}/edges")
+async def get_document_edges(
+    document_id: str,
+    direction: str = "both",
+    kinds: str | None = None,
+    user: dict = Depends(get_current_user),
 ):
-    """Return documents that link to this document via doc_mentions edges."""
+    """Typed edges of a document OR reference — both directions, every relation
+    kind the product shows as a link (plan typed-edges).
+
+    `direction` = in|out|both; `kinds` = comma-separated filter, default
+    `mention,transclusion,attachment` (note/chat-context are opt-in). Document
+    peers carry {document_id, title, is_reference, source_type, broken
+    (outgoing stored edges only), updated_at}; note/chat peers carry session_id
+    + label (chat-context = the viewer's OWN chats). The same service answers
+    the agent's get_links tool — one function, one default.
+    """
+    if direction not in ("in", "out", "both"):
+        raise HTTPException(status_code=422, detail="direction must be in, out or both")
     await require_document_read(document_id, user)
-    doc_project_id = await get_doc_project_id(document_id)
-    source_refs = await db.query(
-        "SELECT VALUE in FROM doc_mentions "
-        "WHERE out = type::record('documents', $did)",
-        {"did": document_id},
+    return await collect_edges(
+        document_id,
+        viewer_user_id=user["user_id"],
+        direction=direction,
+        kinds=parse_edge_kinds(kinds),
     )
-    src_ids = [extract_id(ref) for ref in (source_refs or [])]
-    src_ids = [sid for sid in src_ids if sid]
-    if not src_ids:
-        return {"backlinks": []}
-
-    doc_map = await fetch_many("documents", src_ids)
-
-    backlinks = []
-    for src_id in src_ids:
-        if src_id not in doc_map:
-            continue
-        src_doc = doc_map[src_id]
-        # INVARIANT(security): a by-id target outside the reading document's
-        # project is skipped. Why: doc_mentions edges survive cross-project
-        # subtree moves (documents/move.py never rewrites them), so without the
-        # filter a member of the target project would learn the title and
-        # updated_at of documents in a project he cannot read. Project equality
-        # is the wall — per-source access resolution is deliberately absent
-        # (small trusted group; N×4 round-trips otherwise, audit N4).
-        if src_doc.get("project_id") != doc_project_id:
-            continue
-        is_ref = is_ref_row(src_doc)
-        entry: dict = {
-            "document_id": src_id,
-            "title": src_doc.get("title", ""),
-            "updated_at": str(src_doc["updated_at"]) if src_doc.get("updated_at") else None,
-            "source_type": "ref" if is_ref else "doc",
-            "is_reference": is_ref,
-        }
-        if is_ref:
-            # WHY: keep reference_id alias on the response so clients that branch
-            # on it (frontend + tests) continue to work.
-            entry["reference_id"] = src_id
-        backlinks.append(entry)
-    return {"backlinks": backlinks}
 
 
 async def _resolve_first_circle(content: str, self_id: str) -> dict:

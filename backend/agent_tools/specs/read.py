@@ -310,6 +310,66 @@ READ_TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "mutating": False,
+        "function": {
+            "name": "get_links",
+            "description": (
+                "Read the typed links of one document or reference — what links "
+                "here AND what it links to, in one shape. This is the SAME answer "
+                "the user's links panel reads; what you see is what they see. "
+                "Stored content edges: `mention` (`[t](target)`) and "
+                "`transclusion` (`![t](target)`). Projected field edges: "
+                "`attachment` (a material attached to the document), `note` "
+                "(a note pinned to it), `chat-context` (one of YOUR chats using "
+                "it as context — another member's chats are never shown). "
+                "`direction` = in|out|both. `kinds` filters; the default is "
+                "mention,transclusion,attachment — ask for note/chat-context "
+                "explicitly. Document peers carry document_id, title, "
+                "is_reference, source_type, updated_at and `broken` (outgoing "
+                "stored edges only: the target is soft-deleted or gone); "
+                "note/chat peers carry session_id and a label (a chat's title, a "
+                "note's preview) instead of document_id. A peer outside the "
+                "document's project is skipped by the project wall, and under a "
+                "subtree-scoped key no peer outside your scope is served."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {
+                        "type": "string",
+                        "description": (
+                            "Document or reference id whose links to read — the "
+                            "same id the links panel is open on."
+                        ),
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["in", "out", "both"],
+                        "default": "both",
+                        "description": "in = what links here, out = what it links to.",
+                    },
+                    "kinds": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "mention", "transclusion", "attachment",
+                                "note", "chat-context",
+                            ],
+                        },
+                        "description": (
+                            "Optional kind filter. Default: mention, "
+                            "transclusion, attachment (note and chat-context "
+                            "only when asked)."
+                        ),
+                    },
+                },
+                "required": ["document_id"],
+            },
+        },
+    },
     EXPORT_SUBTREE_MD_TOOL,
 ]
 

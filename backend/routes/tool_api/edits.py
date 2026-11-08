@@ -12,6 +12,7 @@ import settings
 from agent.context import get_agent_context
 from artifacts import is_artifact_row
 from fastapi import Depends, HTTPException
+from markdown_normalize import normalize_list_spacing, unwrap_placeholder_brackets
 from textmatch import _section_end_offset
 
 from config import AGENT_EDIT_MAX_CHARS
@@ -251,21 +252,34 @@ async def _apply_append_to_empty_doc(
 ) -> dict:
     """Set content on an empty document via the convergence core (route_document_content
     — the ONE convergence core for content mutation, same path the edit tail uses, so
-    ydoc never desyncs). No checkpoint: an empty doc has no prior state to revert to."""
-    from agent.collab_writes import broadcast_agent_presence
+    ydoc never desyncs). No checkpoint: an empty doc has no prior state to revert to.
+
+    The append is an AUTHORED markdown body: its pipe tables become table objects
+    (authored-cell cap included). The whole buffer is fresh, so the models ride
+    route_document_content's `tables_json` — anchor + models land in ONE update on
+    both convergence legs, and the finalize tail runs on the EXPANDED body there."""
+    from agent.collab_writes import broadcast_agent_presence, convert_import_tables
     from agent.doc_state import route_document_content
-    from markdown_normalize import normalize_list_spacing, unwrap_placeholder_brackets
 
     # Unwrap `(<id>)` placeholder-bracket destinations — one of the three agent
     # write sites for the unwrap (append into an EMPTY document, the one append
     # branch that bypasses the edit executor and normalizes on its own).
+    body = unwrap_placeholder_brackets(normalize_list_spacing(append_text))
+    converted, tables_json, tables_out = convert_import_tables(body, check_cell_cap=True)
     await route_document_content(
         doc_id=doc_id,
-        new_content=unwrap_placeholder_brackets(normalize_list_spacing(append_text)),
+        new_content=converted if converted is not None else body,
         project_id=project_id,
+        tables_json=tables_json,
+        # The PRE-conversion body equals expand_tables of the fresh state — the
+        # finalize tail must see a cell's links, never the anchor-form text.
+        finalize_body=body,
     )
     await broadcast_agent_presence(doc_id, user.get("user_id"))
-    return {"status": "applied", "doc_id": doc_id}
+    result = {"status": "applied", "doc_id": doc_id}
+    if tables_out:
+        result["tables"] = tables_out
+    return result
 
 
 @track_agent_tool("append_to_document")

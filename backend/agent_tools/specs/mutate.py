@@ -183,8 +183,9 @@ MUTATE_TOOLS: list[dict] = [
                 "confirmation mode the call is held for the user's approval; it "
                 "applies on approval, or returns `rejected`. Always call "
                 "read_document first so the section name is exact. Reversible via the "
-                "Lore History panel. This is the ONLY way to create a table — a pipe "
-                "table written into a document body stays plain text."
+                "Lore History panel. A pipe table you write into a document body "
+                "becomes a table object on its own lines; use create_table to NAME a "
+                "table (label) or to place it at the end of a specific section."
             ),
             "parameters": {
                 "type": "object",

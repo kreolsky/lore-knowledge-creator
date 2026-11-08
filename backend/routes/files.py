@@ -55,6 +55,8 @@ from event_bus import emit
 from models import is_ref_row
 from routes._guards import guard_row, require_reference
 from routes.files_serve import _serve_reference_file, _serve_thumbnail
+from table_serialize import import_gfm_tables
+from ydoc_store import set_content
 
 router = APIRouter()
 
@@ -198,7 +200,6 @@ async def _transcribe_and_store(ref_id: str, file_path, project_id: str) -> str:
     the function-length gate). Returns the transcript text.
     """
     text = await transcribe_audio(file_path)
-    from ydoc_store import set_content
     await set_content(ref_id, text, persist=True, extra_sets={"processing_status": "ready"})
     from collab.events import apply_external_content_change
     await apply_external_content_change("doc", ref_id, text, already_persisted=True)
@@ -576,7 +577,8 @@ async def upload_markdown_reference(
     # post-marker spacing) only for Markdown files. Why: reflowing arbitrary
     # .txt/code/verse would join meaningful line breaks. Runs BEFORE image extraction so
     # the image regexes see clean content.
-    if filename.endswith(".md") or filename.endswith(".markdown"):
+    is_markdown = filename.endswith(".md") or filename.endswith(".markdown")
+    if is_markdown:
         content = normalize_markdown(content)
 
     try:
@@ -587,6 +589,15 @@ async def upload_markdown_reference(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    # GFM tables → objects LAST (after the image pass — a cell moved into the
+    # model is invisible to every text pass above), under the SAME markdown
+    # predicate as normalize. The row is born with the PRE-conversion body
+    # (documents.content holds the GFM read-model at every instant — the
+    # set_content contract), then set_content replaces it in ONE Y.Doc update.
+    converted, tables_json = (
+        import_gfm_tables(processed_content) if is_markdown
+        else (processed_content, "{}")
+    )
     ref_id = str(uuid4())
     # "project level" markdown upload (no host selected) → host on the project index
     # doc. INVARIANT: paired with the documents_reference_parent_check schema event.  Why: the app-level host write is backed by a schema event so the parent invariant can't be bypassed by a stray write — enforcement sits at the DB layer.
@@ -597,6 +608,8 @@ async def upload_markdown_reference(
         content=processed_content, source_url="",
         created_by=user.get("user_id"), created_by_name=user.get("name"),
     )
+    if tables_json != "{}":
+        await set_content(ref_id, converted, persist=True, tables_json=tables_json)
 
     md_ref = serialize_record(record, "reference_id")
     return {"reference": md_ref, "image_references": ref_records}

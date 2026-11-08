@@ -15,6 +15,7 @@ This module is also the home of the pinned-region containment gate
 (`AppliedUnverifiedError`) lives in `textmatch` beside the primitive that
 raises it.
 """
+import json
 import logging
 
 import settings
@@ -235,13 +236,158 @@ def _reject_overlapping_edits(resolved: list[dict]) -> None:
             )
 
 
+def _splice_edge_state(
+    content: str, mask: list[bool], from_cp: int, to_cp: int,
+) -> tuple[bool, str | None, str | None]:
+    """(edge-clean?, prev-before, after-first) for a splice — the fence gate on
+    from_cp plus the two surviving neighbour lines the post-splice skip rule
+    needs when a converted anchor touches conv_new's first/last line."""
+    if from_cp > 0:
+        if mask[content.count("\n", 0, from_cp)]:
+            return False, None, None  # starts inside a fence of the live content
+    prev_before = content[:from_cp].rsplit("\n", 1)[-1] if from_cp > 0 else None
+    after_first = content[to_cp:].split("\n", 1)[0] if to_cp < len(content) else None
+    return True, prev_before, after_first
+
+
+def _anchors_own_their_lines(
+    conv_new: str, content: str, mask: list[bool], from_cp: int, to_cp: int,
+) -> bool:
+    """The post-splice skip rule for edit-path table conversion: True when every
+    converted anchor in ``conv_new`` (the rewritten new_text) sits on a line of
+    its own in the text AS IT WILL STAND — never judged on new_text alone.
+
+    Per anchor line: the neighbour lines must hold no unescaped ``|`` (a bare
+    pipe there means a legacy pipe block whose edge rows the conversion would
+    orphan), and the splice must not start inside a fenced block of the live
+    content (a table authored inside a fence is code).
+
+    An anchor interior to conv_new is already newline-locked on both sides; a
+    table touching conv_new's FIRST/LAST line can glue to the surviving
+    prefix/suffix — there alone the splice edge must sit at a line boundary:
+    an append (mid-line splice, table behind a blank line inside new_string)
+    converts, a mid-line edit_document replacement never does.
+    """
+    from table_serialize import _TABLE_ANCHOR, _row_has_pipe
+
+    edge_clean, prev_before, after_first = _splice_edge_state(
+        content, mask, from_cp, to_cp,
+    )
+    if not edge_clean:
+        return False
+    from_cp_line_start = from_cp == 0 or content[from_cp - 1] == "\n"
+    to_cp_line_end = to_cp >= len(content) or content[to_cp] == "\n"
+
+    lines = conv_new.split("\n")
+    last = len(lines) - 1
+    for i, line in enumerate(lines):
+        if not _TABLE_ANCHOR.fullmatch(line.strip()):
+            continue
+        if i > 0:
+            prev = lines[i - 1]
+        else:
+            if not from_cp_line_start and prev_before is not None:
+                return False  # the anchor would glue onto the prefix's last line
+            prev = prev_before
+        if i < last:
+            nxt = lines[i + 1]
+        else:
+            if not to_cp_line_end and after_first is not None:
+                return False  # the anchor would glue onto the suffix's first line
+            nxt = after_first
+        if prev is not None and _row_has_pipe(prev):
+            return False
+        if nxt is not None and _row_has_pipe(nxt):
+            return False
+    return True
+
+
+def _convert_resolved_edit_tables(
+    resolved: list[dict], current_content: str,
+) -> tuple[dict[str, list[list[str]]] | None, list[dict]]:
+    """GFM tables → objects for agent-authored EDITS, staged per resolved edit:
+    convert the new_text alone, gate the result on the post-splice skip rule,
+    and only then bound the cells (the authored-cell 400 fires for edits that
+    WOULD convert — a fenced or partial splice of the same body stays text).
+    Accepted edits get their ``new_text`` rewritten to anchor form; the fresh
+    models are returned for ``route_document_edits(new_tables=…)`` (the anchor
+    splices and the model builds land in ONE transaction there) plus the
+    ``tables`` result field. Callers run this BEFORE the checkpoint, so a
+    refusal writes nothing.
+    """
+    from markdown_normalize import fence_mask
+
+    from table_serialize import extract_table_labels, import_gfm_tables
+
+    mask = fence_mask(current_content.split("\n"))
+    new_tables: dict[str, list[list[str]]] = {}
+    tables_out: list[dict] = []
+    for r in resolved:
+        conv_new, tables_json = import_gfm_tables(r["new_text"])
+        if tables_json == "{}":
+            continue  # nothing tabular authored in this splice
+        if not _anchors_own_their_lines(
+            conv_new, current_content, mask, r["from_cp"], r["to_cp"],
+        ):
+            continue
+        from agent.table_writes import reject_table_overflow
+
+        models = json.loads(tables_json)
+        reject_table_overflow([m["rows"] for m in models.values()])
+        r["new_text"] = conv_new
+        for tid, model in models.items():
+            new_tables[tid] = model["rows"]
+        tables_out.extend(
+            {"table_id": tid, "label": label}
+            for tid, label in extract_table_labels(conv_new).items()
+        )
+    return (new_tables or None), tables_out
+
+
+async def _route_descending_batch(
+    doc_id: str, project_id: str, resolved: list[dict], on_commit, new_tables,
+) -> None:
+    """Apply in DESCENDING from_cp order so each surgical splice's earlier
+    offsets stay valid (earlier text unshifted) under the ONE _write_lock →
+    ONE Y.Doc update → ONE publish (route_document_edits, audit F5). A failure
+    AFTER the mark-first seam (on_commit ran) surfaces AppliedUnverifiedError —
+    the row IS applied even though the write failed (reload shows applied);
+    without a mark the original error propagates."""
+    try:
+        await doc_state.route_document_edits(
+            doc_id=doc_id, project_id=project_id,
+            edits=[{"from_cp": r["from_cp"], "to_cp": r["to_cp"],
+                    "new_text": r["new_text"], "original_text": r["original_text"]}
+                   for r in sorted(resolved, key=lambda r: r["from_cp"], reverse=True)],
+            new_tables=new_tables,
+        )
+    except AppliedUnverifiedError:
+        raise
+    except Exception:
+        if on_commit is not None:
+            logger.exception("Content mutation failed after mark-first for %s", doc_id)
+            raise AppliedUnverifiedError()
+        raise
+
+
 async def _apply_resolved_edits(
     doc_id: str, project_id: str, current_content: str, current_tables_json,
     resolved: list[dict], skipped: list[dict], on_commit,
+    convert_tables: bool = False,
 ) -> dict:
     """The apply pass: ONE checkpoint (applied >= 1), the mark-first seam, then
     descending splices. Returns the caller's result dict; maps a post-mark write
     failure to AppliedUnverifiedError (see INVARIANT(data-loss) on the core)."""
+    # GFM tables → objects for each edit's AUTHORED new_text that survives the
+    # post-splice skip rule — BEFORE the checkpoint so the authored-cell cap
+    # (400) leaves nothing written. The converted anchors and models reach
+    # route_document_edits together: ONE transaction, ONE publish.
+    new_tables = None
+    tables_out: list[dict] = []
+    if convert_tables:
+        new_tables, tables_out = _convert_resolved_edit_tables(
+            resolved, current_content,
+        )
     preview = ", ".join(
         r["original_text"][:40] + ("…" if len(r["original_text"]) > 40 else "")
         for r in resolved
@@ -254,31 +400,14 @@ async def _apply_resolved_edits(
     # mid-apply crash leaves the row applied, never a double-apply. Auto path: no-op.
     if on_commit is not None:
         await on_commit()
-    # Apply in DESCENDING from_cp order so each surgical splice's earlier offsets
-    # stay valid (earlier text unshifted) under the ONE _write_lock → ONE Y.Doc
-    # update → ONE publish (route_document_edits, audit F5).
-    ordered = sorted(resolved, key=lambda r: r["from_cp"], reverse=True)
-    try:
-        await doc_state.route_document_edits(
-            doc_id=doc_id, project_id=project_id,
-            edits=[{"from_cp": r["from_cp"], "to_cp": r["to_cp"],
-                    "new_text": r["new_text"], "original_text": r["original_text"]}
-                   for r in ordered],
-        )
-    except AppliedUnverifiedError:
-        raise
-    except Exception:
-        # Only the confirm path (on_commit) marked applied_at before this write; there
-        # the row IS applied even on failure, so surface AppliedUnverifiedError (reload
-        # shows applied). The auto path (no mark) lets the original error propagate.
-        if on_commit is not None:
-            logger.exception("Content mutation failed after mark-first for %s", doc_id)
-            raise AppliedUnverifiedError()
-        raise
-    return {
+    await _route_descending_batch(doc_id, project_id, resolved, on_commit, new_tables)
+    result = {
         "applied": len(resolved), "skipped": skipped, "checkpoint": True,
         "applied_ranges": [r["from_cp"] for r in resolved],
     }
+    if tables_out:
+        result["tables"] = tables_out
+    return result
 
 
 async def _resolve_validate_apply_edits(
@@ -288,6 +417,7 @@ async def _resolve_validate_apply_edits(
     project_id: str,
     on_commit=None,
     region_check=None,
+    convert_tables: bool = False,
 ) -> dict:
     """Lock-free core used by the direct apply path (apply_edits_to_document).
     Callers MUST hold the per-doc edit lock around this call.
@@ -300,9 +430,13 @@ async def _resolve_validate_apply_edits(
 
     `edits` are pre-normalized {old_string, new_string}; `on_commit` /
     `region_check` are the confirm path's seams (see the helper contracts).
-    Returns {applied, skipped, checkpoint, noop?}. Raises HTTPException (stale/
-    miss/overlap/full_rewrite) or RegionContainmentReject; when on_commit ran and
-    the write then fails, re-raises AppliedUnverifiedError (mark-first: applied)."""
+    `convert_tables` enables the edit-path GFM→object conversion (markdown
+    bodies only — the caller computes `not is_artifact`); each edit converts
+    under the post-splice skip rule (see `_convert_resolved_edit_tables`).
+    Returns {applied, skipped, checkpoint, tables?, noop?}. Raises HTTPException
+    (stale/miss/overlap/full_rewrite/cell-too-large) or
+    RegionContainmentReject; when on_commit ran and the write then fails,
+    re-raises AppliedUnverifiedError (mark-first: applied)."""
     # WHY (agent source): resolve current content AND tables from the
     # Y.Doc via the shared helper, NOT merge_live_content. Why: merge_live_content
     # returns the derived GFM read-model, so splicing against it persists a
@@ -324,5 +458,5 @@ async def _resolve_validate_apply_edits(
 
     return await _apply_resolved_edits(
         doc_id, project_id, current_content, current_tables_json,
-        resolved, skipped, on_commit,
+        resolved, skipped, on_commit, convert_tables=convert_tables,
     )

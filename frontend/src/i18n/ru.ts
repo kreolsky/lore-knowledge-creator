@@ -330,7 +330,6 @@ export const ru: Record<TranslationKey, string> = {
   orSelectTextHint: 'Или выделите текст и нажмите {hotkey} чтобы закрепить заметку.',
   thread: 'тред',
   deleteNote: 'Удалить заметку',
-  backlinks: 'Обратные ссылки',
   noteBelongsToDocument: 'Относится к документу',
   noteBelongsToReference: 'Относится к референсу',
   noteUnavailableInPreview: 'Заметки недоступны в быстром просмотре — откройте референс в режиме разделения или по центру, чтобы добавить заметки',
@@ -383,7 +382,15 @@ export const ru: Record<TranslationKey, string> = {
 
   // backlinks panel
   noDocsLinkHere: 'Нет документов, ссылающихся сюда.',
-  failedToLoadBacklinks: 'Не удалось загрузить обратные ссылки.',
+  failedToLoadLinks: 'Не удалось загрузить связи.',
+  edgeKindMention: 'Упоминания',
+  edgeKindTransclusion: 'Встраивания',
+  edgeKindAttachment: 'Материалы',
+  edgeKindNote: 'Заметки',
+  edgeKindChat: 'Мои чаты',
+  brokenLink: 'Удалённый документ',
+  brokenLinkHint: 'Связанный документ удалён',
+  untitledLink: 'Без названия',
 
   // compact layout
   compactToggleTree: 'Документы',
@@ -1062,9 +1069,10 @@ export const ru: Record<TranslationKey, string> = {
   settingsVoiceFixed: 'Указанный документ',
   settingsVoiceFixedDesc: 'Все голосовые сообщения сохраняются в выбранный документ независимо от того, какой документ открыт.',
   settingsVoiceDesc: 'Куда по умолчанию сохраняются новые голосовые записи.',
-  settingsImagePreviewTitle: 'Превью картинок',
-  settingsImagePreviewDesc: 'Как показывать изображения в панели референсов — для всех участников проекта.',
+  settingsDisplayTitle: 'Отображение',
+  settingsDisplayDesc: 'Как выглядят панели проекта — для всех участников проекта.',
   settingsImagePreviewLabel: 'Показывать изображения галереей превью',
+  settingsLinksShowSessionsLabel: 'Показывать заметки и мои чаты в панели ссылок',
   settingsChange: 'Изменить',
   settingsClear: 'Сбросить',
   settingsSelectDocument: 'Выбрать документ',

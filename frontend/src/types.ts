@@ -104,6 +104,8 @@ export interface Project {
   voice_recording_doc_id: string | null;
   /** Project-wide: the references panel shows image refs as a gallery (true) or as cards. */
   ref_image_preview?: boolean;
+  /** Project-wide: the links panel includes notes and the viewer's own chats. */
+  links_show_sessions?: boolean;
   last_accessed_doc_id: string | null;
   owner_id: string | null;
   owner_name?: string | null;

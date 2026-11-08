@@ -329,11 +329,11 @@ async def test_cascade_soft_deletes_chat_sessions_by_id(
 
 # TEST-WHY: cross-process-contract — delete drops inbound and outbound doc_mentions graph edges over the real Surreal; guard named by documents/delete.py.
 @pytest.mark.asyncio
-async def test_cascade_deletes_inbound_and_outbound_mentions(
+async def test_cascade_deletes_outbound_keeps_inbound_mentions(
     client, test_db, admin_user, project_with_doc,
 ):
-    """Deleting a document removes BOTH its inbound and outbound doc_mentions edges
-    and leaves unrelated edges alone."""
+    """Deleting a document removes its outbound doc_mentions edges, keeps its inbound
+    ones (sources render them as broken links) and leaves unrelated edges alone."""
     pid, idx_id, _ = project_with_doc
     _, token = admin_user
     cookies = {"lore_session": token}
@@ -360,7 +360,7 @@ async def test_cascade_deletes_inbound_and_outbound_mentions(
     assert resp.status_code == 200, resp.text
 
     assert await edge_count(a, b) == 0, "outbound mention of the deleted doc must be gone"
-    assert await edge_count(c, a) == 0, "inbound mention of the deleted doc must be gone"
+    assert await edge_count(c, a) == 1, "inbound mention of the deleted doc must stay (broken link)"
     assert await edge_count(b, c) == 1, "unrelated mention edge must survive"
 
 

@@ -150,12 +150,12 @@ class CollabSession:
         self._flush_pipeline._last_flushed_content = value
 
     @property
-    def _last_mention_ids(self) -> set[str]:
-        return self._flush_pipeline._last_mention_ids
+    def _last_edge_pairs(self) -> set[tuple[str, str]]:
+        return self._flush_pipeline._last_edge_pairs
 
-    @_last_mention_ids.setter
-    def _last_mention_ids(self, value: set[str]) -> None:
-        self._flush_pipeline._last_mention_ids = value
+    @_last_edge_pairs.setter
+    def _last_edge_pairs(self, value: set[tuple[str, str]]) -> None:
+        self._flush_pipeline._last_edge_pairs = value
 
     @property
     def _updates_since_compact(self) -> int:

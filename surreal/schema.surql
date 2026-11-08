@@ -201,6 +201,10 @@ DEFINE FIELD IF NOT EXISTS ref_image_preview     ON projects TYPE bool DEFAULT t
 -- UPDATE on it (record_doc_open writing last_accessed_doc_id) fails coercion — the
 -- user sees "Couldn't open this document" (same trap as the `documents` block below).
 UPDATE projects SET ref_image_preview = true WHERE ref_image_preview IS NONE;
+-- Project-wide: links panel lists notes & chats (true) or documents only. Backfilled
+-- under the same INVARIANT(corruption) as ref_image_preview above.
+DEFINE FIELD IF NOT EXISTS links_show_sessions   ON projects TYPE bool DEFAULT false;
+UPDATE projects SET links_show_sessions = false WHERE links_show_sessions IS NONE;
 DEFINE FIELD IF NOT EXISTS deleted_at            ON projects TYPE option<datetime>;
 
 -- ─── Project Members ──────────────────────────────────────────────────────────
@@ -582,6 +586,15 @@ DEFINE FIELD IF NOT EXISTS created_at ON cp_blobs TYPE datetime DEFAULT time::no
 DEFINE TABLE IF NOT EXISTS doc_mentions TYPE RELATION SCHEMAFULL;
 DEFINE FIELD OVERWRITE in  ON doc_mentions TYPE record<documents>;
 DEFINE FIELD IF NOT EXISTS out ON doc_mentions TYPE record<documents>;
+-- Typed edges (plan typed-edges): content-derived kind on the stored edge —
+-- 'mention' ([t](target)) vs 'transclusion' (![t](target), incl. ref: embeds).
+-- DEFAULT 'mention' keeps pre-backfill rows READABLE, not retro-filled (SurrealDB
+-- DEFAULT never touches existing rows) — the /edges read coalesces NONE →
+-- 'mention' and backend/migrations/backfill_edge_kinds.py re-runs the rebuild.
+-- Field-backed kinds (attachment/note/chat-context) are PROJECTED at read time
+-- from their indexed fields, never stored here — see backend/edges.py.
+DEFINE FIELD OVERWRITE kind ON doc_mentions TYPE string DEFAULT 'mention'
+    ASSERT $value IN ['mention', 'transclusion'];
 
 -- ─── API Keys ────────────────────────────────────────────────────────────────
 

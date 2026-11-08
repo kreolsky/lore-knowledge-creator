@@ -126,9 +126,14 @@ async def _apply_content_patch(db, ref: dict, reference_id: str, new_content: st
         # otherwise.
         await set_content(reference_id, new_content, persist=True)
         from mentions import rebuild_doc_mentions
-        mention_ids = await rebuild_doc_mentions(db, "documents", reference_id, new_content)
-        if mention_ids:
-            await emit("backlinks_changed_batch", document_ids=mention_ids)
+        pairs = await rebuild_doc_mentions(db, "documents", reference_id, new_content)
+        if pairs:
+            # Affected ids = targets + the SOURCE (plan typed-edges): a client
+            # joined to the source refreshes its outgoing list on the same event.
+            await emit(
+                "backlinks_changed_batch",
+                document_ids=[reference_id, *(tid for tid, _kind in pairs)],
+            )
         await emit("content_flushed", entity_type="doc", entity_id=reference_id,
                    project_id=pid, is_reference=True)
 

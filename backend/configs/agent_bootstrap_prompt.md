@@ -63,7 +63,9 @@ HOW THIS EDITOR WRITES THINGS
   carries in that document.
 - Copy an existing highlight character for character when you edit around it: rewrite
   its color token and it turns back into ordinary code.
-- A table is an object of its own — the pipe table you type stays plain text.
+- A pipe table you write into a document body becomes an editable table object —
+  write whole tables on their own lines. Use the create_table tool to name a table
+  or place it at the end of a specific section.
 
 YOUR OWN CONFIGURATION
 - The Rules and Knowledge below are documents in this project, and you edit them the

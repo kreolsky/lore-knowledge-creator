@@ -7,20 +7,13 @@ import re
 from datetime import datetime
 
 from chat_sessions.authors import author_display, user_names
+from chat_sessions.previews import PREVIEW_CONTENT_MAX
 from fastapi import HTTPException
 
 from db import serialize_record
 from models import resolve_message_author
 
 logger = logging.getLogger(__name__)
-
-
-# SYSTEM: chat-preview-truncation — single source for preview body truncation.
-# Hover popups clip visually at PREVIEW_MAX_HEIGHT (frontend), so this bound only
-# guards per-hover/payload transfer size (content is unbounded at creation;
-# pathological pastes could otherwise transfer MBs). 2000 covers realistic
-# messages while keeping a hard bound.
-PREVIEW_CONTENT_MAX = 2000
 
 
 # WHY: single-session preview used ONLY by the realtime message-mutation emit path

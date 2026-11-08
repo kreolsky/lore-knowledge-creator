@@ -8,6 +8,7 @@ from agent.context import get_agent_context
 from fastapi import Body, Depends, HTTPException
 
 from models import (
+    ToolGetLinks,
     ToolGetProjectStructure,
     ToolReadDocument,
     ToolSearch,
@@ -63,6 +64,31 @@ async def tool_search_materials(
         mode=body.mode, under_document_id=body.under_document_id,
         scope_root=ctx.get("scope_root"),
     )
+
+
+@track_agent_tool("get_links")
+async def tool_get_links(
+    body: ToolGetLinks, ctx: dict = Depends(get_agent_context),
+):
+    """Typed links of a document — both directions, every kind (plan typed-edges).
+
+    Delegates to the SAME service the /edges route reads (one function, one
+    default kind set); the executor applies the read gates (same-project, RBAC,
+    scope ceiling, page lock) and the service walls the peers.
+    """
+    from agent.readonly_executors import get_links_tool
+    result = await get_links_tool(
+        doc_id=body.document_id, project_id=ctx["project_id"], user=ctx["user"],
+        direction=body.direction, kinds=body.kinds,
+        scope_root=ctx.get("scope_root"),
+    )
+    if "error" in result:
+        # Map the executor's soft errors to HTTP codes (no silent degradation).
+        err = result["error"]
+        if "not found" in err or "not in this project" in err:
+            raise HTTPException(status_code=404, detail=err)
+        raise HTTPException(status_code=403, detail=err)
+    return result
 
 
 @track_agent_tool("read_document")

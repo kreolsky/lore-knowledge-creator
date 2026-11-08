@@ -15,6 +15,8 @@
  */
 
 import { EditorView } from '@codemirror/view';
+import { syntaxTree } from '@codemirror/language';
+import type { SyntaxNode } from '@lezer/common';
 import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
 import { entityYdoc } from './active-editor';
@@ -56,6 +58,13 @@ const BRACKET_CLOSE_PLACEHOLDER = '\uE002';
 // does not match and is preserved).
 const LEADING_ORDERED_LIST = /^(\d+)\\\./;
 
+// Reverse Turndown's leading `-` / `=` escapes where no block construct can follow: a list item
+// or thematic break needs `-` + space/dash, a setext underline is a line of `=` only. "-160000"
+// or "=SUM(A1)" from a spreadsheet are values, and the backslash landed in the cell verbatim.
+// Post-strip is unambiguous for the same reason as above: a user's own "\-5" is doubled first.
+const LEADING_SAFE_DASH = /^\\-(?=[^\s-])/;
+const LEADING_SAFE_EQUALS = /^\\(=+)(?=[^=\s])/;
+
 turndown.escape = (string: string): string => {
   const shielded = string
     .replace(INTRAWORD_UNDERSCORE, UNDERSCORE_PLACEHOLDER)
@@ -69,7 +78,9 @@ turndown.escape = (string: string): string => {
     .join('[')
     .split(BRACKET_CLOSE_PLACEHOLDER)
     .join(']')
-    .replace(LEADING_ORDERED_LIST, '$1.');
+    .replace(LEADING_ORDERED_LIST, '$1.')
+    .replace(LEADING_SAFE_DASH, '-')
+    .replace(LEADING_SAFE_EQUALS, '$1');
 };
 
 // Tags whose presence means the clipboard HTML carries real semantic formatting → Turndown.
@@ -103,18 +114,75 @@ turndown.addRule('tableCellFlatten', {
   },
 });
 
+/**
+ * Normalize clipboard tables before Turndown: unfold merged cells, flatten each cell to one line (`<br>`/`<p>` →
+ * space, attributes dropped) and promote the first row of a header-less table to `<th>`.
+ * WHY the promotion: turndown-plugin-gfm converts only a table whose first row is a heading
+ * row and `keep`s every other one as raw HTML; Google Docs/Sheets and spreadsheets copy
+ * all-`<td>` tables, which landed in the document as inert HTML. GFM requires a header, so
+ * the first row becomes it, moved into a `<thead>`.
+ */
+/**
+ * Unfold colspan/rowspan into a plain grid: the text stays in the top-left cell of the merged
+ * area, every other slot gets an empty cell of the same tag.
+ * WHY: the table model is a rectangular grid with no spans; a dropped `rowspan` shifted every
+ * later cell of the rows below it under the wrong column — silent data corruption on paste.
+ */
+function unfoldSpans(doc: Document, table: HTMLTableElement): void {
+  const pending: number[] = []; // per column: rows still covered by a rowspan from above
+  for (const row of [...table.rows]) {
+    const cells = [...row.cells];
+    const out: HTMLTableCellElement[] = [];
+    const filler = (tag: string) => doc.createElement(tag) as HTMLTableCellElement;
+    let col = 0;
+    const fillCovered = (tag: string) => {
+      while ((pending[col] ?? 0) > 0) { pending[col] -= 1; out.push(filler(tag)); col += 1; }
+    };
+    for (const cell of cells) {
+      const tag = cell.tagName.toLowerCase();
+      fillCovered(tag);
+      const colspan = Math.max(cell.colSpan || 1, 1);
+      const rowspan = Math.max(cell.rowSpan || 1, 1);
+      cell.removeAttribute('colspan');
+      cell.removeAttribute('rowspan');
+      for (let k = 0; k < colspan; k += 1) {
+        out.push(k === 0 ? cell : filler(tag));
+        pending[col] = rowspan - 1;
+        col += 1;
+      }
+    }
+    fillCovered(cells[cells.length - 1]?.tagName.toLowerCase() ?? 'td');
+    row.replaceChildren(...out);
+  }
+}
+
 function preprocessTableHtml(html: string): string {
-  return html.replace(
-    /<(td|th)(?![a-zA-Z])[^>]*>([\s\S]*?)<\/\1>/gi,
-    (_match, tag: string, inner: string) => {
-      const flat = inner
-        .replace(/<br\s*\/?>/gi, ' ')
-        .replace(/<\/?p>/gi, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-      return `<${tag}>${flat}</${tag}>`;
-    },
-  );
+  if (!/<t[dh][\s>]/i.test(html)) return html;
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('table').forEach((t) => unfoldSpans(doc, t as HTMLTableElement));
+  for (const cell of doc.querySelectorAll('td, th')) {
+    cell.querySelectorAll('br').forEach((br) => br.replaceWith(' '));
+    cell.querySelectorAll('p').forEach((p) => p.replaceWith(' ', ...p.childNodes, ' '));
+    const flat = cell.innerHTML.replace(/\s+/g, ' ').trim();
+    const clean = doc.createElement(cell.tagName.toLowerCase());
+    clean.innerHTML = flat;
+    cell.replaceWith(clean);
+  }
+  for (const table of doc.querySelectorAll('table')) {
+    const first = (table as HTMLTableElement).rows[0];
+    if (!first || first.querySelector('th')) continue;
+    for (const td of [...first.cells]) {
+      const th = doc.createElement('th');
+      th.append(...td.childNodes);
+      td.replaceWith(th);
+    }
+    // WHY a <thead>, not just <th>: the plugin accepts an all-<th> row only as the first child
+    // of the FIRST tbody, and a `<colgroup>` (Sheets/Docs always emit one) disqualifies it.
+    const thead = doc.createElement('thead');
+    thead.append(first);
+    table.prepend(thead);
+  }
+  return doc.body.innerHTML;
 }
 
 /**
@@ -213,6 +281,14 @@ function resolvePasteSource(html: string, plain: string): string | null {
   return null;
 }
 
+/** True when `pos` sits inside a `FencedCode` node of the markdown syntax tree. */
+function inFencedCode(view: EditorView, pos: number): boolean {
+  for (let node: SyntaxNode | null = syntaxTree(view.state).resolveInner(pos, -1); node; node = node.parent) {
+    if (node.name === 'FencedCode') return true;
+  }
+  return false;
+}
+
 /**
  * Insert `source` at the selection, first upgrading any GFM table to a live table object when
  * a collab handle is active. Shared by the Lore-origin and unformatted-external paths so a
@@ -230,7 +306,9 @@ function insertVerbatim(view: EditorView, source: string): void {
   // anchor lands here, splitting model and anchor across ydocs (the exact bug class
   // this targeting exists to prevent).
   const ydoc = entityYdoc(view);
-  if (ydoc) {
+  // WHY: a paste into a fenced code block is code — its pipe table stays text (the same
+  // fence skip the scanner applies to fences inside the pasted source).
+  if (ydoc && !inFencedCode(view, view.state.selection.main.from)) {
     insert = importGfmTables(ydoc, insert, t('tableBlockUntitled')).text;
   }
   const main = view.state.selection.main;

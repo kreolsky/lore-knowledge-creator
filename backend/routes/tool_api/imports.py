@@ -486,6 +486,11 @@ async def _import_document(
     resolved_title = (title or "").strip() or _default_title(filename)
 
     text: str | None = None
+    # The markdown predicate — the SAME one that gates normalize_markdown: the
+    # body is markdown when it came out of the docx converter, or when the text
+    # file is .md/.markdown. It also gates the GFM-table → object conversion at
+    # the record factories below; `.txt` and other text never convert.
+    markdown_body = False
     if content_base64 is not None:
         raw = await _decode_base64(content_base64)
         # INVARIANT (zip/docx collision): archive dispatch runs on the EXTENSION
@@ -508,6 +513,7 @@ async def _import_document(
             if len(raw) > max_docx_mb * 1024 * 1024:
                 raise HTTPException(status_code=413, detail=f"File too large (max {max_docx_mb}MB)")
             text = normalize_markdown(await _convert_docx_sync(raw, filename))
+            markdown_body = True
         else:
             # binary image/audio — reference-only path (part1 Commit B fold-in).
             if not binary_allowed:
@@ -529,7 +535,8 @@ async def _import_document(
         text = is_text_bytes(raw_bytes)
         if text is None:
             raise HTTPException(status_code=400, detail="content is not valid UTF-8 text")
-        if filename.endswith(".md") or filename.endswith(".markdown"):
+        markdown_body = filename.endswith(".md") or filename.endswith(".markdown")
+        if markdown_body:
             text = normalize_markdown(text)
 
     # Cleaning choke point shared by every import entry point: extract base64
@@ -550,6 +557,9 @@ async def _import_document(
             document_id=document_id, title=resolved_title, content=processed,
             media_type="markdown", source_url=None, project_id=project_id,
             user=user, scope_root=scope_root, author_name=author_name,
+            # GFM tables → objects under the markdown predicate ONLY (docx
+            # converter output / .md/.markdown text); .txt stays pipe text.
+            import_tables=markdown_body,
         )
         rid = created["doc_id"]
         return {
@@ -559,6 +569,7 @@ async def _import_document(
     created = await create_document_via_collab(
         title=resolved_title, content=processed, parent_id=parent_id,
         project_id=project_id, user=user, scope_root=scope_root,
+        import_tables=markdown_body,
     )
     return {
         "status": "applied", "doc_id": created["doc_id"],

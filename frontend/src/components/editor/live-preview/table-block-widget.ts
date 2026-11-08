@@ -651,13 +651,13 @@ export class TableBlockWidget extends WidgetType {
   }
 
   /**
-   * Tab/Shift-Tab navigate between cells (NEVER create rows/columns — structure is
-   * only ever changed via the toolbar). Enter/Shift-Enter insert an intra-cell line.
-   * INVARIANT: Enter does not create a table row and Tab does not create a cell.
-   * Why: rows/columns are added exclusively through the bottom-right toolbar buttons;
-   * keystrokes stay inside the focused cell.
+   * Tab/Shift-Tab navigate between cells; Tab on the bottom-right cell appends a row.
+   * Enter/Shift-Enter insert an intra-cell line.
+   * INVARIANT: Enter does not create a table row; Tab creates one only from the bottom-right cell.
+   * Why: Tab past the end is the universal "next row" gesture; elsewhere keystrokes stay
+   * inside the cell.
    * WHY no arrow into a cell from the document and no Esc out of one: operator ruling, a
-   * cell is entered by click and left by Tab or click.
+   * cell is entered by click and left by click.
    */
   private cellNavKeymap(row: number, col: number) {
     return Prec.highest(keymap.of([
@@ -667,7 +667,7 @@ export class TableBlockWidget extends WidgetType {
     ]));
   }
 
-  /** Tab: next cell (wrapping row→row). Tab on the last (bottom-right) cell exits the table. */
+  /** Tab: next cell (wrapping row→row). Tab on the bottom-right cell appends a row (editors only). */
   private tabNext(row: number, col: number): boolean {
     if (!this.doc) return true;
     const shape = readTableShape(this.doc, this.tableId);
@@ -675,7 +675,10 @@ export class TableBlockWidget extends WidgetType {
     let c = col + 1;
     let r = row;
     if (c >= shape.cols) { c = 0; r += 1; }
-    if (r >= shape.rows) { this.exitAfterTable(); return true; }
+    if (r >= shape.rows) {
+      if (!this.canEdit()) return true;
+      addRow(this.doc, this.tableId, shape.rows);
+    }
     this.focusCell(r, c);
     return true;
   }
@@ -691,27 +694,6 @@ export class TableBlockWidget extends WidgetType {
     if (r < 0) return true;
     this.focusCell(r, c);
     return true;
-  }
-
-  /**
-   * Blur the table and drop the host-doc caret just after the table anchor, past a
-   * whitespace char (inserting a space if none follows the anchor). Mirrors the anchor
-   * lookup in `removeAnchor`.
-   */
-  private exitAfterTable(): void {
-    if (!this.view) return;
-    const needle = tableAnchor(this.label, this.tableId);
-    const text = this.view.state.doc.toString();
-    const at = text.indexOf(needle);
-    if (at < 0) return;
-    let pos = at + needle.length;
-    const next = text[pos];
-    if (next === undefined || !/\s/.test(next)) {
-      this.view.dispatch({ changes: { from: pos, insert: ' ' } });
-    }
-    pos += 1; // land past the whitespace char that follows the table
-    this.view.focus();
-    this.view.dispatch({ selection: { anchor: pos } });
   }
 
   private focusCell(row: number, col: number): void {

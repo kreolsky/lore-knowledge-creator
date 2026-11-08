@@ -59,9 +59,14 @@ async def _live_baseline(document_id: str, existing: dict | None) -> tuple[str, 
 async def _rebuild_mentions(db, document_id: str, project_id: str, content: str) -> None:
     """Rebuild mention edges for new content, then signal the flush."""
     from mentions import rebuild_doc_mentions
-    mention_ids = await rebuild_doc_mentions(db, "documents", document_id, content)
-    if mention_ids:
-        await event_bus.emit("backlinks_changed_batch", document_ids=mention_ids)
+    pairs = await rebuild_doc_mentions(db, "documents", document_id, content)
+    if pairs:
+        # Affected ids = targets + the SOURCE (plan typed-edges): a client
+        # joined to the source refreshes its outgoing list on the same event.
+        await event_bus.emit(
+            "backlinks_changed_batch",
+            document_ids=[document_id, *(tid for tid, _kind in pairs)],
+        )
 
     await event_bus.emit("content_flushed", entity_type="doc", entity_id=document_id, project_id=project_id)
 

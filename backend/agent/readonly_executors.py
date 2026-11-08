@@ -18,6 +18,7 @@ import logging
 from dataclasses import dataclass
 
 import settings
+from edges import collect_edges
 from fastapi import HTTPException
 
 # Boundary-stability re-exports: external importers (Tool-API, MCP gateway) reach the
@@ -477,4 +478,38 @@ async def read_document_tool(
         table_id=table_id,
         offset=offset,
         limit=limit,
+    )
+
+
+async def get_links_tool(
+    *,
+    doc_id: str,
+    project_id: str,
+    user: dict,
+    direction: str = "both",
+    kinds: list[str] | None = None,
+    scope_root: str | None = None,
+) -> dict:
+    """Public get_links: the typed-edges read, served by the SAME service as the
+    /edges route (one function, one default kinds set — plan typed-edges).
+
+    Anchor gates mirror read_document (same-project + per-doc RBAC + scope
+    ceiling + page lock); the PEER walls (project equality, own-chats for
+    chat-context, scope ceiling on document peers) live in edges.collect_edges.
+    """
+    target = await _resolve_read_document_target(doc_id=doc_id)
+    if isinstance(target, dict):
+        return target
+    err = await _read_gate_error(
+        resolved=target.resolved, doc=target.doc,
+        project_id=project_id, user=user, scope_root=scope_root,
+    )
+    if err:
+        return {"error": err}
+    return await collect_edges(
+        target.resolved,
+        viewer_user_id=user["user_id"],
+        direction=direction,
+        kinds=kinds,
+        scope_root=scope_root,
     )

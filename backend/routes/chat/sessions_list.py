@@ -9,6 +9,7 @@ in sessions.py).
 """
 import logging
 
+from chat_sessions.previews import note_previews as _note_previews
 from chat_sessions.serialize import build_ref_map, serialize_session
 from fastapi import Depends, HTTPException, Query
 from surrealdb import AsyncSurreal
@@ -19,7 +20,6 @@ from db import extract_id, fetch_one, get_ancestor_ids, get_db
 from models import is_ref_row
 from routes.chat._router import router
 from routes.chat.messages import load_session_messages
-from routes.chat.serializers import PREVIEW_CONTENT_MAX
 from routes.chat.timeline_attach import _attach_timeline
 
 logger = logging.getLogger(__name__)
@@ -158,51 +158,6 @@ async def _document_titles(db, rows: list, ref_map: dict) -> dict[str, str]:
             if tid:
                 document_titles[tid] = rr.get("title")
     return document_titles
-
-
-async def _note_previews(db, note_ids: list[str]) -> dict[str, dict]:
-    """Derive note pill display from messages, not from the stale
-    `title` snapshot. Only note sessions need previews; AI chats read `title`. The
-    serializer stays sync and pure — it consumes this map without any DB call.
-
-    # INVARIANT(persisted): messages.chat_id stores the BARE session UUID (schema string),
-    # Why: `chat_id IN $ids` matches bare strings, so RecordID-form keys would miss every row.
-    # NOT the full RecordID form, so note_ids MUST be extracted to bare ids via
-    # extract_id() — str(RecordID) ("chat_sessions:<uuid>") would never match
-    # `chat_id IN $ids` and silently empty every preview. The map is keyed by the
-    # same bare id; the serializer looks it up by out["session_id"] (also bare).
-    #
-    # One ordered query, content truncated in SQL (string::slice) so full message
-    # bodies — incl. large image data URLs — are never transferred. The scan is
-    # bounded to the listed notes' messages (idx_messages_chat_deleted-served).
-    # math::min/max is NOT used: it coerces datetimes to floats and returns -inf;
-    # ascending ordering + Python first/last-per-chat gives the same result.
-    """
-    previews_by_session_id: dict[str, dict] = {}
-    if not note_ids:
-        return previews_by_session_id
-    agg = await db.query(
-        f"SELECT chat_id, string::slice(content, 0, {PREVIEW_CONTENT_MAX}) AS content, created_at "
-        "FROM messages WHERE chat_id IN $ids AND deleted_at IS NONE "
-        "ORDER BY created_at ASC",
-        {"ids": note_ids},
-    )
-    by_chat: dict[str, list[dict]] = {}
-    for m in (agg or []):
-        cid = str(m.get("chat_id", ""))
-        if not cid:
-            continue
-        by_chat.setdefault(cid, []).append(m)
-    for cid, msgs in by_chat.items():
-        first = msgs[0]
-        last = msgs[-1]
-        previews_by_session_id[cid] = {
-            "first": (first.get("content") or "").strip()[:PREVIEW_CONTENT_MAX] or None,
-            "last": (last.get("content") or "").strip()[:PREVIEW_CONTENT_MAX] or None,
-            "count": len(msgs),
-            "last_at": last.get("created_at"),
-        }
-    return previews_by_session_id
 
 
 async def _last_activity_map(db, ai_ids: list[str], previews: dict) -> dict:

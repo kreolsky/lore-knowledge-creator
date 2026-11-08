@@ -1,32 +1,24 @@
-/** Parse outgoing links from markdown content. Extracted from OutgoingLinksPanel. */
-// SYSTEM: outgoing-links — shared link parser (used by LinksPanel)
-// ARCH: Pure function extracted from deleted OutgoingLinksPanel. Shared by LinksPanel for combined
-// incoming+outgoing view. No React dependencies — testable in isolation.
+/** Parse EXTERNAL (http/https) links from markdown content — the one relation the graph does not hold. */
+// SYSTEM: outgoing-links — client parser for external links (used by LinksPanel)
+// ARCH: document/reference relations come from GET /documents/{id}/edges (see SYSTEM: edges);
+// external URLs are not graph nodes, so they stay a client parse of live content.
 
-import { docLink, refLink, extLink } from '../components/editor/link-patterns';
+import { extLink } from '../components/editor/link-patterns';
 
-export interface OutgoingLink {
+export interface ExternalLink {
   label: string;
   target: string;
-  type: 'doc' | 'ref' | 'ext';
 }
 
-export function parseOutgoingLinks(content: string): OutgoingLink[] {
-  const links: OutgoingLink[] = [];
+export function parseExternalLinks(content: string): ExternalLink[] {
+  const links: ExternalLink[] = [];
   const seen = new Set<string>();
-
-  for (const [regex, type] of [
-    [docLink(), 'doc'],
-    [refLink(), 'ref'],
-    [extLink(), 'ext'],
-  ] as const) {
-    let m: RegExpExecArray | null;
-    while ((m = regex.exec(content))) {
-      const key = `${type}:${m[2]}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        links.push({ label: m[1], target: m[2], type });
-      }
+  const regex = extLink();
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(content))) {
+    if (!seen.has(m[2])) {
+      seen.add(m[2]);
+      links.push({ label: m[1], target: m[2] });
     }
   }
   return links;

@@ -5,9 +5,15 @@ Unit-level, mirrors `test_chat_agent_multitool.py`: pure primitives + monkeypatc
 DB/collab seams over a real pycrdt Doc fixture (no live DB/Redis).
 """
 
+import asyncio
+import json
+
 import pycrdt as Y
 import pytest
 from fastapi import HTTPException
+from helpers import join_collab_ws, project_collab_url
+
+from db import get_db
 
 
 def _make_table(doc: Y.Doc, tid: str, matrix: list[list[str]], widths: list[int] | None = None) -> None:
@@ -307,7 +313,7 @@ def test_create_table_entry_builds_model_and_returns_width():
     matrix = [["Name", "Role"], ["Aragorn", "Ranger"], ["Legolas", "Elf"]]
     create_table_entry(doc, "newid", matrix)
     grid = read_table_grid(doc, "newid")
-    assert grid["columns"] == [0, 0]
+    assert grid["columns"] == [454, 390]
     assert grid["rows"] == matrix
 
 
@@ -380,3 +386,252 @@ async def test_apply_create_table_unknown_section_404(monkeypatch):
             project_id="p-1", user={"user_id": "u-1"},
         )
     assert exc.value.status_code == 404
+
+
+# ─── import_file: a pipe table lands as an object (plan gfm-table-ingress) ────
+
+
+# Before the conversion, a pipe table imported as an object hid its cell text
+# from documents.content and from the mention rebuild (a `[t](<id>)` cell link
+# silently lost its edge); the .txt twin pins the predicate.
+# TEST-WHY: data-loss — an imported table's cell link must keep its mention edge; .txt stays text.
+async def test_import_file_md_table_becomes_object_with_mention_edge(
+    client, test_db, project_with_doc,
+):
+    from routes.tool_api.imports import _import_document
+
+    from table_serialize import capture_tables_json
+    from ydoc_store import load as load_ydoc
+
+    pid, host_id, uid = project_with_doc
+    user = {"user_id": uid, "name": "Table Test"}
+    body = (
+        "# Notes\n\n"
+        "| what | link |\n"
+        "| --- | --- |\n"
+        f"| row | [t]({host_id}) |\n"
+    )
+
+    async def _import(filename: str) -> str:
+        result = await _import_document(
+            is_reference=False, binary_allowed=False, filename=filename,
+            content=body, content_base64=None, title="Imported",
+            parent_id=None, document_id=None, project_id=pid, user=user,
+            scope_root=None,
+        )
+        assert result["status"] == "applied"
+        return result["doc_id"]
+
+    doc_id = await _import("notes.md")
+    db = await get_db()
+    row = (await db.query(
+        "SELECT content FROM type::record('documents', $id)", {"id": doc_id},
+    ))[0]
+    # The persisted row is the GFM read-model: table text, never a `table:`
+    # anchor — embeddings/search read this column.
+    assert "table:" not in row["content"]
+    assert "| row |" in row["content"]
+
+    # The tables map holds the matrix — the cell link lives in the MODEL.
+    tables = json.loads(capture_tables_json(await load_ydoc(doc_id)))
+    (model,) = tables.values()
+    assert model["rows"] == [["what", "link"], ["row", f"[t]({host_id})"]]
+
+    # The finalize tail ran on the EXPANDED body, so the cell link has its
+    # mention edge (anchor-form text would have hidden it).
+    edges = await db.query(
+        "SELECT VALUE meta::id(out) FROM doc_mentions "
+        "WHERE in = type::record('documents', $id)",
+        {"id": doc_id},
+    )
+    assert host_id in list(edges or [])
+
+    # The .txt twin: same body, non-markdown predicate — stays pipe text.
+    txt_id = await _import("notes.txt")
+    txt_tables = capture_tables_json(await load_ydoc(txt_id))
+    assert txt_tables == "{}"
+    txt_row = (await db.query(
+        "SELECT content FROM type::record('documents', $id)", {"id": txt_id},
+    ))[0]
+    assert "| row | [t](" + host_id + ") |" in txt_row["content"]
+
+
+# ─── agent-authored writes: pipe tables become objects (plan gfm-table-ingress) ──
+
+
+@pytest.fixture
+def _clear_sessions():
+    """Own no live CollabSession across the test, and drop the ones it made —
+    mirror of test_agent_batch_edit's fixture (a leaked periodic-flush task
+    wedges the worker)."""
+    from collab.registry import _sessions
+
+    _sessions.clear()
+    yield
+    for session in _sessions.values():
+        session.stop_periodic_flush()
+        if session._batch_task and not session._batch_task.done():
+            session._batch_task.cancel()
+    _sessions.clear()
+
+
+def _set_session_text(session, text: str) -> None:
+    """Replace the live session's buffer (mirror of test_agent_batch_edit)."""
+    t = session._get_text()
+    old_len = len(t)
+    if old_len > 0:
+        del t[0:old_len]
+    if text:
+        t += text
+
+
+_SEED_TEXT = "Intro paragraph.\n\n![Existing](table:t0)\n\nTail line."
+_SEED_TABLES = {"t0": {"columns": [0, 0], "rows": [["h1", "h2"], ["v1", "v2"]]}}
+_TABLE_EDIT = {
+    "old_string": "Tail line.",
+    "new_string": "Tail line.\n\n| a | b |\n| --- | --- |\n| 1 | 2 |",
+}
+
+
+def _assert_table_object_landed(result, live: str, tables: dict) -> None:
+    """The inserted pipe table left an anchor + a model (and the doc's own
+    table survived the same update); the pipe rows are gone from the text."""
+    (table_id,) = [t["table_id"] for t in result["tables"]]
+    assert result["tables"] == [{"table_id": table_id, "label": "Table"}]
+    assert f"![Table](table:{table_id})" in live
+    assert "| 1 | 2 |" not in live
+    assert tables[table_id]["rows"] == [["a", "b"], ["1", "2"]]
+    assert tables["t0"]["rows"] == [["h1", "h2"], ["v1", "v2"]]
+
+
+# TEST-WHY: cross-process-contract — a whole-table edit lands anchor+model in one update over the real store, live session and none.
+@pytest.mark.parametrize("live_session", [True, False], ids=["live", "no-session"])
+def test_edit_document_inserted_table_becomes_object(
+    sync_app, collab_project, _clear_sessions, live_session,
+):
+    """edit_document splicing a whole pipe table on its own lines: the anchor
+    and the model land in ONE update — through the live collab session and on
+    the no-session persistence path alike; a table already in the doc rides the
+    same update untouched."""
+    from agent.tool_api_surface import apply_edits_to_document
+
+    from table_serialize import capture_tables_json, create_table_entry
+    from ydoc_store import load as load_ydoc
+    from ydoc_store import set_content
+
+    pid, doc_id, admin_token, _ut, admin_uid, _uu = collab_project
+    loop = asyncio.get_event_loop()
+
+    async def _apply():
+        return await apply_edits_to_document(
+            doc_id=doc_id, project_id=pid, user={"user_id": admin_uid},
+            edits=[dict(_TABLE_EDIT)],
+        )
+
+    if not live_session:
+        loop.run_until_complete(set_content(
+            doc_id, _SEED_TEXT, persist=True,
+            tables_json=json.dumps(_SEED_TABLES),
+        ))
+        result = loop.run_until_complete(_apply())
+        doc = loop.run_until_complete(load_ydoc(doc_id))
+        _assert_table_object_landed(
+            result, str(doc.get("content", type=Y.Text)),
+            json.loads(capture_tables_json(doc)),
+        )
+        # The persisted row is the GFM read-model: table text, never a
+        # `table:` anchor — embeddings/search read this column.
+        db = loop.run_until_complete(get_db())
+        rows = loop.run_until_complete(db.query(
+            "SELECT content FROM type::record('documents', $id)", {"id": doc_id},
+        ))
+        assert "table:" not in rows[0]["content"]
+        assert "| 1 | 2 |" in rows[0]["content"]
+        return
+
+    with sync_app.websocket_connect(
+        project_collab_url(pid), cookies={"lore_session": admin_token},
+    ) as ws:
+        join_collab_ws(ws, doc_id)
+        ws.receive_text()
+        from collab.registry import _session_key, _sessions
+
+        session = _sessions[_session_key("doc", doc_id)]
+        _set_session_text(session, _SEED_TEXT)
+        create_table_entry(session.ydoc, "t0", _SEED_TABLES["t0"]["rows"])
+        result = loop.run_until_complete(_apply())
+        _assert_table_object_landed(
+            result, str(session._get_text()),
+            json.loads(capture_tables_json(session.ydoc)),
+        )
+
+
+# TEST-WHY: cross-process-contract — partial, fenced and mid-line splices stay pipe text over the real store, tables map untouched.
+@pytest.mark.parametrize(
+    "content,old_string,new_string",
+    [
+        ("| a | b |\n| --- | --- |\n| 1 | 2 |", "| a | b |", "| x | y |"),
+        ("Before.\n\n```lang\n| a | b |\n| --- | --- |\n```\n\nAfter.",
+         "| a | b |", "| x | y |"),
+        ("Some text here.", "text", "text | a |\n| --- |"),
+    ],
+    ids=["legacy-header", "inside-fence", "mid-line"],
+)
+async def test_edit_document_partial_splices_stay_pipe_text(
+    collab_project, _clear_sessions, content, old_string, new_string,
+):
+    """The skip rule: a splice that is a legacy table's fragment, sits inside a
+    fence, or starts mid-line never converts — the authored text lands verbatim
+    and the tables map is untouched."""
+    from agent.tool_api_surface import apply_edits_to_document
+    from collab.registry import _session_key, _sessions
+
+    from table_serialize import capture_tables_json
+    from ydoc_store import load as load_ydoc
+    from ydoc_store import set_content
+
+    pid, doc_id, _at, _ut, admin_uid, _uu = collab_project
+    await set_content(doc_id, content, persist=True)
+    _sessions.pop(_session_key("doc", doc_id), None)
+
+    result = await apply_edits_to_document(
+        doc_id=doc_id, project_id=pid, user={"user_id": admin_uid},
+        edits=[{"old_string": old_string, "new_string": new_string}],
+    )
+
+    assert result["status"] == "applied"
+    assert "tables" not in result
+    doc = await load_ydoc(doc_id)
+    live = str(doc.get("content", type=Y.Text))
+    # the authored pipe text landed verbatim (block-boundary aligned), nothing
+    # converted: no anchor, the tables map untouched
+    assert new_string in live
+    assert "](table:" not in live
+    assert capture_tables_json(doc) == "{}"
+
+
+# TEST-WHY: cross-process-contract — an authored cell over the cap answers 400 and no row exists in the real store.
+async def test_agent_create_oversize_table_cell_400_writes_nothing(
+    test_db, project_with_doc,
+):
+    """create_document with a cell over AGENT_TABLE_MAX_CELL_CHARS: the refusal
+    fires BEFORE the row birth — 400, nothing written (never silent
+    truncation)."""
+    from routes.tool_api._common import _apply_create_document_direct
+
+    from config import AGENT_TABLE_MAX_CELL_CHARS
+
+    pid, _idx, uid = project_with_doc
+    oversize = "x" * (AGENT_TABLE_MAX_CELL_CHARS + 1)
+    with pytest.raises(HTTPException) as exc:
+        await _apply_create_document_direct(
+            title="Never born",
+            content=f"| a | b |\n| --- | --- |\n| 1 | {oversize} |",
+            parent_id=None, project_id=pid,
+            user={"user_id": uid, "name": "t"}, media_type="markdown",
+        )
+    assert exc.value.status_code == 400
+    db = await get_db()
+    rows = await db.query(
+        "SELECT id FROM documents WHERE title = 'Never born'")
+    assert not rows

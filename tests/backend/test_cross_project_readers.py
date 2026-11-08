@@ -1,6 +1,6 @@
-"""Project wall on by-id readers — backlinks + export inlining.
+"""Project wall on by-id readers — export inlining.
 
-A by-id reader (GET /documents/{id}/backlinks, export transclusion inlining)
+A by-id reader (export transclusion inlining; /edges walls live in test_edges.py)
 stops at the READ document's project: doc_mentions edges and doc:/ref: embeds
 survive cross-project subtree moves (documents/move.py never rewrites them),
 so without a wall a member of the target project would learn titles,
@@ -51,54 +51,6 @@ async def _export_md(client, token, doc_id):
     )
     assert r.status_code == 200, r.text
     return r.text
-
-
-# ─── (a) backlinks: foreign sources hidden, same-project sources kept ─────────
-
-
-@pytest.mark.asyncio
-async def test_backlinks_of_moved_doc_hide_foreign_sources(
-    client, admin_user, regular_user,
-):
-    """A-doc links to D; D's subtree moves to B. A B-only member's backlinks
-    of D must exclude the A-doc (the doc_mentions edge survived the move);
-    the A-owner's backlinks of an A-doc still include same-project sources."""
-    admin_uid, admin_token = admin_user
-    user_uid, user_token = regular_user
-
-    pid_a, idx_a = await _mk_project(client, admin_token, "Wall Backlinks A")
-    pid_b, _ = await _mk_project(client, admin_token, "Wall Backlinks B")
-    await _add_member(client, admin_token, pid_b, user_uid)
-
-    a1 = await _mk_doc(client, pid_a, admin_token, title="A1 source", parent_id=idx_a)
-    d = await _mk_doc(client, pid_a, admin_token, title="Movable D", parent_id=idx_a)
-    # a1 links to d → doc_mentions edge a1→d (REST fallback path rebuilds it).
-    r = await client.patch(
-        f"/api/documents/{a1}", json={"content": f"see [D](doc:{d})"},
-        cookies={"lore_session": admin_token},
-    )
-    assert r.status_code == 200, r.text
-
-    resp = await _move(client, admin_token, d, pid_b)
-    assert resp.status_code == 200, resp.text
-
-    # B-only member: the A-doc source must not appear (no title/timestamp leak).
-    r = await client.get(f"/api/documents/{d}/backlinks", cookies={"lore_session": user_token})
-    assert r.status_code == 200, r.text
-    assert r.json()["backlinks"] == [], \
-        "a B-only member must not see A-project sources on a moved doc"
-
-    # A-owner: same-project sources still resolve.
-    a2 = await _mk_doc(client, pid_a, admin_token, title="A2 linker", parent_id=idx_a)
-    r = await client.patch(
-        f"/api/documents/{a2}", json={"content": f"see [A1](doc:{a1})"},
-        cookies={"lore_session": admin_token},
-    )
-    assert r.status_code == 200, r.text
-    r = await client.get(f"/api/documents/{a1}/backlinks", cookies={"lore_session": admin_token})
-    assert r.status_code == 200, r.text
-    ids = [b["document_id"] for b in r.json()["backlinks"]]
-    assert a2 in ids, "same-project sources must still be returned"
 
 
 # ─── (b) export: foreign embeds skipped, same-project embeds still inline ─────

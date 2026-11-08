@@ -35,9 +35,10 @@ import { uuid } from '../../../utils/uuid';
  * width inside a `table-layout: fixed` table — auto columns split the free
  * width equally, never by content (widths must not move by themselves). "Auto" is the absence of a
  * measurement, so nothing computed from one client's font metrics is ever
- * written to the shared model. New tables and imports start all-auto, full width.
- * The first drag freezes EVERY column to px (`setColumnWidths`), and an all-px table is
- * exactly as wide as its columns; a double-click turns a column back to auto.
+ * written to the shared model. New tables and imports are born FIXED (`birthColumnWidths`,
+ * from text length, not metrics); auto columns come only from a double-click reset or
+ * older tables. The first drag freezes EVERY column to px (`setColumnWidths`), and an
+ * all-px table is exactly as wide as its columns.
  */
 export const AUTO_COLUMN_WIDTH = 0;
 
@@ -50,6 +51,45 @@ export const MIN_COLUMN_WIDTH = 40;
  * constants must stay equal — see table-block-model.test.ts).
  */
 export const DEFAULT_COLUMN_WIDTH = 160;
+
+/**
+ * WHY: the px width a new table is born at = the document text column max width
+ * (`.editor-content .cm-editor .cm-content` in index.css). MUST equal the backend
+ * `BIRTH_TABLE_WIDTH` in `backend/table_serialize.py`.
+ */
+export const BIRTH_TABLE_WIDTH = 844;
+/**
+ * WHY: an EMPTY table from the insert command is born at 60% of `BIRTH_TABLE_WIDTH`, so the
+ * free space beside it shows room for more columns (operator ruling). Frontend-only: the
+ * server never creates an empty table, so the backend twin has no counterpart.
+ */
+export const INSERT_TABLE_WIDTH = Math.round(BIRTH_TABLE_WIDTH * 0.6);
+const BIRTH_WEIGHT_MIN = 3;
+const BIRTH_WEIGHT_MAX = 40;
+
+/**
+ * Fixed px widths for a table at birth, proportional to cell text length.
+ * Weight = code points of the longest trimmed line per cell, clamped to [3, 40].
+ * INVARIANT(persisted): TEXT LENGTH only, never font metrics; equals backend `birth_column_widths`.
+ * Why: server and every client must write the same numbers into the shared model;
+ * after birth widths change only by a user's resize.
+ */
+export function birthColumnWidths(matrix: string[][], total = BIRTH_TABLE_WIDTH): number[] {
+  const width = Math.max(matrix.reduce((m, r) => Math.max(m, r.length), 1), 1);
+  const weights = Array.from({ length: width }, (_, col) => {
+    let longest = 0;
+    for (const row of matrix) {
+      if (col >= row.length) continue;
+      for (const line of String(row[col]).split('\n')) longest = Math.max(longest, [...line.trim()].length);
+    }
+    return Math.min(Math.max(longest, BIRTH_WEIGHT_MIN), BIRTH_WEIGHT_MAX);
+  });
+  const weightSum = weights.reduce((a, b) => a + b, 0);
+  const px = weights.map((w) => Math.max(Math.round((total * w) / weightSum), MIN_COLUMN_WIDTH));
+  const widest = px.indexOf(Math.max(...px));
+  px[widest] = Math.max(px[widest] + total - px.reduce((a, b) => a + b, 0), MIN_COLUMN_WIDTH);
+  return px;
+}
 
 export interface TableModel {
   columns: number[];
@@ -86,8 +126,8 @@ function makeCell(text: string): CellMap {
   return cell;
 }
 
-/** Build a `tables` entry from a cell-body matrix; returns the fresh uuid. */
-export function createTable(doc: Y.Doc, matrix: string[][]): string {
+/** Build a `tables` entry from a cell-body matrix; returns the fresh uuid. `total` = birth width in px. */
+export function createTable(doc: Y.Doc, matrix: string[][], total = BIRTH_TABLE_WIDTH): string {
   const id = uuid();
   const width = matrix.reduce((m, r) => Math.max(m, r.length), 1);
   doc.transact(() => {
@@ -97,7 +137,7 @@ export function createTable(doc: Y.Doc, matrix: string[][]): string {
     // 5000×200 import pushed cell-by-cell emitted ~1M ops; batched it is O(rows+2) pushes.
     // Pre-built Y.Map/Y.Array/Y.Text children integrate correctly when inserted in bulk.
     const columns = new Y.Array<ColMap>();
-    columns.push(Array.from({ length: width }, () => makeColumn(AUTO_COLUMN_WIDTH)));
+    columns.push(birthColumnWidths(matrix, total).map(makeColumn));
     const rows = new Y.Array<Y.Array<CellMap>>();
     rows.push(matrix.map((row) => {
       const yrow = new Y.Array<CellMap>();

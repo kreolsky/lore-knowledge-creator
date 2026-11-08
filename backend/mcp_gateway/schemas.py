@@ -363,7 +363,7 @@ _GATEWAY_OUTPUT_SCHEMAS: dict[str, dict] = {
 _TOOL_LIST_ORDER: tuple[str, ...] = (
     "init",
     # reads (incl. read_document — addresses the text part but grouped as a read)
-    "search_materials", "read_document", "get_project_structure",
+    "search_materials", "read_document", "get_project_structure", "get_links",
     "export_subtree_md",
     # text part
     "create_document", "edit_document", "append_to_document",

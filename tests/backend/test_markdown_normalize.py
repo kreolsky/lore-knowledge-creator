@@ -228,3 +228,24 @@ def test_unwrap_not_wired_into_import_normalize():
     # own syntax and must survive.
     src = "[text](<526bf4e3-f775>)\n"
     assert "<526bf4e3-f775>" in normalize_markdown(src)
+
+
+# ── escaped pipe on a table row survives into ONE cell ───────────────────────
+# `\|` is the GFM cell escape. The import strip used to collapse it to `|`
+# BEFORE the table pass, so `| x \| y | z |` imported as THREE cells instead of
+# the two the author wrote — silent content corruption at import.
+
+
+# The strip/preserve predicate is pure text logic on the normalize→import
+# pipeline; a wrong edge fuses or splits table cells with no error anywhere.
+# TEST-WHY: pure-logic-edge — a wrong strip edge fuses or splits table cells silently.
+def test_escaped_pipe_on_table_row_yields_one_cell():
+    import json
+
+    from table_serialize import import_gfm_tables
+
+    src = "| x \\| y | z |\n| --- | --- |\n"
+    out = normalize_markdown(src)
+    rewritten, tables_json = import_gfm_tables(out)
+    matrices = [m["rows"] for m in json.loads(tables_json).values()]
+    assert matrices == [[["x | y", "z"]]]

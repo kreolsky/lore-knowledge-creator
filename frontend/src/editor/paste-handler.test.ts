@@ -392,6 +392,39 @@ describe('External formatted paste (Turndown path)', () => {
   });
 });
 
+describe('Header-less clipboard table (Google Sheets / Docs)', () => {
+  // TEST-WHY: pure-logic-edge — turndown-plugin-gfm keeps an all-<td> table as raw HTML; the real Sheets payload must become a pipe table.
+  it('promotes the first row to a header and emits a GFM table', () => {
+    const html = '<table data-sheets-root="1" border="1"><colgroup><col width="165"><col width="74"></colgroup>'
+      + '<tbody><tr><td>Брусок</td><td>3</td></tr><tr><td>Просвет</td><td></td></tr></tbody></table>';
+    const md = htmlToMarkdown(html);
+    expect(md).not.toContain('<t');
+    expect(md.split('\n').map((l) => l.trim())).toEqual(['| Брусок | 3 |', '| --- | --- |', '| Просвет |  |']);
+  });
+});
+
+describe('Merged cells on paste', () => {
+  // TEST-WHY: pure-logic-edge — a dropped rowspan shifted the rows below under the wrong column.
+  it('unfolds colspan and rowspan into empty cells, keeping every value in its column', () => {
+    const html = '<table><tr><th>A</th><th>B</th><th>C</th></tr>'
+      + '<tr><td rowspan="2">x</td><td colspan="2">y</td></tr>'
+      + '<tr><td>p</td><td>q</td></tr></table>';
+    expect(htmlToMarkdown(html).split('\n').map((l) => l.trim())).toEqual([
+      '| A | B | C |', '| --- | --- | --- |', '| x | y |  |', '|  | p | q |',
+    ]);
+  });
+});
+
+describe('Turndown leading dash / equals', () => {
+  // TEST-WHY: pure-logic-edge — Turndown escapes every leading `-`/`=`; a spreadsheet's -160000 and =SUM arrived as \-160000.
+  it('keeps values verbatim and still escapes real block markers', () => {
+    expect(htmlToMarkdown('<p>-160000</p>')).toBe('-160000');
+    expect(htmlToMarkdown('<p>=SUM(A1)</p>')).toBe('=SUM(A1)');
+    expect(htmlToMarkdown('<p>- item</p>')).toBe('\\- item');
+    expect(htmlToMarkdown('<p>===</p>')).toBe('\\===');
+  });
+});
+
 describe('Turndown intraword underscore', () => {
   it('keeps <strong> emphasis while leaving intraword _ unescaped', () => {
     expect(htmlToMarkdown('<p><strong>a</strong> x_y_z</p>')).toBe('**a** x_y_z');

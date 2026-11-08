@@ -103,7 +103,7 @@ def _patch_executor_deps(monkeypatch, *, live_content, route_capture=None):
     if route_capture is not None:
         original_captured = route_capture
 
-        async def fake_route_edits(*, doc_id, edits, project_id):
+        async def fake_route_edits(*, doc_id, edits, project_id, new_tables=None):
             original_captured["edits"] = edits
             original_captured["project_id"] = project_id
             return True

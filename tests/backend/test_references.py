@@ -64,17 +64,15 @@ async def test_patch_reference_rebuilds_mention_edges(client, admin_user, projec
         cookies={"lore_session": token},
     )
     assert resp.status_code == 200
-    # Verify backlink exists on target doc
+    # Verify the incoming edge exists on target doc
     resp = await client.get(
-        f"/api/documents/{target_id}/backlinks",
+        f"/api/documents/{target_id}/edges",
+        params={"direction": "in"},
         cookies={"lore_session": token},
     )
     assert resp.status_code == 200
-    backlinks = resp.json()["backlinks"]
-    # Backlink should show the reference as source
-    ref_sources = [bl for bl in backlinks if bl.get("reference_id") == ref_id or bl.get("source_type") == "ref"]
-    assert len(ref_sources) >= 1
-    # (exact shape depends on how backlinks query handles ref-sourced edges)
+    ref_sources = [e for e in resp.json()["edges"] if e["document_id"] == ref_id and e["source_type"] == "ref"]
+    assert len(ref_sources) == 1
 
 
 # ─── Sorting tests ──────────────────────────────────────────────────────────

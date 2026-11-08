@@ -12,13 +12,12 @@ import { readRefOpenMode, refIsScope } from '../store/ui-store/documents-slice';
 import { useShallow } from 'zustand/react/shallow';
 import { apiClient } from '../api/client';
 import { useEvent } from '../hooks/useEvent';
-import { useHoverPreview } from '../hooks/useHoverPreview';
+import { useRightPanelHoverPreview } from '../hooks/useRightPanelHoverPreview';
 import { useTranslation } from '../i18n';
 import { useEditorContent, getRoleView } from '../editor/active-editor';
 import type { Checkpoint, DocumentHistoryEntry, DocumentTreeNode } from '../types';
 import { formatDate } from '../utils/format';
 import { Button, IconButton, FieldTextarea, DownloadMenu, PanelLoading } from './ui';
-import { PREVIEW_WIDTH } from '../utils/preview-geometry';
 import { HoverPreviewPopup } from './HoverPreviewPopup';
 import { upsertSnapshotById, appendDedupSnapshots } from './history-panel-helpers';
 import { LABEL_LAST_SESSION as LAST_SESSION_LABEL } from '../collab/backup-labels';
@@ -277,8 +276,7 @@ export function HistoryPanel() {
   };
 
   // Hover preview for snapshot rows
-  const getPopupLeft = useCallback((rect: DOMRect) => rect.left - PREVIEW_WIDTH - 8, []);
-  const hover = useHoverPreview({ getPopupLeft });
+  const hover = useRightPanelHoverPreview();
   const [hoverTitle, setHoverTitle] = useState<string>('');
   // INVARIANT: each hover state field carries the snapshot id it describes and is
   // read only when that id still matches the hovered one (mirrors useDocumentPreview).

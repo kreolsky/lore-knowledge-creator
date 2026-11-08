@@ -142,8 +142,8 @@ export function ProjectSettingsPanel() {
 
         <SectionHeader
           icon={<Image size={11} />}
-          title={t('settingsImagePreviewTitle')}
-          description={t('settingsImagePreviewDesc')}
+          title={t('settingsDisplayTitle')}
+          description={t('settingsDisplayDesc')}
         />
         <div className="px-3.5">
           <FieldCheckbox
@@ -151,6 +151,12 @@ export function ProjectSettingsPanel() {
             onChange={v => patchProject({ ref_image_preview: v })}
             label={t('settingsImagePreviewLabel')}
             disabled={saving === 'ref_image_preview'}
+          />
+          <FieldCheckbox
+            checked={project.links_show_sessions ?? false}
+            onChange={v => patchProject({ links_show_sessions: v })}
+            label={t('settingsLinksShowSessionsLabel')}
+            disabled={saving === 'links_show_sessions'}
           />
         </div>
 

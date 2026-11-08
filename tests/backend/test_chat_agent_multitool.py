@@ -147,7 +147,7 @@ def _mk_doc_edit_mocks(monkeypatch, *, live_states, access="full"):
     async def fake_checkpoint(**kw):
         return {"checkpoint_id": "cp"}
 
-    async def fake_route_edits(*, doc_id, edits, project_id):
+    async def fake_route_edits(*, doc_id, edits, project_id, new_tables=None):
         await asyncio.sleep(0)  # SUSPEND so writers interleave (last-writer-wins)
         cur = live_states[doc_id]
         # Descending-offset apply (mirrors route_document_edits' real contract).

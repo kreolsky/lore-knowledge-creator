@@ -4,8 +4,12 @@ SYSTEM: table-block — backend serializer entry point. The editable table block
 its model as a Yjs subtree (`ydoc.getMap('tables')`); this module serializes the flat
 cell-body form (``rows = list[list[str]]``) to a GFM table; ``expand_tables`` consumes
 it for the derived plaintext / export. The inverse GFM→model parse ALSO lives here
-(``parse_gfm_table`` + the block scanner ``import_gfm_tables``) — production's
-subtree-zip import converts whole files, and the test oracle
+(``parse_gfm_table`` + the block scanner ``import_gfm_tables``) — EVERY markdown
+import converts through it (the subtree zip, the REST/MCP uploads, the docx/pdf
+converter worker, the agent ``import_file``), and so does every agent-AUTHORED
+markdown body (create / edit / append — a pipe table the agent writes is born as an
+object, never left as text; the collab_writes/apply_edits_resolver/edits.py call
+sites reach it through ``convert_import_tables``), and the test oracle
 (``tests/backend/helpers.py``) delegates to the same functions, so there is ONE
 Python copy. The frontend twin (``gfm-table-import.ts``) stays the sanctioned
 UI-side conversion (paste/import in the editor).
@@ -39,6 +43,7 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 
 # WHY (cross-producer default column width): the px width assigned to a column
 # when none is captured. MUST equal the frontend `DEFAULT_COLUMN_WIDTH`
@@ -49,8 +54,44 @@ import re
 # Guarded by table-block-model.test.ts (asserts equality with the frontend constant).
 DEFAULT_COLUMN_WIDTH = 160
 # WHY: mirrors the frontend `AUTO_COLUMN_WIDTH` — no stored px, the column takes an equal
-# share of the free width. New tables start here, so they fill the document column.
+# share of the free width. Existing tables and the double-click resets produce it.
 AUTO_COLUMN_WIDTH = 0
+# WHY: the px width a new table is born at. MUST equal the frontend `BIRTH_TABLE_WIDTH`
+# (table-block-model.ts) and the document text column max width (index.css
+# `.cm-content { max-width: 844px }`). Why: an all-px table renders at its sum, so a
+# new table fills a full-width document; a drift makes server-born and editor-born
+# tables differ in width.
+BIRTH_TABLE_WIDTH = 844
+MIN_COLUMN_WIDTH = 40
+_BIRTH_WEIGHT_MIN = 3
+_BIRTH_WEIGHT_MAX = 40
+
+
+def birth_column_widths(rows_matrix: list[list[str]]) -> list[int]:
+    """Fixed px widths for a table at birth, proportional to cell text length.
+
+    Weight = code points of the longest trimmed line per cell, clamped to [3, 40].
+
+    # INVARIANT(persisted): TEXT LENGTH only, never font metrics; equals frontend `birthColumnWidths`.
+    # Why: server and every client must write the same numbers into the shared model;
+    # after birth widths change only by a user's resize.
+    """
+    width = max(max((len(r) for r in rows_matrix), default=1), 1)
+    weights = []
+    for col in range(width):
+        longest = max(
+            (len(line.strip()) for r in rows_matrix if col < len(r)
+             for line in str(r[col]).split("\n")),
+            default=0,
+        )
+        weights.append(min(max(longest, _BIRTH_WEIGHT_MIN), _BIRTH_WEIGHT_MAX))
+    total = sum(weights)
+    # WHY: floor(x + 0.5), not round() — Python rounds half to even, JS Math.round
+    # rounds half up; the twins must agree on every .5.
+    px = [max(int(BIRTH_TABLE_WIDTH * w / total + 0.5), MIN_COLUMN_WIDTH) for w in weights]
+    widest = px.index(max(px))
+    px[widest] = max(px[widest] + BIRTH_TABLE_WIDTH - sum(px), MIN_COLUMN_WIDTH)
+    return px
 
 
 def _escape_cell(text: str) -> str:
@@ -260,10 +301,10 @@ def create_table_entry(doc, table_id: str, rows_matrix: list[list[str]]) -> None
         tables[table_id] = table
         cols = Array()
         table["columns"] = cols
-        for _i in range(width):
+        for w in birth_column_widths(rows_matrix):
             c = Map()
             cols.append(c)
-            c["w"] = AUTO_COLUMN_WIDTH
+            c["w"] = w
         rows_root = Array()
         table["rows"] = rows_root
         for row in rows_matrix:
@@ -410,6 +451,43 @@ def expand_tables(doc) -> str:
 
 _CELL_SPLIT = re.compile(r"(?<!\\)\|")
 
+# An image-embed span (`![alt|WxH](ref:id)`) — its `|` is the SIZE SEPARATOR of
+# the sized-image shape (subtree_md._rewrite_embeds emits exactly this form),
+# never a cell delimiter. Masked before a row split so an embed never
+# fragments its cell.
+_IMAGE_EMBED = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+
+
+def _split_row(line: str) -> list[str]:
+    """Split one GFM table row into raw cell segments (padding + escapes kept).
+
+    Drops ONE optional leading ``|`` and ONE optional unescaped trailing ``|``
+    (outer pipes are optional in GFM), then splits on unescaped pipes OUTSIDE
+    image-embed spans. The ONE splitter — ``_is_separator``, ``_parse_row`` and
+    ``parse_gfm_table`` ride it, and the frontend twin
+    (``gfm-table-import.ts``) must agree byte-for-byte; the shared fixture in
+    ``test_table_serialize.py`` / ``gfm-table-import.test.ts`` enforces it.
+
+    Why the trailing drop is escape-aware: ``| a | b\\|`` ends in an ESCAPED
+    pipe (cell content), not the row delimiter. Embeds are masked behind a
+    ``\\x00`` placeholder (never a literal in text content) and restored per
+    segment, in order.
+    """
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|") and not s.endswith("\\|"):
+        s = s[:-1]
+    embeds = [m.group(0) for m in _IMAGE_EMBED.finditer(s)]
+    if not embeds:
+        return _CELL_SPLIT.split(s)
+    masked = _IMAGE_EMBED.sub("\x00", s)
+    restore = iter(embeds)
+    return [
+        re.sub("\x00", lambda _m: next(restore), seg)
+        for seg in _CELL_SPLIT.split(masked)
+    ]
+
 
 def _unescape_cell(wire: str) -> str:
     """Reverse `_escape_cell`: `<br>` → newline, `\\|` → literal pipe.
@@ -421,11 +499,12 @@ def _unescape_cell(wire: str) -> str:
 
 
 def _is_separator(line: str) -> bool:
-    """True for a GFM header-separator row (`| --- | :--: | …`)."""
-    stripped = line.strip()
-    if not stripped.startswith("|"):
-        return False
-    cells = [c.strip() for c in _CELL_SPLIT.split(stripped[1:-1])]
+    """True for a GFM header-separator row (`| --- | :--: | …`, outer pipes
+    optional). NOTE: a bare setext/thematic run (``---``) is also dash-only —
+    the HEADER rules in ``_collect_table_block`` keep setext headings out of a
+    conversion (a no-leading-pipe header requires a separator WITH a pipe and
+    an equal cell count), not this predicate."""
+    cells = [c.strip() for c in _split_row(line)]
     # Require >=1 NON-EMPTY dash cell. Why: ``all([])`` is True, so without this an
     # all-empty data row (``|   |   |``) is misclassified as the separator and
     # silently dropped on import.
@@ -434,9 +513,8 @@ def _is_separator(line: str) -> bool:
 
 
 def _parse_row(line: str) -> list[str]:
-    inner = line.strip()[1:-1]  # drop leading/trailing pipe
     out: list[str] = []
-    for seg in _CELL_SPLIT.split(inner):
+    for seg in _split_row(line):
         # Strip exactly the one padding space added on each side by serialize_table.
         if seg.startswith(" "):
             seg = seg[1:]
@@ -449,10 +527,16 @@ def _parse_row(line: str) -> list[str]:
 def parse_gfm_table(md: str) -> list[list[str]]:
     """Parse a GFM table string into the cell-body model (the inverse of
     `serialize_table`). The separator row is dropped; every other non-empty
-    `|`-delimited line is a data row. `<br>` → newline; `\\|` → literal pipe."""
+    pipe-delimited line (outer pipes optional) is a data row. `<br>` → newline;
+    `\\|` → literal pipe."""
     rows: list[list[str]] = []
     for line in md.splitlines():
-        if not line.strip().startswith("|"):
+        s = line.strip()
+        if not s:
+            continue
+        # A data row is pipe-delimited: outer pipes OR an inner unescaped pipe —
+        # plain prose lines never parse as single-cell rows.
+        if not s.startswith("|") and len(_split_row(line)) < 2:
             continue
         if _is_separator(line):
             continue
@@ -469,23 +553,24 @@ def import_gfm_tables(markdown: str, label: str = "Table") -> tuple[str, str]:
     ``ydoc_store.set_content(..., tables_json=...)``.
 
     A block = a pipe-line header immediately followed by a separator row, then
-    any run of pipe-lines. Prose (and pipes not forming a table) are left
+    the body run (outer pipes optional — see ``_collect_table_block``). Fenced
+    code is skipped verbatim (``fence_mask``): a pipe table inside a fence is
+    code, never a table. Prose (and pipes not forming a table) are left
     untouched.
     """
-    import json
-    import uuid
+    from markdown_normalize import fence_mask
 
     lines = markdown.split("\n")
+    mask = fence_mask(lines)
     out: list[str] = []
     tables: dict[str, dict] = {}
     i = 0
     while i < len(lines):
-        matrix, next_i = _collect_table_block(lines, i)
+        matrix, next_i = _collect_table_block(lines, i, mask)
         if matrix is not None:
             table_id = uuid.uuid4().hex
-            width = max(len(r) for r in matrix)
             tables[table_id] = {
-                "columns": [AUTO_COLUMN_WIDTH] * width,
+                "columns": birth_column_widths(matrix),
                 "rows": matrix,
             }
             out.append(table_anchor(label, table_id))
@@ -498,26 +583,76 @@ def import_gfm_tables(markdown: str, label: str = "Table") -> tuple[str, str]:
                                       ensure_ascii=False)
 
 
-def _collect_table_block(lines: list[str], i: int) -> tuple[list | None, int]:
+def _row_has_pipe(line: str) -> bool:
+    """The line holds a cell-delimiter ``|`` outside image-embed spans (an
+    embed's ``|`` is the sized-image separator, not a cell delimiter)."""
+    return bool(_CELL_SPLIT.search(_IMAGE_EMBED.sub("\x00", line)))
+
+
+def _separator_matches_header(
+    lines: list[str], i: int, mask: list[bool], has_leading_pipe: bool,
+) -> bool:
+    """The delimiter row under the header at `i`, shaped for its form:
+    ``_is_separator`` first, then — a pipe-PREFIXED separator for a
+    leading-pipe header (a bare ``---`` under a pipe header stays
+    thematic/setext); for a no-pipe header, a separator HOLDING a pipe with an
+    EQUAL cell count (``a\\n---`` and ``a | b\\n---`` stay setext headings)."""
+    if i + 1 >= len(lines) or mask[i + 1] or not _is_separator(lines[i + 1]):
+        return False
+    if has_leading_pipe:
+        return lines[i + 1].strip().startswith("|")
+    sep = lines[i + 1]
+    return _row_has_pipe(sep) and len(_split_row(lines[i])) == len(_split_row(sep))
+
+
+def _block_end(lines: list[str], i: int, mask: list[bool],
+               has_leading_pipe: bool) -> int:
+    """The index of the block's LAST line from header `i`: leading-pipe bodies
+    run over pipe-prefixed lines; no-outer-pipe bodies over NON-BLANK lines
+    holding an unescaped pipe. Fenced lines (``mask``) never continue a block."""
+    if has_leading_pipe:
+        def _body(idx: int) -> bool:
+            return lines[idx].strip().startswith("|")
+    else:
+        def _body(idx: int) -> bool:
+            body = lines[idx]
+            return bool(body.strip()) and _row_has_pipe(body)
+    j = i + 1
+    while j + 1 < len(lines) and not mask[j + 1] and _body(j + 1):
+        j += 1
+    return j
+
+
+def _collect_table_block(
+    lines: list[str], i: int, mask: list[bool],
+) -> tuple[list | None, int]:
     """From line `i`, collect one GFM table block's matrix (header + data
     rows, separator dropped) → (matrix, next_index_after_block); (None, i)
-    when line i does not START a table (pipe header immediately followed by a
-    separator row)."""
-    def _pipe(line: str) -> bool:
-        return line.strip().startswith("|")
+    when line i does not START a table.
 
-    header_is_table = (
-        _pipe(lines[i])
-        and not _is_separator(lines[i])
-        and i + 1 < len(lines)
-        and _is_separator(lines[i + 1])
-    )
-    if not header_is_table:
+    Two header shapes:
+      · leading-pipe (``| a | b |``) + a pipe-prefixed separator — the classic
+        form; the body runs over pipe-prefixed lines;
+      · no outer pipes (``a | b``) + a pipe-holding separator with an equal
+        cell count — the body runs over non-blank lines holding an unescaped
+        pipe. Blockquoted tables stay text (the ``> `` prefix never parses as
+        cells). Fenced lines (``mask``) never start or continue a block — a
+        converted table would land its anchor INSIDE the fence. A block nested
+        in a list item converts and its anchor lands at top level (the block's
+        indented lines are replaced by one unindented anchor line).
+    """
+    if mask[i]:
         return None, i
-    j = i + 1
-    while j + 1 < len(lines) and _pipe(lines[j + 1]):
-        j += 1
+    line = lines[i]
+    if not line.strip() or _is_separator(line):
+        return None, i
+    has_leading_pipe = line.strip().startswith("|")
+    if not has_leading_pipe and not _row_has_pipe(line):
+        return None, i
+    if not _separator_matches_header(lines, i, mask, has_leading_pipe):
+        return None, i
+    j = _block_end(lines, i, mask, has_leading_pipe)
     matrix = [
-        _parse_row(line) for line in lines[i:j + 1] if not _is_separator(line)
+        _parse_row(l) for l in lines[i:j + 1] if not _is_separator(l)
     ]
     return (matrix if matrix else None), j + 1

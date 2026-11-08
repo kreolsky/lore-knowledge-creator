@@ -17,6 +17,7 @@ import http_clients
 import event_bus
 from jobs.tasks._transcript_landing import land_transcript
 from models import is_ref_row
+from table_serialize import import_gfm_tables
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +206,13 @@ async def _convert_upload_task(ctx, reference_id: str, user_id: str,
             markdown, project_id, ref.get("parent_id"),
             created_by=created_by, created_by_name=created_by_name,
         )
+        # GFM tables → objects LAST (after the image pass — a cell moved into
+        # the model is invisible to it). Converter output is markdown by
+        # contract, so the markdown predicate holds unconditionally. A retry
+        # re-runs the whole pass and set_content REBUILDS the tables map
+        # (apply_tables_json clears first), so a retried reference keeps
+        # exactly one table per block.
+        processed, tables_json = import_gfm_tables(processed)
     except Exception as e:
         logger.error("convert_upload failed for %s: %s", reference_id, e)
         # Terminal dead-letter: WHEN is dead_letter()'s contract; the recorder is
@@ -216,7 +224,8 @@ async def _convert_upload_task(ctx, reference_id: str, user_id: str,
     # Why: the worker holds no editors; set_content is the only path that writes Surreal
     # AND fans the update to live editors (a plain DB UPDATE would leave them stale).
     await set_content(reference_id, processed, persist=True,
-                      extra_sets={"processing_status": "ready"})
+                      extra_sets={"processing_status": "ready"},
+                      tables_json=tables_json if tables_json != "{}" else None)
     # D1b: set_content does NOT emit content_flushed, so emit here once per worker write
     # (mirrors _finalize_content_mutation on the REST path) so embeddings._on_content_flushed
     # schedules the embed. Without it an imported .docx is persisted + broadcast but never

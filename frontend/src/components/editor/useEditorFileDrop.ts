@@ -28,6 +28,7 @@ import type { Document, Reference } from '../../types';
 import { entityYdoc, getViewEntity } from '../../editor/active-editor';
 import { dropEmbedForView, dropImageRow, dropInsertSpec, editorDropPoint, spliceAt } from './drop-target';
 import { createTable, tableAnchor, normalizeTableLabel } from '../editor/live-preview/table-block-model';
+import { importGfmTables } from '../editor/live-preview/gfm-table-import';
 import { sniffDelimiter, parseCsv, MAX_TABLE_IMPORT_ROWS, MAX_TABLE_IMPORT_COLS, MAX_TABLE_IMPORT_CELLS } from '../editor/live-preview/csv-table';
 import { createTempRef, isImageFile, isTableFile, MAX_IMAGE_SIZE_MB, MAX_MARKDOWN_SIZE_MB } from '../references/ref-utils';
 
@@ -235,6 +236,15 @@ export function useEditorFileDrop({
       setPendingDrop(null);
       return;
     }
+    // WHY: model and anchor must land in the DROP VIEW'S entity ydoc (same targeting and
+    // toast-on-missing-handle as handleTableInsert) — the dropped markdown's pipe tables
+    // become table objects, like every server-side markdown import.
+    const ydoc = entityYdoc(view);
+    if (!ydoc) {
+      useAppStore.getState().showToast(t('failedToImportFile'), 'error');
+      setPendingDrop(null);
+      return;
+    }
     setImporting(true);
     try {
       const form = new FormData();
@@ -242,7 +252,8 @@ export function useEditorFileDrop({
       form.append('project_id', projectId);
       form.append('document_id', docId);
       const { markdown } = await apiClient.upload('/documents/extract-text', form) as { markdown: string };
-      spliceAt(view, dropInsertSpec(view.state.doc, drop.pos, markdown, 'block'));
+      const { text } = importGfmTables(ydoc, markdown, t('tableBlockUntitled'));
+      spliceAt(view, dropInsertSpec(view.state.doc, drop.pos, text, 'block'));
       setPendingDrop(null);
     } catch (err) {
       console.error('file-drop import failed', err);

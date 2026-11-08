@@ -65,6 +65,7 @@ from models import (
     ToolExportSubtreeMd,
     ToolGenerateImage,
     ToolGetFactHistory,
+    ToolGetLinks,
     ToolGetMemoryFacts,
     ToolGetProjectStructure,
     ToolHttpRequest,
@@ -95,10 +96,11 @@ from models import (
 # (model, handler) per base tool, in READ_TOOLS + MUTATE_TOOLS order.
 _BASE: tuple[tuple[type, str], ...] = (
     # READ_TOOLS: search_materials, read_document, get_project_structure,
-    # export_subtree_md
+    # get_links, export_subtree_md
     (ToolSearch, "routes.tool_api.reads:tool_search_materials"),
     (ToolReadDocument, "routes.tool_api.reads:tool_read_document"),
     (ToolGetProjectStructure, "routes.tool_api.reads:tool_get_project_structure"),
+    (ToolGetLinks, "routes.tool_api.reads:tool_get_links"),
     (ToolExportSubtreeMd, "routes.tool_api.subtree:tool_export_subtree_md"),
     # MUTATE_TOOLS: create_document .. rename_document
     (ToolCreateDocument, "routes.tool_api.creates:tool_create_document"),

@@ -59,40 +59,53 @@ _UNDERLINE_OR_RULE = re.compile(r"(=+|-+|_{3,}|\*{3,})")
 _INLINE_CODE = re.compile(r"`[^`]*`")
 
 
+def fence_mask(lines: list[str]) -> list[bool]:
+    """Per-line fence state: True for every line of a fenced code block (opener,
+    body, closer — an unclosed fence masks to EOF).
+
+    The ONE fence scanner — ``_fence_aware`` (the normalize transforms copy
+    fenced lines through) and the GFM table importer
+    (``table_serialize.import_gfm_tables`` skips masked lines so a pipe table
+    inside a fence is never converted) share it.
+
+    WHY the closer is matched against the LSTRIPPED line: an indented closing
+    fence (≤3 spaces is valid CommonMark) must be recognized — _FENCE_ONLY is
+    anchored at column 0 and would otherwise miss it, latching in_fence true
+    and masking the rest of the document (normalize_markdown pre-dedents, so
+    this matters for the standalone call paths that do not).
+    """
+    mask = [False] * len(lines)
+    in_fence = False
+    fence_char = ""
+    for idx, line in enumerate(lines):
+        if not in_fence:
+            m = _FENCE_OPEN.match(line)
+            if m:
+                in_fence = True
+                fence_char = m.group(2)[0]
+                mask[idx] = True
+                continue
+        else:
+            mask[idx] = True
+            stripped = line.lstrip()
+            if _FENCE_ONLY.match(stripped) and stripped[:1] == fence_char:
+                in_fence = False
+    return mask
+
+
 def _fence_aware(content: str, transform: Callable[[str], str]) -> str:
     """Apply `transform` to every line OUTSIDE ``` fenced code blocks; fence
     opener/closer and in-fence lines are copied through verbatim.
 
     The ONE fence-aware line loop — strip_markdown_escapes,
     normalize_list_spacing and unwrap_placeholder_brackets share it (each was a
-    hand copy before).
-
-    WHY the closer is matched against the LSTRIPPED line: an indented closing
-    fence (≤3 spaces is valid CommonMark) must be recognized — _FENCE_ONLY is
-    anchored at column 0 and would otherwise miss it, latching in_fence true
-    and skipping the transform for the rest of the document on the standalone
-    call paths that never pre-dedent (normalize_markdown runs _dedent_fences
-    first; the standalone entries do not).
+    hand copy before). Rides fence_mask (the shared fence scanner).
     """
-    out: list[str] = []
-    in_fence = False
-    fence_char = ""
-    for line in content.split("\n"):
-        if not in_fence:
-            m = _FENCE_OPEN.match(line)
-            if m:
-                in_fence = True
-                fence_char = m.group(2)[0]
-                out.append(line)
-                continue
-        else:
-            out.append(line)
-            stripped = line.lstrip()
-            if _FENCE_ONLY.match(stripped) and stripped[:1] == fence_char:
-                in_fence = False
-            continue
-        out.append(transform(line))
-    return "\n".join(out)
+    lines = content.split("\n")
+    mask = fence_mask(lines)
+    return "\n".join(
+        line if fenced else transform(line) for line, fenced in zip(lines, mask)
+    )
 
 
 def _apply_outside_inline_code(line: str, transform: Callable[[str], str]) -> str:
@@ -133,6 +146,10 @@ _REF_DEF_LINE = re.compile(r"^\[[^\]]+\]:")
 # a backslash run correctly without re-scanning the emitted char.
 # SYSTEM: markdown escape strip — removes Pandoc/Word export backslash noise.
 _STRIP_ESCAPE = re.compile(r"\\([!\"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])")
+# The strip set minus the pipe: `\|` is the GFM cell escape, not export noise.
+_STRIP_ESCAPE_KEEP_PIPE = re.compile(r"\\([!\"#$%&'()*+,\-./:;<=>?@[\\\]^_`{}~])")
+# An unescaped `|` outside inline code — a GFM pipe-table row's cell delimiter.
+_UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
 
 # WHY: a source line shorter than the wrap threshold is treated as a deliberate
 # line end and is NOT folded into the next line. Why: the agent hard-wraps near a fixed
@@ -468,8 +485,23 @@ def strip_markdown_escapes(content: str) -> str:
 
 def _strip_escapes_line(line: str) -> str:
     r"""Strip ``\punct`` escapes from one line, preserving inline-code spans
-    verbatim (the gaps ride _apply_outside_inline_code)."""
-    return _apply_outside_inline_code(line, lambda gap: _STRIP_ESCAPE.sub(r"\1", gap))
+    verbatim (the gaps ride _apply_outside_inline_code).
+
+    # WHY ``\|`` survives on a table row: ``\|`` is the GFM cell escape. On a
+    # line that ALSO holds an unescaped ``|`` outside inline code (a pipe-table
+    # row), stripping it would fuse two cells into one the moment the table
+    # pass converts the row — ``| x \| y | z |`` must parse to the cell
+    # ``x | y``, not three cells. A line whose only pipe is escaped
+    # (``a \| b``) is prose and still strips. Accepted cost: prose carrying
+    # both a bare ``|`` and ``\|`` keeps a visible backslash.
+    """
+    if "\\|" in line and _UNESCAPED_PIPE.search(_INLINE_CODE.sub("", line)):
+        return _apply_outside_inline_code(
+            line, lambda gap: _STRIP_ESCAPE_KEEP_PIPE.sub(r"\1", gap),
+        )
+    return _apply_outside_inline_code(
+        line, lambda gap: _STRIP_ESCAPE.sub(r"\1", gap),
+    )
 
 
 # Collapses the run of spaces immediately AFTER a list marker (-, *, +, N.) and

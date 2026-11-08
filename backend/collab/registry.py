@@ -9,7 +9,7 @@ import logging
 from pycrdt import Doc
 
 from collab.session import CollabSession
-from mentions import extract_doc_mentions
+from mentions import content_edge_pairs
 from models import is_ref_row
 from ydoc_store import get_text
 
@@ -75,7 +75,9 @@ async def _get_or_create_session(entity_type: str, entity_id: str, content: str,
         text = get_text(ydoc)
 
         initial_content = str(text)
-        initial_mentions = set(extract_doc_mentions(initial_content)) - {entity_id}
+        # Pairs (not bare ids) so a link↔embed flip of the same target rebuilds
+        # on the first flush after reopen (plan typed-edges).
+        initial_pairs = content_edge_pairs(initial_content, exclude=entity_id)
 
         session = CollabSession(
             entity_type=entity_type,
@@ -89,7 +91,7 @@ async def _get_or_create_session(entity_type: str, entity_id: str, content: str,
         # Seed the flush pipeline's baseline state from the loaded doc (proxied on the
         # session → forwarded to the FlushPipeline created in __post_init__).
         session._last_flushed_content = initial_content
-        session._last_mention_ids = initial_mentions
+        session._last_edge_pairs = initial_pairs
         _sessions[key] = session
 
     await session.subscribe_backplane()

@@ -5,15 +5,61 @@ Part of the chat-agent-mode system: the collab-backed create paths
 pre-edit checkpoint + presence broadcast. Internal extraction — no SYSTEM marker;
 this module OWNS its names.
 """
+import json
 import logging
 from uuid import uuid4
 
 import artifacts
+from fastapi import HTTPException
+from markdown_normalize import normalize_list_spacing, unwrap_placeholder_brackets
 
 import event_bus
 from agent import doc_state
+from table_serialize import extract_table_labels, import_gfm_tables
+from ydoc_store import set_content
 
 logger = logging.getLogger(__name__)
+
+
+def convert_import_tables(
+    content: str, check_cell_cap: bool,
+) -> tuple[str | None, str | None, list[dict]]:
+    """GFM tables → objects for a markdown body: the ONE conversion block the
+    create factories and the empty-doc append share (the edit apply core stages
+    the same pieces around its post-splice skip rule —
+    apply_edits_resolver._convert_resolved_edit_tables).
+    Returns ``(converted, tables_json, tables_out)`` — converted/tables_json
+    are None and tables_out empty when nothing converted; a create caller
+    births the row with the PRE-conversion ``content`` and, when tables_json
+    is not None, replaces it via ``set_content(converted, persist=True,
+    tables_json=…)`` in ONE Y.Doc update; an edit caller rewrites its splice's
+    new_text to ``converted`` and hands the parsed models to
+    ``route_document_edits(new_tables=…)``.
+
+    ``check_cell_cap`` bounds each cell at AGENT_TABLE_MAX_CELL_CHARS (400,
+    nothing written) — agent-AUTHORED bodies only; file imports are bounded by
+    their file-size cap upstream, so the same ``.md`` behaves identically on
+    every import route.
+
+    # Public (no underscore): consumed across the chat/ package boundary by
+    # routes/tool_api/edits.py (the empty-doc append) — the same sanctioned
+    # seam as doc_state.reject_remote_images; test_module_boundaries forbids a
+    # private reach from there.
+    """
+    converted, tables_json = import_gfm_tables(content)
+    if tables_json == "{}":
+        return None, None, []
+    if check_cell_cap:
+        from agent.table_writes import reject_table_overflow
+
+        reject_table_overflow(
+            [m["rows"] for m in json.loads(tables_json).values()]
+        )
+    tables_out = [
+        {"table_id": tid, "label": label}
+        for tid, label in extract_table_labels(converted).items()
+    ]
+    return converted, tables_json, tables_out
 
 
 async def _create_agent_pre_edit_checkpoint(
@@ -102,6 +148,8 @@ async def create_document_via_collab(
     scope_root: str | None = None,
     is_system: bool = False,
     media_type: str = "markdown",
+    import_tables: bool = False,
+    check_cell_cap: bool = False,
 ) -> dict:
     """Single source of truth for agent-driven document creation (PR4 R3).
 
@@ -113,6 +161,22 @@ async def create_document_via_collab(
     placeholder unwrap) are SKIPPED (the body is page source, not markdown),
     the artifact size cap applies, and the mention/embed finalize tail is
     skipped (a page cannot navigate; embeddings skip html rows).
+
+    `import_tables`: when set and the body is markdown, every GFM table in
+    `content` becomes a table object — file imports (zip, uploads, the
+    converter worker, import_file) AND the agent-authored Tool-API creates set
+    it (an authored pipe table is born as an object, never left as text). The row
+    is born with the PRE-conversion body (the GFM read-model of its own future
+    state — documents.content never holds anchor-form text, not even for a
+    moment), then `set_content(converted, persist=True, tables_json=…)`
+    replaces it in ONE Y.Doc update, and the finalize tail runs on the
+    PRE-conversion body (= expand_tables — a cell's `[t](<id>)` link stays
+    mention-visible; the anchor-form text is never what mentions read).
+    `check_cell_cap` additionally bounds each cell at
+    AGENT_TABLE_MAX_CELL_CHARS (400, nothing written) — agent-AUTHORED bodies
+    only; file imports are bounded by their file-size cap upstream. Default
+    False keeps memory cards, the zip's own row creation (content="") and html
+    pages untouched.
 
     Validates title + content cap, normalizes list spacing, validates the parent,
     derives a unique path (preserving the sort_key invariant), creates the row,
@@ -128,17 +192,16 @@ async def create_document_via_collab(
     # and any explicit parent must already be in the subtree (else 403). Unscoped
     # keys keep today's behavior (parent_id as-passed).
 
-    Returns {"doc_id": ..., "sort_key": ...}. Raises HTTPException on validation
-    failure. Caller is responsible for the access check (the two callers use
-    different access-resolution helpers) and any proposal bookkeeping.
+    Returns {"doc_id": ..., "sort_key": ..., "tables": [{table_id, label}]?}.
+    Raises HTTPException on validation failure. Caller is responsible for the
+    access check (the two callers use different access-resolution helpers) and
+    any proposal bookkeeping.
     """
     from documents.service import (
         assert_parent_valid,
         create_with_unique_path,
         effective_parent_id,
     )
-    from fastapi import HTTPException
-    from markdown_normalize import normalize_list_spacing, unwrap_placeholder_brackets
 
     from config import MAX_PROPOSAL_NEW_TEXT_CHARS
     from scope import require_doc_in_scope, resolve_scoped_parent
@@ -158,6 +221,13 @@ async def create_document_via_collab(
         # Unwrap `(<id>)` placeholder-bracket destinations — one of the three agent
         # write sites for the unwrap (create).
         content = unwrap_placeholder_brackets(normalize_list_spacing(content))
+    # GFM tables → objects: the conversion runs AFTER the checks above (they saw
+    # the pre-conversion body) and BEFORE the row birth, so a cap refusal (400)
+    # writes nothing. `content` stays PRE-conversion — the row is born with it.
+    converted, tables_json, tables_out = (
+        convert_import_tables(content, check_cell_cap)
+        if import_tables and not is_artifact else (None, None, [])
+    )
     # T5: under a scoped key, a missing parent defaults to the subtree root and an
     # explicit parent must lie inside the subtree (the wall cannot be bypassed by
     # choosing an out-of-scope parent).
@@ -196,7 +266,11 @@ async def create_document_via_collab(
         # media_type from; without it a fresh page opens as text until a reload.
         media_type=payload.get("media_type"),
     )
-    # WHY: a create that CARRIES a body runs the same finalize tail as an edit —
+    if converted is not None:
+        # ONE Y.Doc update replaces the born body: anchors + models land in a
+        # single broadcast frame (the orphan INVARIANT on table_serialize).
+        await set_content(doc_id, converted, persist=True,
+                          tables_json=tables_json)    # WHY: a create that CARRIES a body runs the same finalize tail as an edit —
     # mentions rebuilt, `content_flushed` emitted.
     # Why: the embedding debounce and the mention graph both listen on
     # `content_flushed`, so a create that only announced `document_created` left the
@@ -209,9 +283,17 @@ async def create_document_via_collab(
     # embed (same reasoning jobs/tasks.py records for its own double emit).
     # html artifacts skip the tail: mentions are gated off at the rebuild
     # chokepoint anyway and embeddings skip html rows — no read model to update.
+    # WHY the tail takes the PRE-conversion body: after an import_tables
+    # conversion it equals expand_tables(doc) — the GFM read-model — so a
+    # mention link inside a converted cell ([t](<id>)) stays visible to
+    # rebuild_doc_mentions. The anchor-form `converted` text is NEVER passed
+    # here (cell links would be invisible = data loss).
     if content and not is_artifact:
         await doc_state.finalize_content_mutation(doc_id, content, project_id)
-    return {"doc_id": doc_id, "sort_key": payload.get("sort_key")}
+    result = {"doc_id": doc_id, "sort_key": payload.get("sort_key")}
+    if tables_out:
+        result["tables"] = tables_out
+    return result
 
 
 async def create_reference_via_collab(
@@ -225,6 +307,8 @@ async def create_reference_via_collab(
     user: dict,
     scope_root: str | None = None,
     author_name: str | None = None,
+    import_tables: bool = False,
+    check_cell_cap: bool = False,
 ) -> dict:
     """Single source of truth for agent-driven reference creation.
 
@@ -235,6 +319,18 @@ async def create_reference_via_collab(
     the 409 note on `create_document_via_collab`) both land here so the two
     entry points can never drift on invariants.
 
+    `import_tables`: when set and media_type is markdown, every GFM table in
+    `content` becomes a table object — file imports and the agent-authored
+    Tool-API reference creates both set it. The row is born with the
+    PRE-conversion body (documents.content is never anchor-form, not even for
+    a moment), then `set_content(converted, persist=True, tables_json=…)`
+    replaces it in ONE Y.Doc update, then the finalize tail runs on the
+    PRE-conversion body (= expand_tables — a cell's `[t](<id>)` link stays
+    mention-visible). This factory gains exactly ONE new check with it:
+    `check_cell_cap` bounds each cell at AGENT_TABLE_MAX_CELL_CHARS (400,
+    nothing written) for agent-AUTHORED bodies; no size cap, no remote-image
+    guard here.
+
     # ARCH (subtree-scoped agent keys): the host document must be inside the
     # subtree (a reference attaches to its host — the wall covers the anchor too).
 
@@ -242,11 +338,11 @@ async def create_reference_via_collab(
     key's label, resolved by api_key_auth.agent_author_name at the surface. None
     (default / chat-agent callers) keeps the owning user's name.
 
-    Returns {"doc_id": ...} (the new reference's id). Raises HTTPException on
-    validation failure. The caller owns the access check and proposal bookkeeping.
+    Returns {"doc_id": ..., "tables": [{table_id, label}]?}. Raises HTTPException
+    on validation failure. The caller owns the access check and proposal
+    bookkeeping.
     """
     from documents.service import create_reference_row
-    from fastapi import HTTPException
 
     from scope import require_doc_in_scope
 
@@ -267,6 +363,13 @@ async def create_reference_via_collab(
     if not document_id:
         raise HTTPException(status_code=400, detail="A reference requires a host document")
     await require_doc_in_scope(scope_root, document_id)
+    # GFM tables → objects, BEFORE the row birth (a cap refusal writes nothing).
+    # `content` stays PRE-conversion — the row is born with it.
+    is_markdown_body = import_tables and media_type == "markdown"
+    converted, tables_json, tables_out = (
+        convert_import_tables(content, check_cell_cap)
+        if is_markdown_body else (None, None, [])
+    )
     ref_id = str(uuid4())
     try:
         await create_reference_row(
@@ -281,4 +384,19 @@ async def create_reference_via_collab(
     except Exception:
         logger.exception("Agent create_reference failed (project=%s)", project_id)
         raise HTTPException(status_code=500, detail="Failed to create reference")
-    return {"doc_id": ref_id}
+    if converted is not None:
+        # ONE Y.Doc update replaces the born body: anchors + models land in a
+        # single broadcast frame (the orphan INVARIANT on table_serialize).
+        await set_content(ref_id, converted, persist=True,
+                          tables_json=tables_json)
+    if is_markdown_body:
+        # Finalize tail on the EXPANDED body (the PRE-conversion content equals
+        # expand_tables(doc)): mention links inside converted cells stay visible
+        # to rebuild_doc_mentions — the anchor-form text is never what mentions
+        # read. The birth emit from create_reference_row + this content_flushed
+        # collapse in the embedding debounce (one embed).
+        await doc_state.finalize_content_mutation(ref_id, content, project_id)
+    result = {"doc_id": ref_id}
+    if tables_out:
+        result["tables"] = tables_out
+    return result

@@ -179,7 +179,9 @@ async def _apply_create_document_direct(
     `agent.tool_api_surface.create_document_via_collab`. The access
     check stays here (the Tool-API direct path uses project access).
     `media_type` rides the primitive's own kind handling ("html" = the
-    artifact leaf passes).
+    artifact leaf passes). An AUTHORED markdown body lands its pipe tables as
+    table objects (`import_tables` + the authored-cell cap) — the same ingress
+    rule as every markdown import.
     """
     await require_full_project_access(project_id, user, "create")
     from agent.collab_writes import create_document_via_collab
@@ -188,8 +190,13 @@ async def _apply_create_document_direct(
         title=title, content=content, parent_id=parent_id,
         project_id=project_id, user=user, scope_root=scope_root,
         media_type=media_type,
+        import_tables=True, check_cell_cap=True,
     )
-    return {"status": "applied", "doc_id": created["doc_id"]}
+    result = {"status": "applied", "doc_id": created["doc_id"]}
+    if created.get("tables"):
+        # The agent learns the fresh table ids without a read_document.
+        result["tables"] = created["tables"]
+    return result
 
 
 async def _apply_create_reference_direct(
@@ -201,6 +208,10 @@ async def _apply_create_reference_direct(
 
     `author_name` (S1): the DISPLAY-axis byline — the making agent key's label
     (api_key_auth.agent_author_name at the surface). None keeps the user's name.
+
+    An AUTHORED markdown body lands its pipe tables as table objects
+    (`import_tables` + the authored-cell cap) — the factory gates on
+    media_type == "markdown", so binary references are untouched.
     """
     await require_full_project_access(project_id, user, "create")
     from agent.collab_writes import create_reference_via_collab
@@ -210,9 +221,14 @@ async def _apply_create_reference_direct(
         media_type=media_type, source_url=source_url,
         project_id=project_id, user=user, scope_root=scope_root,
         author_name=author_name,
+        import_tables=True, check_cell_cap=True,
     )
     ref_id = created["doc_id"]
-    return {"status": "applied", "reference_id": ref_id, "doc_id": ref_id}
+    result = {"status": "applied", "reference_id": ref_id, "doc_id": ref_id}
+    if created.get("tables"):
+        # The agent learns the fresh table ids without a read_document.
+        result["tables"] = created["tables"]
+    return result
 
 
 async def _apply_edit_table_cell_direct(

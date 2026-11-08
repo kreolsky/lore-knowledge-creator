@@ -53,11 +53,12 @@ class TestFlushCompactGate:
         db_mock = AsyncMock()
         db_mock.query = AsyncMock()
         # Stack the patches; the returned context manager wraps all of them.
+        # (No mention-extraction patch: the seeded "hello" content holds no
+        # links, so the pair diff skips the rebuild on its own.)
         from contextlib import ExitStack
         stack = ExitStack()
         stack.enter_context(patch("collab.flush_pipeline.get_db", return_value=db_mock))
         stack.enter_context(EnqueueRecorder.active())
-        stack.enter_context(patch("collab.flush_pipeline.extract_doc_mentions", return_value=[]))
         return stack
 
     async def test_flush_skips_compact_below_threshold(self):
@@ -89,24 +90,24 @@ class TestFlushCompactGate:
 
 
 class TestBacklinksEmitTimeout:
-    """T1: when the backlinks_changed_batch emit times out, the mention-id cache
+    """T1: when the backlinks_changed_batch emit times out, the edge-pair cache
     must NOT advance — otherwise the (idempotent) rebuild + re-emit never re-runs
     and peers miss that backlinks delta forever. The cache staying stale makes the
     next flush retry the whole mention delta."""
 
     async def test_emit_timeout_leaves_cache_stale_for_retry(self):
         session = _mk_session()
-        session._last_mention_ids = {"old1"}
+        session._last_edge_pairs = {("old1", "mention")}
         db_mock = AsyncMock()
-        content = "body [[doc:changed]]"
+        # Real link syntax: the extracted pairs differ from the seeded cache, so
+        # the rebuild runs (against the mocked db) and the emit fires.
+        content = "body [x](changed)"
 
-        with patch("collab.flush_pipeline.extract_doc_mentions", return_value=["changed"]):
-            with patch("mentions.rebuild_doc_mentions", new_callable=AsyncMock):
-                with patch("event_bus.emit", new_callable=AsyncMock, side_effect=asyncio.TimeoutError):
-                    await session._flush_pipeline._rebuild_mentions_if_needed(db_mock, content)
+        with patch("event_bus.emit", new_callable=AsyncMock, side_effect=asyncio.TimeoutError):
+            await session._flush_pipeline._rebuild_mentions_if_needed(db_mock, content)
 
         # Cache unchanged so the next flush sees the same delta and retries.
-        assert session._last_mention_ids == {"old1"}
+        assert session._last_edge_pairs == {("old1", "mention")}
 
 
 class TestFlushPipelineProxySurface:

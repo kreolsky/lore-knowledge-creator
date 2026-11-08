@@ -1827,7 +1827,8 @@ body.ref-drag-none, body.ref-drag-none * { cursor: no-drop !important; }
   /* INVARIANT: column widths never change by themselves — only a user's resize
      changes them. Why: table-layout:auto re-measured content on every focus change
      (a live cell shows raw markdown, wider than the rendered placeholder), so a click
-     made columns jump. fixed: a px column keeps its width; auto columns (w=0 → empty
+     made columns jump. Tables are born all-px (birthColumnWidths, from text length).
+     fixed: a px column keeps its width; auto columns (w=0 → empty
      <col> width) split the remaining document width EQUALLY, independent of content.
      width:100% applies only while a column is auto: an all-px table gets its sum inline
      (applyColumnWidths), or the browser rescales every column to fill the line. */

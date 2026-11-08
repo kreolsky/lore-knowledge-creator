@@ -37,7 +37,7 @@ from collab.timeout import (
 )
 from db import get_db
 from jobs import pool as jobs_pool
-from mentions import extract_doc_mentions
+from mentions import content_edge_pairs
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ def flush_pipeline_failures() -> int:
 class FlushPipeline:
     """The flush→backup→mention pipeline for a CollabSession.
 
-    Holds the pipeline-private state (content/tables baselines, mention-id cache, backup
+    Holds the pipeline-private state (content/tables baselines, edge-pair cache, backup
     job-id dedup, compact gate counter, degraded/failure counters) and the _flush_lock
     that serializes the pipeline. Receives the owning CollabSession as a dependency (NOT
     a subclass) and reads its Y.Doc / content / last-editor fields; recovery/degraded
@@ -78,7 +78,10 @@ class FlushPipeline:
         self.session = session
         self._last_flushed_content: str = ""
         self._last_flushed_tables_json: str = "{}"
-        self._last_mention_ids: set[str] = set()
+        # (target_id, kind) pairs the last flush left in doc_mentions (plan
+        # typed-edges): a link turning into an embed of the SAME target changes
+        # the pair set and must rebuild, where a target-id set could not see it.
+        self._last_edge_pairs: set[tuple[str, str]] = set()
         self._last_backup_job_id: str | None = None
         self._updates_since_compact: int = 0
         self._consecutive_flush_failures: int = 0
@@ -201,9 +204,20 @@ class FlushPipeline:
         )
 
     async def _rebuild_mentions_if_needed(self, db, content: str) -> None:
-        """Rebuild mention edges if the set of mentioned IDs changed."""
-        new_mentions = set(extract_doc_mentions(content)) - {self.session.entity_id}
-        if new_mentions == self._last_mention_ids:
+        """Rebuild mention edges if the set of (target, kind) pairs changed.
+
+        # ARCH: pair-based detection (plan typed-edges) — a link turning into an
+        # embed of the SAME target flips the kind and must rebuild; the old
+        # target-id set could not see it. Pairs also include `ref:` targets
+        # (extract_content_edges), so a collab edit touching only `[t](ref:X)`
+        # now rebuilds too — the old detector (extract_doc_mentions) rejected
+        # `ref:` and never fired for such edits (more rebuilds, correct graph).
+        # The emit keeps the affected TARGET ids and ADDS the source id, so a
+        # client joined to the source refreshes its outgoing list on the same
+        # backlinks_changed_batch event (the panel reads both directions).
+        """
+        new_pairs = content_edge_pairs(content, exclude=self.session.entity_id)
+        if new_pairs == self._last_edge_pairs:
             return
         from mentions import rebuild_doc_mentions
         try:
@@ -213,22 +227,23 @@ class FlushPipeline:
             )
         except asyncio.TimeoutError:
             return
-        affected = list((new_mentions - self._last_mention_ids) | (self._last_mention_ids - new_mentions))
-        if affected:
+        affected_ids = {tid for tid, _kind in new_pairs ^ self._last_edge_pairs}
+        affected_ids.add(self.session.entity_id)
+        if affected_ids:
             try:
                 await _with_timeout(
-                    event_bus.emit("backlinks_changed_batch", document_ids=affected),
+                    event_bus.emit("backlinks_changed_batch", document_ids=list(affected_ids)),
                     TIMEOUT_EVENT_EMIT_SEC, "emit(backlinks_changed_batch)",
                 )
             except asyncio.TimeoutError:
-                # ARCH: do NOT advance _last_mention_ids on emit timeout. Why: the
+                # ARCH: do NOT advance _last_edge_pairs on emit timeout. Why: the
                 # mentions were already rebuilt in DB above, but peers never got the
                 # backlinks_changed_batch delta. Leaving the cache stale makes the next
                 # flush re-run the (idempotent) rebuild and re-emit, so a transient emit
                 # timeout does not permanently drop the backlinks refresh. Returning here
-                # skips the `_last_mention_ids = new_mentions` below.
+                # skips the `_last_edge_pairs = new_pairs` below.
                 return
-        self._last_mention_ids = new_mentions
+        self._last_edge_pairs = new_pairs
 
     async def _handle_flush_success(self, content: str) -> dict | None:
         """Reset counters, emit content_flushed. Returns recovery broadcast if was degraded."""

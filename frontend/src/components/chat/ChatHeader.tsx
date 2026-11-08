@@ -1,7 +1,7 @@
 /** Chat header — static title (double-click to rename) + new chat / goto-parent / unindexed toggle / export / analyse-in-new-chat / delete. Chat-store slices: sessions, activeSessionId, modelsLoaded, createSession, setActiveSession, deleteSession, updateSession, setChatUnindexed, loadModels. App-store slices: currentProject, currentDocument, currentReference. */
 
 import { useState, useCallback, useEffect } from 'react';
-import { ArrowLeft, Trash2, Download, FileText, Network, Clock, FolderUp, ShieldCheck, Sparkles } from 'lucide-react';
+import { ArrowLeft, Trash2, Download, FileText, Network, Clock, FolderUp, EyeOff, Sparkles } from 'lucide-react';
 import { Button, IconButton, FieldInput, Popover } from '../ui';
 import { ParentPickerPopup } from '../ParentPickerPopup';
 import { useChatStore, selectBranchPath } from '../../store/chat-store';
@@ -332,7 +332,7 @@ export function ChatHeader() {
             title={activeSession?.unindexed ? t('chatUnindexedOn') : t('chatUnindexedOff')}
             onClick={() => { void setChatUnindexed(!activeSession?.unindexed); }}
           >
-            <ShieldCheck size={14} />
+            <EyeOff size={14} />
           </IconButton>
           <IconButton
             size="sm"

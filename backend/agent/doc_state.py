@@ -105,6 +105,7 @@ async def resolve_live_doc_state(doc_id: str) -> tuple[str, str]:
 
 async def route_document_content(
     *, doc_id: str, new_content: str, project_id: str | None,
+    tables_json: str | None = None, finalize_body: str | None = None,
 ) -> bool:
     """Single content-convergence path for agent edits.
 
@@ -113,6 +114,14 @@ async def route_document_content(
     `content_flushed`. Both `apply_edit_to_document` and the proposal edit apply
     path delegate here so there is exactly ONE orchestration for content mutation
     (no copy-pasted CRDT-route → set_content → mentions → emit tail).
+
+    `tables_json`: fresh table models (the capture shape) pairing with anchors
+    in `new_content` — forwarded to BOTH convergence legs (the live session's
+    apply_tables_json rebuild and set_content) so anchor + models land in ONE
+    update. `finalize_body`: the EXPANDED text mentions must read (the
+    PRE-conversion body equals expand_tables of the fresh state); a caller that
+    passes fresh `tables_json` MUST pass it — the anchor-form `new_content`
+    would hide a cell's `[t](<id>)` link from rebuild_doc_mentions.
 
     # WHY: identical convergence path to the in-editor agent. Returns whether
     # the change was routed through a live session (True) or persisted directly.  Why: same convergence contract as the in-editor agent — routes via the live collab session when one is connected (True), else persists directly, but never bypasses the single mutation source.
@@ -131,15 +140,21 @@ async def route_document_content(
     # entry points (append_text). Do NOT restore it here — a buffer may legitimately
     # carry an image a human typed; the boundary is what the agent authors, not the
     # whole document state it converges.
-    routed = await apply_external_content_change("doc", doc_id, new_content)
+    routed = await apply_external_content_change(
+        "doc", doc_id, new_content, tables_json=tables_json,
+    )
     if not routed:
-        await set_content(doc_id, new_content, persist=True)
-        await finalize_content_mutation(doc_id, new_content, project_id)
+        await set_content(doc_id, new_content, persist=True, tables_json=tables_json)
+        await finalize_content_mutation(
+            doc_id, finalize_body if finalize_body is not None else new_content,
+            project_id,
+        )
     return routed
 
 
 async def route_document_edits(
     *, doc_id: str, edits: list[dict], project_id: str | None,
+    new_tables: dict[str, list[list[str]]] | None = None,
 ) -> bool:
     """Surgical batch convergence: N non-overlapping slices in ONE Y.Doc update.
 
@@ -151,6 +166,12 @@ async def route_document_edits(
     `content_flushed` (the table-cell batch publishes N times via per-cell
     `route_tables_mutation`; the text batch must NOT — a weak model reorganizing
     a doc should produce ONE History entry, not N).
+
+    `new_tables`: fresh models for pipe tables the SAME batch converted to
+    anchors (edit-path GFM→object conversion). Each `create_table_entry` runs
+    in the SAME `doc.transaction()` as the splices — anchor + model land in one
+    broadcast frame, never an orphan intermediate (the table-block INVARIANT),
+    and the ONE publish contract above still holds.
 
     # INVARIANT(corruption): edits MUST be in DESCENDING from_cp order (the
     # validation pass sorts them) so each splice's earlier offsets stay valid.
@@ -174,14 +195,21 @@ async def route_document_edits(
     if session is not None:
         from collab.sync import MSG_SYNC, create_update_message, wrap_binary
 
+        from table_serialize import create_table_entry
         from ydoc_store import publish_doc_update
 
         async with session._write_lock:
             text = session._get_text()
-            for e in edits:
-                surgical_splice_text(
-                    text, e["from_cp"], e["to_cp"], e["new_text"], e.get("original_text"),
-                )
+            # ONE transaction: the batch's splices AND every converted table's
+            # model — a replica never receives an anchor without its model.
+            with session.ydoc.transaction():
+                for e in edits:
+                    surgical_splice_text(
+                        text, e["from_cp"], e["to_cp"], e["new_text"],
+                        e.get("original_text"),
+                    )
+                for tid, matrix in (new_tables or {}).items():
+                    create_table_entry(session.ydoc, tid, matrix)
             update = session.ydoc.get_update()
             session._dirty = True
             resync_msg = wrap_binary(doc_id, MSG_SYNC, create_update_message(update))
@@ -192,16 +220,22 @@ async def route_document_edits(
         return True
 
     # No live session: surgical load + N del/inserts + persist snapshot + ONE publish.
-    from table_serialize import expand_tables
+    from table_serialize import create_table_entry, expand_tables
     from ydoc_store import get_text, publish_doc_update
     from ydoc_store import load as load_ydoc
 
     doc = await load_ydoc(doc_id)
     text = get_text(doc)
-    for e in edits:
-        surgical_splice_text(
-            text, e["from_cp"], e["to_cp"], e["new_text"], e.get("original_text"),
-        )
+    # Same ONE-transaction contract as the live branch: splices + converted
+    # models land in a single Yjs update, so the persisted snapshot below and
+    # the broadcast carry both together.
+    with doc.transaction():
+        for e in edits:
+            surgical_splice_text(
+                text, e["from_cp"], e["to_cp"], e["new_text"], e.get("original_text"),
+            )
+        for tid, matrix in (new_tables or {}).items():
+            create_table_entry(doc, tid, matrix)
     new_content = expand_tables(doc)
     snapshot = doc.get_update()
     # INVARIANT(corruption): persist the FULL snapshot as ydoc_state and prune the
@@ -241,9 +275,14 @@ async def finalize_content_mutation(doc_id: str, new_content: str,
     db2 = await get_db()
     from mentions import rebuild_doc_mentions
 
-    mention_ids = await rebuild_doc_mentions(db2, "documents", doc_id, new_content)
-    if mention_ids:
-        await event_bus.emit("backlinks_changed_batch", document_ids=mention_ids)
+    pairs = await rebuild_doc_mentions(db2, "documents", doc_id, new_content)
+    if pairs:
+        # Affected ids = targets + the SOURCE (plan typed-edges): a client
+        # joined to the source refreshes its outgoing list on the same event.
+        await event_bus.emit(
+            "backlinks_changed_batch",
+            document_ids=[doc_id, *(tid for tid, _kind in pairs)],
+        )
     await event_bus.emit(
         "content_flushed",
         entity_type="doc",
