@@ -187,3 +187,45 @@ class ApiKeyResponse(BaseModel):
     created_at: str
     last_used_at: str | None
     expires_at: str | None = None
+
+
+class CreateSecretRequest(BaseModel):
+    """POST /api/cabinet/secrets body — the value is write-only: it exists in
+    the request, the Fernet ciphertext and the tool handler, never in any
+    response. Name/hosts are validated at the route through
+    user_secrets (the contract's single home)."""
+    name: str
+    value: str = Field(min_length=1, max_length=8192)
+    description: str = Field(default="", max_length=2000)
+    hosts: list[str] = Field(min_length=1, max_length=32)
+    header_name: str = "Authorization"
+    header_template: str = Field(default="Bearer {{value}}", max_length=1024)
+    query_param: str = Field(default="", max_length=64)
+
+
+class UpdateSecretRequest(BaseModel):
+    """PATCH /api/cabinet/secrets/{name} body — every field optional; `value`
+    re-enters the key (a PATCH without it keeps the stored ciphertext)."""
+    value: str | None = Field(default=None, min_length=1, max_length=8192)
+    description: str | None = Field(default=None, max_length=2000)
+    hosts: list[str] | None = Field(default=None, min_length=1, max_length=32)
+    header_name: str | None = None
+    header_template: str | None = Field(default=None, max_length=1024)
+    # None = keep, '' = clear (back to header mode).
+    query_param: str | None = Field(default=None, max_length=64)
+    enabled: bool | None = None
+
+
+class McpServerKeyValue(BaseModel):
+    """PUT /api/cabinet/mcp/{server_id}/secrets body — the caller's key for
+    the server, write-only like CreateSecretRequest.value; the row's hosts
+    binding is the server's CURRENT host (the route sets it, the user
+    cannot)."""
+    value: str = Field(min_length=1, max_length=8192)
+
+
+class McpServerToggle(BaseModel):
+    """PATCH /api/cabinet/mcp/{server_id} body — the per-user toggle for
+    EVERY auth mode: adds/removes the caller in the server row's
+    disabled_by."""
+    enabled: bool

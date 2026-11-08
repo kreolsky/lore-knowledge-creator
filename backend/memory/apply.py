@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import logging
 
+from doc_edit_lock import edit_lock
 from fastapi import HTTPException
 
 import event_bus
 from db import get_db
+from embeddings import reembed_now
 from memory._apply_resolution import (
     _apply_verdicts,
     _resolve_run,
@@ -41,10 +43,16 @@ logger = logging.getLogger(__name__)
 
 
 async def _resolve_apply_inputs(
-    *, project_id: str, run_id: str, reference_id: str,
+    *, project_id: str, run_id: str, source: dict,
     verdicts: list[dict], user: dict | None,
 ) -> tuple[str, dict, dict[int, str]]:
     """Resolve the run context and the pre-lock refusal map (read-only gates only).
+
+    `source` is the ALREADY-VALIDATED typed provenance entry — `{kind:
+    "reference", id}` from `_portion_source` for a consolidation batch,
+    `{kind: "chat", id}` stamped from the server-side session id for a chat
+    save (apply_chat_verdicts). It is never caller-supplied (see
+    `_stamp_provenance`).
 
     Both refusal sources only READ, so they run BEFORE the project lock — holding it
     across the duplicate gate's embedding round-trip (or the staleness gate's scan)
@@ -58,7 +66,6 @@ async def _resolve_apply_inputs(
 
     run = await _resolve_run(project_id, run_id)
     scope_root = run.scope_root
-    source = await _portion_source(project_id, reference_id)
     if user is None:
         # INVARIANT(security): a memory write runs under the OWNING user's identity.
         # Why: the project-wide rule that an agent can never exceed the invoking user's
@@ -83,6 +90,11 @@ async def apply_memory_verdicts(
 ) -> dict:
     """Apply a batch of per-fact verdicts under the project's memory lock.
 
+    The REFERENCE-sourced entry: the batch consolidates one portion of one
+    reference, so the source is validated (`_portion_source`) and the result
+    carries the per-reference shape. The chat-sourced twin is
+    `apply_chat_verdicts`.
+
     # ARCH: ONE lock per PROJECT. Two runs on different targets serialize where
     # per-target scoping used to let them proceed independently — accepted, because it
     # is the same lock that makes a merge safe: a merge is a read-compute-write cycle
@@ -92,10 +104,43 @@ async def apply_memory_verdicts(
     # applies on different replicas serialize too — ambient consolidation would
     # be safe; nothing in the current design limits it to one replica.
     """
-    from doc_edit_lock import edit_lock
+    source = await _portion_source(project_id, reference_id)
+    return await _apply_verdict_batch(
+        project_id=project_id, run_id=run_id, verdicts=verdicts, source=source,
+        reference_id=reference_id, user=user,
+    )
 
+
+async def apply_chat_verdicts(
+    *, project_id: str, run_id: str, verdicts: list[dict], session_id: str,
+    user: dict | None = None,
+) -> dict:
+    """Apply a batch of facts saved from ONE chat — the chat-sourced twin of
+    `apply_memory_verdicts`.
+
+    # ARCH: the source is STAMPED from the server-side session id, exactly like
+    # the reference entry stamps its portion — the model never supplies it (see
+    # `_stamp_provenance`). The session's existence/ownership is the TOOL
+    # route's gate (owned_session_row); here the id is already trusted input.
+    A chat source has no per-reference shape (`_reference_shape` is skipped,
+    `reference_id=None`), and the fact's narrow follows the chat's
+    `chat_sessions.document_id` at query time (retrieval._allowed_fact_ids) —
+    no denormalized document id on the fact.
+    """
+    return await _apply_verdict_batch(
+        project_id=project_id, run_id=run_id, verdicts=verdicts,
+        source={"kind": "chat", "id": session_id},
+        reference_id=None, user=user,
+    )
+
+
+async def _apply_verdict_batch(
+    *, project_id: str, run_id: str, verdicts: list[dict], source: dict,
+    reference_id: str | None, user: dict | None,
+) -> dict:
+    """The shared apply body: pre-lock gates, one project lock, post-lock embeds."""
     scope_root, user, extra_errors = await _resolve_apply_inputs(
-        project_id=project_id, run_id=run_id, reference_id=reference_id,
+        project_id=project_id, run_id=run_id, source=source,
         verdicts=verdicts, user=user,
     )
     # Namespaced key in the shared Redis edit-lock keyspace — a uuid doc id can
@@ -115,8 +160,6 @@ async def apply_memory_verdicts(
     # portion's dedup gate and merge candidates cannot see a fact whose vector
     # arrives a cooldown later. reembed_now never raises — a provider blip costs
     # the early vector, not the apply; the debounced job still catches up.
-    from embeddings import reembed_now
-
     for doc_id in written:
         await reembed_now(doc_id, project_id)
     return result
@@ -278,10 +321,12 @@ async def _reference_shape(
 
 async def _apply_locked(
     *, project_id: str, run_id: str, verdicts: list[dict], scope_root: str, user: dict,
-    reference_id: str, extra_errors: dict[int, str] | None = None,
+    reference_id: str | None, extra_errors: dict[int, str] | None = None,
 ) -> tuple[dict, list[str]]:
     """The batch body, under the lock. Returns `(result, written)` — `written`
-    feeds the post-lock inline embed in `apply_memory_verdicts`."""
+    feeds the post-lock inline embed in `_apply_verdict_batch`. `reference_id`
+    is None for a chat-sourced batch: there is no per-reference shape to
+    report and no batches-per-reference counter to bump."""
     # `extra_errors` was decided before the lock (see `_resolve_apply_inputs`) and is
     # merged into the preflight so the batch reports every refusal together. Today it
     # carries the two read-only, pre-lock gates: the duplicate gate and the staleness
@@ -300,9 +345,12 @@ async def _apply_locked(
     # hot path used to scan twice — once for stats, once for the per-reference number).
     shape = await memory_shape(project_id)
     stats = {"facts": shape["facts"], "retired": shape["retired"]}
-    reference_shape = await _reference_shape(
-        run_id=run_id, reference_id=reference_id,
-        facts=shape["by_reference"].get(reference_id, 0),
+    reference_shape = (
+        await _reference_shape(
+            run_id=run_id, reference_id=reference_id,
+            facts=shape["by_reference"].get(reference_id, 0),
+        )
+        if reference_id is not None else None
     )
     result = await _build_apply_result(
         written=written, created=created, actions=actions, skipped=skipped,
@@ -372,4 +420,4 @@ async def _build_apply_result(
     }
 
 
-__all__ = ["apply_memory_verdicts"]
+__all__ = ["apply_memory_verdicts", "apply_chat_verdicts"]

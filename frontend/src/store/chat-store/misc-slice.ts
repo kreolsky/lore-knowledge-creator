@@ -53,14 +53,17 @@ type MiscSlice = Pick<
 
 export function createMiscSlice(set: Set, get: Get): MiscSlice {
   return {
-    addPendingImage(dataUrl: string) {
-      set(s => ({ pendingImages: [...s.pendingImages, dataUrl] }));
+    addPendingImage(dataUrl, meta) {
+      set(s => ({
+        pendingImages: [...s.pendingImages, dataUrl],
+        pendingImageMeta: meta ? { ...s.pendingImageMeta, [dataUrl]: meta } : s.pendingImageMeta,
+      }));
     },
     removePendingImage(index: number) {
       set(s => ({ pendingImages: s.pendingImages.filter((_, i) => i !== index) }));
     },
     clearPendingImages() {
-      set({ pendingImages: [] });
+      set({ pendingImages: [], pendingImageMeta: {} });
     },
     // Composer draft (shared, session-agnostic — see ChatState.draft). Held in the
     // store so the text survives ChatPanel unmount on right-panel tab switches.
@@ -78,6 +81,7 @@ export function createMiscSlice(set: Set, get: Get): MiscSlice {
         useAppStore.getState().setMaxAttachmentMb(
           Number(data.max_attachment_mb) > 0 ? Number(data.max_attachment_mb) : 5,
         );
+        useAppStore.getState().setModelImageMaxPixels(data.model_image_max_pixels ?? null);
         set({
           models: data.models ?? [],
           // ARCH: vision set projected server-side off the gateway metadata;
@@ -133,6 +137,7 @@ export function createMiscSlice(set: Set, get: Get): MiscSlice {
         turnRanges: {},
         turnStartSeq: null,
         pendingImages: [],
+        pendingImageMeta: {},
         pendingFiles: [],
         // Shared composer draft — logout hygiene: the prior user's draft must
         // never render after a same-tab re-login.

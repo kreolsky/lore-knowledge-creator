@@ -75,7 +75,7 @@
   --bg: #ecebe7;
   --surface: #e4e2dd;
   /* Midpoint between --bg and --surface (transclusion band background). */
-  --surface-transclusion: #e8e5e0;
+  --surface-transclusion: color-mix(in srgb, var(--bg) 50%, var(--surface));
   --surface2: #dbd8d2;
   --surface3: #cccac4;
   /* One step past surface3, away from the panel: hover of a control resting on surface3. */
@@ -90,16 +90,16 @@
      where --bg would merge with the page behind the popup. */
   --preview-title-bg: var(--surface2);
   --border: #cccac4;
-  --border-soft: #e4e2dd;
+  --border-soft: var(--surface);
   --header-bg: #d6d3cd;
   --text: #1a1918;
   --text-muted: #5a5855;
   --text-dim: #a09e9a;
   --text-strong: var(--text);
   --accent: #6255e0;
-  --accent-glow: rgba(98, 85, 224, 0.20);
-  --selection-bg: rgba(98, 85, 224, 0.32);
-  --accent-soft: rgba(98, 85, 224, 0.07);
+  --accent-glow: color-mix(in srgb, var(--accent) 20%, transparent);
+  --selection-bg: color-mix(in srgb, var(--accent) 32%, transparent);
+  --accent-soft: color-mix(in srgb, var(--accent) 7%, transparent);
   /* Accent as TEXT/icon ink. Light: the fill itself reads fine on light surfaces. */
   --accent-text: var(--accent);
   /* Subtle button hover fill (warm-tint in light theme). */
@@ -114,8 +114,8 @@
   --orange: #f97316;
   /* Diff "removed" fill — matches anchorless note default (ListPill.module.css). */
   --diff-removed-bg: rgba(255, 70, 70, 0.14);
-  --handle-bg: #bcbab4;
-  --handle-bg-hover: #6255e0;
+  --handle-bg: var(--surface4);
+  --handle-bg-hover: var(--accent);
   --warm-tint: #F0E7C2;
   --warm-strong: #F2DE9D;
   --warm-mid: #F1E2AD;
@@ -180,7 +180,7 @@ html.dark {
   --bg: #1e1e1e;
   --surface: #262626;
   /* Midpoint between --bg and --surface (transclusion band background). */
-  --surface-transclusion: #222222;
+  --surface-transclusion: color-mix(in srgb, var(--bg) 50%, var(--surface));
   --surface2: #2e2e2e;
   --surface3: #434343;
   --surface4: #505050;
@@ -188,7 +188,7 @@ html.dark {
   --composer-control-bg: var(--bg);
   --preview-title-bg: var(--header-bg);
   --border: #363636;
-  --border-soft: #2a2a2a;
+  --border-soft: color-mix(in srgb, var(--border) 50%, var(--bg));
   --header-bg: #363636;
   /* WHY: light-on-dark reads louder than its WCAG ratio — body text is dimmed
      off near-white, and muted sits well below it so the chrome stays quiet. */
@@ -199,10 +199,10 @@ html.dark {
   --text-strong: #f0f0f0;
   --text-dim: #696969;
   --accent: #5847d1;
-  --accent-glow: rgba(88, 71, 209, 0.30);
+  --accent-glow: color-mix(in srgb, var(--accent) 30%, transparent);
   /* WHY: --accent-glow barely separates from the dark canvas; selection needs a brighter, denser tint. */
-  --selection-bg: rgba(118, 102, 245, 0.55);
-  --accent-soft: rgba(88, 71, 209, 0.07);
+  --selection-bg: color-mix(in srgb, var(--accent-text) 55%, transparent);
+  --accent-soft: color-mix(in srgb, var(--accent) 7%, transparent);
   /* WHY: the deep fill (#5847d1) is too dark as text on dark surfaces; links
      and active icons use this lighter tint of the same hue. */
   --accent-text: #8f84f5;
@@ -218,8 +218,8 @@ html.dark {
   --orange: #fb923c;
   /* Diff "removed" fill — matches anchorless note default (ListPill.module.css). */
   --diff-removed-bg: rgba(200, 50, 50, 0.16);
-  --handle-bg: #363636;
-  --handle-bg-hover: #5847d1;
+  --handle-bg: var(--border);
+  --handle-bg-hover: var(--accent);
   /* WHY: the warm accent is neutral in dark — a warm tint on dark surfaces was
      rejected; only -strong keeps a warm hue. */
   --warm-tint: var(--surface);
@@ -1112,7 +1112,7 @@ html.dark .resizer:not(:hover):not(.dragging)::before {
 .right-tab.notes-tab-unread.active,
 .right-tab.refs-tab-unread.active {
   background: var(--warm-tint);
-  color: #6b5e10;
+  color: var(--warm-ink);
 }
 html.dark .right-tab.notes-tab-thread.active,
 html.dark .right-tab.notes-tab-unread.active,
@@ -1124,7 +1124,7 @@ html.dark .right-tab.refs-tab-unread.active {
 .right-tab.notes-tab-unread.inactive,
 .right-tab.refs-tab-unread.inactive {
   background: var(--warm-strong);
-  color: #6b5e10;
+  color: var(--warm-ink);
 }
 .right-tab.notes-tab-thread.inactive:hover,
 .right-tab.notes-tab-unread.inactive:hover,
@@ -1159,7 +1159,7 @@ html.dark .right-tab.refs-tab-unread.inactive:hover {
 }
 .right-tab.access-tab--yellow.inactive {
   background: var(--warm-strong);
-  color: #6b5e10;
+  color: var(--warm-ink);
 }
 .right-tab.access-tab--yellow.active {
   background: var(--warm-mid);

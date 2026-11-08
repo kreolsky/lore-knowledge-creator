@@ -58,6 +58,7 @@ export interface TurnToolCtx {
   document_id: string | null
   mutating: Set<string>
   holdable: Set<string>
+  perCallApproval: Set<string>
   regionTools: Set<string>
   region: Record<string, unknown> | null
   /** The turn model's vision bit (caps.ts, off the gateway roster) — the
@@ -75,6 +76,7 @@ export interface SessionToolCtx {
   agentKey: string
   mutating: Set<string>
   holdable: Set<string>
+  perCallApproval: Set<string>
   regionTools: Set<string>
 }
 
@@ -252,6 +254,7 @@ export function loreTurnCtxFor(dshId: string): TurnToolCtx | undefined {
     document_id: request.document_id,
     mutating: standing.mutating,
     holdable: standing.holdable,
+    perCallApproval: standing.perCallApproval,
     regionTools: standing.regionTools,
     region: request.region,
     vision: request.vision,

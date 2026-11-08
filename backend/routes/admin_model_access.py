@@ -281,6 +281,13 @@ async def delete_group(
         "DELETE model_grants WHERE subject = $subject",
         "UPDATE projects SET audiences = audiences[WHERE subject != $subject] "
         "WHERE audiences.subject CONTAINS $subject",
+        # Strip the dead group subject from MCP server rows (see SYSTEM:
+        # mcp-servers); a server left with no subjects is admin-only until
+        # re-granted. `subjects[WHERE $this != $subject]` walks an array of
+        # STRINGS — filtering on a field name (`subject`) reads NONE for
+        # every element and keeps them all.
+        "UPDATE mcp_servers SET subjects = subjects[WHERE $this != $subject] "
+        "WHERE subjects CONTAINS $subject",
         "DELETE type::record('groups', $id)",
     ], {"id": group_id, "subject": subject})
     for pid in pids or []:

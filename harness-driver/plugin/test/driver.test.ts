@@ -328,6 +328,7 @@ test('an anthropic-api model lands under providers.anthropic with the scaffold a
     providers: { anthropic: {
       apiKeyEnv: 'LORE_AGENT_API_KEY',
       baseURL: 'http://x',
+      requestImageMaxBytes: 4194304,
       defaultContextWindow: 128000,
       models: [{
         id: 'deepseek-a/flash',
@@ -382,6 +383,7 @@ test('an openai model on lore produces today\'s payload unchanged', async () => 
       apiKeyEnv: 'LORE_AGENT_API_KEY',
       api: 'openai-completions',
       baseURL: 'http://gw/v1',
+      requestImageMaxBytes: 4194304,
       compat: { supportsDeveloperRole: false, maxTokensField: 'max_tokens', thinkingFormat: 'openai' },
       defaultContextWindow: 128000,
       models: [{
@@ -1102,7 +1104,7 @@ test('reasoning effort: the prep wires the body effort through the selection, no
 test('the tool ctx splits: standing survives between turns, the request half does not', () => {
   setSessionToolCtx('dsh-ctx', {
     loreSessionId: 'lore-1', agentKey: 'k',
-    mutating: new Set(['edit_document']), holdable: new Set(), regionTools: new Set(),
+    mutating: new Set(['edit_document']), holdable: new Set(), perCallApproval: new Set(), regionTools: new Set(),
   })
   assert.equal(loreTurnCtxFor('dsh-ctx'), undefined,
     'standing alone answers nothing — a tool call outside a turn still errors (plan Decision)')

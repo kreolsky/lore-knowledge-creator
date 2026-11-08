@@ -18,7 +18,7 @@ import { useAppStore } from '../store/app-store';
 import { useUIStore } from '../store/ui-store';
 import { readRefOpenMode, refIsScope } from '../store/ui-store/documents-slice';
 import { useNoteStore } from '../store/note-store';
-import { useNoteChatStore } from '../store/note-chat-store';
+import { useNoteChatStore, noteAttachSurface } from '../store/note-chat-store';
 import { claimAutoOpen, openInboxObject } from '../store/inbox-store';
 import { emit } from '../events';
 import { getRoleView, type EditorRole } from '../editor/active-editor';
@@ -209,7 +209,6 @@ export function NotesPanel() {
   const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocument?.document_id ?? ''], s.compactLayout));
   const currentReference = refIsScope(refOpenMode) ? rawReference : null;
   const activeNoteThreadId = useNoteStore(s => s.activeNoteThreadId);
-  const addPendingImage = useNoteChatStore(s => s.addPendingImage);
   const setActiveNoteThreadId = useNoteStore(s => s.setActiveNoteThreadId);
   const canComment = accessLevel !== 'readonly';
   const canDelete = accessLevel === 'full' || accessLevel === 'commentator';
@@ -259,8 +258,7 @@ export function NotesPanel() {
   // always swallowed (preventDefault+stopPropagation) so it never reaches the
   // references path; images enqueue only when a note thread is open (enabled).
   const { isDragging, dragHandlers } = useImageDropHandlers({
-    getPending: () => useNoteChatStore.getState().pendingImages,
-    addImage: addPendingImage,
+    surface: noteAttachSurface,
     enabled: isThreadView,
   });
 

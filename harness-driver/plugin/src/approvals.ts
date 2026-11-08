@@ -31,6 +31,9 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
+// publicToolName is dsh's naming contract — the revoke prefix below must key
+// by exactly the names dsh registers, never a hand-built string.
+import { publicToolName } from '@deepseek-ai/dsh-mcp-client/src/tools.ts'
 
 import type { TurnToolCtx } from './tools.ts'
 
@@ -39,6 +42,8 @@ interface PendingAsk {
   loreSessionId: string
   toolName: string
   messageId: string
+  /** The tool is asked on every call: this ask can never mint a session grant. */
+  perCall: boolean
   resolve: (outcome: ApprovalOutcome) => void
   expiresAt: number
   timer: ReturnType<typeof setTimeout>
@@ -111,6 +116,10 @@ export function postVerdictAnswer(
     // a body claiming a different tool mints nothing.
     if (!toolName) return { status: 422 }
     if (toolName !== ask.toolName) return { status: 404 }
+    // INVARIANT(security): a per-call tool never gets a session grant.
+    // Why: its writes land outside Lore with no history to roll back, so one
+    // click must not silently approve the next ones.
+    if (ask.perCall) return { status: 403 }
   }
   return {
     status: 200,
@@ -212,6 +221,7 @@ export function registerLoreApprovalBridge(
         loreSessionId: tctx.loreSessionId,
         toolName: String(req.toolName ?? ''),
         messageId: tctx.messageId,
+        perCall: tctx.perCallApproval.has(String(req.toolName ?? '')),
         resolve,
         expiresAt: Date.now() + LORE_APPROVAL_MAX_S * 1000,
         timer: setTimeout(() => {
@@ -289,4 +299,29 @@ export function resetLoreApprovalBridgeForTest(): void {
   grants.clear()
   bridgeCtx = null
   turnCtxFor = null
+}
+
+/** The dsh public-name namespace of one MCP server's tools, derived through
+ * publicToolName itself (an empty raw name yields exactly `mcp__<server>__`):
+ * every public tool name of the server starts with it — server names are
+ * [A-Za-z0-9_-]{1,32}, so the prefix always survives dsh's 64-char
+ * truncation — and no other server's names can (names are unique). */
+export function serverToolPrefix(serverName: string): string {
+  return publicToolName(serverName, '')
+}
+
+/** Revoke the session's "allow for session" grants for one server's tools:
+ * a url change that remounts the server under the SAME name is a different
+ * endpoint, and a grant minted against the old one must not cover it.
+ * Returns how many grants were revoked. */
+export function revokeServerGrants(loreSessionId: string, serverName: string): number {
+  const prefix = `${loreSessionId} ${serverToolPrefix(serverName)}`
+  let revoked = 0
+  for (const key of [...grants]) {
+    if (key.startsWith(prefix)) {
+      grants.delete(key)
+      revoked += 1
+    }
+  }
+  return revoked
 }

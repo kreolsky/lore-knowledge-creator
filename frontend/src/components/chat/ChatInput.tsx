@@ -1,4 +1,4 @@
-/** Chat input area — textarea with send, stop, mic buttons + model selector + apply-mode dropdown (confirm/auto, derived from PROJECT system-prompts folder) + multi-doc context picker. Chat-store slices: streaming, dshRunning, inboxQueue, liveSend, discardQueued, activeSessionId, pendingInputFocus, pendingImages, addPendingImage, removePendingImage, clearPendingImages, pendingFiles, removePendingFile, clearPendingFiles, draft, setDraft, models, defaultModel, sessions, updateSession, createSession, sendMessage, stopGeneration, setSessionMode. App-store slices: currentProject, currentDocument, currentReference, documents, accessLevel. Context: useChatContext (reactive read), pruneContext. Picker writes directly via addItemToContext / removeItemFromContext. */
+/** Chat input area — textarea with send, stop, mic buttons + model selector + apply-mode dropdown (confirm/auto, derived from PROJECT system-prompts folder) + multi-doc context picker. Chat-store slices: streaming, dshRunning, inboxQueue, liveSend, discardQueued, activeSessionId, pendingInputFocus, pendingImages, pendingImageMeta, pressingImages, removePendingImage, clearPendingImages, pendingFiles, removePendingFile, clearPendingFiles, draft, setDraft, models, defaultModel, sessions, updateSession, createSession, sendMessage, stopGeneration, setSessionMode. App-store slices: currentProject, currentDocument, currentReference, documents, accessLevel. Context: useChatContext (reactive read), pruneContext. Picker writes directly via addItemToContext / removeItemFromContext. */
 
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { BookPlus, EyeOff, ScrollText } from 'lucide-react';
@@ -7,7 +7,7 @@ import { ChatComposer } from './ChatComposer';
 import { SelectionPill } from './SelectionPill';
 import { TokenUsageGauge } from './TokenUsageGauge';
 import { CacheHitIndicator, lastTurnCacheHit } from './CacheHitIndicator';
-import { useChatStore } from '../../store/chat-store';
+import { useChatStore, chatAttachSurface } from '../../store/chat-store';
 import type { ChatUIMode } from '../../types';
 import { deriveUIMode } from '../../types';
 import { useAppStore } from '../../store/app-store';
@@ -25,8 +25,7 @@ import { ghostPinTransfer } from '../../chat/ghost-pin-transfer';
 import { on, off, emit } from '../../events';
 import { clarifyBlock } from './clarify-format';
 import { insertAtCaret } from '../../utils/insert-at-caret';
-import { totalAttachmentBytes, attachmentBudgetExceeded, formatAttachmentMb } from '../../utils/attachment-size';
-import { selectBranchPath } from '../../store/chat-store/tree';
+import { attachImage } from '../../chat/attach-image';
 import { effectiveCap } from '../../store/chat-store/misc-slice';
 import { useSystemPrompts, useAttachmentBudget } from './chat-input-hooks';
 
@@ -61,7 +60,8 @@ export function ChatInput() {
   const cacheHit = useMemo(() => lastTurnCacheHit(conversation), [conversation]);
   const pendingInputFocus = useChatStore(s => s.pendingInputFocus);
   const images = useChatStore(s => s.pendingImages);
-  const addPendingImage = useChatStore(s => s.addPendingImage);
+  const pressingImages = useChatStore(s => s.pressingImages);
+  const imageMeta = useChatStore(s => s.pendingImageMeta);
   const removePendingImage = useChatStore(s => s.removePendingImage);
   const clearPendingImages = useChatStore(s => s.clearPendingImages);
   const pendingFiles = useChatStore(s => s.pendingFiles);
@@ -141,7 +141,6 @@ export function ChatInput() {
   const ghostModel = useChatStore(s => s.ghostModel);
   const ghostReasoningEffort = useChatStore(s => s.ghostReasoningEffort);
   const setGhostSystemPrompt = useChatStore(s => s.setGhostSystemPrompt);
-  const startGhostChat = useChatStore(s => s.startGhostChat);
   const projectId = useAppStore(s => s.currentProject?.project_id);
   const currentDocId = useAppStore(s => s.currentDocument?.document_id);
   const rawReference = useAppStore(s => s.currentReference);
@@ -268,22 +267,11 @@ export function ChatInput() {
     ? activeSession.reasoning_effort ?? null
     : ghostReasoningEffort;
 
-  // WHY: attach-time validation against the shared attachment budget
-  // (raw bytes; source = GET /chat/models → maxAttachmentMb). Send is disabled and
-  // an in-composer error is shown while over the limit, so the user gets explicit
-  // feedback instead of a silent 413 at send time.
-  // INVARIANT: the budget is the WHOLE projected body's image sum (history that
-  // rides along in apiMessages + new pending), NOT just the new turn's images.
-  // Why: the middleware caps the full request body; every send builder ships all
-  // non-deleted history images as LLM context, so they count against the cap too.
-  // (Derived state lives in useAttachmentBudget.)
-  const historyMessages = useChatStore(selectBranchPath);
-  const {
-    projectedAttachmentBytes,
-    contextOverLimit,
-    attachmentsOverLimit,
-    historyBytes,
-  } = useAttachmentBudget(maxAttachmentMb, historyMessages, images);
+  // WHY: the shared attachment budget over the turn's PRESSED images (source =
+  // GET /chat/models → maxAttachmentMb). Send is disabled and an in-composer error
+  // is shown while over the limit, so the user gets explicit feedback instead of a
+  // silent 413 at send time.
+  const { projectedAttachmentBytes, attachmentsOverLimit } = useAttachmentBudget(maxAttachmentMb, images);
 
   // INVARIANT: a selected persona ALONE permits an  Why: a persona is a complete instruction with doc metadata attached, so a persona-scoped turn may send an empty body; without a persona an empty send is blocked.
   // empty message — a persona is a complete instruction and the working
@@ -298,15 +286,8 @@ export function ChatInput() {
     filesUploading,
     systemPromptId: effectiveSystemPromptId,
     overLimit: attachmentsOverLimit,
-    contextOverLimit,
+    imagesPressing: pressingImages > 0,
   });
-
-  const handleNewChat = useCallback(() => {
-    // WHY: the conversation history alone overflows the attachment budget —
-    // start a fresh ghost so the user can send again. No POST; materialization
-    // is on first send (lazy everywhere).
-    startGhostChat();
-  }, [startGhostChat]);
 
   const handleSend = useCallback(async () => {
     if (!canSend) return;
@@ -375,37 +356,16 @@ export function ChatInput() {
     }
   }, [handleSend]);
 
-  const readImageFile = useCallback((file: File) => {
-    // WHY: enforce the shared attachment budget (sum of all images) at
-    // attach time. file.size is the new file's raw bytes; add the already-queued
-    // images' estimated bytes. Reject (with explicit feedback) before adding.
-    const pending = totalAttachmentBytes(useChatStore.getState().pendingImages);
-    if (attachmentBudgetExceeded(pending, file.size, maxAttachmentMb)) {
-      useAppStore.getState().showToast(
-        t('attachmentsExceedLimit', { used: formatAttachmentMb(pending + file.size), limit: maxAttachmentMb }),
-        'error',
-      );
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        addPendingImage(reader.result as string);
-      }
-    };
-    reader.readAsDataURL(file);
-  }, [maxAttachmentMb, t, addPendingImage]);
-
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     const items = e.clipboardData.items;
     for (const item of items) {
       if (item.type.startsWith('image/')) {
         e.preventDefault();
         const file = item.getAsFile();
-        if (file) readImageFile(file);
+        if (file) void attachImage(file, chatAttachSurface);
       }
     }
-  }, [readImageFile]);
+  }, []);
 
 
   const handleModelChange = useCallback((model: string) => {
@@ -564,20 +524,6 @@ export function ChatInput() {
         </div>
       )}
 
-      {contextOverLimit && (
-        <div className="mb-2 text-ui-sm text-danger px-2 py-1 border border-danger/40 bg-danger/5 flex items-center justify-between gap-2">
-          <span>
-            {t('chatContextImagesFull', {
-              used: (historyBytes / (1024 * 1024)).toFixed(1),
-              limit: maxAttachmentMb,
-            })}
-          </span>
-          <Button variant="ghost" size="sm" onClick={handleNewChat}>
-            {t('chatContextFullNewChat')}
-          </Button>
-        </div>
-      )}
-
       {/* Audit fix #2 (A5): when the active AI chat is open but the agent service
           became unavailable, surface a notice. Every AI chat is an agent chat, so
           this shows whenever the agent service is down (no readonly/ask fallback
@@ -687,14 +633,15 @@ export function ChatInput() {
       onPaste={handlePaste}
       isStreaming={isStreaming}
       canSend={canSend}
-      placeholder={contextOverLimit ? t('chatContextFullPlaceholder') : (activeSessionId ? t('chatPlaceholder') : t('chatPlaceholderNew'))}
-      disabled={contextOverLimit}
+      placeholder={activeSessionId ? t('chatPlaceholder') : t('chatPlaceholderNew')}
       recording={recording}
       transcribing={transcribing}
       onToggleRecording={toggleRecording}
       onCancelRecording={cancelRecording}
       images={images}
       onRemoveImage={removePendingImage}
+      imageMeta={imageMeta}
+      pressingImages={pressingImages}
       files={pendingFiles}
       onRemoveFile={removePendingFile}
       queued={queued}

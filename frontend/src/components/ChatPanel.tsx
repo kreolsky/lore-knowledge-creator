@@ -16,7 +16,7 @@ import { ChatInput } from './chat/ChatInput';
 import { ChatClarifyPopover } from './chat/ChatClarifyPopover';
 import { ChatUnavailableNotice, useChatUnavailable } from './chat/ChatUnavailableNotice';
 import { useTranslation } from '../i18n';
-import { useChatStore } from '../store/chat-store';
+import { useChatStore, chatAttachSurface } from '../store/chat-store';
 import { useAppStore } from '../store/app-store';
 import { useGhostContextWarm } from '../chat/use-ghost-context';
 import { useImageDropHandlers } from '../hooks/useImageDropHandlers';
@@ -42,7 +42,6 @@ export function ChatPanel() {
   const projectId = useAppStore(s => s.currentProject?.project_id);
   const documentId = useAppStore(s => s.currentDocument?.document_id);
   const loadSessions = useChatStore(s => s.loadSessions);
-  const addPendingImage = useChatStore(s => s.addPendingImage);
   const addPendingFile = useChatStore(s => s.addPendingFile);
   // Files land in the sender's sandbox workspace — a full-access privilege
   // (the upload route refuses everyone else the same way).
@@ -52,8 +51,7 @@ export function ChatPanel() {
   }, [projectId, takesFiles, addPendingFile]);
   const chatUnavailable = useChatUnavailable();
   const { isDragging, dragHandlers } = useImageDropHandlers({
-    getPending: () => useChatStore.getState().pendingImages,
-    addImage: addPendingImage,
+    surface: chatAttachSurface,
     addFile: takesFiles ? addFile : undefined,
     enabled: !chatUnavailable,
   });

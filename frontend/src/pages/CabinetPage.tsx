@@ -1,39 +1,19 @@
-/** User cabinet: self-service profile management (name, email, password, PIN). Store slices: currentUser, setCurrentUser; ui-store (the aside width shared with the admin panel + project sidebar, panelWidths.left). */
+/** User cabinet: the section shell (Profile, MCP, Private keys, Colors) and the profile fields (name, email, password, PIN, version). Store slices: currentUser, setCurrentUser, setSectionCrumb; ui-store (cabinetSectionTab; the aside width shared with the admin panel + project sidebar, panelWidths.left). */
 
-import type React from 'react';
-import { useState } from 'react';
-import { User } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { Cable, KeyRound, Palette, User } from 'lucide-react';
+import { cabinetFetch } from '../api/cabinet';
 import { useAppStore } from '../store/app-store';
+import { useUIStore, type CabinetSectionTab } from '../store/ui-store';
 import { useSectionAsideWidth } from '../hooks/useSectionAsideWidth';
 import { useAppVersion } from '../hooks/useAppVersion';
-import { Button, FieldInput } from '../components/ui';
+import { Button, CenterHeading, FieldInput } from '../components/ui';
 import { SectionShell, SectionAsideRow } from '../components/SectionShell';
+import { McpKeysSection } from '../components/cabinet/McpKeysSection';
+import { PersonalKeysSection } from '../components/cabinet/PersonalKeysSection';
+import { ColorsSection } from '../components/cabinet/ColorsSection';
 import { useTranslation } from '../i18n';
-
-/** PATCH/POST to cabinet endpoints with error handling. Returns [data, errorMsg]. */
-async function cabinetFetch(
-  endpoint: string,
-  body: Record<string, unknown>,
-  method = 'PATCH',
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- callers access untyped JSON fields
-): Promise<[any, string]> {
-  const res = await fetch(`/api/cabinet/${endpoint}`, {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify(body),
-  });
-  if (res.status === 401) {
-    window.location.href = '/';
-    return [null, ''];
-  }
-  const data = await res.json().catch(() => null);
-  if (!res.ok) {
-    const msg = data?.detail ?? `Error ${res.status}`;
-    return [null, msg];
-  }
-  return [data, ''];
-}
 
 /** `null` = still loading, `''` = /api/health failed, anything else = the release tag. */
 function versionState(version: string | null): 'loading' | 'error' | 'ok' {
@@ -50,6 +30,33 @@ export function CabinetPage() {
   // Aside width: ONE width with the admin panel and the project sidebar
   // (panelWidths.left, per-user global pref; see useSectionAsideWidth).
   const { initialAsideWidth, onAsideWidthChange } = useSectionAsideWidth();
+
+  // Initial section: the user's last one, validated against the fixed list so a
+  // garbage saved value falls back to Profile. Mount-time snapshot, as in AdminPage.
+  const savedSectionTab = useUIStore(s => s.cabinetSectionTab);
+  const setCabinetSectionTab = useUIStore(s => s.setCabinetSectionTab);
+  const sections: { tab: CabinetSectionTab; icon: ReactNode; label: string }[] = [
+    { tab: 'profile', icon: <User size={14} />, label: t('profile') },
+    { tab: 'mcp', icon: <Cable size={14} />, label: t('cabinetSectionMcp') },
+    { tab: 'keys', icon: <KeyRound size={14} />, label: t('personalKeys') },
+    { tab: 'colors', icon: <Palette size={14} />, label: t('cabinetSectionColors') },
+  ];
+  const [tab, setTab] = useState<CabinetSectionTab>(() =>
+    sections.some(s => s.tab === savedSectionTab) ? savedSectionTab! : 'profile');
+
+  /** Section row click: switch + persist the choice (per-user, _global prefs). */
+  const selectSection = useCallback((next: CabinetSectionTab) => {
+    setTab(next);
+    setCabinetSectionTab(next);
+  }, [setCabinetSectionTab]);
+
+  // Header crumb: `Profile : <section>` follows the ACTIVE tab; cleared on unmount.
+  const setSectionCrumb = useAppStore(s => s.setSectionCrumb);
+  const activeLabel = sections.find(s => s.tab === tab)?.label ?? null;
+  useEffect(() => {
+    setSectionCrumb(activeLabel);
+    return () => setSectionCrumb(null);
+  }, [activeLabel, setSectionCrumb]);
 
   // ─── Release version ──────────────────────────────────────────────────────
   const version = useAppVersion();
@@ -167,13 +174,14 @@ export function CabinetPage() {
   const emailUpdatedText = t('emailUpdated');
   const passwordChangedText = t('passwordChanged');
 
-  // A tab-less section: the shell draws no top tabs — the UserControls user
-  // button at the bottom of the bar is the active tab (see UserControls). The
-  // aside lists the one selectable entry, the user's email, always selected.
-  // The page <h1> is gone — the header shows "Profile".
+  // The shell draws no top tabs — the UserControls user button at the bottom of
+  // the bar is the active tab (see UserControls). Every row shows for every user
+  // so the navigation does not shift.
   const renderAside = () => (
     <div className="px-1 pt-1">
-      <SectionAsideRow label={currentUser.email} icon={<User size={14} />} selected />
+      {sections.map(s => (
+        <SectionAsideRow key={s.tab} label={s.label} icon={s.icon} selected={tab === s.tab} onSelect={() => selectSection(s.tab)} />
+      ))}
     </div>
   );
 
@@ -185,14 +193,19 @@ export function CabinetPage() {
       onAsideWidthChange={onAsideWidthChange}
       renderCenter={() => (
       <div className="flex-1 overflow-y-auto">
-      <div className="max-w-[640px] mx-auto py-10 px-6 text-text">
+      <div className="max-w-[800px] mx-auto py-12 px-8 text-text">
 
+      {tab === 'mcp' && <McpKeysSection />}
+      {tab === 'keys' && <PersonalKeysSection />}
+      {tab === 'colors' && <ColorsSection />}
+      {tab === 'profile' && (
+      <>
       {/* ─── Display Name ──────────────────────────────────────────── */}
-      <div className="py-5 border-b border-border-soft">
-        <label className="block text-xs text-text-dim mb-1.5">{t('displayName')}</label>
+      <div>
+        <CenterHeading>{t('displayName')}</CenterHeading>
         <div className="flex gap-2 items-center">
           <FieldInput
-            className="flex-1"
+            className="w-[160px]"
             value={name}
             onChange={e => setName(e.target.value)}
           />
@@ -209,8 +222,8 @@ export function CabinetPage() {
       </div>
 
       {/* ─── Email ─────────────────────────────────────────────────── */}
-      <div className="py-5 border-b border-border-soft">
-        <label className="block text-xs text-text-dim mb-1.5">{t('email')}</label>
+      <div className="mt-8">
+        <CenterHeading>{t('email')}</CenterHeading>
         {!emailEditing ? (
           <div className="flex gap-2 items-center">
             <span className="flex-1 text-sm">{currentUser.email}</span>
@@ -253,8 +266,8 @@ export function CabinetPage() {
       </div>
 
       {/* ─── Password ──────────────────────────────────────────────── */}
-      <div className="py-5 border-b border-border-soft">
-        <label className="block text-xs text-text-dim mb-1.5">{t('password')}</label>
+      <div className="mt-8">
+        <CenterHeading>{t('password')}</CenterHeading>
         {!pwdEditing ? (
           <Button size="lg" onClick={() => setPwdEditing(true)}>
             {t('changePassword')}
@@ -302,8 +315,8 @@ export function CabinetPage() {
       </div>
 
       {/* ─── PIN ───────────────────────────────────────────────────── */}
-      <div className="py-5">
-        <label className="block text-xs text-text-dim mb-1.5">{t('quickLockPin')}</label>
+      <div className="mt-8">
+        <CenterHeading>{t('quickLockPin')}</CenterHeading>
         <p className="text-xs text-text-dim mb-2">
           {hasPin ? t('pinIsSet') : t('setPinDescription')}
         </p>
@@ -339,11 +352,12 @@ export function CabinetPage() {
         </div>
         {pinMsg && <p className={['text-xs mt-1', pinMsg === t('pinRemoved') || pinMsg === t('pinSet') ? 'text-green' : 'text-red'].join(' ')}>{pinMsg}</p>}
       </div>
-
-      <div className="py-5">
-        <label className="block text-xs text-text-dim mb-1.5">{t('appVersion')}</label>
+      <div className="mt-8">
+        <CenterHeading>{t('appVersion')}</CenterHeading>
         <span className={versionView.className}>{versionView.text}</span>
       </div>
+      </>
+      )}
       </div>
       </div>
     )}

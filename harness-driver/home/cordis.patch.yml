@@ -300,7 +300,10 @@
 # disabling this row leaves the settings fiber PENDING and every turn 502s.
 # It serves no tool and adds no prompt section; the served-surface
 # comparison after a pin move is the guard.
-# MCP resource exposure: no MCP server is mounted for the agent line.
+# MCP resource exposure: personal MCP servers mount per TURN into the
+# session agent's scope (plugin/src/mcp-servers.ts), but this shared resource
+# service stays disabled — it is a process-global composition, and a user's
+# MCP resources must ride their own agent scope, never a shared one.
 - id: mcp-resources
   disabled: true
 # ── subagents ─────────────────────────────────────────────────────────────────

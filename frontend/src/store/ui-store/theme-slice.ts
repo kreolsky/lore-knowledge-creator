@@ -10,13 +10,16 @@
 import { apiClient } from '../../api/client';
 import type { Language } from '../../types';
 import type { UIState } from '../ui-store';
+import { readCachedColors } from '../../theme/apply-colors';
+import { emptyOverrides, sanitizeOverrides, type ColorOverrides } from '../../theme/color-tokens';
 
 export type ThemeSlice = Pick<
   UIState,
-  | 'theme' | 'language' | 'panelWidths' | 'splitRatio' | 'globalPrefsLoaded'
-  | 'showArchived' | 'adminSectionTab' | 'sidebarPinned'
+  | 'theme' | 'colorOverrides' | 'language' | 'panelWidths' | 'splitRatio' | 'globalPrefsLoaded'
+  | 'showArchived' | 'adminSectionTab' | 'cabinetSectionTab' | 'sidebarPinned'
   | 'setTheme' | 'setLanguage' | 'setPanelWidth' | 'setSplitRatio' | 'getSplitRatio' | 'loadGlobalPrefs'
-  | 'setShowArchived' | 'setAdminSectionTab' | 'setSidebarPinned'
+  | 'setShowArchived' | 'setAdminSectionTab' | 'setCabinetSectionTab' | 'setSidebarPinned'
+  | 'setColorOverride' | 'replaceColorOverrides' | 'flushColorSave'
 >;
 
 type UISet = (
@@ -46,7 +49,11 @@ export type AdminSectionTab =
   | 'settings:storage'
   | 'skills'
   | 'model-access'
-  | 'groups';
+  | 'groups'
+  | 'mcp-servers';
+
+/** The cabinet's left-aside sections, same placement reason as AdminSectionTab. */
+export type CabinetSectionTab = 'profile' | 'mcp' | 'keys' | 'colors';
 
 export interface GlobalPrefs {
   theme: 'light' | 'dark';
@@ -64,8 +71,14 @@ export interface GlobalPrefs {
   // store saves it raw; the page validates it at mount against the sections the
   // user is offered (a moderator has no Embeddings row).
   adminSectionTab: AdminSectionTab | null;
+  // Same contract as adminSectionTab, for the cabinet's last-open section.
+  cabinetSectionTab: CabinetSectionTab | null;
   // WHY: global like panelWidths — docked vs auto-hiding left panel is a layout habit.
   sidebarPinned: boolean;
+  // INVARIANT(persisted): sparse per-theme map token → color; reset = key deleted.
+  // Why: defaults stay in index.css, so a later palette change reaches every token
+  // the user did not touch. Loaded raw-then-sanitized (the server does not validate).
+  colorOverrides: ColorOverrides;
 }
 
 const GLOBAL_DEFAULTS: GlobalPrefs = {
@@ -75,8 +88,14 @@ const GLOBAL_DEFAULTS: GlobalPrefs = {
   splitRatio: SPLIT_RATIO_DEFAULT,
   showArchived: false,
   adminSectionTab: null,
+  cabinetSectionTab: null,
   sidebarPinned: true,
+  colorOverrides: { light: {}, dark: {} },
 };
+
+// WHY: a color picker fires per drag tick; the save is debounced while the apply is instant.
+const COLOR_SAVE_DEBOUNCE_MS = 400;
+let _colorSaveTimer: ReturnType<typeof setTimeout> | null = null;
 
 // WHY: per-device mirror of the server theme, read by public/theme-boot.js before first
 // paint so a dark reload does not flash light. Server prefs remain the source of truth.
@@ -112,7 +131,10 @@ export function createThemeSlice(set: UISet, get: UIGet): ThemeSlice {
     splitRatio: SPLIT_RATIO_DEFAULT,
     showArchived: false,
     adminSectionTab: null,
+    cabinetSectionTab: null,
     sidebarPinned: true,
+    // WHY: same reason as theme above — keep what theme-boot.js painted until prefs load.
+    colorOverrides: readCachedColors(),
     globalPrefsLoaded: false,    setTheme: (theme) => { set({ theme }); cacheTheme(theme); get().saveGlobalPrefsNow(); },
     setLanguage: (language) => { set({ language }); get().saveGlobalPrefsNow(); },
     setPanelWidth: (side, width) => {
@@ -129,14 +151,37 @@ export function createThemeSlice(set: UISet, get: UIGet): ThemeSlice {
     setShowArchived: (showArchived) => { set({ showArchived }); get().saveGlobalPrefsNow(); },
     // Admin section pref — same persistence route as showArchived (per-user _global).
     setAdminSectionTab: (tab) => { set({ adminSectionTab: tab }); get().saveGlobalPrefsNow(); },
+    setCabinetSectionTab: (tab) => { set({ cabinetSectionTab: tab }); get().saveGlobalPrefsNow(); },
     setSidebarPinned: (sidebarPinned) => { set({ sidebarPinned }); get().saveGlobalPrefsNow(); },
+    setColorOverride: (theme, token, value) => {
+      set(prev => {
+        const map = { ...prev.colorOverrides[theme] };
+        if (value === null) delete map[token];
+        else map[token] = value;
+        return { colorOverrides: { ...prev.colorOverrides, [theme]: map } };
+      });
+      if (_colorSaveTimer) clearTimeout(_colorSaveTimer);
+      _colorSaveTimer = setTimeout(() => { _colorSaveTimer = null; get().saveGlobalPrefsNow(); }, COLOR_SAVE_DEBOUNCE_MS);
+    },
+    replaceColorOverrides: (overrides) => {
+      if (_colorSaveTimer) { clearTimeout(_colorSaveTimer); _colorSaveTimer = null; }
+      set({ colorOverrides: sanitizeOverrides(overrides) });
+      get().saveGlobalPrefsNow();
+    },
+    flushColorSave: () => {
+      if (!_colorSaveTimer) return;
+      clearTimeout(_colorSaveTimer);
+      _colorSaveTimer = null;
+      get().saveGlobalPrefsNow();
+    },
     loadGlobalPrefs: () => {
       if (_globalPrefsPromise) return _globalPrefsPromise;
       _globalPrefsPromise = (async () => {
         try {
           const data: Partial<GlobalPrefs> = await apiClient.get('/preferences/_global');
           if (!data || Object.keys(data).length === 0) {
-            set({ globalPrefsLoaded: true });
+            // Empty prefs = a fresh account: drop any colors left by a previous one.
+            set({ colorOverrides: emptyOverrides(), globalPrefsLoaded: true });
             return;
           }
           const theme = data.theme ?? GLOBAL_DEFAULTS.theme;
@@ -153,7 +198,9 @@ export function createThemeSlice(set: UISet, get: UIGet): ThemeSlice {
             // Garbage-proofing is the PAGE's job (availability check at mount);
             // here unknown values load raw and never block hydration.
             adminSectionTab: data.adminSectionTab ?? null,
+            cabinetSectionTab: data.cabinetSectionTab ?? null,
             sidebarPinned: data.sidebarPinned ?? GLOBAL_DEFAULTS.sidebarPinned,
+            colorOverrides: sanitizeOverrides(data.colorOverrides),
             globalPrefsLoaded: true,
           });
         } catch {

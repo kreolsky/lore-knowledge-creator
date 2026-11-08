@@ -15,6 +15,7 @@ import { useUIStore } from '../../store/ui-store';
 import { MicButton } from './shared/MicButton';
 import { AttachmentChips } from './shared/AttachmentChips';
 import type { PendingFile } from '../../store/chat-store/types';
+import type { PressedImageMeta } from '../../chat/attach-image';
 import { QueuedChips } from './shared/QueuedChips';
 import { ScrollToBottomButton } from './shared/ScrollToBottomButton';
 import type { QueuedMessage } from '../../chat/inbox-queue';
@@ -46,6 +47,10 @@ interface Props {
   // Attachments
   images: string[];
   onRemoveImage: (index: number) => void;
+  /** Pressed sizes keyed by data URL, for the size label. */
+  imageMeta?: Record<string, PressedImageMeta>;
+  /** Presses in flight: one busy chip each. */
+  pressingImages?: number;
   /** AI composer only: dropped files on their way into the sandbox workspace. */
   files?: PendingFile[];
   onRemoveFile?: (key: string) => void;
@@ -84,6 +89,8 @@ export function ChatComposer({
   onCancelRecording,
   images,
   onRemoveImage,
+  imageMeta,
+  pressingImages,
   files,
   onRemoveFile,
   queued,
@@ -166,7 +173,7 @@ export function ChatComposer({
           {/* Top area: AI controls + shared attachment chips + warnings */}
           <div className="px-3 pt-2">
             {topControls}
-            <AttachmentChips images={images} onRemove={onRemoveImage} files={files} onRemoveFile={onRemoveFile} />
+            <AttachmentChips images={images} onRemove={onRemoveImage} imageMeta={imageMeta} pressing={pressingImages} files={files} onRemoveFile={onRemoveFile} />
             {warnings}
           </div>
 

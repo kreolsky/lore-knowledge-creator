@@ -1,4 +1,5 @@
 /** ChatState interface and Set/Get aliases for slice creators. */
+import type { PressedImageMeta } from '../../chat/attach-image';
 import type { ChatUIMode, ChatSession, ChatMessage, ChatFile, Reference, PinnedRegion, ReasoningCapability } from '../../types';
 import type { ConversationVM, TurnRange } from './conversation-feed';
 import type { QueuedMessage } from '../../chat/inbox-queue';
@@ -212,6 +213,11 @@ export interface ChatState {
   // controls the Dropdown with it).
   modelPickerOpen: boolean;
   pendingImages: string[];
+  // Sizes of the pressed images for the chip label, keyed by data URL. Absent for
+  // an image returned from the queue: only the size label goes missing.
+  pendingImageMeta: Record<string, PressedImageMeta>;
+  // Presses in flight; send waits for them (attach-image.ts).
+  pressingImages: number;
   // Files dropped on the AI chat (full access only), uploaded on drop. The
   // send carries the `done` ones; in-memory like pendingImages.
   pendingFiles: PendingFile[];
@@ -296,7 +302,7 @@ export interface ChatState {
   setChatUnindexed: (value: boolean) => Promise<void>;
 
   // Actions — images (pending attachments before send)
-  addPendingImage: (dataUrl: string) => void;
+  addPendingImage: (dataUrl: string, meta?: PressedImageMeta) => void;
   removePendingImage: (index: number) => void;
   clearPendingImages: () => void;
   // Actions — files (uploaded into the sender's sandbox workspace on drop)

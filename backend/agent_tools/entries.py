@@ -21,7 +21,9 @@ from agent_tools.registry import ToolEntry, register
 from agent_tools.specs.chat_recall import (
     LIST_MY_CHATS_TOOL,
     READ_MY_CHAT_TOOL,
+    SAVE_CHAT_FACTS_TOOL,
     SEARCH_MY_CHATS_TOOL,
+    SET_FACT_ANCHOR_TOOL,
     VIEW_CHAT_IMAGE_TOOL,
 )
 from agent_tools.specs.media import (
@@ -45,6 +47,10 @@ from agent_tools.specs.read import (
     GET_MEMORY_FACTS_TOOL,
     READ_TOOLS,
 )
+from agent_tools.specs.secrets import (
+    HTTP_REQUEST_TOOL,
+    LIST_SECRETS_TOOL,
+)
 from agent_tools.specs.skills import SAVE_SKILL_TOOL
 from models import (
     ToolAddTableColumn,
@@ -61,9 +67,11 @@ from models import (
     ToolGetFactHistory,
     ToolGetMemoryFacts,
     ToolGetProjectStructure,
+    ToolHttpRequest,
     ToolImportFile,
     ToolImportSubtreeMd,
     ToolListMyChats,
+    ToolListSecrets,
     ToolMoveDocument,
     ToolNextReference,
     ToolReadDocument,
@@ -75,9 +83,11 @@ from models import (
     ToolSandboxFetchReference,
     ToolSandboxFetchSkill,
     ToolSandboxRunStatus,
+    ToolSaveChatFacts,
     ToolSaveSkill,
     ToolSearch,
     ToolSearchMyChats,
+    ToolSetFactAnchor,
     ToolViewChatImage,
 )
 
@@ -297,8 +307,9 @@ register(ToolEntry(
     handler_path="routes.tool_api.skills:tool_save_skill",
     surfaces=_AGENT_HTTP,
 ))
-# search_my_chats + the list/read pair + the image view: agent-only, the
-# chat-recall skill's pack (see specs/chat_recall.py ARCH).
+# search_my_chats + the list/read pair + the image view + the fact-saving
+# pair: agent-only, the chat-recall skill's pack (see specs/chat_recall.py
+# ARCH).
 register(ToolEntry(
     spec=SEARCH_MY_CHATS_TOOL, request_model=ToolSearchMyChats,
     handler_path="routes.tool_api.chat_recall:tool_search_my_chats",
@@ -318,4 +329,27 @@ register(ToolEntry(
     spec=VIEW_CHAT_IMAGE_TOOL, request_model=ToolViewChatImage,
     handler_path="routes.tool_api.chat_recall:tool_view_chat_image",
     surfaces=_AGENT_HTTP,
+))
+register(ToolEntry(
+    spec=SAVE_CHAT_FACTS_TOOL, request_model=ToolSaveChatFacts,
+    handler_path="routes.tool_api.chat_recall:tool_save_chat_facts",
+    surfaces=_AGENT_HTTP,
+))
+register(ToolEntry(
+    spec=SET_FACT_ANCHOR_TOOL, request_model=ToolSetFactAnchor,
+    handler_path="routes.tool_api.chat_recall:tool_set_fact_anchor",
+    surfaces=_AGENT_HTTP,
+))
+# Personal-secrets pack: agent-only + always served.
+# list_secrets is read-only; http_request is mutating WITH `apply` (holdable —
+# the mid-turn gate holds every non-GET/HEAD call; see specs/secrets.py ARCH).
+register(ToolEntry(
+    spec=LIST_SECRETS_TOOL, request_model=ToolListSecrets,
+    handler_path="routes.tool_api.secrets:tool_list_secrets",
+    surfaces=_AGENT_HTTP,
+))
+register(ToolEntry(
+    spec=HTTP_REQUEST_TOOL, request_model=ToolHttpRequest,
+    handler_path="routes.tool_api.secrets:tool_http_request",
+    surfaces=_AGENT_HTTP, per_call_approval=True,
 ))

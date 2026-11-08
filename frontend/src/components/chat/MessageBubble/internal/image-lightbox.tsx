@@ -103,12 +103,13 @@ function downloadName(src: string, n: number): string {
   return `image-${n}.${ext || 'png'}`;
 }
 
-function LightboxImage({ src, n, onDelete, deleteArmed, onDeleteDisarm }: {
-  src: string; n: number;
+function LightboxImage({ src, n, actualSize, onDelete, deleteArmed, onDeleteDisarm }: {
+  src: string; n: number; actualSize?: boolean;
   onDelete?: () => void; deleteArmed?: boolean; onDeleteDisarm?: () => void;
 }) {
   const { t } = useTranslation();
   const [errored, setErrored] = useState(false);
+  const [naturalWidth, setNaturalWidth] = useState<number | null>(null);
   const trash = onDelete && (
     <IconButton
       size="md"
@@ -139,12 +140,27 @@ function LightboxImage({ src, n, onDelete, deleteArmed, onDeleteDisarm }: {
   }
   return (
     <>
-      <img
-        src={src}
-        alt={t('generatedImage')}
-        onError={() => setErrored(true)}
-        className="block max-w-full max-h-[72vh] object-contain border border-border"
-      />
+      {actualSize ? (
+        // WHY: width in CSS pixels = image pixels / devicePixelRatio, so one image
+        // pixel lands on one device pixel; a larger image scrolls, it never scales.
+        <div className="overflow-auto max-w-full max-h-[72vh] border border-border">
+          <img
+            src={src}
+            alt={t('generatedImage')}
+            onLoad={e => setNaturalWidth(e.currentTarget.naturalWidth)}
+            onError={() => setErrored(true)}
+            className="block max-w-none"
+            style={naturalWidth ? { width: naturalWidth / window.devicePixelRatio } : undefined}
+          />
+        </div>
+      ) : (
+        <img
+          src={src}
+          alt={t('generatedImage')}
+          onError={() => setErrored(true)}
+          className="block max-w-full max-h-[72vh] object-contain border border-border"
+        />
+      )}
       {/* Same hover plate as the reference image overlay (ReferenceMediaBar): top-right
           corner, shown on hover / focus-within, always on touch devices; z-10 lifts
           it above the nav zones. A broken image offers no download (its branch
@@ -193,6 +209,10 @@ function LightboxImage({ src, n, onDelete, deleteArmed, onDeleteDisarm }: {
  * plate and the `Delete` key (press twice; Backspace is the same key on macOS
  * keyboards). One armed state serves both, so a keyed delete cannot fire on a
  * half-armed click.
+ *
+ * `actualSize` shows 1 image pixel = 1 device pixel in a scrollable frame: the
+ * person judges small-text legibility on the bytes the model gets. The nav zones
+ * narrow to the edges there, so the wheel reaches the frame between them.
  */
 export function ImageLightbox({
   srcs,
@@ -201,6 +221,7 @@ export function ImageLightbox({
   onClose,
   title,
   onDelete,
+  actualSize,
 }: {
   srcs: string[];
   index: number;
@@ -208,8 +229,10 @@ export function ImageLightbox({
   onClose: () => void;
   title: string;
   onDelete?: (i: number) => void;
+  actualSize?: boolean;
 }) {
   const { t } = useTranslation();
+  const zoneWidth = actualSize ? 'w-12' : 'w-1/3';
   const current = srcs[index];
   const multi = srcs.length > 1;
   const deleteAction = useArmedAction();
@@ -257,7 +280,7 @@ export function ImageLightbox({
       open
       onClose={onClose}
       title={title}
-      width={720}
+      width={actualSize ? 1200 : 720}
       closeLabel={t('close')}
     >
       <div className="flex items-center justify-center">
@@ -267,6 +290,7 @@ export function ImageLightbox({
             key={current}
             src={current}
             n={index + 1}
+            actualSize={actualSize}
             onDelete={onDelete ? requestDelete : undefined}
             deleteArmed={deleteAction.armed}
             onDeleteDisarm={deleteAction.disarm}
@@ -279,7 +303,7 @@ export function ImageLightbox({
                 aria-label={t('previousImage')}
                 title={t('previousImage')}
                 onClick={goPrev}
-                className="absolute inset-y-0 left-0 w-1/3 cursor-pointer bg-transparent"
+                className={`absolute inset-y-0 left-0 ${zoneWidth} cursor-pointer bg-transparent`}
               />
               {/* eslint-disable-next-line react/forbid-elements */}
               <button
@@ -287,7 +311,7 @@ export function ImageLightbox({
                 aria-label={t('nextImage')}
                 title={t('nextImage')}
                 onClick={goNext}
-                className="absolute inset-y-0 right-0 w-1/3 cursor-pointer bg-transparent"
+                className={`absolute inset-y-0 right-0 ${zoneWidth} cursor-pointer bg-transparent`}
               />
             </>
           )}

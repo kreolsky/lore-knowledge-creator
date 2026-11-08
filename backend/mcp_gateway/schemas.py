@@ -272,6 +272,10 @@ def _entry_to_mcp(entry, fill: str) -> types.Tool:
         description=description,
         inputSchema=input_schema,
         outputSchema=_READ_TOOL_OUTPUT_SCHEMAS.get(name, _AGENT_TOOL_OUTPUT_SCHEMA),
+        # readOnlyHint from the registry's own `mutating` declaration — an
+        # unannotated read tool parks on an approval card on EVERY external
+        # client that trusts the hint (the driver's ask gate included).
+        annotations=types.ToolAnnotations(readOnlyHint=not entry.mutating),
     )
 
 
@@ -454,6 +458,7 @@ def build_tool_list(*, scope_root: str = "", root_title: str = "",
                     entry.spec["function"]["parameters"], fill,
                 ),
                 outputSchema=output,
+                annotations=types.ToolAnnotations(readOnlyHint=not entry.mutating),
             )
         return _entry_to_mcp(entry, fill)
 

@@ -224,3 +224,79 @@ export async function deleteAdminGroup(groupId: string): Promise<void> {
 export async function putAdminGroupMembers(groupId: string, userIds: string[]): Promise<AdminGroup> {
   return await apiClient.put(`/admin/groups/${groupId}/members`, { user_ids: userIds }) as AdminGroup;
 }
+
+// ─── MCP servers (SYSTEM: mcp-servers) ────────────────────────────────────────
+
+/** Who holds the key: each user, one shared key, or nobody. */
+export type McpAuthMode = 'personal' | 'shared' | 'none';
+
+/** An MCP server definition from GET /api/admin/mcp-servers. `subjects` uses
+ * the model-access vocabulary ('public', 'mod:<uid>', 'group:<gid>'); a
+ * moderator's list already contains only their own single-subject rows. */
+export interface AdminMcpServer {
+  id: string;
+  name: string;
+  title: string;
+  url: string;
+  /** `host[:port]` — where the users' keys go (the cabinet shows it). */
+  host: string;
+  auth_mode: McpAuthMode;
+  /** Sent before the key in `Authorization`; empty = the key goes verbatim. */
+  auth_scheme: string;
+  /** Where a user gets their key (personal mode). */
+  help_url: string | null;
+  subjects: string[];
+  created_by: string;
+  created_by_name: string;
+  enabled: boolean;
+  /** Write-only shared key: the API answers these two states, never a value. */
+  shared_key_set: boolean;
+  /** The url moved to another host, stranding the stored key. */
+  shared_needs_reenter: boolean;
+}
+
+/** POST/PATCH body — every field optional on PATCH; the backend re-runs the
+ * save gate (https-only url, scheme shape, key shape). */
+export interface AdminMcpServerBody {
+  name?: string;
+  title?: string;
+  url?: string;
+  auth_mode?: McpAuthMode;
+  auth_scheme?: string;
+  /** An empty string clears it; omitted keeps the stored one. */
+  help_url?: string;
+  /** Write-only; omitted keeps the stored key. */
+  shared_key?: string;
+  subjects?: string[];
+  enabled?: boolean;
+}
+
+export async function listAdminMcpServers(): Promise<AdminMcpServer[]> {
+  return await apiClient.get('/admin/mcp-servers') as AdminMcpServer[];
+}
+
+export async function createAdminMcpServer(body: AdminMcpServerBody): Promise<AdminMcpServer> {
+  return await apiClient.post('/admin/mcp-servers', body) as AdminMcpServer;
+}
+
+export async function patchAdminMcpServer(serverId: string, body: AdminMcpServerBody): Promise<AdminMcpServer> {
+  return await apiClient.patch(`/admin/mcp-servers/${serverId}`, body) as AdminMcpServer;
+}
+
+export type McpCheckStatus = 'ok' | 'unauthorized' | 'refused' | 'unreachable' | 'protocol';
+
+/** A live `initialize` + `tools/list` verdict; `tools` is set on `ok`. */
+export interface McpCheckResult {
+  status: McpCheckStatus;
+  tools: number | null;
+}
+
+/** The connection check for `shared` and `none` servers, against the SAVED row. */
+export async function checkAdminMcpServer(serverId: string): Promise<McpCheckResult> {
+  return await apiClient.post(`/admin/mcp-servers/${serverId}/check`, {}) as McpCheckResult;
+}
+
+/** Hard delete: the server and every user's key rows for it. */
+export async function deleteAdminMcpServer(serverId: string): Promise<void> {
+  await apiClient.delete(`/admin/mcp-servers/${serverId}`);
+}

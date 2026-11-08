@@ -8,11 +8,8 @@ The presentational JSX split (topControls / leftControls / warnings) is the plan
 designated separate task — it needs interactive UI verification. */
 import { useMemo } from 'react';
 
-import type { Document, ChatMessage } from '../../types';
-import {
-  totalAttachmentBytes,
-  historyAttachmentBytes,
-} from '../../utils/attachment-size';
+import type { Document } from '../../types';
+import { totalAttachmentBytes } from '../../utils/attachment-size';
 
 /**
  * Personas ≡ system prompts:
@@ -46,32 +43,20 @@ export function useSystemPrompts(
 }
 
 /**
- * Shared attachment-budget math. The budget is the WHOLE projected body's
- * image sum (history that rides along in apiMessages + new pending), NOT just the
- * new turn's images — the middleware caps the full request body, and every send
- * builder ships all non-deleted history images as LLM context.
- *
- * `contextOverLimit`: conversation history alone already exceeds the budget —
- * removing the new image can't fix it; the user must start a fresh chat. Distinct
- * from `attachmentsOverLimit` (new attachments too big) so the message + remedy differ.
+ * Shared attachment-budget math over the turn's PRESSED images. Only the new turn
+ * counts: the wire carries the tail turn's images alone (see the INVARIANT in
+ * completionBody).
  */
 export function useAttachmentBudget(
   maxAttachmentMb: number,
-  historyMessages: ChatMessage[],
   images: string[],
 ): {
-  maxAttachmentBytes: number;
-  historyBytes: number;
-  pendingBytes: number;
   projectedAttachmentBytes: number;
-  contextOverLimit: boolean;
   attachmentsOverLimit: boolean;
 } {
-  const maxAttachmentBytes = maxAttachmentMb * 1024 * 1024;
-  const historyBytes = useMemo(() => historyAttachmentBytes(historyMessages), [historyMessages]);
-  const pendingBytes = totalAttachmentBytes(images);
-  const projectedAttachmentBytes = historyBytes + pendingBytes;
-  const contextOverLimit = historyBytes > maxAttachmentBytes;
-  const attachmentsOverLimit = !contextOverLimit && projectedAttachmentBytes > maxAttachmentBytes;
-  return { maxAttachmentBytes, historyBytes, pendingBytes, projectedAttachmentBytes, contextOverLimit, attachmentsOverLimit };
+  const projectedAttachmentBytes = totalAttachmentBytes(images);
+  return {
+    projectedAttachmentBytes,
+    attachmentsOverLimit: projectedAttachmentBytes > maxAttachmentMb * 1024 * 1024,
+  };
 }

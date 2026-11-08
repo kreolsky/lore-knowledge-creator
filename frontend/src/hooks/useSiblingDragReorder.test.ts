@@ -4,7 +4,7 @@
  * any gap, any depth, the pointer's X picking the depth; the commit sends
  * {after_id} alone while the parent is unchanged and {after_id, parent_id}
  * ('' = root) when it is not. A row's middle half drops INTO it (first child)
- * and the indicator becomes a vertical bar at the row's indent. The indicator is
+ * and the indicator becomes a squiggle at the row's indent. The indicator is
  * one shared element for both panels: a line with a chevron at EACH end,
  * pointing inward.
  */

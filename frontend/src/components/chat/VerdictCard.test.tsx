@@ -11,9 +11,13 @@ import { act } from 'react';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const decideVerdict = vi.fn();
+const chatState = {
+  decideVerdict: vi.fn(),
+  activeSessionId: null as string | null,
+  sessions: [] as Array<{ session_id: string; document_id: string | null }>,
+};
 vi.mock('../../store/chat-store', () => ({
-  useChatStore: (sel: (s: unknown) => unknown) => sel({ decideVerdict }),
+  useChatStore: (sel: (s: unknown) => unknown) => sel(chatState),
 }));
 vi.mock('../../i18n', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
 
@@ -32,7 +36,9 @@ const PENDING: PendingVerdict = {
 };
 
 beforeEach(() => {
-  decideVerdict.mockClear();
+  chatState.decideVerdict.mockClear();
+  chatState.activeSessionId = null;
+  chatState.sessions = [];
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -98,5 +104,58 @@ describe('VerdictCard — proposed change preview', () => {
     mount(PENDING);
     expect(container.querySelector('pre')).toBeNull();
     expect(container.textContent).toContain('verdictBody');
+  });
+
+  // The memory-capture tools' args must render as prose a person can moderate
+  // (fact title/body, merge label, anchor fact and targets, the clear line).
+  // TEST-WHY: pure-logic-edge — a raw JSON dump is unreadable moderation.
+  it('renders save_chat_facts and set_fact_anchor args as prose, never JSON', () => {
+    mount({ ...PENDING, tool_name: 'save_chat_facts' }, JSON.stringify({
+      verdicts: [
+        { action: 'new', title: 'Аспирин: антиагрегант', text: 'Назначается при риске нарушения функции плаценты.' },
+        { action: 'merge', fact_id: 'f1', title: null, text: 'Дополняет уже сохранённый факт.' },
+      ],
+    }));
+    let text = container.textContent ?? '';
+    expect(text).toContain('Аспирин: антиагрегант');
+    expect(text).toContain('Назначается при риске нарушения функции плаценты.');
+    expect(text).toContain('verdictFactMerge');
+    expect(text).not.toContain('verdictFactSupersede');
+    expect(container.querySelector('pre')).toBeNull();
+
+    mount({ ...PENDING, tool_name: 'set_fact_anchor' }, JSON.stringify({
+      fact_id: 'fact:9', document_ids: ['docA', 'docB'],
+    }));
+    text = container.textContent ?? '';
+    expect(text).toContain('fact:9');
+    expect(text).toContain('docA, docB');
+    expect(text).not.toContain('verdictAnchorClear');
+    expect(container.querySelector('pre')).toBeNull();
+
+    // document_ids: [] is the CLEAR call — named as such, not an empty list.
+    mount({ ...PENDING, tool_name: 'set_fact_anchor' }, JSON.stringify({
+      fact_id: 'fact:9', document_ids: [],
+    }));
+    expect((container.textContent ?? '')).toContain('verdictAnchorClear');
+    expect(container.querySelector('pre')).toBeNull();
+  });
+
+  // A save from a chat with no parent document parks the facts project-wide
+  // only; the warning line must fire exactly there.
+  // TEST-WHY: pure-logic-edge — no warning on a bound chat or another tool.
+  it('warns about a parentless chat only for save_chat_facts without a document', () => {
+    chatState.activeSessionId = 's1';
+    chatState.sessions = [{ session_id: 's1', document_id: null }];
+
+    mount({ ...PENDING, tool_name: 'save_chat_facts' }, '{"verdicts":[]}');
+    expect(container.textContent).toContain('verdictSaveNoParent');
+
+    chatState.sessions = [{ session_id: 's1', document_id: 'docA' }];
+    mount({ ...PENDING, tool_name: 'save_chat_facts' }, '{"verdicts":[]}');
+    expect(container.textContent).not.toContain('verdictSaveNoParent');
+
+    chatState.sessions = [{ session_id: 's1', document_id: null }];
+    mount(PENDING, '{"document_id":"d1","edits":[]}');
+    expect(container.textContent).not.toContain('verdictSaveNoParent');
   });
 });

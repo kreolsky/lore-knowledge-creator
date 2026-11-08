@@ -19,11 +19,11 @@ type Handlers = ReturnType<typeof useImageDropHandlers>['dragHandlers'];
 let container: HTMLDivElement;
 let root: Root;
 
-function mount(opts: { addFile?: (f: File) => void; addImage?: (u: string) => void }): Handlers {
+function mount(opts: { addFile?: (f: File) => void }): Handlers {
   let handlers!: Handlers;
   function Probe() {
     handlers = useImageDropHandlers({
-      getPending: () => [], addImage: opts.addImage ?? vi.fn(), addFile: opts.addFile, enabled: true,
+      surface: { getPending: () => [], add: vi.fn(), pressing: vi.fn() }, addFile: opts.addFile, enabled: true,
     }).dragHandlers;
     return null;
   }

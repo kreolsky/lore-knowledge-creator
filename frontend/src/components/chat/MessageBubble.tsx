@@ -342,6 +342,7 @@ export const MessageBubble = memo(function MessageBubble({
                 onIndexChange={setOpenAttachIndex}
                 onClose={() => setOpenAttachIndex(null)}
                 title={t('attachmentImage')}
+                actualSize
               />
             )}
             {isUser ? (

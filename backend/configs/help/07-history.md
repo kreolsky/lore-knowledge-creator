@@ -24,6 +24,8 @@ Press ⌘/Ctrl + S or "Save snapshot" in the "Snapshots" tab. Add a comment: wha
 - A click on a snapshot opens it for viewing; hovering shows an excerpt.
 - A snapshot can be restored. Before that, Lore saves the current state, so nothing is lost.
 - A snapshot's comment can be changed.
-- From the "Snapshots" tab the document can be exported to PDF or DOCX.
+- From the "Snapshots" tab the document can be downloaded as PDF, DOCX or Markdown, the live document or the selected snapshot.
+- A document with child documents also offers `*.zip`: the document with its whole subtree as Markdown files, pictures included. The parent's text is named `README.md`, so GitHub and Gitea show it when the folder opens. The zip is offered for the live document only, not for a selected snapshot.
+- An [HTML page](help:html-pages) downloads only as `.html`.
 
 The tab also shows the document's history: who created the document and who edited it.

@@ -72,6 +72,87 @@ def test_same_input_twice_byte_identical():
     assert a == b
 
 
+# ─── press_bytes: the cross-process contract with dsh ────────────────────────
+
+
+def _icc_bytes() -> bytes:
+    from PIL import ImageCms
+
+    return ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+
+
+def _jpeg_exif_orientation_bytes() -> bytes:
+    from PIL import ExifTags
+
+    exif = Image.Exif()
+    exif[ExifTags.Base.Orientation] = 6
+    buf = io.BytesIO()
+    Image.new("RGB", (40, 20), (10, 20, 30)).save(buf, "JPEG", exif=exif)
+    return buf.getvalue()
+
+
+def _png16_rgb_bytes(w: int = 4, h: int = 2) -> bytes:
+    """A 16-bit-per-sample truecolor PNG (bit depth 16, color type 2) built
+    raw: Pillow cannot WRITE this shape, but it is exactly the source Pillow
+    reports as plain mode RGB with no metadata — the reason a PNG never
+    passes through the press unproven."""
+    import struct
+    import zlib
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + tag + data
+                + struct.pack(">I", zlib.crc32(tag + data)))
+
+    ihdr = struct.pack(">IIBBBBB", w, h, 16, 2, 0, 0, 0)
+    row = b"\x00" + b"\xff\xff\x00\x00\x00\x00" * w  # filter 0 + w red 16-bit pixels
+    raw = row * h
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+def _apng_bytes() -> bytes:
+    buf = io.BytesIO()
+    first = Image.new("RGB", (8, 8), (200, 0, 0))
+    second = Image.new("RGB", (8, 8), (0, 0, 200))
+    first.save(buf, "PNG", save_all=True, append_images=[second])
+    return buf.getvalue()
+
+
+def _press_sources() -> list[tuple[str, str, bytes]]:
+    png_icc = io.BytesIO()
+    Image.new("RGB", (30, 20), (1, 2, 3)).save(png_icc, "PNG", icc_profile=_icc_bytes())
+    jpeg_icc = io.BytesIO()
+    Image.new("RGB", (30, 20), (4, 5, 6)).save(jpeg_icc, "JPEG", icc_profile=_icc_bytes())
+    return [
+        ("PNG with ICC", "image/png", png_icc.getvalue()),
+        ("JPEG with ICC", "image/jpeg", jpeg_icc.getvalue()),
+        ("JPEG with EXIF orientation", "image/jpeg", _jpeg_exif_orientation_bytes()),
+        ("16-bit RGB PNG", "image/png", _png16_rgb_bytes()),
+        ("APNG", "image/png", _apng_bytes()),
+    ]
+
+
+# TEST-WHY: cross-process-contract — dsh passes stored chat image bytes to the model unchanged only when they are single-frame 8-bit sRGB metadata-free, so over every violating source kind (ICC, EXIF orientation, 16-bit depth, animation) the press output must come out clean AND byte-identical on a second press, or a later press (a resend, a fork) would hand dsh different bytes than the row stored.
+def test_press_output_is_clean_and_idempotent():
+    from thumbnails import press_bytes
+
+    for label, mime, raw in _press_sources():
+        data, out_mime, w, h, sw, sh = press_bytes(
+            raw, mime, max_pixels=1_250_000, jpeg_quality=85
+        )
+        assert out_mime == ("image/png" if mime == "image/png" else "image/jpeg"), label
+        assert w * h <= 1_250_000 and w * h <= sw * sh, f"{label}: upscaled or over cap"
+        out = Image.open(io.BytesIO(data))
+        assert not out.info.get("icc_profile"), f"{label}: ICC survived the press"
+        assert not out.info.get("exif"), f"{label}: exif survived the press"
+        assert out.format in ("PNG", "JPEG") and not getattr(out, "is_animated", False), label
+        again, again_mime, *_ = press_bytes(
+            data, out_mime, max_pixels=1_250_000, jpeg_quality=85
+        )
+        assert again == data, f"{label}: second press is not byte-identical"
+        assert again_mime == out_mime, label
+
+
 # ─── context: vision gate ─────────────────────────────────────────────────────
 
 

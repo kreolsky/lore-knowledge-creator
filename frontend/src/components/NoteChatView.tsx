@@ -9,13 +9,13 @@ import { Button } from './ui';
 import { ChatComposer } from './chat/ChatComposer';
 import { MessageBubble, type MessageBubbleActions } from './chat/MessageBubble';
 import { copyWithToast } from './chat/shared/copy';
-import { useNoteChatStore } from '../store/note-chat-store';
+import { useNoteChatStore, noteAttachSurface } from '../store/note-chat-store';
 import { exitNoteThread } from '../store/note-exit';
 import { useAppStore } from '../store/app-store';
 import { useIsProjectOwner } from '../hooks/useIsProjectOwner';
 import { useTranslation } from '../i18n';
 import { useSimpleVoiceRecording } from '../hooks/useSimpleVoiceRecording';
-import { totalAttachmentBytes, attachmentBudgetExceeded, formatAttachmentMb } from '../utils/attachment-size';
+import { attachImage } from '../chat/attach-image';
 import { insertAtCaret } from '../utils/insert-at-caret';
 
 const STICK_EPSILON = 48;
@@ -33,7 +33,8 @@ export function NoteChatView() {
   const pendingInputFocus = useNoteChatStore(s => s.pendingInputFocus);
   const setPendingInputFocus = useNoteChatStore(s => s.setPendingInputFocus);
   const images = useNoteChatStore(s => s.pendingImages);
-  const addPendingImage = useNoteChatStore(s => s.addPendingImage);
+  const pressingImages = useNoteChatStore(s => s.pressingImages);
+  const imageMeta = useNoteChatStore(s => s.pendingImageMeta);
   const removePendingImage = useNoteChatStore(s => s.removePendingImage);
   const clearPendingImages = useNoteChatStore(s => s.clearPendingImages);
   const editMessage = useNoteChatStore(s => s.editMessage);
@@ -100,7 +101,8 @@ export function NoteChatView() {
   const canVoice = currentUser?.can_voice !== false;
 
   const handleSend = useCallback(() => {
-    if (!text.trim()) return;
+    // A press in flight holds the send: the image would silently miss the message.
+    if (!text.trim() || pressingImages > 0) return;
     const sid = useNoteChatStore.getState().activeSessionId;
     if (!sid) return;
     const imgs = images.length > 0 ? images : undefined;
@@ -110,7 +112,7 @@ export function NoteChatView() {
     setDraftForSession(sid, '');
     clearPendingImages();
     textareaRef.current?.focus();
-  }, [text, images, sendMessage, clearPendingImages, setDraftForSession]);
+  }, [text, images, pressingImages, sendMessage, clearPendingImages, setDraftForSession]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
@@ -131,39 +133,16 @@ export function NoteChatView() {
     }
   }, [handleSend, recording]);
 
-  const readImageFile = useCallback((file: File) => {
-    // ARCH: note image budget reads the SHARED
-    // maxAttachmentMb from app-store (single source, hydrated from /chat/models by
-    // chat-store.loadModels), validated against the projected total of already-queued
-    // images + the new file's raw bytes — mirroring ChatInput's logic.
-    const maxMb = useAppStore.getState().maxAttachmentMb;
-    const pending = totalAttachmentBytes(useNoteChatStore.getState().pendingImages);
-    if (attachmentBudgetExceeded(pending, file.size, maxMb)) {
-      useAppStore.getState().showToast(
-        t('attachmentsExceedLimit', { used: formatAttachmentMb(pending + file.size), limit: maxMb }),
-        'error',
-      );
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        addPendingImage(reader.result as string);
-      }
-    };
-    reader.readAsDataURL(file);
-  }, [t, addPendingImage]);
-
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     const items = e.clipboardData.items;
     for (const item of items) {
       if (item.type.startsWith('image/')) {
         e.preventDefault();
         const file = item.getAsFile();
-        if (file) readImageFile(file);
+        if (file) void attachImage(file, noteAttachSurface);
       }
     }
-  }, [readImageFile]);
+  }, []);
 
   // WHY: the scroll-to-bottom button shows exactly when auto-follow is off — one
   // threshold for both, no separate button threshold (operator requirement).
@@ -249,7 +228,7 @@ export function NoteChatView() {
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
         isStreaming={false}
-        canSend={text.trim().length > 0}
+        canSend={text.trim().length > 0 && pressingImages === 0}
         placeholder={t('noteChatPlaceholder')}
         recording={canVoice ? recording : false}
         transcribing={transcribing}
@@ -257,6 +236,8 @@ export function NoteChatView() {
         onCancelRecording={cancelRecording}
         images={images}
         onRemoveImage={removePendingImage}
+        imageMeta={imageMeta}
+        pressingImages={pressingImages}
         onScrollToBottom={scrolledAway ? scrollToBottom : undefined}
         textareaRef={textareaRef}
       />

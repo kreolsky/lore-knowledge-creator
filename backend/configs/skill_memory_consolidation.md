@@ -1,6 +1,6 @@
 ---
 name: memory-consolidation
-description: Use when the user wants to consolidate, merge, clean up, or verify project memory from a document's references — distil the attached material into memory facts (one fact per document). Сконсолидировать / объединить / почистить / сверить память проекта; работает по ссылкам документа. Loads the consolidation procedure and its tool pack.
+description: Use when the user wants to consolidate, merge, clean up, or verify project memory from material attached to a document — distil a document's references into memory facts (one fact per document); knowledge from the current conversation is saved through chat-recall. Сконсолидировать / объединить / почистить / сверить память проекта; работает по ссылкам документа. Loads the consolidation procedure and its tool pack.
 tools:
   - consolidate_memory
   - get_memory_facts

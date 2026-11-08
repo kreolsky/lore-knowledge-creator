@@ -17,6 +17,12 @@ What happens:
 
 The process runs in the chat: you can follow it, correct the agent and answer its questions.
 
+## Saving facts from a chat
+
+Mid-conversation, say "save this to memory" (or "remember this"). The agent proposes the facts as one card: each fact with its title and text, and a note when it merges into or replaces a fact already known. Approve the card, or reject it with a comment on what to change. With "Auto" checked the facts are saved at once.
+
+A saved fact cites the chat as its source and belongs to the chat's parent document: a search narrowed to that document finds it. If the chat has no parent document, the card warns that the facts will be found only by a project-wide search. The agent can also place a fact on other documents you name. A commentator cannot save facts.
+
 ## Tips
 
 - Gather one call's or discussion's materials under one document before consolidating: facts are tied to their sources.

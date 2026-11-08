@@ -175,6 +175,17 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
     async updateSession(sessionId: string, data: { title?: string; model?: string; system_prompt_id?: string | null; context_ids?: string[]; mode?: string; agent_auto?: boolean; has_region?: boolean; reasoning_effort?: string | null; document_id?: string | null }) {
       const p = apiClient.patch(`/chat/sessions/${sessionId}`, data)
         .then((updated: ChatSession) => {
+          // ARCH: a reparent is written by the server to EVERY row of the
+          // conversation (update.py _propagate_parent), so the store follows
+          // for the whole thread — a branch row left on the old parent splits
+          // the thread between two documents until the next list reload.
+          const reparent = data.document_id !== undefined;
+          const rootId = reparent ? threadRootOf(get, sessionId) : null;
+          const threadIds = reparent && rootId !== null
+            ? new Set(get().sessions
+                .filter(ss => threadRootOf(get, ss.session_id) === rootId)
+                .map(ss => ss.session_id))
+            : null;
           set(s => ({
             // WHY: update_session returns
             // last_message_at=null (it doesn't carry the last-activity map), so
@@ -182,9 +193,15 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
             // a settings edit (which bumps updated_at server-side) would revert
             // the card to the patch time and re-sort the chat to the top by patch
             // time until the next list_sessions reload.
-            sessions: s.sessions.map(ss => ss.session_id === sessionId
-              ? { ...updated, last_message_at: updated.last_message_at ?? ss.last_message_at }
-              : ss),
+            sessions: s.sessions.map(ss => {
+              if (ss.session_id === sessionId) {
+                return { ...updated, last_message_at: updated.last_message_at ?? ss.last_message_at };
+              }
+              if (threadIds?.has(ss.session_id)) {
+                return { ...ss, document_id: updated.document_id ?? null };
+              }
+              return ss;
+            }),
           }));
         })
         .catch(() => {

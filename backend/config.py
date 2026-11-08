@@ -17,6 +17,7 @@ carrying its WHY at the declaration site below.
 # declared above it).
 
 import base64
+import ipaddress
 import os
 from pathlib import Path
 
@@ -271,10 +272,12 @@ STT_MODEL = setting(
 
 # Session TITLES are minted by the harness titler; CHAT_TITLE_MODEL above only
 # names its model, served to the harness per turn (the turn payload).
-# ARCH: Total budget for ALL chat image attachments in one turn, in raw source
-# bytes (not base64). The frontend enforces this sum at attach time;
-# main.py derives the request-body JSON cap from it. Single source of truth —
-# exposed to clients via GET /chat/models (max_attachment_mb).
+# ARCH: Total budget for ALL chat image attachments in one turn, in PRESSED
+# bytes — the output of /api/chat/images/normalize (never the raw source file:
+# a screenshot's source can exceed this while its pressed copy fits). The
+# frontend enforces this sum at send time; main.py derives the request-body
+# JSON cap from it. Single source of truth — exposed to clients via
+# GET /chat/models (max_attachment_mb).
 CHAT_MAX_IMAGE_SIZE_MB = 5
 
 # ─── Auto-backup thresholds ─────────────────────────────────────────────────
@@ -442,7 +445,9 @@ MODEL_IMAGE_MAX_PIXELS = setting(
     "MODEL_IMAGE_MAX_PIXELS", int, default=1_250_000, min=10_000,
     label="Model image pixel cap",
     help="Total-pixel cap for images normalized on the way to the model "
-         "(cost is a function of pixel area).",
+         "(cost is a function of pixel area). Above ~1.3 Mpx a pressed PNG "
+         "can exceed 4 MiB, past the size dsh forwards unchanged — it then "
+         "re-encodes the image silently.",
 )
 MODEL_IMAGE_JPEG_QUALITY = setting(
     "MODEL_IMAGE_JPEG_QUALITY", int, default=85, min=1, max=100,
@@ -1145,6 +1150,22 @@ SANDBOX_EXTERNAL_AGENT_KEY = setting(
     help="Model credential delivered per run to a foreign agent CLI that "
          "asked for it (sandbox_bash with_external_agent_key).",
 )
+
+
+# ─── Outbound egress (SYSTEM: user-secrets, backend/egress_guard.py) ────────
+# Comma-separated CIDRs the backend may dial despite being non-public — the
+# operator's escape hatch for a service on their own LAN (a Confluence the
+# agent reaches through a user's stored key). Empty = private, loopback,
+# link-local, CGNAT, multicast and reserved addresses are ALWAYS refused: the
+# backend sits next to surreal and redis, and a secret-bound host is user
+# input, so the default must not be able to reach them.
+# WHY env-only, no admin row: the dial names the operator's own network and
+# widens a security guard — an admin session able to flip it open is exactly
+# the compromised principal it exists against (the SCHEMA_FINGERPRINT_FATAL
+# precedent: a guard's escape hatch lives where the deployment is controlled).
+OUTBOUND_ALLOW_CIDRS = os.environ.get("OUTBOUND_ALLOW_CIDRS", "")
+for _cidr in filter(None, (c.strip() for c in OUTBOUND_ALLOW_CIDRS.split(","))):
+    ipaddress.ip_network(_cidr, strict=False)  # a malformed range crashes the boot
 
 
 # ─── HTML artifacts (SYSTEM: artifact-serve) ─────────────────────────────────

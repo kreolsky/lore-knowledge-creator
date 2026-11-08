@@ -12,6 +12,8 @@
 
 import { FileArchive } from 'lucide-react';
 import { useTranslation } from '../../i18n';
+import { pressedSize } from '../../chat/attach-image';
+import { useAppStore } from '../../store/app-store';
 import { formatFileSize } from '../references/ref-utils';
 import { Reference } from '../../types';
 import { referenceFileUrl } from '../../utils/reference-url';
@@ -26,6 +28,7 @@ interface Props {
 
 export function ReferenceMediaBar({ reference, canEdit }: Props) {
   const { t } = useTranslation();
+  const modelImageMaxPixels = useAppStore(s => s.modelImageMaxPixels);
   if (!reference.file_path) return null;
 
   // referenceFileUrl routes through the anonymous /api/public/{token}/files/…
@@ -33,8 +36,12 @@ export function ReferenceMediaBar({ reference, canEdit }: Props) {
   const fileUrl = referenceFileUrl(reference.reference_id, reference.file_path);
 
   if (reference.media_type === 'image') {
+    const { width, height } = reference.file_meta ?? {};
+    const modelSize = width && height && modelImageMaxPixels
+      ? pressedSize(width, height, modelImageMaxPixels)
+      : null;
     return (
-      <div className="flex justify-center px-4">
+      <div className="flex flex-col items-center px-4">
         {/* relative group — the actions plate sits over the picture's top-right
             corner and shows on hover / focus-within, and always on devices without
             hover (touch) so a tap never arms an invisible delete; bg-surface plate so
@@ -59,6 +66,11 @@ export function ReferenceMediaBar({ reference, canEdit }: Props) {
             className="block object-contain max-w-full"
           />
         </div>
+        {modelSize && (
+          <div className="mt-1 text-ui-xs text-text-dim">
+            {t('referenceModelImageSize', { size: `${modelSize.width}×${modelSize.height}` })}
+          </div>
+        )}
       </div>
     );
   }

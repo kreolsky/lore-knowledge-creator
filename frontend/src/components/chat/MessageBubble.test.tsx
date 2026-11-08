@@ -24,10 +24,15 @@ vi.mock('../../store/app-store', () => ({
     { getState: () => ({ showToast: vi.fn() }), subscribe: () => () => {} },
   ),
 }));
-// VerdictCard reads decideVerdict from the chat store; the bubble stays
-// store-agnostic, so the card's own store call is mocked at module level.
+// VerdictCard reads decideVerdict + the active session's parent document from
+// the chat store; the bubble stays store-agnostic, so the card's own store
+// call is mocked at module level.
 vi.mock('../../store/chat-store', () => ({
-  useChatStore: (selector: (s: unknown) => unknown) => selector({ decideVerdict: vi.fn() }),
+  useChatStore: (selector: (s: unknown) => unknown) => selector({
+    decideVerdict: vi.fn(),
+    activeSessionId: null,
+    sessions: [],
+  }),
 }));
 vi.mock('../../i18n', () => ({
   useTranslation: () => ({

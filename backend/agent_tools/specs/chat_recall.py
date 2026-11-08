@@ -1,6 +1,10 @@
 """chat-recall agent tool CONSTANTS: the chat-recall skill's pack.
-Pure data — imports nothing (leaf).
+Pure data — imports the verdicts sub-schema from specs.memory (the ONE source
+of the verdict shape, so a field change can never drift between the two
+capture tools); no other imports, no cycle.
 """
+
+from agent_tools.specs.memory import APPLY_MEMORY_VERDICTS_TOOL
 
 # ARCH: agent-only (agent + tool_api, never MCP). Why: the corpus is ONE PERSON's own
 # chats, and an MCP key has no person whose chats these are — the caller's identity is
@@ -203,6 +207,109 @@ VIEW_CHAT_IMAGE_TOOL: dict = {
                 },
             },
             "required": ["message_id", "index"],
+        },
+    },
+}
+
+# The verdict shape is DERIVED from the consolidation tool's parameter (the
+# one source of the verdict schema) — only the description is capture-specific.
+_CHAT_VERDICTS_PARAM = dict(
+    APPLY_MEMORY_VERDICTS_TOOL["function"]["parameters"]["properties"]["verdicts"],
+    description=(
+        "One verdict per fact you are saving from this conversation. Invalid "
+        "verdicts are NOT fatal to the batch: valid ones apply, invalid ones "
+        "come back in `rejected` with the correction to make — fix ONLY those "
+        "and re-emit just them."
+    ),
+)
+
+# ARCH: the two WRITE tools of the pack (mutating, both holdable through the
+# `apply` field — one approval card per call). They live in the chat-recall
+# pack, not the memory-consolidation one, because capture is bound to THIS
+# conversation and operator-ruled as not always available: listing them under
+# `tools:` in backend/configs/skill_chat_recall.md is the whole gate — the
+# driver prunes pack tools from the core surface until the skill loads, so
+# disabling the skill disables saving from chats too.
+SAVE_CHAT_FACTS_TOOL: dict = {
+    "type": "function",
+    "mutating": True,
+    "function": {
+        "name": "save_chat_facts",
+        "description": (
+            "Save facts distilled from THIS conversation to project memory — "
+            "the moderated capture the user asks for with «сохрани это в "
+            "знания» / «запомни это». One verdict per fact, exactly as "
+            "`apply_memory_verdicts` takes them: `new` (title + text) creates "
+            "a fact, `merge` folds into a stored fact (`fact_id`, optional "
+            "`absorb_id`), `supersede` corrects one in place, `skip` declines "
+            "with a `reason`. There is no `reference_id` and no run loop — "
+            "capture is one shot, and the server stamps every fact with THIS "
+            "chat as its source (never a field you send). In confirm mode one "
+            "batch produces ONE approval card: a rejection with text is "
+            "per-fact moderation — drop or fix the named verdicts and re-emit "
+            "the corrected batch ONLY. The result names every fact written "
+            "(`created` / `touched`) — take ids from there for "
+            "`set_fact_anchor`. Saved facts are found project-wide by "
+            "`search_materials`, and under a document narrow they follow this "
+            "chat's parent document until anchored otherwise."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "verdicts": _CHAT_VERDICTS_PARAM,
+                "apply": {
+                    "type": "string",
+                    "enum": ["confirm", "auto"],
+                    "description": "confirm (default) shows one approval card "
+                                   "for the whole batch; auto writes directly.",
+                },
+            },
+            "required": ["verdicts"],
+        },
+    },
+}
+
+SET_FACT_ANCHOR_TOOL: dict = {
+    "type": "function",
+    "mutating": True,
+    "function": {
+        "name": "set_fact_anchor",
+        "description": (
+            "Place one stored memory fact on specific documents — after this, "
+            "a `search_materials` narrow over an anchor document finds the "
+            "fact there, even though the fact came from a chat or a reference "
+            "elsewhere (and moving that chat no longer moves the fact). "
+            "`document_ids: []` CLEARS the anchors: the fact returns to "
+            "following its source. Anchors are placement, not origin — the "
+            "fact keeps its provenance and its place in the Memory folder. "
+            "`fact_id` comes from `search_materials` or a `save_chat_facts` "
+            "result. Each target must be a live document of this project — "
+            "not a reference, not another fact. In confirm mode the call "
+            "shows one approval card. The result returns the fact's anchors "
+            "after the write; `get_memory_facts` serves them per fact."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fact_id": {
+                    "type": "string",
+                    "description": "The stored fact to anchor (a documents id "
+                                   "with `is_memory`).",
+                },
+                "document_ids": {
+                    "type": "array",
+                    "description": "The anchor documents. Non-empty replaces "
+                                   "the current anchors; [] clears them.",
+                    "items": {"type": "string"},
+                },
+                "apply": {
+                    "type": "string",
+                    "enum": ["confirm", "auto"],
+                    "description": "confirm (default) shows one approval card; "
+                                   "auto writes directly.",
+                },
+            },
+            "required": ["fact_id", "document_ids"],
         },
     },
 }

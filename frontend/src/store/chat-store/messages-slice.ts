@@ -174,8 +174,9 @@ function completionBody(get: Get, activeSessionId: string, wire: SendWire): Reco
   const scopeRefId = refIsScope(sendMode) ? appState.currentReference?.reference_id : undefined;
   const openDocId =
     scopeRefId ?? appState.currentDocument?.document_id ?? null;
+  // INVARIANT: the wire carries only the tail turn's images  Why: the backend reads nothing but messages[-1]; history images only ate the body cap and made a long chat with pictures unsendable.
   return {
-    messages: wire.apiMessages,
+    messages: wire.apiMessages.slice(-1),
     parent_id: wire.parentId,
     user_msg_id: wire.userMsgId,
     ...contentCtx,

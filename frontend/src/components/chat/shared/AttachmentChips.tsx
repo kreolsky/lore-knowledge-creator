@@ -1,19 +1,27 @@
 /** Shared pending-attachment strip: image thumbnails and file chips, one square
- * size. Click a chip to remove it. Used by both AI and notes composers (files:
+ * size. An image chip opens the lightbox at 1:1 — the version the model gets — and
+ * removes by its corner button; a file chip removes on click. Used by both AI and notes composers (files:
  * AI only). `FileChip` alone also renders a sent message's files. */
 // SYSTEM: chat-composer — shared composer attachment chips
 // INVARIANT: no rounded corners anywhere (project rule) — the hover overlay uses
 // a square backdrop, not rounded-full. Why: the AI composer historically used
 // rounded-full here; unifying on the note style keeps the whole app square.
 
-import { AlertTriangle, File, FileArchive, FileAudio, FileSpreadsheet, FileText, X } from 'lucide-react';
+import { useState } from 'react';
+import { AlertTriangle, File, FileArchive, FileAudio, FileSpreadsheet, FileText, Loader2, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { IconButton } from '../../ui';
+import { ImageLightbox } from '../MessageBubble/internal/image-lightbox';
 import { useTranslation } from '../../../i18n';
+import type { PressedImageMeta } from '../../../chat/attach-image';
 import type { PendingFile } from '../../../store/chat-store/types';
 
 interface Props {
   images: string[];
   onRemove: (index: number) => void;
+  imageMeta?: Record<string, PressedImageMeta>;
+  /** Presses in flight: one busy chip each. */
+  pressing?: number;
   files?: PendingFile[];
   onRemoveFile?: (key: string) => void;
 }
@@ -67,20 +75,51 @@ function RemoveOverlay() {
   );
 }
 
-export function AttachmentChips({ images, onRemove, files = [], onRemoveFile }: Props) {
+export function AttachmentChips({ images, onRemove, imageMeta = {}, pressing = 0, files = [], onRemoveFile }: Props) {
   const { t } = useTranslation();
-  if (images.length === 0 && files.length === 0) return null;
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  if (images.length === 0 && files.length === 0 && pressing === 0) return null;
+  // WHY: compared by area, not by side — an EXIF rotation swaps the sides of an
+  // image that was not compressed at all.
+  const sizeLabel = (src: string): string | null => {
+    const m = imageMeta[src];
+    if (!m) return null;
+    const size = `${m.width}×${m.height}`;
+    return m.width * m.height === m.sourceWidth * m.sourceHeight
+      ? size
+      : t('imageSizePressed', { size, source: `${m.sourceWidth}×${m.sourceHeight}` });
+  };
+  const open = openIndex !== null && openIndex < images.length ? openIndex : null;
   return (
     <div className="flex gap-2 mb-2 flex-wrap">
       {images.map((img, i) => (
         <div
           key={i}
           className="group relative w-16 h-16 border border-border cursor-pointer"
-          onClick={() => onRemove(i)}
-          title={t('removeImage')}
+          onClick={() => setOpenIndex(i)}
+          title={sizeLabel(img) ?? t('attachmentImage')}
         >
           <img src={img} alt="" className="w-full h-full object-cover" />
-          <RemoveOverlay />
+          <div className="absolute top-0 right-0 bg-surface opacity-0 group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
+            <IconButton
+              size="sm"
+              title={t('removeImage')}
+              aria-label={t('removeImage')}
+              onClick={(e: React.MouseEvent) => { e.stopPropagation(); onRemove(i); }}
+            >
+              <X size={14} />
+            </IconButton>
+          </div>
+        </div>
+      ))}
+      {Array.from({ length: pressing }, (_, i) => (
+        <div
+          key={`pressing-${i}`}
+          className="w-16 h-16 border border-border bg-surface2 flex items-center justify-center"
+          title={t('chatImagePressing')}
+          data-testid="pressing-image-chip"
+        >
+          <Loader2 size={20} className="text-text-muted animate-spin" />
         </div>
       ))}
       {files.map(f => (
@@ -95,6 +134,16 @@ export function AttachmentChips({ images, onRemove, files = [], onRemoveFile }: 
           <RemoveOverlay />
         </div>
       ))}
+      {open !== null && (
+        <ImageLightbox
+          srcs={images}
+          index={open}
+          onIndexChange={setOpenIndex}
+          onClose={() => setOpenIndex(null)}
+          title={sizeLabel(images[open]) ?? t('attachmentImage')}
+          actualSize
+        />
+      )}
     </div>
   );
 }

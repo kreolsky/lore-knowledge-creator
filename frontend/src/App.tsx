@@ -4,6 +4,7 @@ import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { Toast } from './components/Toast';
 import { SessionRoute } from './pages/SessionRoute';
+import { useColorOverrides } from './hooks/useColorOverrides';
 // ARCH: the pages reachable without a session are route-split via React.lazy.
 // SessionRoute is the exception, statically linked into the entry, because React
 // holds a freshly shown Suspense fallback ~300ms (see EditorRoutes' ARCH) even
@@ -30,6 +31,7 @@ function RouteLoading() {
 }
 
 export default function App() {
+  useColorOverrides();
   return (
       <BrowserRouter>
         {/* ARCH: single global Toast, mounted OUTSIDE <Routes>. Why: one

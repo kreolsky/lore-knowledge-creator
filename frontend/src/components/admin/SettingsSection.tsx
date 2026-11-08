@@ -84,7 +84,7 @@ export function SettingsSection({ tab }: { tab: SettingsTabId }) {
   return (
     <>
       {loadFailed && <p className="text-xs text-red mb-2">{t('adminListLoadFailed')}</p>}
-      <div className="px-1.5">
+      <div>
         {groups.map((grp, i) => (
           <Fragment key={grp.section}>
             {/* Same heading as the Users section's "Add user" — one style for

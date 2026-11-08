@@ -168,6 +168,11 @@ async function approvalsPost(
     res.end(JSON.stringify({ detail: 'Unknown verdict action or missing tool_name' }))
     return
   }
+  if (status === 403) {
+    res.writeHead(403, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ detail: 'This tool is approved one call at a time' }))
+    return
+  }
   res.writeHead(200, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify({ success: true }))
 }

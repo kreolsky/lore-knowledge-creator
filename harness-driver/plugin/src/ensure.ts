@@ -76,6 +76,7 @@ export interface LoreRouteScaffold {
   baseURL: string
   compat?: Record<string, unknown>
   defaultContextWindow?: number
+  requestImageMaxBytes?: number
 }
 
 /** The credentials ref the route's key resolves through — Lore-internal, set
@@ -92,6 +93,14 @@ export const AGENT_KEY_REF = 'LORE_AGENT_API_KEY'
  * Same number the composes' deleted env default carried: pi-ai's own
  * fallback (262144) would silently change the context_usage denominator. */
 export const ROUTE_DEFAULT_CONTEXT_WINDOW = 128000
+
+/** `requestImageMaxBytes` for both route scaffolds. Why 4 MiB: it equals
+ * dsh's admission normalization target (attachment-local encoding), and it
+ * exceeds any RGB PNG the press can emit at the 1.25 Mpx pixel cap (3 bytes
+ * per pixel = 3.75 MB raw) — so a pressed image is never re-encoded by dsh's
+ * request step, which otherwise re-encodes anything over its default 1 MiB
+ * and the model would receive different bytes than the row stored. */
+export const REQUEST_IMAGE_MAX_BYTES = 4 * 1024 * 1024
 
 /** The settings seam the upsert talks to (ctx.settings; duck-typed for tests).
  * 0.2.0 shape: no namespace `get` — `describe()` reads the live form values
@@ -192,10 +201,13 @@ export async function ensureModelEntry(
       ? committed?.reasoningEfforts
       : reasoningEffortsDeclaration(effortLevels, model)
     // The route scaffold rides this write whenever a field a turn can change
-    // differs: baseURL (an admin edit) or apiKeyEnv (a route committed under
-    // the pre-admin ref).
+    // differs: baseURL (an admin edit), apiKeyEnv (a route committed under
+    // the pre-admin ref) or requestImageMaxBytes (a route committed before
+    // the press contract — an existing install must get the new field too,
+    // not keep re-encoding every pressed image over 1 MiB).
     const scaffoldPatch = scaffold !== null
-      && (routeSection?.baseURL !== scaffold.baseURL || routeSection?.apiKeyEnv !== scaffold.apiKeyEnv)
+      && (routeSection?.baseURL !== scaffold.baseURL || routeSection?.apiKeyEnv !== scaffold.apiKeyEnv
+        || routeSection?.requestImageMaxBytes !== scaffold.requestImageMaxBytes)
       ? scaffold
       : {}
     // Skip when the committed entry already carries every value this turn

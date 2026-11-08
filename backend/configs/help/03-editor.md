@@ -71,6 +71,8 @@ A click on a link opens the document, reference or note; hovering shows a previe
 
 ⌘/Ctrl + V converts formatting from Word, Google Docs or a web page into Markdown, and a copied table becomes a [Lore table](help:tables). Text copied from Lore itself pastes without loss, with all its links. ⌘/Ctrl + ⇧ + V pastes plain text without formatting.
 
+A screenshot or a copied picture pastes as a picture: it is uploaded as a reference of the document and placed at the cursor (see [Images and embeds](help:embeds)). When the clipboard holds text as well, the text wins, so selections from Word and Excel paste as before.
+
 ## Files in a document
 
-A text file or a Word file can be dragged straight into a document: Lore offers to insert its content below the line where you dropped it. Pictures, recordings and PDFs are not inserted into the text: they are uploaded in the "References" tab (see [References](help:references)).
+A text file or a Word file can be dragged straight into a document: Lore offers to insert its content below the line where you dropped it. A picture dropped into a document is uploaded as a reference and inserted where you dropped it (see [Images and embeds](help:embeds)). Recordings and PDFs are not inserted into the text: they are uploaded in the "References" tab (see [References](help:references)).

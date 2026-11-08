@@ -39,6 +39,7 @@ import routes.tool_api.imports  # noqa: F401
 import routes.tool_api.memory  # noqa: F401
 import routes.tool_api.reads  # noqa: F401
 import routes.tool_api.sandbox  # noqa: F401
+import routes.tool_api.secrets  # noqa: F401
 import routes.tool_api.skills  # noqa: F401
 import routes.tool_api.structure  # noqa: F401
 import routes.tool_api.subtree  # noqa: F401

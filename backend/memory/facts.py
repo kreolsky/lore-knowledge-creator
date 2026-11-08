@@ -206,6 +206,21 @@ def retire_fact_mem(mem: dict, successor_id: str, *, reason: str | None, now: st
     return retired
 
 
+def union_anchors(a: list | None, b: list | None) -> list[str]:
+    """The merged fact's `mem.anchors`: survivor-first, order-preserving dedup.
+
+    WHY `.get()`-style reads (never a subscript): SurrealDB does not persist
+    a NONE-valued key, so a fact that never carried anchors has the key
+    ABSENT (see the module INVARIANT above).
+    """
+    out: list[str] = []
+    for x in [*(a or []), *(b or [])]:
+        s = str(x)
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
 def select_survivor(
     a_id: str, a: dict, b_id: str, b: dict,
 ) -> tuple[str, str]:
@@ -277,5 +292,6 @@ def fact_history(mem: dict) -> list[dict]:
 
 __all__ = [
     "new_fact_mem", "merge_into_fact", "supersede_fact_mem", "retire_fact_mem",
-    "successor_history", "select_survivor", "fact_revisions", "fact_history",
+    "successor_history", "select_survivor", "union_anchors",
+    "fact_revisions", "fact_history",
 ]

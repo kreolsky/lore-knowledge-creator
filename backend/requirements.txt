@@ -42,6 +42,10 @@ idna>=3.15
 # dispatcher runs inside the async request path, and paramiko is blocking — it would
 # need a thread pool to avoid stalling the event loop during a long command.
 asyncssh>=2.14.0
+# Fernet encryption of personal user secrets at rest (SYSTEM: user-secrets,
+# backend/user_secrets.py). The key is the per-instance file under the storage
+# root; rotating the JWT secret must never brick stored ciphertexts.
+cryptography>=42.0
 # The backend→driver standing event channel (driver/channel.py). Shipped by
 # uvicorn[standard] already; pinned here because it is now a DIRECT import
 # (the 14+ asyncio client — additional_headers on connect).

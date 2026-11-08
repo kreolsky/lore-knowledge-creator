@@ -30,8 +30,8 @@
  * (no new CSS classes), commit on pointerup. The drop target is a fixed-position
  * line in the gap between rows with a chevron at BOTH ends pointing inward —
  * identical for the tree (left panel) and reference cards (right panel). A tree
- * drop INTO a row (its middle half) turns the same element vertical at the
- * row's indent, chevrons top and bottom: horizontal = "between", vertical = "inside".
+ * drop INTO a row (its middle half) turns the same element into a squiggle at the
+ * row's indent, its arrow pointing at the row: line = "between", squiggle = "inside".
  */
 import { useEffect } from 'react';
 import { useAppStore } from '../store/app-store';
@@ -59,7 +59,7 @@ export interface DragDropTarget {
   lineLeft: number;
   lineRight: number;
   lineY: number;
-  /** Set for a drop INTO a row: the indicator becomes a vertical bar at
+  /** Set for a drop INTO a row: the indicator becomes a squiggle at
    * `lineLeft` spanning `top`..`bottom` (lineRight/lineY unused). */
   nest?: { top: number; bottom: number };
 }
@@ -104,8 +104,8 @@ export interface DragOutsideTarget {
 
 /** Detached drop-line element: a 4px accent line plus TWO chevrons pointing
  * inward (`>` at the left end, `<` at the right end), identical for both
- * panels. It also carries the vertical pair (`v` at the top, `^` at the bottom)
- * for the "inside" bar — `placeDropIndicator` shows one pair at a time. */
+ * panels. It also carries the "inside" squiggle — `placeDropIndicator` shows
+ * either the line with its chevrons or the squiggle. */
 export function createDropIndicator(): HTMLElement {
   const el = document.createElement('div');
   el.setAttribute('data-drop-indicator', '');
@@ -116,18 +116,17 @@ export function createDropIndicator(): HTMLElement {
   const half = INDICATOR_CHEVRON / 2;
   const far = INDICATOR_CHEVRON - 1;
   const across = INDICATOR_LINE / 2 - half; // centres the chevron on the stroke
-  const svg = (edge: 'left' | 'right' | 'top' | 'bottom', points: string) => {
-    const axis = edge === 'left' || edge === 'right' ? 'top' : 'left';
+  const svg = (edge: 'left' | 'right', points: string) => {
     return `<svg data-chevron="${edge}" width="${INDICATOR_CHEVRON}" height="${INDICATOR_CHEVRON}" viewBox="0 0 ${INDICATOR_CHEVRON} ${INDICATOR_CHEVRON}" `
-      + `style="position:absolute;${axis}:${across}px;${edge}:${-half}px;overflow:visible">`
+      + `style="position:absolute;top:${across}px;${edge}:${-half}px;overflow:visible">`
       + `<polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="${INDICATOR_LINE}" stroke-linecap="square"/></svg>`;
   };
-  // Chevron tips point INTO the stroke: '>' left, '<' right, 'v' top, '^' bottom.
+  // Chevron tips point INTO the stroke: '>' left, '<' right.
   el.innerHTML =
     svg('left', `1,1 ${half},${half} 1,${far}`)
     + svg('right', `${far},1 ${half},${half} ${far},${far}`)
-    + svg('top', `1,1 ${half},${half} ${far},1`)
-    + svg('bottom', `1,${far} ${half},${half} ${far},${far}`);
+    + '<svg data-nest-squiggle width="1" height="1" style="position:absolute;left:0;top:0;overflow:visible">'
+    + `<path fill="none" stroke="var(--accent)" stroke-width="${INDICATOR_LINE}" stroke-linejoin="miter"/></svg>`;
   return el;
 }
 
@@ -143,28 +142,41 @@ export function rowDropLine(rect: DOMRect, before: boolean): Pick<DragDropTarget
 }
 
 /** Put the drop line at `pos`, straddling the gap; each chevron overhangs the
- * line's end by half. With `pos.nest` the element becomes the "inside" bar:
- * the same stroke turned vertical at `lineLeft`, spanning `nest.top`..`nest.bottom`
- * with the top/bottom chevron pair instead of the left/right one. */
+ * line's end by half. With `pos.nest` the element becomes the "inside" squiggle:
+ * the same stroke running down from `nest.top` to `nest.bottom` at `lineLeft`,
+ * straight except for a chevron-sized arrow at mid-height pointing at the row. */
 export function placeDropIndicator(
   el: HTMLElement,
   pos: Pick<DragDropTarget, 'lineLeft' | 'lineRight' | 'lineY' | 'nest'>,
 ): void {
   const { nest } = pos;
-  const vertical = new Set(['top', 'bottom']);
   el.querySelectorAll<SVGElement>('svg[data-chevron]').forEach(svg => {
-    svg.style.display = vertical.has(svg.dataset.chevron!) === !!nest ? '' : 'none';
+    svg.style.display = nest ? 'none' : '';
   });
+  const squiggle = el.querySelector<SVGElement>('svg[data-nest-squiggle]')!;
+  squiggle.style.display = nest ? '' : 'none';
+  if (nest) {
+    const height = Math.max(nest.bottom - nest.top, 0);
+    const mid = height / 2;
+    const half = INDICATOR_CHEVRON / 2;
+    const x = INDICATOR_LINE / 2;
+    squiggle.querySelector('path')!.setAttribute(
+      'd',
+      `M${x} 0V${mid - half}L${x + half} ${mid}L${x} ${mid + half}V${height}`,
+    );
+  }
   Object.assign(el.style, nest
     ? {
       display: 'block',
+      background: 'transparent',
       top: `${nest.top}px`,
       left: `${pos.lineLeft}px`,
-      width: `${INDICATOR_LINE}px`,
+      width: `${INDICATOR_CHEVRON}px`,
       height: `${Math.max(nest.bottom - nest.top, 0)}px`,
     }
     : {
       display: 'block',
+      background: 'var(--accent)',
       top: `${pos.lineY - INDICATOR_LINE / 2}px`,
       left: `${pos.lineLeft}px`,
       width: `${Math.max(pos.lineRight - pos.lineLeft, 0)}px`,
@@ -261,17 +273,15 @@ export const treeDragAdapter: SiblingDragAdapter = {
     if (e.clientY >= rect.top + edge && e.clientY < rect.bottom - edge) {
       const nest = resolveTreeNest(rows, idx, candidate.id);
       if (!nest) return undefined;
-      // The bar sits at the TARGET row's own indent — the level being nested into;
-      // inset by half a chevron so each tip lands on the row's edge (as the line does).
+      // The squiggle sits at the TARGET row's own indent — the level being nested into.
       const left = rect.left + TREE_BASE_PAD + rows[idx].depth * TREE_INDENT;
-      const half = INDICATOR_CHEVRON / 2;
       return {
         parentId: nest.parentId,
         afterId: null,
         lineLeft: left,
         lineRight: left + INDICATOR_LINE,
         lineY: rect.top,
-        nest: { top: rect.top + half, bottom: rect.bottom - half },
+        nest: { top: rect.top, bottom: rect.bottom },
       };
     }
     const before = e.clientY < rect.top + rect.height / 2;

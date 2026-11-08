@@ -46,17 +46,19 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  useUIStore.setState({ adminSectionTab: null });
+  useUIStore.setState({ adminSectionTab: null, cabinetSectionTab: null });
 });
 
 describe('admin section prefs — setters persist on _global', () => {
   it('setAdminSectionTab PUTs _global with adminSectionTab in the blob', async () => {
     const fetchSpy = vi.mocked(globalThis.fetch);
     useUIStore.getState().setAdminSectionTab('projects');
+    useUIStore.getState().setCabinetSectionTab('mcp');
 
     await vi.waitFor(() => { expect(globalPuts(fetchSpy)).not.toHaveLength(0); }, { timeout: 1000 });
     const last = globalPuts(fetchSpy).at(-1)!.preferences;
     expect(last.adminSectionTab).toBe('projects');
+    expect(last.cabinetSectionTab).toBe('mcp');
     // The pre-existing global fields still ride along — blob is field-by-field.
     expect(last.theme).toBeDefined();
     expect(last.language).toBeDefined();
@@ -67,17 +69,19 @@ describe('admin section prefs — loadGlobalPrefs hydration', () => {
   it('hydrates adminSectionTab from the server row', async () => {
     vi.mocked(globalThis.fetch).mockResolvedValue({
       ok: true, status: 200,
-      json: () => Promise.resolve({ adminSectionTab: 'embeddings' }),
+      json: () => Promise.resolve({ adminSectionTab: 'embeddings', cabinetSectionTab: 'keys' }),
     } as Response);
 
     await useUIStore.getState().loadGlobalPrefs();
 
     expect(useUIStore.getState().adminSectionTab).toBe('embeddings');
+    expect(useUIStore.getState().cabinetSectionTab).toBe('keys');
   });
 
   it('empty prefs row keeps the null default (page falls back to Users)', async () => {
     await useUIStore.getState().loadGlobalPrefs();
 
     expect(useUIStore.getState().adminSectionTab).toBeNull();
+    expect(useUIStore.getState().cabinetSectionTab).toBeNull();
   });
 });

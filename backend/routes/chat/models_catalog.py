@@ -302,24 +302,36 @@ async def gateway_model_ids() -> list[str]:
 # ─── Models endpoint ──────────────────────────────────────────────────────────
 
 
+def _roster_fields(entries: list[dict]) -> dict:
+    """The per-model roster fields, projected from ONE gateway payload so the
+    picker cannot disagree with what the provider serves. (The turn-time gates
+    ask the DRIVER, which resolves the same roster — picker and gates agree
+    because they read the same gateway, not because they share code.)"""
+    models = [m["id"] for m in entries if m.get("id")]
+    return {
+        "models": sorted(models),
+        "tool_models": sorted(models),
+        "vision_models": sorted(
+            m["id"] for m in entries if m.get("id") and _entry_supports_vision(m)
+        ),
+        "structured_output_models": sorted(
+            m["id"] for m in entries if m.get("id") and _entry_supports_structured_outputs(m)
+        ),
+    }
+
+
 def _models_payload(
     entries: list[dict],
     cap: dict,
     reasoning: dict | None = None,
     default_model: str | None = None,
+    model_image_max_pixels: int | None = None,
 ) -> dict:
     """Build the GET /models response body from the raw gateway entries.
 
     Capability fields (vision_models + agent_available + the reasoning map) are
     merged here so BOTH the success and the empty-AI_API_URL branches stay
     identical in shape.
-
-    Every per-model field the client gets — the id, the vision badge, the context
-    window, the reasoning-effort levels — is projected from ONE gateway payload
-    here, so the picker cannot disagree with what the provider serves. (The
-    turn-time gates ask the DRIVER, which resolves the same roster —
-    driver.client.agent_capability; picker and gates agree because they read
-    the same gateway, not because they share code.)
     `default_model` is omitted entirely when None (empty-gateway branch), matching
     the historical response shape.
 
@@ -331,17 +343,10 @@ def _models_payload(
     the effort dropdown's single source. {} when the gateway has no
     /capabilities (feature absence — see gateway_reasoning_map).
     """
-    models = [m["id"] for m in entries if m.get("id")]
     body = {
-        "models": sorted(models),
-        "tool_models": sorted(models),
-        "vision_models": sorted(
-            m["id"] for m in entries if m.get("id") and _entry_supports_vision(m)
-        ),
-        "structured_output_models": sorted(
-            m["id"] for m in entries if m.get("id") and _entry_supports_structured_outputs(m)
-        ),
+        **_roster_fields(entries),
         "max_attachment_mb": CHAT_MAX_IMAGE_SIZE_MB,
+        "model_image_max_pixels": model_image_max_pixels,
         "agent_available": cap["available"],
         "agent_unavailable_reason": cap.get("reason"),
         "context_windows": _context_windows_map(entries),
@@ -399,11 +404,9 @@ async def list_models(user: dict = Depends(get_current_user)):
 
     Freshness: the served model list, default_model, and context_windows come from a
     CHAT_MODELS_CACHE_TTL_S (60s) TTL cache — a freshly-added gateway model (or a
-    removed one) can lag by up to that bound, and a chat-panel open reads the
-    cached snapshot rather than a fresh gateway fetch. The set of served models
-    changes on the order of weeks, so the staleness is accepted over a per-open
-    gateway RTT. The `reasoning` map rides its own cache with the same TTL and
-    the same accepted lag.
+    removed one) can lag by up to that bound. The set of served models changes on
+    the order of weeks, so the staleness is accepted over a per-open gateway RTT.
+    The `reasoning` map rides its own cache with the same TTL and lag.
 
     The roster is FILTERED to the caller's available models (SYSTEM:
     model-access) — the picker only; the turn gate is require_model_access.
@@ -411,27 +414,28 @@ async def list_models(user: dict = Depends(get_current_user)):
     capability fields stay, so a pinned session keeps working. `tool_models`: _split_rosters.
     """
     api_url = await settings.get("AI_API_URL")
+    # model_image_max_pixels rides beside max_attachment_mb: the client sizes
+    # reference-image labels with it (what the model gets after the press), so
+    # it must stay the same number the press uses.
+    image_cap = await settings.get("MODEL_IMAGE_MAX_PIXELS")
     if not api_url:
         cap = await _capability_snapshot()
-        return _models_payload([], cap)
+        return _models_payload([], cap, model_image_max_pixels=image_cap)
     # Read before the try: a DB failure here is not "AI service unavailable".
     visible, hidden, tools, positions = await _caller_tiers(user)
     try:
-        # Run the gateway fetches and the capability check concurrently — they're
-        # independent. agent_capability is a config read (no probe, cannot
-        # raise) and gateway_reasoning_map serves {} on failure, so only a
-        # /models gateway failure → 503.
+        # Run the gateway fetches and the capability check concurrently —
+        # independent; only a /models gateway failure → 503 (agent_capability
+        # is a config read, gateway_reasoning_map serves {} on failure).
         entries, cap, reasoning = await asyncio.gather(
-            _gateway_model_entries(),
-            _capability_snapshot(),
-            gateway_reasoning_map(),
-        )
+            _gateway_model_entries(), _capability_snapshot(), gateway_reasoning_map())
         if visible is not None:
             entries = [e for e in entries if e.get("id") in visible]
             reasoning = {k: v for k, v in reasoning.items() if k in visible}
         body = _models_payload(
             entries, cap, reasoning=reasoning,
             default_model=await settings.get("CHAT_MODEL"),
+            model_image_max_pixels=image_cap,
         )
         return _split_rosters(body, hidden, tools, positions)
     except Exception as e:

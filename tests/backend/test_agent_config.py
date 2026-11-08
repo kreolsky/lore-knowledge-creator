@@ -113,8 +113,11 @@ async def test_build_prompt_and_skill_docs_wires_all_three_layers(
     assert set(shipped) == {
         "memory-consolidation", "web-search", "image-generation", "sandbox",
         "deep-research", "skill-authoring", "extractor-config", "chat-recall",
-        "digest-config",
+        "digest-config", "secrets",
     }
+    assert _front(shipped["secrets"]["content"])["tools"] == [
+        "list_secrets", "http_request",
+    ]
     meta = _front(shipped["memory-consolidation"]["content"])
     assert set(meta["tools"]) == {
         "consolidate_memory", "get_memory_facts",

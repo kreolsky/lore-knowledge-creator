@@ -168,12 +168,16 @@ export interface AppState {
   setPendingEditorFocus: (entityId: string | null) => void;
 
   // SYSTEM: maxAttachmentMb single-source. The
-  // shared chat-attachment budget (sum of all images, raw bytes), hydrated from
+  // shared chat-attachment budget (sum of one turn's pressed images), hydrated from
   // GET /chat/models. Previously lived in chat-store; lifted here so note-chat and
   // AI-chat both read ONE source. Default 5 (matching backend CHAT_MAX_IMAGE_SIZE_MB)
   // so attach-time validation works before loadModels resolves.
   maxAttachmentMb: number;
   setMaxAttachmentMb: (mb: number) => void;
+  // The press's area cap, for the reference size label. null until /chat/models
+  // resolves and on the public surface, which never fetches it: no label then.
+  modelImageMaxPixels: number | null;
+  setModelImageMaxPixels: (pixels: number | null) => void;
 
   // Where a section page (/admin, /cabinet) was entered FROM — the SectionShell
   // back button navigates to `path` and labels itself `label`. Set at every
@@ -318,12 +322,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   pendingEditorFocus: null,
   // L1: default 5 MB before /chat/models resolves (matches backend CHAT_MAX_IMAGE_SIZE_MB).
   maxAttachmentMb: 5,
+  modelImageMaxPixels: null,
   liveHeadings: null,
 
   setPendingEditorFocus: (entityId) => set({ pendingEditorFocus: entityId }),
   // L1: shared attachment budget default. The
   // /chat/models fetch overrides it via setMaxAttachmentMb (chat-store.misc-slice).
   setMaxAttachmentMb: (mb) => set({ maxAttachmentMb: mb }),
+  setModelImageMaxPixels: (pixels) => set({ modelImageMaxPixels: pixels }),
   setSectionOrigin: (origin) => set({ sectionOrigin: origin }),
   setSectionCrumb: (label) => set({ sectionCrumb: label }),
 

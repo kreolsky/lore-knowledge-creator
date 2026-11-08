@@ -21,12 +21,37 @@
 # pool is rebuilt on next use — the is_closed guard every former singleton
 # carried, so a TestClient lifespan close must not poison the next request.
 # Deliberately NOT pooled: routes/health.py (a probe must not share a
-# possibly-wedged pool with what it probes) and pipeline/extractor/utils.py
-# (one call per worker job — no pool to gain).
+# possibly-wedged pool with what it probes), pipeline/extractor/utils.py
+# (one call per worker job — no pool to gain) and `isolated_client` below.
 """
+import functools
+import ssl
+
 import httpx
 
 _clients: dict[str, httpx.AsyncClient] = {}
+
+
+@functools.cache
+def outbound_tls_context() -> ssl.SSLContext:
+    """The one verifying TLS context of `isolated_client` — a per-call client
+    must not re-read the CA bundle per call."""
+    return httpx.create_ssl_context(trust_env=False)
+
+
+def isolated_client(*, timeout: float | httpx.Timeout) -> httpx.AsyncClient:
+    """A client that lives for ONE exchange; the caller closes it.
+
+    # INVARIANT(security): an exchange carrying a user's credential never shares
+    # a client with another exchange.
+    # Why: a client keeps a cookie jar and a keep-alive pool, and a dial pinned
+    # to an IP keys both by that IP — a shared one sends user A's session cookie
+    # with user B's request, and hands host B a TLS connection whose certificate
+    # was only checked for host A.
+    """
+    return httpx.AsyncClient(
+        timeout=timeout, verify=outbound_tls_context(), trust_env=False,
+    )
 
 
 def get_http_client(name: str, *, timeout: float | httpx.Timeout) -> httpx.AsyncClient:

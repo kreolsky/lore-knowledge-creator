@@ -2,6 +2,7 @@
 # SYSTEM: project-routes — project CRUD, search, members, document tree
 
 import logging
+from typing import Literal
 from uuid import uuid4
 
 from artifacts import ARTIFACT_CONTENT_GATE, is_artifact_row
@@ -31,7 +32,6 @@ from db import (
     run_in_transaction,
     serialize_record,
     soft_delete,
-    validate_record_id,
 )
 from event_bus import emit
 from jobs import pool as jobs_pool
@@ -117,17 +117,22 @@ async def _enrich_projects(db: AsyncSurreal, projects: list[dict], user: dict, m
             p.pop("last_accessed_doc_id", None)
 
     owner_ids = list({p["owner_id"] for p in projects if p.get("owner_id")})
+    owner_map: dict[str, str] = {}
     if owner_ids:
-        # SECURITY: validate IDs before f-string embedding in SurrealQL
-        placeholders = [f"type::record('users', '{validate_record_id(oid)}')" for oid in owner_ids]
+        # WHY: owner ids are bound, never embedded — one malformed stored owner_id must
+        # not fail the list.
         owner_rows = await db.query(
-            f"SELECT id, name FROM users WHERE id IN [{', '.join(placeholders)}]"
+            "SELECT meta::id(id) AS uid, name FROM users WHERE meta::id(id) IN $ids",
+            {"ids": owner_ids},
         )
-        owner_map = {serialize_record(r, "user_id")["user_id"]: r["name"] for r in (owner_rows or [])}
-    else:
-        owner_map = {}
+        owner_map = {r["uid"]: r["name"] for r in (owner_rows or [])}
     for p in projects:
-        p["owner_name"] = owner_map.get(p.get("owner_id"))
+        oid = p.get("owner_id")
+        # INVARIANT: an owner id that resolves to no user drops only that card's owner_name.
+        # Why: operator decision — one bad row must not fail the list; the warning names it.
+        if oid and oid not in owner_map:
+            logger.warning("project %s: owner_id %r resolves to no user", p.get("project_id"), oid)
+        p["owner_name"] = owner_map.get(oid)
 
     # members_count for Dashboard chip. One batched GROUP BY query, then join in Python.
     project_ids = [p["project_id"] for p in projects]
@@ -180,31 +185,49 @@ async def _get_member_maps(db: AsyncSurreal, uid: str) -> tuple[dict[str, str], 
 async def list_projects(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    scope: Literal["all", "own", "shared"] = Query(default="all"),
     user: dict = Depends(get_current_user),
     db: AsyncSurreal = Depends(get_db),
 ):
-    """List projects visible to the current user (owner + public + explicit membership + group audience)."""
+    """List projects visible to the current user, cut per `scope`: `all` = owner +
+    explicit membership + group audience (the merged list); `own` = the caller's
+    projects; `shared` = visible projects the caller does NOT own — the
+    dashboard's two sections, paginated per section (limit/offset)."""
     uid = user["user_id"]
     member_access, last_doc_map = await _get_member_maps(db, uid)
-    # INCLUDES 'public' (every live user holds it) — the predicate carries the
-    # public rows, so it is never empty for a live user.
-    subjects = await user_subjects(db, uid)
-    # INVARIANT(security): the audience predicate is CONDITIONAL — it joins the
-    # query only when the caller holds at least one subject. Why: a
-    # `audiences.subject CONTAINSANY $subjects` run over an EMPTY list (a
-    # deleted user, user_subjects → []) must be omitted, not trusted to match
-    # nothing — the operator semantics over an empty list are version-sensitive
-    # and an `IN`-shaped degeneration leaked every private project once (the
-    # pre-audiences trap). Same shape as the moderator scope_sql in
-    # list_all_projects, for the same reason.
-    audience_sql = " OR audiences.subject CONTAINSANY $subjects" if subjects else ""
+    member_sql = (
+        "id IN (SELECT VALUE type::record('projects', project_id) "
+        "FROM project_members WHERE user_id = $uid)"
+    )
+    audience_sql = ""
+    subjects: list[str] = []
+    if scope in ("all", "shared"):
+        # INCLUDES 'public' (every live user holds it) — the predicate carries the
+        # public rows, so it is never empty for a live user.
+        subjects = await user_subjects(db, uid)
+        # INVARIANT(security): the audience predicate is CONDITIONAL — it joins the
+        # query only when the caller holds at least one subject. Why: a
+        # `audiences.subject CONTAINSANY $subjects` run over an EMPTY list (a
+        # deleted user, user_subjects → []) must be omitted, not trusted to match
+        # nothing — the operator semantics over an empty list are version-sensitive
+        # and an `IN`-shaped degeneration leaked every private project once (the
+        # pre-audiences trap). Same shape as the moderator scope_sql in
+        # list_all_projects, for the same reason.
+        audience_sql = " OR audiences.subject CONTAINSANY $subjects" if subjects else ""
+    if scope == "own":
+        where = "deleted_at IS NONE AND owner_id = $uid"
+    elif scope == "shared":
+        # owner_id != $uid is REQUIRED, not an optimisation: an owner's subjects
+        # match their own project's audience rows (every live user holds 'public'),
+        # so the audience clause alone would pull own projects into shared.
+        where = f"deleted_at IS NONE AND owner_id != $uid AND ({member_sql}{audience_sql})"
+    else:
+        where = f"deleted_at IS NONE AND (owner_id = $uid OR {member_sql}{audience_sql})"
     rows = await db.query(
-        "SELECT * FROM projects WHERE deleted_at IS NONE AND "
-        "(owner_id = $uid OR "
-        "id IN (SELECT VALUE type::record('projects', project_id) FROM project_members WHERE user_id = $uid)"
-        f"{audience_sql}) "
+        f"SELECT * FROM projects WHERE {where} "
         "ORDER BY created_at DESC LIMIT $limit START $offset",
-        {"uid": uid, "limit": limit, "offset": offset, **({"subjects": subjects} if subjects else {})},
+        {"uid": uid, "limit": limit, "offset": offset,
+         **({"subjects": subjects} if subjects else {})},
     )
 
     projects = [serialize_record(r, "project_id") for r in (rows or [])]

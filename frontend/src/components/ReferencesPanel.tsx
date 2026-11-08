@@ -683,7 +683,7 @@ export function ReferencesPanel() {
         onChange={handleFileInput}
       />
 
-      {!panelRef && <PillList ref={listRef} className={isDragging ? 'bg-accent-soft' : undefined}>
+      {!panelRef && <PillList ref={listRef} className={isDragging ? 'list-scroll bg-accent-soft' : 'list-scroll'}>
         {showAgentConfig && currentDocument && (
           <TranscriptionAgentConfigManager documentId={currentDocument.document_id} />
         )}

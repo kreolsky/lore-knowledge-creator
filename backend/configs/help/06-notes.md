@@ -16,6 +16,7 @@ A note is not part of the text: it lies over the document like a layer and is an
 - All of a document's notes are in the "Notes" tab; an open note shows the thread. A long thread opens on its latest messages; "Load older messages" shows the earlier ones.
 - Hovering a highlighted fragment shows its note.
 - The "Commentator" role cannot edit documents but can write notes — the way to collect remarks from readers.
+- An [HTML page](help:html-pages) has no text to anchor to: members leave notes on the whole page with "+". Guests on a public link cannot leave notes there.
 
 ## Notes from guests
 

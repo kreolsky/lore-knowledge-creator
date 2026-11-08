@@ -141,6 +141,8 @@ class ToolEntry:
                     drops the tool from the agent toolset when off. None = always
                     served. The gate never affects the Tool-API route (the
                     handler checks its own config) or MUTATING_TOOLS (static).
+    per_call_approval — every call is asked separately: the driver refuses
+                    "allow for the session" on this tool.
     """
 
     spec: dict
@@ -148,6 +150,7 @@ class ToolEntry:
     handler_path: str
     surfaces: frozenset[str]
     env_gate: str | None = None
+    per_call_approval: bool = False
     #: MCP-only description override. The shared spec description describes the
     #: in-app proposal/confirmation flow (real on the agent/Tool-API path); that
     #: flow does NOT exist over MCP, so a mutating mcp tool REPLACES its text
@@ -238,6 +241,12 @@ def holdable_names() -> frozenset[str]:
         and e.request_model is not None
         and "apply" in e.request_model.model_fields
     )
+
+
+def per_call_approval_names() -> frozenset[str]:
+    """The holdable tools a session grant must not cover — sent to the driver
+    in the turn payload, which is where the grant is minted."""
+    return frozenset(e.name for e in REGISTRY.values() if e.per_call_approval)
 
 
 def _is_region_capable(entry) -> bool:

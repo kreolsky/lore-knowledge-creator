@@ -124,6 +124,9 @@ class ToolApplyMemoryVerdicts(BaseModel):
     `run_id` is OPTIONAL on the agent surface: the loop tools resolve the session's active
     # run when it is omitted (a hand-copied 36-char run_id cost a whole batch on one
     # transcription slip). A sessionless caller must still pass it; the route 400s loudly.
+
+    Deliberately NO `apply` field: this is the consolidation loop's DIRECT write path
+    (see routes/tool_api/memory.py ARCH), so it never holds on a confirm card.
     """
 
     run_id: str | None = None
@@ -138,3 +141,39 @@ class ToolApplyMemoryVerdicts(BaseModel):
     verdicts: list[MemoryVerdict] = Field(
         min_length=1, max_length=MEMORY_VERDICTS_MAX_PER_BATCH,
     )
+
+
+class ToolSaveChatFacts(BaseModel):
+    """`save_chat_facts` body — save facts distilled from THIS chat.
+
+    # ARCH: the chat-recall pack's moderated capture. `apply` makes the call
+    # holdable: in confirm mode one batch produces ONE approval card (rejecting
+    # with text is per-fact moderation — the agent re-emits the corrected
+    # batch); in auto mode facts are written directly. The source is stamped
+    # from the calling session SERVER-side (`mem.provenance.sources` gets
+    `{kind: "chat", id}`), never from these fields — a verdict cannot name its
+    origin. No `reference_id` / run loop here: capture is explicit and
+    one-shot.
+    """
+
+    verdicts: list[MemoryVerdict] = Field(
+        min_length=1, max_length=MEMORY_VERDICTS_MAX_PER_BATCH,
+    )
+    apply: ToolApply = ToolApply.confirm
+
+
+class ToolSetFactAnchor(BaseModel):
+    """`set_fact_anchor` body — place one fact on documents by id, or clear it.
+
+    # ARCH: `mem.anchors` (document ids) is separate from provenance: it is
+    PLACEMENT, not origin. Non-empty anchors REPLACE the provenance join for
+    that fact in a subtree narrow (retrieval._allowed_fact_ids); an empty list
+    clears them and the fact returns to following its source. `fact_id` comes
+    from `search_materials` or a `save_chat_facts` result.
+    """
+
+    fact_id: str
+    # `[]` clears the anchors. Each target must be a live non-reference
+    # non-memory document of the key's project.
+    document_ids: list[str] = Field(max_length=20)
+    apply: ToolApply = ToolApply.confirm

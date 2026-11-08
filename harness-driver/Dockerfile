@@ -19,7 +19,16 @@ RUN pnpm install --frozen-lockfile && pnpm run build
 
 # The Lore plugin lives INSIDE the harness workspace so its imports resolve
 # against the workspace packages (same shape as the spike's spike-plugin).
+# The npm deps the plugin's own imports need (the MCP SDK for the personal
+# servers seam + its test fixture) are symlinked from the dsh-mcp-client
+# workspace package — the same pinned versions its transport uses; tsconfig
+# paths cover every @deepseek-ai/* workspace import already.
 COPY plugin /dsh/lore-driver
+RUN mkdir -p /dsh/lore-driver/node_modules/@modelcontextprotocol \
+    && ln -s /dsh/packages/mcp/mcp-client/node_modules/@modelcontextprotocol/client /dsh/lore-driver/node_modules/@modelcontextprotocol/client \
+    && ln -s /dsh/packages/mcp/mcp-client/node_modules/@modelcontextprotocol/server /dsh/lore-driver/node_modules/@modelcontextprotocol/server \
+    && ln -s /dsh/packages/mcp/mcp-client/node_modules/@modelcontextprotocol/node /dsh/lore-driver/node_modules/@modelcontextprotocol/node \
+    && ln -s /dsh/packages/mcp/mcp-client/node_modules/zod /dsh/lore-driver/node_modules/zod
 # The DSH_HOME composition: the lore profile (dsh-base only) + the home patch
 # carrying the plugin insert, the llm-pi-ai `lore` LLM route (plugin-upserted
 # catalog) and the zero-tool disables.
@@ -45,8 +54,12 @@ COPY conversation /dsh/lore-conversation
 # standalone boot (no backend fetch rides the entry); time-stamps.test.ts gates
 # the turn's time ground as its own lore-time context message;
 # session-agents.test.ts gates the session's dsh agent against a REAL loop
-# (the inbox queue, per-claim prep, idle dispose, the creation-time clear).
-RUN node --import tsx/esm --test lore-driver/test/map.test.ts lore-driver/test/entries.test.ts lore-driver/test/driver.test.ts lore-driver/test/ws-events.test.ts lore-driver/test/approvals.test.ts lore-driver/test/skills.test.ts lore-driver/test/images.test.ts lore-driver/test/caps.test.ts lore-driver/test/web-search.test.ts lore-driver/test/boot-env.test.ts lore-driver/test/time-stamps.test.ts lore-driver/test/session-agents.test.ts
+# (the inbox queue, per-claim prep, idle dispose, the creation-time clear);
+# mcp-servers.test.ts gates the personal MCP seam against a REAL loop + a
+# real streamable-http MCP fixture (claim-time mount, first-request tools,
+# per-agent isolation, the ask/scrub listeners, the stalled-server bound,
+# the redirect Authorization drop).
+RUN node --import tsx/esm --test lore-driver/test/map.test.ts lore-driver/test/entries.test.ts lore-driver/test/driver.test.ts lore-driver/test/ws-events.test.ts lore-driver/test/approvals.test.ts lore-driver/test/skills.test.ts lore-driver/test/images.test.ts lore-driver/test/caps.test.ts lore-driver/test/web-search.test.ts lore-driver/test/boot-env.test.ts lore-driver/test/time-stamps.test.ts lore-driver/test/session-agents.test.ts lore-driver/test/mcp-servers.test.ts
 
 # The test feeds a real session log.
 RUN node --import tsx/esm --test lore-conversation/test/conversation.test.ts lore-conversation/test/lore-nodes.test.ts

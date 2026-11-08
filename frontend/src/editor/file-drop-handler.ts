@@ -47,6 +47,25 @@ export function clipboardImages(data: DataTransfer): File[] {
   return images;
 }
 
+/**
+ * The image a drop carries as a `data:` URL, or null. An <img> with a data URI (a chat
+ * attachment) is dragged as a URL, not a file.
+ * INVARIANT: a dropped image data URL never lands in the document as text.
+ * Why: CM6's built-in drop would insert megabytes of base64 where a picture was meant.
+ */
+export function droppedDataImage(data: DataTransfer): File | null {
+  const url = (data.getData('text/uri-list') || data.getData('text/plain')).trim();
+  const head = /^data:image\/([a-z0-9.+-]+);base64,/i.exec(url.slice(0, 64));
+  if (!head) return null;
+  try {
+    const bytes = Uint8Array.from(atob(url.slice(head[0].length)), (c) => c.charCodeAt(0));
+    const subtype = head[1].toLowerCase();
+    return new File([bytes], `image.${subtype.replace('jpeg', 'jpg')}`, { type: `image/${subtype}` });
+  } catch {
+    return null; // not valid base64: it is ordinary text, CM6 drops it as such
+  }
+}
+
 export function makeFileDropExtension(
   onDrop: (files: File[], coords: FileDropCoords) => void,
   onPasteImages: (images: File[], view: EditorView, pos: number) => void,
@@ -54,10 +73,11 @@ export function makeFileDropExtension(
   return ViewPlugin.define((view) => {
     const onDragOver = (e: DragEvent) => { if (hasFiles(e)) e.preventDefault(); };
     const handleDrop = (e: DragEvent) => {
-      if (!hasFiles(e)) return;
+      const dataImage = e.dataTransfer && !e.dataTransfer.files?.length ? droppedDataImage(e.dataTransfer) : null;
+      if (!dataImage && !hasFiles(e)) return;
       e.preventDefault();
       e.stopPropagation();
-      const files = Array.from(e.dataTransfer?.files ?? []);
+      const files = dataImage ? [dataImage] : Array.from(e.dataTransfer?.files ?? []);
       if (files.length === 0) return;
       const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
       onDrop(files, { hostPos: pos ?? view.state.selection.main.head, x: e.clientX, y: e.clientY });

@@ -47,6 +47,9 @@ from migrations.migrate_document_access_drop import _migrate_document_access_dro
 from migrations.migrate_index_children_to_root import (
     _migrate_index_children_to_root,
 )
+from migrations.migrate_mcp_servers_template_fields_drop import (
+    _migrate_mcp_servers_template_fields_drop,
+)
 from migrations.migrate_messages_schemafull_converge import (
     _migrate_messages_schemafull_converge,
 )
@@ -143,6 +146,9 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     # are carved out (index = canonical project-level host). Idempotent; runs
     # last, no dependency.
     ("index_children_to_root", _migrate_index_children_to_root),
+    # Retired mcp_servers header-template fields: their required definitions fail
+    # every UPDATE of a newer row. Idempotent; no dependency.
+    ("mcp_servers_template_fields_drop", _migrate_mcp_servers_template_fields_drop),
 ]
 
 

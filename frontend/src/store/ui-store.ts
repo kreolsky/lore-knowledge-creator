@@ -20,8 +20,9 @@ import type { EditorPosition } from '../editor/position-cache';
 import { createPublicShareSlice } from './ui-store/public-share-slice';
 import { createSearchSlice } from './ui-store/search-slice';
 import { createSidebarSlice } from './ui-store/sidebar-slice';
-import { createThemeSlice, type GlobalPrefs, type AdminSectionTab } from './ui-store/theme-slice';
-export type { AdminSectionTab };
+import type { ColorOverrides, ThemeName } from '../theme/color-tokens';
+import { createThemeSlice, type GlobalPrefs, type AdminSectionTab, type CabinetSectionTab } from './ui-store/theme-slice';
+export type { AdminSectionTab, CabinetSectionTab };
 import { createDocumentsSlice, DEFAULT_DOC_STATE, ORPHAN_KEY, readRefOpenMode, showsBothPanes } from './ui-store/documents-slice';
 import type { RightTab, MainEntity, DocumentUIState, RefOpenMode } from './ui-store/documents-slice';
 
@@ -205,7 +206,9 @@ function triggerSaveGlobalPrefs(state: UIState) {
     splitRatio: state.splitRatio,
     showArchived: state.showArchived,
     adminSectionTab: state.adminSectionTab,
+    cabinetSectionTab: state.cabinetSectionTab,
     sidebarPinned: state.sidebarPinned,
+    colorOverrides: state.colorOverrides,
   };
   apiClient.put('/preferences/_global', { preferences: blob })
     .catch(() => _appBridge?.showToast('Settings not saved', 'error'));
@@ -236,6 +239,7 @@ export interface UIState {
   // panelWidths.left — ONE width shared with the project sidebar (no jump in
   // either direction; see hooks/useSectionAsideWidth.ts).
   adminSectionTab: AdminSectionTab | null;
+  cabinetSectionTab: CabinetSectionTab | null;
   globalPrefsLoaded: boolean;
   // WHY: false until the current project's prefs have hydrated. The right
   // panel renders a loading state (not content) while false. Why: DEFAULT_DOC_STATE
@@ -301,7 +305,13 @@ export interface UIState {
   getSplitRatio: () => number;
   setShowArchived: (showArchived: boolean) => void;
   setSidebarPinned: (pinned: boolean) => void;
+  // Per-theme user color overrides (global-persisted; see theme-slice GlobalPrefs).
+  colorOverrides: ColorOverrides;
+  setColorOverride: (theme: ThemeName, token: string, value: string | null) => void;
+  replaceColorOverrides: (overrides: ColorOverrides) => void;
+  flushColorSave: () => void;
   setAdminSectionTab: (tab: AdminSectionTab) => void;
+  setCabinetSectionTab: (tab: CabinetSectionTab) => void;
   setSearchMode: (mode: SearchMode) => void;
   setTheme: (theme: 'light' | 'dark') => void;
   setLanguage: (language: Language) => void;

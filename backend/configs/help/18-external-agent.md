@@ -32,7 +32,7 @@ The same server in a project's `.mcp.json`:
 {"mcpServers": {"lore": {"type": "http", "url": "<Lore address>/mcp", "headers": {"Authorization": "Bearer <token>"}}}}
 ```
 
-Other clients take the same two things — the URL and the header — in their own settings.
+Other clients take the same two things — the URL and the header — in their own settings. Reading tools are marked read-only, so a client that respects the mark runs them without asking you.
 
 Without an MCP client, send `POST <Lore address>/mcp` — stateless JSON-RPC 2.0, one request per call — with the headers `Authorization: Bearer <token>`, `Content-Type: application/json` and `Accept: application/json`, and the body `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"init","arguments":{}}}`. The result is a JSON string in `result.content[0].text`. `"method":"tools/list"` lists the tools with their parameters.
 
@@ -63,7 +63,8 @@ Uploading audio requires an account tier with voice (see [Access and publishing]
 ## What it cannot do
 
 - Delete documents — that is the user's job.
-- Chat history, memory curation, saving skills, the sandbox console, image generation and web search — these belong to the built-in agent only.
+- Chat history, memory curation, saving skills, the sandbox console, image generation, web search and your personal keys — these belong to the built-in agent only.
+- Read a page you locked with your PIN.
 - Wait for your approval: there is no confirmation step over MCP. On a read-write key every write applies at once.
 
 ## Undoing its work

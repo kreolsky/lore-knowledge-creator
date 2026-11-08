@@ -110,6 +110,31 @@ describe('the shown slot belongs to the active chat — leaving drops only the s
   });
 });
 
+describe('updateSession — a reparent moves the whole thread in the store', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearChatCaches();
+  });
+
+  // The server writes document_id to every row of the conversation
+  // (update.py _propagate_parent).
+  // TEST-WHY: pure-logic-edge — only the patched row would move until reload.
+  it('propagates the new parent to every thread row, not only the patched one', async () => {
+    const root = { ...sess('root', null, '2026-01-01'), thread_id: null, document_id: 'docA' };
+    const branch = { ...sess('branch', null, '2026-01-02'), thread_id: 'root', document_id: 'docA' };
+    const stranger = { ...sess('stranger', null, '2026-01-03'), thread_id: null, document_id: 'docA' };
+    const store = buildStore([root, branch, stranger]);
+    patchMock.mockResolvedValue({ ...branch, document_id: 'docB', updated_at: '2026-01-04' });
+
+    await store.getState().updateSession('branch', { document_id: 'docB' });
+
+    const byId = new Map(store.getState().sessions.map(s => [s.session_id, s.document_id]));
+    expect(byId.get('root')).toBe('docB');
+    expect(byId.get('branch')).toBe('docB');
+    expect(byId.get('stranger')).toBe('docA');
+  });
+});
+
 describe('setActiveSession — returning to a chat whose turn still runs', () => {
   beforeEach(() => {
     vi.clearAllMocks();

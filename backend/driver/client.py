@@ -289,10 +289,16 @@ def _derived_tool_sets() -> dict[str, list[str]]:
     Each is the single backend source for one driver decision — the driver
     never re-hardcodes any of them (INVARIANT(security) on mutating_tools above;
     region_tools is the sibling for pinned-region confinement)."""
-    from agent.tools import HOLDABLE_TOOLS, MUTATING_TOOLS, REGION_TOOLS
+    from agent.tools import (
+        HOLDABLE_TOOLS,
+        MUTATING_TOOLS,
+        PER_CALL_APPROVAL_TOOLS,
+        REGION_TOOLS,
+    )
     return {
         "mutating_tools": sorted(MUTATING_TOOLS),
         "holdable_tools": sorted(HOLDABLE_TOOLS),
+        "per_call_approval_tools": sorted(PER_CALL_APPROVAL_TOOLS),
         "region_tools": sorted(REGION_TOOLS),
     }
 
@@ -342,11 +348,13 @@ def _admin_config_fields(
 # the SAME path (title_model keeps config.py's CHAT_MODEL fallback; an unset
 # credential rides as '' — web search has no off state, the harness fails the
 # call loudly naming the provider and the admin path).
-# INVARIANT(security): ai_api_key and web_search_credential never reach a log
-# line or a frame. Why: they are the operator's credentials; /followup is
-# gated by the driver secret, the log is not. MUTATING_TOOLS is the SINGLE
-# source of truth for which tools get `apply` injected — mirrored into the
-# request as `mutating_tools` so the driver never re-hardcodes the set.
+# INVARIANT(security): ai_api_key, web_search_credential and the rendered
+# mcp_servers entries (headers + secret_values — the user's MCP keys in the
+# clear) never reach a log line or a frame. Why: the credentials are the
+# operator's and the user's own; /followup is gated by the driver secret, the
+# log is not. MUTATING_TOOLS is the SINGLE source of truth for which tools
+# get `apply` injected — mirrored into the request as `mutating_tools` so the
+# driver never re-hardcodes the set.
 #
 # The turn contract carries NO messages[]: only the last user turn (`prompt`,
 # multimodal shape — the RAW user text) + the layered system_prompt + the
@@ -360,6 +368,16 @@ def _admin_config_fields(
 #
 # NO capability numbers ride the payload: the driver resolves the caps itself
 # (plugin caps.ts).
+def _log_turn_payload(session_id: str, prompt) -> None:
+    """The one shape log — session id and prompt shape only, never a field of
+    the payload itself (the INVARIANT above: no credential rides a log line)."""
+    logger.info(
+        "_build_turn_payload: session=%s prompt_shape=%s has_images=%s",
+        session_id or "new", type(prompt).__name__,
+        len(prompt) if isinstance(prompt, list) else "text",
+    )
+
+
 def _build_turn_payload(
     *, model: str, system_prompt: str, tools: list[dict],
     agent_key: str, apply_mode: str, session_id: str = "", user_id: str = "",
@@ -370,7 +388,7 @@ def _build_turn_payload(
     reasoning_effort: str | None = None,
     ai_api_url: str = "", ai_api_key: str = "",
     title_model: str = "", web_search_provider: str = "",
-    web_search_credential: str = "",
+    web_search_credential: str = "", mcp_servers: list[dict] | None = None,
 ) -> dict:
     payload = {
         "model": model,
@@ -403,12 +421,11 @@ def _build_turn_payload(
         # plugin branches on presence; an empty value would be branded into a
         # ReasoningEffortId).
         **({"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}),
+        # The user's personal MCP servers, rendered by backend/mcp_servers.py
+        # (see the INVARIANT above — the entries are the user's keys).
+        "mcp_servers": mcp_servers or [],
     }
-    logger.info(
-        "_build_turn_payload: session=%s prompt_shape=%s has_images=%s",
-        session_id or "new", type(prompt).__name__,
-        len(prompt) if isinstance(prompt, list) else "text",
-    )
+    _log_turn_payload(session_id, prompt)
     return payload
 
 

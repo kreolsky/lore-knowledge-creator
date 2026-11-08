@@ -1,12 +1,12 @@
-/** Attachment-size helpers — estimate raw source bytes from data URLs. */
+/** Attachment-size helpers — estimate decoded bytes from data URLs. */
 
 /**
  * Estimate the decoded byte length of a base64 `data:` URL.
  *
  * The chat stores pending images as data URLs. The attach-time budget is
- * expressed in RAW source bytes (the file's original size), and base64 inflates
- * ~33%. Decoding length * 3/4 (minus any `=` padding) recovers the source size
- * closely enough to enforce a byte budget without allocating the full blob.
+ * expressed in PRESSED bytes, and base64 inflates ~33%. Decoding length * 3/4
+ * (minus any `=` padding) recovers the size closely enough to enforce a byte
+ * budget without allocating the full blob.
  */
 export function dataUrlBytes(dataUrl: string): number {
   const comma = dataUrl.indexOf(',');
@@ -38,16 +38,4 @@ export function attachmentBudgetExceeded(pendingBytes: number, addedBytes: numbe
 /** Format a byte count as a one-decimal megabyte string for toast messages. */
 export function formatAttachmentMb(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1);
-}
-
-/**
- * Sum of image bytes across history messages that ride along in `apiMessages`.
- *
- * Every send builder ships ALL non-deleted history images as LLM context
- * (`activePath.map(... images: m.images)`), so the attach-time budget must count
- * them too — not just the new turn's attachments — or the request body can exceed
- * the middleware cap and 413 silently.
- */
-export function historyAttachmentBytes(messages: { images?: string[] }[]): number {
-  return messages.reduce((sum, m) => sum + (m.images ? totalAttachmentBytes(m.images) : 0), 0);
 }

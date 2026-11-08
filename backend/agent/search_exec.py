@@ -395,9 +395,9 @@ async def _retrieve_semantic_result(
 ):
     """One retrieve_context call with the layer's budgets and the narrow.
 
-    # INVARIANT(security): under a narrow, memory is filtered by PROVENANCE, never by
-    # tree position. Why: fact-docs live flat under the project's memory
-    # space, outside every user subtree, so a tree-position filter (the old
+    # INVARIANT(security): under a narrow, memory is filtered by PLACEMENT (provenance
+    # or anchors), never by tree position. Why: fact-docs live flat under the project's
+    # memory space, outside every user subtree, so a tree-position filter (the old
     # blanket post-filter) kills EVERY memory hit under any narrow while a
     # provenance filter keeps exactly the facts the subtree's own material
     # produced — retrieve_context applies it in SQL (allowed_doc_ids +
@@ -516,13 +516,14 @@ async def _assemble_search_result(
 # ceiling, so a narrow can only narrow further, never widen. An out-of-scope or
 # unknown root is an ERROR naming the remedy (never empty hits, which a model
 # reads as "the project holds nothing"). Under a narrow, memory is filtered by
-# PROVENANCE, not dropped: a fact belongs to the subtree iff any of its
-# `mem.provenance.sources` resolves to a reference hosted there (the pushdown
-# inside retrieve_context — see _allowed_fact_ids). Facts with empty/
-# unresolvable sources drop (a measured legacy shortfall stated in the tool
-# description), and the direct layer's `IN $allowed` keeps excluding fact-docs
-# by tree position — under a narrow memory reaches the model via the semantic
-# layer.
+# PLACEMENT, not dropped: a fact belongs to the subtree iff any of its
+# `mem.provenance.sources` resolves to a reference hosted there or to a chat
+# parented there, OR its `mem.anchors` name a document in it (anchors REPLACE
+# the provenance join for that fact) — the pushdown inside retrieve_context,
+# see _allowed_fact_ids. Facts with empty/unresolvable sources and no anchors
+# drop (a measured legacy shortfall stated in the tool description), and the
+# direct layer's `IN $allowed` keeps excluding fact-docs by tree position —
+# under a narrow memory reaches the model via the semantic layer.
 #
 # ARCH(mode): `mode` routes the layers: `semantic` (default)
 # runs the union predicate + the semantic layer + RRF; `exact` runs the direct

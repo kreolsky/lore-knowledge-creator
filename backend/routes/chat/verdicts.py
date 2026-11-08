@@ -60,7 +60,7 @@ async def _require_driver():
 
 async def _driver_request(method: str, path: str, *, params=None, json_body=None):
     """One authenticated driver call. Returns the parsed JSON on 2xx; maps the
-    driver's 404/409/422 onto HTTPException; anything else (including an
+    driver's 403/404/409/422 onto HTTPException; anything else (including an
     unreachable driver) is the explicit 502 — a verdict the user believes was
     delivered but was not is the exact silent failure this surface refuses."""
     line = await _require_driver()
@@ -81,7 +81,7 @@ async def _driver_request(method: str, path: str, *, params=None, json_body=None
         ) from exc
     if resp.status_code == 200:
         return resp.json()
-    if resp.status_code in (404, 409, 422):
+    if resp.status_code in (403, 404, 409, 422):
         # The driver's own refusal vocabulary — surface it verbatim (the 409
         # detail `hold_expired` is the contract the frontend toasts on).
         try:

@@ -71,9 +71,7 @@ vi.mock('./chat-input-hooks', () => ({
   useSystemPrompts: () => ({ systemPrompts: [], activeSystemPromptTitle: null }),
   useAttachmentBudget: () => ({
     projectedAttachmentBytes: 0,
-    contextOverLimit: false,
     attachmentsOverLimit: false,
-    historyBytes: 0,
   }),
 }));
 vi.mock('../ui', () => ({

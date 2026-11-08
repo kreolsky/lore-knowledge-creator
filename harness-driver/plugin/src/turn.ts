@@ -20,6 +20,7 @@ import {
   type Gateway, type ModelApi,
 } from './caps.ts'
 import { parseTimeStamps } from './time-stamps.ts'
+import { parseMcpServers } from './mcp-servers.ts'
 import type { EventsChannel, SessionEventTap } from './ws-events.ts'
 import {
   assembleTurnPrompt, catalogServedNames, computeCoreTools, computeActiveTools,
@@ -27,7 +28,7 @@ import {
 } from './skills.ts'
 import { registerLoreTools } from './tools.ts'
 import {
-  AGENT_KEY_REF, ROUTE_DEFAULT_CONTEXT_WINDOW, PROVIDER,
+  AGENT_KEY_REF, ROUTE_DEFAULT_CONTEXT_WINDOW, REQUEST_IMAGE_MAX_BYTES, PROVIDER,
   ensureAgentKey, ensureModelEntry, ensureTitleConfig, ensureTitleEntry, ensureWebSearch,
   type ConfigEditorSeam, type CredentialsSeam, type LoreRouteScaffold, type SettingsSeam,
 } from './ensure.ts'
@@ -150,6 +151,7 @@ export function loreRoute(baseURL: string): LoreRouteScaffold | null {
     apiKeyEnv: AGENT_KEY_REF,
     api: 'openai-completions',
     baseURL,
+    requestImageMaxBytes: REQUEST_IMAGE_MAX_BYTES,
     compat: {
       supportsDeveloperRole: false,
       maxTokensField: 'max_tokens',
@@ -177,6 +179,7 @@ export function anthropicRoute(baseURL: string): LoreRouteScaffold | null {
   return {
     apiKeyEnv: AGENT_KEY_REF,
     baseURL: baseURL.replace(/\/v1\/?$/, ''),
+    requestImageMaxBytes: REQUEST_IMAGE_MAX_BYTES,
     defaultContextWindow: ROUTE_DEFAULT_CONTEXT_WINDOW,
   }
 }
@@ -414,6 +417,9 @@ async function buildTurnPrep(ctx: Context, map: SessionMap, body: Record<string,
     agentKey: String(body.agent_key ?? ''),
     mutating,
     holdable: new Set<string>(Array.isArray(body.holdable_tools) ? body.holdable_tools : []),
+    perCallApproval: new Set<string>(
+      Array.isArray(body.per_call_approval_tools) ? body.per_call_approval_tools : [],
+    ),
     regionTools: new Set<string>(Array.isArray(body.region_tools) ? body.region_tools : []),
   }
   const requestCtx = {
@@ -433,6 +439,7 @@ async function buildTurnPrep(ctx: Context, map: SessionMap, body: Record<string,
     loreId, model, cap, selection,
     systemPrompt: assembleTurnPrompt(body.system_prompt),
     timeStamps, servedNames, skills, activated, standingCtx, requestCtx,
+    mcpServers: parseMcpServers(body),
     claim: {
       user_msg_id: String(body.user_msg_id ?? ''),
       assistant_msg_id: requestCtx.messageId,

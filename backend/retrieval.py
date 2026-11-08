@@ -141,22 +141,21 @@ async def _reference_titles(db, ids: set[str]) -> dict[str, str]:
 
 
 async def _allowed_fact_ids(db, project_id: str, allowed: set[str]) -> set[str]:
-    """Ids of the live facts attributable to `allowed` by PROVENANCE.
+    """Ids of the live facts attributable to `allowed`.
 
-    A fact belongs to the narrow iff ANY of its `mem.provenance.sources` (kind
-    `reference`) resolves to a reference whose `parent_id` (the schema-enforced
-    host, INVARIANT(reference-host)) is in `allowed` — a query-time join over
-    the live reference rows, deliberately NOT a denormalized `hosts` copy on
-    `mem.provenance` (references can move between hosts; a stamped copy drifts
-    silently, the join is always honest).
+    A fact belongs to the narrow when EITHER hold (see `_fact_in_narrow`):
+    PROVENANCE — any of its `mem.provenance.sources` resolves into the subtree
+    (a `reference` source via its schema-enforced host `parent_id`, a `chat`
+    source via its session row's `document_id`) — or ANCHORS — a non-empty
+    `mem.anchors` (agent-set placements, `set_fact_anchor`) REPLACES the
+    provenance join for that fact. Both are query-time joins over live rows,
+    deliberately NOT denormalized copies on `mem.provenance` (references and
+    chats can move; a stamped copy drifts silently, the join is always honest
+    — the chat's parent is the live truth).
 
-    Two indexed queries: refs hosted in the subtree (idx_documents_parent_only),
-    then the project's live fact rows whose `mem` is filtered here in Python.
-    Soft-deleted references STILL resolve: provenance is a historical thread —
-    only a hard-missing row counts as unresolvable, so the refs query carries
-    no `deleted_at` filter. Facts with empty/unresolvable sources drop under a
-    narrow (a measured legacy shortfall on dev — stated in the tool
-    description, never silently).
+    Facts with empty/unresolvable sources AND no anchors drop under a narrow
+    (a measured legacy shortfall on dev — stated in the tool description,
+    never silently).
     """
     ref_rows = await db.query(
         "SELECT VALUE meta::id(id) FROM documents "
@@ -165,22 +164,76 @@ async def _allowed_fact_ids(db, project_id: str, allowed: set[str]) -> set[str]:
         {"pid": project_id, "allowed": list(allowed)},
     )
     hosted = set(ref_rows or [])
-    if not hosted:
-        return set()
+    parent_chats = await _narrow_parent_chats(db, project_id, allowed, hosted)
     fact_rows = await db.query(
         "SELECT meta::id(id) AS id, mem FROM documents "
         "WHERE project_id = $pid AND is_memory = true AND deleted_at IS NONE",
         {"pid": project_id},
     )
-    out: set[str] = set()
-    for fr in fact_rows or []:
-        sources = (((fr.get("mem") or {}).get("provenance") or {}).get("sources") or [])
-        if any(
-            isinstance(s, dict) and s.get("kind") == "reference" and s.get("id") in hosted
-            for s in sources
-        ):
-            out.add(fr["id"])
-    return out
+    return {
+        fr["id"] for fr in (fact_rows or [])
+        if _fact_in_narrow(fr.get("mem") or {}, allowed, hosted, parent_chats)
+    }
+
+
+async def _narrow_parent_chats(
+    db, project_id: str, allowed: set[str], hosted: set[str],
+) -> set[str]:
+    """Chat sessions whose `document_id` places them inside the narrow — the
+    chat half of the fact→source join, ONE indexed query
+    (idx_chatsessions_document), never a fetch per fact.
+
+    The target set is `allowed ∪ hosted` because a reference-scoped chat holds
+    the REFERENCE id in `document_id` (see the _reparent_sets comment in
+    chat_sessions/update.py), and a soft-deleted reference sits in `hosted`
+    but not in the subtree walk's `allowed` — the union keeps the chat (and so
+    its facts) inside the narrow either way.
+    """
+    chat_rows = await db.query(
+        "SELECT VALUE meta::id(id) FROM chat_sessions "
+        "WHERE project_id = $pid AND document_id IN $targets",
+        {"pid": project_id, "targets": sorted(allowed | hosted)},
+    )
+    # INVARIANT: the returned set carries DELETED chats too — the join has no
+    # `deleted_at` filter, mirroring the reference query.
+    # Why: a chat delete only soft-deletes (chat_sessions/delete.py), so a
+    # deleted chat keeps `document_id` — its facts stay on the last parent
+    # with no pin step, and a deleted chat cannot be moved, so the column can
+    # never go stale.
+    return set(chat_rows or [])
+
+
+def _fact_in_narrow(
+    mem: dict, allowed: set[str], hosted: set[str], parent_chats: set[str],
+) -> bool:
+    """The narrow's per-fact predicate: anchors override, else provenance."""
+    # Read with `.get()` (the module INVARIANT in memory/facts.py): anchors
+    # and sources are ABSENT on a fact that never carried them. Soft-deleted
+    # references still scope their fact (provenance is a historical thread);
+    # only a hard-missing row counts as unresolvable.
+    anchors = [str(a) for a in (mem.get("anchors") or []) if a]
+    # INVARIANT: non-empty `mem.anchors` REPLACE the provenance join — this
+    # branch decides narrow membership alone.
+    # Why: anchors are the user's explicit placement of one fact; after that
+    # act the chat's later moves must not drag the fact, and clearing the
+    # anchors returns it to following its source (provenance stays the truth
+    # about ORIGIN, anchors about PLACEMENT — two different questions).
+    if anchors:
+        return any(a in allowed for a in anchors)
+    sources = ((mem.get("provenance") or {}).get("sources") or [])
+    return any(
+        (
+            isinstance(s, dict)
+            and s.get("kind") == "reference"
+            and s.get("id") in hosted
+        )
+        or (
+            isinstance(s, dict)
+            and s.get("kind") == "chat"
+            and s.get("id") in parent_chats
+        )
+        for s in sources
+    )
 
 
 async def _resolve_retrieval_limits(

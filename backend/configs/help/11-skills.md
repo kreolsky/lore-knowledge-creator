@@ -21,9 +21,10 @@ After a task went well, ask the agent: "save this as a skill". The skill is save
 | image-generation | Generates and edits pictures; results are saved as references. |
 | sandbox | A Linux console: running code, calculations over data, reading raw files. |
 | memory-consolidation | Turns a document's references into [memory](help:memory) facts. |
-| chat-recall | Finds what you said in your other chats of this project. Never sees other people's chats or chats marked "Unindexed". |
+| chat-recall | Finds what you said in your other chats of this project, lists them and reads one whole; saves facts from the current chat into [memory](help:memory). Never sees other people's chats or chats marked "Unindexed". |
 | extractor-config | Writes and edits [extractor](help:pipelines) configs. |
 | digest-config | Writes [digest](help:pipelines) configs and explains why a digest is empty. |
 | skill-authoring | Saves a finished procedure as a skill, or improves one. |
+| secrets | Calls an outside API with one of your [personal keys](help:profile) — "check the billing with my key". The agent never sees the key's value. |
 
 A project skill with the same name replaces the built-in one. The administrator can switch a built-in skill off.

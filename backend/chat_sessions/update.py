@@ -174,6 +174,30 @@ async def _propagate_unindexed(db, session_id: str, session: dict, value: bool) 
     )
 
 
+async def _propagate_parent(db, session_id: str, session: dict, value: str | None) -> None:
+    """Write the new parent to every OTHER row of the conversation (mirrors
+    `_propagate_unindexed`). `value=None` clears the parent on every row alike."""
+    ids = await conversation_session_ids(db, session_id, session)
+    others = sorted(ids - {session_id})
+    # INVARIANT: a reparent writes EVERY branch and compaction continuation,
+    # not only the addressed row.
+    # Why: recall_search.root_documents treats the thread as ONE scope, and a
+    # chat-sourced fact follows its row's `document_id` in the retrieval
+    # narrow — a sibling left on the old parent splits the conversation's
+    # facts between two narrows.
+    if not others:
+        return
+    # WHY: a clear writes the literal NONE (field absent), matching the
+    # addressed row's `document_id = NONE` — a bound None would store NULL.
+    assignment = "document_id = $v" if value is not None else "document_id = NONE"
+    await db.query(
+        f"UPDATE chat_sessions SET {assignment} "
+        "WHERE user_id = $uid AND project_id = $pid AND meta::id(id) IN $ids",
+        {"v": value, "uid": session["user_id"], "pid": session["project_id"],
+         "ids": others},
+    )
+
+
 async def update_session_command(
     db, session_id: str, session: dict, body: SessionUpdate, user: dict,
 ) -> dict:
@@ -190,6 +214,11 @@ async def update_session_command(
     _ai_only_sets(session, body, sets, params)
     await _agent_flag_sets(session, body, user, sets, params)
     await _reparent_sets(db, session, body, user, sets, params)
+    # WHY: keyed on the request field, not on `params` — the clear arm of
+    # `_reparent_sets` writes a literal `NONE` and never fills `params`, and a
+    # clear must reach every branch exactly like a move.
+    if "document_id" in body.model_fields_set:
+        await _propagate_parent(db, session_id, session, body.document_id)
     _unindexed_sets(session, body, sets, params)
     if "unindexed" in params:
         await _propagate_unindexed(db, session_id, session, params["unindexed"])

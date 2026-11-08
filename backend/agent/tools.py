@@ -30,6 +30,7 @@ from agent_tools.registry import entries as _registry_entries
 from agent_tools.registry import fill_spec_root as _fill_spec_root
 from agent_tools.registry import holdable_names as _registry_holdable_names
 from agent_tools.registry import mutating_names as _registry_mutating_names
+from agent_tools.registry import per_call_approval_names as _registry_per_call_names
 
 
 async def _gate_on(gate: str | None) -> bool:
@@ -105,6 +106,7 @@ MUTATING_TOOLS: frozenset[str] = _registry_mutating_names()
 # card for sandbox_bash/import_file would claim a call is held that already
 # ran). Derived, never hand-listed — see the totality test on MUTATING_TOOLS.
 HOLDABLE_TOOLS: frozenset[str] = _registry_holdable_names()
+PER_CALL_APPROVAL_TOOLS: frozenset[str] = _registry_per_call_names()
 
 
 # The agent tools whose request model carries `region` — the only tools a pinned

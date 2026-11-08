@@ -66,6 +66,13 @@ def _serve_fact(doc: dict) -> dict:
         "title": doc.get("title") or "",
         "text": doc.get("content") or "",
     }
+    # `anchors` (agent-set placements, set_fact_anchor) ride ONLY when
+    # non-empty — the served payload pays nothing for the common unanchored
+    # fact, and the agent can answer "where is this fact attached" without a
+    # second channel. Read with `.get()` (the module INVARIANT in facts.py).
+    anchors = [str(a) for a in (mem.get("anchors") or []) if a]
+    if anchors:
+        served["anchors"] = anchors
     revisions, last_revised_at = fact_revisions(mem)
     if revisions > 0:
         served["revisions"] = revisions

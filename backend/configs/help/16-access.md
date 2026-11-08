@@ -23,7 +23,18 @@ A person's effective access is the highest of their own member row and every gro
 
 In the "Access" tab, "General access" section, you can publish a document by an anonymous link: anyone can read it, even without an account. The "Include subtree" option publishes all nested documents too. If a document is already published through its parent, you will see that.
 
+A published link pasted into a messenger (Telegram, WhatsApp, Slack, Discord, VK and others) unfolds into a card: the document's title, the start of its text and its first picture that the link can show (otherwise the Lore picture). An unpublished or deleted document gives a plain "Lore" card that reveals nothing about it. Messengers cache cards, so an already sent link updates only when the messenger asks again.
+
+A published [HTML page](help:html-pages) opens bare, without side panels; the link offers neither the subtree nor comments.
+
 "Allow comments" on the link lets anyone holding it leave notes under a name of their choice and see every note on the document with its author's name; the text stays read-only (see [Notes](help:notes)). A guest's page updates as members edit and comment. Revoking the link, deleting or moving the document closes it for guests at once, and the guest's page says the connection is lost.
+
+## Privacy
+
+In the "Access" tab, "Privacy" section, two checkboxes:
+
+- **Hide this page behind my PIN (only for me)** — the page opens for you only after your PIN, and the agent acting for you cannot read or find it. Other members are not affected. See [Screen and page lock](help:pin-lock).
+- **Hide this document's chats** — chats started in this document and its subtree are hidden outside it, both from the chat list and from the agent's search across your chats; inside the subtree they are visible. The tree marks such a document with a crossed-out eye. Only a member with full access sets it. A [digest](help:pipelines) still reads these chats.
 
 ## API keys
 

@@ -16,3 +16,4 @@ export { PillList } from './PillList';
 export { RowActions } from './RowActions';
 export { SegmentedControl } from './SegmentedControl';
 export { PinDigitsInput } from './PinDigitsInput';
+export { ColorField } from './ColorField';

@@ -35,6 +35,7 @@ vi.mock('./app-store', () => {
     currentProject: null,
     maxAttachmentMb: 5,
     setMaxAttachmentMb,
+    setModelImageMaxPixels: vi.fn(),
     accessLevel: 'full',
     showToast: vi.fn(),
   };
@@ -367,6 +368,7 @@ describe('loadModels', () => {
       currentProject: null,
       maxAttachmentMb: 5,
       setMaxAttachmentMb: appSpy,
+      setModelImageMaxPixels: vi.fn(),
       showToast: vi.fn(),
     });
   });

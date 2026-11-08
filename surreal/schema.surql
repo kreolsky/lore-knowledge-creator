@@ -1331,3 +1331,106 @@ DEFINE FIELD IF NOT EXISTS updated_by ON instance_skills TYPE string;
 DEFINE FIELD IF NOT EXISTS updated_at ON instance_skills TYPE datetime DEFAULT time::now();
 DEFINE INDEX IF NOT EXISTS idx_instance_skills_name ON instance_skills FIELDS name UNIQUE;
 UPDATE instance_skills SET enabled = true WHERE enabled IS NONE;
+
+-- ─── User secrets (SYSTEM: user-secrets) ────────────────────────────────────
+-- A user's personal API keys: name, description, the exact hosts the key is
+-- bound to, and the Fernet ciphertext of the value (the key file lives under
+-- the storage root, NOT derived from SECRET_KEY — rotating sessions must not
+-- brick stored keys). The value is decrypted only inside the http_request
+-- tool handler; the REST API is write-only (is_set, never the value).
+-- The `hosts` binding is the exfiltration guard — see the INVARIANT(security)
+-- on the host check in backend/user_secrets.py.
+DEFINE TABLE IF NOT EXISTS user_secrets SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS user_id         ON user_secrets TYPE string;
+-- name: [A-Za-z0-9_-]{1,64}, `--` refused (SurrealQL comment marker) — the
+-- contract lives in user_secrets.SECRET_NAME_RE, applied at the write gate.
+DEFINE FIELD IF NOT EXISTS name            ON user_secrets TYPE string;
+DEFINE FIELD IF NOT EXISTS description     ON user_secrets TYPE string DEFAULT '';
+DEFINE FIELD IF NOT EXISTS ciphertext      ON user_secrets TYPE string;
+-- `host[:port]` or `*.domain[:port]` mask entries, port 443 stripped at save time; set by
+-- backend/user_secrets.validate_hosts only.
+DEFINE FIELD IF NOT EXISTS hosts           ON user_secrets TYPE array<string>;
+DEFINE FIELD IF NOT EXISTS header_name     ON user_secrets TYPE string;
+DEFINE FIELD IF NOT EXISTS header_template ON user_secrets TYPE string;
+-- '' = header mode; a name = the key is appended as this URL query parameter
+-- (backend/routes/tool_api/secrets.py). Pre-existing rows read NONE → ''.
+DEFINE FIELD IF NOT EXISTS query_param     ON user_secrets TYPE string DEFAULT '';
+DEFINE FIELD IF NOT EXISTS enabled         ON user_secrets TYPE bool DEFAULT true;
+DEFINE FIELD IF NOT EXISTS updated_at      ON user_secrets TYPE datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS idx_user_secrets_user_name ON user_secrets FIELDS user_id, name UNIQUE;
+-- MCP server variables (SYSTEM: mcp-servers): a row with server_id+var_name
+-- is this user's value for ONE declared variable of ONE mcp_servers row. The
+-- backend mints the row's name as `{server}--{var}` — validate_name is never
+-- called on it (its `--` refusal marks backend-minted names apart from
+-- user-chosen ones). hosts = the server's CURRENT host at save time, so a
+-- url change that moves the host makes the row count as "not set"
+-- ("re-enter key") instead of silently sending the key to the new host.
+-- Same NONE precedent as documents.idempotency_key: plain rows carry NONE
+-- server_id/var_name and do NOT collide under the UNIQUE index (verified on
+-- gray, surreal 3.x, for idempotency_key).
+-- MCP server personal keys (SYSTEM: mcp-servers): a row with server_id is
+-- this user's key for ONE mcp_servers row. The backend mints the row's name
+-- as `mcp--{server_id}` — server_id-derived, never from the server's name,
+-- so a rename cannot collide (validate_name is never called on it: its `--`
+-- refusal marks backend-minted names apart from user-chosen ones). hosts =
+-- the server's CURRENT host at save time, so a url change that moves the
+-- host makes the row count as "not set" ("re-enter key") instead of
+-- silently sending the key to the new host. Same NONE precedent as
+-- documents.idempotency_key: plain rows carry NONE server_id and do NOT
+-- collide under the UNIQUE index (verified on gray, surreal 3.x, for
+-- idempotency_key).
+DEFINE FIELD IF NOT EXISTS server_id       ON user_secrets TYPE option<string>;
+DEFINE INDEX IF NOT EXISTS idx_user_secrets_server
+    ON user_secrets FIELDS user_id, server_id UNIQUE;
+
+-- ─── Personal MCP servers (SYSTEM: mcp-servers) ─────────────────────────────
+-- An admin/moderator-defined external MCP server that each user authenticates
+-- to with their OWN key (stored as user_secrets rows above), so the remote
+-- system sees the user, not a shared service account. `name` is the dsh
+-- serverName ([A-Za-z0-9_-]{1,32}, unique — the mcp__<server>__<tool> prefix).
+-- auth_mode picks who holds the key: personal (each user, one user_secrets
+-- row per (user, server)), shared (one key an admin/moderator sets, stored
+-- as Fernet ciphertext on the row) or none. auth_scheme prefixes the key in
+-- Authorization (default Bearer, the MCP authorization spec's form for
+-- static keys; '' sends the key verbatim).
+-- INVARIANT(security): a decrypted MCP key — personal or shared — exists only
+-- inside backend/mcp_servers.py's render/check paths and the turn payload's
+-- mcp_servers entry — never a log line, a frame, a REST response or the model
+-- context; shared_ciphertext is the only stored form of a shared key.
+DEFINE TABLE IF NOT EXISTS mcp_servers SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS name       ON mcp_servers TYPE string;
+DEFINE FIELD IF NOT EXISTS title      ON mcp_servers TYPE string;
+DEFINE FIELD IF NOT EXISTS url        ON mcp_servers TYPE string;
+-- 'personal' | 'shared' | 'none' — who holds the key (block comment above).
+DEFINE FIELD IF NOT EXISTS auth_mode  ON mcp_servers TYPE string DEFAULT 'personal';
+-- ^[A-Za-z0-9._~+/-]{0,32}$ (the save gate): the scheme prefixed to the key
+-- in Authorization; '' sends the key verbatim.
+DEFINE FIELD IF NOT EXISTS auth_scheme ON mcp_servers TYPE string DEFAULT 'Bearer';
+-- Where a user gets a key (http(s) only, validated at the save gate).
+DEFINE FIELD IF NOT EXISTS help_url   ON mcp_servers TYPE option<string>;
+-- The shared key's Fernet ciphertext and the host_key of the url it was
+-- saved against: a url move to another host strands it exactly like a
+-- personal key ("re-enter key"). Write-only for everyone incl. the admin.
+DEFINE FIELD IF NOT EXISTS shared_ciphertext ON mcp_servers TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS shared_host ON mcp_servers TYPE option<string>;
+-- users who declined this server (the per-user toggle, all auth modes).
+DEFINE FIELD IF NOT EXISTS disabled_by ON mcp_servers TYPE array<string> DEFAULT [];
+-- 'public' | 'mod:<moderator uid>' | 'group:<admin group id>' — the same
+-- subject vocabulary as model_grants (backend/model_access.py).
+DEFINE FIELD IF NOT EXISTS subjects   ON mcp_servers TYPE array<string>;
+DEFINE FIELD IF NOT EXISTS created_by ON mcp_servers TYPE string;
+DEFINE FIELD IF NOT EXISTS enabled    ON mcp_servers TYPE bool DEFAULT true;
+DEFINE FIELD IF NOT EXISTS created_at ON mcp_servers TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS updated_at ON mcp_servers TYPE datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS idx_mcp_servers_name ON mcp_servers FIELDS name UNIQUE;
+-- WHY: DEFINE ... IF NOT EXISTS never drops a definition, so a field cut from
+-- this file stays enforced on a live database: a required one with no value on
+-- newer rows fails every UPDATE of that row.
+REMOVE FIELD IF EXISTS headers ON mcp_servers;
+REMOVE FIELD IF EXISTS variables[*].name ON mcp_servers;
+REMOVE FIELD IF EXISTS variables[*].label ON mcp_servers;
+REMOVE FIELD IF EXISTS variables[*].help_url ON mcp_servers;
+REMOVE FIELD IF EXISTS variables[*].secret ON mcp_servers;
+REMOVE FIELD IF EXISTS variables ON mcp_servers;
+REMOVE INDEX IF EXISTS idx_user_secrets_server_var ON user_secrets;
+REMOVE FIELD IF EXISTS var_name ON user_secrets;

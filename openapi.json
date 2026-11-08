@@ -127,6 +127,20 @@
         "title": "Audience",
         "type": "object"
       },
+      "Body_chat_image_normalize_api_chat_images_normalize_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_chat_image_normalize_api_chat_images_normalize_post",
+        "type": "object"
+      },
       "Body_chat_transcribe_api_chat_transcribe_post": {
         "properties": {
           "file": {
@@ -961,6 +975,60 @@
         "title": "CreateReference",
         "type": "object"
       },
+      "CreateSecretRequest": {
+        "description": "POST /api/cabinet/secrets body — the value is write-only: it exists in\nthe request, the Fernet ciphertext and the tool handler, never in any\nresponse. Name/hosts are validated at the route through\nuser_secrets (the contract's single home).",
+        "properties": {
+          "description": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Description",
+            "type": "string"
+          },
+          "header_name": {
+            "default": "Authorization",
+            "title": "Header Name",
+            "type": "string"
+          },
+          "header_template": {
+            "default": "Bearer {{value}}",
+            "maxLength": 1024,
+            "title": "Header Template",
+            "type": "string"
+          },
+          "hosts": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Hosts",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "query_param": {
+            "default": "",
+            "maxLength": 64,
+            "title": "Query Param",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 8192,
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value",
+          "hosts"
+        ],
+        "title": "CreateSecretRequest",
+        "type": "object"
+      },
       "CreateShareBody": {
         "properties": {
           "scope": {
@@ -1261,6 +1329,214 @@
           "password"
         ],
         "title": "LoginRequest",
+        "type": "object"
+      },
+      "McpServerCreate": {
+        "properties": {
+          "auth_mode": {
+            "default": "personal",
+            "title": "Auth Mode",
+            "type": "string"
+          },
+          "auth_scheme": {
+            "default": "Bearer",
+            "title": "Auth Scheme",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "help_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Help Url"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "shared_key": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared Key"
+          },
+          "subjects": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Subjects",
+            "type": "array"
+          },
+          "title": {
+            "default": "",
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "url"
+        ],
+        "title": "McpServerCreate",
+        "type": "object"
+      },
+      "McpServerKeyValue": {
+        "description": "PUT /api/cabinet/mcp/{server_id}/secrets body — the caller's key for\nthe server, write-only like CreateSecretRequest.value; the row's hosts\nbinding is the server's CURRENT host (the route sets it, the user\ncannot).",
+        "properties": {
+          "value": {
+            "maxLength": 8192,
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "McpServerKeyValue",
+        "type": "object"
+      },
+      "McpServerToggle": {
+        "description": "PATCH /api/cabinet/mcp/{server_id} body — the per-user toggle for\nEVERY auth mode: adds/removes the caller in the server row's\ndisabled_by.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "McpServerToggle",
+        "type": "object"
+      },
+      "McpServerUpdate": {
+        "description": "PATCH body — every field optional; a provided url re-runs the egress\ncheck, and stored keys keep following the OLD host until each user\nre-enters theirs (the \"re-enter key\" state is the point). A mode change\naway from `shared` clears the shared ciphertext; away from `personal` it\ndeletes every user's key rows (an orphaned ciphertext row is a credential\nleft in the database).",
+        "properties": {
+          "auth_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Mode"
+          },
+          "auth_scheme": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Scheme"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "help_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Help Url"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "shared_key": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared Key"
+          },
+          "subjects": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subjects"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "title": "McpServerUpdate",
         "type": "object"
       },
       "MemoryVerdict": {
@@ -2816,7 +3092,7 @@
         "type": "string"
       },
       "ToolApplyMemoryVerdicts": {
-        "description": "`apply_memory_verdicts` body — a batch applied under the project memory lock.\n\n`run_id` is OPTIONAL on the agent surface: the loop tools resolve the session's active\n# run when it is omitted (a hand-copied 36-char run_id cost a whole batch on one\n# transcription slip). A sessionless caller must still pass it; the route 400s loudly.",
+        "description": "`apply_memory_verdicts` body — a batch applied under the project memory lock.\n\n`run_id` is OPTIONAL on the agent surface: the loop tools resolve the session's active\n# run when it is omitted (a hand-copied 36-char run_id cost a whole batch on one\n# transcription slip). A sessionless caller must still pass it; the route 400s loudly.\n\nDeliberately NO `apply` field: this is the consolidation loop's DIRECT write path\n(see routes/tool_api/memory.py ARCH), so it never holds on a confirm card.",
         "properties": {
           "reference_id": {
             "title": "Reference Id",
@@ -3303,6 +3579,71 @@
         "title": "ToolGetProjectStructure",
         "type": "object"
       },
+      "ToolHttpRequest": {
+        "description": "`http_request` body — one call to a secret's bound host.",
+        "properties": {
+          "apply": {
+            "$ref": "#/components/schemas/ToolApply",
+            "default": "confirm"
+          },
+          "body": {
+            "anyOf": [
+              {
+                "maxLength": 2000000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "maxProperties": 64,
+            "title": "Headers",
+            "type": "object"
+          },
+          "method": {
+            "default": "GET",
+            "enum": [
+              "GET",
+              "HEAD",
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
+          "save": {
+            "default": false,
+            "title": "Save",
+            "type": "boolean"
+          },
+          "secret": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Secret",
+            "type": "string"
+          },
+          "url": {
+            "maxLength": 2048,
+            "minLength": 8,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "secret",
+          "url"
+        ],
+        "title": "ToolHttpRequest",
+        "type": "object"
+      },
       "ToolImportFile": {
         "description": "import_file body — import a FILE as a new document or reference.\n\n# Plain `content` (authored text) is REMOVED from this surface. Authored\n# text goes to create_document (which may propose); importing bytes applies\n# immediately. The boundary the model observes: \"text I authored\" →\n# create_document; \"bytes I am importing\" → import_file. `_import_document`'s\n# internal `content` parameter is retained — `_resolve_sandbox_path` produces\n# it for a text/.md file read from the workspace (a FILE import, not authored\n# text), so sandbox .md files still flow through the shared text gate +\n# conditional normalize_markdown.\n\n# Exactly one input form: `sandbox_path` (a workspace file, console-only) OR\n# `message_id` + `attachment_index` (a stored chat image, in-chat agent\n# only). The former \"latest message\" default of `attachment_index` is\n# REMOVED (operator ruling: old calls are not needed) — an image is\n# ADDRESSED by its message id (the prompt's `[attached images: …]` marker,\n# an `images: N` recall read, or `view_chat_image`), so an\n# `attachment_index` without `message_id` is a 422 that names the fix.\n# Binary image/audio/archive (.zip) requires node_type=\"reference\" (a\n# binary is never a document).\n\n# `content_base64` LEAVES the\n# agent surface — zero calls in all of telemetry, and unreachable in practice\n# (the agent can only produce bytes via the sandbox, where sandbox_path is\n# explicitly preferred by the tool's own description). It is removed from the\n# schema, the model, and the XOR validator. `_import_document`'s INTERNAL\n# `content_base64` parameter STAYS — `_resolve_sandbox_path` produces it for\n# binary/.docx workspace files. A model cannot emit multi-MB base64 into a tool\n# call; the byte channels are sandbox_path (produced) and attachment_index\n# (persisted), neither of which the model authors.\n\n# Auto-only on BOTH surfaces (no ProposalKind): the bytes are user-supplied\n# data, not a text edit to confirm. Console-only props (`sandbox_path`,\n# `message_id`, `attachment_index`) are agent-only (import_file is off the\n# MCP surface).",
         "properties": {
@@ -3456,6 +3797,12 @@
           }
         },
         "title": "ToolListMyChats",
+        "type": "object"
+      },
+      "ToolListSecrets": {
+        "description": "`list_secrets` body — no arguments: the rows are the caller's own\n(the agent key resolves to its owning user), so nothing to address.",
+        "properties": {},
+        "title": "ToolListSecrets",
         "type": "object"
       },
       "ToolMoveDocument": {
@@ -3767,6 +4114,29 @@
         "title": "ToolSandboxRunStatus",
         "type": "object"
       },
+      "ToolSaveChatFacts": {
+        "description": "`save_chat_facts` body — save facts distilled from THIS chat.\n\n`{kind: \"chat\", id}`), never from these fields — a verdict cannot name its\norigin. No `reference_id` / run loop here: capture is explicit and\none-shot.",
+        "properties": {
+          "apply": {
+            "$ref": "#/components/schemas/ToolApply",
+            "default": "confirm"
+          },
+          "verdicts": {
+            "items": {
+              "$ref": "#/components/schemas/MemoryVerdict"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Verdicts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "verdicts"
+        ],
+        "title": "ToolSaveChatFacts",
+        "type": "object"
+      },
       "ToolSaveSkill": {
         "description": "save_skill body — upsert a project skill under the Skills folder.",
         "properties": {
@@ -3952,6 +4322,33 @@
         "title": "ToolSearchMyChats",
         "type": "object"
       },
+      "ToolSetFactAnchor": {
+        "description": "`set_fact_anchor` body — place one fact on documents by id, or clear it.\n\nPLACEMENT, not origin. Non-empty anchors REPLACE the provenance join for\nthat fact in a subtree narrow (retrieval._allowed_fact_ids); an empty list\nclears them and the fact returns to following its source. `fact_id` comes\nfrom `search_materials` or a `save_chat_facts` result.",
+        "properties": {
+          "apply": {
+            "$ref": "#/components/schemas/ToolApply",
+            "default": "confirm"
+          },
+          "document_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Document Ids",
+            "type": "array"
+          },
+          "fact_id": {
+            "title": "Fact Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fact_id",
+          "document_ids"
+        ],
+        "title": "ToolSetFactAnchor",
+        "type": "object"
+      },
       "ToolTableCellEdit": {
         "description": "One pointwise cell edit in an edit_table_cell batch.",
         "properties": {
@@ -4104,6 +4501,100 @@
           }
         },
         "title": "UpdateProfilePin",
+        "type": "object"
+      },
+      "UpdateSecretRequest": {
+        "description": "PATCH /api/cabinet/secrets/{name} body — every field optional; `value`\nre-enters the key (a PATCH without it keeps the stored ciphertext).",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "header_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Header Name"
+          },
+          "header_template": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Header Template"
+          },
+          "hosts": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hosts"
+          },
+          "query_param": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query Param"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "title": "UpdateSecretRequest",
         "type": "object"
       },
       "UpdateShareBody": {
@@ -5026,6 +5517,287 @@
         "summary": "Get Storage",
         "tags": [
           "admin-info"
+        ]
+      }
+    },
+    "/api/admin/mcp-servers": {
+      "get": {
+        "description": "Admin: every server. Moderator: only their own single-subject rows.",
+        "operationId": "list_servers_api_admin_mcp_servers_get",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Servers",
+        "tags": [
+          "admin-mcp-servers"
+        ]
+      },
+      "post": {
+        "operationId": "create_server_api_admin_mcp_servers_post",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Server",
+        "tags": [
+          "admin-mcp-servers"
+        ]
+      }
+    },
+    "/api/admin/mcp-servers/{server_id}": {
+      "delete": {
+        "description": "Hard delete: the server and every user's key rows for it (an\norphaned ciphertext row is a credential left in the database).",
+        "operationId": "delete_server_api_admin_mcp_servers__server_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Server",
+        "tags": [
+          "admin-mcp-servers"
+        ]
+      },
+      "patch": {
+        "operationId": "update_server_api_admin_mcp_servers__server_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Server",
+        "tags": [
+          "admin-mcp-servers"
+        ]
+      }
+    },
+    "/api/admin/mcp-servers/{server_id}/check": {
+      "post": {
+        "description": "The admin/moderator connection check for `shared` and `none` servers\n(a personal server is each user's to check, from the cabinet).",
+        "operationId": "check_server_api_admin_mcp_servers__server_id__check_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Check Server",
+        "tags": [
+          "admin-mcp-servers"
         ]
       }
     },
@@ -6951,6 +7723,285 @@
         "summary": "Unlock Document"
       }
     },
+    "/api/cabinet/mcp": {
+      "get": {
+        "description": "The caller's MCP servers: host line, creator, the write-only key\nstate, the per-user toggle, unavailable cards for keys stranded on\nservers they can no longer see.",
+        "operationId": "list_mcp_servers_api_cabinet_mcp_get",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Mcp Servers"
+      }
+    },
+    "/api/cabinet/mcp/{server_id}": {
+      "patch": {
+        "description": "The per-user toggle, EVERY auth mode: adds/removes the caller in the\nserver row's disabled_by — even a keyless server's tool schemas ride\nevery request, so it must be declinable too.",
+        "operationId": "toggle_mcp_server_api_cabinet_mcp__server_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerToggle"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Toggle Mcp Server"
+      }
+    },
+    "/api/cabinet/mcp/{server_id}/check": {
+      "post": {
+        "description": "The connection check with the caller's OWN render: initialize +\ntools/list with the key they would ride the turn with, classified\n(ok/unauthorized/refused/unreachable/protocol) — a wrong key must not\nlook like success.",
+        "operationId": "check_mcp_server_api_cabinet_mcp__server_id__check_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Check Mcp Server"
+      }
+    },
+    "/api/cabinet/mcp/{server_id}/secrets": {
+      "delete": {
+        "description": "Delete the caller's key rows for the server (the ciphertext rows —\nthere is no soft delete). No visibility requirement: it deletes only the\ncaller's OWN rows, and a key stranded on a server the admin disabled or\nrevoked must be deletable — an orphaned ciphertext is a credential left\nin the database.",
+        "operationId": "delete_mcp_server_secrets_api_cabinet_mcp__server_id__secrets_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Mcp Server Secrets"
+      },
+      "put": {
+        "description": "Store the caller's key for the server. The row's hosts binding is the\nserver's CURRENT host (the user cannot pick a destination — same\nexfiltration guard as the plain secrets), a pasted `<scheme> ` prefix is\nstripped, and a saved key revives a declined toggle (the user clearly\nwants the server).",
+        "operationId": "put_mcp_server_secrets_api_cabinet_mcp__server_id__secrets_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerKeyValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Mcp Server Secrets"
+      }
+    },
     "/api/cabinet/name": {
       "patch": {
         "description": "Change display name. No confirmation needed.",
@@ -7116,6 +8167,220 @@
         "summary": "Change Pin"
       }
     },
+    "/api/cabinet/secrets": {
+      "get": {
+        "description": "The caller's personal keys — metadata and is_set, NEVER the value.",
+        "operationId": "list_secrets_api_cabinet_secrets_get",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Secrets"
+      },
+      "post": {
+        "description": "Store one personal key (encrypted) bound to its hosts.",
+        "operationId": "create_secret_api_cabinet_secrets_post",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSecretRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Secret"
+      }
+    },
+    "/api/cabinet/secrets/{name}": {
+      "delete": {
+        "description": "Delete one personal key (the ciphertext row — there is no soft delete).",
+        "operationId": "delete_secret_api_cabinet_secrets__name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Secret"
+      },
+      "patch": {
+        "description": "Update one personal key. A body without `value` keeps the stored\nciphertext (the UI never re-sends it); one with `value` re-enters the key.",
+        "operationId": "update_secret_api_cabinet_secrets__name__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSecretRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Secret"
+      }
+    },
     "/api/cabinet/verify-pin": {
       "post": {
         "description": "Verify PIN for lock screen unlock. Rate-limited per user.",
@@ -7169,6 +8434,64 @@
           }
         },
         "summary": "Verify Pin"
+      }
+    },
+    "/api/chat/images/normalize": {
+      "post": {
+        "description": "Press an attached chat image ONCE at attach time: the composer shows,\nthe row stores and the model receives exactly these bytes (press_bytes —\nthe same press the turn path runs, so nothing re-encodes later).",
+        "operationId": "chat_image_normalize_api_chat_images_normalize_post",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_chat_image_normalize_api_chat_images_normalize_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Chat Image Normalize",
+        "tags": [
+          "chat"
+        ]
       }
     },
     "/api/chat/messages/{message_id}": {
@@ -7295,7 +8618,7 @@
     },
     "/api/chat/models": {
       "get": {
-        "description": "Proxy GET /v1/models from the AI API. Returns model ID list + capability flags.\n\nReports Agent-line availability and the vision-capable model set\nso the frontend picker can badge vision models instead of erroring at send time.\nBoth capability fields are merged into the success AND empty-AI_API_URL bodies.\nThe 503-on-gateway-down path stays: when the whole gateway is down the flags are\nirrelevant. Also returns `context_windows` (per-model real context length)\nfrom the same cached gateway fetch.\n\nFreshness: the served model list, default_model, and context_windows come from a\nCHAT_MODELS_CACHE_TTL_S (60s) TTL cache — a freshly-added gateway model (or a\nremoved one) can lag by up to that bound, and a chat-panel open reads the\ncached snapshot rather than a fresh gateway fetch. The set of served models\nchanges on the order of weeks, so the staleness is accepted over a per-open\ngateway RTT. The `reasoning` map rides its own cache with the same TTL and\nthe same accepted lag.\n\nThe roster is FILTERED to the caller's available models (SYSTEM:\nmodel-access) — the picker only; the turn gate is require_model_access.\nHidden models leave `models` for every caller, admins included; their\ncapability fields stay, so a pinned session keeps working. `tool_models`: _split_rosters.",
+        "description": "Proxy GET /v1/models from the AI API. Returns model ID list + capability flags.\n\nReports Agent-line availability and the vision-capable model set\nso the frontend picker can badge vision models instead of erroring at send time.\nBoth capability fields are merged into the success AND empty-AI_API_URL bodies.\nThe 503-on-gateway-down path stays: when the whole gateway is down the flags are\nirrelevant. Also returns `context_windows` (per-model real context length)\nfrom the same cached gateway fetch.\n\nFreshness: the served model list, default_model, and context_windows come from a\nCHAT_MODELS_CACHE_TTL_S (60s) TTL cache — a freshly-added gateway model (or a\nremoved one) can lag by up to that bound. The set of served models changes on\nthe order of weeks, so the staleness is accepted over a per-open gateway RTT.\nThe `reasoning` map rides its own cache with the same TTL and lag.\n\nThe roster is FILTERED to the caller's available models (SYSTEM:\nmodel-access) — the picker only; the turn gate is require_model_access.\nHidden models leave `models` for every caller, admins included; their\ncapability fields stay, so a pinned session keeps working. `tool_models`: _split_rosters.",
         "operationId": "list_models_api_chat_models_get",
         "parameters": [
           {
@@ -10585,7 +11908,7 @@
     },
     "/api/projects": {
       "get": {
-        "description": "List projects visible to the current user (owner + public + explicit membership + group audience).",
+        "description": "List projects visible to the current user, cut per `scope`: `all` = owner +\nexplicit membership + group audience (the merged list); `own` = the caller's\nprojects; `shared` = visible projects the caller does NOT own — the\ndashboard's two sections, paginated per section (limit/offset).",
         "operationId": "list_projects_api_projects_get",
         "parameters": [
           {
@@ -10609,6 +11932,21 @@
               "minimum": 0,
               "title": "Offset",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "enum": [
+                "all",
+                "own",
+                "shared"
+              ],
+              "title": "Scope",
+              "type": "string"
             }
           },
           {
@@ -16000,6 +17338,137 @@
         ]
       }
     },
+    "/api/tool/http_request": {
+      "post": {
+        "description": "Call a host one of the user's personal keys is BOUND to, with the key\ninjected server-side. GET/HEAD run silently; every other method needs the\nuser's approval on THIS call (the driver-attested `allowed-once` verdict) —\n`auto` never substitutes for it, because a foreign write under the user's\nname has no history to roll back.",
+        "operationId": "tool_http_request_api_tool_http_request_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolHttpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Http Request",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
     "/api/tool/import_file": {
       "post": {
         "description": "Import a FILE as a new document (node_type=\"document\", the default) or\nreference (node_type=\"reference\", attached to parent_id = the host).\n\nAuto-only (applies directly on both surfaces — no ProposalKind): the bytes are\nuser-supplied data, not a text edit to confirm. Binary image/audio/archive\nrequires node_type=\"reference\" (a binary is never a document); the error names\nthe fix.\nReversible in the Lore History panel for a document body / markdown reference;\nbinary references are deleted separately.\n\nPlan tool-surface-consolidation Step 2b: merges upload_document +\nupload_reference. D2: authored text is NOT an input (use create_document) —\nonly `content_base64` / `sandbox_path` / `message_id` + `attachment_index`\nreach the pipeline.",
@@ -16385,6 +17854,137 @@
           }
         },
         "summary": "Tool List My Chats",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
+    "/api/tool/list_secrets": {
+      "post": {
+        "description": "The caller's enabled personal keys as {name, description, hosts} — the\nmodel-facing catalog `http_request` spends from. The value is structurally\nabsent: it never leaves the Fernet ciphertext and this domain's dial.",
+        "operationId": "tool_list_secrets_api_tool_list_secrets_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolListSecrets"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool List Secrets",
         "tags": [
           "tool-api"
         ]
@@ -17829,6 +19429,137 @@
         ]
       }
     },
+    "/api/tool/save_chat_facts": {
+      "post": {
+        "description": "Save facts distilled from THIS conversation to project memory.\n\nModerated capture: the agent proposes one\nverdict per fact, the user moderates on the approval card. In `confirm`\n(the default) one batch produces ONE card — a rejection with text is\nper-fact moderation and the agent re-emits the corrected batch; in `auto`\nthere is no card and the facts are written directly.\n\nThe order of gates follows the consolidation pack's reopen path\n(routes/tool_api/memory.py `_propose_or_apply_reopen`): full-access check,\nthe caller's OWN live session (no session ⇒ 400), the confirm-gate refusal\n— and ONLY THEN `mint_memory_run_key`, so an asked or rejected call mints\nno key. The run key is the same Memory-scoped wall as a consolidation run;\n`record_active_run` is NOT called — the save is one shot and must not\nhijack a session's active consolidation run. The chat source is STAMPED\nfrom the session id server-side (memory.apply.apply_chat_verdicts); the\nmodel never supplies it.",
+        "operationId": "tool_save_chat_facts_api_tool_save_chat_facts_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolSaveChatFacts"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Save Chat Facts",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
     "/api/tool/save_skill": {
       "post": {
         "description": "Upsert a skill under the project's Skills folder — the server assembles\nthe frontmatter and owns the placement; a live head whose frontmatter name\nmatches is updated in place (every doc id kept: the head's `## Material`\nline advertises the Spec's id, so churn would break the id the model just\nread). Mirrors create_document's apply shape: one consent covers the head,\nthe Spec child and the file children together.",
@@ -18215,6 +19946,137 @@
           }
         },
         "summary": "Tool Search My Chats",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
+    "/api/tool/set_fact_anchor": {
+      "post": {
+        "description": "Place one stored memory fact on specific documents (`mem.anchors`), or\nclear the placement with `document_ids: []`.\n\nAnchors are PLACEMENT, not origin: non-empty anchors REPLACE the\nprovenance join for that fact in a subtree narrow\n(retrieval._allowed_fact_ids), clearing them returns the fact to following\nits chat/reference source. The fact keeps its row, its `parent_id` and its\nprovenance. Targets are validated BEFORE the confirm gate (parity with\nreopen's validate-before-propose: a confirm-mode call must not propose a\nplacement that could never apply) and the write runs under the project's\nmemory lock — the same lock an apply holds, so an anchor write and a merge\non the same fact cannot interleave.",
+        "operationId": "tool_set_fact_anchor_api_tool_set_fact_anchor_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolSetFactAnchor"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Set Fact Anchor",
         "tags": [
           "tool-api"
         ]

@@ -1,6 +1,7 @@
 /**
  * One dsh agent per session — the live inbox that IS the chat queue, the
- * per-claim prep swap, the claim/status frames and the gated idle dispose.
+ * per-claim prep swap, the claim/status frames, the gated idle dispose and
+ * the claim-time mount of the turn's personal MCP servers (mcp-servers.ts).
  *
  * # ARCH: the queue is dsh's inbox. `/followup` stores the message's prep
  *   (the backend-built facts of ONE send) keyed by the dsh message id and
@@ -24,6 +25,10 @@ import type { ModelSelection, ModelSelectionRef, PreStepDecision } from '@deepse
 import { turnFailureLine } from './map.ts'
 import { timeStampMessage } from './time-stamps.ts'
 import type { EventsChannel, SessionEventTap } from './ws-events.ts'
+import {
+  disposeMcpServers, installMcpSeam, syncMcpServers,
+  type McpServerWire, type MountedMcp,
+} from './mcp-servers.ts'
 import {
   LORE_SKILL_PROVIDER, loreSkillProvider, restrictDenyNames, skillLoadCallName,
   skillLoadResultName, type ResolvedSkill,
@@ -63,6 +68,8 @@ export interface TurnPrep {
   standingCtx: SessionToolCtx
   requestCtx: TurnRequestCtx
   claim: ClaimFacts
+  /** The turn's personal MCP servers (backend-rendered; mcp-servers.ts). */
+  mcpServers: McpServerWire[]
 }
 
 export interface AgentHandle { agent: any; dispose(): Promise<void> }
@@ -100,6 +107,9 @@ interface SessionAgent {
   releaseRestriction: (() => void) | null
   agentCtx: Context | null
   invalidateSkills: (() => void) | null
+  /** Live MCP mounts by server name + mounts not yet in an assembly. */
+  mcpMounted: Map<string, MountedMcp>
+  mcpPending: Promise<unknown>[]
   offWatch: () => void
   idleTimer: ReturnType<typeof setTimeout> | null
 }
@@ -178,6 +188,9 @@ function onClaim(entry: SessionAgent, message: { id: unknown }): void {
   entry.selection.current = prep.selection
   for (const name of prep.activated) entry.activated.add(name)
   applyRestriction(entry)
+  // The personal MCP mounts: diffed, disposed-and-remounted as needed, never
+  // awaited here (the assembly's bounded wait delivers the tools).
+  syncMcpServers(entry)
   entry.invalidateSkills?.()
   setSessionToolCtx(entry.dshId, prep.standingCtx)
   stampTurnRequestCtx(entry.dshId, prep.requestCtx)
@@ -259,6 +272,8 @@ function sessionSetup(entry: SessionAgent): (agentCtx: Context) => void {
       })
     })
     const mine = (agent: { id?: unknown } | undefined) => String(agent?.id ?? '') === entry.dshId
+    // The MCP seam: the bounded assembly wait, the ask gate, the scrub.
+    installMcpSeam(agentCtx, entry)
     agentCtx.on('agent/inbox/claimed', ({ agent, message }: { agent: any; message: { id: unknown } }) => {
       if (mine(agent)) onClaim(entry, message)
     })
@@ -310,7 +325,8 @@ async function createSessionAgent(
       assembled: undefined,
     },
     activated: new Set<string>(), turnOpen: false, releaseRestriction: null,
-    agentCtx: null, invalidateSkills: null, offWatch: () => {}, idleTimer: null,
+    agentCtx: null, invalidateSkills: null, mcpMounted: new Map(), mcpPending: [],
+    offWatch: () => {}, idleTimer: null,
   } as unknown as SessionAgent
   const handle = await deps.open(dshId, agentOptions, sessionSetup(entry))
   entry.handle = handle
@@ -360,6 +376,8 @@ async function tryDispose(entry: SessionAgent): Promise<void> {
   const done = (async () => {
     entry.offWatch()
     entry.releaseRestriction?.()
+    // MCP connections and in-memory keys drop here, with the agent.
+    await disposeMcpServers(entry).catch(() => {})
     try {
       await entry.handle.dispose()
     } catch (err) {

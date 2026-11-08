@@ -1,4 +1,4 @@
-// SYSTEM: theme — light/dark theme toggle synced to DOM class
+// SYSTEM: theme — light/dark theme toggle synced to DOM class, plus per-theme user color overrides (hooks/useColorOverrides.ts, theme/color-tokens.ts)
 import { useEffect } from 'react';
 import { useUIStore } from '../store/ui-store';
 

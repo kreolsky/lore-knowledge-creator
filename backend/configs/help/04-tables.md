@@ -2,6 +2,8 @@
 
 A table in Lore is a separate object inside a document. Its data is stored with the document, and the text holds only a marker of the form `![Title](table:…)`. In place of the marker the editor shows the table itself. The marker can be moved to another place in the text, and the table moves with it.
 
+A table stands on its own line, like a picture: the cursor, clicks and arrow keys treat it as one block. A click on the empty part of the table puts the cursor next to it — before the table near its top, after it otherwise. A table selected as a whole shows the same frame as a selected picture.
+
 ## How to create a table
 
 - ⌘/Ctrl + ⇧ + T inserts an empty 2 × 2 table at the cursor line.
@@ -9,13 +11,17 @@ A table in Lore is a separate object inside a document. Its data is stored with 
 - A table copied from a web page, Word, Excel or Google Sheets becomes a Lore table when pasted into a document.
 - Ask the agent: it can create tables, add rows and columns, and fill in cells.
 
+A table created by the agent or imported from Markdown starts at the full width of the text, with equal columns.
+
 ## How to edit
 
 - Every cell is a small editor with the same markup as the document: bold, links, lists.
 - Tab moves to the next cell, ⇧ + Tab to the previous one. Tab in the last cell takes the cursor out of the table.
 - Enter breaks a line inside a cell; it does not create a new table row.
 - Rows and columns are added and removed with the buttons in the bottom-right corner of the table: insert a row below, delete a row, insert a column to the right, delete a column. Deletion takes a second press. The last row or the last column cannot be deleted.
-- Column width changes by dragging its border in the header.
+- Dragging a column's border changes the width of that column only. The corner handle on the table's frame scales the whole table, keeping the proportions of its columns. A table wider than the page scrolls inside its own block.
+- Pictures in cells work as in the text: drop or paste them into a cell (see [Images and embeds](help:embeds)).
+- A viewer or a commentator cannot edit cells or change widths.
 
 ## Tables in the "References" tab
 

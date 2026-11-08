@@ -4,11 +4,14 @@ An embed shows the content of another object inside a document: a picture, anoth
 
 ## Pictures in the text
 
-A picture in the text is always a [reference](help:references). To put a picture into a document:
+A picture in the text is always a [reference](help:references). Ways to put a picture into a document:
 
-1. Upload it in the "References" tab, or ask the agent to generate a picture: a generated picture is also saved as a reference of the document.
-2. Put the cursor where the picture should go.
-3. On the picture's card, press "Insert embed at cursor".
+- **Drop a file** into the text: it is uploaded as a reference of the document and inserted where you dropped it. Several pictures dropped at once land in one row, a third of the width each.
+- **Paste** a screenshot or a copied picture with ⌘/Ctrl + V: it is uploaded and inserted at the cursor. When the clipboard holds text too, the text is pasted instead.
+- **Drag a reference** from the "References" tab into the text, or drag a picture the agent generated in the chat.
+- **From a card**: put the cursor where the picture should go and press "Insert embed at cursor" on the picture's card in the "References" tab.
+
+All of these work in table cells too. Pictures cannot be dropped into an open reference, only into a document.
 
 The text gets an entry `![Title](ref:…)`. The size is set in the caption after a vertical bar:
 
@@ -27,6 +30,14 @@ And this one at 40% of the page width, `![Cat after a wash|40%](ref:…)`:
 Both pictures are references of this page: you can see them in the "References" tab while it is open. Put the cursor on a picture's line to see and adjust its entry.
 
 A picture linked from the internet is not shown in a document; only its caption remains. Upload such a picture to "References" first.
+
+## Working with a picture
+
+- **A click** selects the picture: a frame with resize handles on the corners and edges appears, with a small toolbar. Dragging a handle resizes the picture; the width field in the toolbar follows live and also takes a typed size (`300`, `50%` or `500x400`). The toolbar's other button downloads the picture.
+- **A second click** (the first one where you cannot edit) opens the gallery: every picture of the document, embedded ones included, with arrows between them.
+- **⌘/Ctrl + C** on a selected picture copies the picture itself and its entry: pasted into another app (Google Docs, Telegram, Figma) it becomes the picture, pasted inside Lore it becomes the entry, without uploading the file again. Animated GIFs are copied as their first frame.
+- **Backspace** deletes the selected picture from the text; the reference stays in the "References" tab.
+- A click anywhere else drops the selection.
 
 ## Embedding a document
 

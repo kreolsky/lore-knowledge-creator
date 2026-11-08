@@ -38,8 +38,13 @@
 # that reads the source. The body, content routing and embedding all flow from the
 # single document model above; nothing else mints a fact row.
 
-# INVARIANT(journal) [D8]: every fact is stamped with the `reference_id` it came
-# from (`mem.provenance.sources`), references are immutable, and consolidation is
-# re-runnable over them — so the knowledge base is rebuildable from the reference
-# log. That is what licenses the "no migration, clean cut" stance of the flatten plan.
+# INVARIANT(journal) [D8]: every fact is stamped with its typed source
+# (`mem.provenance.sources` — `{kind: "reference", id}` or `{kind: "chat",
+# id}`, server-stamped, never agent-supplied), so the knowledge base is
+# attributable to its material at query time. References are NOT immutable
+# (operator-confirmed): a rebuild re-runs over the document's CURRENT content,
+# so a reference-sourced fact is rebuildable that way. A chat-sourced fact
+# has no consolidation loop to re-derive it — it is PRIMARY data, and memory
+# must not be wiped to rebuild anything (the "no migration, clean cut" stance
+# of the flatten plan rests on this).
 """

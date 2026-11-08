@@ -127,7 +127,7 @@ function prep(text: string, over: Partial<TurnPrep> = {}): TurnPrep {
     timeStamps: [],
     servedNames: new Set(), skills: [], activated: new Set(),
     standingCtx: {
-      loreSessionId: 'lore-x', agentKey: 'k', mutating: new Set(), holdable: new Set(),
+      loreSessionId: 'lore-x', agentKey: 'k', mutating: new Set(), holdable: new Set(), perCallApproval: new Set(),
       regionTools: new Set(),
     },
     requestCtx: { messageId: `a-${text}`, applyMode: 'confirm', document_id: null, region: null, vision: false },

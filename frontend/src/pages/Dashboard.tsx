@@ -1,12 +1,13 @@
 /** Project list split into own / shared sections, create-project form, and the card edit modal. Rendered at /projects route. */
 // ARCH: Extracted from App.tsx — page component with its own data fetching.
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../store/app-store';
 import { useUIStore } from '../store/ui-store';
 import { useShallow } from 'zustand/react/shallow';
 import { apiClient } from '../api/client';
+import { listProjects } from '../api/projects';
 import type { AccessLevel, Project } from '../types';
 import { docUrl } from '../utils/routing';
 import { FolderPlus, Pencil, Users } from 'lucide-react';
@@ -24,6 +25,93 @@ const ACCESS_BADGE: Partial<Record<AccessLevel, { label: 'notesAccess' | 'roAcce
   readonly: { label: 'roAccess', className: 'bg-[rgba(220,60,60,0.18)] text-red' },
 };
 
+type Section = 'own' | 'shared';
+const SECTIONS: Section[] = ['own', 'shared'];
+const PROJECT_PAGE = 50;
+
+/** Section of a store row for the CURRENT user, read at resolve time. */
+function sectionOf(p: Project): Section {
+  return p.owner_id === useAppStore.getState().currentUser?.user_id ? 'own' : 'shared';
+}
+
+/**
+ * Per-section scroll paging of the flat `app-store.projects` (own / shared),
+ * `page.length === PROJECT_PAGE` ⇒ more. Page 0 REPLACES its section's rows
+ * (keeps the other section's), page N appends deduped by project_id.
+ * WHY: per-section seq/loading/hasMore — the two sections load concurrently,
+ * one shared seq would drop the first page-0 response. Every merge reads
+ * getState(): the store setter is not functional.
+ */
+function useSectionPaging(onError: () => void) {
+  const seq = useRef<Record<Section, number>>({ own: 0, shared: 0 });
+  const loading = useRef<Record<Section, boolean>>({ own: false, shared: false });
+  const hasMore = useRef<Record<Section, boolean>>({ own: false, shared: false });
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+
+  const loadPage = useCallback(async (section: Section, offset: number) => {
+    const id = ++seq.current[section];
+    loading.current[section] = true;
+    try {
+      const page = await listProjects({ scope: section, offset, limit: PROJECT_PAGE });
+      if (id !== seq.current[section]) return;
+      const { projects, setProjects } = useAppStore.getState();
+      if (offset === 0) {
+        setProjects([...projects.filter(p => sectionOf(p) !== section), ...page]);
+      } else {
+        const known = new Set(projects.map(p => p.project_id));
+        setProjects([...projects, ...page.filter(p => !known.has(p.project_id))]);
+      }
+      hasMore.current[section] = page.length === PROJECT_PAGE;
+    } catch (err) {
+      if (id !== seq.current[section]) return;
+      console.error('Failed to load projects', err);
+      onErrorRef.current();
+    } finally {
+      if (id === seq.current[section]) loading.current[section] = false;
+    }
+  }, []);
+
+  const loadFirstPages = useCallback(() => {
+    for (const section of SECTIONS) void loadPage(section, 0);
+  }, [loadPage]);
+
+  // One observer for both sentinels; the section comes from entry.target's
+  // data-section. jsdom has no IntersectionObserver — the guard keeps tests working.
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  const ensureObserver = useCallback(() => {
+    if (observerRef.current) return observerRef.current;
+    if (typeof IntersectionObserver === 'undefined') return null;
+    observerRef.current = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const section = (entry.target as HTMLElement).dataset.section as Section;
+        if (!hasMore.current[section] || loading.current[section]) continue;
+        const count = useAppStore.getState().projects.filter(p => sectionOf(p) === section).length;
+        void loadPage(section, count);
+      }
+    });
+    return observerRef.current;
+  }, [loadPage]);
+  useEffect(() => () => observerRef.current?.disconnect(), []);
+
+  // WHY: unobserve the previous element, not disconnect() — that would detach
+  // the other section's sentinel too.
+  const prevEl = useRef<Record<Section, HTMLDivElement | null>>({ own: null, shared: null });
+  const ownSentinel = useCallback((el: HTMLDivElement | null) => {
+    if (prevEl.current.own) observerRef.current?.unobserve(prevEl.current.own);
+    prevEl.current.own = el;
+    if (el) ensureObserver()?.observe(el);
+  }, [ensureObserver]);
+  const sharedSentinel = useCallback((el: HTMLDivElement | null) => {
+    if (prevEl.current.shared) observerRef.current?.unobserve(prevEl.current.shared);
+    prevEl.current.shared = el;
+    if (el) ensureObserver()?.observe(el);
+  }, [ensureObserver]);
+
+  return { loadFirstPages, ownSentinel, sharedSentinel };
+}
+
 export function Dashboard() {
   const navigate = useNavigate();
   const { t } = useTranslation();
@@ -36,13 +124,14 @@ export function Dashboard() {
   // The project whose edit modal is open (pencil, my_access === 'full' only).
   const [editing, setEditing] = useState<Project | null>(null);
 
+  const { loadFirstPages, ownSentinel, sharedSentinel } = useSectionPaging(
+    () => useAppStore.getState().showToast(tRef.current('failedToLoadProjects'), 'error'),
+  );
+
   useEffect(() => {
     setCurrentProject(null);
-    apiClient.get('/projects').then(setProjects).catch((err) => {
-      console.error('Failed to load projects', err);
-      useAppStore.getState().showToast(tRef.current('failedToLoadProjects'), 'error');
-    });
-  }, [setProjects, setCurrentProject]);
+    loadFirstPages();
+  }, [loadFirstPages, setCurrentProject]);
 
   const handleCreateProject = async (name: string, description: string | null) => {
     try {
@@ -190,6 +279,7 @@ export function Dashboard() {
             </div>
           )}
         </div>
+        <div ref={ownSentinel} data-section="own" className="h-px" />
       </section>
 
       {sharedProjects.length > 0 && (
@@ -198,6 +288,7 @@ export function Dashboard() {
           <div className="grid grid-cols-[repeat(auto-fill,minmax(min(320px,100%),1fr))] gap-3">
             {sharedProjects.map(renderCard)}
           </div>
+          <div ref={sharedSentinel} data-section="shared" className="h-px" />
         </section>
       )}
 

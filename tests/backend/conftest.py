@@ -333,6 +333,12 @@ _DATA_TABLES = [
     # telemetry decorator; clean between tests so tool-telemetry integration tests
     # start from a known slate.
     "telemetry_event",
+    # user_secrets: personal-key rows keyed by (user_id, name) — a surviving row
+    # trips the UNIQUE index when the next test re-creates the same-named secret.
+    "user_secrets",
+    # mcp_servers: same UNIQUE-name exposure as user_secrets (SYSTEM:
+    # mcp-servers); its variable rows live in user_secrets, wiped above.
+    "mcp_servers",
 ]
 
 # ARCH (perf): one multi-statement query wipes ALL test tables in a SINGLE

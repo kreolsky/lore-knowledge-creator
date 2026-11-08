@@ -28,6 +28,7 @@ from memory.facts import (
     retire_fact_mem,
     select_survivor,
     supersede_fact_mem,
+    union_anchors,
 )
 
 UNKNOWN_RUN_DETAIL = (
@@ -299,7 +300,8 @@ async def _apply_merge(
 
     if absorb_id is None:
         # Absorb THIS portion's material into the stored fact: update wording (if the
-        # agent sent merged text) and record the second source.
+        # agent sent merged text) and record the second source. The survivor keeps
+        # its own anchors — `merge_into_fact` copies the whole mem through.
         updated = merge_into_fact(
             target_mem, survivor_body=target_body, text=v.get("text"),
             sources=_sources_of(v), run_id=run_id, now=now,
@@ -309,6 +311,21 @@ async def _apply_merge(
             await _route_content(v["fact_id"], v["text"], project_id)
         return [v["fact_id"]]
 
+    return await _fold_two_facts(
+        v, project_id=project_id, scope_root=scope_root, run_id=run_id, now=now,
+        target=target, target_mem=target_mem, target_body=target_body,
+        absorb_id=absorb_id,
+    )
+
+
+async def _fold_two_facts(
+    v: dict, *, project_id: str, scope_root: str, run_id: str, now: str,
+    target: dict, target_mem: dict, target_body: str, absorb_id: str,
+) -> list[str]:
+    """Fold a SECOND stored fact into the target: the server picks the
+    survivor (`select_survivor`), the survivor absorbs both sides' sources and
+    the UNION of both sides' anchors, and the absorbed fact retires pointing
+    at the survivor."""
     absorb = await _require_fact_in_scope(scope_root, absorb_id, project_id)
     # Defence in depth: the pure preflight already rejects absorb_id == fact_id as a
     # per-verdict rejection (see _validate_verdict); this mid-lock raise is the
@@ -327,6 +344,18 @@ async def _apply_merge(
         survivor_mem, survivor_body=survivor_body, text=v.get("text"),
         sources=[*_sources_of(v), *absorb_sources], run_id=run_id, now=now,
     )
+    # WHY: a merge UNIONS anchors onto the survivor (read with `.get()` — the
+    # module INVARIANT in memory/facts.py). An anchor is a placement the user
+    # asked for; folding two facts must keep BOTH placements valid, and a side
+    # with no anchors contributes nothing (only-one-side anchors apply to the
+    # whole merged fact). A supersede never touches anchors — an in-place
+    # correction keeps its placements.
+    other_mem = absorb_mem if survivor_id == v["fact_id"] else target_mem
+    merged_anchors = union_anchors(
+        survivor_mem.get("anchors"), other_mem.get("anchors"),
+    )
+    if merged_anchors:
+        updated["anchors"] = merged_anchors
     await _persist_mem(survivor_id, updated)
     if v.get("text") and v["text"] != survivor_body:
         await _route_content(survivor_id, v["text"], project_id)

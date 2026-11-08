@@ -28,11 +28,12 @@ export interface CanSendInput {
   filesUploading?: boolean;
   systemPromptId: string | null;
   overLimit: boolean;
-  contextOverLimit: boolean;
+  /** A press in flight holds the send: the image would silently miss the turn. */
+  imagesPressing: boolean;
 }
 
 export function canSend(input: CanSendInput): boolean {
-  const { text, imagesCount, filesCount = 0, filesUploading = false, systemPromptId, overLimit, contextOverLimit } = input;
+  const { text, imagesCount, filesCount = 0, filesUploading = false, systemPromptId, overLimit, imagesPressing } = input;
   const withoutText = canSendWithoutText(imagesCount + filesCount, systemPromptId);
-  return (text.trim().length > 0 || withoutText) && !overLimit && !contextOverLimit && !filesUploading;
+  return (text.trim().length > 0 || withoutText) && !overLimit && !imagesPressing && !filesUploading;
 }

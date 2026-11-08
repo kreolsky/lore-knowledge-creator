@@ -27,6 +27,7 @@ import logging
 from typing import TYPE_CHECKING
 
 import driver.timeline as timeline
+import mcp_servers
 import settings
 from driver.client import (
     PERPLEXITY_SEARCH_PINS,
@@ -39,6 +40,7 @@ from driver.timeline import DriverTurnRefused
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
+from db import get_db
 from routes.chat.completions_turn import prepare_agent_turn
 from routes.chat.fanout import ensure_fanout
 
@@ -112,8 +114,15 @@ async def _turn_payload(turn: "_AgentTurn", plan, agent_key: str, driver_session
         pin = PERPLEXITY_SEARCH_PINS[await settings.get("PERPLEXITY_SEARCH_TYPE")]
     config = await settings.get_all(
         ["CHAT_TITLE_MODEL", credential_key])
+    # The turn's MCP servers are the SENDER's (SYSTEM: mcp-servers): rendered
+    # per user from their own stored keys, re-resolved every turn so a key
+    # change, a toggle or a revoked server lands on the next message. Their
+    # names ride the system prompt (prompt_section: "" for a user with no
+    # servers, so everyone else's prompt stays byte-identical).
+    mcp_entries = await mcp_servers.render_for_user(await get_db(), turn.user)
     return _build_turn_payload(
-        model=turn.model, system_prompt=plan.system_prompt,
+        model=turn.model,
+        system_prompt=plan.system_prompt + mcp_servers.prompt_section(mcp_entries),
         tools=plan.tools, agent_key=agent_key, apply_mode=plan.apply_mode,
         session_id=driver_session_id,
         user_id=turn.user.get("user_id", ""),
@@ -127,6 +136,7 @@ async def _turn_payload(turn: "_AgentTurn", plan, agent_key: str, driver_session
         title_model=config["CHAT_TITLE_MODEL"],
         web_search_provider=pin,
         web_search_credential=config[credential_key],
+        mcp_servers=mcp_entries,
     ) | _claim_facts(turn)
 
 

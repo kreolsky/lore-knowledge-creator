@@ -161,6 +161,39 @@ class ToolSandboxBash(BaseModel):
     with_external_agent_key: bool = False
 
 
+class ToolListSecrets(BaseModel):
+    """`list_secrets` body — no arguments: the rows are the caller's own
+    (the agent key resolves to its owning user), so nothing to address."""
+
+
+class ToolHttpRequest(BaseModel):
+    """`http_request` body — one call to a secret's bound host.
+
+    # INVARIANT(security): `secret` is a NAME, never a value. Why: the value
+    # lives only in the Fernet ciphertext and the handler's injected header;
+    # an argument carrying it would put the key straight into the model
+    # context (SYSTEM: user-secrets). Pydantic drops unknown keys, so a
+    # hallucinated `value`/`api_key` arg is ignored, not honored.
+
+    # INVARIANT(security): `apply` exists ONLY so the mid-turn gate holds the
+    # tool (holdable_names reads it); the handler IGNORES its value.
+    # Why: every non-GET/HEAD call needs the driver-attested verdict
+    # regardless, and `auto` must never widen a foreign write under the user's
+    # name.
+    """
+
+    secret: str = Field(min_length=1, max_length=64)
+    url: str = Field(min_length=8, max_length=2048)
+    method: Literal["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"] = "GET"
+    # Host / Authorization / the row's header_name are stripped by the handler;
+    # the injected credential header always wins.
+    headers: dict[str, str] = Field(default_factory=dict, max_length=64)
+    # Text request body; the byte cap (1 MB of utf-8) is enforced at the handler.
+    body: str | None = Field(default=None, max_length=2_000_000)
+    save: bool = False
+    apply: ToolApply = ToolApply.confirm
+
+
 class ToolSandboxRunStatus(BaseModel):
     """Args for `sandbox_run_status` — poll a detached run.
 

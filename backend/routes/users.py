@@ -8,6 +8,8 @@
 
 from uuid import uuid4
 
+import mcp_servers
+import user_secrets
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from model_access import drop_moderator_grants
@@ -355,6 +357,10 @@ async def patch_user_admin(user_id: str, body: UpdateUserAdmin, current_user: di
     # its grants back to a re-promoted moderator.
     if "role" in updates and (target.get("role") == "moderator") != (updates["role"] == "moderator"):
         await drop_moderator_grants(db, user_id)
+        # Their single-subject MCP servers go with the virtual group (SYSTEM:
+        # mcp-servers) — same "a re-promoted moderator starts with nothing"
+        # contract, users' key rows included (nothing can spend them anymore).
+        await mcp_servers.drop_moderator_servers(db, user_id)
     # INVARIANT: a credential reset (password change) must invalidate the target's existing
     # sessions immediately. Why: without this the target's in-flight cookies stay valid for
     # up to JWT TTL (14 days) + token_version cache TTL on the old credential. Bumping the
@@ -397,8 +403,17 @@ async def delete_user(user_id: str, current_user: dict = Depends(require_user_ma
             {"id": user_id, "released": f"deleted:{user_id}:{target['email']}"},
         )
     await soft_delete("users", user_id)
+    # INVARIANT(security): deleting a user destroys their personal keys, the
+    # ciphertext included.
+    # Why: nothing can spend a deleted user's keys, so a row kept past the
+    # account is only a credential left in the database and its dumps.
+    await user_secrets.delete_user_rows(db, user_id)
+    # The user's per-server toggle marks die with the account: a dead uid in
+    # a server's disabled_by is unremovable noise (SYSTEM: mcp-servers).
+    await mcp_servers.remove_disabled_user(db, user_id)
     if target and target.get("role") == "moderator":
         await drop_moderator_grants(db, user_id)
+        await mcp_servers.drop_moderator_servers(db, user_id)
     return {"success": True}
 
 

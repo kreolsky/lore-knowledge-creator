@@ -103,11 +103,13 @@ class TestFetchRelevantChunks:
 
     async def test_narrow_scope_clause_per_kind(self):
         """Doc/REF chunks scope by tree position ($allowed_docs — a reference
-        IS a documents row); MEMORY scopes by provenance ($allowed_facts). The
-        old OR-of-both clause made every kind's query carry both lists."""
+        IS a documents row); MEMORY scopes by placement ($allowed_facts): the
+        refs join, the chats join, then the per-kind chunk queries. The old
+        OR-of-both clause made every kind's query carry both lists."""
         db = AsyncMock()
         db.query = AsyncMock(side_effect=[
             ["ref1"],                                   # _allowed_fact_ids: refs
+            [],                                         # _allowed_fact_ids: chats
             [{"id": "f1", "mem": {"provenance": {"sources": [
                 {"kind": "reference", "id": "ref1"},
             ]}}}],                                      # _allowed_fact_ids: facts
@@ -117,8 +119,11 @@ class TestFetchRelevantChunks:
         ])
         rows = await self._fetch(db, allowed_doc_ids={"d1"})
         assert [r["document_id"] for r in rows] == ["d1", "r1", "f1"]
+        chat_sql = db.query.call_args_list[1].args[0]
+        assert "FROM chat_sessions" in chat_sql
+        assert "document_id IN $targets" in chat_sql
         doc_sql, ref_sql, mem_sql = (
-            c.args[0] for c in db.query.call_args_list[2:]
+            c.args[0] for c in db.query.call_args_list[3:]
         )
         for sql in (doc_sql, ref_sql):
             assert "document_id IN $allowed_docs" in sql
@@ -127,7 +132,7 @@ class TestFetchRelevantChunks:
         assert "allowed_docs" not in mem_sql
         mem_params = db.query.call_args_list[-1].args[1]
         assert mem_params["allowed_facts"] == ["f1"]
-        assert db.query.call_args_list[2].args[1]["allowed_docs"] == ["d1"]
+        assert db.query.call_args_list[3].args[1]["allowed_docs"] == ["d1"]
 
 
 # ─── _fetch_relevant_chunks (model/dimension predicate over REAL rows) ───────

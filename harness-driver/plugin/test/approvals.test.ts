@@ -27,6 +27,7 @@ function tctx(loreSessionId: string): TurnToolCtx {
     document_id: null,
     mutating: new Set(['edit_document']),
     holdable: new Set(['edit_document']),
+    perCallApproval: new Set(['http_request']),
     regionTools: new Set(),
     region: null,
     vision: false,
@@ -117,6 +118,17 @@ test('a reject carries the user\'s words to the asker as the call\'s own result'
   const asked = askLoreApproval(exec, ctx, 'edit_document', 'needs approval')
   assert.equal(resolveVerdict('c3', 'lore-1', 'reject', null, 'user said no'), 200)
   assert.deepEqual(await asked, { outcome: 'rejected', reason: 'user said no' })
+})
+
+// TEST-WHY: refused-principal — one click must not approve the next writes outside Lore: the session grant on a per-call tool is refused (403) and leaves the ask parked.
+test('allow_session is refused on a per-call tool', async () => {
+  const { ask } = fakeBridge(() => tctx('lore-1'))
+  const outcome = ask('c-pc', 'dsh-1', 'http_request')
+  assert.equal(resolveVerdict('c-pc', 'lore-1', 'allow_session', 'http_request', null), 403)
+  assert.equal(hasLoreGrant('lore-1', 'http_request'), false)
+  assert.equal(resolveVerdict('c-pc', 'lore-1', 'allow_once', null, null), 200)
+  assert.equal(await outcome, 'allowed-once')
+  assert.equal(hasLoreGrant('lore-1', 'http_request'), false)
 })
 
 test('allow_session mints the grant from the ASK\'s tool, never the body', async () => {

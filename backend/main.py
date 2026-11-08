@@ -20,9 +20,9 @@ from urllib.parse import urlsplit
 import settings  # noqa: E402 — load-bearing bus-subscription import (see above)
 from embedding_coverage import LIVE_PROJECTS_SQL
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exception_handlers import (
     http_exception_handler,
-    request_validation_exception_handler,
 )
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -88,6 +88,7 @@ from logging_conf import setup_logging
 from routes import (
     admin_embeddings,
     admin_info,
+    admin_mcp_servers,
     admin_model_access,
     admin_settings,
     admin_skills,
@@ -572,14 +573,17 @@ app.add_middleware(WSOriginGuardMiddleware)
 _JSON_MAX_BYTES = 1 * 1024 * 1024  # 1MB limit for non-upload JSON endpoints
 # ARCH: request-body cap for chat completions (which carry base64 images). Derived
 # from the shared CHAT_MAX_IMAGE_SIZE_MB total-attachment budget (config.py). The
-# *1.5 factor covers base64 inflation (~33%) + JSON/conversation-history overhead:
-# 5MB raw images → ~6.7MB base64, leaving headroom for the text payload. Frontend
-# validates the raw sum at attach time so a compliant request always fits.
+# budget counts PRESSED bytes: every chat image is pressed by the attach route
+# (/api/chat/images/normalize) before it becomes a data URL, and the client sums
+# the pressed sizes at send time. The *1.5 factor covers base64 inflation (~33%)
+# + JSON/conversation-history overhead: 5MB pressed images → ~6.7MB base64,
+# leaving headroom for the text payload.
 _LARGE_JSON_MAX_BYTES = int(CHAT_MAX_IMAGE_SIZE_MB * 1.5 * 1024 * 1024)
 _UPLOAD_PATHS = (
     "/api/documents/upload", "/api/documents/upload-and-transcribe", "/api/documents/upload-markdown",
     "/api/references/upload", "/api/references/upload-and-transcribe", "/api/references/upload-markdown",
     "/api/widget/upload", "/api/widget/extract", "/api/chat/transcribe",
+    "/api/chat/images/normalize",
     # WHY: the MCP signed-URL redeem route is exempt like every other
     # streaming upload. Why: it exists precisely to carry payloads the 1MB JSON cap
     # refuses (that cap on /mcp is what made `content_base64` useless for a 14MB
@@ -685,6 +689,7 @@ app.include_router(extractor.router)
 app.include_router(admin_embeddings.router)
 app.include_router(admin_info.router)
 app.include_router(admin_model_access.router)
+app.include_router(admin_mcp_servers.router)
 app.include_router(admin_settings.router)
 app.include_router(admin_skills.router)
 
@@ -727,9 +732,12 @@ async def logged_http_exception_handler(request: Request, exc: StarletteHTTPExce
 
 
 # INVARIANT(security): log only where validation failed and why, never the `input` of
-# errors().
+# errors(); the response drops `input` as well.
 # Why: `input` holds the submitted value, a password included.
 @app.exception_handler(RequestValidationError)
 async def logged_validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
-    _log_refusal(request, 422, [(e["loc"], e["msg"]) for e in exc.errors()])
-    return await request_validation_exception_handler(request, exc)
+    errors = exc.errors()
+    _log_refusal(request, 422, [(e["loc"], e["msg"]) for e in errors])
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(
+        [{k: v for k, v in e.items() if k != "input"} for e in errors],
+    )})

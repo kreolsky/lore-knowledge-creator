@@ -4,6 +4,7 @@
 // preventing collision with the AI chat-store.activeSessionId.
 // SYSTEM: note-chat — note-chat store for user-only message threads
 
+import type { AttachSurface, PressedImageMeta } from '../chat/attach-image';
 import { create } from 'zustand';
 import { ChatSession, ChatMessage } from '../types';
 import { apiClient } from '../api/client';
@@ -91,6 +92,9 @@ interface NoteChatState {
   sessionsLoading: boolean;
   pendingInputFocus: boolean;
   pendingImages: string[];
+  // See the same fields in chat-store/types.ts.
+  pendingImageMeta: Record<string, PressedImageMeta>;
+  pressingImages: number;
   // SYSTEM: note-draft — PER-SESSION composer drafts (thread-scoped; a shared draft
   // would leak text between distinct note threads, unlike AI-chat's session-agnostic
   // prompt). Survives NoteChatView unmount (back-to-list / tab switch / Esc).
@@ -125,7 +129,7 @@ interface NoteChatState {
   editMessage: (messageId: string, content: string) => Promise<void>;
   deleteMessage: (messageId: string) => Promise<void>;
   setPendingInputFocus: (v: boolean) => void;
-  addPendingImage: (dataUrl: string) => void;
+  addPendingImage: (dataUrl: string, meta?: PressedImageMeta) => void;
   removePendingImage: (index: number) => void;
   clearPendingImages: () => void;
   setDraftForSession: (sessionId: string, v: string) => void;
@@ -183,6 +187,8 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
   sessionsLoading: false,
   pendingInputFocus: false,
   pendingImages: [],
+  pendingImageMeta: {},
+  pressingImages: 0,
   drafts: {},
 
   async loadSessions(projectId: string, documentId: string) {
@@ -519,8 +525,11 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
     set({ pendingInputFocus: v });
   },
 
-  addPendingImage(dataUrl: string) {
-    set(s => ({ pendingImages: [...s.pendingImages, dataUrl] }));
+  addPendingImage(dataUrl, meta) {
+    set(s => ({
+      pendingImages: [...s.pendingImages, dataUrl],
+      pendingImageMeta: meta ? { ...s.pendingImageMeta, [dataUrl]: meta } : s.pendingImageMeta,
+    }));
   },
 
   removePendingImage(index: number) {
@@ -528,7 +537,7 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
   },
 
   clearPendingImages() {
-    set({ pendingImages: [] });
+    set({ pendingImages: [], pendingImageMeta: {} });
   },
 
   // Per-session composer draft (see NoteChatState.drafts).
@@ -600,6 +609,7 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
       sessionsLoading: false,
       pendingInputFocus: false,
       pendingImages: [],
+      pendingImageMeta: {},
       // Logout hygiene: the prior user's note drafts never render after a
       // same-tab re-login.
       drafts: {},
@@ -611,3 +621,9 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
 // note sessions/messages can't render after a same-tab re-login (cache clear alone
 // doesn't touch store state). See the parallel registration in chat-store.ts.
 registerLogoutHandler(() => useNoteChatStore.getState().reset());
+
+export const noteAttachSurface: AttachSurface = {
+  getPending: () => useNoteChatStore.getState().pendingImages,
+  add: (dataUrl, meta) => useNoteChatStore.getState().addPendingImage(dataUrl, meta),
+  pressing: delta => useNoteChatStore.setState(s => ({ pressingImages: s.pressingImages + delta })),
+};

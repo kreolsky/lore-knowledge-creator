@@ -6,6 +6,7 @@
 // setLastActiveChatSession / getLastActiveChatSession.
 // SYSTEM: chat-store — isolated Zustand store for AI chat (sessions, message tree, streaming)
 
+import type { AttachSurface } from '../chat/attach-image';
 import { create } from 'zustand';
 import { useAppStore } from './app-store';
 import { useUIStore } from './ui-store';
@@ -90,6 +91,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   pendingInputFocus: false,
   modelPickerOpen: false,
   pendingImages: [],
+  pendingImageMeta: {},
+  pressingImages: 0,
   pendingFiles: [],
   // SYSTEM: chat-draft — composer text held in-store (survives tab-switch unmount).
   draft: '',
@@ -176,3 +179,9 @@ useChatStore.subscribe((state, prevState) => {
   // piggyback activates first, seeds second.
   resetInbox(patch => useChatStore.setState(patch));
 });
+
+export const chatAttachSurface: AttachSurface = {
+  getPending: () => useChatStore.getState().pendingImages,
+  add: (dataUrl, meta) => useChatStore.getState().addPendingImage(dataUrl, meta),
+  pressing: delta => useChatStore.setState(s => ({ pressingImages: s.pressingImages + delta })),
+};

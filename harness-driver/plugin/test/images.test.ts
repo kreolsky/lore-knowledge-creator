@@ -395,6 +395,7 @@ test('the first write lands the env route scaffold beside the model; later write
   const settings = fakeSettings()
   const route = {
     apiKeyEnv: 'AI_API_KEY', api: 'openai-completions', baseURL: 'http://gw',
+    requestImageMaxBytes: 4194304,
     compat: { maxTokensField: 'max_tokens' }, defaultContextWindow: 131072,
   }
   await ensureModelEntry(settings as never, 'm/x', 128000, 65536, false, null, false, route)
@@ -409,6 +410,24 @@ test('the first write lands the env route scaffold beside the model; later write
   const second = (settings.updates[1]!.patch.providers as { lore: Record<string, unknown> }).lore
   assert.equal(second.baseURL, undefined)
   assert.deepEqual((second.models as { id: string }[]).map(m => m.id).sort(), ['m/x', 'm/y'])
+})
+
+test('a committed route missing requestImageMaxBytes rewrites: existing installs get the press contract', async () => {
+  // The field is what keeps dsh from re-encoding a pressed image over its
+  // 1 MiB default — a route committed before it exists must be upgraded on
+  // the next turn, or every existing install silently keeps re-encoding.
+  const settings = fakeSettings([{ id: 'm/x', contextWindow: 128000, maxTokens: 65536 }])
+  const lore = (settings.describe()[0]!.value as { providers: { lore: Record<string, unknown> } }).providers.lore
+  lore.baseURL = 'http://gw'
+  lore.apiKeyEnv = 'LORE_AGENT_API_KEY'
+  const route = { apiKeyEnv: 'LORE_AGENT_API_KEY', api: 'openai-completions',
+    baseURL: 'http://gw', requestImageMaxBytes: 4194304 }
+  await ensureModelEntry(settings as never, 'm/x', 128000, 65536, false, null, false, route)
+  assert.equal(settings.updates.length, 1, 'the missing field alone forces the rewrite')
+  assert.equal((settings.updates[0]!.patch.providers as { lore: Record<string, unknown> }).lore.requestImageMaxBytes,
+    4194304)
+  await ensureModelEntry(settings as never, 'm/x', 128000, 65536, false, null, false, route)
+  assert.equal(settings.updates.length, 1, 'once committed, the field writes nothing more')
 })
 
 test('a changed gateway URL or key ref rewrites the route scaffold on the next turn', async () => {

@@ -6,7 +6,7 @@
 // ARCH: Thin shell — SectionShell owns the chrome with NO top tabs: the gear
 // button in UserControls is the section's tab, the aside lists the sections
 // (Users / Projects / Embeddings + the admin-only settings tabs, Skills,
-// Model access and Groups)
+// Model access and Groups — plus MCP servers, which moderators get too)
 // as rows, the center carries the active section's FULL list. All domain
 // handlers live here; the list renderers (ProjectsTab, UsersTab) render only.
 // The settings/skills sections fetch from inside their own components (an
@@ -21,7 +21,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FolderOpen, Users as UsersIcon, Layers, Cpu, Bot, Wrench, Search, Database, Sparkles, Gauge, KeyRound, UsersRound } from 'lucide-react';
+import { FolderOpen, Users as UsersIcon, Layers, Cpu, Bot, Wrench, Search, Database, Sparkles, Gauge, KeyRound, UsersRound, Cable } from 'lucide-react';
 import { apiClient, isAccessRefusal } from '../api/client';
 import { listAdminProjects, listAdminUsers } from '../api/admin';
 import type { SettingsTabId } from '../api/admin';
@@ -42,19 +42,22 @@ import { SettingsSection } from '../components/admin/SettingsSection';
 import { SkillsSection } from '../components/admin/SkillsSection';
 import { ModelsSection } from '../components/admin/ModelsSection';
 import { GroupsSection } from '../components/admin/GroupsSection';
+import { McpServersSection } from '../components/admin/McpServersSection';
 import { withOptimistic } from '../utils/optimistic';
 import { serverRefusalDetail } from '../utils/server-refusal-detail';
 import { AddUserForm } from '../components/admin/AddUserForm';
 
 type AdminTab = AdminSectionTab;
 
-/** The admin-only sections in aside order — `slot` places a row above Users
- * ('top') or between Users and Projects ('users'); the rest follow Projects —
- * ONE row per section feeds the aside rows, the saved-section validation
- * list (sectionsAtMount) and the settings-tab lookup. The tab LIST is fixed
- * here, never derived from the server (a new section needs an i18n label
- * and an icon anyway); the AdminSectionTab union in theme-slice stays — it
- * is the persisted-value type. */
+/** The admin-panel-only sections in aside order — `slot` places a row above
+ * Users ('top') or between Users and Projects ('users'); the rest follow
+ * Projects — ONE row per section feeds the aside rows, the saved-section
+ * validation list (sectionsAtMount) and the settings-tab lookup. `scope`
+ * picks who sees the row: 'admin' (default) only admins, 'manager' anyone
+ * with can_manage_users (admin | moderator — the backend gate of that
+ * section). The tab LIST is fixed here, never derived from the server (a new
+ * section needs an i18n label and an icon anyway); the AdminSectionTab union
+ * in theme-slice stays — it is the persisted-value type. */
 const ADMIN_ONLY_SECTIONS: readonly {
   tab: AdminSectionTab;
   icon: ReactNode;
@@ -62,6 +65,7 @@ const ADMIN_ONLY_SECTIONS: readonly {
   /** `settings:<registry tab>` rows carry the registry tab id for the center. */
   settingsTab?: SettingsTabId;
   slot?: 'top' | 'users';
+  scope?: 'admin' | 'manager';
 }[] = [
   { tab: 'info', icon: <Gauge size={14} />, labelKey: 'adminInfo', slot: 'top' },
   { tab: 'settings:models', icon: <Cpu size={14} />, labelKey: 'settingsModels', settingsTab: 'models', slot: 'top' },
@@ -70,6 +74,7 @@ const ADMIN_ONLY_SECTIONS: readonly {
   { tab: 'settings:search', icon: <Search size={14} />, labelKey: 'settingsSearch', settingsTab: 'search' },
   { tab: 'settings:agent', icon: <Bot size={14} />, labelKey: 'settingsAgent', settingsTab: 'agent' },
   { tab: 'settings:tools', icon: <Wrench size={14} />, labelKey: 'settingsTools', settingsTab: 'tools' },
+  { tab: 'mcp-servers', icon: <Cable size={14} />, labelKey: 'adminMcpServers', scope: 'manager' },
   { tab: 'settings:storage', icon: <Database size={14} />, labelKey: 'settingsStorage', settingsTab: 'storage' },
   { tab: 'embeddings', icon: <Layers size={14} />, labelKey: 'embeddings' },
   { tab: 'skills', icon: <Sparkles size={14} />, labelKey: 'skills' },
@@ -189,13 +194,14 @@ export function AdminPage() {
 
   // Initial section: the user's last one, validated against the sections THIS
   // user is offered (a moderator has no Embeddings/settings/skills rows — a
-  // stale saved admin-only tab must not open an admin-only surface). Derived,
-  // not mutated: the store keeps the raw value, the page falls back to Users.
+  // stale saved admin-only tab must not open an admin-only surface; the MCP
+  // servers row is scope 'manager', so a moderator keeps it). Derived, not
+  // mutated: the store keeps the raw value, the page falls back to Users.
   // Mount-time snapshot by design — later store changes don't yank the open
   // section.
   const sectionsAtMount: AdminTab[] = isAdmin
     ? ['users', 'projects', ...ADMIN_ONLY_SECTIONS.map(s => s.tab)]
-    : ['users', 'projects'];
+    : ['users', 'projects', ...ADMIN_ONLY_SECTIONS.filter(s => s.scope === 'manager').map(s => s.tab)];
   const [tab, setTab] = useState<AdminTab>(() =>
     savedSectionTab && sectionsAtMount.includes(savedSectionTab) ? savedSectionTab : 'users');
 
@@ -443,10 +449,12 @@ export function AdminPage() {
   // Embeddings, the settings tabs, Skills, Model access and Groups are
   // admin-only (capability flag, not a role comparison). Flat rows beside the
   // others — a section is a heading in the center, never a second navigation
-  // level. Each admin row's `slot` picks its place around Users / Projects.
-  const adminRows = (slot: 'top' | 'users' | undefined) => (isAdmin
-    ? ADMIN_ONLY_SECTIONS.filter(s => s.slot === slot).map(s => ({ tab: s.tab, icon: s.icon, label: t(s.labelKey) }))
-    : []);
+  // level. Each admin row's `slot` picks its place around Users / Projects;
+  // scope 'manager' rows (MCP servers) show for moderators too — the page's
+  // mount guard is can_manage_users, so every non-admin here is a moderator.
+  const adminRows = (slot: 'top' | 'users' | undefined) => ADMIN_ONLY_SECTIONS
+    .filter(s => s.slot === slot && (isAdmin || s.scope === 'manager'))
+    .map(s => ({ tab: s.tab, icon: s.icon, label: t(s.labelKey) }));
   const sections: { tab: AdminTab; icon: ReactNode; label: string }[] = [
     ...adminRows('top'),
     { tab: 'users', icon: <UsersIcon size={14} />, label: t('users') },
@@ -542,6 +550,7 @@ export function AdminPage() {
             {tab === 'skills' && <SkillsSection />}
             {tab === 'model-access' && <ModelsSection />}
             {tab === 'groups' && <GroupsSection />}
+            {tab === 'mcp-servers' && <McpServersSection />}
           </div>
         </div>
       )}

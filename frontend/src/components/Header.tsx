@@ -159,9 +159,9 @@ export function Header() {
             {isProjectList ? t('projects') : isCabinet ? t('profile') : t('adminPanel')}
             {isAdmin && <AdminVersion />}
           </span>
-          {/* The admin page's active section, as a non-interactive leaf crumb —
-              the same `Project : Document` shape as the editor breadcrumb. */}
-          {isAdmin && sectionCrumb && (
+          {/* The admin or cabinet page's active section, as a non-interactive leaf
+              crumb — the same `Project : Document` shape as the editor breadcrumb. */}
+          {(isAdmin || isCabinet) && sectionCrumb && (
             <>
               <span className="text-text select-none">:</span>
               <span className="text-[15.6px] text-text px-1 py-0.5 select-none">{sectionCrumb}</span>

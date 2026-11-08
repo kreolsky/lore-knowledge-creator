@@ -232,3 +232,126 @@ async def test_owner_last_accessed_dropped_single_project(client, admin_user):
 
     data = (await client.get(f"/api/projects/{pid}", cookies={"lore_session": token})).json()
     assert data["project"].get("last_accessed_doc_id") is None
+
+
+# ─── Per-section scope cut (dashboard own/shared pagination) ─────────────────
+
+
+async def _create_project(client, token, name):
+    resp = await client.post("/api/projects", json={"name": name}, cookies={"lore_session": token})
+    assert resp.status_code == 200, resp.text
+    return resp.json()["project_id"]
+
+
+async def _add_member(client, admin_token, pid, uid, access_level="readonly"):
+    resp = await client.post(
+        f"/api/admin/projects/{pid}/members",
+        json={"user_id": uid, "access_level": access_level},
+        cookies={"lore_session": admin_token},
+    )
+    assert resp.status_code == 200, resp.text
+
+
+async def _set_public_audience(test_db, pid):
+    await test_db.query(
+        "UPDATE type::record('projects', $id) SET audiences = [{subject: 'public', access_level: 'readonly'}]",
+        {"id": pid},
+    )
+
+
+# TEST-WHY: cross-process-contract — the shared cut over real HTTP must surface another user's member- and audience-shared projects and never the caller's own rows, whose own audience rows the caller's subjects match.
+@pytest.mark.asyncio
+async def test_scope_shared_member_and_audience_without_own(client, regular_user, admin_user, test_db):
+    """scope=shared returns exactly the two share shapes: the admin project the
+    caller is a member of and the admin project shared via a 'public' audience
+    row. NEVER returned: the caller's own project, the caller's own
+    public-audience project (the trap — the caller's subjects match 'public', so
+    without `owner_id != $uid` it would leak into shared), and the admin's
+    private project."""
+    uid, token = regular_user
+    _, admin_token = admin_user
+
+    member_pid = await _create_project(client, admin_token, "Admin member-shared")
+    await _add_member(client, admin_token, member_pid, uid)
+    audience_pid = await _create_project(client, admin_token, "Admin audience-shared")
+    await _set_public_audience(test_db, audience_pid)
+    private_pid = await _create_project(client, admin_token, "Admin private")
+    own_pid = await _create_project(client, token, "Mine plain")
+    own_public_pid = await _create_project(client, token, "Mine public")
+    await _set_public_audience(test_db, own_public_pid)
+
+    resp = await client.get("/api/projects?scope=shared", cookies={"lore_session": token})
+    assert resp.status_code == 200
+    rows = resp.json()
+    ids = {p["project_id"] for p in rows}
+    assert member_pid in ids
+    assert audience_pid in ids
+    assert own_pid not in ids
+    assert own_public_pid not in ids
+    assert private_pid not in ids
+    assert all(p["owner_id"] != uid for p in rows)
+
+
+# TEST-WHY: cross-process-contract — a zero-subjects caller (soft-deleted mid-session, auth served from the 60s token-version cache) gets 200 with member rows only, never an audience leak of foreign projects.
+@pytest.mark.asyncio
+async def test_scope_shared_zero_subjects_no_audience_leak(client, regular_user, admin_user, test_db):
+    """The empty-list trap on the shared cut: user_subjects → [] must OMIT the
+    audience clause, so the caller sees only their member row — the foreign
+    private project AND the public-audience one stay invisible (a
+    CONTAINSANY-over-[] degeneration would leak them). The zero-subjects caller
+    reaches HTTP for real only inside auth's 60s token-version cache window: the
+    first request primes the cache while the user is live, then the row is
+    soft-deleted (fetch_one drops it → a cache-cold request would 401)."""
+    uid, token = regular_user
+    _, admin_token = admin_user
+
+    member_pid = await _create_project(client, admin_token, "Admin member-shared")
+    await _add_member(client, admin_token, member_pid, uid)
+    audience_pid = await _create_project(client, admin_token, "Admin public")
+    await _set_public_audience(test_db, audience_pid)
+    await _create_project(client, admin_token, "Admin private")
+
+    resp = await client.get("/api/projects?scope=shared", cookies={"lore_session": token})
+    assert resp.status_code == 200
+
+    await test_db.query(
+        "UPDATE type::record('users', $id) SET deleted_at = time::now()", {"id": uid},
+    )
+
+    resp = await client.get("/api/projects?scope=shared", cookies={"lore_session": token})
+    assert resp.status_code == 200
+    assert {p["project_id"] for p in resp.json()} == {member_pid}
+
+
+# TEST-WHY: cross-process-contract — the own cut pages strictly over the caller's rows over real HTTP: disjoint limit/offset pages, foreign and shared rows never present, bare-array response.
+@pytest.mark.asyncio
+async def test_scope_own_pages_over_own_projects_only(client, regular_user, admin_user):
+    """scope=own paginates only the caller's projects: page 0 (limit=2) and page 1
+    (offset=2) over 3 own projects are disjoint and together exhaustive, every
+    row is owned by the caller, the foreign project never appears, and the
+    response stays a bare Project[] (no envelope — has_more is derived by the
+    client as page.length === limit)."""
+    uid, token = regular_user
+    _, admin_token = admin_user
+    own = [await _create_project(client, token, f"Own {i}") for i in range(3)]
+    foreign_pid = await _create_project(client, admin_token, "Foreign")
+
+    page0 = await client.get("/api/projects?scope=own&limit=2", cookies={"lore_session": token})
+    assert page0.status_code == 200
+    rows0 = page0.json()
+    assert isinstance(rows0, list)
+    assert len(rows0) == 2
+
+    page1 = await client.get(
+        "/api/projects?scope=own&limit=2&offset=2", cookies={"lore_session": token}
+    )
+    assert page1.status_code == 200
+    rows1 = page1.json()
+    assert len(rows1) == 1
+
+    ids0 = {p["project_id"] for p in rows0}
+    ids1 = {p["project_id"] for p in rows1}
+    assert not ids0 & ids1
+    assert ids0 | ids1 == set(own)
+    assert all(p["owner_id"] == uid for p in rows0 + rows1)
+    assert foreign_pid not in ids0 | ids1

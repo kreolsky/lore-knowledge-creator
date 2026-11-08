@@ -256,21 +256,36 @@ def fake_embedding_provider(monkeypatch, vector_of):
 
 def pin_tool_gates(
     monkeypatch, *, sandbox: bool | None = None, comfy: bool | None = None,
+    outbound_cidrs: str | None = None, driver_secret: str | None = None,
 ) -> None:
-    """Pin the agent tool gates via their config BASE keys.
+    """Pin agent-adjacent config BASE keys in one setattr site (the shape
+    ratchet prices each `monkeypatch.setattr` line, so the pin_* family folds
+    into one loop).
 
     The served-tool gates (SANDBOX/COMFYUI _ENABLED) are config folds
     re-derived from the base keys at call time by agent.tools._gate_on (through
     settings), so a test pins a gate by pinning its bases — the same config.*
-    fallback bucket the other pin_* helpers use.
+    fallback bucket the other pin_* helpers use. `outbound_cidrs` pins
+    OUTBOUND_ALLOW_CIDRS (the egress guard reads it per call — live for a test
+    that must dial a private-address echo server). `driver_secret` pins
+    HARNESS_DRIVER_SECRET so X-Driver-Secret headers can make a request
+    driver-attested (the X-Agent-Verdict marker is only honored on an attested
+    request — agent/context.driver_attested).
     """
     import config
 
+    pins: dict[str, object] = {}
     if sandbox is not None:
-        monkeypatch.setattr(config, "SANDBOX_SSH_HOST", "sandbox-test" if sandbox else "")
-        monkeypatch.setattr(config, "SANDBOX_SSH_KEY_B64", "dGVzdC1rZXk=" if sandbox else "")
+        pins["SANDBOX_SSH_HOST"] = "sandbox-test" if sandbox else ""
+        pins["SANDBOX_SSH_KEY_B64"] = "dGVzdC1rZXk=" if sandbox else ""
     if comfy is not None:
-        monkeypatch.setattr(config, "COMFYUI_URL", "http://comfy-test" if comfy else "")
+        pins["COMFYUI_URL"] = "http://comfy-test" if comfy else ""
+    if outbound_cidrs is not None:
+        pins["OUTBOUND_ALLOW_CIDRS"] = outbound_cidrs
+    if driver_secret is not None:
+        pins["HARNESS_DRIVER_SECRET"] = driver_secret
+    for key, value in pins.items():
+        monkeypatch.setattr(config, key, value)
 
 
 def pin_artifact_origin(

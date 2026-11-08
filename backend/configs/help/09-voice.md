@@ -21,6 +21,15 @@ With the cursor in the document's text, ⌘/Ctrl + D inserts the transcript at t
 
 Voice recorders that can also record system audio (calls). Recordings from an app land as references of the document its key belongs to. The Android APK, when the administrator has published it, is downloadable from `/downloads/` on the Lore site.
 
+Lore Voice for Android:
+
+- holds several keys, one per document, shown as tabs on the recording screen; recording also works without a key, and the files wait on the phone;
+- records the microphone, the system audio, or both at once;
+- uploads through a queue that retries on failure; long uploads continue in the background;
+- keeps a history of recordings: swipe to delete (with undo), play back, open a recording's card;
+- shows the transcript once the server has it;
+- in Settings: the app version and an "Upload journal" with the server's answer to every upload, which can be copied when something fails.
+
 Connecting an app:
 
 1. Open the target document.
