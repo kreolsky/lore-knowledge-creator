@@ -14,15 +14,25 @@ from pycrdt import Doc, Text
 from db import get_db
 
 
-def _drop_session(doc_id: str) -> None:
+async def _drop_session(doc_id: str) -> None:
     """Simulate a server restart: pop the session and stop its tasks — a popped
-    session is invisible to the _clear_sessions teardown, so it would leak."""
+    session is invisible to the _clear_sessions teardown, so it would leak.
+
+    A real restart kills the process, so the backplane subscription dies with
+    it — unsubscribe here too. Without it, set_content's publish on
+    ydoc:{doc_id} echoes back to the popped session's still-registered
+    handler, whose queue_broadcast re-arms a _flush_batch task AFTER the test
+    (the leaked-task trap; a popped session has no flush loop to reap it)."""
     session = _sessions.pop(_session_key("doc", doc_id), None)
     if session is None:
         return
     session.stop_periodic_flush()
     if session._batch_task and not session._batch_task.done():
         session._batch_task.cancel()
+    try:
+        await session.unsubscribe_backplane()
+    except Exception:
+        pass  # WHY: best-effort — a torn-down listener is already gone.
 
 
 async def _db_content(doc_id: str) -> str | None:
@@ -115,7 +125,7 @@ async def test_set_content_persist_prunes_update_log(collab_project, _clear_sess
     await session.flush_to_db()
     assert await _ydoc_updates_count(doc_id) >= 1
 
-    _drop_session(doc_id)
+    await _drop_session(doc_id)
     await set_content(doc_id, "Fresh content", persist=True)
 
     assert await _ydoc_updates_count(doc_id) == 0
@@ -128,7 +138,7 @@ async def test_load_after_set_content_persist_returns_correct_content(collab_pro
     from ydoc_store import load, set_content
 
     await set_content(doc_id, "New content", persist=True)
-    _drop_session(doc_id)
+    await _drop_session(doc_id)
 
     doc = await load(doc_id)
     assert str(doc.get("content", type=Text)) == "New content"

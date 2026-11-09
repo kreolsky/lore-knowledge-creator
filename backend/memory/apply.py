@@ -72,9 +72,9 @@ async def _resolve_apply_inputs(
         # rights. A synthetic writer would be an identity with independent grants.
         # The user id comes off the SAME api_keys read as the scope wall — one
         # round-trip per batch, not one per resolved fact.
-        from api_key_auth import _resolve_user
+        from api_key_auth import resolve_key_principal
 
-        user = await _resolve_user(run.user_id)
+        user = await resolve_key_principal(run.user_id, internal=True)
     _stamp_provenance(verdicts, source)
     dup_errors = await duplicate_fact_errors(verdicts, project_id=project_id)
     stale_errors = await _unresolvable_fact_errors(verdicts, project_id=project_id)

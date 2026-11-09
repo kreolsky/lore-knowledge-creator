@@ -138,8 +138,8 @@ async def tool_generate_image(
 
     # see SYSTEM: capability-tiers — 'ai' gate, defense in depth: the only caller
     # is an ai-gated turn (the completion gate), but the tool itself is a
-    # cost start and carries its own gate. Principal = ctx["user"] (the
-    # role-pinned agent principal — no role inheritance).
+    # cost start and carries its own gate. Principal = ctx["user"]
+    # (resolve_key_principal).
     """
     await require_tier(ctx["user"], "ai")
     await _require_configured()

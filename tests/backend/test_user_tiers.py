@@ -4,7 +4,7 @@ One parametrized test over the gated route table asserting the EXACT
 `tier_required:<tier>` detail (a bare 403 also comes from project access ⇒ a
 bare-403 assertion would be a false green), plus the principal rules: note
 sessions are base, a downgrade bites on the next request, a soft-deleted user
-holds nothing, a key never inherits the admin role, schedule fire re-checks
+holds nothing, only the internal agent key carries its owner's live role, schedule fire re-checks
 the creator, /me + login carry can_voice/can_ai, and the backfill stamps 'ai'.
 """
 
@@ -252,11 +252,15 @@ async def test_soft_deleted_and_missing_user_hold_nothing(test_db):
     assert await user_has_tier("tier-nobody", "user", "base") is False
 
 
+# TEST-WHY: refused-principal — an admin's external key and a demoted admin's internal key are refused the admin role.
 @pytest.mark.asyncio
-async def test_role_is_a_parameter_never_inherited(client, project_with_doc, test_db, admin_user):
-    """An admin's WIDGET KEY is bounded by that admin's stored tier — the key
-    principal passes role='user' (no instance-role inheritance), while the
-    same admin's session sails through on the admin bypass."""
+async def test_only_the_internal_agent_key_carries_the_live_role(client, project_with_doc, test_db, admin_user):
+    """An admin's WIDGET KEY stays bounded by the admin's stored tier (external
+    keys resolve as 'user'), while the admin's INTERNAL agent key carries the
+    live admin role — and loses it on the next call after a demotion."""
+    from agent.keys import create_agent_key_row
+    from api_key_auth import resolve_api_key
+
     pid, doc_id, admin_uid = project_with_doc
     _, admin_token = admin_user
     await test_db.query(
@@ -269,24 +273,18 @@ async def test_role_is_a_parameter_never_inherited(client, project_with_doc, tes
         cookies={"lore_session": admin_token},
     )
     assert resp.status_code == 200, resp.text
-    key = resp.json()["token"]
-    headers = {"Authorization": f"Bearer {key}"}
-
-    # The key's extract (ai) and audio upload (voice) are both refused.
-    resp = await client.post(
-        "/api/widget/extract", files=_audio_files(),
-        data={"session": '{"id": "s1"}'}, headers=headers,
-    )
-    assert resp.status_code == 403 and resp.json()["detail"] == "tier_required:ai", resp.text
+    headers = {"Authorization": f"Bearer {resp.json()['token']}"}
     resp = await client.post("/api/widget/upload", files=_audio_files(), headers=headers)
     assert resp.status_code == 403 and resp.json()["detail"] == "tier_required:voice", resp.text
 
-    # The same admin's SESSION passes the same gates (admin ⇒ always ai).
-    resp = await client.post(
-        "/api/agent-config/run", json={"document_id": doc_id},
-        cookies={"lore_session": admin_token},
+    internal_token, _, _ = await create_agent_key_row(admin_uid, pid)
+    ctx = await resolve_api_key(internal_token, require="agent")
+    assert ctx["user"]["role"] == "admin"
+    await test_db.query(
+        "UPDATE type::record('users', $id) SET role = 'user'", {"id": admin_uid},
     )
-    assert _tier_403(resp) is None, resp.text
+    ctx = await resolve_api_key(internal_token, require="agent")
+    assert ctx["user"]["role"] == "user"
 
 
 @pytest.mark.asyncio

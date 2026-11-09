@@ -593,7 +593,10 @@ async def export_document(document_id: str, format: str = "pdf", checkpoint_id: 
     client = http_clients.get_http_client("docx", timeout=WEB_CONVERTER_TIMEOUT)
     resp = await client.post(
         f"{CONVERTER_URL}/export",
-        data={"markdown": content, "format": format},
+        # WHY: a file part, not a form field — the converter's form parser caps a
+        # field at 1 MB and inlined base64 images exceed it.
+        data={"format": format},
+        files={"markdown": ("document.md", content.encode("utf-8"), "text/markdown")},
         timeout=EXPORT_CONVERTER_TIMEOUT_S,
     )
     if resp.status_code != 200:

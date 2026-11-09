@@ -33,6 +33,7 @@ import time
 from datetime import datetime
 
 import settings
+from api_key_auth import resolve_key_principal
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from files_util import (
     DOCX_MIME,
@@ -105,9 +106,8 @@ async def redeem_mcp_upload(token: str, file: UploadFile = File(...)):
 
     # see SYSTEM: capability-tiers — the audio arm queues STT, so it is
     # 'voice'-gated. Principal = the key owner who minted the token
-    # (claims["user_id"], pinned role "user" — a key never inherits an
-    # instance role, so an admin's key is bounded by that admin's stored
-    # tier). Runs BEFORE the dedup claim so a refused upload leaves no
+    # (claims["user_id"], resolved by resolve_key_principal — role 'user'
+    # unless the internal agent key minted the token). Runs BEFORE the dedup claim so a refused upload leaves no
     # locking sentinel.
     """
     claims = verify_upload_token(token)
@@ -127,7 +127,12 @@ async def _redeem_create_node(
     """The node-creating redeem tail: voice tier gate → dedup claim → store by
     kind → inbox flag → the normalized response carrying the NEW node's id."""
     if kind == "audio":
-        await require_tier({"user_id": claims["user_id"], "role": "user"}, "voice")
+        await require_tier(
+            await resolve_key_principal(
+                claims["user_id"], internal=claims.get("internal") is True,
+            ),
+            "voice",
+        )
 
     dedup_key = _dedup_key(claims)
     if dedup_key:

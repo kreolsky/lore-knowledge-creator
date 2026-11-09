@@ -44,8 +44,11 @@ async def convert(file: UploadFile = File(...)) -> dict:
 
 
 @app.post("/export")
-async def export(markdown: str = Form(...), format: str = Form(...)) -> Response:
+async def export(markdown_file: UploadFile = File(..., alias="markdown"), format: str = Form(...)) -> Response:
     """Export Markdown to PDF or DOCX. Returns binary response."""
+    # WHY: markdown arrives as a FILE part — Starlette caps a non-file form field at
+    # 1 MB (max_part_size), and a document with inlined base64 images exceeds it.
+    markdown = (await markdown_file.read()).decode("utf-8")
     if format == "docx":
         try:
             data = markdown_to_docx(markdown)

@@ -376,7 +376,7 @@ async def _create_binary_reference(
 
     if media_type == "audio":
         # see SYSTEM: capability-tiers — the audio arm queues STT, so it is
-        # 'voice'-gated. Principal = the agent key owner (role-pinned); reached
+        # 'voice'-gated. Principal = the agent key owner (resolve_key_principal); reached
         # by import_file on the Tool-API, which a key may call directly.
         await require_tier(user, "voice")
         max_audio_mb = await settings.get("MAX_AUDIO_SIZE_MB")

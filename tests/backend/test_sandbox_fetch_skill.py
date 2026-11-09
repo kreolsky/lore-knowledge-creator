@@ -58,11 +58,11 @@ async def _seed_skill(test_db, pid, uid, name, children: dict[str, str]) -> str:
     """A project skill head under the Skills folder + the given children
     (title → content), created through the same direct path save_skill uses."""
     from agent_config import ensure_agent_system_docs
-    from api_key_auth import _resolve_user
+    from api_key_auth import resolve_key_principal
     from routes.tool_api._common import _apply_create_document_direct
 
     folder_id = (await ensure_agent_system_docs(pid))["skills_folder"]
-    user = await _resolve_user(uid)
+    user = await resolve_key_principal(uid, internal=True)
     head = await _apply_create_document_direct(
         title=name, parent_id=folder_id, project_id=pid, user=user, scope_root="",
         content=f"---\nname: {name}\ndescription: \"x\"\ntools: []\n---\n\n# {name}\n",

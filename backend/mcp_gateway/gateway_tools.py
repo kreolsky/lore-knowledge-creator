@@ -337,8 +337,7 @@ async def _dispatch_preview_extractor(args: dict, ctx: dict) -> dict:
     from pipeline.extractor.runner import run_extractor_dry
 
     # see SYSTEM: capability-tiers — 'ai' gate: a dry-run is a real model run.
-    # Principal = the key owner (ctx["user"], role-pinned — no role
-    # inheritance), so an admin's key is bounded by that admin's stored tier.
+    # Principal = the key owner (ctx["user"], resolve_key_principal).
     await require_tier(ctx["user"], "ai")
     params_list = await _resolve_extractor_params_list(args, ctx)
     params = _select_extractor_params(params_list, args)

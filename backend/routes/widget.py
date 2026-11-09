@@ -127,7 +127,7 @@ async def _emit_widget_note_created(document_id: str, session_uid: str) -> None:
 async def _require_upload_voice_tier(file: UploadFile, ctx: dict) -> str:
     """Resolve the part's filename and 'voice'-gate it when it names audio
     (see SYSTEM: capability-tiers). Principal = the widget key owner
-    (ctx["user"], the role-pinned principal — they minted and pay for the
+    (ctx["user"], resolve_key_principal — they minted and pay for the
     key); audio-ness is read from the filename extension, so the gate
     precedes every byte read. Returns the original filename."""
     original_name = file.filename or _fallback_name(file.content_type)

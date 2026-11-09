@@ -1,10 +1,10 @@
 """Admin = owner-equivalent inside member projects.
 
 Covers:
-- key principals never inherit the instance role (no-regression on the
-  existing live-membership re-check).
+- an agent key of a demoted/removed member loses write access on its next
+  call (the live-membership re-check).
 - admin elevation in get_project_access / get_document_access, the
-  is_project_root predicate, and the key-no-inheritance guard.
+  is_project_root predicate.
 - the owner surface (members/invites/shares) opens to admin-members via
   require_project_owner.
 - note-chat moderation — admin-member is root.
@@ -117,9 +117,7 @@ async def ao_world(client, test_db):
     }
 
 
-# ─── Step 1: key principals never inherit the instance role ─────────────────
-# No-regression on the EXISTING live-membership re-check (these pass today and
-# must keep passing). The admin-role-inheritance guard lives in step 2.
+# ─── Agent keys follow live membership ──────────────────────────────────────
 
 async def test_agent_key_of_demoted_member_forbidden_on_write(client, test_db, ao_world):
     w = ao_world

@@ -39,11 +39,11 @@ async def user_has_tier(user_id: str, role: str | None, needed: str) -> bool:
     same rule as user_subjects, backend/model_access.py).
 
     `role` is a PARAMETER, never re-read here: a session request passes its
-    session role; a key principal (widget, MCP) passes the "user" that
-    _resolve_user pins (backend/api_key_auth.py — a key never inherits an
-    instance role); the schedule worker passes the creator's DB role. Reading
-    the role inside would hand an admin's key the admin bypass. Consequence:
-    an admin's key is bounded by that admin's stored tier.
+    session role; a key principal passes what resolve_key_principal
+    (backend/api_key_auth.py) resolved — the owner's live role for the
+    internal agent key, 'user' for widget/MCP keys; the
+    schedule worker passes the creator's DB role. The caller owns the role
+    resolution; this function never re-reads it.
     """
     if role == "admin":
         return True

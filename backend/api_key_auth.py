@@ -65,20 +65,21 @@ def mint_token() -> tuple[str, str]:
     return token, token_hash
 
 
-async def _resolve_user(user_id: str) -> dict:
-    """Build the user dict RBAC helpers expect, fetching the display name."""
+async def resolve_key_principal(user_id: str, *, internal: bool) -> dict:
+    """Build the user dict RBAC helpers expect for a key's owner. The internal
+    agent key carries the owner's LIVE instance role; every other key is 'user'."""
     row = await fetch_one("users", user_id)
     name = (row or {}).get("name") or "agent"
-    # INVARIANT(security): a key principal NEVER inherits ANY instance role
-    # (admin today, moderator later).
-    # Why: role elevation is a property of a human session, not a key — an agent
-    # key's rights are its mint-time capabilities (`capabilities`, `auto_apply`)
-    # floored by the owner's LIVE membership (the per-call re-check in
-    # resolve_api_key), the only revocation channel a project owner has over
-    # someone else's key since _require_own_key hides a key from everyone but
-    # its minter. Inheriting the role would make a demotion or removal inert
-    # against every key an admin ever minted.
-    return {"user_id": user_id, "name": name, "role": "user"}
+    # INVARIANT(security): only the INTERNAL agent key carries its owner's live
+    # instance role; external MCP/widget keys and upload tokens resolve as 'user'.
+    # Why: operator rule — "an admin has full access whatever the member level;
+    # what I see is what I have": the agent in an admin's chat gets the admin's UI
+    # rights. External keys are narrowed because they outlive a session and get
+    # copied: a leaked admin key must not bring admin write, the sandbox or a tier
+    # bypass with it. Reading the role live keeps a demotion effective on the
+    # internal key's next call.
+    role = (row or {}).get("role") if internal else None
+    return {"user_id": user_id, "name": name, "role": role or "user"}
 
 
 async def resolve_api_key(
@@ -142,7 +143,7 @@ async def resolve_api_key(
     # scope_root = document_id (empty = whole project for agent keys).
     scope_root = key.get("document_id") or ""
 
-    user = await _resolve_user(key["user_id"])
+    user = await resolve_key_principal(key["user_id"], internal=key.get("internal") is True)
 
     # Per-surface liveness — keyed on `require` ONLY (never the other
     # capability), so a combined key survives on one surface when the other
