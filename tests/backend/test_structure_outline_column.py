@@ -96,14 +96,17 @@ async def test_scoped_key_enumeration_stays_inside_the_wall(
     _, token = admin_user
     outside = await _make_doc(client, token, pid, "Outside", None, content=HEADED_CONTENT)
     await refresh_outline(outside)
+    # The wall root is an ORDINARY doc under the index — the fixture index is
+    # the project's face now (its scope is the whole project), so it cannot
+    # play "narrow root" here.
     inside = await _make_index_child_doc(test_db, pid, idx_id, "Inside", HEADED_CONTENT)
     await refresh_outline(inside)
-    scoped = await _make_agent_key(test_db, admin_uid, pid, scope_root=idx_id)
+    scoped = await _make_agent_key(test_db, admin_uid, pid, scope_root=inside)
 
     out = await _outline_row_ids(
         client, scoped, {"start_id": outside, "include_outline": True},
     )
     ids = {d["document_id"] for d in out["documents"]}
     assert outside not in ids, "the wall cannot be widened by request"
-    assert ids == {idx_id, inside}
+    assert ids == {inside}
     assert _row(out, inside)["outline"]

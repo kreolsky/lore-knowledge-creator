@@ -62,7 +62,7 @@ export interface TurnToolCtx {
   regionTools: Set<string>
   region: Record<string, unknown> | null
   /** The turn model's vision bit (caps.ts, off the gateway roster) — the
-   * `view_chat_image` gate. Same resolution the catalog upsert declares from,
+   * gate of every image-result tool (the payload's `image_result_tools`). Same resolution the catalog upsert declares from,
    * so the tool gate and the entry never disagree. */
   vision: boolean
 }
@@ -114,20 +114,21 @@ const CONFIRMATION_REQUIRED = 'confirmation_required'
 export const READ_TOOL_TIMEOUT_MS = 120_000
 
 /**
- * The ONE proxy whose result is not a plain string: `view_chat_image` serves
- * image bytes. Its envelope (`{image: {media_type, data}, chat_id,
- * message_id, index, chat_title}`) is parsed here, the bytes go through the
- * durable attachment store (the same seam a turn's own prompt images take),
- * and what dsh logs and renders carries the attachment REFERENCE — never the
- * base64 (the read_image pattern: the settled value stays small, the image
- * rides an image block). Every other proxy keeps `{type:'string'}` output.
+ * The image-result proxies — exactly the payload's `image_result_tools` (the
+ * backend registry's `image_result` declaration; this module re-declares no
+ * name) — are the only ones whose result is not a plain string. Their envelope
+ * (`{image: {media_type, data}, ...meta}`) is parsed here, the bytes go
+ * through the durable attachment store (the same seam a turn's own prompt
+ * images take), and what dsh logs and renders carries the attachment
+ * REFERENCE — never the base64 (the read_image pattern: the settled value
+ * stays small, the image rides an image block). Every other proxy keeps
+ * `{type:'string'}` output.
  */
-const VIEW_CHAT_IMAGE = 'view_chat_image'
 
-/** The settled `view_chat_image` value: the JSON meta the model (and the
+/** The settled image-result value: the JSON meta the model (and the
  * person's thumbnail, from the same one contract) read, plus the durable
  * attachment reference. */
-export interface ViewChatImageValue {
+export interface ImageResultValue {
   meta: Record<string, unknown>
   image: ImageAttachmentRef
 }
@@ -135,7 +136,7 @@ export interface ViewChatImageValue {
 /** The output contract for the two shapes execute can settle on: the meta +
  * attachment reference on success, or the envelope's own text (errors,
  * `unavailable`, a non-vision model) — which render turns into one text block. */
-const VIEW_CHAT_IMAGE_OUTPUT_SCHEMA = {
+const IMAGE_RESULT_OUTPUT_SCHEMA = {
   oneOf: [
     { type: 'string' },
     {
@@ -154,9 +155,9 @@ const VIEW_CHAT_IMAGE_OUTPUT_SCHEMA = {
  * reads it; the person's plate parses the same object for the thumbnail) plus
  * the image block itself. Text results — errors, `unavailable`, a non-vision
  * model — render as themselves, never swallowed. */
-function renderViewChatImage(value: unknown): ContentBlock[] {
+function renderImageResult(value: unknown): ContentBlock[] {
   if (typeof value === 'string') return [{ type: 'text', text: value }]
-  const { meta, image } = value as ViewChatImageValue
+  const { meta, image } = value as ImageResultValue
   return [
     { type: 'text', text: JSON.stringify(meta) },
     { type: 'image', attachment: image },
@@ -169,26 +170,26 @@ function renderViewChatImage(value: unknown): ContentBlock[] {
  * admission refusals (sniff, media type, limits) surface as text with their
  * stable code; a malformed envelope answers text too, so no arm can return
  * base64 inside a string the session log keeps. */
-async function materializeViewChatImage(
-  ctx: Context, exec: any, raw: string,
-): Promise<string | ViewChatImageValue> {
+async function materializeImageResult(
+  ctx: Context, exec: any, raw: string, name: string,
+): Promise<string | ImageResultValue> {
   const envelope = parseEnvelope(raw)
   const image = envelope?.image
   if (!envelope || typeof image !== 'object' || image === null) return raw
   const dshId = String(exec?.agent?.session?.id ?? '')
   if (!loreTurnCtxFor(dshId)?.vision) {
-    return 'view_chat_image: the current model does not accept images'
+    return `${name}: the current model does not accept images`
   }
   const store = ctx.get('attachments')
   if (!store) {
-    return 'view_chat_image: the durable attachment service is not composed'
+    return `${name}: the durable attachment service is not composed`
   }
   const { media_type: mediaType, data } = image as {
     media_type?: unknown
     data?: unknown
   }
   if (typeof mediaType !== 'string' || typeof data !== 'string') {
-    return 'view_chat_image: malformed image envelope'
+    return `${name}: malformed image envelope`
   }
   try {
     const ref = await store.saveImage({
@@ -197,11 +198,11 @@ async function materializeViewChatImage(
       data: Buffer.from(data, 'base64'),
       mediaType: mediaType as ImageMediaType,
     })
+    // Meta = every envelope member except the bytes, then the STORED ref's
+    // type and (possibly normalized) dimensions.
+    const { image: _bytes, ...rest } = envelope
     const meta: Record<string, unknown> = {
-      chat_id: envelope.chat_id,
-      message_id: envelope.message_id,
-      index: envelope.index,
-      chat_title: envelope.chat_title,
+      ...rest,
       media_type: ref.mediaType,
       width: ref.width,
       height: ref.height,
@@ -209,7 +210,7 @@ async function materializeViewChatImage(
     return { meta, image: ref }
   } catch (err) {
     const code = (err as { code?: unknown } | null)?.code
-    return `view_chat_image: ${typeof code === 'string' ? code : String(err)}`
+    return `${name}: ${typeof code === 'string' ? code : String(err)}`
   }
 }
 
@@ -274,26 +275,26 @@ const registered = new Map<string, () => void>()
  */
 export function registerLoreTools(
   ctx: Context, tools: unknown[], includeMutating: boolean,
-  mutating: Set<string>,
+  mutating: Set<string>, imageResult: Set<string> = new Set(),
 ): void {
   for (const entry of Array.isArray(tools) ? tools : []) {
     const fn = (entry as any)?.function
     const name = typeof fn?.name === 'string' ? fn.name : ''
     if (!name || registered.has(name)) continue
     if (!includeMutating && mutating.has(name)) continue
-    // view_chat_image is the one image-result proxy (see VIEW_CHAT_IMAGE);
-    // every other tool's result stays a string, byte-identical.
-    const isViewChatImage = name === VIEW_CHAT_IMAGE
+    // Image-result proxies are chosen by the payload set (see the module
+    // block above); every other tool's result stays a string, byte-identical.
+    const isImageResult = imageResult.has(name)
     const dispose = ctx.tools.register({
       name,
       description: String(fn?.description ?? ''),
       parameters: (fn?.parameters ?? { type: 'object', properties: {} }) as Record<string, unknown>,
       output: {
-        schema: isViewChatImage
-          ? VIEW_CHAT_IMAGE_OUTPUT_SCHEMA
+        schema: isImageResult
+          ? IMAGE_RESULT_OUTPUT_SCHEMA
           : { type: 'string' },
-        render: isViewChatImage
-          ? (_args: unknown, value: unknown) => renderViewChatImage(value)
+        render: isImageResult
+          ? (_args: unknown, value: unknown) => renderImageResult(value)
           : (_args: unknown, value: unknown) => [
               { type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) },
             ],
@@ -302,10 +303,10 @@ export function registerLoreTools(
       // approval ask must outlive 600 s). Read-only proxies declare the hang
       // bound timeout-policy arms.
       ...(mutating.has(name) ? {} : { timeoutMs: READ_TOOL_TIMEOUT_MS }),
-      async execute(args: unknown, exec: any): Promise<string | ViewChatImageValue> {
+      async execute(args: unknown, exec: any): Promise<string | ImageResultValue> {
         const raw = await proxyExecute(name, args as Record<string, unknown>, exec)
-        return isViewChatImage
-          ? await materializeViewChatImage(ctx, exec, raw)
+        return isImageResult
+          ? await materializeImageResult(ctx, exec, raw, name)
           : raw
       },
     })

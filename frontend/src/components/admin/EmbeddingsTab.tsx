@@ -205,19 +205,19 @@ export function EmbeddingsTab() {
       {/* One grid = ONE shared button column (equal widths, styling.md lesson);
           the hint spans take the rest of the row. */}
       <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-3">
-        <Button variant="primary" size="lg" onClick={handleEmbedMissing} disabled={status.running || missing === 0}>
+        <Button variant="primary" onClick={handleEmbedMissing} disabled={status.running || missing === 0}>
           {status.running ? t('embeddingRunning') : t('embedNow')}
         </Button>
         <span className="text-xs text-text-dim">{t('embedNowHint')}</span>
 
-        <Button size="lg" onClick={handleIndexChats} disabled={chatWork === 0}>
+        <Button onClick={handleIndexChats} disabled={chatWork === 0}>
           {t('indexChatsNow')}
         </Button>
         <span className="text-xs text-text-dim">{t('indexChatsNowHint')}</span>
 
         {!confirmRebuild ? (
           <>
-            <Button variant="danger" size="lg" onClick={() => setConfirmRebuild(true)} disabled={status.running}>
+            <Button variant="danger" onClick={() => setConfirmRebuild(true)} disabled={status.running}>
               {t('rebuildIndex')}
             </Button>
             <span className="text-xs text-text-dim">{t('rebuildIndexHint')}</span>
@@ -234,13 +234,12 @@ export function EmbeddingsTab() {
             <div className="flex gap-2">
               <Button
                 variant="danger"
-                size="sm"
                 onClick={handleRebuild}
                 disabled={confirmInput !== t('rebuildConfirmWord')}
               >
                 {t('confirm')}
               </Button>
-              <Button size="sm" onClick={cancelRebuild}>
+              <Button onClick={cancelRebuild}>
                 {t('cancel')}
               </Button>
             </div>

@@ -226,7 +226,6 @@ function ProjectCard({
           />
           <Button
             variant="primary"
-            size="lg"
             disabled={deleteConfirmValue !== project.name}
             onClick={() => commitDelete()}
           >
@@ -234,7 +233,6 @@ function ProjectCard({
           </Button>
           <Button
             variant="ghost"
-            size="lg"
             onClick={() => { setDeleting(false); setDeleteConfirmValue(''); }}
           >
             {t('cancel')}

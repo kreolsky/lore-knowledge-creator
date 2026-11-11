@@ -33,7 +33,7 @@
 
 import type { EditorView } from '@codemirror/view';
 import type { EntityYjsState } from '../collab/yjs-provider';
-import { serializeTables } from '../components/editor/live-preview/table-block-model';
+import { serializeTables } from '../components/editor/live-preview/table-serialize';
 import { viewEntity } from '../components/editor/live-preview/table-doc-source';
 import { getEntityHandle } from '../collab/active-handle-registry';
 import { selectionFeedPlugin } from './editor-observer';
@@ -82,6 +82,9 @@ let focusedView: EditorView | null = null;
 // they follow the caret into a cell.
 let rootView: EditorView | null = null;
 
+type RootViewListener = (view: EditorView | null) => void;
+const rootViewListeners = new Set<RootViewListener>();
+
 function setFocusedView(view: EditorView | null, previous?: EditorView): void {
   // INVARIANT: only clear if previous matches current — prevents a snapshot
   // unmount from nulling the main editor's view. Why: an unmount clears with its
@@ -104,7 +107,9 @@ function setRootView(view: EditorView | null, previous?: EditorView): void {
   // Same previous-match guard as setFocusedView: a secondary column's unmount must not
   // null the primary editor's root view.
   if (view === null && previous !== undefined && previous !== rootView) return;
+  if (rootView === view) return;
   rootView = view;
+  rootViewListeners.forEach((l) => l(view));
 }
 
 /** Return the focused EditorView (host or cell), or null if unmounted. */
@@ -117,6 +122,15 @@ export function getRootEditorView(): EditorView | null {
   return rootView;
 }
 
+/** Subscribe to root-slot view changes (host mount/replace/unmount — a nested cell
+ *  view never touches the root slot). Lets the Find panel re-bind to the CURRENT
+ *  host view (document-switch remount, snapshot-preview enter/exit — see Editor's
+ *  registry-ownership notes) instead of holding a listener on a destroyed view. */
+export function subscribeRootView(fn: RootViewListener): () => void {
+  rootViewListeners.add(fn);
+  return () => { rootViewListeners.delete(fn); };
+}
+
 /** The root (host) view's text, or `fallback` when no editor is mounted. */
 function getContent(fallback = ''): string {
   // INVARIANT: content capture reads the ROOT (host) view, not the focused one. Why:
@@ -127,6 +141,12 @@ function getContent(fallback = ''): string {
 /** Focused-view getter for React components (toolbar, selection, scroll). Stable identity. */
 export function useEditorView(): () => EditorView | null {
   return getEditorView;
+}
+
+/** Root (host) view getter for React components (the Find panel — it targets the
+ *  document, never the focused cell). Stable identity. */
+export function useRootEditorView(): () => EditorView | null {
+  return getRootEditorView;
 }
 
 /** Content-capture getter for React components (Cmd+S, create-snapshot). Stable identity. */

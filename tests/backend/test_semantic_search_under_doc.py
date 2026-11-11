@@ -140,3 +140,48 @@ async def test_scoped_key_out_of_scope_root_403(client, narrow_corpus, test_db):
     detail = resp.json()["detail"]
     assert "outside" in detail.lower()
     assert "get_project_structure" in detail
+
+
+# TEST-WHY: refused-principal — a Bearer key rooted at the project INDEX is served a top-level doc's hits and 403-refused on the system root: its /semantic-search ceiling is the index scope, not the doc-bound index row.
+async def test_index_scoped_key_ceiling_is_the_index_scope(client, narrow_corpus, test_db):
+    """The step-1 audit correction, pinned: the widget surface is NOT doc-bound —
+    routes/search.py applies a Bearer key's scope_root as the /semantic-search
+    ceiling via resolve_search_subtree, so a key on the project's index went
+    from "index doc chunks only" to the whole project minus system/help when
+    the index rule landed (plan "project-index-as-project-face", Decisions:
+    search inherits)."""
+    from db import create_record, fetch_one
+
+    corpus = narrow_corpus
+    project = await fetch_one("projects", corpus["pid"])
+    idx = (project or {}).get("index_doc_id")
+    assert idx, "fixture project carries index_doc_id"
+    # The system root (raw row — the skeleton is not REST-creatable).
+    sys_root = f"sys-system_root-{corpus['pid']}"
+    await test_db.query("DELETE type::record('documents', $id)", {"id": sys_root})
+    await create_record("documents", sys_root, {
+        "project_id": corpus["pid"], "parent_id": None, "title": "System",
+        "content": "", "path": f".lore/system/{sys_root}", "is_system": True,
+    })
+    token = await _make_widget_key(test_db, corpus["uid"], corpus["pid"], idx)
+
+    # A TOP-LEVEL doc — outside the index row's literal subtree, inside the
+    # index scope: served (200) with its own hits, the narrow still narrowing.
+    resp = await client.get(
+        f"/api/projects/{corpus['pid']}/semantic-search"
+        f"?q={TOKEN}&under_document_id={corpus['host_out']}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    hits = _hits(resp.json())
+    assert corpus["host_out"] in hits
+    assert corpus["host_in"] not in hits
+
+    # The system root is OUTSIDE the index scope: 403 naming the remedy.
+    resp = await client.get(
+        f"/api/projects/{corpus['pid']}/semantic-search"
+        f"?q={TOKEN}&under_document_id={sys_root}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 403
+    assert "get_project_structure" in resp.json()["detail"]

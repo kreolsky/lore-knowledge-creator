@@ -16,7 +16,7 @@
 import { EditorState, Prec, type Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import * as Y from 'yjs';
-import { applyTablesJson } from './live-preview/table-block-model';
+import { applyTablesJson } from './live-preview/table-serialize';
 import { tableDocSource } from './live-preview/table-doc-source';
 
 /**

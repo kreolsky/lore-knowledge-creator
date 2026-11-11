@@ -27,9 +27,12 @@ import { uploadReferenceFile } from '../../api/reference-upload';
 import type { Document, Reference } from '../../types';
 import { entityYdoc, getViewEntity } from '../../editor/active-editor';
 import { dropEmbedForView, dropImageRow, dropInsertSpec, editorDropPoint, spliceAt } from './drop-target';
-import { createTable, tableAnchor, normalizeTableLabel } from '../editor/live-preview/table-block-model';
+import { createTable } from '../editor/live-preview/table-block-model';
+import { fitColumnWidths } from '../editor/live-preview/table-widths';
+import { tableAnchor, normalizeTableLabel } from '../editor/live-preview/table-document-ops';
+import { documentTextWidth } from '../editor/live-preview/document-width';
 import { importGfmTables } from '../editor/live-preview/gfm-table-import';
-import { sniffDelimiter, parseCsv, MAX_TABLE_IMPORT_ROWS, MAX_TABLE_IMPORT_COLS, MAX_TABLE_IMPORT_CELLS } from '../editor/live-preview/csv-table';
+import { readCsvForImport, MAX_TABLE_IMPORT_ROWS, MAX_TABLE_IMPORT_COLS, MAX_TABLE_IMPORT_CELLS } from '../editor/live-preview/csv-table';
 import { createTempRef, isImageFile, isTableFile, MAX_IMAGE_SIZE_MB, MAX_MARKDOWN_SIZE_MB } from '../references/ref-utils';
 
 export interface DropGuard {
@@ -87,21 +90,18 @@ export function useEditorFileDrop({
       return;
     }
     try {
-      const text = await file.text();
-      const lower = file.name.toLowerCase();
-      const delimiter = lower.endsWith('.tsv') ? '\t' : sniffDelimiter(text, ',');
-      const matrix = parseCsv(text, delimiter);
-      const rows = matrix.length;
-      const cols = matrix.reduce((m, r) => Math.max(m, r.length), 0);
-      if (rows === 0 || rows > MAX_TABLE_IMPORT_ROWS || cols > MAX_TABLE_IMPORT_COLS || rows * cols > MAX_TABLE_IMPORT_CELLS) {
+      const read = await readCsvForImport(file);
+      if ('refusal' in read) {
         useAppStore.getState().showToast(
           t('csvTooLarge', { rows: String(MAX_TABLE_IMPORT_ROWS), cols: String(MAX_TABLE_IMPORT_COLS), cells: String(MAX_TABLE_IMPORT_CELLS) }),
           'error',
         );
         return;
       }
+      const { matrix } = read;
       const label = normalizeTableLabel(file.name.replace(/\.(csv|tsv)$/i, ''));
-      const id = createTable(ydoc, matrix);
+      const fitWidth = documentTextWidth(view);
+      const id = fitWidth ? createTable(ydoc, matrix, fitWidth, fitColumnWidths) : createTable(ydoc, matrix);
       const anchor = tableAnchor(label, id);
       spliceAt(view, dropInsertSpec(view.state.doc, pos, anchor, 'block'));
     } catch (err) {
@@ -118,20 +118,25 @@ export function useEditorFileDrop({
   // ARCH (split view): same identity rule as the table path — the host is the
   // drop view's entity, never the focused slot's item (a table cell is
   // registered to its host's entity at mount). A drop onto an open REFERENCE
-  // (split column or center) is refused with a toast: a reference cannot host
-  // references.
+  // (split column or center) uploads under THAT reference's host document — a
+  // reference cannot host references — and the embed lands in the reference's
+  // text, exactly like a transcluded card dragged in. An unhosted reference has
+  // no document to parent the upload: refused with a toast.
   const handleImageDrop = useCallback(async (files: File[], view: EditorView, pos: number) => {
     const store = useAppStore.getState();
     // Resolve the drop view's item: the registered entity is a document_id or a
     // reference_id; an unregistered view falls back to the slot item (the same
     // fallback scope as the table path).
     const entityId = getViewEntity(view);
-    const host: Document | Reference | null = entityId
+    const item: Document | Reference | null = entityId
       ? store.documents.find(d => d.document_id === entityId)
         ?? store.references.find(r => r.reference_id === entityId)
         ?? null
       : activeItemRef.current;
-    if (!host || 'reference_id' in host) {
+    const host: Document | null = item && 'reference_id' in item
+      ? store.documents.find(d => d.document_id === item.document_id) ?? null
+      : item;
+    if (!host) {
       store.showToast(t('dropImageIntoReferenceUnsupported'), 'error');
       return;
     }
@@ -252,7 +257,7 @@ export function useEditorFileDrop({
       form.append('project_id', projectId);
       form.append('document_id', docId);
       const { markdown } = await apiClient.upload('/documents/extract-text', form) as { markdown: string };
-      const { text } = importGfmTables(ydoc, markdown, t('tableBlockUntitled'));
+      const { text } = importGfmTables(ydoc, markdown, t('tableBlockUntitled'), documentTextWidth(view));
       spliceAt(view, dropInsertSpec(view.state.doc, drop.pos, text, 'block'));
       setPendingDrop(null);
     } catch (err) {

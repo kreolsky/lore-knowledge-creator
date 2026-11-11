@@ -17,6 +17,7 @@ import { useDocumentPreview } from '../../hooks/useDocumentPreview';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useReferencePreview } from '../../hooks/useReferencePreview';
 import { usePopupSlot } from '../../hooks/usePopupSlot';
+import { useClickOutside } from '../../hooks/useClickOutside';
 import { useEditorView } from '../../editor/active-editor';
 import { apiClient } from '../../api/client';
 import { Reference } from '../../types';
@@ -163,19 +164,8 @@ export function LinkSuggestionsPopup() {
     targetViewRef.current = detail.editorView ?? null;
   }, [documents]));
 
-  // Click-outside dismissal
-  useEffect(() => {
-    if (!isOpen) return;
-    const onDown = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (popupRef.current && !popupRef.current.contains(target)
-          && (!previewPanelRef.current || !previewPanelRef.current.contains(target))) {
-        setIsOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [isOpen]);
+  const close = useCallback(() => setIsOpen(false), []);
+  useClickOutside([popupRef, previewPanelRef], close, isOpen);
 
   // Floating-popup slot: gating the render below yields to a higher-priority popup.
   // Don't force-close on suppression — that would fire during the one-render acquire lag.

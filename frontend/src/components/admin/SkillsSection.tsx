@@ -80,10 +80,10 @@ function SkillEditor({ initial, disabled, onSave, onCancel }: {
         autoFocus
       />
       <div className="flex gap-2 items-center">
-        <Button variant="primary" size="lg" disabled={disabled || !draft.trim()} onClick={() => onSave(draft)}>
+        <Button variant="primary" disabled={disabled || !draft.trim()} onClick={() => onSave(draft)}>
           {t('save')}
         </Button>
-        <Button size="lg" disabled={disabled} onClick={onCancel}>{t('cancel')}</Button>
+        <Button disabled={disabled} onClick={onCancel}>{t('cancel')}</Button>
       </div>
     </div>
   );
@@ -194,7 +194,7 @@ export function SkillsSection() {
           {msg?.scope === NEW_SKILL && <p className="text-xs mt-1 text-red">{msg.text}</p>}
         </div>
       ) : (
-        <Button variant="primary" size="lg" onClick={() => { setEditing(NEW_SKILL); setMsg(null); }}>
+        <Button variant="primary" onClick={() => { setEditing(NEW_SKILL); setMsg(null); }}>
           {t('skillNew')}
         </Button>
       )}

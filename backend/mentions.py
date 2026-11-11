@@ -8,8 +8,14 @@
 import re
 
 from artifacts import ARTIFACT_MEDIA_TYPE
+from edge_kinds import (
+    KIND_MENTION,
+    KIND_TRANSCLUSION,
+    STORED_EDGE_KINDS,
+)
 from surrealdb import AsyncSurreal
 
+import event_bus
 from db import (
     SAFE_ID_RE,
     get_db,
@@ -19,12 +25,23 @@ from db import (
 from models import is_ref_row
 from transclusion_grammar import SCHEME_TABLE
 
-# The stored edge-kind vocabulary (plan typed-edges). Content-derived kinds live
-# on doc_mentions.kind; field-backed kinds (attachment/note/chat-context) are
-# PROJECTED at read time by edges.py and never stored.
-KIND_MENTION = "mention"
-KIND_TRANSCLUSION = "transclusion"
-STORED_EDGE_KINDS = (KIND_MENTION, KIND_TRANSCLUSION)
+# The stored edge-kind vocabulary (plan typed-edges) lives in edge_kinds — the
+# ONE source the /edges route, the get_links tool schema and these rebuild
+# writers all derive from. Content-derived kinds live on doc_mentions.kind;
+# field-backed kinds (attachment/note/chat-context) and the content-parsed
+# `external` are PROJECTED at read time by edges.py and never stored.
+# Re-exported here for the existing `from mentions import KIND_MENTION` consumers.
+__all__ = [
+    "KIND_MENTION", "KIND_TRANSCLUSION", "STORED_EDGE_KINDS",
+    "extract_doc_mentions", "extract_ref_mentions", "extract_content_edges",
+    "extract_external_links", "content_edge_pairs", "content_external_urls",
+    "finalize_content_edges", "rebuild_doc_mentions", "resolve_first_circle",
+]
+
+# The frontend extLink pattern (frontend/src/components/editor/link-patterns.ts)
+# verbatim: `[{1,2}label]{1,2}(http…)\]?` — wiki-collapsible brackets and the
+# trailing `]` of the wiki-close form are matched, the (label, url) groups kept.
+_EXTERNAL_LINK_RE = re.compile(r"\[{1,2}([^\]]+)\]{1,2}\((http[^)]+)\)\]?")
 
 
 def extract_doc_mentions(content: str) -> list[str]:
@@ -86,10 +103,45 @@ def content_edge_pairs(content: str, *, exclude: str) -> set[tuple[str, str]]:
     """extract_content_edges as the flush/registry pair CACHE seed: the set
     with self-edges removed. Why one helper: the flush detector and the
     session-creation seed must build the SAME set or a reopen+flush rebuilds
-    forever (plan typed-edges)."""
+    forever (plan typed-edges).
+
+    # ARCH: `content` is the GFM read-model form (expand_tables) at EVERY call
+    # site — the flush detector and the registry seed both pass the expanded
+    # text; the anchor form cannot see a table cell's `[x](doc:id)` link.
+    """
     return {
         (tid, kind) for tid, kind in extract_content_edges(content) if tid != exclude
     }
+
+
+def extract_external_links(content: str) -> list[tuple[str, str]]:
+    """(label, url) for every external `[label](http…)` link, deduped by URL in
+    first-seen order — the Links panel's external section renders exactly this.
+
+    # ARCH: `content` is the GFM read-model form (expand_tables of the source's
+    # Y.Doc) — the anchor form cannot see a table cell's `[x](https://…)` link,
+    # the exact defect this extraction exists to close (plan table-links-notes).
+    """
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for m in _EXTERNAL_LINK_RE.finditer(content):
+        if m.group(2) not in seen:
+            seen.add(m.group(2))
+            out.append((m.group(1), m.group(2)))
+    return out
+
+
+def content_external_urls(content: str) -> set[str]:
+    """extract_external_links as the flush/registry URL CACHE seed — the SAME
+    set-from-same-form contract as content_edge_pairs: the session-creation
+    seed and the flush detector must build the SAME URL set or every reopen's
+    first flush emits a false `backlinks_changed` for the source (plan
+    table-links-notes).
+
+    # ARCH: `content` is the GFM read-model form (expand_tables) at EVERY call
+    # site, exactly as content_edge_pairs.
+    """
+    return {url for _label, url in extract_external_links(content)}
 
 
 async def _rebuild_mentions(
@@ -134,6 +186,11 @@ async def rebuild_doc_mentions(
 ) -> list[tuple[str, str]]:
     """Rebuild mention edges for one source row — EXCEPT an html artifact.
 
+    # ARCH: `content` is the GFM read-model form (expand_tables of the source's
+    # Y.Doc) at EVERY call site — the anchor form cannot see a table cell's
+    # `[x](doc:id)` link, and an anchor-form rebuild DELETES the cell edges a
+    # previous expanded-form writer created (plan table-cell-mention-edges).
+
     Returns the rebuilt (target_id, kind) pairs.
 
     # INVARIANT: an html artifact row carries NO mention edges. Why: a page
@@ -157,6 +214,40 @@ async def rebuild_doc_mentions(
             )
             return []
     return await _rebuild_mentions(db, table, "doc_mentions", entity_id, content, exclude_self=True)
+
+
+async def finalize_content_edges(
+    db: AsyncSurreal, source_id: str, content: str, *,
+    project_id: str | None = None, is_reference: bool = False,
+) -> None:
+    """rebuild mention edges + ALWAYS emit backlinks_changed_batch for the
+    source + content_flushed — the ONE no-session finalize tail (plan
+    table-links-notes).
+
+    Folds the three formerly-identical tails (agent finalize_content_mutation,
+    the REST PATCH document fallback, the REST PATCH reference fallback) that
+    each emitted only `if pairs:` — a URL-only edit produces no pair delta, so
+    the Links panel's future server-side `external` read would never refresh
+    on those paths. These paths have no URL cache to diff against (they are
+    rare writes), so the emit is UNCONDITIONAL for `[source, *targets]`; cost
+    if wrong: one extra backlinks_changed frame + one /edges GET per viewer
+    per agent/REST write.
+
+    # ARCH: `content` is the GFM read-model form (the set_content return or the
+    # agent's expand_tables output) at EVERY call site — see rebuild_doc_mentions.
+    """
+    pairs = await rebuild_doc_mentions(db, "documents", source_id, content)
+    await event_bus.emit(
+        "backlinks_changed_batch",
+        document_ids=[source_id, *(tid for tid, _kind in pairs)],
+    )
+    await event_bus.emit(
+        "content_flushed",
+        entity_type="doc",
+        entity_id=source_id,
+        project_id=project_id,
+        **({"is_reference": True} if is_reference else {}),
+    )
 
 
 async def _filter_alive(table: str, ids: list[str]) -> list[str]:

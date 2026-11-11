@@ -18,11 +18,11 @@ from agent import collab_writes, doc_state
 logger = logging.getLogger(__name__)
 
 
-def _resolve_table_col(doc, table_id: str, column: str | None, col_fallback: int | None,
-                       n_rows: int, n_cols: int) -> int:
-    """Resolve a header-name `column` (3A) to a 0-based col index; fall back to the
+def _resolve_table_col(column: str | None, col_fallback: int | None,
+                       headers: list[str]) -> int:
+    """Resolve a header-name `column` to a 0-based col index; fall back to the
     numeric `col` when `column` is None/blank. Header names are matched against
-    rows[0], case- and whitespace-insensitive. Raises HTTPException(404) with the
+    the header row, case- and whitespace-insensitive. Raises HTTPException(404) with the
     available headers when a named column is not found.
 
     # INVARIANT: neither coordinate → HTTPException(400), never TypeError→500.
@@ -32,8 +32,6 @@ def _resolve_table_col(doc, table_id: str, column: str | None, col_fallback: int
     """
     from fastapi import HTTPException
 
-    from table_serialize import read_table_cell
-
     if not column or not column.strip():
         if col_fallback is None:
             raise HTTPException(
@@ -41,10 +39,9 @@ def _resolve_table_col(doc, table_id: str, column: str | None, col_fallback: int
                 detail={"error": "edit_table_cell needs a column name or col index"},
             )
         return col_fallback
-    if n_rows == 0:
-        raise HTTPException(status_code=404, detail={"error": "Table has no header row", "table_id": table_id})
+    if not headers:
+        raise HTTPException(status_code=404, detail={"error": "Table has no header row"})
     want = column.strip().lower()
-    headers = [str(read_table_cell(doc, table_id, 0, i) or "") for i in range(n_cols)]
     for i, h in enumerate(headers):
         if h.strip().lower() == want:
             return i
@@ -52,6 +49,55 @@ def _resolve_table_col(doc, table_id: str, column: str | None, col_fallback: int
         status_code=404,
         detail={"error": "Unknown column", "column": column, "headers": headers},
     )
+
+
+def resolve_cell(doc, table_id: str, row: int, column: str | None,
+                 col_fallback: int | None) -> tuple[str, str, int]:
+    """The agent tool entry's position → id boundary for ONE cell: row index + header
+    name (or col index) → ``(row_id, col_id, col_index)`` against the LIVE order.
+
+    # INVARIANT(persisted): the ONLY place an agent cell position becomes ids; every
+    # write below it is id-addressed. Why: a position goes stale when a peer inserts a
+    # row; resolving once, under the per-doc edit lock, pins the edit to the cell the
+    # agent saw.
+    Raises HTTPException 404 for an unknown table / out-of-bounds cell (detail carries
+    n_rows / n_cols / the target row so the model self-corrects), 400 for no column.
+    """
+    from fastapi import HTTPException
+    from pycrdt import Map
+
+    from table_serialize import ordered_ids, read_table_cell, table_awaits_migration
+
+    tables = doc.get("tables", type=Map)
+    if tables is None or table_id not in tables:
+        raise HTTPException(
+            status_code=404, detail={"error": "Unknown table_id", "table_id": table_id},
+        )
+    if table_awaits_migration(tables[table_id]):
+        raise HTTPException(
+            status_code=409, detail={"error": "Table awaits migration", "table_id": table_id},
+        )
+    row_ids, col_ids = ordered_ids(tables[table_id])
+    n_rows, n_cols = len(row_ids), len(col_ids)
+
+    def _row_texts(rid: str) -> list[str]:
+        return [read_table_cell(doc, table_id, rid, cid) or "" for cid in col_ids]
+
+    headers = _row_texts(row_ids[0]) if n_rows else []
+    col = _resolve_table_col(column, col_fallback, headers)
+    if row < 0 or row >= n_rows or col < 0 or col >= n_cols:
+        target_row = (
+            [{"col": i, "t": t} for i, t in enumerate(_row_texts(row_ids[row]))]
+            if 0 <= row < n_rows else None
+        )
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "Cell out of bounds", "n_rows": n_rows, "n_cols": n_cols,
+                "row": target_row,
+            },
+        )
+    return row_ids[row], col_ids[col], col
 
 
 async def validate_table_cell_edit(
@@ -62,22 +108,21 @@ async def validate_table_cell_edit(
     `apply_edit_table_cell` — the two must never diverge (mirrors `resolve_edit_range`
     being shared by the `edit_document` gate and apply).
 
-    Each edit dict: {table_id, row, col, old_value}. ALL edits are validated before
-    any is applied (all-or-nothing). Returns `current_tables_json` on success.
-    Raises HTTPException:
-      404 — doc missing/deleted/cross-project, OR unknown table_id/row/col
-            (detail carries n_rows/n_cols/the target row so the model self-corrects).
+    Each edit dict: {table_id, row, col|column, old_value}. ALL edits are validated before
+    any is applied (all-or-nothing). Each edit is resolved through `resolve_cell`, and
+    the resolved `row_id` / `col_id` (plus the numeric `col`) are written back onto the
+    edit dict so the apply tail and the proposal record use them. Returns
+    `current_tables_json` on success. Raises HTTPException:
+      404 — doc missing/deleted/cross-project, OR unknown table_id/row/col.
       403 — access below "full".
       409 — old_value stale (detail carries current_value).
 
     # WHY: coordinate resolution (not substring) — an empty `old_value`
     # Why: str_replace can't target an empty cell (""); coordinates resolve it correctly.
-    # ("" for an empty cell) resolves correctly, unlike a str_replace scan.
     """
     from fastapi import HTTPException
-    from pycrdt import Map
 
-    # M7: shared fetch+RBAC gate. scope_root=None → the subtree wall no-ops (this is the
+    # Shared fetch+RBAC gate. scope_root=None → the subtree wall no-ops (this is the
     # confirm-time validate; the scope wall was already applied at the route). 404 on
     # missing/cross-project, 403 unless per-doc access is full.
     from scope import gate_mutation_target
@@ -95,39 +140,14 @@ async def validate_table_cell_edit(
 
     session = get_active_session("doc", document_id)
     doc = session.ydoc if session is not None else await load_ydoc(document_id)
-    tables = doc.get("tables", type=Map)
 
     for e in edits:
-        table_id, row, old_value = e["table_id"], e["row"], e["old_value"]
-        if tables is None or table_id not in tables:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": "Unknown table_id", "table_id": table_id},
-            )
-        rows_root = tables[table_id].get("rows")
-        n_rows = len(rows_root) if rows_root is not None else 0
-        n_cols = len(rows_root[0]) if n_rows else 0
-        # 3A (ergonomics): resolve a header-NAME `column` to a numeric col index
-        # (rows[0] is the header). `column` wins over the numeric `col` fallback.
-        # The resolved index is written back onto the edit dict so the apply tail
-        # (route_tables_mutation) and the proposal record use it too.
-        col = _resolve_table_col(doc, table_id, e.get("column"), e.get("col"), n_rows, n_cols)
-        e["col"] = col
-        if row < 0 or row >= n_rows or col < 0 or col >= n_cols:
-            target_row = (
-                [{"col": i, "t": str(rows_root[row][i]["t"])} for i in range(len(rows_root[row]))]
-                if rows_root is not None and 0 <= row < n_rows
-                else None
-            )
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "error": "Cell out of bounds", "n_rows": n_rows, "n_cols": n_cols,
-                    "row": target_row,
-                },
-            )
-        current_value = read_table_cell(doc, table_id, row, col)
-        if current_value != old_value:
+        row_id, col_id, col = resolve_cell(
+            doc, e["table_id"], e["row"], e.get("column"), e.get("col"),
+        )
+        e["row_id"], e["col_id"], e["col"] = row_id, col_id, col
+        current_value = read_table_cell(doc, e["table_id"], row_id, col_id)
+        if current_value != e["old_value"]:
             raise HTTPException(
                 status_code=409,
                 detail={"error": "stale", "current_value": current_value},
@@ -136,7 +156,8 @@ async def validate_table_cell_edit(
 
 
 async def route_tables_mutation(
-    *, doc_id: str, table_id: str, row: int, col: int, new_value: str, project_id: str | None,
+    *, doc_id: str, table_id: str, row_id: str, col_id: str, new_value: str,
+    project_id: str | None,
 ) -> None:
     """Single convergence path for agent table-cell mutations (mirrors
     `route_document_content` for the `content` Text — this is the `tables`-subtree
@@ -158,7 +179,7 @@ async def route_tables_mutation(
     doc = session.ydoc if session is not None else await load_ydoc(doc_id)
 
     def _mutate(d):
-        set_table_cell(d, table_id, row, col, new_value)
+        set_table_cell(d, table_id, row_id, col_id, new_value)
 
     await _tables_convergence_tail(
         doc_id=doc_id, doc=doc, session=session, mutate=_mutate,
@@ -173,8 +194,7 @@ async def apply_edit_table_cell(
     user: dict,
     scope_root: str | None = None,
 ) -> dict:
-    """Apply one or more table-cell edits atomically (batch-ready internally —
-    plan decision 7). Each edit dict: {document_id, table_id, row, col, old_value,
+    """Apply one or more table-cell edits atomically (batch-ready internally). Each edit dict: {document_id, table_id, row, col, old_value,
     new_value}. Validates + stale-checks ALL edits first, then applies them in ONE
     checkpoint + ONE transaction (all-or-nothing). The single-cell `edit_table_cell`
     tool wraps a list of one.
@@ -194,7 +214,7 @@ async def apply_edit_table_cell(
     if any(e["document_id"] != doc_id for e in edits):
         raise HTTPException(status_code=400, detail="Batch edits must target one document")
 
-    # M7: shared fetch+RBAC+scope gate BEFORE acquiring the per-doc lock (mirrors
+    # Shared fetch+RBAC+scope gate BEFORE acquiring the per-doc lock (mirrors
     # apply_edit_to_document). Rejecting an invalid / unauthorized / cross-project
     # doc_id here keeps the Redis keyspace free of garbage lock keys for targets
     # that would never apply. validate_table_cell_edit (inside the lock, below)
@@ -231,8 +251,8 @@ async def apply_edit_table_cell(
         )
         for e in edits:
             await route_tables_mutation(
-                doc_id=doc_id, table_id=e["table_id"], row=e["row"], col=e["col"],
-                new_value=e["new_value"], project_id=project_id,
+                doc_id=doc_id, table_id=e["table_id"], row_id=e["row_id"],
+                col_id=e["col_id"], new_value=e["new_value"], project_id=project_id,
             )
     await collab_writes.broadcast_agent_presence(doc_id, user.get("user_id"))
     last = edits[-1]
@@ -304,6 +324,16 @@ def _dims_from_tables_json(tables_json: str, table_id: str) -> tuple[int, int]:
             detail={"error": "Table has no columns", "table_id": table_id, "n_rows": len(rows)},
         )
     return len(rows), n_cols
+
+
+def _live_ids(doc, table_id: str) -> tuple[list[str], list[str]]:
+    """``(row_ids, col_ids)`` of a table in the live display order (the order the
+    ``tables_json`` snapshot the dims came from was projected in)."""
+    from pycrdt import Map
+
+    from table_serialize import ordered_ids
+
+    return ordered_ids(doc.get("tables", type=Map)[table_id])
 
 
 def reject_table_overflow(rows_matrix: list[list[str]]) -> None:
@@ -461,10 +491,13 @@ async def apply_add_table_rows(
                     },
                 )
 
+        _row_ids, col_ids = _live_ids(doc, table_id)
+        rows_by_id = [dict(zip(col_ids, (str(c) for c in row))) for row in rows_matrix]
+
         def _mutate(d):
             from table_serialize import add_table_rows
 
-            add_table_rows(d, table_id, rows_matrix, width=n_cols)
+            add_table_rows(d, table_id, rows_by_id)
 
         return table_id, f"{table_id} +{len(rows_matrix)} rows", _mutate
 
@@ -500,7 +533,7 @@ async def apply_add_table_column(
         reject_table_overflow([values])
 
     def _inside_lock(doc, content, tables_json):
-        n_rows, n_cols = _dims_from_tables_json(tables_json, table_id)
+        _n_rows, n_cols = _dims_from_tables_json(tables_json, table_id)
         resolved_index = n_cols if at_index is None else at_index
         if resolved_index < 0 or resolved_index > n_cols:
             raise HTTPException(
@@ -510,12 +543,19 @@ async def apply_add_table_column(
                 },
             )
 
+        # Position → ids at the tool boundary: the gap at `resolved_index` becomes its
+        # two neighbour column ids; `header` / `values` (0-based over DATA rows) become
+        # texts keyed by row id in the live row order.
+        row_ids, col_ids = _live_ids(doc, table_id)
+        before_id = col_ids[resolved_index - 1] if resolved_index > 0 else None
+        after_id = col_ids[resolved_index] if resolved_index < len(col_ids) else None
+        cell_values = [header or ""] + list(values or [])
+        texts = dict(zip(row_ids, cell_values))
+
         def _mutate(d):
             from table_serialize import add_table_column
 
-            add_table_column(
-                d, table_id, at_index=resolved_index, header=header, values=values, n_rows=n_rows,
-            )
+            add_table_column(d, table_id, before_id=before_id, after_id=after_id, texts=texts)
 
         return table_id, f"{table_id} +1 col @ {resolved_index}", _mutate
 

@@ -109,9 +109,12 @@ async def test_readonly_member_cannot_create_note_commentator_can(
 async def test_allow_comments_defaults_off_and_only_the_owner_toggles_it(
     client, admin_user, regular_user, project_with_doc,
 ):
-    pid, doc_id, _ = project_with_doc
+    pid, _, _ = project_with_doc
     _, admin_token = admin_user
     uid, token = regular_user
+    # An ORDINARY doc — the fixture index is the project's face now and is
+    # unpublishable, so it cannot play "publishable doc" here.
+    doc_id = await _make_doc(client, admin_token, pid, "Shareable")
     share_id = await _share(client, admin_token, pid, doc_id, allow_comments=False)
 
     listed = await client.get(
@@ -165,6 +168,39 @@ async def test_anon_note_on_child_of_subtree_share_anchors_to_the_fragment(
     _, admin_token = admin_user
     root = await _make_doc(client, admin_token, pid, "Root", "корень 😀")
     child = await _make_doc(client, admin_token, pid, "Child", CONTENT, parent_id=root)
+    # A CELL-anchored note (its relpos bound inside a table cell's Y.Text, the
+    # shape step 2 of plan table-links-notes creates on the member surface).
+    # Seeded BEFORE the first public read: _resolve_doc_ids TTL-caches the
+    # subtree's doc set, so a doc created after a read is invisible to the
+    # share until the TTL lapses.
+    import base64
+    import json
+
+    from helpers import cell_text
+    from pycrdt import Assoc, StickyIndex
+
+    from ydoc_store import load, set_content
+
+    tab_child = await _make_doc(client, admin_token, pid, "Tab child", parent_id=root)
+    await set_content(
+        tab_child, "Intro\n\n![t](table:t1)", persist=True,
+        tables_json=json.dumps({
+            "t1": {"columns": [160, 160], "rows": [["Hdr", "Val"], ["see", "cell body"]]},
+        }),
+    )
+    cell = cell_text(await load(tab_child), "t1", 1, 1)
+    wire = lambda pos: base64.b64encode(pos).decode()  # noqa: E731
+    created = await client.post(
+        "/api/chat/sessions",
+        json={
+            "project_id": pid, "document_id": tab_child, "is_note": True,
+            "anchor_rel_start": wire(StickyIndex.new(cell, 0, Assoc.AFTER).encode()),
+            "anchor_rel_end": wire(StickyIndex.new(cell, 1, Assoc.BEFORE).encode()),
+        },
+        cookies={"lore_session": admin_token},
+    )
+    assert created.status_code == 201, created.text
+    cell_sid = created.json()["session_id"]
     await _share(client, admin_token, pid, root, scope="subtree")
 
     resp = await _anon_create(client, child)
@@ -195,6 +231,16 @@ async def test_anon_note_on_child_of_subtree_share_anchors_to_the_fragment(
     client.cookies.clear()
     stranger = await client.get(f"/api/public/documents/{child}/notes")
     assert stranger.json()["notes"][0]["is_mine"] is False
+
+    # The cell-anchored note is listed ANCHORLESS on the public share — never
+    # host offsets: the public page decodes against the host `content` text,
+    # and pycrdt natively answers the item's OWN-type offsets, which the page
+    # would paint on host text.
+    tab_listed = await client.get(f"/api/public/documents/{tab_child}/notes")
+    assert tab_listed.status_code == 200, tab_listed.text
+    cell_note = next(n for n in tab_listed.json()["notes"] if n["session_id"] == cell_sid)
+    assert cell_note["anchor"] is None, \
+        "a cell note is listed anchorless on the public share — never host offsets"
 
 
 @pytest.mark.asyncio

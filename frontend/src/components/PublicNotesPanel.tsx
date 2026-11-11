@@ -228,14 +228,13 @@ export function PublicNotesPanel() {
   return (
     <div className="flex flex-col h-full relative">
       {isThread ? (
-        <div className="flex items-center justify-between gap-1 px-3 py-2 border-b border-[var(--warm-sep)] bg-[var(--warm-tint)] min-h-[40px]">
-          <Button variant="ghost-note" size="sm" onClick={closeThread}>
+        <div className="flex items-center justify-between gap-1 px-3 py-1 border-b border-[var(--warm-sep)] bg-[var(--warm-tint)] min-h-[40px]">
+          <Button variant="ghost-note" onClick={closeThread}>
             <ArrowLeft size={13} />
             {t('backToAllNotes')}
           </Button>
           {canDeleteNote && (
             <IconButton
-              size="sm"
               danger
               theme="note"
               filled={headerDelete.armed}
@@ -248,8 +247,8 @@ export function PublicNotesPanel() {
           )}
         </div>
       ) : canNote ? (
-        <div className="flex items-center gap-1 px-3 py-2 border-b border-border bg-surface min-h-[40px]">
-          <Button variant="ghost" size="sm" onClick={() => startNote({ selection: null, quote: '' })}>
+        <div className="flex items-center gap-1 px-3 py-1 border-b border-border bg-surface min-h-[40px]">
+          <Button variant="ghost" onClick={() => startNote({ selection: null, quote: '' })}>
             <Plus size={13} />
             {t('addNote')}
           </Button>

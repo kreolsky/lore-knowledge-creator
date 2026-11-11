@@ -68,7 +68,7 @@ CONSOLIDATE_MEMORY_TOOL: dict = {
 # credential-bearing loop). Non-mutating by design: the stamp it writes is a
 # server-side CURSOR on the reference (mem_consolidated_at), not content the user
 # could confirm — and first-writer-wins makes it idempotent, so it needs no
-# sequential-execution guarantee either.
+# `apply` injection either.
 NEXT_REFERENCE_TOOL: dict = {
     "type": "function",
     "mutating": False,
@@ -124,8 +124,8 @@ NEXT_REFERENCE_TOOL: dict = {
 APPLY_MEMORY_VERDICTS_TOOL: dict = {
     "type": "function",
     # Mutating: it writes fact documents. This puts it in MUTATING_TOOLS, which is
-    # what makes the dsh driver run it sequentially — the property that matters here,
-    # since two concurrent applies over one fact are a read-compute-write race the
+    # what gives it the injected `apply` and no proxy timeout in the dsh driver.
+    # Two concurrent applies over one fact are a read-compute-write race the
     # in-process lock only covers within a replica.
     "mutating": True,
     "function": {
@@ -263,7 +263,7 @@ APPLY_MEMORY_VERDICTS_TOOL: dict = {
 
 # Agent-only for the same reason as CONSOLIDATE_MEMORY_TOOL (same credential-bearing loop).
 # Mutating: it moves the run cursor — clearing the consumed-stamps so a target's material
-# can be walked again. This puts it in MUTATING_TOOLS (sequential execution) AND behind
+# can be walked again. This puts it in MUTATING_TOOLS (`apply` injection) AND behind
 # the apply gate (confirm ⇒ the call is held for the user's approval; repeats are bounded
 # per target). Reach for it ONLY when the user asks to redo a target with a new accent or a
 # different model — never as a step of the normal loop (a re-walk sees the existing facts

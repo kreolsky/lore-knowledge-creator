@@ -218,7 +218,16 @@ async def test_download_reference_file_subtree_scoped_key_rejects_out_of_scope(
     scope_root check added to _dispatch_get_file."""
     from db import create_record
 
-    pid, scope_root, admin_uid = project_with_doc
+    pid, idx_id, admin_uid = project_with_doc
+    # An ORDINARY subtree root — the fixture index is the project's face now
+    # (its scope is the whole project), so it cannot play "narrow root" here.
+    scope_root = f"dl-root-{secrets.token_hex(4)}"
+    await test_db.query(
+        "CREATE type::record('documents', $id) SET project_id=$pid, parent_id=NONE, "
+        "title='Root', content='', path=$path, is_reference=false, is_index=false, "
+        "deleted_at=NONE",
+        {"id": scope_root, "pid": pid, "path": f"{scope_root}.md"},
+    )
     # A sibling doc NOT under the scoped subtree (scope_root).
     sibling = f"dl-sibling-{secrets.token_hex(4)}"
     await test_db.query(

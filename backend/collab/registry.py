@@ -9,8 +9,9 @@ import logging
 from pycrdt import Doc
 
 from collab.session import CollabSession
-from mentions import content_edge_pairs
+from mentions import content_edge_pairs, content_external_urls
 from models import is_ref_row
+from table_serialize import capture_tables_json, expand_tables
 from ydoc_store import get_text
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,39 @@ def _cancel_grace_teardown(session: CollabSession) -> None:
     session._grace_task = None
 
 
+def _new_session(entity_type: str, entity_id: str, ydoc: Doc, entity: dict | None) -> CollabSession:
+    """Construct a session and seed the flush pipeline's baselines from the loaded Y.Doc.
+
+    # ARCH: the pair seed and the tables baseline come from the GFM read-model
+    # form of the SAME Y.Doc the flush detector parses — an anchor-form seed
+    # cannot see a table cell's link (seed ≠ detector → rebuild forever), and
+    # the tables baseline pairs the content-loss backup from session birth
+    # (plan table-cell-mention-edges). Baselines write through the session
+    # proxies → forwarded to the FlushPipeline created in __post_init__.
+    """
+    session = CollabSession(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        ydoc=ydoc,
+        last_editor_id=entity.get("last_editor_id") if entity else None,
+        last_editor_name=entity.get("last_editor_name") if entity else None,
+        is_reference=is_ref_row(entity) if entity else False,
+        project_id=(entity.get("project_id") or "") if entity else "",
+    )
+    session._last_flushed_content = str(get_text(ydoc))
+    # Pairs (not bare ids) so a link↔embed flip of the same target rebuilds
+    # on the first flush after reopen (plan typed-edges). The URL seed beside
+    # it holds the SAME set the flush detector builds (content_external_urls
+    # contract) — an anchor-form or otherwise drifted seed makes every
+    # reopen's first flush emit a false backlinks_changed for the source
+    # (plan table-links-notes).
+    gfm = expand_tables(ydoc)
+    session._last_edge_pairs = content_edge_pairs(gfm, exclude=entity_id)
+    session._last_external_urls = content_external_urls(gfm)
+    session._last_flushed_tables_json = capture_tables_json(ydoc)
+    return session
+
+
 async def _get_or_create_session(entity_type: str, entity_id: str, content: str, *, entity: dict | None = None) -> CollabSession:
     """Get an existing session or create a new one with a Y.Doc loaded from the store.
 
@@ -72,31 +106,11 @@ async def _get_or_create_session(entity_type: str, entity_id: str, content: str,
             return existing
 
         ydoc = await _load_ydoc(entity_id, content)
-        text = get_text(ydoc)
+        _sessions[key] = _new_session(entity_type, entity_id, ydoc, entity)
 
-        initial_content = str(text)
-        # Pairs (not bare ids) so a link↔embed flip of the same target rebuilds
-        # on the first flush after reopen (plan typed-edges).
-        initial_pairs = content_edge_pairs(initial_content, exclude=entity_id)
+    await _sessions[key].subscribe_backplane()
 
-        session = CollabSession(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            ydoc=ydoc,
-            last_editor_id=entity.get("last_editor_id") if entity else None,
-            last_editor_name=entity.get("last_editor_name") if entity else None,
-            is_reference=is_ref_row(entity) if entity else False,
-            project_id=(entity.get("project_id") or "") if entity else "",
-        )
-        # Seed the flush pipeline's baseline state from the loaded doc (proxied on the
-        # session → forwarded to the FlushPipeline created in __post_init__).
-        session._last_flushed_content = initial_content
-        session._last_edge_pairs = initial_pairs
-        _sessions[key] = session
-
-    await session.subscribe_backplane()
-
-    return session
+    return _sessions[key]
 
 
 async def _load_ydoc(entity_id: str, fallback_content: str) -> Doc:

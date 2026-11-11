@@ -184,11 +184,20 @@ def _public_note(session: dict, anchor: dict | None, messages: list[dict], viewe
 
 
 def _resolved(space: AnchorSpace | None, session: dict) -> dict | None:
-    """{state, start, end} in UTF-16 over the served text; None for an anchorless note."""
+    """{state, start, end} in UTF-16 over the served text; None for an anchorless note.
+
+    `external` (the anchor's item lives in a table cell, not the host text) is
+    served as anchorless: cell notes are listed on the public surface but never
+    painted — the host shadow has no offsets for them (plan table-links-notes
+    Ruling: painting cell notes inside tables on the public share is out of
+    scope; cost: a guest sees the note without a highlight).
+    """
     start, end = session.get("anchor_rel_start"), session.get("anchor_rel_end")
     if space is None or not relpos_to_wire(start) or not relpos_to_wire(end):
         return None
     r = resolve_anchor(space, bytes(start), bytes(end))
+    if r.state == "external":
+        return None
     return {"state": r.state, "start": r.start, "end": r.end}
 
 

@@ -33,6 +33,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import settings
 from fastapi import HTTPException
 from settings_registry import ConfigError
 
@@ -84,37 +85,38 @@ ARTIFACT_LIB_ROOT = Path("/opt/artifact_lib")
 #: Signed-URL lifetime, seconds — the revocation window (see INVARIANT above).
 ARTIFACT_URL_TTL_S = 600
 
-#: Refusal ceiling for ONE html body, UTF-8 bytes — ONE limit for every
-#: writer: agent create, import_file, edit growth, the human Source view.
-#: Read-side cost is bounded elsewhere: read_document pages by
-#: offset/limit (default window AGENT_READ_SLICE_CHARS, config.py), so a
-#: page is never returned whole.
-ARTIFACT_MAX_HTML_BYTES = 2 * 1024 * 1024
 
-
-def _cap_label() -> str:
-    """The cap in human units — a whole MiB renders MiB (2 MiB, not 2048 KiB).
-
-    Read at call time so a test-pinned cap labels its own refusal honestly.
+async def artifact_max_bytes() -> int:
+    """The refusal ceiling for ONE html body, UTF-8 bytes, from the admin
+    setting ARTIFACT_MAX_HTML_MB (whole MB, live). ONE limit for every
+    writer: agent create, import_file, edit growth, replace_artifact_page,
+    the human Source view. Read-side cost is bounded elsewhere: read_document
+    pages by offset/limit (default window AGENT_READ_SLICE_CHARS, config.py),
+    so a page is never returned whole. Resolved through settings at CALL time
+    (config is the default⊕env leg), so an admin change reaches every writer
+    on its next read — and ONE config pin sizes every writer in a test.
     """
-    if ARTIFACT_MAX_HTML_BYTES % (1024 * 1024) == 0:
-        return f"{ARTIFACT_MAX_HTML_BYTES // (1024 * 1024)} MiB"
-    return f"{ARTIFACT_MAX_HTML_BYTES // 1024} KiB"
+    return (await settings.get("ARTIFACT_MAX_HTML_MB")) * 1024 * 1024
 
 
-def assert_artifact_size(n_bytes: int) -> None:
+def _cap_label(n_bytes: int) -> str:
+    """The cap in human units — whole MiB (the setting is whole MB)."""
+    return f"{n_bytes // (1024 * 1024)} MiB"
+
+
+async def assert_artifact_size(n_bytes: int) -> None:
     """422 when an html write would exceed the cap (create, import, edit growth).
 
     `n_bytes` is UTF-8 byte length — the cap is a byte ceiling, and a char
-    count would let a Cyrillic page grow to ~2x the limit. Every caller
-    reaches the constant through this module at call time, so ONE
-    `monkeypatch.setattr(artifacts, "ARTIFACT_MAX_HTML_BYTES", …)` pins
-    every writer in a test.
+    count would let a Cyrillic page grow to ~2x the limit. The cap is read
+    ONCE per call through artifact_max_bytes, so every writer refuses at (and
+    names) the same live cap the admin set.
     """
-    if n_bytes > ARTIFACT_MAX_HTML_BYTES:
+    cap = await artifact_max_bytes()
+    if n_bytes > cap:
         raise HTTPException(
             status_code=422,
-            detail=f"html artifact exceeds the {_cap_label()} cap — shrink "
+            detail=f"html artifact exceeds the {_cap_label(cap)} cap — shrink "
                    "the page before writing further",
         )
 
@@ -201,6 +203,13 @@ def html_node_sentence() -> str:
     (the handler's 422 names the reason if a caller still sends it). The
     library list is rendered from the pinned manifest, so the description
     and /lib/* cannot drift.
+
+    # ARCH: the sandbox rewrite ROUTE (sandbox_fetch_artifact →
+    # replace_artifact_page) is deliberately NOT named here — this sentence
+    # is concatenated into the static create_document spec at import, while
+    # those two tools ride env_gate="sandbox" and their descriptions appear
+    # exactly when the route is real. No cap NUMBER either: a live setting
+    # cannot render into an import-time constant.
     """
     if not artifact_enabled():
         return ""
@@ -212,8 +221,10 @@ def html_node_sentence() -> str:
         f"a sandboxed frame with no network access{lib_phrase}. The page "
         "source rides `content` — or, for a page you build in the sandbox, "
         "import the .html file with import_file instead of re-sending it; "
-        "edit it with edit_document str_replace; a page is refused past "
-        f"{_cap_label()}. A tool call's JSON body is capped at 1 MiB, so a "
+        "point edits with edit_document str_replace. Update an existing page "
+        "in place — create a new page only when the user asks for one; a page "
+        "past the instance's size cap is refused — the error names the cap. "
+        "A tool call's JSON body is capped at 1 MiB, so a "
         "page over 1 MiB is built in the sandbox and imported with "
         "import_file. "
         'Declare the page\'s design in its head: `<meta name="color-scheme" '

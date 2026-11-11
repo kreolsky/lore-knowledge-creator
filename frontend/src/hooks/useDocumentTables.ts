@@ -33,7 +33,9 @@
 import { useEffect, useMemo, useReducer } from 'react';
 import * as Y from 'yjs';
 import { getEntityHandle, subscribeEntityHandle } from '../collab/active-handle-registry';
-import { applyTablesJson, getTablesMap, listDocumentTables } from '../components/editor/live-preview/table-block-model';
+import { applyTablesJson } from '../components/editor/live-preview/table-serialize';
+import { getTablesMap } from '../components/editor/live-preview/table-block-model';
+import { listDocumentTables } from '../components/editor/live-preview/table-document-ops';
 import { useAppStore } from '../store/app-store';
 import { useUIStore } from '../store/ui-store';
 

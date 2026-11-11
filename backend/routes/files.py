@@ -16,6 +16,7 @@ from cascade import _cascade_delete_document
 from collab.events import merge_live_content
 from documents.service import (
     create_reference_row,
+    find_image_reference_by_digest,
     find_reference_by_idempotency_key,
     resolve_reference_host,
 )
@@ -31,6 +32,7 @@ from files_util import (
     DOCX_MIME,
     PDF_MIME,
     detect_media_type,
+    image_digest,
     is_text_bytes,
     resolve_stored_file,
     save_audio_upload,
@@ -106,6 +108,22 @@ async def _upload_image_reference(
     user: dict, idempotency_key: str | None,
 ) -> dict:
     """Image arm of /api/references/upload (replay- and race-safe)."""
+    # WHY: same-bytes dedup — an upload whose sha256 matches a live,
+    # non-archived image reference of the SAME resolved host returns that
+    # reference (no new row, no new file, no thumbnail job). Scope is the
+    # host (resolve_reference_host), not the subtree or project: a reference
+    # is visible through its host, and reusing one hosted elsewhere could
+    # embed a picture the reader cannot reach. The title form field is
+    # ignored on a hit — the reused reference keeps its own. Simultaneous
+    # same-bytes uploads can both miss the SELECT and duplicate — accepted
+    # (no UNIQUE index on a FLEXIBLE sub-field; the result is only the
+    # pre-dedup duplicate).
+    host_id = await resolve_reference_host(document_id, project_id)
+    existing = await find_image_reference_by_digest(
+        project_id, host_id, image_digest(data),
+    )
+    if existing:
+        return serialize_record(existing, "reference_id")
     try:
         _, result = await save_upload(
             data, mime, original_name, project_id, document_id,

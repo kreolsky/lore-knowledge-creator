@@ -36,7 +36,7 @@ need ancestor selectors (`.editor-cm`, `.editor-content`) that exist outside CM6
 | Selector | Lines | Why in index.css |
 |----------|-------|-----------------|
 | `.cm-code-copy-btn` | 802-824 | Widget DOM styling — positioned absolutely within code fence line |
-| `.cm-code-copy-btn--label` | 825-833 | Language label variant |
+| `.cm-code-lang` | index.css | Fence language label, left side of the code block header |
 
 **Source:** `live-preview/widgets.ts` → `CopyButtonWidget.toDOM()`
 
@@ -75,6 +75,7 @@ need ancestor selectors (`.editor-cm`, `.editor-content`) that exist outside CM6
 | `.cm-table-block-scroll` | Scroller around the table; `overflow-y: hidden` must be explicit (computed auto breaks widget height measurement) |
 | `.cm-table-block` | `table-layout: fixed; width: 100%` while any column is auto; an all-px table gets its sum as inline width |
 | `.cm-table-block-col-resize` | Square column control on the header cell's right border, reuses `.cm-image-resize-handle`; shown on hover, `:focus-within` and `--selected` |
+| `.cm-table-block-resize--active` | Set on a column/scale control for its drag; with `:hover` it lights the edges the resize moves (column: its top + right border, "Г"; scale: the table's top + right) |
 
 **Source:** `live-preview/table-block-widget.ts` → `TableBlockWidget.toDOM()`
 

@@ -24,9 +24,8 @@ export interface ArmedActionCore<K> {
 /**
  * The non-React core of the double-click-to-confirm pattern: synchronous armed
  * state for one key at a time plus ONE auto-disarm timer, reported through
- * `onChange` (the React hook mirrors it into useState; the table-block widget
- * re-applies the armed button class). The hook below wraps it with a single
- * key; the table toolbar holds one keyed `'row' | 'col'` (see SYSTEM: armed-action).
+ * `onChange` (the React hook mirrors it into useState). The hook below wraps it with a single
+ * key; the cabinet key lists hold one keyed by key id (see SYSTEM: armed-action).
  */
 // ARCH: handleClick reads the core's synchronous `armed` — avoids stale closure on rapid
 //       double-clicks. useState capture at render time; on clicks faster than ~16ms (React

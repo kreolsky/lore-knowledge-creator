@@ -109,7 +109,6 @@ export function ProjectSettingsPanel() {
                 <span>
                   <Button
                     variant="ghost"
-                    size="sm"
                     onClick={() => setVoicePickerOpen(true)}
                     disabled={saving === 'voice_recording_doc_id'}
                   >
@@ -117,7 +116,6 @@ export function ProjectSettingsPanel() {
                   </Button>
                 </span>
                 <IconButton
-                  size="sm"
                   onClick={handleClearVoiceTarget}
                   title={t('settingsClear')}
                 >
@@ -128,7 +126,6 @@ export function ProjectSettingsPanel() {
               <span>
                 <Button
                   variant="ghost"
-                  size="sm"
                   onClick={() => setVoicePickerOpen(true)}
                   disabled={saving === 'voice_recording_doc_id'}
                 >

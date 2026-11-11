@@ -6,7 +6,7 @@
  * with a reference focused the slot holds the ref's handle, the badges still list the
  * doc's tables) and re-renders when either the `tables` model or the `content` text
  * mutates. The pure derivation (labels, shape, orphans, duplicates) is covered by
- * table-block-model.test.ts (`listDocumentTables`).
+ * table-document-ops.test.ts (`listDocumentTables`).
  */
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -14,7 +14,8 @@ import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 import * as Y from 'yjs';
-import { createTable, addRow, deleteTable, tableAnchor } from '../components/editor/live-preview/table-block-model';
+import { createTable, addRow, deleteTable } from '../components/editor/live-preview/table-block-model';
+import { tableAnchor } from '../components/editor/live-preview/table-document-ops';
 import { setEntityHandle } from '../collab/active-handle-registry';
 import { releaseHandle, publishHandle } from '../editor/active-editor';
 import type { EntityYjsState } from '../collab/yjs-provider';

@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as Y from 'yjs';
 import type { DocCollabCallbacks } from '../doc-callbacks';
-import { YjsProjectProvider } from '../yjs-provider';
+import { YjsProjectProvider, COLLAB_PROTOCOL } from '../yjs-provider';
 
 class MockWebSocket {
   static readonly CONNECTING = 0;
@@ -192,6 +192,34 @@ describe('YjsProjectProvider', () => {
 
       expect(cb.onStatusChange).toHaveBeenCalledWith('reconnecting');
       expect(provider.status).toBe('reconnecting');
+
+      provider.disconnect();
+    });
+  });
+
+  describe('collab protocol gate (?proto=, 4010 → outdated)', () => {
+    // TEST-WHY: recurring-regression — yjs-provider is the most fix-churned collab module; permanent closes have regressed into reconnect loops before.
+    it('connects with ?proto=2; a 4010 close is permanent outdated, never a reconnect', () => {
+      const provider = new YjsProjectProvider('proj1', 'user1');
+      provider.connect();
+      const ws = MockWebSocket.latest()!;
+      expect(ws.url).toContain(`/ws/collab/project/proj1?proto=${COLLAB_PROTOCOL}`);
+      ws.simulateOpen();
+
+      const cb = makeCallbacks();
+      provider.joinEntity('doc', 'e1', cb, localUser);
+
+      ws.simulateClose(4010, 'Client outdated');
+
+      expect(cb.onStatusChange).toHaveBeenCalledWith('outdated');
+      expect(provider.status).toBe('outdated');
+
+      // No scheduled reconnect fires, and a later connect() attempt (retry button /
+      // foreground revive) is latched off.
+      vi.advanceTimersByTime(60_000);
+      expect(MockWebSocket.instances.length).toBe(1);
+      provider.connect();
+      expect(MockWebSocket.instances.length).toBe(1);
 
       provider.disconnect();
     });

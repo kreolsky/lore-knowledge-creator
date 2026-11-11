@@ -1,6 +1,6 @@
 /**
  * Toolbar over an artifact (html page) in the window: the Page/Source switch
- * (members who may edit), the html download (every reader) and the one-click publication (project owner) —
+ * (members who may edit), the html download and the fullscreen toggle (every reader) and the one-click publication (project owner) —
  * "Publish", or once a link exists "Published · copy · revoke". Publication is
  * the ordinary doc-scope document_shares link (see SYSTEM: public-share); this
  * is a second trigger for it, not a second mechanism.
@@ -10,7 +10,7 @@
  * minted/revoked in the Access panel moves this toolbar without a remount.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Globe } from 'lucide-react';
+import { Globe, Maximize2, Minimize2 } from 'lucide-react';
 import { Button, DownloadMenu } from '../ui';
 import { useAppStore } from '../../store/app-store';
 import { useIsProjectOwner } from '../../hooks/useIsProjectOwner';
@@ -28,18 +28,26 @@ interface ArtifactToolbarProps {
   canEdit: boolean;
   source: boolean;
   onToggleSource: () => void;
+  fullscreen: boolean;
+  onToggleFullscreen: () => void;
 }
 
-export function ArtifactToolbar({ projectId, documentId, canEdit, source, onToggleSource }: ArtifactToolbarProps) {
+export function ArtifactToolbar({
+  projectId, documentId, canEdit, source, onToggleSource, fullscreen, onToggleFullscreen,
+}: ArtifactToolbarProps) {
   const { t } = useTranslation();
   return (
-    <div className="flex items-center gap-2 px-2 py-1 border-b border-border bg-surface shrink-0">
+    <div className="flex items-center gap-2 px-2 py-1 border-b border-border bg-surface shrink-0 min-h-[40px]">
       {canEdit && (
-        <Button variant="ghost" size="sm" onClick={onToggleSource}>
+        <Button variant="ghost" onClick={onToggleSource}>
           {source ? t('artifactShowPage') : t('artifactShowSource')}
         </Button>
       )}
       <DownloadMenu documentId={documentId} hasText exportFormats={ARTIFACT_EXPORT_FORMATS} />
+      <Button variant="ghost" onClick={onToggleFullscreen}>
+        {fullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+        {fullscreen ? t('artifactExitFullscreen') : t('artifactFullscreen')}
+      </Button>
       <div className="flex-1" />
       <PublishControl projectId={projectId} documentId={documentId} />
     </div>
@@ -99,7 +107,7 @@ function PublishControl({ projectId, documentId }: { projectId: string; document
 
   if (!published) {
     return (
-      <Button variant="ghost" size="sm" disabled={busy}
+      <Button variant="ghost" disabled={busy}
         onClick={() => run(() => createShare(projectId, documentId, 'doc'), true)}>
         <Globe size={13} />
         {t('artifactPublish')}
@@ -111,12 +119,12 @@ function PublishControl({ projectId, documentId }: { projectId: string; document
       <Globe size={13} className="text-amber" />
       <span>{t('artifactPublished')}</span>
       <span>·</span>
-      <Button variant="ghost" size="sm" onClick={() => copyWithToast(link, showToast)}>{t('artifactCopyLink')}</Button>
+      <Button variant="ghost" onClick={() => copyWithToast(link, showToast)}>{t('artifactCopyLink')}</Button>
       {/* A link inherited from an ancestor's subtree share is revoked there, not here. */}
       {own && (
         <>
           <span>·</span>
-          <Button variant="ghost" size="sm" danger disabled={busy}
+          <Button variant="ghost" danger disabled={busy}
             onClick={() => run(() => revokeShare(own.share_id), false)}>
             {t('artifactRevoke')}
           </Button>

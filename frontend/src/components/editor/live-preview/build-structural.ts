@@ -467,8 +467,8 @@ export function buildStructuralDecorations(state: EditorState): DecorationSet {
         }
 
         // WHY: when the cursor is outside the block, hide the raw fence  Why: with the cursor outside a fenced block the raw ```/```lang marker lines are hidden (opening → copy button, closing → nothing) so only rendered content shows.
-        // marker lines (``` / ```lang) — replace the opening line with the copy
-        // button (language shown as its label) and the closing line with nothing.
+        // marker lines (``` / ```lang) — replace the opening line with the code header
+        // (language label left, copy icon right) and the closing line with nothing.
         // Why: a short (<=20-char) pure-ASCII marker line rendered in the CODE
         // font is a valid charWidth sample for CM6's measureTextSize(); its
         // monospace width swings the height-oracle estimate and re-triggers the
@@ -480,7 +480,7 @@ export function buildStructuralDecorations(state: EditorState): DecorationSet {
         // the cursor out of the block first.
         if (cursorInside) {
           if (openLine && codeText) {
-            replaceRanges.push({ from: openLine.to, to: openLine.to, widget: new CopyButtonWidget(codeText, language) });
+            replaceRanges.push({ from: openLine.to, to: openLine.to, widget: new CopyButtonWidget(codeText, language, false) });
           }
           return false;
         }

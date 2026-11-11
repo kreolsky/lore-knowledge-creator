@@ -15,7 +15,6 @@ import re
 from fastapi import HTTPException
 from textmatch import surgical_splice_text
 
-import event_bus
 from db import get_db
 
 # A remote image URL (`![...](https://...)`)
@@ -265,27 +264,15 @@ async def route_document_edits(
 
 async def finalize_content_mutation(doc_id: str, new_content: str,
                                      project_id: str | None) -> None:
-    """rebuild_doc_mentions + backlinks emit + content_flushed emit — the shared
-    read-model finalize tail for no-session content mutations.
+    """The shared read-model finalize tail for no-session content mutations.
 
-    Extracted verbatim from `route_document_content` and the surgical no-session
-    edit branch (`route_document_edits`) so the two paths share ONE tail (a fix
-    applied to one no longer silently diverges the other).
+    Delegates to mentions.finalize_content_edges — the ONE tail the agent
+    path, the REST PATCH document fallback and the REST PATCH reference
+    fallback share (plan table-links-notes), so a fix applied to one no longer
+    silently diverges the others. The emit is ALWAYS for the source: a
+    URL-only edit has no pair delta to key on.
     """
     db2 = await get_db()
-    from mentions import rebuild_doc_mentions
+    from mentions import finalize_content_edges
 
-    pairs = await rebuild_doc_mentions(db2, "documents", doc_id, new_content)
-    if pairs:
-        # Affected ids = targets + the SOURCE (plan typed-edges): a client
-        # joined to the source refreshes its outgoing list on the same event.
-        await event_bus.emit(
-            "backlinks_changed_batch",
-            document_ids=[doc_id, *(tid for tid, _kind in pairs)],
-        )
-    await event_bus.emit(
-        "content_flushed",
-        entity_type="doc",
-        entity_id=doc_id,
-        project_id=project_id,
-    )
+    await finalize_content_edges(db2, doc_id, new_content, project_id=project_id)

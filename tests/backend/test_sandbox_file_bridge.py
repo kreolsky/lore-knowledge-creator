@@ -419,6 +419,154 @@ async def test_fetch_reference_rejects_commentator(
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# H. The page-rewrite pair — sandbox_fetch_artifact + replace_artifact_page
+# ════════════════════════════════════════════════════════════════════════════
+
+
+# TEST-WHY: refused-principal — replace_artifact_page refuses a confirm-mode call, a markdown target and a non-console key, and every html writer refuses a page past the admin cap; the page path writes the same document id, checkpoints the old body first, and an unchanged file is a no-op.
+@pytest.mark.asyncio
+async def test_artifact_page_replace_round_trip_and_refusals(client, test_db, project_with_doc, admin_user, sftp_seams, monkeypatch):
+    """One page's life through the rewrite pair, contract by contract."""
+    from helpers import pin_artifact_cap, pin_artifact_origin
+
+    pin_artifact_origin(monkeypatch)
+    pid, parent, uid = project_with_doc
+    _, admin_token = admin_user
+    agent_tok = await _make_key(uid, pid, internal=True)
+
+    live_body = (
+        "<!doctype html><html><body><h1>Old</h1>"
+        "<script>console.log(1)</script></body></html>"
+    )
+    resp = await client.post("/api/tool/create_document", json={
+        "title": "Dash", "content": live_body, "parent_id": parent,
+        "node_type": "html", "apply": "auto",
+    }, headers=_hdr(agent_tok))
+    assert resp.status_code == 200, resp.text
+    doc_id = resp.json()["doc_id"]
+
+    # Fetch: the live page source lands at artifacts/<id>/index.html — the
+    # seam records {path, size}, and the size is the LIVE body's byte length.
+    resp = await client.post("/api/tool/sandbox_fetch_artifact", json={
+        "document_id": doc_id,
+    }, headers=_hdr(agent_tok))
+    assert resp.status_code == 200, resp.text
+    fetched = resp.json()
+    assert fetched["doc_id"] == doc_id
+    assert fetched["path"].endswith(f"/artifacts/{doc_id}/index.html")
+    assert any(
+        w["path"].endswith(f"/artifacts/{doc_id}/index.html")
+        and w["size"] == len(live_body.encode("utf-8"))
+        for w in sftp_seams["write_calls"]
+    ), sftp_seams["write_calls"]
+
+    # Replace: new bytes fed through the SFTP seam → 200 changed, the SAME
+    # document id, the live state converged onto the new body, and ONE
+    # checkpoint holding the OLD body (the History route back).
+    new_body = (
+        "<!doctype html><html><body><h1>New</h1>"
+        "<script>console.log(2)</script></body></html>"
+    )
+    sftp_seams["state"]["data"] = new_body.encode("utf-8")
+    page_path = fetched["path"]
+
+    from agent.doc_state import resolve_live_doc_state
+
+    # A `confirm` call is refused with the 409 ask signal the driver holds on
+    # — the page is untouched until the user approves.
+    resp = await client.post("/api/tool/replace_artifact_page", json={
+        "document_id": doc_id, "sandbox_path": page_path, "apply": "confirm",
+    }, headers=_hdr(agent_tok))
+    assert resp.status_code == 409, resp.text
+    assert "confirmation_required" in resp.text, resp.text
+    assert (await resolve_live_doc_state(doc_id))[0] == live_body
+
+    resp = await client.post("/api/tool/replace_artifact_page", json={
+        "document_id": doc_id, "sandbox_path": page_path, "apply": "auto",
+    }, headers=_hdr(agent_tok))
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"status": "applied", "doc_id": doc_id, "changed": True}
+
+    from cp_store import resolve_checkpoint_content
+
+    live, _ = await resolve_live_doc_state(doc_id)
+    assert live == new_body
+    rows = await test_db.query(
+        "SELECT * FROM checkpoints WHERE document_id = $id AND deleted_at IS NONE",
+        {"id": doc_id},
+    )
+    assert len(rows) == 1, rows
+    assert await resolve_checkpoint_content(dict(rows[0])) == live_body
+
+    # The same bytes again: a no-op — no new checkpoint, changed: false.
+    resp = await client.post("/api/tool/replace_artifact_page", json={
+        "document_id": doc_id, "sandbox_path": page_path, "apply": "auto",
+    }, headers=_hdr(agent_tok))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["changed"] is False
+    rows = await test_db.query(
+        "SELECT * FROM checkpoints WHERE document_id = $id AND deleted_at IS NONE",
+        {"id": doc_id},
+    )
+    assert len(rows) == 1
+
+    # A markdown target is refused with the named 422 (before any read).
+    md = await client.post("/api/documents", json={
+        "project_id": pid, "title": "Plain", "content": "prose",
+    }, cookies={"lore_session": admin_token})
+    assert md.status_code == 200, md.text
+    md_id = md.json()["document_id"]
+    resp = await client.post("/api/tool/replace_artifact_page", json={
+        "document_id": md_id, "sandbox_path": page_path, "apply": "auto",
+    }, headers=_hdr(agent_tok))
+    assert resp.status_code == 422 and "edit_document" in resp.text, resp.text
+
+    # A non-console key is refused before anything runs.
+    ext_tok = await _make_key(uid, pid, internal=False)
+    resp = await client.post("/api/tool/replace_artifact_page", json={
+        "document_id": doc_id, "sandbox_path": page_path, "apply": "auto",
+    }, headers=_hdr(ext_tok))
+    assert resp.status_code == 403, resp.text
+
+    # The admin cap (pinned to 1 MiB — the smallest pinnable) refuses every
+    # writer past it. Over-cap bytes come from the sandbox seam, not tool
+    # JSON: the 1 MiB middleware cap would 413 such a body first.
+    cap = pin_artifact_cap(monkeypatch, 1)
+    over = ("<p>" + "x" * (cap - 6) + "</p>").encode("utf-8")
+    assert len(over) == cap + 1
+    sftp_seams["state"]["data"] = over
+    resp = await client.post("/api/tool/import_file", json={
+        "filename": "big.html", "sandbox_path": "big.html", "parent_id": parent,
+    }, headers=_hdr(agent_tok))
+    assert resp.status_code == 422 and "1 MiB" in resp.text, resp.text
+
+    near = ("<p>" + "a" * (cap - 107) + "</p>").encode("utf-8")
+    assert len(near) == cap - 100
+    sftp_seams["state"]["data"] = near
+    resp = await client.post("/api/tool/import_file", json={
+        "filename": "near.html", "sandbox_path": "near.html",
+        "parent_id": parent,
+    }, headers=_hdr(agent_tok))
+    assert resp.status_code == 200, resp.text
+    near_id = resp.json()["doc_id"]
+
+    resp = await client.post("/api/tool/edit_document", json={
+        "document_id": near_id,
+        "edits": [{"old_string": "<p>", "new_string": "<p>" + "b" * 200}],
+        "apply": "auto",
+    }, headers=_hdr(agent_tok))
+    assert resp.status_code == 422 and "1 MiB" in resp.text, resp.text
+
+    # An over-cap replace file: the bounded read refuses it, and the refusal
+    # is the writers' own 422 naming the cap — not a bare "File too large".
+    sftp_seams["state"]["data"] = over
+    resp = await client.post("/api/tool/replace_artifact_page", json={
+        "document_id": near_id, "sandbox_path": "near.html", "apply": "auto",
+    }, headers=_hdr(agent_tok))
+    assert resp.status_code == 422 and "1 MiB" in resp.text, resp.text
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # E. Registration — route / tool surface / MCP projection / repeat bound / chip
 # ════════════════════════════════════════════════════════════════════════════
 

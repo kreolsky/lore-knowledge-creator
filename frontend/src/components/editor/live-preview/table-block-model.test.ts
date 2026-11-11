@@ -1,8 +1,9 @@
 /**
- * Unit tests for the table-block Yjs subtree model helpers (Order step 1–2).
+ * Unit tests for the table-block Yjs subtree model helpers — schema v2 (id-keyed).
  *
- * The model lives in `ydoc.getMap('tables')` as Y.Map<tableId, Y.Map{columns, rows}>.
- * These helpers are the ONLY sanctioned read/write path (Thin Client INVARIANT).
+ * The model lives in `ydoc.getMap('tables')` as
+ * `Y.Map<tableId, Y.Map{v:2, columns, rows, cells}>` (see the model header). These
+ * helpers are the ONLY sanctioned read/write path (Thin Client INVARIANT).
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import * as Y from 'yjs';
@@ -10,42 +11,83 @@ import {
   getTablesMap,
   createTable,
   readTableModel,
-  setColumnWidth,
+  orderedColIds,
+  orderedRowIds,
   addRow,
   addColumn,
-  scaleColumnWidths,
-  setColumnWidths,
-  MIN_COLUMN_WIDTH,
-  birthColumnWidths,
   removeRow,
   removeColumn,
-  tableAnchor,
-  serializeTables,
-  applyTablesJson,
-  modelToGfm,
-  expandTableAnchorsToGfm,
-  deleteTableFromDoc,
-  deleteTableWithBackup,
-  listDocumentTables,
-  renameTable,
-  insertTableAnchor,
-  getModelLabel,
-  normalizeTableLabel,
-  createUnlinkedTable,
-  TABLE_ANCHOR_RE,
-  DEFAULT_COLUMN_WIDTH,
+  moveRow,
+  moveColumn,
+  cellKey,
+  getCellText,
+  ensureCell,
+  readColumnWidths,
+  readTableShape,
+  tableAwaitsMigration,
+  TABLE_SCHEMA_VERSION,
+  TABLE_LOCAL_ORIGIN,
+  type RowId,
+  type ColId,
+  TABLE_SYSTEM_ORIGIN,
 } from './table-block-model';
-import { importGfmTables } from './gfm-table-import';
+import { birthColumnWidths, DEFAULT_COLUMN_WIDTH } from './table-widths';
+import { tableAnchor, cloneDuplicateAnchors } from './table-document-ops';
+import { serializeTables, applyTablesJson } from './table-serialize';
 
 let doc: Y.Doc;
 beforeEach(() => {
   doc = new Y.Doc();
 });
 
+/** A minimal v1 table (positional Y.Arrays), hand-built as the pre-migration writer left it. */
+function seedV1Table(doc: Y.Doc, id: string, matrix: string[][]): void {
+  doc.transact(() => {
+    const table = new Y.Map();
+    const columns = new Y.Array();
+    columns.push(matrix[0].map(() => {
+      const col = new Y.Map();
+      col.set('w', 100);
+      return col;
+    }));
+    const rows = new Y.Array();
+    rows.push(matrix.map((row) => {
+      const yrow = new Y.Array();
+      yrow.push(row.map((cell) => {
+        const m = new Y.Map();
+        m.set('t', new Y.Text(cell));
+        return m;
+      }));
+      return yrow;
+    }));
+    table.set('columns', columns);
+    table.set('rows', rows);
+    getTablesMap(doc).set(id, table);
+  });
+}
+
+function cellsOf(d: Y.Doc, id: string): Y.Map<Y.Text> {
+  return getTablesMap(d).get(id)!.get('cells') as Y.Map<Y.Text>;
+}
+
+function rowsOf(d: Y.Doc, id: string): Y.Map<Y.Map<string | number>> {
+  return getTablesMap(d).get(id)!.get('rows') as Y.Map<Y.Map<string | number>>;
+}
+
+/** Type into a cell the way the mount path does: ensureCell, then edit its Y.Text. */
+function write(id: string, rowId: RowId, colId: ColId, text: string): void {
+  const body = ensureCell(doc, id, rowId, colId)!;
+  doc.transact(() => { body.delete(0, body.length); body.insert(0, text); }, TABLE_LOCAL_ORIGIN);
+}
+
 describe('createTable / readTableModel', () => {
   it('creates a table from a cell-body matrix and reads it back', () => {
     const id = createTable(doc, [['a', 'b'], ['c', 'd']]);
     expect(typeof id).toBe('string');
+    // Born as schema v2 (the backend twin TABLE_SCHEMA_VERSION is 2 — a server
+    // speaking another version is kept out by the ?proto gate, not by this constant).
+    expect(TABLE_SCHEMA_VERSION).toBe(2);
+    expect(getTablesMap(doc).get(id)!.get('v')).toBe(TABLE_SCHEMA_VERSION);
     // Born fixed, proportional to text length — see birthColumnWidths.
     expect(readTableModel(doc, id)).toEqual({
       columns: [422, 422],
@@ -55,452 +97,150 @@ describe('createTable / readTableModel', () => {
 
 });
 
-describe('cell + structure mutations', () => {
-  // TEST-WHY: pure-logic-edge — a born-fixed table gets a px column, never a 0 that flips it to 100% wide.
+describe('cell addressing by ids (v2 contract)', () => {
+  // TEST-WHY: recurring-regression — the most fix-churned model in the tree; id addressing, the missing-cell race and the in-place edit each regressed here in v1.
+  it('addresses a cell ONLY by (tableId, rowId, colId): read/write, race, in-place', () => {
+    const id = createTable(doc, [['a', 'b'], ['c', 'd']]);
+    const [r0, r1] = orderedRowIds(doc, id)!;
+    const [c0, c1] = orderedColIds(doc, id)!;
+
+    // Id-addressed read/write round-trip.
+    write(id, r1, c0, 'X');
+    expect(readTableModel(doc, id)!.rows).toEqual([['a', 'b'], ['X', 'd']]);
+    expect(getCellText(doc, id, r1, c0)!.toString()).toBe('X');
+    expect(getCellText(doc, id, r0, c1)!.toString()).toBe('b');
+
+    // Missing table/row/column: null, never a throw.
+    expect(ensureCell(doc, id, 'no-row' as never, c0)).toBeNull();
+    expect(ensureCell(doc, id, r0, 'no-col' as never)).toBeNull();
+    expect(getCellText(doc, 'no-table', r0, c0)).toBeNull();
+
+    // The concurrent add-row × add-column intersection: a missing cell of a LIVE row ×
+    // column reads empty and is created by the first write (ensureCell = mount path).
+    const key = cellKey(r0, c0);
+    cellsOf(doc, id).delete(key);
+    expect(readTableModel(doc, id)!.rows[0][0]).toBe('');
+    expect(getCellText(doc, id, r0, c0)).toBeNull();
+    expect(ensureCell(doc, id, r0, c0)).toBeInstanceOf(Y.Text);
+    write(id, r0, c0, 'late');
+    expect(readTableModel(doc, id)!.rows[0][0]).toBe('late');
+
+    // An orphan cell (its row or column is gone) is ignored by every reader.
+    cellsOf(doc, id).set('ghost-row:ghost-col', new Y.Text('stale'));
+    expect(readTableModel(doc, id)!.rows).toEqual([['late', 'b'], ['X', 'd']]);
+
+  });
+});
+
+describe('structure mutations (id-keyed)', () => {
+  // TEST-WHY: pure-logic-edge — eager cells, one-pos moves, observer-invalidated order and origins are pure model logic; zero seams.
+  it('structural ops, order and origins follow the v2 contract', () => {
+    const origins: unknown[] = [];
+    const id = createTable(doc, [['r0', 'c0'], ['r1', 'c1'], ['r2', 'c2']]);
+    doc.on('afterTransaction', (tr) => origins.push(tr.origin));
+    const rows = orderedRowIds(doc, id)!;
+    const cols = orderedColIds(doc, id)!;
+
+    // addRow appends an EAGER row (a cell per live column) under a fresh RowId.
+    const rid = addRow(doc, id)!;
+    expect(orderedRowIds(doc, id)!.at(-1)).toBe(rid);
+    for (const cid of cols) expect(cellsOf(doc, id).get(cellKey(rid, cid))).toBeInstanceOf(Y.Text);
+    expect(readTableModel(doc, id)!.rows.at(-1)).toEqual(['', '']);
+
+    // addRow inserts between live anchors: below r0, above r1.
+    const mid = addRow(doc, id, rows[0], rows[1])!;
+    expect(orderedRowIds(doc, id)).toEqual([rows[0], mid, rows[1], rows[2], rid]);
+
+    // moveRow / moveColumn are ONE pos write; the matrix read follows both axes.
+    moveRow(doc, id, rows[2], null, rows[0]);
+    expect(orderedRowIds(doc, id)!.slice(0, 2)).toEqual([rows[2], rows[0]]);
+    moveColumn(doc, id, cols[1], null, cols[0]);
+    expect(orderedColIds(doc, id)).toEqual([cols[1], cols[0]]);
+    expect(readTableModel(doc, id)!.rows[0]).toEqual(['c2', 'r2']);
+
+    // removeRow / removeColumn drop the axis entry AND its cells (one transaction).
+    removeRow(doc, id, rid);
+    expect(orderedRowIds(doc, id)).not.toContain(rid);
+    removeColumn(doc, id, cols[0]);
+    expect(orderedColIds(doc, id)).toEqual([cols[1]]);
+    for (const r of orderedRowIds(doc, id)!) {
+      expect(cellsOf(doc, id).has(cellKey(r, cols[0]))).toBe(false);
+    }
+
+    // Missing table/axis ids are no-ops, never throws.
+    expect(addRow(doc, 'missing')).toBeNull();
+    expect(addColumn(doc, 'missing', DEFAULT_COLUMN_WIDTH)).toBeNull();
+    expect(() => removeRow(doc, id, 'ghost' as never)).not.toThrow();
+    expect(() => moveRow(doc, id, 'ghost' as never)).not.toThrow();
+
+    // Order: equal pos values (two replicas minted the same key) fall back to id —
+    // a total order. Two rows forced onto one pos still sort unambiguously.
+    const axis = rowsOf(doc, id);
+    const live = orderedRowIds(doc, id)!;
+    doc.transact(() => {
+      axis.get(live[1])!.set('pos', String(axis.get(live[0])!.get('pos')));
+    }, TABLE_LOCAL_ORIGIN);
+    expect(orderedRowIds(doc, id)).toEqual([...[live[0], live[1]].sort(), ...live.slice(2)]);
+
+    // Cache: a cell edit does NOT invalidate the cached order (same array reference);
+    // a structural op rebuilds it.
+    const cached = orderedRowIds(doc, id)!;
+    write(id, live[0], orderedColIds(doc, id)![0], 'typing');
+    expect(orderedRowIds(doc, id)).toBe(cached);
+    addRow(doc, id);
+    expect(orderedRowIds(doc, id)).not.toBe(cached);
+
+    // Origins: user ops carry TABLE_LOCAL_ORIGIN (one undoable step each) — captured
+    // by the listener registered after createTable; every op above is a user op.
+    expect(origins.every((o) => o === TABLE_LOCAL_ORIGIN)).toBe(true);
+
+    // Seeding (applyTablesJson) and reconciliation (cloneDuplicateAnchors) carry
+    // TABLE_SYSTEM_ORIGIN — outside the undo stack (a replayed capture must not
+    // "un-insert" on Ctrl+Z).
+    const systemOrigins: unknown[] = [];
+    doc.on('afterTransaction', (tr) => systemOrigins.push(tr.origin));
+    applyTablesJson(doc, serializeTables(doc)); // rebuild under the same id
+    const dup = cloneDuplicateAnchors(doc, `${tableAnchor('L', id)}${tableAnchor('L2', id)}`);
+    expect(dup.changed).toBe(true);
+    expect(systemOrigins.length).toBeGreaterThan(0);
+    expect(systemOrigins.every((o) => o === TABLE_SYSTEM_ORIGIN)).toBe(true);
+  });
+
   it('addColumn appends an empty cell to every row + a px width in a born-fixed table', () => {
     const id = createTable(doc, [['a'], ['b']]);
-    addColumn(doc, id);
-    const m = readTableModel(doc, id)!;
-    expect(m.rows).toEqual([['a', ''], ['b', '']]);
-    expect(m.columns).toEqual([844, DEFAULT_COLUMN_WIDTH]);
-  });
-
-  // TEST-WHY: pure-logic-edge — the GFM import birth path writes the birth formula, not auto columns.
-  it('GFM import creates birth-width columns', () => {
-    const { text } = importGfmTables(doc, '| A | B |\n| --- | --- |\n| 1 | 2 |', 't');
-    const id = [...text.matchAll(TABLE_ANCHOR_RE)][0][2];
-    expect(readTableModel(doc, id)!.columns).toEqual([422, 422]);
-  });
-
-});
-
-/**
- * serializeTables / applyTablesJson — full table-state capture for checkpoints.
- *
- * INVARIANT (shared shape, frontend ↔ backend): both producers emit the identical
- * JSON shape `{ columns: number[], rows: string[][] }` per table id. The fixture
- * below MUST stay byte-identical to the backend `test_table_capture.py` fixture so a
- * silent column-width drop fails loudly on either side.
- */
-describe('serializeTables (checkpoint capture)', () => {
-  // INVARIANT (cross-producer default column width): DEFAULT_COLUMN_WIDTH MUST equal
-  // the backend table_serialize.DEFAULT_COLUMN_WIDTH (160). Why: a table restored from
-  // a checkpoint with no captured widths renders at this default; a drift between the
-  // two producers makes the widget render a different width than the editor authored.
-  // Pinned here (and in test_table_capture.py) because the two producers cannot share
-  // code — a change to either constant must update both.
-  it('DEFAULT_COLUMN_WIDTH matches the backend constant (160)', () => {
-    expect(DEFAULT_COLUMN_WIDTH).toBe(160);
-  });
-  it('emits {columns, rows} per table — matches the backend shape', () => {
-    // Mirror of the backend fixture in test_table_capture.py::test_capture_emits_columns_and_rows
-    const id = createTable(doc, [['a', 'b'], ['c', 'd']]);
-    setColumnWidth(doc, id, 0, 200);
-    setColumnWidth(doc, id, 1, 320);
-    expect(JSON.parse(serializeTables(doc))).toEqual({
-      [id]: { columns: [200, 320], rows: [['a', 'b'], ['c', 'd']] },
-    });
-  });
-
-  it('preserves special chars / empty cells verbatim (lossless, unlike GFM export)', () => {
-    const id = createTable(doc, [['a|b', ''], ['c\nd', '  e  ']]);
-    const data = JSON.parse(serializeTables(doc));
-    expect(data[id].rows).toEqual([['a|b', ''], ['c\nd', '  e  ']]);
+    const last = orderedColIds(doc, id)!.at(-1)!;
+    const cid = addColumn(doc, id, DEFAULT_COLUMN_WIDTH, last, null)!; // append at the end
+    expect(orderedColIds(doc, id)!.at(-1)).toBe(cid);
+    expect(readTableModel(doc, id)!.rows).toEqual([['a', ''], ['b', '']]);
+    expect(readTableModel(doc, id)!.columns).toEqual([844, DEFAULT_COLUMN_WIDTH]);
   });
 });
 
-describe('applyTablesJson (restore)', () => {
-  it('is a no-op for null (legacy restore leaves tables untouched)', () => {
-    const id = createTable(doc, [['a']]);
-    applyTablesJson(doc, null);
-    expect(getTablesMap(doc).has(id)).toBe(true);
-  });
-
-  it('clears existing tables for "{}"', () => {
-    createTable(doc, [['a']]);
-    applyTablesJson(doc, '{}');
-    expect(getTablesMap(doc).size).toBe(0);
-  });
-
-  it('rebuilds widths and cells from the captured JSON', () => {
-    applyTablesJson(doc, JSON.stringify({
-      t1: { columns: [200, 320], rows: [['a', 'b'], ['c', 'd']] },
-    }));
-    expect(readTableModel(doc, 't1')).toEqual({ columns: [200, 320], rows: [['a', 'b'], ['c', 'd']] });
-  });
-
-  it('replaces previous state (no leftover ids)', () => {
-    const old = createTable(doc, [['z']]);
-    applyTablesJson(doc, JSON.stringify({ fresh: { columns: [7], rows: [['q']] } }));
-    expect(getTablesMap(doc).has(old)).toBe(false);
-    expect(readTableModel(doc, 'fresh')!.rows).toEqual([['q']]);
-  });
-
-  it('round-trips through serialize → apply → serialize identically', () => {
-    const id = createTable(doc, [['a|b', 'z\nw']]);
-    setColumnWidth(doc, id, 0, 50);
-    setColumnWidth(doc, id, 1, 90);
-    const captured = serializeTables(doc);
-
-    const doc2 = new Y.Doc();
-    applyTablesJson(doc2, captured);
-    expect(serializeTables(doc2)).toBe(captured);
-  });
-});
-
-/**
- * modelToGfm / expandTableAnchorsToGfm — table model → portable GFM (clipboard copy path).
- *
- * modelToGfm is the byte-inverse of gfm-table-import.parseRow/unescapeCell: cell `|` → `\|`,
- * newline → `<br>`; rows[0] = header; a `| --- |` separator row follows; exactly one padding
- * space per side. expandTableAnchorsToGfm rewrites every `![label](table:id)` anchor in
- * arbitrary markdown to its GFM, leaving missing models untouched (never throws).
- */
-describe('modelToGfm (model → GFM serializer)', () => {
-  it('serializes a simple table with header + separator + body', () => {
-    const id = createTable(doc, [['A', 'B'], ['1', '2']]);
-    expect(modelToGfm(readTableModel(doc, id)!)).toBe(
-      '| A | B |\n| --- | --- |\n| 1 | 2 |',
-    );
-  });
-
-  it('escapes pipes and converts newlines (byte-inverse of unescapeCell)', () => {
-    const id = createTable(doc, [['h1', 'h2'], ['a | b', 'line1\nline2']]);
-    const gfm = modelToGfm(readTableModel(doc, id)!);
-    expect(gfm).toContain('a \\| b');
-    expect(gfm).toContain('line1<br>line2');
-    // The escaped pipe must NOT split the cell: still 2 columns.
-    expect(gfm.split('\n')[2].split(/(?<!\\)\|/)).toHaveLength(4); // '' + 2 cells + ''
-  });
-
-  it('round-trips cell text losslessly: readTableModel(import(modelToGfm(model)))', () => {
-    // Header cells deliberately do NOT match the GFM separator grammar (see limitation test).
-    const id = createTable(doc, [['h1', 'h2'], ['a|b', 'x\ny'], ['c', 'd']]);
-    const model = readTableModel(doc, id)!;
-
-    const doc2 = new Y.Doc();
-    const { text } = importGfmTables(doc2, modelToGfm(model), 'Untitled');
-    const newId = [...text.matchAll(TABLE_ANCHOR_RE)][0][2];
-    // Cell text identity (column WIDTHS intentionally differ — importer uses default width).
-    expect(readTableModel(doc2, newId)!.rows).toEqual(model.rows);
-  });
-});
-
-describe('expandTableAnchorsToGfm (copy-path anchor expansion)', () => {
-  it('replaces a table anchor with its GFM in arbitrary markdown', () => {
-    const id = createTable(doc, [['A', 'B'], ['1', '2']]);
-    const md = `intro text\n\n${tableAnchor('My table', id)}\n\noutro`;
-    const expanded = expandTableAnchorsToGfm(doc, md);
-    expect(expanded).toContain('| A | B |');
-    expect(expanded).toContain('| --- | --- |');
-    expect(expanded).toContain('intro text');
-    expect(expanded).toContain('outro');
-    expect(expanded).not.toContain('table:');
-  });
-
-  it('leaves a missing-model anchor untouched (never throws)', () => {
-    const md = `text ${tableAnchor('orphan', 'does-not-exist')} end`;
-    expect(expandTableAnchorsToGfm(doc, md)).toBe(md);
-  });
-
-  it('is read-only on the Y.Doc (no model added/removed)', () => {
-    const id = createTable(doc, [['A'], ['1']]);
-    const before = getTablesMap(doc).size;
-    expandTableAnchorsToGfm(doc, tableAnchor('t', id));
-    expect(getTablesMap(doc).size).toBe(before);
-    expect(getTablesMap(doc).has(id)).toBe(true);
-  });
-
-});
-
-describe('modelToGfm — GFM separator-grammar limitation', () => {
-  // A header ROW whose EVERY cell body matches /^:?-+:?$/ (e.g. "---", ":--:") cannot
-  // round-trip: GFM has no way to mark a row as data rather than separator, so the importer
-  // (gfm-table-import.ts:isSeparatorRow) misclassifies the serialized header as the separator
-  // and the table is not recognized. A SINGLE such cell among normal cells is fine — the row
-  // only reads as a separator when ALL its cells are dash-like. Inherent to GFM, rare in
-  // practice; body cells are unaffected.
-  it('a header row of all-separator-grammar cells is NOT recoverable (documented limitation)', () => {
-    const id = createTable(doc, [['---', ':--:'], ['1', '2']]);
-    const gfm = modelToGfm(readTableModel(doc, id)!);
-    const doc2 = new Y.Doc();
-    const { count } = importGfmTables(doc2, gfm, 't');
-    // The all-dash header is indistinguishable from a separator → no table recognized.
-    expect(count).toBe(0);
-  });
-
-});
-
-/**
- * deleteTableFromDoc — whole-table removal for the References-panel "table badge" delete.
- *
- * Edits the document `content` Y.Text (anchor range delete) AND drops the `tables` model
- * in a SINGLE transact (one atomic Yjs update). This is the panel/badge write path; the
- * inline widget's removeAnchor() (broken-state only) is the other. Precedent for editing
- * content Y.Text directly (not via a view): table-reconcile.ts.
- */
-describe('deleteTableFromDoc (whole-table delete)', () => {
-  function seedContent(text: string) {
-    doc.getText('content').insert(0, text);
-  }
-
-  it('removes the anchor from content AND drops the model', () => {
-    const id = createTable(doc, [['a', 'b'], ['c', 'd']]);
-    seedContent(`intro\n\n${tableAnchor('My table', id)}\n\noutro`);
-    deleteTableFromDoc(doc, id, 'My table');
-    expect(doc.getText('content').toString()).toBe('intro\n\n\n\noutro');
-    expect(getTablesMap(doc).has(id)).toBe(false);
-  });
-
-  it('still drops the model when the anchor is already gone (orphan-model cleanup)', () => {
-    const id = createTable(doc, [['a']]);
-    seedContent('no anchor here');
-    deleteTableFromDoc(doc, id, 'My table');
-    expect(doc.getText('content').toString()).toBe('no anchor here');
-    expect(getTablesMap(doc).has(id)).toBe(false);
-  });
-
-  it('leaves a DIFFERENT table untouched (deletes only the targeted id)', () => {
-    const keep = createTable(doc, [['k']]);
-    const drop = createTable(doc, [['d']]);
-    seedContent(`${tableAnchor('keep', keep)} and ${tableAnchor('drop', drop)}`);
-    deleteTableFromDoc(doc, drop, 'drop');
-    expect(getTablesMap(doc).has(keep)).toBe(true);
-    expect(getTablesMap(doc).has(drop)).toBe(false);
-    expect(doc.getText('content').toString()).toBe(`${tableAnchor('keep', keep)} and `);
-  });
-
-});
-
-/**
- * deleteTableWithBackup — awaits a backup (checkpoint POST) BEFORE mutating the model,
- * so a recovery point always exists and captures the table while it is still present.
- * On backup failure the delete is aborted (No silent degradation).
- */
-describe('deleteTableWithBackup (backup-before-delete ordering)', () => {
-  function seedContent(text: string) {
-    doc.getText('content').insert(0, text);
-  }
-
-  it('awaits the backup BEFORE the model is dropped (ordering, not a literal)', async () => {
-    const id = createTable(doc, [['a']]);
-    seedContent(tableAnchor('T', id));
-    const order: string[] = [];
-    const backup = () =>
-      new Promise<void>((resolve) => {
-        // Table must still exist while the backup runs (it captures the live state).
-        order.push(`backup:present=${getTablesMap(doc).has(id)}`);
-        setTimeout(() => { order.push('backup-resolved'); resolve(); }, 0);
-      });
-
-    await deleteTableWithBackup(doc, id, 'T', backup);
-
-    expect(order).toEqual(['backup:present=true', 'backup-resolved']);
-    expect(getTablesMap(doc).has(id)).toBe(false);
-  });
-
-  it('aborts the delete (model RETAINED) when the backup rejects', async () => {
-    const id = createTable(doc, [['a']]);
-    seedContent(tableAnchor('T', id));
-    const backup = () => Promise.reject(new Error('checkpoint failed'));
-
-    await expect(deleteTableWithBackup(doc, id, 'T', backup)).rejects.toThrow('checkpoint failed');
-    // The model survives — a failed backup must never lose data.
-    expect(getTablesMap(doc).has(id)).toBe(true);
-    expect(doc.getText('content').toString()).toBe(tableAnchor('T', id));
-  });
-});
-
-/**
- * listDocumentTables — the reactive list derivation (pure half of useDocumentTables).
- *
- * Walks `content` anchors in DOCUMENT order (LINKED, unlinked:false), then appends every
- * model with no surviving anchor (UNLINKED, unlinked:true) so intact data is never hidden.
- * Orphan anchors (no model) are excluded; a stray duplicate id yields only its first
- * occurrence (post-reconcile ids are unique — this mirrors that invariant defensively).
- */
-describe('listDocumentTables (panel list derivation)', () => {
-  function seedContent(text: string) {
-    doc.getText('content').insert(0, text);
-  }
-
-  it('lists tables in document/anchor order with label + shape', () => {
-    const t1 = createTable(doc, [['a', 'b'], ['c', 'd']]);
-    const t2 = createTable(doc, [['x'], ['y'], ['z']]);
-    seedContent(`before\n\n${tableAnchor('First', t1)}\n\nmid\n\n${tableAnchor('Second', t2)}\n\nafter`);
-    expect(listDocumentTables(doc)).toEqual([
-      { table_id: t1, label: 'First', rows: 2, cols: 2, unlinked: false },
-      { table_id: t2, label: 'Second', rows: 3, cols: 1, unlinked: false },
-    ]);
-  });
-
-  it('INCLUDES an orphan MODEL as unlinked, AFTER the linked tables', () => {
-    const anchored = createTable(doc, [['a']]);
-    const orphan = createTable(doc, [['x', 'y']]); // model present, no anchor → unlinked
-    seedContent(tableAnchor('Anchored', anchored));
-    expect(listDocumentTables(doc)).toEqual([
-      { table_id: anchored, label: 'Anchored', rows: 1, cols: 1, unlinked: false },
-      { table_id: orphan, label: '', rows: 1, cols: 2, unlinked: true },
-    ]);
-  });
-
-  it('excludes an orphan ANCHOR (no matching model)', () => {
-    const id = createTable(doc, [['a']]);
-    seedContent(`${tableAnchor('real', id)} and ${tableAnchor('ghost', 'missing-model')}`);
-    expect(listDocumentTables(doc)).toEqual([
-      { table_id: id, label: 'real', rows: 1, cols: 1, unlinked: false },
-    ]);
-  });
-
-  it('skips a duplicate id, keeping the first occurrence', () => {
-    const id = createTable(doc, [['a']]);
-    seedContent(`${tableAnchor('one', id)} then ${tableAnchor('two', id)}`);
-    expect(listDocumentTables(doc)).toEqual([
-      { table_id: id, label: 'one', rows: 1, cols: 1, unlinked: false },
-    ]);
-  });
-
-  it('lists a model with empty content as unlinked (data still reachable)', () => {
-    const orphan = createTable(doc, [['a']]);
-    expect(listDocumentTables(doc)).toEqual([
-      { table_id: orphan, label: '', rows: 1, cols: 1, unlinked: true },
-    ]);
-  });
-
-});
-
-/**
- * renameTable / insertTableAnchor for UNLINKED tables — an orphan (no anchor) can still be
- * named (model-label fallback) and re-inserted into the document.
- */
-describe('unlinked table rename + re-insert', () => {
-  it('renameTable stores a model label when there is no anchor', () => {
-    const id = createTable(doc, [['a']]);
-    renameTable(doc, id, '', 'Renamed');
-    expect(getModelLabel(doc, id)).toBe('Renamed');
-    expect(doc.getText('content').toString()).toBe(''); // no anchor written
-  });
-
-  it('insertTableAnchor re-links an orphan (anchor added, table becomes linked)', () => {
-    const id = createTable(doc, [['a']]);
-    renameTable(doc, id, '', 'Back');
-    insertTableAnchor(doc, id, getModelLabel(doc, id));
-    expect(doc.getText('content').toString()).toContain(tableAnchor('Back', id));
-    // Now linked: listed as unlinked:false with the anchor label.
-    expect(listDocumentTables(doc)).toEqual([
-      { table_id: id, label: 'Back', rows: 1, cols: 1, unlinked: false },
-    ]);
-  });
-
-});
-
-/**
- * normalizeTableLabel — sanitize a user-typed label so it cannot break the
- * `![label](table:id)` anchor grammar. `]` ends the alt-text (`[^\]]*` in
- * TABLE_ANCHOR_RE) and a newline would split the anchor across lines; both are
- * neutralized at the write path (renameTable) so a rename can never produce a
- * broken anchor. Trailing/leading whitespace is trimmed.
- */
-describe('normalizeTableLabel', () => {
-  it('strips every "]" (ends the alt-text grammar)', () => {
-    expect(normalizeTableLabel('a]b]c')).toBe('abc');
-  });
-
-  it('replaces newlines with a single space (no anchor split across lines)', () => {
-    expect(normalizeTableLabel('line1\nline2')).toBe('line1 line2');
-    expect(normalizeTableLabel('a\n\nb')).toBe('a  b');
-  });
-
-});
-
-/**
- * renameTable — the References-panel "table badge" rename write path. In ONE
- * `doc.transact` it locates `tableAnchor(oldLabel, id)` in `content` and replaces
- * that range with `tableAnchor(normalizeTableLabel(newLabel), id)`. Same
- * direct-content-edit precedent as `deleteTableFromDoc`. Collab merges via Yjs.
- */
-describe('renameTable (whole-table label rename)', () => {
-  function seedContent(text: string) {
-    doc.getText('content').insert(0, text);
-  }
-
-  it('replaces the anchor label in content (single transact)', () => {
-    const id = createTable(doc, [['a', 'b'], ['c', 'd']]);
-    seedContent(`intro\n\n${tableAnchor('Old name', id)}\n\noutro`);
-    renameTable(doc, id, 'Old name', 'New name');
-    expect(doc.getText('content').toString()).toBe(`intro\n\n${tableAnchor('New name', id)}\n\noutro`);
-  });
-
-  it('is a no-op (no throw) when the old anchor is absent (peer already moved/removed it)', () => {
-    const id = createTable(doc, [['a']]);
-    seedContent('no anchor here at all');
-    expect(() => renameTable(doc, id, 'Old name', 'New name')).not.toThrow();
-    expect(doc.getText('content').toString()).toBe('no anchor here at all');
-    // the model is untouched (rename only edits content, never the model).
-    expect(getTablesMap(doc).has(id)).toBe(true);
-  });
-
-  it('applies normalizeTableLabel on commit (strips "]" and newlines)', () => {
-    const id = createTable(doc, [['a']]);
-    seedContent(tableAnchor('Plain', id));
-    renameTable(doc, id, 'Plain', 'a]b\nc');
-    // "]" stripped, "\n" → space → the resulting anchor still parses.
-    expect(doc.getText('content').toString()).toBe(tableAnchor('ab c', id));
-  });
-
-});
-
-describe('scaleColumnWidths', () => {
-  const sum = (w: number[]) => w.reduce((a, b) => a + b, 0);
-
-  // TEST-WHY: pure-logic-edge — the sum is what keeps the table edge under the cursor, and rounding breaks it silently.
-  it('hits the requested total exactly, in integers', () => {
-    const out = scaleColumnWidths([233, 233, 234], 401);
-    expect(sum(out)).toBe(401);
-    expect(out.every(Number.isInteger)).toBe(true);
-  });
-
-  // TEST-WHY: pure-logic-edge — a pinned column must not stop the shrink; the others absorb the rest.
-  it('pins a column at the floor while the others absorb the shrink', () => {
-    const out = scaleColumnWidths([50, 200, 400], 200);
-    expect(out[0]).toBe(MIN_COLUMN_WIDTH);
-    expect(sum(out)).toBe(200);
-    expect(Math.min(...out)).toBeGreaterThanOrEqual(MIN_COLUMN_WIDTH);
-    expect(scaleColumnWidths([100, 300, 500], 10)).toEqual([40, 40, 40]);
-  });
-});
-
-// BYTE-IDENTICAL BACKEND TWIN: tests/backend/test_table_serialize.py BIRTH_WIDTH_FIXTURE
-// (the containers do not mount each other's trees). A case changed HERE changes THERE.
-const BIRTH_WIDTH_FIXTURE: [string, string[][], number[]][] = [
-  ['empty-2x2-equal', [['', ''], ['', '']], [422, 422]],
-  ['narrow-hash-wide-text', [['#', 'Description'], ['1', 'a'.repeat(100)]], [59, 785]],
-  ['names', [['Name', 'Role'], ['Aragorn', 'Ranger'], ['Legolas', 'Elf']], [454, 390]],
-  ['multiline-longest-trimmed-line', [['a\nbbbbbb  ', 'cc']], [563, 281]],
-  ['ragged-row', [['x', 'y', 'z'], ['only']], [338, 253, 253]],
-  ['remainder-to-widest-first', [['a', 'b', 'c']], [282, 281, 281]],
-  ['code-points-not-bytes', [['ёжик', 'ab']], [482, 362]],
-  ['too-many-columns-floor-at-min', [Array(25).fill('x')], Array(25).fill(40)],
-];
-
-describe('birthColumnWidths', () => {
-  // TEST-WHY: pure-logic-edge — pins the birth-width formula and its byte agreement with the backend twin.
-  it.each(BIRTH_WIDTH_FIXTURE)('%s', (_case, matrix, expected) => {
-    expect(birthColumnWidths(matrix)).toEqual(expected);
-  });
-});
-
-describe('addColumn width follows the table state', () => {
-  // TEST-WHY: pure-logic-edge — a 0 in an all-px table flips it to 100% wide, a jump the user never made.
-  it('a frozen table gets a px column, an auto table an auto one', () => {
-    const doc = new Y.Doc();
+describe('v1 tables (awaiting migration) — never empty', () => {
+  // TEST-WHY: data-loss — a v1 table projected as EMPTY reaches a checkpoint, and restoring that checkpoint rebuilds it empty.
+  it('a v1 table never projects empty: probed, skipped by capture, kept by restore', () => {
     const id = createTable(doc, [['a', 'b']]);
-    setColumnWidth(doc, id, 0, 0);
-    setColumnWidth(doc, id, 1, 0);
-    addColumn(doc, id);
-    expect(readTableModel(doc, id)?.columns).toEqual([0, 0, 0]);
-    setColumnWidths(doc, id, [100, 200, 300]);
-    addColumn(doc, id);
-    expect(readTableModel(doc, id)?.columns).toEqual([100, 200, 300, DEFAULT_COLUMN_WIDTH]);
+    expect(tableAwaitsMigration(getTablesMap(doc).get(id))).toBe(false);
+
+    seedV1Table(doc, 'v1', [['x', 'y'], ['z', 'w']]);
+    const v1 = getTablesMap(doc).get('v1');
+    expect(tableAwaitsMigration(v1)).toBe(true);
+    // Reads: broken (null) for the matrix, but the panel still sees its shape.
+    expect(readTableModel(doc, 'v1')).toBeNull();
+    expect(readColumnWidths(doc, 'v1')).toBeNull();
+    expect(readTableShape(doc, 'v1')).toEqual({ rows: 2, cols: 2 });
+
+    // Capture OMITS it — never emits an empty table.
+    expect(JSON.parse(serializeTables(doc))).toEqual({
+      [id]: { columns: [422, 422], rows: [['a', 'b']] },
+    });
+
+    // Restore KEEPS an unnamed v1 table (the snapshot holds no truth about it) and
+    // REPLACES a named one (the rebuild wins).
+    applyTablesJson(doc, JSON.stringify({ fresh: { columns: [7], rows: [['q']] } }));
+    expect(tableAwaitsMigration(getTablesMap(doc).get('v1'))).toBe(true);
+    expect(readTableModel(doc, 'fresh')!.rows).toEqual([['q']]);
+    applyTablesJson(doc, JSON.stringify({ v1: { columns: [7], rows: [['rebuilt']] } }));
+    expect(readTableModel(doc, 'v1')!.rows).toEqual([['rebuilt']]);
   });
 });

@@ -119,7 +119,7 @@ export function Header() {
         // to the project crumb and the divider below is dropped.
         className={`flex items-center no-underline text-text ${compactLayout ? 'mr-0.5' : 'mr-2'}`}
       >
-        <div className="w-[26px] h-[26px] bg-accent flex items-center justify-center text-sm text-white tracking-[-0.5px] font-bold">L</div>
+        <div className="w-[30px] h-[30px] bg-accent flex items-center justify-center text-sm text-white tracking-[-0.5px] font-bold">L</div>
       </Link>
 
       {/*

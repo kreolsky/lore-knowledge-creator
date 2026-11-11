@@ -171,7 +171,10 @@ export function ChatComposer({
       >
         <div className="flex flex-col h-full">
           {/* Top area: AI controls + shared attachment chips + warnings */}
-          <div className="px-3 pt-2">
+          {/* WHY pt-[5px]: with the AI controls row's mb-px and the textarea wrapper's
+              py-1 (4px), the 30px controls get 5px above and below — the same as the
+              tab header bar (30px buttons in min-h-[40px]). */}
+          <div className="px-3 pt-[5px]">
             {topControls}
             <AttachmentChips images={images} onRemove={onRemoveImage} imageMeta={imageMeta} pressing={pressingImages} files={files} onRemoveFile={onRemoveFile} />
             {warnings}

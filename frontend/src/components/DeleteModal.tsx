@@ -4,6 +4,7 @@
 import { useState } from 'react';
 import { Button, Modal, FieldCheckbox, FieldInput } from './ui';
 import { useTranslation } from '../i18n';
+import { copyWithToast } from './chat/shared/copy';
 import { useAppStore } from '../store/app-store';
 import type { TranslationKey } from '../i18n';
 
@@ -30,8 +31,7 @@ function InterpolatedName({ template, itemName }: { template: string; itemName: 
   const parts = template.split(NAME_SENTINEL);
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(itemName);
-    showToast(t('copied'), 'info');
+    copyWithToast(itemName, showToast);
   };
 
   return (

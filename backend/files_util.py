@@ -11,6 +11,7 @@ chain (resolve_reference_file) in files_service.py.
 """
 
 import asyncio
+import hashlib
 import logging
 import mimetypes
 import os
@@ -528,6 +529,14 @@ async def classify_upload_kind(filename: str, mime: str) -> tuple[str | None, in
     return None, 0
 
 
+def image_digest(data: bytes) -> str:
+    """sha256 of an image's bytes — stored as file_meta.content_sha256 by
+    save_upload and matched by find_image_reference_by_digest (same-bytes
+    upload dedup). Bytes, not pixels: a re-encoded copy hashes differently
+    and uploads as new."""
+    return hashlib.sha256(data).hexdigest()
+
+
 async def save_upload(
     data: bytes | None,
     mime: str,
@@ -570,6 +579,16 @@ async def save_upload(
     }
 
     if media_type == "image":
+        # Content digest for the same-bytes upload dedup: EVERY image save
+        # stores it (agent imports, image generation, MCP uploads included)
+        # so later uploads can dedup against them; only the user upload
+        # route (_upload_image_reference) looks it up.
+        if data is not None:
+            file_meta["content_sha256"] = image_digest(data)
+        else:
+            file_meta["content_sha256"] = image_digest(
+                await asyncio.to_thread(file_path.read_bytes)
+            )
         try:
             from PIL import Image as _PILImage
             img = await asyncio.to_thread(_PILImage.open, file_path)

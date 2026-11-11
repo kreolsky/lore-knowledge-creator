@@ -20,6 +20,7 @@ import { Button, FieldTextarea } from '../ui';
 import { emit } from '../../events';
 import { useTranslation } from '../../i18n';
 import { useSimpleVoiceRecording } from '../../hooks/useSimpleVoiceRecording';
+import { useClickOutside } from '../../hooks/useClickOutside';
 import { MicButton } from './shared/MicButton';
 
 interface Anchor {
@@ -117,15 +118,7 @@ export function ChatClarifyPopover() {
     return () => document.removeEventListener('keydown', onKey);
   }, [visible, hide]);
 
-  // Click outside dismisses.
-  useEffect(() => {
-    if (!visible) return;
-    const onDown = (e: MouseEvent) => {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) hide();
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [visible, hide]);
+  useClickOutside(popoverRef, hide, visible);
 
   // Post-measure placement: the button is centred under the pointer; the expanded
   // form opens from the button's top-left corner. Clamped into the viewport only

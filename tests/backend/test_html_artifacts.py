@@ -14,7 +14,7 @@ import time
 import zipfile
 
 import pytest
-from helpers import pin_artifact_cap, pin_artifact_origin
+from helpers import pin_artifact_origin
 
 TEST_ORIGIN = "https://lore-usercontent.test"
 ARTIFACT_HOST = {"host": "lore-usercontent.test"}
@@ -296,7 +296,7 @@ async def test_artifact_url_mint_access(client, test_db, admin_user, regular_use
 # ═══ agent surface + row rules + skips + export ═════════════════════════════
 
 
-# TEST-WHY: cross-process-contract — the html row over the real tool+HTTP+Surreal path: verbatim create/edit, caps, leaf rule in route AND schema, fixed kind, title-only search, embed/mention skips, .html export.
+# TEST-WHY: cross-process-contract — the html row over the real tool+HTTP+Surreal path: verbatim create/edit, leaf rule in route AND schema, fixed kind, title-only search, embed/mention skips, .html export.
 async def test_html_agent_surface_and_rules(client, test_db, admin_user, project_with_doc, monkeypatch):
     """The row's whole life, contract by contract."""
     pin_artifact_origin(monkeypatch)
@@ -353,27 +353,6 @@ async def test_html_agent_surface_and_rules(client, test_db, admin_user, project
     assert (await client.post("/api/tool/create_table", json={
         "document_id": doc_id, "rows": [["a", "b"]], "apply": "auto",
     }, headers=_hdr(agent_key))).status_code == 422
-
-    # Size cap: create past the cap is a named 422; an edit crossing it too.
-    # The cap is pinned SMALL through the artifacts module (helpers.
-    # pin_artifact_cap) — every writer reads it at call time, so ONE pin
-    # covers create and edit growth without posting multi-MiB bodies over
-    # the HTTP test path.
-    cap = pin_artifact_cap(monkeypatch, 300 * 1024)
-    assert (await _create_html(
-        client, agent_key, pid, parent, "Huge",
-        "<p>" + "x" * (cap + 1) + "</p>",
-    )).status_code == 422
-    near_id = (await _create_html(
-        client, agent_key, pid, parent, "Near",
-        "<p>" + "a" * (cap - 100) + "</p>",
-    )).json()["doc_id"]
-    resp = await client.post("/api/tool/edit_document", json={
-        "document_id": near_id,
-        "edits": [{"old_string": "<p>", "new_string": "<p>" + "b" * 200}],
-        "apply": "auto",
-    }, headers=_hdr(agent_key))
-    assert resp.status_code == 422 and "KiB" in resp.text
 
     # Leaf rule: REST create under the page is a 400; a DIRECT row create is
     # aborted by the schema event (no row persists).

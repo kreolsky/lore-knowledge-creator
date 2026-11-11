@@ -11,7 +11,11 @@ from api_key_auth import mint_token, resolve_api_key
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from surrealdb import AsyncSurreal
 
-from access import require_document_full, require_project_full
+from access import (
+    require_document_full,
+    require_project_full,
+    require_project_owner,
+)
 from auth import get_current_user
 from db import (
     create_record,
@@ -111,6 +115,16 @@ async def create_api_key(
 
     doc = await guard_row("documents", body.document_id, not_found="Document not found")
     await require_document_full(body.document_id, user)
+
+    # Operator ruling (plan "project-index-as-project-face"): ANY key on the
+    # project's index doc — widget or agent — is owner-only. Why: the index is
+    # the project's face and its scope is the whole project (minus the system
+    # and help subtrees), a volume only the owner may delegate.
+    if doc.get("is_index"):
+        project = await fetch_one("projects", doc["project_id"])
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        await require_project_owner(project, user)
 
     if "agent" in body.capabilities:
         await require_project_full(doc["project_id"], user)

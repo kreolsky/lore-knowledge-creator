@@ -51,26 +51,26 @@ export function RefPanelPlaque({
   const download = referenceDownloadProps(reference);
 
   return (
-    <div data-testid="refs-panel-plaque" className="flex items-center gap-1 px-3 py-2 border-b border-border bg-surface min-h-[40px]">
-      <Button variant="primary" size="sm" onClick={onBack}>
+    <div data-testid="refs-panel-plaque" className="flex items-center gap-1 px-3 py-1 border-b border-border bg-surface min-h-[40px]">
+      <Button variant="primary" onClick={onBack}>
         <ArrowLeft size={13} />
         {t('references')}
       </Button>
 
-      {/* WHY this 22×22 slot (IconButton size="sm" footprint) is ALWAYS rendered
+      {/* WHY this 30×30 slot (IconButton footprint) is ALWAYS rendered
           between the "← Refs" button and the title with AT MOST one icon —
           goto-parent / change-parent / empty: the title's left edge must not
           shift across states. The two icon branches are mutually exclusive by
           construction (goto-parent requires parent ≠ open document, change-parent
           requires parent == open document), so the slot never holds two icons. */}
-      <div data-title-slot className="flex items-center justify-center w-[22px] h-[22px] shrink-0">
+      <div data-title-slot className="flex items-center justify-center w-[30px] h-[30px] shrink-0">
         {showGotoParent && (
-          <IconButton size="sm" title={t('gotoParentDoc', { title: parentTitle })} onClick={() => onGotoParent(parentId!)}>
+          <IconButton title={t('gotoParentDoc', { title: parentTitle })} onClick={() => onGotoParent(parentId!)}>
             <FileText size={14} />
           </IconButton>
         )}
         {showChangeParent && (
-          <IconButton size="sm" title={t('changeParentDocument')} onClick={e => onChangeParent(reference, e.currentTarget.getBoundingClientRect())}>
+          <IconButton title={t('changeParentDocument')} onClick={e => onChangeParent(reference, e.currentTarget.getBoundingClientRect())}>
             <FolderUp size={14} />
           </IconButton>
         )}
@@ -109,7 +109,7 @@ export function RefPanelPlaque({
 
       {/* The pressed eye = the panel toggle in its active state; clicking it turns panel
           mode off and the reference re-opens in the center. */}
-      <IconButton size="sm" className={ACTIVE_TOGGLE_CLS} title={t('toggleRefInPanel')} onClick={onExitPanel}>
+      <IconButton className={ACTIVE_TOGGLE_CLS} title={t('toggleRefInPanel')} onClick={onExitPanel}>
         <Eye size={14} />
       </IconButton>
       <DownloadMenu
@@ -122,7 +122,7 @@ export function RefPanelPlaque({
       {/* Restore sits directly LEFT of the trash (the pair reads as one archive control);
           the download menu moves left to make room. */}
       {canEdit && archived && (
-        <IconButton size="sm" title={t('restoreReference')} onClick={() => onRestore(reference)}>
+        <IconButton title={t('restoreReference')} onClick={() => onRestore(reference)}>
           <ArchiveRestore size={14} />
         </IconButton>
       )}
@@ -130,7 +130,6 @@ export function RefPanelPlaque({
         // Stateful trash, same contract as RefCard: live → single-click archive (no
         // arming, non-destructive); archived → armed two-click permanent delete.
         <IconButton
-          size="sm"
           danger
           filled={deleteAction.armed}
           title={archived ? t('deleteReferencePermanently') : t('archiveReference')}

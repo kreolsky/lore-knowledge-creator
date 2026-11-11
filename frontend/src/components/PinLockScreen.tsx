@@ -34,6 +34,11 @@ export function PinLockScreen() {
         credentials: 'include',
         body: JSON.stringify({ pin }),
       });
+      // WHY: a 401/500 is not a wrong PIN — only a 2xx body carries `valid`.
+      if (!res.ok) {
+        setError(t('connectionError'));
+        return;
+      }
       const data = await res.json();
       if (data.valid) {
         setPinLocked(false);

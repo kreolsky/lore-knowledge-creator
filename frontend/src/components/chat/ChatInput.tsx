@@ -6,7 +6,7 @@ import { Button, Dropdown, FieldCheckbox } from '../ui';
 import { ChatComposer } from './ChatComposer';
 import { SelectionPill } from './SelectionPill';
 import { TokenUsageGauge } from './TokenUsageGauge';
-import { CacheHitIndicator, lastTurnCacheHit } from './CacheHitIndicator';
+import { CacheHitIndicator } from './CacheHitIndicator';
 import { useChatStore, chatAttachSurface } from '../../store/chat-store';
 import type { ChatUIMode } from '../../types';
 import { deriveUIMode } from '../../types';
@@ -53,11 +53,6 @@ export function ChatInput() {
   // tab, or the gap between two queued turns): Stop shows and stops either.
   const isStreaming = useChatStore(s => s.streaming !== null || s.dshRunning);
   const activeSessionId = useChatStore(s => s.activeSessionId);
-  // Last completed turn's prompt-cache share, off dsh's turn-tail node in the
-  // published conversation (see SYSTEM: dsh-conversation) — the assembler
-  // derives the per-turn aggregate; nothing is summed here.
-  const conversation = useChatStore(s => s.conversation);
-  const cacheHit = useMemo(() => lastTurnCacheHit(conversation), [conversation]);
   const pendingInputFocus = useChatStore(s => s.pendingInputFocus);
   const images = useChatStore(s => s.pendingImages);
   const pressingImages = useChatStore(s => s.pressingImages);
@@ -431,12 +426,11 @@ export function ChatInput() {
   const topControls = (
     <>
       {(currentDocId || activeSessionId) && (
-        <div className="flex justify-between items-center gap-3 mb-1 flex-wrap">
+        <div className="flex justify-between items-center gap-3 mb-px flex-wrap">
           <div className="flex gap-3">
             <div ref={contentPickerRef}>
               <Button
                 variant="ghost"
-                size="sm"
                 onClick={handleOpenContentPicker}
                 disabled={isStreaming}
               >
@@ -479,7 +473,7 @@ export function ChatInput() {
               />
               {/* Prompt-cache hit share of the last turn, beside the gauge. Absent
                   until a turn completes with cache accounting (see CacheHitIndicator). */}
-              {cacheHit && <CacheHitIndicator figure={cacheHit} />}
+              <CacheHitIndicator />
             </div>
           )}
         </div>
@@ -564,7 +558,6 @@ export function ChatInput() {
           onSelect={handleModelSelect}
           disabled={isStreaming}
           placement="top"
-          size="md"
           open={modelPickerOpen}
           onOpenChange={setModelPickerOpen}
         />
@@ -595,7 +588,6 @@ export function ChatInput() {
           disabled={isStreaming}
           title={t('chatReasoningTitle')}
           placement="top"
-          size="md"
         />
       )}
       <FieldCheckbox

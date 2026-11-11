@@ -21,6 +21,7 @@ import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
 import { entityYdoc } from './active-editor';
 import { importGfmTables } from '../components/editor/live-preview/gfm-table-import';
+import { documentTextWidth } from '../components/editor/live-preview/document-width';
 import { t } from '../i18n';
 
 const turndown = new TurndownService({
@@ -309,7 +310,7 @@ function insertVerbatim(view: EditorView, source: string): void {
   // WHY: a paste into a fenced code block is code — its pipe table stays text (the same
   // fence skip the scanner applies to fences inside the pasted source).
   if (ydoc && !inFencedCode(view, view.state.selection.main.from)) {
-    insert = importGfmTables(ydoc, insert, t('tableBlockUntitled')).text;
+    insert = importGfmTables(ydoc, insert, t('tableBlockUntitled'), documentTextWidth(view)).text;
   }
   const main = view.state.selection.main;
   view.dispatch({

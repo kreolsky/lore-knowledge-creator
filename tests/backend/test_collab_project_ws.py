@@ -13,6 +13,7 @@ flush content through the session object — they do not reconstruct binary fram
 import json
 
 import pytest
+from helpers import project_collab_url
 
 # ─── 1. Connection & Auth ─────────────────────────────────────────────────────
 
@@ -25,7 +26,7 @@ class TestProjectWsConnection:
         # left the `rtt` telemetry kind permanently empty.
         pid, _, admin_token, *_ = collab_project
         with sync_app.websocket_connect(
-            f"/ws/collab/project/{pid}", cookies={"lore_session": admin_token}
+            project_collab_url(pid), cookies={"lore_session": admin_token}
         ) as ws:
             ws.send_text(json.dumps({"type": "heartbeat", "t": 123456}))
             reply = json.loads(ws.receive_text())
@@ -42,7 +43,7 @@ class TestJoinLeave:
     def test_rejoin_after_leave(self, sync_app, collab_project):
         pid, doc_id, admin_token, *_ = collab_project
         with sync_app.websocket_connect(
-            f"/ws/collab/project/{pid}", cookies={"lore_session": admin_token}
+            project_collab_url(pid), cookies={"lore_session": admin_token}
         ) as ws:
             ws.send_text(json.dumps({"type": "join", "entity_type": "doc", "entity_id": doc_id}))
             assert json.loads(ws.receive_text())["type"] == "init"
@@ -64,8 +65,27 @@ class TestAuthPerJoin:
         _, _, ref_id, *_ = collab_ref_project
 
         with sync_app.websocket_connect(
-            f"/ws/collab/project/{pid1}", cookies={"lore_session": admin_token}
+            project_collab_url(pid1), cookies={"lore_session": admin_token}
         ) as ws:
             ws.send_text(json.dumps({"type": "join", "entity_type": "doc", "entity_id": ref_id}))
             msg = json.loads(ws.receive_text())
             assert msg["type"] == "error"
+
+
+# ─── Protocol gate ────────────────────────────────────────────────────────────
+
+
+# TEST-WHY: cross-process-contract — a tab running pre-deploy code must be shut out before sync, with the code the new client turns into a reload notice.
+@pytest.mark.parametrize("query", ["", "?proto=1", "?proto="])
+def test_outdated_client_closed_4010_before_sync(sync_app, collab_project, query):
+    from routes.collab_project_ws import CLIENT_OUTDATED_CLOSE_CODE
+    from starlette.websockets import WebSocketDisconnect
+
+    pid, doc_id, admin_token, *_ = collab_project
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with sync_app.websocket_connect(
+            f"/ws/collab/project/{pid}{query}", cookies={"lore_session": admin_token}
+        ) as ws:
+            ws.send_text(json.dumps({"type": "join", "entity_type": "doc", "entity_id": doc_id}))
+            ws.receive_text()
+    assert exc.value.code == CLIENT_OUTDATED_CLOSE_CODE == 4010

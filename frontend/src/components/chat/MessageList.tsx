@@ -496,7 +496,7 @@ export function MessageList() {
       <div className="flex-1 flex flex-col items-center justify-center gap-3 px-4 text-center">
         <p className="text-sm text-text-dim">{t('chatMessagesLoadFailed')}</p>
         {activeSessionId && (
-          <Button variant="ghost" size="sm" onClick={() => void loadMessages(activeSessionId)}>
+          <Button variant="ghost" onClick={() => void loadMessages(activeSessionId)}>
             {t('retry')}
           </Button>
         )}

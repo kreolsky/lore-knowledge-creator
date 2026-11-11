@@ -220,13 +220,12 @@ export function ChatHeader() {
   // either way.
   if (!activeSessionId) {
     return (
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-surface min-h-[40px]">
+      <div className="flex items-center gap-2 px-3 py-1 border-b border-border bg-surface min-h-[40px]">
         <div className="flex-1 min-w-0">
           <span className="block text-sm font-medium text-text-muted truncate">{t('chatEmptyHint')}</span>
         </div>
         {currentDocumentId && (
           <IconButton
-            size="sm"
             className={chatSortByProximity ? 'text-accent-text' : 'text-text-muted'}
             title={chatSortByProximity ? t('chatSortByRecency') : t('chatSortByProximity')}
             onClick={() => setChatSortByProximity(currentDocumentId, !chatSortByProximity)}
@@ -239,14 +238,14 @@ export function ChatHeader() {
   }
 
   return (
-    <div className="flex items-center gap-1 px-3 py-2 border-b border-border bg-surface min-h-[40px]">
-      <Button variant="primary" size="sm" onClick={handleNewChat}>
+    <div className="flex items-center gap-1 px-3 py-1 border-b border-border bg-surface min-h-[40px]">
+      <Button variant="primary" onClick={handleNewChat}>
         <ArrowLeft size={13} />
         {t('chatNew')}
       </Button>
 
       {activeSessionId && (
-        // WHY this 22×22 slot (IconButton size="sm" footprint) is ALWAYS rendered
+        // WHY this 30×30 slot (IconButton footprint) is ALWAYS rendered
         // between the "← New chat" button and the title with AT MOST one icon —
         // goto-parent / change-parent / empty: the title's left edge must not
         // shift across states (icon shown / hidden / renaming); a slot that
@@ -254,10 +253,9 @@ export function ChatHeader() {
         // two icon branches are mutually exclusive by construction (goto-parent
         // requires parent ≠ open entity, change-parent requires parent == open
         // entity), so the slot never holds two icons.
-        <div data-title-slot className="flex items-center justify-center w-[22px] h-[22px] shrink-0">
+        <div data-title-slot className="flex items-center justify-center w-[30px] h-[30px] shrink-0">
           {showGotoParent && (
             <IconButton
-              size="sm"
               title={t('gotoParentDoc', { title: parentTitle })}
               onClick={() => {
                 if (isRefSession) {
@@ -278,7 +276,6 @@ export function ChatHeader() {
           )}
           {showChangeParent && (
             <IconButton
-              size="sm"
               title={t('changeChatParent')}
               onClick={e => setParentPickerRect(e.currentTarget.getBoundingClientRect())}
             >
@@ -326,7 +323,6 @@ export function ChatHeader() {
       {activeSessionId && (
         <>
           <IconButton
-            size="sm"
             pressed={!!activeSession?.unindexed}
             color="green"
             title={activeSession?.unindexed ? t('chatUnindexedOn') : t('chatUnindexedOff')}
@@ -335,7 +331,6 @@ export function ChatHeader() {
             <EyeOff size={14} />
           </IconButton>
           <IconButton
-            size="sm"
             disabled={!!activeSession?.unindexed}
             title={activeSession?.unindexed ? t('analyseChatHiddenHint') : t('analyseInNewChat')}
             onClick={handleAnalyseInNewChat}
@@ -348,7 +343,7 @@ export function ChatHeader() {
             keyboardNav={false}
             panelClassName="min-w-[120px]"
             trigger={
-              <IconButton size="sm" title={t('exportChat')}>
+              <IconButton title={t('exportChat')}>
                 <Download size={14} />
               </IconButton>
             }
@@ -377,7 +372,6 @@ export function ChatHeader() {
             )}
           </Popover>
           <IconButton
-            size="sm"
             danger
             filled={deleteAction.armed}
             title={t('deleteChat')}

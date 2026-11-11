@@ -57,18 +57,17 @@ async def _live_baseline(document_id: str, existing: dict | None) -> tuple[str, 
 
 
 async def _rebuild_mentions(db, document_id: str, project_id: str, content: str) -> None:
-    """Rebuild mention edges for new content, then signal the flush."""
-    from mentions import rebuild_doc_mentions
-    pairs = await rebuild_doc_mentions(db, "documents", document_id, content)
-    if pairs:
-        # Affected ids = targets + the SOURCE (plan typed-edges): a client
-        # joined to the source refreshes its outgoing list on the same event.
-        await event_bus.emit(
-            "backlinks_changed_batch",
-            document_ids=[document_id, *(tid for tid, _kind in pairs)],
-        )
+    """Rebuild mention edges for new content, then signal the flush.
 
-    await event_bus.emit("content_flushed", entity_type="doc", entity_id=document_id, project_id=project_id)
+    # ARCH: `content` must be the GFM read-model form (the set_content return),
+    # never the anchor-form PATCH body — a table cell's `[x](doc:id)` link is
+    # invisible in the anchor form (plan table-cell-mention-edges).
+    Delegates to mentions.finalize_content_edges — the ONE no-session finalize
+    tail shared with the agent path and the reference PATCH (plan
+    table-links-notes); the backlinks emit is ALWAYS for the source.
+    """
+    from mentions import finalize_content_edges
+    await finalize_content_edges(db, document_id, content, project_id=project_id)
 
 
 async def _reject_empty_wipe(entity_id: str, project_id: str, baseline_len: int) -> None:
@@ -186,9 +185,10 @@ async def _write_content_update(
     # persisted Y.Doc at the OLD text, and the next collab open loads ydoc_state,
     # so the browser shows the pre-PATCH body while documents.content says
     # otherwise. set_content also prunes the update log and converges any
-    # registered zero-client session via the backplane publish.
-    await set_content(document_id, new_content, persist=True)
-    await _rebuild_mentions(db, document_id, project_id, new_content)
+    # registered zero-client session via the backplane publish. Its return is
+    # the persisted GFM read-model — the ONE form mention edges parse.
+    persisted = await set_content(document_id, new_content, persist=True)
+    await _rebuild_mentions(db, document_id, project_id, persisted)
     return backup
 
 

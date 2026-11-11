@@ -150,7 +150,7 @@ export function ArtifactFrame({ fetchUrl, changeSeq }: ArtifactFrameProps) {
                     : state.reason === 'navigated' ? 'artifactNavigated' : 'artifactLoadFailed')}
                 </p>
                 {state.reason !== 'unconfigured' && (
-                  <Button variant="ghost" size="sm" onClick={reload}>{t('artifactReload')}</Button>
+                  <Button variant="ghost" onClick={reload}>{t('artifactReload')}</Button>
                 )}
               </div>
             </div>

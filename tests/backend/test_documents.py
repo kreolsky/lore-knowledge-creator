@@ -68,7 +68,13 @@ async def test_document_links_prefers_live_session_content_over_db(client, admin
     await client.patch(f"/api/documents/{src}", json={"content": f"see ![](ref:{ref_id})"}, cookies=cookies)
 
     # Live session has a connected client but EMPTY content (deletion not yet flushed).
-    live = SimpleNamespace(content="", clients={"someone"})
+    # The route reads the GFM read-model from the session Y.Doc (expand_tables) —
+    # the fake carries a real empty Doc so the live branch sees "" (same contract).
+    from pycrdt import Doc, Text
+
+    live_doc = Doc()
+    live_doc.get("content", type=Text)
+    live = SimpleNamespace(ydoc=live_doc, clients={"someone"})
 
     def fake_active(entity_type, entity_id):
         return live if entity_id == src else None
@@ -95,8 +101,13 @@ async def test_reference_links_prefers_live_session_content_over_db(client, admi
               "content": f"text [d]({doc})"},
         cookies=cookies)).json()["document_id"]
 
-    # Live session emptied the reference body before flush.
-    live = SimpleNamespace(content="", clients={"someone"})
+    # Live session emptied the reference body before flush — a real empty Doc
+    # (the route expands the read-model from the session Y.Doc).
+    from pycrdt import Doc, Text
+
+    live_doc = Doc()
+    live_doc.get("content", type=Text)
+    live = SimpleNamespace(ydoc=live_doc, clients={"someone"})
 
     def fake_active(entity_type, entity_id):
         return live if entity_id == src_ref else None

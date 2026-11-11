@@ -197,7 +197,7 @@ function buildAtomicObjects(state: EditorState): DecorationSet {
       const resolved = resolveTransclusion(embed.urlText);
       if (resolved?.kind !== 'image') return;
       const { width, height } = parseSizeFromAlt(embed.alt);
-      const widget = new ImageWidget(transcludeMap.get(resolved.id)?.imageUrl as string, width, height);
+      const widget = new ImageWidget(transcludeMap.get(resolved.id)?.imageUrl as string, resolved.id, width, height);
       ranges.push(Decoration.replace({ widget, atomicKind: 'image' }).range(node.from, node.to));
       return false;
     },

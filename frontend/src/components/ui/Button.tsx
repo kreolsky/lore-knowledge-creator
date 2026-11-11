@@ -7,7 +7,7 @@ import { forwardRef } from 'react';
 
 interface ButtonProps {
   variant?: 'primary' | 'ghost' | 'ghost-note' | 'yellow' | 'yellow-strong' | 'dashed' | 'danger' | 'subtle' | 'highlight' | 'composer' | 'panel';
-  size?: 'sm' | 'md' | 'md-square' | 'lg' | 'lg-square';
+  size?: 'sm' | 'md' | 'md-square';
   danger?: boolean;
   fullWidth?: boolean;
   onClick?: React.MouseEventHandler<HTMLButtonElement>;
@@ -55,16 +55,13 @@ const variants: Record<string, string> = {
 };
 
 const sizes: Record<string, string> = {
+  // WHY two heights only — md 30 (base) and sm 22: operator rule; md equals
+  // FieldInput / Dropdown / SegmentedControl, so any mixed row lines up.
   md: 'h-[30px] px-3',
-  // Icon-only square at the md height (compact-layout chat send).
+  // Icon-only square at the md height (no className passthrough, so the square
+  // is a size, not a class).
   'md-square': 'h-[30px] w-[30px] p-0',
   sm: 'text-xs h-[22px] px-2.5',
-  // lg = FieldInput's pinned height (h-[37px], FieldInput.tsx) — for a button
-  // in the same row as an input (cabinet / admin forms). Never the default.
-  lg: 'h-[37px] px-3 text-sm',
-  // Icon-only square at the same input-row height (no className passthrough,
-  // so the square is a size, not a class).
-  'lg-square': 'h-[37px] w-[37px] p-0 justify-center text-sm',
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(

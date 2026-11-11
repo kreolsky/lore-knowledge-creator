@@ -41,10 +41,6 @@ export interface DropdownProps {
   variant?: 'composer' | 'highlight' | 'ghost' | 'panel';
   align?: 'left' | 'right';
   placement?: 'top' | 'bottom';
-  /** Trigger height: `sm` (compact rows), `md` = the md Button's height, for a
-   * selector sharing a row with md buttons (chat composer: send), or `lg` =
-   * FieldInput's 37px, for a selector sitting in the same row as inputs (admin forms). */
-  size?: 'sm' | 'md' | 'lg';
   /** Controlled open state, passed through to Popover; omit for uncontrolled. */
   open?: boolean;
   onOpenChange?: (v: boolean) => void;
@@ -67,7 +63,6 @@ export function Dropdown({
   variant,
   align = 'left',
   placement = 'top',
-  size = 'sm',
   open,
   onOpenChange,
   filterPlaceholder,
@@ -121,7 +116,8 @@ export function Dropdown({
           // selector must never submit the form around it (admin add-user form).
           type="button"
           variant={variant ?? (highlight ? 'highlight' : 'composer')}
-          size={size}
+          // Always the md height (30) = FieldInput = Button md — one selector height.
+          size="md"
           title={title}
           disabled={disabled}
           fullWidth={fullWidth}

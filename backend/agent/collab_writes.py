@@ -211,7 +211,7 @@ async def create_document_via_collab(
     if not title:
         raise HTTPException(status_code=400, detail="title is required")
     if is_artifact:
-        artifacts.assert_artifact_size(len(content.encode("utf-8")))
+        await artifacts.assert_artifact_size(len(content.encode("utf-8")))
     else:
         if len(content) > MAX_PROPOSAL_NEW_TEXT_CHARS:
             raise HTTPException(status_code=413, detail="Content too large")

@@ -25,7 +25,13 @@ export function useEditorHotkeys({ role, isReference }: UseEditorHotkeysOpts): v
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        if (!isReference && getFocusedRole() !== 'secondary' && useAppStore.getState().accessLevel === 'full') {
+        if (!isReference && getFocusedRole() !== 'secondary' && useAppStore.getState().accessLevel === 'full'
+          // INVARIANT(corruption): no manual snapshot while a snapshot preview is open.
+          // Why: the preview owns the root slot, so getContent() would capture the
+          // CHECKPOINT's historical text and store it as a fresh "current" snapshot.
+          // Exit the preview first; HistoryPanel's saveSnapshot button remains the
+          // live-text snapshot path.
+          && !useAppStore.getState().snapshotPreview) {
           useAppStore.getState().openSnapshotModal(getContent(), getActiveTablesJson());
         }
       }

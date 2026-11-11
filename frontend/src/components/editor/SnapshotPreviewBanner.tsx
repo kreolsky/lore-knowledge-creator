@@ -70,10 +70,10 @@ export function SnapshotPreviewBanner() {
     <>
       <div className="snapshot-preview-banner snapshot-viewer-banner">
         <div className="flex gap-1.5 items-center ml-auto">
-          <Button variant="ghost" size="sm" onClick={() => setConfirmOpen(true)}>
+          <Button variant="ghost" onClick={() => setConfirmOpen(true)}>
             <History size={13} /> {t('restore')}
           </Button>
-          <Button variant="ghost" size="sm" onClick={handleBack}>
+          <Button variant="ghost" onClick={handleBack}>
             <ArrowLeft size={13} /> {currentDocument.title}
           </Button>
         </div>

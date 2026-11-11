@@ -23,12 +23,13 @@
 //      false. An UPLOAD failure is toasted separately (recordingKeptForRetry).
 
 import { useAppStore } from '../store/app-store';
-import { apiClient, AuthError, isAccessRefusal } from '../api/client';
+import { AuthError, isAccessRefusal } from '../api/client';
+import { uploadReferenceFile } from '../api/reference-upload';
 import { tierRefusal } from './server-refusal-detail';
 import { createTempRef } from '../components/references/ref-utils';
 import { t } from '../i18n';
 import { registerLogoutHandler } from '../store/logout-handlers';
-import type { Project, Document, Reference } from '../types';
+import type { Project, Document } from '../types';
 
 const DB_NAME = 'lore-recording-cache';
 const DB_VERSION = 2;
@@ -603,17 +604,12 @@ async function doRestore(projectId: string): Promise<void> {
     );
     useAppStore.getState().addReference(tempRef);
 
-    const formData = new FormData();
-    formData.append('file', new File([r.blob], title, { type: 'audio/webm' }));
-    formData.append('project_id', r.projectId);
-    formData.append('document_id', r.documentId);
-    formData.append('title', title);
     // The record id IS the cache session id — the replay of a lost 2xx is
     // served the same reference instead of creating a duplicate.
-    formData.append('idempotency_key', r.id);
     try {
-      const ref = await apiClient.upload('/references/upload', formData);
-      useAppStore.getState().replaceReference(tempId, ref as Reference);
+      const file = new File([r.blob], title, { type: 'audio/webm' });
+      const ref = await uploadReferenceFile(r.projectId, r.documentId, file, { idempotencyKey: r.id });
+      useAppStore.getState().replaceReference(tempId, ref);
       await deleteSession(r.id);
     } catch (err) {
       if (err instanceof AuthError) {

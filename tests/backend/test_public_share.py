@@ -674,18 +674,21 @@ async def test_public_document_404_after_project_delete(client, admin_user, proj
     marks only the project row (the share and the document survive), so
     resolve_share must check project liveness itself — uniform 404, no
     existence oracle for anonymous callers."""
-    pid, idx_id, _ = project_with_doc
+    pid, _, _ = project_with_doc
     _, admin_token = admin_user
+    # An ORDINARY doc — the fixture index is the project's face now and is
+    # unpublishable, so it cannot play "publishable doc" here.
+    doc_id = await _make_doc(client, admin_token, pid, "Shareable", "x")
 
-    await _mint_share(client, admin_token, pid, idx_id, "doc")
+    await _mint_share(client, admin_token, pid, doc_id, "doc")
     # False-green check: the share serves BEFORE the delete.
-    resp = await client.get(f"/api/public/documents/{idx_id}")
+    resp = await client.get(f"/api/public/documents/{doc_id}")
     assert resp.status_code == 200, resp.text
 
     resp = await client.delete(f"/api/projects/{pid}", cookies={"lore_session": admin_token})
     assert resp.status_code == 200, resp.text
 
-    resp = await client.get(f"/api/public/documents/{idx_id}")
+    resp = await client.get(f"/api/public/documents/{doc_id}")
     assert resp.status_code == 404
 
 
@@ -802,7 +805,7 @@ async def _patch_share_scope(client, token: str, share_id: str, scope: str):
 @pytest.mark.asyncio
 async def test_non_owner_cannot_patch_share_scope(client, admin_user, regular_user, project_with_doc):
     """INVARIANT: scope writes stay owner-only — the patch is a write affordance."""
-    pid, idx_id, _ = project_with_doc
+    pid, _, _ = project_with_doc
     _, admin_token = admin_user
     user_uid, user_token = regular_user
     await client.post(
@@ -810,7 +813,10 @@ async def test_non_owner_cannot_patch_share_scope(client, admin_user, regular_us
         json={"user_id": user_uid, "access_level": "full"},
         cookies={"lore_session": admin_token},
     )
-    minted = await _mint_share(client, admin_token, pid, idx_id, "doc")
+    # An ORDINARY doc — the fixture index is the project's face now and is
+    # unpublishable, so it cannot play "publishable doc" here.
+    doc_id = await _make_doc(client, admin_token, pid, "Shareable", "x")
+    minted = await _mint_share(client, admin_token, pid, doc_id, "doc")
     resp = await _patch_share_scope(client, user_token, minted["share_id"], "subtree")
     assert resp.status_code == 403, f"non-owner full must NOT patch scope: {resp.text}"
 

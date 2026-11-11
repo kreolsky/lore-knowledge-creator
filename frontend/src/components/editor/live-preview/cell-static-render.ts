@@ -15,8 +15,14 @@ import { EditorView } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
 import { staticCellExtensions } from '../render-bundle';
 import { LIGATURE_RULES } from '../ligature-plugin';
+import { noteHighlightExtension, notesChanged, type NoteAnchorRange } from '../../../editor/note-highlight';
+import { setCellMatches, type MatchRange } from '../find-matches';
 
 let renderer: EditorView | null = null;
+// INVARIANT: the shared renderer paints exactly the note ranges handed to the CURRENT
+// render, reset on every call. Why: one view renders every cell in turn — a range left
+// over from the previous call would paint one cell's note in another.
+let renderNotes: NoteAnchorRange[] = [];
 
 function getRenderer(): EditorView {
   if (renderer) return renderer;
@@ -24,7 +30,7 @@ function getRenderer(): EditorView {
   host.setAttribute('aria-hidden', 'true');
   host.style.cssText = 'position:fixed;left:-10000px;top:0;width:600px;visibility:hidden;pointer-events:none';
   document.body.appendChild(host);
-  renderer = new EditorView({ parent: host, state: EditorState.create({ extensions: staticCellExtensions() }) });
+  renderer = new EditorView({ parent: host, state: EditorState.create({ extensions: [staticCellExtensions(), noteHighlightExtension(() => renderNotes)] }) });
   return renderer;
 }
 
@@ -51,6 +57,11 @@ export function isPlainCellText(text: string): boolean {
  *  offset in the cell text — opt-in, read by click-to-source mapping (table-widget.ts). */
 export interface CellRenderOptions {
   stampOffsets?: boolean;
+  /** Note ranges in this cell's text (offsets into `text`), painted as `.cm-note-anchor`. */
+  notes?: NoteAnchorRange[];
+  /** Find-match ranges in this cell's text (offsets into `text`), painted as
+   *  `.cm-searchMatch` — the Find panel's cell marks (see find-matches.ts). */
+  marks?: readonly MatchRange[];
 }
 
 /**
@@ -61,7 +72,15 @@ export interface CellRenderOptions {
  */
 export function renderCellThroughEditor(text: string, opts: CellRenderOptions = {}): DocumentFragment {
   const view = getRenderer();
-  view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+  renderNotes = opts.notes ?? [];
+  // Marks ride the transaction (not module state like renderNotes): the effect
+  // carries this render's ranges, so a range left from the previous cell cannot
+  // paint into the next one.
+  view.dispatch({
+    changes: { from: 0, to: view.state.doc.length, insert: text },
+    annotations: notesChanged.of(true),
+    effects: setCellMatches.of(opts.marks ?? []),
+  });
   const frag = document.createDocumentFragment();
   for (const line of view.contentDOM.children) {
     const div = document.createElement('div');
@@ -89,5 +108,9 @@ export function renderCellThroughEditor(text: string, opts: CellRenderOptions = 
  * to open; plain text renders as itself, so it is a bare text node.
  */
 export function renderCellStatic(text: string, opts: CellRenderOptions = {}): Node {
-  return isPlainCellText(text) ? document.createTextNode(text) : renderCellThroughEditor(text, opts);
+  // WHY a noted/marked cell skips the fast path: a bare text node carries no
+  // note or search-match mark.
+  return isPlainCellText(text) && !opts.notes?.length && !opts.marks?.length
+    ? document.createTextNode(text)
+    : renderCellThroughEditor(text, opts);
 }

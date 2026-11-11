@@ -13,6 +13,13 @@ perf-audited `db.get_ancestor_ids` (O(depth), depth-capped 50), and enumeration
 uses `db.get_descendant_ids` (one project scan + in-memory BFS). No new
 materialization infra. The wall is "one bounded walk per call", not a cached
 closure table.
+#
+# The INDEX rule (plan "project-index-as-project-face") adds exactly two named
+# costs, both on the index path only: recognising an index scope_root costs ONE
+# `fetch_one` of the scope_root row on the slow path (scope_root not among the
+# doc's ancestors — the fast path is unchanged), and the index scope itself is
+# derived from ONE project scan (`_index_scope_ids`, the get_descendant_ids
+# query shape). Still one bounded walk per call, never a cached closure table.
 
 # WHY: scope ⊂ RBAC. Every shared executor calls `require_doc_in_scope`
 # AFTER its `get_document_access` gate — scope stacks on top, never replaces it.
@@ -22,8 +29,9 @@ closure table.
 from __future__ import annotations
 
 from fastapi import HTTPException
+from share_guard import system_root_id
 
-from db import fetch_one, get_ancestor_ids, get_descendant_ids
+from db import extract_id, fetch_one, get_ancestor_ids, get_db, get_descendant_ids
 
 
 def out_of_scope_detail(scope_root: str, *, empty_intersection: bool = False) -> str:
@@ -60,19 +68,117 @@ def out_of_scope_detail(scope_root: str, *, empty_intersection: bool = False) ->
     )
 
 
+async def _project_doc_topology(project_id: str) -> tuple[dict[str, list[str]], set[str]]:
+    """(children map, live ids) from ONE project scan — the db.get_descendant_ids
+    query shape, shared by the index scope and its exclusion closure."""
+    db = await get_db()
+    rows = await db.query(
+        "SELECT id, parent_id, deleted_at FROM documents WHERE project_id = $pid",
+        {"pid": project_id},
+    )
+    children: dict[str, list[str]] = {}
+    live: set[str] = set()
+    for row in rows or []:
+        rid = extract_id(row.get("id"))
+        if not rid or row.get("deleted_at") is not None:
+            continue
+        live.add(rid)
+        parent = row.get("parent_id")
+        if parent:
+            pid = extract_id(parent) if not isinstance(parent, str) or ":" in parent else parent
+            if pid:
+                children.setdefault(pid, []).append(rid)
+    return children, live
+
+
+def _excluded_subtree_ids(
+    children: dict[str, list[str]], roots: set[str],
+) -> set[str]:
+    """`roots` + their descendants (seen-guarded BFS, depth-capped 50 — the
+    db.get_descendant_ids walk shape)."""
+    excluded = set(roots)
+    queue = [c for root in roots for c in children.get(root, [])]
+    depth = 0
+    while queue and depth < 50:
+        next_queue: list[str] = []
+        for cid in queue:
+            if cid in excluded:
+                continue
+            excluded.add(cid)
+            next_queue.extend(children.get(cid, []))
+        queue = next_queue
+        depth += 1
+    return excluded
+
+
+async def _index_scope_ids(project_id: str) -> list[str]:
+    """The index scope: every live doc of the project minus the system subtree
+    and the help subtree, plus the index itself.
+
+    # INVARIANT(security): the index doc's subtree IS the whole project, minus
+    # the system tree and the help guide (operator ruling, plan
+    # "project-index-as-project-face"). Why: the index is the project's FACE —
+    # a key or an export rooted at it stands for the project — while the
+    # system tree (the agent's operating state) and the guide are operator
+    # infrastructure, not project content, so the project key sees neither
+    # help nor system files. Exclusion is by ANCESTRY from the two
+    # deterministic roots, mirroring share_guard.is_unshareable_by_ancestry:
+    # a help page a user moved out of the guide is an ordinary doc and IS in
+    # scope. This helper must never resolve to "" / [] for a live project —
+    # an empty result is the whole-project sentinel on the enumeration path
+    # and would drop the wall.
+    """
+    # Lazy import: agent_config_seed pulls the documents.service stack, while
+    # scope is a near-leaf module for the key-auth surfaces — the help-root id
+    # helper is a pure string function, imported at call time.
+    from agent_config_seed import help_doc_id
+
+    children, live = await _project_doc_topology(project_id)
+    excluded = _excluded_subtree_ids(children, {
+        system_root_id(project_id), help_doc_id(project_id, "index"),
+    })
+    return sorted(live - excluded)
+
+
+async def resolve_index_scope(
+    scope_root: str, project_id: str | None = None,
+) -> list[str] | None:
+    """The index-scope id list when `scope_root` is a live index doc (of
+    `project_id` when given), else None — the ONE recognition point of the
+    index rule. Public for structure_exec: the structure tool keeps its
+    in-memory clip for ordinary subtree roots and asks here only to recognise
+    an index scope_root (whose seed must NOT be forced onto the index row)."""
+    row = await fetch_one("documents", scope_root)
+    if not row or row.get("deleted_at") or not row.get("is_index"):
+        return None
+    pid = row.get("project_id")
+    if not pid or (project_id is not None and pid != project_id):
+        return None
+    return await _index_scope_ids(pid)
+
+
 async def in_subtree(scope_root: str | None, doc_id: str) -> bool:
     """True if `doc_id` lies inside the subtree rooted at `scope_root`.
 
     Empty/None scope_root ⇒ whole project ⇒ always True (legacy behavior).
     Membership is decided by walking `doc_id`'s ancestor chain and checking
     whether `scope_root` appears in it (the root is its own ancestor, so a doc
-    IS in its own subtree).
+    IS in its own subtree). An INDEX scope_root additionally covers the whole
+    project minus the system and help subtrees (`_index_scope_ids`) — the
+    index is nobody's ancestor for a top-level doc, so that answer is decided
+    on the slow path: ONE fetch of the scope_root row to recognise the index,
+    then the single project scan (module ARCH).
     """
     if not scope_root:
         return True
     if not doc_id:
         return False
-    return scope_root in await get_ancestor_ids(doc_id)
+    if scope_root in await get_ancestor_ids(doc_id):
+        return True
+    index_ids = await resolve_index_scope(scope_root)
+    if index_ids is None:
+        return False
+    return doc_id in set(index_ids)
 
 
 async def require_doc_in_scope(scope_root: str | None, doc_id: str) -> None:
@@ -178,10 +284,15 @@ async def subtree_doc_ids(scope_root: str | None, project_id: str) -> list[str]:
     Empty/None scope_root ⇒ whole project ⇒ returns [] (the sentinel the
     enumeration tools use to mean "no subtree restriction — do not filter").
     A scoped key always returns at least [scope_root] (the root itself), so []
-    unambiguously means "whole project".
+    unambiguously means "whole project". An INDEX scope_root enumerates the
+    index scope instead (the whole project minus the system and help
+    subtrees — `resolve_index_scope`, the same rule `in_subtree` answers by).
     """
     if not scope_root:
         return []
+    index_ids = await resolve_index_scope(scope_root, project_id)
+    if index_ids is not None:
+        return index_ids
     return [scope_root] + await get_descendant_ids(scope_root, project_id)
 
 
@@ -280,6 +391,7 @@ __all__ = [
     "in_subtree",
     "require_doc_in_scope",
     "out_of_scope_detail",
+    "resolve_index_scope",
     "resolve_search_subtree",
     "subtree_doc_ids",
     "resolve_scoped_parent",

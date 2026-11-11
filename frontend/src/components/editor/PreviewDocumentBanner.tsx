@@ -22,7 +22,7 @@ export function PreviewDocumentBanner() {
         <span className="truncate">{previewDocument.title}</span>
       </div>
       <div className="flex gap-1.5 items-center ml-auto">
-        <Button variant="ghost" size="sm" onClick={clearPreviewDocument}>
+        <Button variant="ghost" onClick={clearPreviewDocument}>
           <ArrowLeft size={13} /> {backLabel}
         </Button>
       </div>

@@ -186,7 +186,10 @@ def test_validate_definition_and_key_gates():
     from agent_tools.registry import mcp_entries
     from mcp_gateway.schemas import build_tool_list
 
-    advertised = {t.name: t for t in build_tool_list()}
+    # INVARIANT: the env-gated preview_extractor is pinned visible — every
+    # mcp entry must be advertised. Why: unpinned, the test reads the runner's
+    # MCP_RUN_EXTRACTOR and fails on CI while passing on gray.
+    advertised = {t.name: t for t in build_tool_list(preview_visible=True)}
     for entry in mcp_entries():
         tool = advertised.get(entry.name)
         assert tool is not None, entry.name

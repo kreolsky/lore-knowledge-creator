@@ -10,10 +10,11 @@ import { apiClient } from '../api/client';
 import { uploadReferenceFile } from '../api/reference-upload';
 import { tierRefusal } from '../utils/server-refusal-detail';
 import { useTranslation } from '../i18n';
+import type { TranslationKey } from '../i18n/en';
 import type { Reference } from '../types';
 import { getEntityHandle } from '../collab/active-handle-registry';
-import { createUnlinkedTable } from '../components/editor/live-preview/table-block-model';
-import { sniffDelimiter, parseCsv, MAX_TABLE_IMPORT_ROWS, MAX_TABLE_IMPORT_COLS, MAX_TABLE_IMPORT_CELLS } from '../components/editor/live-preview/csv-table';
+import { createUnlinkedTable } from '../components/editor/live-preview/table-document-ops';
+import { readCsvForImport, MAX_TABLE_IMPORT_ROWS, MAX_TABLE_IMPORT_COLS, MAX_TABLE_IMPORT_CELLS } from '../components/editor/live-preview/csv-table';
 import {
   createTempRef,
   isMediaFile,
@@ -28,6 +29,21 @@ import {
   MAX_PDF_SIZE_MB,
   MAX_MARKDOWN_SIZE_MB,
 } from '../components/references/ref-utils';
+
+type ImportSpec = {
+  endpoint: string;
+  maxMB: number;
+  tooLargeKey: TranslationKey;
+  failedKey: TranslationKey;
+  sendsTitle: boolean;
+  withImageRefs: boolean;
+};
+
+const IMPORT_SPECS = {
+  markdown: { endpoint: '/references/upload-markdown', maxMB: MAX_MARKDOWN_SIZE_MB, tooLargeKey: 'fileTooLargeMarkdown', failedKey: 'failedToImportMarkdown', sendsTitle: false, withImageRefs: true },
+  docx: { endpoint: '/references/upload-docx', maxMB: MAX_DOCX_SIZE_MB, tooLargeKey: 'fileTooLargeDocx', failedKey: 'failedToImportDocx', sendsTitle: true, withImageRefs: false },
+  pdf: { endpoint: '/references/upload-pdf', maxMB: MAX_PDF_SIZE_MB, tooLargeKey: 'fileTooLargePdf', failedKey: 'failedToImportPdf', sendsTitle: true, withImageRefs: false },
+} satisfies Record<string, ImportSpec>;
 
 export function useReferenceUpload() {
   const currentProject = useAppStore(s => s.currentProject);
@@ -129,11 +145,15 @@ export function useReferenceUpload() {
     }
   }, [currentProject, currentDocument]);
 
-  // Handles .md and any other text file — backend validates by content, not extension.
-  const handleMdImport = useCallback(async (file: File) => {
+  // Text import (any non-media, non-docx/pdf/table file — backend validates by content,
+  // not extension) and DOCX/PDF imports differ only in this spec. DOCX/PDF are async: the
+  // endpoint returns a queued markdown reference, the worker converts it via the converter
+  // service, the status-polling effect picks up the ready content, and extracted image refs
+  // arrive via the reference_created WS event. Markdown returns its image refs inline.
+  const importToReference = useCallback(async (file: File, spec: ImportSpec) => {
     if (!currentProject || !currentDocument) return;
-    if (file.size > MAX_MARKDOWN_SIZE_MB * 1024 * 1024) {
-      useAppStore.getState().showToast(t('fileTooLargeMarkdown', { limit: String(MAX_MARKDOWN_SIZE_MB) }));
+    if (file.size > spec.maxMB * 1024 * 1024) {
+      useAppStore.getState().showToast(t(spec.tooLargeKey, { limit: String(spec.maxMB) }));
       return;
     }
     const { tempId, tempRef } = createTempRef(currentProject, currentDocument, file.name, 'markdown');
@@ -143,7 +163,13 @@ export function useReferenceUpload() {
       formData.append('file', file);
       formData.append('project_id', currentProject.project_id);
       formData.append('document_id', currentDocument.document_id);
-      const result = await apiClient.upload('/references/upload-markdown', formData);
+      // WHY: markdown omits the title so the backend derives it from the file stem.
+      if (spec.sendsTitle) formData.append('title', file.name);
+      const result = await apiClient.upload(spec.endpoint, formData);
+      if (!spec.withImageRefs) {
+        replaceReference(tempId, result);
+        return;
+      }
       const allIds = [result.reference.reference_id, ...result.image_references.map((r: Reference) => r.reference_id)];
       addPendingUploadRefIds(allIds);
       replaceReference(tempId, result.reference);
@@ -152,63 +178,11 @@ export function useReferenceUpload() {
       }
       setTimeout(() => removePendingUploadRefIds(allIds), 5000);
     } catch (err) {
-      console.error('Failed to import markdown', err);
-      useAppStore.getState().showToast(t('failedToImportMarkdown'), 'error');
+      console.error(`Failed to import ${spec.endpoint}`, err);
+      useAppStore.getState().showToast(t(spec.failedKey), 'error');
       updateReference(tempId, { processing_status: 'error' });
     }
-  }, [currentProject, currentDocument, t]);
-
-  // DOCX import is async: the endpoint returns a queued markdown reference, the worker
-  // converts it via the converter service, and the existing status-polling effect picks
-  // up the ready content. Extracted image refs arrive via the reference_created WS event.
-  const handleDocxImport = useCallback(async (file: File) => {
-    if (!currentProject || !currentDocument) return;
-    if (file.size > MAX_DOCX_SIZE_MB * 1024 * 1024) {
-      useAppStore.getState().showToast(t('fileTooLargeDocx', { limit: String(MAX_DOCX_SIZE_MB) }));
-      return;
-    }
-    const { tempId, tempRef } = createTempRef(currentProject, currentDocument, file.name, 'markdown');
-    addReference(tempRef);
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('project_id', currentProject.project_id);
-      formData.append('document_id', currentDocument.document_id);
-      formData.append('title', file.name);
-      const ref = await apiClient.upload('/references/upload-docx', formData);
-      replaceReference(tempId, ref);
-    } catch (err) {
-      console.error('Failed to import docx', err);
-      useAppStore.getState().showToast(t('failedToImportDocx'), 'error');
-      updateReference(tempId, { processing_status: 'error' });
-    }
-  }, [currentProject, currentDocument, addReference, replaceReference, updateReference, t]);
-
-  // PDF import mirrors DOCX: the endpoint returns a queued markdown reference, the
-  // worker converts it via the converter service, and status polling picks up the
-  // ready content. Extracted image refs arrive via the reference_created WS event.
-  const handlePdfImport = useCallback(async (file: File) => {
-    if (!currentProject || !currentDocument) return;
-    if (file.size > MAX_PDF_SIZE_MB * 1024 * 1024) {
-      useAppStore.getState().showToast(t('fileTooLargePdf', { limit: String(MAX_PDF_SIZE_MB) }));
-      return;
-    }
-    const { tempId, tempRef } = createTempRef(currentProject, currentDocument, file.name, 'markdown');
-    addReference(tempRef);
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('project_id', currentProject.project_id);
-      formData.append('document_id', currentDocument.document_id);
-      formData.append('title', file.name);
-      const ref = await apiClient.upload('/references/upload-pdf', formData);
-      replaceReference(tempId, ref);
-    } catch (err) {
-      console.error('Failed to import pdf', err);
-      useAppStore.getState().showToast(t('failedToImportPdf'), 'error');
-      updateReference(tempId, { processing_status: 'error' });
-    }
-  }, [currentProject, currentDocument, addReference, replaceReference, updateReference, t]);
+  }, [currentProject, currentDocument, addReference, replaceReference, updateReference, addPendingUploadRefIds, removePendingUploadRefIds, t]);
 
   // CSV/TSV → native table. Parsed fully client-side into a table model: no upload
   // round-trip, no stored file (a "virtual reference" badge appears reactively via
@@ -233,19 +207,15 @@ export function useReferenceUpload() {
       return;
     }
     try {
-      const text = await file.text();
-      const isTsv = file.name.toLowerCase().endsWith('.tsv');
-      const delimiter = isTsv ? '\t' : sniffDelimiter(text, ',');
-      const matrix = parseCsv(text, delimiter);
-      const rows = matrix.length;
-      const cols = matrix.reduce((m, r) => Math.max(m, r.length), 0);
-      if (rows === 0 || rows > MAX_TABLE_IMPORT_ROWS || cols > MAX_TABLE_IMPORT_COLS || rows * cols > MAX_TABLE_IMPORT_CELLS) {
+      const read = await readCsvForImport(file);
+      if ('refusal' in read) {
         useAppStore.getState().showToast(
           t('csvTooLarge', { rows: String(MAX_TABLE_IMPORT_ROWS), cols: String(MAX_TABLE_IMPORT_COLS), cells: String(MAX_TABLE_IMPORT_CELLS) }),
           'error',
         );
         return;
       }
+      const { matrix } = read;
       const stem = file.name.replace(/\.(csv|tsv)$/i, '');
       createUnlinkedTable(ydoc, matrix, stem);
       // No temp ref / no optimistic card — a table is not a reference; the badge appears
@@ -256,23 +226,19 @@ export function useReferenceUpload() {
     }
   }, [t, isPublicShare, currentDocument]);
 
+  const handlerFor = useCallback((file: File): ((f: File) => Promise<void>) => {
+    if (isMediaFile(file.name)) return handleFileUpload;
+    if (isTableFile(file.name)) return handleTableImport;
+    const spec = isDocxFile(file.name) ? IMPORT_SPECS.docx : isPdfFile(file.name) ? IMPORT_SPECS.pdf : IMPORT_SPECS.markdown;
+    return f => importToReference(f, spec);
+  }, [handleFileUpload, handleTableImport, importToReference]);
+
   const handleFileInput = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !currentProject || !currentDocument) return;
-    if (isMediaFile(file.name)) {
-      await handleFileUpload(file);
-    } else if (isDocxFile(file.name)) {
-      await handleDocxImport(file);
-    } else if (isPdfFile(file.name)) {
-      await handlePdfImport(file);
-    } else if (isTableFile(file.name)) {
-      await handleTableImport(file);
-    } else {
-      // Any other file → text import; backend validates by content, not extension.
-      await handleMdImport(file);
-    }
+    await handlerFor(file)(file);
     e.target.value = '';
-  }, [handleFileUpload, handleMdImport, handleDocxImport, handlePdfImport, handleTableImport, t]);
+  }, [currentProject, currentDocument, handlerFor]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -289,22 +255,10 @@ export function useReferenceUpload() {
     setIsDragging(false);
     if (!currentProject || !currentDocument) return;
 
-    const files = Array.from(e.dataTransfer.files);
-    for (const file of files) {
-      if (isMediaFile(file.name)) {
-        await handleFileUpload(file);
-      } else if (isDocxFile(file.name)) {
-        await handleDocxImport(file);
-      } else if (isPdfFile(file.name)) {
-        await handlePdfImport(file);
-      } else if (isTableFile(file.name)) {
-        await handleTableImport(file);
-      } else {
-        // Any other file → text import; backend validates by content, not extension.
-        await handleMdImport(file);
-      }
+    for (const file of Array.from(e.dataTransfer.files)) {
+      await handlerFor(file)(file);
     }
-  }, [currentProject, currentDocument, handleFileUpload, handleMdImport, handleDocxImport, handlePdfImport, handleTableImport, t]);
+  }, [currentProject, currentDocument, handlerFor]);
 
   return {
     isDragging,

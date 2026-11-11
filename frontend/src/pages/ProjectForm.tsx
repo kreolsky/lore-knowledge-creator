@@ -1,6 +1,6 @@
 /** Two-row project form (name + description) shared by the Dashboard create
  * panel and the card edit Modal. Row 1: name input + Cancel + submit, all at
- * the input's pinned 37px (Button size="lg"); row 2: optional description. */
+ * the input's pinned 30px (Button md); row 2: optional description. */
 // ARCH: Extracted from Dashboard.tsx — one form, two callers (create panel,
 // edit modal); the create panel and the modal must never drift apart.
 
@@ -48,10 +48,10 @@ export function ProjectForm({ initialName, initialDescription, submitLabel, onSu
           placeholder={t('projectPlaceholder')}
           className="flex-1"
         />
-        <Button type="button" variant="ghost" size="lg" onClick={onCancel}>
+        <Button type="button" variant="ghost" onClick={onCancel}>
           {t('cancel')}
         </Button>
-        <Button type="submit" variant="primary" size="lg">
+        <Button type="submit" variant="primary">
           {submitLabel}
         </Button>
       </div>

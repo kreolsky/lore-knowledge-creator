@@ -16,7 +16,8 @@ import * as Y from 'yjs';
 import { pasteHandlerExtension, htmlToMarkdown } from './paste-handler';
 import { releaseHandle, publishHandle } from './active-editor';
 import type { EntityYjsState } from '../collab/yjs-provider';
-import { readTableModel, TABLE_ANCHOR_RE } from '../components/editor/live-preview/table-block-model';
+import { readTableModel } from '../components/editor/live-preview/table-block-model';
+import { TABLE_ANCHOR_RE } from '../components/editor/live-preview/table-document-ops';
 
 const origRangeGetClientRects = Range.prototype.getClientRects;
 const origRangeGetBoundingClientRect = Range.prototype.getBoundingClientRect;

@@ -13,6 +13,12 @@
  *   5. API — widget/agent keys + transcription agent config for the current
  *      document. Project-wide members live in ProjectSettingsPanel.MembersSection.
  *
+ * ARCH: the index doc (the project's face, plan "project-index-as-project-face")
+ *   renders a DIFFERENT shape: Inbox, then API keys — nothing else. General
+ *   access / Privacy / Move are not rendered (the index is unpublishable
+ *   (share_guard) and immovable server-side); key creation on it is owner-only
+ *   (routes/api_keys.py), so the create affordance hides for a full non-owner.
+ *
  * ARCH: the tab is full-only and hidden when a reference is open (gated in
  * ProjectPage). The collapsed-tab tint (red/yellow/blue) is derived in
  * useAccessTabState; this panel owns the management surface.
@@ -54,17 +60,22 @@ export function AccessPanel() {
 
   if (!project) return null;
   const docId = currentDocument?.document_id ?? null;
+  // The index doc is the project's face — it gets the stripped shape (see the
+  // file header ARCH). is_index comes on the document payload itself.
+  const isIndex = !!currentDocument?.is_index;
 
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-auto py-1 px-1.5">
-        <GeneralAccessSection
-          projectId={project.project_id}
-          docId={docId}
-          isArtifact={isArtifactDoc(currentDocument)}
-        />
-        {docId && <ChatsPrivacySection docId={docId} />}
-        {docId && (
+        {!isIndex && (
+          <GeneralAccessSection
+            projectId={project.project_id}
+            docId={docId}
+            isArtifact={isArtifactDoc(currentDocument)}
+          />
+        )}
+        {!isIndex && docId && <ChatsPrivacySection docId={docId} />}
+        {!isIndex && docId && (
           <MoveDocumentSection
             projectId={project.project_id}
             docId={docId}
@@ -75,20 +86,24 @@ export function AccessPanel() {
           <InboxTogglesSection
             projectId={project.project_id}
             docId={docId}
+            first={isIndex}
           />
         )}
         {docId && (
           <>
             <SectionHeader
               // The general-access section above is owner-only; for non-owners the
-              // API section becomes the first one rendered.
-              first={!isOwner}
+              // API section becomes the first one rendered — except on the index,
+              // where the Inbox section precedes it for everyone.
+              first={!isOwner && !isIndex}
               icon={<KeyRound size={11} />}
               title={t('accessApiTitle')}
               description={t('accessApiDesc')}
             />
             <div className="px-3.5">
-              <ApiKeyManager documentId={docId} />
+              {/* Any key on the index is owner-only at the API (whole-project
+                  scope); a full non-owner sees the list but no create trigger. */}
+              <ApiKeyManager documentId={docId} canCreate={!isIndex || isOwner} />
             </div>
           </>
         )}
@@ -456,7 +471,6 @@ function MoveDocumentSection({ projectId, docId, docTitle }: {
               <Button
                 ref={parentButtonRef}
                 variant="composer"
-                size="sm"
                 disabled={!targetDocs}
                 onClick={() => {
                   const rect = parentButtonRef.current?.getBoundingClientRect();
@@ -466,14 +480,8 @@ function MoveDocumentSection({ projectId, docId, docTitle }: {
                 <span className="truncate max-w-[180px]">{parentTitle}</span>
                 <ChevronDown size={12} className="ml-1 opacity-60 shrink-0" />
               </Button>
-            </div>
-            {/* The action sits under the plates with the same label gutter, so the
-                left edges of project → parent → Move line up: one vertical path. */}
-            <div className="flex items-center gap-2">
-              <span className="w-[110px] shrink-0" />
               <Button
                 variant="primary"
-                size="sm"
                 disabled={!targetId || !targetDocs}
                 onClick={() => setConfirming(true)}
               >
@@ -499,8 +507,8 @@ function MoveDocumentSection({ projectId, docId, docTitle }: {
         title={t('accessMoveTitle')}
         footer={
           <>
-            <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>{t('cancel')}</Button>
-            <Button variant="primary" size="sm" disabled={busy} onClick={handleMove}>
+            <Button variant="ghost" onClick={() => setConfirming(false)}>{t('cancel')}</Button>
+            <Button variant="primary" disabled={busy} onClick={handleMove}>
               {t('accessMoveButton')}
             </Button>
           </>
@@ -530,7 +538,7 @@ function MoveDocumentSection({ projectId, docId, docTitle }: {
 
 const INBOX_TOGGLE_DEFAULTS: InboxToggles = { notes: true, refs: false };
 
-export function InboxTogglesSection({ projectId, docId }: { projectId: string; docId: string }) {
+export function InboxTogglesSection({ projectId, docId, first }: { projectId: string; docId: string; first?: boolean }) {
   const { t } = useTranslation();
   const toggles = useInboxStore(s => s.toggles[`${projectId}:${docId}`]) ?? null;
   // i18n rule: `t` is a NEW function every render — read it in effects/handlers
@@ -569,6 +577,7 @@ export function InboxTogglesSection({ projectId, docId }: { projectId: string; d
   return (
     <>
       <SectionHeader
+        first={first}
         icon={<Inbox size={11} />}
         title={t('accessInboxTitle')}
         description={t('accessInboxDesc')}

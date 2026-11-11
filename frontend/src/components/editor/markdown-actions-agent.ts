@@ -17,7 +17,8 @@ import type { EditorView } from '@codemirror/view';
 import * as Y from 'yjs';
 import { emit } from '../../events';
 import { useAppStore } from '../../store/app-store';
-import { getActiveHandle, getFocusedIsReference } from '../../editor/active-editor';
+import { getFocusedIsReference } from '../../editor/active-editor';
+import { boundText, isHostText } from './note-anchor-wiring';
 import { utf16ToCp } from '../../utils/utf16-cp';
 
 /** Open a pinned-region agent chat for the current editor selection. Returns true if handled. */
@@ -34,6 +35,12 @@ export function agentAction(view: EditorView): boolean {
   const app = useAppStore.getState();
   if (app.accessLevel !== 'full') return false;
 
+  // INVARIANT: "Work with selection" is refused inside a table cell (covers Cmd+J; the Bot
+  // button is hidden too). Why: the backend region gate scopes TEXT edits of the host,
+  // and a cell is edited through the agent's table tool — a cell region has no edit to allow.
+  const ytext = boundText(view);
+  if (ytext && !isHostText(ytext)) return false;
+
   const { currentProject, currentDocument, currentReference } = app;
   if (!currentProject || !currentDocument) return false;
 
@@ -44,8 +51,6 @@ export function agentAction(view: EditorView): boolean {
   const docId = isRef ? currentReference?.reference_id : currentDocument.document_id;
   if (!docId) return false;
 
-  const handle = getActiveHandle();
-  const ytext = handle?.ytext;
   const text = view.state.sliceDoc(from, to);
 
   // No live ytext (mount race / offline): fall back to bare offsets without an

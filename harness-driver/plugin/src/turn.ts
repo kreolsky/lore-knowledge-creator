@@ -429,7 +429,7 @@ async function buildTurnPrep(ctx: Context, map: SessionMap, body: Record<string,
       ? body.document_id : null,
     region: (body.region && typeof body.region === 'object')
       ? body.region as Record<string, unknown> : null,
-    // The turn's own caps resolve — the view_chat_image gate reads it off the
+    // The turn's own caps resolve — the image-result gate reads it off the
     // merged turn ctx (tools.ts), the same roster the catalog upsert declares
     // from (one source, caps.ts).
     vision: caps.vision,
@@ -451,7 +451,10 @@ async function buildTurnPrep(ctx: Context, map: SessionMap, body: Record<string,
     },
   }
 
-  registerLoreTools(ctx, body.tools, true, mutating)
+  registerLoreTools(
+    ctx, body.tools, true, mutating,
+    new Set(Array.isArray(body.image_result_tools) ? body.image_result_tools : []),
+  )
 
   // The multimodal turn prompt: dsh's saveImage normalizes pixels
   // (decode→scale→encode, up to seconds per image).

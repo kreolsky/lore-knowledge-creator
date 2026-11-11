@@ -49,7 +49,8 @@ import { useEditorFileDrop } from './useEditorFileDrop';
 import { setEntityHandle } from '../../collab/active-handle-registry';
 import { getViewEntity, publishHandle, releaseHandle } from '../../editor/active-editor';
 import type { EntityYjsState } from '../../collab/yjs-provider';
-import { getTablesMap, readTableModel, TABLE_ANCHOR_RE } from './live-preview/table-block-model';
+import { getTablesMap, readTableModel } from './live-preview/table-block-model';
+import { TABLE_ANCHOR_RE } from './live-preview/table-document-ops';
 import type { Document, Reference } from '../../types';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

@@ -3531,7 +3531,7 @@
         "type": "object"
       },
       "ToolGetLinks": {
-        "description": "`get_links` body — the typed-edges read, same service as /edges.\n\n`kinds` is a Literal-bounded list so a misspelled kind is a 422 the loop\nself-corrects from (same policy as ToolSearch.mode); absent = the ONE\ndefault the /edges route also uses (mention,transclusion,attachment).",
+        "description": "`get_links` body — the typed-edges read, same service as /edges.\n\n`kinds` is a Literal-bounded list so a misspelled kind is a 422 the loop\nself-corrects from (same policy as ToolSearch.mode); absent = the ONE\ndefault the /edges route also uses (mention,transclusion,attachment).\nThe Literal is DERIVED from edge_kinds.ALL_EDGE_KINDS — the same tuple the\nroute validates against, so the tool can never reject a kind the route\naccepts or vice versa.",
         "properties": {
           "direction": {
             "default": "both",
@@ -3556,7 +3556,8 @@
                     "transclusion",
                     "attachment",
                     "note",
-                    "chat-context"
+                    "chat-context",
+                    "external"
                   ],
                   "type": "string"
                 },
@@ -4070,6 +4071,29 @@
         "title": "ToolReopenConsolidation",
         "type": "object"
       },
+      "ToolReplaceArtifactPage": {
+        "description": "replace_artifact_page body — replace an html page's WHOLE body with a\nsandbox-built file, keeping the document's identity (id, links, History,\ntree place).",
+        "properties": {
+          "apply": {
+            "$ref": "#/components/schemas/ToolApply",
+            "default": "confirm"
+          },
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          },
+          "sandbox_path": {
+            "title": "Sandbox Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "document_id",
+          "sandbox_path"
+        ],
+        "title": "ToolReplaceArtifactPage",
+        "type": "object"
+      },
       "ToolReprocessReference": {
         "description": "reprocess_reference body — re-run the import pipeline on a reference.",
         "properties": {
@@ -4126,6 +4150,20 @@
         "title": "ToolSandboxBash",
         "type": "object"
       },
+      "ToolSandboxFetchArtifact": {
+        "description": "sandbox_fetch_artifact body — write an html page's live source INTO the\ncaller's workspace.",
+        "properties": {
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "document_id"
+        ],
+        "title": "ToolSandboxFetchArtifact",
+        "type": "object"
+      },
       "ToolSandboxFetchReference": {
         "description": "sandbox_fetch_reference body — copy an uploaded reference INTO the workspace.",
         "properties": {
@@ -4155,6 +4193,21 @@
         "title": "ToolSandboxFetchSkill",
         "type": "object"
       },
+      "ToolSandboxRunKill": {
+        "description": "Args for `sandbox_run_kill` — stop one of the caller's own runs.",
+        "properties": {
+          "run_id": {
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "ToolSandboxRunKill",
+        "type": "object"
+      },
       "ToolSandboxRunStatus": {
         "description": "Args for `sandbox_run_status` — poll a detached run.",
         "properties": {
@@ -4168,6 +4221,20 @@
           "run_id"
         ],
         "title": "ToolSandboxRunStatus",
+        "type": "object"
+      },
+      "ToolSandboxViewImage": {
+        "description": "Args for `sandbox_view_image` — an image file in the caller's workspace.\n\nThe path is checked against the key-derived workspace by read_workspace_file\n(structural leaf check + far-end realpath prefix), never trusted here.",
+        "properties": {
+          "file_path": {
+            "title": "File Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file_path"
+        ],
+        "title": "ToolSandboxViewImage",
         "type": "object"
       },
       "ToolSaveChatFacts": {
@@ -10716,7 +10783,7 @@
     },
     "/api/documents/{document_id}/edges": {
       "get": {
-        "description": "Typed edges of a document OR reference — both directions, every relation\nkind the product shows as a link (plan typed-edges).\n\n`direction` = in|out|both; `kinds` = comma-separated filter, default\n`mention,transclusion,attachment` (note/chat-context are opt-in). Document\npeers carry {document_id, title, is_reference, source_type, broken\n(outgoing stored edges only), updated_at}; note/chat peers carry session_id\n+ label (chat-context = the viewer's OWN chats). The same service answers\nthe agent's get_links tool — one function, one default.",
+        "description": "Typed edges of a document OR reference — both directions, every relation\nkind the product shows as a link (plan typed-edges).\n\n`direction` = in|out|both; `kinds` = comma-separated filter, default\n`mention,transclusion,attachment` (note/chat-context/external are opt-in;\n`external` answers from the GFM read-model — live session when it has\nclients, else the DB row — and carries url + label instead of document_id).\nDocument peers carry {document_id, title, is_reference, source_type, broken\n(outgoing stored edges only), updated_at}; note/chat peers carry session_id\n+ label (chat-context = the viewer's OWN chats). The same service answers\nthe agent's get_links tool — one function, one default.",
         "operationId": "get_document_edges_api_documents__document_id__edges_get",
         "parameters": [
           {
@@ -18987,6 +19054,137 @@
         ]
       }
     },
+    "/api/tool/replace_artifact_page": {
+      "post": {
+        "description": "Replace an html page's WHOLE body with a sandbox-built file, keeping\nthe SAME document (id, links, History, tree place).\n\nThe route for a large rewrite of an existing page — restructure the\nmarkup, rework an inline script — instead of creating a duplicate:\n`sandbox_fetch_artifact` → edit the file with `sandbox_bash` → this tool.\nCheckpointed (History restores the pre-replace page); an unchanged file\nis a no-op (no checkpoint, no write); markdown documents are refused;\npoint edits stay with `edit_document`. A `confirm` call is refused with\nthe ask signal, exactly like `edit_document`.",
+        "operationId": "tool_replace_artifact_page_api_tool_replace_artifact_page_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolReplaceArtifactPage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Replace Artifact Page",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
     "/api/tool/reprocess_reference": {
       "post": {
         "description": "Re-run a reference's import pipeline (audio → re-transcribe, .docx →\nre-convert). The sanctioned alternative to re-deriving a reference's text from\nits binary in the sandbox.\n\nAgent-only (never on MCP): the wipe of `content` is not History-recoverable for a\nreference, so confirmation is the gate. The dsh driver builds the request URL\ngenerically from the tool name, so this route IS the wiring (parity with\nimport_file). Delegates to the shared `_reprocess_reference` core (routes.files),\nreused by the REST retry endpoint; project access is checked here (the tool's\nedge), the access check is deliberately NOT unified with the REST edge.",
@@ -19120,7 +19318,7 @@
     },
     "/api/tool/sandbox_bash": {
       "post": {
-        "description": "Run a bash command in the invoking user's sandbox workspace.\n\nReturns the exec contract — stdout/stderr/exit_code/truncated/timed_out. A\nnon-zero exit is a RESULT, not an HTTP error: the agent needs to read the failure\n(a compiler message, a traceback) to fix its own next command. HTTP errors are\nreserved for \"you may not do this at all\" and \"the sandbox is not reachable\".\n\nWith `detach: true` it returns `{status: \"running\", run_id}` at once and the run\ncontinues in the background under the detached ceiling; collect it with\n`sandbox_run_status` (read-only), in this or a later turn.",
+        "description": "Run a bash command in the invoking user's sandbox workspace.\n\nReturns the exec contract: `status` — `\"exited\"` (with `exit_code`),\n`\"running\"` (the wait deadline passed and the command was PROMOTED: it\nkeeps running in the background, collect with `sandbox_run_status` or stop\nwith `sandbox_run_kill`), or `\"killed\"` (the run vanished without an\n`exit`, e.g. its `.runs` dir was deleted) — plus bounded head+tail slices\nof stdout/stderr, byte counts, `run_id` and `log_dir` (the run's full\nlogs). `timed_out` is true only on the SSH backstop (a wedged connection).\nA non-zero exit is a RESULT, not an HTTP error: the agent needs to read\nthe failure (a compiler message, a traceback) to fix its own next\ncommand. HTTP errors are reserved for \"you may not do this at all\" and\n\"the sandbox is not reachable\".\n\nWith `detach: true` it returns `{status: \"running\", run_id}` at once and\nthe run continues in the background under the detached ceiling; collect it\nwith `sandbox_run_status` (read-only), in this or a later turn.",
         "operationId": "tool_sandbox_bash_api_tool_sandbox_bash_post",
         "parameters": [
           {
@@ -19244,6 +19442,137 @@
           }
         },
         "summary": "Tool Sandbox Bash",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
+    "/api/tool/sandbox_fetch_artifact": {
+      "post": {
+        "description": "Write an html page's LIVE source into the invoking user's workspace.\n\nThe first step of rewriting an existing page in place: the source lands\nat `artifacts/<document_id>/index.html` (a re-fetch overwrites itself),\nthe agent edits/checks it here with `sandbox_bash`, then\n`replace_artifact_page` writes it back into the SAME document. The\nsource is the live CRDT text — what a connected editor would see, not\nthe DB content column.",
+        "operationId": "tool_sandbox_fetch_artifact_api_tool_sandbox_fetch_artifact_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolSandboxFetchArtifact"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Sandbox Fetch Artifact",
         "tags": [
           "tool-api"
         ]
@@ -19511,9 +19840,140 @@
         ]
       }
     },
+    "/api/tool/sandbox_run_kill": {
+      "post": {
+        "description": "Stop one of the caller's own runs — detached, or a foreground call that\nwas promoted at its wait deadline.\n\nIdempotent, mirroring the dsh driver's `job_kill`: an already-finished run\nis a no-op success (`{status: \"exited\", exit_code}`), an unknown run_id is\na 404, and anything else signals the run's whole process group (TERM, then\nKILL after a short grace — see the INVARIANT(security) on\n`_build_run_kill_script` for why the group is only ever signalled when its\n/proc cmdline names this run's dir) and returns `{status: \"killed\"}`. A\nrun whose `.runs` dir was deleted is a 404 — its pid file went with the\ndir, so it can no longer be signalled from here, and its process may\nSTILL be running (up to the detached ceiling).",
+        "operationId": "tool_sandbox_run_kill_api_tool_sandbox_run_kill_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolSandboxRunKill"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Sandbox Run Kill",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
     "/api/tool/sandbox_run_status": {
       "post": {
-        "description": "Poll a DETACHED run started with `sandbox_bash(detach=true)`.\n\nReturns `{status: running|exited|killed, run_id, exit_code, out, truncated}`:\n`out` is a capped tail of the run's output and truncation is REPORTED; `killed`\nwith exit_code 124/137 means the run hit its detached wall-clock ceiling; a dead\npid with no `exit` file (the wrapper crashed mid-write) reads `killed`, never a\nsilent `running`. Read-only, so polling does not take the console. An unknown\nrun_id is a 404 — it was never started or already GC'd.",
+        "description": "Poll a run started by `sandbox_bash` — detached, or a foreground call\nthat was promoted at its wait deadline.\n\nReturns `{status: running|exited|killed, run_id, log_dir, exit_code, out,\nerr, truncated}`: `out`/`err` are capped tails of the run's stdout/stderr logs,\nand `truncated: true` means a real log is longer than its tail. `killed`\nwith exit_code 124/137 means the run hit its wall-clock ceiling; a dead\npid with no `exit` file (the wrapper crashed mid-write, or the run's\n`.runs` dir was deleted under it) reads `killed`, never a silent\n`running`. Read-only, so it keeps the read-tool timeout. An unknown\nrun_id is a 404 — it was never started, or already GC'd/deleted.",
         "operationId": "tool_sandbox_run_status_api_tool_sandbox_run_status_post",
         "parameters": [
           {
@@ -19637,6 +20097,137 @@
           }
         },
         "summary": "Tool Sandbox Run Status",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
+    "/api/tool/sandbox_view_image": {
+      "post": {
+        "description": "Serve a png/jpeg/gif/webp from the caller's workspace as an image result.\n\nReturns `{image: {media_type, data}, path}`; anything that is not one of the\nfour raster types is a 415 naming the rasterize route that exists on the box.",
+        "operationId": "tool_sandbox_view_image_api_tool_sandbox_view_image_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolSandboxViewImage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Sandbox View Image",
         "tags": [
           "tool-api"
         ]

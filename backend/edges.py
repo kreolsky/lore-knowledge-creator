@@ -18,6 +18,11 @@ silently:
     Notes carry no user_id filter: every reader of the project sees them.
   - `chat-context` (chat → document): chat_sessions.context_document_ids, the
     viewer's OWN chats only (idx_chatsessions_user_project).
+  - `external` (document → URL): `[t](https://…)` links parsed from the GFM
+    read-model — the live session's expand_tables when it has clients, else
+    documents.content (the exact branch get_document_links uses). Opt-in: a
+    URL is not a graph node, and the agent get_links default output must not
+    change. Entries carry url + label instead of document_id.
 
 The REST route (GET /api/documents/{id}/edges) and the agent tool (get_links)
 both call collect_edges — one function, one default kind set. Callers gate the
@@ -27,24 +32,29 @@ PEERS.
 from __future__ import annotations
 
 from chat_sessions.previews import PREVIEW_CONTENT_MAX, note_previews
+from edge_kinds import (
+    ALL_EDGE_KINDS,
+    DEFAULT_EDGE_KINDS,
+    KIND_ATTACHMENT,
+    KIND_CHAT_CONTEXT,
+    KIND_EXTERNAL,
+    KIND_MENTION,
+    KIND_NOTE,
+    STORED_EDGE_KINDS,
+)
 from fastapi import HTTPException
 
-from db import extract_id, fetch_many, fetch_one, get_db, get_descendant_ids
-from mentions import KIND_MENTION, STORED_EDGE_KINDS
+from db import extract_id, fetch_many, fetch_one, get_db
+from mentions import extract_external_links
+from scope import subtree_doc_ids
 
-KIND_ATTACHMENT = "attachment"
-KIND_NOTE = "note"
-KIND_CHAT_CONTEXT = "chat-context"
-
-# One default for both surfaces (route + agent tool): the content-derived kinds
-# plus attachments; note/chat-context are opt-in (program decision: behind a
-# filter — chat-context is private/per-user, notes are a comment surface).
-DEFAULT_EDGE_KINDS: tuple[str, ...] = (
-    KIND_MENTION, "transclusion", KIND_ATTACHMENT,
-)
-ALL_EDGE_KINDS: tuple[str, ...] = (
-    *STORED_EDGE_KINDS, KIND_ATTACHMENT, KIND_NOTE, KIND_CHAT_CONTEXT,
-)
+# One default + one full vocabulary, canonical in edge_kinds (the leaf every
+# kind list derives from — see edge_kinds.py); re-exported here for the
+# route/tool/test import surface.
+__all__ = [
+    "ALL_EDGE_KINDS", "DEFAULT_EDGE_KINDS", "KIND_ATTACHMENT", "KIND_NOTE",
+    "KIND_CHAT_CONTEXT", "KIND_EXTERNAL", "collect_edges", "parse_edge_kinds",
+]
 
 
 def parse_edge_kinds(raw: str | None) -> list[str]:
@@ -162,12 +172,16 @@ async def _scope_allowed(scope_root: str | None, peer_ids: list[str], project_id
     # Why: it only narrows what a scoped key sees — it cannot widen access, and
     # replacing the wall with it would let a scoped key name cross-project peers
     # the RBAC wall already refuses. Document peers only; note/chat peers are
-    # anchored to the in-scope document itself. Membership is computed once (one
-    # project scan) instead of one ancestor walk per peer.
+    # anchored to the in-scope document itself. Membership is computed once (via
+    # scope.subtree_doc_ids — one project scan, and the INDEX rule: a key on the
+    # project's index sees the whole project minus system/help) instead of one
+    # ancestor walk per peer. The early `if not scope_root` return is
+    # load-bearing: subtree_doc_ids returns [] for an empty scope, meaning "no
+    # filter", not "nothing allowed".
     """
     if not scope_root or not peer_ids:
         return set(peer_ids)
-    allowed = {scope_root, *await get_descendant_ids(scope_root, project_id)}
+    allowed = set(await subtree_doc_ids(scope_root, project_id))
     return {pid for pid in peer_ids if pid in allowed}
 
 
@@ -290,6 +304,29 @@ async def _chat_context_rows(db, project_id: str, viewer_user_id: str, document_
     ) or []
 
 
+def _external_entries(document_id: str, row: dict) -> list[dict]:
+    """external projection: outgoing `[t](https://…)` links parsed from the GFM
+    read-model — the SAME live-session-else-DB-row branch get_document_links
+    uses (routes/documents.py). A URL is not a graph node: no wall, no
+    project_id, entries carry {direction, kind, url, label} — the shape the
+    Links panel's external section renders (plan table-links-notes). Out-only:
+    the caller gates on direction like the note/chat projections do on `in`."""
+    from collab.registry import (
+        get_active_session,  # lazy: registry is heavy and cycle-prone
+    )
+
+    session = get_active_session("doc", document_id)
+    if session and session.clients:
+        from table_serialize import expand_tables
+        content = expand_tables(session.ydoc)
+    else:
+        content = row.get("content") or ""
+    return [
+        {"direction": "out", "kind": KIND_EXTERNAL, "url": url, "label": label}
+        for label, url in extract_external_links(content)
+    ]
+
+
 async def collect_edges(
     document_id: str,
     *,
@@ -303,7 +340,8 @@ async def collect_edges(
     Entry shape — document peers: {direction, kind, document_id, title,
     is_reference, source_type, broken (outgoing only), updated_at};
     note/chat peers: {direction: 'in', kind, session_id, label} plus note
-    (author, created_at) / chat (updated_at).
+    (author, created_at) / chat (updated_at); external (out-only, opt-in):
+    {direction: 'out', kind, url, label} — no document_id.
     """
     wanted = _validate_query(direction, kinds)
 
@@ -325,6 +363,9 @@ async def collect_edges(
     chat_rows: list = []
     if KIND_CHAT_CONTEXT in wanted and direction in ("in", "both"):
         chat_rows = await _chat_context_rows(db, project_id, viewer_user_id, document_id)
+    external_entries: list[dict] = []
+    if KIND_EXTERNAL in wanted and direction in ("out", "both"):
+        external_entries = _external_entries(document_id, row)
 
     peer_ids = {peer_id for _d, _k, peer_id in triples}
     allowed = await _scope_allowed(scope_root, sorted(peer_ids), project_id)
@@ -333,4 +374,5 @@ async def collect_edges(
         triples, alive=alive, allowed_peers=allowed, project_id=project_id,
     )
     entries += await _session_entries(db, note_rows, chat_rows)
+    entries += external_entries
     return {"edges": entries}

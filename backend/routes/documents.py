@@ -44,6 +44,7 @@ from models import (
     is_ref_row,
 )
 from routes._guards import guard_row
+from table_serialize import expand_tables
 
 router = APIRouter()
 
@@ -321,8 +322,10 @@ async def get_document_edges(
     kind the product shows as a link (plan typed-edges).
 
     `direction` = in|out|both; `kinds` = comma-separated filter, default
-    `mention,transclusion,attachment` (note/chat-context are opt-in). Document
-    peers carry {document_id, title, is_reference, source_type, broken
+    `mention,transclusion,attachment` (note/chat-context/external are opt-in;
+    `external` answers from the GFM read-model — live session when it has
+    clients, else the DB row — and carries url + label instead of document_id).
+    Document peers carry {document_id, title, is_reference, source_type, broken
     (outgoing stored edges only), updated_at}; note/chat peers carry session_id
     + label (chat-context = the viewer's OWN chats). The same service answers
     the agent's get_links tool — one function, one default.
@@ -353,11 +356,14 @@ async def get_document_links(
     # the chat completion path sees (chat/context.py) and export_document — the DB
     # lags the in-memory Y.Doc by the ~1s flush, so a just-deleted link would
     # otherwise still cascade. Idle session (no clients) → DB is authoritative.
+    # The live branch reads the GFM read-model form (expand_tables of the session
+    # Y.Doc) — the anchor-form session text cannot see a table cell's link, and
+    # the edges (/edges) already parse the expanded form.
     from collab.registry import get_active_session
     content = doc.get("content") or ""
     session = get_active_session("doc", document_id)
     if session and session.clients:
-        content = session.content
+        content = expand_tables(session.ydoc)
     return await _resolve_first_circle(content, document_id)
 
 

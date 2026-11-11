@@ -32,6 +32,7 @@ from agent.apply_edits_resolver import (
 )
 from agent.collab_writes import broadcast_agent_presence
 from agent.doc_state import resolve_live_doc_state
+from agent.edit_primitives import edit_range_error_detail
 from config import AGENT_EDIT_MAX_CHARS
 from models import RegionRef
 
@@ -122,7 +123,7 @@ async def apply_edits_to_document(
             - len((e.get("old_string") or "").encode("utf-8"))
             for e in edits
         )
-        artifacts.assert_artifact_size(len(live.encode("utf-8")) + delta)
+        await artifacts.assert_artifact_size(len(live.encode("utf-8")) + delta)
         normalized = edits
     else:
         from markdown_normalize import (
@@ -174,6 +175,8 @@ async def apply_edits_to_document(
                 # partial/fenced/mid-line splices as text.
                 convert_tables=not is_artifact,
             )
+        except HTTPException as exc:
+            raise _steer_html_full_rewrite(exc) if is_artifact else exc
         except RegionContainmentReject as exc:
             # A pinned-region edit escaping the fragment is rejected hard — 409
             # with the region_locked code (the deleted proposal path's
@@ -185,6 +188,30 @@ async def apply_edits_to_document(
     # Best-effort presence: tell live editors the agent edited this doc.
     await broadcast_agent_presence(doc_id, user.get("user_id"))
     return {"status": "applied", "doc_id": doc_id, **result}
+
+
+def _steer_html_full_rewrite(exc: HTTPException) -> HTTPException:
+    """On an html page, a full_rewrite refusal names the page-rewrite route.
+
+    # WHY: the generic full_rewrite text ("a SEQUENCE of small edit_document
+    # calls") is the markdown advice; on a page it sends the agent into dozens
+    # of point edits while a whole-page replace exists. The sentence is
+    # conditional ("if you have it") because the sandbox gate is per call and
+    # MCP never serves the tool — an agent without it reads the first half only.
+    """
+    detail = exc.detail if isinstance(exc.detail, dict) else None
+    if exc.status_code != 422 or not detail or not str(detail.get("error", "")).startswith(
+        edit_range_error_detail("full_rewrite")
+    ):
+        return exc
+    return HTTPException(status_code=422, detail={**detail, "error": (
+        "old_string covers ~the whole page — edit_document is pointwise only. To "
+        "rewrite most of an existing html page, use sandbox_fetch_artifact → edit "
+        "the file with sandbox_bash → replace_artifact_page, if you have those "
+        "tools; otherwise make a SEQUENCE of small edit_document calls, each "
+        "replacing one unique passage. Either way the rewrite stays in this same "
+        "document."
+    )})
 
 
 async def apply_edit_to_document(

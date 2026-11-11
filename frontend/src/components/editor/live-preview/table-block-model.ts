@@ -1,221 +1,522 @@
 /**
- * Table-block model — read/write helpers for the `tables` Yjs subtree.
+ * Table-block model — read/write helpers for the `tables` Yjs subtree (schema v2).
  *
  * SYSTEM: table-block — frontend model entry point. The editable table object stores its
  * data OUTSIDE the plain-text buffer, as a sibling root in the same entity Y.Doc:
  *
  *     ydoc.getMap('tables') : Y.Map<tableId, Y.Map{
- *       columns: Y.Array<Y.Map{ w: number }>,            // px width per column; 0 = AUTO
- *       rows:    Y.Array<Y.Array<Y.Map{ t: Y.Text }>>,   // cell = Y.Map, body = Y.Text
+ *       v: 2,
+ *       label?: string,
+ *       columns: Y.Map<colId, Y.Map{ pos: string, w: number }>,   // px width, always >= MIN_COLUMN_WIDTH
+ *       rows:    Y.Map<rowId, Y.Map{ pos: string }>,
+ *       cells:   Y.Map<"rowId:colId", Y.Text>,                    // cell body
  *     }>
  *
  * The document `content` text holds only a transclusion anchor `![label](table:id)`.
  *
+ * ARCH (schema v2, id-keyed): rows and columns are keyed maps ordered by `(pos, id)`
+ * (plain string comparison) — see `orderedAxisIds`, the ONE order function on this side
+ * (the backend twin is `table_serialize.ordered_axis_ids`). Rows/columns are never
+ * positional, so a concurrent add-row × add-column merges to a rectangle instead of a
+ * ragged array, and a peer inserting a row never invalidates an edit's address.
+ *
+ * ARCH: row/column `pos` keys are generated ON THE CLIENT (whoever writes the op) —
+ * a deliberate exception to backend-authoritative sort-key generation: a CRDT op must
+ * apply locally without a round-trip. Both sides use the same base-62 algorithm
+ * (npm `fractional-indexing`, pinned EXACTLY `3.2.0`); the shared vector fixture
+ * (`fixtures/table-v2.json`, read by this tree's vector test and by the backend
+ * `test_fractional_key_parity.py`) proves the two libraries agree key for key.
+ *
  * ARCH: cell body is a per-cell Y.Text so concurrent edits to different cells (and width
  * drags) never conflict and never produce an invalid intermediate state — the reason the
  * model is a CRDT subtree, not a JSON string in the text buffer.
+ *
+ * INVARIANT(persisted): inside the system a cell is addressed ONLY by
+ * `(tableId, rowId, colId)`. Why: a positional address goes stale the moment a peer
+ * inserts a row; an id never does. Model functions, the widget's DOM (`data-row-id`/
+ * `data-col-id`), find marks, Replace-all, badges and undo meta all address by ids;
+ * a position (row/column index) exists at exactly TWO boundaries — the whole-matrix
+ * projections kept here (`readTableModel`, `serializeTables`/`applyTablesJson`,
+ * `modelToGfm`, GFM import; a full ordered copy, not addressing) and the agent tool
+ * entry on the backend.
  *
  * INVARIANT: these helpers are the ONLY sanctioned write path; the widget is a pure
  * reflection of this model (Thin Client). Why: keeps collab merge correct and the widget
  * stateless. Every mutation runs inside a single `doc.transact` so one widget action = one
  * atomic Yjs update.
  *
- * INVARIANT(data-loss): an orphan MODEL (no anchor references its id) is TOLERATED — it is
- * retained, never auto-pruned. Only an orphan ANCHOR (anchor present, no model) renders an
- * inline error. Why: "no matching anchor" cannot distinguish a deliberate anchor removal
- * from a corrupted `table:id`, so auto-cleanup silently lost whole tables on a single
- * mangled char. Deletion is EXPLICIT-UI-ONLY (`deleteTableWithBackup`); a retained orphan is
- * accepted dead weight (no GC).
+ * INVARIANT(data-loss): a table removed WHOLE from the document text drops its model too.
+ * Why: a one-key delete is refused (atomic-delete-guard), so removing a whole anchor is a
+ * deliberate act (see SYSTEM: table-block, table-reconcile.ts). An orphan MODEL left any
+ * other way (a corrupted `table:id`, an agent edit) is TOLERATED — retained, never
+ * auto-pruned, listed unlinked in the References tab — because a corrupted anchor is
+ * indistinguishable from a removal by "no matching anchor", and auto-cleanup keyed on that
+ * lost whole tables on one mangled char. Only an orphan ANCHOR (anchor present, no model)
+ * renders an inline error.
  */
 import * as Y from 'yjs';
+import { generateNKeysBetween } from 'fractional-indexing';
 import { uuid } from '../../../utils/uuid';
+import { stopCapturing } from '../../../collab/document-undo';
+import { BIRTH_TABLE_WIDTH, DEFAULT_COLUMN_WIDTH, MIN_COLUMN_WIDTH, birthColumnWidths } from './table-widths';
+import { appendPos, cachedOrder, posBetween } from './table-order';
+
+/** The table subtree schema this code reads and writes. MUST equal the backend
+ * `TABLE_SCHEMA_VERSION` — a server speaking a different version is kept out by the
+ * collab protocol gate (`?proto=`, see yjs-provider.ts), not by this constant. */
+export const TABLE_SCHEMA_VERSION = 2;
 
 /**
- * Column width value meaning AUTO: no stored px. Rendered as an EMPTY `<col>`
- * width inside a `table-layout: fixed` table — auto columns split the free
- * width equally, never by content (widths must not move by themselves). "Auto" is the absence of a
- * measurement, so nothing computed from one client's font metrics is ever
- * written to the shared model. New tables and imports are born FIXED (`birthColumnWidths`,
- * from text length, not metrics); auto columns come only from a double-click reset or
- * older tables. The first drag freezes EVERY column to px (`setColumnWidths`), and an
- * all-px table is exactly as wide as its columns.
+ * Yjs transaction origins for every model write — the undo-stack contract (the
+ * document-wide `Y.UndoManager` tracks `TABLE_LOCAL_ORIGIN`, never the system one):
+ *
+ *  - `TABLE_LOCAL_ORIGIN` — user-initiated writes (insert/import a table, rename, delete,
+ *    structural ops, cell rewrites). One user action = one undoable step.
+ *  - `TABLE_SYSTEM_ORIGIN` — deliberately OUTSIDE the undo stack: `applyTablesJson`
+ *    seeding (PublicEditor / snapshot preview / useDocumentTables) and
+ *    `cloneDuplicateAnchors` reconciliation. Why: seeding replays a whole captured
+ *    state — undoing it would "un-insert" a table the user just navigated to, and the
+ *    reconcile clone is a background repair, not a user action.
+ *
+ * WHY explicit origins at all: the Yjs default captures every origin-less local write
+ * (`new Set([null])`), so a model without origins would land random internal writes in
+ * the undo stack. Nested `doc.transact` calls JOIN the outermost transaction — its origin
+ * wins — so a public helper called inside a system transaction (e.g. `cloneTable` from
+ * `cloneDuplicateAnchors`) inherits the system origin without extra plumbing.
  */
-export const AUTO_COLUMN_WIDTH = 0;
-
-/** Narrowest column a drag can produce, in px. */
-export const MIN_COLUMN_WIDTH = 40;
-
-/**
- * Default FIXED column width in px — the restore fallback for captured tables
- * with missing widths (mirrored in `backend/table_serialize.py`; the two
- * constants must stay equal — see table-block-model.test.ts).
- */
-export const DEFAULT_COLUMN_WIDTH = 160;
-
-/**
- * WHY: the px width a new table is born at = the document text column max width
- * (`.editor-content .cm-editor .cm-content` in index.css). MUST equal the backend
- * `BIRTH_TABLE_WIDTH` in `backend/table_serialize.py`.
- */
-export const BIRTH_TABLE_WIDTH = 844;
-/**
- * WHY: an EMPTY table from the insert command is born at 60% of `BIRTH_TABLE_WIDTH`, so the
- * free space beside it shows room for more columns (operator ruling). Frontend-only: the
- * server never creates an empty table, so the backend twin has no counterpart.
- */
-export const INSERT_TABLE_WIDTH = Math.round(BIRTH_TABLE_WIDTH * 0.6);
-const BIRTH_WEIGHT_MIN = 3;
-const BIRTH_WEIGHT_MAX = 40;
+export const TABLE_LOCAL_ORIGIN = Symbol('table-local');
+export const TABLE_SYSTEM_ORIGIN = Symbol('table-system');
 
 /**
- * Fixed px widths for a table at birth, proportional to cell text length.
- * Weight = code points of the longest trimmed line per cell, clamped to [3, 40].
- * INVARIANT(persisted): TEXT LENGTH only, never font metrics; equals backend `birth_column_widths`.
- * Why: server and every client must write the same numbers into the shared model;
- * after birth widths change only by a user's resize.
+ * One user-initiated structural/width write = ONE undo step: the document-wide stack is
+ * closed before AND after it, so text typed around it within the capture timeout never
+ * merges into it. Inside an open undo group (a drag) the boundaries are suppressed and
+ * the whole gesture stays one step (see collab/document-undo.ts).
+ * WHY creation and `deleteTable` stay plain `transact`: their callers pair them with the
+ * anchor text edit (insert / remove), which must land in the SAME step.
  */
-export function birthColumnWidths(matrix: string[][], total = BIRTH_TABLE_WIDTH): number[] {
-  const width = Math.max(matrix.reduce((m, r) => Math.max(m, r.length), 1), 1);
-  const weights = Array.from({ length: width }, (_, col) => {
-    let longest = 0;
-    for (const row of matrix) {
-      if (col >= row.length) continue;
-      for (const line of String(row[col]).split('\n')) longest = Math.max(longest, [...line.trim()].length);
-    }
-    return Math.min(Math.max(longest, BIRTH_WEIGHT_MIN), BIRTH_WEIGHT_MAX);
-  });
-  const weightSum = weights.reduce((a, b) => a + b, 0);
-  const px = weights.map((w) => Math.max(Math.round((total * w) / weightSum), MIN_COLUMN_WIDTH));
-  const widest = px.indexOf(Math.max(...px));
-  px[widest] = Math.max(px[widest] + total - px.reduce((a, b) => a + b, 0), MIN_COLUMN_WIDTH);
-  return px;
+export function localStep(doc: Y.Doc, fn: () => void): void {
+  stopCapturing(doc);
+  doc.transact(fn, TABLE_LOCAL_ORIGIN);
+  stopCapturing(doc);
 }
 
+/**
+ * A row id as minted by this model (uuid via `uuid()` locally, or read back from the
+ * CRDT). Branded so a positional index can never silently pass as one — the only mint is
+ * the model (create/add paths and the order functions).
+ */
+declare const rowIdBrand: unique symbol;
+export type RowId = string & { readonly [rowIdBrand]: never };
+/** A column id — see `RowId`. */
+declare const colIdBrand: unique symbol;
+export type ColId = string & { readonly [colIdBrand]: never };
+
+/** Whole-matrix projection: a table as flat `{columns, rows}` (display order). The
+ * read-only shape for consumers that copy/serialize the WHOLE table — never an
+ * addressing scheme (see the INVARIANT(persisted) in the header). */
 export interface TableModel {
   columns: number[];
   rows: string[][];
 }
 
-type ColMap = Y.Map<number>; // { w: number }
-type CellMap = Y.Map<Y.Text>; // { t: Y.Text }
-type TableMap = Y.Map<Y.Array<ColMap> | Y.Array<Y.Array<CellMap>>>;
+/** One column's width in display order — `readColumnWidths`/`setColumnWidths` items. */
+export interface ColumnWidth {
+  id: ColId;
+  w: number;
+}
+
+/** Internal to the table-* modules. */
+export type AxisEntry = Y.Map<string | number>; // { pos } on rows, { pos, w } on columns
+type CellText = Y.Text;
+/** A `tables` entry (v2 or legacy v1 — see `tableAwaitsMigration`). Internal to the table-* modules. */
+export type TableMap = Y.Map<unknown>;
 
 export function getTablesMap(doc: Y.Doc): Y.Map<TableMap> {
   return doc.getMap('tables') as Y.Map<TableMap>;
 }
 
-function getColumns(table: TableMap): Y.Array<ColMap> {
-  return table.get('columns') as Y.Array<ColMap>;
+/** The `cells` map key of one cell — `"<rowId>:<colId>"`. Ids are uuids (no `:`), so the
+ * split is unambiguous in both directions. */
+export function cellKey(rowId: RowId, colId: ColId): string {
+  return `${rowId}:${colId}`;
 }
 
-function getRows(table: TableMap): Y.Array<Y.Array<CellMap>> {
-  return table.get('rows') as Y.Array<Y.Array<CellMap>>;
+/**
+ * True for a schema-v1 table (positional `columns`/`rows` Y.Arrays) that the
+ * `tables_v2` backend migration has not rebuilt yet — a DEFERRED document keeps one.
+ *
+ * INVARIANT(data-loss): a v1 table is never projected as an empty v2 table —
+ * `serializeTables` skips it, `applyTablesJson` keeps it, and the widget renders
+ * "table awaits migration". Why: an empty projection reaches a checkpoint, and restoring
+ * that checkpoint would rebuild the table empty; "awaits migration" is an explicit
+ * error, an empty table is a lie. Backend twin: `table_serialize.table_awaits_migration`.
+ */
+export function tableAwaitsMigration(table: unknown): boolean {
+  return (
+    table instanceof Y.Map && table.get('v') === undefined
+    && table.get('columns') instanceof Y.Array && table.get('rows') instanceof Y.Array
+  );
 }
 
-function makeColumn(width: number): ColMap {
-  const col = new Y.Map() as ColMap;
-  col.set('w', width);
-  return col;
+/** Internal to the table-* modules. */
+export interface TableV2Parts {
+  columns: Y.Map<AxisEntry>;
+  rows: Y.Map<AxisEntry>;
+  cells: Y.Map<CellText>;
 }
 
-function makeCell(text: string): CellMap {
-  const cell = new Y.Map() as CellMap;
-  const body = new Y.Text();
-  if (text) body.insert(0, text);
-  cell.set('t', body);
-  return cell;
+/** `(columns, rows, cells)` of a v2 table Map, `null` for anything else (a v1 table
+ * awaiting migration reads as structurally broken, never half-parsed). Backend twin:
+ * `_v2_parts`. */
+function v2Parts(table: unknown): TableV2Parts | null {
+  if (!(table instanceof Y.Map) || table.get('v') !== TABLE_SCHEMA_VERSION) return null;
+  const columns = table.get('columns');
+  const rows = table.get('rows');
+  const cells = table.get('cells');
+  if (!(columns instanceof Y.Map) || !(rows instanceof Y.Map) || !(cells instanceof Y.Map)) return null;
+  return { columns, rows, cells };
 }
 
-/** Build a `tables` entry from a cell-body matrix; returns the fresh uuid. `total` = birth width in px. */
-export function createTable(doc: Y.Doc, matrix: string[][], total = BIRTH_TABLE_WIDTH): string {
-  const id = uuid();
-  const width = matrix.reduce((m, r) => Math.max(m, r.length), 1);
-  doc.transact(() => {
-    const table = new Y.Map() as TableMap;
-    // ARCH: batch every child array into ONE Yjs `push` instead of one push per item.
-    // Why: each `push` is a separate Yjs operation (observer fire + op in the update). A
-    // 5000×200 import pushed cell-by-cell emitted ~1M ops; batched it is O(rows+2) pushes.
-    // Pre-built Y.Map/Y.Array/Y.Text children integrate correctly when inserted in bulk.
-    const columns = new Y.Array<ColMap>();
-    columns.push(birthColumnWidths(matrix, total).map(makeColumn));
-    const rows = new Y.Array<Y.Array<CellMap>>();
-    rows.push(matrix.map((row) => {
-      const yrow = new Y.Array<CellMap>();
-      yrow.push(Array.from({ length: width }, (_, c) => makeCell(row[c] ?? '')));
-      return yrow;
-    }));
-    table.set('columns', columns);
-    table.set('rows', rows);
-    getTablesMap(doc).set(id, table);
-  });
-  return id;
+function tableById(doc: Y.Doc, id: string): TableMap | undefined {
+  return getTablesMap(doc).get(id);
 }
 
-/** Read a table into the flat model form; null for a missing/structurally broken entry. */
+/** `tableById` + `v2Parts` in one step — the standard write-path guard. */
+function v2ById(doc: Y.Doc, id: string): TableV2Parts | null {
+  const table = tableById(doc, id);
+  return table ? v2Parts(table) : null;
+}
+
+/** `v2Parts` + the cached display order of one table; `null` for a missing/non-v2 table. */
+function tableOrder(doc: Y.Doc, id: string): ({ parts: TableV2Parts } & { rowIds: RowId[]; colIds: ColId[] }) | null {
+  const table = tableById(doc, id);
+  const parts = table && v2Parts(table);
+  return parts ? { parts, ...cachedOrder(table, parts) } : null;
+}
+
+/** Row ids of a table in display order; `null` for a missing/non-v2 table. */
+export function orderedRowIds(doc: Y.Doc, id: string): RowId[] | null {
+  return tableOrder(doc, id)?.rowIds ?? null;
+}
+
+/** Column ids of a table in display order; `null` for a missing/non-v2 table. */
+export function orderedColIds(doc: Y.Doc, id: string): ColId[] | null {
+  return tableOrder(doc, id)?.colIds ?? null;
+}
+
+// ─── Reads ────────────────────────────────────────────────────────────────────
+
+/**
+ * Read a table into the flat whole-matrix form; `null` for a missing/structurally
+ * broken entry (including a v1 table awaiting migration — the widget renders the
+ * "awaits migration" error for those, never an empty grid).
+ *
+ * A missing cell (the concurrent add-row × add-column intersection) reads empty;
+ * orphan cells (a row or column removed concurrently) are never read.
+ */
 export function readTableModel(doc: Y.Doc, id: string): TableModel | null {
-  const table = getTablesMap(doc).get(id);
-  if (!table) return null;
-  const columns = getColumns(table);
-  const rows = getRows(table);
-  if (!(columns instanceof Y.Array) || !(rows instanceof Y.Array)) return null;
+  const order = tableOrder(doc, id);
+  if (!order) return null;
+  const { columns, cells } = order.parts;
   return {
-    columns: columns.map((c) => c.get('w') as number),
-    rows: rows.map((row) => row.map((cell) => (cell.get('t') as Y.Text).toString())),
+    columns: order.colIds.map((cid) => Number(columns.get(cid)?.get('w') ?? DEFAULT_COLUMN_WIDTH)),
+    rows: order.rowIds.map((rid) =>
+      order.colIds.map((cid) => cells.get(cellKey(rid, cid))?.toString() ?? '')),
   };
 }
 
 /**
  * Cheap structural probe — row/column counts ONLY, no cell-text materialization.
  *
- * ARCH: `readTableModel` calls `.toString()` on every cell's Y.Text (O(rows×cols) string
- * allocation). The block widget's `observeDeep` callback fires on every keystroke in any cell,
- * so calling `readTableModel` per fire would allocate the whole table per keystroke. This
- * helper reads only the Yjs array lengths, letting the widget short-circuit a no-op re-render
- * (same row/column counts → content-only change, patched in place by yCollab) without ever
- * touching cell text. Returns null for a missing/structurally broken entry.
+ * WHY: `readTableModel` calls `.toString()` on every cell's Y.Text (O(rows×cols) string
+ * allocation); the document's table list (`listDocumentTables`) needs only the counts.
+ * (The widget short-circuits a keystroke on the order cache's array identity instead.)
+ * Returns null for a missing/structurally broken entry. A v1 table still reports its
+ * counts (from the legacy arrays) so the panel keeps it reachable.
  */
 export function readTableShape(doc: Y.Doc, id: string): { rows: number; cols: number } | null {
-  const table = getTablesMap(doc).get(id);
+  const table = tableById(doc, id);
   if (!table) return null;
-  const columns = getColumns(table);
-  const rows = getRows(table);
-  if (!(columns instanceof Y.Array) || !(rows instanceof Y.Array)) return null;
-  return { rows: rows.length, cols: columns.length };
+  const parts = v2Parts(table);
+  if (parts) return { rows: parts.rows.size, cols: parts.columns.size };
+  if (tableAwaitsMigration(table)) {
+    const columns = table.get('columns') as Y.Array<unknown>;
+    const rows = table.get('rows') as Y.Array<unknown>;
+    return { rows: rows.length, cols: columns.length };
+  }
+  return null;
 }
 
-/** Read only the column widths (px), without materializing cell text. See `readTableShape`. */
-export function readColumnWidths(doc: Y.Doc, id: string): number[] | null {
-  const table = getTablesMap(doc).get(id);
-  if (!table) return null;
-  const columns = getColumns(table);
-  if (!(columns instanceof Y.Array)) return null;
-  return columns.map((c) => c.get('w') as number);
+/**
+ * Column widths in display order, without materializing cell text (the widget reads
+ * them on every axis write — a width drag). `null` for a missing/non-v2 table.
+ */
+export function readColumnWidths(doc: Y.Doc, id: string): ColumnWidth[] | null {
+  const order = tableOrder(doc, id);
+  if (!order) return null;
+  return order.colIds.map((cid) => ({ id: cid, w: Number(order.parts.columns.get(cid)?.get('w') ?? DEFAULT_COLUMN_WIDTH) }));
 }
 
-/** The live per-cell Y.Text (for binding a nested editor); null if out of range. */
-export function getCellText(doc: Y.Doc, id: string, row: number, col: number): Y.Text | null {
-  const table = getTablesMap(doc).get(id);
-  if (!table) return null;
-  const cell = getRows(table).get(row)?.get(col);
-  if (!cell) return null;
-  const body = cell.get('t');
-  return body instanceof Y.Text ? body : null;
+/**
+ * The live per-cell Y.Text (for binding a nested editor or scanning text); `null` when
+ * the table, row or column does not exist or the cell was never created. A read-only
+ * walker treats null as the empty string; an editor-mount path uses `ensureCell`.
+ */
+export function getCellText(doc: Y.Doc, id: string, rowId: RowId, colId: ColId): Y.Text | null {
+  const parts = v2ById(doc, id);
+  if (!parts) return null;
+  if (!parts.rows.has(rowId) || !parts.columns.has(colId)) return null;
+  return parts.cells.get(cellKey(rowId, colId)) ?? null;
+}
+
+/**
+ * The live per-cell Y.Text, creating an EMPTY one when the cell does not exist yet (the
+ * concurrent add-row × add-column intersection) — "a missing cell reads empty; the first
+ * write creates it", and mounting a cell editor IS that first write.
+ *
+ * WHY `TABLE_SYSTEM_ORIGIN`: the creation carries no user content — an empty cell reads
+ * identically to a missing one, so it must NOT enter the undo stack as an invisible
+ * Ctrl+Z step. Subsequent typing goes through the yCollab binding's own origin.
+ */
+export function ensureCell(doc: Y.Doc, id: string, rowId: RowId, colId: ColId): Y.Text | null {
+  const parts = v2ById(doc, id);
+  if (!parts) return null;
+  if (!parts.rows.has(rowId) || !parts.columns.has(colId)) return null;
+  const key = cellKey(rowId, colId);
+  let text = parts.cells.get(key);
+  if (!text) {
+    doc.transact(() => {
+      parts.cells.set(key, new Y.Text());
+    }, TABLE_SYSTEM_ORIGIN);
+    text = parts.cells.get(key)!;
+  }
+  return text;
+}
+
+// ─── Writes: structure ────────────────────────────────────────────────────────
+
+/**
+ * Write one fresh v2 table under `tableId`: `len(widths)` columns, one row per matrix
+ * row, a cell per row × column (EAGER). Caller owns the transaction and its origin —
+ * `createTable` (user), `applyTablesJson` (seeding) and tests all build through here.
+ * Backend twin: `_build_table`.
+ *
+ * ARCH: build every child map FULLY, then attach once. Pre-built Y.Map/Y.Text children
+ * integrate correctly when inserted in bulk, so a 5000×200 import is O(rows+cols) map
+ * sets, never one Yjs operation per push (the v1 rule, kept).
+ *
+ * Internal to the table-* modules.
+ */
+export function buildTable(
+  tables: Y.Map<TableMap>, tableId: string, widths: number[], matrix: string[][],
+): void {
+  const columns = new Y.Map<AxisEntry>();
+  const rows = new Y.Map<AxisEntry>();
+  const cells = new Y.Map<CellText>();
+  const colIds = widths.map(() => uuid() as ColId);
+  generateNKeysBetween(null, null, colIds.length).forEach((pos, i) => {
+    const entry = new Y.Map<string | number>() as AxisEntry;
+    entry.set('pos', pos);
+    entry.set('w', widths[i]);
+    columns.set(colIds[i], entry);
+  });
+  generateNKeysBetween(null, null, matrix.length).forEach((pos, r) => {
+    const rid = uuid() as RowId;
+    const entry = new Y.Map<string | number>() as AxisEntry;
+    entry.set('pos', pos);
+    rows.set(rid, entry);
+    colIds.forEach((cid, c) => {
+      const body = new Y.Text(matrix[r][c] ?? '');
+      cells.set(cellKey(rid, cid), body);
+    });
+  });
+  const table = new Y.Map() as TableMap;
+  table.set('v', TABLE_SCHEMA_VERSION);
+  table.set('columns', columns);
+  table.set('rows', rows);
+  table.set('cells', cells);
+  tables.set(tableId, table);
+}
+
+/**
+ * Build a `tables` entry from a cell-body matrix; returns the fresh uuid. `total` = birth
+ * width in px, `layout` = the width rule (the shared birth rule unless a client fits the
+ * table to its own document width).
+ */
+export function createTable(
+  doc: Y.Doc, matrix: string[][], total = BIRTH_TABLE_WIDTH,
+  layout: (matrix: string[][], total: number) => number[] = birthColumnWidths,
+): string {
+  const id = uuid();
+  doc.transact(() => {
+    buildTable(getTablesMap(doc), id, layout(matrix, total), matrix);
+  }, TABLE_LOCAL_ORIGIN);
+  return id;
 }
 
 /** Deep-copy a table under a fresh id (copy-paste of an anchor — never alias one model). */
 export function cloneTable(doc: Y.Doc, srcId: string): string {
   const model = readTableModel(doc, srcId);
   if (!model) throw new Error(`cloneTable: source table ${srcId} not found`);
-  const newId = createTable(doc, model.rows);
+  const newId = uuid();
   doc.transact(() => {
-    model.columns.forEach((w, i) => setColumnWidth(doc, newId, i, w));
-  });
+    buildTable(getTablesMap(doc), newId, model.columns, model.rows);
+  }, TABLE_LOCAL_ORIGIN);
   return newId;
 }
 
 export function deleteTable(doc: Y.Doc, id: string): void {
-  getTablesMap(doc).delete(id);
+  doc.transact(() => {
+    getTablesMap(doc).delete(id);
+  }, TABLE_LOCAL_ORIGIN);
 }
+
+/**
+ * Add ONE row. `afterId` = the row that ends up right ABOVE the new one, `beforeId` =
+ * right BELOW (both `null` = append at the BOTTOM — the Tab/agent append path). Cells
+ * are EAGER: a cell per live column, so a replica never sees a row without its cells.
+ * Returns the new `RowId`, `null` when the table does not exist.
+ */
+export function addRow(doc: Y.Doc, id: string, beforeId: RowId | null = null, afterId: RowId | null = null): RowId | null {
+  const order = tableOrder(doc, id);
+  if (!order) return null;
+  const { parts } = order;
+  const rid = uuid() as RowId;
+  localStep(doc, () => {
+    const pos = beforeId === null && afterId === null
+      ? appendPos(parts.rows)
+      : posBetween(parts.rows, beforeId, afterId);
+    const entry = new Y.Map<string | number>() as AxisEntry;
+    entry.set('pos', pos);
+    parts.rows.set(rid, entry);
+    for (const cid of order.colIds) {
+      parts.cells.set(cellKey(rid, cid), new Y.Text());
+    }
+  });
+  return rid;
+}
+
+/**
+ * Insert ONE column between `beforeId` (the column that ends up right BEFORE it,
+ * `null` = first) and `afterId` (right AFTER it, `null` = last); both `null` = append
+ * at the END (the default-add path, mirrors `addRow`). A cell per live row
+ * (EAGER), all in ONE transaction. Returns the new `ColId`, `null` when the table does
+ * not exist. `width`: the px width the caller inherits (the cell menu passes the clicked
+ * column's), floored at `MIN_COLUMN_WIDTH` — see INVARIANT on `fixedWidth`.
+ */
+export function addColumn(
+  doc: Y.Doc, id: string, width: number, beforeId: ColId | null = null, afterId: ColId | null = null,
+): ColId | null {
+  const parts = v2ById(doc, id);
+  if (!parts) return null;
+  const cid = uuid() as ColId;
+  localStep(doc, () => {
+    const entry = new Y.Map<string | number>() as AxisEntry;
+    entry.set('pos', beforeId === null && afterId === null
+      ? appendPos(parts.columns)
+      : posBetween(parts.columns, beforeId, afterId));
+    entry.set('w', fixedWidth(width));
+    parts.columns.set(cid, entry);
+    for (const rid of parts.rows.keys() as Iterable<RowId>) {
+      parts.cells.set(cellKey(rid, cid), new Y.Text());
+    }
+  });
+  return cid;
+}
+
+/**
+ * Remove one row AND its cells (`"<rowId>:"` prefix) in ONE transaction — a replica
+ * never sees a row without its cells, and no orphan cell is left behind by a local op
+ * (orphans exist only via the concurrent remove × add races, and every reader ignores
+ * them — see `readTableModel`). No-op when the table or row does not exist.
+ */
+export function removeRow(doc: Y.Doc, id: string, rowId: RowId): void {
+  const parts = v2ById(doc, id);
+  if (!parts || !parts.rows.has(rowId)) return;
+  localStep(doc, () => {
+    parts.rows.delete(rowId);
+    const prefix = `${rowId}:`;
+    for (const key of Array.from(parts.cells.keys())) {
+      if (key.startsWith(prefix)) parts.cells.delete(key);
+    }
+  });
+}
+
+/** Remove one column and its cells (`:"<colId>"` suffix) — column twin of `removeRow`. */
+export function removeColumn(doc: Y.Doc, id: string, colId: ColId): void {
+  const parts = v2ById(doc, id);
+  if (!parts || !parts.columns.has(colId)) return;
+  localStep(doc, () => {
+    parts.columns.delete(colId);
+    const suffix = `:${colId}`;
+    for (const key of Array.from(parts.cells.keys())) {
+      if (key.endsWith(suffix)) parts.cells.delete(key);
+    }
+  });
+}
+
+/**
+ * Move one row/column to sit right after `beforeId` / right before `afterId` — ONE
+ * `pos` write, no reorder of any other item (the whole point of fractional keys). A
+ * bound naming the moved item itself, or an anchor the race already removed, degrades
+ * to that side's END (see `posBetween`). No-op when the table or item does not exist.
+ */
+export function moveRow(doc: Y.Doc, id: string, rowId: RowId, beforeId: RowId | null = null, afterId: RowId | null = null): void {
+  const parts = v2ById(doc, id);
+  if (!parts) return;
+  const entry = parts.rows.get(rowId);
+  if (!entry) return;
+  const lo = beforeId === rowId ? null : beforeId;
+  const hi = afterId === rowId ? null : afterId;
+  localStep(doc, () => {
+    entry.set('pos', posBetween(parts.rows, lo, hi));
+  });
+}
+
+/** Column twin of `moveRow`. */
+export function moveColumn(doc: Y.Doc, id: string, colId: ColId, beforeId: ColId | null = null, afterId: ColId | null = null): void {
+  const parts = v2ById(doc, id);
+  if (!parts) return;
+  const entry = parts.columns.get(colId);
+  if (!entry) return;
+  const lo = beforeId === colId ? null : beforeId;
+  const hi = afterId === colId ? null : afterId;
+  localStep(doc, () => {
+    entry.set('pos', posBetween(parts.columns, lo, hi));
+  });
+}
+
+// ─── Writes: widths ───────────────────────────────────────────────────────────
+
+// INVARIANT(persisted): every column always has a fixed px width (>= MIN_COLUMN_WIDTH);
+// there are no auto columns.
+// Why: table widths must be predictable and never reflow by themselves.
+const fixedWidth = (w: number): number => Math.max(Math.round(w), MIN_COLUMN_WIDTH);
+
+export function setColumnWidth(doc: Y.Doc, id: string, colId: ColId, width: number): void {
+  const parts = v2ById(doc, id);
+  const colMap = parts?.columns.get(colId);
+  if (!colMap) return;
+  localStep(doc, () => {
+    colMap.set('w', fixedWidth(width));
+  });
+}
+
+/** Write a set of column widths in one transaction; only changed values. Ids the table
+ * no longer has (a peer removed the column mid-drag) are ignored. */
+export function setColumnWidths(doc: Y.Doc, id: string, widths: ColumnWidth[]): void {
+  const parts = v2ById(doc, id);
+  if (!parts) return;
+  localStep(doc, () => {
+    for (const { id: colId, w } of widths) {
+      const colMap = parts.columns.get(colId);
+      if (colMap && colMap.get('w') !== fixedWidth(w)) colMap.set('w', fixedWidth(w));
+    }
+  });
+}
+
+// ─── Label / anchor / whole-table paths ──────────────────────────────────────
 
 /**
  * Store a fallback label ON the model (a `label` field in the table's Y.Map).
@@ -228,459 +529,16 @@ export function deleteTable(doc: Y.Doc, id: string): void {
  * orphan label is intentionally not checkpoint-persisted, keeping the frontend↔backend shape
  * INVARIANT intact. Stored normalized so it can seed a valid anchor.
  */
-function setModelLabel(doc: Y.Doc, id: string, label: string): void {
-  const table = getTablesMap(doc).get(id);
-  if (table) (table as unknown as Y.Map<unknown>).set('label', label);
+export function setModelLabel(doc: Y.Doc, id: string, label: string): void {
+  const table = tableById(doc, id);
+  if (table) localStep(doc, () => {
+    table.set('label', label);
+  });
 }
 
 /** Read the model-level fallback label (see `setModelLabel`); '' when unset. */
 export function getModelLabel(doc: Y.Doc, id: string): string {
-  const table = getTablesMap(doc).get(id);
-  const v = table ? (table as unknown as Y.Map<unknown>).get('label') : undefined;
+  const table = tableById(doc, id);
+  const v = table ? table.get('label') : undefined;
   return typeof v === 'string' ? v : '';
-}
-
-/**
- * Create a table model from a cell matrix AND store its label — with NO anchor spliced into
- * the document `content`. Returns the fresh table id.
- *
- * WHY: the CSV/TSV panel-import path (see `csv-table.ts`) absorbs a file fully into a table
- * model; the table then surfaces as a panel-resident "virtual reference" badge (reactively
- * via `useDocumentTables`) without occupying a line in the body. The label is the model-level
- * fallback (see `setModelLabel`) — it seeds the anchor if the user later inserts the table.
- *
- * INVARIANT(atomic-write): model build + label set run in ONE `doc.transact`.
- * Why: two separate transactions could be observed mid-way by a peer or by the reactive
- * `useDocumentTables` derive — a badge with an empty label that then snaps to the real name.
- * One atomic update makes an import a single consistent table-with-label Yjs state.
- */
-export function createUnlinkedTable(doc: Y.Doc, matrix: string[][], label: string): string {
-  let id = '';
-  doc.transact(() => {
-    id = createTable(doc, matrix);
-    setModelLabel(doc, id, normalizeTableLabel(label));
-  });
-  return id;
-}
-
-export function setColumnWidth(doc: Y.Doc, id: string, col: number, width: number): void {
-  const table = getTablesMap(doc).get(id);
-  if (!table) return;
-  const colMap = getColumns(table).get(col);
-  if (colMap) colMap.set('w', width);
-}
-
-/** Write a whole width array in one transaction; only changed values, indices past the
- * table (a peer removed a column mid-drag) are ignored. */
-export function setColumnWidths(doc: Y.Doc, id: string, widths: number[]): void {
-  const table = getTablesMap(doc).get(id);
-  if (!table) return;
-  const columns = getColumns(table);
-  doc.transact(() => {
-    widths.forEach((width, i) => {
-      const colMap = i < columns.length ? columns.get(i) : undefined;
-      if (colMap && colMap.get('w') !== width) colMap.set('w', width);
-    });
-  });
-}
-
-/**
- * Scale widths proportionally to `total`. A column reaching `MIN_COLUMN_WIDTH` pins there
- * and the others absorb the rest, so the smallest column does not stop a shrink. Integers
- * summing exactly to `max(total, n * MIN)`: the rounding remainder goes to the widest
- * column, which keeps the table edge under the cursor.
- */
-export function scaleColumnWidths(widths: number[], total: number): number[] {
-  const target = Math.max(Math.round(total), widths.length * MIN_COLUMN_WIDTH);
-  const pinned = new Set<number>();
-  let scale = 0;
-  for (let settled = false; !settled;) {
-    const free = widths.filter((_, i) => !pinned.has(i));
-    const freeSum = free.reduce((sum, w) => sum + w, 0);
-    scale = freeSum > 0 ? (target - pinned.size * MIN_COLUMN_WIDTH) / freeSum : 0;
-    const below = widths.flatMap((w, i) => (!pinned.has(i) && w * scale < MIN_COLUMN_WIDTH ? [i] : []));
-    below.forEach((i) => pinned.add(i));
-    settled = below.length === 0;
-  }
-  const scaled = widths.map((w, i) => (pinned.has(i) ? MIN_COLUMN_WIDTH : Math.round(w * scale)));
-  const widest = scaled.indexOf(Math.max(...scaled));
-  scaled[widest] += target - scaled.reduce((sum, w) => sum + w, 0);
-  return scaled;
-}
-
-export function addRow(doc: Y.Doc, id: string, at?: number): void {
-  const table = getTablesMap(doc).get(id);
-  if (!table) return;
-  const rows = getRows(table);
-  const width = getColumns(table).length;
-  doc.transact(() => {
-    const yrow = new Y.Array<CellMap>();
-    for (let c = 0; c < width; c++) yrow.push([makeCell('')]);
-    rows.insert(at ?? rows.length, [yrow]);
-  });
-}
-
-export function addColumn(doc: Y.Doc, id: string, at?: number): void {
-  const table = getTablesMap(doc).get(id);
-  if (!table) return;
-  const columns = getColumns(table);
-  const rows = getRows(table);
-  const index = at ?? columns.length;
-  // WHY: a 0 in an all-px table flips it back to 100% wide, a size change nobody asked for.
-  const frozen = columns.length > 0 && columns.toArray().every((c) => c.get('w') !== AUTO_COLUMN_WIDTH);
-  doc.transact(() => {
-    columns.insert(index, [makeColumn(frozen ? DEFAULT_COLUMN_WIDTH : AUTO_COLUMN_WIDTH)]);
-    rows.forEach((row) => row.insert(index, [makeCell('')]));
-  });
-}
-
-export function removeRow(doc: Y.Doc, id: string, index: number): void {
-  const table = getTablesMap(doc).get(id);
-  if (!table) return;
-  const rows = getRows(table);
-  if (index < 0 || index >= rows.length) return;
-  doc.transact(() => rows.delete(index, 1));
-}
-
-export function removeColumn(doc: Y.Doc, id: string, index: number): void {
-  const table = getTablesMap(doc).get(id);
-  if (!table) return;
-  const columns = getColumns(table);
-  const rows = getRows(table);
-  if (index < 0 || index >= columns.length) return;
-  doc.transact(() => {
-    columns.delete(index, 1);
-    rows.forEach((row) => {
-      if (index < row.length) row.delete(index, 1);
-    });
-  });
-}
-
-/** Build a table transclusion anchor for the document text. */
-export function tableAnchor(label: string, id: string): string {
-  return `![${label}](table:${id})`;
-}
-
-/** Matches every `![label](table:id)` anchor; group 1 = label, group 2 = id. */
-export const TABLE_ANCHOR_RE = /!\[([^\]]*)\]\(table:([^)]+)\)/g;
-
-/**
-  * Clone a DUPLICATED anchor id (copy-paste) under a fresh id and rewrite the content so
-  * each anchor owns a distinct model (no aliasing). The live trigger is the debounced
-  * `tableReconcileExtension` (see `table-reconcile.ts`); orphan MODELS are never pruned
-  * here — see the INVARIANT(data-loss) in the header.
-  *
-  * Returns the (possibly rewritten) content + a `changed` flag. The caller is responsible
-  * for writing `content` back into the text buffer when `changed` (the model mutations are
-  * already applied to the Y.Doc here).
-  *
-  * INVARIANT: an orphan ANCHOR (anchor present, no model) is NOT created here — it renders
-  * an inline error in the widget. Why: content is the user's authored text; we never
-  * silently delete an anchor they typed.
-  */
-export function cloneDuplicateAnchors(doc: Y.Doc, content: string): { content: string; changed: boolean } {
-  const tables = getTablesMap(doc);
-  const seen = new Set<string>();
-  const referenced = new Set<string>();
-  let changed = false;
-
-  const rewritten = content.replace(TABLE_ANCHOR_RE, (full, label: string, id: string) => {
-    if (!seen.has(id)) {
-      seen.add(id);
-      referenced.add(id);
-      return full;
-    }
-    // Duplicate id → clone the source model under a fresh id, rewrite this anchor.
-    if (!tables.has(id)) {
-      // Orphan duplicate (no model to clone) — leave as-is; widget shows the error.
-      return full;
-    }
-    const newId = cloneTable(doc, id);
-    changed = true;
-    seen.add(newId);
-    referenced.add(newId);
-    return tableAnchor(label, newId);
-  });
-
-  return { content: rewritten, changed };
-}
-
-/**
- * Serialize the whole `tables` subtree to compact JSON for checkpoint capture.
- *
- * INVARIANT (shared shape, frontend ↔ backend): the output MUST be byte-identical in
- * SHAPE to the backend `capture_tables_json`: `{ "<id>": { columns: number[], rows: string[][] } }`.
- * Why: a checkpoint is restored by whichever replica/producer captured it; silent shape
- * drift (e.g. dropping column widths) rebuilds a default-width table. `table-block-model.test.ts`
- * shares one fixture with the backend `test_table_capture.py` to guard this.
- *
- * `'{}'` when there are no tables. Capture is lossless (cell text verbatim, no GFM escaping).
- */
-export function serializeTables(doc: Y.Doc): string {
-  const tables = getTablesMap(doc);
-  const out: Record<string, { columns: number[]; rows: string[][] }> = {};
-  tables.forEach((table, id) => {
-    const model = readTableModel(doc, id);
-    if (!model) return;
-    out[id] = { columns: model.columns, rows: model.rows };
-  });
-  return JSON.stringify(out);
-}
-
-/**
- * Rebuild the `tables` subtree from `serializeTables` output (checkpoint restore).
- *
- * `null` = legacy restore (no tables captured): leave the tables map untouched.
- * `'{}'` / empty = clear to no tables. Otherwise clear + rebuild every table under fresh
- * ids in ONE `doc.transact()` so the rebuild is a single atomic Yjs update — the broadcast
- * frame then carries the whole table rebuild and other replicas converge without an
- * intermediate orphan-anchor state. Mirrors the backend `apply_tables_json`.
- */
-export function applyTablesJson(doc: Y.Doc, tablesJson: string | null): void {
-  if (tablesJson === null) return;
-  const data: Record<string, { columns?: number[]; rows?: string[][] }> = JSON.parse(tablesJson || '{}');
-  const tables = getTablesMap(doc);
-
-  doc.transact(() => {
-    tables.forEach((_, id) => tables.delete(id));
-    Object.entries(data).forEach(([id, model]) => {
-      const columns = model.columns ?? [];
-      const rows = model.rows ?? [];
-      let width = columns.length;
-      if (width === 0 && rows.length) width = Math.max(...rows.map((r) => r.length));
-      const table = new Y.Map() as TableMap;
-      tables.set(id, table);
-
-      const colsArr = new Y.Array<ColMap>();
-      table.set('columns', colsArr);
-      for (let i = 0; i < width; i++) {
-        const col = new Y.Map() as ColMap;
-        colsArr.push([col]);
-        col.set('w', columns[i] ?? DEFAULT_COLUMN_WIDTH);
-      }
-
-      const rowsArr = new Y.Array<Y.Array<CellMap>>();
-      table.set('rows', rowsArr);
-      for (const row of rows) {
-        const yrow = new Y.Array<CellMap>();
-        rowsArr.push([yrow]);
-        for (let c = 0; c < width; c++) {
-          const cell = new Y.Map() as CellMap;
-          yrow.push([cell]);
-          cell.set('t', new Y.Text(row[c] ?? ''));
-        }
-      }
-    });
-  });
-}
-
-/**
- * Serialize a table model to GFM pipe-table markdown (the byte-inverse of
- * `gfm-table-import.ts`'s `parseRow`/`unescapeCell`).
- *
- * model→GFM export (clipboard copy path; see SYSTEM: table-block). The editable table lives as
- * a Yjs subtree; this is the read-only serializer that turns it back into portable pipe
- * markdown so a copied table becomes real `| a | b |` text in `text/plain` and a `<table>`
- * in `text/html` (via `cleanMarkdownToHtml`). Never throws.
- *
- * INVARIANT: cell escaping is the exact inverse of the importer — `\n`→`<br>`, `|`→`\|`,
- * exactly one padding space per cell side, `rows[0]` = header, separator = `| --- | … |`.
- * Why: a copy must round-trip back into a native table object on paste (see
- * `gfm-table-import.ts:unescapeCell`/`parseRow`). Read-only on the Y.Doc.
- *
- * Known limitation (inherent to GFM, not a bug): a header ROW whose EVERY cell body matches
- * the separator grammar `/^:?-+:?$/` (e.g. `| --- | :--: |`) cannot be represented — GFM has
- * no way to mark such a row as data rather than separator, so the importer misclassifies it
- * (gfm-table-import.ts:isSeparatorRow) and the table is not recognized. A single separator-
- * grammar cell alongside a normal cell is fine (the row only reads as a separator when all
- * its cells are dash-like). Rare in practice; body cells are unaffected.
- */
-export function modelToGfm(model: TableModel): string {
-  const rows = model.rows;
-  if (rows.length === 0) return '';
-  const width = Math.max(model.columns.length, ...rows.map((r) => r.length), 1);
-  // Inverse of unescapeCell: pipe first (so a cell's own `|` is escaped before padding),
-  // then newline→<br>. Order is load-bearing for invertibility across mixed cell content.
-  const esc = (cell: string) => cell.replace(/\|/g, '\\|').replace(/\n/g, '<br>');
-  const rowToLine = (cells: string[]) => {
-    const padded = cells.slice(0, width);
-    while (padded.length < width) padded.push('');
-    return `|${padded.map((c) => ` ${esc(c)} `).join('|')}|`;
-  };
-  const header = rowToLine(rows[0]);
-  const sep = `|${Array.from({ length: width }, () => ' --- ').join('|')}|`;
-  const body = rows.slice(1).map(rowToLine);
-  return [header, sep, ...body].join('\n');
-}
-
-/**
- * Replace every `![label](table:id)` anchor in `markdown` with the GFM serialization of its
- * model. A model that is missing (orphan anchor / mount race) is left untouched — the copy
- * handler degrades gracefully and never throws. Read-only on the Y.Doc.
- */
-export function expandTableAnchorsToGfm(doc: Y.Doc, markdown: string): string {
-  return markdown.replace(TABLE_ANCHOR_RE, (full, _label: string, id: string) => {
-    const model = readTableModel(doc, id);
-    if (!model) return full;
-    return modelToGfm(model);
-  });
-}
-
-/**
- * Delete a WHOLE table (anchor + model) — the References-panel "table badge" delete path.
- *
- * In a single `doc.transact`: locate `tableAnchor(label, id)` in `doc.getText('content')`
- * and delete that range, then `deleteTable(doc, id)`. A missing anchor is tolerated (the
- * model is still dropped — orphan cleanup); a missing model is a no-op. Precedent for
- * editing the content Y.Text directly (not via a CM6 view): table-reconcile.ts.
- *
- * INVARIANT: same ydoc as the inline editor's yCollab-bound `content` — Yjs merges the
- * delete correctly; the editor re-renders the now-empty anchor range. One widget action =
- * one atomic Yjs update (mirrors the model-helper write-path INVARIANT above).  Why: the delete runs against the same ydoc as the editor's content binding so Yjs merges it correctly and the editor re-renders the empty anchor; one widget action = one atomic update.
- */
-export function deleteTableFromDoc(doc: Y.Doc, tableId: string, label: string): void {
-  const content = doc.getText('content');
-  const text = content.toString();
-  const needle = tableAnchor(label, tableId);
-  const at = text.indexOf(needle);
-  doc.transact(() => {
-    if (at >= 0) content.delete(at, needle.length);
-    deleteTable(doc, tableId);
-  });
-}
-
-/**
- * Delete a whole table WITH a backup recovery point (References-badge delete path).
- *
- * Awaits `backup()` (a forced checkpoint POST — captures the LIVE server ydoc while the
- * table is still present) BEFORE `deleteTableFromDoc` mutates the map. `backup` is injected
- * (the model layer stays free of the api/i18n/store coupling the caller owns).
- *
- * INVARIANT(data-loss): the backup is awaited and must RESOLVE before any mutation; if it
- * REJECTS the delete is aborted (the rejection propagates, the model is left intact). Why:
- * a table delete with no recovery point is unrecoverable user-data loss, and a "backup"
- * that ran after (or in parallel with) the delete could capture the already-deleted state
- * (No silent degradation — the caller surfaces the error).
- */
-export async function deleteTableWithBackup(
-  doc: Y.Doc,
-  tableId: string,
-  label: string,
-  backup: () => Promise<void>,
-): Promise<void> {
-  await backup();
-  deleteTableFromDoc(doc, tableId, label);
-}
-
-/**
- * Sanitize a user-typed table label so it can never break the `![label](table:id)`
- * anchor grammar. `]` ends the alt-text (`[^\]]*` in `TABLE_ANCHOR_RE`) and a newline
- * would split the anchor across two lines; both are neutralized. Applied at the write
- * path (renameTable) so a rename can never produce an unparseable anchor.
- *
- * INVARIANT: the output contains no `]` and no newline. Why: an anchor with either is
- * either unparseable or parses to a truncated label — a silent corruption of `content`.
- * `(`, `[`, spaces, unicode all survive (they do not break the grammar).
- */
-export function normalizeTableLabel(raw: string): string {
-  return raw.replace(/]/g, '').replace(/\n/g, ' ').trim();
-}
-
-/**
- * Rename a table's anchor LABEL (the References-panel "table badge" rename path).
- *
- * In a single `doc.transact`: store the normalized label on the model (fallback, see
- * `setModelLabel`) AND — when the table is LINKED — replace its `![oldLabel](table:id)`
- * anchor range in `content` with the renamed anchor. An UNLINKED table (anchor absent) is
- * still renamed via the model label alone, so an orphan table can be named and keep that
- * name when it is re-inserted. Same direct-content-edit precedent as `deleteTableFromDoc`.
- *
- * INVARIANT: the new label is normalized first, so the resulting anchor always re-parses
- * via `TABLE_ANCHOR_RE`. Why: a typed `]`/newline would otherwise corrupt the anchor
- * (see `normalizeTableLabel`). One widget action = one atomic Yjs update (mirrors the
- * model-helper write-path INVARIANT).
- */
-export function renameTable(doc: Y.Doc, tableId: string, oldLabel: string, newLabel: string): void {
-  const normalized = normalizeTableLabel(newLabel);
-  const content = doc.getText('content');
-  const needle = tableAnchor(oldLabel, tableId);
-  const at = content.toString().indexOf(needle);
-  doc.transact(() => {
-    setModelLabel(doc, tableId, normalized);
-    if (at >= 0) {
-      content.delete(at, needle.length);
-      content.insert(at, tableAnchor(normalized, tableId));
-    }
-  });
-}
-
-/**
- * Re-insert a table's transclusion anchor into `content` so a broken/unlinked table becomes
- * reachable in the document again. Appends `\n\n![label](table:id)\n` at the end of the
- * content when no view offset is given; the label is seeded from the model fallback (see
- * `setModelLabel`). One atomic Yjs update. Callers with an editor view should instead insert
- * at the cursor (see ReferencesPanel) — this is the no-view fallback.
- */
-export function insertTableAnchor(doc: Y.Doc, tableId: string, label: string): void {
-  const content = doc.getText('content');
-  const anchor = tableAnchor(normalizeTableLabel(label), tableId);
-  doc.transact(() => {
-    content.insert(content.length, `\n\n${anchor}\n`);
-  });
-}
-
-/** One row of `listDocumentTables` — a table badge's identity + shape (no cell text). */
-export interface DocumentTableEntry {
-  table_id: string;
-  label: string;
-  rows: number;
-  cols: number;
-  /**
-   * True when the model exists in the ydoc but NO anchor in `content` references it
-   * (anchor removed or its `table:id` corrupted). The label lives only in the anchor, so
-   * an unlinked table has none (`''`) and cannot be renamed — but its data is intact and
-   * it stays reachable (open / delete / restore-by-fixing-the-anchor) from the panel.
-   */
-  unlinked: boolean;
-}
-
-/**
- * Derive the panel list of a document's tables from the LIVE ydoc. Read-only; the pure half
- * of the reactive `useDocumentTables` hook.
- *
- * Two ordered groups:
- *  1. LINKED tables — every `![label](table:id)` anchor in `content` joined with its model's
- *     shape, in document (anchor) order (`unlinked: false`).
- *  2. UNLINKED tables — models present in the ydoc that NO surviving anchor references,
- *     appended AFTER the linked group (`unlinked: true`, empty label).
- *
- * INVARIANT: a model that exists in the ydoc is ALWAYS listed (linked or unlinked) — a table
- * is never hidden from the panel just because its anchor was removed/corrupted. Why: hiding
- * it makes intact data unreachable (the user's only handle to open/delete/restore it is this
- * list); the earlier "orphan model excluded" behavior meant a single mangled char in an
- * anchor visually erased a still-present table. Orphan ANCHORS (anchor, no model) are still
- * excluded (nothing to show); a stray duplicate id yields only its first occurrence.
- */
-export function listDocumentTables(doc: Y.Doc): DocumentTableEntry[] {
-  const content = doc.getText('content').toString();
-  const seen = new Set<string>();
-  const out: DocumentTableEntry[] = [];
-  for (const m of content.matchAll(TABLE_ANCHOR_RE)) {
-    const label = m[1] as string;
-    const id = m[2] as string;
-    if (seen.has(id)) continue;
-    const shape = readTableShape(doc, id);
-    if (!shape) continue;
-    seen.add(id);
-    out.push({ table_id: id, label, rows: shape.rows, cols: shape.cols, unlinked: false });
-  }
-  // Unlinked models (no anchor references them) — appended below the linked group.
-  for (const id of getTablesMap(doc).keys()) {
-    if (seen.has(id)) continue;
-    const shape = readTableShape(doc, id);
-    if (!shape) continue;
-    seen.add(id);
-    out.push({ table_id: id, label: getModelLabel(doc, id), rows: shape.rows, cols: shape.cols, unlinked: true });
-  }
-  return out;
 }

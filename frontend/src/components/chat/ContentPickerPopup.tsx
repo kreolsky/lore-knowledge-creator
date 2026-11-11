@@ -21,6 +21,7 @@ import { useDocumentPreview } from '../../hooks/useDocumentPreview';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useReferencePreview } from '../../hooks/useReferencePreview';
 import { usePopupSlot } from '../../hooks/usePopupSlot';
+import { useClickOutside } from '../../hooks/useClickOutside';
 import { PickerPreviewPopup } from '../PickerPreviewPopup';
 import { computeBesideBoxPreviewPosition } from '../../utils/popup-position';
 import { PREVIEW_MAX_HEIGHT } from '../../utils/preview-geometry';
@@ -247,18 +248,7 @@ export function ContentPickerPopup({ sessionId, selectedDocIds, selectedRefIds, 
     if (activeTab === 'references') setPreviewRefId((item as Reference).reference_id);
   };
 
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (popupRef.current && !popupRef.current.contains(target)
-          && (!previewPanelRef.current || !previewPanelRef.current.contains(target))
-          && (!triggerRef?.current || !triggerRef.current.contains(target))) {
-        onClose();
-      }
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [onClose, triggerRef]);
+  useClickOutside([popupRef, previewPanelRef, triggerRef], onClose);
 
   useEffect(() => {
     if (items.length > 0) {

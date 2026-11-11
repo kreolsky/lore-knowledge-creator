@@ -26,7 +26,8 @@ vi.mock('../store/app-store', () => ({
   },
 }));
 
-import * as YjsModel from '../components/editor/live-preview/table-block-model';
+import { createTable, readTableModel } from '../components/editor/live-preview/table-block-model';
+import { tableAnchor } from '../components/editor/live-preview/table-document-ops';
 import { setEntityHandle } from '../collab/active-handle-registry';
 import { releaseHandle, publishHandle } from '../editor/active-editor';
 import type { EntityYjsState } from '../collab/yjs-provider';
@@ -37,8 +38,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
-const { createTable, tableAnchor } = YjsModel;
 
 function makeHandle(doc: Y.Doc): EntityYjsState {
   return { ydoc: doc } as unknown as EntityYjsState;
@@ -109,8 +108,8 @@ describe('useTableBadgeOps — delete targets the entity handle', () => {
     await act(async () => { await ops!.handleTableDelete(entry); });
 
     // The DOCUMENT's table is gone; the reference's table is untouched.
-    expect(YjsModel.readTableModel(docYdoc, t1)).toBeNull();
-    expect(YjsModel.readTableModel(refYdoc, tRef)).not.toBeNull();
+    expect(readTableModel(docYdoc, t1)).toBeNull();
+    expect(readTableModel(refYdoc, tRef)).not.toBeNull();
     // Checkpoint was requested for the DOCUMENT before the drop.
     expect(apiPost).toHaveBeenCalledWith('/checkpoints', {
       document_id: DOC_ID,
@@ -138,7 +137,7 @@ describe('useTableBadgeOps — delete targets the entity handle', () => {
 
     expect(showToast).toHaveBeenCalledWith('tableDeleteFailed', 'error');
     expect(apiPost).not.toHaveBeenCalled();
-    expect(YjsModel.readTableModel(foreignDoc, tForeign)).not.toBeNull();
+    expect(readTableModel(foreignDoc, tForeign)).not.toBeNull();
     docYdoc.destroy();
     foreignDoc.destroy();
   });

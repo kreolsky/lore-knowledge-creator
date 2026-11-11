@@ -147,3 +147,19 @@ export function serializeTableCsv(model: { rows: string[][] }, delimiter = ','):
 
   return BOM + body;
 }
+
+/**
+ * Read a dropped/picked .csv/.tsv into a matrix within the import limits. `.tsv` is
+ * tab-delimited by name; anything else is sniffed with a comma fallback. Callers own
+ * the toast and the table creation (unlinked vs anchored at a drop position).
+ */
+export async function readCsvForImport(file: File): Promise<{ matrix: string[][] } | { refusal: 'tooLarge' | 'empty' }> {
+  const text = await file.text();
+  const delimiter = file.name.toLowerCase().endsWith('.tsv') ? '\t' : sniffDelimiter(text, ',');
+  const matrix = parseCsv(text, delimiter);
+  const rows = matrix.length;
+  if (rows === 0) return { refusal: 'empty' };
+  const cols = matrix.reduce((m, r) => Math.max(m, r.length), 0);
+  if (rows > MAX_TABLE_IMPORT_ROWS || cols > MAX_TABLE_IMPORT_COLS || rows * cols > MAX_TABLE_IMPORT_CELLS) return { refusal: 'tooLarge' };
+  return { matrix };
+}

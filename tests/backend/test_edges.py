@@ -212,3 +212,95 @@ async def test_deleted_target_stays_on_source_as_broken(client, admin_user):
     rows = [e for e in await _edges(client, token, a, direction="out") if e["document_id"] == b]
     assert len(rows) == 1, "the deleted target must stay on the source's outgoing list"
     assert rows[0]["broken"] is True
+
+
+async def _noop(*_a, **_kw):
+    pass
+
+
+# TEST-WHY: cross-process-contract — /edges?kinds=external parses the SAME GFM read-model on both branches (the live session's expand_tables, the idle DB row), and the get_links tool validates kinds against the SAME derived vocabulary (edge_kinds.ALL_EDGE_KINDS): a kind the route accepts must never 422 on the tool, both surfaces must answer identically, and a bare URL (no `[label](…)`) is never listed.
+@pytest.mark.asyncio
+async def test_edges_external_links_live_idle_and_tool_parity(
+    client, collab_project, test_db, _clear_sessions,
+):
+    import json
+
+    from collab.registry import _get_or_create_session
+    from helpers import cell_ids
+
+    from db import create_record
+    from table_serialize import set_table_cell
+    from ydoc_store import set_content
+
+    pid, _doc, admin_token, _user_token, admin_uid, _user_uid = collab_project
+    anchor_root = await _mk_doc(client, pid, admin_token, title="Key root")
+    source = await _mk_doc(
+        client, pid, admin_token, title="Source", parent_id=anchor_root, content="Intro",
+    )
+
+    tables = json.dumps({"t1": {"columns": [160, 160], "rows": [
+        ["Hdr", "Val"],
+        ["see", "[x](https://example.com/cell)"],
+        ["again https://example.com/bare", "[y](https://example.com/cell)"],
+    ]}})
+    await set_content(source, "Intro\n\n![t](table:t1)", persist=True, tables_json=tables)
+
+    # Idle branch (no live session): documents.content carries the expanded cells.
+    ext = [e for e in await _edges(client, admin_token, source, kinds="external", direction="out")
+           if e["kind"] == "external"]
+    assert [(e["label"], e["url"]) for e in ext] == [("x", "https://example.com/cell")], \
+        "dedup by URL in first-seen order; the bare URL is not listed"
+    assert all(e["direction"] == "out" for e in ext)
+
+    # Opt-in + out-only: the default kind set never answers external, an
+    # in-direction query parses nothing.
+    assert "external" not in {e["kind"] for e in await _edges(client, admin_token, source)}
+    assert await _edges(client, admin_token, source, kinds="external", direction="in") == []
+
+    # Live branch: a connected client, a URL-only cell edit — read BEFORE any
+    # flush, so the DB row still holds the OLD url: only the live branch
+    # (expand_tables of the session ydoc) can answer the new one.
+    session = await _get_or_create_session("doc", source, "Intro")
+    ws = type("W", (), {"send_bytes": _noop, "send_text": _noop})()
+    session.add_client(ws, "u1", "User", "full")
+    assert set_table_cell(session.ydoc, "t1", *cell_ids(session.ydoc, "t1", 1, 1), "[z](https://example.com/live)")
+
+    ext = [e for e in await _edges(client, admin_token, source, kinds="external")
+           if e["kind"] == "external"]
+    assert [(e["label"], e["url"]) for e in ext] == [
+        ("z", "https://example.com/live"), ("y", "https://example.com/cell"),
+    ], "the live session's expanded ydoc answers, not the stale DB row"
+
+    session._dirty = True
+    await session.flush_to_db()
+
+    # The tool surface: the same answer via get_links (key scoped to the
+    # subtree holding source), and the Literal still self-corrects — a
+    # misspelled kind 422s on BOTH surfaces.
+    token = "lore_" + secrets.token_hex(32)
+    await create_record("api_keys", f"ext-key-{secrets.token_hex(4)}", {
+        "user_id": admin_uid, "project_id": pid, "document_id": anchor_root,
+        "token_hash": hashlib.sha256(token.encode()).hexdigest(),
+        "label": "agent", "capabilities": ["agent"],
+    })
+    r = await client.post(
+        "/api/tool/get_links",
+        json={"document_id": source, "kinds": ["external"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text
+    tool_urls = {e["url"] for e in r.json()["edges"] if e["kind"] == "external"}
+    assert tool_urls == {"https://example.com/live", "https://example.com/cell"}, \
+        "the tool must answer exactly what the route answered"
+
+    r = await client.post(
+        "/api/tool/get_links",
+        json={"document_id": source, "kinds": ["externall"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 422, r.text
+    r = await client.get(
+        f"/api/documents/{source}/edges", params={"kinds": "externall"},
+        cookies={"lore_session": admin_token},
+    )
+    assert r.status_code == 422, r.text

@@ -23,7 +23,7 @@ import { act } from 'react';
 // NOTE: no static setPublicFileContext import — vi.resetModules() hands the
 // panel a FRESH reference-url instance whose module-level context must be
 // seeded inside beforeEach (a static import would write the stale instance).
-import { tableAnchor } from './editor/live-preview/table-block-model';
+import { tableAnchor } from './editor/live-preview/table-document-ops';
 import type { Document, Reference } from '../types';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

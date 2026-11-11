@@ -39,6 +39,24 @@ let _chunks: Blob[] = [];
 let _context: RecordingContext | null = null;
 let _onComplete: ((file: File, ctx: RecordingContext) => void) | null = null;
 
+/**
+ * Start a MediaRecorder on `stream` with the one shared config: opus codec, chunks
+ * delivered every second, empty chunks dropped. Used by the header REC (this hook)
+ * and the chat/note mic (useSimpleVoiceRecording).
+ * INVARIANT: opus codec + start(1000) + size-guarded chunks. Why: without timeslice/codec
+ *   some browsers deliver an empty/degraded stream → Whisper returns "" → onTranscribed("")
+ *   silently no-ops. This divergence was the root cause of the chat/note
+ *   voice-input regression (header REC used the other hook and kept working).
+ */
+export function startOpusRecorder(stream: MediaStream, onChunk: (chunk: Blob) => void): MediaRecorder {
+  const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+  recorder.ondataavailable = (e) => {
+    if (e.data.size > 0) onChunk(e.data);
+  };
+  recorder.start(1000);
+  return recorder;
+}
+
 function newSessionId(): string {
   return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
@@ -98,16 +116,12 @@ export function useAudioRecorder(
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
       _chunks = [];
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          _chunks.push(e.data);
-          // Fire-and-forget: the cache's queue serializes writes per session.
-          void appendChunk(sessionId, e.data);
-        }
-      };
+      const recorder = startOpusRecorder(stream, (chunk) => {
+        _chunks.push(chunk);
+        // Fire-and-forget: the cache's queue serializes writes per session.
+        void appendChunk(sessionId, chunk);
+      });
 
       recorder.onstop = () => {
         stream.getTracks().forEach(t => t.stop());
@@ -127,7 +141,6 @@ export function useAudioRecorder(
         }
       };
 
-      recorder.start(1000);
       _recorder = recorder;
       // Only after start() succeeded, in the same synchronous block: a
       // getUserMedia/MediaRecorder failure leaves no empty record, and the first

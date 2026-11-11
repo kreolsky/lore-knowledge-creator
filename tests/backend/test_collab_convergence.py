@@ -20,6 +20,7 @@ from collab.sync import (
     unwrap_binary,
     wrap_binary,
 )
+from helpers import project_collab_url
 from pycrdt import Doc, Text
 
 
@@ -60,9 +61,9 @@ class TestCrdtConvergence:
         pid, doc_id, admin_token, user_token, *_ = collab_project
 
         with sync_app.websocket_connect(
-            f"/ws/collab/project/{pid}", cookies={"lore_session": admin_token}
+            project_collab_url(pid), cookies={"lore_session": admin_token}
         ) as a, sync_app.websocket_connect(
-            f"/ws/collab/project/{pid}", cookies={"lore_session": user_token}
+            project_collab_url(pid), cookies={"lore_session": user_token}
         ) as b:
             _join(a, doc_id)
             _recv(a, want_type="init")

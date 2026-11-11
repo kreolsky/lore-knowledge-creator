@@ -1,9 +1,12 @@
-"""Contract tests for the agent sandbox tool surface (plan 1783645342155-pi-sandbox-v2).
+"""Contract tests for the agent sandbox tool surface.
 
 The sandbox is an SSH host with Python where `sandbox_bash` runs arbitrary commands.
 These tests prove the guards WITHOUT a live sandbox: the SSH exec primitive is the
-seam (`sandbox.transport._ssh_exec`), monkeypatched here so the security predicates — which are
-the whole point of the surface — are provable in CI where no sandbox exists.
+seam (`sandbox.transport._ssh_exec`), monkeypatched here (via the captured_exec
+fixture) so the security predicates — which are the whole point of the surface —
+are provable in CI where no sandbox exists. The pure-shell parts (the foreground
+slice function, the run-kill script) run under a real bash locally — they have no
+SSH seam at all.
 
 # ARCH: the highest-value tests here are the three rejection guards. `sandbox_bash` is
 # arbitrary code execution: every key class that must NOT reach it (external
@@ -16,6 +19,7 @@ import re
 import secrets
 
 import pytest
+import pytest_asyncio
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -71,6 +75,17 @@ def sandbox_configured(monkeypatch):
     pin_tool_gates(monkeypatch, sandbox=True)
 
 
+class _ExecLog(list):
+    """The exec log the fixture returns; also the script-a-reply hook.
+
+    `response` (class default None): what the NEXT patched exec returns — a
+    result dict, or a BaseException instance to raise (the wedged-connection
+    backstop). Lets each contract test shape the far end WITHOUT a second,
+    test-local monkeypatch seam.
+    """
+    response = None
+
+
 @pytest.fixture
 def captured_exec(monkeypatch, sandbox_configured):
     """Replace the SSH primitive; record the command the dispatcher would run.
@@ -79,11 +94,15 @@ def captured_exec(monkeypatch, sandbox_configured):
     where they resolve it — the package split kept that per-module binding)."""
     from routes.tool_api.sandbox import bash, lifecycle, runs
 
-    calls = []
+    calls = _ExecLog()
 
     async def _fake(command: str, *, timeout: float, env: dict | None = None):
         calls.append({"command": command, "timeout": timeout, "env": env})
-        return {"stdout": "ok", "stderr": "", "exit_code": 0, "truncated": False}
+        if calls.response is None:
+            return {"stdout": "ok", "stderr": "", "exit_code": 0, "truncated": False}
+        if isinstance(calls.response, BaseException):
+            raise calls.response
+        return dict(calls.response)
 
     monkeypatch.setattr(bash, "_ssh_exec", _fake)
     monkeypatch.setattr(runs, "_ssh_exec", _fake)
@@ -204,25 +223,25 @@ async def _member(user_id: str, project_id: str, access_level: str) -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("exit_code", [124, 137])
 async def test_remote_timeout_exit_code_is_reported_as_timed_out(
-    client, test_db, project_with_doc, monkeypatch, sandbox_configured, exit_code,
+    client, test_db, project_with_doc, captured_exec, exit_code,
 ):
-    """124 (SIGTERM) and 137 (the -k SIGKILL escalation) both mean "killed by the
-    remote timeout" and must surface as timed_out, not as a mysterious failure."""
-    from routes.tool_api import sandbox
-    from routes.tool_api.sandbox import (  # noqa: F401 — submodules own the seams
-        bash,
-        files,
-        lifecycle,
-        runs,
-        transport,
-    )
-
-    async def _fake(command: str, *, timeout: float, env: dict | None = None):
-        return {"stdout": "", "stderr": "", "exit_code": exit_code, "truncated": False}
-
-    monkeypatch.setattr(sandbox.bash, "_ssh_exec", _fake)
+    """124 (SIGTERM) and 137 (the -k SIGKILL escalation) are the run's OWN exit
+    codes now: the foreground result reports status "exited" with that code and
+    `timed_out: false` — timed_out is reserved for the wedged-connection
+    backstop, and the full contract (run_id, log_dir, slices, byte counts)
+    rides along so the agent can act on the failure instead of re-running
+    blind."""
     pid, _idx, uid = project_with_doc
     token = await _make_key(uid, pid, internal=True)
+    captured_exec.response = {
+        "stdout": (
+            f"STATUS=exited\nEXIT={exit_code}\nOUT_BYTES=12\nERR_BYTES=7\n"
+            "partial out\n"
+        ),
+        "stderr": "Timeout sent\n",
+        "exit_code": 0,
+        "truncated": False,
+    }
 
     resp = await client.post(
         "/api/tool/sandbox_bash", json={"command": "sleep 999"}, headers=_hdr(token),
@@ -230,34 +249,46 @@ async def test_remote_timeout_exit_code_is_reported_as_timed_out(
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["timed_out"] is True
+    assert body["status"] == "exited"
     assert body["exit_code"] == exit_code
-    assert "timeout" in body["stderr"].lower(), "a killed command must say why"
+    assert body["timed_out"] is False
+    assert "partial out" in body["stdout"]
+    assert "Timeout sent" in body["stderr"]
+    assert body["stdout_bytes"] == 12
+    assert body["stderr_bytes"] == 7
+    assert body["truncated"] is False
+    assert re.fullmatch(r"[0-9a-f]{32}", body["run_id"])
+    assert body["log_dir"].endswith(f"/.runs/{body['run_id']}")
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["backstop", "expired", "gone"])
 async def test_wedged_connection_still_surfaces_as_a_timeout(
-    client, test_db, project_with_doc, monkeypatch, sandbox_configured,
+    client, test_db, project_with_doc, captured_exec, mode,
 ):
-    """The client backstop: if the connection never returns at all, the turn must
-    still continue rather than hang."""
+    """A foreground wait that ends WITHOUT a normal exit still returns a
+    handle the agent can act on — never a hang, never a handle-less kill.
+    backstop: the SSH connection itself wedged → timed_out true + a stderr
+    line saying the command keeps running; expired: the wait deadline passed →
+    the run is PROMOTED (status running, timed_out false); gone: the run
+    vanished under the wait (its .runs dir deleted) → killed with the slices
+    it had, and the wait ends EARLY, not after burning its whole budget."""
     import asyncio
 
-    from routes.tool_api import sandbox
-    from routes.tool_api.sandbox import (  # noqa: F401 — submodules own the seams
-        bash,
-        files,
-        lifecycle,
-        runs,
-        transport,
-    )
-
-    async def _fake(command: str, *, timeout: float, env: dict | None = None):
-        raise asyncio.TimeoutError()
-
-    monkeypatch.setattr(sandbox.bash, "_ssh_exec", _fake)
     pid, _idx, uid = project_with_doc
     token = await _make_key(uid, pid, internal=True)
+    if mode == "backstop":
+        captured_exec.response = asyncio.TimeoutError()
+    elif mode == "expired":
+        captured_exec.response = {
+            "stdout": "STATUS=running\nOUT_BYTES=0\nERR_BYTES=0\n",
+            "stderr": "", "exit_code": 0, "truncated": False,
+        }
+    else:
+        captured_exec.response = {
+            "stdout": "STATUS=killed\nOUT_BYTES=3\nERR_BYTES=0\nfoo\n",
+            "stderr": "", "exit_code": 0, "truncated": False,
+        }
 
     resp = await client.post(
         "/api/tool/sandbox_bash", json={"command": "sleep 999"}, headers=_hdr(token),
@@ -265,23 +296,40 @@ async def test_wedged_connection_still_surfaces_as_a_timeout(
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["timed_out"] is True
-    assert body["exit_code"] != 0
+    assert re.fullmatch(r"[0-9a-f]{32}", body["run_id"]), "no handle to act on"
+    assert body["log_dir"].endswith(f"/.runs/{body['run_id']}")
+    if mode == "backstop":
+        assert body["status"] == "running"
+        assert body["timed_out"] is True
+        assert "keeps running" in body["stderr"]
+    elif mode == "expired":
+        assert body["status"] == "running"
+        assert body["timed_out"] is False
+        assert body["exit_code"] is None
+    else:
+        assert body["status"] == "killed"
+        assert body["exit_code"] is None
+        assert "foo" in body["stdout"]
 
 
-# ─── Detached runs (plan sandbox-detached-runs): spawn ────────────────────────
+# ─── Detached runs: spawn ─────────────────────────────────────────────────────
 
 
 def _status_stdout(
-    state: str, *, exit_code: int | None = None, size: int = 0, tail: str = "",
+    state: str, *, exit_code: int | None = None,
+    size_out: int = 0, size_err: int = 0, out: str = "", err: str = "",
 ) -> str:
     """The remote run-status script's stdout for a given run-dir state — the exact
-    wire format the handler parses (STATE/EXIT/SIZE lines + a TAIL_BEGIN..TAIL_END
-    block)."""
-    lines = [f"STATE={state}", f"SIZE={size}"]
+    wire format the handler parses (STATE/SIZE_OUT/SIZE_ERR/EXIT lines + an
+    OUT_BEGIN..OUT_END and an ERR_BEGIN..ERR_END tail block)."""
+    lines = [f"STATE={state}", f"SIZE_OUT={size_out}", f"SIZE_ERR={size_err}"]
     if exit_code is not None:
         lines.append(f"EXIT={exit_code}")
-    return "\n".join(lines) + "\nTAIL_BEGIN\n" + tail + "\nTAIL_END\n"
+    return (
+        "\n".join(lines)
+        + "\nOUT_BEGIN\n" + out + "\nOUT_END\n"
+        + "ERR_BEGIN\n" + err + "\nERR_END\n"
+    )
 
 
 # ─── Detached runs: sandbox_run_status (read-only collection) ─────────────────
@@ -302,7 +350,9 @@ async def test_run_status_reports_running(
 
     async def _fake(command: str, *, timeout: float, env: dict | None = None):
         return {
-            "stdout": _status_stdout("running", size=42, tail="building…"),
+            "stdout": _status_stdout(
+                "running", size_out=42, size_err=9, out="building…", err="warn",
+            ),
             "stderr": "", "exit_code": 0, "truncated": False,
         }
 
@@ -320,6 +370,7 @@ async def test_run_status_reports_running(
     assert body["run_id"] == "a" * 32
     assert body["exit_code"] is None
     assert "building" in body["out"]
+    assert "warn" in body["err"]
     assert body["truncated"] is False
 
 
@@ -341,7 +392,7 @@ async def test_run_status_dead_pid_without_exit_is_killed_never_running(
 
     async def _fake(command: str, *, timeout: float, env: dict | None = None):
         return {
-            "stdout": _status_stdout("killed", size=5, tail="partial"),
+            "stdout": _status_stdout("killed", size_out=5, out="partial"),
             "stderr": "", "exit_code": 0, "truncated": False,
         }
 
@@ -358,6 +409,7 @@ async def test_run_status_dead_pid_without_exit_is_killed_never_running(
     assert body["status"] == "killed"
     assert body["exit_code"] is None
     assert body["out"] == "partial"
+    assert body["err"] == ""
 
 
 @pytest.mark.asyncio
@@ -377,7 +429,7 @@ async def test_run_status_truncation_is_reported(
 
     async def _fake(command: str, *, timeout: float, env: dict | None = None):
         return {
-            "stdout": _status_stdout("exited", exit_code=0, size=999_999),
+            "stdout": _status_stdout("exited", exit_code=0, size_out=999_999),
             "stderr": "", "exit_code": 0, "truncated": False,
         }
 
@@ -442,6 +494,98 @@ async def test_run_status_sandbox_unreachable_is_502(
     assert resp.status_code == 502, resp.text
 
 
+# ─── Foreground slices: the LAST line must survive ────────────────────────────
+
+
+# TEST-WHY: pure-logic-edge — the slice is pure shell over bytes; a head-only cut would drop exactly the traceback/verdict at the log's end, so the last line surviving at the cap and far past it is the contract
+def test_foreground_slice_keeps_the_last_line(tmp_path):
+    """The `_lore_slice` the foreground script embeds, executed under a real
+    bash: at exactly MAX_OUTPUT_CHARS bytes and at 50 KB, the output keeps the
+    log's LAST line, names the elided byte count, and never exceeds the
+    per-stream cap; a log within the budget passes through verbatim."""
+    import subprocess
+
+    from routes.tool_api.sandbox.runs import (
+        _FG_SLICE_BUDGET,
+        _fg_slice_shell,
+    )
+    from routes.tool_api.sandbox.transport import MAX_OUTPUT_CHARS
+
+    def _sliced(data: bytes) -> bytes:
+        log = tmp_path / f"log-{len(data)}"
+        log.write_bytes(data)
+        out = subprocess.run(
+            ["bash", "-c", _fg_slice_shell() + f"\n_lore_slice {log}\n"],
+            capture_output=True, timeout=30,
+        )
+        assert out.returncode == 0, out.stderr
+        return out.stdout
+
+    last = b"THE_LAST_LINE_MUST_SURVIVE\n"
+    for size in (MAX_OUTPUT_CHARS, 50 * 1024):
+        out = _sliced(b"x" * (size - len(last)) + last)
+        assert out.endswith(last), f"last line lost at {size} bytes"
+        assert b"bytes elided" in out, "elision must be named, never silent"
+        assert len(out) <= MAX_OUTPUT_CHARS
+    # Within the budget the log passes through whole — no elision line.
+    whole = b"y" * (_FG_SLICE_BUDGET - 5) + b"tail\n"
+    assert _sliced(whole) == whole
+
+
+# ─── sandbox_run_kill ─────────────────────────────────────────────────────────
+
+
+# TEST-WHY: pure-logic-edge — the /proc cmdline guard is what stops a reused pid file from signalling another user's process on the shared unix account
+def test_run_kill_refuses_a_pid_that_is_not_this_run(tmp_path):
+    """The kill script executed under a real bash against a LIVE process group
+    whose cmdline does not name the run dir (the pid-reuse case): the group is
+    never signalled — the sleep survives — and the run still reports killed."""
+    import subprocess
+    import sys
+
+    from routes.tool_api.sandbox.runs import _build_run_kill_script
+
+    run_dir = tmp_path / ".runs" / ("k" * 32)
+    run_dir.mkdir(parents=True)
+    victim = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        start_new_session=True,
+    )
+    try:
+        (run_dir / "pid").write_text(str(victim.pid))
+        out = subprocess.run(
+            ["bash", "-c", _build_run_kill_script(str(run_dir))],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert out.returncode == 0, out.stderr
+        assert "STATE=killed" in out.stdout
+        assert victim.poll() is None, "the guard must not signal an unrelated pid"
+    finally:
+        victim.kill()
+        victim.wait()
+
+
+# TEST-WHY: refused-principal — a commentator and an external MCP key must not reach sandbox_run_kill, exactly like the console spawn itself
+@pytest.mark.asyncio
+@pytest.mark.parametrize("who", ["commentator", "external"])
+async def test_run_kill_refused_principals(client, test_db, project_with_doc, captured_exec, who):
+    if who == "commentator":
+        pid, _idx, _owner = project_with_doc
+        guest = f"sb-guest-{secrets.token_hex(4)}"
+        await _member(guest, pid, "commentator")
+        token = await _make_key(guest, pid, internal=True)
+    else:
+        pid, _idx, uid = project_with_doc
+        token = await _make_key(uid, pid, internal=False)
+
+    resp = await client.post(
+        "/api/tool/sandbox_run_kill", json={"run_id": "a" * 32}, headers=_hdr(token),
+    )
+
+    assert resp.status_code == 403, resp.text
+    assert captured_exec == [], "refused key still reached the sandbox"
+
+
 # ─── Lifecycle REST ACL ───────────────────────────────────────────────────────
 
 
@@ -481,6 +625,136 @@ async def test_lifecycle_rejected_for_commentator_and_viewer(
     )
 
     assert resp.status_code == 403, resp.text
+
+
+# ─── {{SANDBOX_ENV}}: the rendered description never leaks the sentinel ────────
+
+
+def _stub_transport_exec(monkeypatch, fn) -> None:
+    """Swap the manifest refresh's SSH exec seam — ONE setattr site, because the
+    shape ratchet prices each setattr LINE (the pin_tool_gates folding idiom).
+    The seam itself is this file's designed SSH boundary (the allowlisted
+    `_ssh_exec`, an outbound channel to the box, not logic mocking)."""
+    from routes.tool_api import sandbox
+
+    monkeypatch.setattr(sandbox.transport, "_ssh_exec", fn)
+
+
+@pytest_asyncio.fixture
+async def manifest_state():
+    """Reset the in-process manifest cache around a test.
+
+    Plain assignment with save/restore, not monkeypatch: this is fixture state
+    on the module under test, not a boundary mock, and the ratchets price
+    setattr lines. A task left in flight (the hung-read phase) is cancelled AND
+    awaited on teardown — a fire-and-forget refresh may outlive the render that
+    scheduled it, but not the test."""
+    import asyncio
+    from contextlib import suppress
+
+    from routes.tool_api import sandbox
+
+    t = sandbox.transport
+    saved = (
+        t._manifest_cache, t._manifest_read_at, t._manifest_attempt_at,
+        t._manifest_task,
+    )
+    t._manifest_cache = None
+    t._manifest_read_at = 0.0
+    t._manifest_attempt_at = 0.0
+    t._manifest_task = None
+    yield t
+    task = t._manifest_task
+    if task is not None:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+    (
+        t._manifest_cache, t._manifest_read_at, t._manifest_attempt_at,
+        t._manifest_task,
+    ) = saved
+
+
+async def _sandbox_bash_description() -> str:
+    """The served sandbox_bash description off the real agent_toolset render."""
+    from agent.tools import agent_toolset
+
+    return next(
+        t["function"]["description"]
+        for t in await agent_toolset()
+        if t["function"]["name"] == "sandbox_bash"
+    )
+
+
+# TEST-WHY: cross-process-contract — the manifest provision.sh writes on the box and the tool text the backend renders are ONE contract across the SSH boundary; a leaked sentinel or a render that awaits the box breaks every AI-chat turn.
+@pytest.mark.asyncio
+async def test_sandbox_env_render_contract(
+    monkeypatch, manifest_state, caplog,
+):
+    """agent_toolset() fills {{SANDBOX_ENV}} from the manifest cache — neutral
+    line when empty, names AND versions when filled — never the literal
+    sentinel, and returns without awaiting a refresh, hung or not. A failed
+    refresh is cached for the backoff window: one attempt, not one per turn."""
+    import asyncio
+    import logging
+    import time
+
+    from helpers import pin_tool_gates
+    from routes.tool_api import sandbox
+
+    pin_tool_gates(monkeypatch, sandbox=True)
+
+    # ── empty cache: neutral line, no sentinel, and a refresh is scheduled.
+    async def _failing_exec(command: str, *, timeout: float, env: dict | None = None):
+        raise RuntimeError("box down")
+
+    _stub_transport_exec(monkeypatch, _failing_exec)
+    desc = await _sandbox_bash_description()
+    assert "{{SANDBOX_ENV}}" not in desc
+    assert "pip list" in desc, "empty cache must render the neutral line"
+    task = sandbox.transport._manifest_task
+    # Scheduled, never awaited by the render (done or not is the loop's choice).
+    assert task is not None
+
+    # ── the refresh fails; the warning names the cause, and the failure is
+    # cached for the backoff window (further renders schedule nothing).
+    with caplog.at_level(logging.WARNING, logger="routes.tool_api.sandbox.transport"):
+        await task
+    assert "manifest refresh failed" in caplog.text
+    desc = await _sandbox_bash_description()
+    assert "{{SANDBOX_ENV}}" not in desc and "pip list" in desc
+    assert sandbox.transport._manifest_task is task, "backoff was not honored"
+
+    # ── filled cache (fresh — no refresh): the manifest's versions are served.
+    sandbox.transport._manifest_cache = {
+        "python": "3.12.3", "node": "v24.19.0", "chromium": "145.0.7449.0",
+        "packages": {"pandas": "3.1.1", "numpy": "2.5.4"},
+    }
+    sandbox.transport._manifest_read_at = time.monotonic()
+    sandbox.transport._manifest_attempt_at = time.monotonic()
+    desc = await _sandbox_bash_description()
+    assert "{{SANDBOX_ENV}}" not in desc
+    for fragment in (
+        "Python 3.12.3", "Node v24.19.0", "Chromium 145.0.7449.0 (Playwright)",
+        "pandas 3.1.1", "numpy 2.5.4",
+    ):
+        assert fragment in desc, f"{fragment!r} missing from the rendered env line"
+
+    # ── never-completing read: the render returns at once with the neutral
+    # line while the refresh hangs — the turn path never waits on SSH.
+    async def _hung_exec(command: str, *, timeout: float, env: dict | None = None):
+        await asyncio.Event().wait()
+
+    _stub_transport_exec(monkeypatch, _hung_exec)
+    sandbox.transport._manifest_cache = None
+    sandbox.transport._manifest_read_at = 0.0
+    sandbox.transport._manifest_attempt_at = 0.0
+    started = time.monotonic()
+    desc = await _sandbox_bash_description()
+    assert time.monotonic() - started < 1.0, "agent_toolset awaited the manifest read"
+    assert "{{SANDBOX_ENV}}" not in desc and "pip list" in desc
+    task = sandbox.transport._manifest_task
+    assert task is not None and not task.done(), "the hung read must stay in flight"
 
 
 # ─── The external agent's model credential: per-run, on the wire, never in the text ──

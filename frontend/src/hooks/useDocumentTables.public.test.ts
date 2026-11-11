@@ -14,7 +14,7 @@ import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 import * as Y from 'yjs';
-import { tableAnchor } from '../components/editor/live-preview/table-block-model';
+import { tableAnchor } from '../components/editor/live-preview/table-document-ops';
 import { releaseHandle, publishHandle } from '../editor/active-editor';
 import type { EntityYjsState } from '../collab/yjs-provider';
 import type { Document } from '../types';

@@ -322,16 +322,16 @@ export function SearchPanel() {
     // data-testid: e2e tab-identity guard reads this node (search overlay spec) —
     // same pattern as refs-panel-root / chat-panel-root.
     <div className="flex flex-col h-full" data-testid="search-panel-root">
-      <div className="flex items-center gap-1 px-3 py-2 border-b border-border bg-surface min-h-[40px]">
-        <Button variant="ghost" size="sm" onClick={() => switchMode('fulltext')}>
+      <div className="flex items-center gap-1 px-3 py-1 border-b border-border bg-surface min-h-[40px]">
+        <Button variant="ghost" onClick={() => switchMode('fulltext')}>
           <Search size={13} className={mode === 'fulltext' ? 'text-accent-text' : undefined} />
           <span className={mode === 'fulltext' ? 'text-accent-text' : undefined}>{t('searchModeFulltext')}</span>
         </Button>
-        <Button variant="ghost" size="sm" onClick={() => switchMode('semantic')}>
+        <Button variant="ghost" onClick={() => switchMode('semantic')}>
           <Sparkles size={13} className={mode === 'semantic' ? 'text-accent-text' : undefined} />
           <span className={mode === 'semantic' ? 'text-accent-text' : undefined}>{t('searchModeSemantic')}</span>
         </Button>
-        <Button variant="ghost" size="sm" onClick={() => switchMode('chats')}>
+        <Button variant="ghost" onClick={() => switchMode('chats')}>
           <MessagesSquare size={13} className={mode === 'chats' ? 'text-accent-text' : undefined} />
           <span className={mode === 'chats' ? 'text-accent-text' : undefined}>{t('searchModeChats')}</span>
         </Button>

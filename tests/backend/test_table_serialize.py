@@ -1,10 +1,8 @@
-"""GFM serialization / parsing for the table block object (Order step 1).
+"""GFM serialization / parsing for the table block object, and the id-only primitive surface.
 
 Pure-logic focus: the table model (rows = list[list[str]] cell bodies) round-trips
 to a GFM table and back. Escaping is the real work and is pinned here — `|` and
 intra-cell `\n` are where GFM serializers break.
-
-See `.kilo/plans/table-block-object.md` (Storage / Markdown export).
 """
 import json
 import re
@@ -110,7 +108,7 @@ def test_import_gfm_tables_fixture(case, markdown, expected_text, expected_matri
 
 
 # The birth-width formula: (case, matrix, expected px widths).
-# BYTE-IDENTICAL FRONTEND TWIN: table-block-model.test.ts BIRTH_WIDTH_FIXTURE
+# BYTE-IDENTICAL FRONTEND TWIN: table-widths.test.ts BIRTH_WIDTH_FIXTURE
 # (the containers do not mount each other's trees). A case changed HERE changes THERE.
 BIRTH_WIDTH_FIXTURE: list[tuple[str, list[list[str]], list[int]]] = [
     ("empty-2x2-equal", [["", ""], ["", ""]], [422, 422]),
@@ -136,3 +134,33 @@ def test_birth_column_widths_fixture(case, matrix, expected):
 def test_import_gfm_tables_born_with_birth_widths():
     _, tables_json = import_gfm_tables("| # | Description |\n| --- | --- |\n| 1 | " + "a" * 100 + " |")
     assert [m["columns"] for m in json.loads(tables_json).values()] == [[59, 785]]
+
+
+# Whole-matrix projections: positional by nature (GFM rows, a birth matrix); every
+# other public primitive addresses a cell by (table_id, row_id, col_id). The agent
+# tool entry, the other position boundary, lives in agent.table_writes.resolve_cell.
+_MATRIX_PROJECTIONS = {
+    "serialize_table", "birth_column_widths", "freeze_auto_widths", "create_table_entry", "parse_gfm_table",
+}
+
+
+# TEST-WHY: pure-logic-edge — walks the module's real surface so a new positional primitive fails here, not in a peer's merged table.
+def test_primitives_address_cells_by_id_only():
+    import inspect
+
+    import table_serialize as ts
+
+    walked, positional, matrix = set(), [], []
+    for name, fn in inspect.getmembers(ts, inspect.isfunction):
+        if name.startswith("_") or fn.__module__ != ts.__name__:
+            continue
+        walked.add(name)
+        for p in inspect.signature(fn).parameters.values():
+            ann = str(p.annotation)
+            if re.search(r"\bint\b", ann) and name not in _MATRIX_PROJECTIONS:
+                positional.append(f"{name}({p.name}: {ann})")
+            if "list[list[" in ann and name not in _MATRIX_PROJECTIONS:
+                matrix.append(f"{name}({p.name}: {ann})")
+    assert {"read_table_cell", "set_table_cell", "add_table_rows", "add_table_column"} <= walked
+    assert positional == []
+    assert matrix == []

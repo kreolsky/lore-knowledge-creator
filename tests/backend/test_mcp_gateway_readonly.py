@@ -366,8 +366,11 @@ async def test_read_document_out_of_scope_is_403_naming_root(
     Pins the `_raise_for_soft_error` text-matching trap: the out-of-scope wording
     must NOT contain 'not found' / 'not in this project', or a scope 403 would be
     mis-mapped to a uniform 404 and lose the recovery signal."""
-    pid, root_doc, admin_uid = project_with_doc
+    pid, _idx, admin_uid = project_with_doc
     _, admin_token = admin_user
+    # An ORDINARY subtree root — the fixture index is the project's face now
+    # (its scope is the whole project), so it cannot play "narrow root" here.
+    root_doc = await _make_doc(client, admin_token, pid, "ScopeRoot", "x")
     # An out-of-scope doc: a separate top-level doc (not a descendant of root_doc).
     other_doc = await _make_doc(client, admin_token, pid, "Elsewhere", "x")
     scoped_tok = await _make_scoped_agent_key(test_db, admin_uid, pid, root_doc)

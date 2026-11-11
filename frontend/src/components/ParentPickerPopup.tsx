@@ -18,6 +18,7 @@ import { buildParentMap, sortDocumentsForChat } from '../utils/document-sort';
 import { useNavMode } from '../hooks/useNavMode';
 import { useDocumentPreview } from '../hooks/useDocumentPreview';
 import { usePopupSlot } from '../hooks/usePopupSlot';
+import { useClickOutside } from '../hooks/useClickOutside';
 import { PickerPreviewPopup } from './PickerPreviewPopup';
 import { computeBesideBoxPreviewPosition } from '../utils/popup-position';
 import { PREVIEW_PICKER_MAX_HEIGHT } from '../utils/preview-geometry';
@@ -150,18 +151,7 @@ export function ParentPickerPopup({ doc, currentDocumentId, onMoved, anchorRect,
 
   const clampedIndex = Math.max(0, Math.min(selectedIndex, items.length - 1));
 
-  // Click-outside dismissal
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (popupRef.current && !popupRef.current.contains(target)
-          && (!previewRef.current || !previewRef.current.contains(target))) {
-        onClose();
-      }
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [onClose]);
+  useClickOutside([popupRef, previewRef], onClose);
 
   const handleSelect = async (parentId: string) => {
     if (isRefMode) {

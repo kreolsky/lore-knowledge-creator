@@ -29,7 +29,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from share_guard import is_unshareable_by_ancestry
+from share_guard import is_unshareable
 from surrealdb import AsyncSurreal
 
 import event_bus
@@ -95,9 +95,12 @@ async def create_share(
     # INVARIANT(security, ancestry): the whole agent-config subtree is
     # unpublishable — it is the agent's operating state, not a reader document.
     # Guarded by ANCESTRY (not the is_system flag): a is_system=false leaf a user
-    # wrote under the system root is still refused. share_guard is the SAME check
-    # the resolve funnel runs, so a row can be neither minted nor resolved.
-    if await is_unshareable_by_ancestry(document_id, project_id):
+    # wrote under the system root is still refused. The project's INDEX doc is
+    # unpublishable the same way (share_guard.is_unshareable) — the project is
+    # shared from its settings, never as an anonymous whole-project link.
+    # share_guard is the SAME check the resolve funnel runs, so a row can be
+    # neither minted nor resolved.
+    if await is_unshareable(document_id, project_id):
         raise HTTPException(
             status_code=400,
             detail="This document cannot be published",

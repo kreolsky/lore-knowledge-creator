@@ -43,7 +43,7 @@ import CodeMirrorEditor from './editor/CodeMirrorEditor';
 import { renderExtensions, editorExperience } from './editor/render-bundle';
 import { scrollAnchorPlugin, revealAtCursor } from './editor/live-preview';
 import { linkClickExtension } from '../editor/editor-plugins';
-import { applyTablesJson } from './editor/live-preview/table-block-model';
+import { applyTablesJson } from './editor/live-preview/table-serialize';
 import { tableDocSource } from './editor/live-preview/table-doc-source';
 import { ReferenceViewerBanner } from './editor/ReferenceViewerBanner';
 import { ReferenceMediaBar } from './editor/ReferenceMediaBar';

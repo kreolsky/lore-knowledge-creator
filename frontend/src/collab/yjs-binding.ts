@@ -1,7 +1,7 @@
 /**
- * Yjs ↔ CodeMirror 6 binding — wires yCollab into the editor (sync only).
+ * Yjs ↔ CodeMirror 6 binding — wires yCollab into the editor (sync + the document-wide undo).
  *
- * // ARCH: yCollab is installed for remote-change application ONLY. Awareness is
+ * // ARCH: yCollab is installed for remote-change application and undo ONLY. Awareness is
  * //       deliberately NOT passed to yCollab — no inline remote carets/selection.
  * //       Presence is rendered separately as a left-margin gutter + name chips
  * //       (see editor/collab-presence/). This is a product decision.
@@ -9,9 +9,10 @@
  */
 
 import * as Y from 'yjs';
-import { yCollab } from 'y-codemirror.next';
+import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import { Awareness, applyAwarenessUpdate, removeAwarenessStates } from 'y-protocols/awareness';
-import type { Extension } from '@codemirror/state';
+import { Prec, type Extension } from '@codemirror/state';
+import { EditorView, keymap } from '@codemirror/view';
 
 export interface AwarenessAdapter {
   receiveRemote(payload: Uint8Array): void;
@@ -25,9 +26,26 @@ export interface LocalPresenceUser {
   color: string;
 }
 
-export function createYjsExtension(ytext: Y.Text): Extension[] {
+/**
+ * Bind an editor to `ytext`, with Ctrl+Z / redo on the entity's document-wide stack
+ * (see collab/document-undo.ts). `undoManager` null = a doc with no entity (snapshot
+ * preview, public share): sync only, no undo.
+ *
+ * INVARIANT: one Mod-z press pops exactly ONE stack item. Why: a cell editor lives inside
+ * the host's `.cm-content` and both bind the SAME manager; the cell's bindings run at
+ * `Prec.highest` and stop propagation, and the host never sees a cell's events (the table
+ * widget's `ignoreEvent` is true), so one press cannot undo two steps.
+ */
+export function createYjsExtension(ytext: Y.Text, undoManager: Y.UndoManager | null): Extension[] {
   // WHY: awareness arg is null — yCollab stays sync-only, presence is the gutter.
-  return [yCollab(ytext, null, { undoManager: false })];
+  if (!undoManager) return [yCollab(ytext, null, { undoManager: false })];
+  return [
+    yCollab(ytext, null, { undoManager }),
+    Prec.highest(keymap.of(yUndoManagerKeymap.map((b) => ({ ...b, stopPropagation: true })))),
+    // A focus change closes the step: text typed in the host and then in a cell (or in two
+    // cells) within the capture timeout stays two Ctrl+Z steps.
+    EditorView.domEventHandlers({ focus: () => { undoManager.stopCapturing(); return false; } }),
+  ];
 }
 
 /**

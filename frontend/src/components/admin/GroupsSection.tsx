@@ -10,8 +10,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
-import { Button, CenterHeading, FieldCheckbox, FieldInput, IconButton } from '../ui';
+import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ArmedDeleteButton, Button, CenterHeading, FieldCheckbox, FieldInput, IconButton } from '../ui';
 import {
   createAdminGroup, deleteAdminGroup, listAdminGroups, listAdminUsers,
   putAdminGroupMembers, renameAdminGroup, type AdminGroup,
@@ -20,7 +20,6 @@ import type { User } from '../../types';
 import { useAppStore } from '../../store/app-store';
 import { useTranslation } from '../../i18n';
 import type { TranslationKey } from '../../i18n/en';
-import { useArmedAction } from '../../hooks/useArmedAction';
 import { serverRefusalDetail } from '../../utils/server-refusal-detail';
 
 type TFn = (key: TranslationKey, vars?: Record<string, string | number>) => string;
@@ -29,24 +28,6 @@ type TFn = (key: TranslationKey, vars?: Record<string, string | number>) => stri
  * "Moderator · <moderator name>" (the server sends only the name). */
 export function groupLabel(group: AdminGroup, t: TFn): string {
   return group.kind === 'moderator' ? t('adminGroupModerator', { name: group.name }) : group.name;
-}
-
-function DeleteGroupButton({ onFire, disabled }: { onFire: () => void; disabled?: boolean }) {
-  const { t } = useTranslation();
-  const action = useArmedAction();
-  return (
-    <IconButton
-      size="sm"
-      danger
-      filled={action.armed}
-      onClick={() => action.handleClick(onFire)}
-      onMouseLeave={action.disarm}
-      disabled={disabled}
-      title={t('delete')}
-    >
-      <Trash2 size={14} />
-    </IconButton>
-  );
 }
 
 /** Rename field + member checkboxes of one admin group. */
@@ -80,7 +61,6 @@ function AdminGroupEditor({ group, users, disabled, onRename, onMembers }: {
         />
         <Button
           variant="primary"
-          size="lg"
           disabled={disabled || !name.trim() || name.trim() === group.name}
           onClick={() => onRename(name.trim())}
         >
@@ -187,7 +167,7 @@ export function GroupsSection() {
           </span>
           <span className="flex-1" />
           {editable && (
-            <DeleteGroupButton
+            <ArmedDeleteButton
               disabled={busy === group.id}
               onFire={() => void mutate(group.id, async () => { await deleteAdminGroup(group.id); return null; })}
             />
@@ -236,7 +216,7 @@ export function GroupsSection() {
           onKeyDown={e => { if (e.key === 'Enter') void create(); }}
           disabled={busy === ''}
         />
-        <Button variant="primary" size="lg" disabled={busy === '' || !newName.trim()} onClick={() => void create()}>
+        <Button variant="primary" disabled={busy === '' || !newName.trim()} onClick={() => void create()}>
           {t('adminGroupCreate')}
         </Button>
       </div>

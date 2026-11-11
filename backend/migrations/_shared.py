@@ -29,10 +29,8 @@ logger = logging.getLogger("migrations.runner")
 
 
 class MigrationDeferred(Exception):
-    """Reserved for a future precondition-gated irreversible migration (e.g. wait
-    for a verified external backup before a destructive step). Currently UNUSED —
-    no registered migration raises it — but kept as the documented primitive so
-    the runner's `except MigrationDeferred` branch is ready when one is added.
+    """A migration whose precondition is not met yet (`tables_v2` raises it while a
+    document's cell notes cannot all be carried into the new table shape).
     The runner logs it and does NOT mark the migration applied, so it retries on
     every boot until the precondition is met. The migration's safe/idempotent work
     (run before raising) still takes effect each boot."""

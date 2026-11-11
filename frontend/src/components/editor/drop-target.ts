@@ -3,7 +3,7 @@
 
 import { EditorView } from '@codemirror/view';
 import type { Text } from '@codemirror/state';
-import { mountLazyCell } from './live-preview/table-block-widget';
+import { mountLazyCell } from './live-preview/table-widget-registry';
 import { contentBoxWidth, imageEmbedParts, setImageSize } from './live-preview/widgets';
 
 /** The cell editor under a td/th hit: the mounted view, a lazy cell mounted now (gated
@@ -37,7 +37,7 @@ function cellDropView(td: Element): EditorView | null | undefined {
 export function editorDropPoint(x: number, y: number): { view: EditorView; pos: number } | null {
   const hit = document.elementFromPoint(x, y);
   if (!(hit instanceof Element)) return null;
-  const td = hit.closest('.cm-table-block td[data-row][data-col], .cm-table-block th[data-row][data-col]');
+  const td = hit.closest('.cm-table-block td[data-row-id][data-col-id], .cm-table-block th[data-row-id][data-col-id]');
   const cell = td ? cellDropView(td) : undefined;
   if (cell !== undefined) return cell ? { view: cell, pos: cell.posAtCoords({ x, y }, false) } : null;
   const cm = hit.closest('.cm-editor');

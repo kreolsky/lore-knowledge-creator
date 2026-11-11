@@ -17,13 +17,15 @@ import { useNoteStore } from '../../store/note-store';
 import { publicCanNote, usePublicNotesStore } from '../../store/public-notes-store';
 import { useUIStore } from '../../store/ui-store';
 import { getActiveHandle, getViewEntity } from '../../editor/active-editor';
-import { getEntityHandle } from '../../collab/active-handle-registry';
 import { refIsScope } from '../../store/ui-store/documents-slice';
 import { buildNoteAnchor } from '../../collab/note-anchor-wire';
+import { boundText } from './note-anchor-wiring';
 import { voiceWidgetField, voiceWidgetStart, voiceWidgetRecognizing } from './voice-widget';
 import { preserveCursorFromLineEnd, snapSelectionToLineEnd } from './cursor-preserve';
-import { createTable, INSERT_TABLE_WIDTH, tableAnchor } from './live-preview/table-block-model';
-import { requestTableFocus } from './live-preview/table-block-widget';
+import { createTable } from './live-preview/table-block-model';
+import { INSERT_TABLE_WIDTH } from './live-preview/table-widths';
+import { tableAnchor } from './live-preview/table-document-ops';
+import { requestTableFocus } from './live-preview/table-widget-registry';
 import { createMarkdownReference } from '../references/create-markdown-reference';
 import { agentAction } from './markdown-actions-agent';
 import { t } from '../../i18n';
@@ -382,7 +384,7 @@ function startPublicNote(view: EditorView, from: number, to: number): boolean {
 
 /**
  * Create a note-chat session anchored to the selected text. The anchor is a Yjs
- * RelativePosition pair over the focused editor's ytext; the text itself is untouched,
+ * RelativePosition pair over the focused editor's ytext (a table cell's own Y.Text); the text itself is untouched,
  * so anyone who may note but not edit (commentator) can anchor one.
  */
 function createNote(view: EditorView): boolean {
@@ -411,13 +413,15 @@ function createNote(view: EditorView): boolean {
     return false;
   }
 
-  const handle = entityId ? getEntityHandle(entityId) : null;
-  if (!handle?.ytext) {
+  // A table-cell view is bound to its own Y.Text (same ydoc, so the wire bytes and the
+  // owning entity are unchanged); its offsets do not index the host text.
+  const bound = boundText(view);
+  if (!bound) {
     useAppStore.getState().showToast(t('failedToCreateNote'), 'error');
     return false;
   }
   const selectedText = view.state.sliceDoc(from, to);
-  const relAnchor = buildNoteAnchor(handle.ytext, from, to);
+  const relAnchor = buildNoteAnchor(bound, from, to);
 
   const currentTab = useUIStore.getState().getActiveDocState().rightPanelTab;
   useNoteStore.getState().setPreviousRightTab(currentTab);

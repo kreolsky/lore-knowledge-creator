@@ -29,11 +29,15 @@ from agent_tools.specs.chat_recall import (
 from agent_tools.specs.media import (
     GENERATE_IMAGE_TOOL,
     IMPORT_FILE_TOOL,
+    REPLACE_ARTIFACT_PAGE_TOOL,
     REPROCESS_REFERENCE_TOOL,
+    SANDBOX_FETCH_ARTIFACT_TOOL,
     SANDBOX_FETCH_REFERENCE_TOOL,
     SANDBOX_FETCH_SKILL_TOOL,
+    SANDBOX_RUN_KILL_TOOL,
     SANDBOX_RUN_STATUS_TOOL,
     SANDBOX_TOOL,
+    SANDBOX_VIEW_IMAGE_TOOL,
 )
 from agent_tools.specs.memory import (
     APPLY_MEMORY_VERDICTS_TOOL,
@@ -79,11 +83,15 @@ from models import (
     ToolReadMyChat,
     ToolRenameDocument,
     ToolReopenConsolidation,
+    ToolReplaceArtifactPage,
     ToolReprocessReference,
     ToolSandboxBash,
+    ToolSandboxFetchArtifact,
     ToolSandboxFetchReference,
     ToolSandboxFetchSkill,
+    ToolSandboxRunKill,
     ToolSandboxRunStatus,
+    ToolSandboxViewImage,
     ToolSaveChatFacts,
     ToolSaveSkill,
     ToolSearch,
@@ -244,6 +252,19 @@ register(ToolEntry(
     handler_path="routes.tool_api.sandbox.bash:tool_sandbox_fetch_reference",
     surfaces=_AGENT_HTTP, env_gate="sandbox",
 ))
+# The page-rewrite pair: fetch writes the live
+# page source into the workspace; replace writes a sandbox file back as the
+# page's whole body. Same env_gate/posture as the fetch beside them.
+register(ToolEntry(
+    spec=SANDBOX_FETCH_ARTIFACT_TOOL, request_model=ToolSandboxFetchArtifact,
+    handler_path="routes.tool_api.sandbox.bash:tool_sandbox_fetch_artifact",
+    surfaces=_AGENT_HTTP, env_gate="sandbox",
+))
+register(ToolEntry(
+    spec=REPLACE_ARTIFACT_PAGE_TOOL, request_model=ToolReplaceArtifactPage,
+    handler_path="routes.tool_api.sandbox.bash:tool_replace_artifact_page",
+    surfaces=_AGENT_HTTP, env_gate="sandbox",
+))
 register(ToolEntry(
     spec=SANDBOX_FETCH_SKILL_TOOL, request_model=ToolSandboxFetchSkill,
     handler_path="routes.tool_api.sandbox.bash:tool_sandbox_fetch_skill",
@@ -253,6 +274,16 @@ register(ToolEntry(
     spec=SANDBOX_RUN_STATUS_TOOL, request_model=ToolSandboxRunStatus,
     handler_path="routes.tool_api.sandbox.runs:tool_sandbox_run_status",
     surfaces=_AGENT_HTTP, env_gate="sandbox",
+))
+register(ToolEntry(
+    spec=SANDBOX_RUN_KILL_TOOL, request_model=ToolSandboxRunKill,
+    handler_path="routes.tool_api.sandbox.runs:tool_sandbox_run_kill",
+    surfaces=_AGENT_HTTP, env_gate="sandbox",
+))
+register(ToolEntry(
+    spec=SANDBOX_VIEW_IMAGE_TOOL, request_model=ToolSandboxViewImage,
+    handler_path="routes.tool_api.sandbox.view:tool_sandbox_view_image",
+    surfaces=_AGENT_HTTP, env_gate="sandbox", image_result=True,
 ))
 register(ToolEntry(
     spec=GENERATE_IMAGE_TOOL, request_model=ToolGenerateImage,
@@ -330,7 +361,7 @@ register(ToolEntry(
 register(ToolEntry(
     spec=VIEW_CHAT_IMAGE_TOOL, request_model=ToolViewChatImage,
     handler_path="routes.tool_api.chat_recall:tool_view_chat_image",
-    surfaces=_AGENT_HTTP,
+    surfaces=_AGENT_HTTP, image_result=True,
 ))
 register(ToolEntry(
     spec=SAVE_CHAT_FACTS_TOOL, request_model=ToolSaveChatFacts,

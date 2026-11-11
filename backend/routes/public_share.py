@@ -68,7 +68,7 @@ import logging
 import time
 
 from fastapi import APIRouter, HTTPException
-from share_guard import is_unshareable_by_ancestry
+from share_guard import is_unshareable
 
 from db import extract_id, fetch_one, get_ancestor_ids, get_db, iso_str
 from deps import extract_headings
@@ -194,8 +194,9 @@ async def resolve_share(document_id: str) -> dict:
         # marks only the project row, the share row survives): indistinguishable
         # from an unknown doc for anonymous callers.
         raise HTTPException(status_code=404, detail="Document not found")
-    if await is_unshareable_by_ancestry(document_id, project_id):
-        # Uniform 404 — system subtree is unpublishable by ancestry.
+    if await is_unshareable(document_id, project_id, doc=doc):
+        # Uniform 404 — system subtree (by ancestry) and the project's index
+        # doc (the project's face) are unpublishable.
         raise HTTPException(status_code=404, detail="Document not found")
     chosen = await _find_share_row(document_id, project_id)
     if not chosen:

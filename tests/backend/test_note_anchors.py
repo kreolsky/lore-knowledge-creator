@@ -11,10 +11,12 @@ import sys
 from pathlib import Path
 
 import pytest
-from pycrdt import Doc, Map, Text
+from helpers import cell_text
+from pycrdt import Assoc, Doc, Map, StickyIndex, Text
 
 sys.path.insert(0, "/app")
 from note_anchors import (  # noqa: E402
+    AnchorRange,
     anchor_space,
     build_anchor,
     cp_to_utf16,
@@ -57,6 +59,28 @@ def test_anchor_whose_items_have_not_arrived_is_pending():
     lagging = Doc()
     lagging.get("content", type=Text)
     assert resolve_anchor(anchor_space(lagging), *anchor).state == "pending"
+
+
+# TEST-WHY: pure-logic-edge — a relpos bound inside a table cell's Y.Text must resolve `external` (never `ok` with host offsets) against the host anchor space: the public share decodes cell notes there, and pycrdt natively answers offsets within the item's OWN type, which the host painter would paint on host text (plan table-links-notes).
+def test_cell_anchored_position_is_external_not_host_offsets():
+    from table_serialize import create_table_entry
+
+    doc = Doc()
+    text = doc.get("content", type=Text)
+    text += "hello host text"
+    create_table_entry(doc, "t1", [["Hdr", "Val"], ["see", "cell body"]])
+    cell = cell_text(doc, "t1", 1, 1)
+
+    space = anchor_space(doc)
+    for start_i, end_i in ((0, 1), (0, len(str(cell)))):  # item-bound and head-bound forms
+        start = StickyIndex.new(cell, start_i, Assoc.AFTER).encode()
+        end = StickyIndex.new(cell, end_i, Assoc.BEFORE).encode()
+        rng = resolve_anchor(space, start, end)
+        assert rng == AnchorRange("external"), (start_i, end_i, rng)
+
+    # Control: a host anchor over the SAME space still resolves ok.
+    host = build_anchor(space, 0, 5)  # "hello"
+    assert resolve_anchor(space, *host) == AnchorRange("ok", 0, 5)
 
 
 def test_build_refuses_a_split_surrogate_pair():

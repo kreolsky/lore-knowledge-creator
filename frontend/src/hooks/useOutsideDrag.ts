@@ -10,65 +10,85 @@ import { useEffect, type RefObject } from 'react';
 import { DRAG_THRESHOLD, type DragOutsideTarget } from './useSiblingDragReorder';
 import { createRefDropController } from '../components/references/refDragAdapter';
 
+/** The gesture core, framework-free: binds on `el` and returns the disposer.
+ * `dispose()` also cancels a drag in flight; `dispose({ keepActive: true })` only
+ * unbinds the press, letting a running drag finish on its document listeners —
+ * for a host that may re-create `el` mid-drag (a CM6 widget redrawn under the
+ * drop caret), and whose teardown can run INSIDE an editor update, where the
+ * cancel's caret dispatch would throw.
+ * `buildController` runs once per drag, at threshold — returning null keeps the
+ * press a click (e.g. the view turned read-only). Shared by the hook below and
+ * the editor's ImageWidget (not React). */
+export function trackOutsideDrag(
+  el: HTMLElement,
+  id: string,
+  buildController: () => DragOutsideTarget | null,
+): (opts?: { keepActive?: boolean }) => void {
+  let press: { x: number; y: number } | null = null;
+  let ctl: DragOutsideTarget | null = null;
+  const swallowClick = (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    el.removeEventListener('click', swallowClick, true);
+  };
+  const end = () => {
+    press = null;
+    ctl = null;
+    document.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+    document.removeEventListener('pointercancel', cancel);
+  };
+  const cancel = () => {
+    ctl?.hide();
+    end();
+  };
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape' && ctl) {
+      e.preventDefault();
+      cancel();
+    }
+  };
+  const onDown = (e: PointerEvent) => {
+    if (e.button !== 0) return;
+    el.removeEventListener('click', swallowClick, true);
+    press = { x: e.clientX, y: e.clientY };
+    // WHY document listeners, not pointer capture: the release lands over
+    // the editor, and a capture that fails or is lost would deliver it
+    // there — the ghost and caret then hang. Same as the card drag.
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', cancel);
+  };
+  const onMove = (e: PointerEvent) => {
+    if (!press) return;
+    if (!ctl) {
+      if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < DRAG_THRESHOLD) return;
+      ctl = buildController();
+      if (!ctl) { end(); return; }
+      el.addEventListener('click', swallowClick, true);
+      document.addEventListener('keydown', onKey, true);
+    }
+    ctl.move(e);
+  };
+  const onUp = () => {
+    if (ctl) ctl.commit(id);
+    end();
+  };
+  el.addEventListener('pointerdown', onDown);
+  return (opts) => {
+    el.removeEventListener('pointerdown', onDown);
+    if (opts?.keepActive && ctl) return;
+    el.removeEventListener('click', swallowClick, true);
+    cancel();
+  };
+}
+
 export function useOutsideDrag(elementRef: RefObject<HTMLElement | null>, id: string, enabled: boolean): void {
   useEffect(() => {
     const el = elementRef.current;
     if (!el || !enabled) return;
-    let press: { x: number; y: number } | null = null;
-    let ctl: DragOutsideTarget | null = null;
-    const swallowClick = (e: MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      el.removeEventListener('click', swallowClick, true);
-    };
-    const end = () => {
-      press = null;
-      ctl = null;
-      document.removeEventListener('keydown', onKey, true);
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onUp);
-      document.removeEventListener('pointercancel', cancel);
-    };
-    const cancel = () => {
-      ctl?.hide();
-      end();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && ctl) {
-        e.preventDefault();
-        cancel();
-      }
-    };
-    const onDown = (e: PointerEvent) => {
-      if (e.button !== 0) return;
-      el.removeEventListener('click', swallowClick, true);
-      press = { x: e.clientX, y: e.clientY };
-      // WHY document listeners, not pointer capture: the release lands over
-      // the editor, and a capture that fails or is lost would deliver it
-      // there — the ghost and caret then hang. Same as the card drag.
-      document.addEventListener('pointermove', onMove);
-      document.addEventListener('pointerup', onUp);
-      document.addEventListener('pointercancel', cancel);
-    };
-    const onMove = (e: PointerEvent) => {
-      if (!press) return;
-      if (!ctl) {
-        if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < DRAG_THRESHOLD) return;
-        ctl = createRefDropController(id, 'image');
-        el.addEventListener('click', swallowClick, true);
-        document.addEventListener('keydown', onKey, true);
-      }
-      ctl.move(e);
-    };
-    const onUp = () => {
-      if (ctl) ctl.commit(id);
-      end();
-    };
-    el.addEventListener('pointerdown', onDown);
-    return () => {
-      el.removeEventListener('pointerdown', onDown);
-      el.removeEventListener('click', swallowClick, true);
-      cancel();
-    };
+    const dispose = trackOutsideDrag(el, id, () => createRefDropController(id, 'image'));
+    return () => dispose();
   }, [elementRef, id, enabled]);
 }

@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock
 import pytest
 from collab.registry import _sessions
 from collab.session import CollabSession, ConnectedClient
+from helpers import project_collab_url
 from pycrdt import Doc, Text
 
 
@@ -62,7 +63,7 @@ class TestMalformedJsonProjectWS:
         """Sending non-JSON on project WS returns an error message, not silent drop."""
         pid, doc_id, admin_token, _, _, _ = collab_project
         with sync_app.websocket_connect(
-            f"/ws/collab/project/{pid}", cookies={"lore_session": admin_token}
+            project_collab_url(pid), cookies={"lore_session": admin_token}
         ) as ws:
             ws.send_text("not valid json {{{")
             msg = json.loads(ws.receive_text())

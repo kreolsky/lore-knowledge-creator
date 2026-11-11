@@ -9,13 +9,13 @@
  */
 
 import { KeyboardEvent, useState } from 'react';
-import { ChevronDown, ChevronRight, RefreshCw, Trash2, X } from 'lucide-react';
-import { Button, Dropdown, FieldInput, IconButton } from '../ui';
+import { ChevronDown, ChevronRight, RefreshCw, X } from 'lucide-react';
+import { ArmedDeleteButton, Button, Dropdown, FieldInput, IconButton } from '../ui';
 import type { DropdownOption } from '../ui/Dropdown';
 import { useTranslation } from '../../i18n';
+import { copyWithToast } from '../chat/shared/copy';
 import type { TranslationKey } from '../../i18n/en';
 import { Role, Tier, User } from '../../types';
-import { useArmedAction } from '../../hooks/useArmedAction';
 import { useAppStore } from '../../store/app-store';
 import { generatePassword } from '../../utils/generate-password';
 
@@ -28,22 +28,6 @@ export interface UserUpdates {
   /** Capability tier (see SYSTEM: capability-tiers) — manager-writable on the
    * same PATCH (MANAGER_FIELDS server-side), for admin AND moderator. */
   tier?: Tier;
-}
-
-function UserDeleteButton({ onDelete }: { onDelete: () => void }) {
-  const { t } = useTranslation();
-  const deleteAction = useArmedAction();
-  return (
-    <IconButton
-      danger
-      filled={deleteAction.armed}
-      onClick={() => deleteAction.handleClick(onDelete)}
-      onMouseLeave={deleteAction.disarm}
-      title={t('deleteUser')}
-    >
-      <Trash2 size={14} />
-    </IconButton>
-  );
 }
 
 type T = (k: TranslationKey) => string;
@@ -268,13 +252,12 @@ function UserEditPanel({ user, canDelete, isSelf, onSave, onCancel, onDelete, is
           <Button
             type="button"
             variant="primary"
-            size="lg-square"
+            size="md-square"
             title={t('generatePasswordTitle')}
             onClick={() => {
               const pwd = generatePassword();
               edit(setPassword)(pwd);
-              navigator.clipboard.writeText(pwd);
-              showToast(t('copied'), 'info');
+              copyWithToast(pwd, showToast);
             }}
           >
             <RefreshCw size={14} />
@@ -282,7 +265,7 @@ function UserEditPanel({ user, canDelete, isSelf, onSave, onCancel, onDelete, is
           <Button
             type="button"
             variant="ghost"
-            size="lg-square"
+            size="md-square"
             title={t('clearPassword')}
             disabled={!password}
             onClick={() => edit(setPassword)('')}
@@ -294,7 +277,6 @@ function UserEditPanel({ user, canDelete, isSelf, onSave, onCancel, onDelete, is
       <div className="flex items-center gap-2 flex-wrap">
         {isAdmin && !isSelf && (
           <Dropdown
-            size="lg"
             placement="bottom"
             title={t('role')}
             value={role}
@@ -304,7 +286,6 @@ function UserEditPanel({ user, canDelete, isSelf, onSave, onCancel, onDelete, is
         )}
         {isAdmin && !isSelf && role === 'user' && (
           <Dropdown
-            size="lg"
             placement="bottom"
             title={t('group')}
             value={moderatorId ?? ''}
@@ -316,18 +297,17 @@ function UserEditPanel({ user, canDelete, isSelf, onSave, onCancel, onDelete, is
             isAdmin: MANAGER_FIELDS carries tier server-side. Unlike role/group
             it IS saveable on self (only key principals feel an admin's tier). */}
         <Dropdown
-          size="lg"
           placement="bottom"
           title={t('tierLabel')}
           value={tier}
           options={tierOptions(t)}
           onSelect={v => edit(setTier)(v as Tier)}
         />
-        <Button variant="primary" size="lg" onClick={commit}>{t('save')}</Button>
-        <Button variant="ghost" size="lg" onClick={onCancel}>{t('cancel')}</Button>
+        <Button variant="primary" onClick={commit}>{t('save')}</Button>
+        <Button variant="ghost" onClick={onCancel}>{t('cancel')}</Button>
         {saved && <span className="text-sm font-bold text-green">{t('saved')}</span>}
         <span className="flex-1" />
-        {canDelete && <UserDeleteButton onDelete={onDelete} />}
+        {canDelete && <ArmedDeleteButton size="md" onFire={onDelete} title={t('deleteUser')} />}
       </div>
     </div>
   );

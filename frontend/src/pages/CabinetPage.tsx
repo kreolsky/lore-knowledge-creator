@@ -211,7 +211,6 @@ export function CabinetPage() {
           />
           <Button
             variant="primary"
-            size="lg"
             onClick={handleSaveName}
             disabled={nameSaving || !name.trim() || name === currentUser.name}
           >
@@ -227,7 +226,7 @@ export function CabinetPage() {
         {!emailEditing ? (
           <div className="flex gap-2 items-center">
             <span className="flex-1 text-sm">{currentUser.email}</span>
-            <Button size="lg" onClick={() => { setEmailEditing(true); setNewEmail(currentUser.email); }}>
+            <Button onClick={() => { setEmailEditing(true); setNewEmail(currentUser.email); }}>
               {t('change')}
             </Button>
           </div>
@@ -250,13 +249,12 @@ export function CabinetPage() {
             <div className="flex gap-2">
               <Button
                 variant="primary"
-                size="lg"
                 onClick={handleSaveEmail}
                 disabled={emailSaving || !newEmail.trim() || !emailPassword}
               >
                 {t('save')}
               </Button>
-              <Button size="lg" onClick={() => { setEmailEditing(false); setEmailMsg(''); }}>
+              <Button onClick={() => { setEmailEditing(false); setEmailMsg(''); }}>
                 {t('cancel')}
               </Button>
             </div>
@@ -269,7 +267,7 @@ export function CabinetPage() {
       <div className="mt-8">
         <CenterHeading>{t('password')}</CenterHeading>
         {!pwdEditing ? (
-          <Button size="lg" onClick={() => setPwdEditing(true)}>
+          <Button onClick={() => setPwdEditing(true)}>
             {t('changePassword')}
           </Button>
         ) : (
@@ -299,13 +297,12 @@ export function CabinetPage() {
             <div className="flex gap-2">
               <Button
                 variant="primary"
-                size="lg"
                 onClick={handleSavePassword}
                 disabled={pwdSaving || !currentPwd || !newPwd || !confirmPwd}
               >
                 {t('save')}
               </Button>
-              <Button size="lg" onClick={() => { setPwdEditing(false); setPwdMsg(''); }}>
+              <Button onClick={() => { setPwdEditing(false); setPwdMsg(''); }}>
                 {t('cancel')}
               </Button>
             </div>
@@ -334,7 +331,6 @@ export function CabinetPage() {
           />
           <Button
             variant="primary"
-            size="lg"
             onClick={handleSetPin}
             disabled={pinSaving || pinValue.length !== 4}
           >
@@ -342,7 +338,6 @@ export function CabinetPage() {
           </Button>
           {hasPin && (
             <Button
-              size="lg"
               onClick={handleRemovePin}
               disabled={pinSaving}
             >

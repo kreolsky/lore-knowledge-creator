@@ -3,6 +3,8 @@ AGENT_TOOLS (READ_TOOLS) plus the two project-memory readers served only on
 the agent path (GET_MEMORY_FACTS_TOOL, GET_FACT_HISTORY_TOOL). Pure data —
 imports nothing from the agent package (leaf).
 """
+from edge_kinds import ALL_EDGE_KINDS
+
 from agent_tools.specs.subtree import EXPORT_SUBTREE_MD_TOOL
 
 READ_TOOLS: list[dict] = [
@@ -323,10 +325,14 @@ READ_TOOLS: list[dict] = [
                 "`transclusion` (`![t](target)`). Projected field edges: "
                 "`attachment` (a material attached to the document), `note` "
                 "(a note pinned to it), `chat-context` (one of YOUR chats using "
-                "it as context — another member's chats are never shown). "
+                "it as context — another member's chats are never shown), "
+                "`external` (outgoing http(s) links `[t](https://…)`, incl. "
+                "inside table cells; entries carry url and label instead of "
+                "document_id). "
                 "`direction` = in|out|both. `kinds` filters; the default is "
-                "mention,transclusion,attachment — ask for note/chat-context "
-                "explicitly. Document peers carry document_id, title, "
+                "mention,transclusion,attachment — ask for "
+                "note/chat-context/external explicitly. Document peers carry "
+                "document_id, title, "
                 "is_reference, source_type, updated_at and `broken` (outgoing "
                 "stored edges only: the target is soft-deleted or gone); "
                 "note/chat peers carry session_id and a label (a chat's title, a "
@@ -352,17 +358,14 @@ READ_TOOLS: list[dict] = [
                     },
                     "kinds": {
                         "type": "array",
-                        "items": {
-                            "type": "string",
-                            "enum": [
-                                "mention", "transclusion", "attachment",
-                                "note", "chat-context",
-                            ],
-                        },
+                        # DERIVED from edge_kinds.ALL_EDGE_KINDS — the same tuple
+                        # the /edges route and the ToolGetLinks Literal validate
+                        # against, so no surface can drift from the service.
+                        "items": {"type": "string", "enum": list(ALL_EDGE_KINDS)},
                         "description": (
                             "Optional kind filter. Default: mention, "
-                            "transclusion, attachment (note and chat-context "
-                            "only when asked)."
+                            "transclusion, attachment (note, chat-context and "
+                            "external only when asked)."
                         ),
                     },
                 },

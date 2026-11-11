@@ -33,7 +33,8 @@ import { EditorView } from '@codemirror/view';
 import { Table, ArrowLeft } from 'lucide-react';
 import CodeMirrorEditor from './CodeMirrorEditor';
 import { editorExperience, renderExtensions } from './render-bundle';
-import { tableAnchor, getTablesMap } from './live-preview/table-block-model';
+import { tableAnchor } from './live-preview/table-document-ops';
+import { getTablesMap } from './live-preview/table-block-model';
 import { viewEntity } from './live-preview/table-doc-source';
 import { claimFocus, getRoleView } from '../../editor/active-editor';
 import { editableCompartment } from '../../editor/editor-plugins';
@@ -53,7 +54,7 @@ export function TableFocusBanner({ label, onBack }: { label: string; onBack: () 
         <span className="text-ui-base text-text-muted truncate" title={label}>{label}</span>
       </div>
       <div className="ml-auto flex items-center gap-1.5">
-        <Button variant="ghost" size="sm" onClick={onBack}>
+        <Button variant="ghost" onClick={onBack}>
           <ArrowLeft size={13} /> {t('tableFocusBack')}
         </Button>
       </div>

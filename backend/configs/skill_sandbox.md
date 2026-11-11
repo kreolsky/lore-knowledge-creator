@@ -47,8 +47,7 @@ audio", "the picture") or the operation, and code here has to read the actual by
 
 A command over the 300-second foreground cap goes with `detach: true`: it returns
 `{status:"running", run_id}` at once and keeps going after the call. Poll it with
-`sandbox_run_status` — read-only, so it does not take the console and several runs can
-be in flight. Do NOT busy-wait in this turn; an unfinished run is collected in the
+`sandbox_run_status` — read-only, and several runs can be in flight. Do NOT busy-wait in this turn; an unfinished run is collected in the
 NEXT one. The workspace is ONE shared file tree, so never launch two detached runs
 that would fight over the same files.
 

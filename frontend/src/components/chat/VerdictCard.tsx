@@ -192,23 +192,23 @@ export function VerdictCard({ pending, argsRaw }: { pending: PendingVerdict; arg
                 value={reason}
                 onChange={e => setReason(e.target.value)}
                 placeholder={t('verdictReasonPlaceholder')}
-                className="h-7 min-w-0 flex-1"
+                className="min-w-0 flex-1"
               />
               <Button
-                variant="danger" size="sm"
+                variant="danger"
                 onClick={() => void decide('reject')}
                 disabled={busy !== null}
               >
                 {t('verdictReject')}
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => setRejecting(false)} disabled={busy !== null}>
+              <Button variant="ghost" onClick={() => setRejecting(false)} disabled={busy !== null}>
                 {t('verdictCancel')}
               </Button>
             </>
           ) : (
             <>
               <Button
-                variant="primary" size="sm"
+                variant="primary"
                 onClick={() => void decide('allow_once')}
                 disabled={busy !== null}
               >
@@ -216,7 +216,7 @@ export function VerdictCard({ pending, argsRaw }: { pending: PendingVerdict; arg
               </Button>
               {!NO_SESSION_GRANT_TOOLS.has(pending.tool_name) && (
                 <Button
-                  variant="ghost" size="sm"
+                  variant="ghost"
                   onClick={() => void decide('allow_session')}
                   disabled={busy !== null}
                 >
@@ -224,7 +224,7 @@ export function VerdictCard({ pending, argsRaw }: { pending: PendingVerdict; arg
                 </Button>
               )}
               <Button
-                variant="danger" size="sm"
+                variant="danger"
                 onClick={() => setRejecting(true)}
                 disabled={busy !== null}
               >

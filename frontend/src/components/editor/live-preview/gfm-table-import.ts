@@ -14,7 +14,9 @@
  * import must not corrupt content; the model is the source of truth (see table_serialize).
  */
 import type * as Y from 'yjs';
-import { createTable, tableAnchor } from './table-block-model';
+import { createTable } from './table-block-model';
+import { fitColumnWidths } from './table-widths';
+import { tableAnchor } from './table-document-ops';
 
 // Split a GFM row on a `|` NOT preceded by a backslash escape (mirror of backend _CELL_SPLIT).
 const CELL_SPLIT = /(?<!\\)\|/;
@@ -135,8 +137,12 @@ function collectTableBlock(lines: string[], i: number, mask: boolean[]): { matri
  *
  * A block = a header row immediately followed by a separator row, then the body run (outer
  * pipes optional — see collectTableBlock). Fenced code and prose are left untouched.
+ * `fitWidth` (the target editor's text column) fits each table to it by content, as the
+ * scale control's double-click does; null keeps the shared birth rule.
  */
-export function importGfmTables(doc: Y.Doc, markdown: string, label: string): { text: string; count: number } {
+export function importGfmTables(
+  doc: Y.Doc, markdown: string, label: string, fitWidth: number | null = null,
+): { text: string; count: number } {
   const lines = markdown.split('\n');
   const mask = fenceMask(lines);
   const out: string[] = [];
@@ -145,7 +151,10 @@ export function importGfmTables(doc: Y.Doc, markdown: string, label: string): { 
   while (i < lines.length) {
     const block = collectTableBlock(lines, i, mask);
     if (block) {
-      out.push(tableAnchor(label, createTable(doc, block.matrix)));
+      const id = fitWidth
+        ? createTable(doc, block.matrix, fitWidth, fitColumnWidths)
+        : createTable(doc, block.matrix);
+      out.push(tableAnchor(label, id));
       count++;
       i = block.next;
       continue;

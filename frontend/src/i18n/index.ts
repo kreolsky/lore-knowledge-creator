@@ -1,5 +1,5 @@
 /** Lightweight i18n: reactive hook for components, standalone t() for store/handlers. */
-// ARCH: Custom i18n instead of i18next — ~40 lines vs ~40KB library for ~200 keys and 2 languages.
+// ARCH: Custom i18n instead of i18next — ~40 lines vs ~40KB library for ~1060 keys and 2 languages.
 // Two access patterns: useTranslation() hook (reactive, for JSX) and standalone t() (imperative, for store/handlers).
 // Fallback chain: current language → English → raw key. Type safety via TranslationKey derived from en.ts.
 // SYSTEM: i18n — lightweight internationalization (EN/RU), reactive hook + imperative t()

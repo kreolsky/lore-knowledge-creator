@@ -7,6 +7,7 @@ fail-closed rejection of a non-member.
 
 import pytest
 import pytest_asyncio
+from helpers import project_collab_url
 
 
 @pytest_asyncio.fixture
@@ -36,6 +37,6 @@ async def test_join_rejected_for_non_member(sync_app, collab_no_member):
     # The non-member never gets membership → connect rejected at auth (4003).
     with pytest.raises(Exception):
         with sync_app.websocket_connect(
-            f"/ws/collab/project/{pid}", cookies={"lore_session": "garbage-token"}
+            project_collab_url(pid), cookies={"lore_session": "garbage-token"}
         ) as ws:
             ws.receive_text()

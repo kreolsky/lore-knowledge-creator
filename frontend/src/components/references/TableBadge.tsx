@@ -17,7 +17,7 @@
 import { memo, useRef } from 'react';
 import { Table, Trash2, Pencil, FileInput, Download } from 'lucide-react';
 import { useTranslation } from '../../i18n';
-import type { DocumentTableEntry } from '../editor/live-preview/table-block-model';
+import type { DocumentTableEntry } from '../editor/live-preview/table-document-ops';
 import { IconButton, FieldInput, ListPill, RowActions } from '../ui';
 import { ListRow } from '../chat/ListRow';
 import { useArmedAction } from '../../hooks/useArmedAction';

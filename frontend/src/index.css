@@ -97,6 +97,12 @@
   --text-dim: #a09e9a;
   --text-strong: var(--text);
   --accent: #6255e0;
+  /* INVARIANT: one width for every lit resize edge — the panel resizers' hover line and the
+     table edges a resize moves. Why: they drifted apart and were re-fixed by hand each time. */
+  --resize-edge: 4px;
+  /* INVARIANT: one width for every selection/focus frame — an image's, a table's, a focused
+     cell's. Why: same as --resize-edge, one place instead of per-rule literals. */
+  --select-edge: 2px;
   --accent-glow: color-mix(in srgb, var(--accent) 20%, transparent);
   --selection-bg: color-mix(in srgb, var(--accent) 32%, transparent);
   --accent-soft: color-mix(in srgb, var(--accent) 7%, transparent);
@@ -826,6 +832,7 @@ body.is-resizing * { transition: none !important; }
 .collab-status-dot--connecting { background: #facc15; }
 .collab-status-dot--reconnecting { background: #facc15; animation: pulse-dot 1.5s ease-in-out infinite; }
 .collab-status-dot--offline { background: #f87171; }
+.collab-status-dot--outdated { background: #60a5fa; }
 
 @keyframes pulse-dot {
   0%, 100% { opacity: 0.4; }
@@ -850,7 +857,10 @@ body.is-resizing * { transition: none !important; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 16px;
+  /* WHY 4px + min-height 40px: 30px buttons, and the banner lines up with the
+     tab header bars beside it (same min-h-[40px] py-1 shape). */
+  padding: 4px 16px;
+  min-height: 40px;
   background: var(--surface2);
   border-bottom: 1px solid var(--border);
   font-size: 13px;
@@ -1307,8 +1317,8 @@ html.dark .right-panel--notes-thread input:not([type=checkbox]):not([type=radio]
 }
 .resizer:hover::before,
 .resizer.dragging::before {
-  width: 4px;
-  left: -2px;
+  width: var(--resize-edge);
+  left: calc(var(--resize-edge) / -2);
   background: var(--accent);
 }
 /* Right resizer: visible line starts below header so header and right panel tabs merge visually */
@@ -1351,8 +1361,8 @@ html.dark .right-panel--notes-thread input:not([type=checkbox]):not([type=radio]
 }
 .resizer-v:hover::before,
 .resizer-v.dragging::before {
-  height: 4px;
-  top: -2px;
+  height: var(--resize-edge);
+  top: calc(var(--resize-edge) / -2);
   background: var(--accent);
 }
 
@@ -1477,7 +1487,9 @@ html.dark .right-panel--notes-thread input:not([type=checkbox]):not([type=radio]
   background: transparent;
   border: none;
   cursor: pointer;
-  padding: 5px 7px;
+  height: 30px;
+  min-width: 30px;
+  padding: 0 7px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1573,16 +1585,16 @@ html.dark .cm-color-swatch[style*="rgb(253, 214, 99)"] { background-color: var(-
 .cm-scroller::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 .cm-scroller::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
 
-/* Copy button — widget inside fenced code block fence line */
+/* Copy button — right side of the fenced code block header (fence line widget) */
 .cm-code-copy-btn {
   position: absolute;
   right: 8px;
-  top: 7px;
+  top: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 30px;
+  height: 30px;
   padding: 0;
   border: none;
   border-radius: 0;
@@ -1597,14 +1609,23 @@ html.dark .cm-color-swatch[style*="rgb(253, 214, 99)"] { background-color: var(-
   opacity: 1;
   color: var(--text);
 }
-.cm-code-copy-btn--label {
-  width: auto;
-  height: auto;
-  padding: 2px 6px;
+/* Language label — left side of the fenced code block header */
+.cm-code-lang {
+  position: absolute;
+  left: 12px;
+  top: 7px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  z-index: 2;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.75em;
-  letter-spacing: 0.02em;
+  font-weight: 600;
   line-height: 1;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+  pointer-events: none;
+  user-select: none;
 }
 
 /* Task list checkbox widget — → see live-preview/widgets.ts → CheckboxWidget */
@@ -1676,7 +1697,7 @@ html.dark .cm-color-swatch[style*="rgb(253, 214, 99)"] { background-color: var(-
   content: '';
   position: absolute;
   inset: -1px;
-  border: 2px solid var(--accent);
+  border: var(--select-edge) solid var(--accent);
   border-radius: 3px;
   pointer-events: none;
 }
@@ -1795,7 +1816,7 @@ body.ref-drag-none, body.ref-drag-none * { cursor: no-drop !important; }
   position: absolute;
   z-index: 2;
   inset: -1px;
-  border: 2px solid transparent;
+  border: var(--select-edge) solid transparent;
   border-radius: 3px;
   pointer-events: none;
 }
@@ -1806,8 +1827,7 @@ body.ref-drag-none, body.ref-drag-none * { cursor: no-drop !important; }
 .cm-table-block-wrap--selected .cm-table-block-frame .cm-image-resize-handle { opacity: 1; }
 .cm-table-block-scale { cursor: ew-resize; }
 /* WHY CSS: see the .cm-image-resize-handle rule — a widget never rebuilds on an editable flip. */
-.cm-content[contenteditable="false"] .cm-table-block-frame,
-.cm-content[contenteditable="false"] .cm-table-block-toolbar { display: none; }
+.cm-content[contenteditable="false"] .cm-table-block-frame { display: none; }
 /* Horizontal scroller: an auto/fixed table wider than the document column scrolls
    HERE, never widens the page. overflow-y is explicit — computed-to-auto would add
    an inner vertical scrollbar and break widget height measurement. The
@@ -1827,13 +1847,10 @@ body.ref-drag-none, body.ref-drag-none * { cursor: no-drop !important; }
   /* INVARIANT: column widths never change by themselves — only a user's resize
      changes them. Why: table-layout:auto re-measured content on every focus change
      (a live cell shows raw markdown, wider than the rendered placeholder), so a click
-     made columns jump. Tables are born all-px (birthColumnWidths, from text length).
-     fixed: a px column keeps its width; auto columns (w=0 → empty
-     <col> width) split the remaining document width EQUALLY, independent of content.
-     width:100% applies only while a column is auto: an all-px table gets its sum inline
-     (applyColumnWidths), or the browser rescales every column to fill the line. */
+     made columns jump. Tables are born all-px (birthColumnWidths, from text length) and
+     every column stays px; the table gets their sum inline (applyColumnWidths), or the
+     browser rescales every column to fill the line. */
   table-layout: fixed;
-  width: 100%;
 }
 .cm-table-block th,
 .cm-table-block td {
@@ -1867,6 +1884,14 @@ body.ref-drag-none, body.ref-drag-none * { cursor: no-drop !important; }
   white-space: pre-wrap;
   word-break: break-word;
 }
+/* The Find panel's current match inside a cell that has NO mounted editor (a
+   viewer/commentator's placeholder, a snapshot-preview static cell): the
+   cell-level twin of .cm-searchMatch-selected, which only a live editor can
+   paint per-range. Same violet tint as theme.ts's SEARCH_MATCH_SELECTED_BG —
+   keep the pair in sync when the token changes. */
+.cm-table-block-cell-editor.cm-table-block-cell-current {
+  background: rgba(98, 85, 224, 0.45);
+}
 /* A lazy placeholder's marks are styled by the host document's theme, whose heading scale
    is document-sized; a cell keeps headings at text size (as cellThemeOverride does for the
    mounted cell editor). !important: the theme rule ties on specificity and its StyleModule
@@ -1875,6 +1900,17 @@ body.ref-drag-none, body.ref-drag-none * { cursor: no-drop !important; }
   font-size: 1em !important;
   line-height: inherit !important;
 }
+.cm-table-block td { position: relative; } /* anchor for the focus frame */
+/* The cell holding the caret. WHY inset 0, inside the cell: the scroller clips anything above
+   the first row and below the last. */
+.cm-table-block :is(th, td):focus-within::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: var(--select-edge) solid var(--accent);
+  pointer-events: none;
+  z-index: 1;
+}
 .cm-table-block th {
   font-weight: 600;
   background: var(--surface2);
@@ -1882,7 +1918,7 @@ body.ref-drag-none, body.ref-drag-none * { cursor: no-drop !important; }
 }
 /* Column-resize control: the image's square handle (.cm-image-resize-handle) centred on
    the right border of each header cell. Visible with the table's frame, no hover state.
-   Double-click resets the column to auto (w=0). z-index: above the frame's line. */
+   Double-click fits the column to its content. z-index: above the frame's line. */
 .cm-table-block-col-resize {
   top: 50%;
   right: -5px;
@@ -1894,23 +1930,35 @@ body.ref-drag-none, body.ref-drag-none * { cursor: no-drop !important; }
 .cm-table-block-wrap:hover .cm-table-block-col-resize,
 .cm-table-block-wrap:focus-within .cm-table-block-col-resize,
 .cm-table-block-wrap--selected .cm-table-block-col-resize { opacity: 1; }
-/* Compact icon toolbar just below the table, aligned to its right edge (outside the table).
-   Button visuals are Tailwind utilities on the element itself (see buildToolbar). */
-/* Shown only while focus is inside THIS table (a cell editor) — otherwise it is
-   unclear which table the buttons act on. visibility, not display: the row keeps
-   its height, so focusing a cell never shifts the content below. Buttons act on
-   mousedown with preventDefault, so focus (and the bar) stays put on click. */
-.cm-table-block-toolbar {
-  visibility: hidden;
-  display: flex;
-  justify-content: flex-end;
-  gap: 2px;
-  margin-top: 3px;
-  /* Inline width = the table's sum; a narrow table's buttons must not overflow left. */
-  max-width: 100%;
-  min-width: max-content;
+/* The edges a resize moves, lit while its control is hovered or dragged: a column control
+   lights that column's top edge and its whole right border (a "Г"); the scale control lights
+   the table's whole top edge and right border.
+   WHY bottom far below: the scroller's overflow clips it at the table's bottom, so the line
+   spans every row without measuring them. */
+.cm-table-block th:has(> .cm-table-block-col-resize:is(:hover, .cm-table-block-resize--active))::after {
+  content: '';
+  position: absolute;
+  /* WHY top 0, not -1px: the scroller clips above the table, which thinned this line. */
+  top: 0;
+  /* Centred on the cell borders, as the panel resizer's line is on its edge. */
+  left: calc(var(--resize-edge) / -2);
+  right: calc(var(--resize-edge) / -2);
+  bottom: -100000px;
+  border-top: var(--resize-edge) solid var(--accent);
+  border-right: var(--resize-edge) solid var(--accent);
+  pointer-events: none;
+  z-index: 2;
 }
-.cm-table-block-wrap:focus-within .cm-table-block-toolbar { visibility: visible; }
+/* On the box, not the frame: the frame's 2px selection border is not a resize edge. */
+.cm-table-block-box:has(.cm-table-block-scale:is(:hover, .cm-table-block-resize--active))::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-top: var(--resize-edge) solid var(--accent);
+  border-right: var(--resize-edge) solid var(--accent);
+  pointer-events: none;
+  z-index: 2;
+}
 .cm-table-block-error {
   display: flex;
   align-items: center;
@@ -1922,7 +1970,10 @@ body.ref-drag-none, body.ref-drag-none * { cursor: no-drop !important; }
   font-size: 0.875em;
 }
 .cm-table-block-remove {
-  padding: 2px 8px;
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 12px;
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text);

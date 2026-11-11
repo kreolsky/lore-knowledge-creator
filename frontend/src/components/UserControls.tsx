@@ -61,84 +61,12 @@ export function UserControls({
     navigate('/');
   };
 
-  // Minimal variant (anonymous public share): theme + language only.
-  if (variant === 'minimal') {
-    if (layout === 'vertical') {
-      return (
-        <div className="flex flex-col items-center gap-0.5 pb-2 w-full">
-          <IconButton onClick={toggleTheme} title={t('toggleTheme')}>
-            <Moon size={15} className="icon-moon" />
-            <Sun size={15} className="icon-sun" />
-          </IconButton>
-          <IconButton onClick={toggleLanguage} title={language === 'en' ? 'Русский' : 'English'}>
-            <span className="text-ui-2xs font-bold leading-none">{language.toUpperCase()}</span>
-          </IconButton>
-        </div>
-      );
-    }
-    return (
-      <>
-        <IconButton onClick={toggleTheme} title={t('toggleTheme')}>
-          <Moon size={15} className="icon-moon" />
-          <Sun size={15} className="icon-sun" />
-        </IconButton>
-        <IconButton onClick={toggleLanguage} title={language === 'en' ? 'Русский' : 'English'}>
-          <span className="text-ui-2xs font-bold leading-none">{language.toUpperCase()}</span>
-        </IconButton>
-      </>
-    );
-  }
+  const vertical = layout === 'vertical';
+  // On /cabinet and /admin (vertical bar only) these buttons ARE the section's tab
+  // (the shell has no top tabs there), so they take the left-bar-tab active chrome.
+  const sectionTab = (path: string) => (vertical && location.pathname === path ? 'left-bar-tab active' : undefined);
 
-  if (layout === 'vertical') {
-    return (
-      <div className="flex flex-col items-center gap-0.5 pb-2 w-full">
-        <IconButton onClick={toggleTheme} title={t('toggleTheme')}>
-          <Moon size={15} className="icon-moon" />
-          <Sun size={15} className="icon-sun" />
-        </IconButton>
-        <IconButton onClick={toggleLanguage} title={language === 'en' ? 'Русский' : 'English'}>
-          <span className="text-ui-2xs font-bold leading-none">{language.toUpperCase()}</span>
-        </IconButton>
-        <div className="w-4 h-px bg-border my-1" />
-        {/* On /cabinet and /admin these buttons ARE the section's tab (the
-            shell has no top tabs there), so they take the left-bar-tab active chrome. */}
-        <IconButton
-          onClick={() => openSection('/cabinet')}
-          title={currentUser?.name ?? t('profileSettings')}
-          className={location.pathname === '/cabinet' ? 'left-bar-tab active' : undefined}
-        >
-          <User size={15} />
-        </IconButton>
-        {/* Capability flag from /me (admin | moderator) — never a role string
-            comparison here: the flag is the single gate for the section. */}
-        {currentUser?.can_manage_users && (
-          <IconButton
-            onClick={() => openSection('/admin')}
-            title={t('adminPanel')}
-            className={location.pathname === '/admin' ? 'left-bar-tab active' : undefined}
-          >
-            <Settings size={15} />
-          </IconButton>
-        )}
-        {currentUser?.has_pin && (
-          <IconButton
-            onClick={() => setPinLocked(true)}
-            title={t('lockScreen')}
-          >
-            <Lock size={15} />
-          </IconButton>
-        )}
-        <IconButton
-          onClick={handleLogout}
-          title={t('signOut')}
-        >
-          <LogOut size={15} />
-        </IconButton>
-      </div>
-    );
-  }
-
-  return (
+  const prefs = (
     <>
       <IconButton onClick={toggleTheme} title={t('toggleTheme')}>
         <Moon size={15} className="icon-moon" />
@@ -147,35 +75,40 @@ export function UserControls({
       <IconButton onClick={toggleLanguage} title={language === 'en' ? 'Русский' : 'English'}>
         <span className="text-ui-2xs font-bold leading-none">{language.toUpperCase()}</span>
       </IconButton>
-      <div className="w-px h-5 bg-border mx-1" />
+    </>
+  );
+
+  // Minimal variant (anonymous public share): theme + language only.
+  const account = variant === 'minimal' ? null : (
+    <>
+      <div className={vertical ? 'w-4 h-px bg-border my-1' : 'w-px h-5 bg-border mx-1'} />
       <IconButton
         onClick={() => openSection('/cabinet')}
         title={currentUser?.name ?? t('profileSettings')}
+        className={sectionTab('/cabinet')}
       >
         <User size={15} />
       </IconButton>
+      {/* Capability flag from /me (admin | moderator) — never a role string
+          comparison here: the flag is the single gate for the section. */}
       {currentUser?.can_manage_users && (
-        <IconButton
-          onClick={() => openSection('/admin')}
-          title={t('adminPanel')}
-        >
+        <IconButton onClick={() => openSection('/admin')} title={t('adminPanel')} className={sectionTab('/admin')}>
           <Settings size={15} />
         </IconButton>
       )}
       {currentUser?.has_pin && (
-        <IconButton
-          onClick={() => setPinLocked(true)}
-          title={t('lockScreen')}
-        >
+        <IconButton onClick={() => setPinLocked(true)} title={t('lockScreen')}>
           <Lock size={15} />
         </IconButton>
       )}
-      <IconButton
-        onClick={handleLogout}
-        title={t('signOut')}
-      >
+      <IconButton onClick={handleLogout} title={t('signOut')}>
         <LogOut size={15} />
       </IconButton>
     </>
   );
+
+  if (vertical) {
+    return <div className="flex flex-col items-center gap-0.5 pb-2 w-full">{prefs}{account}</div>;
+  }
+  return <>{prefs}{account}</>;
 }

@@ -33,6 +33,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# INVARIANT(corruption): only clients speaking COLLAB_PROTOCOL are admitted; any other `?proto=` closes 4010 before sync.
+# Why: a tab opened before a deploy keeps running the old code and would keep writing
+# the old Y.Doc shape into every document it has open. Must equal the frontend
+# `COLLAB_PROTOCOL` (yjs-provider.ts); bump both whenever the shared Y.Doc shape changes.
+COLLAB_PROTOCOL = 3
+CLIENT_OUTDATED_CLOSE_CODE = 4010
+
 
 async def _handle_join(
     ws: WebSocket,
@@ -169,6 +176,13 @@ async def _route_binary_message(
 
 @router.websocket("/ws/collab/project/{project_id}")
 async def collab_project_ws(ws: WebSocket, project_id: str):
+    # WHY: accept before the close — a close sent before accept surfaces in the browser
+    # as a failed handshake (1006), and the client could not tell "reload" from a blip.
+    if ws.query_params.get("proto") != str(COLLAB_PROTOCOL):
+        await ws.accept()
+        await ws.close(code=CLIENT_OUTDATED_CLOSE_CODE, reason="Client outdated")
+        return
+
     # Auth prologue shared with the notification socket (ws_utils).
     auth = await authenticate_project_ws(ws, project_id)
     if auth is None:

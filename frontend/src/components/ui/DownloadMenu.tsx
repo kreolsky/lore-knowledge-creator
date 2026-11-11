@@ -89,11 +89,11 @@ export function DownloadMenu({ documentId, hasText, original, theme = 'default',
     return (
       <div className="download-menu" data-theme={theme}>
         {iconOnly ? (
-          <IconButton size="sm" title={t('download')} onClick={downloadDirect} disabled={busy}>
+          <IconButton title={t('download')} onClick={downloadDirect} disabled={busy}>
             <Download size={14} />
           </IconButton>
         ) : (
-          <Button variant="ghost" size="sm" onClick={downloadDirect} disabled={busy}>
+          <Button variant="ghost" onClick={downloadDirect} disabled={busy}>
             <Download size={13} />
             {busy ? <span className="animate-pulse">{t('infoExporting')}</span> : t('download')}
           </Button>
@@ -111,11 +111,11 @@ export function DownloadMenu({ documentId, hasText, original, theme = 'default',
       keyboardNav={false}
       panelClassName="download-menu__panel min-w-[120px]"
       trigger={iconOnly ? (
-        <IconButton size="sm" title={t('download')}>
+        <IconButton title={t('download')}>
           <Download size={14} />
         </IconButton>
       ) : (
-        <Button variant="ghost" size="sm">
+        <Button variant="ghost">
           <Download size={13} />
           {t('download')}
           <ChevronDown size={12} />

@@ -170,7 +170,6 @@ function SettingField({ entry, onSaved, onReset }: {
       value={text}
       options={entry.choices.map(c => ({ value: c, label: c }))}
       onSelect={setText}
-      size="lg"
       placement="bottom"
       disabled={busy}
     />
@@ -206,12 +205,12 @@ function SettingField({ entry, onSaved, onReset }: {
       <div className={`flex gap-2 items-center${entry.type === 'text' ? ' flex-wrap' : ''}`}>
         {control}
         {!readOnly && (
-          <Button variant="primary" size="lg" disabled={busy || unchanged || !parseOk} onClick={save}>
+          <Button variant="primary" disabled={busy || unchanged || !parseOk} onClick={save}>
             {t('save')}
           </Button>
         )}
         {!readOnly && entry.source === 'override' && (
-          <Button size="lg" disabled={busy} onClick={reset}>
+          <Button disabled={busy} onClick={reset}>
             {t('settingsReset')}
           </Button>
         )}

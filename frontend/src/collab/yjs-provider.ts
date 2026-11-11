@@ -21,7 +21,7 @@ import { encodeAwarenessUpdate } from 'y-protocols/awareness';
 import { YjsAwarenessAdapter, removeAwarenessStatesForUser, type AwarenessAdapter, type LocalPresenceUser } from './yjs-binding';
 import type { WsStatus } from './ws-status';
 import { ReconnectController, MAX_RECONNECT_ATTEMPTS } from './reconnect-controller';
-import { isAuthCloseCode } from './ws-close-codes';
+import { isAuthCloseCode, isClientOutdatedCloseCode } from './ws-close-codes';
 import { logCollabEvent, watchDeadDoc } from './collab-log';
 import { recordRtt, recordAckLatency, recordSyncLatency, recordRecovered } from '../telemetry/perf';
 import { markCollabSocketOpen } from '../telemetry/page-perf';
@@ -37,6 +37,9 @@ import {
 import { isString, broadcastToBundles, dispatchEntityFrame } from './yjs-events';
 import { attachLocalDoc, clearLocalDoc, clearProjectLocalDocs, type LocalDocHandle } from './local-doc-persistence';
 import { dispatchDocControlFrame, type DocCollabCallbacks } from './doc-callbacks';
+import { createDocumentUndo, destroyDocumentUndo } from './document-undo';
+import { TABLE_LOCAL_ORIGIN } from '../components/editor/live-preview/table-block-model';
+import { REPLACE_ALL_ORIGIN } from '../components/editor/find-replace-undo';
 import type { EntityType } from './entity-types';
 
 export type { EntityType } from './entity-types';
@@ -48,6 +51,12 @@ export interface EntityYjsState {
   entityType: EntityType;
   ydoc: Y.Doc;
   ytext: Y.Text;
+  /**
+   * The entity's ONE undo stack over `content` + `tables` (see collab/document-undo.ts):
+   * the host binding, every cell binding, table ops and Replace-all share it. Tracks the
+   * user-initiated origins only — remote updates, seeding and repairs are never undone.
+   */
+  undoManager: Y.UndoManager;
   awareness: AwarenessAdapter;
   // WHY: event dispatch iterates `callbackBundles` so every registered consumer
   // receives events (split view, agent + editor observing the same entity). Why:
@@ -91,6 +100,15 @@ export const HEARTBEAT_ACK_DEADLINE_MS = 10_000;
 
 /** Close code the client uses when IT declares the connection dead (server never sees it). */
 const CLOSE_CLIENT_LIVENESS = 4009;
+
+/**
+ * The collab protocol THIS build speaks — sent as `?proto=` on the socket URL. The
+ * server closes any other value (or a missing one) with 4010 "client outdated" BEFORE
+ * sync (see backend/routes/collab_project_ws.py) so a tab from before a deploy cannot
+ * keep writing the old Y.Doc shape. MUST equal the backend `COLLAB_PROTOCOL`; bump both
+ * together whenever the shared Y.Doc shape changes.
+ */
+export const COLLAB_PROTOCOL = 3;
 
 // WHY: a page still running this long after its own beforeunload did not unload — the
 // navigation was cancelled, or the target was a download / external app. Short enough that
@@ -140,6 +158,10 @@ export class YjsProjectProvider {
   // WHY: a separate flag rather than the controller's markIntentional(), which is sticky for
   // the provider's lifetime and cannot be revoked. See the guard in _onSocketClosed.
   private _unloading = false;
+  // Set by the 4010 close: this build's protocol was refused — no code path (foreground
+  // revive, retry button, a leftover scheduled reconnect) may dial again. Only a reload
+  // with the new build clears it, so the latch is intentionally permanent.
+  private _outdated = false;
   private _unloadSurvivalTimer: ReturnType<typeof setTimeout> | null = null;
   private _syncStartTs = new Map<string, number>();
 
@@ -170,6 +192,7 @@ export class YjsProjectProvider {
   }
 
   connect() {
+    if (this._outdated) return; // 4010 latch — see the field comment
     if (this.ws && this.ws.readyState <= WebSocket.OPEN) return;
     this._setStatus(this._status === 'connected' ? 'reconnecting' : 'connecting');
     logCollabEvent('yjs', 'connect', undefined, {
@@ -179,7 +202,7 @@ export class YjsProjectProvider {
 
     this._firstConnectTs ??= performance.now();
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    this.ws = new WebSocket(`${proto}//${location.host}/ws/collab/project/${this.projectId}`);
+    this.ws = new WebSocket(`${proto}//${location.host}/ws/collab/project/${this.projectId}?proto=${COLLAB_PROTOCOL}`);
     this.ws.binaryType = 'arraybuffer';
 
     this.ws.onopen = () => {
@@ -272,6 +295,21 @@ export class YjsProjectProvider {
       return;
     }
 
+    // ARCH: Client-outdated (4010) is permanent like auth, but NOT an auth failure: this
+    // tab predates a deploy and speaks an old collab protocol. No reconnect (the same
+    // build can never be accepted), no mirror wipe (nothing was revoked — the data is
+    // merely stale until reload). The surface shows the persistent reload notice; an
+    // old tab that cannot know 4010 stays on its existing disconnected path.
+    if (isClientOutdatedCloseCode(code)) {
+      this._outdated = true;
+      this._rejectAllFlushWaiters();
+      this._setStatus('outdated');
+      for (const entity of this.entities.values()) {
+        this._broadcast(entity, cb => cb.onStatusChange('outdated'));
+      }
+      return;
+    }
+
     this._rejectAllFlushWaiters();
     for (const entity of this.entities.values()) {
       // On reconnect, every entity is re-joined from this map with ITS OWN stored type
@@ -323,6 +361,7 @@ export class YjsProjectProvider {
       this.send({ type: 'flush', entity_id: entityId });
       entity.disposeAwareness();
       if (!this._dropMirrorIfFullySynced(entityId, entity)) void entity.local?.detach();
+      destroyDocumentUndo(entity.ydoc);
       entity.ydoc.destroy();
       watchDeadDoc(entity.ydoc, entityId, 'disconnect');
       // WHY: a torn-down entity reports synced=false to the handles still held. The
@@ -363,6 +402,7 @@ export class YjsProjectProvider {
 
     const ydoc = new Y.Doc();
     const ytext = ydoc.getText('content');
+    const undoManager = createDocumentUndo(ydoc, [TABLE_LOCAL_ORIGIN, REPLACE_ALL_ORIGIN]);
     const local = attachLocalDoc(this.projectId, entityId, ydoc);
 
     const onUpdate = (update: Uint8Array, origin: unknown) => {
@@ -427,6 +467,7 @@ export class YjsProjectProvider {
       entityType,
       ydoc,
       ytext,
+      undoManager,
       awareness,
       callbackBundles: bundles,
       local,
@@ -543,6 +584,7 @@ export class YjsProjectProvider {
     // the doc — writing into a destroyed doc is not something the mirror survives.
     const dropped = this._dropMirrorIfFullySynced(entityId, entity);
     if (!dropped) void entity.local?.detach();
+    destroyDocumentUndo(entity.ydoc);
     entity.ydoc.destroy();
     watchDeadDoc(entity.ydoc, entityId, 'leave');
     logCollabEvent('yjs', 'entity-leave', entityId, {

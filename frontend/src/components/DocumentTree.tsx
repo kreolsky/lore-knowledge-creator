@@ -574,7 +574,11 @@ export function DocumentTree({ onDelete, onCreateChild, onChangeParent, canEdit 
             <span className="doc-icon">
               <BookOpen size={14} />
             </span>
-            <span className="doc-label">{t('projectContext')}</span>
+            {/* The project's face: the index doc row is labelled with the
+                project's own name (plan "project-index-as-project-face") —
+                "Project Context" lied: the body is not injected into the
+                agent's context. */}
+            <span className="doc-label">{currentProject.name}</span>
           </div>
         )}
         {documentTree.map((doc) => (

@@ -10,6 +10,7 @@ allow-list, same rule as the HTTP guard.
 import json
 
 import pytest
+from helpers import project_collab_url
 from starlette.websockets import WebSocketDisconnect
 
 LOGIN = {"email": "admin@test.com", "password": "adminpass"}
@@ -84,6 +85,6 @@ class TestCollabProjectWsOrigin:
         pid, _, _ = project_with_doc
         _, token = admin_user
         with pytest.raises(WebSocketDisconnect):
-            with _ws_connect(sync_app, f"/ws/collab/project/{pid}", token, "https://evil.example") as ws:
+            with _ws_connect(sync_app, project_collab_url(pid), token, "https://evil.example") as ws:
                 ws.send_text(json.dumps({"type": "heartbeat"}))
                 ws.receive_text()

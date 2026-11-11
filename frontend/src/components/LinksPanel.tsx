@@ -5,10 +5,10 @@
  * by kind, one section per (direction, kind) group; a stored outgoing edge to a
  * deleted target is shown as broken. Notes and the viewer's own chats are included
  * when the project setting `links_show_sessions` is on. Rows show the shared
- * right-panel hover preview. External http(s) links are not graph nodes and stay a
- * client parse of live editor content.
+ * right-panel hover preview. External http(s) links (incl. table cells) come from the
+ * same endpoint as the projected `external` kind — the panel parses no text.
  * Store slices: currentDocument, currentReference, currentProject; ui documents (ref open mode).
- * Events consumed: collab-backlinks-changed, editor-doc-changed, ws:document_created,
+ * Events consumed: collab-backlinks-changed, ws:document_created,
  * ws:reference_created, ws:reference_deleted, ws:document_deleted, collab-note-created,
  * collab-note-deleted.
  * Events emitted: navigate-to-document, navigate-to-reference, open-notes, open-right-panel.
@@ -23,8 +23,6 @@ import { readRefOpenMode, refIsScope } from '../store/ui-store/documents-slice';
 import { apiClient } from '../api/client';
 import { emit } from '../events';
 import { useEvent } from '../hooks/useEvent';
-import { parseExternalLinks, type ExternalLink as ExternalLinkItem } from '../utils/outgoing-links';
-import { useEditorContent } from '../editor/active-editor';
 import { useRightPanelHoverPreview } from '../hooks/useRightPanelHoverPreview';
 import { useDocumentPreview } from '../hooks/useDocumentPreview';
 import { useReferencePreview } from '../hooks/useReferencePreview';
@@ -39,8 +37,11 @@ type EdgeKind = 'mention' | 'transclusion' | 'attachment' | 'note' | 'chat-conte
 
 interface EdgeItem {
   direction: 'in' | 'out';
-  kind: EdgeKind;
+  // WHY 'external' outside EdgeKind: it is not a graph group — it feeds the
+  // dedicated external section below, never the KIND_ORDER sections.
+  kind: EdgeKind | 'external';
   document_id?: string;
+  url?: string;
   session_id?: string;
   title?: string;
   label?: string;
@@ -58,12 +59,14 @@ const KIND_ORDER: { kind: EdgeKind; labelKey: KindLabelKey; icon: typeof FileTex
   { kind: 'chat-context', labelKey: 'edgeKindChat', icon: MessageSquare },
 ];
 
-// WHY: the same default as the server (mention,transclusion,attachment); notes and
-// chats are opt-in, so the project flag widens the request instead of filtering client-side.
-const KINDS_WITH_SESSIONS = 'mention,transclusion,attachment,note,chat-context';
+// WHY: the server default (mention,transclusion,attachment) plus the opt-in
+// `external`; notes and chats are opt-in too, so the project flag widens the
+// request instead of filtering client-side.
+const KINDS_DEFAULT = 'mention,transclusion,attachment,external';
+const KINDS_WITH_SESSIONS = `${KINDS_DEFAULT},note,chat-context`;
 
 function edgeKey(e: EdgeItem): string {
-  return `${e.direction}:${e.kind}:${e.document_id ?? e.session_id}`;
+  return `${e.direction}:${e.kind}:${e.url ?? e.document_id ?? e.session_id}`;
 }
 
 export function LinksPanel() {
@@ -76,10 +79,7 @@ export function LinksPanel() {
   const currentReference = refIsScope(refOpenMode) ? rawReference : null;
   // INVARIANT: a reference shows its OWN links/backlinks, not its parent document's.  Why: while a ref is open both currentDocument (parent) and currentReference are set; resolving reference-first shows the ref's own links, matching the canonical activeItem.
   const documentId = currentReference?.reference_id ?? currentDocument?.document_id;
-  // Active entity's saved content — reference-first, same priority as documentId.
-  const activeContent = currentReference?.content ?? currentDocument?.content ?? '';
   const { t } = useTranslation();
-  const getEditorContent = useEditorContent();
 
   // ── Graph edges (both directions) ──
   // Project-wide setting (ProjectSettingsPanel), shared by every member.
@@ -91,9 +91,9 @@ export function LinksPanel() {
   const fetchEdges = useCallback(() => {
     if (!documentId) { setEdges([]); setLoading(false); return; }
     setError(false);
-    const kindsParam = showSessions ? `&kinds=${KINDS_WITH_SESSIONS}` : '';
+    const kinds = showSessions ? KINDS_WITH_SESSIONS : KINDS_DEFAULT;
     apiClient
-      .get(`/documents/${documentId}/edges?direction=both${kindsParam}`)
+      .get(`/documents/${documentId}/edges?direction=both&kinds=${kinds}`)
       .then((data: { edges: EdgeItem[] }) => setEdges(data.edges))
       .catch(() => { setError(true); })
       .finally(() => setLoading(false));
@@ -123,21 +123,7 @@ export function LinksPanel() {
   useEvent('collab-note-created', useCallback(() => { if (showSessions) fetchEdges(); }, [showSessions, fetchEdges]));
   useEvent('collab-note-deleted', useCallback(() => { if (showSessions) fetchEdges(); }, [showSessions, fetchEdges]));
 
-  // ── External links (client parse) ──
-  const [externalLinks, setExternalLinks] = useState<ExternalLinkItem[]>(() => parseExternalLinks(activeContent));
-
-  // WHY: on entity switch parse from the store's saved content, not the live editor
-  // view. Why: the CM6 editor remount is deferred (useDeferredValue in Editor.tsx) and
-  // reference content loads async via collab, so reading the editor right after a
-  // switch returns the PREVIOUS entity's text.
-  useEffect(() => {
-    setExternalLinks(parseExternalLinks(activeContent));
-  }, [activeContent, documentId]);
-
-  const refreshFromEditor = useCallback(() => {
-    setExternalLinks(parseExternalLinks(getEditorContent(activeContent)));
-  }, [getEditorContent, activeContent]);
-  useEvent('editor-doc-changed', refreshFromEditor);
+  const externalLinks = edges.filter(e => e.kind === 'external');
 
   // ── Hover preview ──
   const hover = useRightPanelHoverPreview();
@@ -252,13 +238,13 @@ export function LinksPanel() {
       {externalLinks.length > 0 && (
         <div>
           <SectionHeader icon={<ArrowUpRight size={11} />} title={t('outgoingLinks')} suffix={t('externalLinks')} />
-          {externalLinks.map((link, i) => (
+          {externalLinks.map(link => (
             <div
-              key={`${link.target}-${i}`}
+              key={edgeKey(link)}
               role="button"
               tabIndex={0}
               className="doc-item doc-item--right-panel"
-              onClick={() => window.open(link.target, '_blank', 'noopener')}
+              onClick={() => window.open(link.url, '_blank', 'noopener')}
               onKeyDown={onKey}
             >
               <span className="w-3" />
@@ -268,9 +254,16 @@ export function LinksPanel() {
           ))}
         </div>
       )}
+      {/* WHY no title for notes: the ONE note-preview style (NotesPanel sets the same
+          rule) — a note has no title, its label IS the body, so a plaque would only
+          repeat it. Chats keep the plaque: their label is a real chat title. */}
       <HoverPreviewPopup
         hover={hover}
-        title={hoverEdge ? (hoverEdge.session_id ? hoverEdge.label || t('untitledLink') : hoverEdge.title) : undefined}
+        title={hoverEdge
+          ? (hoverEdge.session_id
+            ? (hoverEdge.kind === 'note' ? undefined : hoverEdge.label || t('untitledLink'))
+            : hoverEdge.title)
+          : undefined}
         content={hoverBody.content}
         imageUrl={hoverBody.imageUrl}
         error={hoverBody.error}

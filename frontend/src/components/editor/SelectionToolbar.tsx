@@ -9,6 +9,7 @@ import { markdownActionRegistry, applyColorHighlight, getLastHighlightColor, cre
 import { isPanelPreviewView } from '../../editor/editor-plugins';
 import { selectedAtomicRange } from './live-preview/atomic-delete-guard';
 import { agentAction } from './markdown-actions-agent';
+import { boundText, isHostText } from './note-anchor-wiring';
 import { useUIStore } from '../../store/ui-store';
 import { useAppStore } from '../../store/app-store';
 import { usePublicCanNote } from '../../store/public-notes-store';
@@ -299,6 +300,8 @@ export default function SelectionToolbar() {
   // An artifact's source: markdown formatting would corrupt the markup, and an
   // artifact has no notes.
   if (isArtifactSourceView(view)) return null;
+  const bound = boundText(view);
+  const inHostText = !bound || isHostText(bound);
 
   // WHY: formatting writes through the view, so it is offered only on a view that takes
   // input — a full member's editor that is not editable yet (collab joining) or any more
@@ -506,13 +509,15 @@ export default function SelectionToolbar() {
         <FileText size={ICON_SIZE} />
       </button>
 
-      <div className="separator" />
-
       {/* see SYSTEM: selection-region-agent — open a pinned-region agent chat for the
-          selection. Full-access only (the toolbar is already canEdit-gated above). */}
-      <button className="sel-toolbar-btn" onClick={() => { agentAction(view); hide(); }} title={t('selectionToolbarAgent')} aria-label={t('selectionToolbarAgent')}>
-        <Bot size={ICON_SIZE} />
-      </button>
+          selection. Full-access only (the toolbar is already canEdit-gated above); absent
+          in a table cell, where agentAction refuses. */}
+      {inHostText && <>
+        <div className="separator" />
+        <button className="sel-toolbar-btn" onClick={() => { agentAction(view); hide(); }} title={t('selectionToolbarAgent')} aria-label={t('selectionToolbarAgent')}>
+          <Bot size={ICON_SIZE} />
+        </button>
+      </>}
     </div>,
     document.body
   );

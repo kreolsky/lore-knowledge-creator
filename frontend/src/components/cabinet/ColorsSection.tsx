@@ -107,9 +107,9 @@ export function ColorsSection() {
       <p className="text-xs text-text-dim mb-1">{t('colorsDescription')}</p>
       <p className="text-xs text-text-muted mb-3">{t('colorsEditingTheme', { theme: themeName })}</p>
       <div className="flex gap-2 mb-6 flex-wrap">
-        <Button size="lg" onClick={() => downloadBackup(overrides)}><Download size={14} />{t('colorsExport')}</Button>
-        <Button size="lg" onClick={handleImport}><Upload size={14} />{t('colorsImport')}</Button>
-        <Button size="lg" onClick={() => setConfirmReset(true)} disabled={!Object.keys(map).length}>{t('colorsResetAll')}</Button>
+        <Button onClick={() => downloadBackup(overrides)}><Download size={14} />{t('colorsExport')}</Button>
+        <Button onClick={handleImport}><Upload size={14} />{t('colorsImport')}</Button>
+        <Button onClick={() => setConfirmReset(true)} disabled={!Object.keys(map).length}>{t('colorsResetAll')}</Button>
       </div>
 
       <div className="grid grid-cols-[minmax(0,1fr)_auto_28px] gap-x-3 gap-y-2 items-center">

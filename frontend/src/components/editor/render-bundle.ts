@@ -29,7 +29,8 @@ import { markdownExtensions } from '../../editor/markdown-config';
 import { headingHighlight, bareUrlPlugin, linkClickExtension } from '../../editor/editor-plugins';
 import { copyHandlerExtension } from '../../editor/copy-handler';
 import { selectionFeedPlugin, cellDocChangedFeed } from '../../editor/editor-observer';
-import { cellLinkContextRelay } from './live-preview/table-block-widget';
+import { cellLinkContextRelay, cellMarksRelay } from './live-preview/table-relays';
+import { cellMatchesField, cellCurrentMatchField } from './find-matches';
 import { codeHighlightStyle } from '../../editor/code-highlight';
 import { ligaturePlugin } from './ligature-plugin';
 import { thickCursorLayer } from './thick-cursor';
@@ -72,7 +73,7 @@ export function liveFields({ tableBlock }: { tableBlock: boolean }): Extension {
     cursorLinePlugin,
     tableRenderField,
     atomicObjectField,
-    ...(tableBlock ? [atomicTables.of(true), cellLinkContextRelay] : []),
+    ...(tableBlock ? [atomicTables.of(true), cellLinkContextRelay, cellMarksRelay] : []),
     mathBlockRenderField,
     mermaidBlockRenderField,
     headingHighlight,
@@ -247,6 +248,16 @@ export function editorExperience(opts: {
     return ext;
   }
 
+  if (mode === 'cell') {
+    // Find-in-cells marks (fed by setCellMatches — see find-matches.ts): mounted
+    // here ONCE for BOTH cell branches — a mounted cell editor and the shared
+    // static placeholder renderer paint the same .cm-searchMatch classes the
+    // host's searchHighlight paints. Inert until something pushes ranges.
+    // cellCurrentMatchField is the current-match mark (the -selected twin) a
+    // mounted cell receives when Next/Prev land inside it.
+    ext.push(cellMatchesField, cellCurrentMatchField);
+  }
+
   if (mode === 'cell' && !editable) {
     // The lazy cell placeholder renderer (cell-static-render): the cell's exact render and
     // skin, with no editing stack.
@@ -262,7 +273,8 @@ export function editorExperience(opts: {
   if (mode === 'cell') {
     ext.push(
       // Same inline experience as the document: smart quotes, auto-surround/pairs,
-      // history, bracket matching, autocompletion + the base keymap (no search).
+      // bracket matching, autocompletion + the base keymap (no search). Undo is the
+      // document-wide stack, bound with the cell's Y.Text by the widget.
       cmSetup({ search: false, thickCursor: false }),
       // The document's formatting hotkeys (bold/italic/quote/lists/…), minus cell-unsafe ones.
       buildKeymapExtension(CELL_HOTKEYS),

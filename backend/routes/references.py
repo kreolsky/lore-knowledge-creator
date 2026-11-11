@@ -57,6 +57,7 @@ from models import (
     ResolveReferencesRequest,
 )
 from routes._guards import require_reference
+from table_serialize import expand_tables
 from ydoc_store import set_content
 
 router = APIRouter()
@@ -123,19 +124,16 @@ async def _apply_content_patch(db, ref: dict, reference_id: str, new_content: st
         # the same). Why: a bare `SET content` leaves the persisted Y.Doc at
         # the OLD text, and the next collab open loads ydoc_state, so the
         # browser shows the pre-PATCH body while documents.content says
-        # otherwise.
-        await set_content(reference_id, new_content, persist=True)
-        from mentions import rebuild_doc_mentions
-        pairs = await rebuild_doc_mentions(db, "documents", reference_id, new_content)
-        if pairs:
-            # Affected ids = targets + the SOURCE (plan typed-edges): a client
-            # joined to the source refreshes its outgoing list on the same event.
-            await emit(
-                "backlinks_changed_batch",
-                document_ids=[reference_id, *(tid for tid, _kind in pairs)],
-            )
-        await emit("content_flushed", entity_type="doc", entity_id=reference_id,
-                   project_id=pid, is_reference=True)
+        # otherwise. The return is the persisted GFM read-model — mention
+        # edges parse it, never the anchor-form PATCH body (a table cell's
+        # link is invisible in the anchor form).
+        persisted = await set_content(reference_id, new_content, persist=True)
+        # The ONE no-session finalize tail (plan table-links-notes): the emit is
+        # ALWAYS for the source — a URL-only edit has no pair delta to key on.
+        from mentions import finalize_content_edges
+        await finalize_content_edges(
+            db, reference_id, persisted, project_id=pid, is_reference=True,
+        )
 
 
 async def _apply_archived_patch(db, reference_id: str, archived: bool, pid: str) -> None:
@@ -403,11 +401,13 @@ async def get_reference_links(reference_id: str, user: dict = Depends(get_curren
     # ARCH: prefer live-session content over the DB row (mirrors get_document_links /
     # export_document / chat/context.py) — the DB lags the in-memory Y.Doc by the ~1s
     # flush. References use collab entity_type "doc" (see RELATE below / line ~182).
+    # The live branch reads the GFM read-model form (expand_tables of the session
+    # Y.Doc) — the anchor-form session text cannot see a table cell's link.
     from collab.registry import get_active_session
     content = ref.get("content") or ""
     session = get_active_session("doc", reference_id)
     if session and session.clients:
-        content = session.content
+        content = expand_tables(session.ydoc)
     return await resolve_first_circle(content, reference_id)
 
 

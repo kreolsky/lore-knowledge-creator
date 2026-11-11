@@ -13,8 +13,7 @@
 # bool) and read with no default — a tool that omits it fails at registration.
 # Why: the derivation `mutating_names()` is the single source for
 # agent.tools.MUTATING_TOOLS; a silent default would let a new tool
-# fall out of the mutating set (skipping sequential execution + `apply`
-# injection in the dsh driver — a lost-update risk) with nothing failing.
+# fall out of the mutating set (no `apply` injection — the call falls to the model default `confirm` (`backend/models/tools.py:210`), so a user's `auto` preference is ignored and every call asks; a read-tool timeout that cuts that parked approval ask after 120 s; no empty-arguments guard) with nothing failing.
 """
 from __future__ import annotations
 
@@ -143,6 +142,9 @@ class ToolEntry:
                     handler checks its own config) or MUTATING_TOOLS (static).
     per_call_approval — every call is asked separately: the driver refuses
                     "allow for the session" on this tool.
+    image_result   — the handler returns an `{image: {media_type, data}}`
+                    envelope member; the dsh plugin stores it and hands the
+                    model an image block (the image-result arm).
     """
 
     spec: dict
@@ -151,6 +153,7 @@ class ToolEntry:
     surfaces: frozenset[str]
     env_gate: str | None = None
     per_call_approval: bool = False
+    image_result: bool = False
     #: MCP-only description override. The shared spec description describes the
     #: in-app proposal/confirmation flow (real on the agent/Tool-API path); that
     #: flow does NOT exist over MCP, so a mutating mcp tool REPLACES its text
@@ -247,6 +250,12 @@ def per_call_approval_names() -> frozenset[str]:
     """The holdable tools a session grant must not cover — sent to the driver
     in the turn payload, which is where the grant is minted."""
     return frozenset(e.name for e in REGISTRY.values() if e.per_call_approval)
+
+
+def image_result_names() -> frozenset[str]:
+    """The tools whose result carries an image — sent to the driver in the turn
+    payload, where the plugin picks the image-result arm by membership."""
+    return frozenset(e.name for e in REGISTRY.values() if e.image_result)
 
 
 def _is_region_capable(entry) -> bool:

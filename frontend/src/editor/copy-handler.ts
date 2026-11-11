@@ -20,7 +20,7 @@
 import { EditorView } from '@codemirror/view';
 import { getActiveHandle } from './active-editor';
 import { cleanMarkdownToHtml } from '../components/editor/markdown-to-html';
-import { expandTableAnchorsToGfm } from '../components/editor/live-preview/table-block-model';
+import { expandTableAnchorsToGfm } from '../components/editor/live-preview/table-serialize';
 import { ligatureSubstitutedText } from '../components/editor/ligature-plugin';
 import { selectedAtomicRange } from '../components/editor/live-preview/atomic-delete-guard';
 import { useAppStore } from '../store/app-store';

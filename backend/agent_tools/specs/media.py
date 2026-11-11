@@ -129,8 +129,8 @@ IMPORT_FILE_TOOL: dict = {
 # agent_toolset() (the agent path) appends it. See the seam note on agent_toolset.
 SANDBOX_TOOL: dict = {
     "type": "function",
-    # mutating=True buys ONE property: sequential execution in the dsh driver (one
-    # console, one command at a time). It does NOT drag in the proposal/confirm path
+    # mutating=True buys no proxy timeout in the dsh driver (a long command is not
+    # cut at the read-tool bound) and keeps it out of the read-only line. It does NOT drag in the proposal/confirm path
     # — that is resolved by the document endpoints via resolve_apply_mode, not by
     # membership here — and it is EXEMPT from the per-target repeat bound
     # (the turn telemetry's per-target repeat bound). Why the exemption: re-running `pytest` after a fix is
@@ -140,10 +140,19 @@ SANDBOX_TOOL: dict = {
         "name": "sandbox_bash",
         "description": (
             "Run a bash command on your sandbox: a Linux host with Python, pip, gcc "
-            "and git, plus pandas/numpy preinstalled. Use it to write and run "
-            "scripts, do calculations, process data and install packages "
-            "(`pip install X`) — it has internet access. It is a real console, so "
-            "re-running a command after a fix is normal.\n"
+            "and git.\n"
+            # {{SANDBOX_ENV}} is filled at render time by agent_toolset
+            # (agent.tools) from the box's provisioned-environment manifest
+            # (routes.tool_api.sandbox.transport.sandbox_env_fill): the ACTUAL
+            # python/node/chromium versions and the pinned Python packages WITH
+            # versions — pandas 2 → 3 API breaks matter to the model. Only
+            # agent_toolset fills it: this tool never reaches MCP
+            # (surfaces=_AGENT_HTTP), so no MCP path can carry the fill.
+            "{{SANDBOX_ENV}}\n"
+            "Use it to write and run scripts, do calculations, process "
+            "data and install packages (`pip install X`) — it has internet "
+            "access. It is a real console, so re-running a command after a fix "
+            "is normal.\n"
             # State drift across sessions is the known trap here: files
             # persist, so a stale artifact silently poisons a later run. Naming the
             # escape hatch in the description is what lets the agent resolve that
@@ -160,22 +169,31 @@ SANDBOX_TOOL: dict = {
             # base64-over-exec, the only channel it had before.
             "To land a file you produced here as a document or reference, pass its "
             "workspace path as `sandbox_path` to import_file (node_type picks "
-            "document vs reference) — do not base64-encode it into the request.\n"
-            # Detached mode: for a command that would
-            # outlive the 300 s foreground ceiling (a test suite, a build). The
-            # concurrency warning must be stated — detached runs make the workspace
-            # concurrent for the first time, and the model is what decides not to
-            # launch two builds over one checkout.
-            "For a LONG command (a full test suite, a build) that would exceed the "
-            "300-second foreground cap, pass `detach: true`: it starts the command "
-            "in the background, returns `{status:\"running\", run_id}` at once, and "
-            "the run keeps going after this call. Poll it with `sandbox_run_status` "
-            "(read-only) and do NOT busy-wait in this turn — the per-turn tool-call "
-            "ceiling will stop you; an unfinished run is collected in the NEXT turn. "
-            "A detached run still dies at its own ceiling (hours) and is killed "
-            "then. The workspace is ONE file tree shared with every other call, so "
-            "do NOT launch two detached runs that would fight over the same "
-            "checkout or files — the runs are not isolated.\n"
+            "document vs reference) — do not base64-encode it into the request. "
+            "To see an image you produced, use sandbox_view_image.\n"
+            # The result contract: status + bounded slices + the full logs'
+            # address. `timeout` is a WAIT, not a lifetime — promotion is the
+            # behavior that replaces the old kill-at-60s, so it must be stated,
+            # not implied, or the model reads a promoted run as dead.
+            "The result carries {status, exit_code, stdout, stderr, "
+            "stdout_bytes, stderr_bytes, truncated, run_id, log_dir}: stdout/"
+            "stderr are bounded head+tail slices of the run's logs (`truncated: "
+            "true` names elision — the FULL logs are out.log and err.log inside "
+            "log_dir; read them with another command). `timeout` is how long "
+            "this call WAITS: at the deadline a still-running command is NOT "
+            "killed — it is promoted to a background run and the result is "
+            "{status: \"running\", run_id}, to collect with sandbox_run_status "
+            "or stop with sandbox_run_kill. A run whose .runs dir the command "
+            "itself deleted (git clean -fdx, rm -rf .runs) reports "
+            "{status: \"killed\"} — its process may in fact keep running, "
+            "and it 404s on sandbox_run_status and sandbox_run_kill.\n"
+            "For work known to run LONGER than the 300 s wait cap, pass "
+            "`detach: true` instead: it starts the run in the background and "
+            "returns {status:\"running\", run_id, log_dir} at once. Either way the run "
+            "is bounded by the detached ceiling (hours), not `timeout`. The "
+            "workspace is ONE file tree shared with every other call, so do "
+            "NOT launch two runs that would fight over the same checkout or "
+            "files — the runs are not isolated.\n"
             "You are a non-root user: no sudo, no apt-get. The sandbox cannot reach "
             "Lore itself or any internal service — use the document tools for that."
         ),
@@ -188,18 +206,22 @@ SANDBOX_TOOL: dict = {
                 },
                 "timeout": {
                     "type": "number",
-                    "description": "Seconds to wait before killing the command "
-                                   "(default 60, max 300). Ignored when detach is true.",
+                    "description": (
+                        "Seconds this call WAITS for the command (default 60, "
+                        "max 300). At the deadline a still-running command is "
+                        "promoted to a background run — NOT killed — and the "
+                        "result carries its run_id. Ignored when detach is true."
+                    ),
                 },
                 "detach": {
                     "type": "boolean",
                     "description": (
                         "Start the command in the background and return "
-                        "{status:\"running\", run_id} at once (default false). "
-                        "For a command that must outlive the 300 s foreground cap. "
-                        "The run is bounded by the detached ceiling, not `timeout`; "
-                        "collect it with `sandbox_run_status` in the same or a "
-                        "later turn."
+                        "{status:\"running\", run_id} at once (default false), "
+                        "for a command known to outlive the 300 s wait cap. "
+                        "The run is bounded by the detached ceiling, not "
+                        "`timeout`; collect it with `sandbox_run_status` in "
+                        "this or a later turn."
                     ),
                 },
                 "with_external_agent_key": {
@@ -224,18 +246,21 @@ SANDBOX_TOOL: dict = {
 # reach the MCP surface. Only agent_toolset() (the agent path) appends it.
 SANDBOX_RUN_STATUS_TOOL: dict = {
     "type": "function",
-    # read-only: polls a detached run's directory and touches nothing — outside
-    # MUTATING_TOOLS by design, so polling does not take the console (sequential
-    # execution) and several runs can be in flight at once.
+    # read-only: polls a run's directory and touches nothing — outside
+    # MUTATING_TOOLS by design, so polling keeps the read-tool timeout and is served
+    # in the read-only line, and several runs can be in flight at once.
     "mutating": False,
     "function": {
         "name": "sandbox_run_status",
         "description": (
-            "Poll a DETACHED run started with `sandbox_bash(detach: true)`. "
-            "Returns {status: running|exited|killed, run_id, exit_code, out, "
-            "truncated}: `out` is a capped tail of the run's output, and "
-            "`truncated: true` means the real log is longer. `killed` with "
-            "exit_code 124/137 means the run hit its detached wall-clock ceiling.\n"
+            "Poll a run started with `sandbox_bash` — detached, or a foreground "
+            "call that was promoted at its wait deadline. Returns {status: "
+            "running|exited|killed, run_id, log_dir, exit_code, out, err, "
+            "truncated}: "
+            "`out`/`err` are capped tails of the run's stdout/stderr logs "
+            "(out.log / err.log inside its log_dir), and `truncated: true` "
+            "means a real log is longer than its tail. `killed` with exit_code "
+            "124/137 means the run hit its wall-clock ceiling.\n"
             # The busy-poll warning is load-bearing: the repeat guard reminds on
             # identical consecutive calls and the whole-turn wall-clock deadline
             # bounds a wait-here loop, so an unfinished run is collected in the
@@ -244,7 +269,8 @@ SANDBOX_RUN_STATUS_TOOL: dict = {
             "Do NOT busy-wait on this in the current turn — the per-turn tool-call "
             "ceiling will stop you with the run still going. Poll a few times, and "
             "if it is still `running`, end your turn and collect it in the NEXT "
-            "turn. A 404 means no such run (already GC'd or never started)."
+            "turn (or stop it with sandbox_run_kill). A 404 means no such run "
+            "(already GC'd, its .runs dir deleted, or never started)."
         ),
         "parameters": {
             "type": "object",
@@ -252,8 +278,8 @@ SANDBOX_RUN_STATUS_TOOL: dict = {
                 "run_id": {
                     "type": "string",
                     "description": (
-                        "The run_id from `sandbox_bash(detach: true)`'s result "
-                        "`{status:\"running\", run_id}`."
+                        "The run_id from `sandbox_bash`'s result — a detached "
+                        "spawn or a promoted foreground call, both carry one."
                     ),
                 },
             },
@@ -265,9 +291,76 @@ SANDBOX_RUN_STATUS_TOOL: dict = {
 # ARCH: defined OUTSIDE AGENT_TOOLS for the same reason
 # as SANDBOX_TOOL — it is console-only (internal whole-project key) and must never
 # reach the MCP surface. Only agent_toolset() (the agent path) appends it.
+SANDBOX_RUN_KILL_TOOL: dict = {
+    "type": "function",
+    # mutating=False on purpose: it only ever signals the caller's OWN run (the
+    # workspace is key-derived), so it needs no `apply` and keeps the read-tool
+    # timeout — the same class as sandbox_run_status.
+    "mutating": False,
+    "function": {
+        "name": "sandbox_run_kill",
+        "description": (
+            "Stop a run started with `sandbox_bash` — detached, or a foreground "
+            "call that was promoted at its wait deadline (both results carry "
+            "run_id). Idempotent: an already-finished run is a no-op returning "
+            "{status: \"exited\", exit_code}; anything else signals the run's "
+            "whole process group (TERM, then KILL after a short grace) and "
+            "returns {status: \"killed\"}. An unknown run_id is a 404 — including "
+            "a run whose .runs dir was deleted: its process may still be "
+            "running, but it can no longer be collected or stopped from here."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "run_id": {
+                    "type": "string",
+                    "description": (
+                        "The run_id from `sandbox_bash`'s result (foreground or "
+                        "detached)."
+                    ),
+                },
+            },
+            "required": ["run_id"],
+        },
+    },
+}
+
+# ARCH: defined OUTSIDE AGENT_TOOLS for the same reason
+# as SANDBOX_TOOL — it is console-only (internal whole-project key) and must never
+# reach the MCP surface. Only agent_toolset() (the agent path) appends it.
+SANDBOX_VIEW_IMAGE_TOOL: dict = {
+    "type": "function",
+    # mutating=False: it only reads the caller's own workspace (key-derived) —
+    # the same class as sandbox_run_kill.
+    "mutating": False,
+    "function": {
+        "name": "sandbox_view_image",
+        "description": (
+            "Look at an image file in your sandbox workspace — e.g. check a chart "
+            "or screenshot you produced before publishing it with import_file. "
+            "png, jpeg, gif or webp; rasterize html with Playwright first. View "
+            "only what you need to check — images stay in the conversation. Keep "
+            "charts/screenshots at normal screen size."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Path of the image in your workspace (relative or absolute).",
+                },
+            },
+            "required": ["file_path"],
+        },
+    },
+}
+
+# ARCH: defined OUTSIDE AGENT_TOOLS for the same reason
+# as SANDBOX_TOOL — it is console-only (internal whole-project key) and must never
+# reach the MCP surface. Only agent_toolset() (the agent path) appends it.
 SANDBOX_FETCH_REFERENCE_TOOL: dict = {
     "type": "function",
-    # mutating=True for the SAME property as sandbox_bash (sequential execution),
+    # mutating=True for the SAME property as sandbox_bash (no proxy timeout),
     # but is NOT exempt from the per-target repeat bound: ref_id is its only
     # argument, so the generic per-target repeat fallback already keys on it,
     # and a 3rd identical fetch of one ref_id is the stuck-loop signature (the
@@ -336,6 +429,95 @@ SANDBOX_FETCH_SKILL_TOOL: dict = {
     },
 }
 
+# ARCH: console-only like SANDBOX_FETCH_REFERENCE_TOOL. Read-only: it writes
+# only the caller's own workspace cache (deterministic path, a re-fetch
+# overwrites itself) — the same class as sandbox_fetch_skill.
+SANDBOX_FETCH_ARTIFACT_TOOL: dict = {
+    "type": "function",
+    "mutating": False,
+    "function": {
+        "name": "sandbox_fetch_artifact",
+        "description": (
+            "Step 1 of rewriting an EXISTING html page in place. Writes the "
+            "page's LIVE source to `artifacts/<document_id>/index.html` in your "
+            "sandbox workspace (a re-fetch overwrites it). Then edit that file "
+            "with sandbox_bash (sed, python, a heredoc — check it there too) "
+            "and finish with replace_artifact_page on the same path. Use this "
+            "route whenever the user asks to change an existing page beyond a "
+            "few passages: a redesign, restructured markup, reworked script, "
+            "new sections, or anything that would take more than 2-3 "
+            "edit_document calls. For a small fix (one label, one value, one "
+            "style rule) edit_document str_replace is enough."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {
+                    "type": "string",
+                    "description": "The html page document to fetch.",
+                },
+            },
+            "required": ["document_id"],
+        },
+    },
+}
+
+# ARCH: the in-place rewrite route for an EXISTING html page — the agent-only
+# alternative to creating a duplicate page. Whole-body replace through the
+# single agent convergence path (route_document_content), checkpointed
+# before the write so History restores the pre-replace page. Held for
+# approval in confirmation mode like edit_document (the handler refuses a
+# `confirm` call with the 409 ask signal).
+REPLACE_ARTIFACT_PAGE_TOOL: dict = {
+    "type": "function",
+    "mutating": True,
+    "function": {
+        "name": "replace_artifact_page",
+        "description": (
+            "Step 2 of rewriting an EXISTING html page in place: replaces the "
+            "page's WHOLE body with a file from your sandbox workspace "
+            "(normally the one sandbox_fetch_artifact wrote and you edited). "
+            "This is how an existing page gets a redesign, restructured "
+            "markup, a reworked script or new sections — the user keeps the "
+            "same page: same document_id, links to it, History and tree "
+            "place. The previous body is checkpointed (History restores it); "
+            "an unchanged file is a no-op. Choose by the size of the change: "
+            "more than 2-3 passages → this route; a small fix → edit_document "
+            "str_replace; a NEW page only when the user asks for a separate "
+            "one → create_document. Markdown documents are refused — they are "
+            "edited with edit_document."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {
+                    "type": "string",
+                    "description": "The html page document whose body is replaced.",
+                },
+                "sandbox_path": {
+                    "type": "string",
+                    "description": (
+                        "The workspace path of the new page source (the file "
+                        "sandbox_fetch_artifact wrote and you edited)."
+                    ),
+                },
+                "apply": {
+                    "type": "string",
+                    "enum": ["confirm", "auto"],
+                    "default": "confirm",
+                    "description": (
+                        "confirm (default) holds the replace for the user's "
+                        "approval; auto applies it directly (requires full "
+                        "access + opted-in)."
+                    ),
+                },
+            },
+            "required": ["document_id", "sandbox_path"],
+        },
+    },
+}
+
+
 # ARCH: defined OUTSIDE AGENT_TOOLS for the same
 # reason as the SANDBOX_* tools — ComfyUI is an internal service an external MCP
 # client cannot reach, so the tool must never appear in build_tool_list()'s public
@@ -354,8 +536,8 @@ SANDBOX_FETCH_SKILL_TOOL: dict = {
 # so a description inviting "make it darker" alone strands the rest of the scene.
 GENERATE_IMAGE_TOOL: dict = {
     "type": "function",
-    # mutating=True buys sequential execution in the dsh driver (one ComfyUI
-    # generation at a time), exactly like sandbox_bash. It does NOT drag in the
+    # mutating=True buys no proxy timeout in the dsh driver (a ComfyUI generation
+    # is not cut at the read-tool bound), exactly like sandbox_bash. It does NOT drag in the
     # proposal/confirm path — the handler returns status:"applied" directly.
     "mutating": True,
     "function": {
@@ -416,8 +598,8 @@ GENERATE_IMAGE_TOOL: dict = {
 
 REPROCESS_REFERENCE_TOOL: dict = {
     "type": "function",
-    # mutating=True buys ONE property — sequential execution in the dsh driver (one
-    # content-wipe+queue at a time) — exactly like the SANDBOX_* tools. It does NOT
+    # mutating=True buys no proxy timeout in the dsh driver and keeps it out of
+    # the read-only line — exactly like the SANDBOX_* tools. It does NOT
     # drag in the proposal/confirm path on its own; the handler resolves that via
     # resolve_apply_mode (see routes/tool_api/imports.py).
     "mutating": True,

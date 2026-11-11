@@ -48,7 +48,7 @@ COPY conversation /dsh/lore-conversation
 # approvals.test.ts gates the dsh approval bridge (the parked ask, grants,
 # the 409/404 expiry split); skills.test.ts gates the lore-skills provider +
 # the served-toolset filter;  images.test.ts gates the multimodal prompt blocks + the per-turn
-# image-capability upsert; caps.test.ts gates the model-capability resolution
+# image-capability upsert; image-result.test.ts gates the image-result proxy arm; caps.test.ts gates the model-capability resolution
 # (the ONE source); web-search.test.ts gates the Lore search providers' wire
 # mapping + call-time credential resolution; boot-env.test.ts gates the
 # standalone boot (no backend fetch rides the entry); time-stamps.test.ts gates
@@ -59,7 +59,7 @@ COPY conversation /dsh/lore-conversation
 # real streamable-http MCP fixture (claim-time mount, first-request tools,
 # per-agent isolation, the ask/scrub listeners, the stalled-server bound,
 # the redirect Authorization drop).
-RUN node --import tsx/esm --test lore-driver/test/map.test.ts lore-driver/test/entries.test.ts lore-driver/test/driver.test.ts lore-driver/test/ws-events.test.ts lore-driver/test/approvals.test.ts lore-driver/test/skills.test.ts lore-driver/test/images.test.ts lore-driver/test/caps.test.ts lore-driver/test/web-search.test.ts lore-driver/test/boot-env.test.ts lore-driver/test/time-stamps.test.ts lore-driver/test/session-agents.test.ts lore-driver/test/mcp-servers.test.ts
+RUN node --import tsx/esm --test lore-driver/test/map.test.ts lore-driver/test/entries.test.ts lore-driver/test/driver.test.ts lore-driver/test/ws-events.test.ts lore-driver/test/approvals.test.ts lore-driver/test/skills.test.ts lore-driver/test/images.test.ts lore-driver/test/image-result.test.ts lore-driver/test/caps.test.ts lore-driver/test/web-search.test.ts lore-driver/test/boot-env.test.ts lore-driver/test/time-stamps.test.ts lore-driver/test/session-agents.test.ts lore-driver/test/mcp-servers.test.ts
 
 # The test feeds a real session log.
 RUN node --import tsx/esm --test lore-conversation/test/conversation.test.ts lore-conversation/test/lore-nodes.test.ts

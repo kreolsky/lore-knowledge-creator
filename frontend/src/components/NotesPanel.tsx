@@ -415,14 +415,13 @@ export function NotesPanel() {
       {...dragHandlers}
     >
       {isThreadView ? (
-        <div className="flex items-center justify-between gap-1 px-3 py-2 border-b border-[var(--warm-sep)] bg-[var(--warm-tint)] min-h-[40px]">
-          <Button variant="ghost-note" size="sm" onClick={crud.exitThread}>
+        <div className="flex items-center justify-between gap-1 px-3 py-1 border-b border-[var(--warm-sep)] bg-[var(--warm-tint)] min-h-[40px]">
+          <Button variant="ghost-note" onClick={crud.exitThread}>
             <ArrowLeft size={13} />
             {t('backToAllNotes')}
           </Button>
           {canDelete && (
             <IconButton
-              size="sm"
               danger
               theme="note"
               filled={headerDelete.armed}
@@ -435,8 +434,8 @@ export function NotesPanel() {
           )}
         </div>
       ) : canComment ? (
-        <div className="flex items-center gap-1 px-3 py-2 border-b border-border bg-surface min-h-[40px]">
-          <Button variant="ghost" size="sm" onClick={handleCreateNote}>
+        <div className="flex items-center gap-1 px-3 py-1 border-b border-border bg-surface min-h-[40px]">
+          <Button variant="ghost" onClick={handleCreateNote}>
             <Plus size={13} />
             {t('addNote')}
           </Button>

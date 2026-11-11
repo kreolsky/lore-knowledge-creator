@@ -33,6 +33,7 @@ import { AccessLevel, Role, Tier, User, Project } from '../types';
 import { SectionShell, SectionAsideRow } from '../components/SectionShell';
 import { CenterHeading, FieldInput } from '../components/ui';
 import { useTranslation } from '../i18n';
+import { copyWithToast } from '../components/chat/shared/copy';
 import type { TranslationKey } from '../i18n/en';
 import { ProjectsTab } from '../components/admin/ProjectsTab';
 import { UsersTab, UserUpdates } from '../components/admin/UsersTab';
@@ -309,10 +310,13 @@ export function AdminPage() {
   const handleInvite = async (tier: Tier) => {
     try {
       const { token } = await apiClient.post('/invites', { tier });
-      if (token) {
-        await navigator.clipboard?.writeText(`${window.location.origin}/register/${token}`);
-      }
-      useAppStore.getState().showToast(t('inviteLinkCopied'), 'info');
+      if (!token) throw new Error('invite token missing');
+      const url = `${window.location.origin}/register/${token}`;
+      const { showToast } = useAppStore.getState();
+      // WHY: on a failed write the link is shown nowhere else, so the warning
+      // carries it and stays until dismissed.
+      copyWithToast(url, showToast, undefined,
+        () => showToast(t('inviteLinkCopyFailed', { url }), 'warning', { persistent: true }));
     } catch {
       useAppStore.getState().showToast(t('failedToCreateInvite'), 'error');
     }

@@ -182,7 +182,7 @@ function SecretForm({ initial, disabled, error, onSave, onCancel }: {
         </p>
       )}
       <div>
-        <Button size="sm" onClick={() => setAdvancedOpen(open => !open)} disabled={disabled}>
+        <Button onClick={() => setAdvancedOpen(open => !open)} disabled={disabled}>
           {advancedOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
           {t('secretAdvanced')}
         </Button>
@@ -242,10 +242,10 @@ function SecretForm({ initial, disabled, error, onSave, onCancel }: {
         </>
       )}
       <div className="flex gap-2 items-center">
-        <Button variant="primary" size="lg" onClick={save} disabled={disabled || !canSave}>
+        <Button variant="primary" onClick={save} disabled={disabled || !canSave}>
           {t('save')}
         </Button>
-        <Button size="lg" onClick={onCancel} disabled={disabled}>{t('cancel')}</Button>
+        <Button onClick={onCancel} disabled={disabled}>{t('cancel')}</Button>
         {error && <span className="text-xs text-red">{error}</span>}
       </div>
     </div>
@@ -354,7 +354,7 @@ export function PersonalKeysSection() {
               />
             </div>
           ) : (
-            <Button variant="primary" size="lg" onClick={() => { setExpanded(NEW_PANEL); setMsg(null); }}>
+            <Button variant="primary" onClick={() => { setExpanded(NEW_PANEL); setMsg(null); }}>
               {t('addSecretKey')}
             </Button>
           )}

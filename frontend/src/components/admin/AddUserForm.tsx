@@ -9,6 +9,7 @@ import { Link2, Plus, RefreshCw } from 'lucide-react';
 import { Button, CenterHeading, Dropdown, FieldInput } from '../ui';
 import { groupOptions, roleOptions, tierOptions } from './UsersTab';
 import { useTranslation } from '../../i18n';
+import { copyWithToast } from '../chat/shared/copy';
 import { useAppStore } from '../../store/app-store';
 import { Role, Tier, User } from '../../types';
 import { generatePassword } from '../../utils/generate-password';
@@ -116,13 +117,12 @@ export function AddUserForm({ onAdd, onInvite, isAdmin, moderators }: AddUserFor
               <Button
                 type="button"
                 variant="primary"
-                size="lg-square"
+                size="md-square"
                 title={t('generatePasswordTitle')}
                 onClick={() => {
                   const pwd = generatePassword();
                   setNewPassword(pwd);
-                  navigator.clipboard.writeText(pwd);
-                  showToast(t('copied'), 'info');
+                  copyWithToast(pwd, showToast);
                 }}
               >
                 <RefreshCw size={14} />
@@ -135,7 +135,6 @@ export function AddUserForm({ onAdd, onInvite, isAdmin, moderators }: AddUserFor
             <div>
               <label className="block text-ui-xs text-text-dim mb-1">{t('role')}</label>
               <Dropdown
-                size="lg"
                 placement="bottom"
                 title={t('role')}
                 value={newRole}
@@ -148,7 +147,6 @@ export function AddUserForm({ onAdd, onInvite, isAdmin, moderators }: AddUserFor
             <div>
               <label className="block text-ui-xs text-text-dim mb-1">{t('group')}</label>
               <Dropdown
-                size="lg"
                 placement="bottom"
                 title={t('group')}
                 value={newModeratorId ?? ''}
@@ -162,7 +160,6 @@ export function AddUserForm({ onAdd, onInvite, isAdmin, moderators }: AddUserFor
           <div>
             <label className="block text-ui-xs text-text-dim mb-1">{t('tierLabel')}</label>
             <Dropdown
-              size="lg"
               placement="bottom"
               title={t('tierLabel')}
               value={newTier}
@@ -173,7 +170,6 @@ export function AddUserForm({ onAdd, onInvite, isAdmin, moderators }: AddUserFor
           <Button
             type="submit"
             variant="primary"
-            size="lg"
             disabled={!newName || !newEmail || !newPassword}
           >
             <Plus size={14} />

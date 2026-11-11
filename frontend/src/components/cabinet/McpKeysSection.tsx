@@ -178,7 +178,6 @@ export function McpKeysSection() {
         />
         <Button
           variant="primary"
-          size="lg"
           onClick={() => handleSave(server)}
           disabled={saving || !drafts[server.id]}
         >

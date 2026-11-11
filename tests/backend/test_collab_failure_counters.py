@@ -44,7 +44,8 @@ class TestFlushPipelineCounters:
         db_mock.query = AsyncMock()
         with patch("jobs.pool.enqueue", side_effect=RuntimeError("arq down")):
             before = fp.flush_pipeline_failures()
-            await session._flush_pipeline._flush_content_to_db(db_mock, "hello")
+            # No tables on this doc → the GFM read-model form equals the anchor text.
+            await session._flush_pipeline._flush_content_to_db(db_mock, "hello", "hello")
         assert fp.flush_pipeline_failures() == before + 1
 
     async def test_compact_failure_increments_counter(self):

@@ -16,6 +16,7 @@ import type { PinnedRegion, RegionRef } from '../../types';
 import * as Y from 'yjs';
 import { getActiveHandle } from '../../editor/active-editor';
 import { utf16ToCp } from '../../utils/utf16-cp';
+import { isHostText } from '../../components/editor/note-anchor-wiring';
 
 const STORAGE_KEY = 'lore.agent.regionBySession.v2';
 
@@ -84,18 +85,20 @@ export function clearPendingRegion(sessionId: string): void {
  * through resolveRegionRange below, note anchors through collab/note-anchor-wire.ts.
  * `followUndoneDeletions` is Yjs's flag — regions keep its default (true); note
  * anchors pass false so an undo does not revive them (see the INVARIANT there).
+ * `type` is the shared type the positions live in — a note anchored in a table cell
+ * resolves into that cell's Y.Text, not the host text, and only the caller can tell.
  */
 export function resolveRelPosRange(
   from: Y.RelativePosition,
   to: Y.RelativePosition,
   ydoc: Y.Doc,
   followUndoneDeletions: boolean,
-): RegionRange | null {
+): (RegionRange & { type: Y.AbstractType<unknown> }) | null {
   try {
     const fromAbs = Y.createAbsolutePositionFromRelativePosition(from, ydoc, followUndoneDeletions);
     const toAbs = Y.createAbsolutePositionFromRelativePosition(to, ydoc, followUndoneDeletions);
     if (!fromAbs || !toAbs) return null;
-    return { from: fromAbs.index, to: toAbs.index };
+    return { from: fromAbs.index, to: toAbs.index, type: fromAbs.type };
   } catch {
     return null;
   }
@@ -110,17 +113,22 @@ export function resolveRelPosRange(
  * layers the offline-vs-lost distinction + code-point conversion on top). The
  * RelativePosition math itself is resolveRelPosRange.
  */
-export function resolveRegionRange(region: PinnedRegion): RegionRange | null {
+export function resolveRegionRange(region: PinnedRegion): (RegionRange & { text: Y.Text }) | null {
   if (!region.relFrom || !region.relTo) return null;
   const ydoc = getActiveHandle()?.ydoc;
   if (!ydoc) return null;
   try {
-    return resolveRelPosRange(
+    const range = resolveRelPosRange(
       Y.createRelativePositionFromJSON(region.relFrom as object),
       Y.createRelativePositionFromJSON(region.relTo as object),
       ydoc,
       true,
     );
+    // INVARIANT: a region resolves only into the host text — a non-host type is `lost`.
+    // Why: the backend region gate scopes host-text edits; cell offsets painted or sliced
+    // on the host land on arbitrary characters.
+    if (!range || !(range.type instanceof Y.Text) || !isHostText(range.type)) return null;
+    return { from: range.from, to: range.to, text: range.type };
   } catch {
     return null;
   }
@@ -164,19 +172,17 @@ export type RegionResolution =
 export function resolveRegion(sessionId: string): RegionResolution {
   const region = getPendingRegion(sessionId);
   if (!region || !region.relFrom || !region.relTo) return { status: 'none' };
-  const handle = getActiveHandle();
-  const ydoc = handle?.ydoc;
-  const ytext = handle?.ytext;
+  const ydoc = getActiveHandle()?.ydoc;
   // Offline (no live ydoc) is distinct from lost (ydoc present, anchor null): only the
   // latter auto-unpins. resolveRegionRange collapses both to null, so keep the offline
   // guard HERE (before the helper) — a null from the helper with a live ydoc is 'lost'.
-  if (!ydoc || !ytext) return { status: 'offline' };
+  if (!ydoc) return { status: 'offline' };
   const range = resolveRegionRange(region);
   // ydoc present but the anchor did not resolve (or a malformed RelativePosition threw
   // inside the helper) → lost, not offline: an unrecoverable anchor must not freeze the
   // session forever.
   if (!range) return { status: 'lost' };
-  const full = ytext.toString();
+  const full = range.text.toString();
   const from_cp = utf16ToCp(full, range.from);
   const to_cp = utf16ToCp(full, range.to);
   const text = full.slice(range.from, range.to);

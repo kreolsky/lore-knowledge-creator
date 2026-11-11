@@ -18,7 +18,7 @@ import time
 import pytest
 from collab.registry import _session_key, _sessions
 from collab.sync import MSG_SYNC, MSG_SYNC_UPDATE, wrap_binary
-from helpers import set_session_text
+from helpers import project_collab_url, set_session_text
 from pycrdt import Doc, Text
 
 
@@ -74,9 +74,9 @@ class TestLastSessionE2E:
         set_session_text(session, "Initial document body for the e2e handoff test here.")
 
         with sync_app.websocket_connect(
-            f"/ws/collab/project/{pid}", cookies={"lore_session": admin_token}
+            project_collab_url(pid), cookies={"lore_session": admin_token}
         ) as ws_red, sync_app.websocket_connect(
-            f"/ws/collab/project/{pid}", cookies={"lore_session": user_token}
+            project_collab_url(pid), cookies={"lore_session": user_token}
         ) as ws_black:
             _join(ws_red, doc_id)
             _recv_until(ws_red, want_type="init")

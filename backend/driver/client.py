@@ -291,6 +291,7 @@ def _derived_tool_sets() -> dict[str, list[str]]:
     region_tools is the sibling for pinned-region confinement)."""
     from agent.tools import (
         HOLDABLE_TOOLS,
+        IMAGE_RESULT_TOOLS,
         MUTATING_TOOLS,
         PER_CALL_APPROVAL_TOOLS,
         REGION_TOOLS,
@@ -300,6 +301,7 @@ def _derived_tool_sets() -> dict[str, list[str]]:
         "holdable_tools": sorted(HOLDABLE_TOOLS),
         "per_call_approval_tools": sorted(PER_CALL_APPROVAL_TOOLS),
         "region_tools": sorted(REGION_TOOLS),
+        "image_result_tools": sorted(IMAGE_RESULT_TOOLS),
     }
 
 

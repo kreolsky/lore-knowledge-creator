@@ -1,10 +1,10 @@
 /**
- * Unit tests for tableReconcileExtension — the debounced host-doc trigger that
- * clones duplicate anchors (short timer). Auto orphan-cleanup was REMOVED (a text
- * edit must never delete a table model — see the retain tests below).
+ * Unit tests for tableReconcileExtension — the host-doc trigger that clones duplicate
+ * anchors (short timer) and drops the model of an anchor a local edit removed WHOLE.
  *
  * These tests pin the data-loss invariants:
- *  - a docChanged that removes OR mangles an anchor RETAINS the model (no cleanup);
+ *  - a local edit removing an anchor whole drops its model; a mangled or moved
+ *    anchor RETAINS it;
  *  - the target doc captured at arm time MUST be re-verified at fire time (clone);
  *  - view destroy MUST cancel the timer.
  *
@@ -15,7 +15,10 @@ import * as Y from 'yjs';
 import { EditorState, Prec } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { tableReconcileExtension } from './table-reconcile';
-import { createTable, getTablesMap, tableAnchor, DEFAULT_COLUMN_WIDTH } from './table-block-model';
+import { applyTablesJson } from './table-serialize';
+import { createTable, getTablesMap } from './table-block-model';
+import { tableAnchor } from './table-document-ops';
+import { DEFAULT_COLUMN_WIDTH } from './table-widths';
 import { releaseHandle, publishHandle } from '../../../editor/active-editor';
 import { DOC } from '../../../collab/entity-types';
 import type { EntityYjsState } from '../../../collab/yjs-provider';
@@ -29,6 +32,7 @@ function makeHandle(opts: { synced?: boolean } = {}): EntityYjsState {
     entityType: DOC,
     ydoc,
     ytext: ydoc.getText('content'),
+    undoManager: new Y.UndoManager(ydoc.getText('content')),
     awareness: {} as EntityYjsState['awareness'],
     callbackBundles: [],
     local: null,
@@ -43,20 +47,10 @@ function makeHandle(opts: { synced?: boolean } = {}): EntityYjsState {
   };
 }
 
-/** Seed a table model under a literal id (for clone tests / duplicate anchors). */
+/** Seed a one-cell table model under a literal id (for clone tests / duplicate anchors),
+ *  through the model's one seeding path — callers seed a fresh doc. */
 function seedLiteralTable(doc: Y.Doc, id: string, label = 'a') {
-  doc.transact(() => {
-    const tables = doc.getMap('tables');
-    const table = new Y.Map();
-    const col = () => { const m = new Y.Map<number>(); m.set('w', DEFAULT_COLUMN_WIDTH); return m; };
-    const cols = new Y.Array(); cols.push([col()]);
-    table.set('columns', cols);
-    const cell = () => { const c = new Y.Map<Y.Text>(); c.set('t', new Y.Text(label)); return c; };
-    const row = new Y.Array(); row.push([cell()]);
-    const rows = new Y.Array(); rows.push([row]);
-    table.set('rows', rows);
-    tables.set(id, table);
-  });
+  applyTablesJson(doc, JSON.stringify({ [id]: { columns: [DEFAULT_COLUMN_WIDTH], rows: [[label]] } }));
 }
 
 function setContent(handle: EntityYjsState, text: string) {
@@ -99,12 +93,20 @@ afterEach(() => {
   releaseHandle();
 });
 
-// ── Data-loss guard: a text edit NEVER deletes a table model ──────────────────
+// ── Data-loss guard: only a WHOLE local removal deletes a table model ──────────
 
-describe('anchor removal / corruption retains the model (no auto-cleanup)', () => {
+/** Dispatch a change into the view AND the handle's ytext (what yCollab does live). */
+function editSynced(view: EditorView, handle: EntityYjsState, from: number, to: number, insert: string) {
+  view.dispatch({ changes: { from, to, insert } });
+  handle.ytext.delete(from, to - from);
+  handle.ytext.insert(from, insert);
+}
+
+describe('anchor removal / corruption', () => {
   beforeEach(() => vi.useFakeTimers());
 
-  it('deleting the anchor line RETAINS the model (deletion must be explicit UI)', () => {
+  // TEST-WHY: data-loss — a whole-removed anchor must take its model with it, and every look-alike (mangle, move) must not.
+  it('deleting the anchor whole drops the model', async () => {
     const handle = makeHandle();
     const id = createTable(handle.ydoc, [['a', 'b'], ['c', 'd']]);
     const anchor = tableAnchor('T', id);
@@ -113,30 +115,40 @@ describe('anchor removal / corruption retains the model (no auto-cleanup)', () =
     publishHandle(handle);
 
     const view = mountView(content);
-    const newText = 'lead\ntrail';
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: newText } });
-    setContent(handle, newText);
-
-    vi.advanceTimersByTime(5000);
-    // The model survives — only an explicit UI delete may drop it.
-    expect(getTablesMap(handle.ydoc).has(id)).toBe(true);
+    editSynced(view, handle, 5, 5 + anchor.length + 1, '');
+    await Promise.resolve();
+    expect(getTablesMap(handle.ydoc).has(id)).toBe(false);
   });
 
-  it('mangling a single char in the anchor id RETAINS the model (no silent whole-table loss)', () => {
+  // TEST-WHY: data-loss — a full-text rewrite that only mangles the id must not read as a whole removal.
+  it('a full-text rewrite mangling one char of the id RETAINS the model', async () => {
     const handle = makeHandle();
     const id = createTable(handle.ydoc, [['a']]);
-    const anchor = tableAnchor('T', id);
-    const content = `lead ${anchor} trail`;
+    const content = `lead ${tableAnchor('T', id)} trail`;
     setContent(handle, content);
     publishHandle(handle);
 
     const view = mountView(content);
-    // Corrupt the id (drop one char) — the anchor no longer matches the model.
-    const mangled = content.replace(`table:${id}`, `table:${id.slice(1)}`);
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: mangled } });
-    setContent(handle, mangled);
+    editSynced(view, handle, 0, content.length, content.replace(`table:${id}`, `table:${id.slice(1)}`));
+    await Promise.resolve();
+    expect(getTablesMap(handle.ydoc).has(id)).toBe(true);
+  });
 
-    vi.advanceTimersByTime(5000);
+  // TEST-WHY: data-loss — a drag-move deletes and re-inserts the same anchor in one transaction.
+  it('moving the anchor (delete + insert in one transaction) RETAINS the model', async () => {
+    const handle = makeHandle();
+    const id = createTable(handle.ydoc, [['a']]);
+    const anchor = tableAnchor('T', id);
+    const content = `${anchor}\nmid\n`;
+    setContent(handle, content);
+    publishHandle(handle);
+
+    const view = mountView(content);
+    const moved = `mid\n${anchor}\n`;
+    view.dispatch({ changes: [{ from: 0, to: anchor.length + 1 }, { from: content.length, insert: `${anchor}\n` }] });
+    setContent(handle, moved);
+    await Promise.resolve();
+    expect(view.state.doc.toString()).toBe(moved);
     expect(getTablesMap(handle.ydoc).has(id)).toBe(true);
   });
 

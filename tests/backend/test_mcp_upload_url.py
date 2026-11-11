@@ -135,8 +135,11 @@ async def test_out_of_scope_mint_403_names_the_scope_root(
     """An upload mint against a document_id OUTSIDE the key's subtree is a 403 whose
     detail names the scope root — the recovery the agent needs to re-target an
     in-scope host document instead of concluding 'uploading is impossible'."""
-    pid, root_doc, admin_uid = project_with_doc
+    pid, _idx, admin_uid = project_with_doc
     _, admin_token = admin_user
+    # An ORDINARY subtree root — the fixture index is the project's face now
+    # (its scope is the whole project), so it cannot play "narrow root" here.
+    root_doc = await _make_doc(client, admin_token, pid, "ScopeRoot", "x")
     # Host document OUTSIDE the key's subtree (top-level, not under root_doc).
     out_doc = await _make_doc(client, admin_token, pid, "Outside", "x")
     # Read-write key scoped to root_doc's subtree.

@@ -11,7 +11,7 @@ interface ColorFieldProps {
 export function ColorField({ value, onChange, 'aria-label': ariaLabel }: ColorFieldProps) {
   const hex = toHex(value);
   return (
-    <div className="flex items-center gap-2 h-[37px] px-2 border border-border bg-surface2">
+    <div className="flex items-center gap-2 h-[30px] px-2 border border-border bg-surface2">
       <input
         type="color"
         value={hex}

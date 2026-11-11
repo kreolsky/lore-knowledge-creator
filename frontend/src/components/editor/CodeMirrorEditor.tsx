@@ -13,7 +13,7 @@ import type React from 'react';
 import { useRef, useEffect } from 'react';
 import { EditorView, keymap, dropCursor, rectangularSelection, crosshairCursor, highlightSpecialChars } from '@codemirror/view';
 import { EditorState, StateEffect, type Extension } from '@codemirror/state';
-import { history, defaultKeymap, historyKeymap } from '@codemirror/commands';
+import { defaultKeymap } from '@codemirror/commands';
 import { search as searchExt, highlightSelectionMatches } from '@codemirror/search';
 import { closeBrackets, closeBracketsKeymap, autocompletion, completionKeymap } from '@codemirror/autocomplete';
 import { bracketMatching, indentOnInput, syntaxHighlighting, defaultHighlightStyle, syntaxTreeAvailable } from '@codemirror/language';
@@ -22,7 +22,7 @@ import { autoFence } from './auto-fence';
 import { autoFenceSelection } from './auto-fence-selection';
 import { smartQuotes } from './smart-quotes';
 import { thickCursorLayer } from './thick-cursor';
-import { searchHighlight, searchPanelListenerCompartment } from './find-matches';
+import { searchHighlight, searchPanelListenerCompartment, cellMarksByTableField, currentCellMatchField } from './find-matches';
 import { noteConnectorRefresh } from '../../editor/note-connector-refresh';
 
 /**
@@ -34,11 +34,14 @@ import { noteConnectorRefresh } from '../../editor/note-connector-refresh';
  *   inline editors.
  * `thickCursor` — include the thick caret layer. On for the document/cell,
  *   off for mini inline editors.
+ *
+ * WHY no CM6 `history()`: every caller is a collab view (or read-only) whose undo is the
+ * entity's document-wide Y.UndoManager, bound by `createYjsExtension` — a per-view history
+ * would revert the same Y.Text a second time. The artifact source editor keeps its own.
  */
 export function cmSetup({ search = true, thickCursor = true }: { search?: boolean; thickCursor?: boolean } = {}): Extension {
   return [
     highlightSpecialChars(),
-    history(),
     ...(thickCursor ? [thickCursorLayer] : []),
     dropCursor(),
     EditorState.allowMultipleSelections.of(true),
@@ -63,12 +66,17 @@ export function cmSetup({ search = true, thickCursor = true }: { search?: boolea
     // is kept inert here; FindReplacePanel reconfigures it on mount for the live count.
     // The connector compartment is the same seam for NoteConnector (inert until a
     // note is connected — see editor/note-connector-refresh.ts).
-    ...(search ? [searchExt(), searchHighlight, searchPanelListenerCompartment.of([])] : []),
+    // cellMarksByTableField is the HOST-side half of find-in-cells: the combined
+    // index publishes per-table cell marks there; the relay in table-block-widget
+    // fans them out to the table widgets (document + snapshot preview alike).
+    // currentCellMatchField is the host-side slot for the panel's CURRENT cell
+    // match — the same relay fans it out (mounted-cell selected mark / static
+    // cell's current class).
+    ...(search ? [searchExt(), searchHighlight, searchPanelListenerCompartment.of([]), cellMarksByTableField, currentCellMatchField] : []),
     noteConnectorRefresh,
     keymap.of([
       ...closeBracketsKeymap,
       ...defaultKeymap,
-      ...historyKeymap,
       ...completionKeymap,
     ]),
   ];

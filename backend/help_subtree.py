@@ -165,9 +165,10 @@ async def _refresh(db, doc_id: str, project_id: str, content: str) -> None:
     # WHY: set_content(persist=True) is the single writer of content + ydoc_state
     # and fans the snapshot out to any live editor session (see INVARIANT(corruption)
     # in documents/update.py) — a bare `SET content` would be reverted by the next
-    # collab open.
-    await set_content(doc_id, content, persist=True)
-    await rebuild_doc_mentions(db, "documents", doc_id, content)
+    # collab open. Its return is the persisted GFM read-model — mention edges
+    # parse it, never the anchor-form input.
+    persisted = await set_content(doc_id, content, persist=True)
+    await rebuild_doc_mentions(db, "documents", doc_id, persisted)
     await event_bus.emit("content_flushed", entity_type="doc", entity_id=doc_id,
                          project_id=project_id)
 

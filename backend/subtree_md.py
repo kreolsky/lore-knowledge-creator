@@ -60,6 +60,7 @@ from db import (
     record_refs,
 )
 from mentions import rebuild_doc_mentions
+from scope import subtree_doc_ids
 from table_serialize import expand_tables, import_gfm_tables
 from transclusion_grammar import parse_target
 from ydoc_store import set_content
@@ -161,13 +162,53 @@ async def _read_doc_content(doc_id: str, row: dict) -> str:
     return row.get("content") or ""
 
 
+def _group_children(
+    ids: list[str], by_id: dict[str, dict], root_id: str, *, is_index_root: bool,
+) -> dict[str, list[dict]]:
+    """Live child-doc rows grouped by parent over the walked id list.
+
+    References are skipped (an export covers documents only). For an index
+    root every doc whose parent_id is NONE is grouped as a CHILD of the index
+    (the zip layout: the project under one `<Project name>/` dir) — the ids
+    themselves came from the scope helper, which is what excludes the
+    top-level system and help roots."""
+    children: dict[str, list[dict]] = {}
+    for doc_id in ids:
+        if doc_id == root_id:
+            continue
+        row = by_id.get(doc_id)
+        if row is None or row.get("is_reference"):
+            continue
+        parent = row.get("parent_id")
+        if not (isinstance(parent, str) and parent) and is_index_root:
+            parent = root_id  # top-level doc → child of the index (zip layout)
+        if isinstance(parent, str) and parent:
+            children.setdefault(parent, []).append(row)
+    for kids in children.values():
+        kids.sort(key=lambda r: (sanitize_name(r.get("title") or "").lower(),
+                                 str(r.get("id"))))
+    return children
+
+
 async def _subtree_children(
     root_id: str, project_id: str,
 ) -> tuple[dict, dict[str, list[dict]]]:
     """Root row (validated in-project) + live child-doc rows grouped by parent.
 
-    References are not tree children — an export covers documents only."""
-    ids = [root_id] + await get_descendant_ids(root_id, project_id)
+    # ARCH (plan "project-index-as-project-face"): an INDEX root exports the
+    # whole project. The id list comes from scope.subtree_doc_ids (the index
+    # scope: every live doc minus the system and help subtrees) and the
+    # archive's face carries the PROJECT's name (not the row's
+    # 'project_context.md' title). The id list NEVER comes from a
+    # `parent_id IS NONE` query: the system and help roots are themselves
+    # top-level, and the scope helper is what excludes them.
+    """
+    project = await fetch_one("projects", project_id)
+    is_index_root = bool(project) and project.get("index_doc_id") == root_id
+    if is_index_root:
+        ids = await subtree_doc_ids(root_id, project_id)
+    else:
+        ids = [root_id] + await get_descendant_ids(root_id, project_id)
     db = await get_db()
     refs, params = record_refs("documents", ids)
     rows = await db.query(
@@ -179,18 +220,10 @@ async def _subtree_children(
     root_row = by_id.get(root_id)
     if root_row is None or root_row.get("project_id") != project_id:
         raise HTTPException(status_code=404, detail="Document not found")
-
-    children: dict[str, list[dict]] = {}
-    for doc_id in ids[1:]:
-        row = by_id.get(doc_id)
-        if row is None or row.get("is_reference"):
-            continue
-        parent = row.get("parent_id")
-        if isinstance(parent, str) and parent:
-            children.setdefault(parent, []).append(row)
-    for kids in children.values():
-        kids.sort(key=lambda r: (sanitize_name(r.get("title") or "").lower(),
-                                 str(r.get("id"))))
+    if is_index_root:
+        root_row = dict(root_row, title=(project or {}).get("name")
+                        or root_row.get("title"))
+    children = _group_children(ids, by_id, root_id, is_index_root=is_index_root)
     return root_row, children
 
 

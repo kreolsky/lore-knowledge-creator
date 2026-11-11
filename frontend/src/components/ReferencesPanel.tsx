@@ -45,7 +45,7 @@ import { useDocumentTables } from '../hooks/useDocumentTables';
 import { useTableBadgeOps } from '../hooks/useTableBadgeOps';
 import { HoverPreviewPopup } from './HoverPreviewPopup';
 import { useRightPanelHoverPreview } from '../hooks/useRightPanelHoverPreview';
-import { type DocumentTableEntry } from './editor/live-preview/table-block-model';
+import { type DocumentTableEntry } from './editor/live-preview/table-document-ops';
 
 export function ReferencesPanel() {
   const {
@@ -545,7 +545,6 @@ export function ReferencesPanel() {
   // archived refs, so it would always read 0.
   const archiveToggle = (
     <IconButton
-      size="sm"
       title={showArchived ? `${t('hideArchived')} (${archivedCount})` : t('showArchived')}
       className={showArchived ? ACTIVE_TOGGLE_CLS : undefined}
       onClick={() => setShowArchived(!showArchived)}
@@ -606,15 +605,15 @@ export function ReferencesPanel() {
       )}
 
       {!panelRef && (canEdit || showAgentConfig) && (
-        <div className="flex items-center gap-1 px-3 py-2 border-b border-border bg-surface min-h-[40px]">
+        <div className="flex items-center gap-1 px-3 py-1 border-b border-border bg-surface min-h-[40px]">
           {showAgentConfig ? (
             <>
-              <Button variant="ghost" size="sm" onClick={() => setShowAgentConfig(false)}>
+              <Button variant="ghost" onClick={() => setShowAgentConfig(false)}>
                 <ArrowLeft size={13} />
                 {t('references')}
               </Button>
               <div className="flex-1" />
-              <Button variant="ghost" size="sm" onClick={() => {
+              <Button variant="ghost" onClick={() => {
                 const mgr = document.querySelector('[data-add-agent]') as HTMLButtonElement;
                 mgr?.click();
               }}>
@@ -624,11 +623,11 @@ export function ReferencesPanel() {
             </>
           ) : canEdit ? (
             <>
-              <Button variant="ghost" size="sm" onClick={handleAdd}>
+              <Button variant="ghost" onClick={handleAdd}>
                 <Plus size={13} />
                 {t('add')}
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => fileInputRef.current?.click()}>
+              <Button variant="ghost" onClick={() => fileInputRef.current?.click()}>
                 <Upload size={13} />
                 {t('upload')}
               </Button>
@@ -637,7 +636,6 @@ export function ReferencesPanel() {
               {!compactLayout && (
                 <>
                   <IconButton
-                    size="sm"
                     title={t('toggleSplitView')}
                     className={modeActive('split') ? ACTIVE_TOGGLE_CLS : undefined}
                     onClick={() => toggleMode('split')}
@@ -645,7 +643,6 @@ export function ReferencesPanel() {
                     <Columns2 size={13} />
                   </IconButton>
                   <IconButton
-                    size="sm"
                     title={t('toggleRefInPanel')}
                     className={modeActive('panel') ? ACTIVE_TOGGLE_CLS : undefined}
                     onClick={() => toggleMode('panel')}
@@ -655,7 +652,7 @@ export function ReferencesPanel() {
                 </>
               )}
               <div className="flex-1" />
-              <Button variant="ghost" size="sm" onClick={() => setShowAgentConfig(true)}>
+              <Button variant="ghost" onClick={() => setShowAgentConfig(true)}>
                 <Workflow size={13} />
                 {t('agentConfig')}
               </Button>
@@ -670,7 +667,7 @@ export function ReferencesPanel() {
           public share: the anonymous endpoint never serves archived refs by design, so the
           toggle would be a no-op (and a misleading one) there. */}
       {!panelRef && !canEdit && !showAgentConfig && currentDocument && !isPublicShare && (
-        <div className="flex items-center justify-end gap-1 px-3 py-2 border-b border-border bg-surface min-h-[40px]">
+        <div className="flex items-center justify-end gap-1 px-3 py-1 border-b border-border bg-surface min-h-[40px]">
           {archiveToggle}
         </div>
       )}

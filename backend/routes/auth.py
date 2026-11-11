@@ -149,10 +149,12 @@ async def me(request: Request, response: Response, user: dict = Depends(get_curr
         user["page_lock_grace_s"] = await settings.get("PAGE_LOCK_GRACE_S")
         # Artifact Source-view byte cap (see SYSTEM: artifact-serve): the
         # human writer's refusal ceiling, read through the module at call
-        # time so the ONE owner (and a test pin) is authoritative.
-        from artifacts import ARTIFACT_MAX_HTML_BYTES
+        # time so the ONE owner (and a test pin) is authoritative. A LIVE
+        # settings read — an admin change lands on the next /me probe, the
+        # same posture as page_lock_grace_s above.
+        import artifacts
 
-        user["artifact_max_bytes"] = ARTIFACT_MAX_HTML_BYTES
+        user["artifact_max_bytes"] = await artifacts.artifact_max_bytes()
         tv = (db_user.get("token_version") or 0) if db_user else 0
         # ARCH: /me answers with the DB role (fresh even when the JWT claim is
         # stale — a role flip takes effect without re-login), and with capability

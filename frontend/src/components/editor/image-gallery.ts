@@ -1,6 +1,7 @@
 /**
  * Builds the preview gallery of a document: every rendered image in document
- * order, one transclusion level deep. Read from state, never from the DOM —
+ * order, one transclusion level deep, table cells included (row by row, at the
+ * table anchor's position). Read from state, never from the DOM —
  * CM6 virtualises off-screen lines, so `.cm-image-embed` lists only what is drawn.
  */
 
@@ -8,8 +9,10 @@ import { EditorState } from '@codemirror/state';
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { markdownExtensions } from '../../editor/markdown-config';
+import type * as Y from 'yjs';
 import { transcludeMap } from './live-preview/effects';
-import { extractEmbedFromImageNode, resolveTransclusionTarget } from './live-preview/transclusion-grammar';
+import { extractEmbedFromImageNode, parseTarget, resolveTransclusionTarget } from './live-preview/transclusion-grammar';
+import { readTableModel } from './live-preview/table-block-model';
 
 const PARSE_BUDGET_MS = 1000;
 
@@ -35,28 +38,45 @@ function imageUrlOf(target: { kind: string; id: string }): string | undefined {
   return target.kind === 'image' ? transcludeMap.get(target.id)?.imageUrl : undefined;
 }
 
-/** All images of the host document, including those of its transclusions. */
-export function collectGallery(host: EditorState): GalleryItem[] {
-  const items: GalleryItem[] = [];
-  walkEmbeds(host, (urlText, pos) => {
+function markdownState(content: string): EditorState {
+  return EditorState.create({
+    doc: content,
+    extensions: markdown({ base: markdownLanguage, extensions: markdownExtensions }),
+  });
+}
+
+/** Images of `state` and of its transclusions (one level), all reported at `posOf(from)`. */
+function collectLevel(state: EditorState, items: GalleryItem[], posOf: (from: number) => number, ydoc: Y.Doc | null): void {
+  walkEmbeds(state, (urlText, from) => {
+    const pos = posOf(from);
+    const parsed = parseTarget(urlText);
+    if (parsed?.scheme === 'table') {
+      // WHY: a table's cells live in the `tables` Yjs subtree, not in the text — the
+      // anchor is all the buffer holds, so the gallery reads the model directly.
+      const model = ydoc ? readTableModel(ydoc, parsed.id) : null;
+      model?.rows.flat().forEach((cell) => collectLevel(markdownState(cell), items, () => pos, null));
+      return;
+    }
     const target = resolveTransclusionTarget(urlText);
     if (!target) return;
     const src = imageUrlOf(target);
     if (src) { items.push({ src, pos }); return; }
     const content = target.kind === 'image' ? undefined : transcludeMap.get(target.id)?.content;
     if (content === undefined) return;
-    const body = EditorState.create({
-      doc: content,
-      extensions: markdown({ base: markdownLanguage, extensions: markdownExtensions }),
-    });
     // WHY no recursion: the nested view degrades deeper embeds to plain links, so
     // only images rendered at this level exist on screen.
-    walkEmbeds(body, (nestedUrl) => {
+    walkEmbeds(markdownState(content), (nestedUrl) => {
       const nested = resolveTransclusionTarget(nestedUrl);
       const nestedSrc = nested ? imageUrlOf(nested) : undefined;
       if (nestedSrc) items.push({ src: nestedSrc, pos });
     });
   });
+}
+
+/** All images of the host document: its own, its transclusions' and its tables' cells. */
+export function collectGallery(host: EditorState, ydoc: Y.Doc | null): GalleryItem[] {
+  const items: GalleryItem[] = [];
+  collectLevel(host, items, (from) => from, ydoc);
   return items;
 }
 

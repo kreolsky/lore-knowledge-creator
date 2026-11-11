@@ -793,6 +793,35 @@ async def find_reference_by_idempotency_key(project_id: str, key: str) -> dict |
     return rows[0] if rows else None
 
 
+async def find_image_reference_by_digest(
+    project_id: str, host_id: str, digest: str,
+) -> dict | None:
+    """Same-bytes image dedup lookup: a live, non-archived image reference of
+    THIS host whose file_meta.content_sha256 matches the digest.
+
+    # WHY(host scope): a reference is visible through its host; reusing one
+    # hosted by another document would embed a picture whose host the reader
+    # (or a public-share guest) may not reach. Subtree/project-wide reuse is
+    # deliberately not offered.
+    # WHY(archived/deleted never match): an archived ref is hidden from the
+    # panel; handing it back would make the upload look like it did nothing.
+    # WHY(no unique index): two simultaneous uploads of the same bytes both
+    # miss this SELECT and create two rows — accepted race; a per-host unique
+    # on a FLEXIBLE sub-field would be a schema change for a duplicate-only
+    # failure mode.
+    Returns the raw row (RecordID id — callers extract_id it), None on miss.
+    """
+    db = await get_db()
+    rows = await db.query(
+        "SELECT * FROM documents WHERE project_id = $project AND parent_id = $host "
+        "AND is_reference = true AND media_type = 'image' "
+        "AND file_meta.content_sha256 = $digest "
+        "AND deleted_at = NONE AND archived != true LIMIT 1",
+        {"project": project_id, "host": host_id, "digest": digest},
+    )
+    return rows[0] if rows else None
+
+
 async def create_reference_row(
     *, ref_id: str, project_id: str, host_id: str, title: str, media_type: str,
     content: str | None = None, source_url: str | None = None,

@@ -272,12 +272,16 @@ async def capture_live_state(document_id: str) -> tuple[str, str]:
     doc = await load(document_id)
     return str(get_text(doc)), capture_tables_json(doc)
 
-
-async def set_content(entity_id: str, new_content: str, *, persist: bool = False, extra_sets: dict | None = None, tables_json: str | None = None) -> bytes:
+async def set_content(entity_id: str, new_content: str, *, persist: bool = False, extra_sets: dict | None = None, tables_json: str | None = None) -> str:
     """Replace document content by splicing only the changed spans into the Y.Doc
     (``textmatch.minimal_splice_text``), so anchors on unchanged text survive.
 
-    Returns the resulting Yjs update bytes for broadcast.
+    Returns the resulting GFM read-model content (``expand_tables(doc)`` — the same
+    string persisted to documents.content when persist=True). # ARCH: mention-edge
+    rebuilds parse THIS return, never the anchor-form ``new_content`` — a table
+    cell's ``[x](doc:id)`` link is invisible in the anchor form (plan
+    table-cell-mention-edges).
+
     When persist=True, also writes ydoc_state + content to DB (content as the
     GFM read-model — expand_tables(doc), never the raw anchor-form text) and
     prunes the update log — equivalent to a full compaction. Use this when no
@@ -285,10 +289,10 @@ async def set_content(entity_id: str, new_content: str, *, persist: bool = False
     extra_sets: optional dict of additional SET fields merged into the UPDATE
                 (e.g. {"processing_status": "ready"}).
     tables_json: when not None, rebuild the ``tables`` Yjs subtree from the captured
-                JSON (see table_serialize.apply_tables_json) so a restore rebuilds the
-                editable table blocks, not just the anchor text. None = legacy restore:
-                leave the tables map untouched. Why None-not-"{}": a legacy checkpoint
-                has no tables capture; clearing the map would silently drop live tables.
+                 JSON (see table_serialize.apply_tables_json) so a restore rebuilds the
+                 editable table blocks, not just the anchor text. None = legacy restore:
+                 leave the tables map untouched. Why None-not-"{}": a legacy checkpoint
+                 has no tables capture; clearing the map would silently drop live tables.
 
     # WHY: when tables_json is provided, apply_tables_json runs BEFORE
     # doc.get_update() so the broadcast snapshot carries the table rebuild (other
@@ -302,6 +306,7 @@ async def set_content(entity_id: str, new_content: str, *, persist: bool = False
     if tables_json is not None:
         apply_tables_json(doc, tables_json)
     snapshot = doc.get_update()
+    expanded = expand_tables(doc)
     if persist:
         db = await get_db()
         set_parts = "content = $c, ydoc_state = $state, updated_at = time::now()"
@@ -311,7 +316,7 @@ async def set_content(entity_id: str, new_content: str, *, persist: bool = False
         # table text invisible to them while the other writers (flush, compaction,
         # the no-session surgical edit) already persisted the expansion — see the
         # read-model contract in documents/update.py.
-        params: dict = {"id": entity_id, "c": expand_tables(doc), "state": snapshot}
+        params: dict = {"id": entity_id, "c": expanded, "state": snapshot}
         if extra_sets:
             for k, v in extra_sets.items():
                 set_parts += f", {k} = ${k}"
@@ -328,4 +333,4 @@ async def set_content(entity_id: str, new_content: str, *, persist: bool = False
         # the authoritative snapshot and the log was just pruned). This is what lets a
         # worker reach the target editor without a paired apply_external_content_change.
         await publish_doc_update(entity_id, snapshot, append=False)
-    return snapshot
+    return expanded

@@ -9,7 +9,7 @@ import * as Y from 'yjs';
 import { buildNoteAnchor } from '../../collab/note-anchor-wire';
 import { setEntityHandle } from '../../collab/active-handle-registry';
 import { noteHighlightExtension } from '../../editor/note-highlight';
-import { makeNoteAnchorResolver, useNotesChangedDispatch } from './note-anchor-wiring';
+import { boundYText, makeNoteAnchorResolver, useNotesChangedDispatch } from './note-anchor-wiring';
 import { useNoteChatStore } from '../../store/note-chat-store';
 import type { ChatSession } from '../../types';
 
@@ -54,7 +54,7 @@ describe('useNotesChangedDispatch', () => {
     view = new EditorView({
       state: EditorState.create({
         doc: TEXT,
-        extensions: noteHighlightExtension(makeNoteAnchorResolver(() => DOC)),
+        extensions: [boundYText.of(ytext), noteHighlightExtension(makeNoteAnchorResolver(() => DOC))],
       }),
       parent: document.createElement('div'),
     });

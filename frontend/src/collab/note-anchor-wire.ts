@@ -42,14 +42,15 @@ export function buildNoteAnchor(ytext: Y.Text, from: number, to: number): NoteAn
 
 /**
  * Where a note anchor stands in a Y.Doc:
- *  - `ok` — a non-empty UTF-16 range;
+ *  - `ok` — a non-empty UTF-16 range inside `type` (the host Y.Text, or a table
+ *    cell's Y.Text — each surface paints only the anchors whose type is its own);
  *  - `pending` — an anchor item is not in the store yet (the note row can arrive
  *    before its creator's Yjs update): render nothing, mark nothing;
  *  - `orphan` — the fragment was deleted (empty range) or its item is gone with its
  *    client's state present. Orphans are never re-anchored.
  */
 export type NoteAnchorState =
-  | { state: 'ok'; from: number; to: number }
+  | { state: 'ok'; from: number; to: number; type: Y.AbstractType<unknown> }
   | { state: 'pending' }
   | { state: 'orphan' };
 
@@ -67,7 +68,7 @@ export function resolveNoteAnchor(relStart: string, relEnd: string, ydoc: Y.Doc)
   // Why: redone links are local to the undoing client, so following them would show the
   // note on the undoer's screen and an orphan on every other screen and on the server.
   const range = resolveRelPosRange(start, end, ydoc, false);
-  if (range && range.to > range.from) return { state: 'ok', from: range.from, to: range.to };
+  if (range && range.to > range.from) return { state: 'ok', from: range.from, to: range.to, type: range.type };
   if (!range && (itemNotArrived(start, ydoc) || itemNotArrived(end, ydoc))) return { state: 'pending' };
   return { state: 'orphan' };
 }

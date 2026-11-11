@@ -1047,7 +1047,7 @@ MEMORY_FACTS_PAGE_CHARS = setting(
 # ─── Agent sandbox (SYSTEM: agent-sandbox) ───────────────────────────────────
 # The agent's console host. The backend knows only a host, a key and a path — never
 # whether the far end is the dev compose service or the prod LXC (CT 703). That is
-# what keeps the deployment difference out of the code. See docs/sandbox-access.md.
+# what keeps the deployment difference out of the code.
 _section("tools", "Agent sandbox")
 SANDBOX_SSH_HOST = setting(
     "SANDBOX_SSH_HOST", str, default="",
@@ -1190,6 +1190,18 @@ ARTIFACT_ORIGIN = setting(
          "Empty = artifacts are not served and create_document refuses "
          "node_type=html. Restart-only: the host-split middleware, the CSP "
          "and the startup checks are boot-frozen.",
+)
+# Whole MB, int — one unit and one type across the size settings, exactly
+# like the MAX_*_SIZE_MB neighbours. Effect live: every writer resolves it
+# per call through settings.
+ARTIFACT_MAX_HTML_MB = setting(
+    "ARTIFACT_MAX_HTML_MB", int, default=5, min=1,
+    label="Max html page, MB",
+    help="Refusal ceiling for ONE html body, UTF-8 bytes — ONE limit for "
+         "every writer: agent create, import_file, edit growth, "
+         "replace_artifact_page, the human Source view. Read-side cost is bounded elsewhere: read_document "
+         "pages by offset/limit (default window AGENT_READ_SLICE_CHARS, "
+         "config.py), so a page is never returned whole.",
 )
 
 

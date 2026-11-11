@@ -37,7 +37,8 @@ from collab.timeout import (
 )
 from db import get_db
 from jobs import pool as jobs_pool
-from mentions import content_edge_pairs
+from mentions import content_edge_pairs, content_external_urls
+from table_serialize import capture_tables_json, expand_tables
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,11 @@ class FlushPipeline:
         # typed-edges): a link turning into an embed of the SAME target changes
         # the pair set and must rebuild, where a target-id set could not see it.
         self._last_edge_pairs: set[tuple[str, str]] = set()
+        # External URLs of the same flush (plan table-links-notes): a URL-only
+        # cell edit changes no pair, but the /edges `external` projection the
+        # Links panel will read must refresh — seeded at session creation by the
+        # registry from the SAME expand_tables form (content_external_urls).
+        self._last_external_urls: set[str] = set()
         self._last_backup_job_id: str | None = None
         self._updates_since_compact: int = 0
         self._consecutive_flush_failures: int = 0
@@ -119,7 +125,17 @@ class FlushPipeline:
         degraded_msg = None
         async with self._flush_lock:
             current_content = self.session.content
-            if current_content.rstrip() == self._last_flushed_content.rstrip():
+            # WHY tables in the skip check: a widget cell edit changes ONLY the
+            # tables map — the anchor text stays `![label](table:id)`. A
+            # content-only comparison skipped the whole flush, so table-only
+            # edits never reached documents.content (stale read-model for
+            # embeddings/search) and cell-link edits never rebuilt mention
+            # edges (plan table-cell-mention-edges).
+            current_tables = capture_tables_json(self.session.ydoc)
+            if (
+                current_content.rstrip() == self._last_flushed_content.rstrip()
+                and current_tables == self._last_flushed_tables_json
+            ):
                 self.session._dirty = False
                 return
             # WHY: bind db before the try — get_db() itself raises when the DB is
@@ -129,8 +145,12 @@ class FlushPipeline:
             db = None
             try:
                 db = await get_db()
-                await self._flush_content_to_db(db, current_content)
-                await self._rebuild_mentions_if_needed(db, current_content)
+                # ARCH: the GFM read-model form — the ONE string both the row
+                # write and the mention rebuild parse. Anchor-form extraction
+                # is invisible to table-cell links.
+                persisted_content = expand_tables(self.session.ydoc)
+                await self._flush_content_to_db(db, current_content, persisted_content)
+                await self._rebuild_mentions_if_needed(db, persisted_content)
                 recovery_msg = await self._handle_flush_success(current_content)
             except Exception:
                 degraded_msg = await self._handle_flush_failure(db)
@@ -140,7 +160,7 @@ class FlushPipeline:
         if degraded_msg:
             await self.session.broadcast(degraded_msg)
 
-    async def _flush_content_to_db(self, db, content: str) -> None:
+    async def _flush_content_to_db(self, db, content: str, persisted_content: str) -> None:
         """Persist content + CRDT snapshot to DB."""
         if not self.session.is_reference:
             try:
@@ -185,11 +205,11 @@ class FlushPipeline:
                 _flush_pipeline_failures += 1
                 logger.warning("Failed to enqueue auto_backup for %s", self.session.entity_id, exc_info=True)
         ydoc_state = self.session.ydoc.get_update()
-        # Persist the GFM-expanded form of `content` (table anchors → tables) so the
-        # stored `documents.content` feeding embeddings/search carries table text, not
-        # opaque `![label](table:id)` anchors. The CRDT snapshot keeps the live anchors.
-        from table_serialize import expand_tables
-        persisted_content = expand_tables(self.session.ydoc)
+        # Persist the GFM-expanded form (table anchors → tables) computed by the
+        # caller so the stored `documents.content` feeding embeddings/search carries
+        # table text, not opaque `![label](table:id)` anchors — and so the mention
+        # rebuild below parses byte-identical content. The CRDT snapshot keeps the
+        # live anchors.
         await _with_timeout(
             db.query(
                 "UPDATE type::record('documents', $id) SET "
@@ -203,47 +223,75 @@ class FlushPipeline:
             TIMEOUT_DB_QUERY_SEC, "db.query (UPDATE documents)",
         )
 
-    async def _rebuild_mentions_if_needed(self, db, content: str) -> None:
-        """Rebuild mention edges if the set of (target, kind) pairs changed.
+    def _read_model_edge_state(self, persisted_content: str) -> tuple[set[tuple[str, str]], set[str]]:
+        """The (pairs, urls) of one flush's GFM read-model — the two cache shapes.
+
+        # ARCH: `persisted_content` is the GFM read-model form (expand_tables of
+        # the session Y.Doc) — the ONE form mention edges parse; the anchor form
+        # cannot see a table cell's `[x](doc:id)` link. The registry seed builds
+        # the SAME sets from the SAME form (content_edge_pairs +
+        # content_external_urls contracts), or every reopen's first flush emits
+        # a false refresh.
+        """
+        return (
+            content_edge_pairs(persisted_content, exclude=self.session.entity_id),
+            content_external_urls(persisted_content),
+        )
+
+    async def _emit_backlinks_delta(self, target_ids: set[str]) -> bool:
+        """Emit backlinks_changed_batch for [source, *targets]; False on timeout.
+
+        Cache advancement stays with the caller: a timeout must leave BOTH
+        caches stale so the next flush re-runs the (idempotent) rebuild and
+        re-emits instead of silently dropping the refresh."""
+        affected_ids = set(target_ids)
+        affected_ids.add(self.session.entity_id)
+        try:
+            await _with_timeout(
+                event_bus.emit("backlinks_changed_batch", document_ids=list(affected_ids)),
+                TIMEOUT_EVENT_EMIT_SEC, "emit(backlinks_changed_batch)",
+            )
+        except asyncio.TimeoutError:
+            return False
+        return True
+
+    async def _rebuild_mentions_if_needed(self, db, persisted_content: str) -> None:
+        """Rebuild mention edges if the (target, kind) pair set changed, and
+        emit backlinks_changed_batch when either the pairs OR the external URL
+        set changed.
 
         # ARCH: pair-based detection (plan typed-edges) — a link turning into an
         # embed of the SAME target flips the kind and must rebuild; the old
         # target-id set could not see it. Pairs also include `ref:` targets
         # (extract_content_edges), so a collab edit touching only `[t](ref:X)`
-        # now rebuilds too — the old detector (extract_doc_mentions) rejected
-        # `ref:` and never fired for such edits (more rebuilds, correct graph).
-        # The emit keeps the affected TARGET ids and ADDS the source id, so a
-        # client joined to the source refreshes its outgoing list on the same
-        # backlinks_changed_batch event (the panel reads both directions).
+        # rebuilds too (more rebuilds, correct graph). The emit keeps the
+        # affected TARGET ids and ADDS the source id (the panel reads both
+        # directions).
+        # ARCH: URL-set detection (plan table-links-notes) — a URL-only edit
+        # (e.g. one https link swapped inside a table cell) changes no pair;
+        # the source joins the emit on a URL-set change alone. BOTH caches
+        # advance only after a successful rebuild AND emit — on either timeout
+        # neither does (see _emit_backlinks_delta).
         """
-        new_pairs = content_edge_pairs(content, exclude=self.session.entity_id)
-        if new_pairs == self._last_edge_pairs:
+        new_pairs, new_urls = self._read_model_edge_state(persisted_content)
+        pairs_changed = new_pairs != self._last_edge_pairs
+        urls_changed = new_urls != self._last_external_urls
+        if not pairs_changed and not urls_changed:
             return
-        from mentions import rebuild_doc_mentions
-        try:
-            await _with_timeout(
-                rebuild_doc_mentions(db, "documents", self.session.entity_id, content),
-                TIMEOUT_MENTION_REBUILD_SEC, "rebuild_doc_mentions",
-            )
-        except asyncio.TimeoutError:
-            return
-        affected_ids = {tid for tid, _kind in new_pairs ^ self._last_edge_pairs}
-        affected_ids.add(self.session.entity_id)
-        if affected_ids:
+        if pairs_changed:
+            from mentions import rebuild_doc_mentions
             try:
                 await _with_timeout(
-                    event_bus.emit("backlinks_changed_batch", document_ids=list(affected_ids)),
-                    TIMEOUT_EVENT_EMIT_SEC, "emit(backlinks_changed_batch)",
+                    rebuild_doc_mentions(db, "documents", self.session.entity_id, persisted_content),
+                    TIMEOUT_MENTION_REBUILD_SEC, "rebuild_doc_mentions",
                 )
             except asyncio.TimeoutError:
-                # ARCH: do NOT advance _last_edge_pairs on emit timeout. Why: the
-                # mentions were already rebuilt in DB above, but peers never got the
-                # backlinks_changed_batch delta. Leaving the cache stale makes the next
-                # flush re-run the (idempotent) rebuild and re-emit, so a transient emit
-                # timeout does not permanently drop the backlinks refresh. Returning here
-                # skips the `_last_edge_pairs = new_pairs` below.
-                return
+                return  # rebuild never committed — neither cache may advance
+        delta = {tid for tid, _kind in new_pairs ^ self._last_edge_pairs}
+        if not await self._emit_backlinks_delta(delta):
+            return
         self._last_edge_pairs = new_pairs
+        self._last_external_urls = new_urls
 
     async def _handle_flush_success(self, content: str) -> dict | None:
         """Reset counters, emit content_flushed. Returns recovery broadcast if was degraded."""
@@ -258,7 +306,6 @@ class FlushPipeline:
         # _last_flushed_tables_json, so a destructive edit snapshots the BASELINE
         # table state rather than the post-edit one. Captured from the same Y.Doc state as
         # `content` to keep anchors ↔ table ids paired.
-        from table_serialize import capture_tables_json
         self._last_flushed_tables_json = capture_tables_json(self.session.ydoc)
         self.session._dirty = False
         recovery_msg = None
@@ -395,7 +442,6 @@ class FlushPipeline:
         _has_pushed) — the correct attribution discriminator.
         """
         try:
-            from table_serialize import capture_tables_json
             snapshot = content if content is not None else self.session.content
             snap_tables = tables_json if tables_json is not None else capture_tables_json(self.session.ydoc)
             await jobs_pool.enqueue(

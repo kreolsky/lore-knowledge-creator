@@ -50,6 +50,7 @@ import type { EntitySwitchController } from '../editor/entity-switch-phase';
 import type { WsStatus } from '../collab/ws-status';
 import type { Document, Reference } from '../types';
 import { logCollabEvent } from '../collab/collab-log';
+import { boundYText } from '../components/editor/note-anchor-wiring';
 
 /** How long after opening a document an empty editor counts as the "opened empty" symptom. */
 const VIEW_EMPTY_PROBE_MS = 5000;
@@ -152,6 +153,11 @@ export function useEditorCollab({
     } else if (status === 'offline') {
       showToast(t('collabStatus_offline'), 'error', { persistent: true });
       statusToastRef.current = true;
+    } else if (status === 'outdated') {
+      // 4010: this tab predates the deployed collab protocol — only a reload fixes it
+      // (see ws-close-codes.ts). Persistent toast + the overlay's reload notice.
+      showToast(t('collabOutdatedToast'), 'warning', { persistent: true });
+      statusToastRef.current = true;
     } else if (status === 'connected') {
       // INVARIANT: clear the toast only when THIS handler raised one.
       // Why: the toast slot is global and single-entry, so an unconditional
@@ -186,7 +192,7 @@ export function useEditorCollab({
   useEffect(() => {
     const grace = overlayGraceRef.current;
     if (!grace) return;
-    grace.update(collabStatus === 'connected' && liveForCurrent, collabStatus === 'offline');
+    grace.update(collabStatus === 'connected' && liveForCurrent, collabStatus === 'offline' || collabStatus === 'outdated');
   }, [collabStatus, liveForCurrent]);
 
   useEffect(() => () => overlayGraceRef.current?.dispose(), []);
@@ -216,7 +222,9 @@ export function useEditorCollab({
       selection: { anchor: Math.min(view.state.selection.main.head, synced.length) },
       effects: [
         yjsExtCompartment.current.reconfigure([
-          ...createYjsExtension(conn.ytext),
+          ...createYjsExtension(conn.ytext, conn.undoManager),
+          // WHY in the yjs compartment: a rebind to a new Y.Text must move the address too.
+          boundYText.of(conn.ytext),
           ...collabPresence(
             conn.awareness.getAwareness(),
             conn.ytext,

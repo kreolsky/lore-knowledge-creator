@@ -157,6 +157,17 @@ class CollabSession:
     def _last_edge_pairs(self, value: set[tuple[str, str]]) -> None:
         self._flush_pipeline._last_edge_pairs = value
 
+    # Same proxy shape as _last_edge_pairs: the registry seeds the external-URL
+    # cache at session creation through the session surface; storage lives on
+    # the pipeline (plan table-links-notes).
+    @property
+    def _last_external_urls(self) -> set[str]:
+        return self._flush_pipeline._last_external_urls
+
+    @_last_external_urls.setter
+    def _last_external_urls(self, value: set[str]) -> None:
+        self._flush_pipeline._last_external_urls = value
+
     @property
     def _updates_since_compact(self) -> int:
         return self._flush_pipeline._updates_since_compact

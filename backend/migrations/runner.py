@@ -62,6 +62,8 @@ from migrations.migrate_public_to_group_audience import (
 from migrations.migrate_reference_sort_keys_backfill import (
     _migrate_reference_sort_keys_backfill,
 )
+from migrations.migrate_tables_fixed_widths import _migrate_tables_fixed_widths
+from migrations.migrate_tables_v2 import _migrate_tables_v2
 from migrations.migrate_turn_timeout_override_fold import (
     _migrate_turn_timeout_override_fold,
 )
@@ -149,6 +151,13 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     # Retired mcp_servers header-template fields: their required definitions fail
     # every UPDATE of a newer row. Idempotent; no dependency.
     ("mcp_servers_template_fields_drop", _migrate_mcp_servers_template_fields_drop),
+    # Every v1 (positional) table → schema v2 (id-keyed), cell notes rebound; a
+    # document whose cell notes cannot all be carried keeps v1 and the migration
+    # raises MigrationDeferred (retried next boot). Idempotent; no dependency.
+    ("tables_v2", _migrate_tables_v2),
+    # Legacy `w: 0` (auto) columns get fixed px by the birth rule; MUST run after
+    # tables_v2 (v1 tables are skipped). Idempotent.
+    ("tables_fixed_widths", _migrate_tables_fixed_widths),
 ]
 
 

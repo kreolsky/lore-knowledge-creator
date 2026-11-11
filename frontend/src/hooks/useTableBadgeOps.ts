@@ -14,12 +14,16 @@ import { useCallback } from 'react';
 import type { EditorView } from '@codemirror/view';
 import { useTranslation } from '../i18n';
 import { useAppStore } from '../store/app-store';
-import { apiClient } from '../api/client';
 import { getEntityHandle } from '../collab/active-handle-registry';
 import {
-  deleteTableWithBackup, renameTable, normalizeTableLabel, tableAnchor,
-  insertTableAnchor, readTableModel, type DocumentTableEntry,
-} from '../components/editor/live-preview/table-block-model';
+  deleteTableWithCheckpoint,
+  renameTable,
+  normalizeTableLabel,
+  tableAnchor,
+  insertTableAnchor,
+  type DocumentTableEntry,
+} from '../components/editor/live-preview/table-document-ops';
+import { readTableModel } from '../components/editor/live-preview/table-block-model';
 import { serializeTableCsv } from '../components/editor/live-preview/csv-table';
 import type { Document } from '../types';
 import type { CurrentTable } from '../store/app-store';
@@ -58,16 +62,9 @@ export function useTableBadgeOps({
     }
     const documentId = currentDocument.document_id;
     try {
-      // Force a checkpoint (content: null → server captures the LIVE ydoc, table still
-      // present) BEFORE dropping the table, so the delete is always recoverable via the
-      // History panel. On checkpoint failure the delete is aborted (No silent degradation).
-      await deleteTableWithBackup(handle.ydoc, entry.table_id, entry.label, async () => {
-        await apiClient.post('/checkpoints', {
-          document_id: documentId,
-          content: null,
-          label: t('tableDeleteBackupLabel'),
-        });
-      });
+      // Force a checkpoint BEFORE dropping the table, so the delete is always recoverable
+      // via the History panel. On checkpoint failure the delete is aborted (No silent degradation).
+      await deleteTableWithCheckpoint(handle.ydoc, documentId, entry.table_id, entry.label, t('tableDeleteBackupLabel'));
     } catch (err) {
       console.error('Failed to back up before table delete', err);
       useAppStore.getState().showToast(t('tableDeleteFailed'), 'error');

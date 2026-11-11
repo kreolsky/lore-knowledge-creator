@@ -12,34 +12,22 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { Trash2, Copy, Check, Pencil, KeyRound, Plus } from 'lucide-react';
+import { Copy, Check, Pencil, KeyRound, Plus } from 'lucide-react';
 import { apiClient, HttpError } from '../api/client';
 import { ApiKey } from '../types';
-import { Button, FieldCheckbox, FieldInput, IconButton } from './ui';
+import { ArmedDeleteButton, Button, FieldCheckbox, FieldInput, IconButton } from './ui';
 import { useTranslation } from '../i18n';
-import { useArmedAction } from '../hooks/useArmedAction';
+import { copyWithToast } from './chat/shared/copy';
 import { withOptimistic } from '../utils/optimistic';
 import { useAppStore } from '../store/app-store';
 
-function KeyDeleteButton({ onDelete }: { onDelete: () => void }) {
-  const { t } = useTranslation();
-  const deleteAction = useArmedAction();
-  return (
-    <IconButton
-      size="sm"
-      danger
-      filled={deleteAction.armed}
-      title={t('deleteKey')}
-      onClick={() => deleteAction.handleClick(onDelete)}
-      onMouseLeave={deleteAction.disarm}
-    >
-      <Trash2 size={12} />
-    </IconButton>
-  );
-}
-
 interface Props {
   documentId: string;
+  /** Offer the create affordance (default true). False only on the index doc
+   *  for a full non-owner: ANY key on the index is owner-only at the API
+   *  (whole-project scope), so the UI hides the trigger AND handleCreate
+   *  early-returns — see the AccessPanel INVARIANT(security). */
+  canCreate?: boolean;
 }
 
 interface FreshKey {
@@ -48,7 +36,7 @@ interface FreshKey {
   capabilities: string[];
 }
 
-export default function ApiKeyManager({ documentId }: Props) {
+export default function ApiKeyManager({ documentId, canCreate = true }: Props) {
   const { t } = useTranslation();
   // WHY: a ref, not a dep — the load runs on mount/route change, never on a language switch.
   const tRef = useRef(t);
@@ -99,7 +87,7 @@ export default function ApiKeyManager({ documentId }: Props) {
   };
 
   const handleCreate = async () => {
-    if (creating || (!capWidget && !capAgent)) return;
+    if (!canCreate || creating || (!capWidget && !capAgent)) return;
     const capabilities = [
       ...(capWidget ? ['widget'] : []),
       ...(capAgent ? ['agent'] : []),
@@ -139,13 +127,13 @@ export default function ApiKeyManager({ documentId }: Props) {
     }
   };
 
-  const handleCopy = async (kind: 'widget' | 'token') => {
+  const handleCopy = (kind: 'widget' | 'token') => {
     if (!freshKey) return;
     const payload = kind === 'widget' ? buildWidgetEnvelope(freshKey.token) : freshKey.token;
-    await navigator.clipboard.writeText(payload);
-    showToast(t('copied'), 'info');
-    setCopied(kind);
-    setTimeout(() => setCopied(null), 2000);
+    copyWithToast(payload, showToast, () => {
+      setCopied(kind);
+      setTimeout(() => setCopied(null), 2000);
+    });
   };
 
   const handleDelete = async (keyId: string) => {
@@ -193,8 +181,8 @@ export default function ApiKeyManager({ documentId }: Props) {
        * <button data-create-key> clicked externally via document.querySelector
        * from the ReferencesPanel header. With the move to the unified Access
        * tab the manager must be self-contained, so the trigger is visible here. */}
-      {!formOpen && (
-        <Button variant="dashed" size="sm" onClick={() => setFormOpen(true)}>
+      {!formOpen && canCreate && (
+        <Button variant="dashed" onClick={() => setFormOpen(true)}>
           <Plus size={13} />
           {t('createKey')}
         </Button>
@@ -218,14 +206,13 @@ export default function ApiKeyManager({ documentId }: Props) {
           <div className="flex items-center gap-2">
             <Button
               variant="primary"
-              size="sm"
               onClick={handleCreate}
               disabled={creating || (!capWidget && !capAgent)}
             >
               <KeyRound size={13} />
               {t('createKey')}
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setFormOpen(false)}>
+            <Button variant="ghost" onClick={() => setFormOpen(false)}>
               {t('cancel')}
             </Button>
           </div>
@@ -300,7 +287,7 @@ export default function ApiKeyManager({ documentId }: Props) {
                 >
                   <Pencil size={13} />
                 </IconButton>
-                <KeyDeleteButton onDelete={() => handleDelete(k.key_id)} />
+                <ArmedDeleteButton onFire={() => handleDelete(k.key_id)} title={t('deleteKey')} />
               </div>
             </div>
             {isFresh && (

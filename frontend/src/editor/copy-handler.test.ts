@@ -17,13 +17,9 @@ import { handleCopyCut, copyHandlerExtension } from './copy-handler';
 import { htmlToMarkdown } from './paste-handler';
 import { releaseHandle, publishHandle } from './active-editor';
 import type { EntityYjsState } from '../collab/yjs-provider';
-import {
-  createTable,
-  readTableModel,
-  tableAnchor,
-  modelToGfm,
-  TABLE_ANCHOR_RE,
-} from '../components/editor/live-preview/table-block-model';
+import { createTable, readTableModel } from '../components/editor/live-preview/table-block-model';
+import { tableAnchor, TABLE_ANCHOR_RE } from '../components/editor/live-preview/table-document-ops';
+import { modelToGfm } from '../components/editor/live-preview/table-serialize';
 import { importGfmTables } from '../components/editor/live-preview/gfm-table-import';
 import { cleanMarkdownToHtml } from '../components/editor/markdown-to-html';
 

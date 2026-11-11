@@ -354,6 +354,17 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
     </button>
   ));
 
+  const renderTab = (entry: RightTabEntry) => (
+    <button
+      key={entry.tab}
+      className={`right-tab ${compact ? COMPACT_TAB_CLS : ''} ${entry.className ?? ''} ${rightIsOpen && effectiveRightTab === entry.tab ? 'active' : 'inactive'}`}
+      onClick={() => handleRightTabClick(entry.tab)}
+      title={entry.title}
+    >
+      {entry.icon}
+    </button>
+  );
+
   return (
     /* data-testid: the shell root is the node e2e captures to prove a route change
        did not remount the whole app. */
@@ -501,32 +512,14 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
               </div>
             )}
             {/* Document-scoped tabs (chat/refs/notes/links/checkpoint/access/find). */}
-            {rightTabs.filter(e => !e.aside).map(entry => (
-              <button
-                key={entry.tab}
-                className={`right-tab ${compact ? COMPACT_TAB_CLS : ''} ${entry.className ?? ''} ${rightIsOpen && effectiveRightTab === entry.tab ? 'active' : 'inactive'}`}
-                onClick={() => handleRightTabClick(entry.tab)}
-                title={entry.title}
-              >
-                {entry.icon}
-              </button>
-            ))}
+            {rightTabs.filter(e => !e.aside).map(renderTab)}
             {/* INVARIANT: the flex-1 spacer between the two right-tab groups is  Why: the spacer pushes project-scoped tabs away from document-scoped tabs; removing it collapses the two groups together.
                 load-bearing — see RightTabEntry.aside. Removing it collapses the
                 project-scoped tabs (search/settings) against the document-scoped
                 ones, losing the visual grouping the user relies on. */}
             <div className="flex-1" />
             {/* Project-scoped tabs (search/settings). */}
-            {rightTabs.filter(e => e.aside).map(entry => (
-              <button
-                key={entry.tab}
-                className={`right-tab ${compact ? COMPACT_TAB_CLS : ''} ${entry.className ?? ''} ${rightIsOpen && effectiveRightTab === entry.tab ? 'active' : 'inactive'}`}
-                onClick={() => handleRightTabClick(entry.tab)}
-                title={entry.title}
-              >
-                {entry.icon}
-              </button>
-            ))}
+            {rightTabs.filter(e => e.aside).map(renderTab)}
           </div>
 
           {rightIsOpen && !rightPanelReady && (

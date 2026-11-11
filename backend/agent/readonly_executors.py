@@ -406,7 +406,11 @@ async def _build_tables_field(
     # fetch. A `table_id` argument (or index_only=False) returns that table's full
     # grid. see SYSTEM: mcp-gateway (both surfaces).
     """
-    from table_serialize import extract_table_labels, table_model_from_map
+    from table_serialize import (
+        extract_table_labels,
+        table_awaits_migration,
+        table_model_from_map,
+    )
 
     labels = extract_table_labels(content)
 
@@ -442,6 +446,12 @@ async def _build_tables_field(
     per_table_full = (table_id is not None) or (not index_only)
     for tid in ids:
         if tables_root is None or tid not in tables_root:
+            continue
+        if table_awaits_migration(tables_root[tid]):
+            tables.append({
+                "table_id": tid, "label": labels.get(tid, ""),
+                "error": "Table awaits migration to the current table format; its cells are unreadable until it runs.",
+            })
             continue
         model_rows = table_model_from_map(tables_root[tid])
         n_cols = max((len(r) for r in model_rows), default=0)

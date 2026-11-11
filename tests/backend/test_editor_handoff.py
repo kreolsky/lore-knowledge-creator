@@ -16,7 +16,7 @@ from collab.registry import _get_or_create_session, _session_key, _sessions
 from collab.session import _HAS_PUSHED_CAP
 from collab.sync import MSG_SYNC, MSG_SYNC_UPDATE, wrap_binary
 from enqueue_recorder import EnqueueRecorder
-from helpers import _DummyWS, set_session_text
+from helpers import _DummyWS, project_collab_url, set_session_text
 from pycrdt import Doc, Text
 
 
@@ -135,9 +135,9 @@ class TestHandoffE2E:
 
         with EnqueueRecorder.active() as mock_enqueue:
             with sync_app.websocket_connect(
-                f"/ws/collab/project/{pid}", cookies={"lore_session": admin_token}
+                project_collab_url(pid), cookies={"lore_session": admin_token}
             ) as red, sync_app.websocket_connect(
-                f"/ws/collab/project/{pid}", cookies={"lore_session": user_token}
+                project_collab_url(pid), cookies={"lore_session": user_token}
             ) as black:
                 _join(red, doc_id)
                 _recv_until(red, want_type="init")

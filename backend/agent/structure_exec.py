@@ -29,13 +29,18 @@ keeps its path.
 # ARCH (security): a scoped key's topology is CLIPPED to its scope_root BEFORE
 # any counting. Why: counters computed over the whole project would leak the
 # size and depth of the tree outside the wall — the scope_root override guards
-# ids; this guards aggregates.
+# ids; this guards aggregates. An INDEX scope_root (the project's face, plan
+# "project-index-as-project-face") clips to the index scope (the whole project
+# minus system/help, scope.resolve_index_scope) instead of the index row's own
+# children, and the seed is NOT forced onto the index row — the caller's
+# default root map IS the index scope's orientation view.
 """
 from agent_config_seed import memory_folder_id
 from share_guard import system_root_id
 
 from db import extract_id, get_db
 from models import is_ref_row
+from scope import resolve_index_scope
 
 # ARCH (review): backstop cap on the VISIBLE rows a root call can emit. With the
 # layered walk depth is the real bound and this almost never fires; it stays as
@@ -332,8 +337,12 @@ async def _get_project_structure_exec(
     """
     db = await get_db()
     # T5: a scoped key always enumerates from its subtree root, regardless of the
-    # caller's start_id (the wall cannot be widened by request).
-    if scope_root:
+    # caller's start_id (the wall cannot be widened by request) — EXCEPT an
+    # index scope_root: the index is the project's face, so the enumeration
+    # keeps the caller's seed (default: the root orientation map) and the clip
+    # below applies the index scope (whole project minus system/help).
+    index_ids = await resolve_index_scope(scope_root, project_id) if scope_root else None
+    if scope_root and index_ids is None:
         start_id = scope_root
     # ARCH (enumeration-only): outlines ride the ENUMERATION mode, never the
     # root map — a root call can emit up to STRUCTURE_ROW_CAP rows and outlines
@@ -369,8 +378,10 @@ async def _get_project_structure_exec(
         # whole project would leak the size and depth of the tree outside the
         # wall. UNCONDITIONAL: a wall doc that is itself deleted/unknown clips
         # the map to nothing (empty result) — the wall owns the seed, so an
-        # unknown wall id is an empty answer, never a widening one.
-        allowed = _subtree_ids(children, scope_root)
+        # unknown wall id is an empty answer, never a widening one. The index
+        # scope_root's clip is the index scope (ONE rule source, scope.py),
+        # not the index row's own childless subtree.
+        allowed = set(index_ids) if index_ids is not None else _subtree_ids(children, scope_root)
         topo = {i: r for i, r in topo.items() if i in allowed}
         children = _children_map(topo)
     truncated = False

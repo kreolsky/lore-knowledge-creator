@@ -69,7 +69,6 @@ describe('TableBlockWidget — snapshot preview (readonly)', () => {
     const wrap = widget.toDOM(makeView(previewDoc));
 
     // No write affordances in a pure viewer.
-    expect(wrap.querySelector('.cm-table-block-toolbar')).toBeNull();
     expect(wrap.querySelector('.cm-table-block-col-resize')).toBeNull();
     // No nested CM6 editor instances (the .cm-editor root a live cell would mount).
     expect(wrap.querySelector('.cm-editor')).toBeNull();

@@ -38,7 +38,7 @@ export function ChatUnavailableNotice() {
       <div className="py-6 px-2 text-ui-base text-text-dim text-center border-2 border-dashed border-border flex flex-col items-center gap-2">
         <span>{t('chatNoModels')}</span>
         {isAdmin ? (
-          <Button variant="ghost" size="sm" onClick={openModelsSettings}>{t('chatConnectApi')}</Button>
+          <Button variant="ghost" onClick={openModelsSettings}>{t('chatConnectApi')}</Button>
         ) : (
           <span>{t('chatAskAdminForModels')}</span>
         )}

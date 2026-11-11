@@ -83,7 +83,7 @@ export default defineConfig({
           // WHY: mermaid carries its own nested katex; the bare package-name rule below
           // would pull that second copy into the always-preloaded markdown chunk.
           if (/[\\/]mermaid[\\/]node_modules[\\/]/.test(id)) return;
-          if (/[\\/]node_modules[\\/](react|react-dom|react-router-dom|zustand)[\\/]/.test(id)) return 'vendor';
+          if (/[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|zustand)[\\/]/.test(id)) return 'vendor';
           // INVARIANT: an allowlist of the editor core, never every @codemirror/@lezer id.
           // Why: @codemirror/language-data loads each language by dynamic import; pinning
           // those packages here preloads all of them for every visitor and voids the import.

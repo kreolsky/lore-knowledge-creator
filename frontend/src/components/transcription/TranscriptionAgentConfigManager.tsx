@@ -9,16 +9,15 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Play, Trash2 } from 'lucide-react';
+import { Play } from 'lucide-react';
 import { apiClient, ForbiddenError } from '../../api/client';
 import { listMembers } from '../../api/access';
 import { AgentConfig, ProjectMember } from '../../types';
 import { useAppStore } from '../../store/app-store';
 import { useChatStore } from '../../store/chat-store';
 import { useTranslation } from '../../i18n';
-import { Button, FieldInput, FieldCheckbox, Dropdown, SegmentedControl } from '../ui';
+import { ArmedDeleteButton, Button, FieldInput, FieldCheckbox, Dropdown, SegmentedControl } from '../ui';
 import { ParentPickerPopup } from '../ParentPickerPopup';
-import { useArmedAction } from '../../hooks/useArmedAction';
 import { useIsProjectOwner } from '../../hooks/useIsProjectOwner';
 
 const TRIGGER_EVENTS = [
@@ -162,20 +161,6 @@ function DigestSubjectPicker({ members, selected, onChange }: {
       ))}
       <span className="text-ui-2xs text-text-muted">{t('digestSubjectsHint')}</span>
     </div>
-  );
-}
-
-function AgentDeleteButton({ onDelete }: { onDelete: () => void }) {
-  const deleteAction = useArmedAction();
-  return (
-    <Button
-      variant={deleteAction.armed ? "danger" : "ghost"}
-      size="sm"
-      onClick={() => deleteAction.handleClick(onDelete)}
-      onMouseLeave={deleteAction.disarm}
-    >
-      <Trash2 size={12} />
-    </Button>
   );
 }
 
@@ -364,7 +349,6 @@ export default function TranscriptionAgentConfigManager({ documentId }: Props) {
               <span className="text-ui-sm text-text-dim">{t('configDocument')}</span>
               <Button
                 variant="ghost"
-                size="sm"
                 onClick={(e) => setPickerAnchor({ rowKey: row.key, type: 'config', rect: e.currentTarget.getBoundingClientRect() })}
               >
                 {row.selectedConfigDocId ? getDocTitle(row.selectedConfigDocId) : t('selectConfigDoc')}
@@ -374,7 +358,6 @@ export default function TranscriptionAgentConfigManager({ documentId }: Props) {
               <span className="text-ui-sm text-text-dim">{t('targetDocument')}</span>
               <Button
                 variant="ghost"
-                size="sm"
                 onClick={(e) => setPickerAnchor({ rowKey: row.key, type: 'target', rect: e.currentTarget.getBoundingClientRect() })}
               >
                 {row.selectedTargetDocId ? getDocTitle(row.selectedTargetDocId) : t('selectTargetDoc')}
@@ -440,7 +423,7 @@ export default function TranscriptionAgentConfigManager({ documentId }: Props) {
             <div className="mt-3 text-ui-2xs text-text-muted">{t('digestLockedHint')}</div>
           )}
           <div className="flex items-center gap-2 mt-3 pt-3 border-t border-border-soft">
-            <AgentDeleteButton onDelete={() => handleDelete(row)} />
+            <ArmedDeleteButton size="md" onFire={() => handleDelete(row)} />
             <span className="text-ui-2xs text-text-muted">
               {row.saving ? t('saving') : incomplete ? t('pipelineDraftHint') : row.config && row.rev === row.savedRev ? t('saved') : ''}
             </span>
@@ -448,7 +431,6 @@ export default function TranscriptionAgentConfigManager({ documentId }: Props) {
             {row.config && row.kind === 'digest' && (
               <Button
                 variant="ghost"
-                size="sm"
                 onClick={() => row.config && handleRunDigest(row.config.config_id)}
                 disabled={locked || runningConfigId === row.config.config_id}
               >

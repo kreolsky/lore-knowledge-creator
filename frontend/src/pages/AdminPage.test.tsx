@@ -93,7 +93,6 @@ const I18N: Record<string, string> = {
   noProjectAccess: 'No access',
   publicLabel: 'Public',
   inviteLink: 'Invite link',
-  inviteLinkCopied: 'Invite link copied',
   failedToCreateInvite: 'Failed to create the invite link',
   invitedBy: 'invited by',
   group: 'group',

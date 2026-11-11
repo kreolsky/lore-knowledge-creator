@@ -88,7 +88,6 @@ export function ReferenceViewerBanner({ reference, isReadonly, isEmpty, backLabe
         {showDelete && (
           <Button
             variant="ghost"
-            size="sm"
             danger
             onClick={handleDelete}
           >
@@ -96,7 +95,7 @@ export function ReferenceViewerBanner({ reference, isReadonly, isEmpty, backLabe
           </Button>
         )}
         {isPdf && reference.file_path && (
-          <Button variant="ghost" size="sm" onClick={() => window.open(referenceFileUrl(reference.reference_id, reference.file_path!), '_blank', 'noopener,noreferrer')}>
+          <Button variant="ghost" onClick={() => window.open(referenceFileUrl(reference.reference_id, reference.file_path!), '_blank', 'noopener,noreferrer')}>
             <ExternalLink size={13} /> {t('openOriginal')}
           </Button>
         )}
@@ -110,12 +109,12 @@ export function ReferenceViewerBanner({ reference, isReadonly, isEmpty, backLabe
           />
         )}
         {hasText && !isReadonly && (
-          <Button variant="ghost" size="sm" onClick={handleCreateDocument}>
+          <Button variant="ghost" onClick={handleCreateDocument}>
             <Plus size={13} /> {t('createDocument')}
           </Button>
         )}
         {(hasText || showEmptyMarkdown || showEmptyMedia || isPublicShare) && (
-          <Button variant="ghost" size="sm" onClick={onBack}>
+          <Button variant="ghost" onClick={onBack}>
             <ArrowLeft size={13} /> {backLabel ?? currentDocument!.title}
           </Button>
         )}

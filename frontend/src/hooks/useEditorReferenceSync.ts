@@ -21,7 +21,7 @@ import { setsEqual } from '../components/editor/live-preview/set-equality';
 import { fetchDocumentContent, invalidatePreviewCache, seedDocPreview } from './useDocumentPreview';
 import { fetchRefPreview, seedRefPreview } from './useReferencePreview';
 import { entityYdoc } from '../editor/active-editor';
-import { expandTableAnchorsToGfm } from '../components/editor/live-preview/table-block-model';
+import { readModelText } from '../components/editor/live-preview/table-serialize';
 
 // SYSTEM: transclusion — single source of truth for the image-ref URL. Used by both the
 // image map and the transclusion map so the two resolution paths never diverge.
@@ -91,15 +91,6 @@ function collectRefIdsFromText(text: string): Set<string> {
     if (parsed?.scheme === 'ref') ids.add(parsed.id);
   }
   return ids;
-}
-
-/** The view's text with every table anchor expanded to its cells. WHY: cell text lives in
- * the table model, not the host text — scanning the host alone left a ref embedded only in
- * a cell unresolved (a chat image dropped into a cell rendered as its raw anchor). */
-function textWithTableCells(view: import('@codemirror/view').EditorView): string {
-  const text = view.state.doc.toString();
-  const ydoc = entityYdoc(view);
-  return ydoc ? expandTableAnchorsToGfm(ydoc, text) : text;
 }
 
 interface UseEditorReferenceSyncParams {
@@ -180,7 +171,7 @@ export function useEditorReferenceSync({ editorViewRef }: UseEditorReferenceSync
     const pid = useAppStore.getState().currentProject?.project_id;
     const view = editorViewRef.current;
     if (!pid || !view) return;
-    const todo = [...collectRefIdsFromText(textWithTableCells(view))].filter(
+    const todo = [...collectRefIdsFromText(readModelText(view, entityYdoc(view)))].filter(
       (id) => !validRefIds.has(id) && !projectRefIds.has(id) && !missingRefIds.has(id),
     );
     if (todo.length === 0) return;
@@ -390,7 +381,7 @@ export function useEditorReferenceSync({ editorViewRef }: UseEditorReferenceSync
     if (docFetchTimerRef.current) clearTimeout(docFetchTimerRef.current);
     docFetchTimerRef.current = setTimeout(() => {
       if (cancelled) return;
-      const text = textWithTableCells(view);
+      const text = readModelText(view, entityYdoc(view));
       // see SYSTEM: transclusion — id extraction uses the shared `parseTarget` grammar.
       const re = /!\[[^\]]*\]\(([^)]+)\)/g;
       const docIds = new Set<string>();

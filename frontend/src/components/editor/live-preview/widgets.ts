@@ -1,5 +1,6 @@
 /**
- * Widget classes for live-preview: checkboxes, bullets, images, copy buttons, math.
+ * Widget classes for live-preview: checkboxes, bullets, images (select, preview,
+ * resize, move-drag), copy buttons, math.
  */
 import { EditorView, WidgetType } from '@codemirror/view';
 import { EditorSelection, EditorState } from '@codemirror/state';
@@ -18,6 +19,8 @@ import type { TransclusionEntry } from './effects';
 // at module-eval time, so the cycle resolves the same way as the documented
 // live-preview one.
 import { atomicRangeAt, selectedAtomicRange } from './atomic-delete-guard';
+import { trackOutsideDrag } from '../../../hooks/useOutsideDrag';
+import { createRefDropController } from '../../references/refDragAdapter';
 
 // ─── Checkbox widget ──────────────────────────────────────────────────────────
 
@@ -247,6 +250,9 @@ export function startObjectDrag(e: PointerEvent, handlers: {
   handle.addEventListener('pointercancel', onCancel);
 }
 
+/** Move-drag disposers per mounted image wrapper (ImageWidget.destroy). */
+const imageDragDisposers = new WeakMap<HTMLElement, (opts?: { keepActive?: boolean }) => void>();
+
 /** Past this travel (px) a press-release is not a click. */
 const CLICK_SLOP_PX = 4;
 
@@ -279,6 +285,8 @@ function setImageBox(wrap: HTMLElement, img: HTMLImageElement, width?: string, h
 export class ImageWidget extends WidgetType {
   constructor(
     readonly src: string,
+    /** The embedded reference — the move-drag ghost's thumbnail. */
+    readonly refId: string,
     readonly width?: string,
     readonly height?: string,
   ) { super(); }
@@ -307,7 +315,9 @@ export class ImageWidget extends WidgetType {
       press = { x: e.clientX, y: e.clientY, opensPreview };
       selectImageAt(view, wrap);
     });
-    // WHY click, not mousedown: a press that travels is a drag start, not a preview.
+    // WHY click, not mousedown: a press that travels past DRAG_THRESHOLD is a MOVE
+    // drag (trackOutsideDrag below), which swallows this click; only a press
+    // released in place previews.
     img.addEventListener('click', (e) => {
       const started = press;
       press = null;
@@ -317,6 +327,13 @@ export class ImageWidget extends WidgetType {
       emit('editor-image-preview', { src: this.src, element: wrap, editorView: view });
     });
     wrap.appendChild(img);
+    // Move-drag: the same ghost / cursor / drop caret as a reference-card drag;
+    // the release moves the embed text (createRefDropController's move branch).
+    // Bound on the <img>, so a resize-handle press never starts a move.
+    // Editability checked at threshold time — live, like the resize handles.
+    imageDragDisposers.set(wrap, trackOutsideDrag(img, this.refId, () => (
+      canEditView(view) ? createRefDropController(this.refId, 'image', { view, el: wrap }) : null
+    )));
     // WHY always mounted: the view is usually NOT editable yet at first render
     // (collab joining) and eq() never rebuilds the widget when it becomes so.
     // CSS hides the handles on a non-editable content DOM; drag time re-checks.
@@ -379,8 +396,17 @@ export class ImageWidget extends WidgetType {
 
   eq(other: ImageWidget): boolean {
     return this.src === other.src
+      && this.refId === other.refId
       && this.width === other.width
       && this.height === other.height;
+  }
+  /** Unbinds the move-drag's press. A drag in flight keeps running: CM6 re-creates
+   * this widget when the drop caret lands beside it, and destroy runs inside that
+   * editor update. The drag still ends on pointerup / Escape / pointercancel, and
+   * its commit re-finds the embed by text (refDragAdapter sourceRange). */
+  destroy(dom: HTMLElement): void {
+    imageDragDisposers.get(dom)?.({ keepActive: true });
+    imageDragDisposers.delete(dom);
   }
   ignoreEvent(): boolean { return false; }
   get estimatedHeight(): number { return widgetHeightCache.get(this.src) ?? 200; }
@@ -689,39 +715,46 @@ export class FileRefWidget extends WidgetType {
 
 // ─── Code block copy button widget ────────────────────────────────────────────
 
-/** Copy-to-clipboard button for fenced code blocks. Shows language label if present, otherwise a copy icon. */
+/**
+ * Fenced code block header: the fence language as a label on the left (when given and
+ * `showLabel`) and an always-identical copy-to-clipboard icon on the right.
+ * WHY: `showLabel` is false while the cursor is inside the block — the raw ```lang line
+ * is visible then, so a second label would duplicate it.
+ */
 export class CopyButtonWidget extends WidgetType {
-  constructor(readonly codeText: string, readonly language: string = '') { super(); }
+  constructor(readonly codeText: string, readonly language: string = '', readonly showLabel: boolean = true) { super(); }
 
   toDOM(): HTMLElement {
-    const btn = document.createElement('button');
-    btn.className = this.language ? 'cm-code-copy-btn cm-code-copy-btn--label' : 'cm-code-copy-btn';
-    btn.setAttribute('aria-label', 'Copy code');
-    if (this.language) {
-      btn.textContent = this.language;
-    } else {
-      btn.innerHTML = COPY_ICON;
+    const wrap = document.createElement('span');
+    wrap.className = 'cm-code-header';
+    if (this.language && this.showLabel) {
+      const label = document.createElement('span');
+      label.className = 'cm-code-lang';
+      label.textContent = this.language;
+      wrap.appendChild(label);
     }
 
+    const btn = document.createElement('button');
+    btn.className = 'cm-code-copy-btn';
+    btn.setAttribute('aria-label', 'Copy code');
+    btn.innerHTML = COPY_ICON;
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       copyWithToast(
         this.codeText,
         (m, ty) => useAppStore.getState().showToast(m, ty),
         () => {
-          if (!this.language) {
-            btn.innerHTML = CHECK_ICON;
-            setTimeout(() => { btn.innerHTML = COPY_ICON; }, 1500);
-          }
+          btn.innerHTML = CHECK_ICON;
+          setTimeout(() => { btn.innerHTML = COPY_ICON; }, 1500);
         },
       );
     });
-
-    return btn;
+    wrap.appendChild(btn);
+    return wrap;
   }
 
   eq(other: CopyButtonWidget): boolean {
-    return this.codeText === other.codeText && this.language === other.language;
+    return this.codeText === other.codeText && this.language === other.language && this.showLabel === other.showLabel;
   }
   ignoreEvent(): boolean { return true; }
 }

@@ -11,8 +11,9 @@ import { selectionFeedPlugin } from './editor-observer';
 import { editorExperience, editableCellExtensions, renderExtensions } from '../components/editor/render-bundle';
 import { buildPublicEditorExtensions } from '../components/PublicEditor';
 import { tableDocSource } from '../components/editor/live-preview/table-doc-source';
-import { createTable, tableAnchor } from '../components/editor/live-preview/table-block-model';
-import { mountLazyCell } from '../components/editor/live-preview/table-block-widget';
+import { createTable } from '../components/editor/live-preview/table-block-model';
+import { tableAnchor } from '../components/editor/live-preview/table-document-ops';
+import { mountLazyCell } from '../components/editor/live-preview/table-widget-registry';
 
 const views: EditorView[] = [];
 function makeView(extensions: Extension, doc = 'hello world'): EditorView {

@@ -15,7 +15,6 @@ import { useChatStore } from '../../store/chat-store';
 import { useTranslation } from '../../i18n';
 import { IconButton } from '../ui';
 import { getPendingRegion, resolveRegionRange } from '../../store/chat-store/pending-selection';
-import { getActiveHandle } from '../../editor/active-editor';
 
 export function SelectionPill() {
   const { t } = useTranslation();
@@ -39,7 +38,7 @@ export function SelectionPill() {
     const range = resolveRegionRange(region);
     if (!range) return null; // offline / anchor lost
     if (range.to <= range.from) return ''; // collapsed region
-    return (getActiveHandle()?.ytext?.toString() ?? '').slice(range.from, range.to);
+    return range.text.toString().slice(range.from, range.to);
   }, [region]);
 
   if (!pinned) return null;

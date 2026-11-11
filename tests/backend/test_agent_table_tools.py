@@ -11,34 +11,9 @@ import json
 import pycrdt as Y
 import pytest
 from fastapi import HTTPException
-from helpers import join_collab_ws, project_collab_url
+from helpers import cell_ids, cell_text, join_collab_ws, make_table, project_collab_url
 
 from db import get_db
-
-
-def _make_table(doc: Y.Doc, tid: str, matrix: list[list[str]], widths: list[int] | None = None) -> None:
-    """Build a `tables` entry mirroring the frontend createTable shape (see
-    test_table_capture.py's `_make_table`)."""
-    tables = doc.get("tables", type=Y.Map)
-    table = Y.Map()
-    tables[tid] = table
-    cols = Y.Array()
-    table["columns"] = cols
-    width = max(len(r) for r in matrix) if matrix else 0
-    for i in range(width):
-        c = Y.Map()
-        cols.append(c)
-        c["w"] = (widths or [160] * width)[i]
-    rows = Y.Array()
-    table["rows"] = rows
-    for row in matrix:
-        yrow = Y.Array()
-        rows.append(yrow)
-        for i in range(width):
-            cell = Y.Map()
-            yrow.append(cell)
-            cell["t"] = Y.Text(row[i] if i < len(row) else "")
-
 
 # ─── table_serialize primitives ──────────────────────────────────────────────
 
@@ -47,11 +22,12 @@ def test_read_table_cell_reads_and_bounds():
     from table_serialize import read_table_cell
 
     doc = Y.Doc()
-    _make_table(doc, "t1", [["a", "b"], ["c", "d"]])
-    assert read_table_cell(doc, "t1", 1, 0) == "c"
-    assert read_table_cell(doc, "t1", 5, 0) is None  # row OOB
-    assert read_table_cell(doc, "t1", 0, 5) is None  # col OOB
-    assert read_table_cell(doc, "unknown", 0, 0) is None
+    make_table(doc, "t1", [["a", "b"], ["c", "d"]])
+    rid, cid = cell_ids(doc, "t1", 1, 0)
+    assert read_table_cell(doc, "t1", rid, cid) == "c"
+    assert read_table_cell(doc, "t1", "no-row", cid) is None
+    assert read_table_cell(doc, "t1", rid, "no-col") is None
+    assert read_table_cell(doc, "unknown", rid, cid) is None
 
 
 def test_set_table_cell_edits_text_in_place_not_replaced():
@@ -61,41 +37,43 @@ def test_set_table_cell_edits_text_in_place_not_replaced():
     from table_serialize import read_table_cell, set_table_cell
 
     doc = Y.Doc()
-    _make_table(doc, "t1", [["a", "b"], ["c", "d"]])
-    body = doc.get("tables", type=Y.Map)["t1"]["rows"][1][1]["t"]
+    make_table(doc, "t1", [["a", "b"], ["c", "d"]])
+    body = cell_text(doc, "t1", 1, 1)
     fired: list[object] = []
     _sub = body.observe(lambda e: fired.append(e))  # noqa: F841 — keep the sub alive
 
-    assert set_table_cell(doc, "t1", 1, 1, "DDD") is True
+    assert set_table_cell(doc, "t1", *cell_ids(doc, "t1", 1, 1), "DDD") is True
     assert fired, "cell edit did not reach the bound Y.Text — Text was replaced, not edited"
-    assert read_table_cell(doc, "t1", 1, 1) == "DDD"
+    assert read_table_cell(doc, "t1", *cell_ids(doc, "t1", 1, 1)) == "DDD"
     # other cells untouched
-    assert read_table_cell(doc, "t1", 0, 0) == "a"
+    assert read_table_cell(doc, "t1", *cell_ids(doc, "t1", 0, 0)) == "a"
 
 
 def test_set_table_cell_clears_to_empty_in_place():
     from table_serialize import read_table_cell, set_table_cell
 
     doc = Y.Doc()
-    _make_table(doc, "t1", [["a", "b"], ["c", "d"]])
-    body = doc.get("tables", type=Y.Map)["t1"]["rows"][0][0]["t"]
+    make_table(doc, "t1", [["a", "b"], ["c", "d"]])
+    body = cell_text(doc, "t1", 0, 0)
     fired: list[object] = []
     _sub = body.observe(lambda e: fired.append(e))  # noqa: F841
 
-    assert set_table_cell(doc, "t1", 0, 0, "") is True
+    assert set_table_cell(doc, "t1", *cell_ids(doc, "t1", 0, 0), "") is True
     assert fired
-    assert read_table_cell(doc, "t1", 0, 0) == ""
+    assert read_table_cell(doc, "t1", *cell_ids(doc, "t1", 0, 0)) == ""
 
 
 def test_set_table_cell_out_of_bounds_is_noop():
     from table_serialize import set_table_cell
 
     doc = Y.Doc()
-    _make_table(doc, "t1", [["a"]])
-    assert set_table_cell(doc, "t1", 9, 9, "x") is False
+    make_table(doc, "t1", [["a"]])
+    rid, cid = cell_ids(doc, "t1", 0, 0)
+    assert set_table_cell(doc, "t1", "no-row", cid, "x") is False
+    assert set_table_cell(doc, "t1", rid, "no-col", "x") is False
 
 
-# ─── read_document tables field (Step 2c: read_table folded in) ──────────────
+# ─── read_document tables field ──────────────────────────────────────────────
 
 
 def _mk_read_table_mocks(monkeypatch, *, doc, content, access="full", project_id="p-1",
@@ -142,8 +120,8 @@ async def test_read_document_table_id_returns_full_grid(monkeypatch):
     from agent import readonly_executors as agent_module
 
     doc = Y.Doc()
-    _make_table(doc, "t1", [["Name", "Role"], ["Aragorn", "Ranger"]])
-    _make_table(doc, "t2", [["b"]])
+    make_table(doc, "t1", [["Name", "Role"], ["Aragorn", "Ranger"]])
+    make_table(doc, "t2", [["b"]])
     _mk_read_table_mocks(monkeypatch, doc=doc, content="")
 
     out = await agent_module._read_document_exec(
@@ -211,7 +189,7 @@ async def test_validate_table_cell_edit_no_access_rejected(monkeypatch):
     from agent.table_writes import validate_table_cell_edit
 
     doc = Y.Doc()
-    _make_table(doc, "t1", [["a"]])
+    make_table(doc, "t1", [["a"]])
     _mk_apply_table_mocks(monkeypatch, doc=doc, access="readonly")
 
     with pytest.raises(HTTPException) as exc:
@@ -227,7 +205,7 @@ async def test_apply_edit_table_cell_noop_skips_checkpoint(monkeypatch):
     from agent.table_writes import apply_edit_table_cell
 
     doc = Y.Doc()
-    _make_table(doc, "t1", [["a"]])
+    make_table(doc, "t1", [["a"]])
     captured = _mk_apply_table_mocks(monkeypatch, doc=doc)
 
     result = await apply_edit_table_cell(
@@ -250,8 +228,8 @@ def test_add_table_rows_empty_is_noop():
     from table_serialize import add_table_rows
 
     doc = Y.Doc()
-    _make_table(doc, "t1", [["A"]])
-    add_table_rows(doc, "t1", [], width=1)
+    make_table(doc, "t1", [["A"]])
+    assert add_table_rows(doc, "t1", []) == []
     assert read_table_grid(doc, "t1")["rows"] == [["A"]]
 
 
@@ -259,9 +237,9 @@ def test_add_table_rows_missing_table_is_noop():
     from table_serialize import add_table_rows
 
     doc = Y.Doc()
-    _make_table(doc, "t1", [["A"]])
+    make_table(doc, "t1", [["A"]])
     # must not raise on a missing table id
-    add_table_rows(doc, "no-such", [["x"]], width=1)
+    assert add_table_rows(doc, "no-such", [{"c": "x"}]) == []
 
 
 def test_add_table_column_at_end_inserts_into_every_row():
@@ -270,8 +248,9 @@ def test_add_table_column_at_end_inserts_into_every_row():
     from table_serialize import add_table_column
 
     doc = Y.Doc()
-    _make_table(doc, "t1", [["Name", "HP"], ["Goblin", "7"]])
-    add_table_column(doc, "t1", at_index=2, header="AC", values=["5"], n_rows=2)
+    make_table(doc, "t1", [["Name", "HP"], ["Goblin", "7"]])
+    (r0, c1), (r1, _) = cell_ids(doc, "t1", 0, 1), cell_ids(doc, "t1", 1, 1)
+    add_table_column(doc, "t1", before_id=c1, after_id=None, texts={r0: "AC", r1: "5"})
     grid = read_table_grid(doc, "t1")
     assert grid["rows"] == [["Name", "HP", "AC"], ["Goblin", "7", "5"]]
     assert grid["columns"] == [160, 160, 160]
@@ -283,8 +262,9 @@ def test_add_table_column_at_index_shifts_existing():
     from table_serialize import add_table_column
 
     doc = Y.Doc()
-    _make_table(doc, "t1", [["A", "B"], ["1", "2"], ["3", "4"]])
-    add_table_column(doc, "t1", at_index=0, header="X", values=["p", "q"], n_rows=3)
+    make_table(doc, "t1", [["A", "B"], ["1", "2"], ["3", "4"]])
+    (r0, c0), (r1, _), (r2, _) = (cell_ids(doc, "t1", i, 0) for i in range(3))
+    add_table_column(doc, "t1", before_id=None, after_id=c0, texts={r0: "X", r1: "p", r2: "q"})
     grid = read_table_grid(doc, "t1")
     assert grid["rows"] == [["X", "A", "B"], ["p", "1", "2"], ["q", "3", "4"]]
 
@@ -295,8 +275,9 @@ def test_add_table_column_pads_short_values():
     from table_serialize import add_table_column
 
     doc = Y.Doc()
-    _make_table(doc, "t1", [["A"], ["1"], ["2"], ["3"]])
-    add_table_column(doc, "t1", at_index=1, header="B", values=["only"], n_rows=4)
+    make_table(doc, "t1", [["A"], ["1"], ["2"], ["3"]])
+    (r0, c0), (r1, _) = cell_ids(doc, "t1", 0, 0), cell_ids(doc, "t1", 1, 0)
+    add_table_column(doc, "t1", before_id=c0, after_id=None, texts={r0: "B", r1: "only"})
     grid = read_table_grid(doc, "t1")
     assert grid["rows"] == [
         ["A", "B"], ["1", "only"], ["2", ""], ["3", ""],
@@ -337,7 +318,7 @@ async def test_apply_add_table_rows_appends_at_bottom(monkeypatch):
     from helpers import read_table_grid
 
     doc = Y.Doc()
-    _make_table(doc, "t1", [["Name", "HP"], ["Goblin", "7"]])
+    make_table(doc, "t1", [["Name", "HP"], ["Goblin", "7"]])
     captured = _mk_apply_table_mocks(monkeypatch, doc=doc)
 
     result = await apply_add_table_rows(
@@ -357,7 +338,7 @@ async def test_apply_add_table_column_inserts_at_end(monkeypatch):
     from helpers import read_table_grid
 
     doc = Y.Doc()
-    _make_table(doc, "t1", [["Name", "HP"], ["Goblin", "7"]])
+    make_table(doc, "t1", [["Name", "HP"], ["Goblin", "7"]])
     captured = _mk_apply_table_mocks(monkeypatch, doc=doc)
 
     result = await apply_add_table_column(

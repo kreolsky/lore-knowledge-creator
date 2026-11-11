@@ -4,6 +4,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
+from edge_kinds import ALL_EDGE_KINDS
 from pydantic import (
     BaseModel,
     Field,
@@ -46,10 +47,13 @@ class ToolGetLinks(BaseModel):
     `kinds` is a Literal-bounded list so a misspelled kind is a 422 the loop
     self-corrects from (same policy as ToolSearch.mode); absent = the ONE
     default the /edges route also uses (mention,transclusion,attachment).
+    The Literal is DERIVED from edge_kinds.ALL_EDGE_KINDS — the same tuple the
+    route validates against, so the tool can never reject a kind the route
+    accepts or vice versa.
     """
     document_id: str
     direction: Literal["in", "out", "both"] = "both"
-    kinds: list[Literal["mention", "transclusion", "attachment", "note", "chat-context"]] | None = None
+    kinds: list[Literal[ALL_EDGE_KINDS]] | None = None
 
 
 class ToolSearch(BaseModel):
@@ -217,6 +221,30 @@ class ToolSandboxRunStatus(BaseModel):
     """
 
     run_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
+class ToolSandboxRunKill(BaseModel):
+    """Args for `sandbox_run_kill` — stop one of the caller's own runs.
+
+    # INVARIANT(security): run_id is pattern-locked exactly like
+    # ToolSandboxRunStatus. Why: it is a LOOKUP KEY inside the caller's own
+    # workspace (derived from the key), never a path — a hostile id is a 422
+    # at the schema boundary. The kill itself only ever signals a group whose
+    # /proc cmdline names the run dir (see _build_run_kill_script); the pid
+    # file alone is untrusted input on a shared unix account.
+    """
+
+    run_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
+class ToolSandboxViewImage(BaseModel):
+    """Args for `sandbox_view_image` — an image file in the caller's workspace.
+
+    The path is checked against the key-derived workspace by read_workspace_file
+    (structural leaf check + far-end realpath prefix), never trusted here.
+    """
+
+    file_path: str
 
 
 class ToolCreateDocument(BaseModel):
@@ -731,6 +759,42 @@ class ToolSandboxFetchSkill(BaseModel):
     """
 
     name: str = Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+class ToolSandboxFetchArtifact(BaseModel):
+    """sandbox_fetch_artifact body — write an html page's live source INTO the
+    caller's workspace.
+
+    # ARCH: the page-source twin of sandbox_fetch_reference. The source is the
+    # LIVE CRDT text (resolve_live_doc_state), never the DB content column —
+    # the agent must edit what a connected editor would see. Destination is
+    # backend-derived (`artifacts/<document_id>/index.html`), so there is no
+    # path argument to guard. Console-only (internal whole-project key), never
+    # served over MCP.
+    """
+
+    document_id: str
+
+
+class ToolReplaceArtifactPage(BaseModel):
+    """replace_artifact_page body — replace an html page's WHOLE body with a
+    sandbox-built file, keeping the document's identity (id, links, History,
+    tree place).
+
+    # ARCH: the in-place alternative to creating a duplicate page for a large
+    # rewrite. The full-rewrite ban on edit_document (markdown str_replace
+    # guard) stays untouched: this tool REFUSES a markdown target, so the ban
+    # is not bypassable for markdown.
+
+    # INVARIANT(security): `apply` is resolved like edit_document's — confirm → 409 ask.
+    # Why: a whole-body rewrite must not bypass the approval `edit_document`
+    # gets on the same page; the driver holds a call ONLY on that 409, and
+    # `apply` also makes the tool holdable (holdable_names reads it).
+    """
+
+    document_id: str
+    sandbox_path: str
+    apply: ToolApply = ToolApply.confirm
 
 
 class ToolReprocessReference(BaseModel):

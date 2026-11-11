@@ -31,10 +31,16 @@ export function EditorOfflineOverlay({
 
   const isOffline = status === 'offline';
   const isReconnecting = status === 'reconnecting';
+  // 4010 "client outdated" — terminal, but the fix is a RELOAD, not a retry: this tab
+  // predates the deployed collab protocol and no reconnect can be accepted (ws-close-codes.ts).
+  const isOutdated = status === 'outdated';
 
   let title: string;
   let sub: string | null;
-  if (isOffline) {
+  if (isOutdated) {
+    title = t('collabOverlayOutdatedTitle');
+    sub = t('collabOverlayOutdatedSub');
+  } else if (isOffline) {
     title = t('collabOverlayOfflineTitle');
     sub = t('collabOverlayOfflineSub');
   } else if (isReconnecting) {
@@ -52,7 +58,7 @@ export function EditorOfflineOverlay({
       className="absolute inset-0 z-30 flex items-center justify-center bg-bg/90 backdrop-blur-sm pointer-events-auto"
     >
       <div className="flex flex-col items-center gap-3 max-w-md px-6 text-center">
-        {!isOffline && (
+        {!isOffline && !isOutdated && (
           <div
             data-testid="overlay-spinner"
             className="w-6 h-6 border-2 border-text-dim border-t-transparent animate-spin"
@@ -60,9 +66,14 @@ export function EditorOfflineOverlay({
         )}
         <div className="text-base font-medium text-text">{title}</div>
         {sub && <div className="text-sm text-text-dim">{sub}</div>}
-        <div className="text-xs text-text-dim mt-2">{t('collabOverlayMicrocopy')}</div>
+        {!isOutdated && <div className="text-xs text-text-dim mt-2">{t('collabOverlayMicrocopy')}</div>}
+        {isOutdated && (
+          <Button variant="primary" onClick={() => window.location.reload()}>
+            {t('collabOverlayReload')}
+          </Button>
+        )}
         {isOffline && (
-          <Button variant="primary" size="sm" onClick={onRetry}>
+          <Button variant="primary" onClick={onRetry}>
             {t('collabOverlayRetry')}
           </Button>
         )}

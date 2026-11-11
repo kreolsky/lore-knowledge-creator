@@ -1,6 +1,6 @@
 /**
  * ARCH: Closed props — no className/style passthrough.
- * size="sm" (22px) for note cards, "md" (28px, default) elsewhere.
+ * size="sm" (22px) for list-item actions, "md" (30px, default) elsewhere.
  * filled — solid background with white text (e.g. armed-delete confirmation).
  * pressed — a toggle in its ON state: held at the hover background, aria-pressed set.
  * pressed + color — the ON state takes that color's tint instead (green = privacy mode; OFF stays plain).

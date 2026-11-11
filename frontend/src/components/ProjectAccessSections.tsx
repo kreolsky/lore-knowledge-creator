@@ -105,7 +105,7 @@ export function AudienceSection({
 
   const removeButton = (subject: string) => (
     <span data-remove-subject={subject}>
-      <IconButton size="sm" danger title={t('accessRemove')} onClick={() => dropRow(subject)}>
+      <IconButton danger title={t('accessRemove')} onClick={() => dropRow(subject)}>
         <X size={13} />
       </IconButton>
     </span>
@@ -154,7 +154,6 @@ export function AudienceSection({
             {audiences.map(a => (
               <div key={a.subject} className="flex items-center gap-2">
                 <Dropdown
-                  size="sm"
                   align="left"
                   placement="bottom"
                   value={a.subject}
@@ -163,7 +162,6 @@ export function AudienceSection({
                   disabled={busy}
                 />
                 <Dropdown
-                  size="sm"
                   align="right"
                   placement="bottom"
                   value={a.access_level}
@@ -178,7 +176,6 @@ export function AudienceSection({
              * empty row appears under it once the PATCH lands in the store. */}
             <div className="flex items-center gap-2">
               <Dropdown
-                size="sm"
                 align="left"
                 placement="bottom"
                 value=""
@@ -382,11 +379,11 @@ export function MembersSection({ projectId }: { projectId: string }) {
                 <span className="text-ui-xs text-text-dim w-[110px] text-center">{m.access_level}</span>
               )}
               {m.pending ? (
-                <IconButton size="sm" danger onClick={() => handleCancelPending(m.email)} title={t('accessCancelPending')}>
+                <IconButton danger onClick={() => handleCancelPending(m.email)} title={t('accessCancelPending')}>
                   <X size={13} />
                 </IconButton>
               ) : (
-                <IconButton size="sm" danger onClick={() => handleRemove(m.user_id)} title={t('accessRemove')}>
+                <IconButton danger onClick={() => handleRemove(m.user_id)} title={t('accessRemove')}>
                   <X size={13} />
                 </IconButton>
               )}
@@ -396,7 +393,6 @@ export function MembersSection({ projectId }: { projectId: string }) {
         <div className="flex items-center gap-2">
           {groupSubject ? (
             <Dropdown
-              size="lg"
               fullWidth
               align="left"
               placement="bottom"
@@ -418,7 +414,6 @@ export function MembersSection({ projectId }: { projectId: string }) {
             />
           )}
           <Dropdown
-            size="lg"
             align="right"
             placement="bottom"
             value={effectiveInviteRole ?? inviteRole}
@@ -426,7 +421,7 @@ export function MembersSection({ projectId }: { projectId: string }) {
             onSelect={v => setInviteRole(v as AccessLevel)}
             disabled={busy || !effectiveInviteRole}
           />
-          <Button variant="primary" size="lg" onClick={handleInvite} disabled={busy || !inviteEmail.trim() || !effectiveInviteRole}>
+          <Button variant="primary" onClick={handleInvite} disabled={busy || !inviteEmail.trim() || !effectiveInviteRole}>
             {t('accessInvite')}
           </Button>
         </div>

@@ -34,7 +34,7 @@ import { SnapshotPreviewBanner } from './editor/SnapshotPreviewBanner';
 import { PreviewDocumentBanner } from './editor/PreviewDocumentBanner';
 import { CollabPresenceChips } from './editor/CollabPresenceChips';
 import { ReferenceMediaBar } from './editor/ReferenceMediaBar';
-import { mountView, type EditorRole, setRoleView } from '../editor/active-editor';
+import { mountView, unmountView, type EditorRole, setRoleView } from '../editor/active-editor';
 import { positionCacheGet } from '../editor/position-cache';
 import { editableCompartment } from '../editor/editor-plugins';
 import { useEditorAutosave } from '../hooks/useEditorAutosave';
@@ -386,6 +386,31 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
     }
   }, [restoreScrollPosition, revealEditor]);
 
+  // ── Snapshot preview owns the active-editor registry while shown ──────────
+  // WHY: while the preview is shown it is the page's only MOUNTED editor — the live
+  // editor left the tree, but its view stays in the registry (unmountView runs only
+  // on entity switch, in useEditorCollab), so Find and every focused-view consumer
+  // targeted a destroyed view holding the CURRENT text over a screen showing the
+  // checkpoint. The PublicEditor pattern: claim on create, release on leave. The
+  // previous-match guard inside unmountView makes ordering with the live remount
+  // (preview exit → handleCreateEditor → mountView) irrelevant in both directions.
+  const previewViewRef = useRef<EditorView | null>(null);
+  const handlePreviewCreate = useCallback((view: EditorView) => {
+    if (previewViewRef.current) unmountView(previewViewRef.current);
+    previewViewRef.current = view;
+    mountView(view);
+  }, []);
+  // Release on preview exit, checkpoint switch (key remount re-claims via
+  // handlePreviewCreate) and Editor unmount. Cleanup carries the preview view as
+  // `previous` so it can never clear a slot a newer view already claimed.
+  useEffect(() => {
+    if (!snapshotPreview) return;
+    return () => {
+      unmountView(previewViewRef.current ?? undefined);
+      previewViewRef.current = null;
+    };
+  }, [snapshotPreview]);
+
   // [snapshotPreview] effect — checkpoint content on snapshot enter.
   // Per-document dedup in checkpointContent prevents double WS flush under React strict mode.
   // A persist failure toasts in content-sync; nothing to act on here.
@@ -493,6 +518,7 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
               key={snapshotPreview.checkpoint_id}
               doc={snapshotPreview.content ?? ''}
               extensions={previewCmExtensions}
+              onCreateView={handlePreviewCreate}
               className="snapshot-preview"
             />
           ) : isRefContentLoading ? (

@@ -24,11 +24,14 @@
 # settings at call time (row → env → default), so a settings row on a base key
 # reaches the served surface on the next turn. Tests pin the gates by patching
 # the config base attrs (SANDBOX_SSH_HOST/KEY_B64, COMFYUI_URL).
+import importlib
+
 import settings
 from agent_tools.registry import ROOT_UNSCOPED_FILL, _is_region_capable
 from agent_tools.registry import entries as _registry_entries
 from agent_tools.registry import fill_spec_root as _fill_spec_root
 from agent_tools.registry import holdable_names as _registry_holdable_names
+from agent_tools.registry import image_result_names as _registry_image_result_names
 from agent_tools.registry import mutating_names as _registry_mutating_names
 from agent_tools.registry import per_call_approval_names as _registry_per_call_names
 
@@ -59,6 +62,48 @@ def _agent_spec(entry) -> dict:
     return _fill_spec_root(entry.spec, ROOT_UNSCOPED_FILL)
 
 
+#: The sandbox environment sentinel (carried by SANDBOX_TOOL's description,
+#: agent_tools/specs/media). Filled at RENDER time by agent_toolset from the
+#: provisioned manifest cache — the same render-time-fill pattern as {{ROOT}},
+#: but per-TURN (the manifest changes with provisioning, not with the caller).
+#: Only agent_toolset fills it: the sandbox tool never reaches MCP
+#: (surfaces=_AGENT_HTTP in the registry), so no other surface can leak either
+#: the fill or the literal sentinel.
+SANDBOX_ENV_SENTINEL = "{{SANDBOX_ENV}}"
+
+#: Dotted path of the fill callable — the manifest cache lives with the SSH
+#: seam it reads (routes.tool_api.sandbox.transport). Resolved lazily like a
+#: registry handler (registry.resolve_handler): agent.tools must not import
+#: routes.* (the import-shape gate's hard zero) and must not drag the route
+#: graph into import.
+_SANDBOX_ENV_FILL_PATH = "routes.tool_api.sandbox.transport:sandbox_env_fill"
+_sandbox_env_fill_fn = None
+
+
+def _sandbox_env_fill() -> str:
+    """The current {{SANDBOX_ENV}} fill (the neutral line when the cache is
+    empty). Resolves the dotted path once, then calls through the cache."""
+    global _sandbox_env_fill_fn
+    if _sandbox_env_fill_fn is None:
+        module_name, _, attr = _SANDBOX_ENV_FILL_PATH.partition(":")
+        _sandbox_env_fill_fn = getattr(importlib.import_module(module_name), attr)
+    return _sandbox_env_fill_fn()
+
+
+def _fill_sandbox_env(spec: dict, fill: str) -> dict:
+    """Fill the sentinel in one wire spec's description. Copy-on-need, the
+    same shape as _agent_spec's ROOT fill: registry spec dicts are SHARED
+    across surfaces, so never mutate in place."""
+    fn = spec.get("function") or {}
+    desc = fn.get("description") or ""
+    if SANDBOX_ENV_SENTINEL not in desc:
+        return spec
+    return {
+        **spec,
+        "function": {**fn, "description": desc.replace(SANDBOX_ENV_SENTINEL, fill)},
+    }
+
+
 async def agent_toolset() -> list[dict]:
     """Return the tool surface for an AI chat turn.
 
@@ -73,10 +118,17 @@ async def agent_toolset() -> list[dict]:
     # derives its list FROM AGENT_TOOLS via build_tool_list(). A tool declared
     # without the "mcp" surface never ships to third-party MCP clients.
     """
-    return [
-        _agent_spec(e) for e in _registry_entries()
-        if "agent" in e.surfaces and await _gate_on(e.env_gate)
-    ]
+    out: list[dict] = []
+    for e in _registry_entries():
+        if "agent" not in e.surfaces or not await _gate_on(e.env_gate):
+            continue
+        spec = _agent_spec(e)
+        # Computed per-entry, only when the description carries the sentinel:
+        # tests and ungated deploys never touch the sandbox transport at all.
+        if SANDBOX_ENV_SENTINEL in (spec["function"].get("description") or ""):
+            spec = _fill_sandbox_env(spec, _sandbox_env_fill())
+        out.append(spec)
+    return out
 
 
 # The public surface = the registry's mcp∩agent subset, in declaration order (the
@@ -107,6 +159,9 @@ MUTATING_TOOLS: frozenset[str] = _registry_mutating_names()
 # ran). Derived, never hand-listed — see the totality test on MUTATING_TOOLS.
 HOLDABLE_TOOLS: frozenset[str] = _registry_holdable_names()
 PER_CALL_APPROVAL_TOOLS: frozenset[str] = _registry_per_call_names()
+# The tools whose result carries an image — the dsh plugin picks its
+# image-result arm by membership, never by a re-declared name.
+IMAGE_RESULT_TOOLS: frozenset[str] = _registry_image_result_names()
 
 
 # The agent tools whose request model carries `region` — the only tools a pinned

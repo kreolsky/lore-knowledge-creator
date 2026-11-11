@@ -49,7 +49,7 @@ async def restart_workspace(user_id: str) -> dict:
     venv on PATH) but NOT a bare `sleep 120`, whose cmdline names no path. All users
     share one unix account, so `-u` cannot narrow it further and a broader pattern
     would risk killing another user's work — a worse failure than leaving a stray
-    process. The whole-box reset (`pct stop/start 703`, docs/sandbox-access.md) is the
+    process. The whole-box reset (`pct stop/start 703`) is the
     escalation. `|| true` because "no processes matched" exits non-zero and is the
     NORMAL case for an idle sandbox, not a failure.
     """

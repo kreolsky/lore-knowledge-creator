@@ -52,6 +52,7 @@ import { useRecordingHotkey } from '../hooks/useRecordingHotkey';
 import { useSidebarHotkey } from '../hooks/useSidebarHotkey';
 import { getEditorView } from '../editor/active-editor';
 import { voiceWidgetField, voiceWidgetRemove } from '../components/editor/voice-widget';
+import { uploadReferenceFile } from '../api/reference-upload';
 
 /**
  * Allowed right-panel tabs per access role × account tier.
@@ -226,19 +227,12 @@ export function ProjectPage() {
     };
     addReference(tempRef);
 
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('project_id', ctx.projectId);
-    formData.append('document_id', ctx.documentId);
-    formData.append('title', file.name);
     // Replay guard: THIS take's cache session id (carried by ctx since record
     // start — never a global read) makes a lost-2xx re-send replay the SAME
     // reference instead of duplicating it (SYSTEM: recording-cache).
-    formData.append('idempotency_key', ctx.sessionId);
 
     try {
-      const { apiClient } = await import('../api/client');
-      const ref = await apiClient.upload('/references/upload', formData);
+      const ref = await uploadReferenceFile(ctx.projectId, ctx.documentId, file, { idempotencyKey: ctx.sessionId });
       replaceReference(tempId, ref);
       // 2xx ack → drop the cached copy (see the delete-only-after-2xx rule in
       // SYSTEM: recording-cache).

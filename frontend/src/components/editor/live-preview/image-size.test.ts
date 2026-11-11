@@ -81,7 +81,7 @@ describe('applyImageSuffix', () => {
 describe('ImageWidget DOM', () => {
   it('a percent width sizes the wrapper; the img fills it', () => {
     const view = makeView(IMG);
-    const wrap = new ImageWidget('http://localhost/x.png', '20%').toDOM(view);
+    const wrap = new ImageWidget('http://localhost/x.png', 'r1', '20%').toDOM(view);
     expect(wrap.style.width).toBe('20%');
     expect((wrap.querySelector('img') as HTMLImageElement).style.width).toBe('100%');
   });

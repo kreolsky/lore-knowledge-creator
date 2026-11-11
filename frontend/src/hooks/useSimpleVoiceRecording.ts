@@ -1,11 +1,7 @@
 /**
  * Simple voice recording hook — record audio, transcribe, return text via callback.
  *
- * INVARIANT: MediaRecorder config MUST mirror useAudioRecorder (opus codec +
- *   start(1000) + size-guarded chunks). Why: without timeslice/codec some browsers
- *   deliver an empty/degraded stream → Whisper returns "" → onTranscribed("")
- *   silently no-ops. This divergence was the root cause of the chat/note
- *   voice-input regression (header REC used the other hook and kept working).
+ * The MediaRecorder comes from startOpusRecorder (useAudioRecorder) — one config for every mic.
  * cancelRecording discards the take (Escape in the composer): the recorder stops and
  *   the mic is released, but nothing is transcribed and no toast is shown.
  * INVARIANT: every failure path surfaces a toast (no silent degradation per
@@ -17,6 +13,7 @@
 import { useState, useRef, useCallback } from 'react';
 import { useAppStore } from '../store/app-store';
 import { useTranslation } from '../i18n';
+import { startOpusRecorder } from './useAudioRecorder';
 
 export function useSimpleVoiceRecording(onTranscribed: (text: string) => void) {
   const [recording, setRecording] = useState(false);
@@ -34,11 +31,8 @@ export function useSimpleVoiceRecording(onTranscribed: (text: string) => void) {
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
       chunksRef.current = [];
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
+      const recorder = startOpusRecorder(stream, chunk => chunksRef.current.push(chunk));
       recorder.onstop = async () => {
         stream.getTracks().forEach(tr => tr.stop());
         if (cancelledRef.current) {
@@ -76,7 +70,6 @@ export function useSimpleVoiceRecording(onTranscribed: (text: string) => void) {
         }
       };
       mediaRecorderRef.current = recorder;
-      recorder.start(1000);
       setRecording(true);
     } catch (e) {
       console.error('Mic access denied:', e);

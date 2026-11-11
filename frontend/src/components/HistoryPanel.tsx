@@ -22,7 +22,7 @@ import { HoverPreviewPopup } from './HoverPreviewPopup';
 import { upsertSnapshotById, appendDedupSnapshots } from './history-panel-helpers';
 import { LABEL_LAST_SESSION as LAST_SESSION_LABEL } from '../collab/backup-labels';
 import { getEntityHandle } from '../collab/active-handle-registry';
-import { serializeTables } from './editor/live-preview/table-block-model';
+import { serializeTables } from './editor/live-preview/table-serialize';
 import { useListCapacity } from './chat/useListCapacity';
 import { useSwipePager } from '../hooks/useSwipePager';
 import { isArtifactDoc, ARTIFACT_EXPORT_FORMATS } from '../utils/artifact';
@@ -86,6 +86,9 @@ export function HistoryPanel() {
   // INVARIANT: offered only for a LIVE view of a PARENT doc.  Why: descendants
   // have no matching snapshot, so a zip beside a selected one would mislabel a
   // live archive as that snapshot; a one-file zip is the existing *.md.
+  // The index doc has no tree children, but its zip IS the whole project (the
+  // backend index scope — plan "project-index-as-project-face"), so it is
+  // offered regardless: the index row is the project's face.
   const hasChildren = useMemo(() => {
     if (!currentDocId) return false;
     function search(nodes: DocumentTreeNode[]): DocumentTreeNode | undefined {
@@ -99,6 +102,7 @@ export function HistoryPanel() {
     const node = search(documentTree);
     return !!node && node.children.length > 0;
   }, [documentTree, currentDocId]);
+  const isIndex = !!currentDocument?.is_index;
 
   // INVARIANT: Shared cache Map for hover+click lazy content fetch.  Why: hover and click both lazy-fetch snapshot content; one shared Map avoids refetching the same snapshot on hover-then-click.
   const contentCache = useRef<Map<string, Checkpoint>>(new Map());
@@ -343,14 +347,14 @@ export function HistoryPanel() {
   return (
     <div className="flex flex-col h-full">
       {/* Banner: Save snapshot + Download (left, grouped) */}
-      <div className="flex items-center gap-1 px-3 py-2 border-b border-border bg-surface min-h-[40px]">
+      <div className="flex items-center gap-1 px-3 py-1 border-b border-border bg-surface min-h-[40px]">
         {/* INVARIANT: the manual snapshot captures the DOCUMENT — content from the
             PRIMARY column's view, tables from the doc's ENTITY handle. Why: rootView
             and the focused slot both follow FOCUS, so with the reference focused the
             old pairing wrote ref content + ref tables into a DOC checkpoint; Cmd+S is
             a doc-column keymap (fires only with the primary focused) and stays
             slot-based. */}
-        <Button variant="ghost" size="sm" onClick={() => {
+        <Button variant="ghost" onClick={() => {
           const primary = getRoleView('primary');
           const content = primary ? primary.state.doc.toString() : getContent();
           const handle = currentDocument ? getEntityHandle(currentDocument.document_id) : null;
@@ -360,7 +364,7 @@ export function HistoryPanel() {
           <Plus size={13} />
           {t('saveSnapshot')}
         </Button>
-        <DownloadMenu documentId={currentDocId!} hasText theme={selectedId ? 'green' : 'default'} checkpointId={selectedId ?? undefined} subtree={!selectedId && hasChildren} exportFormats={isArtifactDoc(currentDocument) ? ARTIFACT_EXPORT_FORMATS : undefined} />
+        <DownloadMenu documentId={currentDocId!} hasText theme={selectedId ? 'green' : 'default'} checkpointId={selectedId ?? undefined} subtree={!selectedId && (hasChildren || isIndex)} exportFormats={isArtifactDoc(currentDocument) ? ARTIFACT_EXPORT_FORMATS : undefined} />
       </div>
 
       {/* Timeline (overflow-hidden: capacity fits exactly; swipe owns paging) */}

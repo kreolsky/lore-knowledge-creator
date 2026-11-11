@@ -12,8 +12,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
-import { Button, CenterHeading, FieldCheckbox, FieldInput, IconButton, SegmentedControl } from '../ui';
+import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ArmedDeleteButton, Button, CenterHeading, FieldCheckbox, FieldInput, IconButton, SegmentedControl } from '../ui';
 import {
   checkAdminMcpServer, createAdminMcpServer, deleteAdminMcpServer, listAdminGroups, listAdminMcpServers,
   patchAdminMcpServer, PUBLIC_SUBJECT, type AdminGroup, type AdminMcpServer,
@@ -21,28 +21,9 @@ import {
 } from '../../api/admin';
 import { useAppStore } from '../../store/app-store';
 import { useTranslation } from '../../i18n';
-import { useArmedAction } from '../../hooks/useArmedAction';
 import { serverRefusalDetail } from '../../utils/server-refusal-detail';
 import { McpCheckLine } from '../McpCheckLine';
 import { groupLabel } from './GroupsSection';
-
-function DeleteServerButton({ onFire, disabled }: { onFire: () => void; disabled?: boolean }) {
-  const { t } = useTranslation();
-  const action = useArmedAction();
-  return (
-    <IconButton
-      size="sm"
-      danger
-      filled={action.armed}
-      onClick={() => action.handleClick(onFire)}
-      onMouseLeave={action.disarm}
-      disabled={disabled}
-      title={t('delete')}
-    >
-      <Trash2 size={14} />
-    </IconButton>
-  );
-}
 
 type SchemePreset = 'bearer' | 'raw' | 'custom';
 
@@ -197,7 +178,7 @@ function ServerForm({ initial, isAdmin, ownSubject, groups, disabled, error, onS
       {authMode !== 'none' && (
         <>
           <div>
-            <Button size="sm" onClick={() => setAdvancedOpen(open => !open)} disabled={disabled}>
+            <Button onClick={() => setAdvancedOpen(open => !open)} disabled={disabled}>
               {advancedOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
               {t('adminMcpAdvanced')}
             </Button>
@@ -265,15 +246,14 @@ function ServerForm({ initial, isAdmin, ownSubject, groups, disabled, error, onS
       <div className="flex gap-2 items-center">
         <Button
           variant="primary"
-          size="lg"
           onClick={save}
           disabled={disabled || !name.trim() || !url.trim()}
         >
           {t('save')}
         </Button>
-        <Button size="lg" onClick={onCancel} disabled={disabled}>{t('cancel')}</Button>
+        <Button onClick={onCancel} disabled={disabled}>{t('cancel')}</Button>
         {canCheck && (
-          <Button size="lg" onClick={() => void runCheck()} disabled={disabled || (check !== null && check.result === null && !check.error)}>
+          <Button onClick={() => void runCheck()} disabled={disabled || (check !== null && check.result === null && !check.error)}>
             {t('adminMcpCheck')}
           </Button>
         )}
@@ -403,7 +383,7 @@ export function McpServersSection() {
           />
         </div>
       ) : (
-        <Button variant="primary" size="lg" onClick={() => { setExpanded('new'); setMsg(null); }}>
+        <Button variant="primary" onClick={() => { setExpanded('new'); setMsg(null); }}>
           {t('adminMcpAdd')}
         </Button>
       )}
@@ -434,7 +414,7 @@ export function McpServersSection() {
                   title={t('adminMcpEnabled')}
                   disabled={busy === server.id}
                 />
-                <DeleteServerButton
+                <ArmedDeleteButton
                   disabled={busy === server.id}
                   onFire={() => void remove(server)}
                 />

@@ -13,9 +13,15 @@
  * bucket — a provider without cache accounting yields no indicator at all, not a
  * misleading "0%".
  *
+ * WHY: it subscribes itself — the conversation republishes per animation frame
+ * while streaming, and only this figure (shallow-compared) may re-render on it,
+ * not the whole composer.
+ *
  * INVARIANT (project-wide): border-radius: 0 — no rounded corners anywhere.
  */
+import { useShallow } from 'zustand/react/shallow';
 import { useTranslation } from '../../i18n';
+import { useChatStore } from '../../store/chat-store';
 import type { ConversationVM } from '../../store/chat-store/conversation-feed';
 
 /** The last completed turn's cache accounting, or null when no turn reported it. */
@@ -60,8 +66,10 @@ const BAND_TEXT: Record<string, string> = {
   danger: 'text-danger',
 };
 
-export function CacheHitIndicator({ figure }: { figure: CacheHitFigure }) {
+export function CacheHitIndicator() {
   const { t } = useTranslation();
+  const figure = useChatStore(useShallow(s => lastTurnCacheHit(s.conversation)));
+  if (!figure) return null;
   const band = bandFor(figure.pct);
   return (
     <span

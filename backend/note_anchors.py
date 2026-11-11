@@ -6,16 +6,22 @@ and sent base64 on the wire. The byte format is the one Yjs `encodeRelativePosit
 writes, so the browser resolves server-built anchors and vice versa. This module
 never inserts or deletes text.
 
+The shadow holds ONLY the `content` text's items: the tables subtree is deleted
+in a throwaway replica before the shadow is applied, so a position bound inside
+a table cell's Y.Text resolves to `external` (its item is absent from — or a
+recorded foreign run in — the shadow) and NEVER to host offsets (plan
+table-links-notes).
+
 Offsets here are UTF-16 code units (the Yjs / CM6 unit); `utf16_to_cp` /
 `cp_to_utf16` convert for Python string slicing.
 """
 
 import base64
 import binascii
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Literal
 
-from pycrdt import Assoc, Doc, StickyIndex, Text
+from pycrdt import Assoc, Doc, Map, StickyIndex, Text
 
 TEXT_KEY = "content"
 
@@ -34,12 +40,17 @@ _SCOPE_ITEM = 0
 _SCOPE_ROOT_NAME = 1
 _SCOPE_TYPE_ID = 2
 
-AnchorState = Literal["ok", "pending", "orphan"]
+AnchorState = Literal["ok", "pending", "orphan", "external"]
 
 
 @dataclass(frozen=True)
 class AnchorRange:
-    """A resolved anchor: `start`/`end` are UTF-16 offsets, set only when `ok`."""
+    """A resolved anchor: `start`/`end` are UTF-16 offsets, set only when `ok`.
+
+    `external` — the position's item lives outside the `content` text (a table
+    cell's Y.Text): resolvable against its own cell, never paintable as host
+    offsets on a surface that decodes against the host text.
+    """
     state: AnchorState
     start: int | None = None
     end: int | None = None
@@ -47,10 +58,17 @@ class AnchorRange:
 
 @dataclass(frozen=True)
 class AnchorSpace:
-    """One document's text plus its ASCII shadow, built once per document read."""
+    """One document's text plus its ASCII shadow, built once per document read.
+
+    `foreign` maps client → sorted deleted clock runs the tables-subtree
+    deletion introduced — the items that live outside the `content` text, so a
+    relative position bound to one can be reported `external` instead of
+    resolving against the host shadow.
+    """
     text: str
     shadow: Text
     state: dict[int, int]
+    foreign: dict[int, list[tuple[int, int]]] = field(default_factory=dict)
 
 
 class _Cursor:
@@ -237,19 +255,98 @@ def _ascii_shadow(update: bytes) -> tuple[bytes, dict[int, int]]:
     return bytes(out), state
 
 
+def _delete_set_runs(update: bytes) -> dict[int, list[tuple[int, int]]]:
+    """(client → sorted deleted clock runs) — the DELETE-SET section of a v1
+    update (lib0 writeDeleteSet, appended after the structs section; the
+    struct walkers above stop before it).
+
+    `anchor_space` diffs two of these (before/after the tables-subtree
+    deletion) to name the items that live outside the `content` text: a
+    deleted run present only after the deletion is a tables-subtree run.
+    """
+    cur = _Cursor(update)
+    for _ in range(cur.varuint()):
+        n_structs, _client, clock = cur.varuint(), cur.varuint(), cur.varuint()
+        for _ in range(n_structs):
+            info = cur.byte()
+            ref = info & _REF_MASK
+            if ref in (_REF_GC, _REF_SKIP):
+                clock += cur.varuint()
+                continue
+            _skip_item_header(cur, info)
+            if ref != _REF_STRING:
+                clock += _CONTENT_SKIPPERS[ref](cur)
+            else:
+                clock += _utf16_len(cur.string())
+    runs: dict[int, list[tuple[int, int]]] = {}
+    for _ in range(cur.varuint()):
+        client = cur.varuint()
+        for _ in range(cur.varuint()):
+            start, length = cur.varuint(), cur.varuint()
+            runs.setdefault(client, []).append((start, start + length))
+    return {client: sorted(intervals) for client, intervals in runs.items()}
+
+
+def _subtract_runs(
+    runs: dict[int, list[tuple[int, int]]], base: dict[int, list[tuple[int, int]]],
+) -> dict[int, list[tuple[int, int]]]:
+    """Interval-subtract `base` from `runs`, per client — proper subtraction, not
+    exact match: a fresh tables run that MERGES with an older tombstone run in
+    the encoded delete set still yields its new part."""
+    out: dict[int, list[tuple[int, int]]] = {}
+    for client, intervals in runs.items():
+        base_sorted = base.get(client, [])
+        left: list[tuple[int, int]] = []
+        for start, end in intervals:
+            cursor = start
+            for b_start, b_end in base_sorted:
+                if b_end <= cursor or b_start >= end:
+                    continue
+                if b_start > cursor:
+                    left.append((cursor, min(b_start, end)))
+                cursor = max(cursor, b_end)
+                if cursor >= end:
+                    break
+            if cursor < end:
+                left.append((cursor, end))
+        if left:
+            out[client] = left
+    return out
+
+
 def anchor_space(doc: Doc) -> AnchorSpace:
-    """Build the per-document resolution space; reuse it for every note of the doc."""
+    """Build the per-document resolution space; reuse it for every note of the doc.
+
+    # ARCH: the shadow carries ONLY the `content` text's items. The full
+    # (ASCII-shadowed) update is applied to a throwaway skip_gc replica, the
+    # whole `tables` subtree is deleted there (cascading tombstones over every
+    # cell Y.Text item), and the PRUNED update is what the shadow applies. A
+    # relative position bound inside a cell therefore has no block in the
+    # shadow's store — without this, pycrdt resolves it to offsets within its
+    # OWN type and the public surface painted them on host text (plan
+    # table-links-notes). The deletion's fresh skip runs (minus the tombstone
+    # runs the original already had) are recorded as `foreign` so such
+    # positions report `external` rather than a bare orphan.
+    """
     text = str(doc.get(TEXT_KEY, type=Text))
     shadow_update, state = _ascii_shadow(doc.get_update())
     # WHY skip_gc: the shadow must keep deleted items addressable exactly like the
     # browser's Y.Doc, which keeps a deleted text item (content swapped for
     # ContentDeleted) so a position bound to it resolves to where it stood.
+    full = Doc(skip_gc=True)
+    full.apply_update(shadow_update)
+    tables = full.get("tables", type=Map)
+    with full.transaction():
+        for key in list(tables.keys()):
+            del tables[key]
+    pruned = full.get_update()
+    foreign = _subtract_runs(_delete_set_runs(pruned), _delete_set_runs(shadow_update))
     shadow_doc = Doc(skip_gc=True)
-    shadow_doc.apply_update(shadow_update)
+    shadow_doc.apply_update(pruned)
     shadow = shadow_doc.get(TEXT_KEY, type=Text)
     if len(str(shadow)) != _utf16_len(text):
         raise RuntimeError("ASCII shadow diverged from the document text")
-    return AnchorSpace(text=text, shadow=shadow, state=state)
+    return AnchorSpace(text=text, shadow=shadow, state=state, foreign=foreign)
 
 
 def utf16_to_cp(text: str, offset: int) -> int:
@@ -303,10 +400,18 @@ def _decode_relpos(data: bytes) -> tuple[int, int | None, int | None]:
     return tag, client, clock
 
 
-def _resolve_one(space: AnchorSpace, data: bytes) -> int | None | Literal["pending"]:
+def _resolve_one(space: AnchorSpace, data: bytes) -> int | None | Literal["pending", "external"]:
     tag, client, clock = _decode_relpos(data)
     if tag == _SCOPE_ITEM and clock >= space.state.get(client, 0):
         return "pending"
+    if client is not None and any(
+        start <= clock < end for start, end in space.foreign.get(client, ())
+    ):
+        # The item lives outside the `content` text (a table cell's Y.Text, or
+        # a nested type's parent item for a tag-2 head position). pycrdt would
+        # resolve it to offsets within its OWN type — painting them on host
+        # text is the exact defect (plan table-links-notes).
+        return "external"
     return StickyIndex.decode(data, space.shadow).get_index()
 
 
@@ -315,12 +420,16 @@ def resolve_anchor(space: AnchorSpace, start: bytes, end: bytes) -> AnchorRange:
 
     `pending` — an anchored item has not reached this doc yet (the note row can
     land before its author's Yjs update); `orphan` — the fragment is gone (the
-    range collapsed). Mirrors the browser's resolution with
-    followUndoneDeletions = false: a deleted item is never followed into a redo.
+    range collapsed); `external` — the anchor's item is not in the `content`
+    # text (a table cell): resolvable in its cell, never paintable here.
+    Mirrors the browser's resolution with followUndoneDeletions = false: a
+    deleted item is never followed into a redo.
     """
     lo, hi = _resolve_one(space, start), _resolve_one(space, end)
     if "pending" in (lo, hi):
         return AnchorRange("pending")
+    if "external" in (lo, hi):
+        return AnchorRange("external")
     if lo is None or hi is None or hi <= lo:
         return AnchorRange("orphan")
     return AnchorRange("ok", lo, hi)

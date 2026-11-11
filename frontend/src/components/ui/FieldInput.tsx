@@ -10,9 +10,9 @@ import type { ChangeEventHandler, KeyboardEventHandler, FocusEventHandler, Mouse
 interface FieldInputProps {
   className?: string;
   // Sits on a surface2 panel: takes the lighter surface tone so it still reads as a field;
-  // the border takes it too, so the fill spans the full height beside an lg Button.
+  // the border takes it too, so the fill spans the full height beside a Button.
   onPanel?: boolean;
-  // Toolbar height (25px): sits flush beside a .sel-toolbar-btn icon button.
+  // Toolbar padding (px-2) at the 30px height of the .sel-toolbar-btn beside it.
   compact?: boolean;
   value?: string;
   defaultValue?: string;
@@ -38,7 +38,7 @@ interface FieldTextareaProps {
   // Swaps the locked neutral surface for warm (AI zero-chat experiment).
   highlight?: boolean;
   // Sits on a surface2 panel: takes the lighter surface tone so it still reads as a field;
-  // the border takes it too, so the fill spans the full height beside an lg Button.
+  // the border takes it too, so the fill spans the full height beside a Button.
   onPanel?: boolean;
   // Monospace, smaller text — for code-like values (a pasted JSON workflow).
   mono?: boolean;
@@ -64,11 +64,11 @@ const textareaCls =
 
 export const FieldInput = forwardRef<HTMLInputElement, FieldInputProps>(
   function FieldInput({ className, onPanel, compact, ...props }, ref) {
-    // h-[37px] pins the fractional box (font: inherit → 37.1px) so a Button
-    // size="lg" beside it (same 37px) lines up exactly. Inputs only — the
-    // textarea keeps its content-driven height.
+    // h-[30px] pins the box to the md Button / Dropdown height so a row of them
+    // lines up exactly; py-0 because the fixed height, not padding, sets it.
+    // Inputs only — the textarea keeps its padding and content-driven height.
     const bg = onPanel ? ' !bg-surface !border-surface' : '';
-    const height = compact ? ' !h-[25px] !py-0 !px-2' : ' h-[37px]';
+    const height = compact ? ' h-[30px] !py-0 !px-2' : ' h-[30px] !py-0';
     return <input ref={ref} className={`${inputCls}${height}${bg}${className ? ` ${className}` : ' w-full'}`} {...props} />;
   },
 );

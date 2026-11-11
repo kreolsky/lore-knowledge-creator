@@ -102,8 +102,11 @@ def make_token(user_id: str, name: str, role: str = "user", email: str = "", tok
 
 
 def project_collab_url(project_id: str) -> str:
-    """URL of the multiplexed project collab WS (the one collab channel)."""
-    return f"/ws/collab/project/{project_id}"
+    """URL of the multiplexed project collab WS (the one collab channel), speaking the
+    current collab protocol (an old or missing `proto` is closed 4010)."""
+    from routes.collab_project_ws import COLLAB_PROTOCOL
+
+    return f"/ws/collab/project/{project_id}?proto={COLLAB_PROTOCOL}"
 
 
 def join_collab_ws(ws, entity_id: str, entity_type: str = "doc") -> None:
@@ -214,11 +217,15 @@ def pinned_chat_api(url: str = "http://fake", key: str = "k"):
 
 
 def pin_stt_url(monkeypatch, url: str = "http://stt") -> None:
-    """Pin the STT→AI URL chain on config (the transcription-configured gate)."""
+    """Pin the STT→AI URL chain on config (the transcription-configured gate).
+
+    One setattr site (the pin_tool_gates fold pattern) — the shape ratchet
+    prices each `monkeypatch.setattr` line.
+    """
     import config
 
-    monkeypatch.setattr(config, "STT_API_URL", url)
-    monkeypatch.setattr(config, "AI_API_URL", url)
+    for name in ("STT_API_URL", "AI_API_URL"):
+        monkeypatch.setattr(config, name, url)
 
 
 @contextlib.contextmanager
@@ -302,18 +309,20 @@ def pin_artifact_origin(
     return origin
 
 
-def pin_artifact_cap(monkeypatch, n_bytes: int) -> int:
-    """Pin the artifact size ceiling small (the pin_artifact_origin pattern):
-    every writer (create, import_file, edit growth) reads
-    artifacts.ARTIFACT_MAX_HTML_BYTES at call time, so ONE pin sizes every
-    refusal without posting multi-MiB bodies over the HTTP test path — the
-    1 MiB tool-JSON cap would refuse such bodies before the artifact cap
-    could.
+def pin_artifact_cap(monkeypatch, mb: int) -> int:
+    """Pin the artifact size ceiling small, in whole MB (the pin_artifact_origin
+    pattern): every writer (create, import_file, edit growth,
+    replace_artifact_page) resolves the cap through settings at call time,
+    and settings.get resolves config at CALL time (settings._resolve walks
+    config only when no DB override row exists — none does in tests), so ONE
+    config pin sizes every writer. The smallest pinnable cap is 1 MiB, so an
+    over-cap body can no longer travel as tool JSON (the middleware's 413
+    fires first) — over-cap bytes come from the sandbox SFTP seam instead.
     """
-    import artifacts
+    import config
 
-    monkeypatch.setattr(artifacts, "ARTIFACT_MAX_HTML_BYTES", n_bytes)
-    return n_bytes
+    monkeypatch.setattr(config, "ARTIFACT_MAX_HTML_MB", mb)
+    return mb * 1024 * 1024
 
 
 #: A small marked workflow: sampler 3 [lore:seed], prompt 6 [lore:prompt],
@@ -391,6 +400,40 @@ def read_table_grid(doc, table_id: str) -> dict | None:
         return None
     widths, rows = _table_columns_and_rows(tables[table_id])
     return {"columns": widths, "rows": rows}
+
+
+def make_table(doc, table_id: str, matrix: list[list[str]], widths: list[int] | None = None) -> None:
+    """Test builder: one schema-v2 table from a matrix (width = widest row), through the
+    production builder so fixtures and the model cannot drift on shape."""
+    from pycrdt import Map
+
+    from table_serialize import DEFAULT_COLUMN_WIDTH, _build_table
+
+    width = max((len(r) for r in matrix), default=0)
+    cols = [(widths or [])[i] if i < len(widths or []) else DEFAULT_COLUMN_WIDTH for i in range(width)]
+    with doc.transaction():
+        _build_table(doc.get("tables", type=Map), table_id, cols, matrix)
+
+
+def cell_ids(doc, table_id: str, row: int, col: int) -> tuple[str, str]:
+    """Test oracle: a display position → ``(row_id, col_id)`` through the production
+    order function."""
+    from pycrdt import Map
+
+    from table_serialize import ordered_ids
+
+    row_ids, col_ids = ordered_ids(doc.get("tables", type=Map)[table_id])
+    return row_ids[row], col_ids[col]
+
+
+def cell_text(doc, table_id: str, row: int, col: int):
+    """Test oracle: the cell ``Y.Text`` at a display position."""
+    from pycrdt import Map
+
+    from table_serialize import cell_key
+
+    rid, cid = cell_ids(doc, table_id, row, col)
+    return doc.get("tables", type=Map)[table_id]["cells"][cell_key(rid, cid)]
 
 
 async def derive_content(entity_id: str) -> str:

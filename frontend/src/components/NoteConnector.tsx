@@ -54,6 +54,18 @@ export function findAnchorCoords(noteId: string, getView: () => EditorView | nul
   return rangeEndCoords(view, findNoteAnchorRange(view.state, noteId));
 }
 
+/**
+ * Right edge of the first `[data-note-id]` mark under `root` — the anchor of a note that
+ * is not in the editor's text (a table-cell note, painted by the cell editor or its
+ * static placeholder).
+ */
+export function findMarkCoords(noteId: string, root: HTMLElement | null | undefined): { x: number; y: number } | null {
+  const mark = root?.querySelector(`.cm-note-anchor[data-note-id="${CSS.escape(noteId)}"]`);
+  if (!mark) return null;
+  const rect = mark.getClientRects()[0] ?? mark.getBoundingClientRect();
+  return { x: rect.right, y: (rect.top + rect.bottom) / 2 };
+}
+
 export function findPanelCoords(): { x: number; y: number } | null {
   const el = document.querySelector('aside.right-panel');
   if (!el) return null;
@@ -113,7 +125,9 @@ export function NoteConnector() {
       // → connector hidden until ready (the role-view tick restarts this effect
       // and re-resolves as soon as the secondary column mounts).
       const view = owningRole ? getRoleView(owningRole) : getEditorView();
-      const anchor = findAnchorCoords(connectedNoteId!, () => view);
+      const hostView = owningRole ? view : getRootEditorView();
+      const anchor = findAnchorCoords(connectedNoteId!, () => view)
+        ?? findMarkCoords(connectedNoteId!, (hostView ?? view)?.dom);
       const panel = findPanelCoords();
       if (anchor && panel) {
         setCoords({ x1: anchor.x, y1: anchor.y, x2: panel.x, y2: panel.y });
@@ -153,11 +167,17 @@ export function NoteConnector() {
     listenedView?.dispatch({ effects: noteConnectorListenerCompartment.reconfigure(
       EditorView.updateListener.of(() => schedule()),
     ) });
+    // WHY a DOM observer: a table cell mounting/unmounting its editor or repainting its
+    // placeholder moves a cell note's mark without any host transaction.
+    const cellObserver = new MutationObserver(schedule);
+    const tableRoot = listenedView?.contentDOM;
+    if (tableRoot) cellObserver.observe(tableRoot, { childList: true, subtree: true });
 
     return () => {
       window.removeEventListener('scroll', schedule, true);
       window.removeEventListener('resize', schedule);
       listenedView?.dispatch({ effects: noteConnectorListenerCompartment.reconfigure([]) });
+      cellObserver.disconnect();
       if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = 0; }
     };
     // owningRole + roleViewTick restart the listeners when the owning

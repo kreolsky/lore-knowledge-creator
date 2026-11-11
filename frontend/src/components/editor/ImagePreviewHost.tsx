@@ -2,8 +2,8 @@
  * Full-image preview for editor images: listens for `editor-image-preview`
  * (ImageWidget click) and shows the chat's ImageLightbox over the HOST
  * document's gallery. A click inside a transclusion or a table cell opens the
- * outermost editor's gallery; an image that gallery does not hold (a table cell's
- * own) opens alone.
+ * outermost editor's gallery — one list across the text, transclusions and every
+ * table's cells; an image that gallery does not hold opens alone.
  */
 
 import { useEffect, useState } from 'react';
@@ -13,6 +13,8 @@ import type { EventMap } from '../../events';
 import { useTranslation } from '../../i18n';
 import { ImageLightbox } from '../chat/MessageBubble/internal/image-lightbox';
 import { collectGallery, galleryIndexOf } from './image-gallery';
+import { tableDocSource } from './live-preview/table-doc-source';
+import { entityYdoc } from '../../editor/active-editor';
 
 interface Gallery {
   srcs: string[];
@@ -37,7 +39,7 @@ function buildGallery({ src, element, editorView }: EventMap['editor-image-previ
   const anchor = host === editorView ? element : inner;
   let pos: number | null = null;
   try { pos = host.posAtDOM(anchor); } catch { /* detached: fall back to the first match */ }
-  const items = collectGallery(host.state);
+  const items = collectGallery(host.state, host.state.facet(tableDocSource) ?? entityYdoc(host) ?? null);
   const index = galleryIndexOf(items, src, pos);
   return index < 0 ? { srcs: [src], index: 0 } : { srcs: items.map((i) => i.src), index };
 }

@@ -1,77 +1,52 @@
 """Tool-API sandbox bash — the console tool handlers + foreground exec path.
 
-Behavior-identical split;
-subsystem overview and SYSTEM marker live in sandbox/__init__.py. Test patches
+Subsystem overview and SYSTEM marker live in sandbox/__init__.py. Test patches
 for the exec seam on the foreground path and for the external-agent credential
 target sandbox.bash.
 """
 
 import asyncio
 import logging
-import shlex
+import uuid
 
 import settings
+from agent import collab_writes
 from agent.context import get_agent_context
+from agent.doc_state import resolve_live_doc_state, route_document_content
 from agent_skills import frontmatter_name
+from artifacts import artifact_max_bytes, assert_artifact_size, is_artifact_row
 from fastapi import Body, Depends, HTTPException
 
-from models import ToolSandboxBash, ToolSandboxFetchReference, ToolSandboxFetchSkill
+from db import fetch_one
+from models import (
+    ToolReplaceArtifactPage,
+    ToolSandboxBash,
+    ToolSandboxFetchArtifact,
+    ToolSandboxFetchReference,
+    ToolSandboxFetchSkill,
+)
+from routes.tool_api._common import _refuse_unconfirmable, _resolve_apply_or_force
 from routes.tool_api_telemetry import track_agent_tool
+from scope import gate_mutation_target
 
 from .files import (
     _require_console_key,
     _require_full_project_access,
+    read_workspace_file,
     write_workspace_file,
 )
-from .runs import _spawn_detached
+from .runs import _FG_SLICE_BUDGET, _build_foreground_script, _spawn_detached
 from .transport import (
-    _TIMEOUT_EXIT_CODES,
     DEFAULT_COMMAND_TIMEOUT_S,
     MAX_COMMAND_TIMEOUT_S,
     MIN_COMMAND_TIMEOUT_S,
     SSH_TIMEOUT_SLACK_S,
-    TIMEOUT_KILL_GRACE_S,
     _require_sandbox_configured,
     _ssh_exec,
     workspace_for,
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _wrap_command(command: str, workspace: str, timeout: float) -> str:
-    """Build the shell line: ensure the workspace + venv exist, then run the command
-    under a REMOTE timeout.
-
-    Ensuring is two shell lines, not a service — the filesystem is the state, so
-    `mkdir -p` + a venv check IS the whole "does this user's sandbox exist" logic.
-
-    # WHY HOME is pointed at the workspace: pip's user-level config, ~/.cache and the
-    # venv all follow HOME, so a per-user HOME is what actually keeps two users' Python
-    # environments apart. The venv activation lives INSIDE the timeout'd inner shell so
-    # `python` resolves to the per-user venv. `source` is safe here because the agent
-    # user's login shell is bash (see the Dockerfile / the CT 703 runbook), which is
-    # what sshd runs the command with.
-
-    # WHY: the wall-clock timeout is enforced by `timeout` ON THE SANDBOX, not by
-    # the SSH client. Why: an asyncssh client-side timeout only abandons the channel —
-    # the remote process keeps running forever. Verified before this existed: after a
-    # client TimeoutError, `pgrep -f "sleep 120"` still listed the process. On a box
-    # shared by every user, each timed-out command would leak a process permanently,
-    # which is exactly the "one runaway process starves everyone" risk. `-k` escalates
-    # to SIGKILL for a command that ignores SIGTERM.
-    """
-    ws = shlex.quote(workspace)
-    inner = f"source {ws}/.venv/bin/activate; {command}"
-    return (
-        f"set -e; "
-        f"export HOME={ws}; "
-        f"mkdir -p {ws}; "
-        f"cd {ws}; "
-        f"[ -d {ws}/.venv ] || python3 -m venv {ws}/.venv; "
-        f"set +e; "
-        f"timeout -k {TIMEOUT_KILL_GRACE_S} {timeout:.0f} bash -c {shlex.quote(inner)}"
-    )
 
 
 #: The variable name the credential lands under inside the run. Prefixed LORE_ because
@@ -113,14 +88,21 @@ async def tool_sandbox_bash(
 ):
     """Run a bash command in the invoking user's sandbox workspace.
 
-    Returns the exec contract — stdout/stderr/exit_code/truncated/timed_out. A
-    non-zero exit is a RESULT, not an HTTP error: the agent needs to read the failure
-    (a compiler message, a traceback) to fix its own next command. HTTP errors are
-    reserved for "you may not do this at all" and "the sandbox is not reachable".
+    Returns the exec contract: `status` — `"exited"` (with `exit_code`),
+    `"running"` (the wait deadline passed and the command was PROMOTED: it
+    keeps running in the background, collect with `sandbox_run_status` or stop
+    with `sandbox_run_kill`), or `"killed"` (the run vanished without an
+    `exit`, e.g. its `.runs` dir was deleted) — plus bounded head+tail slices
+    of stdout/stderr, byte counts, `run_id` and `log_dir` (the run's full
+    logs). `timed_out` is true only on the SSH backstop (a wedged connection).
+    A non-zero exit is a RESULT, not an HTTP error: the agent needs to read
+    the failure (a compiler message, a traceback) to fix its own next
+    command. HTTP errors are reserved for "you may not do this at all" and
+    "the sandbox is not reachable".
 
-    With `detach: true` it returns `{status: "running", run_id}` at once and the run
-    continues in the background under the detached ceiling; collect it with
-    `sandbox_run_status` (read-only), in this or a later turn.
+    With `detach: true` it returns `{status: "running", run_id}` at once and
+    the run continues in the background under the detached ceiling; collect it
+    with `sandbox_run_status` (read-only), in this or a later turn.
     """
     _require_console_key(ctx)
     await _require_sandbox_configured()
@@ -145,38 +127,144 @@ async def tool_sandbox_bash(
     return await _exec_foreground(body.command, workspace, timeout, env)
 
 
+def _wedged_result(
+    run_id: str, run_dir: str, workspace: str, timeout: float,
+) -> dict:
+    """The SSH-backstop result: the connection wedged, the run may be alive
+    for up to the detached ceiling — return its handle with a stderr line
+    naming the situation, never a handle-less result the agent can neither
+    collect nor stop."""
+    return {
+        "status": "running",
+        "timed_out": True,
+        "exit_code": None,
+        "run_id": run_id,
+        "log_dir": run_dir,
+        "stdout": "",
+        "stderr": (
+            f"Sandbox connection hung after {timeout:.0f}s; the command "
+            "was NOT killed and keeps running in the background — "
+            "collect it with sandbox_run_status or stop it with "
+            "sandbox_run_kill."
+        ),
+        "stdout_bytes": 0,
+        "stderr_bytes": 0,
+        "truncated": False,
+        "workspace": workspace,
+    }
+
+
 async def _exec_foreground(
     command: str, workspace: str, timeout: float, env: dict | None = None,
 ) -> dict:
-    """Run one foreground command to completion and shape the exec-contract result."""
-    wrapped = _wrap_command(command, workspace, timeout)
+    """Start the command as a RUN, wait up to `timeout`, and shape the result.
+
+    The script (`_build_foreground_script`) writes out.log/err.log on the
+    sandbox and prints bounded slices, so the web process never buffers more
+    than the caps — and the run outlives the call: at the wait deadline it is
+    promoted (STATUS=running) under the detached ceiling rather than killed.
+    See the builder's WHY comments for the memory bound and the gone-run
+    state machine.
+    """
+    ceilings = await settings.get_all(
+        ["SANDBOX_RUNS_GC_DAYS", "SANDBOX_DETACH_TIMEOUT_S"]
+    )
+    run_id = uuid.uuid4().hex
+    run_dir = f"{workspace}/.runs/{run_id}"
+    script = _build_foreground_script(
+        command, workspace, run_dir, timeout,
+        gc_days=ceilings["SANDBOX_RUNS_GC_DAYS"],
+        detach_ceiling=ceilings["SANDBOX_DETACH_TIMEOUT_S"],
+    )
     try:
-        # The SSH deadline is deliberately LATER than the remote one: the sandbox kills
-        # the command itself, and this only catches a connection that never returns.
+        # The SSH deadline is deliberately LATER than the script's own poll
+        # deadline: the script returns on its own at `timeout`, and this only
+        # catches a connection that never comes back.
         result = await _ssh_exec(
-            wrapped, timeout=timeout + SSH_TIMEOUT_SLACK_S, env=env,
+            script, timeout=timeout + SSH_TIMEOUT_SLACK_S, env=env,
         )
     except asyncio.TimeoutError:
-        # The backstop fired — the remote `timeout` should have returned 124 first, so
-        # this means the CONNECTION is wedged, not the command. Still a result, not a
-        # 500: a timeout is information the agent can act on and the turn continues.
-        return {
-            "stdout": "", "stderr": f"Command exceeded the {timeout:.0f}s timeout.",
-            "exit_code": 124, "truncated": False, "timed_out": True,
-            "workspace": workspace,
-        }
+        return _wedged_result(run_id, run_dir, workspace, timeout)
     except Exception as exc:
         # No silent degradation: a broken sandbox must say so, not look like an empty
         # result the agent would read as "the command printed nothing".
         logger.warning("sandbox exec failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail=f"Sandbox unreachable: {exc}") from exc
 
-    # The normal timeout path: the sandbox's own `timeout` killed the command and
-    # reported it through the exit code, so the call returns like any other result.
-    timed_out = result.get("exit_code") in _TIMEOUT_EXIT_CODES
-    if timed_out and not (result.get("stderr") or "").strip():
-        result["stderr"] = f"Command exceeded the {timeout:.0f}s timeout and was killed."
-    return {**result, "timed_out": timed_out, "workspace": workspace}
+    if result.get("exit_code") != 0:
+        # The script runs `set +e` before the run starts, so a non-zero here
+        # means its set -e PREPARATION prefix died (workspace/venv setup) and
+        # the command never started. 502, never a fake empty result.
+        err = (result.get("stderr") or "").strip()
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to prepare the sandbox run: {err or result.get('exit_code')}",
+        )
+    return _foreground_result(result, run_id, run_dir, workspace)
+
+
+def _parse_foreground_meta(stdout: str) -> tuple[dict[str, str], str]:
+    """Split the script's leading metadata lines off its stdout slice.
+
+    Positional, not marker-scanned: the header is a fixed sequence (STATUS,
+    EXIT only when exited, OUT_BYTES, ERR_BYTES) printed BEFORE the slice —
+    so the slice may contain anything, including lines that look like
+    metadata, without shifting the parse. An absent STATUS is the caller's
+    broken-far-end signal.
+    """
+    lines = stdout.split("\n")
+    meta: dict[str, str] = {}
+    i = 0
+    for key in ("STATUS", "EXIT", "OUT_BYTES", "ERR_BYTES"):
+        if i >= len(lines) or not lines[i].startswith(f"{key}="):
+            if key == "EXIT":
+                continue  # printed only for an exited run
+            break
+        meta[key] = lines[i][len(key) + 1:]
+        i += 1
+    return meta, "\n".join(lines[i:])
+
+
+def _foreground_result(
+    result: dict, run_id: str, run_dir: str, workspace: str,
+) -> dict:
+    """Map the script's output onto the foreground result contract."""
+    meta, out_slice = _parse_foreground_meta(result.get("stdout") or "")
+    state = meta.get("STATUS")
+    if state not in ("exited", "running", "killed"):
+        # Never a guessed status: no STATUS line means a broken far end.
+        raise HTTPException(
+            status_code=502, detail="Sandbox returned no foreground status",
+        )
+    exit_code = None
+    if state == "exited":
+        try:
+            exit_code = int(meta.get("EXIT", ""))
+        except ValueError:
+            # A truncated/absent EXIT line for a finished run: "unknown" (None)
+            # is the honest parse, same as the run-status tool.
+            exit_code = None
+
+    def _bytes(key: str) -> int:
+        try:
+            return int(meta.get(key, "0"))
+        except ValueError:
+            return 0
+
+    out_bytes, err_bytes = _bytes("OUT_BYTES"), _bytes("ERR_BYTES")
+    return {
+        "status": state,
+        "timed_out": False,
+        "exit_code": exit_code,
+        "run_id": run_id,
+        "log_dir": run_dir,
+        "stdout": out_slice,
+        "stderr": result.get("stderr") or "",
+        "stdout_bytes": out_bytes,
+        "stderr_bytes": err_bytes,
+        "truncated": out_bytes > _FG_SLICE_BUDGET or err_bytes > _FG_SLICE_BUDGET,
+        "workspace": workspace,
+    }
 
 
 # INVARIANT: the route path MUST equal the tool name exactly (see the note on
@@ -230,6 +318,157 @@ async def tool_sandbox_fetch_reference(
         "reference_id": body.ref_id,
         "filename": safe_name,
     }
+
+
+# INVARIANT: the route path MUST equal the tool name exactly (see tool_sandbox_bash).
+# Why: the dsh driver builds the URL generically — a path divergence is a silent 404.
+@track_agent_tool("sandbox_fetch_artifact")
+async def tool_sandbox_fetch_artifact(
+    body: ToolSandboxFetchArtifact = Body(...),
+    ctx: dict = Depends(get_agent_context),
+):
+    """Write an html page's LIVE source into the invoking user's workspace.
+
+    The first step of rewriting an existing page in place: the source lands
+    at `artifacts/<document_id>/index.html` (a re-fetch overwrites itself),
+    the agent edits/checks it here with `sandbox_bash`, then
+    `replace_artifact_page` writes it back into the SAME document. The
+    source is the live CRDT text — what a connected editor would see, not
+    the DB content column.
+    """
+    _require_console_key(ctx)
+    await _require_sandbox_configured()
+    await _require_full_project_access(ctx)
+
+    doc = await fetch_one("documents", body.document_id)
+    if (
+        not doc or doc.get("deleted_at")
+        or doc.get("project_id") != ctx["project_id"]
+    ):
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not is_artifact_row(doc):
+        raise HTTPException(
+            status_code=422,
+            detail="sandbox_fetch_artifact targets an html page — a markdown "
+                   "document is read with read_document",
+        )
+
+    live, _ = await resolve_live_doc_state(body.document_id)
+    try:
+        ws_path = await write_workspace_file(
+            ctx, f"artifacts/{body.document_id}/index.html", live.encode("utf-8"),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # No silent degradation: a broken sandbox must say so (matches sandbox_bash).
+        logger.warning("sandbox fetch_artifact write failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=502, detail=f"Sandbox unreachable: {exc}",
+        ) from exc
+
+    return {"status": "applied", "doc_id": body.document_id, "path": ws_path}
+
+
+async def _read_replacement_page(ctx: dict, sandbox_path: str) -> str:
+    """Read + validate a sandbox file as an html page's replacement body.
+
+    Every failure is named for the model: 404/403 pass through from
+    read_workspace_file (missing file / symlink escape), oversize is the
+    writers' 422 naming the cap (the read is bounded by that SAME live cap),
+    any other read failure is a 502 "Sandbox unreachable" (never a bare 500
+    the model would retry blind), non-UTF-8 is a 422, an empty page is a 400.
+    """
+    cap = await artifact_max_bytes()
+    try:
+        raw = await read_workspace_file(ctx, sandbox_path, max_bytes=cap)
+    except HTTPException as exc:
+        if exc.status_code == 413:
+            # WHY: the bounded read refuses past the cap with a bare "File too
+            # large"; re-raise as the writers' own 422 so the model learns the cap.
+            await assert_artifact_size(cap + 1)
+        raise
+    except Exception as exc:
+        logger.warning("replace_artifact_page sandbox read failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=502, detail=f"Sandbox unreachable: {exc}",
+        ) from exc
+
+    try:
+        new_content = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=422, detail="sandbox file is not valid UTF-8 page source",
+        ) from exc
+    if not new_content.strip():
+        raise HTTPException(status_code=400, detail="content is empty")
+    await assert_artifact_size(len(raw))
+    return new_content
+
+
+async def _gate_replace_target(ctx: dict, body: ToolReplaceArtifactPage) -> None:
+    """RBAC+scope (gate_mutation_target), html-only, then the apply cell —
+    every refusal before the sandbox is read or the page is written."""
+    target, _ = await gate_mutation_target(
+        user=ctx["user"], doc_id=body.document_id,
+        project_id=ctx["project_id"], scope_root=ctx.get("scope_root"),
+    )
+    if not is_artifact_row(target):
+        raise HTTPException(
+            status_code=422,
+            detail="replace_artifact_page targets an html page; a markdown "
+                   "document is edited with edit_document",
+        )
+    decision = await _resolve_apply_or_force(
+        ctx, ui_preference=body.apply.value, is_system=bool(target.get("is_system")),
+    )
+    # INVARIANT(security): a `confirm` call is refused with the 409 ask signal.
+    # Why: the driver holds a call ONLY on that 409 — a whole-body rewrite must
+    # not bypass the approval `edit_document` gets on the same page.
+    if decision.mode != "auto":
+        _refuse_unconfirmable("replace_artifact_page")
+
+
+# INVARIANT: the route path MUST equal the tool name exactly (see tool_sandbox_bash).
+# Why: the dsh driver builds the URL generically — a path divergence is a silent 404.
+@track_agent_tool("replace_artifact_page")
+async def tool_replace_artifact_page(
+    body: ToolReplaceArtifactPage = Body(...),
+    ctx: dict = Depends(get_agent_context),
+):
+    """Replace an html page's WHOLE body with a sandbox-built file, keeping
+    the SAME document (id, links, History, tree place).
+
+    The route for a large rewrite of an existing page — restructure the
+    markup, rework an inline script — instead of creating a duplicate:
+    `sandbox_fetch_artifact` → edit the file with `sandbox_bash` → this tool.
+    Checkpointed (History restores the pre-replace page); an unchanged file
+    is a no-op (no checkpoint, no write); markdown documents are refused;
+    point edits stay with `edit_document`. A `confirm` call is refused with
+    the ask signal, exactly like `edit_document`.
+    """
+    _require_console_key(ctx)
+    await _require_sandbox_configured()
+    await _gate_replace_target(ctx, body)
+    new_content = await _read_replacement_page(ctx, body.sandbox_path)
+
+    live, _ = await resolve_live_doc_state(body.document_id)
+    if live == new_content:
+        return {"status": "applied", "doc_id": body.document_id, "changed": False}
+
+    # INVARIANT(data-loss): the checkpoint runs BEFORE the write. Why: the
+    # replace overwrites the whole body, and the checkpoint is the only route
+    # back to the pre-replace page — including a human's Source-view edits
+    # made after the agent's fetch.
+    await collab_writes._create_agent_pre_edit_checkpoint(
+        document_id=body.document_id, content=live, tables_json=None,
+        original_preview=live[:80],
+    )
+    await route_document_content(
+        doc_id=body.document_id, new_content=new_content,
+        project_id=ctx["project_id"],
+    )
+    return {"status": "applied", "doc_id": body.document_id, "changed": True}
 
 
 async def _resolve_skill_bundle(ctx: dict, name: str) -> tuple[str, list[tuple[str, str]]]:

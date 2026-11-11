@@ -101,7 +101,7 @@ export function InfoTab() {
           <div>
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs text-text-dim">{t('infoLogicalEstimate')}</span>
-              <Button size="sm" onClick={() => load(true)} disabled={loading}>
+              <Button onClick={() => load(true)} disabled={loading}>
                 {loading ? t('infoMeasuring') : t('infoRefresh')}
               </Button>
             </div>

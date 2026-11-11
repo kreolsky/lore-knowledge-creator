@@ -125,7 +125,7 @@ export function buildEditorExtensions(deps: EditorExtensionDeps): Extension[] {
     // File-drop import (drag a .docx/text file into the body) — see useEditorFileDrop.
     deps.fileDropExtension,
     // see SYSTEM: table-block — clone a pasted duplicate anchor to its own model and drop a
-    // model whose anchor line was deleted. Debounced host-doc trigger; see table-reconcile.
+    // model whose anchor was deleted whole. Host-doc trigger; see table-reconcile.
     // WHY: disabled on the snapshot-preview instance (a pure viewer) — same
     // belt-and-braces pattern as liveHeadingsExtension, on top of the fire-time doc
     // identity guard in table-reconcile.  Why: the preview is a pure viewer — belt-and-braces over the fire-time identity guard

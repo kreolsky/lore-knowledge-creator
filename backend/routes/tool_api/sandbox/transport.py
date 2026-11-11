@@ -7,13 +7,19 @@ its seam here, so test patches target sandbox.transport for the config gate
 and the connection policy.
 """
 
+import asyncio
 import base64
 import hashlib
+import json
+import logging
 import posixpath
+import time
 from contextlib import asynccontextmanager
 
 import settings
 from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
 
 WORKSPACE_ROOT = "/workspace"
 DEFAULT_COMMAND_TIMEOUT_S = 60.0
@@ -39,6 +45,11 @@ TIMEOUT_KILL_GRACE_S = 5
 # ever returning, so it must fire LATER — otherwise the client gives up first and we
 # are back to leaking the remote process.
 SSH_TIMEOUT_SLACK_S = 15
+# Deadline for ESTABLISHING a connection. Why: asyncssh 2.24 without one waits
+# for the OS TCP timeout on a black-holed address (~2 min), and the turn path
+# (the manifest refresh) plus every tool call would hang behind it.
+CONNECT_TIMEOUT_S = 10
+
 # Exit codes GNU `timeout` uses: 124 = killed on SIGTERM, 137 = 128+SIGKILL (the -k
 # escalation for a command that ignored SIGTERM).
 _TIMEOUT_EXIT_CODES = frozenset({124, 137})
@@ -52,8 +63,14 @@ _TIMEOUT_EXIT_CODES = frozenset({124, 137})
 # never push the total stdout past the exec cap (`_ssh_exec` keeps the FIRST
 # MAX_OUTPUT_CHARS chars, so the TAIL_END marker and the tail's END — the most
 # recent output — would be lost). Truncation is still REPORTED via the SIZE
-# line, never silent.
+# lines, never silent.
 _STATUS_TAIL_RESERVE = 2048
+# Sibling of _STATUS_TAIL_RESERVE for the FOREGROUND script: kept OFF each
+# stream's slice budget (runs.py) so the metadata lines (STATUS/EXIT/OUT_BYTES/
+# ERR_BYTES) and the elision line never push a stream past the same exec cap.
+# The metadata prints BEFORE the slice precisely so the head-keeping exec cap
+# can never eat it.
+_FG_SLICE_RESERVE = 2048
 
 
 def workspace_for(user_id: str) -> str:
@@ -124,9 +141,18 @@ async def _ssh_exec(command: str, *, timeout: float, env: dict | None = None) ->
     # anything on its disk outlives the run for every other user's runs too. The far end
     # must list the variable in sshd's AcceptEnv (see sandbox/Dockerfile) or it is
     # dropped silently — hence the delivery test that asserts the wire, not the intent.
+
+    # WHY errors="replace" on the decode: asyncssh defaults to 'strict', and the
+    # foreground slices cut logs at BYTE boundaries (head -c/tail -c) — a cut
+    # mid-UTF-8 (or any binary a command prints) would raise UnicodeDecodeError
+    # in here and surface as a 502 "Sandbox unreachable" for a call that
+    # succeeded. Replaced characters are information; a raise is a lie.
     """
     async with _sandbox_connect() as conn:
-        result = await conn.run(command, check=False, timeout=timeout, env=env or {})
+        result = await conn.run(
+            command, check=False, timeout=timeout, env=env or {},
+            errors="replace",
+        )
         out = result.stdout or ""
         err = result.stderr or ""
         truncated = len(out) > MAX_OUTPUT_CHARS or len(err) > MAX_OUTPUT_CHARS
@@ -146,7 +172,7 @@ async def _sandbox_connect():
     # Why: a second connection call site drifts silently (exec pinned while SFTP lax) — one home enforces uniform hardening.
     # disables host-key verification; the client key is the auth identity). Every channel
     # to the sandbox — exec, stat, read, write — MUST route through here so a policy change
-    # (pinning the host key, adding a connect deadline, keepalive) lands in ONE place. A
+    # (pinning the host key, the connect deadline, keepalive) lands in ONE place. A
     # second copy drifts silently: exec pinned while an SFTP channel still accepts any host
     # key, accepting traffic on a channel the hardening was meant to cover.
 
@@ -170,6 +196,7 @@ async def _sandbox_connect():
         username=conn_cfg["SANDBOX_SSH_USER"],
         client_keys=[key],
         known_hosts=None,
+        connect_timeout=CONNECT_TIMEOUT_S,
     ) as conn:
         yield conn
 
@@ -300,3 +327,116 @@ async def _sftp_put(local_path: str, ws_path: str) -> None:
     async with _sandbox_sftp() as sftp:
         await _sftp_makedirs(sftp, ws_path)
         await sftp.put(local_path, ws_path)
+
+
+# ─── Provisioned-environment manifest (the {{SANDBOX_ENV}} render) ────────────
+#
+# ARCH: provision.sh (image build + prod deploy) writes /etc/lore-sandbox/
+# manifest.json on the sandbox — the python/node/chromium versions and every
+# requirements.txt name with its ACTUALLY installed version. The served
+# sandbox_bash description renders one line from it, so the model knows the
+# environment it is programming against WITH versions (pandas 2 → 3 API breaks
+# matter to it) without spending a tool call.
+#
+# The turn path NEVER waits on SSH for this: agent_toolset() runs on EVERY
+# AI-chat turn, so the cache is read synchronously and refreshed by ONE
+# background task (single-flight). Empty cache ⇒ the truthful neutral line. A
+# failed refresh backs off for _MANIFEST_RETRY_S, so a dead box costs one
+# attempt per minute, not one per turn.
+
+#: Age at which a cached manifest triggers a refresh (stale-while-revalidate:
+#: turns inside the window render the PREVIOUS manifest, accepted for the
+#: deploy window).
+_MANIFEST_TTL_S = 600.0
+#: Backoff after any refresh ATTEMPT, success or failure — the retry cadence
+#: when the box is dead or the manifest unreadable.
+_MANIFEST_RETRY_S = 60.0
+#: Wall budget for one refresh (the connect deadline rides inside it).
+_MANIFEST_FETCH_S = 10.0
+
+#: Rendered when no manifest has been fetched (old image, a box before its
+#: first provisioning, or every refresh so far failed) — truthful, and names
+#: the escape hatch.
+SANDBOX_ENV_NEUTRAL_LINE = "The installed package list is unavailable; check with `pip list`."
+
+_manifest_cache: dict | None = None
+#: last SUCCESS, monotonic (0 = nothing fetched yet).
+_manifest_read_at = 0.0
+#: last ATTEMPT, success or failure, monotonic.
+_manifest_attempt_at = 0.0
+#: Strong ref to the in-flight refresh (a fire-and-forget task without one can
+#: be collected mid-run), and the single-flight gate.
+_manifest_task: asyncio.Task | None = None
+
+
+async def _manifest_refresh() -> None:
+    """Fetch and cache the manifest; a failure is logged and only backs off."""
+    global _manifest_cache, _manifest_read_at, _manifest_attempt_at
+    try:
+        vals = await settings.get_all(["SANDBOX_SSH_HOST", "SANDBOX_SSH_KEY_B64"])
+        if not (vals["SANDBOX_SSH_HOST"] and vals["SANDBOX_SSH_KEY_B64"]):
+            # No sandbox wired: nothing to fetch, nothing to warn about.
+            return
+        result = await asyncio.wait_for(
+            _ssh_exec(
+                "cat /etc/lore-sandbox/manifest.json",
+                timeout=_MANIFEST_FETCH_S,
+            ),
+            _MANIFEST_FETCH_S,
+        )
+        manifest = json.loads(result.get("stdout") or "")
+        if not isinstance(manifest, dict):
+            raise ValueError("manifest.json is not a JSON object")
+        _manifest_cache = manifest
+        _manifest_read_at = time.monotonic()
+    except Exception as exc:
+        logger.warning("sandbox manifest refresh failed: %s", exc)
+    finally:
+        _manifest_attempt_at = time.monotonic()
+
+
+def _schedule_manifest_refresh() -> None:
+    """Start ONE background refresh if the cache is empty/stale and the retry
+    backoff allows. Never awaited by a caller — the turn path renders with
+    what it has."""
+    global _manifest_task
+    now = time.monotonic()
+    fresh = (
+        _manifest_cache is not None
+        and now - _manifest_read_at <= _MANIFEST_TTL_S
+    )
+    if fresh or now - _manifest_attempt_at < _MANIFEST_RETRY_S:
+        return
+    if _manifest_task is not None and not _manifest_task.done():
+        return  # single-flight: one refresh in flight, never one per turn
+    _manifest_task = asyncio.get_running_loop().create_task(_manifest_refresh())
+
+
+def sandbox_env_fill() -> str:
+    """The {{SANDBOX_ENV}} fill: the cached manifest as one line of the served
+    sandbox_bash description. Schedules the background refresh as a side
+    effect — the only caller is the agent toolset render, on the turn path,
+    which must not wait on SSH."""
+    _schedule_manifest_refresh()
+    manifest = _manifest_cache
+    if not isinstance(manifest, dict):
+        return SANDBOX_ENV_NEUTRAL_LINE
+    parts = []
+    for key, label in (("python", "Python"), ("node", "Node"), ("chromium", "Chromium")):
+        if manifest.get(key):
+            suffix = " (Playwright)" if key == "chromium" else ""
+            parts.append(f"{label} {manifest[key]}{suffix}")
+    packages = manifest.get("packages")
+    versions = [
+        f"{name} {version}"
+        for name, version in (packages or {}).items()
+        if version
+    ]
+    if not parts and not versions:
+        return SANDBOX_ENV_NEUTRAL_LINE
+    segments = []
+    if parts:
+        segments.append("Installed: " + ", ".join(parts))
+    if versions:
+        segments.append("Python packages: " + ", ".join(versions))
+    return "; ".join(segments)

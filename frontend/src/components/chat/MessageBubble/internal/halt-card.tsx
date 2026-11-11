@@ -68,7 +68,7 @@ export function HaltCard({ reason, steps, limit, toolCallCount, onContinue }: {
                 effectively invisible against it. `disconnected` is excluded: the frame
                 consumer is gone, so resume is a fresh consolidate_memory call (which
                 auto-resumes off the reference stamp), not a Continue on this card. */}
-            <Button variant="primary" size="sm" onClick={onContinue}>
+            <Button variant="primary" onClick={onContinue}>
               {t('chatHaltContinue')}
             </Button>
           </div>
