@@ -8,8 +8,10 @@ from agent.context import get_agent_context
 from fastapi import Body, Depends, HTTPException
 
 from models import (
+    ToolDiffDocumentVersions,
     ToolGetLinks,
     ToolGetProjectStructure,
+    ToolListDocumentVersions,
     ToolReadDocument,
     ToolSearch,
 )
@@ -100,13 +102,41 @@ async def tool_read_document(
     result = await read_document_tool(
         doc_id=body.document_id, project_id=ctx["project_id"], user=user,
         tables=body.tables, table_id=body.table_id,
-        offset=body.offset, limit=body.limit,
+        offset=body.offset, limit=body.limit, version=body.version,
         scope_root=ctx.get("scope_root"),
     )
+    return _raise_soft_error(result)
+
+
+def _raise_soft_error(result: dict) -> dict:
+    """Map an executor's soft error to HTTP (no silent degradation); pass a result through."""
     if "error" in result:
-        # Map the agent executor's soft errors to HTTP codes (no silent degradation).
         err = result["error"]
         if "not found" in err or "not in this project" in err:
             raise HTTPException(status_code=404, detail=err)
         raise HTTPException(status_code=403, detail=err)
     return result
+
+
+@track_agent_tool("list_document_versions")
+async def tool_list_document_versions(
+    body: ToolListDocumentVersions, ctx: dict = Depends(get_agent_context),
+):
+    from agent.history_executors import list_document_versions_tool
+    return _raise_soft_error(await list_document_versions_tool(
+        doc_id=body.document_id, project_id=ctx["project_id"], user=ctx["user"],
+        scope_root=ctx.get("scope_root"), limit=body.limit,
+        before_checkpoint_id=body.before_checkpoint_id,
+    ))
+
+
+@track_agent_tool("diff_document_versions")
+async def tool_diff_document_versions(
+    body: ToolDiffDocumentVersions, ctx: dict = Depends(get_agent_context),
+):
+    from agent.history_executors import diff_document_versions_tool
+    return _raise_soft_error(await diff_document_versions_tool(
+        doc_id=body.document_id, project_id=ctx["project_id"], user=ctx["user"],
+        scope_root=ctx.get("scope_root"), from_checkpoint_id=body.from_checkpoint_id,
+        to=body.to,
+    ))

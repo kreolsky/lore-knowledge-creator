@@ -14,7 +14,7 @@ When you select text, a pop-up toolbar appears:
 - link;
 - note (a discussion attached to the selected text);
 - "Create reference from selection" — the selected fragment becomes a reference of the document;
-- "Work with selection" — hands the selected fragment to the agent in the chat.
+- "Quote in chat" — puts the selected fragment into the chat input as a quote with a link back to that place in the document (see [Chat and the agent](help:chat-agent)).
 
 Almost everything on the toolbar is also available from the keyboard.
 
@@ -41,11 +41,12 @@ Almost everything on the toolbar is also available from the keyboard.
 | Highlight color | ⌘ O |
 | Insert table | ⇧ ⌘ T |
 | Find and replace | ⌘ F |
-| Work with selection (agent) | ⌘ J |
+| Quote in chat | ⌘ J |
 | Voice input | ⌘ D |
 | Save snapshot | ⌘ S |
 | Show raw markup or return to rendering | ⌘ / |
 | Hide or show the left panel | ⌘ \ |
+| Wider or narrower text column | ⌃ ⌥ ] or ⌃ ⌥ [ (Control, not ⌘, on macOS too) |
 | Send a chat message | ⌘ Enter |
 
 ## Highlight colors
@@ -55,7 +56,7 @@ Highlight colors mark fragments of text: orange, blue, green, purple, yellow. Th
 ## Markup shown in finished form
 
 - Headings, lists, quotes, checkboxes (clickable for those who can edit the document), bold, italic, strikethrough.
-- Code blocks with syntax highlighting and a copy button.
+- Code blocks with syntax highlighting; the block's header shows its language on the left and a copy button on the right.
 - Formulas: `$...$` inline, `$$...$$` as a separate block (LaTeX).
 - Diagrams: a code block with the `mermaid` language.
 - Tables are separate objects, see [Tables](help:tables).
@@ -66,6 +67,12 @@ When the cursor is on a line, that line's markup becomes visible and editable. �
 ## Links in the text
 
 A click on a link opens the document, reference or note; hovering shows a preview. A link is set with ⌘/Ctrl + K over selected text (see [Documents and the graph](help:documents-graph)).
+
+A link to a passage (the kind "Quote in chat" makes) opens its document with the quoted passage selected. If the passage has since been edited or removed, Lore says so. Such links count as ordinary links in the "Links" tab and survive export.
+
+## Undo
+
+⌘/Ctrl + Z and ⇧ ⌘/Ctrl + Z walk one history for the whole document: text typed in the document and in [table](help:tables) cells, table operations and "Replace all" undo in the order they happened. Only your own edits are undone, never another person's or the agent's — roll those back from [Snapshots and history](help:history).
 
 ## Pasting from the clipboard
 

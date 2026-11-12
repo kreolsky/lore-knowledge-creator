@@ -3,9 +3,7 @@
 # SYSTEM: memory — project memory: each FACT is one `documents` row with
 # `is_memory = true`, whose `content` IS the fact. Built by the `consolidate_memory`
 # tool from a target document's attached references, adjudicated per fact by an agent
-# with a human in the session. Design record:
-# `.kilo/plans/1784000000000-project-memory-concept.md`; reshaped to one level by
-# `.kilo/plans/1786230000000-memory-flatten-to-facts.md` (Order 2).
+# with a human in the session.
 
 # ARCH: memory is DOCUMENTS, not a second content model. A fact is one `documents`
 # row, so the CM6 editor, `doc_mentions` interlinks, transclusion, versions and

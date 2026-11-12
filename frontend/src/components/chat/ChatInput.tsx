@@ -4,7 +4,6 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { BookPlus, EyeOff, ScrollText } from 'lucide-react';
 import { Button, Dropdown, FieldCheckbox } from '../ui';
 import { ChatComposer } from './ChatComposer';
-import { SelectionPill } from './SelectionPill';
 import { TokenUsageGauge } from './TokenUsageGauge';
 import { CacheHitIndicator } from './CacheHitIndicator';
 import { useChatStore, chatAttachSurface } from '../../store/chat-store';
@@ -21,9 +20,7 @@ import { useChatContext, pruneContext, computeContextPrune, GHOST_SESSION_ID } f
 import { resolveContentPickerAnchor } from '../../chat/picker-anchor';
 import { useGhostChatContext } from '../../chat/use-ghost-context';
 import { canSend as computeCanSend } from '../../chat/send-gate';
-import { ghostPinTransfer } from '../../chat/ghost-pin-transfer';
 import { on, off, emit } from '../../events';
-import { clarifyBlock } from './clarify-format';
 import { insertAtCaret } from '../../utils/insert-at-caret';
 import { attachImage } from '../../chat/attach-image';
 import { effectiveCap } from '../../store/chat-store/misc-slice';
@@ -80,22 +77,18 @@ export function ChatInput() {
 
   useEffect(() => {
     if (pendingInputFocus) {
-      textareaRef.current?.focus();
+      // WHY: a PIN-locked page owns focus — the chat's auto-focus (mount, async
+      // session load) lands after PageLockScreen's, so typing went into the chat.
+      const ta = textareaRef.current;
+      if (ta && !document.querySelector('[data-page-lock-screen]')) {
+        ta.focus();
+        // WHY: a freshly mounted textarea focuses with the caret at 0 — a quote
+        // appended while the chat tab was closed left the caret before it.
+        ta.setSelectionRange(ta.value.length, ta.value.length);
+      }
       useChatStore.setState({ pendingInputFocus: false });
     }
   }, [pendingInputFocus]);
-
-  useEffect(() => {
-    const handler = ({ quote, question }: { quote: string; question: string }) => {
-      const block = clarifyBlock(quote, question);
-      // Append to the store draft (never overwrite — the user may have typed more).
-      const prev = useChatStore.getState().draft;
-      useChatStore.getState().setDraft(prev ? `${prev}\n\n${block}` : block);
-      textareaRef.current?.focus();
-    };
-    on('chat-clarify-insert', handler);
-    return () => off('chat-clarify-insert', handler);
-  }, []);
 
   // MessageList owns the scroll container; it reports when auto-follow is off and
   // listens for the jump — see 'chat-scrolled-away' / 'chat-scroll-to-bottom'.
@@ -305,13 +298,6 @@ export function ChatInput() {
       // the open entity) so the materialized row reflects the pre-send config.
       const ghost = useChatStore.getState();
       const targetDocId = currentReference?.reference_id ?? currentDocId;
-      // Ghost-pin transfer: if the ghost carries an
-      // in-memory pinned region, materialize it as a has_region agent session and forward
-      // the region so createSession writes it to pending-selection BEFORE activation
-      // (the ordering invariant). Mirrors the ghost-context snapshot on
-      // materialization. Every ghost is an agent chat, so the pin transfers whenever
-      // the ghost carries one (no mode gate).
-      const pin = ghostPinTransfer(ghost.ghostRegion);
       const created = await createSession({
         projectId,
         documentId: currentDocId,
@@ -327,12 +313,8 @@ export function ChatInput() {
         // (currentReference ?? currentDocument), never the source chat's
         // target_doc_id.
         targetDocId,
-        ...(pin ?? {}),
       });
       if (!created) return;
-      // Transfer complete: the pin now lives on the materialized session (localStorage);
-      // drop the in-memory ghost pin so the pill/highlight read the materialized source.
-      if (pin) useChatStore.getState().clearGhostRegion();
     }
     const imgs = images.length > 0 ? images : undefined;
     // Only uploaded files ride the send; a failed chip leaves with the clear.
@@ -508,7 +490,6 @@ export function ChatInput() {
 
   const warnings = (
     <>
-      <SelectionPill />
       {attachmentsOverLimit && (
         <div className="mb-2 text-ui-sm text-danger px-2 py-1 border border-danger/40 bg-danger/5">
           {t('attachmentsExceedLimit', {

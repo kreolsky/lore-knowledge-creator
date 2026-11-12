@@ -14,6 +14,9 @@
 # pins) and the Node version + checksums below. An update is a deliberate bump
 # in a commit.
 set -euo pipefail
+# WHY: `pct exec` (the hand re-run path) starts with a PATH lacking /usr/local/bin,
+# where the pinned node lands; the deploy's SSH login PATH already has it.
+export PATH="/usr/local/sbin:/usr/local/bin:$PATH"
 
 # WHY noninteractive + confold: the prod deploy runs this over SSH with no tty, where
 # a debconf question or a modified-conffile prompt during a dependency upgrade would
@@ -23,6 +26,10 @@ set -euo pipefail
 # deploy for a box that only needed to wait.
 export DEBIAN_FRONTEND=noninteractive
 APT_LOCK=(-o DPkg::Lock::Timeout=600)
+# WHY a conf.d file rather than an -o flag: `playwright install --with-deps` runs its
+# own apt-get, which only a config file reaches. A transient 502 from the LAN apt
+# proxy failed a prod deploy's provisioning on one .deb; apt retries it instead.
+echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80lore-retries
 APT_INSTALL=(apt-get "${APT_LOCK[@]}" install -y --no-install-recommends -o Dpkg::Options::=--force-confold)
 
 die() { echo "provision: $*" >&2; exit 1; }
@@ -113,7 +120,14 @@ python3 -m pip install --break-system-packages --no-cache-dir -r "$REQ"
 # workspace): one shared install under /opt, world-readable so the non-root
 # agent can run them. --with-deps installs the browser libraries via apt.
 export PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
-python3 -m playwright install --with-deps chromium
+# WHY the dry-run probe: the prod deploy re-runs this every release, and
+# --with-deps hits apt (and its proxy) even when nothing is missing. The browser
+# directory exists only after its deps installed, so its presence means done;
+# a Playwright pin bump changes the directory and re-installs.
+pw_dir="$(python3 -m playwright install --dry-run chromium | sed -n 's/^ *Install location: *//p' | head -1)"
+if [ -z "$pw_dir" ] || [ ! -d "$pw_dir" ]; then
+    python3 -m playwright install --with-deps chromium
+fi
 chmod -R a+rX /opt/ms-playwright
 
 # ─── The manifest: what is ACTUALLY installed ──────────────────────────────────

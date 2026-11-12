@@ -85,7 +85,7 @@ def _ai_only_sets(session: dict, body: SessionUpdate, sets: list[str], params: d
 async def _agent_flag_sets(
     session: dict, body: SessionUpdate, user: dict, sets: list[str], params: dict,
 ) -> None:
-    """agent_auto (the confirm↔auto selector) and the has_region unpin."""
+    """agent_auto (the confirm↔auto selector)."""
     # ARCH: there is no in-place `mode` PATCH — the field is not on the wire and
     # ask↔agent switching does not exist (every AI chat is already an agent chat).
     # Only the agent_auto column write (the confirm↔auto selector) remains.
@@ -104,13 +104,6 @@ async def _agent_flag_sets(
             can_auto = access == "full"
         sets.append("agent_auto = $agent_auto")
         params["agent_auto"] = bool(body.agent_auto) and can_auto
-    # ARCH: unpin clears the pinned-region flag so
-    # auto-apply is re-enabled and the containment constraint is dropped. A pin is
-    # established at create only; a PATCH only ever clears it (has_region=false) —
-    # a PATCH setting it true is ignored (no re-pin via PATCH; re-pin = new session).
-    if "has_region" in body.model_fields_set:
-        sets.append("has_region = $has_region")
-        params["has_region"] = False
 
 
 # ARCH: reparent = re-anchor. The write is

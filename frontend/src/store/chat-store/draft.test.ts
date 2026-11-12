@@ -55,7 +55,6 @@ function buildStore() {
     ghostAgentAuto: false,
     ghostSystemPromptId: null,
     ghostModel: '',
-    ghostRegion: null,
     ...createMiscSlice(set, get),
   } as unknown as ChatState));
 }

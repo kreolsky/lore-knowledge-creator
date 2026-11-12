@@ -19,7 +19,8 @@ import { useUIStore } from '../../store/ui-store';
 import { getActiveHandle, getViewEntity } from '../../editor/active-editor';
 import { refIsScope } from '../../store/ui-store/documents-slice';
 import { buildNoteAnchor } from '../../collab/note-anchor-wire';
-import { boundText } from './note-anchor-wiring';
+import { boundText, isHostText } from './note-anchor-wiring';
+import { buildTextFragment } from '../../utils/link-fragment';
 import { voiceWidgetField, voiceWidgetStart, voiceWidgetRecognizing } from './voice-widget';
 import { preserveCursorFromLineEnd, snapSelectionToLineEnd } from './cursor-preserve';
 import { createTable } from './live-preview/table-block-model';
@@ -27,7 +28,6 @@ import { INSERT_TABLE_WIDTH } from './live-preview/table-widths';
 import { tableAnchor } from './live-preview/table-document-ops';
 import { requestTableFocus } from './live-preview/table-widget-registry';
 import { createMarkdownReference } from '../references/create-markdown-reference';
-import { agentAction } from './markdown-actions-agent';
 import { t } from '../../i18n';
 
 // WHY: marker → Lezer node name map. Used to detect "cursor is inside formatted span"
@@ -353,6 +353,7 @@ function createLink(view: EditorView): boolean {
   emit('show-link-suggestions', {
     pos: cursorPos, coords: coords ? { top: coords.bottom, lineTop: coords.top, left: coords.left } : null, editorView: view,
     labelPos: empty ? from + 1 : null,
+    revert: { from, inserted: linkText, original: selectedText },
   });
   return true;
 }
@@ -751,6 +752,49 @@ function openFind(view: EditorView): boolean {
   return true;
 }
 
+/**
+ * May the user send a selection to the chat? The chat tab's own gate (ProjectPage
+ * allowedRightTabs): full and commentator with the ai tier, never readonly, never the
+ * public guest. Read by quoteToChat and by SelectionToolbar to hide the button.
+ */
+export function canQuoteToChat(): boolean {
+  const { accessLevel, currentUser } = useAppStore.getState();
+  return !useUIStore.getState().isPublicShare && accessLevel !== 'readonly' && currentUser?.can_ai !== false;
+}
+
+/** True when `view` renders the document's top-level text (not a table cell). */
+export function isHostTextView(view: EditorView): boolean {
+  const bound = boundText(view);
+  return !!bound && isHostText(bound);
+}
+
+// WHY: a `]` in a title would end the link label early in every `[^\]]+` link regex.
+const linkLabel = (title: string, fallback: string) => title.replace(/[[\]]/g, '').trim() || fallback;
+
+/** Quote the selection into the chat draft, followed by a source link to the passage.
+ *
+ * A document gets a pointer `doc:<id>#text=…` (utils/link-fragment.ts) that the agent
+ * reads as plain markdown and a click resolves back to the selection; a reference gets
+ * a bare `ref:<id>` (refs resolve no fragments). Refuses on an empty selection, in a
+ * table cell (its offsets do not index the host text) and without chat access. */
+function quoteToChat(view: EditorView): boolean {
+  const { from, to, empty } = view.state.selection.main;
+  if (empty || !isHostTextView(view) || !canQuoteToChat()) return false;
+  const quote = view.state.sliceDoc(from, to).trim();
+  const entityId = getViewEntity(view);
+  if (!quote || !entityId) return false;
+  const { documents, references } = useAppStore.getState();
+  const doc = documents.find(d => d.document_id === entityId);
+  const ref = doc ? undefined : references.find(r => r.reference_id === entityId);
+  if (!doc && !ref) return false;
+  const fragment = doc ? buildTextFragment(view.state.doc.toString(), from, to) : null;
+  const source = doc
+    ? `[${linkLabel(doc.title, entityId)}](doc:${entityId}${fragment ? `#${fragment}` : ''})`
+    : `[${linkLabel(ref!.title, entityId)}](ref:${entityId})`;
+  emit('chat-quote-insert', { quote, source });
+  return true;
+}
+
 /** Insert a new editable table block: create the doc-local model + the anchor.
  *
  * see SYSTEM: table-block — the only sanctioned creation entry point. Builds a 2×2 model in
@@ -797,8 +841,5 @@ export const markdownActionRegistry: Record<MarkdownAction, (view: EditorView) =
   highlightColor:  (view) => applyColorHighlight(view, getLastHighlightColor()),
   insertTable,
   openFind,
-  // see SYSTEM: selection-region-agent — Cmd+J mirrors the SelectionToolbar Bot button.
-  // agentAction no-ops on empty selection and for non-full access, so the chord is inert
-  // without a selection or for a read-only role.
-  workWithSelection: agentAction,
+  quoteToChat,
 };

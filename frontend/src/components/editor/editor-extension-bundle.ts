@@ -31,12 +31,10 @@ import { buildKeymapExtension, readonlyNoteHotkeys } from './hotkey-keymap';
 import { listContinuationExtension } from './list-continuation';
 import { listNavExtension } from './list-nav';
 import { liveHeadingsExtension } from '../../editor/live-headings-extension';
-import { regionHighlightExtension, type RegionRange } from '../../editor/region-highlight';
 import { noteHighlightExtension } from '../../editor/note-highlight';
 import { makeNoteAnchorResolver } from './note-anchor-wiring';
 import { claimFocus, type FocusClaim } from '../../editor/active-editor';
 import { viewEntity } from './live-preview/table-doc-source';
-import { regionLostListener } from './region-agent-wiring';
 
 export interface EditorExtensionDeps {
   /** Per-instance visual compartment (NOT module-level: split view toggles columns independently). */
@@ -61,8 +59,6 @@ export interface EditorExtensionDeps {
   isReferenceRef: { current: boolean };
   /** Live collab connection handle for focus routing. */
   collabConnectionRef: { current: FocusClaim['handle'] };
-  /** Region resolver (region-agent-wiring) — drives the pinned-region highlight. */
-  regionResolver: () => RegionRange | null;
 }
 
 /**
@@ -144,11 +140,6 @@ export function buildEditorExtensions(deps: EditorExtensionDeps): Extension[] {
     buildKeymapExtension(),
     // Mod-m for a member who may note but not edit (the view is not focusable then).
     readonlyNoteHotkeys,
-    // see SYSTEM: selection-region-agent — live pinned-region highlight (re-resolves the
-    // RelativePosition on every transaction via the facet resolver) + reactive
-    // auto-unpin when the anchor is lost. See region-agent-wiring.
-    regionHighlightExtension(deps.regionResolver),
-    regionLostListener(() => deps.activeItemIdRef.current),
     // Note anchors: each note's fragment is resolved from its Yjs RelativePosition pair
     // against this editor's own entity ydoc — the text carries no note syntax.
     noteHighlightExtension(makeNoteAnchorResolver(() => deps.activeItemIdRef.current)),

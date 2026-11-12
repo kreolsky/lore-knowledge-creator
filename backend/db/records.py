@@ -1,15 +1,12 @@
-"""Record serialization + record-id coercion helpers (pure, no DB connection).
-
-Split out of the former backend/db.py (behavior-preserving). Record-id
-validation (validate_record_id / SAFE_ID_RE) lives here, not in db._patch, so
-_patch holds only the SDK monkeypatches and is deletable on an SDK upgrade.
-"""
+"""Record serialization + record-id coercion helpers (pure, no DB connection)."""
 
 from __future__ import annotations
 
 import re
 from datetime import datetime
 from typing import Any
+
+from surrealdb import RecordID
 
 
 def extract_id(record_id) -> str | None:
@@ -138,18 +135,8 @@ def parse_iso(value: str) -> datetime:
 
 
 def is_record_id(value) -> bool:
-    """Return True if `value` is a SurrealDB RecordID instance.
-
-    # ARCH (version-robust parity with serialize_record): the RecordID class is
-    # detected by NAME, not by importing the SDK symbol. Why: the symbol's module
-    # path drifts across SDK versions (see extract_id's 1.0.4 note), so a hard
-    # import would break on a bump. The name-based duck-type (`"RecordID" in
-    # type(v).__name__`) matches every version's RecordID class and nothing else,
-    # so this single detector is shared by serialize_record (inbound, per-row) and
-    # the MCP gateway's output boundary (coerce_record_ids) — two copies can no
-    # longer drift.
-    """
-    return "RecordID" in type(value).__name__
+    """Return True if `value` is a SurrealDB RecordID instance."""
+    return isinstance(value, RecordID)
 
 
 def coerce_record_ids(obj: Any) -> Any:

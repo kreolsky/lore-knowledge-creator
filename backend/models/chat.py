@@ -12,8 +12,6 @@ from pydantic import (
     model_validator,
 )
 
-from models.tools import RegionRef
-
 
 class SessionCreate(BaseModel):
     project_id: str
@@ -46,20 +44,14 @@ class SessionCreate(BaseModel):
     # now UNCONDITIONAL for non-note sessions (every AI chat is an agent chat).
     # target_doc_id pins the agent to a specific document (the only document it
     # may propose edits to); it defaults to reference_id or document_id in
-    # _check_invariants. agent_auto persists the "Full auto" dropdown choice
-    # has_region marks a pinned-region agent session. None of these
+    # _check_invariants. agent_auto persists the "Full auto" dropdown choice.
+    # None of these
     # are written for note sessions (the `if not is_note` guard in create_session).
     target_doc_id: str | None = None
     # ARCH (agent_auto persistence): persists the agent-role dropdown's
     # "Full auto" choice on creation. Default false (confirm mode is safer). Only
     # meaningful for agent sessions; serialized back by serialize_session.
     agent_auto: bool = False
-    # ARCH: a pinned-region agent chat constrains the
-    # agent to edit ONLY inside a frontend-tracked text span (has_region=true forces
-    # confirm mode + a per-apply containment check). The RelativePosition pair is
-    # frontend-owned (localStorage); the backend persists only this server-
-    # authoritative flag so confirm-forcing survives cross-device reload.
-    has_region: bool = False
     # Opt-out from the chat-recall search index; AI chats only (refused on a note).
     unindexed: bool = False
 
@@ -78,22 +70,13 @@ class SessionCreate(BaseModel):
                 relpos_from_wire(self.anchor_rel_start)
                 relpos_from_wire(self.anchor_rel_end)
         # ARCH: there is no mode gate here — with one AI line every non-note
-        # session is an agent session, so both rules key on the non-note axis:
-        #
-        # 1. target_doc_id defaulting: a non-note session without an explicit
-        #    target_doc_id defaults it to reference_id or document_id. Without
-        #    this the agent has no pinned document.
-        # 2. has_region is incompatible with a note. The explicit
-        #    `has_region + is_note` guard is the ONLY thing preventing a
-        #    pinned-region flag landing on a note row.
+        # session is an agent session, so target_doc_id defaulting keys on the
+        # non-note axis: a non-note session without an explicit target_doc_id
+        # defaults it to reference_id or document_id. Without this the agent has
+        # no pinned document.
         if not self.is_note and not self.target_doc_id:
             # Default target to whatever the session is opened against.
             self.target_doc_id = self.reference_id or self.document_id
-        # INVARIANT: a pinned region only makes sense for an agent that edits
-        # documents. Why: it forces confirm mode + a per-apply containment check,
-        # neither of which applies to note sessions.
-        if self.is_note and self.has_region:
-            raise ValueError("has_region is incompatible with note sessions")
         # WHY: a note is never indexed (is_note already excludes it), so the
         # flag on a note is a client defect, refused rather than stored.
         if self.is_note and self.unindexed:
@@ -119,10 +102,6 @@ class SessionUpdate(BaseModel):
     # axis left the wire. agent_auto is forced
     # false on a note session by update_session (defense-in-depth).
     agent_auto: bool | None = None
-    # ARCH: PATCH-able to clear the pin (unpin). The
-    # pin itself is set at create; a PATCH only ever clears it (has_region=false) to
-    # re-enable auto-apply and drop the containment constraint.
-    has_region: bool | None = None
     # ARCH: PATCH-able like system_prompt_id
     # (model_fields_set semantics — explicit null clears to project-level).
     # update_session guards the write: 400 for note sessions (anchored to the
@@ -214,14 +193,6 @@ class CompletionRequest(BaseModel):
     # grants it only for full-access users (see
     # agent.apply_policy.resolve_apply_mode). Per-turn + ephemeral.
     auto_apply: bool = False
-    # ARCH: when the active session is pinned, the
-    # frontend resolves its Yjs RelativePosition pair to a live region and attaches
-    # it here per turn. `prepare_agent_turn` injects a "# Pinned fragment" prompt
-    # hint from it; `resolve_apply_mode` forces confirm regardless of auto_apply.
-    # The apply path re-resolves old_string against LIVE content — this text is a
-    # prompt hint only, never trusted for enforcement (enforcement uses the apply
-    # body's region).
-    region: RegionRef | None = None
     # ARCH: the live document open in the
     # central panel right now, resolved per-turn at send time from
     # currentReference ?? currentDocument. Ephemeral — NEVER mutates the session

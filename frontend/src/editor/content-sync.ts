@@ -107,7 +107,7 @@ export function checkpointContent(
   // INVARIANT(data-loss): never persist an empty/whitespace-only editor read.
   // Why: a view born before its yCollab binding lands reads "" while the server
   // still holds the real text — checkpointing it on an entity switch before
-  // sync is the empty-view wipe (plan .kilo/plans/empty-checkpoint-wipe.md).
+  // sync is the empty-view wipe.
   // A legitimate empty state cannot be produced from this UI: editing requires
   // the live-collab phase, and there every keystroke already streams via the
   // ydoc path, so the server holds the empty state before any checkpoint. The

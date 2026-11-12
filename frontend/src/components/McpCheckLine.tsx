@@ -18,5 +18,10 @@ export function McpCheckLine({ result, error }: { result: McpCheckResult | null;
   if (result.status === 'ok') {
     return <p className="text-xs text-green">{t('mcpCheckOk', { count: result.tools ?? 0 })}</p>;
   }
-  return <p className="text-xs text-red">{t(STATUS_LABELS[result.status])}</p>;
+  return (
+    <div className="text-xs">
+      <p className="text-red">{t(STATUS_LABELS[result.status])}</p>
+      {result.detail && <p className="text-text-dim break-words">{t('mcpCheckServerSaid', { detail: result.detail })}</p>}
+    </div>
+  );
 }

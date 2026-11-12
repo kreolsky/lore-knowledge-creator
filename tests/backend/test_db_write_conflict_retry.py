@@ -13,7 +13,7 @@ conflict, never anything else, and give up after a bounded number of attempts.
 from __future__ import annotations
 
 import pytest
-from surrealdb.errors import QueryError
+from surrealdb.errors import ConnectionUnavailableError, QueryError
 
 import db.pool as db_pool
 
@@ -23,21 +23,29 @@ _CONFLICT = (
 
 
 class _Conn:
-    """AsyncSurreal stand-in: fails the first `fail_times` calls, then succeeds."""
+    """AsyncSurreal stand-in: fails the first `fail_times` calls, then succeeds.
+
+    query() answers one result per statement (surrealdb-py 3); the proxy hands
+    callers the first. query_raw() answers the raw envelope stand-in as is.
+    """
 
     def __init__(self, exc: Exception, fail_times: int) -> None:
         self._exc, self._left = exc, fail_times
         self.calls = 0
 
-    async def query(self, sql, params=None):
+    async def _attempt(self):
         self.calls += 1
         if self._left > 0:
             self._left -= 1
             raise self._exc
-        return [{"id": "row:1"}]
+
+    async def query(self, sql, params=None):
+        await self._attempt()
+        return [[{"id": "row:1"}]]
 
     async def query_raw(self, sql, params=None):
-        return await self.query(sql, params)
+        await self._attempt()
+        return [{"id": "row:1"}]
 
 
 @pytest.mark.asyncio
@@ -104,16 +112,14 @@ async def test_non_query_exceptions_are_not_retried():
 
 # ─── Reader-death re-issue (opt-in via idempotent=True) ──────────────────────
 
-_READER_DEATH = "SurrealDB WS reader exited; this query's delivery is unknown"
+_READER_DEATH = "the connection to ws://surrealdb:8000/rpc was closed while query"
 
 
 @pytest.mark.asyncio
 async def test_reader_death_reissued_when_idempotent():
-    """An idempotent-marked statement survives a reader death: the re-issue rides
-    the same connection object, which self-heals inside _send (db/_patch.py)."""
-    from db._patch import SurrealReaderDiedError
-
-    conn = _Conn(SurrealReaderDiedError(_READER_DEATH), fail_times=1)
+    """An idempotent-marked statement survives a dropped connection: the re-issue
+    rides the same connection object, which the SDK reconnects itself."""
+    conn = _Conn(ConnectionUnavailableError(_READER_DEATH), fail_times=1)
     proxy = db_pool._TimedDB(conn)
 
     assert await proxy.query("UPDATE x SET y = 1", idempotent=True) == [{"id": "row:1"}]
@@ -123,9 +129,7 @@ async def test_reader_death_reissued_when_idempotent():
 @pytest.mark.asyncio
 async def test_reader_death_query_raw_reissued_when_idempotent():
     """query_raw carries the same opt-in contract."""
-    from db._patch import SurrealReaderDiedError
-
-    conn = _Conn(SurrealReaderDiedError(_READER_DEATH), fail_times=1)
+    conn = _Conn(ConnectionUnavailableError(_READER_DEATH), fail_times=1)
     proxy = db_pool._TimedDB(conn)
 
     assert await proxy.query_raw("UPDATE x SET y = 1", idempotent=True) == [{"id": "row:1"}]
@@ -135,11 +139,11 @@ async def test_reader_death_query_raw_reissued_when_idempotent():
 @pytest.mark.asyncio
 async def test_reader_death_not_retried_by_default():
     """Default stays conflict-only: without the caller's idempotent declaration the
-    reader-death error propagates from the FIRST attempt (the statement may have
+    dropped connection propagates — as SurrealReaderDiedError — from the FIRST attempt (the statement may have
     executed — re-issuing on a guess could double a non-idempotent write)."""
-    from db._patch import SurrealReaderDiedError
+    from db.pool import SurrealReaderDiedError
 
-    conn = _Conn(SurrealReaderDiedError(_READER_DEATH), fail_times=99)
+    conn = _Conn(ConnectionUnavailableError(_READER_DEATH), fail_times=99)
     proxy = db_pool._TimedDB(conn)
 
     with pytest.raises(SurrealReaderDiedError):
@@ -151,34 +155,11 @@ async def test_reader_death_not_retried_by_default():
 async def test_reader_death_retries_are_bounded():
     """A reader that keeps dying (permanently broken connection) is raised, not
     retried forever — same cap as the write conflict."""
-    from db._patch import SurrealReaderDiedError
+    from db.pool import SurrealReaderDiedError
 
-    conn = _Conn(SurrealReaderDiedError(_READER_DEATH), fail_times=99)
+    conn = _Conn(ConnectionUnavailableError(_READER_DEATH), fail_times=99)
     proxy = db_pool._TimedDB(conn)
 
     with pytest.raises(SurrealReaderDiedError):
         await proxy.query("UPDATE x SET y = 1", idempotent=True)
     assert conn.calls == db_pool.DB_WRITE_CONFLICT_ATTEMPTS
-
-
-@pytest.mark.asyncio
-async def test_transport_loss_reissued_when_idempotent():
-    """A dial refused during a SurrealDB blip is the same uncertain-delivery class
-    as reader death — re-issued only under the caller's idempotent declaration."""
-    conn = _Conn(ConnectionRefusedError("connection refused"), fail_times=1)
-    proxy = db_pool._TimedDB(conn)
-
-    assert await proxy.query("UPDATE x SET y = 1", idempotent=True) == [{"id": "row:1"}]
-    assert conn.calls == 2
-
-
-@pytest.mark.asyncio
-async def test_transport_loss_not_retried_by_default():
-    """Without idempotent=True a transport loss propagates from the first attempt,
-    exactly as before the opt-in existed."""
-    conn = _Conn(ConnectionRefusedError("connection refused"), fail_times=99)
-    proxy = db_pool._TimedDB(conn)
-
-    with pytest.raises(ConnectionRefusedError):
-        await proxy.query("UPDATE x SET y = 1")
-    assert conn.calls == 1

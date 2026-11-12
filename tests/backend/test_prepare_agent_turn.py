@@ -24,10 +24,9 @@ SENT_STAMP_RE = re.compile(
 
 
 def _fake_body(*, messages=None, auto_apply=False, parent_id=None, model=None):
-    # region mirrors CompletionBody.region (default None — non-pinned session);
     # context_ids mirrors CompletionRequest.context_ids (the agent Parent-line gate).
     return SimpleNamespace(
-        messages=messages or [], auto_apply=auto_apply, region=None,
+        messages=messages or [], auto_apply=auto_apply,
         context_ids=None, open_doc_id=None, parent_id=parent_id, model=model,
     )
 

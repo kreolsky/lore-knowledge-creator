@@ -200,6 +200,33 @@ def test_validate_definition_and_key_gates():
 # ─── 2. The admin save gate, the moderator scope, cabinet visibility ─────────
 
 
+# TEST-WHY: pure-logic-edge — the check verdict's server detail: a server echoing the key in any form (raw, base64, url-encoded, whole header) relays [secret] instead, a non-JSON-RPC body relays only its HTTP status, a long or control-laden message is bounded, zero seams, no db.
+def test_check_detail_scrubs_the_key():
+    import base64
+    from urllib.parse import quote
+
+    import httpx
+    import mcp_servers
+
+    key = "mcp_graph-enricher_AV1/x+y=z"
+    headers = {"Authorization": f"Bearer {key}"}
+
+    def detail(body) -> str:
+        resp = httpx.Response(401, json=body) if not isinstance(body, str) else httpx.Response(401, text=body)
+        return mcp_servers._server_detail(resp, headers)
+
+    echoes = [key, base64.b64encode(key.encode()).decode(), quote(key, safe=""), f"Bearer {key}"]
+    for echo in echoes:
+        got = detail({"jsonrpc": "2.0", "error": {"code": -32001, "message": f"bad key {echo} here"}})
+        assert got is not None and "[secret]" in got and "AV1" not in got, (echo, got)
+    assert detail({"jsonrpc": "2.0", "error": {"code": -32001, "message": "Invalid or disabled API key"}}) == "Invalid or disabled API key"
+    assert detail("<html><body>403 Forbidden</body></html>") == "HTTP 401"
+    assert detail({"detail": "not json-rpc"}) == "HTTP 401"
+    assert detail(["not", "an", "object"]) == "HTTP 401"
+    long = detail({"error": {"message": "a\tb\n" + "x" * 500}})
+    assert long is not None and long.startswith("a b x") and len(long) == 200
+
+
 # TEST-WHY: cross-process-contract — the save gate and the subject ladder over real infra (REST → SurrealDB rows → user_subjects, nothing patched): an egress-refused host never lands a row, a moderator's surface is their own single-subject servers only (403 at create, 404 on foreign rows), the cabinet list follows the group grants, and the shared key never rides a response nor a plain SELECT as plaintext.
 @pytest.mark.asyncio
 async def test_admin_gate_moderator_scope_and_visibility(
@@ -542,7 +569,7 @@ async def test_key_flow_render_and_delete_cascades(
     pin_tool_gates(monkeypatch, outbound_cidrs="")
     assert await mcp.check_connection(
         "https://127.0.0.1:9301/mcp", {},
-    ) == {"status": "refused", "tools": None}
+    ) == {"status": "refused", "tools": None, "detail": None}
     pin_tool_gates(monkeypatch, outbound_cidrs="127.0.0.0/8")
     verdict = await mcp.check_connection("https://127.0.0.1:9391/mcp", {})
     assert verdict["status"] in ("unreachable", "protocol"), verdict

@@ -76,7 +76,7 @@ async def _reject_empty_wipe(entity_id: str, project_id: str, baseline_len: int)
     INVARIANT(data-loss): a REST PATCH replacing a NON-empty entity with
     empty/whitespace-only content while NO live session must fail loudly.
     Why: the editor blocks input while unsynced, so every such PATCH is a client
-    bug (the empty-view checkpoint wipe, .kilo/plans/empty-checkpoint-wipe.md);
+    bug (the empty-view checkpoint wipe);
     the accepted wipe writes documents.content="" while leaving ydoc_state
     untouched (next collab load resurrects or diverges), and the pre-wipe
     content-loss backup is suppressed by the auto_backup adjacent-dedup when the

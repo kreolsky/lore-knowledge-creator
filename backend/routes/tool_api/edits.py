@@ -55,6 +55,22 @@ def _refuse_html_target(target: dict, tool: str) -> None:
         )
 
 
+async def _require_auto_target(ctx: dict, document_id: str, apply_pref: str, tool: str) -> None:
+    """Shared prologue of the auto-only markdown tools: scope/RBAC gate, html refusal,
+    apply-mode resolution; a non-auto decision refuses with the ask signal."""
+    target, _ = await gate_mutation_target(
+        user=ctx["user"], doc_id=document_id,
+        project_id=ctx["project_id"], scope_root=ctx.get("scope_root"),
+    )
+    _refuse_html_target(target, tool)
+    decision = await _resolve_apply_or_force(
+        ctx, ui_preference=apply_pref,
+        is_system=bool(target.get("is_system")),
+    )
+    if decision.mode != "auto":
+        _refuse_unconfirmable(tool)
+
+
 @track_agent_tool("edit_document")
 async def tool_edit_document(
     body: ToolEditDocument, ctx: dict = Depends(get_agent_context),
@@ -103,7 +119,7 @@ async def tool_edit_document(
     return await _apply_edits_direct(
         doc_id=body.document_id, edits=edits,
         project_id=ctx["project_id"], user=user,
-        scope_root=ctx.get("scope_root"), region=body.region,
+        scope_root=ctx.get("scope_root"),
     )
 
 
@@ -118,18 +134,8 @@ async def tool_edit_table_cell(
     covered by the text-region advisory lock).
     """
     user = ctx["user"]
-    target, _ = await gate_mutation_target(
-        user=user, doc_id=body.document_id,
-        project_id=ctx["project_id"], scope_root=ctx.get("scope_root"),
-    )
-    _refuse_html_target(target, "edit_table_cell")
-    decision = await _resolve_apply_or_force(
-        ctx, ui_preference=body.apply.value,
-        is_system=bool(target.get("is_system")),
-    )
+    await _require_auto_target(ctx, body.document_id, body.apply.value, "edit_table_cell")
     edits = _body_to_table_edits(body)
-    if decision.mode != "auto":
-        _refuse_unconfirmable("edit_table_cell")
     return await _apply_edit_table_cell_direct(
         document_id=body.document_id, edits=edits,
         project_id=ctx["project_id"], user=user,
@@ -198,7 +204,7 @@ async def _build_append_edit(
 
 async def _apply_append_direct(
     *, doc_id: str, append_text: str, section: str | None,
-    project_id: str, user: dict, scope_root: str | None = None, region=None,
+    project_id: str, user: dict, scope_root: str | None = None,
 ) -> dict:
     """Apply an append directly through the live CRDT path (auto / external-apply path).
 
@@ -243,7 +249,7 @@ async def _apply_append_direct(
     # re-resolves old_string against live content under the per-doc lock).
     return await _apply_edits_direct(
         doc_id=doc_id, edits=[edit], project_id=project_id, user=user,
-        scope_root=scope_root, region=region,
+        scope_root=scope_root,
     )
 
 
@@ -293,23 +299,11 @@ async def tool_append_document(
     the insertion point against live content at apply time.
     """
     user = ctx["user"]
-    # M7: shared fetch+RBAC+scope gate.
-    target, _ = await gate_mutation_target(
-        user=user, doc_id=body.document_id,
-        project_id=ctx["project_id"], scope_root=ctx.get("scope_root"),
-    )
-    _refuse_html_target(target, "append_to_document")
-
-    decision = await _resolve_apply_or_force(
-        ctx, ui_preference=body.apply.value,
-        is_system=bool(target.get("is_system")),
-    )
-    if decision.mode != "auto":
-        _refuse_unconfirmable("append_to_document")
+    await _require_auto_target(ctx, body.document_id, body.apply.value, "append_to_document")
     return await _apply_append_direct(
         doc_id=body.document_id, append_text=body.content,
         section=body.section, project_id=ctx["project_id"], user=user,
-        scope_root=ctx.get("scope_root"), region=body.region,
+        scope_root=ctx.get("scope_root"),
     )
 
 
@@ -327,17 +321,7 @@ async def tool_create_table(
 ):
     """Append a NEW editable table block (header + initial rows) + its anchor."""
     user = ctx["user"]
-    target, _ = await gate_mutation_target(
-        user=user, doc_id=body.document_id,
-        project_id=ctx["project_id"], scope_root=ctx.get("scope_root"),
-    )
-    _refuse_html_target(target, "create_table")
-    decision = await _resolve_apply_or_force(
-        ctx, ui_preference=body.apply.value,
-        is_system=bool(target.get("is_system")),
-    )
-    if decision.mode != "auto":
-        _refuse_unconfirmable("create_table")
+    await _require_auto_target(ctx, body.document_id, body.apply.value, "create_table")
     return await _apply_create_table_direct(
         document_id=body.document_id, label=body.label, rows=body.rows,
         section=body.section, project_id=ctx["project_id"], user=user,
@@ -351,17 +335,7 @@ async def tool_add_table_rows(
 ):
     """Append N rows to the bottom of an existing table."""
     user = ctx["user"]
-    target, _ = await gate_mutation_target(
-        user=user, doc_id=body.document_id,
-        project_id=ctx["project_id"], scope_root=ctx.get("scope_root"),
-    )
-    _refuse_html_target(target, "add_table_rows")
-    decision = await _resolve_apply_or_force(
-        ctx, ui_preference=body.apply.value,
-        is_system=bool(target.get("is_system")),
-    )
-    if decision.mode != "auto":
-        _refuse_unconfirmable("add_table_rows")
+    await _require_auto_target(ctx, body.document_id, body.apply.value, "add_table_rows")
     return await _apply_add_table_rows_direct(
         document_id=body.document_id, table_id=body.table_id, rows=body.rows,
         project_id=ctx["project_id"], user=user,
@@ -375,17 +349,7 @@ async def tool_add_table_column(
 ):
     """Insert ONE column into an existing table."""
     user = ctx["user"]
-    target, _ = await gate_mutation_target(
-        user=user, doc_id=body.document_id,
-        project_id=ctx["project_id"], scope_root=ctx.get("scope_root"),
-    )
-    _refuse_html_target(target, "add_table_column")
-    decision = await _resolve_apply_or_force(
-        ctx, ui_preference=body.apply.value,
-        is_system=bool(target.get("is_system")),
-    )
-    if decision.mode != "auto":
-        _refuse_unconfirmable("add_table_column")
+    await _require_auto_target(ctx, body.document_id, body.apply.value, "add_table_column")
     return await _apply_add_table_column_direct(
         document_id=body.document_id, table_id=body.table_id,
         at_index=body.at_index, header=body.header, values=body.values,

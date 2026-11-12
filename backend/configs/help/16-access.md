@@ -45,6 +45,8 @@ In the "Access" tab, "API access" section, you create keys to a document. A key 
 
 The token is shown once — copy it right away.
 
+A key created on the project's index document (the first row of the tree, named after the project) covers the whole project except the Agent System and this guide. Only the project owner can create keys there. On the index document the "Access" tab shows only arrival notifications and API keys: the index cannot be published by a link or moved to another project.
+
 ## Arrival notifications
 
 In the "Access" tab, "Arrival notifications" section, per document and per person: "Flag external notes" (on by default) and "Flag external references" (off by default). When on, a note or reference that arrives in this document through a key you own is marked unread for you (see [Interface](help:interface)). Arrivals while a toggle is off are never marked later.
@@ -58,7 +60,7 @@ In the "Access" tab, "Move to another project" section, a document with its whol
 In the "Settings" tab:
 
 - **Voice Recording** — where to save new recordings: into the current document or a specific one.
-- **Image previews** — whether to show images in the references panel as a gallery of previews.
+- **Interface** — whether to show images in the references panel as a gallery of previews and whether to list notes and your chats in the "Links" tab (both for every member), and whether to play a sound when the agent finishes or asks for confirmation (for you only).
 - **Group access** — the project's groups and their levels (an owner in a group, or the administrator).
 - **Access** — members and invitations (owner only).
 

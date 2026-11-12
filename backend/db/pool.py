@@ -1,8 +1,4 @@
-"""SurrealDB connection singleton (DBPool) + timed query proxy.
-
-Depends on db._patch being imported first (the _recv_task monkeypatch must be
-installed before any get_db() — enforced by db.__init__ import order).
-"""
+"""SurrealDB connection singleton (DBPool) + timed query proxy."""
 
 from __future__ import annotations
 
@@ -13,10 +9,9 @@ import time
 from query_stats import record_query
 from settings_registry import ConfigError
 from surrealdb import AsyncSurreal
-from websockets.exceptions import ConnectionClosed, WebSocketException
+from surrealdb.errors import ConnectionUnavailableError
 
 import config
-from db._patch import SurrealReaderDiedError
 
 logger = logging.getLogger("db")
 
@@ -46,20 +41,30 @@ _WRITE_CONFLICT_BACKOFF_S = 0.02
 # milliseconds; 4 attempts at a 2s ramp keep re-dialing across ~12s of downtime
 # (measured on gray: a `docker compose restart surreal` is back healthy in ~7s).
 _UNCERTAIN_BACKOFF_S = 2.0
-# Transport-class uncertain-delivery signatures: the statement's delivery is
-# unknown (send failed / connection gone), never a DB-level answer.
-_TRANSPORT_LOST: tuple = (ConnectionError, ConnectionClosed, WebSocketException)
+
+
+class SurrealReaderDiedError(RuntimeError):
+    """The connection dropped with this statement in flight — delivery is UNKNOWN.
+
+    # WHY: raised by _TimedDB in place of the SDK's ConnectionUnavailableError
+    # (surrealdb-py 3 fails every pending request with it when the socket or its
+    # reader stops, and raises it when a send or a dial fails), so the retry set
+    # and its callers key on one name of ours, not on an SDK class.
+    """
 
 
 def _is_write_conflict(exc: BaseException) -> bool:
     """True for the retryable transaction-write-conflict SurrealDB reports.
 
-    Matched on the message: the SDK raises a generic QueryError for every server
-    error and carries no conflict-specific class or code to key on.
+    Keyed on the structured kind surrealdb-py 3 parses (QueryError
+    .is_transaction_conflict) and, failing that, on the message — a server that
+    sends no structured detail reaches us as a plain ServerError.
     """
-    from surrealdb.errors import QueryError
+    from surrealdb.errors import QueryError, ServerError
 
-    return isinstance(exc, QueryError) and "write conflict" in str(exc).lower()
+    if isinstance(exc, QueryError) and exc.is_transaction_conflict:
+        return True
+    return isinstance(exc, ServerError) and "write conflict" in str(exc).lower()
 
 
 def surreal_password() -> str:
@@ -82,15 +87,39 @@ def surreal_password() -> str:
     return password
 
 
+def surreal_credentials() -> dict[str, str]:
+    """Root signin credentials, the password re-read from its file on every call."""
+    return {"username": config.SURREAL_USER, "password": surreal_password()}
+
+
+def open_surreal(url: str) -> AsyncSurreal:
+    """An unopened SurrealDB connection with the options every Lore connection uses."""
+    # WHY timeout=None, streaming=False: surrealdb-py 2.0 had no per-request
+    # timeout and buffered every answer; 3.0 defaults to a 30 s cap (long
+    # migrations and backfills exceed it) and to streamed answers.
+    # INVARIANT: credentials go in as `auth=` and nothing calls signin() on the
+    # connection. Why: surrealdb-py 3 re-signs in with `auth=` after every
+    # reconnect; an explicit signin() takes over from it and the reconnect then
+    # replays the 1-hour session token, so a connection that dropped after an
+    # hour comes back unauthenticated.
+    return AsyncSurreal(url, auth=surreal_credentials, timeout=None, streaming=False)
+
+
 async def _connect() -> AsyncSurreal:
     """Create a new SurrealDB connection, authenticate, and select namespace."""
-    conn = AsyncSurreal(config.SURREAL_URL)
+    conn = open_surreal(config.SURREAL_URL)
     try:
-        await conn.signin({"username": config.SURREAL_USER, "password": surreal_password()})
         await conn.use(config.SURREAL_NS, config.SURREAL_DB)
     except Exception:
         await _close(conn)
         raise
+    # WHY: surrealdb-py 3 reconnects and replays the session inside the
+    # connection and logs it only at DEBUG, so the pool's probe never sees a
+    # drop; these listeners keep a restarted engine visible in the backend log.
+    # Subscribed after use(), so "connected" fires only on a reconnect.
+    conn.subscribe("reconnecting", lambda: logger.warning("SurrealDB connection lost — reconnecting"))
+    conn.subscribe("connected", lambda version: logger.info("SurrealDB reconnected (server %s)", version))
+    conn.subscribe("disconnected", lambda: logger.error("SurrealDB connection dropped — reconnect gave up"))
     return conn
 
 
@@ -131,8 +160,8 @@ class DBPool:
 
             if self._db is not None:
                 try:
-                    # WHY: bound the probe — if the SDK's _recv_task ever dies for any
-                    # reason, query() hangs forever and the pool can't recover.
+                    # WHY: bound the probe so a wedged connection can never pin the
+                    # pool lock; the SDK's own request timeout is off (open_surreal).
                     await asyncio.wait_for(self._db.query("RETURN 1"), timeout=2.0)
                     self._last_check_ts = time.monotonic()
                     return self._db
@@ -249,10 +278,10 @@ class _TimedDB:
         #
         # The ONE opt-in extension: with idempotent=True the caller declares the
         # statement safe to re-issue even when its delivery is UNCERTAIN —
-        # SurrealReaderDiedError (the WS reader died mid-query) or a transport loss
-        # (ConnectionRefused/ConnectionClosed during a SurrealDB blip) then joins
-        # the retry set. The re-issue rides the same connection object, which
-        # self-heals inside _send via the patched connect (db/_patch.py). These
+        # SurrealReaderDiedError (the socket or its reader died mid-query, or a
+        # dial was refused during a SurrealDB blip) then joins the retry set. The
+        # re-issue rides the same connection object, which the SDK reconnects and
+        # re-authenticates itself (open_surreal). These
         # failures carry NO committed-nothing guarantee, so default OFF: a retried
         # CREATE with a lost response would duplicate a row.
         """
@@ -260,10 +289,13 @@ class _TimedDB:
             start = time.perf_counter()
             backoff = _WRITE_CONFLICT_BACKOFF_S
             try:
-                return await call(sql, params)
+                try:
+                    return await call(sql, params)
+                except ConnectionUnavailableError as lost:
+                    raise SurrealReaderDiedError(str(lost)) from lost
             except Exception as e:
                 conflict = _is_write_conflict(e)
-                uncertain = isinstance(e, (SurrealReaderDiedError, *_TRANSPORT_LOST))
+                uncertain = isinstance(e, SurrealReaderDiedError)
                 retryable = conflict or (idempotent and uncertain)
                 if not retryable or attempt == DB_WRITE_CONFLICT_ATTEMPTS - 1:
                     raise
@@ -279,7 +311,12 @@ class _TimedDB:
             await asyncio.sleep(backoff * (attempt + 1))
 
     async def query(self, sql, params=None, *, site="unspecified", idempotent=False):
-        return await self._run_retrying(self._conn.query, sql, params, site, idempotent=idempotent)
+        # WHY: surrealdb-py 3 answers one result PER STATEMENT; every call site
+        # reads the 2.x shape, the first statement's result.
+        results = await self._run_retrying(
+            self._conn.query, sql, params, site, idempotent=idempotent
+        )
+        return results[0] if results else None
 
     async def query_raw(self, sql, params=None, *, site="unspecified", idempotent=False):
         return await self._run_retrying(

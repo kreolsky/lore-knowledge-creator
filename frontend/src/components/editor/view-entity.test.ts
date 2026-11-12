@@ -96,7 +96,6 @@ function makeDeps(activeItemIdRef: { current: string | undefined }): EditorExten
     roleRef: { current: 'primary' },
     isReferenceRef: { current: false },
     collabConnectionRef: { current: null },
-    regionResolver: () => null,
   };
 }
 

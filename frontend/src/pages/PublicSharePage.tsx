@@ -249,12 +249,12 @@ export function PublicSharePage(
   }, [documentId, loadDocBundle, t, setDocuments, setPublicProjectName, setCurrentDocument, setReferences, onTreeIds]);
 
   // ── Doc-select within the share: CHANGE THE ROUTE (one id per document) ─
-  // ARCH (plan "public-document-ids"): navigating to /docs/<childId> re-renders
-  // this page with a new documentId prop → the hydrate effect above swaps the
-  // document in place (the tree is already loaded — no spinner, no re-fetch).
-  // Replaces the prior stay-on-/s/:token + loadDocBundle-no-route-change shape.
-  useEvent('navigate-to-document', useCallback(({ documentId: docId }) => {
-    navigate(docUrl(docId));
+  // ARCH: navigating to /docs/<childId> re-renders this page with a new documentId
+  // prop → the hydrate effect above swaps the document in place (the tree is already
+  // loaded — no spinner, no re-fetch). A pointer's `#fragment` rides the URL hash,
+  // where PublicEditor's useAnchorScroll resolves it — same seam as the authed path.
+  useEvent('navigate-to-document', useCallback(({ documentId: docId, fragment }) => {
+    navigate(fragment ? `${docUrl(docId)}#${fragment}` : docUrl(docId));
   }, [navigate]));
 
   // ── Open a reference within the share: NO route change (refs aren't routed) ─

@@ -56,7 +56,6 @@ import settings
 from fastapi import HTTPException
 
 import config
-from models.tools import RegionRef
 
 logger = logging.getLogger(__name__)
 
@@ -287,20 +286,17 @@ def _derived_tool_sets() -> dict[str, list[str]]:
     """The turn contract's derived tool sets, serialized unconditionally.
 
     Each is the single backend source for one driver decision — the driver
-    never re-hardcodes any of them (INVARIANT(security) on mutating_tools above;
-    region_tools is the sibling for pinned-region confinement)."""
+    never re-hardcodes any of them (INVARIANT(security) on mutating_tools above)."""
     from agent.tools import (
         HOLDABLE_TOOLS,
         IMAGE_RESULT_TOOLS,
         MUTATING_TOOLS,
         PER_CALL_APPROVAL_TOOLS,
-        REGION_TOOLS,
     )
     return {
         "mutating_tools": sorted(MUTATING_TOOLS),
         "holdable_tools": sorted(HOLDABLE_TOOLS),
         "per_call_approval_tools": sorted(PER_CALL_APPROVAL_TOOLS),
-        "region_tools": sorted(REGION_TOOLS),
         "image_result_tools": sorted(IMAGE_RESULT_TOOLS),
     }
 
@@ -386,7 +382,7 @@ def _build_turn_payload(
     project_id: str = "", document_id: str | None = None,
     prompt: str | list = "", assistant_msg_id: str = "",
     time_stamps: list[str] | None = None,
-    skills: dict | list | None = None, region: RegionRef | None = None,
+    skills: dict | list | None = None,
     reasoning_effort: str | None = None,
     ai_api_url: str = "", ai_api_key: str = "",
     title_model: str = "", web_search_provider: str = "",
@@ -413,10 +409,6 @@ def _build_turn_payload(
         # The RAW skills wire: {project, instance, shipped, instance_tombstones}
         # — the plugin parses them.
         "skills": skills if skills else [],
-        # Pinned-region containment: forwarded on edit/append tool calls.
-        # WHY: model_dump — the payload is json.dumps'd, and passing the RegionRef
-        # model killed every turn on a pinned session ("not JSON serializable").
-        "region": region.model_dump() if region is not None else None,
         # ARCH: present ONLY when the session
         # pins an effort — ABSENT = Default (no reasoning_effort on the wire,
         # the provider's default applies), never a null/'' placeholder (the

@@ -153,7 +153,6 @@ export function createMiscSlice(set: Set, get: Get): MiscSlice {
         ghostSystemPromptId: null,
         ghostModel: '',
         ghostReasoningEffort: null,
-        ghostRegion: null,
       });
     },
   };

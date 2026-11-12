@@ -130,7 +130,7 @@ async def _turn_payload(turn: "_AgentTurn", plan, agent_key: str, driver_session
         document_id=turn.session.get("document_id"),
         prompt=plan.prompt, assistant_msg_id=turn.assistant_msg_id,
         time_stamps=plan.time_stamps,
-        skills=plan.skill_docs, region=plan.region,
+        skills=plan.skill_docs,
         reasoning_effort=turn.reasoning_effort,
         ai_api_url=ai["AI_API_URL"], ai_api_key=ai["AI_API_KEY"],
         title_model=config["CHAT_TITLE_MODEL"],

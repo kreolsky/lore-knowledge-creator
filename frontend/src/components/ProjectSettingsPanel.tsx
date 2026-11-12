@@ -1,6 +1,6 @@
 /**
- * Project-level settings panel: voice recording target and reference image
- * previews. The sharing surfaces (audiences, members) live in
+ * Project-level settings panel: voice recording target, reference image
+ * previews, the user's own agent-sound toggle. The sharing surfaces (audiences, members) live in
  * ProjectAccessSections.
  */
 // ARCH: Only visible to users with accessLevel === 'full'. Persists via PATCH /api/projects/{id}.
@@ -11,11 +11,12 @@
 
 import { useState, useRef, useCallback } from 'react';
 import { useAppStore } from '../store/app-store';
+import { useUIStore } from '../store/ui-store';
 import { apiClient } from '../api/client';
 import { ParentPickerPopup } from './ParentPickerPopup';
 import { Button, IconButton, FieldRadio, FieldCheckbox, SectionHeader } from './ui';
 import { useTranslation } from '../i18n';
-import { X, Mic, ChevronRight, Image } from 'lucide-react';
+import { X, Mic, ChevronRight, SlidersHorizontal } from 'lucide-react';
 import { AudienceSection, MembersSection } from './ProjectAccessSections';
 
 type VoiceMode = 'current' | 'fixed';
@@ -28,6 +29,8 @@ export function ProjectSettingsPanel() {
   const { t } = useTranslation();
 
   const [saving, setSaving] = useState<string | null>(null);
+  const soundEnabled = useUIStore(s => s.soundEnabled);
+  const setSoundEnabled = useUIStore(s => s.setSoundEnabled);
 
   const [voicePickerOpen, setVoicePickerOpen] = useState(false);
   const voiceAnchorRef = useRef<HTMLSpanElement>(null);
@@ -138,9 +141,9 @@ export function ProjectSettingsPanel() {
         </div>
 
         <SectionHeader
-          icon={<Image size={11} />}
-          title={t('settingsDisplayTitle')}
-          description={t('settingsDisplayDesc')}
+          icon={<SlidersHorizontal size={11} />}
+          title={t('settingsInterfaceTitle')}
+          description={t('settingsInterfaceDesc')}
         />
         <div className="px-3.5">
           <FieldCheckbox
@@ -154,6 +157,13 @@ export function ProjectSettingsPanel() {
             onChange={v => patchProject({ links_show_sessions: v })}
             label={t('settingsLinksShowSessionsLabel')}
             disabled={saving === 'links_show_sessions'}
+          />
+          {/* WHY: a personal toggle in the project block — it lives in the user's project
+              prefs, not on the project, so it never reaches other members. */}
+          <FieldCheckbox
+            checked={soundEnabled}
+            onChange={setSoundEnabled}
+            label={t('settingsSoundLabel')}
           />
         </div>
 

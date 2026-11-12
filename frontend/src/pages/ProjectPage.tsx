@@ -33,6 +33,7 @@ import { readRefOpenMode, refIsScope } from '../store/ui-store/documents-slice';
 import { searchModeOnOpen } from '../store/ui-store/search-slice';
 import { useNoteStore } from '../store/note-store';
 import { useChatStore } from '../store/chat-store';
+import { clarifyBlock } from '../components/chat/clarify-format';
 import { useEvent } from '../hooks/useEvent';
 import { useAccessTabState } from '../hooks/useAccessTabState';
 import { useInboxSummary } from '../store/inbox-store';
@@ -50,6 +51,7 @@ import { useDocumentRoute } from '../hooks/useDocumentRoute';
 import { useReferenceEvents } from '../hooks/useReferenceEvents';
 import { useRecordingHotkey } from '../hooks/useRecordingHotkey';
 import { useSidebarHotkey } from '../hooks/useSidebarHotkey';
+import { useTextWidthHotkey } from '../hooks/useTextWidthHotkey';
 import { getEditorView } from '../editor/active-editor';
 import { voiceWidgetField, voiceWidgetRemove } from '../components/editor/voice-widget';
 import { uploadReferenceFile } from '../api/reference-upload';
@@ -151,18 +153,11 @@ export function ProjectPage() {
     }
   }, [rightPanelReady, rightPanelTab, allowedTabs, currentDocId, setRightPanelTab]);
 
-  // see SYSTEM: selection-region-agent — the editor's Bot icon emits 'start-agent-chat'
-  // when the user picks "Work with selection". Wired here (always mounted in a
-  // project) rather than in ChatPanel (unmounts on tab switch) so the event is
-  // caught even when the chat tab is closed; startAgentChat reveals the panel.
-  useEvent('start-agent-chat', payload => {
-    void useChatStore.getState().startAgentChat(payload);
-  });
-
   const { projectCollabConn } = useProjectConnection({ projectId });
   useReferenceEvents();
   useRecordingHotkey();
   useSidebarHotkey();
+  useTextWidthHotkey(projectId);
 
   const addReference = useAppStore(s => s.addReference);
   const updateReference = useAppStore(s => s.updateReference);
@@ -271,6 +266,17 @@ export function ProjectPage() {
       useNoteStore.getState().setActiveNoteThreadId(payload.threadId, docId ?? undefined);
     }
     shellRef.current?.openRightPanel('notes');
+  }, []));
+
+  // WHY here, not in ChatInput: ProjectPage is always mounted, the chat tab is not — a
+  // quote sent from the editor while the panel is closed would otherwise be lost.
+  useEvent('chat-quote-insert', useCallback(({ quote, source, question }: { quote: string; source?: string; question?: string }) => {
+    const block = clarifyBlock(quote, source, question);
+    // Append to the store draft (never overwrite — the user may have typed more).
+    const { draft, setDraft } = useChatStore.getState();
+    setDraft(draft ? `${draft}\n\n${block}` : block);
+    useChatStore.setState({ pendingInputFocus: true });
+    shellRef.current?.openRightPanel('chat');
   }, []));
 
   useEvent('open-find', useCallback(({ selection }: { selection: string }) => {

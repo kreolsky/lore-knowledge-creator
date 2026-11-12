@@ -1,5 +1,17 @@
 -- Lore — SurrealDB Schema
 -- Applied on backend startup (DEFINE ... IF NOT EXISTS is idempotent)
+--
+-- ARCH: every store runs at SurrealDB compatibility level 4. There a DEFINE FIELD
+-- on a populated SCHEMAFULL table whose TYPE does not accept every existing value
+-- — a new non-option field, option→non-option, a retype — is REFUSED unless it
+-- says what existing rows hold:
+--   DEFINE FIELD IF NOT EXISTS <f> ON <t> TYPE <T> DEFAULT <v>
+--     MIGRATE EXISTING ROWS AS <t>_<f> USING $value ?? <v> FALLBACK <v>;
+-- The same clause (a new <name>) carries a narrowing or a retype, with USING
+-- converting $value. It re-runs cleanly on every boot, OVERWRITE fields included.
+-- A bare DEFAULT + backfill `UPDATE` is not a substitute: the DEFINE itself fails,
+-- apply_schema (backend/db_schema.py) logs `statement failed` and the deploy goes
+-- red. Test-side twin: migrate_existing_rows() in tests/backend/helpers.py.
 
 -- ─── Analyzers ────────────────────────────────────────────────────────────────
 -- FTS analyzers (SurrealDB v3 FULLTEXT). snowball(russian) ONLY: a single analyzer
@@ -49,8 +61,7 @@ DEFINE FIELD IF NOT EXISTS created_by    ON users TYPE option<string>;
 -- decides which costly features (voice → STT, ai → chat/agent/pipelines/image
 -- gen) the account may START in ANY project. Instance role and project access
 -- are two further, never-merged axes. OVERWRITE like `role` (carries an
--- ASSERT); backfilled to 'ai' by migrate_user_tier_backfill (every existing
--- user keeps everything).
+-- ASSERT).
 DEFINE FIELD OVERWRITE tier ON users TYPE string ASSERT $value IN ['base', 'voice', 'ai'] DEFAULT 'ai';
 DEFINE FIELD IF NOT EXISTS moderator_id ON users TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS created_at    ON users TYPE datetime DEFAULT time::now();
@@ -188,23 +199,11 @@ DEFINE FIELD IF NOT EXISTS audiences ON projects TYPE array<object> DEFAULT [];
 DEFINE FIELD OVERWRITE audiences.* ON projects TYPE object;
 DEFINE FIELD OVERWRITE audiences.*.subject ON projects TYPE string;
 DEFINE FIELD OVERWRITE audiences.*.access_level ON projects TYPE string ASSERT $value IN ['readonly', 'commentator', 'full'];
--- INVARIANT(corruption): a non-option field added to `projects` is backfilled
--- here. Why: DEFAULT fills only new rows; every row predating the field holds
--- NONE, and its next UPDATE fails coercion (same trap as ref_image_preview
--- below). Pinned by test_migrate_audiences_to_list.py.
-UPDATE projects SET audiences = [] WHERE audiences IS NONE;
 DEFINE FIELD IF NOT EXISTS voice_recording_doc_id ON projects TYPE option<string>;
 -- Project-wide: references panel renders image refs as a gallery (true) or as plain cards.
 DEFINE FIELD IF NOT EXISTS ref_image_preview     ON projects TYPE bool DEFAULT true;
--- INVARIANT(corruption): a non-option bool added to `projects` is backfilled here.
--- Why: DEFAULT fills only new rows; every existing row holds NONE, and the next
--- UPDATE on it (record_doc_open writing last_accessed_doc_id) fails coercion — the
--- user sees "Couldn't open this document" (same trap as the `documents` block below).
-UPDATE projects SET ref_image_preview = true WHERE ref_image_preview IS NONE;
--- Project-wide: links panel lists notes & chats (true) or documents only. Backfilled
--- under the same INVARIANT(corruption) as ref_image_preview above.
+-- Project-wide: links panel lists notes & chats (true) or documents only.
 DEFINE FIELD IF NOT EXISTS links_show_sessions   ON projects TYPE bool DEFAULT false;
-UPDATE projects SET links_show_sessions = false WHERE links_show_sessions IS NONE;
 DEFINE FIELD IF NOT EXISTS deleted_at            ON projects TYPE option<datetime>;
 
 -- ─── Project Members ──────────────────────────────────────────────────────────
@@ -260,10 +259,8 @@ DEFINE FIELD IF NOT EXISTS created_at  ON document_shares TYPE datetime DEFAULT 
 DEFINE FIELD IF NOT EXISTS created_by  ON document_shares TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS deleted_at  ON document_shares TYPE option<datetime>;
 -- Comments on the public link: anyone holding it may leave notes (never edit the
--- text). A subtree share's flag covers every document under it. Non-option bool +
--- backfill so the owner's toggle UPDATE never meets NONE on a pre-flag row.
+-- text). A subtree share's flag covers every document under it.
 DEFINE FIELD IF NOT EXISTS allow_comments ON document_shares TYPE bool DEFAULT false;
-UPDATE document_shares SET allow_comments = false WHERE allow_comments IS NONE;
 DEFINE INDEX IF NOT EXISTS idx_dshare_doc     ON document_shares FIELDS document_id;
 DEFINE INDEX IF NOT EXISTS idx_dshare_token   ON document_shares FIELDS token;
 DEFINE INDEX IF NOT EXISTS idx_dshare_project ON document_shares FIELDS project_id;
@@ -397,8 +394,7 @@ DEFINE FIELD IF NOT EXISTS chats_unlisted ON documents TYPE option<bool> DEFAULT
 -- the gateway). `unread_for` = the RECIPIENT user id (the key owner). Written
 -- ONLY by backend/inbox.py::mark_arrived, and ONLY on is_reference=true rows
 -- (see the chat_sessions twin for the note half). option<string> with NO
--- non-option DEFAULT — NONE = "not unread"; deliberately NOT backfilled (the
--- backfill INVARIANT below covers non-option fields only).
+-- non-option DEFAULT — NONE = "not unread"; deliberately NOT backfilled.
 DEFINE FIELD IF NOT EXISTS unread_for   ON documents TYPE option<string>;
 DEFINE INDEX IF NOT EXISTS idx_documents_unread
     ON documents FIELDS project_id, unread_for;
@@ -691,7 +687,9 @@ DEFINE FIELD IF NOT EXISTS content    ON messages TYPE string DEFAULT '';
 DEFINE FIELD IF NOT EXISTS images     ON messages TYPE option<array>;
 -- Files the person dropped on the AI chat: a RECORD that they were attached
 -- (they live in the sender's sandbox workspace, never in Lore storage).
-DEFINE FIELD IF NOT EXISTS files      ON messages TYPE option<array>;
+-- WHY array<object>: a bare `array` makes `files[*]` type any, and SurrealDB v4
+-- refuses sub-fields under it ("only an object holds a field").
+DEFINE FIELD IF NOT EXISTS files      ON messages TYPE option<array<object>>;
 DEFINE FIELD IF NOT EXISTS files[*].id   ON messages TYPE string;
 DEFINE FIELD IF NOT EXISTS files[*].name ON messages TYPE string;
 DEFINE FIELD IF NOT EXISTS files[*].size ON messages TYPE int;
@@ -727,10 +725,10 @@ DEFINE FIELD IF NOT EXISTS document_id    ON agent_configs TYPE string;
 DEFINE FIELD IF NOT EXISTS config_doc_id  ON agent_configs TYPE string;
 DEFINE FIELD IF NOT EXISTS target_doc_id  ON agent_configs TYPE string;
 DEFINE FIELD IF NOT EXISTS project_id     ON agent_configs TYPE string;
--- option<string> + OVERWRITE (not bare string): pre-existing rows — including
--- soft-deleted ones the backfill skips (deleted_at IS NONE filter) — carry NONE
--- here, and a non-option string traps them in the row-wide coerce on any UPDATE
--- (e.g. _migrate_agent_configs_kind_backfill). Same trap as agent_auto.
+-- option<string> + OVERWRITE (not bare string): legacy rows — soft-deleted
+-- ones especially — carry NONE here, and a non-option string traps them in the
+-- row-wide coerce on any UPDATE (e.g. _migrate_agent_configs_kind_backfill).
+-- Same trap as agent_auto.
 DEFINE FIELD OVERWRITE trigger_event  ON agent_configs TYPE option<string> DEFAULT "transcription_complete";
 -- kind discriminates the coexisting config families: "extractor" (event-driven
 -- extractor jobs, the original use), "digest" (theme delta reports) and
@@ -754,9 +752,6 @@ DEFINE INDEX IF NOT EXISTS idx_agent_configs_project  ON agent_configs FIELDS pr
 
 -- MIGRATION: drop the old unique-on-document_id index (replaced by idx_agent_configs_doc_trigger)
 REMOVE INDEX IF EXISTS idx_agent_configs_document ON agent_configs;
-
--- MIGRATION: backfill trigger_event on records created before the field existed
-UPDATE agent_configs SET trigger_event = "transcription_complete" WHERE trigger_event IS NONE AND deleted_at IS NONE;
 
 -- ─── Pipeline schedules (plan 1786740208300 S3, direction C) ─────────────────
 -- A user-configurable schedule is PROJECT DATA (D7): the worker keeps ONE cron
@@ -837,7 +832,8 @@ DEFINE INDEX IF NOT EXISTS doc_chunks_doc_idx  ON doc_chunks FIELDS document_id;
 DEFINE INDEX IF NOT EXISTS doc_chunks_proj_idx ON doc_chunks FIELDS project_id;
 
 -- messages: add sources field (denormalized retrieval results)
-DEFINE FIELD IF NOT EXISTS sources ON messages TYPE option<array>;
+-- WHY array<object>: see `files` above — v4 refuses sub-fields under a bare array.
+DEFINE FIELD IF NOT EXISTS sources ON messages TYPE option<array<object>>;
 DEFINE FIELD IF NOT EXISTS sources[*].kind         ON messages TYPE string;
 DEFINE FIELD IF NOT EXISTS sources[*].id           ON messages TYPE string;
 DEFINE FIELD IF NOT EXISTS sources[*].title        ON messages TYPE string;
@@ -846,6 +842,9 @@ DEFINE FIELD IF NOT EXISTS sources[*].snippet      ON messages TYPE option<strin
 DEFINE FIELD IF NOT EXISTS sources[*].offset_start ON messages TYPE option<int>;
 DEFINE FIELD IF NOT EXISTS sources[*].offset_end   ON messages TYPE option<int>;
 DEFINE FIELD IF NOT EXISTS sources[*].score        ON messages TYPE option<float>;
+-- WHY declared: backend/routes/chat/context.py writes it on manual source rows;
+-- v3 stored the undeclared key silently, v4 rejects the write.
+DEFINE FIELD IF NOT EXISTS sources[*].retrieved    ON messages TYPE option<bool>;
 
 -- documents: content_version for CAS-based embedding updates
 DEFINE FIELD IF NOT EXISTS content_version ON documents TYPE int DEFAULT 0;
@@ -969,15 +968,17 @@ DEFINE INDEX IF NOT EXISTS idx_documents_parent_only
 -- (verified on gray, surreal v3.3.5, 2026-10-30: one event before, one after,
 -- body swapped — no REMOVE EVENT fallback needed). Same precedent as the
 -- media_type ASSERT above.
+-- WHY $parent_doc, not $parent: SurrealDB v4 reserves $parent ("'parent' is a
+-- protected variable and cannot be set") and refuses the whole definition.
 DEFINE EVENT OVERWRITE documents_parent_check ON documents
     WHEN $event = 'CREATE' OR $event = 'UPDATE'
     THEN {
         IF $after.parent_id != NONE {
-            LET $parent = (SELECT is_reference, media_type FROM type::record('documents', $after.parent_id))[0];
-            IF $parent.is_reference = true {
+            LET $parent_doc = (SELECT is_reference, media_type FROM type::record('documents', $after.parent_id))[0];
+            IF $parent_doc.is_reference = true {
                 THROW 'Reference documents cannot be parents';
             };
-            IF $parent.media_type = 'html' AND $after.is_reference != true {
+            IF $parent_doc.media_type = 'html' AND $after.is_reference != true {
                 THROW 'HTML artifacts cannot be parents';
             };
         };
@@ -1026,8 +1027,7 @@ DEFINE INDEX IF NOT EXISTS idx_chatsessions_is_note
 -- chat_sessions rows / is_reference=true documents rows; the dsh chat agent's
 -- internal key never flags. `option<string>` with NO non-option DEFAULT, so a
 -- row predating the field reads NONE = "not unread" — deliberately NOT
--- backfilled (the backfill INVARIANT below covers non-option fields only;
--- NONE is the correct resting state for every existing row).
+-- backfilled (NONE is the correct resting state for every existing row).
 DEFINE FIELD IF NOT EXISTS unread_for ON chat_sessions TYPE option<string>;
 DEFINE INDEX IF NOT EXISTS idx_chatsessions_unread
     ON chat_sessions FIELDS project_id, unread_for;
@@ -1037,20 +1037,6 @@ DEFINE INDEX IF NOT EXISTS idx_chatsessions_unread
 -- resolve_message_author(message, session) — see backend/models.py.
 DEFINE FIELD IF NOT EXISTS author_id ON messages TYPE option<string>;
 DEFINE INDEX IF NOT EXISTS idx_messages_author ON messages FIELDS author_id;
-
--- INVARIANT: every `DEFINE FIELD ... TYPE <non-option> DEFAULT ...` added to
--- an existing table MUST get a matching backfill row here. DEFAULT applies only
--- on CREATE — pre-existing rows keep NONE and SurrealDB then rejects every
--- subsequent UPDATE on them with a coerce error, which `flush_to_db` swallows
--- via `except Exception`. The symptom is silent: edits ack on WS but never
--- reach DB. See incident 2026-05-28 (embedding_status, 394 docs affected).
--- Why: the failure is invisible until users notice their edits revert on
--- doc switch; backend logs only show `logger.exception` inside the periodic
--- flush loop, which is easy to miss. Backfilling at schema-apply time is the
--- cheapest way to keep the trap from re-arming.
-UPDATE documents     SET is_reference     = false WHERE is_reference     = NONE;
-UPDATE documents     SET embedding_status = 'ok' WHERE embedding_status = NONE;
-UPDATE chat_sessions SET is_note          = false WHERE is_note          = NONE;
 
 -- ─── Chat session agent fields ──────────────────────────────────────────────
 -- ARCH (plan: remove-ask-line-mode-axis): the `mode` column is VESTIGIAL — it
@@ -1079,12 +1065,10 @@ REMOVE FIELD IF EXISTS frozen_anchor_message_id ON chat_sessions;
 -- INVARIANT: switching away from agent forces agent_auto=false so re-entering
 -- agent mode always starts in confirm mode (no stale auto-apply grant).
 DEFINE FIELD OVERWRITE agent_auto ON chat_sessions TYPE option<bool> DEFAULT false;
--- ARCH (plan: selection-region-agent): a pinned-region agent chat forces confirm
--- mode + a per-apply containment check constraining the agent to a frontend-tracked
--- text span. Server-authoritative (survives cross-device reload); the RelativePosition
--- pair is frontend-owned (localStorage). option<bool> + OVERWRITE avoids the NONE-
--- coerce-on-UPDATE trap (mirror of agent_auto) for pre-existing rows.
-DEFINE FIELD OVERWRITE has_region ON chat_sessions TYPE option<bool> DEFAULT false;
+-- WHY: the agent is never confined to a text span — no `has_region` column. This
+-- REMOVE is the fresh-DB twin of the chat_has_region_drop migration (which covers
+-- DBs created while the column lived).
+REMOVE FIELD IF EXISTS has_region ON chat_sessions;
 -- ARCH: the driver owns every turn — there is no transport to pick, so no
 -- `lifecycle` column. This REMOVE is the fresh-DB twin of the
 -- chat_lifecycle_drop migration (which covers DBs created while the column
@@ -1161,19 +1145,13 @@ DEFINE FIELD IF NOT EXISTS seed_source_session ON chat_sessions TYPE option<stri
 DEFINE FIELD IF NOT EXISTS seed_source_seq     ON chat_sessions TYPE option<int>;
 DEFINE INDEX IF NOT EXISTS idx_chatsessions_thread ON chat_sessions FIELDS thread_id, deleted_at;
 
--- Backfill pre-existing chat sessions (mode defaults to 'chat').
-UPDATE chat_sessions SET mode = 'chat' WHERE mode = NONE;
-UPDATE chat_sessions SET agent_auto = false WHERE agent_auto IS NONE;
-UPDATE chat_sessions SET title_user_set = false WHERE title_user_set IS NONE;
-
 -- ARCH: the per-chat opt-out from the chat-recall search index. It ONLY means
 -- "not in the search index": the chat lists, titles and deletes as usual. One
 -- value per conversation — the PATCH writes every row of the conversation and
 -- every minting site of a derived row (branch, compaction continuation)
--- copies it from its source. Non-option bool + the backfill below so a read
--- predicate `unindexed = false` never meets NONE.
+-- copies it from its source. Non-option bool so a read predicate
+-- `unindexed = false` never meets NONE.
 DEFINE FIELD IF NOT EXISTS unindexed ON chat_sessions TYPE bool DEFAULT false;
-UPDATE chat_sessions SET unindexed = false WHERE unindexed IS NONE;
 
 -- ARCH: the chat-recall search index — a disposable cache rebuilt from
 -- `messages` by reconciliation (jobs/tasks/chat_index.py), never written by a
@@ -1343,7 +1321,6 @@ DEFINE FIELD IF NOT EXISTS enabled    ON instance_skills TYPE bool DEFAULT true;
 DEFINE FIELD IF NOT EXISTS updated_by ON instance_skills TYPE string;
 DEFINE FIELD IF NOT EXISTS updated_at ON instance_skills TYPE datetime DEFAULT time::now();
 DEFINE INDEX IF NOT EXISTS idx_instance_skills_name ON instance_skills FIELDS name UNIQUE;
-UPDATE instance_skills SET enabled = true WHERE enabled IS NONE;
 
 -- ─── User secrets (SYSTEM: user-secrets) ────────────────────────────────────
 -- A user's personal API keys: name, description, the exact hosts the key is

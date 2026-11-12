@@ -16,6 +16,7 @@ migration exists precisely for DBs that still carry it. On a field-less DB
 from __future__ import annotations
 
 import pytest
+from helpers import migrate_existing_rows
 from password import hash_secret
 
 from migrations.migrate_public_to_group_audience import (
@@ -30,7 +31,7 @@ _NOGROUP_OWNER = "ga-mig-nogroup"
 _ADMIN_OWNER = "test-admin-001"
 
 _LEGACY_DEFINE = [
-    "DEFINE FIELD IF NOT EXISTS is_public ON projects TYPE bool DEFAULT false",
+    "DEFINE FIELD IF NOT EXISTS is_public ON projects TYPE bool DEFAULT false{migrate}",
     "DEFINE FIELD IF NOT EXISTS group_audience ON projects TYPE option<string>",
     "DEFINE FIELD IF NOT EXISTS group_access ON projects TYPE option<string>",
 ]
@@ -38,7 +39,7 @@ _LEGACY_DEFINE = [
 
 async def _define_legacy(test_db) -> None:
     for stmt in _LEGACY_DEFINE:
-        await test_db.query(stmt)
+        await test_db.query(stmt.replace("{migrate}", migrate_existing_rows("false")))
 
 
 async def _drop_legacy(test_db) -> None:

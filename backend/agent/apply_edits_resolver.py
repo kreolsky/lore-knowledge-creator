@@ -2,18 +2,15 @@
 
 Part of the chat-agent-mode system. Extracted from tool_api_surface
  : the all-or-nothing batch resolve→splice→
-checkpoint→write core (`_resolve_validate_apply_edits`) + the pinned-region
-containment exception (`RegionContainmentReject`), used by the direct apply path
-(tool_api_surface.apply_edits_to_document). Internal extraction — no SYSTEM marker.
+checkpoint→write core (`_resolve_validate_apply_edits`), used by the direct apply
+path (tool_api_surface.apply_edits_to_document). Internal extraction — no SYSTEM marker.
 
 WHY (imports): live state and the surgical convergence path come from
 `agent.doc_state`, the checkpoint helper from `agent.collab_writes`; both are
 reached as module attributes at call time so a test patches the owning module.
 
-This module is also the home of the pinned-region containment gate
-(`region_containment_error`); the typed post-write failure
-(`AppliedUnverifiedError`) lives in `textmatch` beside the primitive that
-raises it.
+The typed post-write failure (`AppliedUnverifiedError`) lives in `textmatch`
+beside the primitive that raises it.
 """
 import json
 import logging
@@ -31,53 +28,8 @@ from agent.edit_primitives import (
     fold_new_string,
     resolve_edit_range,
 )
-from models import RegionRef
 
 logger = logging.getLogger(__name__)
-
-
-class RegionContainmentReject(Exception):
-    """Raised by the shared apply core when a resolved edit range falls outside the
-    session's pinned region. Carries the actionable detail; the caller maps it to a
-    409 rejection."""
-
-    def __init__(self, detail: str) -> None:
-        super().__init__(detail)
-        self.detail = detail
-
-
-def region_containment_error(
-    *,
-    edit_from: int,
-    edit_to: int,
-    edit_doc_id: str,
-    has_region: bool,
-    region: RegionRef | dict | None,
-) -> str | None:
-    """Return a human/agent-facing detail string if a resolved edit escapes the
-    pinned region; None when it is fully inside (or no region is pinned).
-
-    The authoritative containment gate for pinned-region sessions. Pure so it is
-    unit-testable independently of the apply path.
-
-    # INVARIANT: fail-closed — a pinned session whose apply request omits the
-    # region is REJECTED (inclusive containment on from/to_cp + doc_id).
-    # Why: under a pin the agent may only edit inside the region; the frontend-owned
-    # RelativePosition may be lost on a cross-device reload, and a missing region is
-    # rejected fail-closed rather than letting an unbounded edit slip through.
-    """
-    if not has_region:
-        return None  # not pinned → unconstrained
-    if region is None:
-        return "region unavailable — re-pin or unpin before editing"
-    r_doc = region.get("doc_id") if isinstance(region, dict) else region.doc_id
-    r_from = region.get("from_cp") if isinstance(region, dict) else region.from_cp
-    r_to = region.get("to_cp") if isinstance(region, dict) else region.to_cp
-    if r_doc != edit_doc_id:
-        return "edit targets a different document than the pinned region"
-    if r_from <= edit_from and edit_to <= r_to:
-        return None
-    return "edit falls outside the pinned fragment"
 
 
 def _classify_edit_miss(
@@ -127,7 +79,7 @@ def _prepare_edit_text(
 
     # Block-boundary alignment (incident doc-53e340da): a block-level
     # replacement must not be spliced onto the tail of a neighboring line. Runs
-    # BEFORE the region gate and the overlap guard so both see the final range;
+    # BEFORE the overlap guard so it sees the final range;
     # it only ever grows the range over a spaces/tabs run, so non-overlap holds.
     # See the INVARIANT on align_block_boundaries.
     """
@@ -142,11 +94,11 @@ def _prepare_edit_text(
 
 
 def _resolve_one_edit(
-    current_content: str, index: int, e: dict, region_check,
+    current_content: str, index: int, e: dict,
     full_rewrite_fraction: float,
 ) -> tuple[str, dict]:
     """Resolve ONE edit against the snapshot: `("resolved", entry)` or
-    `("skip", entry)`; raises HTTPException / RegionContainmentReject.
+    `("skip", entry)`; raises HTTPException.
 
     # WHY: verify/splice against the RESOLVED slice, not the raw old_string.
     # Why: the fold returns the ORIGINAL range, so raw old_string would make
@@ -165,12 +117,6 @@ def _resolve_one_edit(
     from_cp, to_cp, new_text, resolved_old = _prepare_edit_text(
         current_content, from_cp, to_cp, new_text, folded,
     )
-    # Pinned-region containment gate (confirm path only). The resolved range must
-    # lie fully inside the request's region; fail-closed if pinned but no region.
-    if region_check is not None:
-        containment_err = region_check(from_cp, to_cp)
-        if containment_err is not None:
-            raise RegionContainmentReject(containment_err)
     # _splice_edit performs the stale-check (verify current[from:to] == resolved_old)
     # before mutating; its new_content is unused (the surgical path uses cp/new_text).
     _new_content, err = _splice_edit(
@@ -193,7 +139,7 @@ def _resolve_one_edit(
 
 
 def _validate_edits_against_snapshot(
-    current_content: str, edits: list[dict], region_check,
+    current_content: str, edits: list[dict],
     full_rewrite_fraction: float,
 ) -> tuple[list[dict], list[dict]]:
     """The validation pass: resolve every edit against the ONE snapshot —
@@ -202,7 +148,7 @@ def _validate_edits_against_snapshot(
     skipped: list[dict] = []   # {index, at_cp, reason}
     for index, e in enumerate(edits):
         kind, entry = _resolve_one_edit(
-            current_content, index, e, region_check, full_rewrite_fraction,
+            current_content, index, e, full_rewrite_fraction,
         )
         if kind == "skip":
             skipped.append(entry)
@@ -416,7 +362,6 @@ async def _resolve_validate_apply_edits(
     edits: list[dict],
     project_id: str,
     on_commit=None,
-    region_check=None,
     convert_tables: bool = False,
 ) -> dict:
     """Lock-free core used by the direct apply path (apply_edits_to_document).
@@ -428,14 +373,13 @@ async def _resolve_validate_apply_edits(
     # silently drops or corrupts edits (No-silent-degradation) and desyncs the resume
     # trace. This is the single home of the batch-apply contract; both callers reach it.
 
-    `edits` are pre-normalized {old_string, new_string}; `on_commit` /
-    `region_check` are the confirm path's seams (see the helper contracts).
+    `edits` are pre-normalized {old_string, new_string}; `on_commit` is
+    the confirm path's seam (see the helper contracts).
     `convert_tables` enables the edit-path GFM→object conversion (markdown
     bodies only — the caller computes `not is_artifact`); each edit converts
     under the post-splice skip rule (see `_convert_resolved_edit_tables`).
     Returns {applied, skipped, checkpoint, tables?, noop?}. Raises HTTPException
-    (stale/miss/overlap/full_rewrite/cell-too-large) or
-    RegionContainmentReject; when on_commit ran and the write then fails,
+    (stale/miss/overlap/full_rewrite/cell-too-large); when on_commit ran and the write then fails,
     re-raises AppliedUnverifiedError (mark-first: applied)."""
     # WHY (agent source): resolve current content AND tables from the
     # Y.Doc via the shared helper, NOT merge_live_content. Why: merge_live_content
@@ -445,7 +389,7 @@ async def _resolve_validate_apply_edits(
 
     full_rewrite_fraction = await settings.get("AGENT_FULL_REWRITE_FRACTION")
     resolved, skipped = _validate_edits_against_snapshot(
-        current_content, edits, region_check, full_rewrite_fraction,
+        current_content, edits, full_rewrite_fraction,
     )
     _reject_overlapping_edits(resolved)
 

@@ -128,9 +128,9 @@ function prep(text: string, over: Partial<TurnPrep> = {}): TurnPrep {
     servedNames: new Set(), skills: [], activated: new Set(),
     standingCtx: {
       loreSessionId: 'lore-x', agentKey: 'k', mutating: new Set(), holdable: new Set(), perCallApproval: new Set(),
-      regionTools: new Set(),
+     
     },
-    requestCtx: { messageId: `a-${text}`, applyMode: 'confirm', document_id: null, region: null, vision: false },
+    requestCtx: { messageId: `a-${text}`, applyMode: 'confirm', document_id: null, vision: false },
     claim: {
       user_msg_id: `u-${text}`, assistant_msg_id: `a-${text}`, user_text: text,
       images: [], files: [], sources: [], warnings: [],
@@ -349,10 +349,10 @@ test('the idle dispose waits out a send in flight, then releases the agent', asy
 test('each claim swaps in ITS prep: model, prompt, time ground, request ctx', async () => {
   const g = gate()
   const h = await harness([{ text: 'A1', gate: g.promise }, { text: 'B1' }])
-  let regionAtSecondCall: unknown = 'unset'
+  let docAtSecondCall: unknown = 'unset'
   const origStream = h.adapter.stream.bind(h.adapter)
   h.adapter.stream = (options: GenerateOptions) => {
-    if (h.adapter.requests.length === 1) regionAtSecondCall = loreTurnCtxFor('s-prep')?.region
+    if (h.adapter.requests.length === 1) docAtSecondCall = loreTurnCtxFor('s-prep')?.document_id
     return origStream(options)
   }
   await send(h, 's-prep', 'A', prep('A', {
@@ -363,7 +363,7 @@ test('each claim swaps in ITS prep: model, prompt, time ground, request ctx', as
   await send(h, 's-prep', 'B', prep('B', {
     model: 'm2', selection: { provider: 'mock', model: 'm2' }, systemPrompt: 'SYSTEM two',
     timeStamps: ['[stamp two]'],
-    requestCtx: { messageId: 'a-B', applyMode: 'auto', document_id: 'doc-2', region: { start: 7 }, vision: false },
+    requestCtx: { messageId: 'a-B', applyMode: 'auto', document_id: 'doc-2', vision: false },
   }))
   g.open()
   await until(settled('s-prep'), 'both turns')
@@ -376,7 +376,7 @@ test('each claim swaps in ITS prep: model, prompt, time ground, request ctx', as
   assert.ok(userTexts(second).includes('[stamp two]'), 'the second turn carries its own time ground')
   assert.ok(!userTexts(second).slice(userTexts(second).indexOf('B')).includes('[stamp one]'),
     'the first prep\'s stamp is not repeated on the second turn')
-  assert.deepEqual(regionAtSecondCall, { start: 7 },
+  assert.equal(docAtSecondCall, 'doc-2',
     'the tool ctx request half is the second prep\'s while its step runs')
 })
 

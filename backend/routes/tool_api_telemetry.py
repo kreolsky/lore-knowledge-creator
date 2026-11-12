@@ -111,6 +111,7 @@ MAX_HIT_IDS = 20
 _EDIT_TOOLS = frozenset({
     "edit_document", "append_to_document", "edit_table_cell", "add_table_rows",
     "add_table_column", "create_table", "rename_document", "move_document",
+    "restore_document_version",
 })
 
 

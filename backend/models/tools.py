@@ -39,6 +39,27 @@ class ToolReadDocument(BaseModel):
     # schema can (offset past end, limit over the hard max).
     offset: int = Field(default=0, ge=0)
     limit: int | None = Field(default=None, ge=1)
+    # A checkpoint id of this document → read that historical version (GFM, read-only).
+    version: str | None = None
+
+
+class ToolListDocumentVersions(BaseModel):
+    document_id: str
+    limit: int = Field(default=20, ge=1, le=50)
+    before_checkpoint_id: str | None = None
+
+
+class ToolDiffDocumentVersions(BaseModel):
+    document_id: str
+    from_checkpoint_id: str
+    # "current" = the live document; otherwise a checkpoint id of this document.
+    to: str = "current"
+
+
+class ToolRestoreDocumentVersion(BaseModel):
+    document_id: str
+    checkpoint_id: str
+    apply: ToolApply = ToolApply.confirm
 
 
 class ToolGetLinks(BaseModel):
@@ -292,35 +313,6 @@ class ToolDocumentEdit(BaseModel):
     new_string: str
 
 
-class RegionRef(BaseModel):
-    """A live-resolved pinned text region on a document.
-
-    The frontend owns the Yjs RelativePosition pair (localStorage) and resolves it
-    to (from_cp, to_cp, text) per turn. The backend stores ONLY
-    `chat_sessions.has_region`; this model is the WIRE shape the frontend sends with
-    each completion (prompt hint) and each mutating tool call (containment
-    enforcement on the direct apply path). Offsets are Unicode code points — the
-    same unit `resolve_edit_range` / `_splice_edit` use.
-
-    # WHY: from_cp <= to_cp (a collapsed region from==to is allowed on the wire;
-    # the apply path rejects it as out-of-scope, but the model accepts it so a
-    # legitimately-collapsed anchor after user deletions is not a 422).
-    """
-
-    doc_id: str
-    from_cp: int = Field(ge=0)
-    to_cp: int = Field(ge=0)
-    # Optional live text snapshot — purely a prompt hint for the model; the apply
-    # path NEVER trusts it (it re-resolves old_string against live content).
-    text: str | None = None
-
-    @model_validator(mode="after")
-    def _check_order(self) -> "RegionRef":
-        if self.to_cp < self.from_cp:
-            raise ValueError("from_cp must be <= to_cp")
-        return self
-
-
 class ToolEditDocument(BaseModel):
     """edit_document body — batch pointwise edits in ONE atomic call.
 
@@ -337,10 +329,6 @@ class ToolEditDocument(BaseModel):
     old_string: str | None = None
     new_string: str | None = None
     apply: ToolApply = ToolApply.confirm
-    # Pinned-region containment: when the session is pinned the frontend resolves
-    # the region and the driver forwards it here; the direct apply path rejects an
-    # edit whose resolved range escapes it. Absent = unpinned session.
-    region: RegionRef | None = None
 
     @model_validator(mode="after")
     def _require_one_form(self) -> "ToolEditDocument":
@@ -492,8 +480,6 @@ class ToolAppendDocument(BaseModel):
     content: str
     section: str | None = None
     apply: ToolApply = ToolApply.confirm
-    # Pinned-region containment — see ToolEditDocument.region.
-    region: RegionRef | None = None
 
 
 class ToolMoveDocument(BaseModel):

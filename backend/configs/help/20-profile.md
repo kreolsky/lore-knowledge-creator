@@ -1,6 +1,6 @@
 # Profile settings
 
-Opened from the header. Sections: Profile, MCP, Private keys, Colors; the section you used last opens again.
+Opened from the header. Sections: Profile, MCP, Private keys, Colors, Sound; the section you used last opens again.
 
 ## Profile
 
@@ -10,7 +10,7 @@ Name, email, password and the Quick Lock PIN for the [screen and page lock](help
 
 MCP servers that the administrator or your group's moderator connected for the chat agent (see [Chat and the agent](help:chat-agent)). Each server says what it needs:
 
-- **your own key** — paste the key in the field. It is stored encrypted, never shown again, and sent only to the server's address. Lore checks the connection at once: "Connected, tools: N", or why it failed (key rejected, server unreachable, not an MCP server). "get the key" leads to where the service issues keys;
+- **your own key** — paste the key in the field. It is stored encrypted, never shown again, and sent only to the server's address. Lore checks the connection at once: "Connected, tools: N", or why it failed (key rejected, server unreachable, not an MCP server) together with what the server itself answered, so you can tell a wrong key from a server that refuses Lore before reading it. "get the key" leads to where the service issues keys;
 - **a shared key** — set by the administrator; until it is set, the server is not connected;
 - **no key** — connected as is.
 
@@ -35,3 +35,7 @@ If a key no longer decrypts (for example, after a restore from backup), it is ma
 ## Colors
 
 Recolors the theme that is on now: background, text, accent, status and highlight colors. Each theme keeps its own colors; every color resets on its own, "Reset all" returns the whole theme to its defaults. A color with low contrast against its background shows a warning. "Export" saves both themes' colors as a JSON file, "Import" restores them from such a file. Your colors are kept in your account and are not applied on public pages.
+
+## Sound
+
+The sound played when the agent finishes a turn or asks you to confirm a change: one of four built-in sounds (Chime, Pop, Bell, Soft), each with a "Play" button, or "My sound" — your own audio file up to 500 KB; short sounds work best. Your choice follows you to every device. The sound itself is turned on per project in the "Settings" tab, "Interface" section (see [Chat and the agent](help:chat-agent)).

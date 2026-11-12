@@ -420,15 +420,12 @@ async function buildTurnPrep(ctx: Context, map: SessionMap, body: Record<string,
     perCallApproval: new Set<string>(
       Array.isArray(body.per_call_approval_tools) ? body.per_call_approval_tools : [],
     ),
-    regionTools: new Set<string>(Array.isArray(body.region_tools) ? body.region_tools : []),
   }
   const requestCtx = {
     messageId: String(body.assistant_msg_id ?? ''),
     applyMode: String(body.apply_mode ?? 'confirm'),
     document_id: typeof body.document_id === 'string' && body.document_id
       ? body.document_id : null,
-    region: (body.region && typeof body.region === 'object')
-      ? body.region as Record<string, unknown> : null,
     // The turn's own caps resolve — the image-result gate reads it off the
     // merged turn ctx (tools.ts), the same roster the catalog upsert declares
     // from (one source, caps.ts).

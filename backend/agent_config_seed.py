@@ -213,9 +213,9 @@ async def _upsert_system_doc(
     if rows:
         await db.query(
             "UPDATE type::record('documents', $id) SET deleted_at = NONE, "
-            "parent_id = $parent, title = $title, system_role = $role, "
+            "parent_id = $parent_doc, title = $title, system_role = $role, "
             "is_system = true, path = $path",
-            {"id": doc_id, "parent": parent_id, "title": title,
+            {"id": doc_id, "parent_doc": parent_id, "title": title,
              "role": role, "path": _role_path(role)},
         )
         return doc_id

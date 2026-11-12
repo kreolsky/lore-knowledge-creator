@@ -12,6 +12,7 @@ import type { Language } from '../../types';
 import type { UIState } from '../ui-store';
 import { readCachedColors } from '../../theme/apply-colors';
 import { emptyOverrides, sanitizeOverrides, type ColorOverrides } from '../../theme/color-tokens';
+import { DEFAULT_SOUND_PRESET, isSoundChoice, type SoundChoice } from '../../utils/sound-presets';
 
 export type ThemeSlice = Pick<
   UIState,
@@ -20,6 +21,7 @@ export type ThemeSlice = Pick<
   | 'setTheme' | 'setLanguage' | 'setPanelWidth' | 'setSplitRatio' | 'getSplitRatio' | 'loadGlobalPrefs'
   | 'setShowArchived' | 'setAdminSectionTab' | 'setCabinetSectionTab' | 'setSidebarPinned'
   | 'setColorOverride' | 'replaceColorOverrides' | 'flushColorSave'
+  | 'soundPreset' | 'setSoundPreset'
 >;
 
 type UISet = (
@@ -53,7 +55,7 @@ export type AdminSectionTab =
   | 'mcp-servers';
 
 /** The cabinet's left-aside sections, same placement reason as AdminSectionTab. */
-export type CabinetSectionTab = 'profile' | 'mcp' | 'keys' | 'colors';
+export type CabinetSectionTab = 'profile' | 'mcp' | 'keys' | 'colors' | 'sound';
 
 export interface GlobalPrefs {
   theme: 'light' | 'dark';
@@ -79,6 +81,9 @@ export interface GlobalPrefs {
   // Why: defaults stay in index.css, so a later palette change reaches every token
   // the user did not touch. Loaded raw-then-sanitized (the server does not validate).
   colorOverrides: ColorOverrides;
+  // WHY: global like theme — which chime a person hears is a habit, not a project fact;
+  // only the on/off toggle is per project. Loaded raw-then-validated (unknown id → default).
+  soundPreset: SoundChoice;
 }
 
 const GLOBAL_DEFAULTS: GlobalPrefs = {
@@ -91,6 +96,7 @@ const GLOBAL_DEFAULTS: GlobalPrefs = {
   cabinetSectionTab: null,
   sidebarPinned: true,
   colorOverrides: { light: {}, dark: {} },
+  soundPreset: DEFAULT_SOUND_PRESET,
 };
 
 // WHY: a color picker fires per drag tick; the save is debounced while the apply is instant.
@@ -135,6 +141,7 @@ export function createThemeSlice(set: UISet, get: UIGet): ThemeSlice {
     sidebarPinned: true,
     // WHY: same reason as theme above — keep what theme-boot.js painted until prefs load.
     colorOverrides: readCachedColors(),
+    soundPreset: DEFAULT_SOUND_PRESET,
     globalPrefsLoaded: false,    setTheme: (theme) => { set({ theme }); cacheTheme(theme); get().saveGlobalPrefsNow(); },
     setLanguage: (language) => { set({ language }); get().saveGlobalPrefsNow(); },
     setPanelWidth: (side, width) => {
@@ -153,6 +160,7 @@ export function createThemeSlice(set: UISet, get: UIGet): ThemeSlice {
     setAdminSectionTab: (tab) => { set({ adminSectionTab: tab }); get().saveGlobalPrefsNow(); },
     setCabinetSectionTab: (tab) => { set({ cabinetSectionTab: tab }); get().saveGlobalPrefsNow(); },
     setSidebarPinned: (sidebarPinned) => { set({ sidebarPinned }); get().saveGlobalPrefsNow(); },
+    setSoundPreset: (soundPreset) => { set({ soundPreset }); get().saveGlobalPrefsNow(); },
     setColorOverride: (theme, token, value) => {
       set(prev => {
         const map = { ...prev.colorOverrides[theme] };
@@ -201,6 +209,7 @@ export function createThemeSlice(set: UISet, get: UIGet): ThemeSlice {
             cabinetSectionTab: data.cabinetSectionTab ?? null,
             sidebarPinned: data.sidebarPinned ?? GLOBAL_DEFAULTS.sidebarPinned,
             colorOverrides: sanitizeOverrides(data.colorOverrides),
+            soundPreset: isSoundChoice(data.soundPreset) ? data.soundPreset : GLOBAL_DEFAULTS.soundPreset,
             globalPrefsLoaded: true,
           });
         } catch {

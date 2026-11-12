@@ -2,9 +2,11 @@
  * Shared contract for in-app entity links (ref:/doc:) used by the editor,
  * chat markdown, sources list, and the hover-preview host.
  *
- * All three parties — producers (MarkdownContent, Sources, build-structural) and the
- * single consumer (EditorLinkPreview) — go through encode/decode here so the data-link-id
- * contract is code-enforced, not convention-enforced.
+ * Two producers set data-link-id — build-structural (editor) and Sources (chat sources
+ * list) — and EditorLinkPreview consumes it, all through encode/decode here so the
+ * data-link-id contract is code-enforced, not convention-enforced. Links inside a chat
+ * answer carry no data-link-* attributes: MarkdownContent rewrites them to the lore.local
+ * href, which parseInAppLink decodes for both its click handler and EditorLinkPreview.
  *
  * Link types and their URL schemes:
  * - document → doc:<id>  (the editor also accepts a bare id as a doc link)
@@ -22,27 +24,34 @@
 
 export type InAppLinkType = 'ref' | 'doc';
 
-const SCHEME_RE = /^(ref|doc):(.+)$/;
+const SCHEME_RE = /^(ref|doc):([^#]+)(?:#(.*))?$/;
 
 /**
- * The chat markdown wrapper's rewritten form (plan chat-markdown-on-dsh):
+ * The chat markdown wrapper's rewritten form:
  * dsh's renderer allowlists only http(s)/mailto destinations, so `doc:`/`ref:`
  * links in PROSE segments become this absolute URL — an allowlisted
  * destination dsh renders as a real anchor, decoded back here by the chat
  * click handler and EditorLinkPreview's href-derived branch.
  */
-const LORE_LOCAL_RE = /^https:\/\/lore\.local\/l\/(ref|doc)\/([^/?#\s]+)$/;
+const LORE_LOCAL_RE = /^https:\/\/lore\.local\/l\/(ref|doc)\/([^/?#\s]+)(?:#(\S*))?$/;
 
-/** Parse an in-app link URL into type + raw id, or null if not an in-app link.
- * Accepts both the scheme form (`doc:<id>`) and the rewritten
- * `https://lore.local/l/<type>/<id>` form. */
-export function parseInAppLink(url: string): { type: InAppLinkType; id: string } | null {
+export interface InAppLink {
+  type: InAppLinkType;
+  id: string;
+  /** Raw, still percent-encoded fragment after `#` (see utils/link-fragment.ts). */
+  fragment?: string;
+}
+
+/** Parse an in-app link URL into type + raw id (+ fragment), or null if not an in-app link.
+ * Accepts both the scheme form (`doc:<id>#frag`) and the rewritten
+ * `https://lore.local/l/<type>/<id>#frag` form. */
+export function parseInAppLink(url: string): InAppLink | null {
   const trimmed = url.trim();
   const local = trimmed.match(LORE_LOCAL_RE);
-  if (local) return { type: local[1] as InAppLinkType, id: decodeURIComponent(local[2]) };
-  const m = trimmed.match(SCHEME_RE);
+  const m = local ?? trimmed.match(SCHEME_RE);
   if (!m) return null;
-  return { type: m[1] as InAppLinkType, id: m[2] };
+  const id = local ? decodeURIComponent(m[2]) : m[2];
+  return m[3] ? { type: m[1] as InAppLinkType, id, fragment: m[3] } : { type: m[1] as InAppLinkType, id };
 }
 
 /**
@@ -57,8 +66,9 @@ export function encodeLinkId(type: InAppLinkType, id: string): string {
 /**
  * Decode a data-link-id attribute value into the raw entity id.
  * Strips the scheme prefix defensively for ALL types (including doc), so both bare
- * and prefixed values resolve correctly regardless of which producer emitted them.
+ * and prefixed values resolve correctly regardless of which producer emitted them,
+ * and drops a `#fragment` — the editor emits urlText verbatim, pointer included.
  */
 export function decodeLinkId(type: InAppLinkType, value: string): string {
-  return value.replace(new RegExp(`^${type}:`), '');
+  return value.replace(new RegExp(`^${type}:`), '').split('#')[0];
 }

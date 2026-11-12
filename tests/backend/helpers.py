@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import json
+import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -10,6 +11,19 @@ import jwt
 from pycrdt import Doc, Text
 
 from config import ALGORITHM, COOKIE_MAX_AGE, SECRET_KEY
+
+
+def migrate_existing_rows(fallback: str) -> str:
+    """A ` MIGRATE EXISTING ROWS …` clause to append to a DEFINE FIELD that
+    narrows a field on a populated SCHEMAFULL table.
+
+    WHY: SurrealDB v4 refuses such a DEFINE without scanning rows unless it
+    carries this clause, and a migration name is single-use per table — a fresh
+    name per call lets a test restore the same field twice in one session.
+    """
+    name = f"m_{uuid.uuid4().hex}"
+    return f" MIGRATE EXISTING ROWS AS {name} USING $value ?? {fallback} FALLBACK {fallback}"
+
 
 # ─── Sync-loop driver for low-level collab tests ─────────────────────────────
 # The collab TestClient drives the app on anyio's portal thread; the surgical

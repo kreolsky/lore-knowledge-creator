@@ -6,10 +6,13 @@ import { startLongTaskObserver } from './telemetry/perf';
 import { startPagePerf } from './telemetry/page-perf';
 import { publishScrollbarWidth } from './utils/scrollbar-width';
 import { installDomTranslateGuard } from './utils/dom-translate-guard';
+import { installStaleChunkReload } from './utils/stale-chunk-reload';
 import './index.css';
 
 // Before the first render: a translated page must not crash React's DOM commits.
 installDomTranslateGuard();
+// A tab from before a deploy reloads instead of crashing on a chunk the server dropped.
+installStaleChunkReload();
 
 // Begin capturing main-thread freezes (telemetry perf producer). Idempotent; no-op
 // where PerformanceObserver/longtask is unsupported.

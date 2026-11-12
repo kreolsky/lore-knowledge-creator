@@ -104,11 +104,6 @@ def _stamp_wire_fields(out: dict) -> None:
     # authoritative on the session row (survives reload). Default false for
     # pre-field rows.
     out["agent_auto"] = bool(out.get("agent_auto"))
-    # ARCH: the pinned-region flag is server-
-    # authoritative (forces confirm + the containment gate). The client reads it to
-    # render the SelectionPill + disable the auto-apply toggle. Default false for
-    # pre-field rows.
-    out["has_region"] = bool(out.get("has_region"))
     # The recall-index opt-out; false for a row that predates the column.
     out["unindexed"] = bool(out.get("unindexed"))
     # ARCH: last-known context occupation for the token-usage gauge — the tokens

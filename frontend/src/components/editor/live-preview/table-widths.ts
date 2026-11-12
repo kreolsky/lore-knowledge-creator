@@ -13,8 +13,9 @@ export const MIN_COLUMN_WIDTH = 40;
 export const DEFAULT_COLUMN_WIDTH = 160;
 
 /**
- * WHY: the px width a new table is born at = the document text column max width
- * (`.editor-content .cm-editor .cm-content` in index.css). MUST equal the backend
+ * WHY: the px width a new table is born at = the DEFAULT text column width
+ * (`--content-max-width` in index.css, 52.75rem at 16px). A viewer's wider column
+ * preset does not change it: the width is stored and shared by every viewer. MUST equal the backend
  * `BIRTH_TABLE_WIDTH` in `backend/table_serialize.py`.
  */
 export const BIRTH_TABLE_WIDTH = 844;

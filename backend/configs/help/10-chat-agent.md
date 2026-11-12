@@ -1,6 +1,6 @@
 # Chat and the agent
 
-The chat is an agent with tools. It reads, searches, creates, edits, moves and renames documents, builds tables and [HTML pages](help:html-pages). Through [skills](help:skills) it also searches the web, runs deep research, generates pictures, runs code in a sandbox console, works with [memory](help:memory) and pipeline configs, recalls your other chats and calls outside services with your [personal keys](help:profile).
+The chat is an agent with tools. It reads, searches, creates, edits, moves and renames documents, builds tables and [HTML pages](help:html-pages), and works with a document's [snapshots](help:history): lists them, reads and compares old versions, restores one. Through [skills](help:skills) it also searches the web, runs deep research, generates pictures, runs code in a sandbox console, works with [memory](help:memory) and pipeline configs, recalls your other chats and calls outside services with your [personal keys](help:profile).
 
 The agent acts on your behalf: it sees and changes only what you can see and change. The chat needs an account tier with AI (see [Access and publishing](help:access)); without it the Chat tab is hidden.
 
@@ -50,7 +50,7 @@ To hide all chats of a document and its subtree at once, use "Hide this document
 
 ## Other actions
 
-- **Work with selection** (⌘/Ctrl + J) — the agent works on the selected fragment of the document.
+- **Quote in chat** (⌘/Ctrl + J, or the button on the selection toolbar) — the selected text goes into the chat input as a quote, followed by a link to that passage of the document. Add your request and send it. A click on the link, in the chat or in a document, opens the document with the passage selected.
 - **Clarify** — select part of the agent's answer and ask a follow-up about it.
 - **Continue** — an interrupted turn (step limit, error, lost connection) leaves a card with the reason and a "Continue" button. A reply cut off by an error stays on screen, also after a reload.
 - **Create document from response** — the answer becomes a new document.
@@ -60,6 +60,7 @@ To hide all chats of a document and its subtree at once, use "Hide this document
 - **System prompt** — the persona for this chat (see [Personas, rules and knowledge](help:personas-rules-knowledge)).
 - **Prompt rail** — the ticks on the right edge of the chat, one per your message. Hovering (or tapping) opens a list of your prompts with the start of each answer; a click jumps to that prompt.
 - **Scroll to bottom** — the arrow button that appears when the chat is scrolled up.
+- **Sound** — a sound when the agent finishes a turn or asks you to confirm a change, handy while you work in another window. Turn it on per project in the "Settings" tab, "Interface" section; pick or upload the sound in [Profile settings](help:profile), "Sound" section. Off by default.
 
 ## External MCP servers
 

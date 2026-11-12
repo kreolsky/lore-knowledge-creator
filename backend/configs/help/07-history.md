@@ -29,3 +29,7 @@ Press ⌘/Ctrl + S or "Save snapshot" in the "Snapshots" tab. Add a comment: wha
 - An [HTML page](help:html-pages) downloads only as `.html`.
 
 The tab also shows the document's history: who created the document and who edited it.
+
+## Snapshots and the agent
+
+The [agent](help:chat-agent) works with snapshots too: ask it what changed since yesterday, to compare two versions, or to bring back a passage from an old one. It can list a document's snapshots, read any of them, compare two of them or one with the current text, and restore a snapshot. A restore is a change like any other: it waits for your confirmation unless "Auto" is checked, and the state before it is saved as a snapshot, so the restore can be undone.

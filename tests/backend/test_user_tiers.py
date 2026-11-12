@@ -381,47 +381,6 @@ async def test_generate_image_gates_ai_for_key_owner(tier_world):
     assert exc.value.detail == "tier_required:ai"
 
 
-@pytest.mark.asyncio
-async def test_backfill_migration_stamps_ai_and_is_idempotent(test_db):
-    """migrate_user_tier_backfill: rows predating the column (tier NONE) are
-    stamped 'ai'; a re-run is a no-op."""
-    from migrations.migrate_user_tier_backfill import _migrate_user_tier_backfill
-
-    async def _redefine_field() -> None:
-        # The exact production DDL — restores the field even when an earlier
-        # statement in this test fails, so one failure cannot poison the
-        # session's schema (conftest applies schema once per loop only).
-        await test_db.query(
-            "DEFINE FIELD OVERWRITE tier ON users TYPE string "
-            "ASSERT $value IN ['base', 'voice', 'ai'] DEFAULT 'ai'",
-        )
-
-    try:
-        # Recreate the pre-column shape: drop the field, create rows without
-        # it (create_record — raw `users:tierless-a` parses as subtraction).
-        await test_db.query("REMOVE FIELD tier ON users")
-        await create_record("users", "tierless-a", {
-            "name": "a", "role": "user", "user_facts": "",
-        })
-        await create_record("users", "tierless-b", {
-            "name": "b", "role": "user", "user_facts": "",
-        })
-        await _redefine_field()
-        await _migrate_user_tier_backfill(test_db)
-        rows = await test_db.query(
-            "SELECT tier FROM users WHERE name IN ['a', 'b']",
-        )
-        assert sorted(r["tier"] for r in rows) == ["ai", "ai"]
-
-        # Idempotent: a user deliberately at 'base' keeps it; re-run does nothing.
-        await test_db.query("UPDATE users SET tier = 'base' WHERE name = 'a'")
-        await _migrate_user_tier_backfill(test_db)
-        rows = await test_db.query("SELECT name, tier FROM users WHERE name IN ['a', 'b']")
-        assert {r["name"]: r["tier"] for r in rows} == {"a": "base", "b": "ai"}
-    finally:
-        await _redefine_field()
-
-
 # ─── User-admin write paths ──────────────────────────────────────────────────
 
 

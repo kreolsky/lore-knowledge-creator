@@ -67,6 +67,9 @@ function reportLoad(): void {
   const sample = load;
   load = null;
   const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+  // WHY: prod rows carried a ttfb of hours on 'reload' — the page's time origin predates
+  // the load, so every page-relative mark in the row (fcp, text_ms) is that clock artifact too.
+  if (nav && !isPlausiblePerfMs(nav.responseStart)) return;
   const js = (performance.getEntriesByType('resource') as PerformanceResourceTiming[])
     .filter(r => new URL(r.name).pathname.endsWith('.js'));
   sendTelemetry({

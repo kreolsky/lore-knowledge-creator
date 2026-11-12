@@ -14,6 +14,7 @@ import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 import { EditorView } from '@codemirror/view';
+import { MemoryRouter } from 'react-router';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -79,7 +80,7 @@ afterEach(() => {
 
 describe('PublicEditor — TOC scroll-to-line reaches the public CM6 view', () => {
   it('emitting scroll-to-line dispatches scrollIntoView for that heading line', { timeout: 30_000 }, async () => {
-    act(() => root.render(createElement(PublicEditor)));
+    act(() => root.render(createElement(MemoryRouter, null, createElement(PublicEditor))));
 
     const cmHost = container.querySelector('.cm-editor');
     expect(cmHost, 'real CodeMirrorEditor must be mounted').not.toBeNull();

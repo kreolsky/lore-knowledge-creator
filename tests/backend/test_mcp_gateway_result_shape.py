@@ -30,18 +30,11 @@ async def test_nested_record_id_is_canonicalized(monkeypatch):
     the top level (F5 audit — type-based recursive normalization). The helper now
     lives in db.py (single record-id coercion, alongside extract_id); the gateway
     output boundary (_ok) calls it."""
+    from surrealdb import RecordID
+
     from db import coerce_record_ids
 
-    class _FakeRecordID:
-        # Duck-typed to match db.is_record_id's name check.
-        def __init__(self, uuid):
-            self._uuid = uuid
-
-        def __str__(self):
-            return f"documents:`{self._uuid}`"
-
-    _FakeRecordID.__name__ = "RecordID"
-    nested = {"documents": [{"id": _FakeRecordID("abc-123"), "title": "x"}], "top": "plain"}
+    nested = {"documents": [{"id": RecordID("documents", "abc-123"), "title": "x"}], "top": "plain"}
     out = coerce_record_ids(nested)
     assert out["documents"][0]["id"] == "abc-123", "nested RecordID not normalized"
     assert out["top"] == "plain", "a plain string must be untouched"

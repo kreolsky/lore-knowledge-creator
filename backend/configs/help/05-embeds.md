@@ -11,7 +11,7 @@ A picture in the text is always a [reference](help:references). Ways to put a pi
 - **Drag a reference** from the "References" tab into the text, or drag a picture the agent generated in the chat.
 - **From a card**: put the cursor where the picture should go and press "Insert embed at cursor" on the picture's card in the "References" tab.
 
-All of these work in table cells too. Pictures cannot be dropped into an open reference, only into a document.
+All of these work in table cells too. Pictures cannot be dropped into an open reference, only into a document. Uploading the same picture to the same document again reuses its existing reference instead of creating a copy.
 
 The text gets an entry `![Title](ref:…)`. The size is set in the caption after a vertical bar:
 
@@ -34,7 +34,8 @@ A picture linked from the internet is not shown in a document; only its caption 
 ## Working with a picture
 
 - **A click** selects the picture: a frame with resize handles on the corners and edges appears, with a small toolbar. Dragging a handle resizes the picture; the width field in the toolbar follows live and also takes a typed size (`300`, `50%` or `500x400`). The toolbar's other button downloads the picture.
-- **A second click** (the first one where you cannot edit) opens the gallery: every picture of the document, embedded ones included, with arrows between them.
+- **Dragging** a picture moves it to another place in the document, into or out of a table cell, or into the other column of a split view; the caption and size stay. Escape or a release outside the editor cancels the move, and ⌘/Ctrl + Z undoes it.
+- **A second click** (the first one where you cannot edit) opens the gallery: every picture of the document, embedded ones and those in table cells included, with arrows between them.
 - **⌘/Ctrl + C** on a selected picture copies the picture itself and its entry: pasted into another app (Google Docs, Telegram, Figma) it becomes the picture, pasted inside Lore it becomes the entry, without uploading the file again. Animated GIFs are copied as their first frame.
 - **Backspace** deletes the selected picture from the text; the reference stays in the "References" tab.
 - A click anywhere else drops the selection.

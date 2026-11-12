@@ -974,6 +974,7 @@ class DriverChannel:
                 session_id=turn.projection.session_id,
                 reason=reason, source=source,
                 user_id=turn.user_id, project_id=turn.project_id,
+                halt=turn.projection.halt_reason, message=turn.projection.halt_note,
             )
         except Exception:
             logger.warning(

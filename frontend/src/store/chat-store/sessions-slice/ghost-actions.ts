@@ -2,7 +2,7 @@
 
 Extracted from sessions-slice (plan: chat-large-file-decomposition). A focused
 helper factory returning the ghost actions (startGhostChat + override setters +
-scope inheritance + region setters); the main slice composes it via object spread.
+scope inheritance); the main slice composes it via object spread.
 The actions share the same (set, get) closure the slice passes through. */
 import { useUIStore } from '../../ui-store';
 import type { ChatState, Set, Get } from '../types';
@@ -13,8 +13,6 @@ type GhostActions = Pick<
   | 'setGhostSystemPrompt'
   | 'resetGhostOverrides'
   | 'initGhostFromScope'
-  | 'setGhostRegion'
-  | 'clearGhostRegion'
 >;
 
 export function createGhostActions(set: Set, get: Get): GhostActions {
@@ -103,14 +101,6 @@ export function createGhostActions(set: Set, get: Get): GhostActions {
         // the effort the donor chat ran with (same bridge rationale as agent_auto).
         ghostReasoningEffort: source.reasoning_effort ?? null,
       });
-    },
-
-    setGhostRegion(region) {
-      set({ ghostRegion: region });
-    },
-
-    clearGhostRegion() {
-      set({ ghostRegion: null });
     },
   };
 }

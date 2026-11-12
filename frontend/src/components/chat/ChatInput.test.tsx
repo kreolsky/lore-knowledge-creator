@@ -88,7 +88,6 @@ vi.mock('../ui', () => ({
     return null;
   },
 }));
-vi.mock('./SelectionPill', () => ({ SelectionPill: () => null }));
 vi.mock('./TokenUsageGauge', () => ({ TokenUsageGauge: () => null }));
 vi.mock('./ContentPickerPopup', () => ({ ContentPickerPopup: () => null }));
 // The composer is reduced to the contract under test: a controlled textarea bound

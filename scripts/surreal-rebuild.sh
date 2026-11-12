@@ -20,6 +20,13 @@
 #                                  retry after a failed import: dump phase skipped,
 #                                  the given VERIFIED rebuild dump is imported into
 #                                  a fresh store (failed imports leave dirty stores)
+#   surreal-rebuild.sh --confirm --upgrade
+#                                  engine change: the fresh store is booted on the
+#                                  image COMPOSE names (not the running one); any
+#                                  failure after the mv-aside rolls back by itself to
+#                                  the old image on the old store and restarts the
+#                                  apps. On success the apps stay STOPPED — they are
+#                                  the old release; bring the new one up next.
 #
 # Environment (all required unless noted):
 #   STORE_DIR          store dir, e.g. /opt/lore/data/surreal/lore.db (prod) or
@@ -30,33 +37,57 @@
 #   PASS_FILE          the database password file secrets-init generated
 #                      (prod /opt/lore/data/secrets/surreal/pass). The only
 #                      password source — env SURREAL_PASS is wiring, not
-#                      config (plan component-wiring-not-settings step 4);
-#                      an explicit SURREAL_PASS is honored solely as a dev-
+#                      config; an explicit SURREAL_PASS is honored solely as a dev-
 #                      rehearsal escape (the dev secrets live in a named
 #                      volume with no host path).
 #   SURREAL_USER/NS/DB optional overrides (default root / lore / main)
 #   FORCE_SIZE_CHECK=1 optional: skip the dump-size-vs-history abort (legit shrink)
+#   COMPOSE            --upgrade only: the compose command that owns surreal, with
+#                      its -f named, e.g. `docker compose -p lore -f
+#                      docker-compose.prod.yml` (the rollback adds a second -f)
 set -euo pipefail
 
 MODE=""
 RESUME=""
+UPGRADE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) MODE=dry ;;
     --confirm) MODE=real ;;
     --resume) shift; RESUME="${1:?--resume needs a dump path}"; MODE=real ;;
-    --help|-h) sed -n '2,38p' "$0"; exit 0 ;;
+    --upgrade) UPGRADE=1 ;;
+    --help|-h) sed -n '2,48p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
   shift
 done
 [ -n "$MODE" ] || { echo "need --dry-run or --confirm (see --help)" >&2; exit 1; }
+if [ -n "$UPGRADE" ]; then
+  [ "$MODE" = real ] && [ -z "$RESUME" ] || { echo "--upgrade goes with --confirm alone" >&2; exit 1; }
+  case " ${COMPOSE:-} " in *" -f "*) ;; *) echo "--upgrade needs COMPOSE with its -f (see --help)" >&2; exit 1 ;; esac
+fi
 
 : "${STORE_DIR:?}" "${SURREAL_CONTAINER:?}" "${BACKUP_DIR:?}" "${APP_CONTAINERS:-}"
 [ -d "$STORE_DIR" ] || { echo "store dir not found: $STORE_DIR" >&2; exit 1; }
 
 log() { echo "[rebuild $(date +%H:%M:%S)] $*"; }
-fail() { echo "[rebuild] ABORT: $*" >&2; exit 1; }
+# --upgrade runs unattended (the deploy), so a failure undoes what it already did:
+# ROLLBACK=apps once the apps are stopped, =store once the old store is moved aside.
+ROLLBACK=""
+fail() {
+  echo "[rebuild] ABORT: $*" >&2
+  case "$ROLLBACK" in
+    apps) ROLLBACK=""; docker start $APP_CONTAINERS >/dev/null; echo "[rebuild] apps restarted on the untouched store" >&2 ;;
+    store) rollback_upgrade ;;
+  esac
+  exit 1
+}
+# WHY the trap: a command that dies under `set -e` (a failed cold /export, docker
+# stop, mv) never reaches fail(), so without it the apps would stay stopped. It
+# covers the main shell only — fail() inside a pipeline/$(…) subshell would roll
+# back there and again here, so ROLLBACK-armed phases call capture_counts unpiped.
+on_exit() { local rc=$?; [ "$rc" -eq 0 ] || [ -z "$ROLLBACK" ] || fail "unexpected exit $rc"; }
+trap on_exit EXIT
 
 # curl container sharing surreal's netns + host paths (mkdir backup dir first)
 sql_curl() { # $1 = surrealql body, rest = extra curl args
@@ -103,12 +134,38 @@ wait_healthy() { # surreal isready inside the container, up to 60s
   return 1
 }
 
+# WHY: under --upgrade fail() rolls back by itself, so a manual-recovery recipe
+# would name a store the rollback already moved — print it only without --upgrade.
+manual_hint() { [ -n "$UPGRADE" ] || printf '\n  %s' "$1"; }
+
+rollback_upgrade() { # back to the old image on the old store, apps restarted
+  ROLLBACK=""
+  echo "[rebuild] ROLLBACK: $NEW_IMAGE -> $OLD_IMAGE on $ASIDE" >&2
+  docker rm -f "$SURREAL_CONTAINER" >/dev/null 2>&1 || true
+  [ ! -e "$STORE_DIR" ] || mv "$STORE_DIR" "$STORE_DIR.failed-upgrade-$TS"
+  mv "$ASIDE" "$STORE_DIR"
+  local override
+  override=$(mktemp)
+  printf 'services:\n  surreal:\n    image: %s\n' "$OLD_IMAGE" > "$override"
+  # WHY the override: the compose file already names the new image, and the
+  # old container is gone — the old image comes back only by being named.
+  $COMPOSE -f "$override" up -d --no-deps surreal
+  rm -f "$override"
+  wait_healthy || { echo "[rebuild] ROLLBACK FAILED: $OLD_IMAGE not healthy on $STORE_DIR" >&2; exit 2; }
+  # shellcheck disable=SC2086
+  docker start $APP_CONTAINERS >/dev/null
+  echo "[rebuild] ROLLBACK done: $OLD_IMAGE serving the old store, apps started; failed store at $STORE_DIR.failed-upgrade-$TS" >&2
+}
+
 verify_dump() { # $1 = dump.gz → rails 2+3
   gzip -t "$1" || fail "gzip -t failed: $1"
-  # last non-empty line must END a complete INSERT: `... } ];` (space tolerated —
-  # the closing sits on the same multi-MB line as the statement)
-  gzip -dc "$1" | awk 'NF {last=$0} END {exit (last ~ /\}[[:space:]]*\];[[:space:]]*$/) ? 0 : 1}' \
-    || fail "dump tail is not a complete INSERT statement — truncated dump: $1"
+  # last non-empty, non-comment line must END a statement with `;` (space tolerated —
+  # an INSERT closes on the same multi-MB line it opens on, so a cut mid-line fails).
+  # WHY not "must end an INSERT": tables export alphabetically and the last one
+  # (ydoc_updates) is empty on a small install, so its dump ends on a DATA header.
+  # A cut exactly between statements passes here; the per-table parity catches it.
+  gzip -dc "$1" | awk 'NF && !/^--/ {last=$0} END {exit (last ~ /;[[:space:]]*$/) ? 0 : 1}' \
+    || fail "dump tail is not a complete statement — truncated dump: $1"
   # size sanity vs the newest prior dump: logical volume grows slowly; a collapse
   # means silent truncation (a 58MB truncation already fooled a human once)
   local prior new_mb prior_mb
@@ -203,10 +260,18 @@ fi
 if [ -z "$RESUME" ]; then
   [ -n "$APP_CONTAINERS" ] || fail "APP_CONTAINERS must list the app containers to stop"
   container_up "$SURREAL_CONTAINER" || fail "$SURREAL_CONTAINER not running"
+  if [ -n "$UPGRADE" ]; then
+    OLD_IMAGE=$(docker inspect -f '{{.Config.Image}}' "$SURREAL_CONTAINER")
+    NEW_IMAGE=$($COMPOSE config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["surreal"]["image"])')
+    [ "$OLD_IMAGE" != "$NEW_IMAGE" ] || fail "--upgrade: $SURREAL_CONTAINER already runs $NEW_IMAGE"
+    log "upgrade $OLD_IMAGE -> $NEW_IMAGE; pulling before the downtime starts"
+    $COMPOSE pull surreal || fail "could not pull $NEW_IMAGE"
+  fi
   # ── stop app containers BEFORE the dump: closes the write window ─────────────
   log "stopping app containers: $APP_CONTAINERS"
   # shellcheck disable=SC2086
   docker stop $APP_CONTAINERS >/dev/null
+  [ -z "$UPGRADE" ] || ROLLBACK=apps
 
   # ── dump (cold: apps stopped) ────────────────────────────────────────────────
   log "dump (cold): GET /export → $DUMP"
@@ -223,13 +288,14 @@ if [ -z "$RESUME" ]; then
   log "dump verified (gzip, tail, size-vs-history)"
 
   log "before-counts (old store):"
-  capture_counts | tee "$DUMP.counts"
+  capture_counts > "$DUMP.counts"; cat "$DUMP.counts"
 
   # ── stop surreal, mv store aside (rail 5: NEVER deleted) ─────────────────────
   log "stopping $SURREAL_CONTAINER"
   docker stop "$SURREAL_CONTAINER" >/dev/null
   ASIDE="$STORE_DIR.pre-rebuild-$TS"
   mv "$STORE_DIR" "$ASIDE"
+  [ -z "$UPGRADE" ] || ROLLBACK=store
   log "old store moved aside: $ASIDE"
 else
   # resume: surreal may be up from the failed attempt — stop it, move partial aside
@@ -246,34 +312,100 @@ fi
 
 # ── fresh store dir + boot surreal (rail 4: import only into a fresh dir) ──────
 mkdir -p "$STORE_DIR"
-docker start "$SURREAL_CONTAINER" >/dev/null
+if [ -n "$UPGRADE" ]; then
+  log "booting $NEW_IMAGE on the fresh store"
+  $COMPOSE up -d --no-deps surreal || fail "could not start $NEW_IMAGE"
+else
+  docker start "$SURREAL_CONTAINER" >/dev/null
+fi
 log "waiting for surreal healthy..."
 wait_healthy || fail "surreal did not become healthy after start"
 log "surreal healthy on fresh store"
 
 # ── import ─────────────────────────────────────────────────────────────────────
 log "import: POST /import ← $DUMP"
+# Under --upgrade the dump's DDL is translated to what the new major accepts. Rows are
+# untouched, so parity is unaffected. Two passes: the first reads only the dump's
+# DEFINE FIELD lines (to learn which `X.*` have children), the second rewrites.
+# Rule 1 — drop every DEFINE EVENT. WHY: a DEFINE EVENT is code, not data — only
+# surreal/schema.surql defines one, and the new release's backend re-applies it at boot
+# (OVERWRITE / IF NOT EXISTS) in the new engine's dialect. The old store's copy is the
+# OLD release's body, which a new major may refuse ($parent is reserved on v4) and
+# /import stops at the first refusal.
+# Rule 2 — an `X.*` of TYPE any that has children becomes `object`, and its parent
+# `array` becomes `array<object>`. WHY: v3 implied `X.* any` under a bare `array` and
+# still held typed children under it; v4 /import accepts that shape, but v4 DEFINE then
+# refuses any NEW child under it ("only an object holds a field") and refuses the
+# retype on a populated SCHEMAFULL table without MIGRATE EXISTING ROWS — which needs a
+# FALLBACK that passes the required children. Rewritten here, the store comes out in
+# exactly the shape a fresh v4 builds from surreal/schema.surql. v3 enforced the typed
+# children on every element, so every existing element is already an object.
+UPGRADE_DDL_AWK=""
+if [ -n "$UPGRADE" ]; then UPGRADE_DDL_AWK='
+  function field() { i = 3; if ($i == "OVERWRITE") i++; NAME = $i; TBL = $(i + 2) }
+  FNR == NR {
+    if ($1 == "DEFINE" && $2 == "FIELD") {
+      field(); s = NAME; p = ""
+      while ((k = index(s, ".*.")) > 0) {
+        p = p substr(s, 1, k + 1); has[TBL "|" p] = 1; p = p "."; s = substr(s, k + 3)
+      }
+    }
+    next
+  }
+  !skip && /^DEFINE EVENT / { skip = 1; depth = 0 }
+  skip { depth += gsub(/\{/, "{") - gsub(/\}/, "}")
+         if (depth <= 0 && /;[[:space:]]*$/) { skip = 0; events++ }
+         next }
+  $1 == "DEFINE" && $2 == "FIELD" {
+    field()
+    if ((TBL "|" NAME) in has && sub(/ TYPE any /, " TYPE object ")) retyped++
+    if ((TBL "|" NAME ".*") in has && (sub(/ TYPE none \| array /, " TYPE none | array<object> ") \
+        || sub(/ TYPE array /, " TYPE array<object> "))) retyped++
+  }
+  { print }
+  END {
+    print "[rebuild] events dropped from the import (the new backend re-defines them): " events + 0 > "/dev/stderr"
+    print "[rebuild] fields retyped to object under arrays: " retyped + 0 > "/dev/stderr"
+  }'
+fi
 docker run --rm --network "container:$SURREAL_CONTAINER" \
-  -e SURREAL_USER -e SURREAL_PASS -e SURREAL_NS -e SURREAL_DB \
+  -e SURREAL_USER -e SURREAL_PASS -e SURREAL_NS -e SURREAL_DB -e UPGRADE_DDL_AWK="$UPGRADE_DDL_AWK" \
   -v "$BACKUP_DIR":/mnt --user 0 --entrypoint sh curlimages/curl:latest -c '
     set -eu
-    gunzip -c /mnt/'"$(basename "$DUMP")"' > /tmp/import.surql
+    if [ -n "$UPGRADE_DDL_AWK" ]; then
+      gunzip -c /mnt/'"$(basename "$DUMP")"' | grep "^DEFINE FIELD " > /tmp/fields.surql || true
+      gunzip -c /mnt/'"$(basename "$DUMP")"' | awk "$UPGRADE_DDL_AWK" /tmp/fields.surql - > /tmp/import.surql
+    else
+      gunzip -c /mnt/'"$(basename "$DUMP")"' > /tmp/import.surql
+    fi
     curl -sS --fail-with-body --max-time 3600 \
       -u "$SURREAL_USER:$SURREAL_PASS" \
       -H "surreal-ns: $SURREAL_NS" -H "surreal-db: $SURREAL_DB" \
       -H "Content-Type: application/octet-stream" \
-      --data-binary @/tmp/import.surql http://localhost:8000/import
-  ' || fail "IMPORT FAILED — dirty store left for inspection. Retry on a FRESH store:
-  $0 --confirm --resume $DUMP"
+      -H "Accept: application/json" \
+      --data-binary @/tmp/import.surql http://localhost:8000/import \
+      > /mnt/'"$(basename "$DUMP")"'.import.json
+  ' || fail "IMPORT FAILED (HTTP) — $(head -c 600 "$DUMP.import.json" 2>/dev/null).$(manual_hint "Dirty store left for inspection. Retry on a FRESH store: $0 --confirm --resume $DUMP")"
+# WHY: /import answers per statement, so an HTTP 200 alone is not success — one
+# refused row reports itself only as an ERR entry in the body.
+if grep -Eq '"status": ?"ERR"' "$DUMP.import.json"; then
+  fail "IMPORT REFUSED STATEMENTS — $(grep -o '"result":"[^"]*","status":"ERR"' "$DUMP.import.json" | head -3)"
+fi
 
 # ── rail 6: table-count parity ─────────────────────────────────────────────────
 log "after-counts (new store):"
-capture_counts | tee "$DUMP.after-counts"
+capture_counts > "$DUMP.after-counts"; cat "$DUMP.after-counts"
 if ! diff -u <(sort "$DUMP.counts" 2>/dev/null || echo "NO-BEFORE-COUNTS") <(sort "$DUMP.after-counts"); then
-  fail "PARITY MISMATCH — do NOT assume success. Old store is intact at $ASIDE.
-  Rollback: docker stop $SURREAL_CONTAINER && rm -rf $STORE_DIR && mv $ASIDE $STORE_DIR && docker start $SURREAL_CONTAINER && docker start $APP_CONTAINERS"
+  fail "PARITY MISMATCH — do NOT assume success.$(manual_hint "Old store is intact at $ASIDE. Rollback: docker stop $SURREAL_CONTAINER && rm -rf $STORE_DIR && mv $ASIDE $STORE_DIR && docker start $SURREAL_CONTAINER && docker start $APP_CONTAINERS")"
 fi
 log "parity OK (all populated tables match)"
+ROLLBACK=""
+
+if [ -n "$UPGRADE" ]; then
+  log "upgrade complete on $NEW_IMAGE. Apps left STOPPED (old release): bring the new one up, e.g. $COMPOSE up -d"
+  log "old store kept at: ${ASIDE} — delete manually after N days"
+  exit 0
+fi
 
 # ── bring apps back ────────────────────────────────────────────────────────────
 # shellcheck disable=SC2086

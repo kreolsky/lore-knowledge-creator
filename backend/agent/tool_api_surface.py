@@ -14,7 +14,7 @@
 #                            route_document_content / route_document_edits,
 #                            finalize_content_mutation (the leaf)
 #   - collab_writes        : create_document/reference_via_collab, checkpoint, presence
-#   - apply_edits_resolver : _resolve_validate_apply_edits + RegionContainmentReject
+#   - apply_edits_resolver : _resolve_validate_apply_edits
 #   - table_writes         : validate/route/apply table-cell edits
 # This module keeps the batch apply entry (apply_edits_to_document /
 # apply_edit_to_document) and the resolve_edit_range gate wrapper.
@@ -25,16 +25,11 @@ import artifacts
 from artifacts import is_artifact_row
 from fastapi import HTTPException
 
-from agent.apply_edits_resolver import (
-    RegionContainmentReject,
-    _resolve_validate_apply_edits,
-    region_containment_error,
-)
+from agent.apply_edits_resolver import _resolve_validate_apply_edits
 from agent.collab_writes import broadcast_agent_presence
 from agent.doc_state import resolve_live_doc_state
 from agent.edit_primitives import edit_range_error_detail
 from config import AGENT_EDIT_MAX_CHARS
-from models import RegionRef
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +57,6 @@ async def apply_edits_to_document(
     project_id: str,
     user: dict,
     scope_root: str | None = None,
-    region: RegionRef | None = None,
 ) -> dict:
     """Apply a batch of str_replace edits directly through the live CRDT path + ONE
     checkpoint.
@@ -144,21 +138,6 @@ async def apply_edits_to_document(
 
     from doc_edit_lock import edit_lock
 
-    # Pinned-region containment (direct apply path): a pinned session's driver
-    # forwards the resolved region on the call body; the core re-resolves each edit
-    # against live content and rejects any range escaping the fragment. The gate is
-    # the relocated region_containment_error — the same hard check the deleted
-    # proposal apply path used, now on the direct path.
-    region_check = None
-    if region is not None:
-        def _region_check(from_cp: int, to_cp: int) -> str | None:
-            return region_containment_error(
-                edit_from=from_cp, edit_to=to_cp, edit_doc_id=doc_id,
-                has_region=True, region=region,
-            )
-
-        region_check = _region_check
-
     # ARCH: per-doc Redis lock around the FULL resolve→splice→checkpoint→write.
     # See apply_edit_to_document (single-edit) for the lost-update rationale: the
     # validation pass reads the live state, then the checkpoint + batch write must
@@ -168,7 +147,6 @@ async def apply_edits_to_document(
         try:
             result = await _resolve_validate_apply_edits(
                 doc_id=doc_id, edits=normalized, project_id=project_id,
-                region_check=region_check,
                 # A pipe table the agent AUTHORS in new_text becomes a table
                 # object — markdown bodies only (the html-artifact branch above
                 # keeps the page source verbatim). The skip rule inside keeps
@@ -177,14 +155,6 @@ async def apply_edits_to_document(
             )
         except HTTPException as exc:
             raise _steer_html_full_rewrite(exc) if is_artifact else exc
-        except RegionContainmentReject as exc:
-            # A pinned-region edit escaping the fragment is rejected hard — 409
-            # with the region_locked code (the deleted proposal path's
-            # region_out_of_scope status is gone; the wire signal is region_locked).
-            raise HTTPException(
-                status_code=409,
-                detail={"code": "region_locked", "detail": exc.detail},
-            )
     # Best-effort presence: tell live editors the agent edited this doc.
     await broadcast_agent_presence(doc_id, user.get("user_id"))
     return {"status": "applied", "doc_id": doc_id, **result}
@@ -222,7 +192,6 @@ async def apply_edit_to_document(
     project_id: str,
     user: dict,
     scope_root: str | None = None,
-    region: RegionRef | None = None,
 ) -> dict:
     """Back-compat wrapper: a single edit is a batch of one (plan
     "quizzical-mixing-marble"). Coalesces the legacy singular form to a one-element
@@ -231,5 +200,5 @@ async def apply_edit_to_document(
     return await apply_edits_to_document(
         doc_id=doc_id,
         edits=[{"old_string": old_string, "new_string": new_text}],
-        project_id=project_id, user=user, scope_root=scope_root, region=region,
+        project_id=project_id, user=user, scope_root=scope_root,
     )

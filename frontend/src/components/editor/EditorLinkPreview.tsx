@@ -1,10 +1,10 @@
 /**
  * Hover preview for links (documents, references, external URLs) and note anchors.
  *
- * Serves BOTH the CM6 editor decorations and chat links (in-answer markdown links tagged
- * by MarkdownContent + sources list items tagged by Sources). Listens via event
- * delegation on the document for mouseenter/mouseleave (capture) on elements carrying the
- * matching class + data-link-type attribute. Shows a plain-text/image preview popup
+ * Serves BOTH the CM6 editor decorations and chat links (sources list items tagged by
+ * Sources, in-answer anchors matched by their lore.local href). Listens via event
+ * delegation on the document for mouseenter/mouseleave (capture) on elements matching
+ * EVERY_LINK_SELECTOR. Shows a plain-text/image preview popup
  * positioned above or below the link after a 300ms delay.
  *
  * // ARCH: Link metadata (type + id/url) stored in state; content derived in useMemo
@@ -18,7 +18,7 @@
  * // ARCH: data-link-id contract — centralized in utils/in-app-link.ts. Docs use a bare id;
  * // refs keep their scheme prefix. decodeLinkId strips any prefix defensively for all
  * // types, so both bare and prefixed values resolve correctly regardless of the producer.
- * // ARCH: two metadata branches — attributed elements (.chat-link/.chat-source/cm-*) read
+ * // ARCH: two metadata branches — attributed elements (.chat-source/cm-*) read
  * // data-link-type/id; dsh chat anchors read the rewritten lore.local href instead (they
  * // carry no attributes we control) and derive the same LinkMeta via parseInAppLink.
  */
@@ -39,12 +39,12 @@ import { decodeLinkId, parseInAppLink } from '../../utils/in-app-link';
 import { referenceFileUrl } from '../../utils/reference-url';
 import { isTouchPointer } from '../../utils/last-pointer';
 
-// Editor link decorations (CM6) + chat link/source elements tagged with data-link-type
+// Editor link decorations (CM6) + chat source elements tagged with data-link-type
 // + dsh chat anchors: internal doc:/ref: links the chat markdown wrapper rewrote
 // to https://lore.local/l/<type>/<id> (matched by href — dsh owns those anchors' classes)
 // + note anchors the notes layer paints (.cm-note-anchor, data-note-id).
 const EVERY_LINK_SELECTOR =
-  '.cm-note-anchor,.cm-doc-link,.cm-ref-link,.cm-ext-link,.cm-doc-link-broken,.cm-ref-link-broken,.chat-link,.chat-source,.chat-markdown a[href^="https://lore.local/l/"]';
+  '.cm-note-anchor,.cm-doc-link,.cm-ref-link,.cm-ext-link,.cm-doc-link-broken,.cm-ref-link-broken,.chat-source,.chat-markdown a[href^="https://lore.local/l/"]';
 const DELAY_MS = 300;
 
 interface LinkMeta {
@@ -168,8 +168,8 @@ export function EditorLinkPreview() {
       else metaObj = { type: 'ext', id: linkUrl || linkId };
     } else {
       // dsh chat anchors carry no data-link-* attributes — their internal
-      // scheme was rewritten to the lore.local URL form (plan
-      // chat-markdown-on-dsh); derive the meta from the href. Raw ids decode
+      // scheme was rewritten to the lore.local URL form; derive the meta
+      // from the href. Raw ids decode
       // cleanly through decodeLinkId's defensive prefix strip.
       const href = el instanceof HTMLAnchorElement ? el.getAttribute('href') : null;
       const parsed = href !== null ? parseInAppLink(href) : null;
@@ -182,7 +182,7 @@ export function EditorLinkPreview() {
     const pos = computePopupPosition(rect, PREVIEW_MAX_HEIGHT);
     // ARCH: dual placement via
     // chooseLinkPlacement — links rendered INSIDE <aside class="right-panel">
-    // (chat sources .chat-source + chat markdown links .chat-link) open pinned to
+    // (chat sources .chat-source + chat answer lore.local anchors) open pinned to
     // the SIDE of the panel (identical x-offset to Notes/Refs card previews),
     // with the shared RIGHT_PANEL_PREVIEW_SHIFT vertical nudge. Editor links
     // (cm-editor) keep near-link placement. One formula, shared with

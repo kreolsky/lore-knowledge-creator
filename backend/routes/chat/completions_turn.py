@@ -460,10 +460,6 @@ class AgentTurnPlan:
     # field is named `skills`. A real dict, not a tuple
     # default: a mutable-dict field must not alias a shared tuple.
     skill_docs: dict = field(default_factory=dict)
-    # The frontend-resolved pinned region (None when the session is not pinned).
-    # Threaded to the dsh driver so it forwards it on edit/append tool calls for the
-    # direct-path containment gate.
-    region: object | None = None
 
 
 def _bounded_context_text(ctx) -> str | None:
@@ -479,20 +475,6 @@ def _bounded_context_text(ctx) -> str | None:
             context_text[:CHAT_MAX_AGENT_CONTEXT_CHARS] + "\n\n[…context truncated]"
         )
     return context_text
-
-
-def _pinned_fragment_section(region) -> str | None:
-    """Pinned-fragment prompt hint. When the request carries a region (a pinned-
-    region session), tell the model the fragment + that edits outside it are
-    rejected — fewer wasted out-of-scope turns. The text is a HINT only; the
-    authoritative enforcement is the per-apply containment gate."""
-    if region is None or not region.text:
-        return None
-    return (
-        "# Pinned fragment\n"
-        "You may edit ONLY inside this fragment; edits outside it are rejected:\n"
-        f"{region.text}"
-    )
 
 
 # ARCH: turn-varying blocks are APPENDED to the base, never prepended — the
@@ -525,7 +507,6 @@ async def _assemble_system_prompt(
     appended = [
         ("context", _bounded_context_text(ctx)),
         ("current_doc", current_doc_section),
-        ("pinned", _pinned_fragment_section(body.region)),
     ]
     system_prompt = base
     sections = [_section_fingerprint("base", base)]
@@ -637,5 +618,4 @@ async def prepare_agent_turn(
             session=session, body=body, user=user,
         ),
         skill_docs=skill_docs,
-        region=body.region,
     )

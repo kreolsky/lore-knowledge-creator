@@ -12,8 +12,6 @@ async def test_historical_tool_proposal_rows_do_not_surface(test_db):
     payload the deleted card union would have rejected changes nothing."""
     from routes.chat.messages import load_session_messages
 
-    from db import get_timed_proxy
-
     await test_db.query(
         "CREATE type::record('messages', $mid) SET chat_id = 'c1', role = 'assistant', "
         "content = ''",
@@ -27,7 +25,7 @@ async def test_historical_tool_proposal_rows_do_not_surface(test_db):
         {"id": "retired-row-1", "mid": "retired-1"},
     )
     rows = await load_session_messages(
-        get_timed_proxy(test_db),
+        test_db,
         {"session_id": "c1", "user_id": "u-1"},
         "c1",
     )

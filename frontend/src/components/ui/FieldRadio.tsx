@@ -1,10 +1,11 @@
 /** Radio input wrapper — keeps raw <input type="radio"> inside the ui/ exempt zone. */
+import type { ReactNode } from 'react';
 
 interface FieldRadioProps {
   name: string;
   checked: boolean;
   onChange: () => void;
-  label: string;
+  label: ReactNode;
   description?: string;
 }
 

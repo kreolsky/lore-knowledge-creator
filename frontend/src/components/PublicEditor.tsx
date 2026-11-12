@@ -40,6 +40,7 @@ import { EditorState, Prec, type Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import * as Y from 'yjs';
 import CodeMirrorEditor from './editor/CodeMirrorEditor';
+import { useAnchorScroll } from '../hooks/useAnchorScroll';
 import { renderExtensions, editorExperience } from './editor/render-bundle';
 import { scrollAnchorPlugin, revealAtCursor } from './editor/live-preview';
 import { linkClickExtension } from '../editor/editor-plugins';
@@ -138,6 +139,8 @@ export function PublicEditor() {
   // scrolls the reference's headings too (same as authed). Always enabled:
   // no split view on the public surface.
   useScrollToLine({ editorViewRef: viewRef });
+  // WHY disabled while a reference is open: a pointer targets the document, not the ref.
+  useAnchorScroll({ editorViewRef: viewRef, currentDocument, enabled: !currentReference });
 
   // Seed the module-level transcludeMap from public store data so inline
   // transclusions render (images, text refs, docs). Mirrors the authed

@@ -10,6 +10,7 @@ import { t } from '../../i18n';
 import type { ChatState, Set, StreamingState } from './types';
 import { validateFrame, type Frame } from './frame-validate';
 import { registerChatResetHandler } from './reset-registry';
+import { playNotifySound } from '../../utils/notify-sound';
 import {
   isFeedFrame, feedFrame, beginTurn, endTurn, adoptStreamBaseline,
 } from './conversation-feed';
@@ -613,7 +614,17 @@ export function dispatchChatFrame(
     // loop keeps dispatching.
     turn.sink.warnMalformed(e);
   }
+  // WHY registered turns only: every tab of the user receives the frames, but only
+  // the tab that owns the turn chimes — one sound per turn, not one per open tab.
+  if (raw?.type === 'lore/verdict-ask') playNotifySound();
   if (event && TERMINAL_FRAME_TYPES.has(event.type)) {
+    // A deliberate Stop is the user's own act — nothing to announce. A non-empty
+    // queue means dsh claims the next message right after this frame (see the
+    // turn_closed INVARIANT above), so the agent is not done yet — chime on the last.
+    // WHY active chat only: the queue fold exists for the shown chat alone; a turn
+    // of a chat the user left chimes on every close.
+    const moreQueued = sessionId === get().activeSessionId && get().inboxQueue.length > 0;
+    if (!turn.end.aborted && !moreQueued) playNotifySound();
     // The turn's transport end. The DISPLAY half — binding the fed nodes to
     // the streaming row, flushing the slot — belongs to the SHOWN chat only:
     // endTurn's ensureEngine would reset the module engine off whichever chat

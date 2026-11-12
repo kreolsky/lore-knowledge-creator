@@ -40,6 +40,7 @@ from migrations.migrate_chat_apply_lock_fields_drop import (
 from migrations.migrate_chat_branches_to_sessions import (
     _migrate_chat_branches_to_sessions,
 )
+from migrations.migrate_chat_has_region_drop import _migrate_chat_has_region_drop
 from migrations.migrate_chat_lifecycle_drop import _migrate_chat_lifecycle_drop
 from migrations.migrate_chats_hide_fold import _migrate_chats_hide_fold
 from migrations.migrate_comfy_config_docs_drop import _migrate_comfy_config_docs_drop
@@ -67,7 +68,6 @@ from migrations.migrate_tables_v2 import _migrate_tables_v2
 from migrations.migrate_turn_timeout_override_fold import (
     _migrate_turn_timeout_override_fold,
 )
-from migrations.migrate_user_tier_backfill import _migrate_user_tier_backfill
 from migrations.migrate_web_search_off_drop import _migrate_web_search_off_drop
 
 # --- Per-migration modules (registry composition) ---
@@ -98,6 +98,10 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     # turn. schema.surql carries the same REMOVE for fresh DBs; this one covers
     # DBs created while the column lived. No dependency.
     ("chat_lifecycle_drop", _migrate_chat_lifecycle_drop),
+    # chat_sessions.has_region: the dropped pinned-region flag — the agent is
+    # never confined to a span. schema.surql carries the same REMOVE for fresh
+    # DBs; this one covers DBs created while the column lived. No dependency.
+    ("chat_has_region_drop", _migrate_chat_has_region_drop),
     # document_access + per-document pending invites: a document inherits its
     # project's access level. Drops the rows after logging their counts, then
     # narrows idx_pi_unique to (email, project_id). No dependency.
@@ -137,12 +141,6 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     # (schema.surql does not carry them — apply_schema runs before migrations).
     # Idempotent; the fresh-DB boot skips the data pass via the INFO gate.
     ("audiences_to_list", _migrate_audiences_to_list),
-    # users.tier (see SYSTEM: capability-tiers): the column lands with DEFAULT
-    # 'ai', but the DEFAULT never reaches pre-existing rows — every tier-less
-    # user is stamped 'ai' so the backfill preserves today's behaviour (no
-    # existing account loses a feature). Idempotent (NONE rows only); no
-    # dependency.
-    ("user_tier_backfill", _migrate_user_tier_backfill),
     # Documents stored under their project's index (invisible in the tree —
     # the index row renders childless) move to the project root; references
     # are carved out (index = canonical project-level host). Idempotent; runs

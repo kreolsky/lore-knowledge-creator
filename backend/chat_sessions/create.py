@@ -120,15 +120,13 @@ async def _ai_chat_fields(db, body: SessionCreate, user_id: str) -> dict:
     # UNCONDITIONAL for non-note sessions (every AI chat is an agent chat).
     # target_doc_id was defaulted in SessionCreate._check_invariants to
     # reference_id or document_id when the client omitted it. agent_auto persists
-    # the "Full auto" dropdown choice; has_region persists the pinned-
-    # region flag. Notes are kept out of this
+    # the "Full auto" dropdown choice. Notes are kept out of this
     # block by the `not body.is_note` guard (the `else` arm in
     # create_session_command) — the ONLY thing preventing these
     # fields landing on a note row now that the model-validator's is_note+agent
     # rejection is gone.
     data["target_doc_id"] = body.target_doc_id
     data["agent_auto"] = bool(body.agent_auto)
-    data["has_region"] = bool(body.has_region)
     data["unindexed"] = bool(body.unindexed)
     # ARCH: stored when explicitly set at
     # create; omitted → column absent (reads as null = Default). Validated

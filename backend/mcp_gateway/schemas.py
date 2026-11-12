@@ -364,9 +364,10 @@ _TOOL_LIST_ORDER: tuple[str, ...] = (
     "init",
     # reads (incl. read_document — addresses the text part but grouped as a read)
     "search_materials", "read_document", "get_project_structure", "get_links",
-    "export_subtree_md",
+    "export_subtree_md", "list_document_versions", "diff_document_versions",
     # text part
     "create_document", "edit_document", "append_to_document",
+    "restore_document_version",
     # file part — the ONE byte channel (attach_file mints the URL; no bytes as args)
     "attach_file", "get_file", "reprocess_file",
     # tree part

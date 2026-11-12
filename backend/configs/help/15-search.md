@@ -30,7 +30,9 @@ The **Replace** section is visible only to those who can edit the document:
 - "Replace" replaces the current match and moves to the next one;
 - "Replace all" replaces every match at once.
 
-In regular-expression mode the replacement can refer to the captured groups: `$1`, `$2`. In split view the search works in the column where the cursor is: in the document or in the reference. A replacement is an ordinary edit; ⌘/Ctrl + Z undoes it.
+In regular-expression mode the replacement can refer to the captured groups: `$1`, `$2`. In split view the search works in the column where the cursor is: in the document or in the reference. A replacement is an ordinary edit; ⌘/Ctrl + Z undoes it, and a whole "Replace all" undoes in one step.
+
+The search also covers [table](help:tables) cells: their matches are counted and highlighted, "Next" and "Previous" step into the cell, and both replace buttons change cells too. Stepping starts from the cursor.
 
 ## Searching through the agent
 

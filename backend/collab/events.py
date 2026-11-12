@@ -76,13 +76,13 @@ async def apply_external_content_change(
     splicing only the changed spans (``textmatch.minimal_splice_text``) in one
     transaction. Used by restore/checkpoint, re-upload, transcription. CRDT merges
     always converge — no ConflictError. Yjs RelativePosition anchors on unchanged
-    text survive; anchors inside a changed span are lost, so agent edits under a
-    pinned region still use surgical mode.
+    text survive; anchors inside a changed span are lost, so agent edits still use
+    surgical mode.
 
     **Surgical** (`from_cp`/`to_cp`/`new_text` supplied): delete the code-point slice
     [from_cp:to_cp) and insert `new_text` at from_cp. Used by the agent edit path
 . Preserves Yjs RelativePosition anchors in the
-    unchanged prefix/suffix so the frontend's pinned-region anchor survives the
+    unchanged prefix/suffix so the frontend's note anchors survive the
     agent's own edits and the user's edits around it.
 
     # ARCH: pycrdt `Text` indexes in UTF-8 BYTES, not code

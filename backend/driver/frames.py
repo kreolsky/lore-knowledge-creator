@@ -84,6 +84,10 @@ class _TurnProjection:
         # halt. Surfaces to the façade so turn-error telemetry fires once per
         # errored turn, not on every finished turn.
         self.errored = False
+        # The halt reason + note of the abnormal end, for the turn-error telemetry row:
+        # without them the row says only THAT a turn failed, never why.
+        self.halt_reason = ""
+        self.halt_note = ""
         # False once the turn ends in a way that must NOT finalize (error /
         # exception). The façade gates finalize() on this flag.
         self.finalize_pending = True
@@ -182,6 +186,7 @@ class _TurnProjection:
         Never raises: it runs on a turn that is already failing, and a persist
         error here must not mask the primary failure (logged — not silent).
         """
+        self.halt_reason, self.halt_note = reason, note
         try:
             if not self.content():
                 self.content_acc.append(note)

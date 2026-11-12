@@ -177,7 +177,6 @@ def _branch_data(
         "model": chat.get("model") or "",
         "target_doc_id": chat.get("target_doc_id"),
         "agent_auto": bool(chat.get("agent_auto")),
-        "has_region": bool(chat.get("has_region")),
         # INVARIANT(security): a carved branch inherits the recall-index opt-out.
         # Why: a branch of an anonymous chat would otherwise become searchable.
         "unindexed": bool(chat.get("unindexed")),

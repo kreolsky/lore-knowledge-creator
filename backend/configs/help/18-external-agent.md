@@ -10,10 +10,10 @@ Any MCP-capable agent — Claude Code, Claude Desktop, Cursor, your own script �
 
 What the key decides:
 
-- **Scope** — the agent sees only this document and its subtree. Anything outside answers "access denied". To give it the whole project, create the key on the project's index document. A system document (Agent System) cannot be a key's root.
+- **Scope** — the agent sees only this document and its subtree. Anything outside answers "access denied". To give it the whole project, create the key on the project's index document (the first row of the tree, named after the project): such a key sees every document except the Agent System and this guide. A system document (Agent System) cannot be a key's root.
 - **Identity** — the agent acts as you, the key's owner, and never exceeds your rights. If you lose access to the project, the key stops working.
 - **Writing** — read-only or read-write, set at creation.
-- **Who can create one** — a member with full (Editor) access to the project.
+- **Who can create one** — a member with full (Editor) access to the project; on the index document, only the project owner.
 - **Revoking** — delete the key in the same section; it stops working at once. Rename it to tell keys apart.
 
 ## Connecting
@@ -46,6 +46,8 @@ Reading:
 
 - semantic search over documents, references and project memory (`search_materials`);
 - reading a document with its references, tables and processing status (`read_document`), and the tree (`get_project_structure`);
+- a document's links in both directions, mentions and embeds (`get_links`);
+- a document's snapshots: the list, reading an old version (`read_document` with `version`), comparing two versions or a version with the current text (`list_document_versions`, `diff_document_versions`);
 - downloading a node's original file by a short-lived link (`get_file`);
 - exporting a whole subtree as a zip of Markdown files for GitHub or Obsidian (`export_subtree_md`).
 
@@ -53,6 +55,7 @@ Writing (read-write key only):
 
 - creating documents and text references (`create_document`);
 - pointwise edits and appending to the end or to a section (`edit_document`, `append_to_document`);
+- restoring a snapshot (`restore_document_version`); the state before the restore is saved as a snapshot;
 - tables: create, edit cells, add rows and columns (`create_table`, `edit_table_cell`, `add_table_rows`, `add_table_column`);
 - moving and renaming, including turning a document into a reference and back (`move_document`, `rename_document`);
 - uploading files — audio, images, .docx, Markdown (`attach_file`): the agent gets a short-lived link and sends the bytes to it itself; the text (transcript, markdown) appears asynchronously, as with an upload in the interface. A failed conversion is re-run with `reprocess_file`;

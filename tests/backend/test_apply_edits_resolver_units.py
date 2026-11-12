@@ -2,7 +2,7 @@
 
 `_resolve_validate_apply_edits` was a 210-line lock-free core. The extracted
 phases are pinned here at the unit level: the miss classifier (idempotent
-skip vs 409/422), single-edit resolution (fold + align + region gate + noop),
+skip vs 409/422), single-edit resolution (fold + align + noop),
 the snapshot validation pass, the overlap guard, and the mark-first apply tail
 (checkpoint → on_commit seam → descending splices → AppliedUnverifiedError).
 """
@@ -26,7 +26,7 @@ class TestResolveOneEdit:
 
     def test_noop_edit_skips_as_already_applied(self):
         kind, entry = _resolve_one_edit(
-            CONTENT, 0, {"old_string": "bravo", "new_string": "bravo"}, None,
+            CONTENT, 0, {"old_string": "bravo", "new_string": "bravo"},
             0.9,
         )
         assert kind == "skip"

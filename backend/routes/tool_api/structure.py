@@ -1,4 +1,4 @@
-"""Tool-API structural mutating tools — move_document + rename_document.
+"""Tool-API structural mutating tools — move_document, rename_document, restore_document_version.
 
 # ARCH: move is a STRUCTURAL executor, not a content
 # mutation. It reparents a tree document and/or reorders it within a sibling group
@@ -24,15 +24,17 @@
 """
 from agent.context import get_agent_context
 from documents.move import move_document_command
+from documents.restore import restore_checkpoint_command
 from fastapi import Depends, HTTPException
 
-from access import get_document_access
-from db import fetch_one
-from models import ToolMoveDocument, ToolRenameDocument
+from access import get_document_access, require_document_full
+from db import fetch_one, get_db
+from models import ToolMoveDocument, ToolRenameDocument, ToolRestoreDocumentVersion
 from routes.tool_api._common import (
     _refuse_unconfirmable,
     _resolve_apply_or_force,
 )
+from routes.tool_api.reads import _raise_soft_error
 from routes.tool_api_telemetry import track_agent_tool
 
 
@@ -144,3 +146,32 @@ async def tool_rename_document(
     # The core says "renamed"; the tool surface says "applied" (parity with
     # move) and `unchanged` rides along on a no-op — idempotent success.
     return {**result, "status": "applied"}
+
+
+@track_agent_tool("restore_document_version")
+async def tool_restore_document_version(
+    body: ToolRestoreDocumentVersion, ctx: dict = Depends(get_agent_context),
+):
+    """Restore a document to one of its checkpoints through the History panel's
+    command (before-restore backup first); returns the backup id as the undo."""
+    from agent.history_executors import gated_target, owned_checkpoint
+
+    user = ctx["user"]
+    target = await gated_target(
+        doc_id=body.document_id, project_id=ctx["project_id"], user=user,
+        scope_root=ctx.get("scope_root"),
+    )
+    if isinstance(target, dict):
+        _raise_soft_error(target)
+    checkpoint = await owned_checkpoint(body.checkpoint_id, target.resolved)
+    if checkpoint is None:
+        raise HTTPException(status_code=404, detail="Checkpoint not found")
+    await require_document_full(target.resolved, user)
+    decision = await _resolve_apply_or_force(
+        ctx, ui_preference=body.apply.value, is_system=False,
+    )
+    if decision.mode != "auto":
+        # WHY: same driver-side approval as rename_document — see the note there.
+        _refuse_unconfirmable("restore_document_version")
+    result = await restore_checkpoint_command(await get_db(), body.checkpoint_id, checkpoint)
+    return {"status": "applied", "backup_checkpoint_id": result["backup_checkpoint_id"]}

@@ -237,6 +237,16 @@ READ_TOOLS: list[dict] = [
                             "default bound."
                         ),
                     },
+                    "version": {
+                        "type": "string",
+                        "description": (
+                            "Optional: a `checkpoint_id` from list_document_versions — "
+                            "read that past version instead of the live document. The "
+                            "result is read-only GFM with tables inlined (`tables` / "
+                            "`table_id` not accepted) and is never a source for "
+                            "edit_document's old_string."
+                        ),
+                    },
                 },
                 "required": ["document_id"],
             },
@@ -374,6 +384,70 @@ READ_TOOLS: list[dict] = [
         },
     },
     EXPORT_SUBTREE_MD_TOOL,
+    {
+        "type": "function",
+        "mutating": False,
+        "function": {
+            "name": "list_document_versions",
+            "description": (
+                "List a document's saved versions (snapshots taken before agent edits, "
+                "before restores, at session ends, on large deletions, and named "
+                "versions people saved), newest first. Each row: `checkpoint_id`, "
+                "`created_at`, `kind` (`agent-auto`, `auto-backup`, `safety-open`, "
+                "`editor-handoff`, `last-session`, `_backup` = state before the last "
+                "restore, or `manual` with its `label`), `author`, `comment`, `chars`, "
+                "and `lines_added` / `lines_removed` versus the next-older version "
+                "(null for the oldest; a row whose stored content is unreadable "
+                "carries `content_unavailable: true` and null stats). Old automatic "
+                "snapshots are thinned over time. "
+                "Page with `before_checkpoint_id` = the returned "
+                "`next_before_checkpoint_id`; absent means no older versions. Read a "
+                "version with read_document(version=...), compare with "
+                "diff_document_versions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string"},
+                    "limit": {
+                        "type": "integer", "minimum": 1, "maximum": 50, "default": 20,
+                    },
+                    "before_checkpoint_id": {
+                        "type": "string",
+                        "description": "Return only versions older than this one.",
+                    },
+                },
+                "required": ["document_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "mutating": False,
+        "function": {
+            "name": "diff_document_versions",
+            "description": (
+                "Unified diff (GFM, tables inlined, 3 context lines) of a document "
+                "from one saved version to another, or to the current document "
+                "(`to` = \"current\", the default). Returns `diff`, `identical`, and "
+                "`lines_added` / `lines_removed` for the whole change; a long diff is "
+                "cut with `truncated: true` while the counts stay complete."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string"},
+                    "from_checkpoint_id": {"type": "string"},
+                    "to": {
+                        "type": "string",
+                        "default": "current",
+                        "description": "\"current\" or a checkpoint_id of this document.",
+                    },
+                },
+                "required": ["document_id", "from_checkpoint_id"],
+            },
+        },
+    },
 ]
 
 

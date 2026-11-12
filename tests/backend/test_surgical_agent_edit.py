@@ -4,10 +4,10 @@
 
 The previous agent-edit mutation was wholesale: `del text[0:old_len]; text += new`,
 which destroys every Yjs RelativePosition anchor on the FIRST edit (the whole text
-is deleted and re-created). A pinned region cannot survive that. The surgical mode
+is deleted and re-created). A note anchor cannot survive that. The surgical mode
 deletes only the resolved slice and inserts the new text, so anchors in the
 unchanged prefix/suffix survive — letting the frontend's RelativePosition track the
-region across the agent's own edits.
+anchor across the agent's own edits.
 
 # ARCH (B1 RISK — verified): pycrdt `Text` indexes in UTF-8 BYTES, not code points.
 # `len(text)` for an 18-codepoint string with multibyte chars returns the UTF-8 byte

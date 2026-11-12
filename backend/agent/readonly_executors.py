@@ -149,7 +149,8 @@ def _slice_read_window(
 # projection (table anchors → flat `| … |`, list-spacing normalization,
 # escape processing) silently corrupted that copy in the no-live-session
 # branch. A plain substring preserves byte-verity; any normalization destroys
-# it.
+# it. This governs reads WITHOUT `version`; a versioned read is a GFM projection
+# of a checkpoint (agent.history_executors) and is never a source for `old_string`.
 # NOTE: chat context no longer carries bodies at all (scope pinning —
 # routes.chat.context), so read_document is now the ONLY body path into the
 # model, which makes this parity guarantee the single source of text truth.
@@ -476,9 +477,26 @@ async def read_document_tool(
     table_id: str | None = None,
     offset: int = 0,
     limit: int | None = None,
+    version: str | None = None,
 ) -> dict:
     """Public read_document: content as an offset/limit slice + optional tables
-    field, per-doc RBAC + same-project check."""
+    field, per-doc RBAC + same-project check. `version` = a checkpoint id → the
+    read-only historical projection (agent.history_executors)."""
+    if version:
+        if tables != "index" or table_id is not None:
+            raise HTTPException(
+                status_code=400, detail="tables are inlined in a historical version",
+            )
+        from agent.history_executors import gated_target, read_document_version
+
+        target = await gated_target(
+            doc_id=doc_id, project_id=project_id, user=user, scope_root=scope_root,
+        )
+        if isinstance(target, dict):
+            return target
+        return await read_document_version(
+            target, version=version, offset=offset, limit=limit,
+        )
     return await _read_document_exec(
         doc_id=doc_id,
         project_id=project_id,

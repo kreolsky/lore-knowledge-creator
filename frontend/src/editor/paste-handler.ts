@@ -10,7 +10,7 @@
  * Three sources resolve in order: Lore-origin (marker) → unformatted external (verbatim
  * text/plain) → formatted external (HTML→Markdown via Turndown). An unformatted GFM table
  * is still upgraded to a live table object on the verbatim path, never downgraded to inert
- * pipe text by the browser default.
+ * pipe text by the browser default — on a plain-only clipboard too (no `text/html` at all).
  * SYSTEM: editor — clipboard paste handler
  */
 
@@ -291,12 +291,10 @@ function inFencedCode(view: EditorView, pos: number): boolean {
 }
 
 /**
- * Insert `source` at the selection, first upgrading any GFM table to a live table object when
- * a collab handle is active. Shared by the Lore-origin and unformatted-external paths so a
- * pasted GFM table becomes editable, not inert pipe text.
+ * Upgrade every GFM table in `source` to a live table object when a collab handle is active,
+ * creating the backing models in the target view's ydoc. `count` 0 means nothing was created.
  */
-function insertVerbatim(view: EditorView, source: string): void {
-  let insert = source;
+function upgradeGfmTables(view: EditorView, source: string): { text: string; count: number } {
   // ARCH (split view): the model lands in the TARGET VIEW'S entity ydoc — the focused
   // slot may hold the OTHER column's handle (paste into the reference column must not
   // create the table in the document's ydoc, or vice versa). Unknown views (no
@@ -309,14 +307,26 @@ function insertVerbatim(view: EditorView, source: string): void {
   const ydoc = entityYdoc(view);
   // WHY: a paste into a fenced code block is code — its pipe table stays text (the same
   // fence skip the scanner applies to fences inside the pasted source).
-  if (ydoc && !inFencedCode(view, view.state.selection.main.from)) {
-    insert = importGfmTables(ydoc, insert, t('tableBlockUntitled'), documentTextWidth(view)).text;
-  }
+  if (!ydoc || inFencedCode(view, view.state.selection.main.from)) return { text: source, count: 0 };
+  return importGfmTables(ydoc, source, t('tableBlockUntitled'), documentTextWidth(view));
+}
+
+/** Replace the selection with `insert` and park the cursor after it. */
+function dispatchInsert(view: EditorView, insert: string): void {
   const main = view.state.selection.main;
   view.dispatch({
     changes: { from: main.from, to: main.to, insert },
     selection: { anchor: main.from + insert.length },
   });
+}
+
+/**
+ * Insert `source` at the selection, first upgrading any GFM table to a live table object.
+ * Shared by the Lore-origin and unformatted-external paths so a pasted GFM table becomes
+ * editable, not inert pipe text.
+ */
+function insertVerbatim(view: EditorView, source: string): void {
+  dispatchInsert(view, upgradeGfmTables(view, source).text);
 }
 
 export const pasteHandlerExtension = EditorView.domEventHandlers({
@@ -325,9 +335,18 @@ export const pasteHandlerExtension = EditorView.domEventHandlers({
 
     const clipboardData = e.clipboardData;
     const html = clipboardData?.getData('text/html');
-    if (!html) return false;
-
     const plain = clipboardData?.getData('text/plain') ?? '';
+
+    if (!html) {
+      // WHY: a plain-only clipboard (a chat's "copy message" button, a terminal) carries raw
+      // markdown with no `text/html`; its GFM tables are upgraded here, and a paste with no
+      // table stays with CM6's own handler, which keeps multi-cursor line distribution.
+      const upgraded = upgradeGfmTables(view, plain);
+      if (upgraded.count === 0) return false;
+      e.preventDefault();
+      dispatchInsert(view, upgraded.text);
+      return true;
+    }
 
     // INVARIANT(data-loss): Lore→Lore paste uses the lossless `text/plain` source, never Turndown.
     // Why: Turndown backslash-escapes markdown metacharacters and collapses internal

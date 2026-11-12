@@ -285,10 +285,12 @@ export async function patchAdminMcpServer(serverId: string, body: AdminMcpServer
 
 export type McpCheckStatus = 'ok' | 'unauthorized' | 'refused' | 'unreachable' | 'protocol';
 
-/** A live `initialize` + `tools/list` verdict; `tools` is set on `ok`. */
+/** A live `initialize` + `tools/list` verdict; `tools` is set on `ok`, `detail` on a
+ * non-2xx answer (the server's own error text, key scrubbed, or `HTTP <code>`). */
 export interface McpCheckResult {
   status: McpCheckStatus;
   tools: number | null;
+  detail: string | null;
 }
 
 /** The connection check for `shared` and `none` servers, against the SAVED row. */

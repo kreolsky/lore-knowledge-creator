@@ -43,10 +43,10 @@ function harness(imageResult: string[]) {
   const dshId = 'dsh-img'
   tools.setSessionToolCtx(dshId, {
     loreSessionId: 's1', agentKey: 'k', mutating: new Set(), holdable: new Set(),
-    perCallApproval: new Set(), regionTools: new Set(),
+    perCallApproval: new Set(),
   })
   tools.stampTurnRequestCtx(dshId, {
-    messageId: 'm1', applyMode: 'auto', document_id: null, region: null, vision: true,
+    messageId: 'm1', applyMode: 'auto', document_id: null, vision: true,
   })
   const exec = { agent: { session: { id: dshId } }, callId: 'c1' }
   return { registered, exec }

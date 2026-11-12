@@ -132,7 +132,7 @@ def _refuse_unconfirmable(tool_name: str):
 
 async def _apply_edits_direct(
     *, doc_id: str, edits: list[dict], project_id: str, user: dict,
-    scope_root: str | None = None, region=None,
+    scope_root: str | None = None,
 ) -> dict:
     """Delegate a BATCH of edits to the shared standalone batch applier (plan
     "quizzical-mixing-marble"). One atomic call: all-or-nothing, one checkpoint,
@@ -140,7 +140,7 @@ async def _apply_edits_direct(
     from agent.tool_api_surface import apply_edits_to_document
     return await apply_edits_to_document(
         doc_id=doc_id, edits=edits,
-        project_id=project_id, user=user, scope_root=scope_root, region=region,
+        project_id=project_id, user=user, scope_root=scope_root,
     )
 
 

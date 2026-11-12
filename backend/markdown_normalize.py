@@ -109,7 +109,7 @@ def _fence_aware(content: str, transform: Callable[[str], str]) -> str:
 
 
 def _apply_outside_inline_code(line: str, transform: Callable[[str], str]) -> str:
-    """Apply `transform` to the gaps BETWEEN `` `…` `` inline-code spans, copying
+    r"""Apply `transform` to the gaps BETWEEN `` `…` `` inline-code spans, copying
     each span verbatim.
 
     The ONE inline-code-aware line applier — _strip_escapes_line and
@@ -536,7 +536,7 @@ def normalize_list_spacing(content: str) -> str:
 
 # A link destination the agent copied out of a prompt placeholder verbatim:
 # `(<id>)`, `(<ref:id>)`, `(<table:id>)`. The body charset mirrors SAFE_ID_RE
-# (db._patch) — the binding test in test_markdown_normalize.py pins the two
+# (db.records) — the binding test in test_markdown_normalize.py pins the two
 # together. Everything else in brackets (notably `<https://…>` autolinks, where
 # the brackets are legal and MEANT) fails the charset and never matches.
 _PLACEHOLDER_DEST_RE = re.compile(r"\(<((?:ref:|table:)?[a-zA-Z0-9_\-]+)>\)")
@@ -568,7 +568,7 @@ def unwrap_placeholder_brackets(content: str) -> str:
 
     The agent's instructions spell link slots as ``[text](<id>)``; ``<...>`` is a
     legal CommonMark destination, so a weak model cannot tell the slot from the
-    syntax and writes ``[text](<uuid>)`` verbatim. ``extract_doc_mentions``
+    syntax and writes ``[text](<uuid>)`` verbatim. ``extract_content_edges``
     (mentions.py) runs the destination through ``SAFE_ID_RE`` — the brackets fail
     it, the text is stored, and the link renders broken. This pass unwraps the
     destination at write time.

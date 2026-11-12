@@ -24,22 +24,28 @@ import { docUrl } from '../utils/routing';
 
 export function openDocument(
   docId: string,
-  { restore, navigate }: { restore?: true; navigate: NavigateFunction },
+  { restore, navigate, fragment }: { restore?: true; navigate: NavigateFunction; fragment?: string },
 ): void {
   const state = useAppStore.getState();
   const doc = state.documents.find(d => d.document_id === docId);
   if (!doc) return;
+  const url = fragment ? `${docUrl(docId)}#${fragment}` : docUrl(docId);
   // Default path: focusDocument has already unfocused a same-doc reference/table —
   // 'stayed' means the URL is already the doc's, so return without re-committing or
   // re-navigating (no blink). Every other case (incl. same-doc-nothing-focused,
   // which returns 'navigate') runs the normal path.
-  if (!restore && state.focusDocument(docId) === 'stayed') return;
+  if (!restore && state.focusDocument(docId) === 'stayed') {
+    // WHY: a pointer into the open document only changes the hash — no
+    // setCurrentDocument (INVARIANT above), so the document does not re-commit.
+    if (fragment && state.currentProject) navigate(url, { replace: true });
+    return;
+  }
   markDocOpenStart(docId);
   state.setCurrentDocument(doc);
   if (state.currentProject) {
-    // Canonical /docs/<id> URL (plan "public-document-ids") — one shape for
+    // Canonical /docs/<id> URL — one shape for
     // every navigate-to-document source (tree, search, chat Sources, links,
     // editor clicks) since they all go through here.
-    navigate(docUrl(docId));
+    navigate(url);
   }
 }

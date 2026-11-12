@@ -3,7 +3,30 @@
  * The server (backend/note_anchors.py) builds and resolves the same bytes.
  */
 import * as Y from 'yjs';
-import { resolveRelPosRange } from '../store/chat-store/pending-selection';
+
+/**
+ * Resolve a Yjs RelativePosition pair to a UTF-16 [from, to] range against `ydoc`.
+ * Null when either half does not resolve (its item is not in the store yet, or was
+ * GC'd). `followUndoneDeletions` is Yjs's flag — note anchors pass false so an
+ * undo does not revive them (see the INVARIANT there).
+ * `type` is the shared type the positions live in — a note anchored in a table cell
+ * resolves into that cell's Y.Text, not the host text, and only the caller can tell.
+ */
+export function resolveRelPosRange(
+  from: Y.RelativePosition,
+  to: Y.RelativePosition,
+  ydoc: Y.Doc,
+  followUndoneDeletions: boolean,
+): { from: number; to: number; type: Y.AbstractType<unknown> } | null {
+  try {
+    const fromAbs = Y.createAbsolutePositionFromRelativePosition(from, ydoc, followUndoneDeletions);
+    const toAbs = Y.createAbsolutePositionFromRelativePosition(to, ydoc, followUndoneDeletions);
+    if (!fromAbs || !toAbs) return null;
+    return { from: fromAbs.index, to: toAbs.index, type: fromAbs.type };
+  } catch {
+    return null;
+  }
+}
 
 export interface NoteAnchorWire {
   relStart: string;

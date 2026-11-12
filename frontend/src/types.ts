@@ -343,25 +343,6 @@ export interface AgentConfig {
 // (ask|agent) Literal. The only selector is `agent_auto` (confirm <->
 // auto-apply), expressed as `ChatUIMode`.
 
-// ARCH: a live-resolved pinned text region. The
-// frontend owns the Yjs RelativePosition pair (localStorage) and resolves it to
-// (from_cp, to_cp, text) per turn/apply. Wire shape matches the backend RegionRef.
-// Offsets are Unicode CODE POINTS — convert from CM6's UTF-16 units at the bridge.
-export interface RegionRef {
-  doc_id: string;
-  from_cp: number;
-  to_cp: number;
-  text?: string | null;
-}
-
-// The frontend-owned pinned-region anchor: a doc_id + a Yjs RelativePosition JSON
-// pair ( survives edits via the CRDT). Persisted in localStorage keyed by session.
-export interface PinnedRegion {
-  doc_id: string;
-  relFrom: unknown; // Y.relativePositionToJSON(...) — opaque JSON
-  relTo: unknown;
-}
-
 // WHY: the apply-mode selector. With the
 // Ask line gone there is no 'readonly' — every AI chat is an agent chat; the only
 // choice is confirm vs auto-apply. Kept as a 2-option union (the former 3-option
@@ -582,10 +563,6 @@ export interface ChatSession {
   // WHY (agent_auto persistence): persisted "Full auto" dropdown state.
   // The UI mode is DERIVED from agent_auto via deriveUIMode(); survives reload.
   agent_auto?: boolean;
-  // ARCH: a pinned-region agent chat constrains the
-  // agent to a frontend-tracked text span. Server-authoritative (forces confirm +
-  // the containment gate); the RelativePosition pair is frontend-owned (localStorage).
-  has_region?: boolean;
   // Kept out of the agent's chat-recall search index (server-authoritative,
   // one value per conversation).
   unindexed?: boolean;

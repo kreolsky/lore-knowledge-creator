@@ -169,6 +169,8 @@ Every name must be a model your endpoint serves. No restart is needed: the agent
 
 ### Update
 
+Read the release note of every version between yours and the new one in [`docs/releases/`](docs/releases/) first: some releases migrate the database with a step of their own (0.35 does), and the three lines below are not enough for them.
+
 ```sh
 curl -O https://raw.githubusercontent.com/kreolsky/lore-knowledge-creator/main/docker-compose.yml
 docker compose pull --ignore-buildable

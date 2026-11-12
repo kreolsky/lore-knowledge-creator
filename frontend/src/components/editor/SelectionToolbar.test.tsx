@@ -40,8 +40,9 @@ vi.mock('./markdown-actions', () => ({
   getLastHighlightColor: () => '#ec883c',
   HIGHLIGHT_COLORS: ['#ec883c', '#8ab4ff', '#8ab440', '#a978d6', '#fdd663'],
   createReference: vi.fn(),
+  canQuoteToChat: () => true,
+  isHostTextView: () => true,
 }));
-vi.mock('./markdown-actions-agent', () => ({ agentAction: vi.fn() }));
 
 import SelectionToolbar from './SelectionToolbar';
 import { usePublicNotesStore } from '../../store/public-notes-store';

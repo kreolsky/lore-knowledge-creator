@@ -113,7 +113,7 @@ async def _apply_content_patch(db, ref: dict, reference_id: str, new_content: st
         # INVARIANT(data-loss): never apply an empty-wipe on the no-session
         # REST path — reject instead (documents.update._reject_empty_wipe).
         # Why: a never-bound editor view checkpoints "" while the server holds
-        # real text (plan .kilo/plans/empty-checkpoint-wipe.md), and references
+        # real text, and references
         # have no loss-backup — the reject is their only guard. Baseline is
         # non-empty here by content_changed.
         if not new_content.strip():

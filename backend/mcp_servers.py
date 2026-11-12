@@ -34,10 +34,11 @@ reuses the vault (SYSTEM: user-secrets): one row per (user, server) with
 """
 from __future__ import annotations
 
+import base64
 import logging
 import re
 import uuid
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import egress_guard
 import http_clients
@@ -74,6 +75,9 @@ _MAX_TITLE = 200
 #: The connection check's per-exchange bound (the plain POST and the SDK
 #: handshake each get one).
 _CHECK_TIMEOUT_S = 8.0
+
+#: The longest server error message a check verdict relays.
+_MAX_DETAIL = 200
 
 
 class McpServerError(ValueError):
@@ -522,7 +526,10 @@ async def _sdk_handshake(url: str, headers: dict[str, str]) -> int:
 
 async def check_connection(url: str, headers: dict[str, str]) -> dict:
     """One live `initialize` + `tools/list` against `url` with `headers`:
-    `{status: ok|unauthorized|refused|unreachable|protocol, tools: int|None}`.
+    `{status: ok|unauthorized|refused|unreachable|protocol, tools: int|None,
+    detail: str|None}` — on a non-2xx answer `detail` is the server's own
+    JSON-RPC error message scrubbed of the key, else `HTTP <code>` (see
+    _server_detail).
 
     The egress guard runs first; no redirect is followed; the answer NEVER
     carries exception text (an error repr can hold a header value).
@@ -539,7 +546,7 @@ async def check_connection(url: str, headers: dict[str, str]) -> dict:
     try:
         await egress_guard.resolve_outbound_host(host)
     except egress_guard.EgressRefused:
-        return {"status": "refused", "tools": None}
+        return {"status": "refused", "tools": None, "detail": None}
     verdict = await _classify_http_post(url, headers)
     if verdict is not None:
         return verdict
@@ -551,10 +558,10 @@ async def check_connection(url: str, headers: dict[str, str]) -> dict:
                 data = getattr(node.error, "data", None)
                 status = data.get("status_code") if isinstance(data, dict) else None
                 if str(status) in ("401", "403"):
-                    return {"status": "unauthorized", "tools": None}
+                    return {"status": "unauthorized", "tools": None, "detail": None}
         logger.warning("mcp connection check failed: %s", type(exc).__name__)
-        return {"status": "protocol", "tools": None}
-    return {"status": "ok", "tools": tools}
+        return {"status": "protocol", "tools": None, "detail": None}
+    return {"status": "ok", "tools": tools, "detail": None}
 
 
 async def _classify_http_post(url: str, headers: dict[str, str]) -> dict | None:
@@ -580,16 +587,63 @@ async def _classify_http_post(url: str, headers: dict[str, str]) -> dict | None:
             headers={"Accept": "application/json, text/event-stream", **headers},
         )
     except httpx.HTTPError:
-        return {"status": "unreachable", "tools": None}
+        return {"status": "unreachable", "tools": None, "detail": None}
     finally:
         await client.aclose()
+    if 200 <= resp.status_code < 300:
+        return None
     if resp.status_code in (401, 403):
-        return {"status": "unauthorized", "tools": None}
-    if resp.status_code >= 500:
-        return {"status": "unreachable", "tools": None}
-    if not 200 <= resp.status_code < 300:
-        return {"status": "protocol", "tools": None}
-    return None
+        status = "unauthorized"
+    elif resp.status_code >= 500:
+        status = "unreachable"
+    else:
+        status = "protocol"
+    return {"status": status, "tools": None, "detail": _server_detail(resp, headers)}
+
+
+def _secret_forms(headers: dict[str, str]) -> list[str]:
+    """The raw, base64 and url-encoded forms of every rendered credential —
+    each header value and its bare key (the value minus its scheme) — longest
+    first, the same forms the driver scrubs from tool results
+    (harness-driver/plugin/src/mcp-servers.ts)."""
+    secrets: set[str] = set()
+    for value in headers.values():
+        secrets.add(value)
+        secrets.add(value.split(" ", 1)[-1])
+    forms = set()
+    for secret in filter(None, secrets):
+        forms.update((
+            secret,
+            base64.b64encode(secret.encode()).decode(),
+            quote(secret, safe="-_.!~*'()"),
+        ))
+    return sorted(forms, key=len, reverse=True)
+
+
+def _server_detail(resp: httpx.Response, headers: dict[str, str]) -> str:
+    """The server's JSON-RPC `error.message` from a refused check, bounded
+    and cleaned; any other body (a proxy's HTML error page) is not relayed and
+    answers just `HTTP <code>` — a 403 page from a fronting proxy is an
+    address filter, not the MCP server judging the key.
+
+    # INVARIANT(security): every rendered credential form is replaced with
+    # [secret] before the message leaves this function.
+    # Why: the verdict is a REST response, and a shared key is checked from the
+    # cabinet by users who must never see it — a server echoing Authorization
+    # back in its error text must not hand them the key.
+    """
+    fallback = f"HTTP {resp.status_code}"
+    try:
+        error = resp.json().get("error")
+    except (ValueError, AttributeError):
+        return fallback
+    message = error.get("message") if isinstance(error, dict) else None
+    if not isinstance(message, str):
+        return fallback
+    for form in _secret_forms(headers):
+        message = message.replace(form, "[secret]")
+    message = " ".join("".join(c if c.isprintable() else " " for c in message).split())
+    return message[:_MAX_DETAIL] or fallback
 
 
 # ─── The cabinet view ─────────────────────────────────────────────────────────

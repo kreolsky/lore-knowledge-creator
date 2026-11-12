@@ -159,7 +159,7 @@ function linkAt(state: EditorState, pos: number): { entry: LinkEntry; match: Lin
 }
 
 function followLink({ entry, match }: { entry: LinkEntry; match: LinkMatch }): void {
-  if (entry.validate(match.id)) entry.action(match.id);
+  if (entry.validate(match.id)) entry.action(match.id, match.fragment);
   else onBrokenLinkClick(entry, match.id);
 }
 

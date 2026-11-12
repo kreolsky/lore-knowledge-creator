@@ -111,7 +111,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   ghostSystemPromptId: null,
   ghostModel: '',
   ghostReasoningEffort: null,
-  ghostRegion: null,
 
   // — slices —
   ...createSessionsSlice(set, get),
@@ -124,9 +123,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
 }));
 
 // One-shot cleanup: the pinned-selection feature was removed; clear any
-// residual localStorage it wrote so no client-side trace remains.
+// residual localStorage it wrote (both key generations) so no client-side trace remains.
 try {
   localStorage.removeItem('lore.agent.pendingSelectionBySession.v1');
+  localStorage.removeItem('lore.agent.regionBySession.v2');
 } catch (e) {
   // WHY: log only — removing a dead key is housekeeping; nothing the user sees depends on it.
   console.debug('pin-scope cleanup skipped', e);

@@ -7,7 +7,7 @@
  * click, its DECORATION class, and its BROKEN tooltip. Both consumers read only
  * the registry:
  *   - editor-plugins.ts click handler iterates LINK_TYPES instead of inline loops.
- *   - build-structural.ts resolveLinkClass / brokenTooltip delegate here.
+ *   - build-structural.ts resolveLinkClass delegates here.
  *
  * Capture-group contract (PINNED): the 4 source
  * regexes have heterogeneous group structures (ref uses match[2] + prefix-strip,
@@ -40,6 +40,14 @@ export interface LinkMatch {
   end: number;
   raw: string;
   id: string;
+  /** Raw `#fragment` of an in-app link (doc pointer), still percent-encoded. */
+  fragment?: string;
+}
+
+/** Split an in-app urlText `id#fragment` — the id is the part before `#` everywhere ids are checked. */
+function splitTarget(target: string): { id: string; fragment?: string } {
+  const hash = target.indexOf('#');
+  return hash === -1 ? { id: target } : { id: target.slice(0, hash), fragment: target.slice(hash + 1) || undefined };
 }
 
 export interface LinkTypeEntry {
@@ -53,7 +61,7 @@ export interface LinkTypeEntry {
   /** Is this id resolvable right now? (reads the validity Sets) */
   validate(id: string): boolean;
   /** Action dispatched on a successful (valid) click. */
-  action(id: string): void;
+  action(id: string, fragment?: string): void;
   /** Base decoration class (without the -broken suffix). */
   decorationClass: string;
   /**
@@ -85,11 +93,13 @@ const REF: LinkTypeEntry = {
     const re = refLink();
     let m: RegExpExecArray | null;
     while ((m = re.exec(lineText)) !== null) {
-      out.push({ start: m.index, end: m.index + m[0].length, raw: m[0], id: m[2].replace('ref:', '') });
+      // A ref fragment is stripped, not followed: refs open via navigate-to-reference,
+      // which resolves no anchors.
+      out.push({ start: m.index, end: m.index + m[0].length, raw: m[0], id: splitTarget(m[2].replace('ref:', '')).id });
     }
     return out;
   },
-  extractId(urlText) { return urlText.replace('ref:', ''); },
+  extractId(urlText) { return splitTarget(urlText.replace('ref:', '')).id; },
   validate(id) { return validRefIds.has(id) || projectRefIds.has(id); },
   action(id) { emit('navigate-to-reference', { referenceId: id, via: 'link' }); },
   decorationClass: 'cm-ref-link',
@@ -120,13 +130,14 @@ const DOC: LinkTypeEntry = {
     const re = docLink();
     let m: RegExpExecArray | null;
     while ((m = re.exec(lineText)) !== null) {
-      out.push({ start: m.index, end: m.index + m[0].length, raw: m[0], id: m[2] });
+      out.push({ start: m.index, end: m.index + m[0].length, raw: m[0], ...splitTarget(m[2]) });
     }
     return out;
   },
-  extractId(urlText) { return urlText; },
+  // WHY: `doc:` is optional in the docLink grammar, so the decoration's urlText may carry it.
+  extractId(urlText) { return splitTarget(urlText.replace(/^doc:/, '')).id; },
   validate(id) { return validDocIds.has(id); },
-  action(id) { emit('navigate-to-document', { documentId: id, via: 'link' }); },
+  action(id, fragment) { emit('navigate-to-document', { documentId: id, via: 'link', fragment }); },
   decorationClass: 'cm-doc-link',
   brokenTooltip: () => t('linkBrokenDocument'),
 };
@@ -194,18 +205,6 @@ export function resolveLinkClass(cls: string, urlText: string): string {
   const entry = ENTRY_BY_CLASS.get(cls);
   if (!entry) return cls;
   return entry.validate(entry.extractId(urlText)) ? cls : `${cls}-broken`;
-}
-
-/**
- * Broken-link tooltip for a class. Mirrors the original build-structural helper:
- * returns a tooltip ONLY when the class carries the `-broken` suffix (the only
- * form build-structural passes in); '' for base classes and unknown types.
- */
-export function linkBrokenTooltip(cls: string): string {
-  if (!cls.endsWith('-broken')) return '';
-  const base = cls.slice(0, -'-broken'.length);
-  const entry = ENTRY_BY_CLASS.get(base);
-  return entry ? entry.brokenTooltip() : '';
 }
 
 /**

@@ -402,4 +402,29 @@ MUTATE_TOOLS: list[dict] = [
         },
     },
     IMPORT_SUBTREE_MD_TOOL,
+    {
+        "type": "function",
+        "mutating": True,
+        "function": {
+            "name": "restore_document_version",
+            "description": (
+                "Restore a document to a saved version from list_document_versions. "
+                "First call diff_document_versions(from_checkpoint_id=<it>, "
+                "to=\"current\") and tell the user what will change. The restore "
+                "replaces the whole document for every co-editor. The state before the "
+                "restore is saved and returned as `backup_checkpoint_id` — to undo, "
+                "restore that. In confirmation mode the call is held for the user's "
+                "approval; it applies on approval, or returns `rejected` with the "
+                "user's feedback if declined."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string"},
+                    "checkpoint_id": {"type": "string"},
+                },
+                "required": ["document_id", "checkpoint_id"],
+            },
+        },
+    },
 ]

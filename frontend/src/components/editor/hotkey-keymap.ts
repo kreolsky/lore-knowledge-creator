@@ -14,7 +14,7 @@ import { markdownActionRegistry } from './markdown-actions';
 
 // Actions that need no edit right: their bindings also join the `note` scope, which
 // readonlyNoteHotkeys runs for a view the user cannot type into.
-const NO_EDIT_ACTIONS: ReadonlySet<MarkdownAction> = new Set(['createNote']);
+const NO_EDIT_ACTIONS: ReadonlySet<MarkdownAction> = new Set(['createNote', 'quoteToChat']);
 const NOTE_SCOPE = 'note';
 
 export function buildKeymapExtension(config: HotkeyConfig = DEFAULT_HOTKEYS): Extension {
@@ -31,7 +31,7 @@ export function buildKeymapExtension(config: HotkeyConfig = DEFAULT_HOTKEYS): Ex
 }
 
 /**
- * Run the `note`-scope bindings (Mod-m) for a NON-editable view holding the page's text
+ * Run the `note`-scope bindings (Mod-m, Mod-j) for a NON-editable view holding the page's text
  * selection.
  *
  * WHY: a non-editable view is not focusable, so its keymap never sees a keydown — the

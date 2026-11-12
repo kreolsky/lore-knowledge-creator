@@ -121,7 +121,6 @@ def _branch_session_data(session: dict, session_id: str, chain: list[dict],
         # `mode` column is read by nothing and deliberately not copied.
         "target_doc_id": session.get("target_doc_id"),
         "agent_auto": bool(session.get("agent_auto")),
-        "has_region": bool(session.get("has_region")),
         # INVARIANT(security): a branch inherits the source's recall-index
         # opt-out. Why: a branch of an anonymous chat would otherwise silently
         # become searchable.

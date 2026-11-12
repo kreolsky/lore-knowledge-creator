@@ -22,7 +22,6 @@ import type { ChatSession } from '../../../types';
 import type { ChatState, CreateSessionParams, Set, Get } from '../types';
 import { getPendingSessionPatch } from '../inflight';
 import { insertAndPinSession } from '../session-helpers';
-import { setPendingRegion } from '../pending-selection';
 
 type CreateActions = Pick<ChatState, 'createSession'>;
 
@@ -39,14 +38,12 @@ export function createCreateActions(set: Set, _get: Get): CreateActions {
       agentAuto,
       unindexed,
       targetDocId,
-      hasRegion,
-      region,
       reasoningEffort,
     }: CreateSessionParams) {
       // ARCH: unified creator for every entry point (+ button, ChatInput
       // lazy/overflow-create). There is one AI line — every create is an agent chat,
-      // so the full-access guard is unconditional and target_doc_id / agent_auto /
-      // has_region are forwarded on every create (matching the backend).
+      // so the full-access guard is unconditional and target_doc_id / agent_auto
+      // are forwarded on every create (matching the backend).
       // INVARIANT (access): every AI chat requires full project access. This is
       // the single unified entry point, so the guard lives here. Why: CLAUDE.md —
       // enforce on the backend AND guard every handler with an early return;
@@ -93,7 +90,6 @@ export function createCreateActions(set: Set, _get: Get): CreateActions {
             return (refIsScope(mode) ? s.currentReference?.reference_id : undefined) ?? s.currentDocument?.document_id;
           })(),
           agent_auto: !!agentAuto,
-          has_region: !!hasRegion,
           unindexed: !!unindexed,
           // ARCH: present ONLY when the ghost
           // carried an explicit effort — omitted means Default (column absent).
@@ -115,14 +111,6 @@ export function createCreateActions(set: Set, _get: Get): CreateActions {
       insertAndPinSession(set, session, {
         focus: focus !== false,
       });
-      // INVARIANT: the pinned region must be written BEFORE the session becomes active.
-      // Why: the highlight's cache gate only re-resolves on a doc change or the
-      // regionChanged annotation, and that annotation fires on activation (the Editor
-      // effect keyed on activeRegionSessionId) — a region set AFTER activation is never
-      // picked up. insertAndPinSession activated
-      // the session synchronously above, and the React re-render + annotation dispatch is
-      // queued but has NOT run yet (no await since), so this synchronous write lands first.
-      if (region) setPendingRegion(session.session_id, region);
       // Ghost-context materialization. Warm the open entity's first-circle into
       // the shared linkCache BEFORE the single derive pass, then snapshot the DERIVED
       // ghost context onto the real session id synchronously, then reset the ghost
@@ -140,8 +128,8 @@ export function createCreateActions(set: Set, _get: Get): CreateActions {
       //   effect (useGhostContextWarm, runs in ChatPanel) usually filled them, so this
       //   avoids a refetch and keeps the snapshot byte-identical to the picker's
       //   displayed selection. Still guarantees first-circle on turn 1 even when the
-      //   warm effect never ran (e.g. a region-agent fired from the editor while the
-      //   chat tab is closed) — the cold entry is fetched here, no silent
+      //   warm effect never ran (e.g. the chat tab is closed while the first send
+      //   lands) — the cold entry is fetched here, no silent
       //   display-vs-send disagreement (no-silent-degradation).
       const warmDocId = useAppStore.getState().currentDocument?.document_id ?? documentId ?? null;
       // Scope projection (panel preview → null): warm exactly what the derived

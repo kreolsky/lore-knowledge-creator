@@ -64,6 +64,7 @@ from models import (
     ToolConsolidateMemory,
     ToolCreateDocument,
     ToolCreateTable,
+    ToolDiffDocumentVersions,
     ToolEditDocument,
     ToolEditTableCell,
     ToolExportSubtreeMd,
@@ -75,6 +76,7 @@ from models import (
     ToolHttpRequest,
     ToolImportFile,
     ToolImportSubtreeMd,
+    ToolListDocumentVersions,
     ToolListMyChats,
     ToolListSecrets,
     ToolMoveDocument,
@@ -85,6 +87,7 @@ from models import (
     ToolReopenConsolidation,
     ToolReplaceArtifactPage,
     ToolReprocessReference,
+    ToolRestoreDocumentVersion,
     ToolSandboxBash,
     ToolSandboxFetchArtifact,
     ToolSandboxFetchReference,
@@ -104,13 +107,15 @@ from models import (
 # (model, handler) per base tool, in READ_TOOLS + MUTATE_TOOLS order.
 _BASE: tuple[tuple[type, str], ...] = (
     # READ_TOOLS: search_materials, read_document, get_project_structure,
-    # get_links, export_subtree_md
+    # get_links, export_subtree_md, list_document_versions, diff_document_versions
     (ToolSearch, "routes.tool_api.reads:tool_search_materials"),
     (ToolReadDocument, "routes.tool_api.reads:tool_read_document"),
     (ToolGetProjectStructure, "routes.tool_api.reads:tool_get_project_structure"),
     (ToolGetLinks, "routes.tool_api.reads:tool_get_links"),
     (ToolExportSubtreeMd, "routes.tool_api.subtree:tool_export_subtree_md"),
-    # MUTATE_TOOLS: create_document .. rename_document
+    (ToolListDocumentVersions, "routes.tool_api.reads:tool_list_document_versions"),
+    (ToolDiffDocumentVersions, "routes.tool_api.reads:tool_diff_document_versions"),
+    # MUTATE_TOOLS: create_document .. import_subtree_md, restore_document_version
     (ToolCreateDocument, "routes.tool_api.creates:tool_create_document"),
     (ToolEditDocument, "routes.tool_api.edits:tool_edit_document"),
     (ToolEditTableCell, "routes.tool_api.edits:tool_edit_table_cell"),
@@ -121,6 +126,7 @@ _BASE: tuple[tuple[type, str], ...] = (
     (ToolMoveDocument, "routes.tool_api.structure:tool_move_document"),
     (ToolRenameDocument, "routes.tool_api.structure:tool_rename_document"),
     (ToolImportSubtreeMd, "routes.tool_api.subtree:tool_import_subtree_md"),
+    (ToolRestoreDocumentVersion, "routes.tool_api.structure:tool_restore_document_version"),
 )
 
 # MCP-only descriptions for the mutating base tools (entry.mcp_description).
@@ -222,6 +228,13 @@ _MCP_MUTATING_DESCRIPTIONS: dict[str, str] = {
         "re-call with the POST response's `staged_id`. Read-write key: applies "
         "immediately; undo by deleting the created subtree (the deletion itself "
         "is reversible in the Lore History panel)."
+    ),
+    "restore_document_version": (
+        "Restore a document to a saved version from list_document_versions. First "
+        "call diff_document_versions(from_checkpoint_id=<it>, to=\"current\") and "
+        "tell the user what will change. Replaces the whole document for every "
+        "co-editor. Read-write key: applies immediately; reversible: restore the "
+        "returned `backup_checkpoint_id`."
     ),
 }
 

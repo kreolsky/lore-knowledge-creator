@@ -40,6 +40,9 @@ export type WsEventKey = `ws:${(typeof WS_EVENT_TYPES)[number]}`;
 
 // Where a person chose a document from. Present ⇒ the open is counted as a
 // human access (SYSTEM: telemetry, access.ts); absent ⇒ not counted.
+/** What `createLink` wrote over the selection, so a cancelled link picker can put it back. */
+export interface LinkRevert { from: number; inserted: string; original: string }
+
 export type AccessVia = 'tree' | 'link' | 'search' | 'links_panel' | 'chat' | 'url';
 
 export interface EventMap {
@@ -47,7 +50,9 @@ export interface EventMap {
   // restore = "reopen the document as it was" — its remembered last-opened
   // reference. The tree is the ONLY restoring source. Default (omitted) = open
   // the document BODY — app-store.focusDocument owns that decision.
-  'navigate-to-document': { documentId: string; restore?: true; via?: AccessVia };
+  // fragment: raw `#…` pointer (heading slug or `text=…`, see utils/link-fragment.ts),
+  // consumed after the open by useAnchorScroll.
+  'navigate-to-document': { documentId: string; restore?: true; via?: AccessVia; fragment?: string };
   // sourceDocId: null = the jump has NO return point (goto-parent from the panel /
   // chat plaque) — the tree must not keep the doc we left highlighted as the
   // reference's source. Omitted = today's behaviour (source = the doc we navigate from).
@@ -150,23 +155,11 @@ export interface EventMap {
   'create-note-from-editor': { noteId: string };
 
   // ── Editor ──
-  'show-link-suggestions': { pos: number; coords: { top: number; lineTop: number; left: number } | null; editorView: EditorView; labelPos?: number | null };
+  'show-link-suggestions': { pos: number; coords: { top: number; lineTop: number; left: number } | null; editorView: EditorView; labelPos?: number | null; revert: LinkRevert };
   'editor-selection-change': { empty: boolean };
   'editor-doc-changed': void;
   // An image was clicked for preview. `element` is the embed; `editorView` the view rendering it.
   'editor-image-preview': { src: string; element: HTMLElement; editorView: EditorView };
-  // see SYSTEM: selection-region-agent — the user clicked the Bot icon on the selection
-  // toolbar. Carries the pinned region: doc_id, a Yjs RelativePosition JSON pair
-  // (survives edits), and the live code-point offsets + text snapshot. The chat
-  // layer listens and starts a pinned agent session.
-  'start-agent-chat': {
-    doc_id: string;
-    relFrom: unknown;
-    relTo: unknown;
-    from_cp: number;
-    to_cp: number;
-    text: string;
-  };
 
   // ── Sidebar ──
   'open-sidebar-docs': void;
@@ -199,11 +192,12 @@ export interface EventMap {
   // resolver (useEditorReferenceSync) re-probes the open document's text.
   'ref-links-invalidate': { reference_id: string };
 
-  // ── Chat clarify ──
-  // Fired by ChatClarifyPopover when the user confirms a clarifying question on a
-  // selected fragment of an assistant message. ChatInput appends it to the draft
-  // as a markdown blockquote + question.
-  'chat-clarify-insert': { quote: string; question: string };
+  // ── Quote into the chat ──
+  // Fired by ChatClarifyPopover (a question on a fragment of an assistant message) and
+  // the editor's quoteToChat action (a document selection + its pointer link). ProjectPage
+  // appends it to the chat draft as a blockquote [+ source line] [+ question] and opens
+  // the chat tab.
+  'chat-quote-insert': { quote: string; source?: string; question?: string };
   // MessageList → ChatInput: the stream stopped following because the user scrolled
   // up past the stick threshold (away=true), or came back (away=false).
   'chat-scrolled-away': { away: boolean };

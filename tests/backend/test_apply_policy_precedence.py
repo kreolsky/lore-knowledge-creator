@@ -5,9 +5,8 @@ agent_config.system_doc_edit_policy). The precedence is a CHOSEN truth table (pl
 pins the chosen behavior, not the legacy one.
 
 Step 4 (proposal cluster deletion) collapsed the table further: the `access_level`
-cell is gone (RBAC-at-dispatch 403s a non-full caller before the resolver runs) and
-the `has_region` cell is gone (containment is enforced on the direct apply path, not
-by forcing confirm). The resolver is pure (no I/O).
+cell is gone (RBAC-at-dispatch 403s a non-full caller before the resolver runs).
+The resolver is pure (no I/O).
 """
 
 

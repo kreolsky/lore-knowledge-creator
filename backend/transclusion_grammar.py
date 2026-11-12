@@ -5,8 +5,8 @@ Mirrors the frontend ``frontend/.../transclusion-grammar.ts``:
 
 * :func:`parse_target` is a PURE parser returning ``{"scheme": ..., "id": ...}`` or
   ``None`` for every non-transclusion target.
-* :data:`NON_DOC_TARGET` is the shared reject regex (renamed from the old
-  ``_NON_DOC_TARGET`` in ``routes/documents.py``).
+* :data:`NON_DOC_TARGET` is the shared reject regex.
+* :func:`link_target_id` cuts a link target's ``#`` fragment off its id.
 
 ARCH: the reject set MUST be identical on both sides, or a bare ``data:`` / ``http``
 target resolves inconsistently between the editor preview and the export pipeline.
@@ -26,7 +26,7 @@ class ParsedTarget(TypedDict):
 # Canonical scheme table — single source of truth for the transclusion/mention reject
 # grammar. Columns: (prefix, is_transclusion, is_doc_mention).
 #   - NON_DOC_TARGET is projected from the is_transclusion == False prefixes.
-#   - mentions.extract_doc_mentions projects its link-target lookahead from the
+#   - mentions._DOC_LINK_RE projects its link-target lookahead from the
 #     is_doc_mention == False prefixes.
 #   - The frontend NON_TRANSCLUSION_RE is code-generated from this table
 #     (.claude/scripts/transclusion-grammar-codegen.py, CI-gated --check), so the
@@ -47,7 +47,7 @@ SCHEME_TABLE: list[tuple[str, bool, bool]] = [
 
 
 # Targets that are NEVER a transclusion, projected from SCHEME_TABLE (no literal to
-# drift). Renamed from the old ``_NON_DOC_TARGET`` in routes/documents.py.
+# drift).
 # WHY: projected at import time rather than written out, so the reject set cannot drift
 #   from SCHEME_TABLE; the frontend mirror is code-generated from the same table.
 NON_DOC_TARGET = re.compile(
@@ -106,6 +106,16 @@ def render_embed_schemes() -> str:
     if len(forms) == 1:
         return f"You can inline {forms[0]}"
     return f"You can inline {', '.join(forms[:-1])} or {forms[-1]}"
+
+
+def link_target_id(raw: str) -> str:
+    """The id part of a link target: everything before the first ``#``.
+
+    ``doc:<id>#text=…`` / ``<id>#<slug>`` point INTO a document; the fragment names a
+    passage, never a different target, so every id check (``SAFE_ID_RE``, edge
+    extraction, export) runs on the part before it.
+    """
+    return raw.split("#", 1)[0]
 
 
 def parse_target(raw: str) -> ParsedTarget | None:

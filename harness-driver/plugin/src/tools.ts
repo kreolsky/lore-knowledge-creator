@@ -17,11 +17,11 @@
  *   decision_store never parks a request again.
  *
  * # INVARIANT(security): the derived tool sets travel IN THE PAYLOAD —
- *   `mutating_tools`, `holdable_tools`, `region_tools` — and no set is ever
+ *   `mutating_tools`, `holdable_tools` — and no set is ever
  *   re-declared here. Why: agent.tools is the single backend
  *   source for each driver decision; a second copy drifts silently, and a
  *   tool missing from a copy
- *   runs without an apply mode or outside the pinned region.
+ *   runs without an apply mode.
  *
  * # INVARIANT: MUTATING proxy tools NEVER declare `timeoutMs` — only the
  *   read-only ones do (dsh's tool-call timeout-policy arms the
@@ -59,8 +59,6 @@ export interface TurnToolCtx {
   mutating: Set<string>
   holdable: Set<string>
   perCallApproval: Set<string>
-  regionTools: Set<string>
-  region: Record<string, unknown> | null
   /** The turn model's vision bit (caps.ts, off the gateway roster) — the
    * gate of every image-result tool (the payload's `image_result_tools`). Same resolution the catalog upsert declares from,
    * so the tool gate and the entry never disagree. */
@@ -77,7 +75,6 @@ export interface SessionToolCtx {
   mutating: Set<string>
   holdable: Set<string>
   perCallApproval: Set<string>
-  regionTools: Set<string>
 }
 
 /** The PER-REQUEST half: what THIS turn writes and where — stamped by each
@@ -86,7 +83,6 @@ export interface TurnRequestCtx {
   messageId: string
   applyMode: string
   document_id: string | null
-  region: Record<string, unknown> | null
   /** The turn model's vision bit — stamped from the turn's own caps resolve. */
   vision: boolean
 }
@@ -256,8 +252,6 @@ export function loreTurnCtxFor(dshId: string): TurnToolCtx | undefined {
     mutating: standing.mutating,
     holdable: standing.holdable,
     perCallApproval: standing.perCallApproval,
-    regionTools: standing.regionTools,
-    region: request.region,
     vision: request.vision,
   }
 }
@@ -271,7 +265,7 @@ const registered = new Map<string, () => void>()
  * `includeMutating=false` is the READ-ONLY line (kept for bisection and
  * rollback): mutating tools stay unregistered, so the model cannot call what
  * does not exist. Production passes `true` — mutating proxies honour
- * the payload's mutating/holdable/region sets exactly.
+ * the payload's mutating/holdable sets exactly.
  */
 export function registerLoreTools(
   ctx: Context, tools: unknown[], includeMutating: boolean,
@@ -347,11 +341,7 @@ async function proxyExecute(
         're-emit the call with valid JSON',
     })
   }
-  const isRegionCarrying = tctx.regionTools.has(tool)
-  const body = isMutating
-    ? { ...args, apply: tctx.applyMode,
-        ...(tctx.region && isRegionCarrying ? { region: tctx.region } : {}) }
-    : args
+  const body = isMutating ? { ...args, apply: tctx.applyMode } : args
   return await callToolApiWithApproval(tctx, tool, body, exec, dshId)
 }
 

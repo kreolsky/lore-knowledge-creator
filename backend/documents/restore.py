@@ -43,7 +43,7 @@ async def restore_checkpoint_command(db, checkpoint_id: str, checkpoint: dict) -
     )
     await _emit_backup_created(document_id, backup_id, current_content, current_tables_json)
     await _apply_restored_content(db, document_id, new_content, checkpoint.get("tables_json"))
-    return {"success": True}
+    return {"success": True, "backup_checkpoint_id": backup_id}
 
 
 async def _assert_restorable(checkpoint_id: str, checkpoint: dict) -> None:

@@ -122,7 +122,7 @@ const nestedThemeOverride = EditorView.theme({
     background: 'transparent !important',
     overflow: 'visible !important',
   },
-  // Keep `.cm-content` at the host column width (844px, centered — set by index.css)
+  // Keep `.cm-content` at the host column width (--content-max-width, centered — set by index.css)
   // so embedded text aligns with the host document; only drop the min-height.
   '.cm-content': {
     padding: '0 !important',
@@ -177,7 +177,12 @@ const cellThemeOverride = EditorView.theme({
     minWidth: '0 !important',
     maxWidth: '100%',
   },
-  '.cm-line': { padding: '0 !important' },
+  // WHY no !important: this only cancels CM6's base `0 2px 0 6px` line padding (the cell
+  // text padding lives on .cm-content). Block lines own their padding — a list line's
+  // inline hanging indent (list-indent.ts), .cm-quote, .cm-fenced-code — and an !important
+  // reset stripped it while the list's negative text-indent stayed, so the bullet hung
+  // outside the cell. The lazy placeholder (cell-static-render) already keeps those styles.
+  '.cm-line': { padding: '0' },
   // Cells are compact — no document-scale heading sizes and no heading top-spacing.
   '.cm-header-1, .cm-header-2, .cm-header-3, .cm-header-4, .cm-header-5, .cm-header-6': {
     fontSize: '1em !important',
@@ -193,7 +198,7 @@ const cellThemeOverride = EditorView.theme({
 // Cell hotkeys = the document's hotkeys MINUS the ones that make no sense (or are unsafe)
 // inside a cell: insertTable (would nest a table object), voiceInput (targets the doc).
 const CELL_HOTKEYS = Object.fromEntries(
-  Object.entries(DEFAULT_HOTKEYS).filter(([, a]) => a !== 'insertTable' && a !== 'voiceInput' && a !== 'workWithSelection'),
+  Object.entries(DEFAULT_HOTKEYS).filter(([, a]) => a !== 'insertTable' && a !== 'voiceInput'),
 );
 
 /** The markdown language config — identical in every editor context. */

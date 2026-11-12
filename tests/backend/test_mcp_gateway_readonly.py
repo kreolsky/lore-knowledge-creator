@@ -179,12 +179,13 @@ def test_tools_list_curated_order(monkeypatch):
     assert names == [
         "init",
         "search_materials", "read_document", "get_project_structure", "get_links",
-        "export_subtree_md",
+        "export_subtree_md", "list_document_versions", "diff_document_versions",
         "create_document", "edit_document", "append_to_document",
+        "restore_document_version",
         "attach_file", "get_file", "reprocess_file",
         "move_document", "rename_document", "import_subtree_md",
         "create_table", "edit_table_cell", "add_table_rows", "add_table_column",
-        # D14: import_file is Pi-only now (MCP serves attach_file). 19 tools by
+        # D14: import_file is Pi-only now (MCP serves attach_file). 22 tools by
         # default, counting init like the redesign suite's pin.
     ], names
 

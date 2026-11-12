@@ -28,8 +28,6 @@ function tctx(loreSessionId: string): TurnToolCtx {
     mutating: new Set(['edit_document']),
     holdable: new Set(['edit_document']),
     perCallApproval: new Set(['http_request']),
-    regionTools: new Set(),
-    region: null,
     vision: false,
   }
 }

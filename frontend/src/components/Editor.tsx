@@ -6,8 +6,7 @@
  *
  * The component is the orchestrator (store reads, hook wiring, layout); the
  * CM6 extension wiring lives in ./editor submodules: editor-extension-bundle
- * (the live extension array + Mod-/ raw mode), region-agent-wiring
- * (pinned-region highlight + auto-unpin), preview-editor-extensions (the
+ * (the live extension array + Mod-/ raw mode), preview-editor-extensions (the
  * snapshot-preview overrides), useArtifactView + ArtifactPane + artifact-
  * source-extensions (the html artifact's Page/Source wiring). The position
  * cache is ../editor/position-cache; the transclusion map is ./editor/live-preview.
@@ -52,7 +51,6 @@ import { useEditorCollab } from '../hooks/useEditorCollab';
 import { useEditorFileDrop } from './editor/useEditorFileDrop';
 import { FileDropImportModal } from './editor/FileDropImportModal';
 import { buildEditorExtensions } from './editor/editor-extension-bundle';
-import { makeRegionResolver, useRegionChangedDispatch } from './editor/region-agent-wiring';
 import { useNotesChangedDispatch } from './editor/note-anchor-wiring';
 import { buildPreviewExtensions } from './editor/preview-editor-extensions';
 import { EditorReferenceBar } from './editor/EditorReferenceBar';
@@ -240,13 +238,6 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
     }
   }, [previewDocument?.document_id, previewScrollOffset]);
 
-  // see SYSTEM: selection-region-agent — resolve the active pinned region against the
-  // focused ydoc for the live highlight. Stable closure reading live state at call
-  // time; the branch table lives in region-agent-wiring (with its tests).
-  const regionResolver = useMemo(
-    () => makeRegionResolver(() => activeItemIdRef.current),
-    [],
-  );
   // Stable extensions array — created once, never re-created on re-renders.
   // WHY: deps intentionally limited — reconnect only when document/reference changes.
   // Refs capture live values without needing to be deps.
@@ -264,7 +255,6 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
     roleRef,
     isReferenceRef,
     collabConnectionRef,
-    regionResolver,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), []);
 
@@ -322,11 +312,6 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
     // reconfigure — the editor stays read-only until reload.
   }, [editable, activeItemId, viewEpoch]);
 
-  // see SYSTEM: selection-region-agent — re-trigger highlight resolution when the
-  // active region changes WITHOUT a CM6 transaction (pin/unpin/switch, ghost
-  // pin/clear): subscribes and dispatches the regionChanged-annotated no-op.
-  // Selectors + the WHY on the annotation live in region-agent-wiring.
-  useRegionChangedDispatch(editorViewRef);
   // Note highlight refresh on note-list changes (no CM6 transaction of their own) and
   // once the collab binding is live for this entity, whatever the role.
   useNotesChangedDispatch(editorViewRef, collabStatus === 'connected' && liveForCurrent);

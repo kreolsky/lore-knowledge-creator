@@ -1,5 +1,5 @@
 /** Messages slice — load, send, edit, delete, fork, regenerate, stop. */
-import type { ChatFile, ChatMessage, ChatSession, RegionRef } from '../../types';
+import type { ChatFile, ChatMessage, ChatSession } from '../../types';
 import { deriveUIMode } from '../../types';
 import { apiClient, HttpError, RequestTooLargeError } from '../../api/client';
 import { tierRefusal } from '../../utils/server-refusal-detail';
@@ -9,7 +9,6 @@ import { useUIStore } from '../ui-store';
 import { refIsScope } from '../ui-store/documents-slice';
 import { t } from '../../i18n';
 import { resolveCompletionContext } from '../../chat/context';
-import { resolveRegion } from './pending-selection';
 import type { ChatState, Set, Get } from './types';
 
 /** Shape of an optimistic-insert request shared by the send paths. */
@@ -143,26 +142,6 @@ function completionBody(get: Get, activeSessionId: string, wire: SendWire): Reco
   const systemPromptId = activeSession?.system_prompt_id ?? undefined;
   const uiMode = deriveUIMode(activeSession);
   const autoApply = uiMode === 'agent_auto';
-  // see SYSTEM: selection-region-agent — resolve the pinned region (frontend-owned) into
-  // the wire shape for the prompt hint. has_region forces confirm server-side; the
-  // region text is injected as a "# Pinned fragment" block. When the region can't be
-  // resolved (cross-device / lost anchor), warn the user — the apply gate will still
-  // fail-closed, but the agent can read/propose.
-  let region: RegionRef | null = null;
-  if (activeSession?.has_region) {
-    const res = resolveRegion(activeSessionId);
-    if (res.status === 'ok') {
-      region = res.region;
-    } else if (res.status === 'lost') {
-      // Anchor destroyed by a wholesale restore/import — auto-unpin (frees the agent
-      // to work on the whole doc) and tell the user, instead of a stale prompt hint.
-      void get().regionLost(activeSessionId);
-    } else {
-      // offline (no live ydoc yet) or none — warn; the apply gate still fails closed.
-      useAppStore.getState().showToast(t('regionCollapsedWarning'), 'warning');
-    }
-  }
-
   // The live open document (central panel) — resolved synchronously at send time.
   // Per-turn + ephemeral: it surfaces "what's open right now" to the agent WITHOUT
   // repointing the session pin. Priority mirrors the ghost-base (currentReference
@@ -182,7 +161,6 @@ function completionBody(get: Get, activeSessionId: string, wire: SendWire): Reco
     ...contentCtx,
     ...(systemPromptId ? { system_prompt_id: systemPromptId } : {}),
     ...(autoApply ? { auto_apply: true } : {}),
-    ...(region ? { region } : {}),
     ...(openDocId ? { open_doc_id: openDocId } : {}),
   };
 }

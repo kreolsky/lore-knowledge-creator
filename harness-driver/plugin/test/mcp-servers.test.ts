@@ -240,9 +240,9 @@ function prep(text: string, over: Partial<TurnPrep> = {}): TurnPrep {
     mcpServers: [],
     standingCtx: {
       loreSessionId: 'lore-x', agentKey: 'k', mutating: new Set(), holdable: new Set(),
-      perCallApproval: new Set(), regionTools: new Set(),
+      perCallApproval: new Set(),
     },
-    requestCtx: { messageId: `a-${text}`, applyMode: 'confirm', document_id: null, region: null, vision: false },
+    requestCtx: { messageId: `a-${text}`, applyMode: 'confirm', document_id: null, vision: false },
     claim: {
       user_msg_id: `u-${text}`, assistant_msg_id: `a-${text}`, user_text: text,
       images: [], files: [], sources: [], warnings: [],
@@ -380,7 +380,7 @@ test('two agents with different headers keep different connections', async () =>
     await send(h, 's-red', 'r', prep('r', {
       loreId: 'lore-red', standingCtx: {
         loreSessionId: 'lore-red', agentKey: 'k', mutating: new Set(), holdable: new Set(),
-        perCallApproval: new Set(), regionTools: new Set(),
+        perCallApproval: new Set(),
       },
       mcpServers: [mcpServer(fixture.url, red)],
     }))
@@ -388,7 +388,7 @@ test('two agents with different headers keep different connections', async () =>
     await send(h, 's-black', 'b', prep('b', {
       loreId: 'lore-black', standingCtx: {
         loreSessionId: 'lore-black', agentKey: 'k', mutating: new Set(), holdable: new Set(),
-        perCallApproval: new Set(), regionTools: new Set(),
+        perCallApproval: new Set(),
       },
       mcpServers: [mcpServer(fixture.url, black)],
     }))

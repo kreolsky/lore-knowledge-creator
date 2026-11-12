@@ -41,7 +41,7 @@ export function clampPopupLeft(anchorLeft: number): number {
 
 // Right-panel side-of-panel placement, shared by useRightPanelHoverPreview
 // (see SYSTEM: hover-preview — Notes/Refs cards) AND EditorLinkPreview (chat
-// links: .chat-source / .chat-link rendered inside <aside class="right-panel">).
+// links: .chat-source / chat answer anchors rendered inside <aside class="right-panel">).
 // ARCH: ONE formula for both consumers so the two popups cannot drift apart.
 /** Vertical nudge subtracted from the computed top/bottom so the popup aligns
  *  near the hovered row rather than flush against its edge. Mirrors the original

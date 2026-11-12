@@ -1,8 +1,8 @@
-/** User cabinet: the section shell (Profile, MCP, Private keys, Colors) and the profile fields (name, email, password, PIN, version). Store slices: currentUser, setCurrentUser, setSectionCrumb; ui-store (cabinetSectionTab; the aside width shared with the admin panel + project sidebar, panelWidths.left). */
+/** User cabinet: the section shell (Profile, MCP, Private keys, Colors, Sound) and the profile fields (name, email, password, PIN, version). Store slices: currentUser, setCurrentUser, setSectionCrumb; ui-store (cabinetSectionTab; the aside width shared with the admin panel + project sidebar, panelWidths.left). */
 
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useState } from 'react';
-import { Cable, KeyRound, Palette, User } from 'lucide-react';
+import { Cable, KeyRound, Palette, User, Volume2 } from 'lucide-react';
 import { cabinetFetch } from '../api/cabinet';
 import { useAppStore } from '../store/app-store';
 import { useUIStore, type CabinetSectionTab } from '../store/ui-store';
@@ -13,6 +13,7 @@ import { SectionShell, SectionAsideRow } from '../components/SectionShell';
 import { McpKeysSection } from '../components/cabinet/McpKeysSection';
 import { PersonalKeysSection } from '../components/cabinet/PersonalKeysSection';
 import { ColorsSection } from '../components/cabinet/ColorsSection';
+import { SoundSection } from '../components/cabinet/SoundSection';
 import { useTranslation } from '../i18n';
 
 /** `null` = still loading, `''` = /api/health failed, anything else = the release tag. */
@@ -40,6 +41,7 @@ export function CabinetPage() {
     { tab: 'mcp', icon: <Cable size={14} />, label: t('cabinetSectionMcp') },
     { tab: 'keys', icon: <KeyRound size={14} />, label: t('personalKeys') },
     { tab: 'colors', icon: <Palette size={14} />, label: t('cabinetSectionColors') },
+    { tab: 'sound', icon: <Volume2 size={14} />, label: t('cabinetSectionSound') },
   ];
   const [tab, setTab] = useState<CabinetSectionTab>(() =>
     sections.some(s => s.tab === savedSectionTab) ? savedSectionTab! : 'profile');
@@ -198,6 +200,7 @@ export function CabinetPage() {
       {tab === 'mcp' && <McpKeysSection />}
       {tab === 'keys' && <PersonalKeysSection />}
       {tab === 'colors' && <ColorsSection />}
+      {tab === 'sound' && <SoundSection />}
       {tab === 'profile' && (
       <>
       {/* ─── Display Name ──────────────────────────────────────────── */}

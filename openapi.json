@@ -640,16 +640,6 @@
             ],
             "title": "Parent Id"
           },
-          "region": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/RegionRef"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "user_msg_id": {
             "format": "uuid",
             "title": "User Msg Id",
@@ -2401,43 +2391,6 @@
         "title": "ReferenceMetaResponse",
         "type": "object"
       },
-      "RegionRef": {
-        "description": "A live-resolved pinned text region on a document.\n\nThe frontend owns the Yjs RelativePosition pair (localStorage) and resolves it\nto (from_cp, to_cp, text) per turn. The backend stores ONLY\n`chat_sessions.has_region`; this model is the WIRE shape the frontend sends with\neach completion (prompt hint) and each mutating tool call (containment\nenforcement on the direct apply path). Offsets are Unicode code points — the\nsame unit `resolve_edit_range` / `_splice_edit` use.",
-        "properties": {
-          "doc_id": {
-            "title": "Doc Id",
-            "type": "string"
-          },
-          "from_cp": {
-            "minimum": 0.0,
-            "title": "From Cp",
-            "type": "integer"
-          },
-          "text": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Text"
-          },
-          "to_cp": {
-            "minimum": 0.0,
-            "title": "To Cp",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "doc_id",
-          "from_cp",
-          "to_cp"
-        ],
-        "title": "RegionRef",
-        "type": "object"
-      },
       "RegisterRequest": {
         "description": "POST /api/register/{token} body — same field contract as CreateUserAdmin.",
         "properties": {
@@ -2583,11 +2536,6 @@
             ],
             "title": "Document Id"
           },
-          "has_region": {
-            "default": false,
-            "title": "Has Region",
-            "type": "boolean"
-          },
           "is_note": {
             "default": false,
             "title": "Is Note",
@@ -2723,17 +2671,6 @@
               }
             ],
             "title": "Document Id"
-          },
-          "has_region": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Has Region"
           },
           "model": {
             "anyOf": [
@@ -3065,16 +3002,6 @@
             "title": "Document Id",
             "type": "string"
           },
-          "region": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/RegionRef"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "section": {
             "anyOf": [
               {
@@ -3280,6 +3207,29 @@
         "title": "ToolCreateTable",
         "type": "object"
       },
+      "ToolDiffDocumentVersions": {
+        "properties": {
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          },
+          "from_checkpoint_id": {
+            "title": "From Checkpoint Id",
+            "type": "string"
+          },
+          "to": {
+            "default": "current",
+            "title": "To",
+            "type": "string"
+          }
+        },
+        "required": [
+          "document_id",
+          "from_checkpoint_id"
+        ],
+        "title": "ToolDiffDocumentVersions",
+        "type": "object"
+      },
       "ToolDocumentEdit": {
         "description": "One pointwise (str_replace) edit in an edit_document batch.",
         "properties": {
@@ -3345,16 +3295,6 @@
               }
             ],
             "title": "Old String"
-          },
-          "region": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/RegionRef"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "required": [
@@ -3811,6 +3751,37 @@
         "title": "ToolImportSubtreeMd",
         "type": "object"
       },
+      "ToolListDocumentVersions": {
+        "properties": {
+          "before_checkpoint_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before Checkpoint Id"
+          },
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "document_id"
+        ],
+        "title": "ToolListDocumentVersions",
+        "type": "object"
+      },
       "ToolListMyChats": {
         "description": "`list_my_chats` body — the caller's visible chats of the key's project,\npaged. Same visible-session predicate as `search_my_chats`; a hidden\n(`unindexed`) chat is invisible here too.",
         "properties": {
@@ -3997,6 +3968,17 @@
             ],
             "title": "Tables",
             "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
           }
         },
         "required": [
@@ -4110,6 +4092,28 @@
           "reference_id"
         ],
         "title": "ToolReprocessReference",
+        "type": "object"
+      },
+      "ToolRestoreDocumentVersion": {
+        "properties": {
+          "apply": {
+            "$ref": "#/components/schemas/ToolApply",
+            "default": "confirm"
+          },
+          "checkpoint_id": {
+            "title": "Checkpoint Id",
+            "type": "string"
+          },
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "document_id",
+          "checkpoint_id"
+        ],
+        "title": "ToolRestoreDocumentVersion",
         "type": "object"
       },
       "ToolSandboxBash": {
@@ -16572,6 +16576,136 @@
         ]
       }
     },
+    "/api/tool/diff_document_versions": {
+      "post": {
+        "operationId": "tool_diff_document_versions_api_tool_diff_document_versions_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolDiffDocumentVersions"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Diff Document Versions",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
     "/api/tool/edit_document": {
       "post": {
         "operationId": "tool_edit_document_api_tool_edit_document_post",
@@ -18009,6 +18143,136 @@
         ]
       }
     },
+    "/api/tool/list_document_versions": {
+      "post": {
+        "operationId": "tool_list_document_versions_api_tool_list_document_versions_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolListDocumentVersions"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool List Document Versions",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
     "/api/tool/list_my_chats": {
       "post": {
         "description": "List the caller's other chats of the key's project — the whole pack, not\nonly the indexed ones. Refused while the admin disabled the `chat-recall`\nskill, for the same reason as the search.",
@@ -19311,6 +19575,137 @@
           }
         },
         "summary": "Tool Reprocess Reference",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
+    "/api/tool/restore_document_version": {
+      "post": {
+        "description": "Restore a document to one of its checkpoints through the History panel's\ncommand (before-restore backup first); returns the backup id as the undo.",
+        "operationId": "tool_restore_document_version_api_tool_restore_document_version_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolRestoreDocumentVersion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Restore Document Version",
         "tags": [
           "tool-api"
         ]

@@ -2,7 +2,7 @@
  * Note anchor highlight — a mark over each note's anchored fragment, re-derived from
  * the note's anchor; the text itself carries nothing.
  *
- * Same shape as region-highlight: the StateField holds no state of its own and asks a
+ * The StateField holds no state of its own and asks a
  * facet-provided resolver for the ranges to paint. The resolver owns the source — the
  * live editor resolves each note's Yjs RelativePosition pair against the editor's own
  * ydoc (note-anchor-wire.ts); a surface without a Y.Doc can hand ready offsets instead.

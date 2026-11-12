@@ -62,7 +62,7 @@ from db import (
 from mentions import rebuild_doc_mentions
 from scope import subtree_doc_ids
 from table_serialize import expand_tables, import_gfm_tables
-from transclusion_grammar import parse_target
+from transclusion_grammar import link_target_id, parse_target
 from ydoc_store import set_content
 
 # ─── filesystem naming ────────────────────────────────────────────────────────
@@ -103,10 +103,15 @@ def _posix_relpath(target: str, start_dir: str) -> str:
     return posixpath.relpath(target, start_dir or ".")
 
 
-def _rel_link(from_dir: str, to_file: str) -> str:
-    """URL-encoded relative markdown path from a file in `from_dir` to
-    `to_file` (renders on GitHub AND Obsidian)."""
-    rel = _posix_relpath(to_file, from_dir)
+def _rel_link(from_file: str, to_file: str) -> str:
+    """URL-encoded relative markdown path from the file `from_file` to
+    `to_file` (renders on GitHub AND Obsidian).
+
+    # WHY: the base is the linking FILE's directory, never ExportNode.dir_path —
+    # a parent's README.md lives one level BELOW its dir_path, and the importer
+    # resolves a dir document's links from its own dir.
+    """
+    rel = _posix_relpath(to_file, posixpath.dirname(from_file))
     if not rel.startswith("."):
         rel = f"./{rel}"
     return quote(rel, safe="/")
@@ -377,7 +382,7 @@ async def _embed_replacement(alt: str, target: str, node: ExportNode,
     tid = parsed["id"]
     if parsed["scheme"] in ("doc", "bare-doc") and tid in plan:
         target_node = plan[tid]
-        link = _rel_link(node.dir_path, target_node.file_path)
+        link = _rel_link(node.file_path, target_node.file_path)
         if target_node.is_html:
             # An html artifact is not embeddable md — degrade the embed to a
             # relative LINK to the exported .html file.
@@ -416,10 +421,10 @@ def _link_replacement(text: str, target: str, node: ExportNode,
     parsed = parse_target(target)
     if parsed is None or parsed["scheme"] == "table":
         return None
-    tid = parsed["id"]
+    tid = link_target_id(parsed["id"])
     if parsed["scheme"] in ("doc", "bare-doc"):
         if tid in plan:
-            return f"[{text}]({_rel_link(node.dir_path, plan[tid].file_path)})"
+            return f"[{text}]({_rel_link(node.file_path, plan[tid].file_path)})"
         if SAFE_ID_RE.match(tid):
             return text
         return None

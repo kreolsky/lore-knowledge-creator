@@ -1104,12 +1104,12 @@ test('reasoning effort: the prep wires the body effort through the selection, no
 test('the tool ctx splits: standing survives between turns, the request half does not', () => {
   setSessionToolCtx('dsh-ctx', {
     loreSessionId: 'lore-1', agentKey: 'k',
-    mutating: new Set(['edit_document']), holdable: new Set(), perCallApproval: new Set(), regionTools: new Set(),
+    mutating: new Set(['edit_document']), holdable: new Set(), perCallApproval: new Set(),
   })
   assert.equal(loreTurnCtxFor('dsh-ctx'), undefined,
     'standing alone answers nothing — a tool call outside a turn still errors (plan Decision)')
   stampTurnRequestCtx('dsh-ctx', {
-    messageId: 'm1', applyMode: 'confirm', document_id: null, region: null,
+    messageId: 'm1', applyMode: 'confirm', document_id: null,
     vision: true,
   })
   const merged = loreTurnCtxFor('dsh-ctx')
@@ -1124,7 +1124,7 @@ test('the tool ctx splits: standing survives between turns, the request half doe
   // The next turn stamps its own request facts; the standing half was never
   // re-registered (it is session-scoped — one registration, many turns).
   stampTurnRequestCtx('dsh-ctx', {
-    messageId: 'm2', applyMode: 'auto', document_id: 'doc-1', region: { start: 0 },
+    messageId: 'm2', applyMode: 'auto', document_id: 'doc-1',
     vision: false,
   })
   const next = loreTurnCtxFor('dsh-ctx')!

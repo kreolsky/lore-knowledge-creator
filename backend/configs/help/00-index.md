@@ -16,25 +16,25 @@ What the guide does not describe and the "Planned" list does not mention is most
 
 ## Sections
 
-- [Interface](help:interface) — screen layout, the auto-hiding left panel, narrow-screen mode, unread marks.
-- [Documents and the graph](help:documents-graph) — the tree, moving, deleting, links.
-- [Editor](help:editor) — markup, the selection toolbar, keyboard shortcuts, paste, dropped files.
-- [Tables](help:tables) — table objects, CSV import, editing, column widths and scaling.
-- [Images and embeds](help:embeds) — dropping, pasting and resizing pictures, the gallery, embedding documents and references.
+- [Interface](help:interface) — screen layout, the auto-hiding left panel, text column width, narrow-screen mode, unread marks, reloading after an update.
+- [Documents and the graph](help:documents-graph) — the tree, the project's index document, moving, deleting, links, the Links tab.
+- [Editor](help:editor) — markup, the selection toolbar, quoting into the chat, keyboard shortcuts, undo, paste, dropped files.
+- [Tables](help:tables) — table objects, CSV import, the cell menu, fixed column widths and fitting, notes and links in cells.
+- [Images and embeds](help:embeds) — dropping, pasting, moving and resizing pictures, the gallery, embedding documents and references.
 - [Notes](help:notes) — discussions attached to text, notes from guests on a public link and from the apps.
-- [Snapshots and history](help:history) — automatic and manual snapshots, restore, export, a subtree as a zip.
+- [Snapshots and history](help:history) — automatic and manual snapshots, restore, export, a subtree as a zip, snapshots through the agent.
 - [References](help:references) — uploading, visibility, viewing, archive.
 - [Voice notes](help:voice) — recording, where it lands, the apps.
-- [Chat and the agent](help:chat-agent) — chats, branches, queue, context, models, pictures, confirming edits, chat privacy, external MCP servers.
+- [Chat and the agent](help:chat-agent) — chats, branches, queue, context, models, pictures, quoting, confirming edits, chat privacy, the finish sound, external MCP servers.
 - [Skills](help:skills) — creating skills, built-in skills.
 - [Personas, rules and knowledge](help:personas-rules-knowledge) — the Agent System section.
 - [Memory](help:memory) — project facts, consolidation, saving facts from a chat.
 - [Pipelines](help:pipelines) — the extractor and theme digests.
-- [Search](help:search) — documents, memory, your chats, find and replace.
+- [Search](help:search) — documents, memory, your chats, find and replace (table cells included).
 - [Access and publishing](help:access) — members, group access, public links and comments, link previews, privacy, account tiers, API keys, arrival notifications, moving between projects.
-- [HTML pages](help:html-pages) — interactive pages the agent builds: viewing, source, publishing, download.
+- [HTML pages](help:html-pages) — interactive pages the agent builds: viewing, source, publishing, download, fullscreen, rewriting in place.
 - [Screen and page lock](help:pin-lock) — locking the screen, hiding single pages behind your PIN.
-- [Profile settings](help:profile) — profile and PIN, MCP server keys, personal API keys, theme colors.
+- [Profile settings](help:profile) — profile and PIN, MCP server keys, personal API keys, theme colors, the notification sound.
 - [External agent (MCP)](help:external-agent) — connecting Claude Code or another MCP client with an API key: scope, rights, what it can and cannot do, undo, limits.
 
 ## Planned
@@ -43,4 +43,4 @@ Not available in the interface yet:
 
 - scheduling pipeline runs (the scheduler exists; there is no setting in the interface);
 - new pipeline kinds, and pipelines the agent assembles itself;
-- comparing two snapshots with the differences highlighted (for now: open them one after another).
+- comparing two snapshots with the differences highlighted in the interface (for now: open them one after another, or ask the agent to compare them).

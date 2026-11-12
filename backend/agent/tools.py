@@ -27,7 +27,7 @@
 import importlib
 
 import settings
-from agent_tools.registry import ROOT_UNSCOPED_FILL, _is_region_capable
+from agent_tools.registry import ROOT_UNSCOPED_FILL
 from agent_tools.registry import entries as _registry_entries
 from agent_tools.registry import fill_spec_root as _fill_spec_root
 from agent_tools.registry import holdable_names as _registry_holdable_names
@@ -162,16 +162,3 @@ PER_CALL_APPROVAL_TOOLS: frozenset[str] = _registry_per_call_names()
 # The tools whose result carries an image — the dsh plugin picks its
 # image-result arm by membership, never by a re-declared name.
 IMAGE_RESULT_TOOLS: frozenset[str] = _registry_image_result_names()
-
-
-# The agent tools whose request model carries `region` — the only tools a pinned
-# session can confine to its fragment. DERIVED with the pin gate's own predicate
-# (agent_tools.registry._is_region_capable), never hand-listed: a new
-# region-capable tool joins by declaring the field, not by editing a set here.
-# Serialized to the dsh driver as `region_tools` (the mutating_tools contract
-# shape) so the driver never re-hardcodes {edit_document, append_to_document} —
-# the mirrored-literal drift this serialization closes.
-REGION_TOOLS: frozenset[str] = frozenset(
-    e.name for e in _registry_entries()
-    if "agent" in e.surfaces and _is_region_capable(e)
-)

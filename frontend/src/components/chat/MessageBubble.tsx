@@ -14,6 +14,7 @@ import { memo, useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { Copy, Pencil, RefreshCw, GitFork, Check, X, Trash2, AlertTriangle, FileText } from 'lucide-react';
 import { IconButton, FieldTextarea } from '../ui';
 import { MarkdownContent } from './MarkdownContent';
+import { hardLineBreaks } from './hard-line-breaks';
 import { ForkIndicator } from './ForkIndicator';
 import { Sources } from './Sources';
 import { VerdictCard } from './VerdictCard';
@@ -346,13 +347,11 @@ export const MessageBubble = memo(function MessageBubble({
               />
             )}
             {isUser ? (
-              // AI user messages are plain text; note messages render markdown
-              // (notes persisted markdown via MarkdownContent historically).
-              variant === 'note' ? (
-                <MarkdownContent content={message.content} />
-              ) : (
-                <div className="whitespace-pre-wrap">{message.content}</div>
-              )
+              // WHY markdown for AI user messages too: a quote sent from the editor is a
+              // blockquote + a pointer link the user clicks in the sent message (operator
+              // ruling) — typed line breaks are kept as hard breaks; note messages keep
+              // their historical plain markdown.
+              <MarkdownContent content={variant === 'note' ? message.content : hardLineBreaks(message.content)} />
             ) : nodes.length > 0 ? (
               // ARCH (SYSTEM: dsh-conversation): the assembled turn renders over
               // the node data — text, reasoning, tool chips, the lore cards, in

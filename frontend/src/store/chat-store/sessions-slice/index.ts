@@ -1,8 +1,8 @@
 /** Sessions slice — load, create, update, delete, setActive, openChatWithReference.
 
-Holds the session CRUD + load + ref-open flow; the ghost-lifecycle, region/
-pinned-selection, load, and create actions live in composed helper factories
-(`./ghost-actions`, `./region-actions`, `./load-actions`, `./create-actions`) and
+Holds the session CRUD + load + ref-open flow; the ghost-lifecycle, load, and
+create actions live in composed helper factories
+(`./ghost-actions`, `./load-actions`, `./create-actions`) and
 are mixed in via spread. The slice factory + the smaller actions
 (openChatWithReference, setActiveSession, updateSession, deleteSession) live here.
 
@@ -27,7 +27,6 @@ import {
 } from '../inflight';
 
 import { createGhostActions } from './ghost-actions';
-import { createRegionActions } from './region-actions';
 import { createLoadActions } from './load-actions';
 import { createCreateActions } from './create-actions';
 import { createUnindexedActions } from './unindexed-actions';
@@ -46,18 +45,12 @@ type SessionsSlice = Pick<
   | 'setGhostSystemPrompt'
   | 'resetGhostOverrides'
   | 'initGhostFromScope'
-  | 'startAgentChat'
-  | 'unpinRegion'
-  | 'regionLost'
-  | 'setGhostRegion'
-  | 'clearGhostRegion'
   | 'setChatUnindexed'
 >;
 
 export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
   return {
     ...createGhostActions(set, get),
-    ...createRegionActions(set, get),
     ...createLoadActions(set, get),
     ...createCreateActions(set, get),
     ...createUnindexedActions(set, get),
@@ -172,7 +165,7 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
       get().loadMessages(sessionId);
     },
 
-    async updateSession(sessionId: string, data: { title?: string; model?: string; system_prompt_id?: string | null; context_ids?: string[]; mode?: string; agent_auto?: boolean; has_region?: boolean; reasoning_effort?: string | null; document_id?: string | null }) {
+    async updateSession(sessionId: string, data: { title?: string; model?: string; system_prompt_id?: string | null; context_ids?: string[]; mode?: string; agent_auto?: boolean; reasoning_effort?: string | null; document_id?: string | null }) {
       const p = apiClient.patch(`/chat/sessions/${sessionId}`, data)
         .then((updated: ChatSession) => {
           // ARCH: a reparent is written by the server to EVERY row of the

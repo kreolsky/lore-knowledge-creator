@@ -1,8 +1,8 @@
 """Agent request context — the Tool-API auth dependency and the caller's own chat session.
 
 get_agent_context resolves a Bearer agent key to the owning user's ctx and reads
-the dsh-driver correlation headers onto it; owned_session_row and
-pinned_session_doc_id answer questions about the caller's OWN chat session. Service
+the dsh-driver correlation headers onto it; owned_session_row answers questions
+about the caller's OWN chat session. Service
 code, not a route: routes/tool_api/* and agent_tools/routing both depend on it.
 
 # ARCH: Auth(GAP-5): an agent-capable api_keys row ('agent' in
@@ -135,29 +135,3 @@ async def owned_session_row(ctx: dict) -> dict | None:
     if session.get("project_id") != ctx.get("project_id"):
         return None
     return session
-
-
-async def pinned_session_doc_id(ctx: dict) -> str | None:
-    """The document a pinned chat session pins, or None when it is not pinned.
-
-    # INVARIANT(security): the pin is read from `chat_sessions.has_region` — SERVER
-    # state, never the request body — and honored only on the caller's OWN session.
-    # Why: the caller is the party the pin constrains, so deriving "is this session
-    # pinned" from what the caller sent lets it opt out by simply omitting `region`.
-    # The deleted proposal apply path read `session["has_region"]`; when it went, the
-    # direct path was left checking containment only of a region the caller chose to
-    # supply, which is not a boundary at all.
-    # Why the ownership cell: this read runs BEFORE the hold's session guard, so a
-    # foreign pinned session differentiated the answer (pin-specific 409 vs the
-    # generic refusal) — an existence/pin oracle on other users' sessions. A foreign
-    # or nonexistent session now reads as "no pin" and the hold guard refuses it
-    # uniformly downstream.
-    """
-    session_id = ctx.get("session_id")
-    if not session_id:
-        return None
-
-    session = await owned_session_row(ctx)
-    if not session or not session.get("has_region"):
-        return None
-    return session.get("document_id") or None

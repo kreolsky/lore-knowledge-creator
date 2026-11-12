@@ -73,7 +73,7 @@ export function createLoadActions(set: Set, get: Get): LoadActions {
         // during the load — without it the previous project's chat would flash. On a
         // same-scope re-fetch (openChatWithReference) keep_current holds the active
         // chat, so a spinner would blank a chat that never goes away.
-        ...(scopeChanged ? { chatScopeLoading: true, ghostRegion: null } : {}),
+        ...(scopeChanged ? { chatScopeLoading: true } : {}),
       });
 
       // SWR pre-gate paint: on a scope (project) change, show the last-seen session

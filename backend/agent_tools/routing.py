@@ -30,11 +30,9 @@
 # pydantic class at def time (the closure variable), not stay a string
 # ForwardRef — with the future import, FastAPI/pydantic see ForwardRef('model')
 # and every request dies in TypeAdapter at validation time.
-from agent.context import get_agent_context, pinned_session_doc_id
-from fastapi import HTTPException
+from agent.context import get_agent_context
 
 from agent_tools import registry
-from agent_tools.registry import _is_region_capable
 
 
 def _make_endpoint(entry, handler, model, body_param, ctx_dep):
@@ -54,7 +52,6 @@ def _make_endpoint(entry, handler, model, body_param, ctx_dep):
         body: model = body_param,
         ctx: dict = ctx_dep,
     ):
-        await _enforce_pin_scope(entry, body, ctx)
         # KEYWORD call: the @track_agent_tool wrapper reads `body`/`ctx` from
         # kwargs (its telemetry row + halt-directive carrier depend on them).
         return await handler(body=body, ctx=ctx)
@@ -62,49 +59,6 @@ def _make_endpoint(entry, handler, model, body_param, ctx_dep):
     endpoint.__name__ = handler.__name__
     endpoint.__doc__ = handler.__doc__
     return endpoint
-
-
-async def _enforce_pin_scope(entry, body, ctx) -> None:
-    """Refuse a mutating call that escapes the session's pinned region.
-
-    # INVARIANT(security): under a pin, a mutating call against the PINNED document
-    # is allowed only if the tool is region-capable AND carries the region.
-    # Why: the pin is the user's promise that the agent touches one fragment and
-    # nothing else in that document. Two ways it was escapable: omitting `region`
-    # from the body (the gate read capability off the body, so absence read as
-    # "unpinned"), and the table tools, which mutate the same document's Y subtree
-    # but carry no region at all and so were never checked. Both are refused here,
-    # in the GENERATED wrapper, so a third-party tool cannot omit itself — the same
-    # placement argument the deleted mid-turn hold once made.
-    #
-    # A call against a DIFFERENT document is not what the user pinned and is left
-    # alone: the pin narrows one document, it is not a session-wide freeze.
-    """
-    if not entry.mutating:
-        return
-    pinned_doc_id = await pinned_session_doc_id(ctx)
-    if not pinned_doc_id:
-        return
-    if getattr(body, "document_id", None) != pinned_doc_id:
-        return
-    if not _is_region_capable(entry):
-        raise HTTPException(status_code=409, detail={
-            "code": "region_out_of_scope",
-            "detail": (
-                f"{entry.name} is outside the pinned text region — this session is "
-                "pinned to a fragment, and this tool cannot be confined to it. "
-                "Ask the user to unpin the selection first."
-            ),
-        })
-    if getattr(body, "region", None) is None:
-        raise HTTPException(status_code=409, detail={
-            "code": "region_required",
-            "detail": (
-                "This session is pinned to a text fragment, so an edit must carry "
-                "the pinned region. Re-send the call with `region`, or ask the user "
-                "to unpin the selection."
-            ),
-        })
 
 
 def bind_tool_api_routes(router) -> None:

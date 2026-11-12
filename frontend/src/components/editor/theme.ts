@@ -247,14 +247,14 @@ export const loreEditorTheme: Extension = [
   // WHY: standalone lines render as a CM6 block widget (build-structural.ts), so the
   // band lives BETWEEN editor lines — no line-height strut, gapless top/bottom.
   // WHY: full-bleed background. The band breaks out of the centered max-width .cm-content
-  // (844px) to the .cm-scroller border so the gray reaches the full editor column width
+  // (--content-max-width) to the .cm-scroller border so the gray reaches the full editor column width
   // (like the top banner). `.cm-scroller` is a CSS container (index.css): 100cqw = its
   // content box, 4rem = its 2rem padding ×2, 100% = the .cm-content width. The negative
   // margins extend the band to the scroller border-box; the equal padding pulls the band's
-  // CONTENT box back to exactly 844px (the host text column). Header + body are then an
-  // inner `max-width: 844px; margin: 0 auto` column inside that 844 content box, so the
+  // CONTENT box back to exactly the host text column. Header + body are then an
+  // inner `max-width: var(--content-max-width); margin: 0 auto` column inside that content box, so the
   // title and embedded text line up with the host document text.
-  // WHY: overflow: hidden stays on the BODY (the 844 inner column), so any wide
+  // WHY: overflow: hidden stays on the BODY (the inner text column), so any wide
   // child (table/long URL) clips at the text column, never reaching the scroller.  Why: clipping wide children at the text column keeps them inside the transclusion band; without overflow:hidden on the body they'd reach the page scroller and break layout.
   '.cm-transclusion': {
     background: 'var(--surface-transclusion)',
@@ -267,11 +267,11 @@ export const loreEditorTheme: Extension = [
     paddingRight: 'calc((100cqw + 4rem - 100%) / 2)',
     maxWidth: 'none',
   },
-  // WHY: header is an inner 844px centered column (same as the body) carrying the
+  // WHY: header is an inner text-column-wide centered column (same as the body) carrying the
   // divider; the title inside is inline-block so its hover/click target is the title
-  // TEXT only. The 844 centering is what aligns the title with the host text column.
+  // TEXT only. The column centering is what aligns the title with the host text column.
   '.cm-transclusion-header': {
-    maxWidth: '844px',
+    maxWidth: 'var(--content-max-width)',
     marginLeft: 'auto',
     marginRight: 'auto',
     borderBottom: '1px solid var(--border)',
@@ -296,7 +296,7 @@ export const loreEditorTheme: Extension = [
   },
   '.cm-transclusion-title:hover': { textDecoration: 'underline' },
   '.cm-transclusion-body': {
-    maxWidth: '844px',
+    maxWidth: 'var(--content-max-width)',
     marginLeft: 'auto',
     marginRight: 'auto',
     fontSize: '1rem',

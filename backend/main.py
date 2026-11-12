@@ -42,12 +42,7 @@ from starlette.requests import HTTPConnection
 from starlette.requests import Request as _StarletteRequest
 
 from config import CHAT_MAX_IMAGE_SIZE_MB
-from db import (
-    SdkContractError,
-    apply_schema,
-    mark_startup_complete,
-    verify_sdk_contract,
-)
+from db import apply_schema, mark_startup_complete
 from event_bus import on as _bus_on
 from jobs import pool as jobs_pool
 from migrations import seed_admin
@@ -331,21 +326,6 @@ async def lifespan(_: FastAPI):
     except Exception:
         logger.warning("doc_chunks.kind backfill failed; rows stay NONE until re-embed",
                        exc_info=True)
-    # WHY: refuse to start if the surrealdb SDK contract has drifted. The monkeypatched
-    # _recv_task (fut.done() guard) and the is_record_id / query / query_raw error-shape
-    # helpers depend on private SDK internals with no stability guarantee; a silent bump
-    # would wedge the reader or break serialization quietly. A broken reader is worse than
-    # a startup refusal, so a genuine contract violation (SdkContractError) is fatal here.
-    # INVARIANT: catch ONLY SdkContractError — a transient transport error during the probes
-    # is a connectivity problem, not SDK drift; it propagates as a normal startup failure  Why: SdkContractError means the DB schema/protocol drifted from what the SDK expects (a real contract break, fatal); a transport error is just the probe failing to connect and must not be misread as drift.
-    # (verify_sdk_contract already retries it on a fresh connection) and must NOT be
-    # mislabeled/logged as a contract failure. Why: conflating them would refuse startup
-    # on a flaky DB connection when the SDK contract is actually fine.
-    try:
-        await verify_sdk_contract()
-    except SdkContractError:
-        logger.critical("SurrealDB SDK contract verification failed — refusing to start", exc_info=True)
-        raise
     from migrations.runner import run_migrations
     await run_migrations()
     await sweep_orphan_proposal_fields()

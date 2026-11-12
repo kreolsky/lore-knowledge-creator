@@ -21,6 +21,7 @@ import { createPublicShareSlice } from './ui-store/public-share-slice';
 import { createSearchSlice } from './ui-store/search-slice';
 import { createSidebarSlice } from './ui-store/sidebar-slice';
 import type { ColorOverrides, ThemeName } from '../theme/color-tokens';
+import type { SoundChoice } from '../utils/sound-presets';
 import { createThemeSlice, type GlobalPrefs, type AdminSectionTab, type CabinetSectionTab } from './ui-store/theme-slice';
 export type { AdminSectionTab, CabinetSectionTab };
 import { createDocumentsSlice, DEFAULT_DOC_STATE, ORPHAN_KEY, readRefOpenMode, showsBothPanes } from './ui-store/documents-slice';
@@ -46,6 +47,8 @@ interface PersistedUIState {
   searchQuery?: string;
   searchMode?: SearchMode;
   searchDocMode?: SearchDocMode;
+  // The user's own agent-sound toggle for this project (never shared with members).
+  soundEnabled?: boolean;
 }
 
 // WHY: phones in both orientations and portrait tablets; landscape tablets keep desktop.
@@ -62,6 +65,7 @@ export const UI_DEFAULTS: PersistedUIState = {
   collapsedDocIds: [],
   documents: {},
   lastActiveChatSessionId: null,
+  soundEnabled: false,
 };
 
 const lastSavedBlobs = new Map<string, PersistedUIState>();
@@ -123,6 +127,7 @@ function buildUIBlob(uiState: UIState, appCtx: AppContext): PersistedUIState | n
     // source of truth and stale prefs entries get overwritten.
     searchMode: uiState.searchMode,
     searchDocMode: uiState.searchDocMode,
+    soundEnabled: uiState.soundEnabled,
   };
 }
 
@@ -209,6 +214,7 @@ function triggerSaveGlobalPrefs(state: UIState) {
     cabinetSectionTab: state.cabinetSectionTab,
     sidebarPinned: state.sidebarPinned,
     colorOverrides: state.colorOverrides,
+    soundPreset: state.soundPreset,
   };
   apiClient.put('/preferences/_global', { preferences: blob })
     .catch(() => _appBridge?.showToast('Settings not saved', 'error'));
@@ -268,6 +274,10 @@ export interface UIState {
   lastActiveChatSessionId: string | null;
   // Per-project memory of the move section's target project (persisted blob).
   lastMoveTargetProjectId: string | null;
+  // Agent notification sound on/off for this project (project prefs blob, default off).
+  soundEnabled: boolean;
+  // The chosen notification sound (global-persisted; see theme-slice GlobalPrefs).
+  soundPreset: SoundChoice;
   // WHY: Transient one-shot seed for FindReplacePanel. Set on every Cmd+F
   // (carries the editor selection) and read once on panel mount to bridge the
   // fresh-open timing gap (the panel subscribes to open-find too late). NOT persisted.
@@ -293,6 +303,8 @@ export interface UIState {
   setLastActiveChatSession: (id: string | null) => void;
   getLastActiveChatSession: () => string | null;
   setLastMoveTargetProject: (id: string | null) => void;
+  setSoundEnabled: (enabled: boolean) => void;
+  setSoundPreset: (preset: SoundChoice) => void;
   setCurrentReferenceForDoc: (docId: string, refId: string | null) => void;
   getCurrentReferenceForDoc: (docId: string) => string | null;
   setSearchCache: (query: string, results: SearchResult[]) => void;
@@ -358,6 +370,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   selectionEmpty: true,
   lastActiveChatSessionId: null,
   lastMoveTargetProjectId: null,
+  soundEnabled: false,
   findSeedText: '',
   compactLayout: compactMql?.matches ?? false,
   ...createPublicShareSlice(set),
@@ -381,6 +394,10 @@ export const useUIStore = create<UIState>((set, get) => ({
   getLastActiveChatSession: () => get().lastActiveChatSessionId ?? null,
   setLastMoveTargetProject: (id) => {
     set({ lastMoveTargetProjectId: id });
+    triggerSaveUI(get());
+  },
+  setSoundEnabled: (enabled) => {
+    set({ soundEnabled: enabled });
     triggerSaveUI(get());
   },
 
@@ -420,6 +437,7 @@ export const useUIStore = create<UIState>((set, get) => ({
       searchQuery: merged.searchQuery ?? '',
       searchMode: (merged.searchMode as SearchMode) ?? 'fulltext',
       searchDocMode: (merged.searchDocMode as SearchDocMode) ?? 'fulltext',
+      soundEnabled: merged.soundEnabled ?? false,
       documentPositions: serverDocPositions,
     });
   },
@@ -478,6 +496,7 @@ export const useUIStore = create<UIState>((set, get) => ({
       // against the new project's list during the prefs-hydration window.
       lastActiveChatSessionId: null,
       lastMoveTargetProjectId: null,
+      soundEnabled: false,
       searchQuery: '',
       searchResults: [],
       searchMode: 'fulltext' as const,

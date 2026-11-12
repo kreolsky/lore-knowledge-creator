@@ -152,7 +152,7 @@ def test_collapse_list_blanks_idempotent():
 #
 # The agent's instructions spell link slots as `[text](<id>)`; a weak model copies
 # the placeholder brackets verbatim into `[text](<uuid>)`, which fails SAFE_ID_RE
-# in extract_doc_mentions and renders broken. The unwrap strips the brackets at
+# in extract_content_edges and renders broken. The unwrap strips the brackets at
 # the agent write sites.
 
 
@@ -208,18 +208,18 @@ def test_unwrap_idempotent():
 
 def test_unwrap_destination_is_mention_safe_and_extractable():
     """Binding, not literal: the unwrapped destination must pass SAFE_ID_RE and be
-    returned by extract_doc_mentions / extract_ref_mentions — the two live surfaces
-    the unwrap exists for — rather than asserting a string both sides spell out."""
+    returned by extract_content_edges — the live surface the unwrap exists for —
+    rather than asserting a string both sides spell out."""
     from db import SAFE_ID_RE
-    from mentions import extract_doc_mentions, extract_ref_mentions
+    from mentions import extract_content_edges
 
     doc_out = unwrap_placeholder_brackets("[text](<526bf4e3-f775-439a-a2b0>)")
     dest = doc_out[doc_out.index("(") + 1:doc_out.rindex(")")]
     assert SAFE_ID_RE.match(dest)
-    assert extract_doc_mentions(doc_out) == ["526bf4e3-f775-439a-a2b0"]
+    assert extract_content_edges(doc_out) == [("526bf4e3-f775-439a-a2b0", "mention")]
 
     ref_out = unwrap_placeholder_brackets("![alt|800x600](<ref:abc_123>)")
-    assert extract_ref_mentions(ref_out) == ["abc_123"]
+    assert extract_content_edges(ref_out) == [("abc_123", "transclusion")]
 
 
 def test_unwrap_not_wired_into_import_normalize():

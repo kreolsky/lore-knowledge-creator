@@ -27,6 +27,7 @@ import type { ChatState, Set } from './types';
 function makeStore(sessionId = 's1') {
   let state = {
     activeSessionId: sessionId,
+    inboxQueue: [],
     sessions: [{
       session_id: sessionId, document_id: null, reference_id: null, user_id: 'u1',
       title: 't', model: 'm', system_prompt_id: null, context_ids: [],

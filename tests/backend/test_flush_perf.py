@@ -8,7 +8,7 @@ baseline, batched backlink events, and trailing-whitespace no-op.
 
 import pytest
 from collab.registry import _get_or_create_session
-from helpers import set_session_text
+from helpers import migrate_existing_rows, set_session_text
 
 from db import get_db
 
@@ -85,44 +85,39 @@ class TestDiffMentions:
         # The default kind set excludes note/chat-context.
         assert all(e["kind"] in ("mention", "transclusion", "attachment") for e in out_edges)
 
-        # A `ref:`-only edit rebuilds: pairs include ref: targets where the old
-        # bare-id detector (extract_doc_mentions) rejected them.
-        from mentions import extract_content_edges, extract_doc_mentions
+        # A `ref:`-only edit rebuilds: pairs include ref: targets.
+        from mentions import extract_content_edges
 
         assert extract_content_edges("[x](ref:abc123)") == [("abc123", "mention")]
-        assert extract_doc_mentions("[x](ref:abc123)") == []
 
         # Legacy rows written before the kind backfill coalesce NONE → 'mention'.
-        # Simulated exactly as a legacy DB reaches that state: the source's
-        # typed edges are cleared, the field is removed, kind-less edges are
-        # written, the field is re-defined (what startup schema apply does to
-        # pre-field rows — SurrealDB DEFAULT never retro-fills). DEFINE in
-        # finally: this test shares the schema with the rest of the suite — a
-        # failure between REMOVE and DEFINE would leave doc_mentions without
-        # `kind` and break every later kinded RELATE. RELATE endpoints use the
-        # backtick record form (as the production rebuild does): this SurrealDB
-        # version rejects `type::record(...)` calls parsed inline as edge
-        # endpoints. REMOVE FIELD alone is NOT the legacy state: it drops the
-        # definition, not the stored values, so the typed edges must be deleted
-        # too or `transclusion` survives the round-trip.
+        # Simulated as a legacy DB holds them: the source's typed edges are
+        # cleared, the field is widened to option<string> so kind-less edges
+        # can be written (v4 refuses re-narrowing over NONE rows, so REMOVE +
+        # re-DEFINE no longer stages it), and the read happens while they still
+        # hold NONE. Production DDL restored in finally: this test shares the
+        # schema with the rest of the suite. RELATE endpoints use the backtick
+        # record form (as the production rebuild does): SurrealDB rejects
+        # `type::record(...)` calls parsed inline as edge endpoints.
         test_db = await get_db()
-        await test_db.query("REMOVE FIELD kind ON doc_mentions")
+        await test_db.query("DEFINE FIELD OVERWRITE kind ON doc_mentions TYPE option<string>")
         try:
             await test_db.query(
                 f"DELETE doc_mentions WHERE in = documents:`{doc_id}`; "
                 f"RELATE documents:`{doc_id}`->doc_mentions->documents:`{targets[0]}`; "
                 f"RELATE documents:`{doc_id}`->doc_mentions->documents:`{targets[1]}`"
             )
+            resp = await client.get(
+                f"/api/documents/{doc_id}/edges",
+                params={"direction": "out"},
+                cookies={"lore_session": admin_token},
+            )
         finally:
             await test_db.query(
                 "DEFINE FIELD OVERWRITE kind ON doc_mentions TYPE string DEFAULT 'mention' "
                 "ASSERT $value IN ['mention', 'transclusion']"
+                + migrate_existing_rows("'mention'")
             )
-        resp = await client.get(
-            f"/api/documents/{doc_id}/edges",
-            params={"direction": "out"},
-            cookies={"lore_session": admin_token},
-        )
         assert resp.status_code == 200, resp.text
         coalesced = resp.json()["edges"]
         assert coalesced, "legacy rows stay readable"

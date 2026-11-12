@@ -14,7 +14,7 @@ export type MarkdownAction =
   | 'highlightColor'
   | 'insertTable'
   | 'openFind'
-  | 'workWithSelection';
+  | 'quoteToChat';
 
 export type HotkeyConfig = Record<string, MarkdownAction>;
 
@@ -42,5 +42,5 @@ export const DEFAULT_HOTKEYS: HotkeyConfig = {
   'Mod-o':       'highlightColor',
   'Shift-Mod-t': 'insertTable',
   'Mod-f':       'openFind',
-  'Mod-j':       'workWithSelection',
+  'Mod-j':       'quoteToChat',
 };

@@ -148,7 +148,7 @@ def surgical_splice_text(text, from_cp: int, to_cp: int, new_text: str,
     tb = fb + len(current[from_cp:to_cp].encode("utf-8"))
     if original_text is not None and current[from_cp:to_cp] != original_text:
         raise AppliedUnverifiedError(
-            "pinned-region edit range shifted by a concurrent edit — refresh to verify"
+            "edit range shifted by a concurrent edit — refresh to verify"
         )
     if tb > fb:
         del text[fb:tb]
@@ -222,7 +222,7 @@ def minimal_splice_text(text, new_content: str) -> None:
 
     The wholesale writers' primitive (restore, re-upload, REST update, workers):
     the old delete-all + insert re-created every item, so every Yjs RelativePosition
-    anchored in the text (note anchors, pinned regions) was orphaned. Here the
+    anchored in the text (note anchors) was orphaned. Here the
     common prefix/suffix is trimmed, the middle diffed line-wise, and a replaced
     line block diffed char-wise when both sides fit `_CHAR_DIFF_CAP` — so unchanged
     text keeps its items and every anchor on it survives. A middle with more than

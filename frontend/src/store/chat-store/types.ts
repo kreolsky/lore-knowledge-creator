@@ -1,6 +1,6 @@
 /** ChatState interface and Set/Get aliases for slice creators. */
 import type { PressedImageMeta } from '../../chat/attach-image';
-import type { ChatUIMode, ChatSession, ChatMessage, ChatFile, Reference, PinnedRegion, ReasoningCapability } from '../../types';
+import type { ChatUIMode, ChatSession, ChatMessage, ChatFile, Reference, ReasoningCapability } from '../../types';
 import type { ConversationVM, TurnRange } from './conversation-feed';
 import type { QueuedMessage } from '../../chat/inbox-queue';
 
@@ -63,7 +63,7 @@ export interface StreamingState {
 
 /**
  * Single options object for createSession (every entry point: ChatInput
- * lazy-create, startAgentChat, setSessionMode agent branch, "+"). Replaces the
+ * lazy-create, setSessionMode agent branch, "+"). Replaces the
  * prior 7-positional-arg signature.
  *
  * INVARIANT (explicit-null-vs-omitted): systemPromptId / parentSessionId use
@@ -84,17 +84,11 @@ export interface CreateSessionParams {
   // Created already out of the chat-recall search index.
   unindexed?: boolean;
   targetDocId?: string;
-  hasRegion?: boolean;
   // The ghost's explicit reasoning effort.
   // Only a REAL value is ever passed; omitted = Default (the POST leaves the
   // column absent). Unlike systemPromptId there is no null-vs-undefined
   // distinction to carry — both mean Default here.
   reasoningEffort?: string;
-  // The frontend-owned pinned region to persist for this session. Written to
-  // pending-selection (localStorage) SYNCHRONOUSLY right after the session becomes
-  // active — see the ordering INVARIANT in createSession.
-  // Passed by ChatInput.handleSend when materializing a ghost that has a pin.
-  region?: PinnedRegion;
 }
 
 export interface ChatState {
@@ -282,15 +276,6 @@ export interface ChatState {
   // the bridge — same rationale as agent_auto).
   ghostReasoningEffort: string | null;
 
-  // SYSTEM: selection-region-agent (ghost pin). The
-  // pinned region for the ZERO/GHOST chat (activeSessionId === null) — held IN-MEMORY,
-  // NOT localStorage.
-  // INVARIANT(persisted): the ghost region is in-memory only. Why: it must vanish on page refresh
-  // (localStorage would survive) and there is no session id to key a map by until the
-  // chat materializes; on first send it is transferred to pending-selection (localStorage)
-  // keyed by the new session id, mirroring the ghost-context snapshot model.
-  ghostRegion: PinnedRegion | null;
-
   // ARCH (agent_auto persistence): the 2-option apply-mode selector
   // (agent_confirm / agent_auto) is DERIVED from the persisted session row's
   // agent_auto via deriveUIMode() — not held in an in-memory map. The per-session
@@ -342,7 +327,7 @@ export interface ChatState {
   // preloadedMessages: when the sessions list piggybacked this session's
   // messages, commit them directly and skip the loadMessages round-trip.
   setActiveSession: (sessionId: string | null, preloadedMessages?: ChatMessage[]) => void;
-  updateSession: (sessionId: string, data: { title?: string; model?: string; system_prompt_id?: string | null; context_ids?: string[]; agent_auto?: boolean; has_region?: boolean; reasoning_effort?: string | null; document_id?: string | null }) => Promise<void>;
+  updateSession: (sessionId: string, data: { title?: string; model?: string; system_prompt_id?: string | null; context_ids?: string[]; agent_auto?: boolean; reasoning_effort?: string | null; document_id?: string | null }) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
 
   // Actions — messages
@@ -408,28 +393,6 @@ export interface ChatState {
   // (setSessionUIMode); a named prompt (systemPromptId != null) implies no mode
   // switch.
   setSessionMode: (systemPromptId?: string | null) => Promise<void>;
-  // see SYSTEM: selection-region-agent — open a pinned-region agent chat from an editor
-  // selection. Creates a has_region agent session + stores the Yjs RelativePosition
-  // pair (frontend-owned, localStorage) so the pin survives same-device reload.
-  startAgentChat: (payload: {
-    doc_id: string;
-    relFrom: unknown;
-    relTo: unknown;
-    from_cp: number;
-    to_cp: number;
-    text: string;
-  }) => Promise<void>;
-  // Unpin the active region: PATCH has_region=false (re-enables auto-apply, drops
-  // the containment constraint) + clear the localStorage anchor + remove highlight.
-  unpinRegion: (sessionId: string) => Promise<void>;
-  // Auto-unpin when the region's anchor is lost after a wholesale restore/import
-  // (distinct toast from a user-initiated unpin). Idempotent while pinned.
-  regionLost: (sessionId: string) => Promise<void>;
-  // Ghost-pin setters. setGhostRegion attaches an
-  // in-memory pin to the zero chat; clearGhostRegion drops it (the ✕ on the ghost pill,
-  // a lost anchor, a document change, materialization transfer, or reset()).
-  setGhostRegion: (region: PinnedRegion) => void;
-  clearGhostRegion: () => void;
   // Actions — utility
   reset: () => void;
 }

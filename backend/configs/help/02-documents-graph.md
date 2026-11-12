@@ -4,7 +4,7 @@
 
 Documents form a tree; top-level documents sit at the project root. The tree sets the structure (a mechanic inside a system, a system inside a section) and decides which references a document sees: its own and those of all its parents (see [References](help:references)).
 
-"Project Context", above the tree, is a special document: its references are visible from any document.
+The first row of the tree, named after the project, is the project's index document. Its references are visible from any document. It stands for the whole project: its `*.zip` download is the whole project, an API key created on it covers the whole project, and it cannot be published or moved (see [Access and publishing](help:access)).
 
 ## Moving
 
@@ -30,4 +30,6 @@ Links plus the hierarchy form the project graph. A document should link to the m
 
 ## The "Links" tab
 
-Outgoing links (to documents and external addresses) and incoming ones (documents that link here). Use it to check how a document is fitted into the project and to find everything that depends on it.
+Outgoing links (to documents and external addresses) and incoming ones (documents that link here), each split into sections by kind: mentions (ordinary links) and embeds. Hovering a row shows a preview. Links written inside [table](help:tables) cells count too. A document that was deleted stays in the lists of documents that linked to it, as a broken link, so you can see what to fix. Use the tab to check how a document is fitted into the project and to find everything that depends on it.
+
+Whether notes and your chats are listed in the tab is a project setting: "Settings" tab, "Interface" section.

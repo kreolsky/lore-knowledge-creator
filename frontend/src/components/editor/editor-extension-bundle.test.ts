@@ -36,7 +36,6 @@ function makeDeps(overrides: Partial<EditorExtensionDeps> = {}): EditorExtension
     roleRef: { current: 'primary' },
     isReferenceRef: { current: false },
     collabConnectionRef: { current: null },
-    regionResolver: () => null,
     ...overrides,
   };
 }

@@ -273,6 +273,7 @@ async def _record_compaction_mint_failed(assistant_msg_id: str, reason: str) -> 
 async def _record_turn_error(
     *, assistant_msg_id: str, session_id: str, reason: str, source: str,
     user_id: str = "", project_id: str = "", kind: str = "turn_error",
+    halt: str = "", message: str = "",
 ) -> None:
     """Telemetry: an Agent turn terminated in an error (`turn_error`). `source`
     is `error_event` (the reducer saw an explicit dsh `error` event or the fetch
@@ -285,6 +286,10 @@ async def _record_turn_error(
     try:
         from telemetry_store import record_telemetry_events
         detail = {"reason": (reason or "")[:500], "source": source, "session_id": session_id}
+        if halt:
+            detail["halt"] = halt[:100]
+        if message:
+            detail["message"] = message[:500]
         await record_telemetry_events([{
             "category": "agent",
             "kind": kind,

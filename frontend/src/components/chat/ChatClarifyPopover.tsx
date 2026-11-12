@@ -2,9 +2,9 @@
  * Floating "Clarify" affordance over a text selection inside an assistant message.
  *
  * ARCH: Bridges a selection in a `.chat-markdown` bubble to the composer via the
- * global event bus (`chat-clarify-insert`) — the same mechanism MarkdownContent
- * already uses for in-app navigation. No shared store state: the draft lives in
- * ChatInput's local `text`, and this component only emits quote + question.
+ * global event bus (`chat-quote-insert`) — the same mechanism MarkdownContent
+ * already uses for in-app navigation. This component only emits quote + question;
+ * ProjectPage's listener appends them to the store draft (see SYSTEM: chat-draft).
  *
  * Mount once (in ChatPanel). Reads the native DOM Selection directly (no CM6),
  * positions via portal + post-measure clamp, mirroring SelectionToolbar.
@@ -142,7 +142,7 @@ export function ChatClarifyPopover() {
     if (recording || transcribing) return;
     const q = question.trim();
     if (!q || !quoteRef.current) return;
-    emit('chat-clarify-insert', { quote: quoteRef.current, question: q });
+    emit('chat-quote-insert', { quote: quoteRef.current, question: q });
     hide();
   }, [question, hide, recording, transcribing]);
 

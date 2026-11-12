@@ -109,7 +109,7 @@ surreal/dump-*
 
 # Forensic snapshots of superseded plans (plan-snapshot.py, pruned at 30d) — local only:
 # committing dead drafts would recreate the plan residue the shape gate removes.
-.kilo/plans/superseded/
+plans/superseded/
 
 # Runtime artifacts of the harness home. The tracked home dir is never
 # bind-mounted whole: runtime state lives in the container layer, prod-shaped.

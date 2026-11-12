@@ -144,9 +144,8 @@ def is_ref_row(row: dict) -> bool:
 
     # WHY: strict identity check (is True), not truthy. Why: a half-typed or
     # legacy documents row may carry 1 / "true" / other non-boolean truthy values — a
-    # loose check would misclassify it as a reference. The schema backfill
-    # (UPDATE documents SET is_reference = false WHERE is_reference = NONE) keeps live
-    # rows boolean, so this is behavior-identical on backfilled data while still
+    # loose check would misclassify it as a reference. `is_reference` is a non-option
+    # bool, so live rows are boolean and this is behavior-identical on them while still
     # rejecting the non-bool shapes the INVARIANT exists to guard. Do NOT simplify to
     # `bool(row.get(...))` or `if row.get(...)`.
     """

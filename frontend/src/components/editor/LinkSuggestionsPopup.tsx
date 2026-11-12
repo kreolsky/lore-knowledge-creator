@@ -9,7 +9,6 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { EditorView } from '@codemirror/view';
-import { undo } from '@codemirror/commands';
 import { useAppStore } from '../../store/app-store';
 import { useEvent } from '../../hooks/useEvent';
 import { useNavMode } from '../../hooks/useNavMode';
@@ -28,6 +27,7 @@ import { PREVIEW_PICKER_MAX_HEIGHT } from '../../utils/preview-geometry';
 import { useTranslation } from '../../i18n';
 import { buildParentMap, sortDocumentsForChat, sortReferences } from '../../utils/document-sort';
 import { referenceFileUrl } from '../../utils/reference-url';
+import type { EventMap, LinkRevert } from '../../events/event-types';
 
 const POPUP_WIDTH = 340;
 
@@ -70,6 +70,7 @@ export function LinkSuggestionsPopup() {
   }, []);
   const listRef = useRef<HTMLDivElement>(null);
   const insertedRef = useRef(false);
+  const revertRef = useRef<LinkRevert | null>(null);
   const { isKeyboard, activateKeyboard } = useNavMode();
 
   // Mode derived from query
@@ -139,20 +140,30 @@ export function LinkSuggestionsPopup() {
 
   const clampedIndex = Math.max(0, Math.min(selectedIndex, linkItems.length - 1));
 
-  // On close: undo link formatting if no link was inserted, reset preview
+  // On close: remove the `[…]()` scaffold if no link was inserted, reset preview
   useEffect(() => {
     if (isOpen) return;
     setPreviewDocId(null);
     setPreviewRefId(null);
-    // Guard: targetViewRef is null on mount, so undo won't fire on init
-    if (!insertedRef.current && targetViewRef.current) {
-      undo(targetViewRef.current);
-      targetViewRef.current.focus();
+    const view = targetViewRef.current;
+    const revert = revertRef.current;
+    revertRef.current = null;
+    if (insertedRef.current || !view || !revert) return;
+    // WHY an explicit inverse change, not `undo`: a collab view has no CM6 history — its
+    // undo is the document-wide Y.UndoManager, whose capture window can merge the scaffold
+    // with the typing just before it. Applied only while the scaffold is still intact.
+    const { from, inserted, original } = revert;
+    if (view.state.sliceDoc(from, from + inserted.length) === inserted) {
+      view.dispatch({
+        changes: { from, to: from + inserted.length, insert: original },
+        selection: { anchor: from, head: from + original.length },
+      });
     }
+    view.focus();
   }, [isOpen]);
 
   // Listen for show-link-suggestions event
-  useEvent('show-link-suggestions', useCallback((detail: { pos: number; coords: { top: number; lineTop: number; left: number } | null; editorView: EditorView; labelPos?: number | null }) => {
+  useEvent('show-link-suggestions', useCallback((detail: EventMap['show-link-suggestions']) => {
     setInsertPos(detail.pos);
     setLabelPos(detail.labelPos ?? null);
     setCoords(detail.coords);
@@ -162,6 +173,7 @@ export function LinkSuggestionsPopup() {
     setIsOpen(true);
     insertedRef.current = false;
     targetViewRef.current = detail.editorView ?? null;
+    revertRef.current = detail.revert;
   }, [documents]));
 
   const close = useCallback(() => setIsOpen(false), []);

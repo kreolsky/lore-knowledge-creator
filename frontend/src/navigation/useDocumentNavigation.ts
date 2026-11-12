@@ -20,9 +20,9 @@ export function useDocumentNavigation(): void {
   // Both handlers fire on the bus; this one must early-return so the public
   // surface's in-place hydrate is the only one that runs (and because the store
   // lookups in openDocument assume the authed documents/currentProject state).
-  useEvent('navigate-to-document', useCallback(({ documentId, restore, via }) => {
+  useEvent('navigate-to-document', useCallback(({ documentId, restore, via, fragment }) => {
     if (isPublicShare) return;
     if (via) reportOpen(documentId, via);
-    openDocument(documentId, { restore, navigate });
+    openDocument(documentId, { restore, navigate, fragment });
   }, [navigate, isPublicShare]));
 }

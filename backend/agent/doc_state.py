@@ -102,6 +102,22 @@ async def resolve_live_doc_state(doc_id: str) -> tuple[str, str]:
     return str(get_text(live_doc)), capture_tables_json(live_doc)
 
 
+def snapshot_text(content: str, tables_json: str | None) -> str:
+    """GFM projection of a stored state (raw anchors + tables_json): tables inlined.
+
+    The ONE historical projection — version reads, diffs and version stats all pass
+    BOTH sides through it, so a diff never compares two different projections.
+    # INVARIANT(corruption): builds a THROWAWAY Doc only. Why: apply_tables_json mints
+    # fresh row/column ids — writing that into a live Doc would rewrite its tables.
+    """
+    from table_serialize import apply_tables_json, expand_tables
+    from ydoc_store import seed_doc_from_content
+
+    doc = seed_doc_from_content(content)
+    apply_tables_json(doc, tables_json)
+    return expand_tables(doc)
+
+
 async def route_document_content(
     *, doc_id: str, new_content: str, project_id: str | None,
     tables_json: str | None = None, finalize_body: str | None = None,

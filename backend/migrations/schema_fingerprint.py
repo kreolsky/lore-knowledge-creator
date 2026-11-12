@@ -33,9 +33,8 @@ class SchemaFingerprintError(RuntimeError):
 
     Raised from run_migrations() (via _enforce_fingerprint_fatal) when the fingerprint
     check reports `removed` drift on a boot where no migration ran — the
-    stale-schema-restore signature. RuntimeError base matches the SdkContractError
-    boot-refusal idiom in main.py lifespan: awaited unguarded, so raising refuses
-    startup.
+    stale-schema-restore signature. Awaited unguarded in main.py lifespan, so
+    raising refuses startup.
     """
 
 # Fingerprint granularity: table presence + each declared field's TYPE only. Intentionally

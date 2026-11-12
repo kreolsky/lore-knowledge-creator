@@ -72,6 +72,8 @@
 
 /* ─── THEME VARIABLES ─────────────────── */
 :root {
+  /* Text column width; useTextWidthHotkey overrides it per project. */
+  --content-max-width: 52.75rem;
   --bg: #ecebe7;
   --surface: #e4e2dd;
   /* Midpoint between --bg and --surface (transclusion band background). */
@@ -978,7 +980,7 @@ html.dark .download-menu[data-theme="blue"] > button:not(:hover) { color: var(--
 }
 .editor-content .cm-editor .cm-content {
   padding: 0;
-  max-width: 844px;
+  max-width: var(--content-max-width);
   margin-left: auto;
   margin-right: auto;
 }

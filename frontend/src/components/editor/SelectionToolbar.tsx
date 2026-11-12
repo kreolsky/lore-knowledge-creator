@@ -4,12 +4,10 @@ import type React from 'react';
 import { useState, useEffect, useCallback, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { EditorView } from '@codemirror/view';
-import { Bold, Italic, Strikethrough, TextQuote, Code, FileCode2, Link2, StickyNote, FileText, ChevronDown, List, ListOrdered, ListChecks, Bot } from 'lucide-react';
-import { markdownActionRegistry, applyColorHighlight, getLastHighlightColor, createReference, HIGHLIGHT_COLORS } from './markdown-actions';
+import { Bold, Italic, Strikethrough, TextQuote, Code, FileCode2, Link2, StickyNote, FileText, ChevronDown, List, ListOrdered, ListChecks, MessageSquareQuote } from 'lucide-react';
+import { markdownActionRegistry, applyColorHighlight, getLastHighlightColor, createReference, HIGHLIGHT_COLORS, canQuoteToChat, isHostTextView } from './markdown-actions';
 import { isPanelPreviewView } from '../../editor/editor-plugins';
 import { selectedAtomicRange } from './live-preview/atomic-delete-guard';
-import { agentAction } from './markdown-actions-agent';
-import { boundText, isHostText } from './note-anchor-wiring';
 import { useUIStore } from '../../store/ui-store';
 import { useAppStore } from '../../store/app-store';
 import { usePublicCanNote } from '../../store/public-notes-store';
@@ -121,10 +119,9 @@ export default function SelectionToolbar() {
   const getEditorView = useEditorView();
   const selectionEmpty = useUIStore(s => s.selectionEmpty);
   const accessLevel = useAppStore(s => s.accessLevel);
-  // ARCH: full-access users get the formatting toolbar AND the Agent button.
-  // A commentator may note but not edit: formatting and Agent stay hidden (Agent
-  // cannot apply proposals anyway: backend returns 403) and the bar shows ONE wide
-  // labeled «Add note» button — so does a guest on a public link with comments on.
+  // ARCH: full-access users get the formatting toolbar.
+  // A commentator may note but not edit: formatting stays hidden and the bar shows
+  // ONE wide labeled «Add note» button — so does a guest on a public link with comments on.
   // Readonly sees nothing.
   // Why the label: a lone icon is too small to notice when it is the only action.
   const isPublicShare = useUIStore(s => s.isPublicShare);
@@ -134,6 +131,7 @@ export default function SelectionToolbar() {
   // The public guest's bar: one strong-yellow "Add note" button under the pointer.
   const guestBar = isPublicShare && !canEdit;
   const [visible, setVisible] = useState(false);
+  const [offscreen, setOffscreen] = useState(false);
   const [anchor, setAnchor] = useState<ToolbarAnchor>({ centerX: 0, belowTop: 0, aboveBottom: 0 });
   const [styles, setStyles] = useState<ActiveStyles>({ headingLevel: 0, bold: false, italic: false, strikethrough: false, inlineCode: false, quote: false, bullet: false, numbered: false, checkbox: false });
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -167,6 +165,7 @@ export default function SelectionToolbar() {
     if (!a) return;
     setAnchor(a);
     setStyles(detectActiveStyles(view));
+    setOffscreen(false);
     setVisible(true);
   }, [hide, getEditorView]);
 
@@ -191,19 +190,23 @@ export default function SelectionToolbar() {
       const dom = getEditorView()?.scrollDOM;
       if (!dom || dom === attachedDomRef.current) return;
       attachedDomRef.current?.removeEventListener('mousedown', onEditorMouseDown);
-      attachedDomRef.current?.removeEventListener('mouseup', onEditorMouseUp);
       dom.addEventListener('mousedown', onEditorMouseDown);
-      dom.addEventListener('mouseup', onEditorMouseUp);
       attachedDomRef.current = dom;
     };
+
+    // WHY on document, not scrollDOM: a drag released outside the editor never
+    // delivers mouseup to scrollDOM, so the drag never ended and the selection made
+    // got no toolbar until the user collapsed it and selected again.
+    const onDocMouseUp = (e: MouseEvent) => { if (mouseDownRef.current) onEditorMouseUp(e); };
+    document.addEventListener('mouseup', onDocMouseUp);
 
     const onLinkPopup = () => hide();
     on('show-link-suggestions', onLinkPopup);
 
     return () => {
       off('show-link-suggestions', onLinkPopup);
+      document.removeEventListener('mouseup', onDocMouseUp);
       attachedDomRef.current?.removeEventListener('mousedown', onEditorMouseDown);
-      attachedDomRef.current?.removeEventListener('mouseup', onEditorMouseUp);
       attachedDomRef.current = null;
     };
   }, [hide, showToolbar, getEditorView]);
@@ -236,6 +239,29 @@ export default function SelectionToolbar() {
     on('editor-selection-change', onSelChange);
     return () => off('editor-selection-change', onSelChange);
   }, [visible, hide, getEditorView]);
+
+  // WHY: the bar is position:fixed, so its anchor is a viewport point — re-derive it
+  // on any ancestor scroll (capture phase) or it stays put while the text moves away.
+  // A selection scrolled out of the editor's visible box hides the bar until it returns.
+  // The guest bar is exempt: it deliberately stays under the pointer.
+  useEffect(() => {
+    if (!visible || guestBar) return;
+    let frame = 0;
+    const onScroll = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const v = getEditorView();
+        if (!v) return;
+        const a = computeAnchor(v);
+        const box = v.scrollDOM.getBoundingClientRect();
+        const inView = !!a && a.belowTop - 6 > box.top && a.aboveBottom + 6 < box.bottom;
+        setOffscreen(!inView);
+        if (a) setAnchor(a);
+      });
+    };
+    document.addEventListener('scroll', onScroll, true);
+    return () => { cancelAnimationFrame(frame); document.removeEventListener('scroll', onScroll, true); };
+  }, [visible, guestBar, getEditorView]);
 
   // Escape to dismiss
   useEffect(() => {
@@ -296,12 +322,17 @@ export default function SelectionToolbar() {
   }, [visible, anchor, dropdownOpen, colorPickerOpen, guestBar, pointer]);
 
   const view = getEditorView();
-  if (!visible || !view || !(canEdit || canNoteOnly)) return null;
+  if (!visible || offscreen || !view || !(canEdit || canNoteOnly)) return null;
   // An artifact's source: markdown formatting would corrupt the markup, and an
   // artifact has no notes.
   if (isArtifactSourceView(view)) return null;
-  const bound = boundText(view);
-  const inHostText = !bound || isHostText(bound);
+
+  // Same gate the action applies (chat access, host text only); hidden, not disabled.
+  const quoteButton = canQuoteToChat() && isHostTextView(view) && (
+    <button className="sel-toolbar-btn" onClick={() => { markdownActionRegistry.quoteToChat(view); hide(); }} title={t('quoteToChat')} aria-label={t('quoteToChat')}>
+      <MessageSquareQuote size={ICON_SIZE} />
+    </button>
+  );
 
   // WHY: formatting writes through the view, so it is offered only on a view that takes
   // input — a full member's editor that is not editable yet (collab joining) or any more
@@ -335,6 +366,7 @@ export default function SelectionToolbar() {
           <StickyNote size={ICON_SIZE} />
           <span>{t('addNote')}</span>
         </button>
+        {quoteButton}
       </div>,
       document.body
     );
@@ -508,16 +540,7 @@ export default function SelectionToolbar() {
       <button className="sel-toolbar-btn" onClick={() => { createReference(view); hide(); }} title={t('createReferenceTitle')}>
         <FileText size={ICON_SIZE} />
       </button>
-
-      {/* see SYSTEM: selection-region-agent — open a pinned-region agent chat for the
-          selection. Full-access only (the toolbar is already canEdit-gated above); absent
-          in a table cell, where agentAction refuses. */}
-      {inHostText && <>
-        <div className="separator" />
-        <button className="sel-toolbar-btn" onClick={() => { agentAction(view); hide(); }} title={t('selectionToolbarAgent')} aria-label={t('selectionToolbarAgent')}>
-          <Bot size={ICON_SIZE} />
-        </button>
-      </>}
+      {quoteButton}
     </div>,
     document.body
   );

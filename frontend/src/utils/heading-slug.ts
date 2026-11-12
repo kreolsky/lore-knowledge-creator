@@ -46,8 +46,7 @@ export function resolveSlugToLine(headings: HeadingItem[], slug: string): number
 
 /** Absolute shareable URL for a document, optionally anchored to a heading slug.
  *
- * Canonical /docs/<document_id> URL (plan "public-document-ids") — one shape for
- * every audience. The projectId is no longer part of the document URL. */
+ * Canonical /docs/<document_id> URL — one shape for every audience. */
 export function buildHeadingUrl(documentId: string, slug?: string): string {
   const base = `${window.location.origin}/docs/${documentId}`;
   return slug ? `${base}#${encodeURIComponent(slug)}` : base;

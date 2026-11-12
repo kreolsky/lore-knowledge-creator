@@ -373,12 +373,11 @@ async def _connect_test_db() -> AsyncSurreal:
     # block above must run first (see the INVARIANT at the test_harness_turn
     # import below).
     import config
-    from db.pool import surreal_password
+    from db.pool import open_surreal
 
     for attempt in range(3):
         try:
-            conn = AsyncSurreal(config.SURREAL_URL)
-            await conn.signin({"username": config.SURREAL_USER, "password": surreal_password()})
+            conn = open_surreal(config.SURREAL_URL)
             await conn.use("lore_test", TEST_DB_NAME)
             return conn
         except Exception:
@@ -403,7 +402,7 @@ async def _get_test_db() -> AsyncSurreal:
         try:
             if getattr(conn, "loop", None) is not loop:
                 raise RuntimeError("loop mismatch")
-            if not probe_answer_is_healthy(await conn.query(PROBE_SQL)):
+            if not probe_answer_is_healthy((await conn.query(PROBE_SQL))[0]):
                 raise RuntimeError("probe desync")
             return conn
         except Exception:
@@ -509,7 +508,8 @@ async def test_db():
                 _patched_reset_modules.append((mod, original_reset_db))
                 mod.reset_db = patched_reset_db
 
-    yield db
+    from db import get_timed_proxy
+    yield get_timed_proxy(db)
 
     try:
         await db.query(_DELETE_ALL_SQL)

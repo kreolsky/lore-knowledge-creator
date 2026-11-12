@@ -20,7 +20,7 @@ What you can upload:
 
 ## Who sees references
 
-A document sees its own references and those of all its parents up the tree; references of "Project Context" are visible from any document. Put shared material higher up, specific material on the specific document.
+A document sees its own references and those of all its parents up the tree; references of the project's index document (the first row of the tree, named after the project) are visible from any document. Put shared material higher up, specific material on the specific document.
 
 A reference can be moved to another document: "Change parent document" on the reference's card. A reference can be renamed (the pencil or a double click on its title), and dragging in the list changes the order.
 

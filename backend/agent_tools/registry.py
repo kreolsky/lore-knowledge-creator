@@ -258,22 +258,6 @@ def image_result_names() -> frozenset[str]:
     return frozenset(e.name for e in REGISTRY.values() if e.image_result)
 
 
-def _is_region_capable(entry) -> bool:
-    """True when the tool can be constrained to a pinned text region — DERIVED from
-    the request model carrying a `region` field, never a hand-kept list.
-
-    # WHY: the set is exactly {edit_document, append_to_document} today, and the next
-    # region-capable tool joins it by declaring the field rather than by someone
-    # remembering to edit a set here (the mirrored-literal drift the testing rules
-    # call out). Everything else that mutates is, by construction, outside a text
-    # region. Lives in the registry (not the route generator) because it is pure
-    # declaration introspection — the pin gate and the REGION_TOOLS derivation both
-    # read it here, keeping routes out of the taxonomy's reach.
-    """
-    model = entry.request_model
-    return bool(model is not None and "region" in model.model_fields)
-
-
 def resolve_handler(entry: ToolEntry) -> Callable:
     """Import and return the entry's handler (cached). The handler keeps its
     @track_agent_tool telemetry wrapper — both the HTTP route and in-process
