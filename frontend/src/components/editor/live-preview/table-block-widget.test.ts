@@ -8,7 +8,7 @@ import * as Y from 'yjs';
 import type { EditorView } from '@codemirror/view';
 import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView as EV } from '@codemirror/view';
-import { createTable, readTableShape, TABLE_LOCAL_ORIGIN } from './table-block-model';
+import { createTable, readTableModel, readTableShape, TABLE_LOCAL_ORIGIN } from './table-block-model';
 import { tableAnchor } from './table-document-ops';
 import { createDocumentUndo } from '../../../collab/document-undo';
 import { createYjsExtension } from '../../../collab/yjs-binding';
@@ -93,6 +93,19 @@ describe('TableBlockWidget — a host that is not editable', () => {
     expect(menu.defaultPrevented).toBe(false);
     expect(document.querySelector('[role="menu"]')).toBeNull();
     expect(readTableShape(doc, id)).toEqual({ rows: 2, cols: 2 });
+  });
+
+  // TEST-WHY: refused-principal — a commentator must never enter cell selection mode, whose Delete would clear cells the server then drops.
+  it('a commentator is denied cell selection: no range, no tabindex, Delete changes no cell', () => {
+    const { parent, doc, id } = mountTable({ commentator: true });
+    const wrap = parent.querySelector('.cm-table-block-wrap') as HTMLElement;
+    firstCell(parent).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, shiftKey: true }));
+    for (const key of ['Escape', 'Delete']) {
+      wrap.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    }
+    expect(parent.querySelector('.cm-table-cell-selected')).toBeNull();
+    expect(wrap.hasAttribute('tabindex')).toBe(false);
+    expect(readTableModel(doc, id)?.rows).toEqual([['a', 'b'], ['c', 'd']]);
   });
 
   // TEST-WHY: refused-principal — access dropping while a cell is open must leave no live editor, since the eq() widget is never rebuilt.

@@ -79,6 +79,7 @@ import {
   readColumnWidths,
   getCellText,
   ensureCell,
+  clearCells,
   cellKey,
   type ColumnWidth,
   type RowId,
@@ -96,9 +97,20 @@ import {
   deleteWholeTable,
   liveOrder,
   tabTarget,
+  type CellAddr,
   type CellOp,
   type CellOrder,
 } from './table-cell-actions';
+import {
+  cellsIn,
+  moveHead,
+  NATIVE_KEY_ACTIONS,
+  sameCell,
+  selectionKeyAction,
+  selectionRect,
+  type CellSelection,
+  type SelectionAction,
+} from './table-cell-selection';
 
 /**
  * Markdown cells rendered synchronously when a table is built; the rest are upgraded from
@@ -170,6 +182,11 @@ export class TableBlockWidget extends WidgetType {
   private renderedRowCount = 2;
   /** Closer of the open cell context menu; null when none. */
   private closeMenu: (() => void) | null = null;
+  /** Cell selection mode (table-cell-selection.ts): local UI state, never in Yjs or
+   *  awareness; ids only, resolved against the rendered order on every use. */
+  private selection: CellSelection | null = null;
+  /** Disarms the cross-cell drag listener of the press in progress; null when none. */
+  private endCellDrag: (() => void) | null = null;
   constructor(readonly tableId: string, readonly label: string) {
     super();
   }
@@ -202,8 +219,16 @@ export class TableBlockWidget extends WidgetType {
       focusedCaret: (changed) => this.focusedCaret(changed),
       restoreCaret: (caret) => this.restoreCaret(caret),
       isVisible: () => !!this.wrap?.isConnected && this.wrap.getClientRects().length > 0,
+      repaintChanged: (changed) => this.repaintChanged(changed),
     });
     wrap.addEventListener('mousedown', (e) => this.placeCaretBeside(e));
+    wrap.addEventListener('keydown', (e) => this.onSelectionKey(e));
+    wrap.addEventListener('focusout', (e) => {
+      if (e.target !== wrap || !this.selection) return;
+      // WHY deferred: a window switch blurs the wrap but leaves it the active element — the
+      // selection survives that; focus moving anywhere else ends it.
+      setTimeout(() => { if (document.activeElement !== wrap) this.leaveSelection(); }, 0);
+    });
     // WHY: prefer the facet doc (snapshot preview's captured tables) over the live
     // handle so a preview renders ITS table state, not the editor's current one.
     this.doc = view.state.facet(tableDocSource);
@@ -350,6 +375,8 @@ export class TableBlockWidget extends WidgetType {
     // A patch may have recreated the current cell's host (a header swap) — re-apply the
     // panel's current cell match; idempotent on untouched cells.
     if (this.currentCellMatch) this.applyCurrentCellMatch(this.currentCellMatch);
+    // Rebuilt cells lose their classes; a removed anchor/head row or column ends the selection.
+    if (this.selection) this.paintSelection();
     this.scheduleDeferredRenders();
     // New cell hosts lay out over the next frame — re-measure so CM6 reserves the
     // table's real height (see the cellMeasureListener WHY on overflow/clicks).
@@ -594,6 +621,11 @@ export class TableBlockWidget extends WidgetType {
       if (e.button !== 0 || !this.canEdit()) { if (noteId) openNoteThread(noteId); return; }
       e.stopPropagation();
       if (target.closest('.cm-table-block-col-resize')) return;
+      // Shift+press on ANOTHER cell (or any cell while selecting) selects; inside the focused
+      // cell it stays CM6's native text-selection extend below.
+      if (e.shiftKey && this.shiftPressSelects({ rowId, colId })) { e.preventDefault(); return; }
+      this.leaveSelection();
+      this.armCellDrag(e, { rowId, colId });
       // Click inside an ALREADY-MOUNTED live cell editor → let CM6 handle it natively.
       // (The static placeholder also carries `.cm-table-block-cell-editor`, so guard on the
       // editor actually existing — otherwise a first click on a lazy cell would bail here.)
@@ -679,6 +711,7 @@ export class TableBlockWidget extends WidgetType {
           hostView: () => this.view,
           tabStep: (step) => this.tabStep(rowId, colId, step),
           backspaceRow: (cell) => this.backspaceRow(cell, rowId, colId),
+          selectCell: () => this.selectCell({ rowId, colId }),
         }),
       }),
     });
@@ -904,6 +937,9 @@ export class TableBlockWidget extends WidgetType {
     this.tbodyEl = null;
     this.closeMenu?.();
     this.boxEl = null;
+    this.endCellDrag?.();
+    this.selection = null;
+    this.wrap?.removeAttribute('tabindex');
   }
 
   private scheduleDeferredRenders(): void {
@@ -961,8 +997,12 @@ export class TableBlockWidget extends WidgetType {
     e.stopPropagation();
     const order = liveOrder(this.doc, this.tableId);
     if (!order) return;
+    // A right-click inside the selection keeps it; the entries still act on the clicked cell.
+    const selected = this.selectedCells();
+    const inSelection = !!selected?.some((c) => sameCell(c, { rowId, colId }));
+    if (!inSelection) this.leaveSelection();
     // WHY: the menu acts on this cell — focus it (caret at the click) so the target is visible.
-    const cell = this.ensureCellEditor(rowId, colId);
+    const cell = inSelection ? null : this.ensureCellEditor(rowId, colId);
     if (cell) {
       const pos = cell.posAtCoords({ x: e.clientX, y: e.clientY }, false) ?? cell.state.doc.length;
       cell.focus();
@@ -976,7 +1016,8 @@ export class TableBlockWidget extends WidgetType {
     const deleteTable = () => {
       if (this.doc && this.canEdit()) void deleteWholeTable(this.doc, this.tableId, this.label, this.view);
     };
-    this.closeMenu = openCellMenu(e.clientX, e.clientY, cellMenuEntries(this.tableId, order, rowId, colId, run, deleteTable));
+    this.closeMenu = openCellMenu(e.clientX, e.clientY, cellMenuEntries(
+      this.tableId, order, rowId, colId, inSelection ? selected : null, run, deleteTable));
   }
 
   /**
@@ -995,6 +1036,246 @@ export class TableBlockWidget extends WidgetType {
     const order = this.canEdit() ? liveOrder(this.doc, this.tableId) : null;
     if (!order || !this.doc) return false;
     return backspaceRow(this.doc, this.tableId, order, cell, rowId, colId, (to) => this.focusCell(to.rowId, to.colId));
+  }
+
+  // ── Cell selection: state, paint, gestures. Range math and the key table live in
+  //    table-cell-selection.ts. ──
+
+  /** The order the DOM shows — the cells a selection paints. */
+  private renderedOrder(): CellOrder {
+    return { rowIds: this.rowIds, colIds: this.colIds };
+  }
+
+  /** The focused mounted cell, or null. */
+  private focusedCell(): CellAddr | null {
+    const at = this.activeCell;
+    return at && this.cellViews.get(cellKey(at.rowId, at.colId))?.hasFocus ? at : null;
+  }
+
+  /** Every selected cell, row-major; null without a (still valid) selection. */
+  private selectedCells(): CellAddr[] | null {
+    const order = this.renderedOrder();
+    const rect = this.selection ? selectionRect(order, this.selection) : null;
+    return rect ? cellsIn(order, rect) : null;
+  }
+
+  /**
+   * Enter or move selection mode. The wrap holds DOM focus; cells stay placeholders.
+   * WHY tabindex only while selecting: a permanent one would make every press inside the
+   * table that is not prevented (a viewer's click, the scrollbar) focus the wrap instead
+   * of the document.
+   */
+  private enterSelection(sel: CellSelection): void {
+    const wrap = this.wrap;
+    if (!wrap || !this.canEdit()) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== wrap && wrap.contains(active)) active.blur();
+    if (!this.setSelection(sel)) return;
+    wrap.tabIndex = -1;
+    if (document.activeElement !== wrap) wrap.focus({ preventScroll: true });
+  }
+
+  /** Store and paint `sel`, head scrolled into view; false (and selection mode left) when
+   *  its anchor or head is no longer rendered. */
+  private setSelection(sel: CellSelection): boolean {
+    if (!selectionRect(this.renderedOrder(), sel)) { this.leaveSelection(); return false; }
+    this.selection = sel;
+    this.paintSelection();
+    this.cells.get(cellKey(sel.head.rowId, sel.head.colId))?.el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    return true;
+  }
+
+  private leaveSelection(): void {
+    if (!this.selection && !this.wrap?.hasAttribute('tabindex')) return;
+    this.selection = null;
+    this.paintSelection();
+    this.wrap?.removeAttribute('tabindex');
+  }
+
+  private paintSelection(): void {
+    for (const el of this.wrap?.querySelectorAll('.cm-table-cell-selected') ?? []) {
+      el.classList.remove('cm-table-cell-selected', 'cm-table-cell-selection-anchor');
+    }
+    const sel = this.selection;
+    if (!sel) return;
+    const cells = this.selectedCells();
+    if (!cells) {
+      // A peer removed the anchor's or head's row/column: the caret goes after the table,
+      // never to the page body where the keyboard reaches nothing.
+      const hadFocus = document.activeElement === this.wrap;
+      this.leaveSelection();
+      if (hadFocus) this.placeCaretAfterTable();
+      return;
+    }
+    for (const c of cells) this.cells.get(cellKey(c.rowId, c.colId))?.el.classList.add('cm-table-cell-selected');
+    this.cells.get(cellKey(sel.anchor.rowId, sel.anchor.colId))?.el.classList.add('cm-table-cell-selection-anchor');
+  }
+
+  /** Esc in a cell editor: select that cell. False = refused (the key falls through). */
+  private selectCell(at: CellAddr): boolean {
+    this.enterSelection({ anchor: at, head: at });
+    return this.selection !== null;
+  }
+
+  /** Shift+press on `at`: true when it selected (the press is consumed). */
+  private shiftPressSelects(at: CellAddr): boolean {
+    if (this.selection) {
+      this.enterSelection({ anchor: this.selection.anchor, head: at });
+      return true;
+    }
+    const focused = this.focusedCell();
+    if (focused && sameCell(focused, at)) return false;
+    this.enterSelection({ anchor: focused ?? at, head: at });
+    return true;
+  }
+
+  /** This table's cell under the pointer, or null. */
+  private cellAtPoint(x: number, y: number): CellAddr | null {
+    const el = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-row-id][data-col-id]');
+    const rowId = el?.dataset.rowId as RowId | undefined;
+    const colId = el?.dataset.colId as ColId | undefined;
+    if (!el || !rowId || !colId || this.cells.get(cellKey(rowId, colId))?.el !== el) return null;
+    return { rowId, colId };
+  }
+
+  /**
+   * A left press in `from` arms a cross-cell drag: once the held pointer reaches ANOTHER
+   * cell of this table the gesture becomes a cell selection and follows the pointer until
+   * release; within one cell it stays a text selection. A press inside a mounted cell's
+   * existing text selection is a text drag-and-drop — never armed.
+   */
+  private armCellDrag(e: MouseEvent, from: CellAddr): void {
+    const view = this.cellViews.get(cellKey(from.rowId, from.colId));
+    if (view?.state.selection.ranges.some((r) => !r.empty)) {
+      const pos = view.posAtCoords({ x: e.clientX, y: e.clientY }, false);
+      if (view.state.selection.ranges.some((r) => !r.empty && pos >= r.from && pos <= r.to)) return;
+    }
+    this.endCellDrag?.();
+    const drag = new AbortController();
+    let selecting = false;
+    const move = (ev: MouseEvent) => {
+      if (!(ev.buttons & 1)) { drag.abort(); return; }
+      const to = this.cellAtPoint(ev.clientX, ev.clientY);
+      if (!to || (!selecting && sameCell(to, from))) return;
+      ev.preventDefault();
+      if (!selecting) {
+        selecting = true;
+        this.enterSelection({ anchor: from, head: to });
+      } else if (this.selection && !sameCell(to, this.selection.head)) {
+        this.setSelection({ anchor: this.selection.anchor, head: to });
+      }
+    };
+    document.addEventListener('mousemove', move, { signal: drag.signal });
+    document.addEventListener('mouseup', () => drag.abort(), { signal: drag.signal });
+    const end = () => drag.abort();
+    drag.signal.addEventListener('abort', () => { if (this.endCellDrag === end) this.endCellDrag = null; });
+    this.endCellDrag = end;
+  }
+
+  /**
+   * A keydown on the wrap in selection mode. A handled key never bubbles; an unhandled
+   * one does, so the app's window-level hotkeys keep working (the host ignores it —
+   * `ignoreEvent`). Typing and Mod-v keep their default: the browser delivers them into
+   * the head cell the action focuses.
+   */
+  private onSelectionKey(e: KeyboardEvent): void {
+    const sel = this.selection;
+    if (!sel || e.target !== this.wrap || e.isComposing) return;
+    const action = selectionKeyAction(e);
+    if (!action) return;
+    e.stopPropagation();
+    if (!NATIVE_KEY_ACTIONS.has(action.kind)) e.preventDefault();
+    if (!this.canEdit()) { this.leaveSelection(); return; }
+    this.runSelectionAction(action, sel);
+  }
+
+  private runSelectionAction(action: SelectionAction, sel: CellSelection): void {
+    const order = this.renderedOrder();
+    const { head } = sel;
+    switch (action.kind) {
+      case 'move': {
+        const next = moveHead(order, sel, action.dRow, action.dCol, action.extend);
+        if (next) this.setSelection(next); else this.leaveSelection();
+        return;
+      }
+      case 'tab': {
+        const to = this.doc ? tabTarget(this.doc, this.tableId, order, head.rowId, head.colId, action.step, false) : null;
+        if (to) this.setSelection({ anchor: to, head: to });
+        return;
+      }
+      case 'edit':
+      case 'type':
+        // WHY left first: the focus transfer fires the wrap's focusout, which must see no selection.
+        this.leaveSelection();
+        this.focusCell(head.rowId, head.colId);
+        return;
+      case 'paste': {
+        // A selected cell is the whole cell: the native paste lands over its whole text.
+        this.leaveSelection();
+        const view = this.ensureCellEditor(head.rowId, head.colId);
+        view?.focus();
+        view?.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
+        return;
+      }
+      case 'clear':
+        this.clearSelectedCells();
+        return;
+      case 'undo':
+      case 'redo':
+        if (this.doc) documentUndo(this.doc)?.[action.kind]();
+        return;
+      case 'exit':
+        this.leaveSelection();
+        this.placeCaretAfterTable();
+        return;
+    }
+  }
+
+  /** Delete / Backspace: every selected cell emptied as ONE undo step (images and note
+   *  anchors included — a selected cell is the whole cell); the selection stays. */
+  private clearSelectedCells(): void {
+    const cells = this.selectedCells();
+    if (!cells || !this.doc) return;
+    // WHY wired here too: the popped listener repaints this step's placeholders on undo,
+    // and it is otherwise wired only by the first cell mount.
+    const undoManager = documentUndo(this.doc);
+    if (undoManager) wireCellCaret(undoManager);
+    clearCells(this.doc, this.tableId, cells);
+    this.repaintLazy(cells.map((c) => cellKey(c.rowId, c.colId)));
+  }
+
+  /** An undo/redo step changed `changed`: repaint the placeholders it wrote. */
+  private repaintChanged(changed: ReadonlyMap<unknown, unknown>): void {
+    if (!this.doc || this.readOnly) return;
+    const keys = [...this.cells]
+      .filter(([key, slot]) => !this.cellViews.has(key) && changed.has(this.slotText(slot)))
+      .map(([key]) => key);
+    this.repaintLazy(keys);
+  }
+
+  /** Re-render the unmounted placeholders among `keys` from their live text; a mounted
+   *  cell is already live through yCollab. */
+  private repaintLazy(keys: readonly string[]): void {
+    let changed = false;
+    for (const key of keys) {
+      const slot = this.cells.get(key);
+      if (!slot || this.cellViews.has(key)) continue;
+      // WHY clamped: the find index republishes after the write, so its ranges still name
+      // the old text — a range past the new end throws in the static render.
+      const length = this.slotText(slot)?.length ?? 0;
+      this.repaintPlaceholder(slot, this.cellMarksFor(key)?.filter((r) => r.to <= length));
+      changed = true;
+    }
+    if (changed) this.view?.requestMeasure();
+  }
+
+  /** The host caret right after the table, host focused. */
+  private placeCaretAfterTable(): void {
+    const view = this.view;
+    if (!view || !this.wrap) return;
+    const range = atomicRangeAt(view.state, view.posAtDOM(this.wrap));
+    view.focus();
+    if (range) view.dispatch({ selection: { anchor: range.to } });
   }
 
   /** Orphan anchor (no model / broken model) → explicit inline error + remove affordance. */

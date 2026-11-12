@@ -25,6 +25,8 @@ export interface CellCaretHost {
   restoreCaret(caret: CellCaret): void;
   /** On screen now — the inline widget hidden behind an open table view is not. */
   isVisible(): boolean;
+  /** Re-render every unmounted cell placeholder whose Y.Text is among `changed`. */
+  repaintChanged(changed: ReadonlyMap<unknown, unknown>): void;
 }
 
 const CELL_CARET = Symbol('table-cell-caret');
@@ -60,7 +62,10 @@ export function wireCellCaret(manager: Y.UndoManager): void {
       : focusedCaret(manager.doc, changedParentTypes);
     if (caret) stackItem.meta.set(CELL_CARET, caret);
   });
-  manager.on('stack-item-popped', ({ stackItem }) => {
+  manager.on('stack-item-popped', ({ stackItem, changedParentTypes }) => {
+    // WHY every pop, caret or not: a placeholder observes nothing, so a step that wrote
+    // lazy cells (a range clear) would otherwise show its old text after undo/redo.
+    for (const host of hosts) if (host.boundDoc() === manager.doc) host.repaintChanged(changedParentTypes);
     const caret = stackItem.meta.get(CELL_CARET) as CellCaret | undefined;
     if (!caret) return;
     const candidates = [...hosts].filter((h) => h.tableId === caret.tableId && h.boundDoc() === manager.doc);

@@ -189,7 +189,10 @@ describe('table model v2 fuzz — 3 replicas, random interleaving', () => {
     for (let j = 1; j < REPLICA_COUNT; j++) {
       expect(serializeTables(world.docs[j])).toBe(reference);
     }
-  });
+    // WHY 30s, not vitest's 5s: a seed is ~0.3s alone but CPU-bound, and inside the full
+    // parallel suite on the CI runner one seed reached 5.1s — a timeout there is a
+    // scheduler verdict, not a convergence failure.
+  }, 30_000);
 
   // TEST-WHY: pure-logic-edge — the classic v1 failure (concurrent add/remove on stale replicas) as a direct deterministic scenario.
   it('concurrent add-row / add-column / remove-column merges rectangular', () => {

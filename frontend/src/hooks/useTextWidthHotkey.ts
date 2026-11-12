@@ -19,6 +19,7 @@ const PRESETS: ReadonlyArray<{ width: string; label: TranslationKey }> = [
 ];
 const CSS_VAR = '--content-max-width';
 const STEP_BY_CODE: Record<string, number> = { BracketLeft: -1, BracketRight: 1 };
+const IS_MAC = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
 
 const storageKey = (projectId: string) => `lore.textWidth.${projectId}`;
 
@@ -47,8 +48,9 @@ export function useTextWidthHotkey(projectId: string | undefined): void {
       const step = STEP_BY_CODE[e.code];
       if (!step || !e.ctrlKey || !e.altKey || e.metaKey || e.shiftKey) return;
       // WHY: Windows reports AltGr as Ctrl+Alt; on layouts where AltGr+bracket-key types
-      // a character (Swiss German, Hungarian, Czech) the chord must stay typing.
-      if (e.getModifierState('AltGraph')) return;
+      // a character (Swiss German, Hungarian, Czech) the chord must stay typing. Not on
+      // macOS: Firefox reports Option itself as AltGraph there, which would kill the chord.
+      if (!IS_MAC && e.getModifierState('AltGraph')) return;
       e.preventDefault();
       const next = level + step;
       if (next < 0 || next >= PRESETS.length) return;

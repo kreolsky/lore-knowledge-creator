@@ -22,6 +22,8 @@ export interface CellEditorDeps {
   hostView: () => EditorView | null;
   tabStep: (step: 1 | -1) => boolean;
   backspaceRow: (cell: EditorView) => boolean;
+  /** Esc: leave text editing for cell selection on this cell; false = refused. */
+  selectCell: () => boolean;
 }
 
 export function cellEditorExtensions(deps: CellEditorDeps): Extension[] {
@@ -65,6 +67,10 @@ export function cellEditorExtensions(deps: CellEditorDeps): Extension[] {
     }),
     createYjsExtension(ytext, undoManager),
     cellNavKeymap(deps),
+    // WHY default precedence, outside cellNavKeymap: Esc peels one layer at a time — an open
+    // completion closes, a whole-selected image or a text range collapses, and only then
+    // does the cell turn into a cell selection.
+    keymap.of([{ key: 'Escape', run: () => deps.selectCell() }]),
     cellMeasureListener(host),
   ];
 }
@@ -96,8 +102,9 @@ function cellMeasureListener(outer: EditorView | null): Extension {
  * INVARIANT: Enter does not create a table row; Tab creates one only from the bottom-right cell.
  * Why: Tab past the end is the universal "next row" gesture; elsewhere keystrokes stay
  * inside the cell.
- * WHY no arrow into a cell from the document and no Esc out of one: operator ruling, a
- * cell is entered by click and left by click.
+ * WHY no arrow into a cell from the document: operator ruling, a cell is entered by click.
+ * Esc leaves text editing for a selection of the cell (operator ruling, hybrid model: one
+ * click edits, Esc / Shift+click / a drag across cells select).
  */
 function cellNavKeymap(deps: CellEditorDeps): Extension {
   return Prec.highest(keymap.of([

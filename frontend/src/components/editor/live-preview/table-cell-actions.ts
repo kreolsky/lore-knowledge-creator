@@ -133,10 +133,11 @@ function deleteAlong(tableId: string, axis: Axis, cell: CellAddr): CellOp {
 /**
  * The context menu of the clicked cell: insert / move / delete row / column / table, all
  * acting on that cell. `run` applies an op against the order at RUN time (see the widget's
- * menuTarget); `order` here only decides which entries are disabled.
+ * menuTarget); `order` here only decides which entries are disabled. `_selection`: the
+ * selected cells when the click landed inside a cell selection, else null.
  */
 export function cellMenuEntries(
-  tableId: string, order: CellOrder, rowId: RowId, colId: ColId,
+  tableId: string, order: CellOrder, rowId: RowId, colId: ColId, _selection: CellAddr[] | null,
   run: (op: CellOp) => void, deleteTable: () => void,
 ): CellMenuEntry[] {
   const cell: CellAddr = { rowId, colId };

@@ -443,6 +443,22 @@ export function removeRow(doc: Y.Doc, id: string, rowId: RowId): void {
   });
 }
 
+/**
+ * Empty the text of every named cell in ONE local step — one undo item for the whole
+ * range. A missing cell is skipped, never created; an already-empty one is not touched.
+ */
+export function clearCells(doc: Y.Doc, id: string, cells: readonly { rowId: RowId; colId: ColId }[]): void {
+  const parts = v2ById(doc, id);
+  if (!parts) return;
+  const texts = cells
+    .map((c) => parts.cells.get(cellKey(c.rowId, c.colId)))
+    .filter((text): text is Y.Text => !!text && text.length > 0);
+  if (texts.length === 0) return;
+  localStep(doc, () => {
+    for (const text of texts) text.delete(0, text.length);
+  });
+}
+
 /** Remove one column and its cells (`:"<colId>"` suffix) — column twin of `removeRow`. */
 export function removeColumn(doc: Y.Doc, id: string, colId: ColId): void {
   const parts = v2ById(doc, id);

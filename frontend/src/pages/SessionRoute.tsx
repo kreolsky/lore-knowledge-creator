@@ -204,7 +204,7 @@ export function SessionRoute() {
     return (
       <div className="h-dvh flex flex-col items-center justify-center gap-4 bg-bg text-text">
         <p className="text-text-dim">{t('publicShareSessionProbeFailed')}</p>
-        <Button variant="subtle" type="button" onClick={retry}>{t('retry')}</Button>
+        <Button variant="primary" type="button" onClick={retry}>{t('retry')}</Button>
       </div>
     );
   }

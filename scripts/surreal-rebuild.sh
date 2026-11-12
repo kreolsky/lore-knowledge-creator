@@ -338,8 +338,13 @@ log "import: POST /import ← $DUMP"
 # refuses any NEW child under it ("only an object holds a field") and refuses the
 # retype on a populated SCHEMAFULL table without MIGRATE EXISTING ROWS — which needs a
 # FALLBACK that passes the required children. Rewritten here, the store comes out in
-# exactly the shape a fresh v4 builds from surreal/schema.surql. v3 enforced the typed
+# the shape a fresh v4 builds from surreal/schema.surql. v3 enforced the typed
 # children on every element, so every existing element is already an object.
+# The element is `object FLEXIBLE`, not a strict `object`. WHY: under `X.* any` v3 also
+# held keys no DEFINE declared (prod messages.sources[*].retrieved, written before the
+# schema declared it); a strict object makes /import refuse every such row ("Found
+# field … but no such field exists"). FLEXIBLE keeps exactly what v3 accepted, the
+# declared children stay typed, and the new schema's later DEFINE of the key passes.
 UPGRADE_DDL_AWK=""
 if [ -n "$UPGRADE" ]; then UPGRADE_DDL_AWK='
   function field() { i = 3; if ($i == "OVERWRITE") i++; NAME = $i; TBL = $(i + 2) }
@@ -358,7 +363,7 @@ if [ -n "$UPGRADE" ]; then UPGRADE_DDL_AWK='
          next }
   $1 == "DEFINE" && $2 == "FIELD" {
     field()
-    if ((TBL "|" NAME) in has && sub(/ TYPE any /, " TYPE object ")) retyped++
+    if ((TBL "|" NAME) in has && sub(/ TYPE any /, " TYPE object FLEXIBLE ")) retyped++
     if ((TBL "|" NAME ".*") in has && (sub(/ TYPE none \| array /, " TYPE none | array<object> ") \
         || sub(/ TYPE array /, " TYPE array<object> "))) retyped++
   }

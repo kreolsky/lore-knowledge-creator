@@ -1913,6 +1913,17 @@ body.ref-drag-none, body.ref-drag-none * { cursor: no-drop !important; }
   pointer-events: none;
   z-index: 1;
 }
+/* Cell selection (table-cell-selection.ts): a tint over every selected cell (over the
+   header's own background, hence an image layer), a 2px inset frame on the anchor. */
+.cm-table-block .cm-table-cell-selected {
+  background-image: linear-gradient(var(--selection-bg), var(--selection-bg));
+}
+.cm-table-block .cm-table-cell-selection-anchor {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+/* The wrap holds focus only in selection mode; the cells show it, not a focus ring. */
+.cm-table-block-wrap:focus { outline: none; }
 .cm-table-block th {
   font-weight: 600;
   background: var(--surface2);
