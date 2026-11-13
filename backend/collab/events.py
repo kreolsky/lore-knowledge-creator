@@ -79,10 +79,12 @@ async def apply_external_content_change(
     text survive; anchors inside a changed span are lost, so agent edits still use
     surgical mode.
 
-    **Surgical** (`from_cp`/`to_cp`/`new_text` supplied): delete the code-point slice
-    [from_cp:to_cp) and insert `new_text` at from_cp. Used by the agent edit path
-. Preserves Yjs RelativePosition anchors in the
-    unchanged prefix/suffix so the frontend's note anchors survive the
+    **Surgical** (`from_cp`/`to_cp`/`new_text` supplied): replace the code-point slice
+    [from_cp:to_cp) with `new_text`, splicing only the spans that differ inside the
+    verified slice (`textmatch.surgical_splice_text`), so unchanged words inside the
+    agent's span keep their Yjs items. Used by the agent edit path
+. Preserves Yjs RelativePosition anchors on
+    unchanged text — the prefix/suffix and unchanged words inside the slice — so the frontend's note anchors survive the
     agent's own edits and the user's edits around it.
 
     # ARCH: pycrdt `Text` indexes in UTF-8 BYTES, not code
@@ -118,7 +120,7 @@ async def apply_external_content_change(
         text = session._get_text()
 
         if surgical:
-            # Surgical edit: the cp→byte del+insert + the
+            # Surgical edit: the cp→byte diff-splice inside the slice + the
             # original_text TOCTOU guard live in the shared `surgical_splice_text`
             # helper (textmatch) so the live and no-session paths share ONE
             # primitive. Re-reads the live text inside `_write_lock`.

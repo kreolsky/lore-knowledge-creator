@@ -52,6 +52,15 @@ MODEL_DIM_GUARD_SQL = (
     "AND array::len(embedding) = $dim "
 )
 
+# The ef (candidate-list width) of every HNSW KNN — retrieval's per-kind fetch
+# and chat recall (`embedding <|k,ef|> $q`).
+# WHY 64: measured on v4.0.1 (EFC 300 M 24) against brute force over a 27.8k-row
+# index — real project data: zero top-25 set mismatches at ef 64; synthetic
+# 11-copy near-duplicate clusters: recall 0.996 at ef 64 AND at ef 512, i.e. the
+# residual loss is graph-side and a wider ef does not buy it back. ef only
+# widens the walk, so it is a latency knob, not a cut.
+KNN_EF = 64
+
 
 class EmbeddingConfigError(RuntimeError):
     pass

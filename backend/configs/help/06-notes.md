@@ -4,12 +4,18 @@ A note is a discussion thread attached to a document, optionally to a fragment o
 
 ## Creating a note
 
-- Select text and press ⌘/Ctrl + M or "Note" on the selection toolbar. The fragment is highlighted in yellow with a dashed underline.
+- Select text and press ⌘/Ctrl + M or "Note" on the formatting toolbar. The fragment is highlighted in yellow with a dashed underline.
 - "+" in the "Notes" tab creates a note not tied to text.
 
 ## Notes and the text
 
-A note is not part of the text: it lies over the document like a layer and is anchored to its fragment. The highlight moves with the fragment while the document is edited, including by other people, the agent, a snapshot restore or a re-upload. If the fragment is deleted, the note stays in the list with its quote and the "fragment deleted" mark; undo does not reattach it.
+A note is not part of the text: it lies over the document like a layer and is anchored to its fragment. The highlight moves with the fragment while the document is edited, including by other people, the agent, a snapshot restore or a re-upload. An agent edit keeps a note on the words it leaves unchanged.
+
+If the fragment is deleted, the note stays in the list with its quote and the "fragment deleted" mark. It comes back to the text for everyone when:
+
+- an undo (⌘/Ctrl + Z) brings the deleted words back;
+- the fragment was cut and the same text is pasted back into the same document;
+- you select text in the note's document and press "Attach to selection" on the note's card (full access only).
 
 ## Working with notes
 

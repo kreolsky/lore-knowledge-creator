@@ -14,6 +14,10 @@ Both cuts are points on ONE model's score distribution, not properties of your c
 Change the model and the old cuts are a different operating point: `qwen3/600m`'s floor of
 0.35 under `giga/480m` dropped 10 of 20 correct answers and read as "the new model is
 worse". Re-derive the cuts every time the model changes.
+A model whose vectors are not 1024-dim also needs both vector indexes redefined first
+(`REMOVE INDEX` + `DEFINE ... DIMENSION n` for `doc_chunks_embedding_hnsw` and
+`chat_chunks_embedding_hnsw`, `surreal/schema.surql`) — the index refuses every vector of
+another length.
 
 Everything here runs against a **test installation**, never one people work in:
 `EMBEDDING_MODEL` is process-global and `doc_chunks.embedding` is a single column, so while
@@ -29,6 +33,7 @@ a non-default model is active every other project's search on that database is w
 | `arm_embed.py` | backend container | re-embeds a whole project with the model currently configured |
 | `xling_seed.py` + `xling_data.json` | backend container | creates (or resets) the synthetic RU/EN bench project |
 | `queries/xling-bench.json` | — | 48 queries over the 24 seeded documents |
+| `queries/dev-cir.json`, `queries/dev-cir-hard.json` | — | 14 + 20 queries over the dev project `CIR: узи омт` (`00d26d30`, present on dev and gray) — the retrieval regression bench; `-hard` is the discriminating companion |
 
 ## A query set
 

@@ -220,7 +220,7 @@ services:
   # exist", and it re-reads the YAML every 5 s. Not published on a host port;
   # the backend and the harness reach it on the default network at router:8000.
   router:
-    image: ghcr.io/kreolsky/llm-api-gateway:${ROUTER_VERSION:-1.3.0}
+    image: ghcr.io/kreolsky/llm-api-gateway:${ROUTER_VERSION:-1.4.0}
     profiles: [router]
     restart: unless-stopped
     env_file:

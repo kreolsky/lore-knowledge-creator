@@ -8,7 +8,8 @@
  *
  * ARCH: Uses EditorView.domEventHandlers to intercept paste before CM6's default handler.
  * Three sources resolve in order: Lore-origin (marker) → unformatted external (verbatim
- * text/plain) → formatted external (HTML→Markdown via Turndown). An unformatted GFM table
+ * text/plain) → formatted external (HTML→Markdown via Turndown; its tables are built
+ * straight from the DOM grid, merged cells kept as merges). An unformatted GFM table
  * is still upgraded to a live table object on the verbatim path, never downgraded to inert
  * pipe text by the browser default — on a plain-only clipboard too (no `text/html` at all).
  * SYSTEM: editor — clipboard paste handler
@@ -20,9 +21,14 @@ import type { SyntaxNode } from '@lezer/common';
 import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
 import { entityYdoc } from './active-editor';
+import type * as Y from 'yjs';
 import { importGfmTables } from '../components/editor/live-preview/gfm-table-import';
+import { createTable, writeMergeAreas } from '../components/editor/live-preview/table-block-model';
+import { fitColumnWidths } from '../components/editor/live-preview/table-widths';
+import { tableAnchor } from '../components/editor/live-preview/table-document-ops';
 import { documentTextWidth } from '../components/editor/live-preview/document-width';
 import { t } from '../i18n';
+import { reanchorPastedNotes } from './note-clipboard';
 
 const turndown = new TurndownService({
   headingStyle: 'atx',
@@ -109,6 +115,13 @@ turndown.addRule('strikethrough', {
   replacement: (content) => `~~${content}~~`,
 });
 
+// WHY: Google Docs wraps the whole clipboard in `<b style="font-weight:normal">`; as bold it
+// left a stray `**` line above and below every Docs paste.
+turndown.addRule('normalWeightBold', {
+  filter: (node) => node.nodeName === 'B' && /font-weight:\s*(?:normal|400)\b/i.test(node.getAttribute('style') ?? ''),
+  replacement: (content) => content,
+});
+
 turndown.addRule('removeStyles', {
   filter: ['style', 'script', 'meta'],
   replacement: () => '',
@@ -141,13 +154,16 @@ turndown.addRule('tableCellFlatten', {
  */
 /**
  * Unfold colspan/rowspan into a plain grid: the text stays in the top-left cell of the merged
- * area, every other slot gets an empty cell of the same tag.
- * WHY: the table model is a rectangular grid with no spans; a dropped `rowspan` shifted every
- * later cell of the rows below it under the wrong column — silent data corruption on paste.
+ * area, every other slot gets an empty cell of the same tag. Returns the unfolded areas as
+ * `[r0, c0, r1, c1]` (inclusive, rows clamped to the table).
+ * WHY: the table model is a rectangular grid; a dropped `rowspan` shifted every later cell of
+ * the rows below it under the wrong column — silent data corruption on paste.
  */
-function unfoldSpans(doc: Document, table: HTMLTableElement): void {
+function unfoldSpans(doc: Document, table: HTMLTableElement): number[][] {
   const pending: number[] = []; // per column: rows still covered by a rowspan from above
-  for (const row of [...table.rows]) {
+  const areas: number[][] = [];
+  const rows = [...table.rows];
+  for (const [r, row] of rows.entries()) {
     const cells = [...row.cells];
     const out: HTMLTableCellElement[] = [];
     const filler = (tag: string) => doc.createElement(tag) as HTMLTableCellElement;
@@ -162,6 +178,7 @@ function unfoldSpans(doc: Document, table: HTMLTableElement): void {
       const rowspan = Math.max(cell.rowSpan || 1, 1);
       cell.removeAttribute('colspan');
       cell.removeAttribute('rowspan');
+      if (colspan > 1 || rowspan > 1) areas.push([r, col, Math.min(r + rowspan - 1, rows.length - 1), col + colspan - 1]);
       for (let k = 0; k < colspan; k += 1) {
         out.push(k === 0 ? cell : filler(tag));
         pending[col] = rowspan - 1;
@@ -171,6 +188,7 @@ function unfoldSpans(doc: Document, table: HTMLTableElement): void {
     fillCovered(cells[cells.length - 1]?.tagName.toLowerCase() ?? 'td');
     row.replaceChildren(...out);
   }
+  return areas;
 }
 
 function preprocessTableHtml(html: string): string {
@@ -209,6 +227,49 @@ function preprocessTableHtml(html: string): string {
  */
 export function htmlToMarkdown(html: string): string {
   return turndown.turndown(preprocessTableHtml(html));
+}
+
+// Private-use placeholder for a pasted table until Turndown has converted the prose around it.
+const TABLE_TOKEN = '\uE010';
+const TABLE_TOKEN_RE = new RegExp(`${TABLE_TOKEN}(\\d+)${TABLE_TOKEN}`, 'g');
+
+/** One cell's content as model text: Turndown, whitespace runs collapsed, line breaks kept. */
+function cellText(cell: HTMLTableCellElement): string {
+  return turndown.turndown(cell.innerHTML)
+    .split(/\n+/)
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n');
+}
+
+/**
+ * Formatted external HTML → markdown with every top-level `<table>` built straight from its
+ * DOM grid as a table object in `doc` (merged cells written as merges); the prose around them
+ * goes through the same Turndown as `htmlToMarkdown`. Row 0 of the source is the header row.
+ * WHY not via GFM: GFM has no spans, so the merges were unfolded into empty cells and lost.
+ * Areas the resolver rejects (a header cell merged down into the body) are still written;
+ * `resolveMergeEntries` drops them on read and those cells land unmerged, values in place.
+ */
+export function importHtmlTables(doc: Y.Doc, html: string, label: string, fitWidth: number | null): string {
+  const dom = new DOMParser().parseFromString(html, 'text/html');
+  const tables = [...dom.querySelectorAll('table')].filter((el) => !el.parentElement?.closest('table'));
+  if (tables.length === 0) return htmlToMarkdown(html);
+  const anchors: string[] = [];
+  for (const table of tables) {
+    const areas = unfoldSpans(dom, table);
+    const cells = [...table.rows].map((row) => [...row.cells].map(cellText));
+    const width = Math.max(0, ...cells.map((r) => r.length));
+    const placeholder = dom.createElement('p');
+    if (width > 0) {
+      const matrix = cells.map((r) => [...r, ...Array<string>(width - r.length).fill('')]);
+      const id = fitWidth ? createTable(doc, matrix, fitWidth, fitColumnWidths) : createTable(doc, matrix);
+      writeMergeAreas(doc, id, areas);
+      placeholder.textContent = `${TABLE_TOKEN}${anchors.length}${TABLE_TOKEN}`;
+      anchors.push(tableAnchor(label, id));
+    }
+    table.replaceWith(placeholder);
+  }
+  return turndown.turndown(dom.body.innerHTML).replace(TABLE_TOKEN_RE, (_m, i: string) => anchors[Number(i)]);
 }
 
 /**
@@ -307,12 +368,10 @@ function inFencedCode(view: EditorView, pos: number): boolean {
 }
 
 /**
- * Upgrade every GFM table in `source` to a live table object when a collab handle is active,
- * creating the backing models in the target view's ydoc. `count` 0 means nothing was created.
+ * The ydoc a paste into `view` creates its table objects in, or null when the paste stays
+ * text (no collab handle for the view, or the cursor is inside a fenced code block).
  */
-function upgradeGfmTables(
-  view: EditorView, source: string, mergesByGfm: ReadonlyMap<string, readonly unknown[]> = new Map(),
-): { text: string; count: number } {
+function pasteTargetYdoc(view: EditorView): Y.Doc | null {
   // ARCH (split view): the model lands in the TARGET VIEW'S entity ydoc — the focused
   // slot may hold the OTHER column's handle (paste into the reference column must not
   // create the table in the document's ydoc, or vice versa). Unknown views (no
@@ -325,7 +384,19 @@ function upgradeGfmTables(
   const ydoc = entityYdoc(view);
   // WHY: a paste into a fenced code block is code — its pipe table stays text (the same
   // fence skip the scanner applies to fences inside the pasted source).
-  if (!ydoc || inFencedCode(view, view.state.selection.main.from)) return { text: source, count: 0 };
+  if (!ydoc || inFencedCode(view, view.state.selection.main.from)) return null;
+  return ydoc;
+}
+
+/**
+ * Upgrade every GFM table in `source` to a live table object when a collab handle is active,
+ * creating the backing models in the target view's ydoc. `count` 0 means nothing was created.
+ */
+function upgradeGfmTables(
+  view: EditorView, source: string, mergesByGfm: ReadonlyMap<string, readonly unknown[]> = new Map(),
+): { text: string; count: number } {
+  const ydoc = pasteTargetYdoc(view);
+  if (!ydoc) return { text: source, count: 0 };
   return importGfmTables(ydoc, source, t('tableBlockUntitled'), documentTextWidth(view), mergesByGfm);
 }
 
@@ -340,13 +411,16 @@ function dispatchInsert(view: EditorView, insert: string): void {
 
 /**
  * Insert `source` at the selection, first upgrading any GFM table to a live table object.
- * Shared by the Lore-origin and unformatted-external paths so a pasted GFM table becomes
- * editable, not inert pipe text.
+ * Shared by the Lore-origin, formatting-free external and Turndown/table-import paths so a
+ * pasted GFM table becomes editable, not inert pipe text. Returns where and what it actually inserted.
  */
 function insertVerbatim(
   view: EditorView, source: string, mergesByGfm: ReadonlyMap<string, readonly unknown[]> = new Map(),
-): void {
-  dispatchInsert(view, upgradeGfmTables(view, source, mergesByGfm).text);
+): { at: number; inserted: string } {
+  const at = view.state.selection.main.from;
+  const inserted = upgradeGfmTables(view, source, mergesByGfm).text;
+  dispatchInsert(view, inserted);
+  return { at, inserted };
 }
 
 export const pasteHandlerExtension = EditorView.domEventHandlers({
@@ -387,12 +461,16 @@ export const pasteHandlerExtension = EditorView.domEventHandlers({
     const verbatim = resolvePasteSource(html, plain);
     if (verbatim !== null) {
       e.preventDefault();
-      insertVerbatim(view, verbatim, loreMergesByGfm(html));
+      const { at, inserted } = insertVerbatim(view, verbatim, loreMergesByGfm(html));
+      reanchorPastedNotes(view, html, at, inserted);
       return true;
     }
 
     e.preventDefault();
-    insertVerbatim(view, htmlToMarkdown(html));
+    const ydoc = pasteTargetYdoc(view);
+    insertVerbatim(view, ydoc
+      ? importHtmlTables(ydoc, html, t('tableBlockUntitled'), documentTextWidth(view))
+      : htmlToMarkdown(html));
     return true;
   },
 });

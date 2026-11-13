@@ -54,6 +54,7 @@ function ServerForm({ initial, isAdmin, ownSubject, groups, disabled, error, onS
   const [url, setUrl] = useState(initial?.url ?? '');
   const [authMode, setAuthMode] = useState<McpAuthMode>(initial?.auth_mode ?? 'personal');
   const [helpUrl, setHelpUrl] = useState(initial?.help_url ?? '');
+  const [autoApprove, setAutoApprove] = useState(initial?.auto_approve ?? false);
   // Write-only draft: never prefilled, omitted from the body when empty.
   const [sharedKey, setSharedKey] = useState('');
   // Scheme preset is derived from the stored prefix, never stored itself.
@@ -78,6 +79,7 @@ function ServerForm({ initial, isAdmin, ownSubject, groups, disabled, error, onS
       auth_mode: authMode,
       auth_scheme: { bearer: 'Bearer', raw: '', custom: scheme.trim() }[schemePreset],
       help_url: helpUrl.trim(),
+      auto_approve: autoApprove,
       ...(authMode === 'shared' && sharedKey ? { shared_key: sharedKey } : {}),
       // Create always names a subject (the backend defaults to public, which
       // a moderator may not pick); edit sends subjects for admins only — a
@@ -217,6 +219,14 @@ function ServerForm({ initial, isAdmin, ownSubject, groups, disabled, error, onS
           )}
         </>
       )}
+
+      <FieldCheckbox
+        checked={autoApprove}
+        onChange={setAutoApprove}
+        label={t('adminMcpAutoApprove')}
+        disabled={disabled}
+      />
+      <p className="text-xs text-text-dim -mt-1">{t('adminMcpAutoApproveHint')}</p>
 
       {isAdmin ? (
         <>
@@ -406,6 +416,9 @@ export function McpServersSection() {
                 <span className="text-xs text-text-dim font-mono truncate whitespace-nowrap">
                   {server.host}{server.created_by_name ? ` | ${server.created_by_name}` : ''}
                 </span>
+                {server.auto_approve && (
+                  <span className="text-xs text-text-dim whitespace-nowrap">{t('adminMcpAutoApproveBadge')}</span>
+                )}
                 <span className="flex-1" />
                 <FieldCheckbox
                   checked={server.enabled}

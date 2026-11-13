@@ -106,6 +106,7 @@ export interface Project {
   ref_image_preview?: boolean;
   /** Project-wide: the links panel includes notes and the viewer's own chats. */
   links_show_sessions?: boolean;
+  editor_toolbar?: boolean;
   last_accessed_doc_id: string | null;
   owner_id: string | null;
   owner_name?: string | null;

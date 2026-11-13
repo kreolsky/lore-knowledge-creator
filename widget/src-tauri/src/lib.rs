@@ -1,11 +1,18 @@
-/// Lore Recorder — macOS menu bar widget for voice-to-text.
+/// Lore Recorder — macOS menu bar / Windows tray widget for voice-to-text.
 ///
 /// Left-click tray icon to toggle recording. Right-click for history menu.
-/// Audio captured via Swift ScreenCaptureKit helper, uploaded to Lore backend
-/// for transcription, result copied to clipboard automatically.
+/// Audio captured by a per-OS recorder (macOS: Swift AVAudioRecorder helper,
+/// Windows: in-process WASAPI → Ogg/Opus), uploaded to Lore backend for transcription,
+/// result copied to clipboard automatically.
 
 mod api;
+#[cfg(target_os = "macos")]
 mod audio;
+#[cfg(windows)]
+#[path = "audio_wasapi.rs"]
+mod audio;
+#[cfg(windows)]
+mod ogg_opus;
 mod store;
 
 use std::sync::{Arc, Mutex};
@@ -55,6 +62,19 @@ fn set_retention_days(state: tauri::State<'_, Arc<AppState>>, days: u32) -> Resu
     config.retention_days = days;
     store::save_config(&config);
     Ok(())
+}
+
+/// `None` on macOS, where system-audio capture is not available (the settings row is hidden).
+#[tauri::command]
+fn get_record_system_audio(state: tauri::State<'_, Arc<AppState>>) -> Option<bool> {
+    cfg!(windows).then(|| state.config.lock().unwrap().record_system_audio)
+}
+
+#[tauri::command]
+fn set_record_system_audio(state: tauri::State<'_, Arc<AppState>>, enabled: bool) {
+    let mut config = state.config.lock().unwrap();
+    config.record_system_audio = enabled;
+    store::save_config(&config);
 }
 
 static MENU_GEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -113,7 +133,7 @@ fn open_settings(app: &AppHandle) {
     eprintln!("[lore] Opening settings window with url: {:?}", url);
     match tauri::WebviewWindowBuilder::new(app, "settings", url)
         .title("Lore Recorder Settings")
-        .inner_size(360.0, 280.0)
+        .inner_size(360.0, 310.0)
         .resizable(false)
         .build()
     {
@@ -133,14 +153,22 @@ async fn toggle_recording(app: AppHandle) {
         eprintln!("[lore] Starting recording...");
         update_tray_icon(&app, true);
         let recorder = state.recorder.clone_arc();
+        let record_system_audio = state.config.lock().unwrap().record_system_audio;
         let start_result = tokio::task::spawn_blocking(move || {
-            recorder.start()
+            recorder.start(record_system_audio)
         }).await.unwrap_or_else(|e| Err(format!("spawn_blocking failed: {e}")));
-        if let Err(e) = start_result {
-            eprintln!("[lore] Failed to start recording: {e}");
-            update_tray_icon(&app, false);
-            show_notification(&app, "Recording failed", &e);
-            return;
+        match start_result {
+            Ok(None) => {}
+            Ok(Some(warning)) => {
+                eprintln!("[lore] {warning}");
+                show_notification(&app, "Lore Recorder", &warning);
+            }
+            Err(e) => {
+                eprintln!("[lore] Failed to start recording: {e}");
+                update_tray_icon(&app, false);
+                show_notification(&app, "Recording failed", &e);
+                return;
+            }
         }
         eprintln!("[lore] Recording started OK");
     } else {
@@ -210,7 +238,7 @@ async fn toggle_recording(app: AppHandle) {
                         let text = status.content.unwrap_or_default();
                         eprintln!("[lore] Transcription text: {text}");
                         if !text.is_empty() {
-                            copy_to_clipboard(&text);
+                            copy_to_clipboard(&app, &text);
                             show_notification(
                                 &app,
                                 "Copied to clipboard",
@@ -267,7 +295,7 @@ fn update_tray_icon(app: &AppHandle, recording: bool) {
         let icon = if recording {
             Image::from_bytes(include_bytes!("../icons/tray-recording.png"))
         } else {
-            Image::from_bytes(include_bytes!("../icons/tray-idle.png"))
+            Image::from_bytes(IDLE_ICON)
         };
         if let Ok(icon) = icon {
             // ARCH: set icon first, then toggle template mode so macOS
@@ -286,7 +314,15 @@ fn update_tray_icon(app: &AppHandle, recording: bool) {
     }
 }
 
-fn copy_to_clipboard(text: &str) {
+/// Idle tray icon. WHY: macOS recolours the black template icon for the menu bar;
+/// Windows draws it as-is, and black is invisible on the default dark taskbar.
+#[cfg(target_os = "macos")]
+const IDLE_ICON: &[u8] = include_bytes!("../icons/tray-idle.png");
+#[cfg(windows)]
+const IDLE_ICON: &[u8] = include_bytes!("../icons/tray-idle-light.png");
+
+#[cfg(target_os = "macos")]
+fn copy_to_clipboard(_app: &AppHandle, text: &str) {
     use std::io::Write;
     if let Ok(mut child) = std::process::Command::new("pbcopy")
         .env("LANG", "en_US.UTF-8")
@@ -301,6 +337,24 @@ fn copy_to_clipboard(text: &str) {
     }
 }
 
+#[cfg(windows)]
+fn copy_to_clipboard(app: &AppHandle, text: &str) {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    if let Err(e) = app.clipboard().write_text(text) {
+        eprintln!("[lore] Clipboard write failed: {e}");
+        show_notification(app, "Clipboard failed", &e.to_string());
+    }
+}
+
+#[cfg(windows)]
+fn show_notification(app: &AppHandle, title: &str, body: &str) {
+    use tauri_plugin_notification::NotificationExt;
+    if let Err(e) = app.notification().builder().title(title).body(body).show() {
+        eprintln!("[lore] Notification failed: {e}");
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn show_notification(_app: &AppHandle, title: &str, body: &str) {
     std::process::Command::new("osascript")
         .arg("-e")
@@ -353,15 +407,26 @@ pub fn run() {
         config: Mutex::new(config),
     });
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
+    let builder = tauri::Builder::default().plugin(tauri_plugin_shell::init());
+    #[cfg(windows)]
+    let builder = builder
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_notification::init());
+
+    builder
         .manage(state.clone())
-        .invoke_handler(tauri::generate_handler![get_api_key, set_api_key, get_retention_days, set_retention_days])
+        .invoke_handler(tauri::generate_handler![
+            get_api_key,
+            set_api_key,
+            get_retention_days,
+            set_retention_days,
+            get_record_system_audio,
+            set_record_system_audio
+        ])
         .setup(move |app| {
             let config = state.config.lock().unwrap().clone();
             let menu = build_tray_menu(app, &config);
-            let idle_icon =
-                Image::from_bytes(include_bytes!("../icons/tray-idle.png"))?;
+            let idle_icon = Image::from_bytes(IDLE_ICON)?;
 
             let _tray = TrayIconBuilder::with_id("main-tray")
                 .icon(idle_icon)
@@ -401,7 +466,7 @@ pub fn run() {
                                 if let Ok(idx) = idx_str.parse::<usize>() {
                                     let config = state.config.lock().unwrap();
                                     if let Some(entry) = config.history.get(idx) {
-                                        copy_to_clipboard(&entry.text);
+                                        copy_to_clipboard(app, &entry.text);
                                         show_notification(
                                             app,
                                             "Copied",

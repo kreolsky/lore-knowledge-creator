@@ -2,17 +2,18 @@
  * CM6 extension: rich clipboard copy/cut (HTML + portable markdown).
  *
  * Cmd+C / Cmd+X → writes BOTH `text/html` (rendered, class-free semantic HTML via
- * `cleanMarkdownToHtml`) and a portable `text/plain` (markdown source, with table
+ * `cleanMarkdownToHtml`, each table rendered from its model with merged cells as
+ * `colspan`/`rowspan`) and a portable `text/plain` (markdown source, with table
  * transclusion anchors expanded to GFM). External rich editors (Word / Google Docs /
  * Gmail / Notion) read `text/html` and preserve formatting; plain targets (Notepad, code
  * editors) read `text/plain`. A whole-selected image also puts the picture itself
  * (`image/png`) on the clipboard. Paste already converts HTML→Markdown (see paste-handler).
  *
  * ARCH: EditorView.domEventHandlers intercept copy/cut BEFORE CM6's default handler. The
- * selection's raw markdown source is the single portable intermediate: table anchors are
- * expanded to GFM (an anchor is meaningless outside the app) and BOTH clipboard payloads
- * derive from that one string. The copy path is READ-ONLY on the Y.Doc (table model
- * helpers never mutate here); it degrades gracefully — a null active handle (mount race)
+ * selection's raw markdown source is the single portable intermediate: `text/plain` expands
+ * table anchors to GFM (an anchor is meaningless outside the app); `text/html` renders each
+ * anchor straight from the table model as an HTML island, since GFM has no merged cells.
+ * The copy path is READ-ONLY on the Y.Doc (table model helpers never mutate here); it degrades gracefully — a null active handle (mount race)
  * or a missing table model leaves anchors as-is and never throws.
  * SYSTEM: editor — clipboard copy handler
  */
@@ -20,9 +21,10 @@
 import { EditorView } from '@codemirror/view';
 import { getActiveHandle } from './active-editor';
 import { cleanMarkdownToHtml } from '../components/editor/markdown-to-html';
-import { expandTableAnchorsToGfm, tableMergesByGfm } from '../components/editor/live-preview/table-serialize';
+import { expandTableAnchorsToGfm, tableAnchorsToIslands, tableMergesByGfm } from '../components/editor/live-preview/table-serialize';
 import { ligatureSubstitutedText } from '../components/editor/ligature-plugin';
 import { selectedAtomicRange } from '../components/editor/live-preview/atomic-delete-guard';
+import { cutNotesSidecar } from './note-clipboard';
 import { useAppStore } from '../store/app-store';
 import { t } from '../i18n';
 
@@ -147,20 +149,24 @@ export function handleCopyCut(e: ClipboardEvent, view: EditorView, isCut: boolea
   // THEN anchors expand — never the reverse.
   // Why: reversing it would substitute the `---` in a produced GFM delimiter row
   // (`| --- | --- |`) to `—` and corrupt the table (copy-handler.test.ts table case).
-  const renderedPortable = handle?.ydoc
-    ? expandTableAnchorsToGfm(handle.ydoc, renderedMarkdown)
-    : renderedMarkdown;
+  const rendered = handle?.ydoc
+    ? tableAnchorsToIslands(handle.ydoc, renderedMarkdown)
+    : { text: renderedMarkdown, islands: [] };
 
-  const html = cleanMarkdownToHtml(renderedPortable);
+  const html = cleanMarkdownToHtml(rendered.text, rendered.islands);
   // WHY from the SOURCE slice: the paste side matches `text/plain` (source GFM), and the
   // rendered slice's ligatures would never match it.
   const merges = handle?.ydoc ? tableMergesByGfm(handle.ydoc, selectedMarkdown) : [];
   const mergesSidecar = merges.length ? `${LORE_MERGES_PREFIX}${encodeURIComponent(JSON.stringify(merges))}-->` : '';
+  // WHY cut only and single range only: a copy orphans nothing, and a multi-range cut's
+  // pasted text is the ranges joined, which no single offset base describes.
+  const notesSidecar = isCut && ranges.length === 1 ? cutNotesSidecar(view, ranges[0].from, ranges[0].to) : '';
   const envelope =
     FRAGMENT_HEAD +
     '<!--StartFragment-->' +
     LORE_CLIP_MARK +
     mergesSidecar +
+    notesSidecar +
     html +
     '<!--EndFragment-->' +
     FRAGMENT_TAIL;

@@ -6,8 +6,7 @@
  * (Turndown).
  *
  * The chat panel no longer renders through this pipeline — it renders dsh's
- * sealed MarkdownText (components/chat/MarkdownContent.tsx, plan
- * chat-markdown-on-dsh). Replacing this regex pipeline with mdast-util-to-hast
+ * sealed MarkdownText (components/chat/MarkdownContent.tsx). Replacing this regex pipeline with mdast-util-to-hast
  * is a separate task.
  *
  * SYSTEM: markdown-to-html — clipboard MD→HTML pipeline (cleanMarkdownToHtml); chat renders dsh's MarkdownText.
@@ -23,6 +22,13 @@ import { parseInAppLink } from '../../utils/in-app-link';
 
 // Private-use sentinel for stashed-island placeholders — cannot appear in markdown text.
 const MARK = '\uE000';
+// Private-use sentinel for caller-rendered islands (`cleanMarkdownToHtml`'s `islands`).
+const ISLAND = '\uE001';
+
+/** The token a caller puts in the markdown, on its own line, where `islands[i]` goes. */
+export function islandToken(i: number): string {
+  return `${ISLAND}${i}${ISLAND}`;
+}
 
 // Reverses escapeHtml for the one consumer that needs source characters back (math source).
 const UNESCAPE: Record<string, string> = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'" };
@@ -40,6 +46,11 @@ function applyCellInline(text: string): string {
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/~~(.+?)~~/g, '<del>$1</del>')
     .replace(/`([^`]+)`/g, '<code>$1</code>');
+}
+
+/** One raw (unescaped) table-cell body → cell HTML: escaped, inline formatting, newline → `<br>`. */
+export function renderCellHtml(text: string): string {
+  return applyCellInline(escapeHtml(text)).replace(/\n/g, '<br>');
 }
 
 function parseTableRow(line: string): string[] {
@@ -244,8 +255,15 @@ function foldBlocks(text: string, lonePlaceholder: RegExp): string {
 
 // ─── The pipeline ─────────────────────────────────────────────────────────────
 
-function runPipeline(md: string): string {
+/** A caller-rendered block: `html` replaces its token in prose, `text` inside a fenced code block. */
+export interface Island { html: string; text: string }
+
+function runPipeline(md: string, islands: readonly Island[]): string {
   const tokens: string[] = [];
+  // WHY: a fenced block is literal source — an island token in it falls back to the island's
+  // text form, never to its HTML (and never to the raw private-use token).
+  const islandRe = new RegExp(`${ISLAND}(\\d+)${ISLAND}`, 'g');
+  const islandText = (code: string): string => code.replace(islandRe, (_m, i: string) => islands[Number(i)]?.text ?? '');
   const stash = (html: string): string => {
     const i = tokens.length;
     tokens.push(html);
@@ -255,12 +273,16 @@ function runPipeline(md: string): string {
   let html = md
     // Mermaid fenced code blocks — the clipboard keeps the fenced source.
     .replace(/```mermaid\n([\s\S]*?)```/g, (_match, code: string) =>
-      stash(cleanCodeRenderer(code.trimEnd(), 'mermaid')),
+      stash(cleanCodeRenderer(islandText(code).trimEnd(), 'mermaid')),
     )
     // Fenced code blocks (non-mermaid).
     .replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang: string, code: string) =>
-      stash(cleanCodeRenderer(code.trimEnd(), lang)),
-    );
+      stash(cleanCodeRenderer(islandText(code).trimEnd(), lang)),
+    )
+    // Caller-rendered islands (tables rendered from their model) — stashed before escaping.
+    // WHY: the second exception to the escape below — an island's caller owns its escaping
+    // (`modelToHtml` escapes every cell via `renderCellHtml`).
+    .replace(islandRe, (_match, i: string) => stash(islands[Number(i)]?.html ?? ''));
 
   // INVARIANT(security): every character of the source that is not a fenced island is
   // HTML-escaped HERE, once, before any pass emits a tag; no later pass escapes its slice
@@ -342,8 +364,9 @@ function runPipeline(md: string): string {
  * No classes, no copy buttons, no in-app data-* tagging; internal-scheme links
  * and non-http images render as visible text; external http(s) links/images stay
  * active; math renders as literal escaped source; mermaid renders as a fenced
- * code block.
+ * code block. `islands` = pre-rendered blocks the caller marked in `md` with
+ * `islandToken(i)`; each `html` is placed verbatim as a block (its `text` inside fenced code).
  */
-export function cleanMarkdownToHtml(md: string): string {
-  return runPipeline(md);
+export function cleanMarkdownToHtml(md: string, islands: readonly Island[] = []): string {
+  return runPipeline(md, islands);
 }

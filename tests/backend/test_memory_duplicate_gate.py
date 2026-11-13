@@ -18,6 +18,7 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 from agent_config import ensure_agent_system_docs
+from helpers import dim_vec
 from memory_ref import ensure_memory_reference
 
 from db import create_record, get_db
@@ -28,10 +29,10 @@ _OTHER = "ДРУГОЕ"
 
 def _stub_vec(text: str) -> list[float]:
     if _SAME in text:
-        return [1.0, 0.0, 0.0, 0.0]
+        return dim_vec(1.0, 0.0, 0.0, 0.0)
     if _OTHER in text:
-        return [0.0, 1.0, 0.0, 0.0]
-    return [0.0, 0.0, 1.0, 0.0]
+        return dim_vec(0.0, 1.0, 0.0, 0.0)
+    return dim_vec(0.0, 0.0, 1.0, 0.0)
 
 
 PID = "test-project-001"

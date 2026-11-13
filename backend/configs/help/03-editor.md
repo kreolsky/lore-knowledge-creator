@@ -2,9 +2,11 @@
 
 A document is Markdown with live rendering: the markup hides, and headings, lists, tables, pictures, formulas and diagrams are shown in their finished form. Every edit is saved automatically, and several people can edit a document at the same time.
 
-## Selection toolbar
+## Formatting toolbar
 
-When you select text, a pop-up toolbar appears:
+A member with full access sees the formatting toolbar pinned above the document. It formats whichever editor holds the cursor — the document, a reference, a table cell — and lights up the styles under the cursor. Project settings → "Interface" → "Show the formatting toolbar above the editor" turns it off for the whole project; the same buttons then appear in a pop-up toolbar when you select text. A commentator gets only the pop-up "Note" button.
+
+The toolbar holds:
 
 - text style: plain text or heading 1–4;
 - bold, italic, strikethrough;
@@ -16,7 +18,7 @@ When you select text, a pop-up toolbar appears:
 - "Create reference from selection" — the selected fragment becomes a reference of the document;
 - "Quote in chat" — puts the selected fragment into the chat input as a quote with a link back to that place in the document (see [Chat and the agent](help:chat-agent)).
 
-Almost everything on the toolbar is also available from the keyboard.
+"Create reference from selection", "Quote in chat" and "Note" act on the selected text. Almost everything on the toolbar is also available from the keyboard.
 
 ## Keyboard shortcuts
 

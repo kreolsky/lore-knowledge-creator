@@ -1,0 +1,147 @@
+{
+  "name": "dev-cir-hard",
+  "project_id": "00d26d30-c049-480b-92fd-5f506efae456",
+  "comment": "Discriminating companion to dev-cir, written because giga/480m scored 14/14 there and the set stopped resolving differences. Every target answers its query UNIQUELY in this corpus — the discriminating phrase was grep-counted to n=1 over all non-memory documents before the query was written (аркуатн, кист эндоцервикса and семнадцать мил were dropped for n>1). Difficulty is linguistic, not lexical: Russian inflection against the corpus's own word forms, digits against numbers spelled out by STT, synonyms sharing no roots with the text, Russian queries over English documents, and answers that are a stated REASON rather than a phrase. `expect` matches the parent title case-insensitively as a substring; ids colliding across titles (392710, 392722, 395889, 401581, 402256, 402725) are avoided as targets.",
+  "queries": [
+    {
+      "id": "exact-thromboelastography",
+      "class": "exact",
+      "query": "тромбоэластография цельной крови",
+      "expect": "part05",
+      "why": "Verbatim term, but it sits inside a 42k-char lecture transcript among 5 sibling parts with near-identical vocabulary. Sanity floor for the long-document case."
+    },
+    {
+      "id": "exact-hemochromatosis",
+      "class": "exact",
+      "query": "гемохроматоз накопление железа",
+      "expect": "part04",
+      "why": "Same floor, different part — guards against a model that just prefers whichever lecture part is longest."
+    },
+    {
+      "id": "exact-comfy-graph",
+      "class": "exact",
+      "query": "batch_size width height граф нод",
+      "expect": "api_krea2",
+      "why": "A raw JSON node graph with no prose at all. Tests that a structured non-prose document is still reachable."
+    },
+    {
+      "id": "morph-postmenopause-15y",
+      "class": "morph",
+      "query": "пациентка пятнадцать лет в постменопаузе",
+      "expect": "397814",
+      "why": "12 transcripts mention постменопауза; only this one says 'в течение пятнадцати лет'. The query uses the nominative plural, the text the genitive — the case difference is the whole difficulty."
+    },
+    {
+      "id": "morph-consanguineous",
+      "class": "morph",
+      "query": "супруги состоят в близком родстве",
+      "expect": "part04",
+      "why": "Text says 'близкородственном браке' — one compound adjective against a four-word paraphrase carrying the same root only inside a different word."
+    },
+    {
+      "id": "digits-uterus-size",
+      "class": "digits",
+      "query": "матка 35 х 31 х 48 мм",
+      "expect": "397814",
+      "why": "STT spells every number out: 'длина тридцать пять толщина тридцать один ширина сорок восемь'. No digit in the query appears anywhere in the target. The hardest realistic query a clinician would type."
+    },
+    {
+      "id": "syn-blank-page",
+      "class": "synonym",
+      "query": "с чего начать документ когда страница пустая",
+      "expect": "markdown-2026-08-01",
+      "why": "Target says 'проблема белого листа'. Query and text share no root — the concept is the only bridge."
+    },
+    {
+      "id": "syn-default-city",
+      "class": "synonym",
+      "query": "какой город показывать если пользователь его не назвал",
+      "expect": "Погода",
+      "why": "Target states the default-city rule; the query never uses погода, температура or Москва."
+    },
+    {
+      "id": "xling-wet-paper",
+      "class": "xling",
+      "query": "стиль где краска растекается по мокрой бумаге",
+      "expect": "Art and Generation",
+      "why": "Russian query, English-only document ('wet-on-wet', 'water in the paint'). Cross-language retrieval with zero shared tokens."
+    },
+    {
+      "id": "xling-torchlight",
+      "class": "xling",
+      "query": "тёплый свет факелов и глубокие насыщенные тени",
+      "expect": "Art and Generation",
+      "why": "Second cross-language probe into the same document but a different section (chiaroscuro/torches), so a lucky title match cannot carry both."
+    },
+    {
+      "id": "section-invisible-to-model",
+      "class": "section",
+      "query": "какой документ модель не видит при извлечении",
+      "expect": "typography",
+      "why": "The answer is a stated contrast ('в промпт НЕ попадает', unlike dictionary). Competes directly with instructions and pipeline, which ARE in the prompt."
+    },
+    {
+      "id": "section-typo-must-stay",
+      "class": "section",
+      "query": "почему нельзя исправить опечатку в имени поля",
+      "expect": "variables",
+      "why": "Answer is a REASON spread over three comment blocks (lenght/scturcture inherited from the ЦИР database). No heading names it."
+    },
+    {
+      "id": "section-inverted-pair",
+      "class": "section",
+      "query": "какие два поля названы наоборот относительно смысла",
+      "expect": "variables",
+      "why": "Text says 'намеренно перевёрнуты'; the query says наоборот. Same document as the previous query but a different passage inside 19k chars."
+    },
+    {
+      "id": "section-fix-at-output",
+      "class": "section",
+      "query": "какие искажения распознавания чинить поздно на выходе",
+      "expect": "typography",
+      "why": "The criterion is stated in typography ('если модель не поймёт слово, чинить будет нечего') while the RULES it refers to live in instructions — the trap is answering with the document the rules are in."
+    },
+    {
+      "id": "section-whose-decision",
+      "class": "section",
+      "query": "кто должен принять решение о правиле заполнения поля",
+      "expect": "bufer",
+      "why": "Answer is 'правило может быть только вашим, не нашим' in a document with NO headings at all."
+    },
+    {
+      "id": "section-latin-position",
+      "class": "section",
+      "query": "какими терминами записывать положение матки",
+      "expect": "instructions",
+      "why": "Answer names anteflexio/retroflexio. Every transcript in the corpus CONTAINS those words as data — only instructions states the rule about them."
+    },
+    {
+      "id": "section-worst-record",
+      "class": "section",
+      "query": "у какой записи больше всего расхождений с эталоном",
+      "expect": "benchmark",
+      "why": "Requires reading a table of per-record miss counts rather than matching a phrase."
+    },
+    {
+      "id": "mem-complement-trigger",
+      "class": "memory",
+      "query": "что запускается когда антитело соединяется с мишенью",
+      "expect": "Система комплемента",
+      "why": "Fact level, phrased as a mechanism question with none of the fact's own nouns."
+    },
+    {
+      "id": "mem-apc-difference",
+      "class": "memory",
+      "query": "чем акушерская форма отличается от классической",
+      "expect": "Акушерский антифосфолипидный синдром",
+      "why": "Fact level with the SUBJECT elided — the query never says антифосфолипидный, so the fact must be found by its distinguishing clause."
+    },
+    {
+      "id": "mem-iron-panel",
+      "class": "memory",
+      "query": "какие показатели смотреть вместе чтобы оценить запасы железа",
+      "expect": "Обмен железа",
+      "why": "Fact level competing with Насыщение трансферрина железом and Гемохроматоз, which are adjacent facts on the same subject."
+    }
+  ]
+}

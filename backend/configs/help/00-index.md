@@ -18,13 +18,13 @@ What the guide does not describe and the "Planned" list does not mention is most
 
 - [Interface](help:interface) — screen layout, the auto-hiding left panel, text column width, narrow-screen mode, unread marks, reloading after an update.
 - [Documents and the graph](help:documents-graph) — the tree, the project's index document, moving, deleting, links, the Links tab.
-- [Editor](help:editor) — markup, the selection toolbar, quoting into the chat, keyboard shortcuts, undo, paste, dropped files.
-- [Tables](help:tables) — table objects, CSV import, the cell menu, fixed column widths and fitting, notes and links in cells.
+- [Editor](help:editor) — markup, the formatting toolbar, quoting into the chat, keyboard shortcuts, undo, paste, dropped files.
+- [Tables](help:tables) — table objects, CSV import, the cell menu, selecting and merging cells, fixed column widths and fitting, notes and links in cells.
 - [Images and embeds](help:embeds) — dropping, pasting, moving and resizing pictures, the gallery, embedding documents and references.
-- [Notes](help:notes) — discussions attached to text, notes from guests on a public link and from the apps.
+- [Notes](help:notes) — discussions attached to text, bringing a note back to its text, notes from guests on a public link and from the apps.
 - [Snapshots and history](help:history) — automatic and manual snapshots, restore, export, a subtree as a zip, snapshots through the agent.
 - [References](help:references) — uploading, visibility, viewing, archive.
-- [Voice notes](help:voice) — recording, where it lands, the apps.
+- [Voice notes](help:voice) — recording, where it lands, the Android, Windows and macOS apps.
 - [Chat and the agent](help:chat-agent) — chats, branches, queue, context, models, pictures, quoting, confirming edits, chat privacy, the finish sound, external MCP servers.
 - [Skills](help:skills) — creating skills, built-in skills.
 - [Personas, rules and knowledge](help:personas-rules-knowledge) — the Agent System section.

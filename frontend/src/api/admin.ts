@@ -249,6 +249,8 @@ export interface AdminMcpServer {
   created_by: string;
   created_by_name: string;
   enabled: boolean;
+  /** Every tool of the server runs with no approval card. */
+  auto_approve: boolean;
   /** Write-only shared key: the API answers these two states, never a value. */
   shared_key_set: boolean;
   /** The url moved to another host, stranding the stored key. */
@@ -269,6 +271,7 @@ export interface AdminMcpServerBody {
   shared_key?: string;
   subjects?: string[];
   enabled?: boolean;
+  auto_approve?: boolean;
 }
 
 export async function listAdminMcpServers(): Promise<AdminMcpServer[]> {

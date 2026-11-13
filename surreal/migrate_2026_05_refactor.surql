@@ -1,18 +1,20 @@
 -- 2026-05 Refactor — References → Documents-with-flag, Notes → Note-Chats
 --
--- The data migration is executed by the Python runner:
---   docker compose exec backend python -m migrations.migrate_2026_05_refactor
+-- Drops the legacy tables / fields the refactor left behind. Run by hand, once per
+-- environment, after checking INFO FOR DB; IRREVERSIBLE — take a dump first.
+-- schema.surql declares none of these, and nothing reads or writes them.
+-- Precondition: the legacy rows were copied into documents/chat_sessions by the
+-- refactor's (now retired) runner — verify that before dropping; this file copies nothing.
 --
--- Dry-run (copy data but keep legacy tables):
---   docker compose exec backend python -m migrations.migrate_2026_05_refactor
---
--- Finalize (also drop legacy tables / fields):
---   docker compose exec -e MIGRATION_DROP_LEGACY=1 backend \
---       python -m migrations.migrate_2026_05_refactor
---
--- This .surql file is a manual fallback for operators who want to drop legacy
--- structures by hand after a successful runner pass. The runner already does
--- everything below when MIGRATION_DROP_LEGACY=1.
+-- INVARIANT(data-loss): this file ships DISARMED — the THROW below cancels the whole
+-- transaction, so running it as-is removes nothing. To run it, delete the THROW line in
+-- a local copy, never in the tree.
+-- Why: it sits next to schema.surql and ships in the backend image; a mistaken import
+-- of it would drop eight tables on any database it reaches, with no way back but a dump.
+
+BEGIN TRANSACTION;
+
+THROW "migrate_2026_05_refactor.surql is disarmed: delete this THROW line in a local copy to drop the legacy tables (irreversible)";
 
 REMOVE TABLE IF EXISTS notes;
 REMOVE TABLE IF EXISTS parent_doc;
@@ -27,3 +29,5 @@ REMOVE INDEX IF EXISTS idx_chatsessions_user_ref ON chat_sessions;
 
 REMOVE TABLE IF EXISTS _migration_ref_map;
 REMOVE TABLE IF EXISTS _migration_note_map;
+
+COMMIT TRANSACTION;

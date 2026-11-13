@@ -264,12 +264,23 @@ def pin_embedding_api(
     monkeypatch.setattr(config, "AI_API_KEY", key)
 
 
+# The vector length the HNSW indexes on doc_chunks/chat_chunks accept
+# (surreal/schema.surql) — a stored vector of any other length is refused.
+EMBED_DIM = 1024
+
+
+def dim_vec(*head: float) -> list[float]:
+    """A fake vector at the stored dimension: `head` padded with zeros, so its
+    cosine against another dim_vec equals the cosine of the two heads."""
+    return [*head] + [0.0] * (EMBED_DIM - len(head))
+
+
 def fake_embedding_provider(monkeypatch, vector_of):
     """Replace the embedding provider at its boundary: `vector_of(text)` per
-    input, every call recorded on the returned AsyncMock."""
+    input (padded to EMBED_DIM), every call recorded on the returned AsyncMock."""
     from unittest.mock import AsyncMock
 
-    fake = AsyncMock(side_effect=lambda texts, **_: [vector_of(t) for t in texts])
+    fake = AsyncMock(side_effect=lambda texts, **_: [dim_vec(*vector_of(t)) for t in texts])
     monkeypatch.setattr("embeddings.embed_texts", fake)
     monkeypatch.setattr("embeddings._ensure_config", AsyncMock(return_value="http://e"))
     return fake

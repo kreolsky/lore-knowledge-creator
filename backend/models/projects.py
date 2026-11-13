@@ -94,6 +94,7 @@ class PatchProject(BaseModel):
     voice_recording_doc_id: str | None = None
     ref_image_preview: bool | None = None
     links_show_sessions: bool | None = None
+    editor_toolbar: bool | None = None
 
     @model_validator(mode="after")
     def _audiences_rules(self) -> "PatchProject":

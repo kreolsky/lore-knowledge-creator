@@ -38,6 +38,7 @@ import { isString, broadcastToBundles, dispatchEntityFrame } from './yjs-events'
 import { attachLocalDoc, clearLocalDoc, clearProjectLocalDocs, type LocalDocHandle } from './local-doc-persistence';
 import { dispatchDocControlFrame, type DocCollabCallbacks } from './doc-callbacks';
 import { createDocumentUndo, destroyDocumentUndo } from './document-undo';
+import { attachNoteReanchor } from './note-undo-reanchor';
 import { TABLE_LOCAL_ORIGIN } from '../components/editor/live-preview/table-block-model';
 import { REPLACE_ALL_ORIGIN } from '../components/editor/find-replace-undo';
 import type { EntityType } from './entity-types';
@@ -79,6 +80,8 @@ export interface EntityYjsState {
   /** Per-registration teardown — removes THIS joinEntity's bundle only (multi-consumer). */
   leave: () => void;
   disposeObserver: () => void;
+  /** Detaches the undo/redo note re-anchor listener (collab/note-undo-reanchor.ts). */
+  disposeNoteReanchor: () => void;
   disposeAwareness: () => void;
   // SYSTEM: region-lock — reports the local selection to the backend so an agent
   // edit intersecting it is rejected. Undefined when the
@@ -361,6 +364,7 @@ export class YjsProjectProvider {
       this.send({ type: 'flush', entity_id: entityId });
       entity.disposeAwareness();
       if (!this._dropMirrorIfFullySynced(entityId, entity)) void entity.local?.detach();
+      entity.disposeNoteReanchor();
       destroyDocumentUndo(entity.ydoc);
       entity.ydoc.destroy();
       watchDeadDoc(entity.ydoc, entityId, 'disconnect');
@@ -403,6 +407,7 @@ export class YjsProjectProvider {
     const ydoc = new Y.Doc();
     const ytext = ydoc.getText('content');
     const undoManager = createDocumentUndo(ydoc, [TABLE_LOCAL_ORIGIN, REPLACE_ALL_ORIGIN]);
+    const disposeNoteReanchor = attachNoteReanchor(ydoc, undoManager, entityId);
     const local = attachLocalDoc(this.projectId, entityId, ydoc);
 
     const onUpdate = (update: Uint8Array, origin: unknown) => {
@@ -480,6 +485,7 @@ export class YjsProjectProvider {
       // consumers of the same entity are not torn down together.
       leave: () => this.leaveEntity(entityId, callbacks),
       disposeObserver,
+      disposeNoteReanchor,
       disposeAwareness,
       // Report the local selection to the advisory region-lock registry.
       // Bound here (not in awareness) because the backend needs absolute code-point
@@ -584,6 +590,7 @@ export class YjsProjectProvider {
     // the doc — writing into a destroyed doc is not something the mirror survives.
     const dropped = this._dropMirrorIfFullySynced(entityId, entity);
     if (!dropped) void entity.local?.detach();
+    entity.disposeNoteReanchor();
     destroyDocumentUndo(entity.ydoc);
     entity.ydoc.destroy();
     watchDeadDoc(entity.ydoc, entityId, 'leave');

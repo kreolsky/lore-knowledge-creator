@@ -22,9 +22,6 @@
       "minimumSystemVersion": "14.0",
       "entitlements": "Entitlements.plist",
       "signingIdentity": "-"
-    },
-    "resources": {
-      "swift-audio/.build/release/lore-audio-capture": "lore-audio-capture"
     }
   }
 }

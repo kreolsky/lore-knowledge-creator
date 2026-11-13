@@ -124,14 +124,15 @@ class AppliedUnverifiedError(HTTPException):
 
 def surgical_splice_text(text, from_cp: int, to_cp: int, new_text: str,
                          original_text: str | None = None) -> None:
-    """cp→UTF-8-byte del+insert on a pycrdt Text IN PLACE.
+    """Replace the code-point slice [from_cp, to_cp) of a pycrdt Text with `new_text`
+    IN PLACE, splicing only what changed inside the slice.
 
     The single source of truth for the surgical slice primitive, shared by
     the live-session path (`apply_external_content_change` surgical branch) and the
-    no-session path (`route_document_edits`). pycrdt `Text` indexes in UTF-8 bytes;
-    `from_cp`/`to_cp` are Unicode code points, so the prefix/slice are encoded once
-    to derive the byte offsets (the slice is encoded ONCE, not the whole prefix
-    twice).
+    no-session path (`route_document_edits`). The slice is diffed against `new_text`
+    by `_diff_spans` and applied through `_apply_cp_spans`, so the unchanged words
+    inside an agent's span keep their Yjs items and the note anchors on them
+    survive; the caps fall back to replacing the slice whole.
 
     # ARCH (TOCTOU corruption guard): when `original_text` is supplied,
     # verify `current[from_cp:to_cp] == original_text` AFTER re-reading the live text
@@ -144,16 +145,12 @@ def surgical_splice_text(text, from_cp: int, to_cp: int, new_text: str,
     # (wholesale callers / legacy tests) skips the check.
     """
     current = str(text)
-    fb = len(current[:from_cp].encode("utf-8"))
-    tb = fb + len(current[from_cp:to_cp].encode("utf-8"))
     if original_text is not None and current[from_cp:to_cp] != original_text:
         raise AppliedUnverifiedError(
             "edit range shifted by a concurrent edit — refresh to verify"
         )
-    if tb > fb:
-        del text[fb:tb]
-    if new_text:
-        text.insert(fb, new_text)
+    spans = _diff_spans(current[from_cp:to_cp], new_text)
+    _apply_cp_spans(text, current, [(from_cp + a, from_cp + b, r) for a, b, r in spans])
 
 
 # WHY: above this size a replaced line block is swapped whole instead of diffed
@@ -228,16 +225,25 @@ def minimal_splice_text(text, new_content: str) -> None:
     text keeps its items and every anchor on it survives. A middle with more than
     `_MAX_CHANGED_RUNS` changed-line runs is replaced whole (anchors inside it lost).
 
-    Computes the spans from ONE read of the text and applies them right-to-left in
-    one transaction with no await in between, so the offsets cannot go stale. cp
-    offsets become UTF-8 byte offsets (pycrdt indexing) in a single forward pass.
+    Computes the spans from ONE read of the text and applies them through
+    `_apply_cp_spans` with no await in between, so the offsets cannot go stale.
     """
     current = str(text)
     if current == new_content:
         return
+    _apply_cp_spans(text, current, _diff_spans(current, new_content))
+
+
+def _apply_cp_spans(text, current: str, spans: list[tuple[int, int, str]]) -> None:
+    """Apply ascending, non-overlapping cp spans over `current` (the text's value
+    read by the caller) right-to-left in ONE transaction.
+
+    pycrdt `Text` indexes in UTF-8 bytes; the cp offsets become byte offsets in a
+    single forward pass over `current`, so they must be absolute in `current`.
+    """
     byte_spans: list[tuple[int, int, str]] = []
     cp = bpos = 0
-    for from_cp, to_cp, replacement in _diff_spans(current, new_content):
+    for from_cp, to_cp, replacement in spans:
         fb = bpos + len(current[cp:from_cp].encode("utf-8"))
         tb = fb + len(current[from_cp:to_cp].encode("utf-8"))
         byte_spans.append((fb, tb, replacement))

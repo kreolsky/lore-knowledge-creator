@@ -253,11 +253,11 @@ function prep(text: string, over: Partial<TurnPrep> = {}): TurnPrep {
 
 const OPTS = { provider: 'mock', model: 'm1' }
 
-function mcpServer(fixtureUrl: string, token: string): import('../src/mcp-servers.ts').McpServerWire {
+function mcpServer(fixtureUrl: string, token: string, autoApprove = false): import('../src/mcp-servers.ts').McpServerWire {
   return {
     name: 'spike', url: fixtureUrl, title: 'Spike fixture',
     headers: { Authorization: `Bearer ${token}` },
-    secret_values: [token],
+    secret_values: [token], auto_approve: autoApprove,
   }
 }
 
@@ -448,6 +448,26 @@ test('a marked read-only tool runs with no ask; an unmarked write asks and allow
   }
 })
 
+// TEST-WHY: cross-process-contract — the backend's auto_approve on a real MCP fixture's payload entry lets an unmarked write run with no approval/asked event
+test('a server marked auto_approve runs an unmarked write with no ask', async () => {
+  const fixture = await startMcpFixture()
+  try {
+    const h = await harness([
+      { toolCall: { id: 'c1', name: 'mcp__spike__write_thing', args: '{"thing":"x"}' } },
+      { text: 'wrote' },
+    ])
+    await send(h, 's-auto', 'write', prep('write', {
+      mcpServers: [mcpServer(fixture.url, 'tok-AUTO', true)],
+    }))
+    await until(settled('s-auto'), 'the auto-approved turn')
+    assert.equal(fixture.writes, 1, 'the write ran')
+    assert.equal(sessionEvents.filter((e) => e.id === 's-auto'
+      && e.ev?.type === 'approval/asked').length, 0, 'no ask was raised')
+  } finally {
+    await fixture.close()
+  }
+})
+
 test('the scrub replaces a secret echoed in results and error results alike', async () => {
   const fixture = await startMcpFixture()
   try {
@@ -489,7 +509,7 @@ test('a stalled server costs at most the mount bound and its tools are absent', 
     const started = Date.now()
     await send(h, 's-stall', 'hello', prep('hello', {
       mcpServers: [{ name: 'stall', url: `http://127.0.0.1:${port}/mcp`, title: 'stall',
-        headers: { Authorization: 'Bearer tok-stall' }, secret_values: ['tok-stall'] }],
+        headers: { Authorization: 'Bearer tok-stall' }, secret_values: ['tok-stall'], auto_approve: false }],
     }))
     await until(settled('s-stall'), 'the turn', MCP_MOUNT_WAIT_MS + 5000)
     assert.ok(Date.now() - started < MCP_MOUNT_WAIT_MS + 4000,
@@ -524,7 +544,7 @@ test('a cross-origin redirect drops Authorization on the way', async () => {
       const h = await harness([{ text: 'done' }])
       await send(h, 's-redir', 'via redirect', prep('via redirect', {
         mcpServers: [{ name: 'spike', url: `http://127.0.0.1:${port}/mcp`, title: 'spike',
-          headers: { Authorization: `Bearer ${token}` }, secret_values: [token] }],
+          headers: { Authorization: `Bearer ${token}` }, secret_values: [token], auto_approve: false }],
       }))
       await until(settled('s-redir'), 'the turn')
       assert.ok(redirects.includes(`Bearer ${token}`), 'the first hop carried the header')

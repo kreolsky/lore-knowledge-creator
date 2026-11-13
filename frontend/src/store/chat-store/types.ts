@@ -381,7 +381,7 @@ export interface ChatState {
     action: 'allow_once' | 'allow_session' | 'reject',
     toolName: string,
     reason?: string,
-  ) => Promise<void>;
+  ) => Promise<VerdictOutcome>;
   // Drop the decision card for a call id (optimistic post-verdict / stale hold).
   removePendingVerdictByCall: (callId: string) => void;
   // Reload re-render: restore the session's still-held calls from the decision
@@ -396,6 +396,11 @@ export interface ChatState {
   // Actions — utility
   reset: () => void;
 }
+
+/** How a verdict POST ended: `sent` — the driver resolved the hold, the turn
+ * continues; `stale` — the hold was already gone (404/409), nothing continues;
+ * `failed` — not delivered (toasted), the card stays answerable. */
+export type VerdictOutcome = 'sent' | 'stale' | 'failed';
 
 export type Set = (
   partial: Partial<ChatState> | ((s: ChatState) => Partial<ChatState>),

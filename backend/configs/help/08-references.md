@@ -5,7 +5,7 @@ References are materials attached to a document: recordings, transcripts, files,
 ## How to add a reference
 
 - "Upload" in the "References" tab, or drag files into the panel.
-- "Create reference from selection" on the editor's selection toolbar.
+- "Create reference from selection" on the editor's formatting toolbar.
 - A voice note (see [Voice notes](help:voice)).
 - From outside: the recording apps (widget key) or an external agent (MCP key). Such references can be marked unread (see [Interface](help:interface)).
 - The agent: generated pictures and deep-research findings are saved as references of the open document. Asked to, it also saves a picture from any of your chats as a reference.

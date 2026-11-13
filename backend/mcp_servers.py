@@ -438,6 +438,7 @@ async def _render_one(db: AsyncSurreal, user_id: str, row: dict) -> dict | None:
         "url": row.get("url"),
         "headers": _auth_headers(row, key),
         "secret_values": [key] if key else [],
+        "auto_approve": bool(row.get("auto_approve")),
     }
 
 

@@ -120,6 +120,19 @@ class SessionUpdate(BaseModel):
     unindexed: bool | None = None
 
 
+class NoteAnchorUpdate(BaseModel):
+    """A note's new anchor: both bounds required; the quote only when it changes."""
+    anchor_rel_start: str
+    anchor_rel_end: str
+    anchor_quote: str | None = None
+
+    @model_validator(mode="after")
+    def _decode_bounds(self) -> "NoteAnchorUpdate":
+        relpos_from_wire(self.anchor_rel_start)
+        relpos_from_wire(self.anchor_rel_end)
+        return self
+
+
 class BranchCreate(BaseModel):
     # ARCH: fork a branch session after a message.
     # after_message_id = the LAST row the branch copies (its parent chain to

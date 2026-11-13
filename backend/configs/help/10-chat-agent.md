@@ -29,7 +29,7 @@ Model and reasoning mode are picked next to the input. "default" leaves the reas
 - **"Auto" unchecked** (default) — every change is shown first: allow once, allow for this chat, or reject. The card shows the proposed change: "before / after" for text and cell edits, the call's arguments for other actions. A rejection with an explanation makes the agent try another way.
 - **"Auto" checked** — changes apply at once. A snapshot is taken before every agent edit, so it can be rolled back (see [Snapshots and history](help:history)).
 
-Some actions ask every time, even with "Auto" checked: a request with your personal key that sends data (anything but reading), and a call to an external MCP server's tool that the server does not mark as read-only.
+Some actions ask every time, even with "Auto" checked: a request with your personal key that sends data (anything but reading), and a call to an external MCP server's tool that the server does not mark as read-only — unless the administrator (or your group's moderator) set that server to "Run without confirmation"; then all its tools run at once.
 
 ## Branches
 
@@ -50,7 +50,7 @@ To hide all chats of a document and its subtree at once, use "Hide this document
 
 ## Other actions
 
-- **Quote in chat** (⌘/Ctrl + J, or the button on the selection toolbar) — the selected text goes into the chat input as a quote, followed by a link to that passage of the document. Add your request and send it. A click on the link, in the chat or in a document, opens the document with the passage selected.
+- **Quote in chat** (⌘/Ctrl + J, or the button on the formatting toolbar) — the selected text goes into the chat input as a quote, followed by a link to that passage of the document. Add your request and send it. A click on the link, in the chat or in a document, opens the document with the passage selected.
 - **Clarify** — select part of the agent's answer and ask a follow-up about it.
 - **Continue** — an interrupted turn (step limit, error, lost connection) leaves a card with the reason and a "Continue" button. A reply cut off by an error stays on screen, also after a reload.
 - **Create document from response** — the answer becomes a new document.

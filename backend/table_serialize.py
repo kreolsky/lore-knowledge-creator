@@ -46,7 +46,7 @@ import re
 import uuid
 
 from fractional_indexing import generate_key_between, generate_n_keys_between
-from pycrdt import Array, Map, Text
+from pycrdt import Map, Text
 
 # WHY (cross-producer default column width): the px width assigned to a column
 # when none is captured. MUST equal the frontend `DEFAULT_COLUMN_WIDTH`
@@ -166,8 +166,8 @@ def cell_key(row_id: str, col_id: str) -> str:
 
 
 def _v2_parts(table):
-    """``(columns, rows, cells)`` of a v2 table Map, ``None`` for anything else (a v1
-    table awaiting migration reads as structurally broken, never half-parsed)."""
+    """``(columns, rows, cells)`` of a v2 table Map, ``None`` for anything else (an
+    entry in any other format reads as structurally broken, never half-parsed)."""
 
     if not isinstance(table, Map) or table.get("v") != TABLE_SCHEMA_VERSION:
         return None
@@ -177,20 +177,16 @@ def _v2_parts(table):
     return cols, rows, cells
 
 
-def table_awaits_migration(table) -> bool:
-    """True for a schema-v1 table (``columns``/``rows`` are positional ``Array``s) that
-    was never rebuilt to v2 (its document deferred before the ``tables_v2`` migration
-    was retired).
+def table_format_unknown(table) -> bool:
+    """True for a ``tables`` entry that is not a v2 table Map.
 
-    # INVARIANT(data-loss): a v1 table is never projected as an empty v2 table — capture
-    # skips it, ``apply_tables_json`` keeps it, agent reads report it. Why: an empty
-    # projection reaches a checkpoint, and restoring that checkpoint would rebuild the
-    # table empty; "awaits migration" is an explicit error, an empty table is a lie.
+    # INVARIANT(data-loss): a table not in the current format is never projected as an
+    # empty v2 table — capture skips it, ``apply_tables_json`` keeps it, agent reads
+    # report it. Why: an empty projection reaches a checkpoint, and restoring that
+    # checkpoint would rebuild the table empty; "unreadable format" is an explicit
+    # error, an empty table is a lie.
     """
-    return (
-        isinstance(table, Map) and table.get("v") is None
-        and isinstance(table.get("columns"), Array) and isinstance(table.get("rows"), Array)
-    )
+    return _v2_parts(table) is None
 
 
 def ordered_axis_ids(axis) -> list[str]:
@@ -527,7 +523,7 @@ def capture_tables_json(doc) -> str:
 
     Capture is LOSSLESS (unlike ``expand_tables``): cell text is read verbatim, no GFM
     escaping — ``|`` and ``\\n`` survive intact so restore rebuilds identical cells.
-    A v1 table awaiting migration is OMITTED, never emitted empty.
+    A table in an unreadable format is OMITTED, never emitted empty.
     """
 
     tables = doc.get("tables", type=Map)
@@ -535,8 +531,8 @@ def capture_tables_json(doc) -> str:
         return "{}"
     out: dict[str, dict] = {}
     for tid, table in tables.items():
-        if table_awaits_migration(table):
-            continue  # see INVARIANT on table_awaits_migration
+        if table_format_unknown(table):
+            continue  # see INVARIANT on table_format_unknown
         widths, rows = _table_columns_and_rows(table)
         entry: dict = {"columns": widths, "rows": rows}
         if merges := [[a["r0"], a["c0"], a["r1"], a["c1"]] for a in resolve_merges(table)]:
@@ -552,8 +548,9 @@ def apply_tables_json(doc, tables_json: str | None) -> None:
     (fresh Yjs structures, NOT a replayed update — consistent with the
     ``SEED_CLIENT_ID`` deterministic-seed rule for content in ydoc_store). No-op for
     ``None`` (legacy restore: leave the tables map untouched) and for ``"{}"`` / empty
-    (clears to no tables). A v1 table the snapshot does not name is KEPT — capture
-    skipped it (see ``table_awaits_migration``), so the snapshot holds no truth about it.
+    (clears to no tables). An unreadable-format table the snapshot does not name is
+    KEPT — capture skipped it (see ``table_format_unknown``), so the snapshot holds no
+    truth about it.
 
     Runs inside a single ``doc.transaction()`` so the rebuild is one atomic Yjs update — the
     broadcast update (set_content / apply_external_content_change) then carries the whole
@@ -570,7 +567,7 @@ def apply_tables_json(doc, tables_json: str | None) -> None:
 
     with doc.transaction():
         for key in list(tables.keys()):
-            if key in data or not table_awaits_migration(tables[key]):
+            if key in data or not table_format_unknown(tables[key]):
                 del tables[key]
         for tid, model in data.items():
             cols_src = model.get("columns") or []

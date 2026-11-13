@@ -20,9 +20,13 @@ pub struct Config {
     /// Days to keep local recording files (default: 2).
     #[serde(default = "default_retention_days")]
     pub retention_days: u32,
+    /// Windows: mix system playback (call participants) into the recording (default: on).
+    #[serde(default = "default_true")]
+    pub record_system_audio: bool,
 }
 
 fn default_retention_days() -> u32 { 2 }
+fn default_true() -> bool { true }
 
 impl Default for Config {
     fn default() -> Self {
@@ -30,6 +34,7 @@ impl Default for Config {
             api_key_encoded: String::new(),
             history: Vec::new(),
             retention_days: default_retention_days(),
+            record_system_audio: true,
         }
     }
 }
@@ -47,7 +52,7 @@ fn config_path() -> PathBuf {
     data_dir().join("config.json")
 }
 
-/// Directory for local recording WAV files.
+/// Directory for local recording files (M4A on macOS, Ogg/Opus on Windows).
 pub fn recordings_dir() -> PathBuf {
     let dir = data_dir().join("recordings");
     std::fs::create_dir_all(&dir).ok();
@@ -101,7 +106,7 @@ pub fn cleanup_old_recordings(retention_days: u32) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path.extension().is_some_and(|ext| ext == "m4a" || ext == "wav") {
+        if !path.extension().is_some_and(|ext| ext == "m4a" || ext == "wav" || ext == "ogg") {
             continue;
         }
         if let Ok(meta) = path.metadata() {
@@ -125,7 +130,7 @@ pub fn find_orphaned_recordings() -> Vec<PathBuf> {
     let mut orphans = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "m4a" || ext == "wav") {
+        if path.extension().is_some_and(|ext| ext == "m4a" || ext == "wav" || ext == "ogg") {
             if let Ok(meta) = path.metadata() {
                 if meta.len() > 8 {
                     orphans.push(path);
@@ -134,4 +139,41 @@ pub fn find_orphaned_recordings() -> Vec<PathBuf> {
         }
     }
     orphans
+}
+
+/// A fresh recording file path: `widget-<UTC date> <HH:MM:SS>.<ext>`.
+pub fn new_recording_path(ext: &str) -> PathBuf {
+    recordings_dir().join(format!("widget-{}.{ext}", chrono_compact_now()))
+}
+
+/// Frontend voice-recording format plus seconds: "2026-03-18 04:02:37".
+/// WHY: seconds because `File::create` truncates — a minute-resolution name let a second
+/// recording in the same minute overwrite a first one still waiting for its upload retry.
+/// WHY: ':' is illegal in a Windows file name, and the name becomes the
+/// reference title — Windows uses "04.02.37" rather than failing to create the file.
+fn chrono_compact_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let s = secs % 60;
+    let m = (secs / 60) % 60;
+    let h = (secs / 3600) % 24;
+    let days = secs / 86400;
+    let (y, mo, d) = civil_from_days(days as i64);
+    let sep = if cfg!(windows) { '.' } else { ':' };
+    format!("{y:04}-{mo:02}-{d:02} {h:02}{sep}{m:02}{sep}{s:02}")
+}
+
+/// Convert days since 1970-01-01 to (year, month, day).
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z.rem_euclid(146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
 }

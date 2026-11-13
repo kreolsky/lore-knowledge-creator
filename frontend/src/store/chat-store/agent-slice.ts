@@ -29,7 +29,7 @@ export function createAgentSlice(set: Set, get: Get): AgentSlice {
       reason?: string,
     ) {
       const sessionId = get().activeSessionId;
-      if (!sessionId) return;
+      if (!sessionId) return 'failed';
       try {
         await apiClient.post('/chat/verdicts', {
           call_id: callId,
@@ -41,6 +41,7 @@ export function createAgentSlice(set: Set, get: Get): AgentSlice {
         // Drop the card optimistically; the resolved call's tool result (or a
         // reload) confirms.
         get().removePendingVerdictByCall(callId);
+        return 'sent';
       } catch (e) {
         if (e instanceof HttpError && (e.status === 404 || e.status === 409)) {
           // WHY: a 404 here is not a degraded state — the hold is already gone
@@ -54,9 +55,10 @@ export function createAgentSlice(set: Set, get: Get): AgentSlice {
           if (e.status === 409) {
             useAppStore.getState().showToast(t('verdictExpired'), 'warning');
           }
-        } else {
-          useAppStore.getState().showToast(t('verdictFailed'), 'error');
+          return 'stale';
         }
+        useAppStore.getState().showToast(t('verdictFailed'), 'error');
+        return 'failed';
       }
     },
     removePendingVerdictByCall(callId: string) {

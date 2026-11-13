@@ -17,9 +17,9 @@ If the connection drops during recording, the recording is kept in the browser a
 
 With the cursor in the document's text, ⌘/Ctrl + D inserts the transcript at the cursor. The chat and notes have a microphone button next to the input field; Escape discards the take without transcribing it.
 
-## Apps for Android and macOS
+## Apps for Android, Windows and macOS
 
-Voice recorders that can also record system audio (calls). Recordings from an app land as references of the document its key belongs to. The Android APK, when the administrator has published it, is downloadable from `/downloads/` on the Lore site.
+Voice recorders. Recordings from an app land as references of the document its key belongs to. The Android APK and the Windows installer, when the administrator has published them, are downloadable from `/downloads/` on the Lore site.
 
 Lore Voice for Android:
 
@@ -29,6 +29,8 @@ Lore Voice for Android:
 - keeps a history of recordings: swipe to delete (with undo), play back, open a recording's card;
 - shows the transcript once the server has it;
 - in Settings: the app version and an "Upload journal" with the server's answer to every upload, which can be copied when something fails.
+
+Lore Recorder for Windows and macOS sits in the tray: start a recording from its icon, and when it stops the recording is uploaded and its transcript copied to the clipboard. On Windows it records the microphone together with the computer's sound, so the other participants of a call are in the recording; "Record system audio (call participants)" in its settings turns that off. On macOS it records the microphone only. If the microphone is lost mid-recording, the recording stops with an error naming the saved partial file instead of uploading it as complete.
 
 Connecting an app:
 

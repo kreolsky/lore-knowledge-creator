@@ -1,12 +1,13 @@
-/** Table serialization — checkpoint JSON and GFM projections of the model (twin of `backend/table_serialize.py`; see SYSTEM: table-block, table-block-model.ts). */
+/** Table serialization — checkpoint JSON, GFM and clipboard-HTML projections of the model (twin of `backend/table_serialize.py`; see SYSTEM: table-block, table-block-model.ts). */
 import type * as Y from 'yjs';
 import type { EditorView } from '@codemirror/view';
 import {
-  TABLE_SYSTEM_ORIGIN, buildTable, getTablesMap, readTableModel, resolveMerges, tableAwaitsMigration,
+  TABLE_SYSTEM_ORIGIN, buildTable, getTablesMap, readTableModel, resolveMerges, tableFormatUnknown,
   type TableModel,
 } from './table-block-model';
 import { DEFAULT_COLUMN_WIDTH, freezeAutoWidths } from './table-widths';
 import { TABLE_ANCHOR_RE } from './table-document-ops';
+import { islandToken, renderCellHtml, type Island } from '../markdown-to-html';
 
 /**
  * Serialize the whole `tables` subtree to compact JSON for checkpoint capture.
@@ -21,15 +22,15 @@ import { TABLE_ANCHOR_RE } from './table-document-ops';
  * rebuilds a default-width table. `table-serialize.test.ts` shares one fixture with
  * the backend `test_table_capture.py` to guard this.
  *
- * A v1 table awaiting migration is OMITTED, never emitted empty (see
- * `tableAwaitsMigration`). `'{}'` when there are no tables. Capture is lossless (cell
+ * A table in an unreadable format is OMITTED, never emitted empty (see
+ * `tableFormatUnknown`). `'{}'` when there are no tables. Capture is lossless (cell
  * text verbatim, no GFM escaping).
  */
 export function serializeTables(doc: Y.Doc): string {
   const tables = getTablesMap(doc);
   const out: Record<string, { columns: number[]; rows: string[][]; merges?: number[][] }> = {};
   tables.forEach((table, id) => {
-    if (tableAwaitsMigration(table)) return;
+    if (tableFormatUnknown(table)) return;
     const model = readTableModel(doc, id);
     if (!model) return;
     const merges = resolveMerges(doc, id).map((a) => [a.r0, a.c0, a.r1, a.c1]);
@@ -48,8 +49,8 @@ export function serializeTables(doc: Y.Doc): string {
  * converge without an intermediate orphan-anchor state. Mirrors the backend
  * `apply_tables_json`.
  *
- * A v1 table the snapshot does not name is KEPT (capture skipped it — see
- * `tableAwaitsMigration` — so the snapshot holds no truth about it). Runs under
+ * An unreadable-format table the snapshot does not name is KEPT (capture skipped it — see
+ * `tableFormatUnknown` — so the snapshot holds no truth about it). Runs under
  * `TABLE_SYSTEM_ORIGIN`: seeding is outside the undo stack (see the origins ARCH).
  */
 export function applyTablesJson(doc: Y.Doc, tablesJson: string | null): void {
@@ -59,7 +60,7 @@ export function applyTablesJson(doc: Y.Doc, tablesJson: string | null): void {
 
   doc.transact(() => {
     tables.forEach((table, id) => {
-      if (data[id] !== undefined || !tableAwaitsMigration(table)) tables.delete(id);
+      if (data[id] !== undefined || !tableFormatUnknown(table)) tables.delete(id);
     });
     Object.entries(data).forEach(([id, model]) => {
       const columns = model.columns ?? [];
@@ -114,7 +115,7 @@ export function modelToGfm(model: TableModel): string {
 
 /**
  * Replace every `![label](table:id)` anchor in `markdown` with the GFM serialization of its
- * model. A model that is missing (orphan anchor / mount race / awaiting migration) is left
+ * model. A model that is missing (orphan anchor / mount race / unreadable format) is left
  * untouched — the copy handler degrades gracefully and never throws. Read-only on the Y.Doc.
  */
 export function expandTableAnchorsToGfm(doc: Y.Doc, markdown: string): string {
@@ -123,6 +124,53 @@ export function expandTableAnchorsToGfm(doc: Y.Doc, markdown: string): string {
     if (!model) return full;
     return modelToGfm(model);
   });
+}
+
+/**
+ * Render a table model as clipboard HTML for external editors (Word / Docs / Sheets): row 0
+ * in `<thead>`, the rest in `<tbody>`; an area's anchor cell carries `colspan`/`rowspan`
+ * (omitted when 1) and its covered cells are not emitted. Built from the model, not from GFM:
+ * GFM has no spans and its pipe grammar would split a cell holding `|`.
+ */
+export function modelToHtml(model: TableModel, areas: readonly { r0: number; c0: number; r1: number; c1: number }[]): string {
+  const rows = model.rows;
+  if (rows.length === 0) return '';
+  const width = Math.max(model.columns.length, ...rows.map((r) => r.length), 1);
+  const anchors = new Map(areas.map((a) => [`${a.r0}:${a.c0}`, a]));
+  const covered = new Set(areas.flatMap((a) => {
+    const keys: string[] = [];
+    for (let r = a.r0; r <= a.r1; r++) for (let c = a.c0; c <= a.c1; c++) if (r !== a.r0 || c !== a.c0) keys.push(`${r}:${c}`);
+    return keys;
+  }));
+  const rowHtml = (cells: string[], r: number, tag: 'th' | 'td') => {
+    let out = '';
+    for (let c = 0; c < width; c++) {
+      if (covered.has(`${r}:${c}`)) continue;
+      const a = anchors.get(`${r}:${c}`);
+      const colspan = a && a.c1 > a.c0 ? ` colspan="${a.c1 - a.c0 + 1}"` : '';
+      const rowspan = a && a.r1 > a.r0 ? ` rowspan="${a.r1 - a.r0 + 1}"` : '';
+      out += `<${tag}${colspan}${rowspan}>${renderCellHtml(cells[c] ?? '')}</${tag}>`;
+    }
+    return `<tr>${out}</tr>`;
+  };
+  const body = rows.slice(1).map((cells, i) => rowHtml(cells, i + 1, 'td')).join('');
+  return `<table><thead>${rowHtml(rows[0], 0, 'th')}</thead><tbody>${body}</tbody></table>`;
+}
+
+/**
+ * Replace every table anchor in `markdown` with an `islandToken` and return the rendered
+ * tables (`modelToHtml`, with `modelToGfm` as the text form) in token order — the `islands` of `cleanMarkdownToHtml`. A missing
+ * model leaves its anchor untouched (copy never throws). Read-only on the Y.Doc.
+ */
+export function tableAnchorsToIslands(doc: Y.Doc, markdown: string): { text: string; islands: Island[] } {
+  const islands: Island[] = [];
+  const text = markdown.replace(TABLE_ANCHOR_RE, (full, _label: string, id: string) => {
+    const model = readTableModel(doc, id);
+    if (!model) return full;
+    islands.push({ html: modelToHtml(model, resolveMerges(doc, id)), text: modelToGfm(model) });
+    return islandToken(islands.length - 1);
+  });
+  return { text, islands };
 }
 
 /**

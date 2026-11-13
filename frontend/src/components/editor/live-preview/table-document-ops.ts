@@ -224,6 +224,16 @@ export interface DocumentTableEntry {
    * it stays reachable (open / delete / restore-by-fixing-the-anchor) from the panel.
    */
   unlinked: boolean;
+  /** Set (only) when the model exists but is not in a readable format; `rows`/`cols` are 0. */
+  unreadable?: true;
+}
+
+/** Shape fields of an EXISTING model; `null` for an id with no model (an orphan anchor). */
+function entryShape(doc: Y.Doc, id: string): Pick<DocumentTableEntry, 'rows' | 'cols' | 'unreadable'> | null {
+  const shape = readTableShape(doc, id);
+  if (shape) return shape;
+  // WHY: an unreadable model is still listed — see the INVARIANT on `listDocumentTables`.
+  return getTablesMap(doc).has(id) ? { rows: 0, cols: 0, unreadable: true } : null;
 }
 
 /**
@@ -251,18 +261,18 @@ export function listDocumentTables(doc: Y.Doc): DocumentTableEntry[] {
     const label = m[1] as string;
     const id = m[2] as string;
     if (seen.has(id)) continue;
-    const shape = readTableShape(doc, id);
+    const shape = entryShape(doc, id);
     if (!shape) continue;
     seen.add(id);
-    out.push({ table_id: id, label, rows: shape.rows, cols: shape.cols, unlinked: false });
+    out.push({ table_id: id, label, ...shape, unlinked: false });
   }
   // Unlinked models (no anchor references them) — appended below the linked group.
   for (const id of getTablesMap(doc).keys()) {
     if (seen.has(id)) continue;
-    const shape = readTableShape(doc, id);
+    const shape = entryShape(doc, id);
     if (!shape) continue;
     seen.add(id);
-    out.push({ table_id: id, label: getModelLabel(doc, id), rows: shape.rows, cols: shape.cols, unlinked: true });
+    out.push({ table_id: id, label: getModelLabel(doc, id), ...shape, unlinked: true });
   }
   return out;
 }

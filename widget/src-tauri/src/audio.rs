@@ -1,4 +1,4 @@
-/// Audio capture via Swift CLI subprocess (lore-audio-capture).
+/// macOS audio capture via Swift CLI subprocess (lore-audio-capture).
 ///
 /// AVAudioRecorder writes M4A (AAC) directly to ~/.lore-widget/recordings/.
 /// Files persist on disk even if the app crashes — they can be retried on next launch.
@@ -66,14 +66,13 @@ impl AudioRecorder {
     }
 
     /// Start recording microphone audio to ~/.lore-widget/recordings/.
-    pub fn start(&self) -> Result<(), String> {
+    /// WHY: system-audio capture is Windows-only; the flag keeps the per-OS surface identical.
+    pub fn start(&self, _record_system_audio: bool) -> Result<Option<String>, String> {
         if self.is_recording() {
             return Err("Already recording".into());
         }
 
-        let recordings = store::recordings_dir();
-        let timestamp = chrono_compact_now();
-        let audio_file = recordings.join(format!("widget-{timestamp}.m4a"));
+        let audio_file = store::new_recording_path("m4a");
 
         let helper = Self::helper_path();
         let mut child = std::process::Command::new(&helper)
@@ -98,7 +97,7 @@ impl AudioRecorder {
         *self.inner.recording.lock().unwrap() = true;
 
         std::thread::spawn(move || { let _ = child.wait(); });
-        Ok(())
+        Ok(None)
     }
 
     /// Stop recording and return (audio_bytes, audio_path).
@@ -129,30 +128,4 @@ impl AudioRecorder {
 
         Ok((audio_bytes, audio_path))
     }
-}
-
-/// Format matching frontend voice recordings: "2026-03-18 04:02"
-fn chrono_compact_now() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-    let m = (secs / 60) % 60;
-    let h = (secs / 3600) % 24;
-    let days = secs / 86400;
-    let (y, mo, d) = civil_from_days(days as i64);
-    format!("{y:04}-{mo:02}-{d:02} {h:02}:{m:02}")
-}
-
-/// Convert days since 1970-01-01 to (year, month, day).
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let z = days + 719468;
-    let era = z.div_euclid(146097);
-    let doe = z.rem_euclid(146097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
 }

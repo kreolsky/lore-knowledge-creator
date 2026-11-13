@@ -70,7 +70,7 @@ import { openCellMenu } from './table-cell-menu';
 import { t } from '../../../i18n';
 import {
   getTablesMap,
-  tableAwaitsMigration,
+  tableFormatUnknown,
   orderedRowIds,
   orderedColIds,
   readColumnWidths,
@@ -331,13 +331,14 @@ export class TableBlockWidget extends WidgetType {
     const doc = this.doc;
     if (!wrap || !doc) return; // mount race — observer attaches; re-render later.
 
-    // INVARIANT(data-loss): a v1 table awaiting migration renders an explicit error,
-    // never an empty grid. Why: see `tableAwaitsMigration` — an empty table is a lie
+    // INVARIANT(data-loss): an existing table in an unreadable format renders an explicit
+    // error, never an empty grid. Why: see `tableFormatUnknown` — an empty table is a lie
     // the user would "fix" by typing into it.
-    if (tableAwaitsMigration(getTablesMap(doc).get(this.tableId))) {
+    const entry = getTablesMap(doc).get(this.tableId);
+    if (entry !== undefined && tableFormatUnknown(entry)) {
       this.resetTable();
       this.renderedRowCount = 0;
-      wrap.replaceChildren(this.renderError(t('tableBlockAwaitsMigration')));
+      wrap.replaceChildren(this.renderError(t('tableBlockUnknownFormat')));
       return;
     }
 
@@ -1051,7 +1052,7 @@ export class TableBlockWidget extends WidgetType {
 
   /**
    * A non-actionable inline error: the snapshot-preview missing-model state (the
-   * checkpoint did not capture this table) and the "awaits migration" state. Distinct
+   * checkpoint did not capture this table) and the "unknown format" state. Distinct
    * from `renderMissing` — no "remove anchor?" button — and a message that names the
    * real cause, so it is visibly different from an empty table (no-silent-degradation).
    */

@@ -27,8 +27,7 @@ import {
   getCellText,
   ensureCell,
   readColumnWidths,
-  readTableShape,
-  tableAwaitsMigration,
+  tableFormatUnknown,
   TABLE_SCHEMA_VERSION,
   TABLE_LOCAL_ORIGIN,
   type RowId,
@@ -36,7 +35,7 @@ import {
   TABLE_SYSTEM_ORIGIN,
 } from './table-block-model';
 import { birthColumnWidths, DEFAULT_COLUMN_WIDTH } from './table-widths';
-import { tableAnchor, cloneDuplicateAnchors } from './table-document-ops';
+import { tableAnchor, cloneDuplicateAnchors, listDocumentTables } from './table-document-ops';
 import { serializeTables, applyTablesJson } from './table-serialize';
 
 let doc: Y.Doc;
@@ -44,30 +43,11 @@ beforeEach(() => {
   doc = new Y.Doc();
 });
 
-/** A minimal v1 table (positional Y.Arrays), hand-built as the pre-migration writer left it. */
-function seedV1Table(doc: Y.Doc, id: string, matrix: string[][]): void {
-  doc.transact(() => {
-    const table = new Y.Map();
-    const columns = new Y.Array();
-    columns.push(matrix[0].map(() => {
-      const col = new Y.Map();
-      col.set('w', 100);
-      return col;
-    }));
-    const rows = new Y.Array();
-    rows.push(matrix.map((row) => {
-      const yrow = new Y.Array();
-      yrow.push(row.map((cell) => {
-        const m = new Y.Map();
-        m.set('t', new Y.Text(cell));
-        return m;
-      }));
-      return yrow;
-    }));
-    table.set('columns', columns);
-    table.set('rows', rows);
-    getTablesMap(doc).set(id, table);
-  });
+/** A `tables` entry in a format this version cannot read. */
+function seedUnknownFormatTable(doc: Y.Doc, id: string): void {
+  const table = new Y.Map();
+  table.set('v', 99);
+  getTablesMap(doc).set(id, table);
 }
 
 function cellsOf(d: Y.Doc, id: string): Y.Map<Y.Text> {
@@ -220,32 +200,31 @@ describe('structure mutations (id-keyed)', () => {
   });
 });
 
-describe('v1 tables (awaiting migration) — never empty', () => {
-  // TEST-WHY: data-loss — a v1 table projected as EMPTY reaches a checkpoint, and restoring that checkpoint rebuilds it empty.
-  it('a v1 table never projects empty: probed, skipped by capture, kept by restore', () => {
+describe('tables in an unreadable format — never empty', () => {
+  // TEST-WHY: data-loss — a table in an unreadable format projected as EMPTY reaches a checkpoint, and restoring that checkpoint rebuilds it empty.
+  it('an unreadable table never projects empty: probed, listed, skipped by capture, kept by restore', () => {
     const id = createTable(doc, [['a', 'b']]);
-    expect(tableAwaitsMigration(getTablesMap(doc).get(id))).toBe(false);
+    expect(tableFormatUnknown(getTablesMap(doc).get(id))).toBe(false);
 
-    seedV1Table(doc, 'v1', [['x', 'y'], ['z', 'w']]);
-    const v1 = getTablesMap(doc).get('v1');
-    expect(tableAwaitsMigration(v1)).toBe(true);
-    // Reads: broken (null) for the matrix, but the panel still sees its shape.
-    expect(readTableModel(doc, 'v1')).toBeNull();
-    expect(readColumnWidths(doc, 'v1')).toBeNull();
-    expect(readTableShape(doc, 'v1')).toEqual({ rows: 2, cols: 2 });
+    seedUnknownFormatTable(doc, 'bad');
+    expect(tableFormatUnknown(getTablesMap(doc).get('bad'))).toBe(true);
+    // Reads: broken (null) for the matrix, but the panel still lists it.
+    expect(readTableModel(doc, 'bad')).toBeNull();
+    expect(readColumnWidths(doc, 'bad')).toBeNull();
+    expect(listDocumentTables(doc)).toContainEqual(expect.objectContaining({ table_id: 'bad', unreadable: true }));
 
     // Capture OMITS it — never emits an empty table.
     expect(JSON.parse(serializeTables(doc))).toEqual({
       [id]: { columns: [422, 422], rows: [['a', 'b']] },
     });
 
-    // Restore KEEPS an unnamed v1 table (the snapshot holds no truth about it) and
+    // Restore KEEPS an unnamed unreadable table (the snapshot holds no truth about it) and
     // REPLACES a named one (the rebuild wins).
     applyTablesJson(doc, JSON.stringify({ fresh: { columns: [7], rows: [['q']] } }));
-    expect(tableAwaitsMigration(getTablesMap(doc).get('v1'))).toBe(true);
+    expect(tableFormatUnknown(getTablesMap(doc).get('bad'))).toBe(true);
     expect(readTableModel(doc, 'fresh')!.rows).toEqual([['q']]);
-    applyTablesJson(doc, JSON.stringify({ v1: { columns: [7], rows: [['rebuilt']] } }));
-    expect(readTableModel(doc, 'v1')!.rows).toEqual([['rebuilt']]);
+    applyTablesJson(doc, JSON.stringify({ bad: { columns: [7], rows: [['rebuilt']] } }));
+    expect(readTableModel(doc, 'bad')!.rows).toEqual([['rebuilt']]);
   });
 });
 

@@ -9,6 +9,8 @@ mocked-DB unit path (previously E2E-only via the subtree-narrow suite).
 
 from unittest.mock import AsyncMock, patch
 
+from helpers import dim_vec
+
 import config
 from retrieval import RetrievalHit
 
@@ -139,10 +141,9 @@ class TestFetchRelevantChunks:
 
 
 class TestFetchModelPredicateRealRows:
-    """The model + dimension legs against a real DB: a KNOWN-stale row never
-    surfaces, a NONE row survives the drain window, and a wrong-dimension row
-    is OMITTED where cosine alone would have raised (a crash into an omission
-    is the whole point of the guard)."""
+    """The model leg against a real DB: a KNOWN-stale row never surfaces and a
+    NONE row survives the drain window. (A wrong-dimension row cannot be stored
+    at all under the HNSW index — test_vector_index proves the write raises.)"""
 
     async def test_stale_excluded_none_and_current_included(self,
                                                             project_with_doc,
@@ -155,16 +156,15 @@ class TestFetchModelPredicateRealRows:
         pid, _host_id, _uid = project_with_doc
         current = await settings_mod.get("EMBEDDING_MODEL")
 
-        doc_id, wide_id = "retmodel-doc", "retmodel-wide"
+        doc_id = "retmodel-doc"
         db = await get_db()
-        for did in (doc_id, wide_id):
-            await db.query("DELETE type::record('documents', $id)", {"id": did})
-            await db.query("DELETE doc_chunks WHERE document_id = $id", {"id": did})
-            await create_record("documents", did, {
-                "project_id": pid, "parent_id": None, "title": did,
-                "content": f"body of {did}", "path": f"{did}.md",
-                "is_reference": False,
-            })
+        await db.query("DELETE type::record('documents', $id)", {"id": doc_id})
+        await db.query("DELETE doc_chunks WHERE document_id = $id", {"id": doc_id})
+        await create_record("documents", doc_id, {
+            "project_id": pid, "parent_id": None, "title": doc_id,
+            "content": f"body of {doc_id}", "path": f"{doc_id}.md",
+            "is_reference": False,
+        })
 
         async def chunk(cid, did, content, model, vec):
             await db.query(
@@ -176,16 +176,12 @@ class TestFetchModelPredicateRealRows:
                  "model": model, "emb": vec},
             )
 
-        await chunk("retmodel-c-none", doc_id, "row-none", None, [1.0, 0.0])
-        await chunk("retmodel-c-stale", doc_id, "row-stale", "other-model", [1.0, 0.0])
-        await chunk("retmodel-c-current", doc_id, "row-current", current, [1.0, 0.0])
-        # A future swap's wrong-dimension row: cosine against the 2-dim query
-        # would raise; the guard must omit it silently instead.
-        await chunk("retmodel-c-wide", wide_id, "row-wide", None,
-                    [1.0, 0.0, 0.0, 0.0])
+        await chunk("retmodel-c-none", doc_id, "row-none", None, dim_vec(1.0))
+        await chunk("retmodel-c-stale", doc_id, "row-stale", "other-model", dim_vec(1.0))
+        await chunk("retmodel-c-current", doc_id, "row-current", current, dim_vec(1.0))
 
         async def _embed(texts, **kwargs):
-            return [[1.0, 0.0] for _ in texts]
+            return [dim_vec(1.0) for _ in texts]
 
         monkeypatch.setattr(retrieval, "embed_texts", _embed)
         result = await retrieval.retrieve_context(
@@ -197,11 +193,9 @@ class TestFetchModelPredicateRealRows:
             assert "row-none" in snippets, "a NONE-model row vanished from search"
             assert "row-current" in snippets, "a current-model row vanished from search"
             assert "row-stale" not in snippets, "a KNOWN-stale row surfaced"
-            assert "row-wide" not in snippets, "a wrong-dimension row surfaced"
         finally:
-            for did in (doc_id, wide_id):
-                await db.query("DELETE type::record('documents', $id)", {"id": did})
-                await db.query("DELETE doc_chunks WHERE document_id = $id", {"id": did})
+            await db.query("DELETE type::record('documents', $id)", {"id": doc_id})
+            await db.query("DELETE doc_chunks WHERE document_id = $id", {"id": doc_id})
 
 
 # ─── _classify_chunk_hits (kind gating, dedupe, anti-monopoly) ───────────────

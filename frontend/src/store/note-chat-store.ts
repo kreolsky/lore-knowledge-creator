@@ -14,6 +14,7 @@ import { registerLogoutHandler, getLogoutEpoch } from './logout-handlers';
 import { upsertByKey } from './chat-store/upsert';
 import { loadMessagesFor, patchMessageContent, deleteMessageById } from './chat-message-crud';
 import { t } from '../i18n';
+import type { NoteAnchorWire } from '../collab/note-anchor-wire';
 
 // ARCH: SWR cache for the note-session list (see SYSTEM: swr-cache). Unlike the AI
 // chat-store this store has no in-flight dedup / terminal INVARIANT, so SWR lands as
@@ -115,6 +116,10 @@ interface NoteChatState {
   }) => Promise<ChatSession>;
   setActiveSession: (sessionId: string | null) => void;
   deleteSession: (sessionId: string) => Promise<void>;
+  /** The one client writer of an existing note's anchor (undo revival, paste, manual
+   * attach): optimistic patch → POST; a failure rolls the fields back and toasts.
+   * `quote` is sent only when the anchored words changed (manual attach). */
+  reanchorNote: (sessionId: string, anchor: NoteAnchorWire, quote?: string) => Promise<void>;
   /** Delete a note this client created if it is still untouched (no message, no
    * draft, no queued image). Returns true when the delete was issued. */
   discardIfFresh: (sessionId: string) => boolean;
@@ -145,6 +150,10 @@ interface NoteChatState {
     message?: ChatMessage;
     message_ids?: string[];
     preview?: { first?: string | null; last?: string | null; count?: number; last_at?: string | null };
+    // Carried by the `reanchored` frame only.
+    anchor_rel_start?: string;
+    anchor_rel_end?: string;
+    anchor_quote?: string | null;
   }) => void;
 
   reset: () => void;
@@ -363,6 +372,35 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
     }
   },
 
+  async reanchorNote(sessionId: string, anchor: NoteAnchorWire, quote?: string) {
+    const prev = get().sessions.find(s => s.session_id === sessionId);
+    if (!prev) return;
+    const before = {
+      anchor_rel_start: prev.anchor_rel_start,
+      anchor_rel_end: prev.anchor_rel_end,
+      anchor_quote: prev.anchor_quote,
+    };
+    const body: Record<string, string> = { anchor_rel_start: anchor.relStart, anchor_rel_end: anchor.relEnd };
+    if (quote !== undefined) body.anchor_quote = quote;
+    set(s => ({
+      sessions: s.sessions.map(ss => (ss.session_id === sessionId ? { ...ss, ...body } : ss)),
+    }));
+    try {
+      await apiClient.post(`/chat/sessions/${sessionId}/anchor`, body);
+    } catch {
+      // WHY the guard: roll back only while our patch is still the session's anchor — a
+      // later re-anchor (a second undo, a remote frame) must not be clobbered by this one.
+      set(s => ({
+        sessions: s.sessions.map(ss => (
+          ss.session_id === sessionId
+          && ss.anchor_rel_start === anchor.relStart && ss.anchor_rel_end === anchor.relEnd
+            ? { ...ss, ...before } : ss
+        )),
+      }));
+      useAppStore.getState().showToast(t('noteReanchorFailed'), 'error');
+    }
+  },
+
   discardIfFresh(sessionId: string) {
     if (!freshNoteIds.has(sessionId)) return false;
     const s = get();
@@ -566,7 +604,7 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
   },
 
   applyMessageChange(payload) {
-    const { action, session_id, message, message_ids, preview } = payload;
+    const { action, session_id, message, message_ids, preview, anchor_rel_start, anchor_rel_end } = payload;
     if (action === 'added') freshNoteIds.delete(session_id);
     set(s => {
       let messages = s.messages;
@@ -582,10 +620,20 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
       }
       // Always patch the owning session's preview from the derived `preview` (the
       // actor already set the same values → idempotent, no double-count).
+      // A `reanchored` frame also moves the note's anchor (idempotent for the actor,
+      // whose reanchorNote already patched the same values).
+      const reanchored = action === 'reanchored' && anchor_rel_start && anchor_rel_end;
       const sessions = s.sessions.map(ss => {
-        if (ss.session_id !== session_id || !preview) return ss;
-        return {
+        if (ss.session_id !== session_id || (!preview && !reanchored)) return ss;
+        const next = reanchored ? {
           ...ss,
+          anchor_rel_start,
+          anchor_rel_end,
+          anchor_quote: payload.anchor_quote !== undefined ? payload.anchor_quote : ss.anchor_quote,
+        } : ss;
+        if (!preview) return next;
+        return {
+          ...next,
           first_message_preview: preview.first ?? ss.first_message_preview,
           last_message_preview: preview.last ?? ss.last_message_preview,
           message_count: typeof preview.count === 'number' ? preview.count : ss.message_count,

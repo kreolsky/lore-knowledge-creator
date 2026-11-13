@@ -1333,6 +1333,11 @@
             "title": "Auth Scheme",
             "type": "string"
           },
+          "auto_approve": {
+            "default": false,
+            "title": "Auto Approve",
+            "type": "boolean"
+          },
           "enabled": {
             "default": true,
             "title": "Enabled",
@@ -1443,6 +1448,17 @@
               }
             ],
             "title": "Auth Scheme"
+          },
+          "auto_approve": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Approve"
           },
           "enabled": {
             "anyOf": [
@@ -1745,6 +1761,36 @@
         "title": "MoveDocumentToProject",
         "type": "object"
       },
+      "NoteAnchorUpdate": {
+        "description": "A note's new anchor: both bounds required; the quote only when it changes.",
+        "properties": {
+          "anchor_quote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor Quote"
+          },
+          "anchor_rel_end": {
+            "title": "Anchor Rel End",
+            "type": "string"
+          },
+          "anchor_rel_start": {
+            "title": "Anchor Rel Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "anchor_rel_start",
+          "anchor_rel_end"
+        ],
+        "title": "NoteAnchorUpdate",
+        "type": "object"
+      },
       "PatchCheckpoint": {
         "properties": {
           "comment": {
@@ -1868,6 +1914,17 @@
               }
             ],
             "title": "Description"
+          },
+          "editor_toolbar": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Editor Toolbar"
           },
           "links_show_sessions": {
             "anyOf": [
@@ -9100,6 +9157,73 @@
         ]
       }
     },
+    "/api/chat/sessions/{session_id}/anchor": {
+      "post": {
+        "description": "Re-write a note's anchor (undo revival, cut+paste, manual attach) and broadcast it.\n\nThe range is NOT checked against the quote or the old state: a cell anchor\nresolves `external` server-side and the live session can be ahead of the\nstored ydoc. A full-access user can already rewrite the anchored text, so\nmoving its highlight grants nothing new.",
+        "operationId": "reanchor_note_api_chat_sessions__session_id__anchor_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoteAnchorUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reanchor Note",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
     "/api/chat/sessions/{session_id}/branches": {
       "post": {
         "description": "Fork a branch session after a message: a new chat_sessions row of the\nsame thread holding a COPY of the shared prefix (rows up to and including\nafter_message_id along its parent chain).\n\nA prefix with no completed turn (the walk's root branch) has nothing to\nseed: no seed_source_* stamp is written and the branch's dsh log starts\nfresh under its own id on the first turn.",
@@ -12301,7 +12425,7 @@
         "summary": "Get Project"
       },
       "patch": {
-        "description": "Update project fields (name, description, status, audiences, project_context, ref_image_preview, links_show_sessions). Requires full access or admin.",
+        "description": "Update project fields (name, description, status, audiences, project_context, ref_image_preview, links_show_sessions, editor_toolbar). Requires full access or admin.",
         "operationId": "patch_project_api_projects__project_id__patch",
         "parameters": [
           {

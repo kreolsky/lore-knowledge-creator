@@ -486,6 +486,7 @@ async def test_key_flow_render_and_delete_cascades(
         "url": "https://127.0.0.1:9301/mcp",
         "headers": {"Authorization": f"Bearer {TOKEN_VALUE}"},
         "secret_values": [TOKEN_VALUE],
+        "auto_approve": False,
     }]
     assert _build_turn_payload(
         model="m", system_prompt="s", tools=[], agent_key="k", apply_mode="ask",

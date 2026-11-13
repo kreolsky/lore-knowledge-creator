@@ -1,0 +1,105 @@
+{
+  "name": "dev-cir",
+  "project_id": "00d26d30-c049-480b-92fd-5f506efae456",
+  "comment": "Dev project 'CIR: узи омт'. Chosen because it is NOT a fixture of the parallel search_materials measurement, so it can be backfilled without destroying anyone's test objects. Russian technical corpus with a deep heading tree (extractor guide, УЗИ protocol instructions, benchmark run) plus 40 memory facts — so it also exercises the fact-level ranking. `expect` matches the parent title case-insensitively as a substring.",
+  "queries": [
+    {
+      "id": "exact-qwen-model",
+      "class": "exact",
+      "query": "Qwen3.6-27B-abliterated",
+      "expect": "benchmark",
+      "why": "Verbatim model id. Sanity floor — a miss means the index is broken, not imprecise."
+    },
+    {
+      "id": "exact-patientcode",
+      "class": "exact",
+      "query": "PatientCode",
+      "expect": "variables",
+      "why": "Verbatim identifier inside a fenced YAML block — the construct the naive heading regex mis-handles."
+    },
+    {
+      "id": "exact-calculate-key",
+      "class": "exact",
+      "query": "calculate плейсхолдеры конфигурации",
+      "expect": "extractor",
+      "why": "Verbatim config keys that exist as headings AND in body prose."
+    },
+    {
+      "id": "para-config-edit-checklist",
+      "class": "paraphrase",
+      "query": "что проверить перед тем как править настройки извлечения",
+      "expect": "extractor",
+      "why": "Restates '## Контрольный список перед изменением конфига' without its words (контрольный/список/конфиг)."
+    },
+    {
+      "id": "para-transcription-mistakes",
+      "class": "paraphrase",
+      "query": "какие слова диктовка распознаёт неправильно",
+      "expect": "instructions",
+      "why": "Restates '### Характерные ошибки транскрибации аудио' in a user's own words."
+    },
+    {
+      "id": "para-model-accuracy",
+      "class": "paraphrase",
+      "query": "насколько точно модель совпала с эталоном",
+      "expect": "benchmark",
+      "why": "The document states a score (1238/1260); the query never uses its vocabulary (расхождения/промахов)."
+    },
+    {
+      "id": "broad-protocol-rules",
+      "class": "broad",
+      "query": "правила заполнения протокола УЗИ",
+      "expect": "instructions",
+      "why": "Broad 'where is anything about X'. Competes with template/bufer, which are also about the protocol — the class a summary level would serve."
+    },
+    {
+      "id": "broad-extractor-overview",
+      "class": "broad",
+      "query": "как устроен экстрактор",
+      "expect": "extractor",
+      "why": "Deliberately vague; expected weak before the summary level exists."
+    },
+    {
+      "id": "section-four-layers",
+      "class": "section",
+      "query": "что нельзя смешивать между слоями",
+      "expect": "extractor",
+      "why": "Answer lives under '## Четыре слоя ответственности — не смешивать'. The heading carries the discriminating words; the body enumerates layers without restating them — the direct probe for the breadcrumb change (D1)."
+    },
+    {
+      "id": "section-where-in-code",
+      "class": "section",
+      "query": "куда смотреть в исходниках",
+      "expect": "extractor",
+      "why": "Maps to '## Где смотреть в коде'; the body is a bare path list with no such phrase."
+    },
+    {
+      "id": "section-content-filtering",
+      "class": "section",
+      "query": "что выкидывать из расшифровки",
+      "expect": "instructions",
+      "why": "Maps to '### Фильтрация контента' — nested under the protocol prompt, needs the ANCESTOR path, not just the local heading."
+    },
+    {
+      "id": "section-caesarean-scar",
+      "class": "section",
+      "query": "рубец на матке и кесарево сечение",
+      "expect": "bufer",
+      "why": "A document with NO headings at all — the control for the breadcrumb change: it must not regress when there is no heading path to prepend."
+    },
+    {
+      "id": "memory-fact-ivig",
+      "class": "memory",
+      "query": "внутривенные иммуноглобулины при беременности",
+      "expect": "Внутривенные иммуноглобулины",
+      "why": "A project-memory fact must outrank raw chunks on its own subject (the fact-level ordering INVARIANT). Guards that chunker changes do not disturb the memory level."
+    },
+    {
+      "id": "memory-fact-hcq",
+      "class": "memory",
+      "query": "чем помогает гидроксихлорохин",
+      "expect": "Гидроксихлорохин",
+      "why": "Second fact-level probe, phrased as a question rather than a term."
+    }
+  ]
+}

@@ -228,7 +228,7 @@ async def _persist_projection_extras(message_id: str, fields: dict) -> None:
     #
     # ARCH: the card rides the
     # `halt` column, not a `segments` member — the column IS the type, so the
-    # card carries only reason/steps(/limit).
+    # card carries reason/steps(/limit) plus where the mint stood (`anchor_seq`/`turn`).
 
     Only non-empty fields are set, so a halt with no known model writes just the
     card.

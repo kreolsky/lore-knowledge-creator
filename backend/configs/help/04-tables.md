@@ -11,7 +11,7 @@ A table stands on its own line, like a picture: the cursor, clicks and arrow key
 - A table copied from a web page, Word, Excel or Google Sheets becomes a Lore table when pasted into a document.
 - Ask the agent: it can create tables, add rows and columns, and fill in cells.
 
-A new table gets column widths that follow its content: a long column is wider, a short one narrower. An empty table inserted with ⌘/Ctrl + ⇧ + T takes part of the text width, leaving room for more columns. A table pasted from Google Docs, Sheets or Excel unfolds merged cells into ordinary ones.
+A new table gets column widths that follow its content: a long column is wider, a short one narrower. An empty table inserted with ⌘/Ctrl + ⇧ + T takes part of the text width, leaving room for more columns. A table with merged cells pasted from Google Docs, Sheets, Word or Excel keeps its merges.
 
 ## How to edit
 
@@ -19,10 +19,12 @@ A new table gets column widths that follow its content: a long column is wider, 
 - Tab moves to the next cell, ⇧ + Tab to the previous one. Tab in the last cell adds a new row and moves to its first cell.
 - Enter breaks a line inside a cell; it does not create a new table row.
 - The cell with the cursor is outlined with a frame.
+- **Selecting cells.** One click edits a cell. Esc in a cell, ⇧ + click on another cell, or a drag across cells selects a rectangle of cells. Arrows move the selection, ⇧ + arrows grow it, Tab walks the cells without adding rows. Typing, Enter or F2 edits the highlighted head cell, ⌘/Ctrl + V replaces its text, Delete clears every selected cell in one undo step, Esc puts the cursor after the table.
+- **Merging cells.** Select a range and choose "Merge cells" in its right-click menu; when other cells of the range hold text, the menu item says how many will lose it. "Unmerge cells" keeps the text in the top-left cell. Arrows, Tab, selection, Find and Backspace row deletion treat a merged area as one cell; a row or column cannot be moved across a merged area.
 - **Right-click on a cell** opens its menu: insert a row above or below, insert a column to the left or right, move the row up or down, move the column left or right, delete the row, delete the column, delete the table. ⇧ + right-click opens the browser's own menu instead.
 - Backspace at the start of an empty row's first cell deletes that row.
 - Every column has a fixed width; no column stretches on its own. A column inserted from the menu takes the width of the column you clicked.
-- Dragging a column's border changes the width of that column only; a double click on the border fits the column to its longest line. The corner handle on the table's frame scales the whole table, keeping the proportions of its columns; a double click on it fits the table to the width of the text, with columns proportional to their content. While you hover or drag a handle, the edges it moves are highlighted. A table wider than the page scrolls inside its own block.
+- Dragging a column's border changes the width of that column only; a double click on the border fits the column to its longest line. The corner handle on the table's frame scales the whole table, keeping the proportions of its columns; a double click on it keeps the table's width and lays out the columns by their content: short columns stay on one line, long ones share the rest. While you hover or drag a handle, the edges it moves are highlighted. A table wider than the page scrolls inside its own block.
 - Undo (⌘/Ctrl + Z) steps back through one history for the whole document: text, cell edits, row and column operations and resizes undo in the order they happened. Another person's or the agent's edits are never undone by your ⌘/Ctrl + Z.
 - Pictures in cells work as in the text: drop or paste them into a cell (see [Images and embeds](help:embeds)). They share one gallery with the pictures in the text.
 - Links, external links included, and [notes](help:notes) work inside cells: a note made in a cell is attached to that cell's text. Links in cells show up in the "Links" tab.
@@ -42,4 +44,6 @@ Deleting a whole table from the text — selecting it and pressing Delete, cutti
 
 If only the marker is damaged (a character of `table:…` was changed), or the table was erased by another person or by undo, the table itself stays: in the list it is marked "no link in text", and the "Insert into document" button puts it back at the cursor.
 
-Document snapshots also keep the state of its tables (see [Snapshots and history](help:history)).
+Copying a table keeps its merged cells: into another Lore document, and into Word, Google Docs or Sheets.
+
+Document snapshots also keep the state of its tables, merges included (see [Snapshots and history](help:history)). The agent sees merged areas and does not write into a cell hidden by a merge.

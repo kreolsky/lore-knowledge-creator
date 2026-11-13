@@ -28,12 +28,13 @@ pinning "default untouched", not a Red test.
 
 
 import pytest
+from helpers import dim_vec
 
 # The monkeypatched query embedding. Seeded chunks carry either this vector
 # (cosine 1.0) or NEAR_VEC (cosine 0.95) — both clear RETRIEVAL_MIN_SCORE and
 # stay within the per-kind drop-off ratio of each other.
-QUERY_VEC = [1.0, 0.0]
-NEAR_VEC = [0.95, 0.31224989991992]
+QUERY_VEC = dim_vec(1.0, 0.0)
+NEAR_VEC = dim_vec(0.95, 0.31224989991992)
 
 TOKEN = "vertigo"
 

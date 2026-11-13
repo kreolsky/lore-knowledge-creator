@@ -5,6 +5,10 @@
  * tool for the session, reject with text. Publishing the verdict resolves the
  * held call; the resolved call's tool result replaces the card.
  *
+ * Between a delivered verdict and that tool result the card is already
+ * answered: it folds to a status line with no buttons (see the INVARIANT on
+ * `decided`).
+ *
  * `argsRaw` (optional): the held call's own arguments, read off its tool-call
  * node by the caller — the ask frame itself carries only {turn, callId,
  * toolName}, and dsh appends the call node BEFORE asking. The reload path
@@ -16,6 +20,7 @@ import { ShieldAlert, AlertTriangle } from 'lucide-react';
 import { Button, FieldInput } from '../ui';
 import { ToolPlate } from './ToolPlate';
 import type { PendingVerdict } from '../../types';
+import type { VerdictOutcome } from '../../store/chat-store/types';
 import { useChatStore } from '../../store/chat-store';
 import { useTranslation } from '../../i18n';
 
@@ -32,6 +37,8 @@ function DiffPre({ text, tone }: { text: string; tone: 'removed' | 'added' }) {
 
 /** Tools asked on every call. Display only: the driver refuses the session
  * grant by the backend's per_call_approval flag, whatever the card offers. */
+type VerdictAction = 'allow_once' | 'allow_session' | 'reject';
+
 const NO_SESSION_GRANT_TOOLS = new Set(['http_request']);
 
 const RAW_PRE_CLASS = 'text-xs font-mono whitespace-pre-wrap break-words m-0 max-h-40 overflow-y-auto';
@@ -164,20 +171,49 @@ export function VerdictCard({ pending, argsRaw }: { pending: PendingVerdict; arg
   const [busy, setBusy] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState('');
+  // INVARIANT: once the verdict is delivered the card never offers its buttons
+  // again — it folds to a status line until the call's tool result replaces it.
+  // Why: the tool and the model's next step can take a while after the POST
+  // returns; re-armed buttons on a still-standing card read as a hung card or
+  // as the agent asking again, and a second click is a second verdict.
+  const [decided, setDecided] = useState<{ action: VerdictAction; outcome: Exclude<VerdictOutcome, 'failed'> } | null>(null);
 
-  const decide = async (action: 'allow_once' | 'allow_session' | 'reject') => {
+  const decide = async (action: VerdictAction) => {
     setBusy(action);
+    let outcome: VerdictOutcome = 'failed';
     try {
-      await decideVerdict(
+      outcome = await decideVerdict(
         pending.call_id,
         action,
         pending.tool_name,
         action === 'reject' ? reason : undefined,
       );
     } finally {
-      setBusy(null);
+      if (outcome === 'failed') setBusy(null);
+      else setDecided({ action, outcome });
     }
   };
+
+  if (decided) {
+    const continuing = decided.outcome === 'sent';
+    const label = continuing
+      ? t(decided.action === 'reject' ? 'verdictRejectedContinuing' : 'verdictApprovedContinuing')
+      : t('verdictBody');
+    // WHY key: without it React reuses the ask plate's instance and keeps its
+    // expanded state — the answered card would stay open.
+    return (
+      <ToolPlate
+        key="decided"
+        icon={<ShieldAlert size={13} />}
+        title={pending.tool_name}
+        footer={
+          <div className={`text-ui-sm text-text-dim ${continuing ? 'animate-pulse' : ''}`}>{label}</div>
+        }
+      >
+        {argsRaw ? <VerdictArgs toolName={pending.tool_name} argsRaw={argsRaw} /> : null}
+      </ToolPlate>
+    );
+  }
 
   return (
     <ToolPlate

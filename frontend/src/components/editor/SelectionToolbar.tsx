@@ -1,12 +1,14 @@
-/** Floating toolbar that appears on text selection for quick formatting. Store slices: selectionEmpty. Events consumed: show-link-suggestions, editor-selection-change. */
+/** Floating toolbar that appears on text selection for quick formatting (suppressed while the docked bar is on; note-only bars stay). Store slices: selectionEmpty. Events consumed: show-link-suggestions, editor-selection-change. */
 
 import type React from 'react';
 import { useState, useEffect, useCallback, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { EditorView } from '@codemirror/view';
-import { Bold, Italic, Strikethrough, TextQuote, Code, FileCode2, Link2, StickyNote, FileText, ChevronDown, List, ListOrdered, ListChecks, MessageSquareQuote } from 'lucide-react';
-import { markdownActionRegistry, applyColorHighlight, getLastHighlightColor, createReference, HIGHLIGHT_COLORS, canQuoteToChat, isHostTextView } from './markdown-actions';
+import { StickyNote, MessageSquareQuote } from 'lucide-react';
+import { markdownActionRegistry, canQuoteToChat, isHostTextView } from './markdown-actions';
 import { isPanelPreviewView } from '../../editor/editor-plugins';
+import { FormattingButtons, detectActiveStyles, NO_STYLES, ICON_SIZE, type ActiveStyles } from './FormattingButtons';
+import { useDockedToolbarOn } from './DockedFormatToolbar';
 import { selectedAtomicRange } from './live-preview/atomic-delete-guard';
 import { useUIStore } from '../../store/ui-store';
 import { useAppStore } from '../../store/app-store';
@@ -16,74 +18,6 @@ import { useEditorView } from '../../editor/active-editor';
 import { useTranslation } from '../../i18n';
 import { Button } from '../ui';
 import { isArtifactSourceView } from './artifact-source-extensions';
-
-interface ActiveStyles {
-  headingLevel: number;
-  bold: boolean;
-  italic: boolean;
-  strikethrough: boolean;
-  inlineCode: boolean;
-  quote: boolean;
-  bullet: boolean;
-  numbered: boolean;
-  checkbox: boolean;
-}
-
-const STYLE_OPTIONS = [
-  { labelKey: 'textStyle' as const, level: 0, hotkey: '\u2325\u2318 0' },
-  { labelKey: 'heading1' as const, level: 1, hotkey: '\u2325\u2318 1' },
-  { labelKey: 'heading2' as const, level: 2, hotkey: '\u2325\u2318 2' },
-  { labelKey: 'heading3' as const, level: 3, hotkey: '\u2325\u2318 3' },
-  { labelKey: 'heading4' as const, level: 4, hotkey: '\u2325\u2318 4' },
-] as const;
-
-const ICON_SIZE = 15;
-
-function detectActiveStyles(view: EditorView): ActiveStyles {
-  const { from, to } = view.state.selection.main;
-  const line = view.state.doc.lineAt(from);
-
-  const headingMatch = line.text.match(/^(#{1,4})\s/);
-  const headingLevel = headingMatch ? headingMatch[1].length : 0;
-
-  const selected = view.state.sliceDoc(from, to);
-  const checkMarker = (marker: string): boolean => {
-    const len = marker.length;
-    if (selected.startsWith(marker) && selected.endsWith(marker) && selected.length >= len * 2) return true;
-    const before = view.state.sliceDoc(Math.max(0, from - len), from);
-    const after = view.state.sliceDoc(to, Math.min(view.state.doc.length, to + len));
-    return before === marker && after === marker;
-  };
-
-  const endLine = view.state.doc.lineAt(to);
-  let allQuoted = true;
-  for (let i = line.number; i <= endLine.number; i++) {
-    if (!view.state.doc.line(i).text.startsWith('> ')) { allQuoted = false; break; }
-  }
-
-  let allBullet = true;
-  let allNumbered = true;
-  let allCheckbox = true;
-  for (let i = line.number; i <= endLine.number; i++) {
-    const t = view.state.doc.line(i).text;
-    if (t.length === 0) continue;
-    if (!(t.startsWith('- ') || t.startsWith('* '))) allBullet = false;
-    if (!(/^\d+\.\s/.test(t))) allNumbered = false;
-    if (!(t.startsWith('- [ ] ') || t.startsWith('- [x] ') || t.startsWith('- [X] '))) allCheckbox = false;
-  }
-
-  return {
-    headingLevel,
-    bold: checkMarker('**'),
-    italic: checkMarker('*') && !checkMarker('**'),
-    strikethrough: checkMarker('~~'),
-    inlineCode: checkMarker('`'),
-    quote: allQuoted,
-    bullet: allBullet,
-    numbered: allNumbered,
-    checkbox: allCheckbox,
-  };
-}
 
 interface ToolbarAnchor {
   centerX: number;
@@ -133,10 +67,10 @@ export default function SelectionToolbar() {
   const [visible, setVisible] = useState(false);
   const [offscreen, setOffscreen] = useState(false);
   const [anchor, setAnchor] = useState<ToolbarAnchor>({ centerX: 0, belowTop: 0, aboveBottom: 0 });
-  const [styles, setStyles] = useState<ActiveStyles>({ headingLevel: 0, bold: false, italic: false, strikethrough: false, inlineCode: false, quote: false, bullet: false, numbered: false, checkbox: false });
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-  const [colorPickerOpen, setColorPickerOpen] = useState(false);
-  const [lastColor, setLastColor] = useState(() => getLastHighlightColor());
+  const [styles, setStyles] = useState<ActiveStyles>(NO_STYLES);
+  // Style menu or colour picker open — a change re-measures the bar's placement.
+  const [popupOpen, setPopupOpen] = useState(false);
+  const dockedOn = useDockedToolbarOn();
   const toolbarRef = useRef<HTMLDivElement>(null);
   const mouseDownRef = useRef(false);
   // Where the pointer released the selection; null after a keyboard selection. State,
@@ -147,8 +81,6 @@ export default function SelectionToolbar() {
 
   const hide = useCallback(() => {
     setVisible(false);
-    setDropdownOpen(false);
-    setColorPickerOpen(false);
     hasPendingRef.current = false;
   }, []);
 
@@ -222,7 +154,9 @@ export default function SelectionToolbar() {
   // Reposition toolbar on selection range changes while already visible
   useEffect(() => {
     if (!visible) return;
-    const onSelChange = () => {
+    // WHY skip empty: the feed also fires on caret moves; hiding is owned by selectionEmpty.
+    const onSelChange = ({ empty }: { empty: boolean }) => {
+      if (empty) return;
       const view = getEditorView();
       if (!view) return;
       const { from, to } = view.state.selection.main;
@@ -319,7 +253,7 @@ export default function SelectionToolbar() {
 
     el.style.left = `${center}px`;
     el.style.top = `${top}px`;
-  }, [visible, anchor, dropdownOpen, colorPickerOpen, guestBar, pointer]);
+  }, [visible, anchor, popupOpen, guestBar, pointer]);
 
   const view = getEditorView();
   if (!visible || offscreen || !view || !(canEdit || canNoteOnly)) return null;
@@ -372,175 +306,25 @@ export default function SelectionToolbar() {
     );
   }
 
-  /** Execute a formatting action, then refresh styles/position or hide if selection collapsed. */
-  const executeAction = (action: keyof typeof markdownActionRegistry, closeDropdown = false) => {
-    markdownActionRegistry[action](view);
-    view.focus();
-    if (closeDropdown) setDropdownOpen(false);
-    setTimeout(() => {
-      const { from, to } = view.state.selection.main;
-      if (from !== to) {
-        setStyles(detectActiveStyles(view));
-        const a = computeAnchor(view);
-        if (a) setAnchor(a);
-      } else hide();
-    }, 0);
-  };
+  // WHY: the docked bar carries the same buttons; a second copy under the selection is noise.
+  if (dockedOn) return null;
 
-  const handleHeading = (level: number) => {
-    const action = level === 0 ? 'clearFormatting' : `heading${level}` as keyof typeof markdownActionRegistry;
-    executeAction(action, true);
+  /** After a formatting action: refresh styles/position, or hide if the selection collapsed. */
+  const afterAction = () => {
+    const { from, to } = view.state.selection.main;
+    if (from === to) { hide(); return; }
+    setStyles(detectActiveStyles(view));
+    const a = computeAnchor(view);
+    if (a) setAnchor(a);
   };
-
-  const noFocus = (e: React.MouseEvent) => e.preventDefault();
-  const currentStyleLabel = styles.headingLevel > 0 ? `H${styles.headingLevel}` : t('textStyle');
 
   return createPortal(
     <div
       ref={toolbarRef}
-      onMouseDown={noFocus}
+      onMouseDown={(e: React.MouseEvent) => e.preventDefault()}
       className="selection-toolbar left-0 top-0 -translate-x-1/2"
     >
-      {/* Style dropdown */}
-      <div className="relative">
-        <button className="sel-toolbar-btn gap-1 min-w-[52px]" onClick={() => { setDropdownOpen(!dropdownOpen); setColorPickerOpen(false); }}>
-          <span className="font-semibold text-ui-base">{currentStyleLabel}</span>
-          <ChevronDown size={12} />
-        </button>
-        {dropdownOpen && (
-          <div className="sel-toolbar-dropdown">
-            {STYLE_OPTIONS.map((opt) => {
-              const isActive = styles.headingLevel === opt.level;
-              return (
-                <button
-                  key={opt.level}
-                  onClick={() => handleHeading(opt.level)}
-                  style={{
-                    fontWeight: opt.level > 0 ? 700 : 400,
-                    fontSize: opt.level === 1 ? 17 : opt.level === 2 ? 15 : opt.level === 3 ? 14 : 13,
-                  }}
-                  className={`sel-toolbar-btn${isActive ? ' active' : ''} w-full py-1.5 px-3 justify-between`}
-                >
-                  <span>{opt.level > 0 && <span className="opacity-40 mr-2 text-ui-sm font-bold">H{opt.level}</span>}{t(opt.labelKey)}</span>
-                  <span className="opacity-35 text-ui-xs font-[system-ui]">{opt.hotkey}</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      <div className="separator" />
-
-      <div className="relative">
-        <button
-          className="sel-toolbar-btn"
-          title={t('colorTitle')}
-          aria-label={t('colorTitle')}
-          onClick={() => {
-            if (colorPickerOpen) {
-              applyColorHighlight(view, lastColor);
-              view.focus();
-              setColorPickerOpen(false);
-              setTimeout(() => {
-                const { from, to } = view.state.selection.main;
-                if (from !== to) {
-                  setStyles(detectActiveStyles(view));
-                  const a = computeAnchor(view);
-                  if (a) setAnchor(a);
-                } else hide();
-              }, 0);
-            } else {
-              setDropdownOpen(false);
-              setColorPickerOpen(true);
-            }
-          }}
-        >
-          <span
-            className="block w-[15px] h-[15px]"
-            style={{ backgroundColor: lastColor }}
-          />
-        </button>
-        {colorPickerOpen && (
-          <div className="sel-toolbar-color-picker">
-            {HIGHLIGHT_COLORS.map((color) => (
-              <button
-                key={color}
-                className={`sel-toolbar-color-swatch${color === lastColor ? ' active' : ''}`}
-                style={{ backgroundColor: color }}
-                aria-label={color}
-                onClick={() => {
-                  applyColorHighlight(view, color);
-                  setLastColor(color);
-                  view.focus();
-                  setColorPickerOpen(false);
-                  setTimeout(() => {
-                    const { from, to } = view.state.selection.main;
-                    if (from !== to) {
-                      setStyles(detectActiveStyles(view));
-                      const a = computeAnchor(view);
-                      if (a) setAnchor(a);
-                    } else hide();
-                  }, 0);
-                }}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="separator" />
-
-      <button className={`sel-toolbar-btn${styles.bold ? ' active' : ''}`} onClick={() => executeAction('bold')} title={t('boldTitle')}>
-        <Bold size={ICON_SIZE} />
-      </button>
-      <button className={`sel-toolbar-btn${styles.italic ? ' active' : ''}`} onClick={() => executeAction('italic')} title={t('italicTitle')}>
-        <Italic size={ICON_SIZE} />
-      </button>
-      <button className={`sel-toolbar-btn${styles.strikethrough ? ' active' : ''}`} onClick={() => executeAction('strikethrough')} title={t('strikethroughTitle')}>
-        <Strikethrough size={ICON_SIZE} />
-      </button>
-
-      <div className="separator" />
-
-      <button className={`sel-toolbar-btn${styles.bullet ? ' active' : ''}`} onClick={() => executeAction('bulletList')} title={t('bulletListTitle')}>
-        <List size={ICON_SIZE} />
-      </button>
-      <button className={`sel-toolbar-btn${styles.numbered ? ' active' : ''}`} onClick={() => executeAction('numberedList')} title={t('numberedListTitle')}>
-        <ListOrdered size={ICON_SIZE} />
-      </button>
-      <button className={`sel-toolbar-btn${styles.checkbox ? ' active' : ''}`} onClick={() => executeAction('checkboxList')} title={t('checkboxListTitle')}>
-        <ListChecks size={ICON_SIZE} />
-      </button>
-
-      <div className="separator" />
-
-      <button className={`sel-toolbar-btn${styles.quote ? ' active' : ''}`} onClick={() => executeAction('quote')} title={t('quoteTitle')}>
-        <TextQuote size={ICON_SIZE} />
-      </button>
-      <button className={`sel-toolbar-btn${styles.inlineCode ? ' active' : ''}`} onClick={() => executeAction('inlineCode')} title={t('inlineCodeTitle')}>
-        <Code size={ICON_SIZE} />
-      </button>
-      <button className="sel-toolbar-btn" onClick={() => executeAction('codeBlock')} title={t('codeBlockTitle')}>
-        <FileCode2 size={ICON_SIZE} />
-      </button>
-
-      <div className="separator" />
-
-      <button className="sel-toolbar-btn" onClick={() => { executeAction('createLink'); hide(); }} title={t('linkTitle')}>
-        <Link2 size={ICON_SIZE} />
-      </button>
-      {/* Panel quick preview: no notes on the previewed reference (decision A) —
-          hide the button; the Mod-M keymap path toasts via createNote's gate. */}
-      {!isPanelPreviewView(view) && (
-        <button className="sel-toolbar-btn" onClick={() => { executeAction('createNote'); hide(); }} title={t('noteTitle')}>
-          <StickyNote size={ICON_SIZE} />
-        </button>
-      )}
-      <button className="sel-toolbar-btn" onClick={() => { createReference(view); hide(); }} title={t('createReferenceTitle')}>
-        <FileText size={ICON_SIZE} />
-      </button>
-      {quoteButton}
+      <FormattingButtons view={view} styles={styles} onAfterAction={afterAction} onSelectionAction={hide} onPopupChange={setPopupOpen} />
     </div>,
     document.body
   );

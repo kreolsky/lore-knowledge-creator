@@ -201,6 +201,9 @@ DEFINE FIELD IF NOT EXISTS voice_recording_doc_id ON projects TYPE option<string
 DEFINE FIELD IF NOT EXISTS ref_image_preview     ON projects TYPE bool DEFAULT true;
 -- Project-wide: links panel lists notes & chats (true) or documents only.
 DEFINE FIELD IF NOT EXISTS links_show_sessions   ON projects TYPE bool DEFAULT false;
+-- Project-wide: the formatting toolbar is docked above the editor (true) or floats on a selection.
+DEFINE FIELD IF NOT EXISTS editor_toolbar        ON projects TYPE bool DEFAULT true
+  MIGRATE EXISTING ROWS AS projects_editor_toolbar USING $value ?? true FALLBACK true;
 DEFINE FIELD IF NOT EXISTS deleted_at            ON projects TYPE option<datetime>;
 
 -- ─── Project Members ──────────────────────────────────────────────────────────
@@ -646,7 +649,7 @@ DEFINE FIELD IF NOT EXISTS reasoning_effort    ON chat_sessions TYPE option<stri
 DEFINE FIELD IF NOT EXISTS context_document_ids  ON chat_sessions TYPE option<array<string>>;
 DEFINE FIELD IF NOT EXISTS context_document_ids[*] ON chat_sessions TYPE string;
 -- INVARIANT: legacy reference_id/context_reference_ids columns retired 2026-05.
--- Why: folded into document_id/context_document_ids by migrate_2026_05_refactor.merge_chat_session_refs.
+-- Why: folded into document_id/context_document_ids.
 -- (API param reference_id is preserved — see models.py AliasChoices.)
 DEFINE FIELD IF NOT EXISTS created_at       ON chat_sessions TYPE datetime DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS updated_at       ON chat_sessions TYPE datetime DEFAULT time::now();
@@ -798,6 +801,24 @@ DEFINE FIELD IF NOT EXISTS model           ON doc_chunks TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS updated_at      ON doc_chunks TYPE datetime DEFAULT time::now();
 DEFINE INDEX IF NOT EXISTS doc_chunks_doc_idx  ON doc_chunks FIELDS document_id;
 DEFINE INDEX IF NOT EXISTS doc_chunks_proj_idx ON doc_chunks FIELDS project_id;
+-- Vector index for retrieval's per-kind KNN (retrieval._kind_chunk_query): the
+-- KNN operator shares the WHERE with project_id/kind/model, and v4's KnnScan
+-- pre-filters through doc_chunks_proj_idx, so the search walks one project.
+-- WHY no CONCURRENTLY (unlike the FULLTEXT indexes): a KNN against a `building`
+-- HNSW index silently returns wrong rows (surrealdb#7543). Built blocking inside
+-- apply_schema, before the app serves, no query can meet a half-built index; the
+-- cost is a one-time wait on the first boot after this line lands (IF NOT EXISTS),
+-- measured on gray at prod scale against the deploy's 180 s health budget.
+-- WHY EFC 300 M 24 spelled out: at M 12 near-duplicate clusters left near-top
+-- rows unreachable even unfiltered; written out so a new image's defaults can't move it.
+-- WHY DIMENSION 1024 = EMBEDDING_MODEL's output: a write of another length raises
+-- (an embedding failure in Admin → Embeddings). ONE stored vector of another length
+-- makes this DEFINE fail: apply_schema logs the ERROR and boots without the index,
+-- and every KNN then raises "needs an HNSW or DiskANN index" until the row is gone.
+-- A model swap that changes the dimension needs REMOVE INDEX + DEFINE ... DIMENSION n
+-- on both tables.
+DEFINE INDEX IF NOT EXISTS doc_chunks_embedding_hnsw ON doc_chunks
+  FIELDS embedding HNSW DIMENSION 1024 DIST COSINE TYPE F32 EFC 300 M 24;
 
 -- messages: add sources field (denormalized retrieval results)
 -- WHY array<object>: see `files` above — v4 refuses sub-fields under a bare array.
@@ -860,10 +881,10 @@ DEFINE FIELD IF NOT EXISTS outline_hidden ON documents TYPE option<int>;
 -- Do not be misled by the same two names in routes/chat/serializers.py — those are
 -- RESPONSE fields computed per request from context_ids, unrelated to the columns.
 -- The columns and tables are NOT necessarily gone from a given database: dropping
--- them is a separate irreversible cutover gated behind MIGRATION_DROP_LEGACY=1 in
--- backend/migrations/migrate_2026_05_refactor.py, and it has not been run on every
--- environment — prod still carries them. Check INFO FOR DB per environment before
--- assuming; do not restate "were dropped" here.
+-- them is a separate irreversible cutover, run by hand with
+-- surreal/migrate_2026_05_refactor.surql, and it has not been run on every
+-- environment — prod still carried them (INFO FOR DB, 2026-11-13). Check INFO FOR
+-- DB per environment before assuming; do not restate "were dropped" here.
 -- INVARIANT: documents.parent_id of any document points to a non-reference,
 -- non-html-artifact document (or NONE); a REFERENCE may be hosted by an html artifact.
 -- Why: a voice note / attachment recorded on an open artifact belongs to it, while the
@@ -1111,6 +1132,10 @@ DEFINE FIELD IF NOT EXISTS embedding    ON chat_chunks TYPE array<float>;
 DEFINE INDEX IF NOT EXISTS idx_chat_chunks_user_project ON chat_chunks FIELDS user_id, project_id;
 DEFINE INDEX IF NOT EXISTS idx_chat_chunks_message ON chat_chunks FIELDS message_id;
 DEFINE INDEX IF NOT EXISTS idx_chat_chunks_hash_model ON chat_chunks FIELDS content_hash, model;
+-- Vector index for chat recall (recall_search._score_chunks); same build and
+-- dimension contract as doc_chunks_embedding_hnsw above.
+DEFINE INDEX IF NOT EXISTS chat_chunks_embedding_hnsw ON chat_chunks
+  FIELDS embedding HNSW DIMENSION 1024 DIST COSINE TYPE F32 EFC 300 M 24;
 
 -- ARCH: the embedded `proposal` (singular) and `proposals` (plural array)
 -- fields + their nested sub-field definitions USED to live here. They are
@@ -1136,9 +1161,9 @@ DEFINE FIELD IF NOT EXISTS agent_trace ON messages TYPE option<object> FLEXIBLE;
 -- abnormally ended turn must show after a reload — is what THIS column keeps.
 -- Written ONLY by _persist_projection_extras (driver/persistence.py) on an
 -- abnormal end; a graceful `turn_halted` persists nothing Lore-side (the
--- driver's own log is that turn's timeline). FLEXIBLE so the one-time backfill
--- can copy the legacy halt SEGMENT verbatim (`type` key included) — new writes
--- carry only reason/steps/limit.
+-- driver's own log is that turn's timeline). FLEXIBLE because the writer also
+-- stores `anchor_seq` and `turn` (driver/frames.py), which no halt.* field below
+-- declares — without it SCHEMAFULL `messages` rejects the card.
 DEFINE FIELD IF NOT EXISTS halt        ON messages TYPE option<object> FLEXIBLE;
 -- OVERWRITE + option<> (not IF NOT EXISTS + string): a declared REQUIRED
 -- subfield fails coercion on every row whose `halt` parent is absent
@@ -1321,6 +1346,10 @@ DEFINE FIELD IF NOT EXISTS auth_mode  ON mcp_servers TYPE string DEFAULT 'person
 DEFINE FIELD IF NOT EXISTS auth_scheme ON mcp_servers TYPE string DEFAULT 'Bearer';
 -- Where a user gets a key (http(s) only, validated at the save gate).
 DEFINE FIELD IF NOT EXISTS help_url   ON mcp_servers TYPE option<string>;
+-- The definer's ruling that every tool of this server runs with no approval
+-- card (the driver's ask gate, harness-driver/plugin/src/mcp-servers.ts).
+DEFINE FIELD IF NOT EXISTS auto_approve ON mcp_servers TYPE bool DEFAULT false
+  MIGRATE EXISTING ROWS AS mcp_servers_auto_approve USING $value ?? false FALLBACK false;
 -- The shared key's Fernet ciphertext and the host_key of the url it was
 -- saved against: a url move to another host strands it exactly like a
 -- personal key ("re-enter key"). Write-only for everyone incl. the admin.

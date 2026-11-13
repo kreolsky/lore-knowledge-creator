@@ -221,13 +221,19 @@ async def _score_chunks(
     WHY model + dimension guard: the embedding model is a deploy variable — a
     chunk of another model is noise against this query, and a chunk of another
     dimension makes vector::similarity::cosine raise.
+    WHY the KNN operator in the same WHERE as the user/session filters: the
+    predicate runs inside the HNSW walk (chat_chunks_embedding_hnsw), so the
+    $n nearest are the nearest VISIBLE chunks — another user's closer chunks
+    never take a slot. k/ef are spliced as literals: the operator's parser
+    rejects parameters there.
     """
     if not sessions:
         return []
     rows = await db.query(
         "SELECT message_id, origin_key, content, content_hash, "
         "vector::similarity::cosine(embedding, $q) AS score FROM chat_chunks "
-        "WHERE user_id = $uid AND project_id = $pid AND chat_id IN $sids "
+        f"WHERE embedding <|{CHAT_RECALL_FETCH},{embeddings.KNN_EF}|> $q "
+        "AND user_id = $uid AND project_id = $pid AND chat_id IN $sids "
         "AND model = $model AND array::len(embedding) = $dim "
         "AND ($since IS NONE OR created_at > $since) "
         "AND ($until IS NONE OR created_at <= $until) "

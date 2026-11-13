@@ -1,4 +1,4 @@
-"""Message CRUD for chat sessions — list, create, update, delete (branch cascade)."""
+"""Message CRUD for chat sessions — list, create, update, delete (branch cascade) — and the note anchor write."""
 # SYSTEM: chat-messages — message CRUD with note-chat ACL and branch-cascade delete
 
 import logging
@@ -6,14 +6,18 @@ from collections import deque
 from uuid import uuid4
 
 from chat_sessions import recall as chat_recall
+from chat_sessions.create import cap_anchor_quote
 from chat_sessions.note_events import broadcast_doc_id, fire_note_emit
+from chat_sessions.serialize import build_session_ref_map, serialize_session
 from fastapi import Depends, HTTPException, Query
+from note_anchors import relpos_from_wire
 from surrealdb import AsyncSurreal
 
 import event_bus
+from access import require_document_full
 from auth import get_current_user
 from db import create_record, fetch_one, get_db, run_in_transaction
-from models import MessageCreate, MessageUpdate
+from models import MessageCreate, MessageUpdate, NoteAnchorUpdate
 from routes._guards import guard_row
 from routes.chat._router import router
 from routes.chat.serializers import (
@@ -32,6 +36,7 @@ logger = logging.getLogger(__name__)
 async def _emit_note_message_changed(
     db, session: dict, session_id: str, *, action: str,
     message: dict | None = None, message_ids: list[str] | None = None,
+    anchor: dict | None = None,
 ) -> None:
     try:
         if session.get("is_note") is not True:
@@ -48,6 +53,8 @@ async def _emit_note_message_changed(
             frame["message"] = message
         if message_ids:
             frame["message_ids"] = message_ids
+        if anchor is not None:
+            frame.update(anchor)
         await event_bus.emit("note_message_changed", entity_type="doc", entity_id=entity_id, event=frame)
     except Exception:
         logger.warning("note_message_changed emit failed", exc_info=True)
@@ -56,11 +63,52 @@ async def _emit_note_message_changed(
 def schedule_note_message_changed(
     db, session: dict, session_id: str, *, action: str,
     message: dict | None = None, message_ids: list[str] | None = None,
+    anchor: dict | None = None,
 ) -> None:
     """Fire-and-forget wrapper: resolve + emit off the request path."""
     fire_note_emit(_emit_note_message_changed(
         db, session, session_id, action=action, message=message, message_ids=message_ids,
+        anchor=anchor,
     ))
+
+
+@router.post("/sessions/{session_id}/anchor")
+async def reanchor_note(session_id: str, body: NoteAnchorUpdate, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
+    """Re-write a note's anchor (undo revival, cut+paste, manual attach) and broadcast it.
+
+    The range is NOT checked against the quote or the old state: a cell anchor
+    resolves `external` server-side and the live session can be ahead of the
+    stored ydoc. A full-access user can already rewrite the anchored text, so
+    moving its highlight grants nothing new.
+    """
+    session = await fetch_one("chat_sessions", session_id)
+    if not session or session.get("is_note") is not True:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    # INVARIANT(security): moving a highlight over document text needs what editing
+    # that text needs — full document access, not the commentator PATCH gate.
+    # Why: the anchor decides which words a note claims for every viewer.
+    await require_document_full(session.get("document_id", ""), user)
+    sets = ["anchor_rel_start = $start", "anchor_rel_end = $end", "updated_at = time::now()"]
+    params: dict = {
+        "id": session_id,
+        "start": relpos_from_wire(body.anchor_rel_start),
+        "end": relpos_from_wire(body.anchor_rel_end),
+    }
+    if body.anchor_quote is not None:
+        sets.append("anchor_quote = $quote")
+        params["quote"] = cap_anchor_quote(body.anchor_quote)
+    rows = await db.query(
+        f"UPDATE type::record('chat_sessions', $id) SET {', '.join(sets)} RETURN AFTER",
+        params,
+    )
+    out = serialize_session(rows[0], await build_session_ref_map(db, rows[0]),
+                            viewer_id=user["user_id"])
+    schedule_note_message_changed(db, rows[0], session_id, action="reanchored", anchor={
+        "anchor_rel_start": out["anchor_rel_start"],
+        "anchor_rel_end": out["anchor_rel_end"],
+        "anchor_quote": out["anchor_quote"],
+    })
+    return out
 
 
 async def _is_project_owner(session: dict, user: dict) -> bool:

@@ -650,6 +650,10 @@ EMBEDDING_API_KEY = setting(
 # cut copied across models is a different operating point — qwen3's 0.35 under giga
 # dropped 10 of 20 correct retrieval hits and read as "the new model is worse". Pinned
 # by test_embedding_calibration_set_moves_together.
+# WHY: a model whose vectors are not 1024-dim also needs both HNSW indexes
+# redefined (REMOVE INDEX + DEFINE ... DIMENSION n, surreal/schema.surql
+# doc_chunks_embedding_hnsw / chat_chunks_embedding_hnsw) — until then every
+# chunk write of the new length fails as an embedding failure.
 EMBEDDING_MODEL = setting(
     "EMBEDDING_MODEL", str, default="embeddings/giga/480m",
     label="Embedding model",

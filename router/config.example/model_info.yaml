@@ -22,7 +22,9 @@
 #       instruct_type: str                 # optional
 #     supported_parameters: [tools, tool_choice, max_tokens, temperature, top_p, stream]
 #                                          # response_format = accepts json_object; structured_outputs =
-#                                          # accepts json_schema strict (Lore's extractor lists only these)
+#                                          # accepts json_schema strict (Lore's extractor lists only these);
+#                                          # valid on anthropic-type models too: non-streaming
+#                                          # /v1/chat/completions translates it to output_config.format
 #     reasoning:
 #       supported: bool                     # auto-derived from upstream supported_parameters
 #       default_enabled: bool               # manual only — no upstream shape expresses it

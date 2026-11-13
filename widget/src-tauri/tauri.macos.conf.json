@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": {
+      "swift-audio/.build/release/lore-audio-capture": "lore-audio-capture"
+    }
+  }
+}

@@ -42,6 +42,8 @@ class McpServerCreate(BaseModel):
     shared_key: str | None = Field(default=None, max_length=8192)
     subjects: list[str] = Field(default_factory=lambda: [PUBLIC_SUBJECT])
     enabled: bool = True
+    #: Every tool of the server runs with no approval card.
+    auto_approve: bool = False
 
 
 class McpServerUpdate(BaseModel):
@@ -60,6 +62,7 @@ class McpServerUpdate(BaseModel):
     shared_key: str | None = Field(default=None, max_length=8192)
     subjects: list[str] | None = None
     enabled: bool | None = None
+    auto_approve: bool | None = None
 
 
 async def _validate_subjects(db: AsyncSurreal, subjects: list[str]) -> list[str]:
@@ -135,6 +138,7 @@ def _admin_view(row: dict, creator_name: str = "") -> dict:
         "created_by": row.get("created_by"),
         "created_by_name": creator_name,
         "enabled": bool(row.get("enabled")),
+        "auto_approve": bool(row.get("auto_approve")),
         "shared_key_set": shared_set,
         # A url move to another host strands the stored key: it is bound to
         # the host it was saved against.
@@ -256,6 +260,7 @@ async def create_server(
         "subjects": subjects,
         "created_by": user["user_id"],
         "enabled": body.enabled,
+        "auto_approve": body.auto_approve,
         "disabled_by": [],
     })
     if row is None:
@@ -287,6 +292,8 @@ def _patch_column_sets(
         sets["subjects"] = subjects
     if body.enabled is not None:
         sets["enabled"] = body.enabled
+    if body.auto_approve is not None:
+        sets["auto_approve"] = body.auto_approve
     return sets, purge_personal
 
 

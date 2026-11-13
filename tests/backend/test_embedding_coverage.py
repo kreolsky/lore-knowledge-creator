@@ -27,6 +27,7 @@ import pytest
 import pytest_asyncio
 import settings
 from emit_recorder import EmitRecorder
+from helpers import dim_vec
 
 from db import create_record, get_db
 
@@ -81,8 +82,8 @@ async def _seed_chunk(doc_id: str, pid: str, *, model: str | None = None) -> Non
     await db.query(
         "CREATE doc_chunks CONTENT { document_id: $id, project_id: $pid, ord: 0, "
         "content: 'text', heading: NONE, offset_start: 0, offset_end: 4, "
-        f"content_version: 0, kind: 'document', embedding: [0.0]{extra} }}",
-        {"id": doc_id, "pid": pid, **params},
+        f"content_version: 0, kind: 'document', embedding: $emb{extra} }}",
+        {"id": doc_id, "pid": pid, "emb": dim_vec(1.0), **params},
     )
 
 

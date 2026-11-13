@@ -37,9 +37,10 @@ impl WidgetApi {
     }
 
     pub async fn upload_audio(&self, audio_bytes: Vec<u8>, filename: &str) -> Result<UploadResponse, String> {
+        let mime = if filename.ends_with(".ogg") { "audio/ogg" } else { "audio/m4a" };
         let part = multipart::Part::bytes(audio_bytes)
             .file_name(filename.to_string())
-            .mime_str("audio/m4a")
+            .mime_str(mime)
             .map_err(|e| e.to_string())?;
 
         let form = multipart::Form::new().part("file", part);

@@ -158,6 +158,12 @@ export function ProjectSettingsPanel() {
             label={t('settingsLinksShowSessionsLabel')}
             disabled={saving === 'links_show_sessions'}
           />
+          <FieldCheckbox
+            checked={project.editor_toolbar ?? true}
+            onChange={v => patchProject({ editor_toolbar: v })}
+            label={t('settingsEditorToolbarLabel')}
+            disabled={saving === 'editor_toolbar'}
+          />
           {/* WHY: a personal toggle in the project block — it lives in the user's project
               prefs, not on the project, so it never reaches other members. */}
           <FieldCheckbox

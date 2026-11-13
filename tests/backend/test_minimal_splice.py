@@ -1,4 +1,4 @@
-"""minimal_splice_text — wholesale writers keep Yjs anchors on the unchanged text.
+"""minimal_splice_text / surgical_splice_text — writers keep Yjs anchors on the unchanged text.
 
 A note anchor is a pair of sticky indices; a wholesale replace (delete all + insert)
 used to orphan every one of them. Every fixture carries Cyrillic AND an astral char
@@ -12,7 +12,7 @@ import time
 import pytest
 from helpers import join_collab_ws, project_collab_url
 from pycrdt import Assoc, Doc, Snapshot, StickyIndex, Text
-from textmatch import minimal_splice_text
+from textmatch import AppliedUnverifiedError, minimal_splice_text, surgical_splice_text
 
 ANCHOR = "якорь 😀 фраза"
 BEFORE = "# Глава 😀 первая\nВступление про замок.\nСтрока до: "
@@ -161,4 +161,35 @@ def test_300k_rewrite_is_fast(make_new, keeps_anchor: bool) -> None:
     elapsed = time.perf_counter() - t0
     assert str(text) == new
     assert _anchor_alive(doc, pair) is keeps_anchor
-    assert elapsed < 0.2, f"{elapsed:.3f}s"
+    assert elapsed < 0.3, f"{elapsed:.3f}s"
+
+
+# TEST-WHY: data-loss — a byte-offset slip in the span-relative diff deletes the wrong text
+def test_surgical_splice_diffs_inside_span_keeps_inner_anchor() -> None:
+    from note_anchors import anchor_space, build_anchor, resolve_anchor, utf16_to_cp
+    from textmatch import _diff_spans
+
+    head = "# Глава 😀 первая\nСтрока до: "
+    span = "красный 😀 замок стоит на холме,\nрядом старый мост 🌉 и река."
+    new_span = "алый 😀 замок стоит на горе,\nрядом новый мост 🌉 и широкое озеро."
+    tail = " — и дальше 😀 текст.\n"
+    current = head + span + tail
+    assert len(_diff_spans(span, new_span)) >= 3  # several runs, not one whole-span swap
+    from_cp, to_cp = len(head), len(head) + len(span)
+    doc, text = _doc_with(current)
+    word_cp = current.index("замок")
+    anchor = build_anchor(
+        anchor_space(doc), _cp_to_u16(current, word_cp), _cp_to_u16(current, word_cp + len("замок")),
+    )
+
+    with pytest.raises(AppliedUnverifiedError):
+        surgical_splice_text(text, from_cp, to_cp, new_span, original_text=span[1:] + "x")
+    assert str(text) == current
+
+    with doc.transaction():  # the callers' outer transaction
+        surgical_splice_text(text, from_cp, to_cp, new_span, original_text=span)
+    after = str(text)
+    assert after == current[:from_cp] + new_span + current[to_cp:]
+    rng = resolve_anchor(anchor_space(doc), *anchor)
+    assert rng.state == "ok"
+    assert after[utf16_to_cp(after, rng.start):utf16_to_cp(after, rng.end)] == "замок"

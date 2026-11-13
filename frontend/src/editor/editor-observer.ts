@@ -53,7 +53,9 @@ function publishSelection(update: ViewUpdate): void {
   const { from, to } = view.state.selection.main;
   const empty = from === to || !live;
   useUIStore.getState().setSelectionEmpty(empty);
-  if (update.selectionSet && !empty) emit('editor-selection-change', { empty: false });
+  // WHY every caret move and focus change, not only a non-empty selection: the docked
+  // toolbar lights its active styles under a bare caret and follows focus between columns.
+  emit('editor-selection-change', { empty });
 }
 
 /** The ONE selection feed every active-able editor carries — mounted by `editorExperience`

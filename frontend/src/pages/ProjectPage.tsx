@@ -20,6 +20,7 @@ import { AccessPanel } from '../components/AccessPanel';
 import { SnapshotModal } from '../components/SnapshotModal';
 import { NoteConnector } from '../components/NoteConnector';
 import SelectionToolbar from '../components/editor/SelectionToolbar';
+import { DockedFormatToolbar, useDockedToolbarOn } from '../components/editor/DockedFormatToolbar';
 import ImageToolbar from '../components/editor/ImageToolbar';
 import { FindReplacePanel } from '../components/editor/FindReplacePanel';
 import { LinkSuggestionsPopup } from '../components/editor/LinkSuggestionsPopup';
@@ -94,6 +95,7 @@ export function ProjectPage() {
   const location = useLocation();
   const { t } = useTranslation();
   const hasDocument = location.pathname.includes('/docs/');
+  const dockedToolbarOn = useDockedToolbarOn();
   const currentReference = useAppStore(s => s.currentReference);
 
   const shellRef = useRef<ProjectShellHandle>(null);
@@ -424,7 +426,14 @@ export function ProjectPage() {
         ref={shellRef}
         leftTabs={leftTabs}
         rightTabs={rightTabs}
-        renderCenter={() => hasDocument ? <Outlet /> : (
+        renderCenter={() => hasDocument ? (
+          // WHY above the Outlet: one docked bar spans both split columns and serves
+          // whichever editor has focus, like the floating overlays below.
+          <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
+            {dockedToolbarOn && <DockedFormatToolbar />}
+            <Outlet />
+          </div>
+        ) : (
           <div className="h-full flex items-center justify-center text-text-dim bg-bg">
             {t('selectOrCreateDocument')}
           </div>

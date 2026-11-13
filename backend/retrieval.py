@@ -23,6 +23,7 @@ import settings
 from config import count_tokens_approx
 from db import get_db
 from embeddings import (
+    KNN_EF,
     MODEL_DIM_GUARD_SQL,
     EmbeddingConfigError,
     embed_texts,
@@ -317,12 +318,21 @@ async def _kind_chunk_query(
     # Why deferred: archived means hidden from the LIST, not removed from the corpus;
     # whether it should also mean "don't cite" waits on the archive UX stabilizing.
     """
+    # WHY the KNN operator in the SAME WHERE as the filters: v4 evaluates the
+    # whole predicate inside the HNSW walk (KnnScan pre-filtered by
+    # doc_chunks_proj_idx), so the k nearest are k nearest OF THIS kind in
+    # THIS scope — a KNN in a subquery with the filters outside would starve a
+    # selective kind exactly like the old post-LIMIT split. `score` stays the
+    # exact cosine, so the cuts downstream read an unchanged scale.
+    # WHY k/ef interpolated: the KNN operator's parser takes integer literals
+    # only (`<|$k,$ef|>` is a parse error); int() keeps the splice a number.
     rows = await db.query(
         "SELECT meta::id(id) AS id, document_id, heading, content, "
         "offset_start, offset_end, "
         "vector::similarity::cosine(embedding, $q) AS score "
         "FROM doc_chunks "
-        "WHERE project_id = $pid AND kind = $kind "
+        f"WHERE embedding <|{int(top_k)},{KNN_EF}|> $q "
+        "AND project_id = $pid AND kind = $kind "
         + MODEL_DIM_GUARD_SQL
         + scope
         + "ORDER BY score DESC LIMIT $top_k",

@@ -36,6 +36,11 @@ export function buildListLineDecorations(view: EditorView): DecorationSet {
       to,
       enter(node) {
         if (node.name !== 'ListItem') return;
+        // WHY: a marker-only item (`27073.`, `-`) has nothing to indent — hanging it would
+        // shift a number with a trailing dot (CommonMark: an empty ordered item) in a table
+        // cell. The indent appears once text follows the marker.
+        const mark = node.node.getChild('ListMark');
+        if (mark && state.doc.sliceString(mark.to, node.to).trim() === '') return;
 
         const nestingLevel = getListNestingLevel(node.node);
         const lines = getListItemContentLines(node, state);

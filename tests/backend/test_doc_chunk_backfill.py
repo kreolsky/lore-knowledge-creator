@@ -9,6 +9,7 @@ until the document's next re-embed stamps it.
 """
 
 import pytest_asyncio
+from helpers import dim_vec
 
 from db import create_record, get_db
 
@@ -48,7 +49,8 @@ async def _seed_chunk(doc_id: str, pid: str, *, suffix: str = "c0",
     the exact state of a pre-column row)."""
     db = await get_db()
     extra = ""
-    params: dict = {"cid": f"{doc_id}-{suffix}", "did": doc_id, "pid": pid}
+    params: dict = {"cid": f"{doc_id}-{suffix}", "did": doc_id, "pid": pid,
+                    "emb": dim_vec(1.0)}
     if kind is not None:
         extra += ", kind = $kind"
         params["kind"] = kind
@@ -58,7 +60,7 @@ async def _seed_chunk(doc_id: str, pid: str, *, suffix: str = "c0",
     await db.query(
         "CREATE type::record('doc_chunks', $cid) SET document_id = $did, "
         "project_id = $pid, ord = 0, heading = NONE, content = 'text', "
-        f"offset_start = 0, offset_end = 4, content_version = 0, embedding = [0.0]{extra}",
+        f"offset_start = 0, offset_end = 4, content_version = 0, embedding = $emb{extra}",
         params,
     )
 

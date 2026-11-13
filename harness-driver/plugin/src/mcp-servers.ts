@@ -55,7 +55,10 @@
  *   annotations.readOnlyHint is accepted (operator ruling: the server already
  *   holds the user's key, a lying mark adds nothing to what it can do); dsh's
  *   sync drops annotations, so the mount also lists them through one
- *   short-lived SDK client with the same headers. An unmarked or
+ *   short-lived SDK client with the same headers. A server whose definer set
+ *   `auto_approve` runs every tool unasked (operator ruling: internal
+ *   read-only servers that ship no marks; the admin or moderator who defines
+ *   the server owns that call for all its users). An unmarked or
  *   unlisted tool asks once per chat — "allow for session" grants through
  *   the same bridge the Tool-API proxies use.
  */
@@ -89,6 +92,8 @@ export interface McpServerWire {
   headers: Record<string, string>
   /** The raw secret values the scrub replaces in tool results. */
   secret_values: string[]
+  /** The definer's ruling: every tool of this server runs with no ask. */
+  auto_approve: boolean
 }
 
 /** The payload's `mcp_servers` array → validated entries; an invalid entry is
@@ -116,7 +121,9 @@ export function parseMcpServers(body: Record<string, any>): McpServerWire[] {
     const secretValues = (Array.isArray(item.secret_values) ? item.secret_values : [])
       .filter((v: unknown): v is string => typeof v === 'string' && v !== '')
     const title = (typeof item.title === 'string' ? item.title : '').split(/\s+/).filter(Boolean).join(' ') || name
-    out.push({ name, url, title, headers, secret_values: secretValues })
+    // Anything but a literal true asks — the fail-safe default.
+    const autoApprove = item.auto_approve === true
+    out.push({ name, url, title, headers, secret_values: secretValues, auto_approve: autoApprove })
   }
   if (out.length > 0) {
     console.error(`[lore-mcp] prep ${out.length} server(s): ${out.map((s) => s.name).join(',')}`)
@@ -277,11 +284,19 @@ export interface McpDescribedServer {
   rawByPublic: ReadonlyMap<string, string>
 }
 
+/** The server owning an `mcp__<name>__<tool>` name, by the LONGEST matching
+ * prefix: SERVER_NAME_RE admits `__`, so `mcp__x__y__t` of a server `x__y`
+ * also starts with server `x`'s prefix. Exact because SERVER_NAME_RE admits
+ * only characters dsh does not normalize. */
+export function owningServer<S extends { name: string }>(toolName: string, servers: readonly S[]): S | undefined {
+  return servers
+    .filter((s) => toolName.startsWith(`mcp__${s.name}__`))
+    .reduce<S | undefined>((best, s) => (!best || s.name.length > best.name.length ? s : best), undefined)
+}
+
 /** Prefix every mounted server's tool description with its external origin,
  * and name the native tool a twin shadows (see module ARCH). Pure; native
- * tools pass through untouched. Attribution by the longest matching
- * `mcp__<name>__` prefix is exact: SERVER_NAME_RE admits only characters dsh
- * does not normalize. */
+ * tools pass through untouched. Attribution: `owningServer`. */
 export function describeMcpTools<T extends { name: string; description: string }>(
   tools: readonly T[], servers: readonly McpDescribedServer[],
 ): T[] {
@@ -289,11 +304,7 @@ export function describeMcpTools<T extends { name: string; description: string }
   const native = new Set(tools.filter((t) => !t.name.startsWith('mcp__')).map((t) => t.name))
   return tools.map((tool) => {
     if (!tool.name.startsWith('mcp__')) return tool
-    // WHY: longest match — SERVER_NAME_RE admits `__`, so `mcp__x__y__t` of a
-    // server `x__y` also starts with server `x`'s prefix.
-    const server = servers
-      .filter((s) => tool.name.startsWith(`mcp__${s.name}__`))
-      .reduce<McpDescribedServer | undefined>((best, s) => (!best || s.name.length > best.name.length ? s : best), undefined)
+    const server = owningServer(tool.name, servers)
     if (!server) return tool
     let prefix = `[External MCP service "${server.title}" (server ${server.name}) — acts on that service, not on this project.] `
     const raw = server.rawByPublic.get(tool.name)
@@ -349,10 +360,12 @@ export function installMcpSeam(agentCtx: Context, entry: McpSeamSite): void {
     if (!name.startsWith('mcp__')) return next()
     const prep = entry.current
     if (!prep) return next()
-    // The server's own mark (operator ruling) or an existing session grant.
+    // The server's own mark, the definer's auto_approve (operator rulings)
+    // or an existing session grant.
     for (const mounted of entry.mcpMounted.values()) {
       if (mounted.marksSet?.has(name)) return next()
     }
+    if (owningServer(name, prep.mcpServers)?.auto_approve) return next()
     if (hasLoreGrant(prep.standingCtx.loreSessionId, name)) return next()
     return Promise.resolve({
       kind: 'ask',

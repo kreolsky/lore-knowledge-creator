@@ -14,6 +14,7 @@ Covers:
 from uuid import uuid4
 
 import pytest
+from helpers import dim_vec
 
 
 async def _mk_doc(client, pid, token, *, title, parent_id=None, is_reference=False):
@@ -62,7 +63,7 @@ async def test_subtree_delete_cascades_descendant_dependents(
     await create_record("doc_chunks", str(uuid4()), {
         "document_id": child, "project_id": pid, "ord": 0, "content": "chunk",
         "offset_start": 0, "offset_end": 5, "content_version": 1,
-        "embedding": [0.1, 0.2],
+        "embedding": dim_vec(0.1, 0.2),
     })
     # ids are server-generated UUIDs (from our own POSTs) — safe to interpolate;
     # ⟨⟩ brackets escape the dashes for the record-literal parse.

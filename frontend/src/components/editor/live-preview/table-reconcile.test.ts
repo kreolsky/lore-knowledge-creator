@@ -43,6 +43,7 @@ function makeHandle(opts: { synced?: boolean } = {}): EntityYjsState {
     refCount: 1,
     leave: () => {},
     disposeObserver: () => {},
+    disposeNoteReanchor: () => {},
     disposeAwareness: () => {},
   };
 }

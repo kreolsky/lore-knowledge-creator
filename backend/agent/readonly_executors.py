@@ -410,7 +410,7 @@ async def _build_tables_field(
     from table_serialize import (
         extract_table_labels,
         resolve_merges,
-        table_awaits_migration,
+        table_format_unknown,
         table_model_from_map,
     )
 
@@ -449,10 +449,10 @@ async def _build_tables_field(
     for tid in ids:
         if tables_root is None or tid not in tables_root:
             continue
-        if table_awaits_migration(tables_root[tid]):
+        if table_format_unknown(tables_root[tid]):
             tables.append({
                 "table_id": tid, "label": labels.get(tid, ""),
-                "error": "Table awaits migration to the current table format; its cells are unreadable until it runs.",
+                "error": "Table is not in the current table format; its cells are unreadable.",
             })
             continue
         model_rows = table_model_from_map(tables_root[tid])

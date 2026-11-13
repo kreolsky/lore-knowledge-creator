@@ -7,8 +7,9 @@ import * as Y from 'yjs';
 /**
  * Resolve a Yjs RelativePosition pair to a UTF-16 [from, to] range against `ydoc`.
  * Null when either half does not resolve (its item is not in the store yet, or was
- * GC'd). `followUndoneDeletions` is Yjs's flag — note anchors pass false so an
- * undo does not revive them (see the INVARIANT there).
+ * GC'd). `followUndoneDeletions` is Yjs's flag — note anchors pass false: resolution
+ * never follows redone links, and an undo revives a note only by re-writing its anchor
+ * (`note-undo-reanchor.ts`; see the INVARIANT there).
  * `type` is the shared type the positions live in — a note anchored in a table cell
  * resolves into that cell's Y.Text, not the host text, and only the caller can tell.
  */
@@ -70,7 +71,7 @@ export function buildNoteAnchor(ytext: Y.Text, from: number, to: number): NoteAn
  *  - `pending` — an anchor item is not in the store yet (the note row can arrive
  *    before its creator's Yjs update): render nothing, mark nothing;
  *  - `orphan` — the fragment was deleted (empty range) or its item is gone with its
- *    client's state present. Orphans are never re-anchored.
+ *    client's state present.
  */
 export type NoteAnchorState =
   | { state: 'ok'; from: number; to: number; type: Y.AbstractType<unknown> }
@@ -86,8 +87,8 @@ export function resolveNoteAnchor(relStart: string, relEnd: string, ydoc: Y.Doc)
   const start = relPosFromWire(relStart);
   const end = relPosFromWire(relEnd);
   if (!start || !end) return null;
-  // INVARIANT: note anchors resolve with followUndoneDeletions = false — an undo never
-  // revives a deleted fragment's note.
+  // INVARIANT: note anchors resolve with followUndoneDeletions = false — an undo revives a note
+  // only by re-writing its anchor (note-undo-reanchor.ts) — resolution never follows redone links.
   // Why: redone links are local to the undoing client, so following them would show the
   // note on the undoer's screen and an orphan on every other screen and on the server.
   const range = resolveRelPosRange(start, end, ydoc, false);

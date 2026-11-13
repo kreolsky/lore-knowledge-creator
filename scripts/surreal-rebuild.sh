@@ -324,9 +324,10 @@ log "surreal healthy on fresh store"
 
 # ── import ─────────────────────────────────────────────────────────────────────
 log "import: POST /import ← $DUMP"
-# Under --upgrade the dump's DDL is translated to what the new major accepts. Rows are
-# untouched, so parity is unaffected. Two passes: the first reads only the dump's
-# DEFINE FIELD lines (to learn which `X.*` have children), the second rewrites.
+# Under --upgrade the dump's DDL is translated to what the new major accepts. No row is
+# added or dropped, so parity is unaffected. Two passes: the first reads only the dump's
+# DEFINE FIELD lines (to learn which `X.*` have children and which top-level keys each
+# table declares), the second rewrites.
 # Rule 1 — drop every DEFINE EVENT. WHY: a DEFINE EVENT is code, not data — only
 # surreal/schema.surql defines one, and the new release's backend re-applies it at boot
 # (OVERWRITE / IF NOT EXISTS) in the new engine's dialect. The old store's copy is the
@@ -345,6 +346,16 @@ log "import: POST /import ← $DUMP"
 # schema declared it); a strict object makes /import refuse every such row ("Found
 # field … but no such field exists"). FLEXIBLE keeps exactly what v3 accepted, the
 # declared children stay typed, and the new schema's later DEFINE of the key passes.
+# Rule 3 — a SCHEMAFULL table imports SCHEMALESS; after all data, its rows lose every
+# top-level key its DEFINE FIELDs do not name, and the table is re-defined SCHEMAFULL.
+# WHY: v3 REMOVE FIELD drops the definition but keeps the value in every row, so an old
+# store's rows carry fields the schema retired (chat_sessions.has_region, lifecycle, …);
+# v4 /import refuses such a row, and a row left holding one refuses every later write.
+# v4 allows FLEXIBLE only on a SCHEMAFULL table, so a loose table's FLEXIBLE fields
+# import without it and are re-defined with it right after the table is re-tightened.
+# Those values are dead — the schema removed the field — so dropping them is the
+# REMOVE finishing its job. A nested undeclared key under a strict object is not
+# covered: the UPDATE refuses it, the ERR scan below catches it, and the run rolls back.
 UPGRADE_DDL_AWK=""
 if [ -n "$UPGRADE" ]; then UPGRADE_DDL_AWK='
   function field() { i = 3; if ($i == "OVERWRITE") i++; NAME = $i; TBL = $(i + 2) }
@@ -354,8 +365,14 @@ if [ -n "$UPGRADE" ]; then UPGRADE_DDL_AWK='
       while ((k = index(s, ".*.")) > 0) {
         p = p substr(s, 1, k + 1); has[TBL "|" p] = 1; p = p "."; s = substr(s, k + 3)
       }
+      top = NAME; sub(/[.[].*/, "", top)
+      if (!((TBL "|" top) in seen)) { seen[TBL "|" top] = 1; keep[TBL] = keep[TBL] ", \047" top "\047" }
     }
     next
+  }
+  $1 == "DEFINE" && $2 == "TABLE" && / SCHEMAFULL/ {
+    strict[++ns] = $3; loose[$3] = 1; redef[ns] = $0
+    sub(/^DEFINE TABLE /, "DEFINE TABLE OVERWRITE ", redef[ns]); sub(/ SCHEMAFULL/, " SCHEMALESS")
   }
   !skip && /^DEFINE EVENT / { skip = 1; depth = 0 }
   skip { depth += gsub(/\{/, "{") - gsub(/\}/, "}")
@@ -366,9 +383,16 @@ if [ -n "$UPGRADE" ]; then UPGRADE_DDL_AWK='
     if ((TBL "|" NAME) in has && sub(/ TYPE any /, " TYPE object FLEXIBLE ")) retyped++
     if ((TBL "|" NAME ".*") in has && (sub(/ TYPE none \| array /, " TYPE none | array<object> ") \
         || sub(/ TYPE array /, " TYPE array<object> "))) retyped++
+    if ((TBL in loose) && / FLEXIBLE /) { reflex[TBL] = reflex[TBL] $0 "\n"; sub(/ FLEXIBLE /, " ") }
   }
   { print }
   END {
+    for (n = 1; n <= ns; n++) {
+      t = strict[n]; ks = "[\047id\047, \047in\047, \047out\047" keep[t] "]"
+      print "UPDATE " t " CONTENT object::from_entries(object::entries($this).filter(|$e| $e[0] IN " ks ")) WHERE object::keys($this).any(|$k| $k NOTINSIDE " ks ") RETURN NONE;"
+      print redef[n]; printf "%s", reflex[t]
+    }
+    print "[rebuild] SCHEMAFULL tables imported loose, stripped of undeclared keys, re-tightened: " ns + 0 > "/dev/stderr"
     print "[rebuild] events dropped from the import (the new backend re-defines them): " events + 0 > "/dev/stderr"
     print "[rebuild] fields retyped to object under arrays: " retyped + 0 > "/dev/stderr"
   }'
@@ -404,6 +428,15 @@ if ! diff -u <(sort "$DUMP.counts" 2>/dev/null || echo "NO-BEFORE-COUNTS") <(sor
   fail "PARITY MISMATCH — do NOT assume success.$(manual_hint "Old store is intact at $ASIDE. Rollback: docker stop $SURREAL_CONTAINER && rm -rf $STORE_DIR && mv $ASIDE $STORE_DIR && docker start $SURREAL_CONTAINER && docker start $APP_CONTAINERS")"
 fi
 log "parity OK (all populated tables match)"
+if [ -n "$UPGRADE" ]; then
+  # WHY: the import filter retypes fields on purpose (rules 2–3), so the schema
+  # fingerprint the old release recorded no longer matches; with no migration left to
+  # run, the new backend reads that as unexplained field loss and refuses to boot.
+  # Clearing the record makes its first boot record the migrated schema as the baseline.
+  sql_curl "UPDATE app_meta:migrations UNSET schema_fields RETURN NONE;" >/dev/null \
+    || fail "could not clear the recorded schema fingerprint (app_meta:migrations.schema_fields)"
+  log "recorded schema fingerprint cleared: the new backend records the migrated schema at first boot"
+fi
 ROLLBACK=""
 
 if [ -n "$UPGRADE" ]; then

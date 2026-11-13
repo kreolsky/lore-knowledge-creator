@@ -14,10 +14,10 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { ensureSyntaxTree } from '@codemirror/language';
 import * as Y from 'yjs';
 import { handleCopyCut, copyHandlerExtension } from './copy-handler';
-import { htmlToMarkdown } from './paste-handler';
+import { htmlToMarkdown, importHtmlTables } from './paste-handler';
 import { releaseHandle, publishHandle } from './active-editor';
 import type { EntityYjsState } from '../collab/yjs-provider';
-import { createTable, readTableModel } from '../components/editor/live-preview/table-block-model';
+import { createTable, readTableModel, resolveMerges, writeMergeAreas } from '../components/editor/live-preview/table-block-model';
 import { tableAnchor, TABLE_ANCHOR_RE } from '../components/editor/live-preview/table-document-ops';
 import { modelToGfm } from '../components/editor/live-preview/table-serialize';
 import { importGfmTables } from '../components/editor/live-preview/gfm-table-import';
@@ -303,6 +303,37 @@ describe('copy → paste round trip (table, structural)', () => {
     expect(count).toBe(1);
     const newId = [...text.matchAll(TABLE_ANCHOR_RE)][0][2];
     expect(readTableModel(target, newId)!.rows).toEqual([['A', 'B'], ['1', '2']]);
+  });
+});
+
+describe('copy → external paste round trip (merged cells)', () => {
+  afterEach(() => releaseHandle());
+
+  // TEST-WHY: pure-logic-edge — merged cells reached Docs/Word as unfolded empty spill cells and came back unmerged; a `|` cell split in two.
+  it('copy HTML carries spans and pastes back as the same merged table', () => {
+    const source = new Y.Doc();
+    const rows = [['H1', '', 'H3'], ['R&D', '', 'x'], ['', '', 'y'], ['a|b', 'line1\nline2', 'z']];
+    const areas = [[0, 0, 0, 1], [1, 0, 2, 1]];
+    const id = createTable(source, rows);
+    writeMergeAreas(source, id, areas);
+    publishHandle({ ydoc: source } as unknown as EntityYjsState);
+    const anchor = tableAnchor('T', id);
+    const view = makeView(anchor);
+    view.dispatch({ selection: EditorSelection.range(0, anchor.length) });
+    const e = makeClipboardEvent();
+    handleCopyCut(e, view, false);
+    view.destroy();
+
+    const html = e.clipboardData!.getData('text/html');
+    expect(html).toContain('<th colspan="2">H1</th><th>H3</th>');
+    expect(html).toContain('<td colspan="2" rowspan="2">R&amp;D</td><td>x</td></tr><tr><td>y</td>');
+    expect(html).toContain('<td>a|b</td><td>line1<br>line2</td>');
+
+    const target = new Y.Doc();
+    const text = importHtmlTables(target, html, 'T', null);
+    const pastedId = [...text.matchAll(TABLE_ANCHOR_RE)][0][2];
+    expect(readTableModel(target, pastedId)!.rows).toEqual(rows);
+    expect(resolveMerges(target, pastedId).map((a) => [a.r0, a.c0, a.r1, a.c1])).toEqual(areas);
   });
 });
 

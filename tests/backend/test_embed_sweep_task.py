@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest_asyncio
 import settings
+from helpers import dim_vec
 
 from db import create_record, get_db
 
@@ -58,8 +59,8 @@ async def _seed_doc(pid: str, doc_id: str, *, status: str | None = None,
         await db.query(
             "CREATE doc_chunks CONTENT { document_id: $id, project_id: $pid, ord: 0, "
             "content: 'text', offset_start: 0, offset_end: 4, content_version: 0, "
-            f"kind: 'document', embedding: [0.0]{extra} }}",
-            {"id": doc_id, "pid": pid, **params},
+            f"kind: 'document', embedding: $emb{extra} }}",
+            {"id": doc_id, "pid": pid, "emb": dim_vec(1.0), **params},
         )
 
 

@@ -137,7 +137,7 @@ export interface ColumnWidth {
 /** Internal to the table-* modules. */
 export type AxisEntry = Y.Map<string | number>; // { pos } on rows, { pos, w } on columns
 type CellText = Y.Text;
-/** A `tables` entry (v2 or legacy v1 — see `tableAwaitsMigration`). Internal to the table-* modules. */
+/** A `tables` entry (v2, or an unreadable format — see `tableFormatUnknown`). Internal to the table-* modules. */
 export type TableMap = Y.Map<unknown>;
 
 export function getTablesMap(doc: Y.Doc): Y.Map<TableMap> {
@@ -151,20 +151,16 @@ export function cellKey(rowId: RowId, colId: ColId): string {
 }
 
 /**
- * True for a schema-v1 table (positional `columns`/`rows` Y.Arrays) that was never
- * rebuilt to v2 (its document deferred before the `tables_v2` backend migration was retired).
+ * True for a `tables` entry that is not a v2 table Map.
  *
- * INVARIANT(data-loss): a v1 table is never projected as an empty v2 table —
- * `serializeTables` skips it, `applyTablesJson` keeps it, and the widget renders
- * "table awaits migration". Why: an empty projection reaches a checkpoint, and restoring
- * that checkpoint would rebuild the table empty; "awaits migration" is an explicit
- * error, an empty table is a lie. Backend twin: `table_serialize.table_awaits_migration`.
+ * INVARIANT(data-loss): a table not in the current format is never projected as an empty
+ * v2 table — `serializeTables` skips it, `applyTablesJson` keeps it, the widget renders
+ * "unknown format", and the panel lists it. Why: an empty projection reaches a checkpoint,
+ * and restoring that checkpoint would rebuild the table empty; "unreadable format" is an
+ * explicit error, an empty table is a lie. Backend twin: `table_serialize.table_format_unknown`.
  */
-export function tableAwaitsMigration(table: unknown): boolean {
-  return (
-    table instanceof Y.Map && table.get('v') === undefined
-    && table.get('columns') instanceof Y.Array && table.get('rows') instanceof Y.Array
-  );
+export function tableFormatUnknown(table: unknown): boolean {
+  return v2Parts(table) === null;
 }
 
 /** One accepted merged area in index space over the CURRENT order (inclusive). */
@@ -251,8 +247,8 @@ export interface TableV2Parts {
   cells: Y.Map<CellText>;
 }
 
-/** `(columns, rows, cells)` of a v2 table Map, `null` for anything else (a v1 table
- * awaiting migration reads as structurally broken, never half-parsed). Backend twin:
+/** `(columns, rows, cells)` of a v2 table Map, `null` for anything else (an entry in
+ * any other format reads as structurally broken, never half-parsed). Backend twin:
  * `_v2_parts`. */
 function v2Parts(table: unknown): TableV2Parts | null {
   if (!(table instanceof Y.Map) || table.get('v') !== TABLE_SCHEMA_VERSION) return null;
@@ -294,8 +290,8 @@ export function orderedColIds(doc: Y.Doc, id: string): ColId[] | null {
 
 /**
  * Read a table into the flat whole-matrix form; `null` for a missing/structurally
- * broken entry (including a v1 table awaiting migration — the widget renders the
- * "awaits migration" error for those, never an empty grid).
+ * broken entry (including a table in an unreadable format — the widget renders the
+ * "unknown format" error for those, never an empty grid).
  *
  * A missing cell (the concurrent add-row × add-column intersection) reads empty;
  * orphan cells (a row or column removed concurrently) are never read.
@@ -317,20 +313,14 @@ export function readTableModel(doc: Y.Doc, id: string): TableModel | null {
  * WHY: `readTableModel` calls `.toString()` on every cell's Y.Text (O(rows×cols) string
  * allocation); the document's table list (`listDocumentTables`) needs only the counts.
  * (The widget short-circuits a keystroke on the order cache's array identity instead.)
- * Returns null for a missing/structurally broken entry. A v1 table still reports its
- * counts (from the legacy arrays) so the panel keeps it reachable.
+ * Returns null for a missing/structurally broken entry (`listDocumentTables` lists an
+ * existing one as unreadable).
  */
 export function readTableShape(doc: Y.Doc, id: string): { rows: number; cols: number } | null {
   const table = tableById(doc, id);
   if (!table) return null;
   const parts = v2Parts(table);
-  if (parts) return { rows: parts.rows.size, cols: parts.columns.size };
-  if (tableAwaitsMigration(table)) {
-    const columns = table.get('columns') as Y.Array<unknown>;
-    const rows = table.get('rows') as Y.Array<unknown>;
-    return { rows: rows.length, cols: columns.length };
-  }
-  return null;
+  return parts ? { rows: parts.rows.size, cols: parts.columns.size } : null;
 }
 
 /**

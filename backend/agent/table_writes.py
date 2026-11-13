@@ -55,6 +55,27 @@ def _resolve_table_col(column: str | None, col_fallback: int | None,
     )
 
 
+def _require_readable_table(doc, table_id: str) -> Map:
+    """The live table model, or HTTPException 404 (unknown id) / 409 (unreadable format).
+
+    # WHY: every agent table write checks this on the live ydoc BEFORE reading the
+    # ``tables_json`` snapshot — capture omits an unreadable table, so a snapshot lookup
+    # alone would report it as an unknown id.
+    """
+    from table_serialize import table_format_unknown
+
+    tables = doc.get("tables", type=Map)
+    if tables is None or table_id not in tables:
+        raise HTTPException(
+            status_code=404, detail={"error": "Unknown table_id", "table_id": table_id},
+        )
+    if table_format_unknown(tables[table_id]):
+        raise HTTPException(
+            status_code=409, detail={"error": "Unreadable table format", "table_id": table_id},
+        )
+    return tables[table_id]
+
+
 def resolve_cell(doc, table_id: str, row: int, column: str | None,
                  col_fallback: int | None) -> tuple[str, str, int]:
     """The agent tool entry's position → id boundary for ONE cell: row index + header
@@ -67,21 +88,10 @@ def resolve_cell(doc, table_id: str, row: int, column: str | None,
     Raises HTTPException 404 for an unknown table / out-of-bounds cell (detail carries
     n_rows / n_cols / the target row so the model self-corrects), 400 for no column.
     """
-    from fastapi import HTTPException
-    from pycrdt import Map
+    from table_serialize import ordered_ids, read_table_cell
 
-    from table_serialize import ordered_ids, read_table_cell, table_awaits_migration
-
-    tables = doc.get("tables", type=Map)
-    if tables is None or table_id not in tables:
-        raise HTTPException(
-            status_code=404, detail={"error": "Unknown table_id", "table_id": table_id},
-        )
-    if table_awaits_migration(tables[table_id]):
-        raise HTTPException(
-            status_code=409, detail={"error": "Table awaits migration", "table_id": table_id},
-        )
-    row_ids, col_ids = ordered_ids(tables[table_id])
+    table = _require_readable_table(doc, table_id)
+    row_ids, col_ids = ordered_ids(table)
     n_rows, n_cols = len(row_ids), len(col_ids)
 
     def _row_texts(rid: str) -> list[str]:
@@ -101,7 +111,7 @@ def resolve_cell(doc, table_id: str, row: int, column: str | None,
                 "row": target_row,
             },
         )
-    _reject_covered_cell(tables[table_id], row, col)
+    _reject_covered_cell(table, row, col)
     return row_ids[row], col_ids[col], col
 
 
@@ -520,7 +530,7 @@ async def apply_add_table_rows(
     Width comes from the LIVE `columns` (read under the per-doc lock via the
     tables_json snapshot). Shorter caller rows pad empty; an over-length row is rejected
     with 400 (No-silent-degradation). Empty `rows` → 400. Checkpoint captures BEFORE
-    `tables_json`. Raises HTTPException on RBAC/not-found (404)/over-length (400)."""
+    `tables_json`. Raises HTTPException on RBAC/not-found (404)/unreadable format (409)/over-length (400)."""
     from fastapi import HTTPException
 
     if not rows_matrix:
@@ -528,6 +538,7 @@ async def apply_add_table_rows(
     reject_table_overflow(rows_matrix)
 
     def _inside_lock(doc, content, tables_json):
+        _require_readable_table(doc, table_id)
         _n_rows, n_cols = _dims_from_tables_json(tables_json, table_id)
         for row in rows_matrix:
             if len(row) > n_cols:
@@ -572,7 +583,7 @@ async def apply_add_table_column(
     ``at_index=None`` resolves to the END (``n_cols``) after reading the live dims —
     matching frontend ``addColumn``'s ``at ?? columns.length`` default. An explicit
     ``at_index`` must be in ``[0, n_cols]`` (else 400). Checkpoint captures BEFORE
-    `tables_json`. Raises HTTPException on RBAC/not-found (404)/bad index (400)."""
+    `tables_json`. Raises HTTPException on RBAC/not-found (404)/unreadable format (409)/bad index (400)."""
     from fastapi import HTTPException
 
     if header is not None:
@@ -581,6 +592,7 @@ async def apply_add_table_column(
         reject_table_overflow([values])
 
     def _inside_lock(doc, content, tables_json):
+        _require_readable_table(doc, table_id)
         _n_rows, n_cols = _dims_from_tables_json(tables_json, table_id)
         resolved_index = n_cols if at_index is None else at_index
         if resolved_index < 0 or resolved_index > n_cols:

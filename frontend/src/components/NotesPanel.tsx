@@ -11,7 +11,7 @@
  */
 
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { ArrowLeft, Trash2, FileText, Plus, MessageSquare, Paperclip } from 'lucide-react';
+import { ArrowLeft, Trash2, FileText, Plus, MessageSquare, Paperclip, Link2 } from 'lucide-react';
 import { EditorView } from '@codemirror/view';
 import { DEFAULT_HOTKEYS } from './editor/hotkey-config';
 import { useAppStore } from '../store/app-store';
@@ -21,7 +21,7 @@ import { useNoteStore } from '../store/note-store';
 import { useNoteChatStore, noteAttachSurface } from '../store/note-chat-store';
 import { claimAutoOpen, openInboxObject } from '../store/inbox-store';
 import { emit } from '../events';
-import { getRoleView, type EditorRole } from '../editor/active-editor';
+import { getEditorView, getRoleView, getViewEntity, type EditorRole } from '../editor/active-editor';
 import { useArmedAction } from '../hooks/useArmedAction';
 import { useImageDropHandlers } from '../hooks/useImageDropHandlers';
 import { useRightPanelHoverPreview } from '../hooks/useRightPanelHoverPreview';
@@ -33,9 +33,9 @@ import { HoverPreviewPopup } from './HoverPreviewPopup';
 import { NoteChatView } from './NoteChatView';
 import { useNoteCrud } from '../hooks/useNoteCrud';
 import { getEntityHandle } from '../collab/active-handle-registry';
-import { resolveNoteAnchor } from '../collab/note-anchor-wire';
+import { buildNoteAnchor, resolveNoteAnchor } from '../collab/note-anchor-wire';
 import { findNoteAnchorRange } from '../editor/note-highlight';
-import { noteOwnerId } from './editor/note-anchor-wiring';
+import { boundText, noteOwnerId } from './editor/note-anchor-wiring';
 import { referenceFileUrl } from '../utils/reference-url';
 import { formatDate } from '../utils/format';
 import { ChatSession, Reference } from '../types';
@@ -91,6 +91,28 @@ function useNoteGroups(noteItems: ChatSession[], references: Reference[], isRefM
 /** How a note card shows its anchor: on a fragment, on a deleted fragment, or on none. */
 type CardAnchor = 'anchored' | 'orphan' | 'none';
 
+/** Re-anchor an orphan note onto the focused editor's selection, built exactly like
+ *  note creation (`boundText` + `buildNoteAnchor`). Toasts when there is nothing to
+ *  attach to. */
+function attachNoteToSelection(session: ChatSession, noSelectionMessage: string): void {
+  if (useAppStore.getState().accessLevel !== 'full') return;
+  // WHY: the focused-view slot survives a blur (cleared only on unmount) and CM6 keeps
+  // its selection while unfocused, so the click on the card still sees what the user
+  // selected; the condition is read here, at click time, because the selection changes
+  // without the card re-rendering.
+  const view = getEditorView();
+  const range = view?.state.selection.ranges.length === 1 ? view.state.selection.main : null;
+  const bound = view ? boundText(view) : null;
+  if (!view || !range || range.empty || !bound || getViewEntity(view) !== noteOwnerId(session)) {
+    useAppStore.getState().showToast(noSelectionMessage, 'info');
+    return;
+  }
+  const anchor = buildNoteAnchor(bound, range.from, range.to);
+  void useNoteChatStore.getState().reanchorNote(
+    session.session_id, anchor, view.state.sliceDoc(range.from, range.to),
+  );
+}
+
 function NoteSessionCard({
   session,
   anchor,
@@ -138,7 +160,7 @@ function NoteSessionCard({
   const date = formatDate(
     session.last_message_at || session.created_at || session.updated_at,
   );
-  // An orphan stays listed (never auto-deleted, never re-anchored) and says why it is grey.
+  // An orphan stays listed (never auto-deleted) and says why it is grey.
   // WHY: a system note's title (widget key label + caller title, pipeline
   // errors) is documented behavior (configs/help/06-notes.md: the widget note
   // "is titled with the key's name") and rides the wire unused — surface it as
@@ -173,6 +195,19 @@ function NoteSessionCard({
           ? <span className="flex items-center gap-1">{materialIcon}{hasDiscussion ? <MessageSquare size={12} /> : null}</span>
           : (hasDiscussion ? <MessageSquare size={12} /> : null)}
       />
+      {anchor === 'orphan' && accessLevel === 'full' && (
+        <IconButton
+          size="sm"
+          className="absolute top-2 right-8 opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity"
+          title={t('noteAttachToSelection')}
+          onClick={(e: React.MouseEvent) => {
+            e.stopPropagation();
+            attachNoteToSelection(session, t('noteAttachNoSelection'));
+          }}
+        >
+          <Link2 size={13} />
+        </IconButton>
+      )}
       {canDelete && (
         <IconButton
           size="sm"

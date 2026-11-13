@@ -134,7 +134,7 @@ export const TableBadge = memo(function TableBadge({
               onClick={e => e.stopPropagation()}
             />
           ) : undefined}
-          meta={entry.unlinked ? `${entry.rows} × ${entry.cols} · ${t('tableBadgeUnlinked')}` : `${entry.rows} × ${entry.cols}`}
+          meta={`${entry.unreadable ? t('tableBadgeUnreadable') : `${entry.rows} × ${entry.cols}`}${entry.unlinked ? ` · ${t('tableBadgeUnlinked')}` : ''}`}
           metaEmphasized={isActive}
           metaIcon={<Table size={13} className="text-text-dim" />}
           actions={<RowActions active={isActive} activeBackdrop="blue" menu={menu} />}
