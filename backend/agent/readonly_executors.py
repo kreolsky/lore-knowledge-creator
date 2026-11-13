@@ -409,6 +409,7 @@ async def _build_tables_field(
     """
     from table_serialize import (
         extract_table_labels,
+        resolve_merges,
         table_awaits_migration,
         table_model_from_map,
     )
@@ -463,6 +464,13 @@ async def _build_tables_field(
         }
         if per_table_full:
             entry["rows"] = [{"row": i, "cells": r} for i, r in enumerate(model_rows)]
+            # WHY: merged areas are addressed by row index + 0-based column index, never
+            # by header — a covered header cell is empty and cannot name its column.
+            if merges := [
+                {"row": a["r0"], "col": a["c0"], "rows": a["r1"] - a["r0"] + 1, "cols": a["c1"] - a["c0"] + 1}
+                for a in resolve_merges(tables_root[tid])
+            ]:
+                entry["merges"] = merges
         tables.append(entry)
     return tables
 

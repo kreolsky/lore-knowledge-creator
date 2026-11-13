@@ -108,7 +108,7 @@ const CLOSE_CLIENT_LIVENESS = 4009;
  * keep writing the old Y.Doc shape. MUST equal the backend `COLLAB_PROTOCOL`; bump both
  * together whenever the shared Y.Doc shape changes.
  */
-export const COLLAB_PROTOCOL = 3;
+export const COLLAB_PROTOCOL = 4;
 
 // WHY: a page still running this long after its own beforeunload did not unload — the
 // navigation was cancelled, or the target was a download / external app. Short enough that

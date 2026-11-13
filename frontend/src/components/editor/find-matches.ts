@@ -28,9 +28,11 @@ import { getSearchQuery, type SearchQuery } from '@codemirror/search';
 import type * as Y from 'yjs';
 import {
   cellKey,
+  coveredCells,
   getCellText as readCellText,
   getTablesMap,
   orderedColIds,
+  resolveMerges,
   orderedRowIds,
   type ColId,
   type RowId,
@@ -245,8 +247,11 @@ export interface CombinedIndexInputs {
   getHostText(): string;
   /** Live cell text, or null when the cell/table/model is absent. */
   getCellText(tableId: string, rowId: RowId, colId: ColId): string | null;
-  /** Row and column ids in the model's display order, or null when the table is absent. */
-  getTableAxes(tableId: string): { rowIds: readonly RowId[]; colIds: readonly ColId[] } | null;
+  /** Row and column ids in the model's display order plus the cellKeys hidden under a
+   *  merged area (never matched: the editor does not show them), or null when absent. */
+  getTableAxes(tableId: string): {
+    rowIds: readonly RowId[]; colIds: readonly ColId[]; covered?: ReadonlySet<string>;
+  } | null;
 }
 
 /**
@@ -350,6 +355,7 @@ export class CombinedMatchIndex {
       let ord = 0;
       for (const rowId of axes.rowIds) {
         for (const colId of axes.colIds) {
+          if (axes.covered?.has(cellKey(rowId, colId))) { ord++; continue; }
           for (const r of this.cellRanges(query, a.id, rowId, colId)) {
             if (!push({ kind: 'cell', tableId: a.id, rowId, colId, ord, from: r.from, to: r.to })) break;
           }
@@ -526,7 +532,9 @@ export function attachFindIndex(view: EditorView, changed: () => void): FindInde
     getTableAxes: (id) => {
       const rowIds = ydoc ? orderedRowIds(ydoc, id) : null;
       const colIds = ydoc ? orderedColIds(ydoc, id) : null;
-      return rowIds && colIds ? { rowIds, colIds } : null;
+      if (!ydoc || !rowIds || !colIds) return null;
+      const covered = new Set(coveredCells(resolveMerges(ydoc, id), { rowIds, colIds }).keys());
+      return { rowIds, colIds, covered };
     },
   });
 

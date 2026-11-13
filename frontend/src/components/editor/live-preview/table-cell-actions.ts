@@ -20,6 +20,12 @@ import {
   removeColumn,
   moveRow,
   moveColumn,
+  resolveMerges,
+  coveredCells,
+  setMerge,
+  unmerge,
+  cellKey,
+  type MergeArea,
   type RowId,
   type ColId,
 } from './table-block-model';
@@ -131,29 +137,107 @@ function deleteAlong(tableId: string, axis: Axis, cell: CellAddr): CellOp {
 }
 
 /**
+ * True when moving line `id` one step `dir` would carry it into, out of or across a merged
+ * area — the moved line or the neighbour it swaps with intersects one.
+ * INVARIANT: a row/column that crosses a merged area cannot be moved.
+ * Why: operator ruling — moving the anchor row below the end row inverts the area (the merge
+ * silently dissolves) and moving a row with text into an area hides that text.
+ */
+function moveCrossesArea(ids: string[], id: string, dir: -1 | 1, areas: readonly MergeArea[], axis: Axis): boolean {
+  const i = ids.indexOf(id);
+  return areas.some((a) => {
+    const [lo, hi] = axis === 'row' ? [a.r0, a.r1] : [a.c0, a.c1];
+    return [i, i + dir].some((k) => k >= lo && k <= hi);
+  });
+}
+
+/** The selection's bounding rectangle as `[anchor, end]` cells; null under 2 cells. */
+function selectionCorners(order: CellOrder, selection: CellAddr[] | null): [CellAddr, CellAddr] | null {
+  if (!selection || selection.length < 2) return null;
+  const rs = selection.map((c) => order.rowIds.indexOf(c.rowId));
+  const cs = selection.map((c) => order.colIds.indexOf(c.colId));
+  if (rs.some((r) => r < 0) || cs.some((c) => c < 0)) return null;
+  const [r0, r1, c0, c1] = [Math.min(...rs), Math.max(...rs), Math.min(...cs), Math.max(...cs)];
+  return [{ rowId: order.rowIds[r0], colId: order.colIds[c0] }, { rowId: order.rowIds[r1], colId: order.colIds[c1] }];
+}
+
+/** `Merge cells` over the selection: label counts the cells that lose text (an absorbed
+ *  area counts by its anchor); disabled across the header and body rows. */
+function mergeEntry(
+  doc: Y.Doc, tableId: string, order: CellOrder, selection: CellAddr[] | null, areas: readonly MergeArea[],
+  run: (op: CellOp) => void,
+): CellMenuEntry | null {
+  const corners = selectionCorners(order, selection);
+  if (!corners || !selection) return null;
+  const [anchor, end] = corners;
+  const covered = coveredCells(areas, order);
+  const losing = selection.filter((c) => !(c.rowId === anchor.rowId && c.colId === anchor.colId)
+    && !covered.has(cellKey(c.rowId, c.colId))
+    && cellTextNow(doc, tableId, c.rowId, c.colId).trim() !== '').length;
+  const spansHeader = anchor.rowId === order.rowIds[0] && end.rowId !== order.rowIds[0];
+  return {
+    label: losing ? t('tableMergeCellsLosing', { count: losing }) : t('tableMergeCells'),
+    icon: 'mergeCells',
+    disabled: spansHeader,
+    run: () => run((d) => {
+      setMerge(d, tableId, anchor.rowId, anchor.colId, end.rowId, end.colId);
+      return anchor;
+    }),
+  };
+}
+
+/** `Unmerge cells` when the clicked cell (or the selection) is an accepted area. */
+function unmergeEntry(
+  tableId: string, cell: CellAddr, selection: CellAddr[] | null, order: CellOrder, areas: readonly MergeArea[],
+  run: (op: CellOp) => void,
+): CellMenuEntry | null {
+  const anchor = selection ? selectionCorners(order, selection)?.[0] ?? cell : cell;
+  const area = areas.find((a) => a.anchorRowId === anchor.rowId && a.anchorColId === anchor.colId);
+  if (!area) return null;
+  return {
+    label: t('tableUnmergeCells'),
+    icon: 'unmergeCells',
+    run: () => run((d) => {
+      unmerge(d, tableId, area.anchorRowId, area.anchorColId);
+      return anchor;
+    }),
+  };
+}
+
+/**
  * The context menu of the clicked cell: insert / move / delete row / column / table, all
- * acting on that cell. `run` applies an op against the order at RUN time (see the widget's
- * menuTarget); `order` here only decides which entries are disabled. `_selection`: the
- * selected cells when the click landed inside a cell selection, else null.
+ * acting on that cell, plus merge / unmerge over the selection. `run` applies an op against
+ * the order at RUN time (see the widget's menuTarget); `order` here only decides which
+ * entries are disabled. `selection`: the selected cells when the click landed inside a cell
+ * selection, else null.
  */
 export function cellMenuEntries(
-  tableId: string, order: CellOrder, rowId: RowId, colId: ColId, _selection: CellAddr[] | null,
+  doc: Y.Doc, tableId: string, order: CellOrder, rowId: RowId, colId: ColId, selection: CellAddr[] | null,
   run: (op: CellOp) => void, deleteTable: () => void,
 ): CellMenuEntry[] {
   const cell: CellAddr = { rowId, colId };
+  const areas = resolveMerges(doc, tableId);
+  const moveOff = (axis: Axis, dir: -1 | 1): boolean => {
+    const ids = AXES[axis].ids(order);
+    const id = AXES[axis].id(cell);
+    return !moveBounds(ids, id, dir) || moveCrossesArea(ids, id, dir, areas, axis);
+  };
+  const merges = [mergeEntry(doc, tableId, order, selection, areas, run), unmergeEntry(tableId, cell, selection, order, areas, run)]
+    .filter((e): e is CellMenuEntry => e !== null);
   return [
+    ...(merges.length ? [...merges, 'separator' as const] : []),
     { label: t('tableInsertRowAbove'), icon: 'insertRowAbove', run: () => run(insertAlong(tableId, 'row', cell, 0)) },
     { label: t('tableInsertRowBelow'), icon: 'insertRowBelow', run: () => run(insertAlong(tableId, 'row', cell, 1)) },
     { label: t('tableInsertColumnLeft'), icon: 'insertColumnLeft', run: () => run(insertAlong(tableId, 'col', cell, 0)) },
     { label: t('tableInsertColumnRight'), icon: 'insertColumnRight', run: () => run(insertAlong(tableId, 'col', cell, 1)) },
     'separator',
-    { label: t('tableMoveRowUp'), icon: 'moveRowUp', disabled: !moveBounds(order.rowIds, rowId, -1),
+    { label: t('tableMoveRowUp'), icon: 'moveRowUp', disabled: moveOff('row', -1),
       run: () => run(moveAlong(tableId, 'row', cell, -1)) },
-    { label: t('tableMoveRowDown'), icon: 'moveRowDown', disabled: !moveBounds(order.rowIds, rowId, 1),
+    { label: t('tableMoveRowDown'), icon: 'moveRowDown', disabled: moveOff('row', 1),
       run: () => run(moveAlong(tableId, 'row', cell, 1)) },
-    { label: t('tableMoveColumnLeft'), icon: 'moveColumnLeft', disabled: !moveBounds(order.colIds, colId, -1),
+    { label: t('tableMoveColumnLeft'), icon: 'moveColumnLeft', disabled: moveOff('col', -1),
       run: () => run(moveAlong(tableId, 'col', cell, -1)) },
-    { label: t('tableMoveColumnRight'), icon: 'moveColumnRight', disabled: !moveBounds(order.colIds, colId, 1),
+    { label: t('tableMoveColumnRight'), icon: 'moveColumnRight', disabled: moveOff('col', 1),
       run: () => run(moveAlong(tableId, 'col', cell, 1)) },
     'separator',
     { label: t('tableDeleteRow'), icon: 'deleteRow', disabled: order.rowIds.length <= 1,
@@ -177,7 +261,12 @@ export function tabTarget(
   const r = rowIds.indexOf(rowId);
   const c = colIds.indexOf(colId);
   if (r < 0 || c < 0) return null; // a peer removed this cell's row/column
-  const flat = r * colIds.length + c + step;
+  // Covered cells are skipped: an area is one cell, reached at its anchor.
+  const covered = coveredCells(resolveMerges(doc, tableId), order);
+  const isCovered = (f: number): boolean =>
+    covered.has(cellKey(rowIds[Math.floor(f / colIds.length)], colIds[f % colIds.length]));
+  let flat = r * colIds.length + c + step;
+  while (flat >= 0 && flat < rowIds.length * colIds.length && isCovered(flat)) flat += step;
   if (flat < 0) return null;
   if (flat >= rowIds.length * colIds.length) {
     if (!canEdit) return null;
@@ -200,7 +289,13 @@ export function backspaceRow(
   if (!sel.empty || sel.head !== 0 || order.colIds[0] !== colId) return false;
   const r = order.rowIds.indexOf(rowId);
   if (r <= 0) return false;
-  if (order.colIds.some((cid) => cellTextNow(doc, tableId, rowId, cid).trim() !== '')) return false;
+  // A row crossing a merged area counts as empty only if the area's anchor text is too.
+  const covered = coveredCells(resolveMerges(doc, tableId), order);
+  const textAt = (cid: ColId): string => {
+    const area = covered.get(cellKey(rowId, cid));
+    return area ? cellTextNow(doc, tableId, area.anchorRowId, area.anchorColId) : cellTextNow(doc, tableId, rowId, cid);
+  };
+  if (order.colIds.some((cid) => textAt(cid).trim() !== '')) return false;
   // WHY focus first: removing the row destroys this very cell editor.
   focus({ rowId: order.rowIds[r - 1], colId: order.colIds[order.colIds.length - 1] });
   removeRow(doc, tableId, rowId);

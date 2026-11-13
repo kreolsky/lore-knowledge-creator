@@ -2,7 +2,7 @@
 import type * as Y from 'yjs';
 import type { EditorView } from '@codemirror/view';
 import {
-  TABLE_SYSTEM_ORIGIN, buildTable, getTablesMap, readTableModel, tableAwaitsMigration,
+  TABLE_SYSTEM_ORIGIN, buildTable, getTablesMap, readTableModel, resolveMerges, tableAwaitsMigration,
   type TableModel,
 } from './table-block-model';
 import { DEFAULT_COLUMN_WIDTH, freezeAutoWidths } from './table-widths';
@@ -12,8 +12,11 @@ import { TABLE_ANCHOR_RE } from './table-document-ops';
  * Serialize the whole `tables` subtree to compact JSON for checkpoint capture.
  *
  * INVARIANT (shared shape, frontend ↔ backend): the output MUST be byte-identical in
- * SHAPE to the backend `capture_tables_json`: `{ "<id>": { columns: number[], rows: string[][] } }`
- * — POSITIONAL, display order, ids dropped. Why: a checkpoint is restored by whichever
+ * SHAPE to the backend `capture_tables_json`:
+ * `{ "<id>": { columns: number[], rows: string[][], merges?: number[][] } }`, key order
+ * `columns, rows, merges` — POSITIONAL, display order, ids dropped; `merges` holds the
+ * accepted areas `[r0, c0, r1, c1]` in row-major anchor order, emitted ONLY when non-empty
+ * (absent = no merges, so old checkpoints restore unchanged). Why: a checkpoint is restored by whichever
  * replica/producer captured it; silent shape drift (e.g. dropping column widths)
  * rebuilds a default-width table. `table-serialize.test.ts` shares one fixture with
  * the backend `test_table_capture.py` to guard this.
@@ -24,12 +27,13 @@ import { TABLE_ANCHOR_RE } from './table-document-ops';
  */
 export function serializeTables(doc: Y.Doc): string {
   const tables = getTablesMap(doc);
-  const out: Record<string, { columns: number[]; rows: string[][] }> = {};
+  const out: Record<string, { columns: number[]; rows: string[][]; merges?: number[][] }> = {};
   tables.forEach((table, id) => {
     if (tableAwaitsMigration(table)) return;
     const model = readTableModel(doc, id);
     if (!model) return;
-    out[id] = { columns: model.columns, rows: model.rows };
+    const merges = resolveMerges(doc, id).map((a) => [a.r0, a.c0, a.r1, a.c1]);
+    out[id] = merges.length ? { columns: model.columns, rows: model.rows, merges } : { columns: model.columns, rows: model.rows };
   });
   return JSON.stringify(out);
 }
@@ -50,7 +54,7 @@ export function serializeTables(doc: Y.Doc): string {
  */
 export function applyTablesJson(doc: Y.Doc, tablesJson: string | null): void {
   if (tablesJson === null) return;
-  const data: Record<string, { columns?: number[]; rows?: string[][] }> = JSON.parse(tablesJson || '{}');
+  const data: Record<string, { columns?: number[]; rows?: string[][]; merges?: unknown[] }> = JSON.parse(tablesJson || '{}');
   const tables = getTablesMap(doc);
 
   doc.transact(() => {
@@ -64,7 +68,7 @@ export function applyTablesJson(doc: Y.Doc, tablesJson: string | null): void {
       if (width === 0 && rows.length) width = Math.max(...rows.map((r) => r.length));
       // WHY: an old checkpoint may hold legacy 0 widths; a restore never brings one back.
       const widths = freezeAutoWidths(columns.length ? columns : Array.from({ length: width }, () => DEFAULT_COLUMN_WIDTH), rows);
-      buildTable(tables, id, widths, rows);
+      buildTable(tables, id, widths, rows, model.merges ?? []);
     });
   }, TABLE_SYSTEM_ORIGIN);
 }
@@ -119,6 +123,21 @@ export function expandTableAnchorsToGfm(doc: Y.Doc, markdown: string): string {
     if (!model) return full;
     return modelToGfm(model);
   });
+}
+
+/**
+ * The merged areas of every table anchor in `markdown`, keyed by that table's GFM
+ * projection (`modelToGfm`) — the Lore→Lore clipboard sidecar: GFM has no spans, so the
+ * paste side re-applies them to the table it builds from the identical GFM block.
+ */
+export function tableMergesByGfm(doc: Y.Doc, markdown: string): [string, number[][]][] {
+  const out: [string, number[][]][] = [];
+  for (const [, , id] of markdown.matchAll(TABLE_ANCHOR_RE)) {
+    const model = readTableModel(doc, id);
+    const merges = model ? resolveMerges(doc, id).map((a) => [a.r0, a.c0, a.r1, a.c1]) : [];
+    if (model && merges.length) out.push([modelToGfm(model), merges]);
+  }
+  return out;
 }
 
 /**

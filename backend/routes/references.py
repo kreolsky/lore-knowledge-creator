@@ -181,8 +181,7 @@ def sort_refs_by_depth_tier(refs: list[dict], ancestor_ids: list[str]) -> list[d
     #
     # The within-tier pass is the persisted MANUAL order ((sort_key or "", id)
     # ASC) — a content edit no longer moves a ref (updated_at is its content
-    # version, not its position). `sort_key` may be missing only on rows the
-    # reference_sort_keys_backfill migration has not reached (reads as "" → top).
+    # version, not its position). A row without a `sort_key` reads as "" → top.
     """
     depth = {doc_id: i for i, doc_id in enumerate(ancestor_ids)}
     refs = sorted(refs, key=lambda r: (r.get("sort_key") or "", r.get("reference_id") or ""))

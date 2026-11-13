@@ -37,7 +37,7 @@ router = APIRouter()
 # Why: a tab opened before a deploy keeps running the old code and would keep writing
 # the old Y.Doc shape into every document it has open. Must equal the frontend
 # `COLLAB_PROTOCOL` (yjs-provider.ts); bump both whenever the shared Y.Doc shape changes.
-COLLAB_PROTOCOL = 3
+COLLAB_PROTOCOL = 4
 CLIENT_OUTDATED_CLOSE_CODE = 4010
 
 

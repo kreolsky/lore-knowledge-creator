@@ -616,3 +616,54 @@ async def test_agent_create_oversize_table_cell_400_writes_nothing(
     rows = await db.query(
         "SELECT id FROM documents WHERE title = 'Never born'")
     assert not rows
+
+
+def _merge_b2_c3(doc, table_id: str) -> None:
+    from helpers import cell_ids
+
+    from table_serialize import cell_key
+
+    table = doc.get("tables", type=Y.Map)[table_id]
+    er, ec = cell_ids(doc, table_id, 2, 2)
+    with doc.transaction():
+        table["merges"] = Y.Map({cell_key(*cell_ids(doc, table_id, 1, 1)): Y.Map({"r": er, "c": ec})})
+
+
+# TEST-WHY: cross-process-contract — the agent must see merged areas by index and never write text the editor hides under one.
+async def test_agent_merged_area_read_and_refusals(monkeypatch):
+    from agent import readonly_executors as agent_module
+    from agent.table_writes import apply_add_table_column, resolve_cell
+    from fastapi import HTTPException
+    from helpers import read_table_grid
+
+    doc = Y.Doc()
+    make_table(doc, "t1", [["A", "B", "C"], ["1", "x", ""], ["2", "", ""]])
+    _merge_b2_c3(doc, "t1")
+    _mk_read_table_mocks(monkeypatch, doc=doc, content="")
+    out = await agent_module._read_document_exec(
+        doc_id="doc-1", project_id="p-1", user={"user_id": "u-1"}, table_id="t1",
+    )
+    assert out["tables"][0]["merges"] == [{"row": 1, "col": 1, "rows": 2, "cols": 2}]
+
+    assert resolve_cell(doc, "t1", 1, None, 1)[2] == 1
+    with pytest.raises(HTTPException) as exc:
+        resolve_cell(doc, "t1", 2, "C", None)
+    assert exc.value.status_code == 400 and exc.value.detail["anchor"] == {"row": 1, "col": 1}
+
+    _mk_apply_table_mocks(monkeypatch, doc=doc)
+    with pytest.raises(HTTPException) as exc:
+        await apply_add_table_column(
+            doc_id="doc-1", table_id="t1", at_index=2, header="H", values=["", "v"],
+            project_id="p-1", user={"user_id": "u-1"},
+        )
+    assert exc.value.status_code == 400
+    result = await apply_add_table_column(
+        doc_id="doc-1", table_id="t1", at_index=2, header="H", values=[],
+        project_id="p-1", user={"user_id": "u-1"},
+    )
+    assert result["status"] == "applied"
+    assert read_table_grid(doc, "t1")["rows"][0] == ["A", "B", "H", "C"]
+    out = await agent_module._read_document_exec(
+        doc_id="doc-1", project_id="p-1", user={"user_id": "u-1"}, table_id="t1",
+    )
+    assert out["tables"][0]["merges"] == [{"row": 1, "col": 1, "rows": 2, "cols": 3}]

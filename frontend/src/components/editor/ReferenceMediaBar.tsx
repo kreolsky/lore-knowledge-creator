@@ -110,7 +110,7 @@ export function ReferenceMediaBar({ reference, canEdit }: Props) {
           durationSec={reference.file_meta?.duration_sec}
           downloadUrl={fileUrl}
           downloadName={reference.file_meta?.original_name || reference.title}
-          trailing={<MediaFileActions reference={reference} canEdit={canEdit} showDownload={false} />}
+          trailing={<MediaFileActions reference={reference} canEdit={canEdit} showDownload={false} size="md" />}
         />
       </div>
     </div>

@@ -1,13 +1,14 @@
 /**
  * Table cell selection (see SYSTEM: table-block in `table-block-widget.ts`): the range math
- * over the live order and the key table of selection mode. Pure — the widget holds the
- * selection, paints it and runs the actions.
+ * over the live order and the key table of selection mode. Pure — `table-cell-selection-mode.ts`
+ * holds the selection, paints it and runs the actions.
  *
  * WHY ids, resolved per use: a selection is addressed by `(rowId, colId)` like every cell
  * (the INVARIANT(persisted) in `table-block-model.ts`); an index rectangle is derived from
  * the CURRENT order each time, so a peer's insert never shifts what is selected.
  */
 import type { CellAddr, CellOrder } from './table-cell-actions';
+import type { MergeArea } from './table-block-model';
 
 export interface CellSelection { anchor: CellAddr; head: CellAddr }
 /** Inclusive index rectangle over a `CellOrder`. */
@@ -32,12 +33,39 @@ function indexOf(order: CellOrder, cell: CellAddr): [number, number] | null {
   return r < 0 || c < 0 ? null : [r, c];
 }
 
-/** The selection's rectangle, or null when a peer removed the anchor's or head's row/column. */
-export function selectionRect(order: CellOrder, sel: CellSelection): CellRect | null {
+const touches = (rect: CellRect, a: MergeArea): boolean =>
+  a.r0 <= rect.r1 && rect.r0 <= a.r1 && a.c0 <= rect.c1 && rect.c0 <= a.c1;
+
+/** `rect` grown until it contains whole every merged area it touches. */
+export function growOverAreas(rect: CellRect, areas: readonly MergeArea[]): CellRect {
+  const out = { ...rect };
+  for (let grown = true; grown;) {
+    grown = false;
+    for (const a of areas) {
+      if (!touches(out, a) || (a.r0 >= out.r0 && a.r1 <= out.r1 && a.c0 >= out.c0 && a.c1 <= out.c1)) continue;
+      out.r0 = Math.min(out.r0, a.r0); out.r1 = Math.max(out.r1, a.r1);
+      out.c0 = Math.min(out.c0, a.c0); out.c1 = Math.max(out.c1, a.c1);
+      grown = true;
+    }
+  }
+  return out;
+}
+
+/** The merged area holding index cell `(r, c)`, if any. */
+export function areaAt(areas: readonly MergeArea[], r: number, c: number): MergeArea | undefined {
+  return areas.find((a) => r >= a.r0 && r <= a.r1 && c >= a.c0 && c <= a.c1);
+}
+
+/** The selection's rectangle, grown over the merged areas it touches; null when a peer
+ *  removed the anchor's or head's row/column. */
+export function selectionRect(order: CellOrder, sel: CellSelection, areas: readonly MergeArea[] = []): CellRect | null {
   const a = indexOf(order, sel.anchor);
   const h = indexOf(order, sel.head);
   if (!a || !h) return null;
-  return { r0: Math.min(a[0], h[0]), r1: Math.max(a[0], h[0]), c0: Math.min(a[1], h[1]), c1: Math.max(a[1], h[1]) };
+  return growOverAreas(
+    { r0: Math.min(a[0], h[0]), r1: Math.max(a[0], h[0]), c0: Math.min(a[1], h[1]), c1: Math.max(a[1], h[1]) },
+    areas,
+  );
 }
 
 /** Every cell inside `rect`, row-major. */
@@ -51,11 +79,20 @@ export function cellsIn(order: CellOrder, rect: CellRect): CellAddr[] {
 
 /** Step the head by `(dRow, dCol)`, clamped at the edges; without `extend` the anchor
  *  follows (a single-cell selection). Null when the head's row/column is gone. */
-export function moveHead(order: CellOrder, sel: CellSelection, dRow: number, dCol: number, extend: boolean): CellSelection | null {
+export function moveHead(
+  order: CellOrder, sel: CellSelection, dRow: number, dCol: number, extend: boolean, areas: readonly MergeArea[] = [],
+): CellSelection | null {
   const h = indexOf(order, sel.head);
   if (!h) return null;
-  const r = Math.min(Math.max(h[0] + dRow, 0), order.rowIds.length - 1);
-  const c = Math.min(Math.max(h[1] + dCol, 0), order.colIds.length - 1);
+  // A merged area steps as one cell: leave it from its far edge; a covered landing cell
+  // maps to its area's anchor.
+  const from = areaAt(areas, h[0], h[1]);
+  const fr = from ? (dRow > 0 ? from.r1 : dRow < 0 ? from.r0 : h[0]) : h[0];
+  const fc = from ? (dCol > 0 ? from.c1 : dCol < 0 ? from.c0 : h[1]) : h[1];
+  let r = Math.min(Math.max(fr + dRow, 0), order.rowIds.length - 1);
+  let c = Math.min(Math.max(fc + dCol, 0), order.colIds.length - 1);
+  const to = areaAt(areas, r, c);
+  if (to) [r, c] = [to.r0, to.c0];
   const head = { rowId: order.rowIds[r], colId: order.colIds[c] };
   return { anchor: extend ? sel.anchor : head, head };
 }

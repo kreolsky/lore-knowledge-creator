@@ -3,7 +3,7 @@
 # SYSTEM: edges — the typed graph read serving /edges and the get_links agent tool
 
 Every relation the product shows as a link answers through ONE endpoint in ONE
-shape (plan typed-edges). Stored kinds (`mention`, `transclusion`) are read from
+shape. Stored kinds (`mention`, `transclusion`) are read from
 doc_mentions (kind stamped by the rebuild in mentions.py); field-backed kinds are
 PROJECTED here at read time from the indexed field that already has many writers
 — storing them would duplicate a field and a missed writer would drift the graph
@@ -13,7 +13,7 @@ silently:
     (idx_documents_parent_only);
   - `note` (note → document): chat_sessions.document_id with is_note=true
     (idx_chatsessions_document). DIRECT anchor only — the branch-scope walk of
-    _note_scope_ids is a listing convenience, not a relation (operator Ruling:
+    _note_scope_ids is a listing convenience, not a relation (operator ruling:
     projecting it would show a note on reference R2 as linked to sibling R1).
     Notes carry no user_id filter: every reader of the project sees them.
   - `chat-context` (chat → document): chat_sessions.context_document_ids, the
@@ -102,7 +102,8 @@ async def _stored_triples(
 
     # WHY the NONE coalesce: rows written before the kind field carry NONE —
     # SurrealDB DEFAULT never retro-fills existing rows, so the read — not the
-    # backfill — is what keeps legacy edges answerable.
+    # backfill — is what keeps legacy edges answerable until the runner entry
+    # `edge_kinds_backfill` has run on every installation.
     """
     triples: list[tuple[str, str, str]] = []
     if direction in ("out", "both"):

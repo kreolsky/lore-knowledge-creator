@@ -181,11 +181,11 @@ export function AudioPlayer({ src, title, durationSec, downloadUrl, downloadName
       aria-label={title}
     >
       <IconButton
-        size="sm"
+        size="md"
         aria-label={isPlaying ? t('pause') : t('play')}
         onClick={togglePlay}
       >
-        {isPlaying ? <Pause size={14} /> : <Play size={14} />}
+        {isPlaying ? <Pause size={16} /> : <Play size={16} />}
       </IconButton>
 
       {error ? (
@@ -215,11 +215,11 @@ export function AudioPlayer({ src, title, durationSec, downloadUrl, downloadName
       )}
 
       <IconButton
-        size="sm"
+        size="md"
         aria-label={muted || volume === 0 ? t('unmute') : t('mute')}
         onClick={toggleMute}
       >
-        {muted || volume === 0 ? <VolumeX size={14} /> : <Volume2 size={14} />}
+        {muted || volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}
       </IconButton>
       <input
         type="range"
@@ -247,9 +247,9 @@ export function AudioPlayer({ src, title, durationSec, downloadUrl, downloadName
           download={downloadName}
           title={t('download')}
           aria-label={t('download')}
-          className="flex items-center justify-center w-[22px] h-[22px] text-text-muted hover:text-text hover:bg-surface3"
+          className="flex items-center justify-center w-[30px] h-[30px] text-text-muted hover:text-text hover:bg-surface3"
         >
-          <Download size={14} />
+          <Download size={16} />
         </a>
       )}
 

@@ -287,8 +287,7 @@ export interface Reference {
   archived?: boolean;
   /**
    * Persisted manual order within the reference's host group: `(sort_key, reference_id)` ASC inside a tier; a
-   * new ref mints the TOP key of its group. Absent only on rows the
-   * reference_sort_keys_backfill migration has not reached (reads as '').
+   * new ref mints the TOP key of its group. A row without one reads as ''.
    */
   sort_key?: string | null;
   headings?: HeadingItem[];

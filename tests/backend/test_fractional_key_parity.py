@@ -47,3 +47,16 @@ def test_freeze_auto_widths_reproduces_every_vector():
     assert len(vectors) >= 6
     got = [(v["case"], freeze_auto_widths(v["widths"], v["matrix"])) for v in vectors]
     assert got == [(v["case"], v["expected"]) for v in vectors]
+
+
+# TEST-WHY: cross-process-contract — browser and backend each resolve merged areas from the same id-keyed entries; a disagreement shows the agent a different table than the user sees.
+def test_resolve_merge_entries_reproduces_every_vector():
+    from table_serialize import resolve_merge_entries
+
+    vectors = _fixture()["merges"]
+    assert len(vectors) >= 6
+    got = [
+        (v["case"], [[a["r0"], a["c0"], a["r1"], a["c1"]] for a in resolve_merge_entries(v["rows"], v["cols"], v["merges"])])
+        for v in vectors
+    ]
+    assert got == [(v["case"], v["expected"]) for v in vectors]

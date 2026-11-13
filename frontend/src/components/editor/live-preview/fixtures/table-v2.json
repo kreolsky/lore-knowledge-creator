@@ -2125,4 +2125,16 @@
   {"case": "zero-columns-without-rows", "widths": [0, 200], "matrix": [], "expected": [644, 200]},
   {"case": "ragged-row-pads-empty", "widths": [0, 0, 100], "matrix": [["x"], ["yyyyyy", "z", "w"]], "expected": [496, 248, 100]}
  ]
+,
+ "merges": [
+  {"case": "accepted", "rows": ["R0", "R1", "R2", "R3"], "cols": ["C0", "C1", "C2"], "merges": {"R1:C1": {"r": "R2", "c": "C2"}}, "expected": [[1, 1, 2, 2]]},
+  {"case": "header-only", "rows": ["R0", "R1", "R2", "R3"], "cols": ["C0", "C1", "C2"], "merges": {"R0:C0": {"r": "R0", "c": "C1"}}, "expected": [[0, 0, 0, 1]]},
+  {"case": "overlapping-later-anchor-rejected", "rows": ["R0", "R1", "R2", "R3"], "cols": ["C0", "C1", "C2"], "merges": {"R2:C1": {"r": "R3", "c": "C2"}, "R1:C0": {"r": "R2", "c": "C1"}}, "expected": [[1, 0, 2, 1]]},
+  {"case": "inverted", "rows": ["R0", "R1", "R2", "R3"], "cols": ["C0", "C1", "C2"], "merges": {"R2:C2": {"r": "R1", "c": "C1"}}, "expected": []},
+  {"case": "header-crossing", "rows": ["R0", "R1", "R2", "R3"], "cols": ["C0", "C1", "C2"], "merges": {"R0:C0": {"r": "R1", "c": "C0"}}, "expected": []},
+  {"case": "missing-end-id", "rows": ["R0", "R1", "R2", "R3"], "cols": ["C0", "C1", "C2"], "merges": {"R1:C1": {"r": "Rx", "c": "C2"}}, "expected": []},
+  {"case": "missing-anchor-id", "rows": ["R0", "R1", "R2", "R3"], "cols": ["C0", "C1", "C2"], "merges": {"Rx:C0": {"r": "R2", "c": "C1"}}, "expected": []},
+  {"case": "single-cell", "rows": ["R0", "R1", "R2", "R3"], "cols": ["C0", "C1", "C2"], "merges": {"R1:C1": {"r": "R1", "c": "C1"}}, "expected": []},
+  {"case": "two-areas-row-major", "rows": ["R0", "R1", "R2", "R3"], "cols": ["C0", "C1", "C2"], "merges": {"R3:C0": {"r": "R3", "c": "C2"}, "R1:C2": {"r": "R2", "c": "C2"}}, "expected": [[1, 2, 2, 2], [3, 0, 3, 2]]}
+ ]
 }

@@ -118,3 +118,53 @@ export function scaleColumnWidths(widths: number[], total: number): number[] {
   scaled[widest] += target - scaled.reduce((sum, w) => sum + w, 0);
   return scaled;
 }
+
+/**
+ * Integer widths summing to `max(total, n × MIN)` from each column's unwrapped `natural`
+ * width (browser auto-layout). Room to spare ⇒ every column keeps its natural width and
+ * the surplus is split evenly. Too narrow ⇒ a column narrower than its even share of what
+ * is left stays unwrapped (repeated until stable), the rest share the remainder in
+ * proportion to their natural widths, none past `FIT_COLUMN_MAX_SHARE` (the
+ * `fitColumnWidths` cap) when there is more than one column.
+ */
+export function distributeColumnWidths(natural: number[], total: number): number[] {
+  const n = natural.length;
+  const target = Math.max(Math.round(total), n * MIN_COLUMN_WIDTH);
+  const nat = natural.map((w) => Math.max(w, MIN_COLUMN_WIDTH));
+  const sum = nat.reduce((a, b) => a + b, 0);
+  let px: number[];
+  if (sum <= target) {
+    px = nat.map((w) => Math.floor(w + (target - sum) / n));
+  } else {
+    const kept = new Set<number>();
+    for (let changed = true; changed;) {
+      changed = false;
+      const left = target - [...kept].reduce((a, i) => a + nat[i], 0);
+      const share = left / (n - kept.size);
+      nat.forEach((w, i) => { if (!kept.has(i) && w <= share) { kept.add(i); changed = true; } });
+    }
+    const rest = nat.flatMap((w, i) => (kept.has(i) ? [] : [w]));
+    const left = target - [...kept].reduce((a, i) => a + nat[i], 0);
+    const scaled = n > 1 ? capShare(rest, left, Math.floor(target * FIT_COLUMN_MAX_SHARE)) : [left];
+    let k = 0;
+    px = nat.map((w, i) => (kept.has(i) ? w : scaled[k++]));
+  }
+  const widest = px.indexOf(Math.max(...px));
+  px[widest] += target - px.reduce((a, b) => a + b, 0);
+  return px;
+}
+
+/** `widths` scaled to `total`, no entry past `cap`; a capped entry's excess goes to the rest. */
+function capShare(widths: number[], total: number, cap: number): number[] {
+  const px = scaleColumnWidths(widths, total);
+  const capped = new Set<number>();
+  for (let over = px.findIndex((w) => w > cap); over !== -1 && capped.size < px.length - 1; over = px.findIndex((w, i) => w > cap && !capped.has(i))) {
+    capped.add(over);
+    px[over] = cap;
+    const rest = px.flatMap((w, i) => (capped.has(i) ? [] : [w]));
+    const scaled = scaleColumnWidths(rest, total - capped.size * cap);
+    let k = 0;
+    px.forEach((_, i) => { if (!capped.has(i)) px[i] = scaled[k++]; });
+  }
+  return px;
+}

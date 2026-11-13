@@ -20,7 +20,7 @@
 import { EditorView } from '@codemirror/view';
 import { getActiveHandle } from './active-editor';
 import { cleanMarkdownToHtml } from '../components/editor/markdown-to-html';
-import { expandTableAnchorsToGfm } from '../components/editor/live-preview/table-serialize';
+import { expandTableAnchorsToGfm, tableMergesByGfm } from '../components/editor/live-preview/table-serialize';
 import { ligatureSubstitutedText } from '../components/editor/ligature-plugin';
 import { selectedAtomicRange } from '../components/editor/live-preview/atomic-delete-guard';
 import { useAppStore } from '../store/app-store';
@@ -37,6 +37,9 @@ const FRAGMENT_TAIL = '\n</body>\n</html>';
 // Why an HTML comment: invisible to external editors and works in the standard clipboard
 // channel without relying on custom MIME types.
 const LORE_CLIP_MARK = '<!--lore-clipboard-->';
+// Merged areas of the copied tables (`[gfm, areas][]`, URI-encoded JSON — `-->` cannot occur
+// in it). Read back by the paste handler's Lore→Lore path; external editors ignore comments.
+const LORE_MERGES_PREFIX = '<!--lore-table-merges:';
 
 /** The rendered `<img>` of the whole-selected image embed, or null for any other selection. */
 function selectedImageElement(view: EditorView): HTMLImageElement | null {
@@ -149,10 +152,15 @@ export function handleCopyCut(e: ClipboardEvent, view: EditorView, isCut: boolea
     : renderedMarkdown;
 
   const html = cleanMarkdownToHtml(renderedPortable);
+  // WHY from the SOURCE slice: the paste side matches `text/plain` (source GFM), and the
+  // rendered slice's ligatures would never match it.
+  const merges = handle?.ydoc ? tableMergesByGfm(handle.ydoc, selectedMarkdown) : [];
+  const mergesSidecar = merges.length ? `${LORE_MERGES_PREFIX}${encodeURIComponent(JSON.stringify(merges))}-->` : '';
   const envelope =
     FRAGMENT_HEAD +
     '<!--StartFragment-->' +
     LORE_CLIP_MARK +
+    mergesSidecar +
     html +
     '<!--EndFragment-->' +
     FRAGMENT_TAIL;

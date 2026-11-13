@@ -153,8 +153,8 @@ logger = logging.getLogger(__name__)
 # There is no per-startup sort_key repair sweep: every creation path is closed at
 # source — seed_dev routes every document through documents.service.create_document
 # (both kinds get a key there now), routes/projects.py::create_project sets the
-# index doc's sort_key in its transactional CREATE, and reference rows predating
-# per-ref keys are covered by the one-time reference_sort_keys_backfill migration.
+# index doc's sort_key in its transactional CREATE, and every reference row
+# mints its key at birth.
 # INVARIANT preserved: every live document row, reference or not, gets a sort_key
 # at creation time.
 

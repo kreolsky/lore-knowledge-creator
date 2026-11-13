@@ -10,7 +10,15 @@
  *       columns: Y.Map<colId, Y.Map{ pos: string, w: number }>,   // px width, always >= MIN_COLUMN_WIDTH
  *       rows:    Y.Map<rowId, Y.Map{ pos: string }>,
  *       cells:   Y.Map<"rowId:colId", Y.Text>,                    // cell body
+ *       merges?: Y.Map<"anchorRowId:anchorColId", Y.Map{ r: rowId, c: colId }>,
  *     }>
+ *
+ * ARCH (merged cells): a `merges` entry is keyed by the area's top-left cell and names its
+ * BOTTOM-RIGHT cell by id, never a span count — a count is positional (see the
+ * INVARIANT(persisted) below). A row/column inserted strictly inside the area extends it by
+ * itself. Covered cells stay in `cells` (the grid stays rectangular) and are emptied by
+ * the merge; text a race leaves in one is hidden in the editor, never repaired. Entries are
+ * resolved on read (`resolveMerges`), never repaired.
  *
  * The document `content` text holds only a transclusion anchor `![label](table:id)`.
  *
@@ -143,8 +151,8 @@ export function cellKey(rowId: RowId, colId: ColId): string {
 }
 
 /**
- * True for a schema-v1 table (positional `columns`/`rows` Y.Arrays) that the
- * `tables_v2` backend migration has not rebuilt yet — a DEFERRED document keeps one.
+ * True for a schema-v1 table (positional `columns`/`rows` Y.Arrays) that was never
+ * rebuilt to v2 (its document deferred before the `tables_v2` backend migration was retired).
  *
  * INVARIANT(data-loss): a v1 table is never projected as an empty v2 table —
  * `serializeTables` skips it, `applyTablesJson` keeps it, and the widget renders
@@ -157,6 +165,83 @@ export function tableAwaitsMigration(table: unknown): boolean {
     table instanceof Y.Map && table.get('v') === undefined
     && table.get('columns') instanceof Y.Array && table.get('rows') instanceof Y.Array
   );
+}
+
+/** One accepted merged area in index space over the CURRENT order (inclusive). */
+export interface MergeArea {
+  r0: number; c0: number; r1: number; c1: number;
+  anchorRowId: RowId; anchorColId: ColId;
+}
+
+/** A raw `merges` entry: the area's bottom-right cell by id. */
+type MergeEnd = { get(key: string): unknown };
+
+/**
+ * Accepted merged areas, row-major by anchor. An entry is accepted only if anchor and end
+ * ids exist, the end is not above/left of the anchor, the area is >= 2 cells, it does not
+ * span the header row and body rows at once, and it does not overlap an earlier accepted
+ * area. Backend twin: `resolve_merge_entries` (parity fixture `table-v2.json` → `merges`).
+ *
+ * INVARIANT(persisted): resolve on read, never repair — the model is not touched.
+ * Why: a concurrent removal or merge can leave an entry that no longer describes an area;
+ * repairing it on one replica would fork the CRDT, and two resolvers that disagree show the
+ * agent a different table than the user sees.
+ */
+export function resolveMergeEntries(
+  rowIds: readonly string[], colIds: readonly string[], merges: Iterable<[string, unknown]>,
+): MergeArea[] {
+  const rowAt = new Map(rowIds.map((id, i) => [id, i]));
+  const colAt = new Map(colIds.map((id, i) => [id, i]));
+  const candidates: [number, number, number, number][] = [];
+  for (const [key, end] of merges) {
+    const [ar, ac] = key.split(':');
+    const r0 = rowAt.get(ar);
+    const c0 = colAt.get(ac);
+    if (r0 === undefined || c0 === undefined || !end || typeof (end as MergeEnd).get !== 'function') continue;
+    const r1 = rowAt.get(String((end as MergeEnd).get('r')));
+    const c1 = colAt.get(String((end as MergeEnd).get('c')));
+    if (r1 === undefined || c1 === undefined) continue;
+    candidates.push([r0, c0, r1, c1]);
+  }
+  candidates.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2] || a[3] - b[3]);
+  const accepted: MergeArea[] = [];
+  for (const [r0, c0, r1, c1] of candidates) {
+    if (r1 < r0 || c1 < c0 || (r1 - r0 + 1) * (c1 - c0 + 1) < 2) continue;
+    if (r0 === 0 && r1 > 0) continue;
+    if (accepted.some((a) => r0 <= a.r1 && a.r0 <= r1 && c0 <= a.c1 && a.c0 <= c1)) continue;
+    accepted.push({ r0, c0, r1, c1, anchorRowId: rowIds[r0] as RowId, anchorColId: colIds[c0] as ColId });
+  }
+  return accepted;
+}
+
+function mergesMap(table: TableMap): Y.Map<Y.Map<string>> | null {
+  const merges = table.get('merges');
+  return merges instanceof Y.Map ? merges as Y.Map<Y.Map<string>> : null;
+}
+
+/** Accepted merged areas of a table over its live order; `[]` for a missing/non-v2 table
+ *  or one without merges. */
+export function resolveMerges(doc: Y.Doc, id: string): MergeArea[] {
+  const table = tableById(doc, id);
+  const merges = table ? mergesMap(table) : null;
+  if (!table || !merges || merges.size === 0) return [];
+  const order = tableOrder(doc, id);
+  return order ? resolveMergeEntries(order.rowIds, order.colIds, merges.entries()) : [];
+}
+
+/** Every covered cell (inside an accepted area, not its anchor) → that area. */
+export function coveredCells(
+  areas: readonly MergeArea[], order: { rowIds: readonly RowId[]; colIds: readonly ColId[] },
+): Map<string, MergeArea> {
+  const out = new Map<string, MergeArea>();
+  for (const a of areas) {
+    for (let r = a.r0; r <= a.r1; r++) {
+      for (let c = a.c0; c <= a.c1; c++) {
+        if (r !== a.r0 || c !== a.c0) out.set(cellKey(order.rowIds[r], order.colIds[c]), a);
+      }
+    }
+  }
+  return out;
 }
 
 /** Internal to the table-* modules. */
@@ -310,11 +395,13 @@ export function ensureCell(doc: Y.Doc, id: string, rowId: RowId, colId: ColId): 
  */
 export function buildTable(
   tables: Y.Map<TableMap>, tableId: string, widths: number[], matrix: string[][],
+  merges: readonly unknown[] = [],
 ): void {
   const columns = new Y.Map<AxisEntry>();
   const rows = new Y.Map<AxisEntry>();
   const cells = new Y.Map<CellText>();
   const colIds = widths.map(() => uuid() as ColId);
+  const rowIds: RowId[] = [];
   generateNKeysBetween(null, null, colIds.length).forEach((pos, i) => {
     const entry = new Y.Map<string | number>() as AxisEntry;
     entry.set('pos', pos);
@@ -323,6 +410,7 @@ export function buildTable(
   });
   generateNKeysBetween(null, null, matrix.length).forEach((pos, r) => {
     const rid = uuid() as RowId;
+    rowIds.push(rid);
     const entry = new Y.Map<string | number>() as AxisEntry;
     entry.set('pos', pos);
     rows.set(rid, entry);
@@ -336,7 +424,31 @@ export function buildTable(
   table.set('columns', columns);
   table.set('rows', rows);
   table.set('cells', cells);
+  // WHY always a map: two peers creating it concurrently on their first merge would
+  // overwrite each other's entry (a nested map set is last-writer-wins).
+  const mergeEntries = new Y.Map<Y.Map<string>>();
+  for (const m of merges) {
+    if (!mergeInGrid(m, rowIds.length, colIds.length)) continue;
+    const [r0, c0, r1, c1] = m;
+    mergeEntries.set(cellKey(rowIds[r0], colIds[c0]), mergeEnd(rowIds[r1], colIds[c1]));
+  }
+  table.set('merges', mergeEntries);
   tables.set(tableId, table);
+}
+
+/** A checkpoint `[r0, c0, r1, c1]` whose four indices address the grid (backend twin
+ *  `_merge_in_grid`). */
+function mergeInGrid(m: unknown, nRows: number, nCols: number): m is [number, number, number, number] {
+  if (!Array.isArray(m) || m.length !== 4 || !m.every((i) => Number.isInteger(i))) return false;
+  const [r0, c0, r1, c1] = m as number[];
+  return r0 >= 0 && r0 < nRows && r1 >= 0 && r1 < nRows && c0 >= 0 && c0 < nCols && c1 >= 0 && c1 < nCols;
+}
+
+function mergeEnd(rowId: RowId, colId: ColId): Y.Map<string> {
+  const end = new Y.Map<string>();
+  end.set('r', rowId);
+  end.set('c', colId);
+  return end;
 }
 
 /**
@@ -359,9 +471,10 @@ export function createTable(
 export function cloneTable(doc: Y.Doc, srcId: string): string {
   const model = readTableModel(doc, srcId);
   if (!model) throw new Error(`cloneTable: source table ${srcId} not found`);
+  const merges = resolveMerges(doc, srcId).map((a) => [a.r0, a.c0, a.r1, a.c1]);
   const newId = uuid();
   doc.transact(() => {
-    buildTable(getTablesMap(doc), newId, model.columns, model.rows);
+    buildTable(getTablesMap(doc), newId, model.columns, model.rows, merges);
   }, TABLE_LOCAL_ORIGIN);
   return newId;
 }
@@ -435,6 +548,7 @@ export function removeRow(doc: Y.Doc, id: string, rowId: RowId): void {
   const parts = v2ById(doc, id);
   if (!parts || !parts.rows.has(rowId)) return;
   localStep(doc, () => {
+    shrinkMerges(doc, id, 'row', rowId);
     parts.rows.delete(rowId);
     const prefix = `${rowId}:`;
     for (const key of Array.from(parts.cells.keys())) {
@@ -448,9 +562,12 @@ export function removeRow(doc: Y.Doc, id: string, rowId: RowId): void {
  * range. A missing cell is skipped, never created; an already-empty one is not touched.
  */
 export function clearCells(doc: Y.Doc, id: string, cells: readonly { rowId: RowId; colId: ColId }[]): void {
-  const parts = v2ById(doc, id);
-  if (!parts) return;
+  const order = tableOrder(doc, id);
+  if (!order) return;
+  const { parts } = order;
+  const covered = coveredCells(resolveMerges(doc, id), order);
   const texts = cells
+    .filter((c) => !covered.has(cellKey(c.rowId, c.colId)))
     .map((c) => parts.cells.get(cellKey(c.rowId, c.colId)))
     .filter((text): text is Y.Text => !!text && text.length > 0);
   if (texts.length === 0) return;
@@ -464,6 +581,7 @@ export function removeColumn(doc: Y.Doc, id: string, colId: ColId): void {
   const parts = v2ById(doc, id);
   if (!parts || !parts.columns.has(colId)) return;
   localStep(doc, () => {
+    shrinkMerges(doc, id, 'col', colId);
     parts.columns.delete(colId);
     const suffix = `:${colId}`;
     for (const key of Array.from(parts.cells.keys())) {
@@ -501,6 +619,108 @@ export function moveColumn(doc: Y.Doc, id: string, colId: ColId, beforeId: ColId
   localStep(doc, () => {
     entry.set('pos', posBetween(parts.columns, lo, hi));
   });
+}
+
+// ─── Writes: merged cells ─────────────────────────────────────────────────────
+
+/**
+ * Merge the rectangle from the anchor cell to the end cell into one cell, as ONE undo step:
+ * every cell entering the area except the anchor is emptied, and any merge entry whose area
+ * it absorbs is dropped. No-op when an id is gone or the rectangle is a single cell.
+ */
+export function setMerge(
+  doc: Y.Doc, id: string, anchorRowId: RowId, anchorColId: ColId, endRowId: RowId, endColId: ColId,
+): void {
+  const table = tableById(doc, id);
+  const order = tableOrder(doc, id);
+  if (!table || !order) return;
+  const [r0, r1] = [order.rowIds.indexOf(anchorRowId), order.rowIds.indexOf(endRowId)];
+  const [c0, c1] = [order.colIds.indexOf(anchorColId), order.colIds.indexOf(endColId)];
+  if (r0 < 0 || c0 < 0 || r1 < r0 || c1 < c0 || (r0 === r1 && c0 === c1)) return;
+  const absorbed = resolveMerges(doc, id).filter((a) => a.r0 <= r1 && r0 <= a.r1 && a.c0 <= c1 && c0 <= a.c1);
+  localStep(doc, () => {
+    let merges = mergesMap(table);
+    if (!merges) {
+      merges = new Y.Map<Y.Map<string>>();
+      table.set('merges', merges);
+    }
+    for (const a of absorbed) merges.delete(cellKey(a.anchorRowId, a.anchorColId));
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        if (r === r0 && c === c0) continue;
+        const text = order.parts.cells.get(cellKey(order.rowIds[r], order.colIds[c]));
+        if (text && text.length > 0) text.delete(0, text.length);
+      }
+    }
+    merges.set(cellKey(anchorRowId, anchorColId), mergeEnd(endRowId, endColId));
+  });
+}
+
+/** Write checkpoint-shaped areas (`[r0, c0, r1, c1]`, positional over the current order)
+ *  onto a freshly created table; entries outside the grid are skipped, the resolver
+ *  decides the rest on read. */
+export function writeMergeAreas(doc: Y.Doc, id: string, areas: readonly unknown[]): void {
+  const table = tableById(doc, id);
+  const order = tableOrder(doc, id);
+  const merges = table ? mergesMap(table) : null;
+  if (!order || !merges) return;
+  doc.transact(() => {
+    for (const m of areas) {
+      if (!mergeInGrid(m, order.rowIds.length, order.colIds.length)) continue;
+      const [r0, c0, r1, c1] = m;
+      merges.set(cellKey(order.rowIds[r0], order.colIds[c0]), mergeEnd(order.rowIds[r1], order.colIds[c1]));
+    }
+  }, TABLE_LOCAL_ORIGIN);
+}
+
+/** Dissolve the area anchored at the cell; its text stays in the anchor. */
+export function unmerge(doc: Y.Doc, id: string, anchorRowId: RowId, anchorColId: ColId): void {
+  const table = tableById(doc, id);
+  const merges = table ? mergesMap(table) : null;
+  const key = cellKey(anchorRowId, anchorColId);
+  if (!merges?.has(key)) return;
+  localStep(doc, () => { merges.delete(key); });
+}
+
+/**
+ * Keep every accepted area valid while one row/column of it is removed (call inside the
+ * removal's transaction, BEFORE the removal): removing the end line moves the end to the
+ * previous line inside the area; removing the anchor's line moves the anchor to the next
+ * line inside the area, carrying the anchor text over; an area left with one line along
+ * that axis and one cell in total, or with no line at all, is dropped.
+ */
+function shrinkMerges(doc: Y.Doc, id: string, axis: 'row' | 'col', lineId: string): void {
+  const table = tableById(doc, id);
+  const order = tableOrder(doc, id);
+  const merges = table ? mergesMap(table) : null;
+  if (!order || !merges) return;
+  const ids: readonly string[] = axis === 'row' ? order.rowIds : order.colIds;
+  const i = ids.indexOf(lineId);
+  for (const a of resolveMergeEntries(order.rowIds, order.colIds, merges.entries())) {
+    const [lo, hi] = axis === 'row' ? [a.r0, a.r1] : [a.c0, a.c1];
+    if (i < lo || i > hi) continue;
+    const key = cellKey(a.anchorRowId, a.anchorColId);
+    const end = merges.get(key)!;
+    const cells = (axis === 'row' ? a.c1 - a.c0 + 1 : a.r1 - a.r0 + 1) * (hi - lo);
+    if (cells < 2) { merges.delete(key); continue; }
+    if (i === hi) { end.set(axis === 'row' ? 'r' : 'c', ids[hi - 1]); continue; }
+    if (i !== lo) continue;
+    const next = axis === 'row'
+      ? { rowId: ids[lo + 1] as RowId, colId: a.anchorColId }
+      : { rowId: a.anchorRowId, colId: ids[lo + 1] as ColId };
+    const from = order.parts.cells.get(key)?.toString() ?? '';
+    const nextKey = cellKey(next.rowId, next.colId);
+    let to = order.parts.cells.get(nextKey);
+    if (!to) {
+      to = new Y.Text();
+      order.parts.cells.set(nextKey, to);
+    }
+    if (to.length > 0) to.delete(0, to.length);
+    if (from) to.insert(0, from);
+    const moved = mergeEnd(end.get('r') as RowId, end.get('c') as ColId);
+    merges.delete(key);
+    merges.set(nextKey, moved);
+  }
 }
 
 // ─── Writes: widths ───────────────────────────────────────────────────────────

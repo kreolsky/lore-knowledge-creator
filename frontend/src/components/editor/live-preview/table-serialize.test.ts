@@ -9,6 +9,8 @@ import {
   readTableModel,
   orderedColIds,
   setColumnWidth,
+  orderedRowIds,
+  setMerge,
 } from './table-block-model';
 import { DEFAULT_COLUMN_WIDTH } from './table-widths';
 import { tableAnchor, deleteTableFromDoc, TABLE_ANCHOR_RE } from './table-document-ops';
@@ -53,6 +55,28 @@ describe('serializeTables (checkpoint capture)', () => {
     const id = createTable(doc, [['a|b', ''], ['c\nd', '  e  ']]);
     const data = JSON.parse(serializeTables(doc));
     expect(data[id].rows).toEqual([['a|b', ''], ['c\nd', '  e  ']]);
+  });
+});
+
+// TEST-WHY: cross-process-contract — mirror of test_table_capture.py::test_capture_restore_keeps_merges_and_omits_empty; both producers must emit `merges` after `rows`, only when non-empty, and restore must skip out-of-grid entries.
+describe('serializeTables merges', () => {
+  // TEST-WHY: cross-process-contract — mirror of the backend capture fixture; both producers emit `merges` after `rows`, only when non-empty.
+  it('captures accepted areas, omits empty, restores and skips out-of-grid entries', () => {
+    const id = createTable(doc, [['h1', 'h2', 'h3'], ['a', '', 'c'], ['', '', 'f']]);
+    const plain = createTable(doc, [['x']]);
+    const cols = orderedColIds(doc, id)!;
+    [100, 120, 140].forEach((w, i) => setColumnWidth(doc, id, cols[i], w));
+    const rows = orderedRowIds(doc, id)!;
+    setMerge(doc, id, rows[1], cols[0], rows[2], cols[1]);
+    const captured = JSON.parse(serializeTables(doc));
+    expect(captured[id]).toEqual(
+      { columns: [100, 120, 140], rows: [['h1', 'h2', 'h3'], ['a', '', 'c'], ['', '', 'f']], merges: [[1, 0, 2, 1]] },
+    );
+    expect(Object.keys(captured[plain])).toEqual(['columns', 'rows']);
+    expect(Object.keys(captured[id])).toEqual(['columns', 'rows', 'merges']);
+    const restored = new Y.Doc();
+    applyTablesJson(restored, JSON.stringify({ ...captured, [id]: { ...captured[id], merges: [[1, 0, 2, 1], [5, 0, 6, 1]] } }));
+    expect(JSON.parse(serializeTables(restored))).toEqual(captured);
   });
 });
 

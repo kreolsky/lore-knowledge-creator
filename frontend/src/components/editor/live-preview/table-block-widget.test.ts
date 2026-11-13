@@ -78,7 +78,14 @@ describe('TableBlockWidget — selection outline + read-only hosts', () => {
   });
 });
 
-const press = (el: Element) => el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+// A full click: a plain press focuses its cell only on the release inside that cell,
+// which the widget resolves through elementFromPoint — aimed at `el` for the mouseup.
+const press = (el: Element) => {
+  el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+  document.elementFromPoint = () => el;
+  try { el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true })); }
+  finally { document.elementFromPoint = () => null; }
+};
 const firstCell = (parent: HTMLElement) => parent.querySelector('td') as HTMLElement;
 const cellEditors = (parent: HTMLElement) => parent.querySelectorAll('.cm-table-block-cell-editor .cm-editor');
 

@@ -14,7 +14,7 @@
  * import must not corrupt content; the model is the source of truth (see table_serialize).
  */
 import type * as Y from 'yjs';
-import { createTable } from './table-block-model';
+import { createTable, writeMergeAreas } from './table-block-model';
 import { fitColumnWidths } from './table-widths';
 import { tableAnchor } from './table-document-ops';
 
@@ -142,6 +142,7 @@ function collectTableBlock(lines: string[], i: number, mask: boolean[]): { matri
  */
 export function importGfmTables(
   doc: Y.Doc, markdown: string, label: string, fitWidth: number | null = null,
+  mergesByGfm: ReadonlyMap<string, readonly unknown[]> = new Map(),
 ): { text: string; count: number } {
   const lines = markdown.split('\n');
   const mask = fenceMask(lines);
@@ -154,6 +155,9 @@ export function importGfmTables(
       const id = fitWidth
         ? createTable(doc, block.matrix, fitWidth, fitColumnWidths)
         : createTable(doc, block.matrix);
+      // A Lore→Lore paste carries the merged areas of the copied table, keyed by its GFM.
+      const merges = mergesByGfm.get(lines.slice(i, block.next).map((l) => l.replace(/\r$/, '')).join('\n'));
+      if (merges) writeMergeAreas(doc, id, merges);
       out.push(tableAnchor(label, id));
       count++;
       i = block.next;

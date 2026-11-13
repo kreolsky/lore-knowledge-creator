@@ -12,6 +12,7 @@ import { describe, it, expect } from 'vitest';
 import { generateKeyBetween, generateNKeysBetween } from 'fractional-indexing';
 import vectors from './fixtures/table-v2.json';
 import { freezeAutoWidths } from './table-widths';
+import { resolveMergeEntries } from './table-block-model';
 
 // TEST-WHY: cross-process-contract — the vectors are shared with the backend pytest; this side proves the npm pin still reproduces them.
 describe('fractional-indexing vector parity (fixtures/table-v2.json)', () => {
@@ -41,5 +42,19 @@ describe('freezeAutoWidths vector parity (fixtures/table-v2.json)', () => {
     for (const v of vectors.freeze_auto_widths) {
       expect({ case: v.case, widths: freezeAutoWidths(v.widths, v.matrix) }).toEqual({ case: v.case, widths: v.expected });
     }
+  });
+});
+
+// TEST-WHY: cross-process-contract — the backend `resolve_merge_entries` replays the same vectors; two resolvers that disagree render a different merged area than the agent and checkpoints see.
+describe('resolveMergeEntries vector parity (fixtures/table-v2.json → merges)', () => {
+  // TEST-WHY: cross-process-contract — the backend resolver replays the same vectors; disagreeing resolvers show the agent a different area than the editor.
+  it('reproduces every recorded vector, in order', () => {
+    const got = vectors.merges.map((v) => [
+      v.case,
+      resolveMergeEntries(v.rows, v.cols, Object.entries(v.merges).map(
+        ([k, e]) => [k, new Map(Object.entries(e as Record<string, string>))] as [string, unknown],
+      )).map((a) => [a.r0, a.c0, a.r1, a.c1]),
+    ]);
+    expect(got).toEqual(vectors.merges.map((v) => [v.case, v.expected]));
   });
 });

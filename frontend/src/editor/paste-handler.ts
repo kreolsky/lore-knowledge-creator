@@ -36,6 +36,22 @@ turndown.use(gfm);
 // Private sentinel written by the Lore copy path. Its presence in `text/html` tells the
 // paste handler to use the lossless `text/plain` markdown source instead of Turndown.
 const LORE_CLIP_MARK = '<!--lore-clipboard-->';
+const LORE_MERGES_RE = /<!--lore-table-merges:([^>]*)-->/;
+
+/** The copied tables' merged areas keyed by GFM (copy-handler's sidecar); empty when absent
+ *  or unreadable — the paste then lands without merges, as from any GFM source. */
+function loreMergesByGfm(html: string): Map<string, unknown[]> {
+  const m = LORE_MERGES_RE.exec(html);
+  if (!m) return new Map();
+  try {
+    const entries: unknown = JSON.parse(decodeURIComponent(m[1]));
+    if (!Array.isArray(entries)) return new Map();
+    return new Map(entries.filter((e): e is [string, unknown[]] =>
+      Array.isArray(e) && typeof e[0] === 'string' && Array.isArray(e[1])));
+  } catch {
+    return new Map(); // WHY silent: a foreign/garbled comment only loses the merges, never the paste
+  }
+}
 
 // An intraword `_` is never an emphasis delimiter (CommonMark/GFM), so Turndown escaping
 // it is unconditionally wrong. We shield intraword underscores before delegating to Turndown's
@@ -294,7 +310,9 @@ function inFencedCode(view: EditorView, pos: number): boolean {
  * Upgrade every GFM table in `source` to a live table object when a collab handle is active,
  * creating the backing models in the target view's ydoc. `count` 0 means nothing was created.
  */
-function upgradeGfmTables(view: EditorView, source: string): { text: string; count: number } {
+function upgradeGfmTables(
+  view: EditorView, source: string, mergesByGfm: ReadonlyMap<string, readonly unknown[]> = new Map(),
+): { text: string; count: number } {
   // ARCH (split view): the model lands in the TARGET VIEW'S entity ydoc — the focused
   // slot may hold the OTHER column's handle (paste into the reference column must not
   // create the table in the document's ydoc, or vice versa). Unknown views (no
@@ -308,7 +326,7 @@ function upgradeGfmTables(view: EditorView, source: string): { text: string; cou
   // WHY: a paste into a fenced code block is code — its pipe table stays text (the same
   // fence skip the scanner applies to fences inside the pasted source).
   if (!ydoc || inFencedCode(view, view.state.selection.main.from)) return { text: source, count: 0 };
-  return importGfmTables(ydoc, source, t('tableBlockUntitled'), documentTextWidth(view));
+  return importGfmTables(ydoc, source, t('tableBlockUntitled'), documentTextWidth(view), mergesByGfm);
 }
 
 /** Replace the selection with `insert` and park the cursor after it. */
@@ -325,8 +343,10 @@ function dispatchInsert(view: EditorView, insert: string): void {
  * Shared by the Lore-origin and unformatted-external paths so a pasted GFM table becomes
  * editable, not inert pipe text.
  */
-function insertVerbatim(view: EditorView, source: string): void {
-  dispatchInsert(view, upgradeGfmTables(view, source).text);
+function insertVerbatim(
+  view: EditorView, source: string, mergesByGfm: ReadonlyMap<string, readonly unknown[]> = new Map(),
+): void {
+  dispatchInsert(view, upgradeGfmTables(view, source, mergesByGfm).text);
 }
 
 export const pasteHandlerExtension = EditorView.domEventHandlers({
@@ -367,7 +387,7 @@ export const pasteHandlerExtension = EditorView.domEventHandlers({
     const verbatim = resolvePasteSource(html, plain);
     if (verbatim !== null) {
       e.preventDefault();
-      insertVerbatim(view, verbatim);
+      insertVerbatim(view, verbatim, loreMergesByGfm(html));
       return true;
     }
 

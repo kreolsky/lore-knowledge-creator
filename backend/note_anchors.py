@@ -9,11 +9,10 @@ never inserts or deletes text.
 The shadow holds ONLY the `content` text's items: the tables subtree is deleted
 in a throwaway replica before the shadow is applied, so a position bound inside
 a table cell's Y.Text resolves to `external` (its item is absent from — or a
-recorded foreign run in — the shadow) and NEVER to host offsets (plan
-table-links-notes).
+recorded foreign run in — the shadow) and NEVER to host offsets.
 
-Offsets here are UTF-16 code units (the Yjs / CM6 unit); `utf16_to_cp` /
-`cp_to_utf16` convert for Python string slicing.
+Offsets here are UTF-16 code units (the Yjs / CM6 unit); `utf16_to_cp`
+converts for Python string slicing.
 """
 
 import base64
@@ -358,13 +357,6 @@ def utf16_to_cp(text: str, offset: int) -> int:
         return len(units[:2 * offset].decode("utf-16-le"))
     except UnicodeDecodeError as exc:
         raise ValueError(f"UTF-16 offset {offset} splits a surrogate pair") from exc
-
-
-def cp_to_utf16(text: str, offset: int) -> int:
-    """Code-point offset → UTF-16 offset."""
-    if offset < 0 or offset > len(text):
-        raise ValueError(f"code-point offset {offset} outside the text")
-    return _utf16_len(text[:offset])
 
 
 def build_anchor(space: AnchorSpace, start: int, end: int) -> tuple[bytes, bytes]:

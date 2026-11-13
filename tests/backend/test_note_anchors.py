@@ -19,7 +19,6 @@ from note_anchors import (  # noqa: E402
     AnchorRange,
     anchor_space,
     build_anchor,
-    cp_to_utf16,
     relpos_from_wire,
     relpos_to_wire,
     resolve_anchor,
@@ -85,7 +84,8 @@ def test_cell_anchored_position_is_external_not_host_offsets():
 
 def test_build_refuses_a_split_surrogate_pair():
     doc, text = _split_doc()
-    emoji_at = cp_to_utf16(str(text), str(text).index("😀"))
+    assert str(text).startswith("абЖ😀")
+    emoji_at = 3  # UTF-16 offset of the first 😀
     with pytest.raises(ValueError):
         build_anchor(anchor_space(doc), emoji_at + 1, emoji_at + 3)
 
@@ -155,8 +155,10 @@ def pycrdt_fixture() -> dict:
     doc, text = _split_doc()
     s = str(text)
     space = anchor_space(doc)
-    ranges = [(0, 3), (2, 6), (3, 4), (7, 9), (9, len(s)), (1, 12)]
-    anchors = [build_anchor(space, cp_to_utf16(s, i), cp_to_utf16(s, j)) for i, j in ranges]
+    assert s == "абЖ😀xв😀ЯЯгде"
+    # UTF-16 offsets of the code-point ranges (0,3) (2,6) (3,4) (7,9) (9,12) (1,12).
+    ranges = [(0, 3), (2, 7), (3, 5), (9, 11), (11, 14), (1, 14)]
+    anchors = [build_anchor(space, i, j) for i, j in ranges]
     other = Doc(client_id=21)
     other.apply_update(doc.get_update())
     other_text = other.get("content", type=Text)

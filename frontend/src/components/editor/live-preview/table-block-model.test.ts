@@ -8,6 +8,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import * as Y from 'yjs';
 import {
+  resolveMerges,
+  setMerge,
+  unmerge,
+  cloneTable,
   getTablesMap,
   createTable,
   readTableModel,
@@ -242,5 +246,39 @@ describe('v1 tables (awaiting migration) — never empty', () => {
     expect(readTableModel(doc, 'fresh')!.rows).toEqual([['q']]);
     applyTablesJson(doc, JSON.stringify({ v1: { columns: [7], rows: [['rebuilt']] } }));
     expect(readTableModel(doc, 'v1')!.rows).toEqual([['rebuilt']]);
+  });
+});
+
+// TEST-WHY: persisted-shape — merges are stored by anchor/end ids and must stay valid across removals and clones; a wrong upkeep silently dissolves or mis-sizes an area in every peer's document.
+describe('merged areas (id-keyed)', () => {
+  // TEST-WHY: data-loss — merges are stored by anchor/end ids; a wrong upkeep on removal or clone silently dissolves or mis-sizes an area in every peer's document.
+  it('setMerge empties covered cells, removals shrink/re-anchor, clone keeps, unmerge keeps anchor text', () => {
+    const doc = new Y.Doc();
+    const id = createTable(doc, [['h', 'h', 'h'], ['a', 'b', 'c'], ['d', 'e', 'f'], ['g', 'h', 'i']]);
+    const r = orderedRowIds(doc, id)!;
+    const c = orderedColIds(doc, id)!;
+    const txt = (ri: number, ci: number) => getCellText(doc, id, orderedRowIds(doc, id)![ri], orderedColIds(doc, id)![ci])!.toString();
+    const area = () => resolveMerges(doc, id).map((a) => [a.r0, a.c0, a.r1, a.c1]);
+
+    setMerge(doc, id, r[1], c[1], r[2], c[2]);
+    expect(area()).toEqual([[1, 1, 2, 2]]);
+    expect([txt(1, 1), txt(1, 2), txt(2, 1), txt(2, 2)]).toEqual(['b', '', '', '']);
+
+    const dup = cloneTable(doc, id);
+    expect(resolveMerges(doc, dup).map((a) => [a.r0, a.c0, a.r1, a.c1])).toEqual([[1, 1, 2, 2]]);
+
+    removeColumn(doc, id, c[1]); // the anchor column: anchor moves right, text carried
+    expect(area()).toEqual([[1, 1, 2, 1]]);
+    expect(txt(1, 1)).toBe('b');
+    removeRow(doc, id, r[2]); // the end row: area shrinks to one cell ⇒ dropped
+    expect(area()).toEqual([]);
+
+    const r2 = orderedRowIds(doc, id)!;
+    const c2 = orderedColIds(doc, id)!;
+    setMerge(doc, id, r2[1], c2[0], r2[2], c2[1]);
+    expect(area()).toEqual([[1, 0, 2, 1]]);
+    unmerge(doc, id, r2[1], c2[0]);
+    expect(area()).toEqual([]);
+    expect(txt(1, 0)).toBe('a');
   });
 });

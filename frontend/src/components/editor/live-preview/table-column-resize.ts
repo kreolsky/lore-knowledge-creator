@@ -9,15 +9,13 @@ import { caretHold } from '../thick-cursor';
 import { startObjectDrag } from './widgets';
 import { documentTextWidth } from './document-width';
 import {
-  orderedColIds,
-  readTableModel,
   readColumnWidths,
   setColumnWidth,
   setColumnWidths,
   type ColumnWidth,
   type ColId,
 } from './table-block-model';
-import { scaleColumnWidths, fitColumnWidths, MIN_COLUMN_WIDTH, FIT_COLUMN_MAX_SHARE } from './table-widths';
+import { scaleColumnWidths, distributeColumnWidths, MIN_COLUMN_WIDTH, FIT_COLUMN_MAX_SHARE } from './table-widths';
 import { cellTextNow, liveOrder } from './table-cell-actions';
 
 /** The widget state a resize reads, each read at gesture time. */
@@ -111,21 +109,22 @@ export function bindScaleControl(control: HTMLElement, host: ResizeHost): void {
     const scaled = scaleColumnWidths(base.map((c) => c.w), base.reduce((sum, c) => sum + c.w, 0) + dx);
     return base.map((c, i) => ({ id: c.id, w: scaled[i] }));
   });
-  // Double-click = full document width, columns proportional to their content. Written as
-  // px: a one-off fit to the clicker's document width, not a width kept on every screen.
+  // Double-click = keep the table's current width; every column gets its unwrapped content
+  // width and the rest is split evenly, or, when too narrow, short columns stay unwrapped
+  // and long ones share the rest (one width write, one undo step).
   control.addEventListener('dblclick', (e) => {
     e.preventDefault();
     e.stopPropagation();
     const doc = host.canEdit() ? host.doc() : null;
-    const model = doc ? readTableModel(doc, host.tableId) : null;
-    const colIds = doc ? orderedColIds(doc, host.tableId) : null;
-    const view = host.view();
-    const total = view ? documentTextWidth(view) : null;
-    if (doc && model && colIds && total) {
-      const fit = fitColumnWidths(model.rows, total);
-      setColumnWidths(doc, host.tableId, colIds.map((id, i) => ({ id, w: fit[i] })));
-      redrawCaret(view);
-    }
+    const widths = doc ? readColumnWidths(doc, host.tableId) : null;
+    const total = widths ? widths.reduce((sum, c) => sum + c.w, 0) : 0;
+    const root = control.closest('.cm-table-block-box');
+    if (!doc || !widths || total <= 0 || !root) return;
+    const natural = widths.map((c) => naturalColumnWidth(doc, host.tableId, c.id, root));
+    if (natural.some((w) => w === null)) return;
+    const fit = distributeColumnWidths(natural as number[], total);
+    setColumnWidths(doc, host.tableId, widths.map((c, i) => ({ id: c.id, w: fit[i] })));
+    redrawCaret(host.view());
   });
 }
 
@@ -148,32 +147,46 @@ export function bindColumnHandle(handle: HTMLElement, host: ResizeHost, colId: C
 }
 
 /**
- * The px width that fits column `colId` to its content: the widest line of its raw cell
- * texts (all rows) measured in the header cell's font, plus that cell's horizontal
- * padding, clamped to `[MIN_COLUMN_WIDTH, FIT_COLUMN_MAX_SHARE × document text width]`.
- * WHY client metrics are allowed: the text-length rule binds BIRTH widths only; this is a
- * user resize. Raw markdown measures wider than its rendered link — the column comes out
- * a little wide, the user drags it back. Null when nothing is laid out to measure.
+ * The px width that fits column `colId` to its content: its natural width, clamped to
+ * `[MIN_COLUMN_WIDTH, FIT_COLUMN_MAX_SHARE × document text width]`. Null when nothing is
+ * laid out to measure.
  */
 function contentFitWidth(doc: Y.Doc, tableId: string, view: EditorView | null, colId: ColId, header: HTMLElement): number | null {
-  const order = liveOrder(doc, tableId);
   const total = view ? documentTextWidth(view) : null;
+  const natural = naturalColumnWidth(doc, tableId, colId, header.closest('table') ?? header);
+  if (!total || natural === null) return null;
+  const cap = Math.floor(FIT_COLUMN_MAX_SHARE * total);
+  return Math.min(Math.max(natural, MIN_COLUMN_WIDTH), Math.max(cap, MIN_COLUMN_WIDTH));
+}
+
+/**
+ * The unwrapped px width of column `colId`: the widest line of its raw cell texts (all
+ * rows), each measured in its own cell's font (a bold header measures bold), plus the
+ * cell's horizontal padding. Null when nothing is laid out to measure.
+ * WHY client metrics are allowed: the text-length rule binds BIRTH widths only; this is a
+ * user resize. Raw markdown measures wider than its rendered link — the column comes out
+ * a little wide, the user drags it back.
+ */
+function naturalColumnWidth(doc: Y.Doc, tableId: string, colId: ColId, root: Element): number | null {
+  const order = liveOrder(doc, tableId);
   const ctx = document.createElement('canvas').getContext('2d');
-  if (!order || !total || !ctx) return null;
-  // WHY: the th has padding 0; the text padding lives on the mounted editor's .cm-content
-  // or on the lazy placeholder (index.css `.cm-table-block th`).
-  const host = header.querySelector('.cm-content') ?? header.querySelector('.cm-table-block-cell-editor') ?? header;
-  const style = getComputedStyle(host);
-  ctx.font = style.font || `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+  if (!order || !ctx) return null;
   let widest = 0;
+  let padding = 0;
   for (const rowId of order.rowIds) {
+    const cell = root.querySelector(`[data-row-id="${rowId}"][data-col-id="${colId}"]`);
+    if (!cell) continue;
+    // WHY: the cell has padding 0; the text padding lives on the mounted editor's
+    // .cm-content or on the lazy placeholder (index.css `.cm-table-block th`).
+    const host = cell.querySelector('.cm-content') ?? cell.querySelector('.cm-table-block-cell-editor') ?? cell;
+    const style = getComputedStyle(host);
+    ctx.font = style.font || `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+    padding = Math.max(padding, parseFloat(style.paddingLeft) + parseFloat(style.paddingRight));
     for (const line of cellTextNow(doc, tableId, rowId, colId).split('\n')) {
       widest = Math.max(widest, ctx.measureText(line).width);
     }
   }
-  const padding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
-  const cap = Math.floor(FIT_COLUMN_MAX_SHARE * total);
   // WHY +1: under border-collapse the cell's box is ~1px narrower than its column (half of
   // each side border); without it the measured longest line wraps right after the fit.
-  return Math.min(Math.max(Math.ceil(widest + padding) + 1, MIN_COLUMN_WIDTH), Math.max(cap, MIN_COLUMN_WIDTH));
+  return Math.ceil(widest + padding) + 1;
 }

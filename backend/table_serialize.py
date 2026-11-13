@@ -23,7 +23,7 @@ places, by design — future table regressions land here.
      embeddings / search / export see the table text, not an opaque anchor. Lossy:
      column widths and intra-cell layout do not survive (GFM cannot represent them).
   3. ``checkpoints.tables_json`` (JSON) — the LOSSLESS checkpoint capture
-     (``capture_tables_json`` / ``apply_tables_json``). ``{ columns, rows }`` per table
+     (``capture_tables_json`` / ``apply_tables_json``). ``{ columns, rows, merges? }`` per table
      id so a restore rebuilds identical editable blocks. tables_json is the price of
      storing checkpoints as plaintext content (blob) instead of a full ydoc_state
      snapshot: it carries the table state the plaintext anchor alone cannot. (A full
@@ -44,7 +44,6 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from collections.abc import Callable
 
 from fractional_indexing import generate_key_between, generate_n_keys_between
 from pycrdt import Array, Map, Text
@@ -180,7 +179,8 @@ def _v2_parts(table):
 
 def table_awaits_migration(table) -> bool:
     """True for a schema-v1 table (``columns``/``rows`` are positional ``Array``s) that
-    the ``tables_v2`` migration has not rebuilt yet — a DEFERRED document keeps one.
+    was never rebuilt to v2 (its document deferred before the ``tables_v2`` migration
+    was retired).
 
     # INVARIANT(data-loss): a v1 table is never projected as an empty v2 table — capture
     # skips it, ``apply_tables_json`` keeps it, agent reads report it. Why: an empty
@@ -213,6 +213,60 @@ def ordered_ids(table) -> tuple[list[str], list[str]]:
     return ordered_axis_ids(rows), ordered_axis_ids(cols)
 
 
+def resolve_merge_entries(row_ids: list[str], col_ids: list[str], merges: dict) -> list[dict]:
+    """Accepted merged areas in index space, row-major by anchor: ``[{r0, c0, r1, c1,
+    anchor_row_id, anchor_col_id}]``. ``merges`` maps ``cell_key(anchorRow, anchorCol)``
+    to ``{"r": endRowId, "c": endColId}`` (the BOTTOM-RIGHT cell, by id).
+
+    An entry is accepted only if anchor and end ids exist, the end is not above/left of
+    the anchor, the area is >= 2 cells, it does not span the header row and body rows at
+    once, and it does not overlap an earlier accepted area; a rejected entry reads as
+    plain cells. Equals frontend ``resolveMerges`` (parity fixture ``table-v2.json`` →
+    ``merges``).
+
+    # INVARIANT(persisted): resolve on read, never repair — the model is not touched.
+    # Why: a concurrent removal or merge can leave an entry that no longer describes an
+    # area; repairing it on one replica would fork the CRDT, and two resolvers that
+    # disagree show the agent a different table than the user sees.
+    """
+    row_at = {rid: i for i, rid in enumerate(row_ids)}
+    col_at = {cid: i for i, cid in enumerate(col_ids)}
+    anchors = {cell_key(r, c): (ri, ci) for r, ri in row_at.items() for c, ci in col_at.items()}
+    candidates = []
+    for key, end in merges.items():
+        if key not in anchors or not hasattr(end, "get"):
+            continue
+        r1, c1 = row_at.get(str(end.get("r"))), col_at.get(str(end.get("c")))
+        if r1 is None or c1 is None:
+            continue
+        r0, c0 = anchors[key]
+        candidates.append((r0, c0, r1, c1))
+    accepted: list[dict] = []
+    for r0, c0, r1, c1 in sorted(candidates):
+        if r1 < r0 or c1 < c0 or (r1 - r0 + 1) * (c1 - c0 + 1) < 2:
+            continue
+        if r0 == 0 < r1:
+            continue
+        if any(r0 <= a["r1"] and a["r0"] <= r1 and c0 <= a["c1"] and a["c0"] <= c1 for a in accepted):
+            continue
+        accepted.append({
+            "r0": r0, "c0": c0, "r1": r1, "c1": c1,
+            "anchor_row_id": row_ids[r0], "anchor_col_id": col_ids[c0],
+        })
+    return accepted
+
+
+def resolve_merges(table) -> list[dict]:
+    """Accepted merged areas of a table Map (see ``resolve_merge_entries``); ``[]`` when
+    the table is not v2 or carries no ``merges`` map."""
+    parts = _v2_parts(table)
+    merges = table.get("merges") if parts is not None else None
+    if not isinstance(merges, Map):
+        return []
+    row_ids, col_ids = ordered_ids(table)
+    return resolve_merge_entries(row_ids, col_ids, {str(k): v for k, v in merges.items()})
+
+
 def _pos_between(axis, before_id: str | None, after_id: str | None) -> str:
     """A ``pos`` key for an item placed right after ``before_id`` and right before
     ``after_id`` (either may be ``None`` = that end of the axis).
@@ -238,16 +292,14 @@ def _new_id() -> str:
     return str(uuid.uuid4())
 
 
-def _build_table(
-    tables, table_id: str, widths: list[int], matrix: list[list[str]],
-    new_id: Callable[[], str] = _new_id,
-) -> None:
+def _build_table(tables, table_id: str, widths: list[int], matrix: list[list[str]],
+                 merges: list | None = None) -> None:
     """Write one fresh v2 table under ``table_id``: ``len(widths)`` columns, one row
-    per matrix row, a cell per row x column (EAGER). Caller owns the transaction.
-    ``new_id`` mints row/column ids — columns first, then rows, in order (the
-    ``tables_v2`` migration passes a deterministic one)."""
+    per matrix row, a cell per row x column (EAGER). ``merges`` (checkpoint shape,
+    ``[[r0, c0, r1, c1], …]``) become id-keyed entries; one whose indices fall outside
+    the grid is skipped. Caller owns the transaction."""
 
-    col_ids = [new_id() for _ in widths]
+    col_ids = [_new_id() for _ in widths]
     cols = {
         cid: Map({"pos": pos, "w": int(w)})
         for cid, pos, w in zip(col_ids, generate_n_keys_between(None, None, len(widths)), widths)
@@ -255,13 +307,28 @@ def _build_table(
     rows: dict = {}
     cells: dict = {}
     for row, pos in zip(matrix, generate_n_keys_between(None, None, len(matrix))):
-        rid = new_id()
+        rid = _new_id()
         rows[rid] = Map({"pos": pos})
         for i, cid in enumerate(col_ids):
             cells[cell_key(rid, cid)] = Text(str(row[i]) if i < len(row) else "")
-    tables[table_id] = Map({
-        "v": TABLE_SCHEMA_VERSION, "columns": Map(cols), "rows": Map(rows), "cells": Map(cells),
-    })
+    row_ids = list(rows)
+    model = {"v": TABLE_SCHEMA_VERSION, "columns": Map(cols), "rows": Map(rows), "cells": Map(cells)}
+    entries = {
+        cell_key(row_ids[r0], col_ids[c0]): Map({"r": row_ids[r1], "c": col_ids[c1]})
+        for r0, c0, r1, c1 in (m for m in merges or [] if _merge_in_grid(m, len(row_ids), len(col_ids)))
+    }
+    if entries:
+        model["merges"] = Map(entries)
+    tables[table_id] = Map(model)
+
+
+def _merge_in_grid(entry, n_rows: int, n_cols: int) -> bool:
+    """A checkpoint ``[r0, c0, r1, c1]`` whose four indices address the restored grid."""
+    return (
+        isinstance(entry, list) and len(entry) == 4 and all(isinstance(i, int) for i in entry)
+        and 0 <= entry[0] < n_rows and 0 <= entry[2] < n_rows
+        and 0 <= entry[1] < n_cols and 0 <= entry[3] < n_cols
+    )
 
 
 def _table_columns_and_rows(table) -> tuple[list[int], list[list[str]]]:
@@ -442,13 +509,17 @@ def capture_tables_json(doc) -> str:
     Output shape (the SHARED contract with the frontend ``serializeTables``) — POSITIONAL,
     rows and columns in display order, ids dropped:
 
-        { "<tableId>": { "columns": [w0, w1], "rows": [["a","b"],["c","d"]] }, ... }
+        { "<tableId>": { "columns": [w0, w1], "rows": [["a","b"],["c","d"]],
+                         "merges": [[r0, c0, r1, c1]] }, ... }
 
     ``"{}"`` when the document has no tables. Column entries are px widths (ints), ``rows``
-    is the flat cell-body matrix.
+    is the flat cell-body matrix, ``merges`` the accepted merged areas in row-major anchor
+    order — emitted ONLY when non-empty (absent = no merges, so old checkpoints restore
+    unchanged).
 
     INVARIANT (shared shape, frontend ↔ backend): both producers MUST emit the identical
-    JSON shape ``{ columns: number[], rows: string[][] }`` per table. Why: silent drift
+    JSON shape ``{ columns: number[], rows: string[][], merges?: number[][] }`` per table,
+    key order ``columns, rows, merges``. Why: silent drift
     drops column widths on restore (the widget renders a default-width table). The
     frontend ``readTableModel`` already emits ``{ columns, rows }``; this reader mirrors it
     exactly. ``test_table_capture.py`` + ``table-serialize.test.ts`` share one fixture to
@@ -467,7 +538,10 @@ def capture_tables_json(doc) -> str:
         if table_awaits_migration(table):
             continue  # see INVARIANT on table_awaits_migration
         widths, rows = _table_columns_and_rows(table)
-        out[str(tid)] = {"columns": widths, "rows": rows}
+        entry: dict = {"columns": widths, "rows": rows}
+        if merges := [[a["r0"], a["c0"], a["r1"], a["c1"]] for a in resolve_merges(table)]:
+            entry["merges"] = merges
+        out[str(tid)] = entry
     return json.dumps(out, separators=(",", ":"), ensure_ascii=False)
 
 
@@ -506,7 +580,7 @@ def apply_tables_json(doc, tables_json: str | None) -> None:
                 width = max(len(r) for r in rows_src)
             # WHY: an old checkpoint may hold legacy 0 widths; a restore never brings one back.
             widths = freeze_auto_widths(cols_src or [DEFAULT_COLUMN_WIDTH] * width, rows_src)
-            _build_table(tables, tid, widths, rows_src)
+            _build_table(tables, tid, widths, rows_src, model.get("merges"))
 
 
 # A table transclusion anchor in the document text: `![label](table:id)`.

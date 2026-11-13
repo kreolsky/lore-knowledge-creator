@@ -53,16 +53,13 @@ import { claimNestedView, getActiveHandle, getEditorView, getViewEntity } from '
 import { selectionFeedPlugin } from '../../../editor/editor-observer';
 import { documentUndo } from '../../../collab/document-undo';
 import { registerCellCaretHost, wireCellCaret, type CellCaret } from './table-cell-undo';
-import { canEditView, selectImageAt } from './widgets';
-import { noteRangesByText } from '../note-anchor-wiring';
+import { canEditView } from './widgets';
 import { useNoteChatStore } from '../../../store/note-chat-store';
-import type { NoteAnchorRange } from '../../../editor/note-highlight';
 import { openNoteThread } from './link-types';
 import { atomicRangeAt } from './atomic-delete-guard';
 import { tableDocSource } from './table-doc-source';
 import { renderCellStatic, isPlainCellText } from './cell-static-render';
 import {
-  cellMarksByTableField,
   setCellCurrentMatch,
   setCellMatches,
   type CurrentCellMatch,
@@ -79,8 +76,10 @@ import {
   readColumnWidths,
   getCellText,
   ensureCell,
-  clearCells,
   cellKey,
+  coveredCells,
+  resolveMerges,
+  type MergeArea,
   type ColumnWidth,
   type RowId,
   type ColId,
@@ -88,7 +87,6 @@ import {
 import { deleteTableFromDoc } from './table-document-ops';
 import { reconcileChildren, sameIds } from './dom-reconcile';
 import { lazyCellMounters, takeTableFocus, widgetsByWrap } from './table-widget-registry';
-import { NO_CELL_MARKS, sameRanges } from './table-relays';
 import { cellEditorExtensions } from './table-cell-editor';
 import { bindColumnHandle, bindScaleControl, type ResizeHost } from './table-column-resize';
 import {
@@ -97,20 +95,12 @@ import {
   deleteWholeTable,
   liveOrder,
   tabTarget,
-  type CellAddr,
   type CellOp,
   type CellOrder,
 } from './table-cell-actions';
-import {
-  cellsIn,
-  moveHead,
-  NATIVE_KEY_ACTIONS,
-  sameCell,
-  selectionKeyAction,
-  selectionRect,
-  type CellSelection,
-  type SelectionAction,
-} from './table-cell-selection';
+import { sameCell } from './table-cell-selection';
+import { createCellSelectionMode, type CellSelectionMode } from './table-cell-selection-mode';
+import { createPlaceholderPainter, type CellSlot, type PlaceholderPainter } from './table-cell-placeholders';
 
 /**
  * Markdown cells rendered synchronously when a table is built; the rest are upgraded from
@@ -120,16 +110,6 @@ import {
  * top of the table (what is on screen first) is formatted immediately.
  */
 export const EAGER_MARKDOWN_RENDERS = 200;
-/** Time slice for one deferred-render pass; the main thread is yielded between slices. */
-const DEFERRED_RENDER_SLICE_MS = 12;
-
-/** One cell's address and DOM: the `th`/`td`, the editor host inside it. */
-interface CellSlot {
-  rowId: RowId;
-  colId: ColId;
-  el: HTMLElement;
-  host: HTMLElement;
-}
 
 export class TableBlockWidget extends WidgetType {
   private unobserve: (() => void) | null = null;
@@ -139,14 +119,6 @@ export class TableBlockWidget extends WidgetType {
   private unsubNotes: (() => void) | null = null;
   /** Registration as a cell-caret host of the undo stack (see table-cell-undo); dropped on destroy. */
   private unregisterCaret: (() => void) | null = null;
-  /** This entity's resolved note ranges by Y.Text; null = recompute on next read. */
-  private noteMap: Map<unknown, NoteAnchorRange[]> | null = null;
-  /** Find-match ranges per cell as LAST painted (`cellKey` → ranges) — the
-   *  change detector applyCellMarks re-renders only cells whose set moved. */
-  private lastCellMarks = new Map<string, readonly MatchRange[]>();
-  /** The panel's CURRENT cell match as last applied (relay / revealCellMatchInView).
-   *  Kept across a structural patch — render() re-applies it onto fresh hosts. */
-  private currentCellMatch: CurrentCellMatch | null = null;
   private tableEl: HTMLTableElement | null = null;
   private colgroupEl: HTMLElement | null = null;
   private theadEl: HTMLElement | null = null;
@@ -168,10 +140,13 @@ export class TableBlockWidget extends WidgetType {
   private cells = new Map<string, CellSlot>();
   /** One nested EditorView per MOUNTED cell, keyed by `cellKey`. Lazily mounted (see ensureCellEditor). */
   private cellViews = new Map<string, EditorView>();
-  /** Markdown cells still showing raw text, by `cellKey`, in table order. */
-  private deferredRenders: string[] = [];
-  private deferredCursor = 0;
-  private deferredTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Accepted merged areas as last rendered, their signature, and the cells they styled. */
+  private areas: MergeArea[] = [];
+  private mergeSig = '';
+  private spanned = new Set<string>();
+  /** Each header column's resize handle, and those currently placed inside a merged header. */
+  private colHandles = new Map<ColId, HTMLElement>();
+  private placedHandles = new Map<HTMLElement, ColId>();
   /** Remaining synchronous markdown renders for the table being built. */
   private eagerRendersLeft = 0;
   /** Last focused cell — the undo caret's source; null = none yet. */
@@ -182,13 +157,36 @@ export class TableBlockWidget extends WidgetType {
   private renderedRowCount = 2;
   /** Closer of the open cell context menu; null when none. */
   private closeMenu: (() => void) | null = null;
-  /** Cell selection mode (table-cell-selection.ts): local UI state, never in Yjs or
-   *  awareness; ids only, resolved against the rendered order on every use. */
-  private selection: CellSelection | null = null;
-  /** Disarms the cross-cell drag listener of the press in progress; null when none. */
-  private endCellDrag: (() => void) | null = null;
+  /** Unmounted cells' placeholder painting (table-cell-placeholders.ts). */
+  private readonly painter: PlaceholderPainter;
+  /** Cell selection mode (table-cell-selection-mode.ts). */
+  private readonly selection: CellSelectionMode;
   constructor(readonly tableId: string, readonly label: string) {
     super();
+    this.painter = createPlaceholderPainter({
+      tableId: this.tableId,
+      view: () => this.view,
+      doc: () => this.doc,
+      readOnly: () => this.readOnly,
+      cells: this.cells,
+      cellViews: this.cellViews,
+      slotText: (slot) => this.slotText(slot),
+    });
+    this.selection = createCellSelectionMode({
+      tableId: this.tableId,
+      wrap: () => this.wrap,
+      doc: () => this.doc,
+      canEdit: () => this.canEdit(),
+      order: () => ({ rowIds: this.rowIds, colIds: this.colIds }),
+      areas: () => this.areas,
+      activeCell: () => this.activeCell,
+      cellEl: (key) => this.cells.get(key)?.el,
+      cellView: (key) => this.cellViews.get(key),
+      ensureCellEditor: (rowId, colId) => this.ensureCellEditor(rowId, colId),
+      focusCell: (rowId, colId) => this.focusCell(rowId, colId),
+      placeCaretAfterTable: () => this.placeCaretAfterTable(),
+      repaintLazy: (keys) => this.painter.repaintLazy(keys),
+    });
   }
 
   eq(other: TableBlockWidget): boolean {
@@ -219,15 +217,15 @@ export class TableBlockWidget extends WidgetType {
       focusedCaret: (changed) => this.focusedCaret(changed),
       restoreCaret: (caret) => this.restoreCaret(caret),
       isVisible: () => !!this.wrap?.isConnected && this.wrap.getClientRects().length > 0,
-      repaintChanged: (changed) => this.repaintChanged(changed),
+      repaintChanged: (changed) => this.painter.repaintChanged(changed),
     });
     wrap.addEventListener('mousedown', (e) => this.placeCaretBeside(e));
-    wrap.addEventListener('keydown', (e) => this.onSelectionKey(e));
+    wrap.addEventListener('keydown', (e) => this.selection.onKey(e));
     wrap.addEventListener('focusout', (e) => {
-      if (e.target !== wrap || !this.selection) return;
+      if (e.target !== wrap || !this.selection.active()) return;
       // WHY deferred: a window switch blurs the wrap but leaves it the active element — the
       // selection survives that; focus moving anywhere else ends it.
-      setTimeout(() => { if (document.activeElement !== wrap) this.leaveSelection(); }, 0);
+      setTimeout(() => { if (document.activeElement !== wrap) this.selection.leave(); }, 0);
     });
     // WHY: prefer the facet doc (snapshot preview's captured tables) over the live
     // handle so a preview renders ITS table state, not the editor's current one.
@@ -309,13 +307,7 @@ export class TableBlockWidget extends WidgetType {
    *  may resolve differently now (see cellLinkContextRelay). */
   rerenderLazyCells(): void {
     if (!this.doc) return;
-    const pending = new Set(this.deferredRenders.slice(this.deferredCursor));
-    for (const [key, slot] of this.cells) {
-      if (this.cellViews.has(key) || pending.has(key)) continue;
-      if (isPlainCellText(this.slotText(slot)?.toString() ?? '')) continue;
-      this.deferredRenders.push(key);
-    }
-    this.scheduleDeferredRenders();
+    this.painter.requeueMarkdown();
   }
 
   /** Bind the live ydoc: attach the whole-map observer, then render. */
@@ -328,7 +320,7 @@ export class TableBlockWidget extends WidgetType {
     tables.observeDeep(cb);
     this.unobserve = () => tables.unobserveDeep(cb);
     this.unsubNotes ??= useNoteChatStore.subscribe((next, prev) => {
-      if (next.sessions !== prev.sessions) this.refreshNotedPlaceholders();
+      if (next.sessions !== prev.sessions) this.painter.refreshNotedPlaceholders();
     });
     this.render();
   }
@@ -363,31 +355,87 @@ export class TableBlockWidget extends WidgetType {
 
     // Same arrays → a cell-text edit: yCollab already patched it in place. The order cache
     // hands back new arrays on any axis write (a width drag included), so this is exact.
-    if (this.tableEl && rowIds === this.rowIds && colIds === this.colIds) return;
+    // Merged areas resolve over the order; a merge/unmerge changes no axis, so its
+    // signature is checked beside the arrays.
+    const areas = resolveMerges(doc, this.tableId);
+    const mergeSig = areas.map((a) => `${a.anchorRowId}:${a.anchorColId}:${a.r1}:${a.c1}:${a.r0}:${a.c0}`).join('|');
+    const sameOrder = rowIds === this.rowIds && colIds === this.colIds;
+    if (this.tableEl && sameOrder && mergeSig === this.mergeSig) return;
 
     if (!this.tableEl) this.buildFresh();
     const patched = this.patchStructure(rowIds, colIds);
-    this.applyColumnWidths(readColumnWidths(doc, this.tableId) ?? []);
-    if (!patched) return; // widths-only change
+    const mergesChanged = patched || mergeSig !== this.mergeSig;
+    if (mergesChanged) this.applyMerges(areas, mergeSig);
+    if (!sameOrder) this.applyColumnWidths(readColumnWidths(doc, this.tableId) ?? []);
+    if (mergesChanged || !sameOrder) this.placeHeaderHandles();
+    if (!patched) {
+      if (mergesChanged) { this.selection.repaint(); this.view?.requestMeasure(); }
+      return; // widths-only or merges-only change
+    }
     // The menu names rows/columns of the shape it opened on.
     this.closeMenu?.();
     this.renderedRowCount = rowIds.length;
     // A patch may have recreated the current cell's host (a header swap) — re-apply the
     // panel's current cell match; idempotent on untouched cells.
-    if (this.currentCellMatch) this.applyCurrentCellMatch(this.currentCellMatch);
+    const current = this.painter.currentMatch();
+    if (current) this.painter.applyCurrentCellMatch(current);
     // Rebuilt cells lose their classes; a removed anchor/head row or column ends the selection.
-    if (this.selection) this.paintSelection();
-    this.scheduleDeferredRenders();
+    this.selection.repaint();
+    this.painter.scheduleDeferredRenders();
     // New cell hosts lay out over the next frame — re-measure so CM6 reserves the
     // table's real height (see the cellMeasureListener WHY on overflow/clicks).
     requestAnimationFrame(() => this.view?.requestMeasure());
   }
 
+  /**
+   * Style the merged areas: the anchor spans its area, every covered cell is hidden
+   * (`cm-table-cell-covered`) and loses a mounted editor, focus going to the anchor.
+   * WHY hidden, not removed: the id-keyed patch keeps one element per (row, column); a
+   * hidden cell leaves the table layout like an absent one.
+   */
+  private applyMerges(areas: MergeArea[], sig: string): void {
+    this.areas = areas;
+    this.mergeSig = sig;
+    for (const key of this.spanned) {
+      const el = this.cells.get(key)?.el as HTMLTableCellElement | undefined;
+      if (!el) continue;
+      el.colSpan = 1;
+      el.rowSpan = 1;
+      el.classList.remove('cm-table-cell-covered');
+    }
+    this.spanned.clear();
+    const order = { rowIds: this.rowIds, colIds: this.colIds };
+    for (const a of areas) {
+      const key = cellKey(a.anchorRowId, a.anchorColId);
+      const el = this.cells.get(key)?.el as HTMLTableCellElement | undefined;
+      if (!el) continue;
+      el.colSpan = a.c1 - a.c0 + 1;
+      el.rowSpan = a.r1 - a.r0 + 1;
+      this.spanned.add(key);
+    }
+    const reveal: string[] = [];
+    for (const [key, area] of coveredCells(areas, order)) {
+      const slot = this.cells.get(key);
+      if (!slot) continue;
+      slot.el.classList.add('cm-table-cell-covered');
+      this.spanned.add(key);
+      const view = this.cellViews.get(key);
+      if (!view) continue;
+      const hadFocus = view.hasFocus;
+      this.destroyCellView(view);
+      this.cellViews.delete(key);
+      slot.host.classList.add('cm-table-block-cell-lazy');
+      reveal.push(key);
+      if (hadFocus) this.focusCell(area.anchorRowId, area.anchorColId);
+    }
+    // A destroyed editor leaves its host empty — repaint it as a placeholder for an unmerge.
+    this.painter.repaintLazy(reveal);
+  }
+
   /** An empty table skeleton (colgroup/thead/tbody) in its box; `patchStructure` then
    *  fills it. */
   private buildFresh(): void {
-    this.noteMap = null; // WHY: the build may follow a remote sync that resolved pending anchors.
-    this.lastCellMarks = new Map();
+    this.painter.startBuild(); // WHY: the build may follow a remote sync that resolved pending anchors.
     this.eagerRendersLeft = EAGER_MARKDOWN_RENDERS;
     const table = document.createElement('table');
     table.className = 'cm-table-block';
@@ -418,6 +466,7 @@ export class TableBlockWidget extends WidgetType {
       if (liveCols.has(cid)) continue;
       col.remove();
       this.colEls.delete(cid);
+      this.colHandles.delete(cid);
       this.dropCells((slot) => slot.colId === cid);
     }
     // The header is the first row in order: when it changes, the old header's cells must
@@ -485,7 +534,7 @@ export class TableBlockWidget extends WidgetType {
       if (view) this.destroyCellView(view);
       this.cellViews.delete(key);
       this.cells.delete(key);
-      this.lastCellMarks.delete(key);
+      this.painter.forget(key);
       slot.el.remove();
     }
   }
@@ -552,8 +601,8 @@ export class TableBlockWidget extends WidgetType {
     cell.dataset.colId = colId;
     const ytext = this.doc ? getCellText(this.doc, this.tableId, rowId, colId) : null;
     const text = ytext?.toString() ?? '';
-    const marks = this.cellMarksFor(key);
-    if (marks) this.lastCellMarks.set(key, marks);
+    const marks = this.painter.cellMarksFor(key);
+    this.painter.trackMarks(key, marks);
 
     // INVARIANT (snapshot preview): a read-only host renders the captured cell TEXT
     // statically — no nested EditorView, no focus routing, no resize handle, no
@@ -611,6 +660,7 @@ export class TableBlockWidget extends WidgetType {
     // the click for the outer editor, which stole focus and dropped the caret into the document
     // (the long-standing "click below text does nothing / focus leaks" bug). This focus
     // stability is also what makes the cell's thick caret render — it only draws on focus.
+    cell.addEventListener('mousedown', (e) => this.selection.deferPress(e, key, { rowId, colId }), { capture: true });
     cell.addEventListener('mousedown', (e) => {
       const target = e.target as HTMLElement;
       // WHY here: a placeholder is a DOM copy with no CM6 handlers, so a press on its note
@@ -623,25 +673,20 @@ export class TableBlockWidget extends WidgetType {
       if (target.closest('.cm-table-block-col-resize')) return;
       // Shift+press on ANOTHER cell (or any cell while selecting) selects; inside the focused
       // cell it stays CM6's native text-selection extend below.
-      if (e.shiftKey && this.shiftPressSelects({ rowId, colId })) { e.preventDefault(); return; }
-      this.leaveSelection();
-      this.armCellDrag(e, { rowId, colId });
+      if (e.shiftKey && this.selection.shiftPressSelects({ rowId, colId })) { e.preventDefault(); return; }
+      this.selection.leave();
+      this.selection.armCellDrag(e, { rowId, colId });
       // Click inside an ALREADY-MOUNTED live cell editor → let CM6 handle it natively.
       // (The static placeholder also carries `.cm-table-block-cell-editor`, so guard on the
       // editor actually existing — otherwise a first click on a lazy cell would bail here.)
       if (this.cellViews.has(key) && target.closest('.cm-table-block-cell-editor')) return;
-      // Static placeholder (lazy) or dead cell space → mount the live editor and route the click.
+      // Dead space of the focused cell (any other cell's plain press is deferPress's) → route.
       const v = this.ensureCellEditor(rowId, colId);
       if (!v) return;
       e.preventDefault();
-      // A press on an image selects it whole — the same gesture the mounted cell's image
-      // widget handles itself; the placeholder copy it replaced had no handler.
-      const img = document.elementFromPoint(e.clientX, e.clientY)?.closest('.cm-image-embed');
-      if (img && v.contentDOM.contains(img)) { selectImageAt(v, img); return; }
       const pos = v.posAtCoords({ x: e.clientX, y: e.clientY }, false) ?? v.state.doc.length;
       v.focus();
       v.dispatch({ selection: { anchor: pos } });
-      if (noteId) openNoteThread(noteId);
     });
 
     // ARCH (lazy editors): a cell is built as a CHEAP formatted placeholder (cell-static-render,
@@ -655,8 +700,8 @@ export class TableBlockWidget extends WidgetType {
     editorHost.className = 'cm-table-block-cell-editor cm-table-block-cell-lazy';
     // Past the eager budget a markdown cell shows its raw text until its deferred render.
     const deferred = !isPlainCellText(text) && this.eagerRendersLeft-- <= 0;
-    editorHost.append(deferred ? text : renderCellStatic(text, { notes: this.cellNotes(ytext), marks }));
-    if (deferred) this.deferredRenders.push(key);
+    editorHost.append(deferred ? text : renderCellStatic(text, { notes: this.painter.cellNotes(ytext), marks }));
+    if (deferred) this.painter.defer(key);
     cell.appendChild(editorHost);
     this.cells.set(key, { rowId, colId, el: cell, host: editorHost });
     lazyCellMounters.set(editorHost, () => (
@@ -669,8 +714,62 @@ export class TableBlockWidget extends WidgetType {
     const handle = document.createElement('div');
     handle.className = 'cm-image-resize-handle cm-table-block-col-resize';
     bindColumnHandle(handle, this.resizeHost(), colId, header);
+    // The lit edge of a placed handle is its column's boundary inside the anchor cell.
+    handle.addEventListener('pointerenter', () => {
+      if (handle.dataset.edge) handle.parentElement?.style.setProperty('--placed-edge', handle.dataset.edge);
+    });
+    this.colHandles.set(colId, handle);
     return handle;
   }
+
+  /**
+   * Keep every column of a merged header resizable on its own: the handles of the area's
+   * columns move into the anchor cell, each on its column's right boundary; an unmerge or a
+   * rebuild puts them back. WHY: a covered header cell is hidden with its handle, and the
+   * anchor's own handle would sit on the area's right edge while resizing its first column.
+   */
+  private placeHeaderHandles(): void {
+    // Desired spot of every handle inside a merged header: the anchor cell, and a `left`
+    // (null = the default right-edge spot, the area's last column).
+    const want = new Map<HTMLElement, { colId: ColId; anchor: HTMLElement; x: number | null }>();
+    const head = this.rowIds[0];
+    for (const a of this.areas) {
+      if (a.r0 !== 0 || a.c1 === a.c0) continue;
+      const anchor = this.cells.get(cellKey(head, a.anchorColId))?.el;
+      if (!anchor) continue;
+      let x = 0;
+      for (let c = a.c0; c <= a.c1; c++) {
+        const colId = this.colIds[c];
+        x += parseFloat(this.colEls.get(colId)?.style.width ?? '') || 0;
+        const handle = this.colHandles.get(colId);
+        if (handle) want.set(handle, { colId, anchor, x: c === a.c1 ? null : x });
+      }
+    }
+    for (const [handle, colId] of this.placedHandles) {
+      if (want.has(handle)) continue;
+      const own = this.colHandles.get(colId) === handle && this.headRowId
+        ? this.cells.get(cellKey(this.headRowId, colId))?.el : undefined;
+      handle.classList.remove('cm-table-block-col-resize--placed');
+      handle.style.left = '';
+      delete handle.dataset.edge;
+      if (own) own.appendChild(handle); else handle.remove();
+      this.placedHandles.delete(handle);
+    }
+    for (const [handle, { colId, anchor, x }] of want) {
+      // INVARIANT: a handle is re-parented only when its cell changes, never on a width write.
+      // Why: this runs on every pointer move of a width drag; moving the dragged element in
+      // the DOM drops its pointer capture and the drag stalls under the cursor.
+      if (handle.parentElement !== anchor) anchor.appendChild(handle);
+      handle.classList.toggle('cm-table-block-col-resize--placed', x !== null);
+      handle.style.left = x === null ? '' : `${x - 5}px`;
+      if (x === null) delete handle.dataset.edge; else handle.dataset.edge = `${x}px`;
+      if (x !== null && handle.matches(':hover, .cm-table-block-resize--active')) {
+        anchor.style.setProperty('--placed-edge', `${x}px`);
+      }
+      this.placedHandles.set(handle, colId);
+    }
+  }
+
 
   /**
    * Lazily mount a cell's nested CM6 editor, replacing its static placeholder. Returns the
@@ -711,19 +810,19 @@ export class TableBlockWidget extends WidgetType {
           hostView: () => this.view,
           tabStep: (step) => this.tabStep(rowId, colId, step),
           backspaceRow: (cell) => this.backspaceRow(cell, rowId, colId),
-          selectCell: () => this.selectCell({ rowId, colId }),
+          selectCell: () => this.selection.selectCell({ rowId, colId }),
         }),
       }),
     });
     this.cellViews.set(key, view);
     // The placeholder's find marks move into the live editor: mounting wiped the
     // static copy, and a mounted cell paints marks only from setCellMatches.
-    const marks = this.cellMarksFor(key);
+    const marks = this.painter.cellMarksFor(key);
     if (marks?.length) view.dispatch({ effects: setCellMatches.of(marks) });
     // The current-match class the placeholder era put on the host element dies
     // with the static copy — the live editor paints its own selected mark.
     host.classList.remove('cm-table-block-cell-current');
-    const current = this.currentCellMatch;
+    const current = this.painter.currentMatch();
     if (current && current.rowId === rowId && current.colId === colId) {
       view.dispatch({ effects: setCellCurrentMatch.of({ from: current.from, to: current.to }) });
     }
@@ -743,6 +842,8 @@ export class TableBlockWidget extends WidgetType {
   }
 
   private focusCell(rowId: RowId, colId: ColId): void {
+    const area = coveredCells(this.areas, { rowIds: this.rowIds, colIds: this.colIds }).get(cellKey(rowId, colId));
+    if (area) [rowId, colId] = [area.anchorRowId, area.anchorColId];
     const view = this.ensureCellEditor(rowId, colId);
     if (!view) return;
     view.focus();
@@ -767,94 +868,6 @@ export class TableBlockWidget extends WidgetType {
     const anchor = Math.min(abs?.index ?? view.state.doc.length, view.state.doc.length);
     view.focus();
     view.dispatch({ selection: { anchor }, scrollIntoView: true });
-  }
-
-  /** Resolved note ranges inside `ytext`; none on a read-only host (a preview paints no notes). */
-  private cellNotes(ytext: Y.Text | null | undefined): NoteAnchorRange[] | undefined {
-    if (this.readOnly || !ytext || !this.view) return undefined;
-    const entityId = getViewEntity(this.view);
-    if (!entityId) return undefined;
-    this.noteMap ??= noteRangesByText(entityId);
-    return this.noteMap.get(ytext);
-  }
-
-  /** This table's host-published find-match marks (`cellKey` → ranges), straight
-   *  from the host view's field — the single source a fresh build pulls and the
-   *  relay's pushes agree with. In the snapshot preview `this.view` IS the preview
-   *  view, so a preview builds its own preview-local marks. */
-  private tableCellMarks(): ReadonlyMap<string, readonly MatchRange[]> {
-    return this.view?.state.field(cellMarksByTableField, false)?.get(this.tableId) ?? NO_CELL_MARKS;
-  }
-
-  private cellMarksFor(key: string): readonly MatchRange[] | undefined {
-    return this.tableCellMarks().get(key);
-  }
-
-  /** Re-render one unmounted cell's placeholder from its CURRENT Y.Text. */
-  private repaintPlaceholder(slot: CellSlot, marks: readonly MatchRange[] | undefined): void {
-    const ytext = this.slotText(slot);
-    slot.host.replaceChildren(renderCellStatic(ytext?.toString() ?? '', {
-      notes: this.cellNotes(ytext),
-      marks,
-    }));
-  }
-
-  /**
-   * The find index published this table's per-cell match marks: re-render static
-   * placeholders whose set changed from their CURRENT Y.Text (an unmounted
-   * placeholder observes nothing — see ensureCellEditor's INVARIANT), and feed
-   * mounted cell editors via setCellMatches. A cell whose set did not move is
-   * not touched — re-rendering is the O(cells) cost lazy mounting avoids.
-   */
-  applyCellMarks(marks: ReadonlyMap<string, readonly MatchRange[]>): void {
-    if (!this.doc) return;
-    let domChanged = false;
-    const keys = new Set<string>([...this.lastCellMarks.keys(), ...marks.keys()]);
-    for (const key of keys) {
-      const next = marks.get(key);
-      if (sameRanges(this.lastCellMarks.get(key), next)) continue;
-      const view = this.cellViews.get(key);
-      if (view) {
-        view.dispatch({ effects: setCellMatches.of(next ?? []) });
-        continue;
-      }
-      const slot = this.cells.get(key);
-      if (!slot) continue; // not rendered (dropped by a patch); a rebuilt cell pulls fresh marks
-      this.repaintPlaceholder(slot, next);
-      domChanged = true;
-    }
-    this.lastCellMarks = new Map(marks);
-    if (domChanged) this.view?.requestMeasure();
-  }
-
-  /**
-   * The panel moved its current-match cursor into (or out of) this table: a
-   * MOUNTED cell receives the `cm-searchMatch-selected` range inside its editor
-   * (setCellCurrentMatch); a STATIC cell — viewer/commentator, snapshot preview,
-   * or an editable host's lazy placeholder — gets the cell-level current class
-   * (its per-range marks already ride applyCellMarks). Idempotent: re-applying
-   * the same position touches nothing.
-   */
-  applyCurrentCellMatch(pos: CurrentCellMatch | null): void {
-    const prev = this.currentCellMatch;
-    this.currentCellMatch = pos;
-    if (prev && (!pos || prev.rowId !== pos.rowId || prev.colId !== pos.colId)) {
-      const prevKey = cellKey(prev.rowId, prev.colId);
-      this.cellViews.get(prevKey)?.dispatch({ effects: setCellCurrentMatch.of(null) });
-      this.cells.get(prevKey)?.host.classList.remove('cm-table-block-cell-current');
-    }
-    if (!pos) return;
-    const key = cellKey(pos.rowId, pos.colId);
-    const view = this.cellViews.get(key);
-    const host = this.cells.get(key)?.host;
-    if (view) {
-      // Mounted: the editor paints its own selected mark — drop the cell-level
-      // class a placeholder era may have left on the shared host element.
-      view.dispatch({ effects: setCellCurrentMatch.of({ from: pos.from, to: pos.to }) });
-      host?.classList.remove('cm-table-block-cell-current');
-    } else {
-      host?.classList.add('cm-table-block-cell-current');
-    }
   }
 
   /**
@@ -888,26 +901,22 @@ export class TableBlockWidget extends WidgetType {
     return true;
   }
 
+  /** See the placeholder painter's applyCellMarks — the find relay's entry. */
+  applyCellMarks(marks: ReadonlyMap<string, readonly MatchRange[]>): void {
+    this.painter.applyCellMarks(marks);
+  }
+
+  /** See the placeholder painter's applyCurrentCellMatch — the find relay's entry. */
+  applyCurrentCellMatch(pos: CurrentCellMatch | null): void {
+    this.painter.applyCurrentCellMatch(pos);
+  }
+
   /** The live editor of a MOUNTED cell, or null — the Find panel's single Replace
    *  goes through it so the edit is an ordinary, Ctrl+Z-undoable cell dispatch. */
   mountedCellView(rowId: RowId, colId: ColId): EditorView | null {
     return this.cellViews.get(cellKey(rowId, colId)) ?? null;
   }
 
-  /** The note list changed: re-render every placeholder that gains or loses a note mark. */
-  private refreshNotedPlaceholders(): void {
-    this.noteMap = null;
-    if (!this.doc || this.readOnly) return;
-    let changed = false;
-    for (const [key, slot] of this.cells) {
-      if (this.cellViews.has(key)) continue;
-      const notes = this.cellNotes(this.slotText(slot));
-      if (!notes?.length && !slot.host.querySelector('.cm-note-anchor')) continue;
-      this.repaintPlaceholder(slot, this.cellMarksFor(key));
-      changed = true;
-    }
-    if (changed) this.view?.requestMeasure();
-  }
 
   /** An active cell view about to die hands the slot to its host. WHY the plugin check:
    * a host mid-destroy (document switch) has dropped its plugins — never reactivate it. */
@@ -924,50 +933,24 @@ export class TableBlockWidget extends WidgetType {
     this.cells.clear();
     this.rowEls.clear();
     this.colEls.clear();
+    this.colHandles.clear();
+    this.placedHandles.clear();
     this.rowIds = [];
     this.colIds = [];
+    this.areas = [];
+    this.mergeSig = '';
+    this.spanned.clear();
     this.headRowId = null;
-    if (this.deferredTimer !== null) clearTimeout(this.deferredTimer);
-    this.deferredTimer = null;
-    this.deferredRenders = [];
-    this.deferredCursor = 0;
+    this.painter.reset();
     this.tableEl = null;
     this.colgroupEl = null;
     this.theadEl = null;
     this.tbodyEl = null;
     this.closeMenu?.();
     this.boxEl = null;
-    this.endCellDrag?.();
-    this.selection = null;
-    this.wrap?.removeAttribute('tabindex');
+    this.selection.reset();
   }
 
-  private scheduleDeferredRenders(): void {
-    if (this.deferredTimer !== null || this.deferredCursor >= this.deferredRenders.length) return;
-    this.deferredTimer = setTimeout(() => {
-      this.deferredTimer = null;
-      this.runDeferredRenders();
-    }, 0);
-  }
-
-  /**
-   * Upgrade raw-text markdown placeholders for one time slice, then yield. A cell whose live
-   * editor mounted meanwhile is skipped (the editor owns it now); the text is re-read from the
-   * Y.Text so a peer edit since the build is not reverted to a stale snapshot.
-   */
-  private runDeferredRenders(): void {
-    if (!this.doc) return;
-    const until = performance.now() + DEFERRED_RENDER_SLICE_MS;
-    while (this.deferredCursor < this.deferredRenders.length && performance.now() < until) {
-      const key = this.deferredRenders[this.deferredCursor++];
-      const slot = this.cells.get(key);
-      if (!slot || this.cellViews.has(key)) continue;
-      this.repaintPlaceholder(slot, this.cellMarksFor(key));
-    }
-    // Collapsed links change row heights — let CM6 re-measure the widget.
-    this.view?.requestMeasure();
-    this.scheduleDeferredRenders();
-  }
 
   /** WHY read per gesture: CM6 flips the editable facet without rebuilding an eq() widget,
    * so the `readOnly` captured at mount says nothing about a commentator. */
@@ -995,12 +978,15 @@ export class TableBlockWidget extends WidgetType {
     if (e.shiftKey || !this.canEdit() || !this.doc) return;
     e.preventDefault();
     e.stopPropagation();
+    // WHY: macOS Ctrl+click is a left press, then this — the press's deferred focus must not
+    // move the caret again under the open menu.
+    this.selection.endDrag();
     const order = liveOrder(this.doc, this.tableId);
     if (!order) return;
     // A right-click inside the selection keeps it; the entries still act on the clicked cell.
-    const selected = this.selectedCells();
+    const selected = this.selection.selectedCells();
     const inSelection = !!selected?.some((c) => sameCell(c, { rowId, colId }));
-    if (!inSelection) this.leaveSelection();
+    if (!inSelection) this.selection.leave();
     // WHY: the menu acts on this cell — focus it (caret at the click) so the target is visible.
     const cell = inSelection ? null : this.ensureCellEditor(rowId, colId);
     if (cell) {
@@ -1017,7 +1003,7 @@ export class TableBlockWidget extends WidgetType {
       if (this.doc && this.canEdit()) void deleteWholeTable(this.doc, this.tableId, this.label, this.view);
     };
     this.closeMenu = openCellMenu(e.clientX, e.clientY, cellMenuEntries(
-      this.tableId, order, rowId, colId, inSelection ? selected : null, run, deleteTable));
+      this.doc, this.tableId, order, rowId, colId, inSelection ? selected : null, run, deleteTable));
   }
 
   /**
@@ -1038,236 +1024,6 @@ export class TableBlockWidget extends WidgetType {
     return backspaceRow(this.doc, this.tableId, order, cell, rowId, colId, (to) => this.focusCell(to.rowId, to.colId));
   }
 
-  // ── Cell selection: state, paint, gestures. Range math and the key table live in
-  //    table-cell-selection.ts. ──
-
-  /** The order the DOM shows — the cells a selection paints. */
-  private renderedOrder(): CellOrder {
-    return { rowIds: this.rowIds, colIds: this.colIds };
-  }
-
-  /** The focused mounted cell, or null. */
-  private focusedCell(): CellAddr | null {
-    const at = this.activeCell;
-    return at && this.cellViews.get(cellKey(at.rowId, at.colId))?.hasFocus ? at : null;
-  }
-
-  /** Every selected cell, row-major; null without a (still valid) selection. */
-  private selectedCells(): CellAddr[] | null {
-    const order = this.renderedOrder();
-    const rect = this.selection ? selectionRect(order, this.selection) : null;
-    return rect ? cellsIn(order, rect) : null;
-  }
-
-  /**
-   * Enter or move selection mode. The wrap holds DOM focus; cells stay placeholders.
-   * WHY tabindex only while selecting: a permanent one would make every press inside the
-   * table that is not prevented (a viewer's click, the scrollbar) focus the wrap instead
-   * of the document.
-   */
-  private enterSelection(sel: CellSelection): void {
-    const wrap = this.wrap;
-    if (!wrap || !this.canEdit()) return;
-    const active = document.activeElement;
-    if (active instanceof HTMLElement && active !== wrap && wrap.contains(active)) active.blur();
-    if (!this.setSelection(sel)) return;
-    wrap.tabIndex = -1;
-    if (document.activeElement !== wrap) wrap.focus({ preventScroll: true });
-  }
-
-  /** Store and paint `sel`, head scrolled into view; false (and selection mode left) when
-   *  its anchor or head is no longer rendered. */
-  private setSelection(sel: CellSelection): boolean {
-    if (!selectionRect(this.renderedOrder(), sel)) { this.leaveSelection(); return false; }
-    this.selection = sel;
-    this.paintSelection();
-    this.cells.get(cellKey(sel.head.rowId, sel.head.colId))?.el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    return true;
-  }
-
-  private leaveSelection(): void {
-    if (!this.selection && !this.wrap?.hasAttribute('tabindex')) return;
-    this.selection = null;
-    this.paintSelection();
-    this.wrap?.removeAttribute('tabindex');
-  }
-
-  private paintSelection(): void {
-    for (const el of this.wrap?.querySelectorAll('.cm-table-cell-selected') ?? []) {
-      el.classList.remove('cm-table-cell-selected', 'cm-table-cell-selection-anchor');
-    }
-    const sel = this.selection;
-    if (!sel) return;
-    const cells = this.selectedCells();
-    if (!cells) {
-      // A peer removed the anchor's or head's row/column: the caret goes after the table,
-      // never to the page body where the keyboard reaches nothing.
-      const hadFocus = document.activeElement === this.wrap;
-      this.leaveSelection();
-      if (hadFocus) this.placeCaretAfterTable();
-      return;
-    }
-    for (const c of cells) this.cells.get(cellKey(c.rowId, c.colId))?.el.classList.add('cm-table-cell-selected');
-    this.cells.get(cellKey(sel.anchor.rowId, sel.anchor.colId))?.el.classList.add('cm-table-cell-selection-anchor');
-  }
-
-  /** Esc in a cell editor: select that cell. False = refused (the key falls through). */
-  private selectCell(at: CellAddr): boolean {
-    this.enterSelection({ anchor: at, head: at });
-    return this.selection !== null;
-  }
-
-  /** Shift+press on `at`: true when it selected (the press is consumed). */
-  private shiftPressSelects(at: CellAddr): boolean {
-    if (this.selection) {
-      this.enterSelection({ anchor: this.selection.anchor, head: at });
-      return true;
-    }
-    const focused = this.focusedCell();
-    if (focused && sameCell(focused, at)) return false;
-    this.enterSelection({ anchor: focused ?? at, head: at });
-    return true;
-  }
-
-  /** This table's cell under the pointer, or null. */
-  private cellAtPoint(x: number, y: number): CellAddr | null {
-    const el = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-row-id][data-col-id]');
-    const rowId = el?.dataset.rowId as RowId | undefined;
-    const colId = el?.dataset.colId as ColId | undefined;
-    if (!el || !rowId || !colId || this.cells.get(cellKey(rowId, colId))?.el !== el) return null;
-    return { rowId, colId };
-  }
-
-  /**
-   * A left press in `from` arms a cross-cell drag: once the held pointer reaches ANOTHER
-   * cell of this table the gesture becomes a cell selection and follows the pointer until
-   * release; within one cell it stays a text selection. A press inside a mounted cell's
-   * existing text selection is a text drag-and-drop — never armed.
-   */
-  private armCellDrag(e: MouseEvent, from: CellAddr): void {
-    const view = this.cellViews.get(cellKey(from.rowId, from.colId));
-    if (view?.state.selection.ranges.some((r) => !r.empty)) {
-      const pos = view.posAtCoords({ x: e.clientX, y: e.clientY }, false);
-      if (view.state.selection.ranges.some((r) => !r.empty && pos >= r.from && pos <= r.to)) return;
-    }
-    this.endCellDrag?.();
-    const drag = new AbortController();
-    let selecting = false;
-    const move = (ev: MouseEvent) => {
-      if (!(ev.buttons & 1)) { drag.abort(); return; }
-      const to = this.cellAtPoint(ev.clientX, ev.clientY);
-      if (!to || (!selecting && sameCell(to, from))) return;
-      ev.preventDefault();
-      if (!selecting) {
-        selecting = true;
-        this.enterSelection({ anchor: from, head: to });
-      } else if (this.selection && !sameCell(to, this.selection.head)) {
-        this.setSelection({ anchor: this.selection.anchor, head: to });
-      }
-    };
-    document.addEventListener('mousemove', move, { signal: drag.signal });
-    document.addEventListener('mouseup', () => drag.abort(), { signal: drag.signal });
-    const end = () => drag.abort();
-    drag.signal.addEventListener('abort', () => { if (this.endCellDrag === end) this.endCellDrag = null; });
-    this.endCellDrag = end;
-  }
-
-  /**
-   * A keydown on the wrap in selection mode. A handled key never bubbles; an unhandled
-   * one does, so the app's window-level hotkeys keep working (the host ignores it —
-   * `ignoreEvent`). Typing and Mod-v keep their default: the browser delivers them into
-   * the head cell the action focuses.
-   */
-  private onSelectionKey(e: KeyboardEvent): void {
-    const sel = this.selection;
-    if (!sel || e.target !== this.wrap || e.isComposing) return;
-    const action = selectionKeyAction(e);
-    if (!action) return;
-    e.stopPropagation();
-    if (!NATIVE_KEY_ACTIONS.has(action.kind)) e.preventDefault();
-    if (!this.canEdit()) { this.leaveSelection(); return; }
-    this.runSelectionAction(action, sel);
-  }
-
-  private runSelectionAction(action: SelectionAction, sel: CellSelection): void {
-    const order = this.renderedOrder();
-    const { head } = sel;
-    switch (action.kind) {
-      case 'move': {
-        const next = moveHead(order, sel, action.dRow, action.dCol, action.extend);
-        if (next) this.setSelection(next); else this.leaveSelection();
-        return;
-      }
-      case 'tab': {
-        const to = this.doc ? tabTarget(this.doc, this.tableId, order, head.rowId, head.colId, action.step, false) : null;
-        if (to) this.setSelection({ anchor: to, head: to });
-        return;
-      }
-      case 'edit':
-      case 'type':
-        // WHY left first: the focus transfer fires the wrap's focusout, which must see no selection.
-        this.leaveSelection();
-        this.focusCell(head.rowId, head.colId);
-        return;
-      case 'paste': {
-        // A selected cell is the whole cell: the native paste lands over its whole text.
-        this.leaveSelection();
-        const view = this.ensureCellEditor(head.rowId, head.colId);
-        view?.focus();
-        view?.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
-        return;
-      }
-      case 'clear':
-        this.clearSelectedCells();
-        return;
-      case 'undo':
-      case 'redo':
-        if (this.doc) documentUndo(this.doc)?.[action.kind]();
-        return;
-      case 'exit':
-        this.leaveSelection();
-        this.placeCaretAfterTable();
-        return;
-    }
-  }
-
-  /** Delete / Backspace: every selected cell emptied as ONE undo step (images and note
-   *  anchors included — a selected cell is the whole cell); the selection stays. */
-  private clearSelectedCells(): void {
-    const cells = this.selectedCells();
-    if (!cells || !this.doc) return;
-    // WHY wired here too: the popped listener repaints this step's placeholders on undo,
-    // and it is otherwise wired only by the first cell mount.
-    const undoManager = documentUndo(this.doc);
-    if (undoManager) wireCellCaret(undoManager);
-    clearCells(this.doc, this.tableId, cells);
-    this.repaintLazy(cells.map((c) => cellKey(c.rowId, c.colId)));
-  }
-
-  /** An undo/redo step changed `changed`: repaint the placeholders it wrote. */
-  private repaintChanged(changed: ReadonlyMap<unknown, unknown>): void {
-    if (!this.doc || this.readOnly) return;
-    const keys = [...this.cells]
-      .filter(([key, slot]) => !this.cellViews.has(key) && changed.has(this.slotText(slot)))
-      .map(([key]) => key);
-    this.repaintLazy(keys);
-  }
-
-  /** Re-render the unmounted placeholders among `keys` from their live text; a mounted
-   *  cell is already live through yCollab. */
-  private repaintLazy(keys: readonly string[]): void {
-    let changed = false;
-    for (const key of keys) {
-      const slot = this.cells.get(key);
-      if (!slot || this.cellViews.has(key)) continue;
-      // WHY clamped: the find index republishes after the write, so its ranges still name
-      // the old text — a range past the new end throws in the static render.
-      const length = this.slotText(slot)?.length ?? 0;
-      this.repaintPlaceholder(slot, this.cellMarksFor(key)?.filter((r) => r.to <= length));
-      changed = true;
-    }
-    if (changed) this.view?.requestMeasure();
-  }
 
   /** The host caret right after the table, host focused. */
   private placeCaretAfterTable(): void {

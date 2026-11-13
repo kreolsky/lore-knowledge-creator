@@ -1910,17 +1910,42 @@ body.ref-drag-none, body.ref-drag-none * { cursor: no-drop !important; }
   position: absolute;
   inset: 0;
   border: var(--select-edge) solid var(--accent);
+  border-radius: 3px; /* the selection frame's radius exception, see .cm-table-selection-box */
   pointer-events: none;
   z-index: 1;
 }
-/* Cell selection (table-cell-selection.ts): a tint over every selected cell (over the
-   header's own background, hence an image layer), a 2px inset frame on the anchor. */
-.cm-table-block .cm-table-cell-selected {
-  background-image: linear-gradient(var(--selection-bg), var(--selection-bg));
+/* Cell selection (table-cell-selection-mode.ts): one block over the selection's bounding box —
+   a light accent tint laid OVER cells and grid lines alike, framed like a selected image or
+   table (same edge, same radius exception, extended here on operator request). The head —
+   where typing lands — gets a denser tint and a diagonal hatch.
+   WHY inset (border-box, inside the cells' rect): the scroller clips anything outside the
+   table's rows. */
+.cm-table-block-scroll { position: relative; }
+/* A cell inside a merged area, not its anchor: out of the table layout (see applyMerges). */
+.cm-table-cell-covered {
+  display: none;
 }
-.cm-table-block .cm-table-cell-selection-anchor {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+
+.cm-table-selection-box,
+.cm-table-selection-head {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 2;
+}
+.cm-table-selection-box {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: var(--select-edge) solid var(--accent);
+  border-radius: 3px;
+}
+.cm-table-selection-head {
+  background:
+    repeating-linear-gradient(-45deg,
+      color-mix(in srgb, var(--accent) 14%, transparent) 0 2px,
+      transparent 2px 7px),
+    color-mix(in srgb, var(--accent) 8%, transparent);
+  /* Under the block: its frame stays on top, and the two tints add up to the head's density. */
+  z-index: 1;
 }
 /* The wrap holds focus only in selection mode; the cells show it, not a focus ring. */
 .cm-table-block-wrap:focus { outline: none; }
@@ -1948,7 +1973,7 @@ body.ref-drag-none, body.ref-drag-none * { cursor: no-drop !important; }
    the table's whole top edge and right border.
    WHY bottom far below: the scroller's overflow clips it at the table's bottom, so the line
    spans every row without measuring them. */
-.cm-table-block th:has(> .cm-table-block-col-resize:is(:hover, .cm-table-block-resize--active))::after {
+.cm-table-block th:has(> .cm-table-block-col-resize:not(.cm-table-block-col-resize--placed):is(:hover, .cm-table-block-resize--active))::after {
   content: '';
   position: absolute;
   /* WHY top 0, not -1px: the scroller clips above the table, which thinned this line. */
@@ -1958,6 +1983,20 @@ body.ref-drag-none, body.ref-drag-none * { cursor: no-drop !important; }
   right: calc(var(--resize-edge) / -2);
   bottom: -100000px;
   border-top: var(--resize-edge) solid var(--accent);
+  border-right: var(--resize-edge) solid var(--accent);
+  pointer-events: none;
+  z-index: 2;
+}
+/* A handle placed on an inner column boundary of a merged header (left set inline) lights
+   that boundary only: `--placed-edge` is copied onto the cell on pointerenter. */
+.cm-table-block-col-resize--placed { right: auto; }
+.cm-table-block th:has(> .cm-table-block-col-resize--placed:is(:hover, .cm-table-block-resize--active))::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: calc(var(--placed-edge) - var(--resize-edge) / 2);
+  width: 0;
+  bottom: -100000px;
   border-right: var(--resize-edge) solid var(--accent);
   pointer-events: none;
   z-index: 2;

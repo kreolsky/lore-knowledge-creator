@@ -166,8 +166,7 @@ async def test_owner_sets_own_group_subject_and_foreign_is_refused(
 # The old pair-semantics tests (audience-without-level → readonly default;
 # lone group_access → 422) are gone with the pair: every audiences row carries
 # its level — a level-less row 422s (test_unified_audiences.py
-# test_row_missing_access_level_is_422) and the readonly default lives in the
-# migration (test_migrate_audiences_to_list.py test_audience_only_defaults_readonly_level).
+# test_row_missing_access_level_is_422).
 
 
 @pytest.mark.asyncio

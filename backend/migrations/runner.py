@@ -3,7 +3,7 @@
 Composition root only: it imports every per-migration module, builds the ordered
 `_MIGRATIONS` registry, and drives `run_migrations()`. Migration bodies live in
 `migrate_<name>.py`; shared infra (logger, `MigrationFn`, `MigrationDeferred`,
-`_LEGACY_MARKERS`, `_get_applied`, `_record_applied`) lives in `_shared.py`.
+`_get_applied`, `_record_applied`) lives in `_shared.py`.
 
 # ARCH: per-migration modules import ONLY from `_shared` (never from runner), so
 # the runner can import them all without an import cycle. The registry order below
@@ -18,10 +18,8 @@ Composition root only: it imports every per-migration module, builds the ordered
 # retired entry was by definition a fix-up of pre-existing rows, inert on a fresh
 # DB built by surreal/schema.surql, so re-checking it at every boot was dead work.
 
-Replaces ad-hoc marker checks scattered across main.py. Reads the applied set
-from app_meta:migrations, runs pending migrations in order, records each on
-success. Legacy per-migration markers (app_meta:sort_keys_backfill,
-app_meta:ref_mentions_backfill) fold in as already-applied on first boot.
+Reads the applied set from app_meta:migrations, runs pending migrations in
+order, records each on success.
 """
 
 from __future__ import annotations
@@ -33,42 +31,8 @@ from migrations._shared import (
     _record_applied,
     logger,
 )
-from migrations.migrate_audiences_to_list import _migrate_audiences_to_list
-from migrations.migrate_chat_apply_lock_fields_drop import (
-    _migrate_chat_apply_lock_fields_drop,
-)
-from migrations.migrate_chat_branches_to_sessions import (
-    _migrate_chat_branches_to_sessions,
-)
 from migrations.migrate_chat_has_region_drop import _migrate_chat_has_region_drop
-from migrations.migrate_chat_lifecycle_drop import _migrate_chat_lifecycle_drop
-from migrations.migrate_chats_hide_fold import _migrate_chats_hide_fold
-from migrations.migrate_comfy_config_docs_drop import _migrate_comfy_config_docs_drop
-from migrations.migrate_document_access_drop import _migrate_document_access_drop
-from migrations.migrate_index_children_to_root import (
-    _migrate_index_children_to_root,
-)
-from migrations.migrate_mcp_servers_template_fields_drop import (
-    _migrate_mcp_servers_template_fields_drop,
-)
-from migrations.migrate_messages_schemafull_converge import (
-    _migrate_messages_schemafull_converge,
-)
-from migrations.migrate_note_links_to_anchors import (
-    _migrate_note_links_to_anchors,
-)
-from migrations.migrate_public_to_group_audience import (
-    _migrate_public_to_group_audience,
-)
-from migrations.migrate_reference_sort_keys_backfill import (
-    _migrate_reference_sort_keys_backfill,
-)
-from migrations.migrate_tables_fixed_widths import _migrate_tables_fixed_widths
-from migrations.migrate_tables_v2 import _migrate_tables_v2
-from migrations.migrate_turn_timeout_override_fold import (
-    _migrate_turn_timeout_override_fold,
-)
-from migrations.migrate_web_search_off_drop import _migrate_web_search_off_drop
+from migrations.migrate_edge_kinds_backfill import _migrate_edge_kinds_backfill
 
 # --- Per-migration modules (registry composition) ---
 # ARCH: each migrate_<name>.py imports only from `_shared` (never from runner),
@@ -76,86 +40,14 @@ from migrations.migrate_web_search_off_drop import _migrate_web_search_off_drop
 # migration functions from their own modules — nothing is re-exported here
 # beyond the registry itself.
 
-# WHY (ordering): `messages_schemafull_converge` makes an undeclared key a hard
-# write error instead of a silent store, so everything that rewrites `messages`
-# rows must run before it. The retired messages entries it once ordered after
-# (the entry_id strip, the timeline sweep) have run on every installation, so no
-# live ordering dependency remains — the entry is still registered only because
-# it has not yet reached every installation.
 _MIGRATIONS: list[tuple[str, MigrationFn]] = [
-    # `messages` takes prod's mode on the databases that froze SCHEMALESS at
-    # creation time: the strip of retired keys runs first and the flip second,
-    # so a row that used to carry an undeclared key stays writable.
-    ("messages_schemafull_converge", _migrate_messages_schemafull_converge),
-    # The chat branch lock's fields (plan remove-chat-branch-lock): the lock is
-    # deleted — edit and fork stay available for the session's life. schema.surql
-    # carries the same REMOVEs for fresh DBs; this one covers DBs created before
-    # the deletion, so the fingerprint guard reads the loss as intentional.
-    # Runs last, no dependency; the dropped values are lock state for a lock
-    # that no longer exists.
-    ("chat_apply_lock_fields_drop", _migrate_chat_apply_lock_fields_drop),
-    # chat_sessions.lifecycle: a dropped transport flag — the driver owns every
-    # turn. schema.surql carries the same REMOVE for fresh DBs; this one covers
-    # DBs created while the column lived. No dependency.
-    ("chat_lifecycle_drop", _migrate_chat_lifecycle_drop),
     # chat_sessions.has_region: the dropped pinned-region flag — the agent is
     # never confined to a span. schema.surql carries the same REMOVE for fresh
     # DBs; this one covers DBs created while the column lived. No dependency.
     ("chat_has_region_drop", _migrate_chat_has_region_drop),
-    # document_access + per-document pending invites: a document inherits its
-    # project's access level. Drops the rows after logging their counts, then
-    # narrows idx_pi_unique to (email, project_id). No dependency.
-    ("document_access_drop", _migrate_document_access_drop),
-    # The per-project Tools/Comfy docs: the Comfy config is instance admin
-    # settings. Tombstones the rows (tag kept), logging hand-edited ones. No
-    # dependency.
-    ("comfy_config_docs_drop", _migrate_comfy_config_docs_drop),
-    # Reference rows join the fractional-order world: keys every NONE-key reference row in its own
-    # (project, parent, ref) group, updated_at DESC per group. Idempotent
-    # (NONE rows only); runs last, no dependency.
-    ("reference_sort_keys_backfill", _migrate_reference_sort_keys_backfill),
-    # A persisted WEB_SEARCH_PROVIDER='off' predates the value leaving the
-    # choices: rows are read without validation, so the stale value would
-    # KeyError every turn's payload build. Deletes exactly the `off` row.
-    # No dependency.
-    ("web_search_off_drop", _migrate_web_search_off_drop),
-    ("turn_timeout_override_fold", _migrate_turn_timeout_override_fold),
-    # The list hide folds into the one chat hide. No dependency.
-    ("chats_hide_fold", _migrate_chats_hide_fold),
-    # Legacy chat trees → branch sessions: every
-    # AI chat self-threads; non-active leaf lineages are carved into their own
-    # sessions stamped for the lazy /session-fork seed. Reads and writes Lore
-    # rows only — never the driver, which may be down at boot. No dependency.
-    ("chat_branches_to_sessions", _migrate_chat_branches_to_sessions),
-    # `[label](note:ID)` body links → anchor_rel_* on the note row, the link removed
-    # through the backplane; then drops the retired anchor_offset_* columns
-    # (schema.surql carries the same REMOVEs for fresh DBs). Idempotent; no
-    # dependency.
-    ("note_links_to_anchors", _migrate_note_links_to_anchors),
-    # is_public became admin-only: every non-admin
-    # public project is re-expressed as a group audience (readonly) or goes
-    # private; admin-owned public projects untouched. Idempotent; no dependency.
-    ("public_to_group_audience", _migrate_public_to_group_audience),
-    # The audience trio folds into the audiences list field; MUST run after
-    # public_to_group_audience (it reads is_public) and owns the trio's REMOVEs
-    # (schema.surql does not carry them — apply_schema runs before migrations).
-    # Idempotent; the fresh-DB boot skips the data pass via the INFO gate.
-    ("audiences_to_list", _migrate_audiences_to_list),
-    # Documents stored under their project's index (invisible in the tree —
-    # the index row renders childless) move to the project root; references
-    # are carved out (index = canonical project-level host). Idempotent; runs
-    # last, no dependency.
-    ("index_children_to_root", _migrate_index_children_to_root),
-    # Retired mcp_servers header-template fields: their required definitions fail
-    # every UPDATE of a newer row. Idempotent; no dependency.
-    ("mcp_servers_template_fields_drop", _migrate_mcp_servers_template_fields_drop),
-    # Every v1 (positional) table → schema v2 (id-keyed), cell notes rebound; a
-    # document whose cell notes cannot all be carried keeps v1 and the migration
-    # raises MigrationDeferred (retried next boot). Idempotent; no dependency.
-    ("tables_v2", _migrate_tables_v2),
-    # Legacy `w: 0` (auto) columns get fixed px by the birth rule; MUST run after
-    # tables_v2 (v1 tables are skipped). Idempotent.
-    ("tables_fixed_widths", _migrate_tables_fixed_widths),
+    # doc_mentions rows written before the `kind` field carry NONE: rebuilds every
+    # live source document that still holds one. Idempotent; no dependency.
+    ("edge_kinds_backfill", _migrate_edge_kinds_backfill),
 ]
 
 
@@ -253,7 +145,7 @@ async def _fingerprint_record(
 
 
 def _enforce_fingerprint_fatal(drift: dict | None, *, migrations_ran: bool) -> None:
-    """Refuse boot on unexplained field loss (debt-paydown W2). Never raises otherwise.
+    """Refuse boot on unexplained field loss. Never raises otherwise.
 
     Fatal IFF `removed` is non-empty AND no migration ran this boot. Everything else
     stays log-only: an ordinary additive release reaches the check with `added=[…]`

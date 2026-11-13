@@ -12,8 +12,12 @@ scope.gate_mutation_target.
 """
 import logging
 
+from fastapi import HTTPException
+from pycrdt import Map
+
 import event_bus
 from agent import collab_writes, doc_state
+from table_serialize import resolve_merges
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +101,33 @@ def resolve_cell(doc, table_id: str, row: int, column: str | None,
                 "row": target_row,
             },
         )
+    _reject_covered_cell(tables[table_id], row, col)
     return row_ids[row], col_ids[col], col
+
+
+def _covering_area(areas: list[dict], row: int, col: int) -> dict | None:
+    """The accepted area that HIDES cell ``(row, col)`` — contains it and is not anchored
+    on it; ``None`` for a visible cell."""
+    return next(
+        (a for a in areas
+         if a["r0"] <= row <= a["r1"] and a["c0"] <= col <= a["c1"]
+         and (row, col) != (a["r0"], a["c0"])),
+        None,
+    )
+
+
+def _reject_covered_cell(table, row: int, col: int) -> None:
+    """Refuse a cell hidden under a merged area, naming the anchor to edit instead."""
+    # INVARIANT: a cell hidden under a merged area is never written by the agent.
+    # Why: its text would be invisible in the editor.
+    if area := _covering_area(resolve_merges(table), row, col):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Cell is covered by a merged area; edit its anchor cell",
+                "anchor": {"row": area["r0"], "col": area["c0"]},
+            },
+        )
 
 
 async def validate_table_cell_edit(
@@ -336,6 +366,24 @@ def _live_ids(doc, table_id: str) -> tuple[list[str], list[str]]:
     return ordered_ids(doc.get("tables", type=Map)[table_id])
 
 
+def _reject_text_into_merged_area(doc, table_id: str, at_index: int,
+                                  cell_values: list[str]) -> None:
+    """Refuse a column inserted strictly inside a merged area (``c0 < at_index <= c1``)
+    when it would put non-empty text into a cell the area then covers. An empty insert
+    is allowed: it widens the area by itself (the end is an id)."""
+    for a in resolve_merges(doc.get("tables", type=Map)[table_id]):
+        hidden = cell_values[a["r0"]:a["r1"] + 1]
+        if a["c0"] < at_index <= a["c1"] and any(v.strip() for v in hidden):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Column inserted inside a merged area cannot carry text into its covered cells",
+                    "anchor": {"row": a["r0"], "col": a["c0"]},
+                    "rows": [a["r0"], a["r1"]],
+                },
+            )
+
+
 def reject_table_overflow(rows_matrix: list[list[str]]) -> None:
     """Reject any cell exceeding ``AGENT_TABLE_MAX_CELL_CHARS`` (resource bound — each
     cell is a Y.Text built inside one ``doc.transaction()``; an unbounded cell balloons
@@ -550,6 +598,7 @@ async def apply_add_table_column(
         before_id = col_ids[resolved_index - 1] if resolved_index > 0 else None
         after_id = col_ids[resolved_index] if resolved_index < len(col_ids) else None
         cell_values = [header or ""] + list(values or [])
+        _reject_text_into_merged_area(doc, table_id, resolved_index, cell_values)
         texts = dict(zip(row_ids, cell_values))
 
         def _mutate(d):

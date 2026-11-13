@@ -1,12 +1,11 @@
-"""Unified audiences — the multi-row project audience list (plan unified-project-audience, step 1).
+"""Unified audiences — the multi-row project audience list.
 
 A project carries `audiences`: [{subject, access_level}], where subject is
 'public' (every logged-in user; readonly|commentator only, admin-only write),
 'mod:<uid>' (a moderator group) or 'group:<id>' (an admin group). Effective
 access = MAX over member row and every audience row the user's subjects match.
 Refused principals first (the guard), then the cascade, the list predicate and
-the live group-membership revocations. The migration has its own file
-(test_migrate_audiences_to_list.py).
+the live group-membership revocations.
 """
 
 from __future__ import annotations

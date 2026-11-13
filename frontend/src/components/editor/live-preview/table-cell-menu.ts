@@ -18,6 +18,8 @@ const ICON_PATHS = {
   moveColumnRight: '<rect width="4" height="18" x="3" y="3"/><path d="M12 12h9"/><path d="m17 8 4 4-4 4"/>',
   deleteRow: '<rect width="18" height="4" x="3" y="3"/><path d="m9 13 6 6"/><path d="m15 13-6 6"/>',
   deleteColumn: '<rect width="4" height="18" x="3" y="3"/><path d="m13 9 6 6"/><path d="m19 9-6 6"/>',
+  mergeCells: '<rect width="18" height="18" x="3" y="3"/><path d="m7 12 3-3"/><path d="m7 12 3 3"/><path d="M7 12h10"/><path d="m17 12-3-3"/><path d="m17 12-3 3"/>',
+  unmergeCells: '<rect width="18" height="18" x="3" y="3"/><path d="M12 3v18"/><path d="m5 12 3-3"/><path d="m5 12 3 3"/><path d="m19 12-3-3"/><path d="m19 12-3 3"/>',
   deleteTable: '<path d="M3 6h18"/><path d="M5 6v15h14V6"/><path d="M9 6V3h6v3"/><path d="M10 11v6"/><path d="M14 11v6"/>',
 } as const;
 

@@ -106,7 +106,7 @@ DEFINE FIELD IF NOT EXISTS created_at ON group_members TYPE datetime DEFAULT tim
 DEFINE INDEX IF NOT EXISTS idx_group_members_unique ON group_members FIELDS group_id, user_id UNIQUE;
 DEFINE INDEX IF NOT EXISTS idx_group_members_user ON group_members FIELDS user_id;
 
--- ─── App Meta (one-shot migration markers, e.g. sort_keys_backfill) ──────────
+-- ─── App Meta (migration runner markers) ──────────────────────────────────────
 -- WHY: created lazily by startup migrations (main.py); must be declared so a SELECT
 -- against it on a fresh DB doesn't fail. surrealdb 2.0.0 raises NotFoundError on a query
 -- to an undefined table (1.0.4 silently returned empty), which broke startup backfill.
@@ -189,10 +189,7 @@ DEFINE FIELD IF NOT EXISTS owner_id             ON projects TYPE option<string>;
 -- one {subject, access_level} per row. 'public' = every logged-in user
 -- (readonly|commentator only; admin-only write — routes/projects.py
 -- _guard_audiences), 'mod:<uid>' a moderator group, 'group:<id>' an admin
--- group. The retired is_public/group_audience/group_access trio and
--- idx_projects_group_audience are REMOVEd by the audiences_to_list migration,
--- not here: apply_schema runs before migrations and would drop the definitions
--- before the migration copies the data (precedent: document_access above).
+-- group.
 DEFINE FIELD IF NOT EXISTS audiences ON projects TYPE array<object> DEFAULT [];
 -- array<object> materializes `audiences.*` at the parent DEFINE — the children
 -- need OVERWRITE to carry their type and ASSERT (gen_steps.* precedent below).
@@ -216,11 +213,6 @@ DEFINE FIELD IF NOT EXISTS last_accessed_doc_id ON project_members TYPE option<s
 DEFINE INDEX IF NOT EXISTS idx_pm_project ON project_members FIELDS project_id;
 DEFINE INDEX IF NOT EXISTS idx_pm_user    ON project_members FIELDS user_id;
 DEFINE INDEX IF NOT EXISTS idx_pm_unique  ON project_members FIELDS project_id, user_id UNIQUE;
-
--- document_access: DROPPED — a document inherits its project's access level.
--- The document_access_drop migration REMOVEs the table on DBs created before the
--- drop; it is not REMOVEd here because apply_schema runs BEFORE migrations and
--- the migration logs the row counts first.
 
 -- ─── Document shares — anonymous read-only public links ─────────────────────
 -- A share publishes ONE document (scope='doc') or its whole subtree
@@ -246,9 +238,6 @@ DEFINE INDEX IF NOT EXISTS idx_pm_unique  ON project_members FIELDS project_id, 
 -- without adding meaningful protection.
 
 DEFINE TABLE IF NOT EXISTS document_shares SCHEMAFULL;
--- Drop the legacy hashed-token column (DECISION-PIN: token now stored plaintext).
--- REMOVE FIELD IF EXISTS is idempotent — safe on fresh AND stale (pre-overturn) DBs.
-REMOVE FIELD IF EXISTS token_hash ON document_shares;
 DEFINE FIELD IF NOT EXISTS project_id  ON document_shares TYPE string;
 DEFINE FIELD IF NOT EXISTS document_id ON document_shares TYPE string;
 -- token: the plaintext public-link token (URL segment /s/:token). Stored
@@ -276,8 +265,6 @@ DEFINE FIELD OVERWRITE access_level ON pending_invites TYPE string ASSERT $value
 DEFINE FIELD IF NOT EXISTS invited_by   ON pending_invites TYPE string;
 DEFINE FIELD IF NOT EXISTS created_at   ON pending_invites TYPE datetime DEFAULT time::now();
 DEFINE INDEX IF NOT EXISTS idx_pi_email  ON pending_invites FIELDS email;
--- The document_access_drop migration redefines this index on DBs that carry
--- the older (email, project_id, document_id) shape.
 DEFINE INDEX IF NOT EXISTS idx_pi_unique ON pending_invites FIELDS email, project_id UNIQUE;
 
 -- ─── Registration invites (invite-link tokens) ────────────────────────────────
@@ -339,12 +326,12 @@ DEFINE FIELD IF NOT EXISTS deleted_at       ON documents TYPE option<datetime>;
 -- INVARIANT: sort_key is option<string> (NOT a non-option DEFAULT). Why: a
 -- non-option DEFAULT only applies on CREATE; pre-existing rows keep NONE and
 -- every later UPDATE coerce-fails silently (flush_to_db swallows it). option<>
--- avoids that trap; existing rows are backfilled by main.py::_backfill_sort_keys.
+-- avoids that trap.
 DEFINE FIELD IF NOT EXISTS sort_key   ON documents TYPE option<string>;
 -- ─── Phase-3: config & knowledge as documents (plan stage-1 §3.4) ───────────
 -- is_system marks the reserved agent-brain subtree. option<bool> DEFAULT false:
 -- option-typed (NOT a non-option DEFAULT) to avoid the silent-write trap noted
--- for sort_key above; existing rows backfill to false via the runner migration.
+-- for sort_key above.
 DEFINE FIELD IF NOT EXISTS is_system   ON documents TYPE option<bool> DEFAULT false;
 -- system_role names the doc's place in the reserved subtree: the always-injected
 -- skeleton (system_root | system_prompt (Personas folder) | rules_folder |
@@ -582,11 +569,11 @@ DEFINE FIELD IF NOT EXISTS created_at ON cp_blobs TYPE datetime DEFAULT time::no
 DEFINE TABLE IF NOT EXISTS doc_mentions TYPE RELATION SCHEMAFULL;
 DEFINE FIELD OVERWRITE in  ON doc_mentions TYPE record<documents>;
 DEFINE FIELD IF NOT EXISTS out ON doc_mentions TYPE record<documents>;
--- Typed edges (plan typed-edges): content-derived kind on the stored edge —
+-- Typed edges: content-derived kind on the stored edge —
 -- 'mention' ([t](target)) vs 'transclusion' (![t](target), incl. ref: embeds).
 -- DEFAULT 'mention' keeps pre-backfill rows READABLE, not retro-filled (SurrealDB
 -- DEFAULT never touches existing rows) — the /edges read coalesces NONE →
--- 'mention' and backend/migrations/backfill_edge_kinds.py re-runs the rebuild.
+-- 'mention' and the runner entry edge_kinds_backfill re-runs the rebuild.
 -- Field-backed kinds (attachment/note/chat-context) are PROJECTED at read time
 -- from their indexed fields, never stored here — see backend/edges.py.
 DEFINE FIELD OVERWRITE kind ON doc_mentions TYPE string DEFAULT 'mention'
@@ -701,16 +688,6 @@ DEFINE FIELD IF NOT EXISTS deleted_at ON messages TYPE option<datetime>;
 -- The display name an ANONYMOUS note author typed (author_id = anon_<hash>, never
 -- a users row); NONE for members, whose name is read from users.
 DEFINE FIELD IF NOT EXISTS author_name ON messages TYPE option<string>;
--- ARCH (plan collapse-agent-stack-onto-dsh-vocabulary step 4): the entry_id
--- field + its chat/entry index are RETIRED with the canonical seam — at that
--- step the fork branch point became the projection-derived turn ordinal
--- (superseded again by messages.driver_seq, plan
--- collapse-the-editor-harness-layer step 5), and no canonical join key is
--- stamped or read anymore. REMOVE, not just a dropped DEFINE: a DB created
--- before the deletion keeps both, and the index would go on being maintained
--- over a field nothing writes.
-REMOVE INDEX IF EXISTS idx_messages_chat_entry ON messages;
-REMOVE FIELD IF EXISTS entry_id ON messages;
 DEFINE INDEX IF NOT EXISTS idx_messages_chat ON messages FIELDS chat_id;
 DEFINE INDEX IF NOT EXISTS idx_messages_chat_deleted ON messages FIELDS chat_id, deleted_at;
 -- The non-owner leaf-delete guard scans parent_id (has-live-reply check in
@@ -750,9 +727,6 @@ DEFINE FIELD IF NOT EXISTS deleted_at     ON agent_configs TYPE option<datetime>
 DEFINE INDEX IF NOT EXISTS idx_agent_configs_doc_trigger ON agent_configs FIELDS document_id, trigger_event;
 DEFINE INDEX IF NOT EXISTS idx_agent_configs_project  ON agent_configs FIELDS project_id;
 
--- MIGRATION: drop the old unique-on-document_id index (replaced by idx_agent_configs_doc_trigger)
-REMOVE INDEX IF EXISTS idx_agent_configs_document ON agent_configs;
-
 -- ─── Pipeline schedules (plan 1786740208300 S3, direction C) ─────────────────
 -- A user-configurable schedule is PROJECT DATA (D7): the worker keeps ONE cron
 -- tick (pipeline_schedule_tick_task) that claims and runs due entries, so adding
@@ -786,12 +760,6 @@ DEFINE FIELD IF NOT EXISTS updated_at   ON pipeline_schedules TYPE datetime DEFA
 DEFINE FIELD IF NOT EXISTS deleted_at   ON pipeline_schedules TYPE option<datetime>;
 DEFINE INDEX IF NOT EXISTS idx_psched_project ON pipeline_schedules FIELDS project_id;
 DEFINE INDEX IF NOT EXISTS idx_psched_enabled ON pipeline_schedules FIELDS enabled, deleted_at;
-
--- ─── Tool-API proposals ───────────────────────────────────────────────────────
--- tool_proposals: DROPPED (plan retire-the-proposal-card-render-cluster) — the
--- render tail that read it is deleted and nothing writes it; a one-time
--- migration (since retired with the applied past) REMOVEd the table, its rows
--- and the three indexes on DBs created before the drop.
 
 -- ─── Embedding tables (RAG context for AI chat) ────────────────────────────────
 
@@ -860,8 +828,7 @@ DEFINE FIELD IF NOT EXISTS embedding_status ON documents TYPE string DEFAULT 'ok
 -- embeds to 'failed' via the terminal branch. Precedent: schema.surql:334-336
 -- (checkpoints content). The null-out below MUST precede the redefine: a row
 -- carrying a datetime will not coerce to string (same failure mode the `archived`
--- backfill comment records); the migration migrate_last_embed_error_string.py
--- performs the same pair for runner-tracked DBs.
+-- backfill comment records).
 -- INVARIANT: the null-out clears ONLY a legacy datetime value, never a recorded
 -- reason string. Why: schema.surql is re-applied on EVERY backend boot
 -- (db_schema.apply_schema), so an unguarded null-out erased last_embed_error at
@@ -878,8 +845,7 @@ DEFINE FIELD OVERWRITE last_embed_error ON documents TYPE option<string>;
 -- content per visible row. Scalars, not a nested object, partly for the
 -- SCHEMAFULL trap (nested fields need explicit DEFINE FIELD to exist at all).
 -- Written by doc_outline.refresh_outline from the embed job ABOVE _reembed, so
--- a project without embeddings still gets outlines; backfilled by the
--- runner-tracked document_outline_backfill migration. option-typed with no
+-- a project without embeddings still gets outlines. option-typed with no
 -- non-option DEFAULT (the silent-write trap noted for sort_key above): a row
 -- predating them reads NONE = "no outline".
 DEFINE FIELD IF NOT EXISTS outline        ON documents TYPE option<string>;
@@ -1012,10 +978,6 @@ DEFINE EVENT IF NOT EXISTS documents_reference_parent_check ON documents
 
 -- chat_sessions: note marker (the anchor is anchor_rel_* below).
 DEFINE FIELD IF NOT EXISTS is_note             ON chat_sessions TYPE bool DEFAULT false;
--- Fresh-DB twin of the note_links_to_anchors migration, which drops the columns on
--- DBs created while they lived.
-REMOVE FIELD IF EXISTS anchor_offset_start ON chat_sessions;
-REMOVE FIELD IF EXISTS anchor_offset_end   ON chat_sessions;
 
 DEFINE INDEX IF NOT EXISTS idx_chatsessions_is_note
     ON chat_sessions FIELDS project_id, is_note;
@@ -1049,15 +1011,6 @@ DEFINE INDEX IF NOT EXISTS idx_messages_author ON messages FIELDS author_id;
 DEFINE FIELD IF NOT EXISTS mode          ON chat_sessions TYPE string DEFAULT 'chat'
     ASSERT $value IN ['chat', 'agent'];
 DEFINE FIELD IF NOT EXISTS target_doc_id ON chat_sessions TYPE option<string>;
--- ARCH (plan remove-chat-branch-lock): the apply-lock fields are deleted —
--- a chat is never frozen; editing a message and forking from it stay available
--- for the life of a session, including after a tool has applied a document
--- mutation. Off-path siblings were only ever HIDDEN (kept in DB), so removing
--- the filter reveals data that is already intact. REMOVE keeps the edit
--- idempotent on fresh AND stale DBs (mirrors the removals below); the runner's
--- chat_apply_lock_fields_drop migration owns the same REMOVE for existing DBs.
-REMOVE FIELD IF EXISTS has_applied_edit ON chat_sessions;
-REMOVE FIELD IF EXISTS frozen_anchor_message_id ON chat_sessions;
 -- ARCH (Issue 3 — agent_auto persistence): the agent-role dropdown's "Full auto"
 -- state is persisted as a backend column (mirrors model/system_prompt_id), NOT an
 -- in-memory UI map — so it survives reload. The UI mode is DERIVED:
@@ -1069,11 +1022,6 @@ DEFINE FIELD OVERWRITE agent_auto ON chat_sessions TYPE option<bool> DEFAULT fal
 -- REMOVE is the fresh-DB twin of the chat_has_region_drop migration (which covers
 -- DBs created while the column lived).
 REMOVE FIELD IF EXISTS has_region ON chat_sessions;
--- ARCH: the driver owns every turn — there is no transport to pick, so no
--- `lifecycle` column. This REMOVE is the fresh-DB twin of the
--- chat_lifecycle_drop migration (which covers DBs created while the column
--- lived).
-REMOVE FIELD IF EXISTS lifecycle ON chat_sessions;
 -- ARCH (plan: session-title-from-the-harness): the session title is minted by
 -- the harness titler and relayed as session/title; the backend's relay write
 -- lands ONLY while this flag is falsy. A PATCH title is a USER rename and sets
@@ -1090,19 +1038,6 @@ DEFINE FIELD OVERWRITE title_user_set ON chat_sessions TYPE option<bool> DEFAULT
 -- pre-existing rows back-fill to NONE; the serializer emits null and the client
 -- resolves the live cap from /models (context_windows).
 DEFINE FIELD IF NOT EXISTS context_tokens_used ON chat_sessions TYPE option<int>;
--- context_tokens_cap was dropped (plan 1785795000000): the persisted cap was a
--- source that could never disagree with the fallback it preceded. REMOVE is
--- idempotent on fresh AND stale DBs (mirrors token_hash/seq removals).
-REMOVE FIELD IF EXISTS context_tokens_cap ON chat_sessions;
--- ARCH (plan collapse-agent-stack-onto-dsh-vocabulary step 5): the freeze
--- subsystem (archived / archived_from / archived_at_leaf + the banner + the
--- legacy-line migrations) is deleted — the release that ships this wipes all
--- chat sessions, so there is nothing left to mark frozen. REMOVE keeps the
--- edit idempotent on fresh AND stale DBs.
-REMOVE FIELD IF EXISTS driver_line ON chat_sessions;
-REMOVE FIELD IF EXISTS archived ON chat_sessions;
-REMOVE FIELD IF EXISTS archived_from ON chat_sessions;
-REMOVE FIELD IF EXISTS archived_at_leaf ON chat_sessions;
 -- The continuation chat_sessions row minted after compaction:
 -- `compacted_from` records the source chat_session id (idempotency +
 -- traceability).
@@ -1123,19 +1058,17 @@ DEFINE FIELD IF NOT EXISTS compacted_at_leaf ON chat_sessions TYPE option<string
 -- permanent holder of active_branch_id (what the chat list previews).
 -- forked_from_session/forked_after_origin name the branch's provenance: the
 -- source session and the ORIGIN (messages.origin_id, never a row id — copies
--- keep the source's origin) it diverged after. NONE on every row minted
--- before this plan: the migration (runner) backfills thread_id/active_branch_id
--- and carves old tree branches into rows; option<> keeps pre-migration rows
+-- keep the source's origin) it diverged after. option<> keeps older rows
 -- reading NONE, which the list and /forks read as "own thread".
 DEFINE FIELD IF NOT EXISTS thread_id           ON chat_sessions TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS forked_from_session ON chat_sessions TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS forked_after_origin ON chat_sessions TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS active_branch_id    ON chat_sessions TYPE option<string>;
--- The lazy-seed stamp (option pair, written ONLY by POST /sessions/{id}/branches
--- and the migration): the (dsh session, dsh log seq) the branch's prefix rows
+-- The lazy-seed stamp (option pair, written ONLY by POST /sessions/{id}/branches):
+-- the (dsh session, dsh log seq) the branch's prefix rows
 -- came from. The branch's first completion calls the plugin's /session-fork
--- with this pair BEFORE the turn and clears both fields — a branch carved by
--- the migration has rows but no dsh log under its new id, and its first turn
+-- with this pair BEFORE the turn and clears both fields — a branch minted by
+-- POST /branches has rows but no dsh log under its new id, and its first turn
 -- without the seed would start with an EMPTY model history. NONE = no seed
 -- owed (a fresh chat, a root branch with no completed turns, or already
 -- seeded). INVARIANT(corruption): the pair is written off ONE row — the seq
@@ -1185,21 +1118,17 @@ DEFINE INDEX IF NOT EXISTS idx_chat_chunks_hash_model ON chat_chunks FIELDS cont
 -- (plan retire-the-proposal-card-render-cluster): the proposal cluster's
 -- writer went first, then the render tail — current turns persist through
 -- turn_persistence, and old threads render through the agent_steps chips.
--- WHY NOT HERE: apply_schema re-runs every boot (main.py:124) BEFORE the migration
+-- WHY NOT HERE: apply_schema re-runs every boot BEFORE the migration
 -- runner, and its `DEFINE FIELD IF NOT EXISTS`/`OVERWRITE` would RE-CREATE
--- whatever the one-time `_migrate_proposals_to_rows` REMOVE FIELD dropped —
+-- whatever a one-time runner REMOVE FIELD dropped —
 -- leaving dead field definitions resurrected on every boot forever. A field
--- removed by a runner migration must NOT also be (re)declared in schema.surql.
--- The `_migrate_proposals_to_rows` entry does copy-then-REMOVE; nothing
--- destructive belongs in this idempotent DDL file.
+-- removed by a runner migration must NOT also be (re)declared in schema.surql;
+-- nothing destructive belongs in this idempotent DDL file.
 DEFINE FIELD IF NOT EXISTS agent_trace ON messages TYPE option<object> FLEXIBLE;
 
 -- `segments` / `agent_steps` / `reasoning` (the stored turn timeline) are
--- DELETED (plan retire-the-stored-turn-timeline step 3): the driver's log
--- replayed as `frames` is the timeline, and `halt` below keeps the one fact
--- the log cannot produce. The runner migration messages_timeline_columns_drop
--- sweeps the data and REMOVEs the fields — do NOT redeclare them here (same
--- rule as the proposals WHY-NOT-HERE above).
+-- DELETED: the driver's log replayed as `frames` is the timeline, and `halt`
+-- below keeps the one fact the log cannot produce.
 
 -- ARCH (plan retire-the-stored-turn-timeline step 1): the abnormal-end halt
 -- card moved OUT of the `segments` array into its own column. `segments` was
@@ -1211,14 +1140,12 @@ DEFINE FIELD IF NOT EXISTS agent_trace ON messages TYPE option<object> FLEXIBLE;
 -- can copy the legacy halt SEGMENT verbatim (`type` key included) — new writes
 -- carry only reason/steps/limit.
 DEFINE FIELD IF NOT EXISTS halt        ON messages TYPE option<object> FLEXIBLE;
--- OVERWRITE + option<> (not IF NOT EXISTS + string): the timeline-column sweep
--- (messages_timeline_columns_drop) re-coerces every row, and on a table of
--- SCHEMALESS kind a declared REQUIRED subfield fails that coercion on every
--- row whose `halt` parent is absent (`Expected string but found NONE`) — a
--- card may carry only steps/limit. OVERWRITE so an existing DB's
--- required-string definition is retyped BEFORE the migration runs (apply_schema
--- precedes the runner); option<> is the data truth: nothing writes a
--- reason-less card today, the option only tolerates one.
+-- OVERWRITE + option<> (not IF NOT EXISTS + string): a declared REQUIRED
+-- subfield fails coercion on every row whose `halt` parent is absent
+-- (`Expected string but found NONE`) — a card may carry only steps/limit.
+-- OVERWRITE so an existing DB's required-string definition is retyped;
+-- option<> is the data truth: nothing writes a reason-less card today, the
+-- option only tolerates one.
 DEFINE FIELD OVERWRITE halt.reason ON messages TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS halt.steps  ON messages TYPE option<int>;
 DEFINE FIELD IF NOT EXISTS halt.limit  ON messages TYPE option<int>;
@@ -1270,8 +1197,6 @@ DEFINE FIELD IF NOT EXISTS origin_id ON messages TYPE option<string>;
 -- merges the log into ydoc_state + derived content, pruning the log, under a per-doc lease.
 
 DEFINE TABLE IF NOT EXISTS ydoc_updates SCHEMAFULL;
-REMOVE FIELD IF EXISTS seq ON ydoc_updates;
-REMOVE INDEX IF EXISTS idx_ydoc_updates_doc_seq ON ydoc_updates;
 DEFINE FIELD IF NOT EXISTS document_id ON ydoc_updates TYPE string;
 DEFINE FIELD IF NOT EXISTS payload     ON ydoc_updates TYPE bytes;
 DEFINE FIELD IF NOT EXISTS created_at  ON ydoc_updates TYPE datetime DEFAULT time::now();
@@ -1293,8 +1218,6 @@ DEFINE FIELD IF NOT EXISTS anchor_rel_end   ON chat_sessions TYPE option<bytes>;
 -- note still shows once its fragment is gone.
 DEFINE FIELD IF NOT EXISTS anchor_quote     ON chat_sessions TYPE option<string>;
 
--- ─── Pi sessions tables (pi_sessions / pi_session_entries) — RETIRED ────────
--- No reader, no writer, no pending migration; nothing here defines them anymore.
 
 -- ─── Instance settings (SYSTEM: instance-settings) ──────────────────────────
 -- One row per OVERRIDDEN key: row exists = override active; DELETE = reset to
@@ -1413,14 +1336,3 @@ DEFINE FIELD IF NOT EXISTS enabled    ON mcp_servers TYPE bool DEFAULT true;
 DEFINE FIELD IF NOT EXISTS created_at ON mcp_servers TYPE datetime DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS updated_at ON mcp_servers TYPE datetime DEFAULT time::now();
 DEFINE INDEX IF NOT EXISTS idx_mcp_servers_name ON mcp_servers FIELDS name UNIQUE;
--- WHY: DEFINE ... IF NOT EXISTS never drops a definition, so a field cut from
--- this file stays enforced on a live database: a required one with no value on
--- newer rows fails every UPDATE of that row.
-REMOVE FIELD IF EXISTS headers ON mcp_servers;
-REMOVE FIELD IF EXISTS variables[*].name ON mcp_servers;
-REMOVE FIELD IF EXISTS variables[*].label ON mcp_servers;
-REMOVE FIELD IF EXISTS variables[*].help_url ON mcp_servers;
-REMOVE FIELD IF EXISTS variables[*].secret ON mcp_servers;
-REMOVE FIELD IF EXISTS variables ON mcp_servers;
-REMOVE INDEX IF EXISTS idx_user_secrets_server_var ON user_secrets;
-REMOVE FIELD IF EXISTS var_name ON user_secrets;
