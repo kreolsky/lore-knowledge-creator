@@ -4,7 +4,11 @@ from fastapi import HTTPException
 
 from access import get_document_access, get_project_access
 from chat_sessions.conversation import conversation_session_ids
-from chat_sessions.recall import schedule_chat_index
+from chat_sessions.recall import (
+    mark_topics_first,
+    schedule_chat_index,
+    schedule_chat_topics,
+)
 from chat_sessions.serialize import (
     build_ref_map,
     build_session_ref_map,
@@ -53,7 +57,7 @@ def _llm_config_sets(body: SessionUpdate, sets: list[str], params: dict) -> None
 
 
 def _ai_only_sets(session: dict, body: SessionUpdate, sets: list[str], params: dict) -> None:
-    """reasoning_effort, context_ids and the thread's active-branch pointer;
+    """reasoning_effort and the thread's active-branch pointer;
     all silently ignored for note sessions."""
     if session.get("is_note") is True:
         return
@@ -65,11 +69,6 @@ def _ai_only_sets(session: dict, body: SessionUpdate, sets: list[str], params: d
         else:
             sets.append("reasoning_effort = $reasoning_effort")
             params["reasoning_effort"] = body.reasoning_effort
-    # ARCH: Unified context_ids — write directly to DB column.
-    # Note sessions never have context; the field is silently ignored for them.
-    if "context_ids" in body.model_fields_set:
-        sets.append("context_document_ids = $context_ids")
-        params["context_ids"] = list(body.context_ids or [])
     # ARCH: the ROOT row's last-opened branch
     # pointer. The route guard (routes/chat/sessions.py) has already validated
     # a non-null value names a live branch of this row's thread; null is always
@@ -153,42 +152,66 @@ def _unindexed_sets(session: dict, body: SessionUpdate, sets: list[str], params:
     params["unindexed"] = body.unindexed
 
 
+async def _write_conversation(db, session_id: str, session: dict, assignment: str, value) -> set[str]:
+    """Apply `assignment` (binding `$v`) to every row of the conversation, the
+    addressed one included, then to the rows that appeared meanwhile; returns
+    the ids written.
+
+    WHY two walks: a branch or continuation created while this PATCH runs is
+    missing from the first walk; one created before the second walk is in it,
+    and one created after re-copies from a source the first pass already wrote
+    (see the INVARIANT in chat_sessions.conversation.inherit_conversation_fields).
+    """
+    written: set[str] = set()
+    for _ in range(2):
+        ids = await conversation_session_ids(db, session_id, session) - written
+        if not ids:
+            return written
+        await db.query(
+            f"UPDATE chat_sessions SET {assignment} "
+            "WHERE user_id = $uid AND project_id = $pid AND meta::id(id) IN $ids",
+            {"v": value, "uid": session["user_id"], "pid": session["project_id"],
+             "ids": sorted(ids)},
+        )
+        written |= ids
+    return written
+
+
 async def _propagate_unindexed(db, session_id: str, session: dict, value: bool) -> None:
-    """Write the flag to every OTHER row of the conversation."""
+    """Write the flag to every row of the conversation."""
     # INVARIANT(security): the flag is one value per conversation — a toggle on
     # one branch writes every branch and compaction continuation.
     # Why: a sibling left unflagged keeps the same transcript searchable.
-    ids = await conversation_session_ids(db, session_id, session)
-    await db.query(
-        "UPDATE chat_sessions SET unindexed = $v "
-        "WHERE user_id = $uid AND project_id = $pid AND meta::id(id) IN $ids",
-        {"v": value, "uid": session["user_id"], "pid": session["project_id"],
-         "ids": sorted(ids - {session_id})},
-    )
+    await _write_conversation(db, session_id, session, "unindexed = $v", value)
+
+
+async def _bind_origin_persona(db, session_id: str, session: dict, value: str) -> None:
+    """Write the persona binding to every row of the conversation, then post the
+    chat-topics reconcile with those rows taken first (every thread's newest
+    branch is among them)."""
+    # INVARIANT(persisted): the binding is one value per conversation — every
+    # branch and compaction continuation — and its topics are KEPT as they are.
+    # Why: operator ruling — a branch or continuation must not stay in the old
+    # persona's memory; topics derive from the chat's text, not from the persona,
+    # so a Default binding only stops labelling and showing them.
+    written = await _write_conversation(db, session_id, session, "origin_persona_id = $v", value)
+    await mark_topics_first(session["user_id"], session["project_id"], written)
+    await schedule_chat_topics(session["user_id"], session["project_id"])
 
 
 async def _propagate_parent(db, session_id: str, session: dict, value: str | None) -> None:
-    """Write the new parent to every OTHER row of the conversation (mirrors
+    """Write the new parent to every row of the conversation (mirrors
     `_propagate_unindexed`). `value=None` clears the parent on every row alike."""
-    ids = await conversation_session_ids(db, session_id, session)
-    others = sorted(ids - {session_id})
     # INVARIANT: a reparent writes EVERY branch and compaction continuation,
     # not only the addressed row.
     # Why: recall_search.root_documents treats the thread as ONE scope, and a
     # chat-sourced fact follows its row's `document_id` in the retrieval
     # narrow — a sibling left on the old parent splits the conversation's
     # facts between two narrows.
-    if not others:
-        return
     # WHY: a clear writes the literal NONE (field absent), matching the
     # addressed row's `document_id = NONE` — a bound None would store NULL.
     assignment = "document_id = $v" if value is not None else "document_id = NONE"
-    await db.query(
-        f"UPDATE chat_sessions SET {assignment} "
-        "WHERE user_id = $uid AND project_id = $pid AND meta::id(id) IN $ids",
-        {"v": value, "uid": session["user_id"], "pid": session["project_id"],
-         "ids": others},
-    )
+    await _write_conversation(db, session_id, session, assignment, value)
 
 
 async def update_session_command(
@@ -213,6 +236,12 @@ async def update_session_command(
     if "document_id" in body.model_fields_set:
         await _propagate_parent(db, session_id, session, body.document_id)
     _unindexed_sets(session, body, sets, params)
+    # INVARIANT(persisted): the persona selected for a chat IS its memory binding.
+    # Why: operator ruling — persona and memory are one choice.
+    # A persona PATCH (set or cleared) re-binds the whole conversation; a cleared
+    # persona = '' = Default, in no persona's memory.
+    if "system_prompt_id" in body.model_fields_set and session.get("is_note") is not True:
+        await _bind_origin_persona(db, session_id, session, body.system_prompt_id or "")
     if "unindexed" in params:
         await _propagate_unindexed(db, session_id, session, params["unindexed"])
     rows = await db.query(

@@ -82,7 +82,7 @@ class TestDiffMentions:
         t0_kinds = {e["kind"] for e in out_edges if e["document_id"] == targets[0]}
         assert t0_kinds == {"mention", "transclusion"}, out_edges
         assert all(e["broken"] is False for e in out_edges), out_edges
-        # The default kind set excludes note/chat-context.
+        # The default kind set excludes note.
         assert all(e["kind"] in ("mention", "transclusion", "attachment") for e in out_edges)
 
         # A `ref:`-only edit rebuilds: pairs include ref: targets.

@@ -36,7 +36,6 @@ function sess(id: string, lm: string | null, updated: string): ChatState['sessio
     title: `t-${id}`,
     model: 'm',
     system_prompt_id: null,
-    context_ids: [],
     updated_at: updated,
     last_message_at: lm,
   } as unknown as ChatState['sessions'][number];
@@ -98,7 +97,7 @@ describe('the shown slot belongs to the active chat — leaving drops only the s
     const store = storeWithOtherChatTurn();
     postMock.mockResolvedValue({
       session_id: 'fresh', document_id: null, reference_id: null, user_id: 'u1',
-      title: '', model: 'm', system_prompt_id: null, context_ids: [],
+      title: '', model: 'm', system_prompt_id: null,
       created_at: '2026-01-01', updated_at: '2026-01-01',
     });
 

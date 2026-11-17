@@ -24,7 +24,7 @@ routes/tool_api/__init__.py wires them onto the shared router.
 
 # ARCH (import DAG): _common is a pure LEAF — it imports only stdlib + deps/db/models
 # + routes.tool_api_telemetry at module level, and reaches the agent
-# library (apply_policy) and the chat package (tool_api_surface /
+# library (apply_policy), share_guard and the chat package (tool_api_surface /
 # selection_conflict) LAZILY inside
 # functions. Domain modules import ONLY _common + _router; no domain imports another
 # domain. Nothing in routes.chat.* imports routes.tool_api back → no cycle.
@@ -32,6 +32,7 @@ routes/tool_api/__init__.py wires them onto the shared router.
 from fastapi import HTTPException
 
 from access import require_full_project_access
+from db import fetch_one
 from models import ToolEditDocument, ToolEditTableCell
 
 # ─── Write-mode resolution ────────────────────────────────────────────────────
@@ -50,13 +51,13 @@ from models import ToolEditDocument, ToolEditTableCell
 #   the card asked, the user allowed, the call still 403'd.
 # - WHY (MCP): the MCP surface has no decision card and no verdict flow; the
 #   subtree scope + read-write key IS the trust boundary and every write is
-#   reversible via History. A system-doc target is the one exception: REJECTED
-#   (403), never force-applied — the agent's own safety config (rules/skills)
-#   is not editable over MCP.
+#   reversible via History. A system-doc target (by ancestry — see
+#   INVARIANT(security) in agent/apply_policy.py) is the one exception: REJECTED
+#   (403), never force-applied — the agent's own instructions (personas, rules,
+#   knowledge, skills) are not editable over MCP.
 # - WHY (the access-level cell): RBAC at dispatch (gate_mutation_target 403s a
 #   non-full caller) is the authority, so `confirm` means the call needs the
-#   user's approval BEFORE it applies, and this surface no longer holds it
-#   (step 7).
+#   user's approval BEFORE it applies, and this surface does not hold it.
 
 # ARCH: consent is taken ONCE, where a run is started — not per call inside it.
 # The user approves launching the pipeline / trigger / subagent; every call that
@@ -93,11 +94,14 @@ async def _resolve_apply_or_force(
     return resolve_apply_mode(is_system=is_system, ui_preference=ui_preference)
 
 
-def _refuse_unconfirmable(tool_name: str):
+def _refuse_unconfirmable(tool_name: str, reason: str | None = None):
     """The ONE confirm-cell refusal: a mutating call resolved to `confirm`
     cannot apply without the user's approval, and the mid-turn ask lives in
-    the DRIVER (dsh's user-approval service) — not on this surface (step 7
-    deleted the backend hold).
+    the DRIVER (dsh's user-approval service) — not on this surface.
+
+    `reason` is the ApplyDecision's reason; `system_doc` adds
+    `ask_every_time: true`, so the driver asks on this call even when the user
+    allowed the tool for the chat, and refuses a chat grant for it.
 
     The Lore driver treats this 409 + code as the ASK signal: it parks the
     call on dsh's approval service and retries with the X-Agent-Verdict marker
@@ -107,21 +111,77 @@ def _refuse_unconfirmable(tool_name: str):
     # INVARIANT(security): a call that resolves to `confirm` and arrives
     # without approval is REFUSED — never auto-applied.
     # Why: the confirm cell is either the user's explicit confirm preference
-    # or a system-doc target (the agent self-edit privilege path), so
-    # degrading an unconfirmable call to an apply would hand the agent exactly
-    # what the table exists to protect.
+    # or a system-doc target BY ANCESTRY (the agent self-edit privilege path),
+    # so degrading an unconfirmable call to an apply would hand the agent
+    # exactly what the table exists to protect.
     """
-    raise HTTPException(
-        status_code=409,
-        detail={
-            "code": "confirmation_required",
-            "detail": (
-                f"{tool_name} needs the user's approval before it applies. The "
-                "Lore driver asks through the mid-turn approval card and "
-                "retries; otherwise ask the user to make this change themselves."
-            ),
-        },
-    )
+    detail = {
+        "code": "confirmation_required",
+        "detail": (
+            f"{tool_name} needs the user's approval before it applies. The "
+            "Lore driver asks through the mid-turn approval card and "
+            "retries; otherwise ask the user to make this change themselves."
+        ),
+    }
+    if reason == "system_doc":
+        detail["ask_every_time"] = True
+    raise HTTPException(status_code=409, detail=detail)
+
+
+async def _is_system_target(
+    doc_id: str | None, project_id: str, row: dict | None = None,
+) -> bool:
+    """The `is_system` cell for one write target: the doc's own flag OR its
+    ancestry (see INVARIANT(security) in agent/apply_policy.py). A None target
+    (project root) is never a system doc; `row` skips the re-fetch when the
+    caller already holds the target."""
+    if not doc_id:
+        return False
+    from share_guard import is_agent_instruction_doc
+
+    if row is None:
+        row = await fetch_one("documents", doc_id)
+    if row and row.get("is_system"):
+        return True
+    return await is_agent_instruction_doc(doc_id, project_id)
+
+
+def _require_in_app_agent(ctx: dict) -> None:
+    """The chat-recall pack is closed to EXTERNAL keys — the person's chat
+    corpus is the in-app assistant's own memory, not a surface for
+    user-minted automation or MCP-gateway clients. Internal keys
+    only: the driver's standing per-session keys AND its scoped run keys are
+    both internal=True (SYSTEM: agent-keys). Same predicate family as the
+    sandbox gate (routes/tool_api/sandbox/files.py) — explicit True only.
+    Why a 403 and not a 404: the caller is authenticated and this is a policy
+    statement about the surface, not an existence claim about any chat."""
+    if ctx.get("internal") is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="this tool is available only to the in-app assistant",
+        )
+
+
+MEMORY_SKILL = "memory"
+
+
+async def _refuse_memory_disabled(db) -> None:
+    """403 while the admin disabled the shipped `memory` skill.
+
+    # INVARIANT(security): disabling `memory` stops EVERY memory tool on every
+    # surface — the writes and the fact reads (get_memory_facts, get_fact_history).
+    # Why: the routes are reachable by a key directly (user keys included),
+    # so the skill tombstone alone, which only hides the skill from the model,
+    # does not stop them; and memory switched off means the agent neither sees
+    # nor uses it. Each handler (consolidate, apply verdicts, next_reference,
+    # reopen, get_memory_facts, get_fact_history, save_chat_facts,
+    # set_fact_anchor) opens with this gate.
+    """
+    from agent_config_load import instance_skill_disabled
+
+    if await instance_skill_disabled(db, MEMORY_SKILL):
+        raise HTTPException(status_code=403,
+                            detail="memory is disabled by the administrator")
 
 
 # ─── Standalone apply primitives ──────────────────────────────────────────────
@@ -134,8 +194,7 @@ async def _apply_edits_direct(
     *, doc_id: str, edits: list[dict], project_id: str, user: dict,
     scope_root: str | None = None,
 ) -> dict:
-    """Delegate a BATCH of edits to the shared standalone batch applier (plan
-    "quizzical-mixing-marble"). One atomic call: all-or-nothing, one checkpoint,
+    """Delegate a BATCH of edits to the shared standalone batch applier. One atomic call: all-or-nothing, one checkpoint,
     one Y.Doc publish."""
     from agent.tool_api_surface import apply_edits_to_document
     return await apply_edits_to_document(
@@ -175,7 +234,7 @@ async def _apply_create_document_direct(
 ) -> dict:
     """Create a document via the shared primitive (sort_key invariant preserved).
 
-    PR4 R3: the create body lives in ONE place —
+    The create body lives in ONE place —
     `agent.tool_api_surface.create_document_via_collab`. The access
     check stays here (the Tool-API direct path uses project access).
     `media_type` rides the primitive's own kind handling ("html" = the

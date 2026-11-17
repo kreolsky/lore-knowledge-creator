@@ -262,4 +262,4 @@ async def test_external_key_is_refused_search_is_in_app_only(client, test_db, wo
     ext = await _key(world["a"], world["pid"], internal=False)
     resp = await _call(client, ext, {"query": "anything"})
     assert resp.status_code == 403, resp.text
-    assert resp.json()["detail"] == "chat-recall is available only to the in-app assistant"
+    assert resp.json()["detail"] == "this tool is available only to the in-app assistant"

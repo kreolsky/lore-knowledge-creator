@@ -215,8 +215,9 @@ async def resolve_api_key(
         # `internal` marks the key the dsh driver mints for itself. Read RAW (no bool
         # coercion) for the same reason as auto_apply above: a row predating the
         # field surfaces as None rather than being masked into a confident False.
-        # Every gate on it (sandbox console, chat-recall pack, chat attachments,
-        # MCP inbox flag) treats ONLY an explicit True as internal.
+        # Every gate on it (sandbox console, chat-recall pack, memory capture
+        # pack, chat attachments, MCP inbox flag) treats ONLY an explicit True as
+        # internal.
         "internal": key.get("internal"),
         "user": user,
         "call_id": call_id,

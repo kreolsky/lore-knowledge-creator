@@ -20,11 +20,12 @@ import {
   type Gateway, type ModelApi,
 } from './caps.ts'
 import { parseTimeStamps } from './time-stamps.ts'
+import { parseMemoryBlock, parseMemoryPersona, parsePreloadNames, resolvePreloads } from './preload.ts'
 import { parseMcpServers } from './mcp-servers.ts'
 import type { EventsChannel, SessionEventTap } from './ws-events.ts'
 import {
   assembleTurnPrompt, catalogServedNames, computeCoreTools, computeActiveTools,
-  resolveSkillCatalog, skillsDelta, type ResolvedSkill, type SkillCatalogWire,
+  disabledPackTools, resolveSkillCatalog, skillsDelta, type ResolvedSkill, type SkillCatalogWire,
 } from './skills.ts'
 import { registerLoreTools } from './tools.ts'
 import {
@@ -390,13 +391,26 @@ async function buildTurnPrep(ctx: Context, map: SessionMap, body: Record<string,
   // resolveSkillCatalog, against the pinned harness's grammar.
   const catalogWire: SkillCatalogWire = (body.skills && typeof body.skills === 'object'
     && !Array.isArray(body.skills)) ? body.skills as SkillCatalogWire : { project: [], shipped: [] }
-  const servedNames = new Set<string>(
+  const payloadNames = new Set<string>(
     (Array.isArray(body.tools) ? body.tools : [])
       .map((e: any) => String(e?.function?.name ?? '')),
   )
   const skills: ResolvedSkill[] = resolveSkillCatalog(
-    catalogWire, catalogServedNames(servedNames))
+    catalogWire, catalogServedNames(payloadNames))
+  // A disabled skill's pack leaves the served set (INVARIANT in
+  // disabledPackTools): no core, no load, denied like any unserved proxy.
+  const withheld = disabledPackTools(catalogWire, skills)
+  const servedNames = new Set([...payloadNames].filter((n) => !withheld.has(n)))
+  if (withheld.size) {
+    console.error(`[lore-skills] disabled packs withheld: ${[...withheld].sort().join(',')}`)
+  }
   const activated = await restoreActivation(ctx, dshId, skills)
+  // The persona's preloaded skills (see ARCH in preload.ts): each name that
+  // resolves in THIS catalog is activated before the active set is computed,
+  // so its pack tools are callable from the first step; its body enters as
+  // the setup's `lore-preload` context message. Unresolved ⇒ logged, skipped.
+  const preloads = resolvePreloads(parsePreloadNames(body.preload_skills), skills)
+  for (const skill of preloads) activated.add(skill.name)
   const coreNames = computeCoreTools(servedNames, skills)
   // ONE active formula, shared with restrictDenyNames (the INVARIANT there):
   // the log and the enforcement must partition `registered` identically.
@@ -436,6 +450,8 @@ async function buildTurnPrep(ctx: Context, map: SessionMap, body: Record<string,
     loreId, model, cap, selection,
     systemPrompt: assembleTurnPrompt(body.system_prompt),
     timeStamps, servedNames, skills, activated, standingCtx, requestCtx,
+    preloads, memoryBlock: parseMemoryBlock(body.memory_block),
+    memoryPersona: parseMemoryPersona(body.memory_persona),
     mcpServers: parseMcpServers(body),
     claim: {
       user_msg_id: String(body.user_msg_id ?? ''),
@@ -443,7 +459,6 @@ async function buildTurnPrep(ctx: Context, map: SessionMap, body: Record<string,
       user_text: typeof body.user_text === 'string' ? body.user_text : '',
       images: list(body.images),
       files: list(body.files),
-      sources: list(body.sources),
       warnings: list(body.warnings),
     },
   }

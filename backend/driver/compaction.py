@@ -19,17 +19,20 @@
 import logging
 from uuid import uuid4
 
+from chat_sessions.conversation import inherit_conversation_fields
+
 from db import create_record, fetch_one, get_db
 
 logger = logging.getLogger(__name__)
 
-# Context-layer fields inherited from the SOURCE chat_session when minting a
-# compaction continuation. `mode` is NOT here and is written nowhere
-# — the column stays in the schema unread; the row simply inherits the context
-# layer below.
+# Fields inherited from the SOURCE chat_session when minting a compaction
+# continuation: the scope fields plus origin_persona_id (the continuation
+# carries the same conversation, so it belongs to the persona the source
+# started with). `mode` is NOT here and is written nowhere — the column stays
+# in the schema unread.
 _INHERITABLE_CHAT_FIELDS = (
-    "document_id", "context_document_ids", "model",
-    "system_prompt_id", "target_doc_id",
+    "document_id", "model",
+    "system_prompt_id", "target_doc_id", "origin_persona_id",
 )
 
 
@@ -89,6 +92,7 @@ async def _create_continuation_chat(
     # unflagged one would silently make an anonymous chat searchable.
     chat_data["unindexed"] = bool(source_chat.get("unindexed"))
     await create_record("chat_sessions", cont_id, chat_data)
+    await inherit_conversation_fields(await get_db(), cont_id, source_session_id)
 
 
 async def _mint_continuation_row(

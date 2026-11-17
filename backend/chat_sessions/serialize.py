@@ -9,8 +9,7 @@ from models import is_ref_row
 async def build_ref_map(db, *doc_ids: str | None) -> dict[str, dict]:
     """Fetch is_reference + parent_id for a set of document IDs.
 
-    Used by serialize_session to restore the legacy reference_id and
-    split context_document_ids into document / reference lists.
+    Used by serialize_session to restore the legacy reference_id.
     """
     ids = {d for d in doc_ids if d}
     if not ids:
@@ -31,14 +30,8 @@ async def build_ref_map(db, *doc_ids: str | None) -> dict[str, dict]:
 
 
 async def build_session_ref_map(db, row: dict) -> dict[str, dict]:
-    """The ref map over a session row's own document_id plus every context id."""
-    # WHY: Include context IDs in ref_map so serialize_session can correctly
-    # split context_document_ids into doc IDs vs ref IDs AND emit the additive
-    # context_reference_ids field (id-invariant classification for the frontend).
-    all_ids = {row.get("document_id")}
-    for cid in (row.get("context_document_ids") or []):
-        all_ids.add(cid)
-    return await build_ref_map(db, *all_ids)
+    """The ref map over a session row's own document_id."""
+    return await build_ref_map(db, row.get("document_id"))
 
 
 def serialize_session(
@@ -53,10 +46,8 @@ def serialize_session(
 
     References are documents with is_reference=true.
     chat_sessions.document_id stores either a regular doc ID or a ref-doc ID.
-    context_document_ids (DB column) stores ALL context IDs (docs + refs).
 
     API surface:
-      - Unified context_ids array (insertion order preserved)
       - reference_id: computed READ-only when document_id points to a ref-doc
       - document_id: emitted VERBATIM — a reference chat keeps the ref-doc id
         (its identity is the entity it was created on); it is NOT remapped
@@ -72,8 +63,8 @@ def serialize_session(
     out = serialize_record(row, "session_id")
     _stamp_wire_fields(out)
     _stamp_reference_identity(out, ref_map or {}, document_titles)
-    # ARCH: Note sessions never carry content context — reference_id preserved
-    # for NotesPanel grouping and navigation.
+    # ARCH: reference_id preserved on note sessions for NotesPanel grouping
+    # and navigation.
     if out["is_note"]:
         _stamp_note_display(out, previews_by_session_id)
     # ARCH: last_message_at is derived for
@@ -94,7 +85,6 @@ def serialize_session(
 
 def _stamp_wire_fields(out: dict) -> None:
     """Normalize the row's own columns into their stable wire shape."""
-    out["context_ids"] = list(out.get("context_document_ids") or [])
     out["is_note"] = bool(out.get("is_note"))
     # ARCH: the `mode` column stays in the schema (unread — no code reads
     # it) and is never emitted on the wire.
@@ -125,7 +115,6 @@ def _stamp_wire_fields(out: dict) -> None:
     out["active_branch_id"] = out.get("active_branch_id")
     out.pop("seed_source_session", None)
     out.pop("seed_source_seq", None)
-    out.pop("context_document_ids", None)
     # INVARIANT(security): anchor_rel_* leave the server ONLY as base64 strings, and
     # only when they decode as v1 RelativePositions (a legacy JSON-text row → null).
     # Why: FastAPI's jsonable_encoder runs bytes.decode() on any bytes value; Yjs
@@ -139,19 +128,7 @@ def _stamp_wire_fields(out: dict) -> None:
 def _stamp_reference_identity(
     out: dict, ref_map: dict, document_titles: dict[str, str] | None,
 ) -> None:
-    """Split context ids into references and label the session's parent entity."""
-    # WHY: emit the ordered
-    # subset of context_ids that are references (id in ref_map with
-    # is_reference=true). The frontend hydrateFromSessions consumes this DIRECTLY
-    # so a cross-doc reference is never misclassified as a document — the open
-    # document's reference scope is never evidence of a reference's existence.
-    # Why server-side: the route already builds ref_map from EVERY context id
-    # (chat_sessions / sessions_list.py), so this adds zero DB queries; the client's
-    # refIdSet was scope-limited to the open doc and silently flipped the split on
-    # every doc/chat switch (a "partial reset" of the References tab).
-    out["context_reference_ids"] = [
-        cid for cid in out["context_ids"] if is_ref_row(ref_map.get(cid) or {})
-    ]
+    """Label the session's parent entity (document or reference)."""
     did_raw = out.get("document_id")
     ref_entry = ref_map.get(did_raw) if did_raw else None
     if ref_entry and is_ref_row(ref_entry):
@@ -185,9 +162,7 @@ def _stamp_reference_identity(
 
 
 def _stamp_note_display(out: dict, previews_by_session_id: dict | None) -> None:
-    """Clear a note's content context and stamp its message-preview fields."""
-    out["context_ids"] = []
-    out["context_reference_ids"] = []
+    """Stamp a note's message-preview fields."""
     # WHY: note pill text is DERIVED from the messages preview map,
     # never from `title`. Why: `title` is a one-shot 100-char copy of the
     # first message (legacy "copied lines") that the backend never refreshes

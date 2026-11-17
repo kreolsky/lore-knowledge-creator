@@ -11,7 +11,7 @@
 # embedded by the existing pipeline, so they need no separate index. Two levels — FACT
 # level (whole fact-docs, distilled and served with their source references) and CHUNK
 # level (the raw documents and references) — with the fact level ranked ahead.
-# SYSTEM: retrieval — RAG context retrieval for AI chat
+# SYSTEM: retrieval — semantic retrieval behind search_materials and /search
 
 from __future__ import annotations
 

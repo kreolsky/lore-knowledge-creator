@@ -8,13 +8,15 @@ the tree ⇄ folder domain mapper lives in backend/subtree_md.py, the staged
 # key may call it); import is mutating (the dispatch read-only-key gate and
 # the force-auto apply are the registry's, same as every base mutating tool)
 # and auto-only — the bytes are user-supplied data, not a text edit to
-# confirm (the import_file posture: no `apply` field, never held). Both read
+# confirm (the import_file posture: no `apply` field, never held) — so it is
+# refused under the system root. Both read
 # ctx.get("scope_root"): export refuses a root outside the key's subtree,
 # import resolves its parent through resolve_scoped_parent and writes only
 # inside the scope.
 """
 from agent.context import get_agent_context
 from fastapi import Body, Depends, HTTPException
+from share_guard import refuse_under_system_root
 from subtree_md import export_subtree, import_subtree_zip
 
 from access import get_document_access, require_full_project_access
@@ -98,7 +100,8 @@ async def tool_export_subtree_md(
 
 async def _validate_import_parent(parent_id: str, ctx: dict) -> None:
     """404 on a missing/deleted/cross-project parent, 400 on an attached node
-    (a subtree cannot land under a reference), then the scope wall."""
+    (a subtree cannot land under a reference), the scope wall, then 403 under
+    the system root (the import never confirms)."""
     parent = await fetch_one("documents", parent_id)
     if not parent or parent.get("project_id") != ctx["project_id"]:
         raise HTTPException(status_code=404, detail="Parent document not found")
@@ -108,6 +111,7 @@ async def _validate_import_parent(parent_id: str, ctx: dict) -> None:
             detail="A subtree imports under a document, not an attached node",
         )
     await require_doc_in_scope(ctx.get("scope_root"), parent_id)
+    await refuse_under_system_root(parent_id, ctx["project_id"], "import_subtree_md")
 
 
 async def _mint_import_upload(ctx: dict, parent_id: str | None) -> dict:

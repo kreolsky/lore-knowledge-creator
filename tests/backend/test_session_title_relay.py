@@ -57,7 +57,7 @@ async def _noop(*_a, **_k):
 def _turn(session_id: str = "chat-1") -> "driver.frames._TurnProjection":
     return driver.frames._TurnProjection(
         assistant_msg_id="m1", persist_content=_noop,
-        persist_sources=_noop, persist_extras=_noop, session_id=session_id,
+        persist_extras=_noop, session_id=session_id,
     )
 
 

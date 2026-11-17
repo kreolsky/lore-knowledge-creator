@@ -12,7 +12,7 @@ All your chats in a project are visible from any document; other members never s
 - **Find a chat**: the "Search" tab in "Chats" mode, by title or by content (see [Search](help:search)).
 - Rename (double click), export to Markdown or JSON, delete.
 - A chat where the agent is working right now is marked with a live indicator in the list.
-- **Analyse in a new chat** (chat header) opens a new chat with a request to read this chat whole; the agent can list your chats and read any of them in full. Not available for an unindexed chat.
+- **Analyse in a new chat** (the sparkles button in the row above the chat input) opens a new chat with a request to read this chat whole; the agent can list your chats and read any of them in full. Not available for an unindexed chat.
 
 ## Context
 
@@ -29,7 +29,7 @@ Model and reasoning mode are picked next to the input. "default" leaves the reas
 - **"Auto" unchecked** (default) — every change is shown first: allow once, allow for this chat, or reject. The card shows the proposed change: "before / after" for text and cell edits, the call's arguments for other actions. A rejection with an explanation makes the agent try another way.
 - **"Auto" checked** — changes apply at once. A snapshot is taken before every agent edit, so it can be rolled back (see [Snapshots and history](help:history)).
 
-Some actions ask every time, even with "Auto" checked: a request with your personal key that sends data (anything but reading), and a call to an external MCP server's tool that the server does not mark as read-only — unless the administrator (or your group's moderator) set that server to "Run without confirmation"; then all its tools run at once.
+Some actions ask every time, even with "Auto" checked: a change to the agent's own configuration (personas, rules and skills — everything in the agent's system folder except Memory; "allow for this chat" never covers it), a request with your personal key that sends data (anything but reading), and a call to an external MCP server's tool that the server does not mark as read-only — unless the administrator (or your group's moderator) set that server to "Run without confirmation"; then all its tools run at once.
 
 ## Branches
 
@@ -44,7 +44,7 @@ A message sent while the agent is busy is queued: it shows as a chip with ✕ (r
 
 ## Chat privacy: "Unindexed"
 
-The shield button in the chat header marks the chat unindexed (the chat list shows it tinted). An unindexed chat is not found by the agent's recall from your other chats and never gets into a [digest](help:pipelines). The flag covers all branches of the chat and can be switched off any time.
+The eye button in the row above the chat input marks the chat unindexed: it shows a crossed-out eye on a pressed background while the chat is hidden, and the chat list shows the same crossed-out eye on the chat. It works in a new chat too, before the first message. An unindexed chat is not found by the agent's recall from your other chats and never gets into a [digest](help:pipelines). The flag covers all branches of the chat and can be switched off any time.
 
 To hide all chats of a document and its subtree at once, use "Hide this document's chats" in the "Access" tab (see [Access and publishing](help:access)): outside the subtree such chats disappear from the chat list and from the agent's search. A chat bound to a page locked with your PIN stays hidden until the PIN is entered (see [Screen and page lock](help:pin-lock)).
 
@@ -57,7 +57,7 @@ To hide all chats of a document and its subtree at once, use "Hide this document
 - **Voice input** — the microphone next to the input.
 - **Pictures** — drag or paste them into the chat, if the model can see images. Each picture is compressed once when attached, and that version is exactly what the model receives: the chip shows its size ("…, compressed from …"), and a click on the chip opens it at full size, so you can check whether small text is still readable. Screenshots need no shrinking by hand. A generated picture opens in a preview with "Download" and "Delete image"; drag it into a document to insert it. The agent can also look at pictures from your other chats and save any chat picture as a reference.
 - **Files** — any other file (up to 100 MB, not RAR) dropped on the chat uploads into your sandbox workspace, and the agent is told its path and works on it in the console. This needs full access to the project and a configured sandbox; in a note's chat only pictures can be attached. A file that cannot be attached shows a message.
-- **System prompt** — the persona for this chat (see [Personas, rules and knowledge](help:personas-rules-knowledge)).
+- **Persona** — the list at the left of the row above the chat input; «Default» means no persona. A brain marks personas with conversation memory, and the persona you pick also decides whose memory the chat belongs to (see [Personas and rules](help:personas-rules-knowledge)).
 - **Prompt rail** — the ticks on the right edge of the chat, one per your message. Hovering (or tapping) opens a list of your prompts with the start of each answer; a click jumps to that prompt.
 - **Scroll to bottom** — the arrow button that appears when the chat is scrolled up.
 - **Sound** — a sound when the agent finishes a turn or asks you to confirm a change, handy while you work in another window. Turn it on per project in the "Settings" tab, "Interface" section; pick or upload the sound in [Profile settings](help:profile), "Sound" section. Off by default.

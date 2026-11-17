@@ -1,17 +1,13 @@
-"""chat-recall agent tool CONSTANTS: the chat-recall skill's pack.
-Pure data — imports the verdicts sub-schema from specs.memory (the ONE source
-of the verdict shape, so a field change can never drift between the two
-capture tools); no other imports, no cycle.
+"""chat-recall agent tool CONSTANTS: the chat-recall skill's pack (reads only).
+Pure data — no imports, no cycle.
 """
-
-from agent_tools.specs.memory import APPLY_MEMORY_VERDICTS_TOOL
 
 # ARCH: agent-only (agent + tool_api, never MCP). Why: the corpus is ONE PERSON's own
 # chats, and an MCP key has no person whose chats these are — the caller's identity is
 # the key's owning user, which is meaningful only for the in-app agent. Runtime half:
 # the handlers refuse any key that is not internal=True — user-minted agent keys
 # (external automation) get a 403; only the in-app assistant's standing keys and its
-# internal run keys may touch the corpus (chat_recall.py _require_in_app_agent).
+# internal run keys may touch the corpus (routes/tool_api/_common.py _require_in_app_agent).
 SEARCH_MY_CHATS_TOOL: dict = {
     "type": "function",
     "mutating": False,
@@ -89,11 +85,18 @@ LIST_MY_CHATS_TOOL: dict = {
             "`chat_id`, `thread_id`, `title`, `document_id` (null for a project-level "
             "chat), `document_title`, `created_at`, `last_message_at`, "
             "`message_count` (live messages; a chat with none stays listed at 0). "
+            "`with_topics: true` adds each chat's table of contents: `topics` "
+            "(`[{title, synopsis, turn, message_id}]` in chat order, or null while "
+            "the chat has none), and — while its later turns are not covered yet — "
+            "`unlabelled_from_turn` and `unlabelled_turns`. Use it for an overview "
+            "of what the chats were about. "
             "`title_contains` narrows by a case-insensitive title substring; "
-            "`under_document_id` narrows to that document's subtree. `total` is the "
-            "match count; `next_offset` is present while more rows remain — call "
-            "again with it as `offset`. Pick a chat here, then read it whole with "
-            "`read_my_chat`."
+            "`under_document_id` narrows to that document's subtree. A page holds "
+            "up to `limit` rows and at most ~30000 characters, so long tables of "
+            "contents can make it shorter. `total` is the match count; "
+            "`next_offset` is present while more rows remain — call again with it "
+            "as `offset`. Pick a chat here, then read it with `read_my_chat`: "
+            "a topic's `turn` is the `from_turn` that jumps to it."
         ),
         "parameters": {
             "type": "object",
@@ -109,7 +112,15 @@ LIST_MY_CHATS_TOOL: dict = {
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Rows per page, 1-100 (default 50).",
+                    "description": "Rows per page, 1-100. Omit it unless the "
+                                   "user asked for a number of chats: the "
+                                   "server picks the page size (with "
+                                   "`with_topics` it is the admin's setting).",
+                },
+                "with_topics": {
+                    "type": "boolean",
+                    "description": "Attach each chat's table of contents "
+                                   "(default false).",
                 },
                 "offset": {
                     "type": "integer",
@@ -147,7 +158,15 @@ READ_MY_CHAT_TOOL: dict = {
             "served); a message longer than the page is never served whole. "
             "Finish a cut message with `search_my_chats` (same `message_id`, "
             "`offset` = `next_offset`) and never count characters yourself. "
-            "`total_turns` counts turns after deleted messages are dropped."
+            "`total_turns` counts turns after deleted messages are dropped. "
+            "The first page (`from_turn` 0) also carries the chat's table of "
+            "contents: `topics` (`[{title, synopsis, turn, message_id}]` in chat "
+            "order, or null while the chat has none) and — while later turns are "
+            "not covered yet — `unlabelled_from_turn` and `unlabelled_turns`. "
+            "`topics_only: true` serves just that and `total_turns`, no turns: "
+            "read the map first, then jump with `from_turn` = a topic's `turn`, "
+            "and read the uncovered tail from `unlabelled_from_turn`. A topic is "
+            "a summary, not the text — quote only from served turns."
         ),
         "parameters": {
             "type": "object",
@@ -161,7 +180,13 @@ READ_MY_CHAT_TOOL: dict = {
                 "from_turn": {
                     "type": "integer",
                     "description": "First turn to serve (default 0, the chat's "
-                                   "start); the previous response's `next_turn`.",
+                                   "start); the previous response's `next_turn`, "
+                                   "a topic's `turn` or `unlabelled_from_turn`.",
+                },
+                "topics_only": {
+                    "type": "boolean",
+                    "description": "Serve only the table of contents and "
+                                   "`total_turns`, no turns (default false).",
                 },
             },
         },
@@ -207,109 +232,6 @@ VIEW_CHAT_IMAGE_TOOL: dict = {
                 },
             },
             "required": ["message_id", "index"],
-        },
-    },
-}
-
-# The verdict shape is DERIVED from the consolidation tool's parameter (the
-# one source of the verdict schema) — only the description is capture-specific.
-_CHAT_VERDICTS_PARAM = dict(
-    APPLY_MEMORY_VERDICTS_TOOL["function"]["parameters"]["properties"]["verdicts"],
-    description=(
-        "One verdict per fact you are saving from this conversation. Invalid "
-        "verdicts are NOT fatal to the batch: valid ones apply, invalid ones "
-        "come back in `rejected` with the correction to make — fix ONLY those "
-        "and re-emit just them."
-    ),
-)
-
-# ARCH: the two WRITE tools of the pack (mutating, both holdable through the
-# `apply` field — one approval card per call). They live in the chat-recall
-# pack, not the memory-consolidation one, because capture is bound to THIS
-# conversation and operator-ruled as not always available: listing them under
-# `tools:` in backend/configs/skill_chat_recall.md is the whole gate — the
-# driver prunes pack tools from the core surface until the skill loads, so
-# disabling the skill disables saving from chats too.
-SAVE_CHAT_FACTS_TOOL: dict = {
-    "type": "function",
-    "mutating": True,
-    "function": {
-        "name": "save_chat_facts",
-        "description": (
-            "Save facts distilled from THIS conversation to project memory — "
-            "the moderated capture the user asks for with «сохрани это в "
-            "знания» / «запомни это». One verdict per fact, exactly as "
-            "`apply_memory_verdicts` takes them: `new` (title + text) creates "
-            "a fact, `merge` folds into a stored fact (`fact_id`, optional "
-            "`absorb_id`), `supersede` corrects one in place, `skip` declines "
-            "with a `reason`. There is no `reference_id` and no run loop — "
-            "capture is one shot, and the server stamps every fact with THIS "
-            "chat as its source (never a field you send). In confirm mode one "
-            "batch produces ONE approval card: a rejection with text is "
-            "per-fact moderation — drop or fix the named verdicts and re-emit "
-            "the corrected batch ONLY. The result names every fact written "
-            "(`created` / `touched`) — take ids from there for "
-            "`set_fact_anchor`. Saved facts are found project-wide by "
-            "`search_materials`, and under a document narrow they follow this "
-            "chat's parent document until anchored otherwise."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "verdicts": _CHAT_VERDICTS_PARAM,
-                "apply": {
-                    "type": "string",
-                    "enum": ["confirm", "auto"],
-                    "description": "confirm (default) shows one approval card "
-                                   "for the whole batch; auto writes directly.",
-                },
-            },
-            "required": ["verdicts"],
-        },
-    },
-}
-
-SET_FACT_ANCHOR_TOOL: dict = {
-    "type": "function",
-    "mutating": True,
-    "function": {
-        "name": "set_fact_anchor",
-        "description": (
-            "Place one stored memory fact on specific documents — after this, "
-            "a `search_materials` narrow over an anchor document finds the "
-            "fact there, even though the fact came from a chat or a reference "
-            "elsewhere (and moving that chat no longer moves the fact). "
-            "`document_ids: []` CLEARS the anchors: the fact returns to "
-            "following its source. Anchors are placement, not origin — the "
-            "fact keeps its provenance and its place in the Memory folder. "
-            "`fact_id` comes from `search_materials` or a `save_chat_facts` "
-            "result. Each target must be a live document of this project — "
-            "not a reference, not another fact. In confirm mode the call "
-            "shows one approval card. The result returns the fact's anchors "
-            "after the write; `get_memory_facts` serves them per fact."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "fact_id": {
-                    "type": "string",
-                    "description": "The stored fact to anchor (a documents id "
-                                   "with `is_memory`).",
-                },
-                "document_ids": {
-                    "type": "array",
-                    "description": "The anchor documents. Non-empty replaces "
-                                   "the current anchors; [] clears them.",
-                    "items": {"type": "string"},
-                },
-                "apply": {
-                    "type": "string",
-                    "enum": ["confirm", "auto"],
-                    "description": "confirm (default) shows one approval card; "
-                                   "auto writes directly.",
-                },
-            },
-            "required": ["fact_id", "document_ids"],
         },
     },
 }

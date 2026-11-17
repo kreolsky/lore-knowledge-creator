@@ -58,6 +58,7 @@ import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import type http from 'node:http'
 
+import { isPerCallAsk } from './approvals.ts'
 import { mapEvent, newTurnMapState, type DshEvent, type TurnMapState } from './map.ts'
 import type { SessionStreamBaselines } from './stream-baselines.ts'
 
@@ -351,7 +352,8 @@ export function attachEventsChannel(opts: EventsChannelOpts): EventsChannel {
     for (const [client, subs] of clients) {
       const state = subs.get(sid)
       if (!state) continue
-      deliver(client, sid, mapEvent(ev as DshEvent, state, { sessionId: sid, isChild: false }))
+      deliver(client, sid, mapEvent(
+        ev as DshEvent, state, { sessionId: sid, isChild: false }, isPerCallAsk))
     }
   }, 'relay')
 

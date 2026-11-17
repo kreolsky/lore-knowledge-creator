@@ -27,7 +27,7 @@ What the guide does not describe and the "Planned" list does not mention is most
 - [Voice notes](help:voice) — recording, where it lands, the Android, Windows and macOS apps.
 - [Chat and the agent](help:chat-agent) — chats, branches, queue, context, models, pictures, quoting, confirming edits, chat privacy, the finish sound, external MCP servers.
 - [Skills](help:skills) — creating skills, built-in skills.
-- [Personas, rules and knowledge](help:personas-rules-knowledge) — the Agent System section.
+- [Personas and rules](help:personas-rules-knowledge) — the Agent System section.
 - [Memory](help:memory) — project facts, consolidation, saving facts from a chat.
 - [Pipelines](help:pipelines) — the extractor and theme digests.
 - [Search](help:search) — documents, memory, your chats, find and replace (table cells included).

@@ -17,14 +17,14 @@ See SYSTEM: chat-sessions (entry: sessions.py).
 import logging
 from uuid import uuid4
 
-from chat_sessions.conversation import origin_of
+from chat_sessions.conversation import inherit_conversation_fields, origin_of
 from chat_sessions.recall import schedule_chat_index
 from chat_sessions.serialize import build_session_ref_map, serialize_session
 from fastapi import Depends, HTTPException
 from surrealdb import AsyncSurreal
 
 from auth import get_current_user
-from db import create_record, fetch_one, get_db, iso_str
+from db import create_record, extract_id, fetch_one, get_db, iso_str
 from models import BranchCreate
 from routes.chat._router import router
 from routes.chat.sessions import _require_session_access
@@ -103,7 +103,7 @@ async def _prefix_chain(session_id: str, after_message_id: str) -> list[dict]:
 # deleted_at (a soft-deleted row breaks the chain before the copy).
 _COPY_FIELDS = (
     "role", "content", "images", "model", "created_at", "author_id",
-    "sources", "halt", "gen_steps", "agent_trace", "driver_seq",
+    "halt", "gen_steps", "agent_trace", "driver_seq",
 )
 
 
@@ -133,8 +133,10 @@ def _branch_session_data(session: dict, session_id: str, chain: list[dict],
         "forked_after_origin": origin_of(chain[-1]),
         "active_branch_id": new_id,
     }
+    # origin_persona_id rides with the branch: the branch continues the same
+    # conversation, so it belongs to the persona the source started with.
     for optional in ("document_id", "system_prompt_id", "reasoning_effort",
-                     "context_document_ids"):
+                     "origin_persona_id"):
         if session.get(optional) is not None:
             data[optional] = session[optional]
     # INVARIANT(corruption): compacted_from is NOT copied.
@@ -167,10 +169,11 @@ def _seed_stamp(session: dict, session_id: str, seq: int,
     return {"seed_source_session": source, "seed_source_seq": seq}
 
 
-async def _copy_prefix(new_id: str, chain: list[dict]) -> None:
+async def _copy_prefix(new_id: str, chain: list[dict]) -> dict[str, str]:
     """Copy the prefix root→leaf as NEW rows, re-pointing the chain onto the
-    copies. The copies go stale on purpose: editing a prefix row in one branch
-    never changes another (no propagation)."""
+    copies; returns `{source row id: copy id}`. The copies go stale on purpose:
+    editing a prefix row in one branch never changes another (no propagation)."""
+    copies: dict[str, str] = {}
     prev: str | None = None
     for src in chain:
         copy = {k: src[k] for k in _COPY_FIELDS if src.get(k) is not None}
@@ -180,6 +183,28 @@ async def _copy_prefix(new_id: str, chain: list[dict]) -> None:
         copy["origin_id"] = origin_of(src)
         prev = str(uuid4())
         await create_record("messages", prev, copy)
+        copies[str(extract_id(src["id"]))] = prev
+    return copies
+
+
+def _inherited_memory(session: dict, chain: list[dict], copies: dict[str, str]) -> dict | None:
+    """The source's memory record remapped onto the copies, or None when the
+    branch's log will not hold the block.
+
+    WHY a completed turn after message_id is required: the fork seeds the log
+    only up to the last completed turn (see ARCH in _branch_point), and the
+    block sits after the user message inside that turn — a fork right after
+    message_id (re-generating the memory turn) or after an aborted memory turn
+    has no block, so its first turn must build one.
+    """
+    record = session.get("memory")
+    if not record or record.get("message_id") not in copies:
+        return None
+    ids = [str(extract_id(r["id"])) for r in chain]
+    after = chain[ids.index(record["message_id"]) + 1:]
+    if not any(r.get("driver_seq") is not None for r in after):
+        return None
+    return record | {"message_id": copies[record["message_id"]]}
 
 
 @router.post("/sessions/{session_id}/branches", status_code=201)
@@ -215,12 +240,19 @@ async def create_branch(
 
     new_id = str(uuid4())
     data = _branch_session_data(session, session_id, chain, new_id, seq, source)
-    row = await create_record("chat_sessions", new_id, data)
-    await _copy_prefix(new_id, chain)
+    await create_record("chat_sessions", new_id, data)
+    row = await inherit_conversation_fields(db, new_id, session_id)
+    copies = await _copy_prefix(new_id, chain)
+    memory = _inherited_memory(session, chain, copies)
+    if memory is not None:
+        row = (await db.query(
+            "UPDATE type::record('chat_sessions', $sid) SET memory = $m RETURN AFTER",
+            {"sid": new_id, "m": memory},
+        ))[0]
     await schedule_chat_index(data["user_id"], data["project_id"])
 
     return serialize_session(
-        row, await build_session_ref_map(db, data), viewer_id=user["user_id"],
+        row, await build_session_ref_map(db, row), viewer_id=user["user_id"],
     )
 
 

@@ -10,8 +10,8 @@
 # single-source-of-truth record factory (create_document_via_collab /
 # create_reference_via_collab / save_upload). No new business logic.
 #
-# Auto-only on BOTH surfaces (no ProposalKind): the bytes are user-supplied data,
-# not a text edit to confirm — a multi-MB blob has no place in a proposal, and the
+# Auto-only on BOTH surfaces (no ProposalKind), hence refused under the system
+# root: the bytes are user-supplied data, not a text edit to confirm — a multi-MB blob has no place in a proposal, and the
 # agent gets the result immediately. MCP force-auto + the read-only key gate live
 # in dispatch.py, so this
 # handler applies directly (no _resolve_apply_or_force / no confirm branch).
@@ -55,14 +55,14 @@ from files_util import (
     validate_magic,
 )
 from markdown_normalize import normalize_markdown
+from share_guard import refuse_under_system_root
 from tiers import require_tier, require_voice_for_audio_ref
 
 from access import require_full_project_access
 from models import ToolImportFile, ToolReprocessReference, is_ref_row
-from routes.tool_api._common import (
-    _refuse_unconfirmable,
-)
+from routes.tool_api._common import _refuse_unconfirmable
 from routes.tool_api_telemetry import track_agent_tool
+from scope import resolve_scoped_parent
 
 logger = logging.getLogger(__name__)
 
@@ -630,6 +630,10 @@ async def tool_import_file(
     # for a document, host for a reference) — discriminated here so the shared
     # executor keeps its internal parameter shape unchanged.
     is_reference = body.node_type == "reference"
+    # Auto-only, so refused under the system root (either placement).
+    placement = resolve_scoped_parent(ctx.get("scope_root"), body.parent_id)
+    if placement:
+        await refuse_under_system_root(placement, ctx["project_id"], "import_file")
     # INVARIANT: an imported html file is a page or a refusal — it never lands as
     # a markdown row. Why: raw markup in a markdown body renders as broken source,
     # pollutes search and embeddings, and is useless as text (there is no
@@ -699,6 +703,9 @@ async def tool_reprocess_reference(
     # Validate (image refusal, retryable state, file type) BEFORE the apply gate so a
     # confirm-mode call does not propose a reprocess that could never apply.
     await validate_reprocessable(ref)
+    await refuse_under_system_root(
+        body.reference_id, ctx["project_id"], "reprocess_reference",
+    )
     return await _propose_or_apply_reprocess(ctx, body, ref, user)
 
 

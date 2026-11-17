@@ -28,7 +28,7 @@ export function isEditorShell(pathname: string): boolean {
 
 /** The canonical document URL: /docs/<document_id>.
  *
- * Single helper for every call site (tree, search, chat Sources, breadcrumbs,
+ * Single helper for every call site (tree, search, breadcrumbs,
  * share dialog, navigate calls). Supersedes the per-audience
  * `/projects/${pid}/docs/${did}` link shape. */
 export function docUrl(documentId: string): string {

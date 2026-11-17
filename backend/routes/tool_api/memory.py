@@ -7,6 +7,7 @@ from agent.context import get_agent_context
 from fastapi import Body, Depends
 
 from access import require_full_project_access
+from db import get_db
 from models import (
     ToolApplyMemoryVerdicts,
     ToolConsolidateMemory,
@@ -16,6 +17,7 @@ from models import (
     ToolReopenConsolidation,
 )
 from routes.tool_api._common import (
+    _refuse_memory_disabled,
     _refuse_unconfirmable,
 )
 from routes.tool_api_telemetry import track_agent_tool
@@ -28,8 +30,8 @@ async def tool_consolidate_memory(
 ):
     """Start (or continue) a consolidation run: mint the run, serve its FIRST portion.
 
-    # ARCH (design P13): the TOOL is the capability and the boundary; the framing
-    # is delivered by the memory-consolidation skill (on demand). It is therefore in
+    # ARCH: the TOOL is the capability and the boundary; the framing
+    # is delivered by the memory skill (on demand). It is therefore in
     # AGENT_TOOLS and callable under ANY persona including Default — if using memory
     # required selecting a persona it would be a mode, not a memory, and the future
     # ambient path (which has no persona at all) would start life needing a rewrite.
@@ -55,6 +57,7 @@ async def tool_consolidate_memory(
     from memory.run_key import mint_memory_run_key, record_active_run
     from memory.task_builder import build_consolidation_task, resolve_consolidation_host
 
+    await _refuse_memory_disabled(await get_db())
     project_id = ctx["project_id"]
     # Validate the target (uniform 404, no existence oracle) BEFORE minting — an
     # invalid target must not persist a run key row (credential minting is the one
@@ -95,6 +98,7 @@ async def tool_reopen_consolidation(
     """
     from memory.task_builder import resolve_consolidation_host
 
+    await _refuse_memory_disabled(await get_db())
     user = ctx["user"]
     await require_full_project_access(ctx["project_id"], user, "reopen a consolidation")
     # Validate the target (uniform 404, no existence oracle) BEFORE proposing — parity
@@ -146,6 +150,7 @@ async def tool_next_reference(
     from memory.run_key import resolve_run_id
     from memory.task_builder import next_reference
 
+    await _refuse_memory_disabled(await get_db())
     run_id = await resolve_run_id(
         run_id=body.run_id, session_id=ctx.get("session_id"),
     )
@@ -167,6 +172,7 @@ async def tool_get_memory_facts(
     (so a stale index entry is reported, never silently ignored)."""
     from memory.task_builder import get_memory_facts
 
+    await _refuse_memory_disabled(await get_db())
     return await get_memory_facts(
         project_id=ctx["project_id"], ids=body.ids,
     )
@@ -184,6 +190,7 @@ async def tool_get_fact_history(
     fact the agent sees (a retired id is a 404)."""
     from memory.task_builder import get_fact_history
 
+    await _refuse_memory_disabled(await get_db())
     return await get_fact_history(
         project_id=ctx["project_id"], fact_id=body.fact_id,
     )
@@ -213,6 +220,7 @@ async def tool_apply_memory_verdicts(
     from memory.apply import apply_memory_verdicts
     from memory.run_key import resolve_run_id
 
+    await _refuse_memory_disabled(await get_db())
     run_id = await resolve_run_id(
         run_id=body.run_id, session_id=ctx.get("session_id"),
     )

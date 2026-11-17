@@ -136,7 +136,7 @@ async def _is_project_owner(session: dict, user: dict) -> bool:
 # `image_count` summarizes it; the client lazy-fetches the actual images from the
 # per-message /images endpoint below. Why `SELECT * OMIT` over a hand-enumerated
 # projection (cf. db.REF_META_COLUMNS): the messages table has 14+ columns
-# (agent_trace, sources, …) that _serialize_message passes through verbatim;
+# (agent_trace, gen_steps, …) that _serialize_message passes through verbatim;
 # enumerating them risks silently dropping one on a future schema add. OMIT drops
 # exactly the heavy column and auto-includes the rest.
 # Keep this aligned with the /images endpoint (the only other reader of `images`).
@@ -149,13 +149,15 @@ async def _is_project_owner(session: dict, user: dict) -> bool:
 # (messages_timeline_columns_drop — no row can carry them anymore);
 # the OMIT stays as belt-and-braces, so even a row that somehow does can never
 # ride the wire.
+# WHY: OMIT drops `sources` too — the stored per-turn source lists stay in the
+# DB (kept data) but nothing renders them anymore, so they never ride the wire.
 # `gen_steps` is NOT omitted and is not a fourth copy: it holds the DETACHED
 # generate_image run's chips, built by a background task the driver's log never
 # saw, so the replay cannot produce them; the reload mints them into the row's
 # frames as `lore/image-gen` (see SYSTEM: dsh-conversation).
 _MESSAGE_LIST_SELECT = (
     "SELECT *, array::len(images ?? []) AS image_count "
-    "OMIT images, segments, agent_steps, reasoning FROM messages"
+    "OMIT images, segments, agent_steps, reasoning, sources FROM messages"
 )
 
 
@@ -385,14 +387,9 @@ async def update_message(message_id: str, body: MessageUpdate, user: dict = Depe
             is_owner=is_owner, message=msg, session=session,
         ):
             raise HTTPException(status_code=403, detail="Only the author or project owner may edit a note")
-    sets: list[str] = ["content = $content"]
-    params: dict = {"id": message_id, "content": body.content}
-    if body.sources is not None:
-        sets.append("sources = $sources")
-        params["sources"] = body.sources
     rows = await db.query(
-        f"UPDATE type::record('messages', $id) SET {', '.join(sets)} RETURN AFTER",
-        params,
+        "UPDATE type::record('messages', $id) SET content = $content RETURN AFTER",
+        {"id": message_id, "content": body.content},
     )
     if isinstance(rows, str):
         raise HTTPException(status_code=500, detail=f"Database error: {rows}")

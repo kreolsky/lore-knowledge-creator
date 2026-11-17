@@ -1,4 +1,4 @@
-/** Banner shown when previewing a document from chat sources. Back button returns to the original document. Store slices: previewDocument, clearPreviewDocument, currentDocument. */
+/** Banner shown when previewing a document from chat. Back button returns to the original document. Store slices: previewDocument, clearPreviewDocument, currentDocument. */
 
 import { ArrowLeft, FileText } from 'lucide-react';
 import { useAppStore } from '../../store/app-store';

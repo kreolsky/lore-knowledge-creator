@@ -408,7 +408,6 @@ async def _validate_destination(
     # no descendants, so this never trips for one — but it is harmless and keeps
     # the path uniform.
     await assert_no_cycle(document_id, new_parent)
-    await _assert_not_into_memory(document_id, new_parent, project_id)
     # Reuse the single create/move parent invariant helper (404 missing/
     # cross-project, 400 reference parent). Also re-checks scope: a scoped key
     # may not move a doc to a parent outside its sandbox.
@@ -416,30 +415,44 @@ async def _validate_destination(
     await require_doc_in_scope(scope_root, new_parent)
 
 
-async def _assert_not_into_memory(
-    document_id: str, new_parent: str, project_id: str,
-) -> None:
-    """400 when a document from outside the Memory subtree is moved into it."""
-    memory_root = memory_folder_id(project_id)
+async def _in_memory(doc_id: str | None, memory_root: str) -> bool:
+    """True when `doc_id` is the Memory folder or inside it; None (project root) is not."""
+    if not doc_id:
+        return False
     # include_deleted_stop + max_depth=None: the move guards'
     # membership semantics (the soft-deleted boundary node counts, no depth cap).
-    if memory_root not in await get_ancestor_ids(
-        new_parent, include_deleted_stop=True, max_depth=None,
-    ):
-        return
+    return memory_root in await get_ancestor_ids(
+        doc_id, include_deleted_stop=True, max_depth=None,
+    )
+
+
+async def _assert_memory_boundary(
+    document_id: str, new_parent: str | None, project_id: str,
+) -> None:
+    """400 when a move crosses the Memory subtree's boundary, in either direction."""
+    memory_root = memory_folder_id(project_id)
+    source_in = await _in_memory(document_id, memory_root)
+    dest_in = await _in_memory(new_parent, memory_root)
     # INVARIANT: the Memory folder and its cards are not a re-parent destination
     # for a document that is not already memory; moves INSIDE memory stay legal.
     # Why: a plain document filed under Memory silently becomes memory the agent
     # retrieves, while the consolidation run's key is scoped to the Memory folder
     # and reorganizes cards within it.
-    if memory_root in await get_ancestor_ids(
-        document_id, include_deleted_stop=True, max_depth=None,
-    ):
-        return
-    raise HTTPException(
-        status_code=400,
-        detail="A document cannot be moved into the Memory folder",
-    )
+    if dest_in and not source_in:
+        raise HTTPException(
+            status_code=400,
+            detail="A document cannot be moved into the Memory folder",
+        )
+    # INVARIANT: nothing inside Memory is re-parented out of it — not under
+    # another document, not to the project root; removing a fact means deleting it.
+    # Why: a fact keeps `is_memory` wherever it sits, so one moved out lies among
+    # ordinary pages while the agent is still served it as memory.
+    if source_in and not dest_in:
+        raise HTTPException(
+            status_code=400,
+            detail="A document cannot be moved out of the Memory folder — "
+                   "delete it to remove it from memory",
+        )
 
 
 async def write_reference_host(
@@ -541,6 +554,8 @@ async def _resolve_move_destination(
 
     final_is_reference = await _resolve_final_kind(target, document_id, node_type)
     _check_reference_edges(final_is_reference, new_parent, after_id)
+    # Before the non-root block: a root move is a way OUT of Memory too.
+    await _assert_memory_boundary(document_id, new_parent, project_id)
     if new_parent is not None:
         await _validate_destination(
             document_id, new_parent, project_id, scope_root, final_is_reference,

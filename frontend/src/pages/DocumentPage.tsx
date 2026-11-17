@@ -56,7 +56,7 @@ export function DocumentPage() {
     // (StrictMode, shell re-render) must not re-fetch what is already on screen.
     // INVARIANT: this skip must self-reconcile note sessions before returning. Why:
     // the pre-commit nav path (Header.setCurrentDocument BEFORE navigate, fed by
-    // tree / search / doc links / chat Sources) lands here with the whole open
+    // tree / search / doc links) lands here with the whole open
     // bundle skipped — this branch is the ONLY note-session loader on that path, or
     // the Notes tab renders the previous scope (or nothing) under the open doc.
     // ensureSessions no-ops when the store's sessionsScope already matches (the
@@ -161,7 +161,7 @@ export function DocumentPage() {
 
     (async () => {
       // track=1: this is the URL-driven intentional open — record it as last-accessed.
-      // Auxiliary fetches (previews, Sources, snapshot banner) omit track so they don't
+      // Auxiliary fetches (previews, snapshot banner) omit track so they don't
       // clobber the pointer. See documents.get_document INVARIANT.
       const docPromise = apiClient.get(`/documents/${documentId}?track=1`);
       // index_doc_id is redundant when document_id is passed — the server walks ancestors

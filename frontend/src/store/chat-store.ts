@@ -8,10 +8,6 @@
 
 import type { AttachSurface } from '../chat/attach-image';
 import { create } from 'zustand';
-import { useAppStore } from './app-store';
-import { useUIStore } from './ui-store';
-import { showsBothPanes, refIsScope } from './ui-store/documents-slice';
-import { setupChatContextBridge, hydrateFromSessions } from '../chat/context';
 import type { ChatState } from './chat-store/types';
 import { createSessionsSlice } from './chat-store/sessions-slice';
 import { createMessagesSlice } from './chat-store/messages-slice';
@@ -24,29 +20,6 @@ import { registerLogoutHandler } from './logout-handlers';
 import { publishTimelineReset } from './chat-store/conversation-feed';
 
 export { selectBranchPath } from './chat-store/tree';
-
-// ARCH: context.ts PATCH response updates chat-store.sessions via bridge callback.
-// Module-level init to avoid circular dependency (context.ts does NOT import chat-store).
-setupChatContextBridge({
-  updateChatSession: (sessionId, updated) => {
-    useChatStore.setState(s => ({
-      sessions: s.sessions.map(ss => ss.session_id === sessionId ? updated : ss),
-    }));
-  },
-  showToast: (msg, type) => useAppStore.getState().showToast(msg, type),
-  getActiveSessionId: () => useChatStore.getState().activeSessionId,
-  getAppStoreState: () => {
-    const s = useAppStore.getState();
-    // Panel quick preview: the ghost materialization snapshot (getDerivedGhostContext)
-    // derives from the SCOPE reference — a previewed ref arrives as null so the
-    // materialized session's context is the document's. One projection, applied at
-    // the bridge seam so context.ts stays free of app/ui imports.
-    const mode = useUIStore.getState().getRefOpenMode(s.currentDocument?.document_id ?? '');
-    return { currentDocument: s.currentDocument, currentReference: refIsScope(mode) ? s.currentReference : null };
-  },
-  getSplitView: (docId: string) => showsBothPanes(useUIStore.getState().getRefOpenMode(docId)),
-  getReferenceIdSet: () => new Set(useAppStore.getState().references.map(r => r.reference_id)),
-});
 
 export const useChatStore = create<ChatState>((set, get) => ({
   // — initial state —
@@ -139,19 +112,6 @@ try {
 // state). reset() also aborts any in-flight stream + clears inflight/tree caches.
 // Registered here (not in a slice) because it needs the assembled useChatStore.
 registerLogoutHandler(() => useChatStore.getState().reset());
-
-// ARCH (context-race): loadSessions hydrates per-session context, but on F5 the
-// app-store reference set may still be empty when hydrateFromSessions first runs,
-// so reference ids misclassify into documentIds. Re-hydrate whenever references
-// load so the doc/ref split is corrected.
-// Why: hydrateFromSessions is idempotent — it skips sessions with in-flight
-// PATCHes and merges server values (never clobbers optimistic state) — so
-// re-running it on a reference-set change is safe.
-useAppStore.subscribe((state, prevState) => {
-  if (state.references === prevState.references) return;
-  const sessions = useChatStore.getState().sessions;
-  if (sessions.length > 0) hydrateFromSessions(sessions);
-});
 
 // INVARIANT(corruption): timeline ownership — the published timeline belongs
 // to the ACTIVE session (SYSTEM: dsh-conversation) and any activeSessionId

@@ -1,4 +1,4 @@
-"""Phase-3 — config & knowledge as project documents (plan stage-1 §3.4).
+"""Agent config as project documents.
 
 The home agent's config is NOT files on disk — it is documents in a reserved
 system subtree of the project, editable/visible as normal documents. This file
@@ -6,11 +6,10 @@ tests the backend pieces: lazy subtree init, system-prompt assembly (immutable
 bootstrap tier + editable persona/rules/skills), the generalized agent_configs
 coexistence (GAP-7), and the self-edit defense (system docs forced to confirm).
 
-# ARCH (plan "agent-config-folder-subtrees"): rules / knowledge / skills are now
-# three IDENTICAL folder-held subtrees. The folder carries content + children
-# (plain docs, any depth, organization only); the whole live subtree is injected;
-# the folder is the (append new here) target and is protected from deletion. No
-# more duplicate seeded canonical children; no `# Your configuration` footer.
+# ARCH: rules / skills are two IDENTICAL folder-held subtrees. The folder carries
+# content + children (plain docs, any depth, organization only); the whole live
+# subtree is injected; the folder is the (append new here) target and is protected
+# from deletion.
 """
 
 import pytest
@@ -106,23 +105,23 @@ async def test_build_prompt_and_skill_docs_wires_all_three_layers(
         return _yaml.safe_load(content[4:end])
 
     pid, _idx, _admin = project_with_doc
-    prompt, wire = await build_prompt_and_skill_docs(pid)
+    prompt, wire, _persona = await build_prompt_and_skill_docs(pid)
     assert prompt
     assert wire["project"] == []
     shipped = {(_front(d["content"]) or {}).get("name"): d for d in wire["shipped"]}
     assert set(shipped) == {
-        "memory-consolidation", "web-search", "image-generation", "sandbox",
+        "memory", "web-search", "image-generation", "sandbox",
         "deep-research", "skill-authoring", "extractor-config", "chat-recall",
-        "digest-config", "secrets",
+        "digest-config", "secrets", "history", "md-folder",
     }
     assert _front(shipped["secrets"]["content"])["tools"] == [
         "list_secrets", "http_request",
     ]
-    meta = _front(shipped["memory-consolidation"]["content"])
+    meta = _front(shipped["memory"]["content"])
     assert set(meta["tools"]) == {
         "consolidate_memory", "get_memory_facts",
         "apply_memory_verdicts", "next_reference", "get_fact_history",
-        "reopen_consolidation",
+        "reopen_consolidation", "save_chat_facts", "set_fact_anchor",
     }
     assert _front(shipped["web-search"]["content"])["tools"] == [
         "web_search", "web_fetch", "sandbox_bash",

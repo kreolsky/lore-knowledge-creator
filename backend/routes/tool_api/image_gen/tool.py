@@ -18,6 +18,7 @@ from agent.context import get_agent_context
 from comfy_markers import marked_nodes, parse_size
 from driver.frames import resolve_image_gen_anchor
 from fastapi import Depends, HTTPException
+from share_guard import refuse_under_system_root
 from tiers import require_tier
 
 from access import require_full_project_access
@@ -57,7 +58,7 @@ async def _require_configured() -> str:
 # the COMFY_CONCURRENCY semaphore, not by a set in the web process.
 
 async def _resolve_target_doc_id(ctx: dict, body: ToolGenerateImage) -> str:
-    """B2a: pin the attachment target to the
+    """Pin the attachment target to the
     chat session's STABLE parent document, not the agent's `document_id` argument.
 
     The agent reads document_id from the live-open-doc prompt line at tool-call
@@ -143,7 +144,7 @@ async def tool_generate_image(
     """
     await require_tier(ctx["user"], "ai")
     await _require_configured()
-    # B2a: pin the target to the chat session's stable parent document, not the
+    # Pin the target to the chat session's stable parent document, not the
     # agent's document_id argument (which can move mid-generation).
     target_doc_id = await _resolve_target_doc_id(ctx, body)
     # Validate the working document BEFORE touching ComfyUI. Doc-first (vs
@@ -165,9 +166,9 @@ async def tool_generate_image(
     # reference attaches to that reference's PARENT, never to the reference.
     # Why: the schema event documents_parent_check THROWs on a reference parent
     # (surreal/schema.surql), so save_upload's CREATE failed with an unhandled 500
-    # AFTER ComfyUI had produced the image — the user saw nothing (prod, m.kozina,
+    # AFTER ComfyUI had produced the image — the user saw nothing (prod,
     # chat opened on an audio widget note). One hop is enough: that same event
-    # guarantees a reference's parent is never itself a reference. B2a: the hop now
+    # guarantees a reference's parent is never itself a reference. The hop
     # starts from the resolved session target (not the agent's document_id arg).
     parent_doc_id = target_doc_id
     if is_ref_row(doc):
@@ -181,6 +182,8 @@ async def tool_generate_image(
             )
         if parent.get("project_id") != ctx["project_id"]:
             raise HTTPException(status_code=404, detail="Document not found")
+    # The image lands as a reference with no confirm: never under the system root.
+    await refuse_under_system_root(parent_doc_id, ctx["project_id"], "generate_image")
 
     # The instance Comfy config (admin settings), read live and frozen into the
     # payload so an admin edit between launch and run cannot split one call

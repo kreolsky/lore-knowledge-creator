@@ -162,20 +162,6 @@ async def _persist_turn_seq(message_id: str, seq: int, dsh_session: str | None) 
     )
 
 
-async def _persist_sources(message_id: str, sources: list[dict]) -> None:
-    """Persist the Sources panel (retrieved context docs) on the assistant message.
-
-    # ARCH (bug: agent sources not persisted): the agent path streamed sources live
-    # but never wrote them to the row, so the "materials" list vanished on reload.
-    # Written once at turn finalization alongside content (mirrors the Ask path).
-    """
-    db = await get_db()
-    await db.query(
-        "UPDATE type::record('messages', $id) SET sources = $s",
-        {"id": message_id, "s": sources},
-    )
-
-
 async def _persist_context_usage(session_id: str, used: int) -> None:
     """Stamp the last-known context occupation onto chat_sessions so the gauge
     survives reload (always-visible, honest). Called once per NORMAL turn end from

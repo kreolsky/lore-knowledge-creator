@@ -9,7 +9,6 @@ import { apiClient } from '../../../api/client';
 import { useUIStore } from '../../ui-store';
 import { useAppStore } from '../../app-store';
 import { resolveActiveSession } from '../../chat-session-resolver';
-import { hydrateFromSessions } from '../../../chat/context';
 import { t } from '../../../i18n';
 import { createResourceCache } from '../../../api/swr-cache';
 import { registerLogoutHandler, getLogoutEpoch } from '../../logout-handlers';
@@ -134,14 +133,6 @@ export function createLoadActions(set: Set, get: Get): LoadActions {
           sessionsCache.seed(scopeKey, rawSessions);
           set({ sessions: rawSessions });
 
-          // WHY: hydrate per-session UI context from authoritative DB values
-          // so a fresh device/browser sees the same context the chat was saved with.  Why: context is hydrated from DB values, not local state, so a fresh device sees the saved context (no device drift).
-          // WHY: hydrateFromSessions requires app-store references to be loaded
-          // first; otherwise ref ids misclassify as doc ids. Why: the internal split
-          // is by the reference id set from app-store. If references are not yet
-          // loaded here, hydrateFromSessions emits a console warning (observability).
-          hydrateFromSessions(rawSessions);
-
           // ARCH: All lifecycle logic delegated to the pure resolver. The resolver
           // restores the project's last-active chat (matched against the whole
           // project-wide list) or yields `none` → a client-only ghost
@@ -162,10 +153,8 @@ export function createLoadActions(set: Set, get: Get): LoadActions {
               return;
             case 'none':
               // Ghost render state: no active session, no messages, loading gate
-              // cleared. The composer / context picker / mode toggle render against
-              // null (ghost) and materialize a row on first send. The ghost context
-              // is DERIVED from the open entity (useGhostChatContext +
-              // useGhostContextWarm in ChatPanel) — nothing to attach here.
+              // cleared. The composer / mode toggle render against null (ghost)
+              // and materialize a row on first send.
               // streaming: null — the slot shows the ACTIVE chat's turn and a
               // ghost has none (the INVARIANT in types.ts).
               get().initGhostFromScope();

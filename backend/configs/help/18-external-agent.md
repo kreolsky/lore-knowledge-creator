@@ -38,7 +38,7 @@ Without an MCP client, send `POST <Lore address>/mcp` — stateless JSON-RPC 2.0
 
 ## The first call: init
 
-Tell the agent to call `init` once, first. It returns the agent's rights (read-only or read-write), its scope and the rules of work, plus your project's Agent System: the rules in full and the lists of skills and knowledge, which the agent reads on demand. So the rules you wrote for the built-in agent (see [Personas, rules and knowledge](help:personas-rules-knowledge)) apply to the external one too. Personas do not.
+Tell the agent to call `init` once, first. It returns the agent's rights (read-only or read-write), its scope and the rules of work, plus your project's Agent System: the rules in full and the list of skills, which the agent reads on demand. So the rules you wrote for the built-in agent (see [Personas and rules](help:personas-rules-knowledge)) apply to the external one too. Personas do not.
 
 ## What the agent can do
 

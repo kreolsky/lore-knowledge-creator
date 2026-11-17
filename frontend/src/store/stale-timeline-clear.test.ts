@@ -30,11 +30,6 @@ vi.mock('../api/client', () => ({
   },
 }));
 
-vi.mock('../api/links', () => ({
-  fetchDocumentLinksFresh: vi.fn(() => Promise.resolve({})),
-  fetchReferenceLinksFresh: vi.fn(() => Promise.resolve({})),
-  linkCache: new Map<string, unknown>(),
-}));
 
 vi.mock('../events', () => ({
   emit: vi.fn(),
@@ -57,22 +52,6 @@ vi.mock('./ui-store', async (importOriginal) => {
   };
 });
 
-vi.mock('../chat/context', () => ({
-  setupChatContextBridge: vi.fn(),
-  GHOST_SESSION_ID: '__ghost__',
-  resolveCompletionContext: vi.fn(() => ({ context_ids: [] })),
-  getContextForSession: vi.fn(() => ({ documentIds: [], referenceIds: [] })),
-  setContextForSession: vi.fn(),
-  clearContextForSession: vi.fn(),
-  hydrateFromSessions: vi.fn(),
-  pruneContext: vi.fn(),
-  clearPendingContextPatches: vi.fn(),
-  useChatContext: vi.fn(() => ({ documentIds: [], referenceIds: [] })),
-  getDerivedGhostContext: vi.fn(() => ({ docIds: [], refIds: [] })),
-  ghostBaseTargets: vi.fn(() => ({ docs: [], refs: [] })),
-  addItemToContext: vi.fn(() => Promise.resolve()),
-  resetGhostDeltas: vi.fn(),
-}));
 
 import { useChatStore } from './chat-store';
 import { apiClient } from '../api/client';
@@ -88,7 +67,6 @@ function makeSession(overrides: Partial<ChatSession> = {}): ChatSession {
     title: '',
     model: 'm',
     system_prompt_id: null,
-    context_ids: [],
     created_at: '2025-01-01T00:00:00Z',
     updated_at: '2025-01-01T00:00:00Z',
     ...overrides,

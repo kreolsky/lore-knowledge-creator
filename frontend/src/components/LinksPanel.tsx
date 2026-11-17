@@ -3,7 +3,7 @@
  *
  * Both directions come from GET /documents/{id}/edges (see SYSTEM: edges), grouped
  * by kind, one section per (direction, kind) group; a stored outgoing edge to a
- * deleted target is shown as broken. Notes and the viewer's own chats are included
+ * deleted target is shown as broken. Notes are included
  * when the project setting `links_show_sessions` is on. Rows show the shared
  * right-panel hover preview. External http(s) links (incl. table cells) come from the
  * same endpoint as the projected `external` kind — the panel parses no text.
@@ -18,7 +18,6 @@ import { useState, useEffect, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import { useAppStore } from '../store/app-store';
 import { useUIStore } from '../store/ui-store';
-import { useChatStore } from '../store/chat-store';
 import { readRefOpenMode, refIsScope } from '../store/ui-store/documents-slice';
 import { apiClient } from '../api/client';
 import { emit } from '../events';
@@ -28,12 +27,12 @@ import { useDocumentPreview } from '../hooks/useDocumentPreview';
 import { useReferencePreview } from '../hooks/useReferencePreview';
 import { HoverPreviewPopup } from './HoverPreviewPopup';
 import {
-  FileText, Paperclip, ExternalLink, ArrowDownLeft, ArrowUpRight, Link2, SquareStack, MessageSquare, StickyNote,
+  FileText, Paperclip, ExternalLink, ArrowDownLeft, ArrowUpRight, Link2, SquareStack, StickyNote,
 } from 'lucide-react';
 import { useTranslation } from '../i18n';
 import { Button, SectionHeader, PanelLoading } from './ui';
 
-type EdgeKind = 'mention' | 'transclusion' | 'attachment' | 'note' | 'chat-context';
+type EdgeKind = 'mention' | 'transclusion' | 'attachment' | 'note';
 
 interface EdgeItem {
   direction: 'in' | 'out';
@@ -49,21 +48,20 @@ interface EdgeItem {
   broken?: boolean;
 }
 
-type KindLabelKey = 'edgeKindMention' | 'edgeKindTransclusion' | 'edgeKindAttachment' | 'edgeKindNote' | 'edgeKindChat';
+type KindLabelKey = 'edgeKindMention' | 'edgeKindTransclusion' | 'edgeKindAttachment' | 'edgeKindNote';
 
 const KIND_ORDER: { kind: EdgeKind; labelKey: KindLabelKey; icon: typeof FileText }[] = [
   { kind: 'mention', labelKey: 'edgeKindMention', icon: Link2 },
   { kind: 'transclusion', labelKey: 'edgeKindTransclusion', icon: SquareStack },
   { kind: 'attachment', labelKey: 'edgeKindAttachment', icon: Paperclip },
   { kind: 'note', labelKey: 'edgeKindNote', icon: StickyNote },
-  { kind: 'chat-context', labelKey: 'edgeKindChat', icon: MessageSquare },
 ];
 
 // WHY: the server default (mention,transclusion,attachment) plus the opt-in
-// `external`; notes and chats are opt-in too, so the project flag widens the
+// `external`; notes are opt-in too, so the project flag widens the
 // request instead of filtering client-side.
 const KINDS_DEFAULT = 'mention,transclusion,attachment,external';
-const KINDS_WITH_SESSIONS = `${KINDS_DEFAULT},note,chat-context`;
+const KINDS_WITH_SESSIONS = `${KINDS_DEFAULT},note`;
 
 function edgeKey(e: EdgeItem): string {
   return `${e.direction}:${e.kind}:${e.url ?? e.document_id ?? e.session_id}`;
@@ -143,14 +141,6 @@ export function LinksPanel() {
   const handleEdgeClick = (e: EdgeItem) => {
     if (e.kind === 'note') {
       emit('open-notes', { threadId: e.session_id });
-      return;
-    }
-    if (e.kind === 'chat-context') {
-      // Ruling: the chat is the viewer's own and in this project — open it in the
-      // right-panel chat beside the current document.
-      useChatStore.getState().setActiveSession(e.session_id!);
-      useUIStore.getState().setRightPanelTab(useAppStore.getState().currentDocument?.document_id ?? null, 'chat');
-      emit('open-right-panel');
       return;
     }
     if (e.source_type === 'ref') {
@@ -256,13 +246,11 @@ export function LinksPanel() {
       )}
       {/* WHY no title for notes: the ONE note-preview style (NotesPanel sets the same
           rule) — a note has no title, its label IS the body, so a plaque would only
-          repeat it. Chats keep the plaque: their label is a real chat title. */}
+          repeat it. */}
       <HoverPreviewPopup
         hover={hover}
         title={hoverEdge
-          ? (hoverEdge.session_id
-            ? (hoverEdge.kind === 'note' ? undefined : hoverEdge.label || t('untitledLink'))
-            : hoverEdge.title)
+          ? (hoverEdge.session_id ? undefined : hoverEdge.title)
           : undefined}
         content={hoverBody.content}
         imageUrl={hoverBody.imageUrl}

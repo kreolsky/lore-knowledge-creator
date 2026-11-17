@@ -408,7 +408,6 @@ CHAT_MODELS_TIMEOUT_S = 10  # HTTP timeout for the /models gateway probe
 # A bare constant, not a setting.
 CHAT_MODELS_CACHE_TTL_S = 60.0
 CHAT_ERROR_TRUNCATE_CHARS = 200  # Max chars to show from error messages
-CHAT_CONTEXT_SNIPPET_LEN = 300  # Max chars for context snippet in prompts
 MAX_PROPOSAL_NEW_TEXT_CHARS = (
     100_000  # Hard cap for agent edit_document new_string (aliased to AGENT_EDIT_MAX_CHARS)
 )
@@ -485,7 +484,7 @@ AGENT_BOOTSTRAP_PROMPT = setting(
     validate=_validate_bootstrap_prompt,
     label="Agent system prompt",
     help="The fixed head of every agent turn's system prompt, in every project; "
-         "the project's Persona, Rules and Knowledge follow it. "
+         "the project's Persona and Rules follow it. "
          f"{BOOTSTRAP_EMBED_TOKEN} must appear exactly once — it is replaced with "
          "the editor's embed forms. A change applies on the next turn and resets "
          "the model's prompt cache for every chat.",
@@ -552,10 +551,16 @@ AGENT_SEARCH_DIRECT_K = setting(
     help="Title/substring match layer count for search_materials (fused with the "
          "semantic layer).",
 )
-# Max chars of context document text injected into the agent's system prompt.
-# Conservative (~20K tokens at 4 chars/tok) — leaves room for config prompt + conversation.
-CHAT_MAX_AGENT_CONTEXT_CHARS = 80_000
-
+# Ceiling on a persona's `chat_memory_budget` (frontmatter): a larger budget is
+# clamped to it with a warning. Why: the budget is author-typed text in a
+# document any project editor can change, and the block rides the first turn
+# of every chat with that persona — an unbounded number would flood the prompt.
+CHAT_MEMORY_MAX_TOKENS = setting(
+    "CHAT_MEMORY_MAX_TOKENS", int, default=32_000, min=1, max=32_000,
+    label="Conversation memory cap, tokens",
+    help="Ceiling on a persona's chat_memory_budget. A persona asking for more "
+         "gets this many tokens of conversation memory (a warning is logged).",
+)
 # ─── Agent line — the rented harness (THE line) ──────────────────────────────
 # Address + secret of the harness-driver service. This is the ONE line: chats
 # pinned to the earlier, retired line are archived read-only, and every NEW
@@ -971,6 +976,18 @@ RETRIEVAL_BUDGET_TOKENS_MEMORY = setting(
          "answer still has to be grounded in. Applies from the next search.",
 )
 RETRIEVAL_TOKEN_SAFETY_MARGIN = 0.85  # Approx token ratio: chars/4 * margin
+
+
+# ─── Chats ────────────────────────────────────────────────────────────────────
+# The agent's chat-recall tools over the user's own other chats.
+_section("search", "Chats")
+CHAT_LIST_TOPICS_LIMIT = setting(
+    "CHAT_LIST_TOPICS_LIMIT", int, default=25, min=1, max=100,
+    label="Chats per page with topics",
+    help="Max chats per page when topics are attached; long tables of "
+         "contents can make a page shorter — the rest comes with the next "
+         "page. Applies from the next call.",
+)
 
 
 # ─── Project memory (SYSTEM: memory) ─────────────────────────────────────────

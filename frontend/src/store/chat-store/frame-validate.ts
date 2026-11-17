@@ -41,7 +41,6 @@ const isStr = (v: unknown): v is string => typeof v === 'string';
  */
 const GUARDS: Record<string, (f: Record<string, unknown>) => boolean> = {
   ids: f => isStr(f.user_message_id) && isStr(f.assistant_message_id),
-  sources: f => Array.isArray(f.sources),
   // Per-turn context-occupation signal (used + cap = ints). Emitted by the
   // driver before the turn's `done` content frame; relayed by the backend reducer.
   context_usage: f => typeof f.used === 'number' && typeof f.cap === 'number',

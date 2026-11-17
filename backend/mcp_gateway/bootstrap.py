@@ -11,13 +11,13 @@
 
 # INVARIANT(security): the bootstrap/instructions tier is CODE, never a document —
 # letting an external agent edit it would let it rewrite its own safety contract.
-# Why: only rules/skills/knowledge/persona are docs; the agent's own system docs
+# Why: only rules/skills/persona are docs; the agent's own system docs
 # (is_system=true) are NOT editable over MCP (rejected 403 in dispatch), so the
 # read-write-always-auto model never lets the agent rewrite its own guardrails.
 
 # ARCH: reuse ensure_agent_system_docs + load_agent_system_docs + render_subtree_section
 # (NOT build_agent_system_prompt — its bootstrap tier is agent-specific).
-# Rules render inline; skills/knowledge are id+title indexes (read on demand via
+# Rules render inline; skills are an id+title index (read on demand via
 # read_document); persona is omitted in v1 (a session concept).
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ from db import fetch_one
 logger = logging.getLogger(__name__)
 
 # Bumped on a breaking change to the package shape. A harness may branch on it.
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 # v1 soft cap on the rendered rules blob. Exceeding it only logs a warning (no
 # truncation yet) — a project with a huge rules subtree would inflate every init
@@ -97,8 +97,8 @@ WRITES APPLY DIRECTLY (no approval step)
   do not retry; you can still read.
 
 CONFIG (read on demand)
-- The Rules subtree is inlined below in this package. Skills and Knowledge are
-  given as id+title indexes; read a node's content with read_document(document_id) when
+- The Rules subtree is inlined below in this package. Skills are given as an
+  id+title index; read a node's content with read_document(document_id) when
   you need it. Do not assume content you have not read.
 - Ground every edit in real document content: read_document before edit_document
   so old_string is verbatim; never fabricate ids or content.
@@ -207,8 +207,8 @@ async def _build_instructions(scope_root: str, root_title: str) -> str:
 async def build_init_package(ctx: dict) -> dict:
     """Assemble the tiered init package for the authenticated agent's project.
 
-    ensure → load the .lore/system config subtree → render rules inline, skills/
-    knowledge as indexes, persona omitted (v1).
+    ensure → load the .lore/system config subtree → render rules inline, skills
+    as an index, persona omitted (v1).
     """
     from agent_config import (
         ensure_agent_system_docs,
@@ -236,9 +236,8 @@ async def build_init_package(ctx: dict) -> dict:
         )
 
     def _index(folder_key: str, child_key: str) -> list[dict]:
-        """id+title pointers for read-on-demand. The FOLDER node leads (it carries
-        the seeded defaults — e.g. knowledge's starter content — so a fresh project
-        still has a reachable node), followed by every descendant child."""
+        """id+title pointers for read-on-demand. The FOLDER node leads (so a fresh
+        project still has a reachable node), followed by every descendant child."""
         entries: list[dict] = []
         folder = docs.get(folder_key)
         if isinstance(folder, dict) and folder.get("id"):
@@ -274,7 +273,6 @@ async def build_init_package(ctx: dict) -> dict:
         "rules": rules_text,
         "persona": None,  # v1: a session concept, omitted.
         "skills_index": _index("skills_folder", "skills_children"),
-        "knowledge_index": _index("knowledge_folder", "knowledge_children"),
         "capabilities": {
             # writable: True = read-write key, False = read-only (was apply_mode).
             "writable": writable,

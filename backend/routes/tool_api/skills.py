@@ -7,7 +7,8 @@
 # parent id. The head is a PLAIN document (is_system=False): the loader walks
 # folder children by parent_id regardless of role, and the user stays free to
 # rename/retitle it in the tree (the frontmatter name, not the title, is the
-# upsert key). An optional `spec` lands as a child titled `Spec` — the
+# upsert key). Its writes still confirm on every call (system doc by ancestry —
+# see INVARIANT(security) in agent/apply_policy.py). An optional `spec` lands as a child titled `Spec` — the
 # on-demand material the head's `## Material` listing carries at one line per
 # load (see harness-driver/plugin/src/skills.ts frameSkillBody). Optional
 # `files` land as children titled by their relative path (`scripts/run.py`),
@@ -282,10 +283,12 @@ async def tool_save_skill(
     await require_full_project_access(project_id, ctx["user"], "save a skill")
     tools = _validated_pack(body.tools)
     _refuse_shipped_name(body.name)
-    if (await _resolve_apply_or_force(
-        ctx, ui_preference=body.apply.value, is_system=False,
-    )).mode != "auto":
-        _refuse_unconfirmable("save_skill")
+    # A skill is the agent's own instructions: always a system-doc write.
+    decision = await _resolve_apply_or_force(
+        ctx, ui_preference=body.apply.value, is_system=True,
+    )
+    if decision.mode != "auto":
+        _refuse_unconfirmable("save_skill", decision.reason)
     files = await _read_skill_files(body, ctx)
 
     folder_id = await _skills_folder_for(ctx)

@@ -1,8 +1,7 @@
 /**
  * Unit tests for ChatHeader — ghost plaque, new-chat no-op, goto-parent
  * visibility rules (icon lives in the reserved LEFT slot), the always-reserved
- * title slot, double-click rename, the optimistic rename commit, and the
- * analyse-in-new-chat action (ghost + appendDraft prefill, unindexed guard).
+ * title slot, double-click rename and the optimistic rename commit.
  * Mounted with mocked stores per the repo's component-test pattern.
  */
 // @vitest-environment jsdom

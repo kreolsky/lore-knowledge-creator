@@ -3,13 +3,8 @@
 # SYSTEM: apply-policy — single source of truth for whether an agent write
 # applies directly (auto) or is held for the user's confirmation.
 
-# ARCH: this replaces THREE drifting resolvers:
-#   - the retired driver-client turn-level apply-mode resolver (Agent-line)
-#   - tool_api._wants_auto / _can_auto_apply (Tool-API per-call)
-#   - agent_config.system_doc_edit_policy  (system-doc override, edit-only)
-# Unification is behavior-changing by design: there is no "intersection" that
-# reproduces all three, so the precedence table below is the CHOSEN truth: the
-# `is_system` cell applies uniformly to every write surface.
+# ARCH: ONE resolver for every write surface — the precedence table below is the
+# CHOSEN truth: the `is_system` cell applies uniformly to every write surface.
 
 The pure resolver has no I/O.
 """
@@ -48,11 +43,17 @@ def resolve_apply_mode(
       3. else                 → confirm
 
     # INVARIANT(security): the only `auto` cell requires the user opted in AND the
-    # target is not a system doc.
-    # Why: system docs are the agent self-edit privilege path and always require
-    # confirmation; the access-level cell this table once carried is gone — RBAC at
-    # dispatch (the per-call gate) is the authority, so a non-full caller is refused
-    # before this resolver ever runs.
+    # target is not a system doc, and a system doc is decided BY ANCESTRY.
+    # Why: these docs are the agent's own instructions — the self-edit privilege
+    # path — so a write to them needs the user's approval each time; the skeleton
+    # flag alone left every leaf a user or agent wrote there editable without one.
+    # A system doc = the system root and everything under it (personas,
+    # Rules/Knowledge children, skill heads) — `is_system` OR
+    # share_guard.is_agent_instruction_doc — EXCEPT the Memory subtree (facts are
+    # data and keep their own apply path). Its confirm is asked on EVERY call: the
+    # 409 carries `ask_every_time`, and the driver's "allow for this chat" grant
+    # never covers it. RBAC at dispatch (the per-call gate) is the access
+    # authority, so a non-full caller is refused before this resolver ever runs.
     """
     if is_system:
         return ApplyDecision(CONFIRM, "system_doc")

@@ -172,7 +172,7 @@ function isDecidedVerdict(callId: string, nodes: TurnNodeLike[]): boolean {
 
 /** The held call's own args, read off its tool-call node: dsh appends the
  * call BEFORE asking (the INVARIANT above), and that node already carries
- * `argsRaw` — the ask frame itself carries only {turn, callId, toolName}. */
+ * `argsRaw` — the ask frame itself carries only {turn, callId, toolName, perCall}. */
 function verdictArgsRaw(callId: string, nodes: TurnNodeLike[]): string | undefined {
   for (const n of nodes) {
     if (n.kind !== 'tool-call') continue;
@@ -206,7 +206,7 @@ function VerdictAskNode({ data, nodes }: { data: unknown; nodes: TurnNodeLike[] 
       </ToolPlate>
     );
   }
-  return <VerdictCard pending={{ call_id: callId, tool_name: toolName, message_id: '' }} argsRaw={verdictArgsRaw(callId, nodes)} />;
+  return <VerdictCard pending={{ call_id: callId, tool_name: toolName, message_id: '', per_call: d.perCall === true }} argsRaw={verdictArgsRaw(callId, nodes)} />;
 }
 
 /** The halt card: what stopped the turn and how far it got. The sentence is

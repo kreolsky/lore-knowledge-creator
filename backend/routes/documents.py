@@ -33,7 +33,6 @@ from access import (
 from auth import get_current_user
 from db import fetch_one, get_db, serialize_record
 from deps import extract_headings
-from mentions import resolve_first_circle
 from models import (
     CreateDocument,
     DeleteDocumentsRequest,
@@ -43,8 +42,6 @@ from models import (
     ReorderDocument,
     is_ref_row,
 )
-from routes._guards import guard_row
-from table_serialize import expand_tables
 
 router = APIRouter()
 
@@ -55,7 +52,7 @@ async def get_document(document_id: str, track: bool = False, user: dict = Depen
 
     INVARIANT: last_accessed_doc_id is updated ONLY on an intentional open (the URL-driven
     DocumentPage passes track=true). Why: auxiliary fetches of the SAME endpoint — hover
-    previews, chat Sources, snapshot banner, backlinks — would otherwise clobber the
+    previews, snapshot banner, backlinks — would otherwise clobber the
     pointer, so re-entering a project landed on the last *previewed* doc, not the last
     *opened* one. Access is still validated on every call.
 
@@ -322,12 +319,12 @@ async def get_document_edges(
     kind the product shows as a link (plan typed-edges).
 
     `direction` = in|out|both; `kinds` = comma-separated filter, default
-    `mention,transclusion,attachment` (note/chat-context/external are opt-in;
+    `mention,transclusion,attachment` (note/external are opt-in;
     `external` answers from the GFM read-model — live session when it has
     clients, else the DB row — and carries url + label instead of document_id).
     Document peers carry {document_id, title, is_reference, source_type, broken
-    (outgoing stored edges only), updated_at}; note/chat peers carry session_id
-    + label (chat-context = the viewer's OWN chats). The same service answers
+    (outgoing stored edges only), updated_at}; note peers carry session_id
+    + label. The same service answers
     the agent's get_links tool — one function, one default.
     """
     if direction not in ("in", "out", "both"):
@@ -335,36 +332,9 @@ async def get_document_edges(
     await require_document_read(document_id, user)
     return await collect_edges(
         document_id,
-        viewer_user_id=user["user_id"],
         direction=direction,
         kinds=parse_edge_kinds(kinds),
     )
-
-
-async def _resolve_first_circle(content: str, self_id: str) -> dict:
-    return await resolve_first_circle(content, self_id)
-
-
-@router.get("/api/documents/{document_id}/links")
-async def get_document_links(
-    document_id: str, user: dict = Depends(get_current_user)
-):
-    """Return first-circle entities explicitly linked from this document's body."""
-    doc = await guard_row("documents", document_id, not_found="Document not found")
-    await require_document_read(document_id, user)
-    # ARCH: prefer live-session content over the DB row so the cascade matches what
-    # the chat completion path sees (chat/context.py) and export_document — the DB
-    # lags the in-memory Y.Doc by the ~1s flush, so a just-deleted link would
-    # otherwise still cascade. Idle session (no clients) → DB is authoritative.
-    # The live branch reads the GFM read-model form (expand_tables of the session
-    # Y.Doc) — the anchor-form session text cannot see a table cell's link, and
-    # the edges (/edges) already parse the expanded form.
-    from collab.registry import get_active_session
-    content = doc.get("content") or ""
-    session = get_active_session("doc", document_id)
-    if session and session.clients:
-        content = expand_tables(session.ydoc)
-    return await _resolve_first_circle(content, document_id)
 
 
 @router.post("/api/documents/{document_id}/move")

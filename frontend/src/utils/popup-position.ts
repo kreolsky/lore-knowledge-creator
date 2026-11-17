@@ -41,7 +41,7 @@ export function clampPopupLeft(anchorLeft: number): number {
 
 // Right-panel side-of-panel placement, shared by useRightPanelHoverPreview
 // (see SYSTEM: hover-preview — Notes/Refs cards) AND EditorLinkPreview (chat
-// links: .chat-source / chat answer anchors rendered inside <aside class="right-panel">).
+// links: chat answer anchors rendered inside <aside class="right-panel">).
 // ARCH: ONE formula for both consumers so the two popups cannot drift apart.
 /** Vertical nudge subtracted from the computed top/bottom so the popup aligns
  *  near the hovered row rather than flush against its edge. Mirrors the original
@@ -58,7 +58,7 @@ export function getRightPanelPopupLeft(rect: DOMRect): number {
 }
 
 /** Resolve horizontal placement + vertical shift for a hover-preview anchor.
- *  Links inside `.right-panel` (chat sources / chat markdown links) pin to the
+ *  Links inside `.right-panel` (chat markdown links) pin to the
  *  side of the panel; editor links keep near-link placement. Pure + testable. */
 export function chooseLinkPlacement(el: HTMLElement, rect: DOMRect): {
   left: number;
@@ -72,8 +72,8 @@ export function chooseLinkPlacement(el: HTMLElement, rect: DOMRect): {
 }
 
 /** Position a preview popup beside a picker/list box — to the right of the box
- *  when there is room, otherwise flipped to its left. Shared by the three pickers
- *  (LinkSuggestions, ParentPicker, ContentPicker), which previously each carried an
+ *  when there is room, otherwise flipped to its left. Shared by the two pickers
+ *  (LinkSuggestions, ParentPicker), which previously each carried an
  *  identical copy of this side-decide + clamp block. maxHeight caps at `maxHeightCap`
  *  and at the viewport minus `bottomMargin` (pickers reserve different bottom space).
  *  See SYSTEM: preview-geometry. */

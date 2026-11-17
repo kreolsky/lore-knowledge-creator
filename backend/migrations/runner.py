@@ -1,5 +1,9 @@
 """Ordered migration runner — centralised, idempotent startup data migrations.
 
+# SYSTEM: migrations — ordered one-time startup data migrations + their registry
+#   The applied set lives in app_meta:migrations; the run is gated by the
+#   stale-schema fingerprint check (schema_fingerprint.py).
+
 Composition root only: it imports every per-migration module, builds the ordered
 `_MIGRATIONS` registry, and drives `run_migrations()`. Migration bodies live in
 `migrate_<name>.py`; shared infra (logger, `MigrationFn`, `MigrationDeferred`,
@@ -31,8 +35,20 @@ from migrations._shared import (
     _record_applied,
     logger,
 )
+from migrations.migrate_chat_context_drop import _migrate_chat_context_drop
 from migrations.migrate_chat_has_region_drop import _migrate_chat_has_region_drop
+from migrations.migrate_chat_tocs_per_exchange_hash import (
+    _migrate_chat_tocs_per_exchange_hash,
+)
 from migrations.migrate_edge_kinds_backfill import _migrate_edge_kinds_backfill
+from migrations.migrate_knowledge_into_rules import _migrate_knowledge_into_rules
+from migrations.migrate_origin_persona_backfill import _migrate_origin_persona_backfill
+from migrations.migrate_origin_persona_follow_persona import (
+    _migrate_origin_persona_follow_persona,
+)
+from migrations.migrate_origin_persona_forget_to_default import (
+    _migrate_origin_persona_forget_to_default,
+)
 
 # --- Per-migration modules (registry composition) ---
 # ARCH: each migrate_<name>.py imports only from `_shared` (never from runner),
@@ -45,9 +61,34 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     # never confined to a span. schema.surql carries the same REMOVE for fresh
     # DBs; this one covers DBs created while the column lived. No dependency.
     ("chat_has_region_drop", _migrate_chat_has_region_drop),
+    # chat_sessions.context_document_ids: the dropped pinned-context column —
+    # the agent finds documents with its own tools. schema.surql carries the
+    # same REMOVE for fresh DBs; this one covers DBs created while the column
+    # lived. No dependency.
+    ("chat_context_drop", _migrate_chat_context_drop),
     # doc_mentions rows written before the `kind` field carry NONE: rebuilds every
     # live source document that still holds one. Idempotent; no dependency.
     ("edge_kinds_backfill", _migrate_edge_kinds_backfill),
+    # chat_sessions.origin_persona_id on rows older than the field: stamped with
+    # the current persona (system_prompt_id ?? ''). Needs the schema field
+    # (apply_schema runs first); no other dependency.
+    ("origin_persona_backfill", _migrate_origin_persona_backfill),
+    # The Knowledge folder folded into Rules: an empty one tombstoned, one holding
+    # user content reparented as a plain "Knowledge" child of Rules; still-shipped
+    # Rules bodies refreshed. Needs the documents tree only; no other dependency.
+    ("knowledge_into_rules", _migrate_knowledge_into_rules),
+    # chat_tocs.labelled_hash (one hash over every labelled exchange) → the
+    # aligned per-exchange labelled_hashes; a row whose aggregate no longer
+    # matches is deleted, then the old field is REMOVEd. Needs the schema's
+    # labelled_hashes field (apply_schema runs first); no other dependency.
+    ("chat_tocs_per_exchange_hash", _migrate_chat_tocs_per_exchange_hash),
+    # chat_sessions.origin_persona_id = 'forget' (the dropped «не запоминать»
+    # binding) → '' (Default — equally in no persona's memory). No dependency.
+    ("origin_persona_forget_to_default", _migrate_origin_persona_forget_to_default),
+    # chat_sessions.origin_persona_id re-aligned to each thread's current persona
+    # (system_prompt_id ?? '' of its most recently updated row) — the binding now
+    # follows the persona. Runs after the forget→default rewrite; no other dependency.
+    ("origin_persona_follow_persona", _migrate_origin_persona_follow_persona),
 ]
 
 

@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 
 class _TurnProjection:
-    """The turn's Lore-domain accumulator (content, sources, model, step count).
+    """The turn's Lore-domain accumulator (content, model, step count).
 
     # ARCH: this is NOT a transcript. The dsh session log is the canonical
     # timeline and the driver projects it on reload (`POST /session-entries`);
@@ -46,14 +46,14 @@ class _TurnProjection:
     #
     # What stays is what the dsh log cannot answer, because it is ours:
     # `content` (the product row's own field, read by the chat-list previews
-    # through SQL truncation — never through the driver), the sources panel,
-    # the active model, and the count of finished tool calls that an ABNORMAL
-    # end reports on its halt card.
+    # through SQL truncation — never through the driver), the active model,
+    # and the count of finished tool calls that an ABNORMAL end reports on
+    # its halt card.
     """
 
     def __init__(
-        self, *, assistant_msg_id: str, sources: list | None = None,
-        persist_content, persist_sources, persist_extras=None,
+        self, *, assistant_msg_id: str,
+        persist_content, persist_extras=None,
         persist_turn_seq=None,
         session_id: str = "",
         dsh_session_id: str | None = None,
@@ -66,7 +66,6 @@ class _TurnProjection:
         # The dsh session this turn runs in — stamped beside driver_seq, since
         # a seq names a boundary only inside its own session's log.
         self.dsh_session_id = dsh_session_id
-        self.sources_acc: list[dict] = list(sources or [])
         self.content_acc: list[str] = []
         self.model: str | None = None
         # The dsh log seq of this turn's `turn/end` (the terminal frame's own
@@ -98,7 +97,6 @@ class _TurnProjection:
         # backend-minted lore event uses when no terminal frame exists.
         self.last_seq: int | None = None
         self._persist_content = persist_content
-        self._persist_sources = persist_sources
         self._persist_extras = persist_extras
         self._persist_turn_seq = persist_turn_seq
 
@@ -122,15 +120,13 @@ class _TurnProjection:
                 self.assistant_msg_id, self.driver_seq, self.dsh_session_id)
 
     async def finalize(self) -> None:
-        """Persist the final assistant content + the accumulated sources panel.
+        """Persist the final assistant content.
 
         Called by the façade only on normal turn end. Nothing else is written:
         the turn's timeline is read back from the driver's own log.
         """
         content = self.content()
         await self._persist_content(self.assistant_msg_id, content)
-        if self.sources_acc:
-            await self._persist_sources(self.assistant_msg_id, self.sources_acc)
         await self._stamp_driver_seq()
 
     async def _persist_abnormal(self, reason: str, content: str) -> None:
@@ -354,8 +350,8 @@ async def _turn_end_arm(turn: _TurnProjection, ev: dict, data: dict) -> list[dic
     rkind = reason.get("kind") if isinstance(reason, dict) else None
     turn.finished = True
     if rkind == "completed" or rkind == "max-tokens":
-        # Graceful ends: the terminal close finalizes (content + sources +
-        # the context stamp). A max-tokens halt IS graceful — the halt card
+        # Graceful ends: the terminal close finalizes (content + the context
+        # stamp). A max-tokens halt IS graceful — the halt card
         # renders from dsh's own turn-max-tokens node.
         # The `done` frame is the row-content producer for the live client:
         # the SAME join finalize() persists, so the chat-list preview, a copy

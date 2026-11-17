@@ -32,15 +32,6 @@ vi.mock('../ui-store', () => ({
 }));
 vi.mock('../../events', () => ({ emit: vi.fn() }));
 vi.mock('../../i18n', () => ({ t: (k: string) => k }));
-vi.mock('../../chat/context', () => ({
-  hydrateFromSessions: vi.fn(),
-  clearContextForSession: vi.fn(),
-  setContextForSession: vi.fn(),
-  addItemToContext: vi.fn(() => Promise.resolve()),
-  getDerivedGhostContext: () => ({ docIds: [], refIds: [] }),
-  ghostBaseTargets: () => ({ docs: [], refs: [] }),
-  resetGhostDeltas: vi.fn(),
-}));
 
 import { createMiscSlice } from './misc-slice';
 import type { ChatState } from './types';

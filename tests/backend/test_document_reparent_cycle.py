@@ -2,8 +2,9 @@
 
 Cycles (self, descendant) are refused, and the move's node rules apply on this
 surface too: a system document is unmovable, a reference keeps no sort_key and
-cannot sit at the project root. The Memory subtree is not a destination for a
-document that is not already memory; moves inside it stay legal.
+cannot sit at the project root. The Memory subtree's boundary is not crossed
+in either direction — nothing moves into it, nothing moves out of it (not to
+another parent, not to the project root); moves inside it stay legal.
 """
 
 import pytest
@@ -173,6 +174,16 @@ async def test_memory_card_moves_inside_memory(
     pid, _, _ = project_with_doc
     _, token = admin_user
     folder, card = memory
+    outside = await _mk_doc(client, pid, token, title="Plain page")
+    out_detail = (
+        "A document cannot be moved out of the Memory folder — "
+        "delete it to remove it from memory"
+    )
+    for dest in (outside, None):
+        resp = await _reparent(client, token, card, dest)
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["detail"] == out_detail
+        assert await _parent_of(test_db, card) == folder
     other = await _mk_doc(client, pid, token, title="Card 2", parent_id=folder)
     resp = await _reparent(client, token, card, other)
     assert resp.status_code == 200, resp.text

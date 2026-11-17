@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 # ARCH: the TRANSCRIPT is the driver's session log, not a Lore column. The Lore row owns
-# what is ours — the id, the author, created_at, the sources panel, the
+# what is ours — the id, the author, created_at, the
 # images, and the abnormal-end halt card — and the ordered
 # timeline (text, reasoning, tool chips, the neutral dsh chips) rides here as
 # `frames`, replayed by the plugin through the same mapEvent the live stream

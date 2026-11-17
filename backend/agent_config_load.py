@@ -81,13 +81,12 @@ async def _bfs_config_subtree(
     #
     # Personas are depth-1: the system_prompt folder seeds the frontier but its
     # children (personas) are NOT descended — grandchildren under a persona were
-    # never personas and were never injected. The three cumulative
+    # never personas and were never injected. The cumulative
     # folders descend fully. `visited` guards against a parent_id cycle (robustness;
     # a cycle would also hang _walk_subtree — no behavior change on valid data).
     #
-    # Per-level `ORDER BY sort_key` + grouping by parent yields the identical
-    # per-parent child order the old global `ORDER BY sort_key` produced (Decision
-    # 5): _walk_subtree's pre-order DFS over this map is unchanged.
+    # Per-level `ORDER BY sort_key` + grouping by parent yields the per-parent
+    # child order _walk_subtree's pre-order DFS relies on.
     """
     children_by_parent: dict[str, list[dict]] = {}
     frontier = [fid for fid in ([sp_folder_id] + folder_ids) if fid]
@@ -122,14 +121,14 @@ async def load_agent_system_docs(project_id: str) -> dict[str, object]:
     """Return system docs by role for prompt assembly.
 
     Skeleton singletons (`system_root`, `system_prompt`, `rules_folder`,
-    `skills_folder`, `knowledge_folder`) are one dict each. `personas` is a list of
+    `skills_folder`) are one dict each. `personas` is a list of
     the DIRECT children of the Personas folder (identified by parent_id, not a role
     tag); only the SELECTED one injects.
 
-    For the three cumulative folders (rules/knowledge/skills) the WHOLE live subtree
+    For the two cumulative folders (rules/skills) the WHOLE live subtree
     is loaded by walking parent_id to any depth (tree = organization only), returned
-    under `rules_children` / `knowledge_children` / `skills_children` as a list of
-    `{id,title,content}`. There is no is_system/role filter on descendants: children
+    under `rules_children` / `skills_children` as a list of
+    `{id,title,content,parent_id}`. There is no is_system/role filter on descendants: children
     are plain docs.
 
     # ARCH (perf): three-phase load, payload proportional to the config subtree, NOT
@@ -158,7 +157,7 @@ async def load_agent_system_docs(project_id: str) -> dict[str, object]:
     sp_folder = out.get("system_prompt")
     sp_folder_id = sp_folder.get("id") if isinstance(sp_folder, dict) else None
     folder_ids: list[str] = []
-    for folder_role in ("rules_folder", "knowledge_folder", "skills_folder"):
+    for folder_role in ("rules_folder", "skills_folder"):
         folder = out.get(folder_role)
         fid = folder.get("id") if isinstance(folder, dict) else None
         if fid:
@@ -185,7 +184,6 @@ async def load_agent_system_docs(project_id: str) -> dict[str, object]:
     relevant_ids: list[str] = []
     for folder_role, child_key in (
         ("rules_folder", "rules_children"),
-        ("knowledge_folder", "knowledge_children"),
         ("skills_folder", "skills_children"),
     ):
         folder = out.get(folder_role)
@@ -198,8 +196,8 @@ async def load_agent_system_docs(project_id: str) -> dict[str, object]:
         out[child_key] = [
             {"id": d["id"], "title": d.get("title") or "", "content": "",
              # parent_id rides along for the folder-shape SKILL wire (heads vs
-             # material — build_skill_docs groups on it); inert for
-             # rules/knowledge, whose consumers read content flat.
+             # material — build_skill_docs groups on it) and for the rules
+             # section's path headers (_child_section_blocks walks it up).
              "parent_id": d.get("parent_id")}
             for d in descendants
         ]
@@ -234,6 +232,21 @@ async def load_instance_skill_docs() -> list[dict]:
     ]
 
 
+async def instance_skill_disabled(db, name: str) -> bool:
+    """True when the admin disabled the shipped skill `name` for the instance.
+
+    The standard off-switch — a disabled instance_skills row of that name, the
+    same row load_instance_skill_tombstones serves to the skill loader — read
+    here by every server-side gate (chat-recall's index tasks and read handlers,
+    memory's write handlers), so there is no second switch to drift from the one
+    the loader honours.
+    """
+    rows = await db.query(
+        "SELECT enabled FROM instance_skills WHERE name = $n", {"n": name},
+    ) or []
+    return any(r.get("enabled") is False for r in rows)
+
+
 async def load_instance_skill_tombstones() -> list[str]:
     """The wire's `instance_tombstones`: NAMES of disabled instance_skills
     rows — the admin's off-switch, the only one: a disabled row suppresses the
@@ -248,7 +261,7 @@ async def load_instance_skill_tombstones() -> list[str]:
 
 async def load_skills_subtree(project_id: str) -> list[dict]:
     """Load ONLY the skills subtree (folder + descendants + content) — a scoped walk
-    that skips rules/knowledge. Reuses the same per-level BFS + bulk content fetch as
+    that skips rules. Reuses the same per-level BFS + bulk content fetch as
     load_agent_system_docs. Feeds the turn payload's raw skills wire
     (build_prompt_and_skill_docs) so the prompt build and the payload share one
     config-tree walk."""

@@ -90,12 +90,18 @@ export const LORE_SKILL_PROVIDER = 'lore-skills'
  * non-empty strings, anything else = no pack. Returns null when the document
  * is not a skill.
  */
-export function parseSkillDoc(
-  content: string,
-): { name: string; description: string; tools: string[]; body: string } | null {
+type ParsedSkillDoc = { name: string; description: string; tools: string[]; body: string }
+
+export function parseSkillDoc(content: string): ParsedSkillDoc | null {
+  const r = parseSkillDocOrReason(content)
+  return typeof r === 'string' ? null : r
+}
+
+/** The parse, or why the doc is not a skill (the string the drop log prints). */
+function parseSkillDocOrReason(content: string): ParsedSkillDoc | string {
   const raw = String(content ?? '')
   const firstLineEnd = raw.indexOf('\n')
-  if (firstLineEnd < 0 || raw.slice(0, firstLineEnd).replace(/\r$/, '') !== '---') return null
+  if (firstLineEnd < 0 || raw.slice(0, firstLineEnd).replace(/\r$/, '') !== '---') return 'no frontmatter'
   let yamlStart = firstLineEnd + 1
   let yamlEnd = -1
   let bodyStart = -1
@@ -107,23 +113,27 @@ export function parseSkillDoc(
       bodyStart = nextNewline < 0 ? raw.length : nextNewline + 1
       break
     }
-    if (nextNewline < 0) return null
+    if (nextNewline < 0) return 'no frontmatter'
     yamlStart = nextNewline + 1
   }
-  if (yamlEnd < 0) return null
+  if (yamlEnd < 0) return 'no frontmatter'
   const body = raw.slice(bodyStart).trim()
   let data: unknown
   try {
     data = jsYaml.load(raw.slice(firstLineEnd + 1, yamlEnd))
-  } catch {
-    return null
+  } catch (err) {
+    // js-yaml's message carries a multi-line code frame; the log line wants
+    // one line — the error's own reason, else the message's first line.
+    const reason = (err as { reason?: unknown })?.reason
+    return `YAML error: ${typeof reason === 'string' && reason
+      ? reason : String(err).split('\n')[0]}`
   }
-  if (typeof data !== 'object' || data === null || Array.isArray(data)) return null
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return 'frontmatter is not a mapping'
   const fm = data as Record<string, unknown>
   const name = fm.name
   const description = fm.description
-  if (typeof name !== 'string' || !name || !isSkillName(name)) return null
-  if (typeof description !== 'string' || !description.trim()) return null
+  if (typeof name !== 'string' || !name || !isSkillName(name)) return `bad name: ${JSON.stringify(name)}`
+  if (typeof description !== 'string' || !description.trim()) return 'empty description'
   const rawTools = fm.tools
   const tools = Array.isArray(rawTools)
     ? rawTools.filter((t): t is string => typeof t === 'string' && !!t)
@@ -140,8 +150,11 @@ export function parseSkillDoc(
 function parseLayer(docs: SkillDocWire[] | undefined): ResolvedSkill[] {
   const out: ResolvedSkill[] = []
   for (const doc of docs ?? []) {
-    const parsed = parseSkillDoc(doc?.content)
-    if (!parsed) continue
+    const parsed = parseSkillDocOrReason(doc?.content)
+    if (typeof parsed === 'string') {
+      console.error(`[lore-skills] skill doc dropped (${String(doc?.location ?? '')}): ${parsed}`)
+      continue
+    }
     out.push({
       name: parsed.name, description: parsed.description, tools: parsed.tools,
       location: String(doc.location ?? ''), body: parsed.body,
@@ -200,6 +213,36 @@ export function resolveSkillCatalog(
   // reach the model through sandbox_bash (curl). Web access in some form is the
   // baseline the operator expects, so a partial pack beats a hidden one.
   return out.filter((s) => !s.tools.length || s.tools.some((t) => servedNames.has(t)))
+}
+
+/**
+ * The pack tools of the admin-disabled SHIPPED skills that NO resolved
+ * (enabled) skill also lists — withheld from the served set, so they are neither core
+ * nor loadable. Only shipped skills are covered: a disabled instance-only
+ * skill never reaches the wire, so its exclusive tools are not withheld
+ * here. A tombstone names a shipped skill; a live project or instance
+ * copy of the same name overrides it (the overlay) and disables nothing.
+ *
+ * INVARIANT(security): a disabled SHIPPED skill's tools are not callable — the
+ * caller removes these names from the served set before core/active/deny.
+ * Why: dropping only the skill from the catalog lands its pack tools in the
+ * always-active core (core = served minus the ENABLED packs), so "disabled"
+ * would expose more than "enabled"; disabled means the agent neither sees
+ * nor uses the tools.
+ */
+export function disabledPackTools(
+  wire: SkillCatalogWire, skills: ResolvedSkill[],
+): Set<string> {
+  const tombstones = new Set((wire.instance_tombstones ?? []).map((n) => String(n ?? '')))
+  const enabled = new Set(skills.map((s) => s.name))
+  const enabledTools = new Set(skills.flatMap((s) => s.tools))
+  const out = new Set<string>()
+  for (const doc of wire.shipped ?? []) {
+    const parsed = parseSkillDoc(doc?.content)
+    if (!parsed || !tombstones.has(parsed.name) || enabled.has(parsed.name)) continue
+    for (const t of parsed.tools) if (!enabledTools.has(t)) out.add(t)
+  }
+  return out
 }
 
 /**

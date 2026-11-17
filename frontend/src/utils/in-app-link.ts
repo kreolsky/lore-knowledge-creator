@@ -1,9 +1,9 @@
 /**
  * Shared contract for in-app entity links (ref:/doc:) used by the editor,
- * chat markdown, sources list, and the hover-preview host.
+ * chat markdown, and the hover-preview host.
  *
- * Two producers set data-link-id — build-structural (editor) and Sources (chat sources
- * list) — and EditorLinkPreview consumes it, all through encode/decode here so the
+ * One producer sets data-link-id — build-structural (editor) — and EditorLinkPreview
+ * consumes it, all through encode/decode here so the
  * data-link-id contract is code-enforced, not convention-enforced. Links inside a chat
  * answer carry no data-link-* attributes: MarkdownContent rewrites them to the lore.local
  * href, which parseInAppLink decodes for both its click handler and EditorLinkPreview.
@@ -17,8 +17,7 @@
  * // both bare and prefixed values resolve correctly regardless of which producer emitted
  * // them. Why: the editor (build-structural.ts) emits data-link-id = urlText verbatim —
  * // doc links are authored as bare ids, so they're already bare; ref urlText
- * // includes the scheme. The chat sources list (chat/Sources.tsx) calls encodeLinkId
- * // explicitly. decodeLinkId normalizes both representations at the single consumption
+ * // includes the scheme. decodeLinkId normalizes both representations at the single consumption
  * // point, eliminating the bare-vs-prefixed mismatch risk.
  */
 
@@ -52,15 +51,6 @@ export function parseInAppLink(url: string): InAppLink | null {
   if (!m) return null;
   const id = local ? decodeURIComponent(m[2]) : m[2];
   return m[3] ? { type: m[1] as InAppLinkType, id, fragment: m[3] } : { type: m[1] as InAppLinkType, id };
-}
-
-/**
- * Encode a raw entity id into the data-link-id attribute value.
- * Docs: bare id (no prefix). Refs: keep the scheme prefix.
- */
-export function encodeLinkId(type: InAppLinkType, id: string): string {
-  if (type === 'doc') return id;
-  return `${type}:${id}`;
 }
 
 /**

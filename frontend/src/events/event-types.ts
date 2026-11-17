@@ -56,7 +56,7 @@ export interface EventMap {
   // sourceDocId: null = the jump has NO return point (goto-parent from the panel /
   // chat plaque) — the tree must not keep the doc we left highlighted as the
   // reference's source. Omitted = today's behaviour (source = the doc we navigate from).
-  'navigate-to-reference': { referenceId: string; stayInContext?: boolean; sourceDocId?: string | null; scrollToOffset?: number; via?: AccessVia };
+  'navigate-to-reference': { referenceId: string; stayInContext?: boolean; inCenter?: boolean; sourceDocId?: string | null; scrollToOffset?: number; via?: AccessVia };
   'scroll-to-line': { line: number };
   'scroll-to-note-in-editor': { noteId: string };
 

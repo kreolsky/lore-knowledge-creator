@@ -9,14 +9,14 @@ import hashlib
 import secrets
 
 
-async def _key(user_id: str, project_id: str) -> str:
+async def _key(user_id: str, project_id: str, internal: bool = True) -> str:
     from db import create_record
 
     token = "lore_" + secrets.token_hex(32)
     await create_record("api_keys", f"agent-key-{secrets.token_hex(4)}", {
         "user_id": user_id, "project_id": project_id, "document_id": "",
         "token_hash": hashlib.sha256(token.encode()).hexdigest(),
-        "label": "agent", "capabilities": ["agent"], "internal": True,
+        "label": "agent", "capabilities": ["agent"], "internal": internal,
     })
     return token
 
@@ -99,3 +99,46 @@ async def test_chat_sourced_fact_serves_no_chat_title_through_sources(test_db, p
     assert ref_hit.sources == [{"id": "cf-ref", "title": "Ref Titled"}], (
         "the reference arm lost its titled source"
     )
+
+
+async def _disable_only(db, name: str) -> None:
+    """The admin's off-switch for ONE shipped skill (every other row removed)."""
+    await db.query(
+        "DELETE instance_skills; CREATE instance_skills CONTENT "
+        "{name: $n, enabled: false, updated_by: 'admin'}", {"n": name})
+
+
+# TEST-WHY: refused-principal — the two admin off-switches gate different objects: with `memory` disabled save_chat_facts (in-app key), consolidate_memory and the get_memory_facts read (a user-minted key) are refused 403, while with only `chat-recall` disabled search_my_chats is refused and save_chat_facts still applies.
+async def test_memory_switch_gates_writes_not_chat_recall_switch(client, test_db, project_with_doc):
+    pid, _idx, uid = project_with_doc
+    await _session(test_db, "cf-switch", uid, pid)
+    in_app = await _key(uid, pid)
+    user_key = await _key(uid, pid, internal=False)
+    headers = {"Authorization": f"Bearer {in_app}", "X-Agent-Session-Id": "cf-switch"}
+    save = {"apply": "auto", "verdicts": [
+        {"action": "new", "title": "Switch: gist", "text": "one assertion"},
+    ]}
+    try:
+        await _disable_only(test_db, "memory")
+        resp = await client.post("/api/tool/save_chat_facts", json=save, headers=headers)
+        assert resp.status_code == 403, resp.text
+        assert "memory is disabled" in resp.json()["detail"]
+        resp = await client.post(
+            "/api/tool/consolidate_memory", json={"target_doc_id": _idx},
+            headers={"Authorization": f"Bearer {user_key}"})
+        assert resp.status_code == 403, resp.text
+        assert "memory is disabled" in resp.json()["detail"]
+        resp = await client.post(
+            "/api/tool/get_memory_facts", json={"ids": ["any"]},
+            headers={"Authorization": f"Bearer {user_key}"})
+        assert resp.status_code == 403, resp.text
+
+        await _disable_only(test_db, "chat-recall")
+        resp = await client.post(
+            "/api/tool/search_my_chats", json={"query": "anything"}, headers=headers)
+        assert resp.status_code == 403, resp.text
+        resp = await client.post("/api/tool/save_chat_facts", json=save, headers=headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "applied"
+    finally:
+        await test_db.query("DELETE instance_skills")

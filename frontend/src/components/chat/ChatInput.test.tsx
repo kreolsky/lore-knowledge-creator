@@ -52,18 +52,6 @@ vi.mock('../../i18n', () => ({
   useTranslation: () => ({ t: (k: string) => k }),
   t: (k: string) => k,
 }));
-vi.mock('../../chat/context', () => ({
-  setupChatContextBridge: vi.fn(),
-  hydrateFromSessions: vi.fn(),
-  resolveCompletionContext: () => ({ context_document_ids: [], context_reference_ids: [] }),
-  useChatContext: () => ({ documentIds: [], referenceIds: [] }),
-  pruneContext: vi.fn(),
-  computeContextPrune: () => null,
-  GHOST_SESSION_ID: '__ghost__',
-}));
-vi.mock('../../chat/use-ghost-context', () => ({
-  useGhostChatContext: () => ({ documentIds: [], referenceIds: [] }),
-}));
 vi.mock('../../hooks/useSimpleVoiceRecording', () => ({
   useSimpleVoiceRecording: () => ({ recording: false, transcribing: false, toggleRecording: vi.fn(), cancelRecording }),
 }));
@@ -83,13 +71,13 @@ vi.mock('../ui', () => ({
     dropdownProps.push(props);
     return null;
   },
+  IconButton: () => null,
   FieldCheckbox: (props: { label?: string }) => {
     checkboxLabels.push(props.label ?? '');
     return null;
   },
 }));
 vi.mock('./TokenUsageGauge', () => ({ TokenUsageGauge: () => null }));
-vi.mock('./ContentPickerPopup', () => ({ ContentPickerPopup: () => null }));
 // The composer is reduced to the contract under test: a controlled textarea bound
 // to value/onChange/textareaRef, PLUS the leftControls slot mounted verbatim —
 // the Dropdown prop-capture tests below read what the composer's control row
@@ -195,7 +183,6 @@ describe('ChatInput reasoning-effort dropdown options (plan reasoning-effort-sel
       system_prompt_id: null as string | null,
       agent_auto: false,
       is_note: false,
-      context_ids: [] as string[],
       created_at: '',
       updated_at: '',
       ...overrides,
@@ -264,7 +251,7 @@ describe('ChatInput reasoning-effort dropdown options (plan reasoning-effort-sel
 
     unmount(rig);
   });
-  it('a compact (phone) layout hides the reasoning picker and the unindexed opt-out; auto-apply stays', () => {
+  it('a compact (phone) layout hides the reasoning picker; auto-apply stays', () => {
     const ui = useUIStore.getState() as { compactLayout?: boolean };
     const ghost = baseState({ sessions: [], activeSessionId: null, ghostModel: 'm1' });
 
@@ -273,7 +260,6 @@ describe('ChatInput reasoning-effort dropdown options (plan reasoning-effort-sel
     useChatStore.setState(ghost);
     let rig = render(createElement(ChatInput));
     expect(dropdownProps.some(p => p.title === 'chatReasoningTitle')).toBe(true);
-    expect(checkboxLabels).toContain('chatUnindexed');
     unmount(rig);
 
     ui.compactLayout = true;
@@ -282,7 +268,6 @@ describe('ChatInput reasoning-effort dropdown options (plan reasoning-effort-sel
       checkboxLabels.length = 0;
       rig = render(createElement(ChatInput));
       expect(dropdownProps.some(p => p.title === 'chatReasoningTitle')).toBe(false);
-      expect(checkboxLabels).not.toContain('chatUnindexed');
       expect(checkboxLabels).toContain('chatAutoApply');
       unmount(rig);
     } finally {

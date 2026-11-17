@@ -2,7 +2,7 @@
 
 Task signatures follow arq convention: async def task(ctx, *args).
 
-# This package was split per the domain map (R1-jobs) — media (STT/convert),
+# This package is split per domain — media (STT/convert),
 # extract, embed, thumbnails, backup, telemetry, cp_migrations, thinning, comfy,
 # schedules — and THIS module is the re-export shim that keeps `jobs.tasks` the
 # single import surface. Load-bearing importers that MUST keep working unchanged:
@@ -27,6 +27,11 @@ from jobs.tasks.backup import (
     auto_backup_open_task,
 )
 from jobs.tasks.chat_index import chat_index_sweep_task, index_chat_messages
+from jobs.tasks.chat_topics import (
+    chat_topics_idle_task,
+    chat_topics_pair_task,
+    chat_topics_sweep_task,
+)
 from jobs.tasks.comfy import COMFY_TASK_NAMES, generate_image_task
 from jobs.tasks.cp_migrations import backfill_cp_blobs_task, nullout_inline_content_task
 from jobs.tasks.digest import digest_task
@@ -68,6 +73,10 @@ __all__ = [
     # chat-recall index
     "index_chat_messages",
     "chat_index_sweep_task",
+    # chat topics (persona chat memory)
+    "chat_topics_pair_task",
+    "chat_topics_idle_task",
+    "chat_topics_sweep_task",
     # thumbnails
     "thumbnail_task",
     # Lore guide

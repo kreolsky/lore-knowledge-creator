@@ -1,7 +1,6 @@
 /** Chat-origin document navigation: open a document while keeping the active chat.
  *
- * Used by the chat-origin navigators — Sources document links (citations above an
- * AI message) and the ChatHeader "go to document" button.
+ * Used by the chat-origin navigators — the ChatHeader "go to document" button.
  *
  * ARCH: the active chat is PROJECT-SCOPED and
  * persists across document navigation by default, so this does not pin

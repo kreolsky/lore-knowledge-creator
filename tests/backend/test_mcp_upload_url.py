@@ -155,6 +155,31 @@ async def test_out_of_scope_mint_403_names_the_scope_root(
     assert root_doc in payload["error"]
 
 
+# TEST-WHY: refused-principal — a read-write MCP key may not attach a file to a Rules page: the file would become a reference under the system root, which the loader injects into the agent's prompt with no confirm.
+@pytest.mark.asyncio
+async def test_attach_into_agent_config_is_refused_403(
+    client, mcp_running, test_db, admin_user, project_with_doc,
+):
+    from agent_config import ensure_agent_system_docs
+
+    pid, _idx, admin_uid = project_with_doc
+    _, admin_token = admin_user
+    roles = await ensure_agent_system_docs(pid)
+    resp = await client.post("/api/documents", json={
+        "project_id": pid, "title": "A rule", "content": "x",
+        "parent_id": roles["rules_folder"],
+    }, cookies={"lore_session": admin_token})
+    assert resp.status_code == 200, resp.text
+    rule_id = resp.json()["document_id"]
+    key = await _make_agent_key(test_db, admin_uid, pid)
+
+    data = await _call(client, key, "attach_file", {"filename": "x.wav", "attach_to": rule_id})
+    assert _is_error(data), data
+    payload = _result_text(data)
+    assert payload["status_code"] == 403, payload
+    assert "agent configuration folder" in payload["error"]
+
+
 @pytest.mark.asyncio
 async def test_host_document_from_another_project_is_uniform_404(
     client, mcp_running, test_db, admin_user, project_with_doc,

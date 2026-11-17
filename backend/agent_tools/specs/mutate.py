@@ -19,12 +19,10 @@ MUTATE_TOOLS: list[dict] = [
         "function": {
             "name": "create_document",
             "description": (
-                "Create a new document or reference. `parent_id` places the node: "
-                "a tree child document for `node_type`=\"document\" (the default; "
-                "null = the project root), or the HOST of a `node_type`="
-                "\"reference\" leaf (visible from it and its descendants, cannot "
-                "itself have children). For a leaf whose content comes from a "
-                "file, use `import_file`."
+                "Create a document or reference. `parent_id` places it: the tree "
+                "parent of a document (null = {{ROOT}}), or the HOST of a reference "
+                "leaf (visible from the host and its descendants; no children). "
+                "Content from a file: `import_file`."
                 + html_node_sentence()
                 + " In confirmation mode the call is held for the user's approval; it applies on approval, or returns `rejected` with the user's feedback if declined."
             ),
@@ -36,10 +34,8 @@ MUTATE_TOOLS: list[dict] = [
                     "parent_id": {
                         "type": ["string", "null"],
                         "description": (
-                            "Placement — required. A parent document id: the tree "
-                            "parent for a document (null = {{ROOT}}), or "
-                            "the host for a reference (never null). Omitting it "
-                            "is invalid."
+                            "Required. Tree parent for a document (null = {{ROOT}}); "
+                            "the host for a reference (never null)."
                         ),
                     },
                     "node_type": {
@@ -47,13 +43,10 @@ MUTATE_TOOLS: list[dict] = [
                         "enum": ["document", "reference", "html"],
                         "default": "document",
                         "description": (
-                            "The kind of node to create: \"document\" (default) = "
-                            "a tree document; \"reference\" = a leaf attached to "
-                            "parent_id (the host); \"html\" = an interactive page "
-                            "leaf (one self-contained HTML file; served only when "
-                            "artifact hosting is configured). media_type is "
-                            "derived server-side, so an audio/image node with no "
-                            "file is unexpressible."
+                            "`document` (default); `reference` = a leaf on host "
+                            "parent_id; `html` = an interactive page leaf, one "
+                            "self-contained HTML file (only with artifact hosting). "
+                            "Audio/image nodes come only from import_file."
                         ),
                     },
                     # Normalize carries the .md
@@ -65,11 +58,9 @@ MUTATE_TOOLS: list[dict] = [
                         "type": "boolean",
                         "default": False,
                         "description": (
-                            "Apply markdown normalize (reflow wrapped prose, dedent "
-                            "list-nested fences) to `content` before writing. Default "
-                            "False — do NOT reflow text you authored; pass True only "
-                            "when importing a .md file's text that carries meaningful "
-                            "hard line breaks."
+                            "Reflow wrapped prose and dedent list-nested fences in "
+                            "`content`. Never for text you authored; true only for an "
+                            "imported .md file's text with hard line breaks."
                         ),
                     },
                 },
@@ -312,24 +303,16 @@ MUTATE_TOOLS: list[dict] = [
         "function": {
             "name": "move_document",
             "description": (
-                "Propose moving a document to a new parent and/or position. Move any "
-                "node under a different parent — a tree document or an attached file "
-                "node, same call. An attached node is visible from its host document "
-                "and all of that host's descendants, so hosting it on the project's "
-                "index document makes it visible project-wide. parent_id = new parent "
-                "(null = project root); after_id = a sibling to land after under the "
-                "target parent (null = top). after_id orders tree documents only; "
-                "attached nodes are not tree-ordered, so passing it for one is an "
-                "error. Omit `node_type` to KEEP the node's kind; pass it to CONVERT "
-                "the node in the same structural op: node_type=\"reference\" turns a "
-                "document into a reference of parent_id (the host) — it gets the "
-                "top key of the host's reference group, after_id and a root parent "
-                "are rejected, and a document with children is refused (a "
-                "reference cannot be a parent); "
-                "node_type=\"document\" turns a reference into a tree document under "
-                "parent_id — a file-backed reference (audio/image bytes) is refused. "
-                "To reorder in place, pass the current parent_id. NOT reversible "
-                "via the Lore History panel (move is structural) — undo by moving back. "
+                "Propose moving a node (tree document or reference) under a new parent "
+                "and/or position: parent_id = new parent (null = {{ROOT}}), after_id = "
+                "the sibling to land after (null = top; tree documents only). To "
+                "reorder in place, pass the current parent_id. A reference is visible "
+                "from its host and the host's descendants — host it on the index "
+                "document for project-wide reach. `node_type` converts in the same op: "
+                "`reference` makes a document a reference of host parent_id (no "
+                "after_id, no root, refused if it has children); `document` makes a "
+                "reference a tree document (refused for a file-backed one). Not "
+                "undoable in the History panel — undo by moving back. "
                 "In confirmation mode the call is held for the user's approval; it applies on approval, or returns `rejected` with the user's feedback if declined."
             ),
             "parameters": {
@@ -339,28 +322,21 @@ MUTATE_TOOLS: list[dict] = [
                     "parent_id": {
                         "type": ["string", "null"],
                         "description": (
-                            "New parent document id, or null for {{ROOT}}. "
-                            "Omitted/null = root. An attached node may not go to the "
-                            "root — host it on the index document instead. For "
-                            "node_type=\"reference\" this is the HOST (required)."
+                            "New parent id; null or omitted = {{ROOT}} (not for a "
+                            "reference — host it on the index document). The HOST "
+                            "for node_type `reference` (required)."
                         ),
                     },
                     "after_id": {
                         "type": "string",
-                        "description": (
-                            "A sibling under the target parent to place this document "
-                            "after; null = top of the group. Tree documents only."
-                        ),
+                        "description": "Sibling to place after; null = top.",
                     },
                     "node_type": {
                         "type": "string",
                         "enum": ["document", "reference"],
                         "description": (
-                            "Omit to keep the node's kind (a plain move). "
-                            "\"reference\" converts a document into a reference of "
-                            "parent_id (the host); \"document\" converts a reference "
-                            "into a tree document. A no-op conversion (the kind it "
-                            "already is) is a plain move."
+                            "Omit to keep the kind; a value converts (see above). "
+                            "The kind it already is = a plain move."
                         ),
                     },
                 },

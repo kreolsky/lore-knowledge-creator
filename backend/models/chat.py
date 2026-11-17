@@ -88,15 +88,12 @@ class SessionUpdate(BaseModel):
     title: str | None = None
     model: str | None = None
     system_prompt_id: str | None = None
-    # ARCH (plan reasoning-effort-selector): PATCH-able like system_prompt_id
+    # ARCH: PATCH-able like system_prompt_id
     # (model_fields_set semantics — explicit null clears). Null is ALWAYS legal
     # (Default, and the model-change reset rides it); a non-null value is
     # validated by update_session against the TARGET model's advertised list —
     # 400 outside it.
     reasoning_effort: str | None = None
-    # ARCH: Unified context array (Spec §5). Backend stores as `context_document_ids` column;
-    # the field accepts both doc and ref IDs in original insertion order.
-    context_ids: list[str] | None = None
     # ARCH (agent_auto persistence): PATCH-able like model/system_prompt_id.
     # The surviving selector axis (confirm <-> auto-apply); the Ask/Agent `mode`
     # axis left the wire. agent_auto is forced
@@ -155,7 +152,6 @@ class MessageCreate(BaseModel):
 
 class MessageUpdate(BaseModel):
     content: str = ""
-    sources: list[dict] | None = None
 
 
 class ChatFile(BaseModel):
@@ -189,8 +185,6 @@ class CompletionRequest(BaseModel):
     # at claim time).
     parent_id: str | None = None
     images: list[str] | None = None
-    # ARCH: Unified context array (Spec §5). Backend splits doc vs ref via ref_map for prompt formatting.
-    context_ids: list[str] | None = None
     # ARCH: the selected persona is sourced ONLY from
     # session.system_prompt_id (threaded into build_agent_system_prompt by
     # prepare_agent_turn). There is no per-request persona override — the session
@@ -199,8 +193,6 @@ class CompletionRequest(BaseModel):
     # or user says "поищи в…"), with a model-formed query. The
     # per-turn forced semantic injection + the docs/refs toggle booleans were removed
     # — the `corpus` switch lives on the tool args instead.
-    # ARCH: Primary document/reference must be explicitly included in context_ids
-    # to be added to context. Nothing is injected implicitly.
     # ARCH: AS (auto-apply) request — the user asks
     # the Agent line to apply writes directly instead of proposing. The backend
     # grants it only for full-access users (see

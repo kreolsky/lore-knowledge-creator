@@ -14,31 +14,15 @@ in files_util, the resolution chain in files_service).
 
 import asyncio
 import logging
-from pathlib import Path
 
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
 from files_service import resolve_reference_file
-from thumbnails import generate_thumbnail, get_thumb_path, warm_model_variant
+from thumbnails import generate_thumbnail, get_thumb_path
 
 logger = logging.getLogger(__name__)
 
 REFERENCE_FILE_CACHE_CONTROL = "private, max-age=31536000, immutable"
-
-
-# WHY: asyncio holds only a weak reference to a bare create_task result, so a
-# fire-and-forget warm can be GC'd before it runs. Mirrors the _spawn pattern in
-# event_bus.py / messages.py — strong ref held here, dropped on completion.
-_warm_tasks: set[asyncio.Task] = set()
-
-
-def _spawn_warm(abs_path: Path, project_id: str, reference_id: str, mime: str) -> None:
-    """Schedule the model-variant pre-warm off the response path (never awaited)."""
-    task = asyncio.create_task(
-        asyncio.to_thread(warm_model_variant, abs_path, project_id, reference_id, mime)
-    )
-    _warm_tasks.add(task)
-    task.add_done_callback(_warm_tasks.discard)
 
 
 # INVARIANT(anonymous-surface): consumed by routes/public_share.py (the anonymous
@@ -80,15 +64,6 @@ async def _serve_thumbnail(ref: dict, reference_id: str) -> FileResponse:
         await asyncio.to_thread(generate_thumbnail, abs_path, thumb_path)
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to generate thumbnail")
-
-    # Pre-warm the model-bound variant beside the thumbnail. plan: model-bound-image-downscale.
-    # INVARIANT: fire-and-forget — the thumbnail response must NEVER wait on it.
-    # Why: rendering the variant is a full Pillow decode→LANCZOS→encode (measured
-    # 2.7s at 4000x3000). Awaited here it delayed every first-time thumbnail by
-    # that much, so opening a reference gallery paid it once per image. The warm
-    # is pure optimization — chat context renders lazily on miss — so a dropped or
-    # still-running warm costs nothing but a slower first chat.
-    _spawn_warm(abs_path, project_id, reference_id, _mime)
 
     return FileResponse(thumb_path, media_type="image/webp", headers={"Cache-Control": REFERENCE_FILE_CACHE_CONTROL})
 

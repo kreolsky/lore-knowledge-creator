@@ -1,6 +1,6 @@
 """save_skill — the agent turns a finished task into a project skill.
 
-Plan skill-authoring-skill. The SERVER assembles the frontmatter and owns the
+The SERVER assembles the frontmatter and owns the
 placement (Skills folder via ensure_agent_system_docs); the upsert key is the
 frontmatter NAME, never the title. Everything here goes through the generated
 Tool-API route with a project agent key, the wire the dsh driver speaks.
@@ -71,6 +71,25 @@ def _hdr(token):
     return {"Authorization": f"Bearer {token}"}
 
 
+_DRIVER_SECRET = "drv-s3cret"
+
+
+@pytest.fixture
+def driver_secret(monkeypatch):
+    import config
+
+    monkeypatch.setattr(config, "HARNESS_DRIVER_SECRET", _DRIVER_SECRET)
+
+
+def _approved(token):
+    """The driver's retry after the user allowed the call: a skill is a
+    system-doc write, so even `apply: auto` asks first."""
+    return {
+        **_hdr(token),
+        "X-Agent-Verdict": "allowed-once", "X-Driver-Secret": _DRIVER_SECRET,
+    }
+
+
 async def _skills_folder_id(test_db, pid: str) -> str:
     from agent_config import ensure_agent_system_docs
 
@@ -100,7 +119,7 @@ class TestSaveSkillCreate:
 
     @pytest.mark.asyncio
     async def test_served_payload_lists_head_with_spec_child(
-        self, client, test_db, admin_user, project_with_doc,
+        self, client, test_db, admin_user, project_with_doc, driver_secret,
     ):
         """The wire the plugin reads: load_skills_subtree → build_skill_docs
         shows the head with the Spec in child_docs (the `## Material` line)."""
@@ -117,7 +136,7 @@ class TestSaveSkillCreate:
             "tools": ["sandbox_bash"],
             "spec": "facts",
             "apply": "auto",
-        }, headers=_hdr(agent_tok))
+        }, headers=_approved(agent_tok))
         assert resp.status_code == 200, resp.text
 
         wire = build_skill_docs(await load_skills_subtree(pid))
@@ -138,7 +157,7 @@ class TestSaveSkillCreate:
 class TestSaveSkillUpsert:
     @pytest.mark.asyncio
     async def test_same_name_updates_in_place(
-        self, client, test_db, admin_user, project_with_doc,
+        self, client, test_db, admin_user, project_with_doc, driver_secret,
     ):
         """A second call with the same name is ONE head (no second catalog
         entry) and the SAME Spec doc id — the head's `## Material` line
@@ -155,7 +174,7 @@ class TestSaveSkillUpsert:
             "tools": ["sandbox_bash"],
             "spec": "v1 spec",
             "apply": "auto",
-        }, headers=_hdr(agent_tok))
+        }, headers=_approved(agent_tok))
         assert first.status_code == 200, first.text
 
         second = await client.post("/api/tool/save_skill", json={
@@ -165,7 +184,7 @@ class TestSaveSkillUpsert:
             "tools": ["sandbox_bash"],
             "spec": "v2 spec",
             "apply": "auto",
-        }, headers=_hdr(agent_tok))
+        }, headers=_approved(agent_tok))
         assert second.status_code == 200, second.text
         assert second.json()["doc_id"] == first.json()["doc_id"]
         assert second.json()["spec_doc_id"] == first.json()["spec_doc_id"]
@@ -207,15 +226,12 @@ class TestSaveSkillRefusals:
 
     @pytest.mark.asyncio
     async def test_confirm_without_verdict_refuses_then_marker_applies(
-        self, client, test_db, admin_user, project_with_doc, monkeypatch,
+        self, client, test_db, admin_user, project_with_doc, driver_secret,
     ):
         """apply defaults to confirm: the machine-readable ask signal (409
         confirmation_required), then the attested driver retry applies — one
         consent covers head + Spec together (copied from
         test_rename_document.py's marker round-trip)."""
-        import config
-
-        monkeypatch.setattr(config, "HARNESS_DRIVER_SECRET", "drv-s3cret")
         pid, _, admin_uid = project_with_doc
         agent_tok = await _make_agent_key(test_db, admin_uid, pid)
 
@@ -232,6 +248,8 @@ class TestSaveSkillRefusals:
         )
         assert resp.status_code == 409, resp.text
         assert resp.json()["detail"]["code"] == "confirmation_required"
+        # A skill is the agent's own instructions: asked on every call.
+        assert resp.json()["detail"]["ask_every_time"] is True
 
         # An UNATTESTED marker changes nothing — the header alone is any
         # agent key's claim about itself.
@@ -241,11 +259,9 @@ class TestSaveSkillRefusals:
         assert resp_bare.status_code == 409, resp_bare.text
 
         # The driver's retry shape: the same call, the marker, the secret.
-        resp2 = await client.post("/api/tool/save_skill", json=payload, headers={
-            **_hdr(agent_tok),
-            "X-Agent-Verdict": "allowed-once",
-            "X-Driver-Secret": "drv-s3cret",
-        })
+        resp2 = await client.post(
+            "/api/tool/save_skill", json=payload, headers=_approved(agent_tok),
+        )
         assert resp2.status_code == 200, resp2.text
         assert resp2.json()["status"] == "applied"
         assert resp2.json()["spec_doc_id"]
@@ -268,12 +284,12 @@ class TestSaveSkillFiles:
         if files is not None:
             payload["files"] = files
         return await client.post(
-            "/api/tool/save_skill", json=payload, headers=_hdr(tok),
+            "/api/tool/save_skill", json=payload, headers=_approved(tok),
         )
 
     @pytest.mark.asyncio
     async def test_files_become_path_titled_children_verbatim(
-        self, client, test_db, project_with_doc, workspace_files,
+        self, client, test_db, project_with_doc, workspace_files, driver_secret,
     ):
         """One child per file, title == path, content byte-identical to the
         workspace file (no fence, no frontmatter — the round trip is the
@@ -304,7 +320,7 @@ class TestSaveSkillFiles:
     @pytest.mark.parametrize("bad", ["../x", "bin/x", "scripts/../x", "scripts/",
                                      "scripts/a/b/c", "/scripts/x"])
     async def test_path_outside_grammar_is_422(
-        self, client, test_db, project_with_doc, workspace_files, bad,
+        self, client, test_db, project_with_doc, workspace_files, driver_secret, bad,
     ):
         pid, _, uid = project_with_doc
         tok = await _make_agent_key(test_db, uid, pid, auto_apply=True, internal=True)
@@ -317,7 +333,7 @@ class TestSaveSkillFiles:
 
     @pytest.mark.asyncio
     async def test_missing_workspace_file_is_404_and_nothing_lands(
-        self, client, test_db, project_with_doc, workspace_files,
+        self, client, test_db, project_with_doc, workspace_files, driver_secret,
     ):
         """The read happens BEFORE any write: a missing file is a 404 naming
         the workspace path, and no head / child exists afterwards."""

@@ -335,9 +335,8 @@ def _emit_chunks(
     # removing an interior node makes the source non-contiguous, so contiguous offsets
     # equal to content cannot be re-derived (offset_end - offset_start != len(content)
     # whenever a node or padding is removed). The offsets ARE tightened to the
-    # post-.strip() non-whitespace bounds (the computable part — what fixes the scroll
-    # target in Sources.tsx, which seeks offset_start); interior transclusion nodes
-    # remain in the span as the accepted residual. The projection
+    # post-.strip() non-whitespace bounds (the computable part); interior transclusion
+    # nodes remain in the span as the accepted residual. The projection
     # (_strip_transclusions(text[offset_start:offset_end]).strip() == content) is the
     # pinned contract.
     for idx, (start, end) in enumerate(spans):

@@ -1,8 +1,8 @@
-/** Chat input area — textarea with send, stop, mic buttons + model selector + apply-mode dropdown (confirm/auto, derived from PROJECT system-prompts folder) + multi-doc context picker. Chat-store slices: streaming, dshRunning, inboxQueue, liveSend, discardQueued, activeSessionId, pendingInputFocus, pendingImages, pendingImageMeta, pressingImages, removePendingImage, clearPendingImages, pendingFiles, removePendingFile, clearPendingFiles, draft, setDraft, models, defaultModel, sessions, updateSession, createSession, sendMessage, stopGeneration, setSessionMode. App-store slices: currentProject, currentDocument, currentReference, documents, accessLevel. Context: useChatContext (reactive read), pruneContext. Picker writes directly via addItemToContext / removeItemFromContext. */
+/** Chat input area — a top row [Persona ▾ (memory state on its icon)] [Hide] [Analyse] … token gauge, then the composer: textarea with send, stop, mic + model / reasoning selectors + auto-apply. Chat-store slices: streaming, dshRunning, inboxQueue, liveSend, discardQueued, activeSessionId, pendingInputFocus, pendingImages, pendingImageMeta, pressingImages, removePendingImage, clearPendingImages, pendingFiles, removePendingFile, clearPendingFiles, draft, setDraft, models, defaultModel, sessions, updateSession, createSession, sendMessage, stopGeneration, setSessionMode, setChatUnindexed, startGhostChat, ghost overrides. App-store slices: currentProject, currentDocument, currentReference, documents, accessLevel. */
 
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { BookPlus, EyeOff, ScrollText } from 'lucide-react';
-import { Button, Dropdown, FieldCheckbox } from '../ui';
+import { Brain, Eye, EyeOff, ScrollText, Sparkles } from 'lucide-react';
+import { Button, Dropdown, FieldCheckbox, IconButton } from '../ui';
 import { ChatComposer } from './ChatComposer';
 import { TokenUsageGauge } from './TokenUsageGauge';
 import { CacheHitIndicator } from './CacheHitIndicator';
@@ -14,17 +14,15 @@ import { useUIStore } from '../../store/ui-store';
 import { readRefOpenMode, refIsScope } from '../../store/ui-store/documents-slice';
 import { useTranslation } from '../../i18n';
 import { useSimpleVoiceRecording } from '../../hooks/useSimpleVoiceRecording';
-import { ContentPickerPopup } from './ContentPickerPopup';
 
-import { useChatContext, pruneContext, computeContextPrune, GHOST_SESSION_ID } from '../../chat/context';
-import { resolveContentPickerAnchor } from '../../chat/picker-anchor';
-import { useGhostChatContext } from '../../chat/use-ghost-context';
 import { canSend as computeCanSend } from '../../chat/send-gate';
 import { on, off, emit } from '../../events';
 import { insertAtCaret } from '../../utils/insert-at-caret';
 import { attachImage } from '../../chat/attach-image';
-import { effectiveCap } from '../../store/chat-store/misc-slice';
+import { effectiveCap, appendDraft } from '../../store/chat-store/misc-slice';
 import { useSystemPrompts, useAttachmentBudget } from './chat-input-hooks';
+import { useMemoryPersonas } from './useMemoryPersonas';
+
 
 export function ChatInput() {
   // The composer text lives in chat-store (ONE shared draft), not local useState:
@@ -129,31 +127,26 @@ export function ChatInput() {
   const ghostModel = useChatStore(s => s.ghostModel);
   const ghostReasoningEffort = useChatStore(s => s.ghostReasoningEffort);
   const setGhostSystemPrompt = useChatStore(s => s.setGhostSystemPrompt);
+  const startGhostChat = useChatStore(s => s.startGhostChat);
   const projectId = useAppStore(s => s.currentProject?.project_id);
   const currentDocId = useAppStore(s => s.currentDocument?.document_id);
   const rawReference = useAppStore(s => s.currentReference);
   const accessLevel = useAppStore(s => s.accessLevel);
   // Panel quick preview: the chat is the DOCUMENT's. The open reference reads
-  // through the ONE projection — session materialization, the agent target and
-  // the picker's default tab all follow the doc scope; the ref is added by hand
-  // through the picker like any material.
+  // through the ONE projection — session materialization and the agent target
+  // follow the doc scope.
   const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocId ?? ''], s.compactLayout));
   const compactLayout = useUIStore(s => s.compactLayout);
   const currentReference = refIsScope(refOpenMode) ? rawReference : null;
-  // Ghost: when no session is active, context is DERIVED from the open entity
-  // (useGhostChatContext) — it is never stored. The content picker writes manual
-  // deltas (add/removeGhostDelta) that fold into the derived value; at
-  // materialization (createSession) the derived value is snapshotted onto the real
-  // session id. A materialized chat keeps its stored snapshot (useChatContext).
-  const contextSessionId = activeSessionId ?? GHOST_SESSION_ID;
-  const storedContext = useChatContext(activeSessionId);
-  const ghostContext = useGhostChatContext();
-  const activeContext = activeSessionId ? storedContext : ghostContext;
+
+  // Red = the persona asked for memory but its settings turned it off (the
+  // tooltip says why).
+  const memoryError = activeSession?.memory?.error;
+  const unindexed = activeSession ? !!activeSession.unindexed : ghostUnindexed;
 
   const activeSystemPromptId = activeSession?.system_prompt_id ?? null;
   const effectiveSystemPromptId = activeSession ? activeSystemPromptId : ghostSystemPromptId;
   const documents = useAppStore(s => s.documents);
-  const references = useAppStore(s => s.references);
   // ARCH: a persona is
   // any DIRECT child document of the Personas folder (the reserved doc whose
   // system_role === 'system_prompt'), identified by parent_id — NOT by a role
@@ -162,65 +155,9 @@ export function ChatInput() {
   // removed. Personas ≡ system prompts: chat_sessions.system_prompt_id is the
   // selected persona doc id. (Derived state lives in useSystemPrompts.)
   const { systemPrompts, activeSystemPromptTitle } = useSystemPrompts(documents, effectiveSystemPromptId);
-
-  const sessionRefId = activeSession?.reference_id ?? currentReference?.reference_id ?? null;
-  // INVARIANT: content picker is anchored to the OPEN document (currentDocId) —
-  // session-based resolution (ref owning doc → session doc → sessionRefId owning
-  // doc) is fallback-only when no document is open (project-level view). Why:
-  // the picker ranks by proximity to what the user is currently looking at, not
-  // to the session's binding; a ref id is not a valid tree anchor (the picker
-  // browses a document's tree).
-  const anchorDocId = useMemo(
-    () => resolveContentPickerAnchor(currentDocId ?? null, activeSession, sessionRefId ?? null, references),
-    [currentDocId, activeSession, sessionRefId, references],
-  );
-  // WHY: The content picker has no local draft state. Every checkbox click
-  // inside ContentPickerPopup writes directly to the session context via
-  // addItemToContext / removeItemFromContext (chat/context.ts), with a 200ms
-  // debounced PATCH. There is no "cancel draft on close" affordance —
-  // intentional, so the same pipeline serves manual edits, auto-population on
-  // session creation, and "Chat with Reference" force-add.
-  const [contentPickerOpen, setContentPickerOpen] = useState(false);
-  const contentPickerRef = useRef<HTMLDivElement>(null);
-
-  // WHY: Prune context IDs that point to entities no longer in the project.
-  // Documents are checked against the project-wide `documents` array. References
-  // are pruned only when soft-deleted (deletedRefIds) — NEVER merely absent from
-  // the open document's `references`, because a selectable cross-doc reference
-  // is permanently outside that scope. Backend also skips invalid IDs at
-  // completion time; this keeps the count honest in the UI.
-  // The prune DECISION lives in computeContextPrune (pure, unit-tested) so this
-  // effect stays a thin wire of store reads → pruneContext call.
-  useEffect(() => {
-    if (!activeSessionId) return;
-    if (contentPickerOpen) return;
-    if (!activeSession || activeSession.project_id !== projectId) return;
-    // INVARIANT (context-race): a context id is pruned only when the SERVER says
-    // which ids are references (context_reference_ids); the open document's
-    // reference scope is never evidence of a reference's existence. Why: cross-
-    // doc refs are selectable (Part B) and are permanently outside that scope,
-    // so scope-absence would PATCH away live selections. computeContextPrune
-    // encodes both the documents-loaded guard and the server-split gate; when it
-    // returns null the effect must NOT call pruneContext / setContextForSession.
-    const decision = computeContextPrune(
-      activeContext,
-      activeSession.context_reference_ids,
-      documents,
-      useAppStore.getState().deletedRefIds,
-    );
-    if (decision) {
-      pruneContext(activeSessionId, decision.aliveDocIds, decision.deletedRefIds);
-    }
-  }, [activeSessionId, activeSession, projectId, documents, activeContext, contentPickerOpen]);
-
-  const handleOpenContentPicker = useCallback(() => {
-    setContentPickerOpen(prev => !prev);
-  }, []);
-
-  const handleContentPickerClose = useCallback((reason?: 'esc') => {
-    setContentPickerOpen(false);
-    if (reason === 'esc') textareaRef.current?.focus();
-  }, []);
+  const memoryPersonas = useMemoryPersonas(projectId, systemPrompts);
+  // The trigger shows Brain for a memory-ON persona, ScrollText otherwise — only the icon differs.
+  const PersonaIcon = effectiveSystemPromptId && memoryPersonas.has(effectiveSystemPromptId) ? Brain : ScrollText;
 
   const canAgent = accessLevel === 'full' && agentAvailable;
   // WHY (agent_auto persistence): the dropdown state is DERIVED from
@@ -398,6 +335,26 @@ export function ChatInput() {
     textareaRef.current?.focus();
   }, [activeSessionId, setSessionMode, setGhostSystemPrompt]);
 
+  // "Analyse in a new chat": open a fresh ghost,
+  // then prefill its composer with a request naming THIS chat by title +
+  // chat_id, so the agent reads it via read_my_chat without searching. Why
+  // capture title/id BEFORE startGhostChat: it clears activeSessionId — after
+  // it the session row is no longer resolvable. appendDraft, never setDraft:
+  // the draft is ONE shared field across chats and appendDraft is the
+  // append-never-overwrite rule (see its INVARIANT in misc-slice) — a setDraft
+  // prefill would erase the unsent text of the chat being left. The unindexed
+  // guard repeats the button's `disabled` because a programmatic click on a
+  // disabled button still reaches onClick. Plain handler, not useCallback: it
+  // uses `t`, which is a new function every render (i18n rule — never in a
+  // callback dep array).
+  const handleAnalyseInNewChat = () => {
+    if (!activeSession || activeSession.unindexed) return;
+    const title = activeSession.title || t('newChat');
+    const id = activeSession.session_id;
+    startGhostChat();
+    appendDraft(useChatStore.getState, t('analyseChatPrompt', { title, id }));
+  };
+
   const handleModelSelect = useCallback((model: string) => {
     handleModelChange(model);
     textareaRef.current?.focus();
@@ -405,86 +362,74 @@ export function ChatInput() {
 
   // AI-only slots forwarded to the shared ChatComposer. The composer owns the
   // resize handle, textarea fill, attachment chips, mic, and send/stop buttons.
+  // WHY one row for ghost and chat alike: Persona and Hide keep their positions
+  // across ghost → chat; Analyse appears at the END once there is a chat to
+  // analyse, so nothing shifts under the cursor.
   const topControls = (
     <>
-      {(currentDocId || activeSessionId) && (
-        <div className="flex justify-between items-center gap-3 mb-px flex-wrap">
-          <div className="flex gap-3">
-            <div ref={contentPickerRef}>
-              <Button
-                variant="ghost"
-                onClick={handleOpenContentPicker}
-                disabled={isStreaming}
-              >
-                <BookPlus size={14} className="mr-1" />
-                {activeContext.documentIds.length > 0 || activeContext.referenceIds.length > 0
-                  ? t('addContentMixedCount', { docs: activeContext.documentIds.length, refs: activeContext.referenceIds.length })
-                  : t('addContent')}
-              </Button>
-            </div>
-            {(currentDocId || activeSessionId) && (
-              <Dropdown
-                value={effectiveSystemPromptId ?? ''}
-                options={[
-                  { value: '', label: t('chatSystemPromptNone') },
-                  ...systemPrompts.map(p => ({ value: p.document_id, label: p.title })),
-                ]}
-                onSelect={handlePromptSelect}
-                icon={<ScrollText size={14} />}
-                variant="ghost"
-                triggerLabel={activeSystemPromptTitle ?? t('chatSystemPromptNone')}
-                disabled={isStreaming}
-                placement="bottom"
-              />
-            )}
-          </div>
-          {/* Token-usage gauge: same row as the context/persona controls, RIGHT
-              side. AI-chat only (activeSessionId); fresh session shows 0 / cap.
-              The cap prefers the session's context_window — the LAST
-              context_usage frame's cap (the model's real window per the
-              harness projection) — with effectiveCap(...) as the
-              pre-first-frame fallback. Hidden on touch devices (.chat-usage-meters). */}
+      <div className="flex justify-between items-center gap-3 mb-px flex-wrap">
+        <div className="flex items-center gap-1">
+          {/* The selected persona IS the chat's memory binding; a Brain marks a
+              persona with memory ON, in the list and on the trigger. */}
+          <Dropdown
+            value={effectiveSystemPromptId ?? ''}
+            options={[
+              { value: '', label: t('chatSystemPromptNone') },
+              ...systemPrompts.map(p => ({
+                value: p.document_id,
+                label: p.title,
+                leading: memoryPersonas.has(p.document_id)
+                  ? <Brain size={12} aria-label={t('chatPersonaMemoryMark')} />
+                  : undefined,
+              })),
+            ]}
+            onSelect={handlePromptSelect}
+            icon={<PersonaIcon size={14} className={memoryError ? 'text-red' : undefined} />}
+            triggerLabel={activeSystemPromptTitle ?? t('chatSystemPromptNone')}
+            title={memoryError ? t('chatMemoryOffNotice', { error: memoryError }) : undefined}
+            disabled={isStreaming}
+            placement="bottom"
+          />
+          {/* WHY: operator ruling — the icon is the state: Eye = visible to recall,
+              EyeOff on the pressed (gray) background = hidden; no green. */}
+          <IconButton
+            pressed={unindexed}
+            title={unindexed ? t('chatUnindexedOn') : t('chatUnindexedOff')}
+            onClick={() => { void setChatUnindexed(!unindexed); }}
+          >
+            {unindexed ? <EyeOff size={14} /> : <Eye size={14} />}
+          </IconButton>
           {activeSessionId && (
-            <div className="chat-usage-meters flex items-center gap-3">
-              <TokenUsageGauge
-                used={activeSession?.context_tokens_used ?? 0}
-                cap={activeSession?.context_window ?? effectiveCap(
-                  contextWindows,
-                  activeSession?.model ?? displayModel,
-                )}
-              />
-              {/* Prompt-cache hit share of the last turn, beside the gauge. Absent
-                  until a turn completes with cache accounting (see CacheHitIndicator). */}
-              <CacheHitIndicator />
-            </div>
+            <IconButton
+              disabled={!!activeSession?.unindexed}
+              title={activeSession?.unindexed ? t('analyseChatHiddenHint') : t('analyseInNewChat')}
+              onClick={handleAnalyseInNewChat}
+            >
+              <Sparkles size={14} />
+            </IconButton>
           )}
         </div>
-      )}
-      {contentPickerOpen && contentPickerRef.current && (activeSessionId || currentDocId) && (() => {
-        const isRefActive = !!currentReference;
-        const initialTab: 'references' | 'documents' = isRefActive ? 'references' : 'documents';
-        if (import.meta.env.DEV) {
-          // Spec §2: ContentPicker default tab must match the type of the open object.
-          const expected = isRefActive ? 'references' : 'documents';
-          if (initialTab !== expected) {
-            console.error('[chat §2] ContentPicker default tab mismatch', { initialTab, expected, currentReference });
-          }
-        }
-        return (
-          <ContentPickerPopup
-            sessionId={contextSessionId}
-            selectedDocIds={activeContext.documentIds}
-            selectedRefIds={activeContext.referenceIds}
-            onClose={handleContentPickerClose}
-            anchorRect={contentPickerRef.current.getBoundingClientRect()}
-            triggerRef={contentPickerRef}
-            initialTab={initialTab}
-            anchorDocId={anchorDocId}
-            sessionRefId={sessionRefId}
-            above
-          />
-        );
-      })()}
+        {/* Token-usage gauge: same row as the persona control, RIGHT
+            side. AI-chat only (activeSessionId); fresh session shows 0 / cap.
+            The cap prefers the session's context_window — the LAST
+            context_usage frame's cap (the model's real window per the
+            harness projection) — with effectiveCap(...) as the
+            pre-first-frame fallback. Hidden on touch devices (.chat-usage-meters). */}
+        {activeSessionId && (
+          <div className="chat-usage-meters flex items-center gap-3">
+            <TokenUsageGauge
+              used={activeSession?.context_tokens_used ?? 0}
+              cap={activeSession?.context_window ?? effectiveCap(
+                contextWindows,
+                activeSession?.model ?? displayModel,
+              )}
+            />
+            {/* Prompt-cache hit share of the last turn, beside the gauge. Absent
+                until a turn completes with cache accounting (see CacheHitIndicator). */}
+            <CacheHitIndicator />
+          </div>
+        )}
+      </div>
     </>
   );
 
@@ -543,9 +488,9 @@ export function ChatInput() {
           onOpenChange={setModelPickerOpen}
         />
       )}
-      {/* WHY: on a compact (phone) layout the reasoning picker and the unindexed
-          opt-out are hidden so the toolbar fits one row; the session keeps its
-          values, they are changed from a wide layout. */}
+      {/* WHY: on a compact (phone) layout the reasoning picker is hidden so the
+          toolbar fits one row; the session keeps its value, it is changed from a
+          wide layout. */}
       {reasoningLevels.length > 0 && !compactLayout && (
         <Dropdown
           value={displayReasoningEffort ?? ''}
@@ -581,16 +526,6 @@ export function ChatInput() {
           ? (agentUnavailableReason ?? t('chatAgentDisabledReason'))
           : t('chatAutoApplyHint')}
       />
-      {/* Create-time opt-out of chat recall; an existing chat toggles it in the header. */}
-      {!activeSessionId && !compactLayout && (
-        <FieldCheckbox
-          checked={ghostUnindexed}
-          onChange={checked => { void setChatUnindexed(checked); }}
-          label={t('chatUnindexed')}
-          className="text-text-muted"
-          title={t('chatUnindexedHint')}
-        />
-      )}
     </>
   );
 

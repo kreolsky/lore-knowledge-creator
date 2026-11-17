@@ -19,7 +19,7 @@
  *    `nestedRenderExtensions(depth)` are thin aliases. The document routes through it too
  *    (Editor.tsx, mode `document`) but keeps its render fields in the Mod-/ compartment.
  */
-import { type Extension } from '@codemirror/state';
+import { Compartment, type Extension } from '@codemirror/state';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { indentUnit } from '@codemirror/language';
@@ -250,6 +250,23 @@ export function editorExperience(opts: {
     // compartment stay entity-specific in Editor.tsx.
     ext.unshift(cmSetup({ search: true, thickCursor: true }));
     ext.push(selectionFeedPlugin);
+    // INVARIANT: the document reveals raw markdown at the caret only after its first focus.
+    // Why: before the user places the caret, the selection sits at the implicit position 0
+    // with no visible caret, so honoring it would show the first line's markup raw.
+    // WHY echo the selection: the live-preview fields rebuild on selection, not on a bare
+    // reconfigure (same as table-cell-editor's focus toggle).
+    const revealComp = new Compartment();
+    ext.push(
+      revealComp.of(revealAtCursor.of(false)),
+      EditorView.domEventHandlers({
+        focus: (_e, v) => {
+          if (!v.state.facet(revealAtCursor)) {
+            v.dispatch({ effects: revealComp.reconfigure(revealAtCursor.of(true)), selection: v.state.selection });
+          }
+          return false;
+        },
+      }),
+    );
     return ext;
   }
 

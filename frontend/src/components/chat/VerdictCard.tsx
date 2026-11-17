@@ -11,7 +11,7 @@
  *
  * `argsRaw` (optional): the held call's own arguments, read off its tool-call
  * node by the caller — the ask frame itself carries only {turn, callId,
- * toolName}, and dsh appends the call node BEFORE asking. The reload path
+ * toolName, perCall}, and dsh appends the call node BEFORE asking. The reload path
  * (GET /chat/verdicts, no nodes) passes nothing and keeps the bare card.
  */
 
@@ -35,11 +35,7 @@ function DiffPre({ text, tone }: { text: string; tone: 'removed' | 'added' }) {
   );
 }
 
-/** Tools asked on every call. Display only: the driver refuses the session
- * grant by the backend's per_call_approval flag, whatever the card offers. */
 type VerdictAction = 'allow_once' | 'allow_session' | 'reject';
-
-const NO_SESSION_GRANT_TOOLS = new Set(['http_request']);
 
 const RAW_PRE_CLASS = 'text-xs font-mono whitespace-pre-wrap break-words m-0 max-h-40 overflow-y-auto';
 
@@ -250,7 +246,9 @@ export function VerdictCard({ pending, argsRaw }: { pending: PendingVerdict; arg
               >
                 {t('verdictAllowOnce')}
               </Button>
-              {!NO_SESSION_GRANT_TOOLS.has(pending.tool_name) && (
+              {/* WHY: display only — the driver refuses the session grant on a
+                  per-call ask (403) whatever the card offers. */}
+              {!pending.per_call && (
                 <Button
                   variant="ghost"
                   onClick={() => void decide('allow_session')}

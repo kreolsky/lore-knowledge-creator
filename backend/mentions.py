@@ -18,25 +18,22 @@ from surrealdb import AsyncSurreal
 import event_bus
 from db import (
     SAFE_ID_RE,
-    get_db,
-    record_refs,
     run_in_transaction,
     validate_record_id,
 )
-from models import is_ref_row
 from transclusion_grammar import SCHEME_TABLE, link_target_id
 
 # The stored edge-kind vocabulary lives in edge_kinds — the
 # ONE source the /edges route, the get_links tool schema and these rebuild
 # writers all derive from. Content-derived kinds live on doc_mentions.kind;
-# field-backed kinds (attachment/note/chat-context) and the content-parsed
+# field-backed kinds (attachment/note) and the content-parsed
 # `external` are PROJECTED at read time by edges.py and never stored.
 # Re-exported here for the existing `from mentions import KIND_MENTION` consumers.
 __all__ = [
     "KIND_MENTION", "KIND_TRANSCLUSION", "STORED_EDGE_KINDS",
     "extract_content_edges",
     "extract_external_links", "content_edge_pairs", "content_external_urls",
-    "finalize_content_edges", "rebuild_doc_mentions", "resolve_first_circle",
+    "finalize_content_edges", "rebuild_doc_mentions",
 ]
 
 # The frontend extLink pattern (frontend/src/components/editor/link-patterns.ts)
@@ -62,9 +59,8 @@ _REF_LINK_RE = re.compile(r'(!?)\[(?:[^\]]*)\]\(ref:([^)]+)\)')
 def _content_links(content: str) -> list[tuple[str, str, str]]:
     """(scheme, target_id, kind) for every doc/ref link and embed in content.
 
-    # ARCH: the ONE link tokenizer — extract_content_edges (the edge writer) and
-    # resolve_first_circle (the doc/ref split) both read it, so the id set an edge
-    # is written for and the id set the first circle resolves cannot diverge.
+    # ARCH: the ONE link tokenizer — extract_content_edges (the edge writer)
+    # reads it.
     # kind comes from the leading `!` ('transclusion') vs its absence ('mention').
     # The id is cut at the first `#` (link_target_id) BEFORE SAFE_ID_RE, so a
     # pointer link `doc:<id>#text=…` still yields its edge.
@@ -231,44 +227,3 @@ async def finalize_content_edges(
         project_id=project_id,
         **({"is_reference": True} if is_reference else {}),
     )
-
-
-async def _filter_alive(table: str, ids: list[str]) -> list[str]:
-    """Return subset of `ids` that exist in `table` and are not soft-deleted."""
-    if not ids:
-        return []
-    db = await get_db()
-    in_clause, params = record_refs(table, ids)
-    rows = await db.query(
-        f"SELECT VALUE meta::id(id) FROM {table} "
-        f"WHERE id IN [{in_clause}] AND deleted_at IS NONE",
-        params,
-    )
-    return list(rows or [])
-
-
-async def resolve_first_circle(content: str, self_id: str) -> dict:
-    """Parse content for `[text](id)` and `[text](ref:id)` markdown links;
-    filter against existing, non-soft-deleted documents; exclude self_id.
-
-    # WHY: Moved from documents.py to break the circular dependency that
-    # forced references.py to use a runtime `from routes.documents import`.
-    """
-    links = _content_links(content)
-    doc_ids = list({tid for scheme, tid, _ in links if scheme == "doc" and tid != self_id})
-    ref_ids = list({tid for scheme, tid, _ in links if scheme == "ref" and tid != self_id})
-    alive_docs = set(await _filter_alive("documents", doc_ids))
-    alive_refs_raw = await _filter_alive("documents", ref_ids)
-    alive_refs: list[str] = []
-    if alive_refs_raw:
-        db = await get_db()
-        ref_flags = await db.query(
-            "SELECT meta::id(id) AS id, is_reference FROM documents "
-            "WHERE meta::id(id) IN $ids AND deleted_at IS NONE",
-            {"ids": alive_refs_raw},
-        )
-        alive_refs = [r["id"] for r in (ref_flags or []) if is_ref_row(r)]
-    return {
-        "document_ids": list(alive_docs),
-        "reference_ids": alive_refs,
-    }

@@ -5,8 +5,8 @@
  *  computeBesideBoxPreviewPosition; the picker passes only the title, the body + fetch state.
  *
  *  Completes the preview-window unification — HoverPreviewPopup covered the hover
- *  sites; this covers the three picker sites (LinkSuggestions, ParentPicker,
- *  ContentPicker) that each previously hand-wired LinkPreviewPopup + a copied
+ *  sites; this covers the two picker sites (LinkSuggestions, ParentPicker)
+ *  that each previously hand-wired LinkPreviewPopup + a copied
  *  side-decide/clamp block. See SYSTEM: preview-geometry / popup-position. */
 // SYSTEM: link-preview-popup — picker-positioned preview adapter
 

@@ -13,7 +13,6 @@ import type { Document, Reference } from '../types';
 import { useAppStore } from '../store/app-store';
 import { t } from '../i18n';
 import { invalidatePreviewCache } from '../hooks/useDocumentPreview';
-import { invalidateLinkCache } from '../api/links';
 import { registerEditorHostReset } from '../components/editor/editor-host';
 
 export type Item = Document | Reference;
@@ -53,7 +52,6 @@ export function syncToStore(item: Item | null, content: string): void {
 
   if ('reference_id' in item) {
     store.updateReference(item.reference_id, { content });
-    invalidateLinkCache('ref', item.reference_id);
     if (store.currentReference?.reference_id === item.reference_id) {
       useAppStore.setState({
         currentReference: { ...store.currentReference, content },
@@ -66,7 +64,6 @@ export function syncToStore(item: Item | null, content: string): void {
     store.documents.map(d => mergeContentIntoDoc(d, item.document_id, content)),
   );
   invalidatePreviewCache(item.document_id);
-  invalidateLinkCache('doc', item.document_id);
   if (store.currentDocument?.document_id === item.document_id) {
     useAppStore.setState({
       currentDocument: { ...store.currentDocument, content },

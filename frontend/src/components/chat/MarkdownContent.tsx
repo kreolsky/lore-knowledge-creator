@@ -146,12 +146,10 @@ function handleInAppLinkClick(e: React.MouseEvent<HTMLDivElement>) {
   e.preventDefault();
   e.stopPropagation();
   const { type, id, fragment } = parsed;
-  // INVARIANT: a ref link in the answer and the same ref in the sources list behave
-  // identically — stayInContext keeps the current chat scope (no navigate to the ref's
-  // parent doc). Why: both point at the same object; without stayInContext the handler
-  // navigates to the parent doc and the per-document chat scope switches (long-standing
-  // bug). Mirrors Sources.handleRefClick.
-  if (type === 'ref') emit('navigate-to-reference', { referenceId: id, stayInContext: true, via: 'chat' });
+  // INVARIANT: a ref link in the answer ALWAYS opens in the center pane, in every
+  // layout ('panel' quick preview included), without navigating to the ref's owner document.
+  // Why: operator decision — the answer's ref is read in place of the document, not beside it.
+  if (type === 'ref') emit('navigate-to-reference', { referenceId: id, stayInContext: true, inCenter: true, via: 'chat' });
   else if (type === 'doc') emit('navigate-to-document', { documentId: id, via: 'chat', fragment });
 }
 

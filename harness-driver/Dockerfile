@@ -53,13 +53,14 @@ COPY conversation /dsh/lore-conversation
 # mapping + call-time credential resolution; boot-env.test.ts gates the
 # standalone boot (no backend fetch rides the entry); time-stamps.test.ts gates
 # the turn's time ground as its own lore-time context message;
+# preload.test.ts gates the per-name preload dedupe against the active surface;
 # session-agents.test.ts gates the session's dsh agent against a REAL loop
 # (the inbox queue, per-claim prep, idle dispose, the creation-time clear);
 # mcp-servers.test.ts gates the personal MCP seam against a REAL loop + a
 # real streamable-http MCP fixture (claim-time mount, first-request tools,
 # per-agent isolation, the ask/scrub listeners, the stalled-server bound,
 # the redirect Authorization drop).
-RUN node --import tsx/esm --test lore-driver/test/map.test.ts lore-driver/test/entries.test.ts lore-driver/test/driver.test.ts lore-driver/test/ws-events.test.ts lore-driver/test/approvals.test.ts lore-driver/test/skills.test.ts lore-driver/test/images.test.ts lore-driver/test/image-result.test.ts lore-driver/test/caps.test.ts lore-driver/test/web-search.test.ts lore-driver/test/boot-env.test.ts lore-driver/test/time-stamps.test.ts lore-driver/test/session-agents.test.ts lore-driver/test/mcp-servers.test.ts
+RUN node --import tsx/esm --test lore-driver/test/map.test.ts lore-driver/test/entries.test.ts lore-driver/test/driver.test.ts lore-driver/test/ws-events.test.ts lore-driver/test/approvals.test.ts lore-driver/test/skills.test.ts lore-driver/test/images.test.ts lore-driver/test/image-result.test.ts lore-driver/test/caps.test.ts lore-driver/test/web-search.test.ts lore-driver/test/boot-env.test.ts lore-driver/test/time-stamps.test.ts lore-driver/test/preload.test.ts lore-driver/test/session-agents.test.ts lore-driver/test/mcp-servers.test.ts
 
 # The test feeds a real session log.
 RUN node --import tsx/esm --test lore-conversation/test/conversation.test.ts lore-conversation/test/lore-nodes.test.ts

@@ -2,8 +2,7 @@
 extracted into a testable `prepare_agent_turn()` returning an `AgentTurnPlan` DTO.
 The SSE layer then just iterates `stream_agent_turn` with the plan's fields.
 
-Unit-tested without SSE: the prompt assembly (context injection + current-doc
-section), apply-mode resolution, and message/tool wiring are all verifiable
+Unit-tested without SSE: the prompt assembly (current-doc section), apply-mode resolution, and message/tool wiring are all verifiable
 directly from the DTO.
 
 The turn-time stamp suite (send stamp every turn, `[chat started ...]` anchor
@@ -17,6 +16,8 @@ import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from agent_config import PersonaSettings
+
 # [sent 2026-09-01T23:14:05+03:00] — ISO 8601, seconds, explicit offset.
 SENT_STAMP_RE = re.compile(
     r"\[sent \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\]$"
@@ -24,19 +25,14 @@ SENT_STAMP_RE = re.compile(
 
 
 def _fake_body(*, messages=None, auto_apply=False, parent_id=None, model=None):
-    # context_ids mirrors CompletionRequest.context_ids (the agent Parent-line gate).
     return SimpleNamespace(
         messages=messages or [], auto_apply=auto_apply,
-        context_ids=None, open_doc_id=None, parent_id=parent_id, model=model,
+        open_doc_id=None, parent_id=parent_id, model=model,
     )
 
 
-def _fake_ctx(system_prefix=None):
-    return SimpleNamespace(system_prefix=system_prefix or [], sources=[], warnings=[])
-
-
 async def _run_turn(
-    *, session=None, body=None, ctx=None, user_row=None, fetch_raises=False,
+    *, session=None, body=None, user_row=None, fetch_raises=False,
 ):
     """prepare_agent_turn with DB/prompt internals patched; `fetch_one` stands
     in for the per-turn users-row read (timezone resolution)."""
@@ -48,7 +44,7 @@ async def _run_turn(
     )
     with patch(
         "routes.chat.completions_turn.build_prompt_and_skill_docs",
-        new=AsyncMock(return_value=("BASE_PROMPT", {})),
+        new=AsyncMock(return_value=("BASE_PROMPT", {}, PersonaSettings(body=""))),
     ), patch(
         "routes.chat.completions_turn._build_current_document_section",
         new=AsyncMock(return_value=None),
@@ -57,7 +53,7 @@ async def _run_turn(
     ):
         return await prepare_agent_turn(
             session=session if session is not None else {"document_id": "d1"},
-            body=body, ctx=ctx or _fake_ctx(), project_id="p1",
+            body=body, vision_ok=True, project_id="p1",
             user={"user_id": "u1"}, toolset=[], capability_is_mutating=True,
         )
 
@@ -79,7 +75,7 @@ async def test_send_stamp_rides_time_stamps_not_the_prompt():
 
 async def test_multimodal_prompt_is_raw_and_attachments_stay_last():
     """Multimodal turns: parts[0].text is the raw user text (no stamp bytes);
-    attachments stay LAST (the ctx-image merge order is untouched); the
+    attachments stay LAST; the
     stamps ride plan.time_stamps."""
     body = _fake_body(
         messages=[SimpleNamespace(

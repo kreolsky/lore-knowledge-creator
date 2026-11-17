@@ -338,7 +338,7 @@ DEFINE FIELD IF NOT EXISTS sort_key   ON documents TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS is_system   ON documents TYPE option<bool> DEFAULT false;
 -- system_role names the doc's place in the reserved subtree: the always-injected
 -- skeleton (system_root | system_prompt (Personas folder) | rules_folder |
--- skills_folder | knowledge_folder) plus the seeded-but-never-injected Memory
+-- skills_folder) plus the seeded-but-never-injected Memory
 -- folder (memory_folder). The legacy leaf roles
 -- (persona/rules/skill/knowledge) were cleared to NONE by a one-time migration
 -- (since retired with the applied past) — personas are positional (direct children
@@ -350,7 +350,9 @@ DEFINE FIELD IF NOT EXISTS is_system   ON documents TYPE option<bool> DEFAULT fa
 -- <vocabulary>` sweep would still hit it. The Tools/Comfy roles (tools_folder |
 -- comfy | comfy_prompt | comfy_workflow | comfy_settings) sit in the same state:
 -- the Comfy config became instance admin settings and a one-time migration
--- tombstoned those rows with the tag kept. Only meaningful on is_system docs.
+-- tombstoned those rows with the tag kept. `knowledge_folder` too: a Knowledge
+-- folder holding user content became a plain child of Rules, an empty one was
+-- tombstoned with the tag kept. Only meaningful on is_system docs.
 DEFINE FIELD IF NOT EXISTS system_role ON documents TYPE option<string>;
 -- ARCH (plan reference-archive-v2): `archived` is the staged-delete (archive) flag for
 -- references. option<bool> DEFAULT false (NOT a non-option DEFAULT) to avoid the
@@ -577,7 +579,7 @@ DEFINE FIELD IF NOT EXISTS out ON doc_mentions TYPE record<documents>;
 -- DEFAULT 'mention' keeps pre-backfill rows READABLE, not retro-filled (SurrealDB
 -- DEFAULT never touches existing rows) — the /edges read coalesces NONE →
 -- 'mention' and the runner entry edge_kinds_backfill re-runs the rebuild.
--- Field-backed kinds (attachment/note/chat-context) are PROJECTED at read time
+-- Field-backed kinds (attachment/note) are PROJECTED at read time
 -- from their indexed fields, never stored here — see backend/edges.py.
 DEFINE FIELD OVERWRITE kind ON doc_mentions TYPE string DEFAULT 'mention'
     ASSERT $value IN ['mention', 'transclusion'];
@@ -646,10 +648,10 @@ DEFINE FIELD IF NOT EXISTS system_prompt_id    ON chat_sessions TYPE option<stri
 -- the harness materializes the adapter default). Validated at PATCH time against
 -- the target model's advertised list (models_catalog.advertised_effort_levels).
 DEFINE FIELD IF NOT EXISTS reasoning_effort    ON chat_sessions TYPE option<string>;
-DEFINE FIELD IF NOT EXISTS context_document_ids  ON chat_sessions TYPE option<array<string>>;
-DEFINE FIELD IF NOT EXISTS context_document_ids[*] ON chat_sessions TYPE string;
--- INVARIANT: legacy reference_id/context_reference_ids columns retired 2026-05.
--- Why: folded into document_id/context_document_ids.
+-- WHY: a chat carries no pinned document context — no `context_document_ids`
+-- column. This REMOVE is the fresh-DB twin of the chat_context_drop migration
+-- (which covers DBs created while the column lived).
+REMOVE FIELD IF EXISTS context_document_ids ON chat_sessions;
 -- (API param reference_id is preserved — see models.py AliasChoices.)
 DEFINE FIELD IF NOT EXISTS created_at       ON chat_sessions TYPE datetime DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS updated_at       ON chat_sessions TYPE datetime DEFAULT time::now();
@@ -831,8 +833,8 @@ DEFINE FIELD IF NOT EXISTS sources[*].snippet      ON messages TYPE option<strin
 DEFINE FIELD IF NOT EXISTS sources[*].offset_start ON messages TYPE option<int>;
 DEFINE FIELD IF NOT EXISTS sources[*].offset_end   ON messages TYPE option<int>;
 DEFINE FIELD IF NOT EXISTS sources[*].score        ON messages TYPE option<float>;
--- WHY declared: backend/routes/chat/context.py writes it on manual source rows;
--- v3 stored the undeclared key silently, v4 rejects the write.
+-- WHY declared: stored manual source rows carry it (the field is kept, unread);
+-- v3 stored the undeclared key silently, v4 rejects a write of an undeclared key.
 DEFINE FIELD IF NOT EXISTS sources[*].retrieved    ON messages TYPE option<bool>;
 
 -- documents: content_version for CAS-based embedding updates
@@ -878,8 +880,8 @@ DEFINE FIELD IF NOT EXISTS outline_hidden ON documents TYPE option<int>;
 -- chat_sessions.reference_id / context_reference_ids COLUMNS are declared nowhere
 -- in this file, and nothing reads or writes them: a reference-scoped chat stores
 -- the reference id in chat_sessions.document_id (routes/chat/sessions.py).
--- Do not be misled by the same two names in routes/chat/serializers.py — those are
--- RESPONSE fields computed per request from context_ids, unrelated to the columns.
+-- Do not be misled by `reference_id` in chat_sessions/serialize.py — that is a
+-- RESPONSE field computed per request from document_id, unrelated to the column.
 -- The columns and tables are NOT necessarily gone from a given database: dropping
 -- them is a separate irreversible cutover, run by hand with
 -- surreal/migrate_2026_05_refactor.surql, and it has not been run on every
@@ -1107,6 +1109,44 @@ DEFINE INDEX IF NOT EXISTS idx_chatsessions_thread ON chat_sessions FIELDS threa
 -- `unindexed = false` never meets NONE.
 DEFINE FIELD IF NOT EXISTS unindexed ON chat_sessions TYPE bool DEFAULT false;
 
+-- ARCH: the persona whose chat memory holds this chat — one value per
+-- conversation, stamped at the first turn, then follows every persona change of
+-- the conversation (operator ruling: persona and memory are one choice).
+-- NONE = not stamped yet, '' = Default (never in any memory: only persona
+-- documents turn memory on), else the persona document id. Stamped at the
+-- chat's first turn on an unbound row (_stamp_origin_persona,
+-- routes/chat/completions_harness.py); a system_prompt_id PATCH
+-- (chat_sessions/update.py) writes the whole conversation and is never NONE, so
+-- the stamp cannot overwrite it; copied by every minting site of a derived row
+-- (branch, compaction continuation); rows older than the field are backfilled by
+-- migrations/migrate_origin_persona_backfill.py, and re-aligned to their current
+-- persona by migrations/migrate_origin_persona_follow_persona.py.
+-- option<string>, so the field needs no MIGRATE clause.
+DEFINE FIELD IF NOT EXISTS origin_persona_id ON chat_sessions TYPE option<string>;
+
+-- ARCH: what conversation memory this chat received —
+-- {message_id: the user message of the turn that carried it, chats: [{sid, date}],
+-- error: why the persona's memory is off | NONE,
+-- persona_id: the persona the block was built for; a different current persona
+-- rebuilds and overwrites}. NONE = nothing decided yet.
+-- Written after a send is accepted (_record_chat_memory,
+-- routes/chat/completions_harness.py), only while NONE, errored, chats = [] or
+-- built for another persona — those are exactly the states that rebuild the
+-- block; a branch inherits it when
+-- its copied prefix holds the memory turn (routes/chat/branches.py). Titles are
+-- resolved at read (GET /chat/sessions/{id}/memory), never stored: rows ride
+-- every chat-list read and a title goes stale on rename.
+-- WHY nested DEFINEs, not FLEXIBLE: a SCHEMAFULL table strips undeclared nested
+-- keys, and FLEXIBLE is refused on the installations whose chat_sessions is
+-- still SCHEMALESS (gray's dev-copy DB) — declared keys hold on both.
+DEFINE FIELD IF NOT EXISTS memory ON chat_sessions TYPE option<object>;
+DEFINE FIELD IF NOT EXISTS memory.message_id ON chat_sessions TYPE string;
+DEFINE FIELD IF NOT EXISTS memory.persona_id ON chat_sessions TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS memory.chats ON chat_sessions TYPE array<object>;
+DEFINE FIELD IF NOT EXISTS memory.chats[*].sid ON chat_sessions TYPE string;
+DEFINE FIELD IF NOT EXISTS memory.chats[*].date ON chat_sessions TYPE string;
+DEFINE FIELD IF NOT EXISTS memory.error ON chat_sessions TYPE option<string>;
+
 -- ARCH: the chat-recall search index — a disposable cache rebuilt from
 -- `messages` by reconciliation (jobs/tasks/chat_index.py), never written by a
 -- message writer. A table of its own, NOT doc_chunks: doc_chunks is searched
@@ -1136,6 +1176,32 @@ DEFINE INDEX IF NOT EXISTS idx_chat_chunks_hash_model ON chat_chunks FIELDS cont
 -- dimension contract as doc_chunks_embedding_hnsw above.
 DEFINE INDEX IF NOT EXISTS chat_chunks_embedding_hnsw ON chat_chunks
   FIELDS embedding HNSW DIMENSION 1024 DIST COSINE TYPE F32 EFC 300 M 24;
+
+-- ARCH: chat tables of contents — one row per labelled chat (id = the chat
+-- session id), written ONLY by the chat-topics reconcile
+-- (jobs/tasks/chat_topics.py) from `messages`. A row lives as long as its
+-- chat; an edited labelled exchange drops the topics that cover it and
+-- re-labels those exchanges. Exchanges are keyed by the USER message id,
+-- never by position. frozen_ids ⊆ labelled_ids; labelled_hashes is aligned
+-- to labelled_ids, each the exchange's content-only hash (exchange_hash) —
+-- a changed hash or a missing id drops every topic covering that id, and
+-- the row when none is left. Visibility is decided at READ time through
+-- recall_search.visible_sessions; a row here proves nothing about
+-- visibility.
+DEFINE TABLE IF NOT EXISTS chat_tocs SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS user_id       ON chat_tocs TYPE string;
+DEFINE FIELD IF NOT EXISTS project_id    ON chat_tocs TYPE string;
+DEFINE FIELD IF NOT EXISTS chat_id       ON chat_tocs TYPE string;
+DEFINE FIELD IF NOT EXISTS model         ON chat_tocs TYPE string;
+DEFINE FIELD IF NOT EXISTS frozen_ids    ON chat_tocs TYPE array<string>;
+DEFINE FIELD IF NOT EXISTS labelled_ids  ON chat_tocs TYPE array<string>;
+DEFINE FIELD IF NOT EXISTS labelled_hashes ON chat_tocs TYPE option<array<string>>;
+DEFINE FIELD IF NOT EXISTS topics        ON chat_tocs TYPE array<object>;
+DEFINE FIELD IF NOT EXISTS topics[*].title       ON chat_tocs TYPE string;
+DEFINE FIELD IF NOT EXISTS topics[*].synopsis    ON chat_tocs TYPE string;
+DEFINE FIELD IF NOT EXISTS topics[*].message_ids ON chat_tocs TYPE array<string>;
+DEFINE FIELD IF NOT EXISTS topics[*].frozen      ON chat_tocs TYPE bool;
+DEFINE INDEX IF NOT EXISTS idx_chat_tocs_user_project ON chat_tocs FIELDS user_id, project_id;
 
 -- ARCH: the embedded `proposal` (singular) and `proposals` (plural array)
 -- fields + their nested sub-field definitions USED to live here. They are

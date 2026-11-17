@@ -17,6 +17,7 @@ from surrealdb import AsyncSurreal
 from access import get_document_access
 from auth import get_current_user
 from db import extract_id, fetch_one, get_ancestor_ids, get_db
+from jobs.tasks.chat_topics import memory_personas
 from models import is_ref_row
 from routes.chat._router import router
 from routes.chat.messages import load_session_messages
@@ -300,15 +301,7 @@ async def list_sessions(
         root_by_row = {extract_id(r.get("id")): root for root, r in pairs}
 
     # Build ref_map: which document_ids belong to reference-documents.
-    # ARCH: Skip context_document_ids for note sessions (notes never use context).
-    doc_ids: set[str] = set()
-    for r in display_rows:
-        did = r.get("document_id")
-        if did:
-            doc_ids.add(str(did))
-        if not r.get("is_note"):
-            for cid in (r.get("context_document_ids") or []):
-                doc_ids.add(str(cid))
+    doc_ids = {str(r["document_id"]) for r in display_rows if r.get("document_id")}
     ref_map = await build_ref_map(db, *doc_ids)
 
     document_titles = await _document_titles(db, display_rows, ref_map)
@@ -340,6 +333,11 @@ async def list_sessions(
         )
         for r in page
     ]
+    # The list row marks a chat whose persona has conversation memory ON (the
+    # persona's frontmatter is server-side only; its title the client has).
+    remembering = await memory_personas(db, project_id)
+    for s in serialized:
+        s["persona_memory"] = s.get("system_prompt_id") in remembering
     if not with_active_messages:
         return serialized
 

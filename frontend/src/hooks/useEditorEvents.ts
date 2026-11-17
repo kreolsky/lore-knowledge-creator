@@ -75,6 +75,9 @@ export function useEditorEvents({ editorViewRef, currentDocument, enabled = true
     // The mode of the CURRENT document rides along: in 'panel' (quick preview)
     // every ref click stays in the document's Refs tab — the resolver owns that
     // decision, senders are untouched.
+    // WHY: inCenter forces the ONE mode every layout reads, so the reference lands in
+    // the center pane whatever the document's split/panel choice was.
+    if (options.inCenter && docId) useUIStore.getState().setRefOpenMode(docId, 'center');
     const refOpenMode = useUIStore.getState().getRefOpenMode(docId ?? '');
     const decision = resolveReferenceNav({
       ref,

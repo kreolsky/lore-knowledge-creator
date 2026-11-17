@@ -61,23 +61,6 @@ vi.mock('../ui-store', async (importOriginal) => {
     },
   };
 });
-vi.mock('../../chat/context', () => ({
-  setupChatContextBridge: vi.fn(),
-  GHOST_SESSION_ID: '__ghost__',
-  resolveCompletionContext: vi.fn(() => ({ document_ids: [], reference_ids: [] })),
-  getContextForSession: vi.fn(() => ({ documentIds: [], referenceIds: [] })),
-  setContextForSession: vi.fn(),
-  clearContextForSession: vi.fn(),
-  getDerivedGhostContext: vi.fn(() => ({ docIds: [], refIds: [] })),
-  ghostBaseTargets: vi.fn(() => ({ docs: [], refs: [] })),
-  resetGhostDeltas: vi.fn(),
-  hydrateFromSessions: vi.fn(),
-  pruneContext: vi.fn(),
-  clearPendingContextPatches: vi.fn(),
-  useChatContext: vi.fn(() => ({ documentIds: [], referenceIds: [] })),
-  addItemToContext: vi.fn(() => Promise.resolve()),
-  removeItemFromContext: vi.fn(() => Promise.resolve()),
-}));
 vi.mock('../../i18n', () => ({ t: (k: string) => k }));
 
 import { streamCompletion, dispatchChatFrame, hasOpenHarnessTurn } from './streaming';
@@ -94,7 +77,7 @@ function makeStore(sessionId = 's1') {
     activeSessionId: sessionId,
     sessions: [{
       session_id: sessionId, document_id: null, reference_id: null, user_id: 'u1',
-      title: 't', model: 'm', system_prompt_id: null, context_ids: [],
+      title: 't', model: 'm', system_prompt_id: null,
       updated_at: '2026-01-01', created_at: '2026-01-01', last_message_at: null,
     }],
     messages: [],
@@ -267,10 +250,10 @@ describe("a turn of a chat that is not shown — each chat's turn is independent
     useChatStore.setState({
       sessions: [
         { session_id: 'A', document_id: null, reference_id: null, user_id: 'u1',
-          title: 't-A', model: 'm', system_prompt_id: null, context_ids: [],
+          title: 't-A', model: 'm', system_prompt_id: null,
           updated_at: '2026-01-01', created_at: '2026-01-01', last_message_at: null },
         { session_id: 'B', document_id: null, reference_id: null, user_id: 'u1',
-          title: 't-B', model: 'm', system_prompt_id: null, context_ids: [],
+          title: 't-B', model: 'm', system_prompt_id: null,
           updated_at: '2026-01-01', created_at: '2026-01-01', last_message_at: null },
       ] as never,
       activeSessionId: 'B',
@@ -299,7 +282,7 @@ describe("a turn of a chat that is not shown — each chat's turn is independent
     const { get, set } = makeStore('B');
     set({ sessions: [...get().sessions, {
       session_id: 'A', document_id: null, reference_id: null, user_id: 'u1',
-      title: 't-A', model: 'm', system_prompt_id: null, context_ids: [],
+      title: 't-A', model: 'm', system_prompt_id: null,
       updated_at: '2026-01-01', created_at: '2026-01-01', last_message_at: null,
     }] } as Partial<ChatState>);
     const pA = startHarness(get, set, 'A');

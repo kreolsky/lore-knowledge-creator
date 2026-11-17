@@ -83,9 +83,8 @@ export function readRefOpenMode(entry: DocumentUIState | undefined, compact: boo
 }
 
 /** Document AND reference visible together — 'split' (two columns) and 'panel'
- *  (reference inside the Refs tab). The ONE predicate behind ghost-chat context,
- *  note attachment and the chat-context bridge: every "is split" reader goes through
- *  it, so a fourth mode is classified once, here. */
+ *  (reference inside the Refs tab). The ONE predicate behind note attachment:
+ *  every "is split" reader goes through it, so a fourth mode is classified once, here. */
 export function showsBothPanes(mode: RefOpenMode): boolean {
   return mode !== 'center';
 }

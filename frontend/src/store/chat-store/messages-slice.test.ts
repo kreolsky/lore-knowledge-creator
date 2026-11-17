@@ -7,9 +7,6 @@ import { create } from 'zustand';
 // Mock the send-path dependencies so sendMessage runs without a live frame stream
 // or DOM editor state. The optimistic bump happens synchronously inside
 // insertOptimisticUser BEFORE runCompletion awaits, so a no-op stream is enough.
-vi.mock('../../chat/context', () => ({
-  resolveCompletionContext: () => ({ context_document_ids: [], context_reference_ids: [] }),
-}));
 vi.mock('./streaming', () => ({
   streamCompletion: vi.fn().mockResolvedValue(undefined),
   // The REAL reducer returns { streaming: null } — the conflict-retry path
@@ -88,7 +85,6 @@ function sess(id: string, lm: string | null, updated: string): ChatState['sessio
     title: `t-${id}`,
     model: 'm',
     system_prompt_id: null,
-    context_ids: [],
     updated_at: updated,
     // created_at mirrors the passed value so sort-fallback assertions have data.
     created_at: updated,

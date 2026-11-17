@@ -9,8 +9,8 @@ below advance the SAME projection through the SAME relay arms via
 own machinery is pinned in test_driver_channel.py). The fakes speak ONLY the
 verbatim `dsh_event` vocabulary (shapes pinned by test_driver_frames.py, the
 source of truth). What remains here is what the reducer-family tests do not
-cover: the REAL-DB persistence paths (the driver_seq stamp, the sources
-panel, abnormal finalize), the turn payload, and agent_capability.
+cover: the REAL-DB persistence paths (the driver_seq stamp, abnormal
+finalize), the turn payload, and agent_capability.
 
 The per-kind translation cases (delta/reasoning/agent_step/turn_halted and the
 per-target repeat bound) are deleted WITH the translator — the relay drops
@@ -69,7 +69,7 @@ def _applied_edit_result(call_id, doc="doc-x", seq=1):
 
 
 async def _drive_turn(
-    frames, *, assistant_msg_id: str, sources: list | None = None,
+    frames, *, assistant_msg_id: str,
     session_id: str = "",
 ):
     """The pump's old loop body, post-pump: advance ONE projection over the
@@ -87,13 +87,12 @@ async def _drive_turn(
         _persist_content,
         _persist_context_usage,
         _persist_projection_extras,
-        _persist_sources,
         _persist_turn_seq,
     )
 
     turn = _TurnProjection(
-        assistant_msg_id=assistant_msg_id, sources=sources,
-        persist_content=_persist_content, persist_sources=_persist_sources,
+        assistant_msg_id=assistant_msg_id,
+        persist_content=_persist_content,
         persist_extras=_persist_projection_extras,
         persist_turn_seq=_persist_turn_seq, session_id=session_id,
     )
@@ -117,13 +116,13 @@ async def test_turn_end_stamps_the_dsh_session_beside_the_seq(client, test_db, p
     """The branch point is the pair: `driver_session` lands on the row with
     `driver_seq`; a turn with no known dsh id writes NONE (the legacy path)."""
     from driver.frames import _relay_frame, _TurnProjection
-    from driver.persistence import _persist_content, _persist_sources, _persist_turn_seq
+    from driver.persistence import _persist_content, _persist_turn_seq
 
     for msg_id, dsh in (("pi-msg-pair", "lore-x~f0badc0d"), ("pi-msg-pair-none", None)):
         await _mk_msg(test_db, msg_id)
         turn = _TurnProjection(
             assistant_msg_id=msg_id, persist_content=_persist_content,
-            persist_sources=_persist_sources, persist_turn_seq=_persist_turn_seq,
+            persist_turn_seq=_persist_turn_seq,
             dsh_session_id=dsh,
         )
         for frame in (_chunk(1, "answer"), _turn_end(3)):

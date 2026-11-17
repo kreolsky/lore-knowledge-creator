@@ -32,6 +32,7 @@ from routes.tool_api._common import (
     _apply_edits_direct,
     _body_to_edits,
     _body_to_table_edits,
+    _is_system_target,
     _refuse_unconfirmable,
     _resolve_apply_or_force,
 )
@@ -65,10 +66,10 @@ async def _require_auto_target(ctx: dict, document_id: str, apply_pref: str, too
     _refuse_html_target(target, tool)
     decision = await _resolve_apply_or_force(
         ctx, ui_preference=apply_pref,
-        is_system=bool(target.get("is_system")),
+        is_system=await _is_system_target(document_id, ctx["project_id"], target),
     )
     if decision.mode != "auto":
-        _refuse_unconfirmable(tool)
+        _refuse_unconfirmable(tool, decision.reason)
 
 
 @track_agent_tool("edit_document")
@@ -88,18 +89,18 @@ async def tool_edit_document(
     # Normalize the body to an edits list (advertised `edits[]` OR legacy shim).
     edits = _body_to_edits(body)
 
-    # Apply-mode resolution (PR4 R2): unified single source, with the MCP
+    # Apply-mode resolution: unified single source, with the MCP
     # force-auto override (see _resolve_apply_or_force).
     decision = await _resolve_apply_or_force(
         ctx, ui_preference=body.apply.value,
-        is_system=bool(target.get("is_system")),
+        is_system=await _is_system_target(body.document_id, ctx["project_id"], target),
     )
     if decision.mode != "auto":
         # Confirm → refuse with the ask signal (the confirm preference or a
         # system-doc target): the driver asks through dsh's approval service and
         # retries with the verdict marker; a reject returns as the call's own
         # result so the model replans inside the same turn.
-        _refuse_unconfirmable("edit_document")
+        _refuse_unconfirmable("edit_document", decision.reason)
 
     # Advisory region-lock pre-check: reject if ANY edit's region
     # intersects another participant's active selection. NON-atomic by design —

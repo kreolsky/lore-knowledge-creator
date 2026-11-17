@@ -1,8 +1,8 @@
 """# SYSTEM: page-lock — personal PIN-gated page hide (UI + agent).
 
 A user marks some of their pages (e.g. a diary) as locked; the agent in that
-user's chats / MCP keys cannot read or find them (read gate + search filter +
-chat-context drop), and the UI shows a PIN screen instead of the editor.
+user's chats / MCP keys cannot read or find them (read gate + search
+filter), and the UI shows a PIN screen instead of the editor.
 Protection level: against casual eyes, NOT against a determined person with
 DevTools.
 

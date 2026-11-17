@@ -1,15 +1,4 @@
-/**
- * createSession. The ghost context is now
- * DERIVED; createSession snapshots deriveGhostContext() onto the real id via
- * setContextForSession + resets the ghost deltas. Context SELECTION (open entity,
- * split, first-circle) is the pure selector's job — tested in
- * ghost-context.test.ts. These tests verify:
- *   1. POST shape: target_doc_id/agent_auto/system_prompt_id (see
- *      remove-ask-line-mode-axis — `mode` left the wire; every create is agent).
- *   2. The derived snapshot is persisted onto the materialized id (+ deltas reset).
- *   3. target_doc_id FIELD is set on the POST unconditionally (orthogonal to context).
- *   4. Failure surfacing + access guard (unchanged).
- */
+/** createSession: a failed POST surfaces a toast and leaves no active session. */
 
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -45,30 +34,6 @@ vi.mock('./ui-store', async (importOriginal) => {
   };
 });
 
-const DERIVED_SNAPSHOT = { docIds: ['doc-1'], refIds: [] };
-
-vi.mock('../chat/context', () => ({
-  setupChatContextBridge: vi.fn(),
-  GHOST_SESSION_ID: '__ghost__',
-  resolveCompletionContext: vi.fn(() => ({ context_ids: [] })),
-  getContextForSession: vi.fn(() => ({ documentIds: [], referenceIds: [] })),
-  setContextForSession: vi.fn(),
-  clearContextForSession: vi.fn(),
-  hydrateFromSessions: vi.fn(),
-  pruneContext: vi.fn(),
-  clearPendingContextPatches: vi.fn(),
-  useChatContext: vi.fn(() => ({ documentIds: [], referenceIds: [] })),
-  getDerivedGhostContext: vi.fn(() => ({ ...DERIVED_SNAPSHOT })),
-  ghostBaseTargets: vi.fn((docId: string | null, refId: string | null, split: boolean) => {
-    const docs: string[] = []; const refs: string[] = [];
-    if (split) { if (docId) docs.push(docId); if (refId) refs.push(refId); }
-    else if (refId) refs.push(refId);
-    else if (docId) docs.push(docId);
-    return { docs, refs };
-  }),
-  addItemToContext: vi.fn(() => Promise.resolve()),
-  resetGhostDeltas: vi.fn(),
-}));
 
 import { useChatStore } from './chat-store';
 import type { ChatSession } from '../types';
@@ -83,7 +48,6 @@ function makeSession(overrides: Partial<ChatSession> = {}): ChatSession {
     title: '',
     model: 'm',
     system_prompt_id: null,
-    context_ids: [],
     created_at: '2025-01-01T00:00:00Z',
     updated_at: '2025-01-01T00:00:00Z',
     ...overrides,
@@ -119,12 +83,6 @@ beforeEach(async () => {
     getRefOpenMode: vi.fn(() => 'center'),
     setRightPanelTab: vi.fn(),
   });
-
-  const { setContextForSession, resetGhostDeltas, getDerivedGhostContext } = await import('../chat/context');
-  (setContextForSession as ReturnType<typeof vi.fn>).mockClear();
-  (resetGhostDeltas as ReturnType<typeof vi.fn>).mockClear();
-  (getDerivedGhostContext as ReturnType<typeof vi.fn>).mockClear();
-  (getDerivedGhostContext as ReturnType<typeof vi.fn>).mockReturnValue({ ...DERIVED_SNAPSHOT });
 
   window.localStorage.clear();
   useChatStore.getState().reset();

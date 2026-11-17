@@ -293,7 +293,6 @@ _GATEWAY_OUTPUT_SCHEMAS: dict[str, dict] = {
             "rules": {"type": "string"},
             "persona": {"type": ["string", "null"]},
             "skills_index": {"type": "array"},
-            "knowledge_index": {"type": "array"},
             "capabilities": {"type": "object"},
         },
     },

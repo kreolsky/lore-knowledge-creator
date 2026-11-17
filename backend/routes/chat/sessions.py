@@ -160,7 +160,7 @@ async def _guard_reasoning_effort(session: dict, body: SessionUpdate) -> None:
     # /capabilities endpoint, unknown model) advertises nothing: non-null is
     # rejected — honest, retryable, never a silent drop.
     # Note sessions never take an LLM turn; the field is silently ignored for
-    # them (the context_ids precedent).
+    # them.
     if session.get("is_note") is True or "reasoning_effort" not in body.model_fields_set:
         return
     if body.reasoning_effort is None:

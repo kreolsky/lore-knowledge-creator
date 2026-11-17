@@ -1,7 +1,7 @@
-/** Shared two-line chat session row — rendered in the empty-screen list. Labels the row with its parent entity: a document-session shows its document title (backend document_title); a reference-scoped chat shows `ref: <reference title>` (its parent IS the reference). The label is clickable → navigates to that document/reference; the row body click → opens the chat. */
+/** Shared two-line chat session row — rendered in the empty-screen list. Meta line: date | persona (brain mark when its memory is on; Default shows none) | parent. Labels the row with its parent entity: a document-session shows its document title (backend document_title); a reference-scoped chat shows `ref: <reference title>` (its parent IS the reference). The label is clickable → navigates to that document/reference; the row body click → opens the chat. */
 
 import { memo, useMemo, useState } from 'react';
-import { Pencil, Trash2, EyeOff } from 'lucide-react';
+import { Pencil, Trash2, EyeOff, Brain } from 'lucide-react';
 import type { ChatSession } from '../../types';
 import { useAppStore } from '../../store/app-store';
 import { useUIStore } from '../../store/ui-store';
@@ -98,6 +98,25 @@ export const ChatRow = memo(function ChatRow({ session, isActive, onSelect, onDe
     ? null
     : (isRef ? t('refParentLabel', { title: rawTitle }) : rawTitle);
 
+  // The chat's persona (system_prompt_id; null = Default, not shown). Its title
+  // comes from the document tree, the memory flag from the list row.
+  const personaTitle = useMemo<string | null>(
+    () => session.system_prompt_id
+      ? documents.find(d => d.document_id === session.system_prompt_id)?.title ?? null
+      : null,
+    [session.system_prompt_id, documents],
+  );
+  const personaLabel = personaTitle ? (
+    // WHY: a plain inline span, not inline-flex — an inline-flex box takes the
+    // icon's bottom edge as its baseline and lifts the title off the meta line.
+    // The 1em icon (11px = text-ui-xs) sits at -0.125em, centring it on the
+    // digits/caps; align-middle centres on half x-height and drops it ~1px.
+    <span className="text-text-muted">
+      {session.persona_memory && <Brain size={11} className="inline-block align-[-0.125em] mr-0.5" aria-label={t('chatPersonaMemoryMark')} />}
+      {personaTitle}
+    </span>
+  ) : null;
+
   // The navigation target: the reference for a ref-session, else the owning doc.
   // Clickable only when it points at a DIFFERENT open entity (a no-op otherwise).
   const parentDocId = isRef ? (session.reference_id ?? null) : (session.document_id ?? null);
@@ -191,6 +210,7 @@ export const ChatRow = memo(function ChatRow({ session, isActive, onSelect, onDe
           parentLabel ? (
             <>
               {dateStr} |{' '}
+              {personaLabel && <>{personaLabel} |{' '}</>}
               {parentClickable ? (
                 <span
                   role="button"
@@ -214,7 +234,7 @@ export const ChatRow = memo(function ChatRow({ session, isActive, onSelect, onDe
                 </span>
               )}
             </>
-          ) : dateStr
+          ) : personaLabel ? <>{dateStr} | {personaLabel}</> : dateStr
         }
         actions={onDelete || onRename ? (
           <RowActions

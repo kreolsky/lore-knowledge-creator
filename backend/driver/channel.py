@@ -248,9 +248,9 @@ class _Subscription:
     listeners: set[asyncio.Queue] = field(default_factory=set)
 
 
-def _claim_preamble(claim: dict, sources: list, chat_id: str | None) -> list[dict]:
+def _claim_preamble(claim: dict, chat_id: str | None) -> list[dict]:
     """The browser's opening frames of a claimed turn: `ids` first, then the
-    context sources and warnings the send's prep carried. `ids` names the
+    context warnings the send's prep carried. `ids` names the
     chat the pair was minted into (None: no live chat took it)."""
     preamble: list[dict] = [{
         "type": "ids",
@@ -259,8 +259,6 @@ def _claim_preamble(claim: dict, sources: list, chat_id: str | None) -> list[dic
         "user_text": claim.get("user_text") or "",
         "chat_id": chat_id,
     }]
-    if sources:
-        preamble.append({"type": "sources", "sources": sources})
     for warning in claim.get("warnings") or []:
         if isinstance(warning, dict):
             preamble.append({"type": "context_warning", **warning})
@@ -270,7 +268,6 @@ def _claim_preamble(claim: dict, sources: list, chat_id: str | None) -> list[dic
 async def _mint_claim(lore_session_id: str, claim: dict) -> tuple[dict | None, list[dict]]:
     """Mint a claim's row pair; return the head chat (None: no live chat took
     it, or the mint failed) and the frames that open the turn in the browser."""
-    sources = claim.get("sources") or []
     try:
         head = await persistence._mint_claim_rows(lore_session_id, claim)
     except Exception:
@@ -280,7 +277,7 @@ async def _mint_claim(lore_session_id: str, claim: dict) -> tuple[dict | None, l
         # WHY: the turn still runs and streams, but with no rows a reload
         # shows nothing of it — say so instead of letting it vanish. Raw (not
         # through the projection): there is no row to stamp a halt on.
-        return None, [*_claim_preamble(claim, sources, None), {
+        return None, [*_claim_preamble(claim, None), {
             "type": "error",
             "message": "This turn could not be saved — it will not be "
                        "in the chat after a reload.",
@@ -289,7 +286,7 @@ async def _mint_claim(lore_session_id: str, claim: dict) -> tuple[dict | None, l
         logger.warning(
             "driver channel: claim without a live head chat session=%s",
             lore_session_id)
-    return head, _claim_preamble(claim, sources, (head or {}).get("cid"))
+    return head, _claim_preamble(claim, (head or {}).get("cid"))
 
 
 class DriverChannel:
@@ -791,7 +788,7 @@ class DriverChannel:
 
     async def _on_claim(self, sub: _Subscription, claim: dict) -> None:
         """dsh claimed a queued send: mint its row pair into the head chat,
-        emit the preamble (ids/sources/context_warning), open the turn, then
+        emit the preamble (ids/context_warning), open the turn, then
         replay the held `turn/start` into it. The claim itself is not relayed
         — the browser learns the turn from `ids`, which carries the user's
         text (a queued message has no optimistic row to take it from) but not
@@ -811,10 +808,9 @@ class DriverChannel:
             await self._close_turn(sub)
         head, preamble = await _mint_claim(sub.lore_session_id, claim)
         self._emit(sub, preamble)
-        sources = claim.get("sources") or []
         sub.turn = await self._open_turn(
             sub, assistant_msg_id=str(claim.get("assistant_msg_id") or ""),
-            sources=sources, user_id=str((head or {}).get("user_id") or ""),
+            user_id=str((head or {}).get("user_id") or ""),
             project_id=str((head or {}).get("project_id") or ""),
         )
         held, sub.held_start = sub.held_start, None
@@ -838,7 +834,7 @@ class DriverChannel:
         self._emit(sub, [frame])
 
     async def _open_turn(
-        self, sub: _Subscription, *, assistant_msg_id: str, sources: list,
+        self, sub: _Subscription, *, assistant_msg_id: str,
         user_id: str, project_id: str,
     ) -> _ChannelTurn:
         # The turn budgets resolve per turn through instance settings, so an
@@ -847,9 +843,7 @@ class DriverChannel:
         turn = _ChannelTurn(
             projection=_TurnProjection(
                 assistant_msg_id=assistant_msg_id,
-                sources=sources,
                 persist_content=persistence._persist_content,
-                persist_sources=persistence._persist_sources,
                 persist_extras=persistence._persist_projection_extras,
                 persist_turn_seq=persistence._persist_turn_seq,
                 session_id=sub.lore_session_id,
@@ -896,7 +890,10 @@ class DriverChannel:
                     sub.lore_session_id, projection.assistant_msg_id,
                 )
             else:
-                await chat_recall.schedule_chat_index(turn.user_id, turn.project_id)
+                await chat_recall.schedule_chat_index(
+                    turn.user_id, turn.project_id,
+                    turn_end_msg_id=projection.assistant_msg_id,
+                )
             if projection.context_usage:
                 try:
                     await persistence._persist_context_usage(

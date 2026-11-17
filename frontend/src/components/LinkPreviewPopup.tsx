@@ -4,7 +4,6 @@
  * Rendered via createPortal to document.body. Plain text with bottom fade gradient
  * (only when content overflows), or image display when imageUrl is provided. An optional
  * `title` renders as a one-line plaque above the body, truncated with an ellipsis.
- * Styling identical to ContentPickerPopup's preview panel.
  */
 // SYSTEM: link-preview-popup — reusable hover preview panel (editor links, sidebar docs)
 

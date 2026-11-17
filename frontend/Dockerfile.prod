@@ -1,7 +1,9 @@
 FROM node:22-alpine AS build
 WORKDIR /app
-COPY package.json .
-RUN npm install --legacy-peer-deps
+COPY package.json package-lock.json ./
+# WHY: `npm ci` from the committed lock — the image installs the tree CI tested;
+# refresh procedure is in frontend/Dockerfile.
+RUN npm ci --legacy-peer-deps
 COPY . .
 RUN npm run build
 

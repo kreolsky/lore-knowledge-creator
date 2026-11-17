@@ -9,7 +9,6 @@
 
 export type PopupId =
   | 'hover-preview'        // DocumentTree + ReferencesPanel + EditorLinkPreview (shared lowest tier)
-  | 'content-picker'       // chat ContentPickerPopup
   | 'link-suggestions'     // editor LinkSuggestionsPopup
   | 'parent-picker';       // ParentPickerPopup (all call sites)
 
@@ -17,7 +16,6 @@ export type PopupPriorityConfig = Record<PopupId, number>;
 
 export const POPUP_PRIORITY: PopupPriorityConfig = {
   'hover-preview':    10,
-  'content-picker':   20,
   'link-suggestions': 20,
   'parent-picker':    30,
 };

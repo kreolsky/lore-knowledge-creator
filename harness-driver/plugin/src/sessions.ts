@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { buildForkSeed, interruptedTurnClosers, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 
+import { isPerCallAsk } from './approvals.ts'
 import { projectSessionEntries } from './entries.ts'
 import { PROVIDER } from './ensure.ts'
 import { restoreActivatedSkills, type ResolvedSkill } from './skills.ts'
@@ -212,7 +213,7 @@ export async function sessionEntries(
   // session's CURRENT dsh id (stream-baselines.ts) — attached to the open
   // turn only, and only while an attempt is active (entries.ts's gate).
   const turns = projectSessionEntries(
-    events as any[], sinceSeq, baselines.snapshot(dshId), terminals)
+    events as any[], sinceSeq, baselines.snapshot(dshId), terminals, isPerCallAsk)
   res.writeHead(200, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify(turns))
 }

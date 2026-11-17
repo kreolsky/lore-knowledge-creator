@@ -4,7 +4,7 @@ VOCABULARY — it accumulates the backend's own facts off the verbatim
 `dsh_event` frames, mints the two backend-product lore events, and relays
 everything else byte-identical. The units under test:
 
-- `_TurnProjection` — the accumulation (content / sources / model / the
+- `_TurnProjection` — the accumulation (content / model / the
   finished-step count / the driver_seq stamp) and the abnormal writes;
 - `_relay_frame` — the dispatch (dsh_event → arm, accumulate frames, error
   frame, everything else verbatim);
@@ -34,7 +34,7 @@ from driver.timeline import DriverTimelineUnavailable
 def _turn(session_id: str = "chat-1") -> driver.frames._TurnProjection:
     return driver.frames._TurnProjection(
         assistant_msg_id="m1", persist_content=AsyncMock(),
-        persist_sources=AsyncMock(), persist_extras=AsyncMock(),
+        persist_extras=AsyncMock(),
         persist_turn_seq=AsyncMock(), session_id=session_id,
     )
 
@@ -106,7 +106,7 @@ async def test_driver_seq_stamp_carries_the_turns_dsh_session():
     (a seq names a boundary only inside its own session's log)."""
     turn = driver.frames._TurnProjection(
         assistant_msg_id="m1", persist_content=AsyncMock(),
-        persist_sources=AsyncMock(), persist_extras=AsyncMock(),
+        persist_extras=AsyncMock(),
         persist_turn_seq=AsyncMock(), session_id="chat-1",
         dsh_session_id="chat-1~fdeadbee",
     )

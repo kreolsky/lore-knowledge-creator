@@ -14,21 +14,22 @@ async def get_ancestor_ids(
     project_id: str | None = None,
     *,
     include_deleted_stop: bool = False,
+    through_deleted: bool = False,
     max_depth: int | None = 50,
 ) -> list[str]:
     """Walk up the document parent chain, returning all IDs including doc_id.
 
     Stops at soft-deleted ancestors (they break the chain) — or, with
-    ``include_deleted_stop=True``, appends the FIRST soft-deleted node and then
-    stops (the move/cycle guards' membership semantics). A dangling parent_id
-    (missing row) is not appended — every caller probes only live-row ids.
-    ``seen`` guards a cyclic parent_id by dedupe only (a repeat ends the walk;
-    routes/references.py keeps-first on repeats). ``max_depth=None`` is the
-    corruption-guard shape: a cap could let a >50-deep move escape the
-    INVARIANT(corruption) cycle check.
+    ``include_deleted_stop=True``, appends the FIRST soft-deleted node and then stops
+    (the move/cycle guards' membership semantics); ``through_deleted=True`` walks past
+    them (the system-root guards). A dangling parent_id (missing row) is not appended —
+    every caller probes only live-row ids. ``seen`` guards a cyclic parent_id by dedupe
+    only (a repeat ends the walk; routes/references.py keeps-first on repeats).
+    ``max_depth=None`` is the corruption-guard shape: a cap could let a >50-deep move
+    escape the INVARIANT(corruption) cycle check.
 
     # ARCH: walks parent_id by primary key — O(tree depth), NOT O(project size).
-    # A full-project scan was ~10x slower on a 144-doc project (Fix 2, perf audit):
+    # A full-project scan was ~10x slower on a 144-doc project:
     # real trees are shallow (depth 2-4) while projects hold hundreds of docs, so
     # a few indexed PK lookups beat materializing every row. project_id is accepted
     # for API compatibility but no longer changes the strategy.
@@ -49,7 +50,7 @@ async def get_ancestor_ids(
         row = rows[0] if rows else None
         if not isinstance(row, dict):
             break
-        if row.get("deleted_at") is not None:
+        if row.get("deleted_at") is not None and not through_deleted:
             if include_deleted_stop:
                 ids.append(current)
             break

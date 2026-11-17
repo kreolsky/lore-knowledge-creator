@@ -381,6 +381,9 @@ export interface PendingVerdict {
   call_id: string;
   tool_name: string;
   message_id: string;
+  /** Approved one call at a time (a per-call tool or a write to the agent's
+   * configuration): no "allow for this chat". */
+  per_call?: boolean;
 }
 
 // One executed/decided step in the agent loop (search/read auto-run; create/edit
@@ -491,6 +494,15 @@ export interface ReasoningCapability {
   effort_levels: string[];
 }
 
+/** chat_sessions.memory: what memory the chat received, on the turn of
+ * `message_id`. `error` set = the persona's memory is off and why; titles are
+ * resolved at read (GET /chat/sessions/{id}/memory). */
+export interface ChatMemoryRecord {
+  message_id: string;
+  chats: { sid: string; date: string }[];
+  error: string | null;
+}
+
 export interface ChatSession {
   session_id: string;
   project_id: string;
@@ -526,14 +538,6 @@ export interface ChatSession {
   // outside it). Reset to null on model change. Optional like
   // context_tokens_used — wire-authored, never client-constructed.
   reasoning_effort?: string | null;
-  context_ids: string[];
-  // ARCH: server-authored
-  // ordered subset of context_ids that are references (is_reference=true). The
-  // single source of truth for the doc/ref split — the client consumes it
-  // directly so a cross-doc reference is never misclassified as a document by
-  // the open doc's scope-limited reference set. Optional: older servers omit it
-  // and the client falls back to its refIdSet split.
-  context_reference_ids?: string[];
   is_note?: boolean;
   /**
    * see SYSTEM: inbox — VIEWER-relative unread flag: this NOTE arrived from
@@ -566,6 +570,16 @@ export interface ChatSession {
   // Kept out of the agent's chat-recall search index (server-authoritative,
   // one value per conversation).
   unindexed?: boolean;
+  // The persona whose conversation memory holds this chat (one value per
+  // conversation): a persona document id, '' = Default (no memory); absent
+  // until the chat's first turn stamps it.
+  origin_persona_id?: string | null;
+  // List rows only: the selected persona (system_prompt_id) has conversation
+  // memory ON (server-parsed frontmatter). Absent on create/update responses.
+  persona_memory?: boolean;
+  // The conversation memory this chat received (server-authored; the send
+  // reply carries it after the turn that recorded it). null/absent = none decided.
+  memory?: ChatMemoryRecord | null;
   // ARCH (plan session-title-from-the-harness): the title pin — a PATCH title
   // (user rename) sets it backend-side, and the harness titler's relayed
   // revision skips pinned rows. Frontend never writes it; declared because
@@ -625,7 +639,6 @@ export interface ChatMessage {
   image_count?: number;
   files?: ChatFile[];
   model?: string;
-  sources?: ChatSource[];
   unsaved?: boolean;
   // WHY: this field is snake_case because it IS the wire name — the chat frame
   // and the driver's replayed frames carry it verbatim, and a camelCase name
@@ -681,18 +694,6 @@ export interface ChatMessage {
   // Emitted by serialize_record for every `*_at` field (pre-formatted for display).
   // Undeclared here until the wire-contract test found it.
   created_at_fmt?: string;
-}
-
-export interface ChatSource {
-  kind: 'document' | 'reference';
-  id: string;
-  title: string;
-  heading?: string;
-  snippet: string;
-  offset_start?: number;
-  offset_end?: number;
-  score: number;
-  retrieved?: boolean;
 }
 
 export interface SemanticSearchHit {

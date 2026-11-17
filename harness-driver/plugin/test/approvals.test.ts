@@ -1,6 +1,5 @@
 /**
- * The approval bridge contract (plan collapse-agent-stack-onto-dsh-vocabulary
- * step 7): dsh's approval/request waterfall is answered by a PARKED question
+ * The approval bridge contract: dsh's approval/request waterfall is answered by a PARKED question
  * that the driver's /approvals endpoints resolve — the verdict vocabulary
  * maps onto dsh's closed outcomes, the allow_session grant is minted from the
  * ASK's record (never the body), an expired ask self-resolves rejected and
@@ -12,7 +11,7 @@ import assert from 'node:assert/strict'
 import { mock } from 'node:test'
 
 import {
-  askLoreApproval, bareAskKey, grantKey, hasLoreGrant, pendingHoldsFor, postVerdictAnswer,
+  askLoreApproval, bareAskKey, grantKey, hasLoreGrant, isPerCallAsk, pendingHoldsFor, postVerdictAnswer,
   registerLoreApprovalBridge, resetLoreApprovalBridgeForTest, resolveSessionAsks,
   resolveVerdict, verdictOutcome,
 } from '../src/approvals.ts'
@@ -90,8 +89,9 @@ test('a parked ask lists under its lore session and resolves allowed-once', asyn
   const parked = bridge.ask('c1', 'dsh-1', 'edit_document')
   // The park is SYNCHRONOUS — the listing sees it in the same tick.
   assert.deepEqual(pendingHoldsFor('lore-1'), [
-    { call_id: 'c1', tool_name: 'edit_document', message_id: 'msg-lore-1' },
+    { call_id: 'c1', tool_name: 'edit_document', message_id: 'msg-lore-1', per_call: false },
   ])
+  assert.equal(isPerCallAsk('c1'), false)
   assert.equal(pendingHoldsFor('other').length, 0)
   assert.equal(resolveVerdict('c1', 'lore-1', 'allow_once', null, null), 200)
   assert.equal(await parked, 'allowed-once')
@@ -122,11 +122,33 @@ test('a reject carries the user\'s words to the asker as the call\'s own result'
 test('allow_session is refused on a per-call tool', async () => {
   const { ask } = fakeBridge(() => tctx('lore-1'))
   const outcome = ask('c-pc', 'dsh-1', 'http_request')
+  // The card reads the same flag (listing + mint), so it offers no session grant.
+  assert.equal(pendingHoldsFor('lore-1')[0].per_call, true)
+  assert.equal(isPerCallAsk('c-pc'), true)
   assert.equal(resolveVerdict('c-pc', 'lore-1', 'allow_session', 'http_request', null), 403)
   assert.equal(hasLoreGrant('lore-1', 'http_request'), false)
   assert.equal(resolveVerdict('c-pc', 'lore-1', 'allow_once', null, null), 200)
   assert.equal(await outcome, 'allowed-once')
   assert.equal(hasLoreGrant('lore-1', 'http_request'), false)
+})
+
+// TEST-WHY: refused-principal — a chat grant on an ordinary page must not approve a write to the agent's own instructions: an ask_every_time call parks despite the grant and its allow_session is refused (403).
+test('an ask_every_time call bypasses the session grant and refuses a new one', async () => {
+  const ctx = tctx('lore-1')
+  const bridge = fakeBridge((dshId) => (dshId === 'dsh-1' ? ctx : undefined))
+  const first = bridge.ask('c-g1', 'dsh-1', 'edit_document')
+  assert.equal(resolveVerdict('c-g1', 'lore-1', 'allow_session', 'edit_document', null), 200)
+  assert.equal(await first, 'allowed-once')
+  assert.ok(hasLoreGrant('lore-1', 'edit_document'))
+  const exec = { callId: 'c-g2', agent: { session: { id: 'dsh-1' } }, signal: undefined }
+  const asked = askLoreApproval(exec, ctx, 'edit_document', 'r', true)
+  // Parked despite the grant — the card is shown again, without the chat grant.
+  assert.equal(pendingHoldsFor('lore-1').length, 1)
+  assert.equal(pendingHoldsFor('lore-1')[0].per_call, true)
+  assert.equal(isPerCallAsk('c-g2'), true)
+  assert.equal(resolveVerdict('c-g2', 'lore-1', 'allow_session', 'edit_document', null), 403)
+  assert.equal(resolveVerdict('c-g2', 'lore-1', 'allow_once', null, null), 200)
+  assert.deepEqual(await asked, { outcome: 'allowed-once' })
 })
 
 test('allow_session mints the grant from the ASK\'s tool, never the body', async () => {

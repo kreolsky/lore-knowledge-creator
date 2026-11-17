@@ -33,7 +33,7 @@ export function SegmentedControl({ options, value, onChange, disabled, ariaLabel
             // (AudienceSection) aligns exactly;
             // the fixed height also makes it font-independent.
             className={`h-[30px] px-2.5 inline-flex items-center text-ui-xs whitespace-nowrap transition-colors duration-150 ${
-              active ? 'bg-accent text-bg' : 'bg-surface text-text-dim hover:bg-surface2'
+              active ? 'bg-accent text-white' : 'bg-surface text-text-dim hover:bg-surface2'
             } ${off ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
           >
             {opt.label}

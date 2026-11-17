@@ -8,7 +8,8 @@ agent's `search_my_chats` tool so both run ONE live-row security predicate.
 # `search_my_chats`, so a Bearer path here would be a second, unconsumed door
 # to private chats.
 """
-from chat_sessions.recall import chat_recall_disabled
+from agent_config_load import instance_skill_disabled
+from chat_sessions.recall import CHAT_RECALL_SKILL
 from chat_sessions.recall_search import ChatScope, require_scope_document, search_chats
 from fastapi import APIRouter, Depends, HTTPException, Query
 from surrealdb import AsyncSurreal
@@ -41,7 +42,7 @@ async def chat_search(
     """
     if not await get_project_access(project_id, user):
         raise HTTPException(status_code=403, detail="No access to this project")
-    if await chat_recall_disabled(db):
+    if await instance_skill_disabled(db, CHAT_RECALL_SKILL):
         raise HTTPException(status_code=403,
                             detail="chat-recall is disabled by the administrator")
     if (scope == "subtree") != (under_document_id is not None):

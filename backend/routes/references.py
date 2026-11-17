@@ -48,7 +48,6 @@ from db import (
 )
 from deps import extract_headings
 from event_bus import emit
-from mentions import resolve_first_circle
 from models import (
     CreateReference,
     DeleteReferencesRequest,
@@ -57,7 +56,6 @@ from models import (
     ResolveReferencesRequest,
 )
 from routes._guards import require_reference
-from table_serialize import expand_tables
 from ydoc_store import set_content
 
 router = APIRouter()
@@ -391,23 +389,6 @@ async def resolve_references(
 async def get_reference(reference_id: str, user: dict = Depends(get_current_user)):
     ref = await require_reference(reference_id, user)
     return _serialize_ref(ref, viewer_id=user["user_id"])
-
-
-@router.get("/api/references/{reference_id}/links")
-async def get_reference_links(reference_id: str, user: dict = Depends(get_current_user)):
-    """First-circle entities linked from this reference's content."""
-    ref = await require_reference(reference_id, user)
-    # ARCH: prefer live-session content over the DB row (mirrors get_document_links /
-    # export_document / chat/context.py) — the DB lags the in-memory Y.Doc by the ~1s
-    # flush. References use collab entity_type "doc" (see RELATE below / line ~182).
-    # The live branch reads the GFM read-model form (expand_tables of the session
-    # Y.Doc) — the anchor-form session text cannot see a table cell's link.
-    from collab.registry import get_active_session
-    content = ref.get("content") or ""
-    session = get_active_session("doc", reference_id)
-    if session and session.clients:
-        content = expand_tables(session.ydoc)
-    return await resolve_first_circle(content, reference_id)
 
 
 @router.post("/api/references")

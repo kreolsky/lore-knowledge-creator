@@ -571,20 +571,6 @@
             "title": "Auto Apply",
             "type": "boolean"
           },
-          "context_ids": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Context Ids"
-          },
           "images": {
             "anyOf": [
               {
@@ -1684,21 +1670,6 @@
             "default": "",
             "title": "Content",
             "type": "string"
-          },
-          "sources": {
-            "anyOf": [
-              {
-                "items": {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sources"
           }
         },
         "title": "MessageUpdate",
@@ -2704,20 +2675,6 @@
             ],
             "title": "Agent Auto"
           },
-          "context_ids": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Context Ids"
-          },
           "document_id": {
             "anyOf": [
               {
@@ -3553,7 +3510,6 @@
                     "transclusion",
                     "attachment",
                     "note",
-                    "chat-context",
                     "external"
                   ],
                   "type": "string"
@@ -3843,11 +3799,17 @@
         "description": "`list_my_chats` body — the caller's visible chats of the key's project,\npaged. Same visible-session predicate as `search_my_chats`; a hidden\n(`unindexed`) chat is invisible here too.",
         "properties": {
           "limit": {
-            "default": 50,
-            "maximum": 100.0,
-            "minimum": 1.0,
-            "title": "Limit",
-            "type": "integer"
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit"
           },
           "offset": {
             "default": 0,
@@ -3879,6 +3841,11 @@
               }
             ],
             "title": "Under Document Id"
+          },
+          "with_topics": {
+            "default": false,
+            "title": "With Topics",
+            "type": "boolean"
           }
         },
         "title": "ToolListMyChats",
@@ -4064,6 +4031,11 @@
             "minimum": 0.0,
             "title": "From Turn",
             "type": "integer"
+          },
+          "topics_only": {
+            "default": false,
+            "title": "Topics Only",
+            "type": "boolean"
           }
         },
         "title": "ToolReadMyChat",
@@ -8678,6 +8650,63 @@
         ]
       }
     },
+    "/api/chat/memory-personas": {
+      "get": {
+        "description": "`{\"persona_ids\": [...]}` — the project's personas with conversation memory\nON, for the persona picker's mark. WHY a route: the frontmatter that decides\nit is parsed server-side only; the client has the personas' titles.",
+        "operationId": "chat_memory_personas_api_chat_memory_personas_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Chat Memory Personas",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
     "/api/chat/messages/{message_id}": {
       "delete": {
         "description": "Soft-delete a message and all its descendants (cascade via BFS on parent_id).\n\nFor note-chats: owner (root) may delete any message (cascade); a non-owner\nauthor may delete only their own LEAF message (single row, no cascade). See\nbackend/access.py:can_modify_note_message. AI chat (is_note=False) is\nREFUSED (400): a branch session only appends — there is no branch surgery.",
@@ -9293,7 +9322,7 @@
     },
     "/api/chat/sessions/{session_id}/completions": {
       "post": {
-        "description": "Queue an LLM turn: validate, assemble the context, hand the send to the\ndriver (dsh queues it behind a running turn). Answers JSON `{accepted,\nuser_msg_id, assistant_msg_id, dsh_session_id, message_id}` — `message_id`\nis the dsh inbox message; the rows and frames arrive at its claim, on the\nproject WS.",
+        "description": "Queue an LLM turn: validate, prepare the turn, hand the send to the\ndriver (dsh queues it behind a running turn). Answers JSON `{accepted,\nuser_msg_id, assistant_msg_id, dsh_session_id, message_id}` — `message_id`\nis the dsh inbox message; the rows and frames arrive at its claim, on the\nproject WS.",
         "operationId": "create_completion_api_chat_sessions__session_id__completions_post",
         "parameters": [
           {
@@ -9596,6 +9625,63 @@
         ]
       }
     },
+    "/api/chat/sessions/{session_id}/memory": {
+      "get": {
+        "description": "The conversation memory this chat received: `{message_id, error, chats:\n[{sid, title, date}], hidden}`, or `{\"memory\": null}` when none was decided.\n\nA recorded chat that `visible_sessions` no longer returns (deleted,\nunindexed, under a hidden subtree) is left out and counted in `hidden`.",
+        "operationId": "chat_memory_api_chat_sessions__session_id__memory_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Chat Memory",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
     "/api/chat/sessions/{session_id}/messages": {
       "get": {
         "description": "Return a chat session's messages (paginated) and its queue —\n`{messages, queue, queue_seq}`: the live dsh agent's next-turn inbox and\nthe seq that snapshot includes (empty/None for a note chat).\n\nPagination anchors differ by kind: AI chats are front-anchored (oldest\nfirst, offset>0 refused — the timeline cannot resolve mid-thread); note\nthreads are TAIL-anchored (offset=0 serves the newest page, offset pages\ntoward the head) so a long note never hides its newest rows.",
@@ -9808,6 +9894,63 @@
           }
         },
         "summary": "Get Message Images",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/api/chat/sessions/{session_id}/toc": {
+      "get": {
+        "description": "The chat's table of contents for the prompt navigator: its topics and\nthe user-message ids they cover, or `{\"toc\": null, \"reason\": …}` —\n`recall_off` | `unindexed` | `memory_off` | `pending`. A stored toc is\nreturned whatever the reason would be: topics are kept forever.",
+        "operationId": "chat_toc_api_chat_sessions__session_id__toc_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Chat Toc",
         "tags": [
           "chat"
         ]
@@ -10911,7 +11054,7 @@
     },
     "/api/documents/{document_id}/edges": {
       "get": {
-        "description": "Typed edges of a document OR reference — both directions, every relation\nkind the product shows as a link (plan typed-edges).\n\n`direction` = in|out|both; `kinds` = comma-separated filter, default\n`mention,transclusion,attachment` (note/chat-context/external are opt-in;\n`external` answers from the GFM read-model — live session when it has\nclients, else the DB row — and carries url + label instead of document_id).\nDocument peers carry {document_id, title, is_reference, source_type, broken\n(outgoing stored edges only), updated_at}; note/chat peers carry session_id\n+ label (chat-context = the viewer's OWN chats). The same service answers\nthe agent's get_links tool — one function, one default.",
+        "description": "Typed edges of a document OR reference — both directions, every relation\nkind the product shows as a link (plan typed-edges).\n\n`direction` = in|out|both; `kinds` = comma-separated filter, default\n`mention,transclusion,attachment` (note/external are opt-in;\n`external` answers from the GFM read-model — live session when it has\nclients, else the DB row — and carries url + label instead of document_id).\nDocument peers carry {document_id, title, is_reference, source_type, broken\n(outgoing stored edges only), updated_at}; note peers carry session_id\n+ label. The same service answers\nthe agent's get_links tool — one function, one default.",
         "operationId": "get_document_edges_api_documents__document_id__edges_get",
         "parameters": [
           {
@@ -11175,60 +11318,6 @@
           }
         },
         "summary": "Get Document History"
-      }
-    },
-    "/api/documents/{document_id}/links": {
-      "get": {
-        "description": "Return first-circle entities explicitly linked from this document's body.",
-        "operationId": "get_document_links_api_documents__document_id__links_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "document_id",
-            "required": true,
-            "schema": {
-              "title": "Document Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "cookie",
-            "name": "lore_session",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Lore Session"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Document Links"
       }
     },
     "/api/documents/{document_id}/move": {
@@ -15367,60 +15456,6 @@
         "summary": "Delete Reference File"
       }
     },
-    "/api/references/{reference_id}/links": {
-      "get": {
-        "description": "First-circle entities linked from this reference's content.",
-        "operationId": "get_reference_links_api_references__reference_id__links_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "reference_id",
-            "required": true,
-            "schema": {
-              "title": "Reference Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "cookie",
-            "name": "lore_session",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Lore Session"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Reference Links"
-      }
-    },
     "/api/references/{reference_id}/retry": {
       "post": {
         "description": "Re-queue a stuck/failed reference: audio → transcription, .docx → conversion.\n\nDelegates to the shared `_reprocess_reference` core (also used by the agent-only\nreprocess_reference tool). Access (require_document_full) is checked at this\nedge; the core owns the retryable-state + dispatch-by-file-type invariants.\n\n# see SYSTEM: capability-tiers — the audio arm re-enqueues STT, so it is\n# 'voice'-gated (a base account cannot restart a transcription).",
@@ -16310,7 +16345,7 @@
     },
     "/api/tool/consolidate_memory": {
       "post": {
-        "description": "Start (or continue) a consolidation run: mint the run, serve its FIRST portion.\n\n# ARCH (design P13): the TOOL is the capability and the boundary; the framing\n# is delivered by the memory-consolidation skill (on demand). It is therefore in\n# AGENT_TOOLS and callable under ANY persona including Default — if using memory\n# required selecting a persona it would be a mode, not a memory, and the future\n# ambient path (which has no persona at all) would start life needing a rewrite.\n\nAccess note: the target is gated by the CALLING key's project, so a target in\nanother project 404s uniformly (no existence oracle). The run key this mints is\nnarrower than the caller's, never wider — it is sandboxed to `Memory` while the\ncaller's chat key is whole-project.",
+        "description": "Start (or continue) a consolidation run: mint the run, serve its FIRST portion.\n\nAccess note: the target is gated by the CALLING key's project, so a target in\nanother project 404s uniformly (no existence oracle). The run key this mints is\nnarrower than the caller's, never wider — it is sandboxed to `Memory` while the\ncaller's chat key is whole-project.",
         "operationId": "tool_consolidate_memory_api_tool_consolidate_memory_post",
         "parameters": [
           {

@@ -1,9 +1,10 @@
 /** Scrollable message list — renders the branch path from the message tree. Chat-store slices: selectBranchPath, streaming, messagesLoading, activeSessionId. */
 
-import { useEffect, useRef, useMemo, useLayoutEffect, useCallback } from 'react';
+import { Fragment, useEffect, useRef, useMemo, useLayoutEffect, useCallback } from 'react';
 import { MessageBubble, type MessageBubbleActions } from './MessageBubble';
 import type { ForkNav } from './MessageBubble';
 import { ChatEmptyList } from './ChatEmptyList';
+import { ChatMemoryRow } from './ChatMemoryRow';
 import { useChatStore, selectBranchPath } from '../../store/chat-store';
 import type { ChatMessage } from '../../types';
 import type { TurnNodeLike } from './MessageBubble/internal/turn-nodes';
@@ -127,6 +128,9 @@ export function MessageList() {
   const messagesError = useChatStore(s => s.messagesError);
   const chatScopeLoading = useChatStore(s => s.chatScopeLoading);
   const activeSessionId = useChatStore(s => s.activeSessionId);
+  // The memory this chat received — its row sits before the user message of
+  // the turn that brought it.
+  const memory = useChatStore(s => s.sessions.find(ss => ss.session_id === s.activeSessionId)?.memory);
   const loadMessages = useChatStore(s => s.loadMessages);
   // The read keys on the is_note axis — every non-note (AI) session is an agent
   // session; note chats (handled by a different composer) never reach
@@ -520,8 +524,11 @@ export function MessageList() {
     <div className="relative flex-1 flex min-h-0">
       <div ref={containerRef} onScroll={handleScroll} className="chat-selection chat-scroll [overflow-anchor:none] flex-1 min-w-0 overflow-y-auto px-3 py-3">
         {activePath.map((msg, idx) => (
+          <Fragment key={msg.message_id}>
+          {memory && activeSessionId && msg.message_id === memory.message_id && (
+            <ChatMemoryRow sessionId={activeSessionId} record={memory} />
+          )}
           <MessageBubble
-            key={msg.message_id}
             message={msg}
             variant="ai"
             isOwn={msg.role === 'user'}
@@ -533,9 +540,10 @@ export function MessageList() {
             isAgent={isAgent}
             actions={actions}
           />
+          </Fragment>
         ))}
       </div>
-      <PromptRail items={railItems} containerRef={containerRef} onJump={jumpToUser} />
+      <PromptRail items={railItems} containerRef={containerRef} sessionId={activeSessionId} onJump={jumpToUser} />
     </div>
   );
 }

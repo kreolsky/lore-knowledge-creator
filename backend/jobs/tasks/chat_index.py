@@ -20,8 +20,9 @@ import logging
 from collections import defaultdict
 
 import settings
+from agent_config_load import instance_skill_disabled
 from chat_sessions.conversation import origin_of
-from chat_sessions.recall import chat_recall_disabled, schedule_chat_index
+from chat_sessions.recall import CHAT_RECALL_SKILL, schedule_chat_index, take_rerun
 from content_hash import hash_content
 from markdown_chunker import chunk_markdown
 
@@ -218,7 +219,7 @@ async def _purge_unindexable(db, user_id: str, project_id: str) -> int:
 async def indexing_state(db) -> tuple[str, str | None]:
     """`(state, model)`: `("on", model)`, or `("skill_disabled" |
     "embeddings_unconfigured", None)` while indexing is off."""
-    if await chat_recall_disabled(db):
+    if await instance_skill_disabled(db, CHAT_RECALL_SKILL):
         return "skill_disabled", None
     model = await _embedding_model()
     if model is None:
@@ -243,13 +244,21 @@ async def index_chat_messages(ctx, user_id: str, project_id: str) -> None:
                         user_id, project_id, purged)
         return
     purged = written = 0
+    await take_rerun(ctx)
     for _ in range(CHAT_INDEX_MAX_PASSES):
         pending, stale = await plan_chat_index(db, user_id, project_id, model)
         await _purge(db, user_id, project_id, stale)
+        # WHY the guard: _index_pending writes its first message whatever the
+        # budget, and a rerun pass past the budget is owed the purge only.
         wrote = await _index_pending(
-            db, pending, user_id, project_id, model, CHAT_INDEX_RUN_BUDGET - written)
+            db, pending if written < CHAT_INDEX_RUN_BUDGET else [],
+            user_id, project_id, model, CHAT_INDEX_RUN_BUDGET - written)
         purged, written = purged + len(stale), written + wrote
-        if (not stale and not wrote) or written >= CHAT_INDEX_RUN_BUDGET:
+        # WHY the rerun flag first: a post that collapsed onto this run (a
+        # «Не запоминать» toggle) owes a purge pass even once the write budget
+        # is spent — that pass purges and writes nothing (see the INVARIANT in
+        # recall._post_reconcile).
+        if not await take_rerun(ctx) and ((not stale and not wrote) or written >= CHAT_INDEX_RUN_BUDGET):
             break
     if purged or written:
         logger.info("chat index user=%s project=%s: purged %d, wrote %d chunks",

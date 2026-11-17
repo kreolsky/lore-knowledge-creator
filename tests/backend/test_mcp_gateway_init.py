@@ -62,11 +62,11 @@ async def test_init_returns_required_keys(client, mcp_running, test_db, admin_us
 
     for key in (
         "protocol_version", "project", "acting_user", "instructions",
-        "rules", "persona", "skills_index", "knowledge_index",
+        "rules", "persona", "skills_index",
     ):
         assert key in pkg, f"init package missing key {key!r}"
 
-    assert pkg["protocol_version"] == 1
+    assert pkg["protocol_version"] == 2
     assert pkg["project"]["id"] == pid
     assert pkg["project"]["name"]
     assert pkg["acting_user"]["user_id"] == admin_uid

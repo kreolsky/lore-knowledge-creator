@@ -25,7 +25,11 @@ from models import (
     ToolSandboxFetchReference,
     ToolSandboxFetchSkill,
 )
-from routes.tool_api._common import _refuse_unconfirmable, _resolve_apply_or_force
+from routes.tool_api._common import (
+    _is_system_target,
+    _refuse_unconfirmable,
+    _resolve_apply_or_force,
+)
 from routes.tool_api_telemetry import track_agent_tool
 from scope import gate_mutation_target
 
@@ -420,13 +424,14 @@ async def _gate_replace_target(ctx: dict, body: ToolReplaceArtifactPage) -> None
                    "document is edited with edit_document",
         )
     decision = await _resolve_apply_or_force(
-        ctx, ui_preference=body.apply.value, is_system=bool(target.get("is_system")),
+        ctx, ui_preference=body.apply.value,
+        is_system=await _is_system_target(body.document_id, ctx["project_id"], target),
     )
     # INVARIANT(security): a `confirm` call is refused with the 409 ask signal.
     # Why: the driver holds a call ONLY on that 409 — a whole-body rewrite must
     # not bypass the approval `edit_document` gets on the same page.
     if decision.mode != "auto":
-        _refuse_unconfirmable("replace_artifact_page")
+        _refuse_unconfirmable("replace_artifact_page", decision.reason)
 
 
 # INVARIANT: the route path MUST equal the tool name exactly (see tool_sandbox_bash).

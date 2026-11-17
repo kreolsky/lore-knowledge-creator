@@ -125,7 +125,7 @@ function prep(text: string, over: Partial<TurnPrep> = {}): TurnPrep {
     selection: { provider: 'mock', model: 'm1' },
     systemPrompt: 'SYSTEM one',
     timeStamps: [],
-    servedNames: new Set(), skills: [], activated: new Set(),
+    servedNames: new Set(), skills: [], activated: new Set(), preloads: [], memoryBlock: '', memoryPersona: '',
     standingCtx: {
       loreSessionId: 'lore-x', agentKey: 'k', mutating: new Set(), holdable: new Set(), perCallApproval: new Set(),
      
@@ -133,7 +133,7 @@ function prep(text: string, over: Partial<TurnPrep> = {}): TurnPrep {
     requestCtx: { messageId: `a-${text}`, applyMode: 'confirm', document_id: null, vision: false },
     claim: {
       user_msg_id: `u-${text}`, assistant_msg_id: `a-${text}`, user_text: text,
-      images: [], files: [], sources: [], warnings: [],
+      images: [], files: [], warnings: [],
     },
     ...over,
   }
@@ -223,7 +223,7 @@ test('the claim frame carries the prep facts the backend mints the pair from', a
   const h = await harness([{ text: 'R' }])
   const facts = {
     user_msg_id: 'u-1', assistant_msg_id: 'a-1', user_text: 'hello',
-    images: ['data:image/png;base64,AAAA'], files: [FILE], sources: [{ id: 'doc' }],
+    images: ['data:image/png;base64,AAAA'], files: [FILE],
     warnings: [{ code: 'image_not_delivered' }],
   }
   const messageId = await send(h, 's-claim', 'hello', prep('hello', { model: 'm-claim', claim: facts }))
@@ -278,7 +278,7 @@ test("the person's Stop takes the queue out and returns its text, images and fil
   await until(() => h.adapter.requests.length === 1, 'the first model call')
   await send(h, 's-back', 'B', prep('B', { claim: {
     user_msg_id: 'u-B', assistant_msg_id: 'a-B', user_text: 'B',
-    images: ['data:image/png;base64,AAA'], files: [FILE], sources: [], warnings: [],
+    images: ['data:image/png;base64,AAA'], files: [FILE], warnings: [],
   } }))
   await send(h, 's-back', 'C')
   const reply = stopSession('s-back', true)

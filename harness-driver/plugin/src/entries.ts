@@ -130,6 +130,7 @@ export function projectSessionEntries(
   events: DshEvent[], sinceSeq?: number,
   assistantStream?: SessionAssistantStreamBaseline,
   terminals?: boolean,
+  askPerCall?: (callId: string) => boolean,
 ): ReplayedSession {
   const turns: ReplayedTurn[] = []
   let pending: DshEvent[] = []
@@ -149,7 +150,7 @@ export function projectSessionEntries(
     if (ev.type === 'turn/start') {
       open = { frames: [], state: newTurnMapState(), startSeq: ev.seq }
       for (const buffered of pending) {
-        open.frames.push(...mapEvent(buffered, open.state))
+        open.frames.push(...mapEvent(buffered, open.state, undefined, askPerCall))
       }
       pending = []
     }
@@ -157,7 +158,7 @@ export function projectSessionEntries(
       pending.push(ev)
       continue
     }
-    open.frames.push(...mapEvent(ev, open.state))
+    open.frames.push(...mapEvent(ev, open.state, undefined, askPerCall))
     if (ev.type === 'turn/end') {
       // After mapEvent's own output (the verbatim turn/end relay + the halt
       // mint when the reason mints one) — the terminal always orders last.

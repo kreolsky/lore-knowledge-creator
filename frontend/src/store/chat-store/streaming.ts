@@ -3,7 +3,7 @@
  * ONE transport: the turn is DRIVER-owned — POST /completions answers JSON
  * and the frames arrive as project-WS chat_frame envelopes, dispatched
  * through createTurnSink into the frame handlers + the assembler feed. */
-import type { ChatFile, ChatMessage, ChatSource } from '../../types';
+import type { ChatFile, ChatMemoryRecord, ChatMessage } from '../../types';
 import { apiClient } from '../../api/client';
 import { useAppStore } from '../app-store';
 import { t } from '../../i18n';
@@ -26,30 +26,6 @@ const isNonEmptyStr = (v: unknown): v is string =>
 /** A fresh, idle streaming-state object (no controller) for `sessionId`'s turn. */
 export function emptyStreaming(sessionId: string): StreamingState {
   return { sessionId, messageId: null, content: '', controller: null };
-}
-
-// ARCH: a turn emits `sources` MORE THAN ONCE and in ANY order relative to
-// `ids`: the manual/explicit context sources (retrieved:false) are streamed first — before
-// the `ids` event that creates the assistant message — and each `search_materials`
-// agent call later streams its semantic hits (retrieved:true). We accumulate across
-// all `sources` events into one deduped list.
-// INVARIANT: dedup by id, and a manual entry (retrieved:false) wins over a retrieval
-// twin (retrieved:true) for the same id — the user explicitly attached the whole
-// document, so it must show without the auto-found chain icon.  Why: dedup by id; a manually-attached entry (retrieved:false) wins over its auto-found twin (retrieved:true) so an explicit attachment shows without the chain icon.
-// Why: the backend reorder in 8d16796 put `sources` before `ids`; a handler that
-// only attached when streamingMessageId was already set silently dropped the manual
-// sources. Order-independent accumulation removes the ordering dependency entirely.
-function mergeSources(acc: ChatSource[], incoming: ChatSource[]): ChatSource[] {
-  const next = [...acc];
-  for (const src of incoming) {
-    const i = next.findIndex(s => s.id === src.id);
-    if (i === -1) {
-      next.push(src);
-    } else if (next[i].retrieved !== false && src.retrieved === false) {
-      next[i] = src;
-    }
-  }
-  return next;
 }
 
 /** Finalize streaming.content into the message, clear state. */
@@ -124,7 +100,6 @@ function createTurnSink(
   ctx: TurnFramesCtx,
 ): { frame: (ev: Frame) => void; accept: (obj: unknown) => Frame | null; warnMalformed: (e: unknown) => void } {
   const opts = ctx;
-  let sourcesForMsg: ChatSource[] = [];
   let warnedMalformed = false;  // one-shot per stream (see the drop site below)
 
   // DISPLAY work (the assembler feed, the messages buffer, the slot) belongs
@@ -146,8 +121,7 @@ function createTurnSink(
   };
 
   // Frame handler map: the per-event-type logic lives in ONE record instead of a
-  // long if/else chain. The handlers close over the shared `sourcesForMsg` and
-  // are dispatched by `event.type` below. Per-token batching is the FEED's job
+  // long if/else chain. The handlers are dispatched by `event.type` below. Per-token batching is the FEED's job
   // now (conversation-feed coalesces its publications per animation frame), so
   // no delta accumulator lives here.
 
@@ -191,8 +165,6 @@ function createTurnSink(
         role: 'assistant',
         content: '',
         created_at: new Date().toISOString(),
-        // Seed from any `sources` events that arrived before `ids`.
-        ...(sourcesForMsg.length > 0 ? { sources: sourcesForMsg } : {}),
       };
       const baseMessages = existing
         ? get().messages.map(m => m.message_id === userId ? userMsg : m)
@@ -251,21 +223,6 @@ function createTurnSink(
           mid && m.message_id === mid ? { ...m, content: (m.content ?? '') + errMsg } : m,
         ),
       }));
-    },
-    sources(ev) {
-      sourcesForMsg = mergeSources(sourcesForMsg, ev.sources as ChatSource[]);
-      // Apply now if the assistant message already exists; otherwise the `ids`
-      // handler seeds it from the accumulator (order-independent). The messages
-      // write is DISPLAY work — gated like every write into the shown buffer.
-      if (!isShown()) return;
-      const mid = get().streaming?.messageId ?? null;
-      if (mid) {
-        set(s => ({
-          messages: s.messages.map(m =>
-            m.message_id === mid ? { ...m, sources: sourcesForMsg } : m,
-          ),
-        }));
-      }
     },
     // The dsh_event + lore/* frames have NO handler here: they are the
     // assembler's input — the dispatch below feeds them to conversation-feed
@@ -651,6 +608,17 @@ interface CompletionOpts {
   onAccepted?: (messageId: string) => void;
 }
 
+/** The send reply's `memory` (the row's record after the turn) onto the
+ * session row — the header's brain and the list's memory row read it. A reply
+ * without the key (an older server) changes nothing. */
+export function applyReplyMemory(set: Set, sessionId: string, reply: unknown): void {
+  if (!reply || typeof reply !== 'object' || !('memory' in reply)) return;
+  const memory = (reply as { memory: ChatMemoryRecord | null }).memory;
+  set(s => ({
+    sessions: s.sessions.map(ss => (ss.session_id === sessionId ? { ...ss, memory } : ss)),
+  }));
+}
+
 async function _harnessCompletion(
   get: () => ChatState,
   set: Set,
@@ -678,6 +646,7 @@ async function _harnessCompletion(
   try {
     const reply = await apiClient.post(endpoint, opts.body, { signal: opts.signal });
     if (isNonEmptyStr(reply?.message_id)) opts.onAccepted?.(reply.message_id);
+    applyReplyMemory(set, sessionId, reply);
   } catch (e) {
     if (turn.settled) return;
     // Nothing was queued (a refused send emits no frames — the HTTP status

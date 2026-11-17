@@ -2,22 +2,14 @@
 
 Extracted from sessions-slice (plan: p1-debt-paydown, P1-4). Owns the unified
 session-materialization entry point (lazy-create on first send + every create
-intent), incl. the access guard, the pending-PATCH flush, the ghost-context warm +
-snapshot. The main slice composes it via object spread; cross-action calls go
+intent), incl. the access guard and the pending-PATCH flush. The main slice composes it via object spread; cross-action calls go
 through `get()`. */
 import { apiClient } from '../../../api/client';
 import { useAppStore } from '../../app-store';
 import { useUIStore } from '../../ui-store';
-import { showsBothPanes, refIsScope } from '../../ui-store/documents-slice';
+import { refIsScope } from '../../ui-store/documents-slice';
 import { t } from '../../../i18n';
 import { getLogoutEpoch } from '../../logout-handlers';
-import {
-  getDerivedGhostContext,
-  ghostBaseTargets,
-  resetGhostDeltas,
-  setContextForSession,
-} from '../../../chat/context';
-import { fetchDocumentLinksFresh, fetchReferenceLinksFresh, linkCache } from '../../../api/links';
 import type { ChatSession } from '../../../types';
 import type { ChatState, CreateSessionParams, Set, Get } from '../types';
 import { getPendingSessionPatch } from '../inflight';
@@ -111,57 +103,6 @@ export function createCreateActions(set: Set, _get: Get): CreateActions {
       insertAndPinSession(set, session, {
         focus: focus !== false,
       });
-      // Ghost-context materialization. Warm the open entity's first-circle into
-      // the shared linkCache BEFORE the single derive pass, then snapshot the DERIVED
-      // ghost context onto the real session id synchronously, then reset the ghost
-      // deltas.
-      // ARCH: warm-before-snapshot, so the single getDerivedGhostContext() pass is the
-      //   one source of truth for the materialized context — there is deliberately NO
-      //   second write path (a post-snapshot backfill through addWithCascade would
-      //   union the target's full first-circle back on and clobber whatever the user
-      //   unchecked). deriveGhostContext folds base + first-circle, THEN applies
-      //   subtractWithCascade on the removed deltas, so an UNCHECKED first-circle child
-      //   stays removed. The agent's editable target_doc_id is set on the POST payload
-      //   above and is orthogonal to context; every createSession({targetDocId}) caller
-      //   passes the OPEN entity, so derive already yields target + first-circle.
-      // INVARIANT: skip-if-warm — only fetch ids NOT already in linkCache. The warm  Why: the warm effect usually filled the cache; fetching only missing ids avoids a refetch and keeps the snapshot byte-identical to the picker's selection.
-      //   effect (useGhostContextWarm, runs in ChatPanel) usually filled them, so this
-      //   avoids a refetch and keeps the snapshot byte-identical to the picker's
-      //   displayed selection. Still guarantees first-circle on turn 1 even when the
-      //   warm effect never ran (e.g. the chat tab is closed while the first send
-      //   lands) — the cold entry is fetched here, no silent
-      //   display-vs-send disagreement (no-silent-degradation).
-      const warmDocId = useAppStore.getState().currentDocument?.document_id ?? documentId ?? null;
-      // Scope projection (panel preview → null): warm exactly what the derived
-      // base will fold, matching the bridge's snapshot input.
-      const mode = useUIStore.getState().getRefOpenMode(warmDocId ?? '');
-      const scopeRefId = refIsScope(mode) ? useAppStore.getState().currentReference : null;
-      const warmRefId = scopeRefId?.reference_id ?? referenceId ?? null;
-      const warmSplit = !!warmDocId && showsBothPanes(mode);
-      const warmTargets = ghostBaseTargets(warmDocId, warmRefId, warmSplit);
-      // WHY: this loop looks like a duplicate of useGhostContextWarm's first-circle
-      //   fetch (use-ghost-context.ts), but the two intentionally diverge and are NOT
-      //   consolidated into a warmFirstCircle(targets) helper:
-      //   - targets: base only here (no manual deltas — they are folded by the derive
-      //     pass itself), vs base+deltas in the effect.
-      //   - no bumpLinkCacheVersion here (this is a one-shot synchronous snapshot, not
-      //     a reactive re-derive), vs the effect bumps so the selector recomputes.
-      //   - no _pendingLinks dedup (awaited once inline), vs the effect dedupes per key.
-      //   - failure is silent best-effort (.catch noop): a failed fetch here only means
-      //     the snapshot goes bare-id, matching whatever the picker last showed — NOT the
-      //     reactive display path that warrants the effect's warn+toast escalation.
-      //   Unifying would force 3+ flags → param-flag branch; left as two explicit loops.
-      const warmTasks: Array<Promise<unknown>> = [];
-      for (const id of warmTargets.docs) if (!linkCache.has(`doc:${id}`)) warmTasks.push(fetchDocumentLinksFresh(id).catch(() => {}));
-      for (const id of warmTargets.refs) if (!linkCache.has(`ref:${id}`)) warmTasks.push(fetchReferenceLinksFresh(id).catch(() => {}));
-      if (warmTasks.length) await Promise.all(warmTasks);
-      // The warm `await` sits between the POST epoch-check (above) and the
-      // snapshot — re-check the epoch so a soft logout that bumped it during the fetch
-      // is treated exactly like the post-POST guard (no write to a reset store).
-      if (getLogoutEpoch() !== startEpoch) return null;
-      const snap = getDerivedGhostContext();
-      setContextForSession(session.session_id, snap.docIds, snap.refIds);
-      resetGhostDeltas();
       return session;
     },
   };

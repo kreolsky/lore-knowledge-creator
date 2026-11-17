@@ -21,31 +21,24 @@ READ_TOOLS: list[dict] = [
             # project's established knowledge. Stated on both surfaces Lore owns: this
             # description and configs/skill_web_search.md (web_search itself is dsh's tool).
             "description": (
-                "Semantic search across documents, references and project memory. "
-                "The project outranks the internet: answer from what this project "
-                "holds before considering `web_search`, including on well-known "
-                "subjects — the project may have its own established position. Only "
-                "material already served in this conversation outranks this tool. "
-                "Returns snippets + ids; use read_document to read the content "
-                "(a long document arrives in slices — follow `next_offset` until "
-                "it is absent). Each hit "
-                "carries a `kind`: `memory` hits are distilled facts the project "
-                "already established (served whole, prefer them over raw material); "
-                "`document` / `reference` hits are raw excerpts, and the first hit of a "
-                "document carries its `outline` (the headings) — judge from it whether "
-                "the document is worth opening. A `memory` hit also "
-                "carries `sources` — the reference ids the fact was distilled from. "
+                "Semantic search over this project's documents, references and memory. "
+                "The project outranks the internet: search here before `web_search`, "
+                "even on well-known subjects — the project may hold its own position. "
+                "Only material already in this conversation outranks it.\n"
+                "Hits carry `kind`: `memory` = a distilled fact the project established "
+                "(prefer it over raw material), with `sources` = the reference ids it "
+                "came from; `document` / `reference` = a raw snippet, the first hit per "
+                "document with its `outline` — judge from it whether to open the "
+                "document. "
                 # WHY: the route to `sources` is triggered by an answer the model
                 # presents as detailed or grounded, NOT only by a verbatim quote.
                 # Why: gated on quoting alone, a model reads "no quote requested" as
                 # "sources not needed" and answers a detailed question from distilled
                 # snippets — a memory hit is a claim, never the evidence for it.
-                "To quote the underlying passage verbatim, or to give any answer you "
-                "present as detailed or grounded in this project, take a `sources` id "
-                "and call `read_document` on it, following `next_offset` until "
-                "absent to cover the WHOLE reference; "
-                "do NOT search for the passage — search returns snippets, which cannot "
-                "satisfy a verbatim quote, and guessing the wording loops. "
+                "Snippets are not content: to quote verbatim, or for any answer you "
+                "present as detailed or grounded in the project, call `read_document` "
+                "on the `sources` ids and read the WHOLE reference — never search for "
+                "the passage. "
                 # `corpus` names WHAT to search in the project's entity model:
                 # references are the raw working stock, documents the compiled
                 # artifact, memory the distilled knowledge (each fact carrying
@@ -69,31 +62,16 @@ READ_TOOLS: list[dict] = [
                 # bleeding symptoms) blended unlabelled into an answer framed as what
                 # the project documents, which is how a reader ends up trusting the
                 # model's weights as this project's established position.
-                "Keep the two sources of an answer apart: what this project's material "
-                "states, and what you add from your own knowledge. Mark the second as "
-                "your own knowledge instead of letting it read as the project's "
-                "position, and say plainly what the project does not cover — an "
-                "unstated gap filled from your own knowledge reaches the reader as an "
-                "established project fact.\n"
-                "\n"
-                "Phrase `query` the way an ANSWER would be written, not the way a "
-                "question is asked: the statement or the key terms you expect to find "
-                "in the text. Word forms are handled for you — do not list inflections "
-                "or synonyms by hand. Put the human version of what you want in "
-                "`intent`; that is what the user sees, and it is not searched.\n"
-                "\n"
-                "This search has no query operators: quotes do not force an exact "
-                "phrase, `*` is not a wildcard, and naming a file does not restrict "
-                "the search to it — all three are matched as ordinary text. To match a "
-                "literal string (an id, a filename, a code, an exact term) use "
-                "`mode: \"exact\"`. `exact` can never find anything `semantic` would "
-                "miss — it only removes matches, so an empty `exact` result means the "
-                "string is not in the project, and re-running it in other words cannot "
-                "change that.\n"
-                "\n"
-                "If a search comes back thin, raise `k` or search for a different "
-                "thing — re-running the same search in other words is the one move "
-                "that reliably wastes a turn."
+                "Keep apart what the project's material states and what you add from "
+                "your own knowledge: label the latter as yours, and say plainly what "
+                "the project does not cover.\n"
+                "Write `query` as the answer would read (the statement or key terms), "
+                "not as a question; word forms are handled — no inflection or synonym "
+                "lists. No operators: quotes, `*` and filenames are plain text. For a "
+                "literal string (id, filename, code) use `mode: exact` — an empty "
+                "exact result means the string is not in the project. Thin result: "
+                "raise `k` or search for something else; rewording the same search "
+                "wastes a turn."
             ),
             "parameters": {
                 "type": "object",
@@ -102,9 +80,8 @@ READ_TOOLS: list[dict] = [
                     "intent": {
                         "type": "string",
                         "description": (
-                            "One short human-readable phrase naming what you are "
-                            "looking for. Shown to the user in place of `query`. Not "
-                            "searched."
+                            "Short human phrase for what you look for; shown to the "
+                            "user instead of `query`, not searched."
                         ),
                     },
                     "mode": {
@@ -112,31 +89,21 @@ READ_TOOLS: list[dict] = [
                         "enum": ["semantic", "exact"],
                         "default": "semantic",
                         "description": (
-                            "`semantic` (default) searches by meaning + word forms + "
-                            "literal substrings, fused by rank. `exact` matches the "
-                            "literal `query` string only (a filename, an id, a code) "
-                            "and is a strict subset of `semantic` — it never finds "
-                            "more, only less."
+                            "`semantic` (default): meaning + word forms + literal "
+                            "substrings. `exact`: the literal `query` only — a strict "
+                            "subset of `semantic`, never more."
                         ),
                     },
                     "under_document_id": {
                         "type": "string",
                         "description": (
-                            "Optional: a document id whose subtree (itself + all "
-                            "descendants) to restrict the search to. Default is the "
-                            "whole project — narrowing is opt-in. When set, memory "
-                            "is narrowed by PLACEMENT: a distilled fact is kept "
-                            "iff it came from a reference hosted in the subtree, "
-                            "or from a chat parented there, or was anchored to a "
-                            "document in it (set_fact_anchor); expect FEWER "
-                            "memory hits under a narrow (facts with no resolvable "
-                            "placement drop too — a known limitation, not "
-                            "absence of knowledge; re-run without "
-                            "under_document_id for the full memory). An "
-                            "unknown id, or one outside your key's subtree, is an "
-                            "error (naming the remedy) — not an empty result. "
-                            "This narrows WHERE the search runs; it does not "
-                            "change `mode`."
+                            "Optional: restrict to this document's subtree (itself + "
+                            "descendants). Memory is then kept only if placed there "
+                            "(from a reference hosted in it, a chat parented there, "
+                            "or anchored to a document in it) — fewer memory hits is "
+                            "not absence of knowledge; re-run without it for all "
+                            "memory. An unknown or out-of-scope id is an error, not "
+                            "an empty result."
                         ),
                     },
                     "corpus": {
@@ -144,13 +111,10 @@ READ_TOOLS: list[dict] = [
                         "enum": ["all", "memory", "documents", "references"],
                         "default": "all",
                         "description": (
-                            "Which kind of material to search. `all` (default): "
-                            "documents + references + memory. `memory`: only the "
-                            "project's distilled facts — the consolidated "
-                            "knowledge, noise already gone. `documents` / "
-                            "`references`: only that raw kind. Narrows the "
-                            "search, never the read — read_document accepts any "
-                            "id under any value."
+                            "`all` (default): documents + references + memory. "
+                            "`memory`: only distilled facts. `documents` / "
+                            "`references`: only that raw kind. Narrows the search, "
+                            "never read_document."
                         ),
                     },
                     "k": {"type": "integer", "default": 5, "minimum": 1, "maximum": 20},
@@ -165,31 +129,20 @@ READ_TOOLS: list[dict] = [
         "function": {
             "name": "read_document",
             "description": (
-                "Read a document's text, plus `media_type`, `has_file`, "
+                "Read a document or reference by `document_id` — a title is not an "
+                "address; ids come from search_materials or get_project_structure. "
+                "`content` is the raw editor buffer: always read before edit_document "
+                "so old_string is byte-verbatim. Also returns `media_type`, `has_file`, "
                 "`processing_status` (`queued` | `processing` | `ready` | `error` | "
-                "null — `ready`, `error` and null are terminal; null means no derived "
-                "text is expected for this node, NOT that the file is missing: an "
-                "image has a file and a null status), `tables[]` and `references[]` "
-                "(attached nodes: id, title, media_type, processing_status, "
-                "has_file, created_at — titles are not unique, so use `created_at` "
-                "to tell same-named nodes apart). "
-                "Returned as the raw editor buffer (the same projection "
-                "edit_document matches against) — always call before edit_document "
-                "so old_string is byte-verbatim. LONG CONTENT IS SLICED: `content` "
-                "carries at most `limit` characters from `offset`, with "
-                "`total_chars` and — while content remains — `next_offset`; re-call "
-                "with `offset` = `next_offset` to page. `next_offset` ABSENT means "
-                "you hold the whole document, so never conclude it ends where a "
-                "slice ends. A sliced read also carries `sections` (every heading of the "
-                "WHOLE document with its `offset`) — page straight to the section you "
-                "need with `offset` = its offset instead of reading from the start. "
-                "Table blocks appear in `content` as opaque anchors like "
-                "![label](table:id) — do NOT edit_document across them; `tables` "
-                "indexes them (derived from the WHOLE document even when `content` "
-                "is sliced) and edit_table_cell edits a cell. "
-                "Requires `document_id` — a title is not an address; ids come from "
-                "`search_materials` or `get_project_structure` (whose root call is a "
-                "bounded map — drill into branches via the row counters)."
+                "null; the last three are terminal, null = no derived text expected, "
+                "not a missing file), `tables[]` and `references[]` (id, title, "
+                "media_type, processing_status, has_file, created_at — titles repeat, "
+                "`created_at` tells them apart). LONG CONTENT IS SLICED: re-call with "
+                "`offset` = `next_offset` until it is absent — only then do you hold "
+                "the whole document. A sliced read lists `sections` (every heading "
+                "with its offset) to jump straight to one. Tables sit in `content` as "
+                "![label](table:id) anchors — never edit_document across them, use "
+                "edit_table_cell; `tables` indexes the whole document even when sliced."
             ),
             "parameters": {
                 "type": "object",
@@ -206,18 +159,16 @@ READ_TOOLS: list[dict] = [
                         "enum": ["index", "inline", "none"],
                         "default": "index",
                         "description": (
-                            "How to return table blocks. \"index\" (default): a cheap "
-                            "list of table_id + label + n_cols (no rows). \"inline\": "
-                            "every table's full grid. \"none\": omit the tables field."
+                            "`index` (default): table_id + label + n_cols. `inline`: "
+                            "every full grid. `none`: omit."
                         ),
                     },
                     "table_id": {
                         "type": "string",
                         "description": (
-                            "Optional: return ONLY this table's full grid (overrides "
-                            "tables mode). Use the table_id from the index. Without "
-                            "`limit` the text is NOT re-sent (`content` is empty) — "
-                            "fetch a table this way instead of re-reading the document."
+                            "Optional: return only this table's grid. Without `limit` "
+                            "`content` is empty — fetch a table this way instead of "
+                            "re-reading the document."
                         ),
                     },
                     # Read-path spill bound: the content slice window.
@@ -232,19 +183,14 @@ READ_TOOLS: list[dict] = [
                     "limit": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": (
-                            "Max characters to return from offset. Unset uses the "
-                            "default bound."
-                        ),
+                        "description": "Max characters from offset; unset = default bound.",
                     },
                     "version": {
                         "type": "string",
                         "description": (
-                            "Optional: a `checkpoint_id` from list_document_versions — "
-                            "read that past version instead of the live document. The "
-                            "result is read-only GFM with tables inlined (`tables` / "
-                            "`table_id` not accepted) and is never a source for "
-                            "edit_document's old_string."
+                            "Optional `checkpoint_id` from list_document_versions: read "
+                            "that past version — read-only GFM, tables inlined, no "
+                            "`tables`/`table_id`, never an edit_document source."
                         ),
                     },
                 },
@@ -258,19 +204,15 @@ READ_TOOLS: list[dict] = [
         "function": {
             "name": "get_project_structure",
             "description": (
-                "A flat map of tree rows (id, parent_id, title, flags) — no "
-                "content. A call WITHOUT start_id is ORIENTATION: two layers by "
-                "default, references omitted, and the agent-config + Memory "
-                "subtrees shown only as door rows. Everything withheld is "
-                "COUNTED on its parent row (child_count, n_references, "
-                "subtree_total, subtree_depth) — read the counters and drill "
-                "into a branch with start_id. A call WITH start_id is "
-                "ENUMERATION: that node's whole subtree, references and system "
-                "contents included — pass include_outline there to add each "
-                "non-reference row's outline (raw headings, flat and "
-                "' · '-separated) so siblings are tellable apart without "
-                "opening them; outline_hidden counts the headings that did not "
-                "fit. Not a substitute for search_materials."
+                "Flat tree rows (id, parent_id, title, flags), no content. Without "
+                "start_id: an ORIENTATION map — 2 layers, references omitted, the "
+                "agent-config and Memory subtrees as door rows; whatever is withheld "
+                "is counted on its parent row (child_count, n_references, "
+                "subtree_total, subtree_depth) — drill into a branch with start_id. "
+                "With start_id: that node's whole subtree, references and system "
+                "contents included; `include_outline` adds each document row's "
+                "headings (' · '-separated; outline_hidden = headings that did not "
+                "fit). Not a substitute for search_materials."
             ),
             "parameters": {
                 "type": "object",
@@ -278,11 +220,8 @@ READ_TOOLS: list[dict] = [
                     "start_id": {
                         "type": "string",
                         "description": (
-                            "Optional: a document id whose subtree to enumerate "
-                            "(itself + all descendants, references included). "
-                            "With it the default breadth is the WHOLE subtree — "
-                            "no depth default applies. If omitted, the root "
-                            "orientation map is returned instead."
+                            "Optional: enumerate this document's whole subtree. "
+                            "Omitted = the root orientation map."
                         ),
                     },
                     "depth": {
@@ -290,32 +229,25 @@ READ_TOOLS: list[dict] = [
                         "minimum": 1,
                         "maximum": 10,
                         "description": (
-                            "Optional: max layers. Defaults to 2 on a root "
-                            "call (no start_id); on a start_id call it applies "
-                            "only when passed — the whole subtree otherwise. "
-                            "Caps at 10."
+                            "Optional max layers: default 2 on a root call, the "
+                            "whole subtree on a start_id call."
                         ),
                     },
                     "include_references": {
                         "type": "boolean",
                         "default": False,
                         "description": (
-                            "Optional, root call only: list reference rows "
-                            "(they carry media_type/source_url). Default false "
-                            "— hidden references are counted as n_references "
-                            "on the host row instead. A start_id call always "
-                            "lists references."
+                            "Root call only: list reference rows (media_type, "
+                            "source_url). Default: counted as n_references on the "
+                            "host row. start_id calls always list them."
                         ),
                     },
                     "include_outline": {
                         "type": "boolean",
                         "default": False,
                         "description": (
-                            "Optional, start_id calls only: add an outline "
-                            "(raw H1–H4 headings, cleaned and budgeted) to "
-                            "non-reference rows. Refused with 422 on a root "
-                            "call — the orientation map stays layered; "
-                            "outlines exist on enumeration only."
+                            "start_id calls only (422 on a root call): add H1–H4 "
+                            "outlines to document rows."
                         ),
                     },
                 },
@@ -328,43 +260,28 @@ READ_TOOLS: list[dict] = [
         "function": {
             "name": "get_links",
             "description": (
-                "Read the typed links of one document or reference — what links "
-                "here AND what it links to, in one shape. This is the SAME answer "
-                "the user's links panel reads; what you see is what they see. "
-                "Stored content edges: `mention` (`[t](target)`) and "
-                "`transclusion` (`![t](target)`). Projected field edges: "
-                "`attachment` (a material attached to the document), `note` "
-                "(a note pinned to it), `chat-context` (one of YOUR chats using "
-                "it as context — another member's chats are never shown), "
-                "`external` (outgoing http(s) links `[t](https://…)`, incl. "
-                "inside table cells; entries carry url and label instead of "
-                "document_id). "
-                "`direction` = in|out|both. `kinds` filters; the default is "
-                "mention,transclusion,attachment — ask for "
-                "note/chat-context/external explicitly. Document peers carry "
-                "document_id, title, "
-                "is_reference, source_type, updated_at and `broken` (outgoing "
-                "stored edges only: the target is soft-deleted or gone); "
-                "note/chat peers carry session_id and a label (a chat's title, a "
-                "note's preview) instead of document_id. A peer outside the "
-                "document's project is skipped by the project wall, and under a "
-                "subtree-scoped key no peer outside your scope is served."
+                "Typed links of one document or reference, incoming and outgoing — "
+                "exactly what the user's links panel shows. Kinds: `mention` "
+                "(`[t](target)`), `transclusion` (`![t](target)`), `attachment` (a "
+                "material attached to it), `note` (a pinned note: session_id + label "
+                "instead of document_id), `external` (outgoing http(s) links, incl. "
+                "table cells: url + label). Document peers carry document_id, title, "
+                "is_reference, source_type, updated_at, and `broken` on outgoing "
+                "mention/transclusion whose target is deleted. Peers outside the "
+                "project or your key's scope are not served."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "document_id": {
                         "type": "string",
-                        "description": (
-                            "Document or reference id whose links to read — the "
-                            "same id the links panel is open on."
-                        ),
+                        "description": "Document or reference id.",
                     },
                     "direction": {
                         "type": "string",
                         "enum": ["in", "out", "both"],
                         "default": "both",
-                        "description": "in = what links here, out = what it links to.",
+                        "description": "in = links here, out = links from it.",
                     },
                     "kinds": {
                         "type": "array",
@@ -373,9 +290,8 @@ READ_TOOLS: list[dict] = [
                         # against, so no surface can drift from the service.
                         "items": {"type": "string", "enum": list(ALL_EDGE_KINDS)},
                         "description": (
-                            "Optional kind filter. Default: mention, "
-                            "transclusion, attachment (note, chat-context and "
-                            "external only when asked)."
+                            "Default: mention, transclusion, attachment — ask for "
+                            "note / external explicitly."
                         ),
                     },
                 },

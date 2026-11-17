@@ -194,7 +194,7 @@ function toInput(frame: Record<string, unknown>, type: string): SessionEventLike
 
 /** Whether this chat frame belongs to the assembler (a verbatim dsh event, a
  * lore mint, or a transient dsh_stream publication). Everything else — ids,
- * sources, done, unknown forward-compat types — is the live arms' business
+ * done, unknown forward-compat types — is the live arms' business
  * and never reaches the engine. */
 export function isFeedFrame(frame: { type?: unknown }): boolean {
   if (typeof frame.type !== 'string') return false;

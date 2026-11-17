@@ -16,7 +16,6 @@ import { DOC } from '../collab/entity-types';
 import { createYjsExtension } from '../collab/yjs-binding';
 import { AUTO_BACKUP_TOAST_KEYS } from '../collab/backup-labels';
 import { clearCheckpointDedup } from '../editor/content-sync';
-import { clearLinkCache } from '../api/links';
 import { useAppStore } from '../store/app-store';
 import { useDocumentRoute } from './useDocumentRoute';
 import { closeDeletedReference } from './useReferenceFileDelete';
@@ -167,9 +166,6 @@ export function useCollabConnection({
       },
       onError: (msg) => useAppStore.getState().showToast(msg, 'error'),
       onBacklinksChanged: () => {
-        // Restore / external link mutation: drop the warm first-circle cache so the
-        // Link2 picker indicator stops showing a stale hint (the event carries no id).
-        clearLinkCache();
         emit('collab-backlinks-changed');
       },
       onCheckpointCreated: (checkpoint) => {

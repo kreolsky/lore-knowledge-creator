@@ -173,7 +173,7 @@ async def test_wire_carries_instance_and_tombstones(
     )
     assert resp.status_code == 200
 
-    _prompt, wire = await build_prompt_and_skill_docs(pid)
+    _prompt, wire, _persona = await build_prompt_and_skill_docs(pid)
     instance = {d["location"]: d for d in wire["instance"]}
     assert "instance:hello" in instance
     assert instance["instance:hello"]["content"] == _skill_md("hello", body="Hello body.")

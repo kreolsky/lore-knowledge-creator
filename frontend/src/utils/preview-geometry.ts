@@ -1,6 +1,6 @@
 /** Single source of truth for the LinkPreviewPopup dimensions.
  *
- *  Every preview in the app (sidebar/editor-link/chat-source hover, and the three
+ *  Every preview in the app (sidebar/editor-link/chat-link hover, and the two
  *  picker popups) renders through ONE component — LinkPreviewPopup. Its width and
  *  height caps live here so a "make the preview N% bigger" change touches one line
  *  and cannot desync the viewport-clamp math (popup-position.ts) from the rendered
@@ -14,7 +14,7 @@ export const PREVIEW_WIDTH = 380;
 /** Gap between the popup and its anchor (hover) or the picker list box (beside-box). */
 export const PREVIEW_GAP = 8;
 
-/** Full standalone preview max height — hover popups + the tabbed ContentPicker. */
+/** Full standalone preview max height — hover popups. */
 export const PREVIEW_MAX_HEIGHT = 400;
 
 /** Preview rendered beside a picker list (height matched to the list box, not the

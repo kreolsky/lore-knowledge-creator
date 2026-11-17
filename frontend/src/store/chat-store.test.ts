@@ -67,29 +67,6 @@ vi.mock('./ui-store', async (importOriginal) => {
   };
 });
 
-vi.mock('../chat/context', () => ({
-  setupChatContextBridge: vi.fn(),
-  GHOST_SESSION_ID: '__ghost__',
-  resolveCompletionContext: vi.fn(() => ({ document_ids: [], reference_ids: [] })),
-  getContextForSession: vi.fn(() => ({ documentIds: [], referenceIds: [] })),
-  setContextForSession: vi.fn(),
-  clearContextForSession: vi.fn(),
-  getDerivedGhostContext: vi.fn(() => ({ docIds: [], refIds: [] })),
-  ghostBaseTargets: vi.fn((docId: string | null, refId: string | null, split: boolean) => {
-    const docs: string[] = []; const refs: string[] = [];
-    if (split) { if (docId) docs.push(docId); if (refId) refs.push(refId); }
-    else if (refId) refs.push(refId);
-    else if (docId) docs.push(docId);
-    return { docs, refs };
-  }),
-  resetGhostDeltas: vi.fn(),
-  hydrateFromSessions: vi.fn(),
-  pruneContext: vi.fn(),
-  clearPendingContextPatches: vi.fn(),
-  useChatContext: vi.fn(() => ({ documentIds: [], referenceIds: [] })),
-  addItemToContext: vi.fn(() => Promise.resolve()),
-  removeItemFromContext: vi.fn(() => Promise.resolve()),
-}));
 
 import { useChatStore, selectBranchPath } from './chat-store';
 import { dispatchChatFrame } from './chat-store/streaming';
@@ -140,7 +117,6 @@ function makeSession(overrides: Record<string, unknown> = {}) {
     title: '',
     model: 'm',
     system_prompt_id: null as string | null,
-    context_ids: [] as string[],
     created_at: '',
     updated_at: '',
     ...overrides,
@@ -520,42 +496,6 @@ describe('sendMessage — send failure surfacing (F1)', () => {
     await p;
 
     expect(toastSpy).not.toHaveBeenCalledWith(expect.anything(), 'error');
-  });
-});
-
-describe('streamCompletion — sources display', () => {
-  it('attaches sources that arrive BEFORE the ids event (order-independent)', async () => {
-    const { useAppStore } = await import('./app-store');
-    (useAppStore.getState as ReturnType<typeof vi.fn>).mockReturnValue({
-      currentDocument: null,
-      currentReference: null,
-      showToast: vi.fn(),
-    });
-
-    // Regression: 8d16796 reordered the backend stream so manual `sources` is
-    // emitted BEFORE `ids`. The handler read streamingMessageId (still null) and
-    // dropped the payload. Sources must survive regardless of arrival order.
-    const { apiClient } = await import('../api/client');
-    (apiClient.post as ReturnType<typeof vi.fn>).mockClear().mockResolvedValue({ accepted: true });
-
-    useChatStore.setState({
-      activeSessionId: 'sess-1',
-      streaming: null,
-      messages: [],
-      sessions: [makeSession({ session_id: 'sess-1' })],
-    });
-
-    const p = useChatStore.getState().sendMessage('hi');
-    wsFrame({ type: 'sources', sources: [{ kind: 'document', id: 'd1', title: 'Doc', retrieved: false }] });
-    wsFrame({ type: 'ids', user_message_id: 'u1', assistant_message_id: 'a1' });
-    wsFrame({ type: 'delta', content: 'Hello' });
-    wsFrame(TURN_CLOSED);
-    await p;
-
-    const assistantMsg = useChatStore.getState().messages.find(m => m.message_id === 'a1');
-    expect(assistantMsg?.sources).toEqual([
-      { kind: 'document', id: 'd1', title: 'Doc', retrieved: false },
-    ]);
   });
 });
 

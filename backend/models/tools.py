@@ -144,8 +144,10 @@ class ToolListMyChats(BaseModel):
 
     under_document_id: str | None = Field(default=None, min_length=1)
     title_contains: str | None = Field(default=None, min_length=1, max_length=200)
-    limit: int = Field(default=50, ge=1, le=100)
+    # None ⇒ the handler picks: CHAT_LIST_TOPICS_LIMIT with `with_topics`, else 50.
+    limit: int | None = Field(default=None, ge=1, le=100)
     offset: int = Field(default=0, ge=0)
+    with_topics: bool = False
 
 
 class ToolReadMyChat(BaseModel):
@@ -162,6 +164,7 @@ class ToolReadMyChat(BaseModel):
 
     chat_id: str | None = Field(default=None, min_length=1)
     from_turn: int = Field(default=0, ge=0)
+    topics_only: bool = False
 
 
 class ToolViewChatImage(BaseModel):

@@ -78,14 +78,14 @@ export function createAgentSlice(set: Set, get: Get): AgentSlice {
           `/chat/verdicts?session_id=${encodeURIComponent(sessionId)}`,
         );
         const holds = (data?.holds ?? []) as Array<{
-          call_id: string; tool_name: string; message_id: string;
+          call_id: string; tool_name: string; message_id: string; per_call?: boolean;
         }>;
         if (holds.length === 0) return;
         const byMsg = new Map<string, PendingVerdict[]>();
         for (const h of holds) {
           if (!h.message_id) continue;
           const arr = byMsg.get(h.message_id) ?? [];
-          arr.push({ call_id: h.call_id, tool_name: h.tool_name, message_id: h.message_id });
+          arr.push({ call_id: h.call_id, tool_name: h.tool_name, message_id: h.message_id, per_call: h.per_call });
           byMsg.set(h.message_id, arr);
         }
         set(s => ({
@@ -153,11 +153,18 @@ export function createAgentSlice(set: Set, get: Get): AgentSlice {
       if (!current) return;
       // Same-session PATCH of system_prompt_id (the only PATCH-able framing field).
       // Omit the call entirely when the value is unchanged.
-      if (systemPromptId !== undefined && current.system_prompt_id !== systemPromptId) {
-        await get().updateSession(sessionId, {
-          system_prompt_id: systemPromptId ?? null,
-        });
-      }
+      if (systemPromptId === undefined || current.system_prompt_id === systemPromptId) return;
+      await get().updateSession(sessionId, { system_prompt_id: systemPromptId ?? null });
+      // updateSession owns the error toast and leaves the row unchanged on failure.
+      const updated = get().sessions.find(s => s.session_id === sessionId);
+      if (!updated || (updated.system_prompt_id ?? null) !== (systemPromptId ?? null)) return;
+      // WHY: the server re-binds the WHOLE conversation's memory to the new
+      // persona (see INVARIANT in backend/chat_sessions/update.py), compaction
+      // continuations included, which share no thread_id the client could match —
+      // a same-scope re-read (keeps the active chat) replaces the list so every
+      // row's origin_persona_id and persona_memory mark follow what the server wrote.
+      const projectId = useAppStore.getState().currentProject?.project_id;
+      if (projectId) await get().loadSessions(projectId, get().documentId ?? undefined);
     },
   };
 }

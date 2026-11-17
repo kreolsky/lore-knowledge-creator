@@ -1,6 +1,7 @@
 """Utility functions for the extractor pipeline.
 
 call_llm_structured — non-streaming LLM call with Structured Outputs.
+call_llm_text — non-streaming LLM call returning the plain answer text.
 render_title_template — render document title from a template with date/random variables.
 build_json_schema — build JSON Schema from variables dict.
 canonicalize_extracted — snap free-extracted categorical strings to canonical options.
@@ -23,6 +24,16 @@ from config import CHAT_LLM_TIMEOUT_S
 from pipeline.core.constants import ALLOWED_VARIABLE_TYPES
 
 logger = logging.getLogger(__name__)
+
+
+class LLMHTTPError(RuntimeError):
+    """An HTTP error answer from the model router; carries its status and body
+    so a caller can tell a refusal of the model from an outage."""
+
+    def __init__(self, message: str, status_code: int, body: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body
 
 
 async def call_llm_structured(
@@ -86,6 +97,41 @@ async def call_llm_structured(
     parsed = json.loads(content)
     logger.info("[call_llm_structured] parsed keys=%s", list(parsed.keys()))
     return parsed
+
+
+async def call_llm_text(
+    user_prompt: str,
+    model: str | None = None,
+    max_tokens: int | None = None,
+) -> str:
+    """Plain chat-completions call at temperature 0, NO response_format; returns
+    the answer text as the model wrote it. Raises LLMHTTPError on an HTTP error.
+
+    WHY beside call_llm_structured: a caller whose prompt was measured as a
+    free-text answer (chat_topics: a bare JSON array parsed out of the text)
+    must not be bent through a json_schema grammar it was never scored under.
+    """
+    api_url = await settings.get("AI_API_URL")
+    api_key = await settings.get("AI_API_KEY")
+    effective_model = model or await settings.get("CHAT_MODEL")
+    payload: dict = {
+        "model": effective_model,
+        "messages": [{"role": "user", "content": user_prompt}],
+        "temperature": 0,
+    }
+    if max_tokens:
+        payload["max_tokens"] = max_tokens
+    async with httpx.AsyncClient(timeout=CHAT_LLM_TIMEOUT_S) as client:
+        resp = await client.post(
+            f"{api_url}/chat/completions",
+            json=payload,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        )
+        if resp.status_code >= 400:
+            detail = f"HTTP {resp.status_code} from model {effective_model}: {resp.text[:500]}"
+            raise LLMHTTPError(f"LLM request failed — {detail}", resp.status_code, resp.text)
+        data = resp.json()
+    return data["choices"][0]["message"]["content"] or ""
 
 
 def _categorical_schema_prop(kind: str, options: list[str], description: str) -> dict:

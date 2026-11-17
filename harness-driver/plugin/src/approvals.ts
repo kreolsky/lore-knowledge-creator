@@ -64,6 +64,12 @@ const expired = new Map<string, string>()
 /** callId → the reject words for the asker's result envelope (cleared on read). */
 const rejectReasons = new Map<string, string>()
 
+/** Call ids asked one call at a time — a per-call tool, or a call the backend
+ * marked `ask_every_time` (a system-doc write). Set by the asker around its
+ * request, read by the answerer and by the verdict-ask mint (the
+ * `approval/asked` append fires before the answerer parks). */
+const perCallCalls = new Set<string>()
+
 /** Session-scoped allow grants: `${loreSessionId} ${toolName}` — swept when
  * the session closes (resolveSessionAsks). */
 const grants = new Set<string>()
@@ -116,9 +122,10 @@ export function postVerdictAnswer(
     // a body claiming a different tool mints nothing.
     if (!toolName) return { status: 422 }
     if (toolName !== ask.toolName) return { status: 404 }
-    // INVARIANT(security): a per-call tool never gets a session grant.
-    // Why: its writes land outside Lore with no history to roll back, so one
-    // click must not silently approve the next ones.
+    // INVARIANT(security): a per-call ask never gets a session grant.
+    // Why: a per-call tool's writes land outside Lore with no history to roll
+    // back, and an ask_every_time call writes the agent's own instructions —
+    // either way one click must not silently approve the next ones.
     if (ask.perCall) return { status: 403 }
   }
   return {
@@ -142,14 +149,25 @@ export function bareAskKey(callId: string): string {
 export function pendingHoldsFor(
   sessionId: string,
   state: { pending: Map<string, PendingAsk> } = { pending },
-): { call_id: string; tool_name: string; message_id: string }[] {
-  const out: { call_id: string; tool_name: string; message_id: string }[] = []
+): { call_id: string; tool_name: string; message_id: string; per_call: boolean }[] {
+  const out: { call_id: string; tool_name: string; message_id: string; per_call: boolean }[] = []
   for (const [callId, ask] of state.pending) {
     if (ask.loreSessionId === sessionId) {
-      out.push({ call_id: callId, tool_name: ask.toolName, message_id: ask.messageId })
+      out.push({
+        call_id: callId, tool_name: ask.toolName, message_id: ask.messageId, per_call: ask.perCall,
+      })
     }
   }
   return out
+}
+
+/** Whether one call's ask is answered one call at a time (no session grant
+ * mints) — the card's `perCall` flag. dsh's `approval/asked` carries no field
+ * for it, so the mint reads it here: the asker's set while the request is in
+ * flight, the parked ask's record otherwise. */
+export function isPerCallAsk(callId: string): boolean {
+  const key = bareAskKey(callId)
+  return perCallCalls.has(key) || pending.get(key)?.perCall === true
 }
 
 // ─── The asker (called by the Tool-API proxies / the report filing) ──────────
@@ -172,8 +190,14 @@ export function hasLoreGrant(loreSessionId: string, toolName: string): boolean {
  */
 export async function askLoreApproval(
   exec: any, tctx: TurnToolCtx, toolName: string, reason: string,
+  askEveryTime = false,
 ): Promise<{ outcome: ApprovalOutcome; reason?: string }> {
-  if (hasLoreGrant(tctx.loreSessionId, toolName)) {
+  // INVARIANT(security): an `ask_every_time` refusal is asked on THIS call —
+  // no session grant short-circuits it, and its ask is perCall (no grant mints).
+  // Why: the backend marks a write to the agent's own instructions this way
+  // (see INVARIANT(security) in backend/agent/apply_policy.py); one "allow for
+  // this chat" on an ordinary page must not silently approve the next Rules edit.
+  if (!askEveryTime && hasLoreGrant(tctx.loreSessionId, toolName)) {
     return { outcome: 'allowed-once' }
   }
   const approval = (bridgeCtx as any)?.approval
@@ -182,13 +206,19 @@ export async function askLoreApproval(
     // Fail closed with a diagnostic the model can act on.
     return { outcome: 'rejected', reason: 'approval service unavailable' }
   }
-  const outcome: ApprovalOutcome = await approval.request({
-    agent: exec.agent,
-    toolName,
-    callId,
-    reason,
-    signal: exec?.signal,
-  })
+  if (askEveryTime || tctx.perCallApproval.has(toolName)) perCallCalls.add(callId)
+  let outcome: ApprovalOutcome
+  try {
+    outcome = await approval.request({
+      agent: exec.agent,
+      toolName,
+      callId,
+      reason,
+      signal: exec?.signal,
+    })
+  } finally {
+    perCallCalls.delete(callId)
+  }
   const words = rejectReasons.get(callId)
   rejectReasons.delete(callId)
   if (outcome === 'allowed-once') return { outcome }
@@ -221,7 +251,8 @@ export function registerLoreApprovalBridge(
         loreSessionId: tctx.loreSessionId,
         toolName: String(req.toolName ?? ''),
         messageId: tctx.messageId,
-        perCall: tctx.perCallApproval.has(String(req.toolName ?? '')),
+        perCall: tctx.perCallApproval.has(String(req.toolName ?? ''))
+          || perCallCalls.has(callId),
         resolve,
         expiresAt: Date.now() + LORE_APPROVAL_MAX_S * 1000,
         timer: setTimeout(() => {
@@ -296,6 +327,7 @@ export function resetLoreApprovalBridgeForTest(): void {
   pending.clear()
   expired.clear()
   rejectReasons.clear()
+  perCallCalls.clear()
   grants.clear()
   bridgeCtx = null
   turnCtxFor = null

@@ -24,6 +24,7 @@ import type { ModelSelection, ModelSelectionRef, PreStepDecision } from '@deepse
 
 import { turnFailureLine } from './map.ts'
 import { timeStampMessage } from './time-stamps.ts'
+import { logInjected, logSwapped, memoryAction, preloadMessages, surfaceMemoryNodes } from './preload.ts'
 import type { EventsChannel, SessionEventTap } from './ws-events.ts'
 import {
   disposeMcpServers, installMcpSeam, syncMcpServers,
@@ -40,7 +41,7 @@ import {
 
 /** The facts `lore/claim` carries back to the backend verbatim — the row
  * pair and the preamble are minted from THESE, never from the dsh message
- * (which holds the merged context images, not the user's own attachments). */
+ * (which holds the model-facing prompt, not the user's own attachments). */
 export interface ClaimFacts {
   user_msg_id: string
   assistant_msg_id: string
@@ -48,7 +49,6 @@ export interface ClaimFacts {
   images: unknown[]
   /** Files dropped on the chat, already in the sender's sandbox workspace. */
   files: unknown[]
-  sources: unknown[]
   warnings: unknown[]
 }
 
@@ -65,6 +65,12 @@ export interface TurnPrep {
   skills: ResolvedSkill[]
   /** Skill loads restored from the log at POST (unioned into the session's set). */
   activated: Set<string>
+  /** The persona's preloaded skills that resolved in `skills` (preload.ts). */
+  preloads: ResolvedSkill[]
+  /** The persona's chat-memory block ('' = none this turn; preload.ts). */
+  memoryBlock: string
+  /** The persona the memory block belongs to ('' = Default; preload.ts). */
+  memoryPersona: string
   standingCtx: SessionToolCtx
   requestCtx: TurnRequestCtx
   claim: ClaimFacts
@@ -254,6 +260,30 @@ function sessionSetup(entry: SessionAgent): (agentCtx: Context) => void {
       const ours = timeStampMessage(entry.current?.timeStamps ?? [], step)
       if (ours === undefined || downstream.kind !== 'enter') return downstream
       return { ...downstream, messages: [...downstream.messages, ours] }
+    })
+    // The persona's preloaded skill bodies and its chat-memory block — each
+    // once per active surface (see the INVARIANT in preload.ts).
+    agentCtx.on('agent/pre-step', async ({ agent, step }: { agent: any; step: number }, next: () => Promise<PreStepDecision>): Promise<PreStepDecision> => {
+      const downstream = await next()
+      const prep = entry.current
+      if (!prep || downstream.kind !== 'enter') return downstream
+      const ours = preloadMessages(prep.preloads, step, () => agent.session.deriveMessages())
+      const memory = memoryAction(
+        prep.memoryBlock, prep.memoryPersona, step, () => surfaceMemoryNodes(agent.session))
+      if (memory?.kind === 'append') ours.push(memory.message)
+      if (memory?.kind === 'replace') {
+        // WHY a direct append, not the decision's messages: the decision only
+        // appends; dropping the old block off the surface is dsh's own
+        // surface op (types.ts SurfaceOp — "any surface-replacing producer").
+        agent.session.append('user/message', memory.message, {
+          surfaceOp: { op: 'replace', startSeq: memory.seq, endSeq: memory.seq },
+          sourceEventSeqs: [memory.seq],
+        })
+        logSwapped(memory)
+      }
+      if (!ours.length) return downstream
+      logInjected(ours)
+      return { ...downstream, messages: [...downstream.messages, ...ours] }
     })
     // The skills registration needs a context that DECLARES the skills
     // inject — the agent scope does not inherit the plugin's inject list, so

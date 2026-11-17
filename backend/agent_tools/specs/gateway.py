@@ -12,7 +12,7 @@ INIT_TOOL: dict = {
         "name": "init",
         "description": (
             "Call ONCE on connect. Returns the full operating package: protocol, "
-            "rules, skill/knowledge indexes, and capabilities. To attach a file: call "
+            "rules, the skill index, and capabilities. To attach a file: call "
             "attach_file(attach_to, filename) → POST the bytes to the returned url → "
             "poll read_document on the POST response's document_id until "
             "processing_status is terminal (ready | error | null)."

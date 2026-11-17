@@ -19,12 +19,12 @@ import config
 
 # ARCH: import `embeddings` at worker startup so its module-level
 # `_bus_on("content_flushed", _on_content_flushed)` is subscribed from process start.
-# The worker emits content_flushed at its write sites (tasks.py: D1b), and the
+# The worker emits content_flushed at its write sites, and the
 # scheduler that turns it into an embed_document_task lives in embeddings.py — an
 # unimported module is an unsubscribed bus, so a worker write would emit to nobody
 # and the embed would never be scheduled. This is the WORKER process's load-bearing
-# import: the web process has its own twin in main.py (the jobs package facade was
-# emptied, so nothing in the web process reaches this module any more). Do not delete
+# import: the web process has its own twin in main.py (nothing in the web process
+# reaches this module). Do not delete
 # this one because "main.py already imports embeddings" — the worker process never
 # imports main. Restart the worker after touching it (arq does not hot-reload).
 import embeddings  # noqa: F401 — load-bearing bus-subscription import (see above)
@@ -37,6 +37,9 @@ from jobs.tasks import (
     auto_backup_open_task,
     backfill_cp_blobs_task,
     chat_index_sweep_task,
+    chat_topics_idle_task,
+    chat_topics_pair_task,
+    chat_topics_sweep_task,
     convert_docx_task,
     convert_pdf_task,
     digest_task,
@@ -164,7 +167,20 @@ def _guarded(raw_funcs: list) -> list:
     return [func(stale_code_guard(f.coroutine), max_tries=f.max_tries) for f in raw_funcs]
 
 
+def _configure_app_logging() -> None:
+    """Give the app's loggers a root handler at INFO.
+
+    WHY: the arq CLI dictConfigs only the `arq` logger, so every app-level
+    `logger.info` in this process fell to the handler-less root and vanished
+    (WARNING+ survived only via logging.lastResort). `arq` stops propagating so
+    its lines, already printed by its own handler, are not printed twice."""
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    logging.getLogger("arq").propagate = False
+
+
 async def _on_worker_startup(ctx) -> None:
+    _configure_app_logging()
     validate_queue_config()
     # SYSTEM: instance-settings — this worker's override-cache drop. off+on so a
     # watchfiles reload never stacks duplicate registrations. ORDER MATTERS: the
@@ -198,6 +214,11 @@ async def _on_worker_shutdown(ctx) -> None:
     # Close every pooled httpx client this worker built (transcription,
     # embeddings, media — SYSTEM: http-clients) in one place.
     await http_clients.close_all()
+    # WHY: close the backplane here — its pub/sub listener task otherwise outlives the
+    # loop and asyncio logs "Task was destroyed but it is pending!" at ERROR on every
+    # worker restart, burying real errors for an operator grepping ERROR.
+    from backplane import get_backplane
+    await get_backplane().close()
     logger.info("arq worker stopped")
 
 
@@ -234,6 +255,11 @@ class WorkerSettings:
         # next trigger or the next sweep, a retry adds nothing.
         func(index_chat_messages, max_tries=1),
         func(chat_index_sweep_task, max_tries=1),
+        # chat topics: the pair reconcile, the deferred turn-end idle check and
+        # the hourly sweep — max_tries=1 for the same reason (idempotent).
+        func(chat_topics_pair_task, max_tries=1),
+        func(chat_topics_idle_task, max_tries=1),
+        func(chat_topics_sweep_task, max_tries=1),
         func(thumbnail_task, max_tries=4),
         # Lore guide: idempotent (deterministic ids), so a retry is safe.
         func(help_seed_task, max_tries=3),
@@ -313,6 +339,9 @@ class WorkerSettings:
         # chat-recall catch-up, hourly at :20 (offset from the :10 embed sweep):
         # posts the pair reconcile for every (user, project) whose index lags.
         cron(chat_index_sweep_task, minute=20, max_tries=1),
+        # chat-topics catch-up, hourly at :35: labels tails that went idle
+        # without a turn-end check landing.
+        cron(chat_topics_sweep_task, minute=35, max_tries=1),
         cron(nullout_inline_content_task, hour=config.THIN_CRON_HOUR, minute=15, max_tries=1),
         # The ONE schedule tick — project-data
         # schedules are claimed + dispatched here, so a new scheduled pipeline is

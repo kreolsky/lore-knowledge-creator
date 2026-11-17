@@ -1,8 +1,7 @@
 """Tests for the mid-turn approval seam on the Tool-API surface.
 
-# ARCH (plan collapse-agent-stack-onto-dsh-vocabulary step 7): the backend no
-longer holds a confirm call — the ASK lives in the driver (dsh's user-approval
-service). What this surface does instead:
+# ARCH: the backend does not hold a confirm call — the ASK lives in the
+driver (dsh's user-approval service). What this surface does instead:
   - a mutating call whose apply-mode resolves to `confirm` REFUSES with
     409 {code: confirmation_required} — the machine-readable ask signal the
     Lore driver keys its approval retry on;
@@ -166,6 +165,86 @@ class TestSystemDocRefusal:
         doc = await client.get(
             f"/api/documents/{doc_id}", cookies={"lore_session": admin_token})
         assert "alpha BETA" in doc.json()["content"]
+
+
+    # TEST-WHY: refused-principal — a Rules child is the agent's own instructions though it carries no is_system flag: an auto edit is refused with the every-call ask, an MCP force-apply is refused 403, while a Memory child keeps its own auto path.
+    @pytest.mark.asyncio
+    async def test_agent_config_is_a_system_doc_by_ancestry_except_memory(self, bp, client, test_db, admin_user, project_with_doc):  # noqa: E501
+        from agent_config import ensure_agent_system_docs
+        from fastapi import HTTPException
+        from routes.tool_api._common import _is_system_target, _resolve_apply_or_force
+
+        admin_uid, admin_token = admin_user
+        pid, _, _ = project_with_doc
+        agent_token = await _make_agent_key(test_db, admin_uid, pid)
+        roles = await ensure_agent_system_docs(pid)
+
+        async def child(parent_id: str, title: str) -> str:
+            resp = await client.post("/api/documents", json={
+                "project_id": pid, "title": title, "content": "alpha beta",
+                "parent_id": parent_id,
+            }, cookies={"lore_session": admin_token})
+            assert resp.status_code == 200, resp.text
+            return resp.json()["document_id"]
+
+        rule_id = await child(roles["rules_folder"], "A rule")
+        memory_id = await child(roles["memory_folder"], "A memory note")
+        auto = {"old_string": "beta", "new_string": "BETA", "apply": "auto"}
+
+        resp = await client.post(
+            "/api/tool/edit_document", json={"document_id": rule_id, **auto},
+            headers=_hdr(agent_token, "anc-call-1", "anc-sess-1"),
+        )
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"]["ask_every_time"] is True
+
+        assert await _is_system_target(rule_id, pid) is True
+        with pytest.raises(HTTPException) as exc:
+            await _resolve_apply_or_force(
+                {"force_auto_apply": True}, ui_preference="auto",
+                is_system=await _is_system_target(rule_id, pid),
+            )
+        assert exc.value.status_code == 403
+        assert await _is_system_target(memory_id, pid) is False
+
+
+    # TEST-WHY: refused-principal — facts have one door: an agent create_document under the Memory folder or under a fact, and a rename of a fact, are refused 403 even in auto mode; and a live page under a TRASHED Rules folder still counts as agent config.
+    @pytest.mark.asyncio
+    async def test_memory_one_door_and_trashed_ancestor(self, bp, client, test_db, admin_user, project_with_doc):  # noqa: E501
+        from agent_config import ensure_agent_system_docs
+        from share_guard import is_agent_instruction_doc
+
+        admin_uid, admin_token = admin_user
+        pid, _, _ = project_with_doc
+        agent_token = await _make_agent_key(test_db, admin_uid, pid)
+        roles = await ensure_agent_system_docs(pid)
+
+        async def child(parent_id: str, title: str) -> str:
+            resp = await client.post("/api/documents", json={
+                "project_id": pid, "title": title, "content": "alpha",
+                "parent_id": parent_id,
+            }, cookies={"lore_session": admin_token})
+            assert resp.status_code == 200, resp.text
+            return resp.json()["document_id"]
+
+        fact_id = await child(roles["memory_folder"], "Fact: gist")
+        await test_db.query(
+            "UPDATE type::record('documents', $id) SET is_memory = true", {"id": fact_id})
+        for i, parent in enumerate((roles["memory_folder"], fact_id)):
+            resp = await client.post("/api/tool/create_document", json={
+                "title": "sneak", "content": "x", "parent_id": parent, "apply": "auto",
+            }, headers=_hdr(agent_token, f"mem-call-{i}", "mem-sess-1"))
+            assert resp.status_code == 403, resp.text
+        resp = await client.post("/api/tool/rename_document", json={
+            "document_id": fact_id, "title": "Renamed", "apply": "auto",
+        }, headers=_hdr(agent_token, "mem-call-r", "mem-sess-1"))
+        assert resp.status_code == 403, resp.text
+
+        folder = await child(roles["rules_folder"], "Folder")
+        page = await child(folder, "Page")
+        await test_db.query(
+            "UPDATE type::record('documents', $id) SET deleted_at = time::now()", {"id": folder})
+        assert await is_agent_instruction_doc(page, pid) is True
 
 
 class TestVerdictAttestation:

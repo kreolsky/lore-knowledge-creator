@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import HTTPException
+from share_guard import refuse_under_system_root
 from tiers import require_tier, require_voice_for_audio_ref
 
 from models import is_ref_row
@@ -119,6 +120,7 @@ async def _authorize_upload_mint(document_id: str, ctx: dict) -> None:
         )
     await require_full_project_access(ctx["project_id"], ctx["user"], "create")
     await require_doc_in_scope(ctx.get("scope_root"), document_id)
+    await refuse_under_system_root(document_id, ctx["project_id"], "attach_file")
 
 
 async def _dispatch_attach_file(args: dict, ctx: dict) -> dict:
@@ -309,6 +311,7 @@ async def _dispatch_reprocess_file(args: dict, ctx: dict) -> dict:
     ):
         raise HTTPException(status_code=404, detail="Document not found")
     await require_doc_in_scope(ctx.get("scope_root"), document_id)
+    await refuse_under_system_root(document_id, ctx["project_id"], "reprocess_file")
     await require_voice_for_audio_ref(ref, ctx["user"])
     _require_mcp_reprocessable(ref)
     from files_service import reprocess_reference

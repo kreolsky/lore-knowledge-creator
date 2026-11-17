@@ -1,6 +1,6 @@
 /**
- * The dsh→frame RELAY contract (plan lore-renders-dsh-conversation step 3).
- * map.ts NO LONGER TRANSLATES: every dsh event emits VERBATIM as a neutral
+ * The dsh→frame RELAY contract.
+ * map.ts does not translate: every dsh event emits VERBATIM as a neutral
  * `{type:'dsh_event', kind, seq, time, data, surfaceOp?, sourceEventSeqs?}`
  * frame — the event's transport to the browser's assembler, not a view of it
  * — and the ONE lore mint anchored inside a dsh session event
@@ -96,7 +96,12 @@ test('approval/asked mints lore/verdict-ask at the ask seq + 0.5', () => {
   // same value the replay mints, so a reload lands at the identical position.
   assert.equal(mint.seq, 7.5)
   assert.equal(mint.ignorable, true)
-  assert.deepEqual(mint.data, { turn: 2, callId: 'call-edit', toolName: 'edit_document' })
+  assert.deepEqual(mint.data, { turn: 2, callId: 'call-edit', toolName: 'edit_document', perCall: false })
+  // A per-call ask (the bridge's lookup) rides the mint so the card drops the chat grant.
+  const [perCall]: any[] = mapEvent(
+    ev(8, 'approval/asked', { callId: 'call-rules', toolName: 'edit_document' }), st, undefined,
+    (id) => id === 'call-rules')
+  assert.equal(perCall.data.perCall, true)
 })
 
 test('a malformed ask relays verbatim instead of minting a broken card', () => {

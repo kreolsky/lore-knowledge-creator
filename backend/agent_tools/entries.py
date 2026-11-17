@@ -21,9 +21,7 @@ from agent_tools.registry import ToolEntry, register
 from agent_tools.specs.chat_recall import (
     LIST_MY_CHATS_TOOL,
     READ_MY_CHAT_TOOL,
-    SAVE_CHAT_FACTS_TOOL,
     SEARCH_MY_CHATS_TOOL,
-    SET_FACT_ANCHOR_TOOL,
     VIEW_CHAT_IMAGE_TOOL,
 )
 from agent_tools.specs.media import (
@@ -44,6 +42,8 @@ from agent_tools.specs.memory import (
     CONSOLIDATE_MEMORY_TOOL,
     NEXT_REFERENCE_TOOL,
     REOPEN_CONSOLIDATION_TOOL,
+    SAVE_CHAT_FACTS_TOOL,
+    SET_FACT_ANCHOR_TOOL,
 )
 from agent_tools.specs.mutate import MUTATE_TOOLS
 from agent_tools.specs.read import (
@@ -353,9 +353,8 @@ register(ToolEntry(
     handler_path="routes.tool_api.skills:tool_save_skill",
     surfaces=_AGENT_HTTP,
 ))
-# search_my_chats + the list/read pair + the image view + the fact-saving
-# pair: agent-only, the chat-recall skill's pack (see specs/chat_recall.py
-# ARCH).
+# search_my_chats + the list/read pair + the image view: agent-only, the
+# chat-recall skill's pack (see specs/chat_recall.py ARCH).
 register(ToolEntry(
     spec=SEARCH_MY_CHATS_TOOL, request_model=ToolSearchMyChats,
     handler_path="routes.tool_api.chat_recall:tool_search_my_chats",
@@ -376,14 +375,16 @@ register(ToolEntry(
     handler_path="routes.tool_api.chat_recall:tool_view_chat_image",
     surfaces=_AGENT_HTTP, image_result=True,
 ))
+# The fact-saving pair: agent-only, the memory skill's capture from THIS
+# conversation (see specs/memory.py ARCH).
 register(ToolEntry(
     spec=SAVE_CHAT_FACTS_TOOL, request_model=ToolSaveChatFacts,
-    handler_path="routes.tool_api.chat_recall:tool_save_chat_facts",
+    handler_path="routes.tool_api.chat_facts:tool_save_chat_facts",
     surfaces=_AGENT_HTTP,
 ))
 register(ToolEntry(
     spec=SET_FACT_ANCHOR_TOOL, request_model=ToolSetFactAnchor,
-    handler_path="routes.tool_api.chat_recall:tool_set_fact_anchor",
+    handler_path="routes.tool_api.chat_facts:tool_set_fact_anchor",
     surfaces=_AGENT_HTTP,
 ))
 # Personal-secrets pack: agent-only + always served.

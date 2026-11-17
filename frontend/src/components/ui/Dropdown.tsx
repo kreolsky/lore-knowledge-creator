@@ -27,6 +27,8 @@ export interface DropdownOption {
   // pass it are unaffected. Used for the no-vision EyeOff mark (see SYSTEM:
   // ui-primitives above).
   badge?: React.ReactNode;
+  /** Icon before the label, in the option row only (never on the trigger). */
+  leading?: React.ReactNode;
 }
 
 export interface DropdownProps {
@@ -186,6 +188,7 @@ export function Dropdown({
                 className={cls}
               >
                 <span className="inline-flex items-center gap-1 min-w-0 max-w-full">
+                  {opt.leading && <span className="shrink-0">{opt.leading}</span>}
                   <span className="truncate">{opt.label}</span>
                   {opt.badge && <span className="shrink-0">{opt.badge}</span>}
                 </span>

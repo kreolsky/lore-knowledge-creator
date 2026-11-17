@@ -5,9 +5,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { create } from 'zustand';
 
-vi.mock('../../chat/context', () => ({
-  resolveCompletionContext: () => ({ context_document_ids: [], context_reference_ids: [] }),
-}));
 vi.mock('./streaming', () => ({
   streamCompletion: vi.fn(),
   flushStreaming: () => ({}),
@@ -44,7 +41,7 @@ function buildStore() {
     ...createMessagesSlice(set, get),
     sessions: [{
       session_id: 's1', document_id: null, reference_id: null, user_id: 'u1',
-      title: 't', model: 'vendor/revoked', system_prompt_id: null, context_ids: [],
+      title: 't', model: 'vendor/revoked', system_prompt_id: null,
       updated_at: '2026-01-01T00:00:00Z', created_at: '2026-01-01T00:00:00Z', last_message_at: null,
     }],
     activeSessionId: 's1',

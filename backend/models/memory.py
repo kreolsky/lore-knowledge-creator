@@ -146,7 +146,7 @@ class ToolApplyMemoryVerdicts(BaseModel):
 class ToolSaveChatFacts(BaseModel):
     """`save_chat_facts` body — save facts distilled from THIS chat.
 
-    # ARCH: the chat-recall pack's moderated capture. `apply` makes the call
+    # ARCH: the memory pack's moderated capture. `apply` makes the call
     # holdable: in confirm mode one batch produces ONE approval card (rejecting
     # with text is per-fact moderation — the agent re-emits the corrected
     # batch); in auto mode facts are written directly. The source is stamped

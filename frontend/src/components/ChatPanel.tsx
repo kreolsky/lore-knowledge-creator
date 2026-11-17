@@ -18,7 +18,6 @@ import { ChatUnavailableNotice, useChatUnavailable } from './chat/ChatUnavailabl
 import { useTranslation } from '../i18n';
 import { useChatStore, chatAttachSurface } from '../store/chat-store';
 import { useAppStore } from '../store/app-store';
-import { useGhostContextWarm } from '../chat/use-ghost-context';
 import { useImageDropHandlers } from '../hooks/useImageDropHandlers';
 import { registerLogoutHandler } from '../store/logout-handlers';
 import {
@@ -78,11 +77,6 @@ export function ChatPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Ghost auto-context: DERIVED, not stored. The warm-effect fills the first-circle
-  // cache for the open entity (+ manual picks) and syncs the ghost base key (which
-  // resets deltas on an entity change). useGhostChatContext (in ChatInput) reads the
-  // derived value reactively. See chat/use-ghost-context.ts.
-  useGhostContextWarm();
   useEffect(() => {
     if (!projectId || !documentId) return;
     // Load once per project; document switches within a project are a no-op.
@@ -104,8 +98,8 @@ export function ChatPanel() {
       <ChatHeader />
       <ChatClarifyPopover />
       <MessageList />
-      {/* No model for this user ⇒ nothing to send to: the whole composer (context,
-          persona, input, auto-send, mic) gives way to the notice. History stays readable. */}
+      {/* No model for this user ⇒ nothing to send to: the whole composer (persona,
+          input, auto-send, mic) gives way to the notice. History stays readable. */}
       {chatUnavailable ? <ChatUnavailableNotice /> : <ChatInput />}
       {isDragging && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-bg/60 border-2 border-dashed border-accent pointer-events-none">

@@ -52,7 +52,7 @@ async def _view(client, token, message_id, index=0, session_id=None, status=200)
         pytest.param("own-conversation", 404, "message not found",
                      id="calling-conversations-own-message"),
         pytest.param("external-key", 403,
-                     "chat-recall is available only to the in-app assistant",
+                     "this tool is available only to the in-app assistant",
                      id="external-key"),
         pytest.param("hidden-subtree", 404, "message not found",
                      id="viewer-outside-chats-unindexed-subtree"),

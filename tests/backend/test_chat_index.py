@@ -147,7 +147,8 @@ async def test_sweep_posts_only_pairs_with_work(test_db, embed, posted):
     await _session(test_db, "lagging", uid="lagger")
     await _msg(test_db, "l1", "lagging", "never indexed")
     await chat_index_sweep_task({})
-    assert posted == [("index_chat_messages", ("lagger", PID), f"chat_index:lagger:{PID}")]
+    assert [p for p in posted if p[0] == "index_chat_messages"] == [
+        ("index_chat_messages", ("lagger", PID), f"chat_index:lagger:{PID}")]
 
 
 # ─── the writer triggers ─────────────────────────────────────────────────────

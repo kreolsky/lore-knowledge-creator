@@ -1,7 +1,7 @@
 /** Unified single chat message — store-agnostic. Renders user bubbles (dynamic
  * width, aligned by isOwn) and agent/assistant bubbles (full-width distinct
- * surface card). AI-only content (reasoning, the assembled turn,
- * sources) renders when present. All mutations arrive via `actions` callbacks;
+ * surface card). AI-only content (reasoning, the assembled turn) renders
+ * when present. All mutations arrive via `actions` callbacks;
  * the corresponding button is hidden when its callback is absent. */
 // ARCH: store-agnostic — no useChatStore / useNoteChatStore calls inside. Each
 // chat wrapper (MessageList for AI, NoteChatView for notes) reads its store and
@@ -16,7 +16,6 @@ import { IconButton, FieldTextarea } from '../ui';
 import { MarkdownContent } from './MarkdownContent';
 import { hardLineBreaks } from './hard-line-breaks';
 import { ForkIndicator } from './ForkIndicator';
-import { Sources } from './Sources';
 import { VerdictCard } from './VerdictCard';
 import { ChatMessage, HaltReason } from '../../types';
 import { useTranslation } from '../../i18n';
@@ -217,7 +216,7 @@ export const MessageBubble = memo(function MessageBubble({
   // Theme map (variant + role + isOwn). NO rounded corners (project rule).
   // User messages: dynamic width + variant/role background.
   // Agent/assistant messages: full-width, base AI style (text-text px-0, NO outer
-  // card). Why: reasoning widgets, Sources, proposals and agent-step chips each
+  // card). Why: reasoning widgets, proposals and agent-step chips each
   // carry their OWN bg-surface2/border card — wrapping them in an outer surface
   // card nests identical plates and hides the reasoning body (surface2-on-
   // surface2). This is the AI chat's established base style (commits c022558 /
@@ -252,11 +251,6 @@ export const MessageBubble = memo(function MessageBubble({
         />
       )}
 
-      {!isUser && message.sources && message.sources.length > 0 && !editing && (
-        <div className="max-w-[85%]">
-          <Sources sources={message.sources} />
-        </div>
-      )}
       {/* Author header — shared for user messages (note messages are all
        * user-role, so it shows for every note message; AI hides it on assistant). */}
       {isUser && (

@@ -11,24 +11,22 @@
 # (LightRAG / Graphiti / mem0) was evaluated and declined, and why there is no
 # `memory_fact` table.
 
-# ARCH (Order 2): the entity level is GONE — there is one identity level, the fact.
+# ARCH: there is one identity level, the fact.
 # A fact's body is authored prose (`content`), never a projection, so there is no
 # `render.py` and no latch. A correction (`supersede`) rewrites the fact
 # in place (the doc id stays — a stable link target), pushing the old wording onto
 # `mem.version_history`. A merge folds one fact into another and RETIRES the absorbed
 # doc (SOFT-DELETE: `deleted_at` set + `mem_active = false` label +
 # `superseded_by` → survivor, vector dropped) — the row is kept, never hard-deleted,
-# so a link to it still resolves (D2); `deleted_at` is the one axis that hides it.
+# so a link to it still resolves; `deleted_at` is the one axis that hides it.
 
 # INVARIANT(security): a consolidation run writes ONLY through a key scoped to the
 # project's `Memory` folder, and that wall is the EXISTING one (SYSTEM: scope), not a
 # new layer.  Why: reusing the existing SYSTEM: scope wall means memory writes cannot escape the project's Memory folder — adding a new layer would risk a gap between the two checks.
 # Why: `scope_root` is opt-in PER CALL, not inherited — `create_document_via_collab`
 # takes `scope_root: str | None = None` and only then consults the wall, so a write
-# routed through a path that omits it lands anywhere with no error and no log
-# (`apply_executors.py` is exactly such a path today, harmlessly, because the chat
-# session's own key is whole-project by design). Memory writes therefore must not
-# traverse `apply_executors`; they go through the Tool-API surface, which threads
+# routed through a path that omits it lands anywhere with no error and no log.
+# Memory writes therefore go through the Tool-API surface, which threads
 # `ctx["scope_root"]` on every branch including the proposal-apply one.
 
 # INVARIANT(one-door) [D9]: a fact document (`is_memory = true`) is created ONLY
@@ -43,6 +41,5 @@
 # (operator-confirmed): a rebuild re-runs over the document's CURRENT content,
 # so a reference-sourced fact is rebuildable that way. A chat-sourced fact
 # has no consolidation loop to re-derive it — it is PRIMARY data, and memory
-# must not be wiped to rebuild anything (the "no migration, clean cut" stance
-# of the flatten plan rests on this).
+# must not be wiped to rebuild anything.
 """

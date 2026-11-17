@@ -6,8 +6,8 @@ locking user must not read or find the locked page; the cabinet endpoints
 guard the set with the ACCOUNT PIN (no new secret, no new rate limiter).
 
 Two tests, within the diet's 3-per-commit ceiling; the rest of the surface —
-/me field, 422 without a PIN, personal semantics, export refusal,
-build_context drop — is proven by the step-2 live drive.
+/me field, 422 without a PIN, personal semantics, export refusal —
+is proven by the step-2 live drive.
 """
 
 import hashlib

@@ -1,11 +1,10 @@
-/** Chat header — static title (double-click to rename) + new chat / goto-parent / unindexed toggle / export / analyse-in-new-chat / delete. Chat-store slices: sessions, activeSessionId, modelsLoaded, createSession, setActiveSession, deleteSession, updateSession, setChatUnindexed, loadModels. App-store slices: currentProject, currentDocument, currentReference. */
+/** Chat header — static title (double-click to rename) + new chat / goto-parent / change-parent on the left, [Delete][Download] on the right (Download in the far-right corner). Chat-store slices: sessions, activeSessionId, modelsLoaded, startGhostChat, deleteSession, updateSession, loadModels. App-store slices: currentDocument, currentReference, documents. */
 
 import { useState, useCallback, useEffect } from 'react';
-import { ArrowLeft, Trash2, Download, FileText, Network, Clock, FolderUp, EyeOff, Sparkles } from 'lucide-react';
+import { ArrowLeft, Trash2, Download, FileText, Network, Clock, FolderUp } from 'lucide-react';
 import { Button, IconButton, FieldInput, Popover } from '../ui';
 import { ParentPickerPopup } from '../ParentPickerPopup';
 import { useChatStore, selectBranchPath } from '../../store/chat-store';
-import { appendDraft } from '../../store/chat-store/misc-slice';
 import { useAppStore } from '../../store/app-store';
 import { useUIStore } from '../../store/ui-store';
 import { readRefOpenMode, refIsScope } from '../../store/ui-store/documents-slice';
@@ -23,7 +22,6 @@ export function ChatHeader() {
   const updateSession = useChatStore(s => s.updateSession);
   const loadModels = useChatStore(s => s.loadModels);
   const startGhostChat = useChatStore(s => s.startGhostChat);
-  const setChatUnindexed = useChatStore(s => s.setChatUnindexed);
 
   const activeSession = sessions.find(s => s.session_id === activeSessionId);
   const documents = useAppStore(s => s.documents);
@@ -63,26 +61,6 @@ export function ChatHeader() {
     if (!activeSessionId) return;
     startGhostChat();
   }, [activeSessionId, startGhostChat]);
-
-  // "Analyse in a new chat": open a fresh ghost,
-  // then prefill its composer with a request naming THIS chat by title +
-  // chat_id, so the agent reads it via read_my_chat without searching. Why
-  // capture title/id BEFORE startGhostChat: it clears activeSessionId — after
-  // it the session row is no longer resolvable. appendDraft, never setDraft:
-  // the draft is ONE shared field across chats and appendDraft is the
-  // append-never-overwrite rule (see its INVARIANT in misc-slice) — a setDraft
-  // prefill would erase the unsent text of the chat being left. The unindexed
-  // guard repeats the button's `disabled` because a programmatic click on a
-  // disabled button still reaches onClick. Plain handler, not useCallback: it
-  // uses `t`, which is a new function every render (i18n rule — never in a
-  // callback dep array).
-  const handleAnalyseInNewChat = () => {
-    if (!activeSession || activeSession.unindexed) return;
-    const title = activeSession.title || t('newChat');
-    const id = activeSession.session_id;
-    startGhostChat();
-    appendDraft(useChatStore.getState, t('analyseChatPrompt', { title, id }));
-  };
 
   const handleExportJson = useCallback(() => {
     const messages = selectBranchPath(useChatStore.getState());
@@ -320,70 +298,51 @@ export function ChatHeader() {
         )}
       </div>
 
-      {activeSessionId && (
-        <>
-          <IconButton
-            pressed={!!activeSession?.unindexed}
-            color="green"
-            title={activeSession?.unindexed ? t('chatUnindexedOn') : t('chatUnindexedOff')}
-            onClick={() => { void setChatUnindexed(!activeSession?.unindexed); }}
-          >
-            <EyeOff size={14} />
+      <IconButton
+        danger
+        filled={deleteAction.armed}
+        title={t('deleteChat')}
+        onClick={() => deleteAction.handleClick(async () => {
+          if (activeSessionId) await deleteSession(activeSessionId);
+        })}
+        onMouseLeave={deleteAction.disarm}
+      >
+        <Trash2 size={14} />
+      </IconButton>
+      <Popover
+        align="right"
+        placement="bottom"
+        keyboardNav={false}
+        panelClassName="min-w-[120px]"
+        trigger={
+          <IconButton title={t('exportChat')}>
+            <Download size={14} />
           </IconButton>
-          <IconButton
-            disabled={!!activeSession?.unindexed}
-            title={activeSession?.unindexed ? t('analyseChatHiddenHint') : t('analyseInNewChat')}
-            onClick={handleAnalyseInNewChat}
-          >
-            <Sparkles size={14} />
-          </IconButton>
-          <Popover
-            align="right"
-            placement="bottom"
-            keyboardNav={false}
-            panelClassName="min-w-[120px]"
-            trigger={
-              <IconButton title={t('exportChat')}>
-                <Download size={14} />
-              </IconButton>
-            }
-          >
-            {({ close }) => (
-              <>
-                <div
-                  role="button"
-                  tabIndex={0}
-                  className="block w-full text-left px-3 py-2 text-sm cursor-pointer text-text hover:bg-surface2"
-                  onClick={() => { handleExportMarkdown(); close(); }}
-                  onKeyDown={e => { if (e.key === 'Enter') { handleExportMarkdown(); close(); } }}
-                >
-                  {t('exportAsMarkdown')}
-                </div>
-                <div
-                  role="button"
-                  tabIndex={0}
-                  className="block w-full text-left px-3 py-2 text-sm cursor-pointer text-text hover:bg-surface2"
-                  onClick={() => { handleExportJson(); close(); }}
-                  onKeyDown={e => { if (e.key === 'Enter') { handleExportJson(); close(); } }}
-                >
-                  {t('exportAsJson')}
-                </div>
-              </>
-            )}
-          </Popover>
-          <IconButton
-            danger
-            filled={deleteAction.armed}
-            title={t('deleteChat')}
-            onClick={() => deleteAction.handleClick(async () => {
-              if (activeSessionId) await deleteSession(activeSessionId);
-            })}
-            onMouseLeave={deleteAction.disarm}
-          >
-            <Trash2 size={14} />
-          </IconButton>
-        </>
-      )}
+        }
+      >
+        {({ close }) => (
+          <>
+            <div
+              role="button"
+              tabIndex={0}
+              className="block w-full text-left px-3 py-2 text-sm cursor-pointer text-text hover:bg-surface2"
+              onClick={() => { handleExportMarkdown(); close(); }}
+              onKeyDown={e => { if (e.key === 'Enter') { handleExportMarkdown(); close(); } }}
+            >
+              {t('exportAsMarkdown')}
+            </div>
+            <div
+              role="button"
+              tabIndex={0}
+              className="block w-full text-left px-3 py-2 text-sm cursor-pointer text-text hover:bg-surface2"
+              onClick={() => { handleExportJson(); close(); }}
+              onKeyDown={e => { if (e.key === 'Enter') { handleExportJson(); close(); } }}
+            >
+              {t('exportAsJson')}
+            </div>
+          </>
+        )}
+      </Popover>
 
       {parentPickerRect && (
         // Same reference-mode picker the ReferencesPanel mounts (no `doc` — a

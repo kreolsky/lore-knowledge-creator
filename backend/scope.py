@@ -1,5 +1,4 @@
-"""Subtree scope helpers — the agent-key sandbox wall (plan
-"subtree-scoped-agent-keys").
+"""Subtree scope helpers — the agent-key sandbox wall.
 
 # SYSTEM: scope — subtree-membership + enumeration for scoped agent keys.
 
@@ -14,7 +13,7 @@ uses `db.get_descendant_ids` (one project scan + in-memory BFS). No new
 materialization infra. The wall is "one bounded walk per call", not a cached
 closure table.
 #
-# The INDEX rule (plan "project-index-as-project-face") adds exactly two named
+# The INDEX rule adds exactly two named
 # costs, both on the index path only: recognising an index scope_root costs ONE
 # `fetch_one` of the scope_root row on the slow path (scope_root not among the
 # doc's ancestors — the fast path is unchanged), and the index scope itself is
@@ -29,7 +28,7 @@ closure table.
 from __future__ import annotations
 
 from fastapi import HTTPException
-from share_guard import system_root_id
+from share_guard import memory_root_id, system_root_id
 
 from db import extract_id, fetch_one, get_ancestor_ids, get_db, get_descendant_ids
 
@@ -203,13 +202,13 @@ async def require_doc_in_scope(scope_root: str | None, doc_id: str) -> None:
         )
 
 
-def _reject_memory_target(target: dict) -> None:
+def reject_memory_target(target: dict) -> None:
     """Refuse a content mutation aimed at a project-memory fact document.
 
     # WHY: no agent content mutation may target an `is_memory` document — its
-    # body IS the fact, written only by the consolidation apply path (the one door,
-    # D9). Why: prose written outside apply carries no provenance (the reference thread
-    # that makes the knowledge base rebuildable, D8), and the apply path is the only
+    # body IS the fact, written only by the consolidation apply path (the one door).
+    # Why: prose written outside apply carries no provenance (the reference thread
+    # that makes the knowledge base rebuildable), and the apply path is the only
     # route that stamps it. The apply path writes fact content through
     # `route_document_content`, which deliberately does NOT pass through this gate.
 
@@ -225,6 +224,30 @@ def _reject_memory_target(target: dict) -> None:
                 "This is a project memory fact — its body is the fact itself, written "
                 "only by the consolidation apply path. Use consolidate_memory to change "
                 "what it says."
+            ),
+        )
+
+
+async def reject_memory_parent(parent_id: str | None, project_id: str) -> None:
+    """Refuse an agent create under project memory — the Memory folder or any
+    document inside it (a fact, or a reference on one).
+
+    # INVARIANT(security): an agent tool never creates a document inside Memory.
+    # Why: everything there is a fact or the Memory folder, and facts have one
+    # door — save_chat_facts and the consolidation apply path, which create
+    # through route_document_content, not through this gate; a document created
+    # beside them silently becomes memory with no provenance.
+    """
+    if not parent_id:
+        return
+    if memory_root_id(project_id) in await get_ancestor_ids(
+        parent_id, through_deleted=True,
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "This is project memory — facts are written only through "
+                "save_chat_facts or a consolidation run, never created directly."
             ),
         )
 
@@ -252,10 +275,6 @@ async def gate_mutation_target(
     # access gate, never instead of it. Why: a scoped key must never exceed the owning
     # user's RBAC; the wall only narrows the volume inside the project.
 
-    NOTE: the confirm-path _resolve_edit_target (apply_executors) deliberately does NOT
-    use this — it is session-gated (no scope_root wall) and returns 403 (not 404) on a
-    cross-project doc_id. That divergence is intentional; do not fold it in here.
-
     This gate is the SINGLE 404 funnel for every scoped-mutation target
     (edit_document / append_to_document / edit_table_cell / table tools, auto +
     confirm) — the shared detail lives in _target_not_found_404, not per call
@@ -273,7 +292,7 @@ async def gate_mutation_target(
     access = await get_document_access(doc_id, user)
     if access != "full":
         raise HTTPException(status_code=403, detail="Full access required to edit")
-    _reject_memory_target(target)
+    reject_memory_target(target)
     await require_doc_in_scope(scope_root, doc_id)
     return target, access
 

@@ -237,8 +237,8 @@ async def _driver_capability(line: DriverLine, model: str) -> dict:
 #   {"type":"dsh_stream","frame":<obj>}                                 # the
 #       transient live tail: dsh's own agent/assistant-stream publication
 #       relayed by the plugin, unsequenced, never replayed. Non-terminal.
-#   {"type":"lore/verdict-ask","seq":<anchor+0.5>,"data":{turn,callId,toolName},
-#       "ignorable":true}                                               # a lore
+#   {"type":"lore/verdict-ask","seq":<anchor+0.5>,
+#       "data":{turn,callId,toolName,perCall},"ignorable":true}                                               # a lore
 #       mint anchored inside a dsh session event (approval/asked): the
 #       mid-turn ask card is OURS — dsh answers approvals in a composer panel
 #       and has no conversation node for the ask.
@@ -270,7 +270,7 @@ async def _driver_capability(line: DriverLine, model: str) -> dict:
 # for being unrendered. The browser's ONLY terminal is `turn_closed`. The
 # backend also feeds the SAME chat channel beside the driver's frames: the
 # turn preamble (completions_harness.py — `ids` names the user/assistant row
-# pair, `sources` the context panel, `context_warning`; non-terminal), `done`
+# pair, `context_warning`; non-terminal), `done`
 # (frames.py — a CONTENT frame, not a terminal: carries the row's joined
 # content on a graceful end, emitted before finalize + the turn-lock release)
 # and the setup-failure tail `error` + `turn_closed` (completions_harness.py).
@@ -383,7 +383,8 @@ def _build_turn_payload(
     prompt: str | list = "", assistant_msg_id: str = "",
     time_stamps: list[str] | None = None,
     skills: dict | list | None = None,
-    reasoning_effort: str | None = None,
+    preload_skills: list[str] | None = None, memory_block: str = "",
+    memory_persona: str = "", reasoning_effort: str | None = None,
     ai_api_url: str = "", ai_api_key: str = "",
     title_model: str = "", web_search_provider: str = "",
     web_search_credential: str = "", mcp_servers: list[dict] | None = None,
@@ -409,6 +410,10 @@ def _build_turn_payload(
         # The RAW skills wire: {project, instance, shipped, instance_tombstones}
         # — the plugin parses them.
         "skills": skills if skills else [],
+        # The persona's preloaded skill names and its chat-memory block — the
+        # plugin activates / injects them (harness-driver/plugin/src/preload.ts).
+        "preload_skills": list(preload_skills or []),
+        "memory_block": memory_block, "memory_persona": memory_persona,
         # ARCH: present ONLY when the session
         # pins an effort — ABSENT = Default (no reasoning_effort on the wire,
         # the provider's default applies), never a null/'' placeholder (the

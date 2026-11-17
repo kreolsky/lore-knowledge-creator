@@ -4,9 +4,7 @@ The search half and its live-row predicate live in chat_sessions.recall_search,
 shared with the person's own chat-search route; this handler adds the key auth,
 the off-switch, the calling conversation's exclusion and anchor, the window read,
 and the skill pack's list (whole-chat find), read (whole-chat paging) and
-view_chat_image (one attached image) tools over the SAME predicate — plus the
-pack's WRITE half, save_chat_facts / set_fact_anchor (moderated capture of
-facts from THIS conversation and their per-fact placements).
+view_chat_image (one attached image) tools over the SAME predicate.
 
 # ARCH (dsh comparison, recorded per the rented-brain rule): dsh already ships
 # cross-session query machinery — `ctx.sessionQuery`, consumed by
@@ -23,12 +21,15 @@ facts from THIS conversation and their per-fact placements).
 # person's chat corpus to external/user-minted keys — dsh has no Lore key
 # policy to enforce.
 """
+import json
 import re
 from typing import NamedTuple
 
+import settings
 from agent.context import get_agent_context, owned_session_row
+from agent_config_load import instance_skill_disabled
 from chat_sessions.conversation import conversation_session_ids
-from chat_sessions.recall import chat_recall_disabled
+from chat_sessions.recall import CHAT_RECALL_SKILL
 from chat_sessions.recall_search import (
     MESSAGE_FIELDS,
     iso,
@@ -38,23 +39,16 @@ from chat_sessions.recall_search import (
     search_chats,
     visible_sessions,
 )
-from doc_edit_lock import edit_lock
 from fastapi import Body, Depends, HTTPException
 
-from access import get_document_access, require_full_project_access
 from db import get_db
 from models import (
     ToolListMyChats,
     ToolReadMyChat,
-    ToolSaveChatFacts,
     ToolSearchMyChats,
-    ToolSetFactAnchor,
     ToolViewChatImage,
 )
-from routes.tool_api._common import (
-    _refuse_unconfirmable,
-    _resolve_apply_or_force,
-)
+from routes.tool_api._common import _require_in_app_agent
 from routes.tool_api_telemetry import track_agent_tool
 from scope import subtree_doc_ids
 
@@ -64,22 +58,6 @@ CHAT_READ_PAGE_CHARS = 30000
 # admission uses (dsh DEFAULT_MAX_IMAGE_BYTES, the min read_image honours), so
 # what this route serves always fits what saveImage will accept.
 VIEW_CHAT_IMAGE_MAX_BYTES = 20 * 1024 * 1024
-
-
-def _require_in_app_agent(ctx: dict) -> None:
-    """The chat-recall pack is closed to EXTERNAL keys — the person's chat
-    corpus is the in-app assistant's own memory, not a surface for
-    user-minted automation or MCP-gateway clients. Internal keys
-    only: the driver's standing per-session keys AND its scoped run keys are
-    both internal=True (SYSTEM: agent-keys). Same predicate family as the
-    sandbox gate (routes/tool_api/sandbox/files.py) — explicit True only.
-    Why a 403 and not a 404: the caller is authenticated and this is a policy
-    statement about the surface, not an existence claim about any chat."""
-    if ctx.get("internal") is not True:
-        raise HTTPException(
-            status_code=403,
-            detail="chat-recall is available only to the in-app assistant",
-        )
 
 
 @track_agent_tool("search_my_chats")
@@ -93,7 +71,7 @@ async def tool_search_my_chats(
     not stop it."""
     _require_in_app_agent(ctx)
     db = await get_db()
-    if await chat_recall_disabled(db):
+    if await instance_skill_disabled(db, CHAT_RECALL_SKILL):
         raise HTTPException(status_code=403,
                             detail="chat-recall is disabled by the administrator")
     user_id, project_id = ctx["user"]["user_id"], ctx["project_id"]
@@ -148,6 +126,25 @@ async def _session_chain(db, chat_id: str) -> list[dict]:
         "FROM messages WHERE chat_id = $cid",
         {"cid": chat_id},
     ) or []
+    return _chain_order(rows)
+
+
+async def _light_chains(db, chat_ids: list[str]) -> dict[str, list[dict]]:
+    """`{chat_id: chain}` for many sessions in ONE query, without content — the
+    shape `_turns` groups (ids, roles, order), enough to place topics on turns."""
+    rows = await db.query(
+        "SELECT meta::id(id) AS id, chat_id, role, created_at, parent_id, deleted_at "
+        "FROM messages WHERE chat_id IN $cids",
+        {"cids": chat_ids},
+    ) or []
+    by_chat: dict[str, list[dict]] = {}
+    for r in rows:
+        by_chat.setdefault(r["chat_id"], []).append(r)
+    return {cid: _chain_order(rs) for cid, rs in by_chat.items()}
+
+
+def _chain_order(rows: list[dict]) -> list[dict]:
+    """One session's rows in parent_id order, deleted ones walked and dropped."""
     ids = {r["id"] for r in rows}
     children: dict[str | None, list[dict]] = {}
     for r in rows:
@@ -227,6 +224,61 @@ async def _read_window(db, sessions: dict, message_id: str, offset: int) -> dict
     return result
 
 
+# ─── table of contents: the labeller's topics placed on turns ─────────────────
+
+
+async def _tocs(db, chat_ids: list[str]) -> dict[str, dict]:
+    """`{chat_id: {topics, labelled_ids}}` for the ids that have a chat_tocs row.
+
+    # INVARIANT(security): the candidate set is exactly visible_sessions' output;
+    # the queries below read only the session ids it returned.
+    # Why: visible_sessions is the one wall between members and around deleted,
+    # unindexed and hidden-subtree chats — a direct chat_tocs selection would
+    # bypass it, and a synopsis restates the chat's text.
+    # (read_my_chat's current-session arm passes owned_session_row's id instead.)
+    """
+    if not chat_ids:
+        return {}
+    rows = await db.query(
+        "SELECT meta::id(id) AS cid, topics, labelled_ids "
+        "FROM $ids.map(|$x| type::record('chat_tocs', $x))",
+        {"ids": sorted(chat_ids)},
+    ) or []
+    return {r["cid"]: r for r in rows if r.get("cid")}
+
+
+def _toc_fields(toc: dict | None, turns: list[list[dict]]) -> dict:
+    """`topics` (`null` without a toc row), and `unlabelled_from_turn` /
+    `unlabelled_turns` while a turn is not labelled yet. A topic's `turn` is the
+    index of its first exchange among `turns` (the `from_turn` that jumps to it),
+    `message_id` that exchange's user message; exchanges are keyed by the user
+    message that opens a turn (chat_topics.group_exchanges), so only such turns
+    count as labellable."""
+    opening = {t[0]["id"]: i for i, t in enumerate(turns) if t[0]["role"] == "user"}
+    fields: dict = {"topics": None}
+    if toc is not None:
+        topics = []
+        for t in toc.get("topics") or []:
+            placed = sorted((opening[m], m) for m in t.get("message_ids") or [] if m in opening)
+            # WHY skip: a topic whose turns are all gone is stale; verify_tocs
+            # drops the whole toc at the next pass of a chat that is being labelled.
+            if placed:
+                topics.append({"title": t["title"], "synopsis": t["synopsis"],
+                               "turn": placed[0][0], "message_id": placed[0][1]})
+        fields["topics"] = sorted(topics, key=lambda t: t["turn"])
+    labelled = set((toc or {}).get("labelled_ids") or [])
+    first = next((i for mid, i in opening.items() if mid not in labelled), None)
+    if first is not None:
+        fields["unlabelled_from_turn"] = first
+        fields["unlabelled_turns"] = len(turns) - first
+    return fields
+
+
+def _chars(value: object) -> int:
+    """Serialized size of a served value — the unit CHAT_READ_PAGE_CHARS counts."""
+    return len(json.dumps(value, ensure_ascii=False, default=str))
+
+
 # ─── list: the caller's chats, one row each ───────────────────────────────────
 
 
@@ -240,7 +292,7 @@ async def tool_list_my_chats(
     skill, for the same reason as the search."""
     _require_in_app_agent(ctx)
     db = await get_db()
-    if await chat_recall_disabled(db):
+    if await instance_skill_disabled(db, CHAT_RECALL_SKILL):
         raise HTTPException(status_code=403,
                             detail="chat-recall is disabled by the administrator")
     user_id, project_id = ctx["user"]["user_id"], ctx["project_id"]
@@ -252,12 +304,39 @@ async def tool_list_my_chats(
         needle = body.title_contains.lower()
         rows = [r for r in rows if needle in r["title"].lower()]
     rows.sort(key=_recency, reverse=True)
-    result: dict = {
-        "rows": rows[body.offset:body.offset + body.limit], "total": len(rows),
-    }
-    if body.offset + body.limit < len(rows):
-        result["next_offset"] = body.offset + body.limit
+    limit = body.limit
+    if limit is None:
+        limit = await settings.get("CHAT_LIST_TOPICS_LIMIT") if body.with_topics else 50
+    page = rows[body.offset:body.offset + limit]
+    if body.with_topics:
+        await _attach_topics(db, page)
+    page = _fit_page(page)
+    result: dict = {"rows": page, "total": len(rows)}
+    if body.offset + len(page) < len(rows):
+        result["next_offset"] = body.offset + len(page)
     return result
+
+
+async def _attach_topics(db, page: list[dict]) -> None:
+    """Add `_toc_fields` to each row; tocs and chains are read in one query
+    each over the page's ids (already visible_sessions' output)."""
+    ids = [r["chat_id"] for r in page]
+    tocs = await _tocs(db, ids)
+    chains = await _light_chains(db, ids)
+    for row in page:
+        row.update(_toc_fields(tocs.get(row["chat_id"]),
+                               _turns(chains.get(row["chat_id"], []))))
+
+
+def _fit_page(page: list[dict]) -> list[dict]:
+    """Whole rows while their serialized size fits CHAT_READ_PAGE_CHARS; the
+    first row is always served. The rest is the next page (`next_offset`)."""
+    budget = CHAT_READ_PAGE_CHARS
+    for n, row in enumerate(page):
+        budget -= _chars(row)
+        if n and budget < 0:
+            return page[:n]
+    return page
 
 
 async def _listed_sessions(
@@ -337,10 +416,33 @@ async def tool_read_my_chat(
     OMISSION reads the current session)."""
     _require_in_app_agent(ctx)
     db = await get_db()
-    if await chat_recall_disabled(db):
+    if await instance_skill_disabled(db, CHAT_RECALL_SKILL):
         raise HTTPException(status_code=403,
                             detail="chat-recall is disabled by the administrator")
-    if body.chat_id is None:
+    chat_id, chat = await _read_target(db, ctx, body.chat_id)
+    turns = _turns(await _session_chain(db, chat_id))
+    result: dict = {
+        "chat_id": chat_id, "chat_title": chat["title"],
+        "document_id": chat.get("document_id"), "total_turns": len(turns),
+    }
+    budget = CHAT_READ_PAGE_CHARS
+    if body.topics_only or body.from_turn == 0:
+        toc = _toc_fields((await _tocs(db, [chat_id])).get(chat_id), turns)
+        result.update(toc)
+        if body.topics_only:
+            return result
+        # WHY the floor: a huge toc must not starve the first turn to an empty cut.
+        budget = max(budget - _chars(toc), CHAT_READ_PAGE_CHARS // 2)
+    page, next_turn = _read_page(turns, body.from_turn, budget)
+    result["turns"] = page
+    if next_turn is not None:
+        result["next_turn"] = next_turn
+    return result
+
+
+async def _read_target(db, ctx: dict, requested: str | None) -> tuple[str, dict]:
+    """`(chat_id, {title, document_id})` of the chat `read_my_chat` serves, or 404."""
+    if requested is None:
         # ARCH: the current-session arm — the ONE read of the calling
         # conversation the pack allows, addressed by OMISSION and not by id:
         # the session is the caller's own (`owned_session_row`, the same
@@ -357,31 +459,21 @@ async def tool_read_my_chat(
     else:
         user_id, project_id = ctx["user"]["user_id"], ctx["project_id"]
         exclude, anchor = await _current_conversation(db, ctx)
-        chat_id = body.chat_id
+        chat_id = requested
         chat = (await visible_sessions(db, user_id, project_id, exclude,
                                        viewer_doc_id=anchor)).get(chat_id)
         if not chat:
             raise HTTPException(status_code=404, detail="chat not found")
-    turns = _turns(await _session_chain(db, chat_id))
-    page, next_turn = _read_page(turns, body.from_turn)
-    result: dict = {
-        "chat_id": chat_id, "chat_title": chat["title"],
-        "document_id": chat.get("document_id"), "total_turns": len(turns),
-        "turns": page,
-    }
-    if next_turn is not None:
-        result["next_turn"] = next_turn
-    return result
+    return chat_id, chat
 
 
 def _read_page(
-    turns: list[list[dict]], from_turn: int,
+    turns: list[list[dict]], from_turn: int, budget: int = CHAT_READ_PAGE_CHARS,
 ) -> tuple[list[list[dict]], int | None]:
-    """Whole turns from `from_turn` while they fit CHAT_READ_PAGE_CHARS; the
+    """Whole turns from `from_turn` while they fit `budget` characters; the
     first turn is always served, so a page is never empty before the end.
     Returns `(served turns, next from_turn or None)`."""
     page: list[list[dict]] = []
-    budget = CHAT_READ_PAGE_CHARS
     i = from_turn
     while i < len(turns):
         turn = turns[i]
@@ -521,7 +613,7 @@ async def admit_chat_message(
         sessions = _conversation_sessions(exclude)
         hit = (await live_rows(db, {message_id}, sessions)).get(message_id)
     if hit is None:
-        if await chat_recall_disabled(db):
+        if await instance_skill_disabled(db, CHAT_RECALL_SKILL):
             raise HTTPException(status_code=403,
                                 detail="chat-recall is disabled by the administrator")
         sessions = await visible_sessions(db, user_id, project_id, exclude,
@@ -574,210 +666,3 @@ def _view_image_result(
     return {"image": {"media_type": media_type, "data": data},
             "chat_id": admitted.hit["chat_id"], "message_id": body.message_id,
             "index": body.index, "chat_title": admitted.chat_title}
-
-
-# ─── save: facts from THIS chat, and their placements ─────────────────────────
-
-
-async def _admit_pack_write(ctx: dict) -> dict:
-    """The pack's WRITE admission: the two in-app guards every save-side tool
-    opens with — the external-key wall and the admin off-switch. Disabling
-    `chat-recall` therefore also disables saving from chats (operator ruling:
-    capture is not always available)."""
-    _require_in_app_agent(ctx)
-    db = await get_db()
-    if await chat_recall_disabled(db):
-        raise HTTPException(status_code=403,
-                            detail="chat-recall is disabled by the administrator")
-    return db
-
-
-@track_agent_tool("save_chat_facts")
-async def tool_save_chat_facts(
-    body: ToolSaveChatFacts = Body(...),
-    ctx: dict = Depends(get_agent_context),
-):
-    """Save facts distilled from THIS conversation to project memory.
-
-    Moderated capture: the agent proposes one
-    verdict per fact, the user moderates on the approval card. In `confirm`
-    (the default) one batch produces ONE card — a rejection with text is
-    per-fact moderation and the agent re-emits the corrected batch; in `auto`
-    there is no card and the facts are written directly.
-
-    The order of gates follows the consolidation pack's reopen path
-    (routes/tool_api/memory.py `_propose_or_apply_reopen`): full-access check,
-    the caller's OWN live session (no session ⇒ 400), the confirm-gate refusal
-    — and ONLY THEN `mint_memory_run_key`, so an asked or rejected call mints
-    no key. The run key is the same Memory-scoped wall as a consolidation run;
-    `record_active_run` is NOT called — the save is one shot and must not
-    hijack a session's active consolidation run. The chat source is STAMPED
-    from the session id server-side (memory.apply.apply_chat_verdicts); the
-    model never supplies it.
-    """
-    await _admit_pack_write(ctx)
-    user = ctx["user"]
-    await _admit_save_caller(ctx)
-    if (await _resolve_apply_or_force(
-        ctx, ui_preference=body.apply.value, is_system=False,
-    )).mode != "auto":
-        _refuse_unconfirmable("save_chat_facts")
-
-    from memory.apply import apply_chat_verdicts
-    from memory.run_key import mint_memory_run_key
-
-    run = await mint_memory_run_key(
-        user_id=ctx["user_id"], project_id=ctx["project_id"],
-    )
-    result = await apply_chat_verdicts(
-        project_id=ctx["project_id"], run_id=run.run_id,
-        verdicts=[v.model_dump() for v in body.verdicts],
-        session_id=ctx["session_id"], user=user,
-    )
-    return {"status": "applied", **result}
-
-
-async def _admit_save_caller(ctx: dict) -> None:
-    """The save-side caller gates, in the plan's fixed order: FULL project
-    access first (saving publishes project-wide memory), then the caller's
-    OWN live session (no own session ⇒ 400 — nothing to save from)."""
-    await require_full_project_access(ctx["project_id"], ctx["user"],
-                                      "save chat facts")
-    session = await owned_session_row(ctx) if ctx.get("session_id") else None
-    if not session:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "save_chat_facts saves from the calling chat session — this "
-                "key has no own live session for this project"
-            ),
-        )
-
-
-@track_agent_tool("set_fact_anchor")
-async def tool_set_fact_anchor(
-    body: ToolSetFactAnchor = Body(...),
-    ctx: dict = Depends(get_agent_context),
-):
-    """Place one stored memory fact on specific documents (`mem.anchors`), or
-    clear the placement with `document_ids: []`.
-
-    Anchors are PLACEMENT, not origin: non-empty anchors REPLACE the
-    provenance join for that fact in a subtree narrow
-    (retrieval._allowed_fact_ids), clearing them returns the fact to following
-    its chat/reference source. The fact keeps its row, its `parent_id` and its
-    provenance. Targets are validated BEFORE the confirm gate (parity with
-    reopen's validate-before-propose: a confirm-mode call must not propose a
-    placement that could never apply) and the write runs under the project's
-    memory lock — the same lock an apply holds, so an anchor write and a merge
-    on the same fact cannot interleave.
-    """
-    await _admit_pack_write(ctx)
-    user = ctx["user"]
-    project_id = ctx["project_id"]
-    await require_full_project_access(project_id, user, "set fact anchors")
-    db = await get_db()
-    await _require_anchorable_fact(db, project_id, body.fact_id)
-    anchors = await _validated_anchor_targets(
-        db, project_id, user, body.document_ids,
-    )
-    if (await _resolve_apply_or_force(
-        ctx, ui_preference=body.apply.value, is_system=False,
-    )).mode != "auto":
-        _refuse_unconfirmable("set_fact_anchor")
-    await _write_fact_anchors(db, project_id, body.fact_id, anchors)
-    return {"status": "applied", "fact_id": body.fact_id, "anchors": anchors}
-
-
-async def _write_fact_anchors(
-    db, project_id: str, fact_id: str, anchors: list[str],
-) -> None:
-    """Write `mem.anchors` under the project's memory lock — the same lock an
-    apply holds, so an anchor write and a merge on the same fact cannot
-    interleave."""
-    async with edit_lock(f"memory:{project_id}"):
-        # Re-read `mem` UNDER the lock, on the LIVE predicate only: an apply
-        # holding the same lock may have rewritten `mem` between the validation
-        # read and here (a merge unions anchors into the survivor — a stale
-        # copy here would drop that union), and a merge may have RETIRED the
-        # fact outright — a retired row answers 404, never takes the write.
-        rows = await db.query(
-            "SELECT mem FROM documents "
-            "WHERE meta::id(id) = $fid AND project_id = $pid "
-            "AND is_memory = true AND deleted_at IS NONE",
-            {"fid": fact_id, "pid": project_id},
-        )
-        if not rows:
-            raise HTTPException(status_code=404, detail="Fact document not found")
-        mem = dict(rows[0].get("mem") or {})
-        if anchors:
-            mem["anchors"] = anchors
-        else:
-            mem.pop("anchors", None)
-        await db.query(
-            "UPDATE type::record('documents', $id) SET mem = $mem",
-            {"id": fact_id, "mem": mem},
-        )
-
-
-async def _require_anchorable_fact(db, project_id: str, fact_id: str) -> None:
-    """Uniform 404 for a fact id that is not a LIVE memory fact of this
-    project — missing, soft-deleted (retired/merged), cross-project and
-    non-memory all read the same (no existence oracle)."""
-    rows = await db.query(
-        "SELECT VALUE meta::id(id) FROM documents "
-        "WHERE meta::id(id) = $fid AND project_id = $pid "
-        "AND is_memory = true AND deleted_at IS NONE",
-        {"fid": fact_id, "pid": project_id},
-    )
-    if not rows:
-        raise HTTPException(status_code=404, detail="Fact document not found")
-
-
-async def _validated_anchor_targets(
-    db, project_id: str, user: dict, document_ids: list[str],
-) -> list[str]:
-    """The normalized anchor list (order-preserving dedup) after validating
-    every target: a live, non-reference, non-memory document of the project
-    with at least commentator access — the same rule a chat reparent applies
-    (`_reparent_sets`, chat_sessions/update.py). A dead/foreign id is a
-    uniform 404."""
-    anchors: list[str] = []
-    for did in document_ids:
-        d = str(did)
-        if d and d not in anchors:
-            anchors.append(d)
-    if not anchors:
-        return []
-    rows = await db.query(
-        "SELECT meta::id(id) AS id, is_reference, is_memory FROM documents "
-        "WHERE meta::id(id) IN $ids AND project_id = $pid "
-        "AND deleted_at IS NONE",
-        {"ids": anchors, "pid": project_id},
-    ) or []
-    by_id = {r["id"]: r for r in rows}
-    for did in anchors:
-        row = by_id.get(did)
-        if row is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"anchor target {did} is not a live document of this project",
-            )
-        if row.get("is_reference"):
-            raise HTTPException(
-                status_code=400, detail="Cannot anchor a fact to a reference",
-            )
-        if row.get("is_memory"):
-            raise HTTPException(
-                status_code=400, detail="Cannot anchor a fact to another fact",
-            )
-    # Independent per-target access resolution — never `or`-combined (the
-    # nullable-fields rule): one readable target cannot carry an unreadable one.
-    for did in anchors:
-        access = await get_document_access(did, user)
-        if access is None or access == "readonly":
-            raise HTTPException(
-                status_code=403,
-                detail="Commentator access required on the target document",
-            )
-    return anchors

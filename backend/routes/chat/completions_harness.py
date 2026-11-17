@@ -5,7 +5,7 @@ completions.py (the mechanical-split precedent: completions_turn). This
 module owns ONE transport arm.
 
 The driver owns every turn. This runs AFTER the shared setup (validation,
-context — `_prepare_agent_turn_setup` in completions.py) and hands the send
+vision read — `_prepare_agent_turn_setup` in completions.py) and hands the send
 over: ensure_fanout (the channel + the project-WS pump), the per-session
 STANDING agent key (agent.keys.get_or_create_session_agent_key), and POST
 /followup, which queues the send in the session's dsh inbox. The HTTP answer
@@ -13,7 +13,7 @@ is JSON — the frames live on the project WS (routes.chat.fanout) and the
 reload path.
 
 # ARCH: the preamble facts (the row ids, the user's text and attachments,
-# sources, context warnings) ride the send's prep to the driver and come back
+# context warnings) ride the send's prep to the driver and come back
 # in `lore/claim` when dsh starts the turn; the channel mints the row pair and
 # emits the preamble there (driver.channel `_on_claim`). A refused send emits
 # NO frames — another queued turn may be running, and a terminal frame would
@@ -29,6 +29,9 @@ from typing import TYPE_CHECKING
 import driver.timeline as timeline
 import mcp_servers
 import settings
+from agent_config_load import instance_skill_disabled
+from chat_memory import build_memory_block
+from chat_sessions.recall import CHAT_RECALL_SKILL
 from driver.client import (
     PERPLEXITY_SEARCH_PINS,
     WEB_SEARCH_PROVIDERS,
@@ -131,6 +134,8 @@ async def _turn_payload(turn: "_AgentTurn", plan, agent_key: str, driver_session
         prompt=plan.prompt, assistant_msg_id=turn.assistant_msg_id,
         time_stamps=plan.time_stamps,
         skills=plan.skill_docs,
+        preload_skills=plan.preload_skills, memory_block=plan.memory_block,
+        memory_persona=turn.session.get("system_prompt_id") or "",
         reasoning_effort=turn.reasoning_effort,
         ai_api_url=ai["AI_API_URL"], ai_api_key=ai["AI_API_KEY"],
         title_model=config["CHAT_TITLE_MODEL"],
@@ -143,8 +148,8 @@ async def _turn_payload(turn: "_AgentTurn", plan, agent_key: str, driver_session
 def _claim_facts(turn: "_AgentTurn") -> dict:
     """The facts `lore/claim` returns verbatim: the plugin keeps them with
     the queued message, and the channel mints the row pair and the preamble
-    from them at claim time (the dsh message holds the merged context images,
-    so a row cannot be rebuilt from it)."""
+    from them at claim time (the dsh message holds the assembled prompt, not
+    the user's own text, so a row cannot be rebuilt from it)."""
     last = turn.body.messages[-1]
     return {
         "user_msg_id": turn.user_msg_id,
@@ -152,24 +157,157 @@ def _claim_facts(turn: "_AgentTurn") -> dict:
         "images": last.images or [],
         # getattr: see _prompt_text — stubs of a message predate `files`.
         "files": [f.model_dump() for f in getattr(last, "files", None) or []],
-        "sources": turn.ctx.sources or [],
-        "warnings": list(turn.ctx.warnings),
+        "warnings": list(turn.warnings),
     }
+
+
+async def _stamp_origin_persona(session_id: str, persona_id: str | None) -> None:
+    """Stamp the persona this chat STARTED with ("" = Default) on an unbound row.
+
+    INVARIANT(persisted): origin_persona_id is stamped at the first turn, then
+    follows every persona change of the conversation.
+    Why: operator ruling — persona and memory are one choice.
+    A system_prompt_id PATCH writes it (chat_sessions/update.py) and is never
+    NONE, so the WHERE never overwrites it. Derived rows (branch, compaction
+    continuation) copy it at their mint, so their first turn never re-stamps.
+    """
+    db = await get_db()
+    await db.query(
+        "UPDATE type::record('chat_sessions', $sid) SET origin_persona_id = $p "
+        "WHERE origin_persona_id IS NONE",
+        {"sid": session_id, "p": persona_id or ""},
+    )
+
+
+def _memory_needs_build(stored: dict | None) -> bool:
+    """True until the chat row records memory that carried chats.
+
+    WHY `chats == []` rebuilds too: an empty block injected nothing (the
+    plugin skips ''), so a persona switched to mid-chat, or labelling that
+    finished since, still brings memory at a later turn. A persona switch
+    rebuilds via `_persona_switched`. The plugin keeps at most one
+    `lore-memory` node per surface and replaces it only on a persona change
+    (INVARIANT in harness-driver/plugin/src/preload.ts), so a rebuild never
+    doubles it.
+    """
+    return not stored or stored.get("error") is not None or not stored.get("chats")
+
+
+def _persona_switched(stored: dict | None, persona_id: str) -> bool:
+    """True when the record was built for a persona other than the current one.
+    A record without `persona_id` (written before the tag) counts as the same
+    persona — the plugin never swaps an untagged block either."""
+    recorded = (stored or {}).get("persona_id")
+    return recorded is not None and recorded != persona_id
+
+
+async def _attach_chat_memory(turn: "_AgentTurn", plan) -> None:
+    """Memory ON (the persona's budget) and chat-recall enabled ⇒ preload
+    chat-recall every turn and, until the chat has received memory, build the
+    block and a pending record (written by run_harness_turn once the send is
+    accepted). A persona whose budget is broken records why memory is off.
+
+    WHY a build failure does not fail the turn: the block is agent-only
+    context — the chat works without it, and the exception is logged.
+    """
+    stored = turn.session.get("memory")
+    persona_id = turn.session.get("system_prompt_id") or ""
+    off = {"message_id": turn.user_msg_id, "chats": [], "error": None, "persona_id": persona_id}
+    if plan.memory_error is not None:
+        if not stored or stored.get("error") != plan.memory_error \
+                or _persona_switched(stored, persona_id):
+            plan.memory_record = off | {"error": plan.memory_error}
+        return
+    # WHY memory-off records a switch: the record then names the off persona,
+    # so a switch BACK rebuilds (chats = [] rebuilds by itself).
+    if plan.chat_memory_budget <= 0:
+        if _persona_switched(stored, persona_id):
+            plan.memory_record = off
+        return
+    db = await get_db()
+    # Admin off-switch, shared with labelling: topics without the tools to
+    # open them would mislead.
+    if await instance_skill_disabled(db, CHAT_RECALL_SKILL):
+        if _persona_switched(stored, persona_id):
+            plan.memory_record = off
+        return
+    if CHAT_RECALL_SKILL not in plan.preload_skills:
+        plan.preload_skills.append(CHAT_RECALL_SKILL)
+    if plan.memory_order_warning:
+        turn.warnings.append({"code": "persona_memory_order", "id": None,
+                             "detail": plan.memory_order_warning})
+    if _memory_needs_build(stored) or _persona_switched(stored, persona_id):
+        await _build_chat_memory(turn, plan, db, persona_id, off)
+
+
+async def _build_chat_memory(turn: "_AgentTurn", plan, db, persona_id: str, off: dict) -> None:
+    """Build the persona's block into `plan` with its pending record (`off` + chats)."""
+    cap = await settings.get("CHAT_MEMORY_MAX_TOKENS")
+    if plan.chat_memory_budget > cap:
+        logger.warning("chat memory: persona %s budget %d above the admin cap — clamped to %d",
+                       persona_id, plan.chat_memory_budget, cap)
+    try:
+        plan.memory_block, shown = await build_memory_block(
+            db, session_id=turn.session_id, session=turn.session,
+            user_id=turn.user.get("user_id", ""), project_id=turn.project_id or "",
+            persona_id=persona_id, budget=min(plan.chat_memory_budget, cap),
+            order=plan.chat_memory_order,
+        )
+    except Exception:
+        logger.exception("chat memory block failed session=%s", turn.session_id)
+        return
+    plan.memory_record = off | {"chats": shown}
+
+
+async def _record_chat_memory(
+    session_id: str, record: dict | None, stored: dict | None,
+) -> dict | None:
+    """Store `record` on the chat row unless it already holds memory with
+    chats for the record's persona; returns the row's record after the write
+    (`stored`, the record read with the session, when there is nothing to write).
+
+    WHY conditional: of two quick sends that both built a block, only the
+    first records — its message_id is the turn the plugin injected into.
+    WHY a failed write does not fail the send: the turn is already queued — an
+    error answer would make the browser resend it; the next turn rebuilds and
+    records again.
+    """
+    if record is None:
+        return stored
+    db = await get_db()
+    try:
+        rows = await db.query(
+            "UPDATE type::record('chat_sessions', $sid) SET memory = $m "
+            "WHERE memory IS NONE OR memory.error IS NOT NONE "
+            "OR array::len(memory.chats ?? []) = 0 "
+            "OR (memory.persona_id IS NOT NONE AND memory.persona_id != $p) RETURN AFTER",
+            {"sid": session_id, "m": record, "p": record.get("persona_id")},
+        ) or []
+        if not rows:
+            rows = await db.query(
+                "SELECT memory FROM type::record('chat_sessions', $sid)", {"sid": session_id},
+            ) or []
+    except Exception:
+        logger.exception("chat memory record write failed session=%s", session_id)
+        return stored
+    return rows[0].get("memory") if rows else None
 
 
 async def _accept_harness_turn(
     turn: "_AgentTurn", driver_session_id: str,
-) -> dict:
+) -> tuple[dict, dict | None]:
     """The accepted-send core: fan-out, prep, standing key, followup.
-    Returns the followup reply."""
+    Returns the followup reply and the pending memory record."""
     session_id = turn.session_id
     await _ensure_fanout_or_refuse(turn, session_id, driver_session_id)
+    await _stamp_origin_persona(session_id, turn.session.get("system_prompt_id"))
 
     plan = await prepare_agent_turn(
-        session=turn.session, body=turn.body, ctx=turn.ctx,
+        session=turn.session, body=turn.body, vision_ok=turn.vision_ok,
         project_id=turn.project_id, user=turn.user, toolset=turn.toolset,
         capability_is_mutating=turn.capability_is_mutating,
     )
+    await _attach_chat_memory(turn, plan)
 
     from agent.keys import get_or_create_session_agent_key
 
@@ -178,7 +316,7 @@ async def _accept_harness_turn(
     )
 
     payload = await _turn_payload(turn, plan, agent_key, driver_session_id)
-    return await timeline.post_followup(payload, line=turn.line)
+    return await timeline.post_followup(payload, line=turn.line), plan.memory_record
 
 
 def _refuse_unconfigured_line() -> None:
@@ -207,7 +345,7 @@ async def run_harness_turn(turn: "_AgentTurn") -> JSONResponse:
         await _fail_harness_turn(turn, **kw)
 
     try:
-        reply = await _accept_harness_turn(turn, driver_session_id)
+        reply, memory_record = await _accept_harness_turn(turn, driver_session_id)
     except DriverTurnRefused as exc:
         await _fail(
             message=str(exc), status=422,
@@ -229,10 +367,16 @@ async def run_harness_turn(turn: "_AgentTurn") -> JSONResponse:
             message="Agent setup failed — please try again",
             status=500, reason="agent_setup_failed", source="setup")
 
+    # WHY after the accept, never inside it: a send refused by the driver
+    # after a write would leave a record that stops every later rebuild — the
+    # agent would never get the block while the row claims it did.
+    memory = await _record_chat_memory(
+        session_id, memory_record, turn.session.get("memory"))
     return JSONResponse({
         "accepted": True,
         "user_msg_id": turn.user_msg_id,
         "assistant_msg_id": turn.assistant_msg_id,
         "dsh_session_id": reply.get("dsh_session_id"),
         "message_id": reply.get("message_id"),
+        "memory": memory,
     })

@@ -151,9 +151,8 @@ def _slice_read_window(
 # branch. A plain substring preserves byte-verity; any normalization destroys
 # it. This governs reads WITHOUT `version`; a versioned read is a GFM projection
 # of a checkpoint (agent.history_executors) and is never a source for `old_string`.
-# NOTE: chat context no longer carries bodies at all (scope pinning —
-# routes.chat.context), so read_document is now the ONLY body path into the
-# model, which makes this parity guarantee the single source of text truth.
+# NOTE: read_document is the ONLY body path into the model, which makes this
+# parity guarantee the single source of text truth.
 def _build_read_result(
     doc: dict, resolved: str, full_content: str, *,
     offset: int, limit: int | None,
@@ -530,8 +529,8 @@ async def get_links_tool(
     /edges route (one function, one default kinds set — plan typed-edges).
 
     Anchor gates mirror read_document (same-project + per-doc RBAC + scope
-    ceiling + page lock); the PEER walls (project equality, own-chats for
-    chat-context, scope ceiling on document peers) live in edges.collect_edges.
+    ceiling + page lock); the PEER walls (project equality, scope ceiling
+    on document peers) live in edges.collect_edges.
     """
     target = await _resolve_read_document_target(doc_id=doc_id)
     if isinstance(target, dict):
@@ -544,7 +543,6 @@ async def get_links_tool(
         return {"error": err}
     return await collect_edges(
         target.resolved,
-        viewer_user_id=user["user_id"],
         direction=direction,
         kinds=kinds,
         scope_root=scope_root,

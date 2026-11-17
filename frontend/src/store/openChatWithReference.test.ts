@@ -4,9 +4,7 @@
  * INVARIANT: the button ALWAYS opens a ref-scoped GHOST (activeSessionId = null)
  * with the reference attached, never auto-restoring a session or POSTing a row.
  * Why: the user decides whether to start fresh or pick an old chat from the list.
- * Existing chats are still loaded into the dropdown so they can open one manually. Existing chats are still loaded into the dropdown so the
- * user can open one manually. The ref is visible in the content picker and
- * transferGhostContext persists it onto the materialized row on the first send.
+ * Existing chats are still loaded into the dropdown so the user can open one manually.
  *
  * The button and navigation previously diverged on "the open reference has no
  * own chats" (the regression axis that broke 3+ times). They now converge: the
@@ -42,20 +40,6 @@ vi.mock('./ui-store', () => ({
   },
 }));
 
-vi.mock('../chat/context', () => ({
-  setupChatContextBridge: vi.fn(),
-  GHOST_SESSION_ID: '__ghost__',
-  resolveCompletionContext: vi.fn(() => ({ document_ids: [], reference_ids: [] })),
-  getContextForSession: vi.fn(() => ({ documentIds: [], referenceIds: [] })),
-  setContextForSession: vi.fn(),
-  clearContextForSession: vi.fn(),
-  getDerivedGhostContext: vi.fn(() => ({ docIds: [], refIds: [] })),
-  resetGhostDeltas: vi.fn(),
-  hydrateFromSessions: vi.fn(),
-  pruneContext: vi.fn(),
-  clearPendingContextPatches: vi.fn(),
-  useChatContext: vi.fn(() => ({ documentIds: [], referenceIds: [] })),
-}));
 
 import { useChatStore } from './chat-store';
 import type { Reference } from '../types';
@@ -96,7 +80,6 @@ function makeSession(overrides: Record<string, unknown> = {}) {
     title: '',
     model: 'm',
     system_prompt_id: null as string | null,
-    context_ids: [] as string[],
     mode: 'ask' as const,
     created_at: '2025-01-01T00:00:00Z',
     updated_at: '2025-01-01T00:00:00Z',
@@ -193,7 +176,7 @@ describe('openChatWithReference — existing session', () => {
 // ─── Scenario 2: no sessions → ref-scoped ghost (derived context) ─────────
 
 describe('openChatWithReference — no sessions', () => {
-  it('opens a ref-scoped ghost (no POST); marks the ref as a context source', async () => {
+  it('opens a ref-scoped ghost (no POST); hydrates the ref as the open entity', async () => {
     const { apiClient } = await import('../api/client');
     const ref = makeRef();
     (apiClient.get as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -201,10 +184,8 @@ describe('openChatWithReference — no sessions', () => {
     await useChatStore.getState().openChatWithReference(ref);
 
     await expectGhostOnRef();
-    // The ref reaches the ghost context via currentReference: the derive base is
-    // UNCONDITIONAL on the open entity (see context.ts / ghost-context.ts), and
-    // hydrateReference is what commits the ref as currentReference. (The old
-    // write-only setTalkToDocument flag is gone — proven unnecessary here.)
+    // hydrateReference commits the ref as currentReference — the open entity the
+    // turn's open-doc line names.
     expect(hydrateReference).toHaveBeenCalledWith(ref);
   });
 });

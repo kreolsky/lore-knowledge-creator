@@ -266,7 +266,7 @@ export function buildStructuralDecorations(state: EditorState): DecorationSet {
                 // they're already bare; ref urlText includes the scheme prefix. The
                 // consumer (EditorLinkPreview) normalizes via decodeLinkId in utils/in-app-link.ts,
                 // which strips any prefix defensively for all types. See that module for the
-                // full contract shared with chat (MarkdownContent, Sources).
+                // full contract shared with chat (MarkdownContent).
                 if (attrs['data-link-type']) attrs['data-link-id'] = urlText;
                 markRanges.push({ from: node.from, to: node.to, cls: finalCls, attributes: attrs });
               } else {
@@ -307,7 +307,7 @@ export function buildStructuralDecorations(state: EditorState): DecorationSet {
                 // they're already bare; ref urlText includes the scheme prefix. The
                 // consumer (EditorLinkPreview) normalizes via decodeLinkId in utils/in-app-link.ts,
                 // which strips any prefix defensively for all types. See that module for the
-                // full contract shared with chat (MarkdownContent, Sources).
+                // full contract shared with chat (MarkdownContent).
                 if (attrs['data-link-type']) attrs['data-link-id'] = urlText;
                 markRanges.push({ from: labelFrom, to: labelTo, cls: finalCls, attributes: attrs });
               } else {

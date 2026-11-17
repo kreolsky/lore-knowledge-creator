@@ -4,7 +4,7 @@ The route validates, assembles the context and hands the send to the driver:
 POST /followup queues it in the session's dsh inbox and the route answers
 JSON. No row exists until dsh CLAIMS the message: the plugin's `lore/claim`
 carries the send's prep facts back, and the channel mints the user +
-assistant pair and emits the preamble (ids/sources/warnings) there. A send
+assistant pair and emits the preamble (ids/warnings) there. A send
 during a running turn is never refused — it queues. The per-session standing
 agent key rides the payload.
 
@@ -70,7 +70,7 @@ def _claim_of(payload: dict, message_id: str = "dm-1") -> dict:
         "type": "lore/claim", "message_id": message_id,
         **{k: payload[k] for k in (
             "user_msg_id", "assistant_msg_id", "user_text", "images",
-            "sources", "warnings")},
+            "warnings")},
         "model": payload["model"],
     }
 
@@ -163,9 +163,9 @@ async def harness_env(monkeypatch, driver_line_pinned):
     monkeypatch.setattr(driver.timeline, "fetch_session_entries", replay)
     monkeypatch.setattr(driver.timeline, "fetch_session_status", statuses)
 
-    # build_context reads the per-model capability off the driver
+    # _resolve_vision_ok reads the per-model capability off the driver
     # (driver.client.agent_capability, read through the owning module's
-    # attribute in routes/chat/context.py)
+    # attribute in routes/chat/completions.py)
     # — with the line pinned that is a real GET /capability, which on gray hit
     # the LIVE harness with the fake secret (401) and in CI has no host at all.
     async def _cap(*_a, **_k):

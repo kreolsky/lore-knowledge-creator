@@ -16,7 +16,6 @@ import { useAppStore } from '../../app-store';
 import { useUIStore } from '../../ui-store';
 import { emit } from '../../../events';
 import { t } from '../../../i18n';
-import { clearContextForSession } from '../../../chat/context';
 import { markChatScopeLoaded } from '../../../chat/scope-tracker';
 import type { ChatState, Set, Get } from '../types';
 import { registeredTurnSlot } from '../streaming';
@@ -56,21 +55,18 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
     ...createUnindexedActions(set, get),
 
     // ARCH: Composite "Chat with Reference" action. Owns the sequence end-to-end:
-    //   1. Open the ref (hydrateReference) — commits it as currentReference, which
-    //      IS the derive base, so the ghost context includes the ref UNCONDITIONALLY
-    //      (no intent flag needed — the old write-only setTalkToDocument is gone).
+    //   1. Open the ref (hydrateReference) — commits it as currentReference, the
+    //      open entity a send names to the agent and materializes the chat on.
     //   2. Load the project-wide session list (doc-scope == project-wide) so
     //      initGhostFromScope has a donor + the empty-screen list is populated.
-    //   3. ALWAYS land on a ref-scoped ghost (activeSessionId = null) with the ref
-    //      in context — never auto-restores an existing session.
+    //   3. ALWAYS land on a ref-scoped ghost (activeSessionId = null) — never
+    //      auto-restores an existing session.
     //   4. Reveal chat panel.
     //
-    // WHY: "Chat with Reference" ALWAYS opens the null/ghost chat with the
-    // reference in context — it NEVER auto-restores an existing session. Why: the
-    // user decides whether to start fresh (send a message → materializes a new row)
-    // or pick an old chat from the empty-screen list. A deterministic ghost whose
-    // DERIVED context includes the ref is the only path that reliably shows the
-    // ref in the content picker and persists it on the first send.
+    // WHY: "Chat with Reference" ALWAYS opens the null/ghost chat on the open
+    // reference — it NEVER auto-restores an existing session. Why: the user
+    // decides whether to start fresh (send a message → materializes a new row)
+    // or pick an old chat from the empty-screen list.
     async openChatWithReference(ref: Reference) {
       const app = useAppStore.getState();
       const project = app.currentProject;
@@ -79,10 +75,9 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
 
       const ui = useUIStore.getState();
 
-      // Panel quick preview cannot host this flow: the ref must BE the scope for
-      // the ghost to derive ref-only context (the flow's contract). Exit preview
-      // first — in 'center' a lone open ref IS the derive base, and the refs-tab
-      // reveal effect stands down (mode !== 'panel').
+      // Panel quick preview cannot host this flow: the ref must BE the scope
+      // (the flow's contract). Exit preview first — in 'center' a lone open ref
+      // IS the scope, and the refs-tab reveal effect stands down (mode !== 'panel').
       if (ui.getRefOpenMode(doc.document_id) === 'panel') {
         ui.setRefOpenMode(doc.document_id, 'center');
       }
@@ -90,8 +85,7 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
       // Step 1: Open the ref. hydrateReference commits the list ref as
       // currentReference immediately (metadata-only LIST → loading state) and fills
       // the body async (fire-and-forget so the chat panel opens without waiting on
-      // the GET). currentReference IS the derive base, so the ghost context
-      // includes the ref unconditionally — no separate intent flag is needed.
+      // the GET).
       void app.hydrateReference(ref);
 
       try {
@@ -108,10 +102,7 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
 
       // Step 3: ALWAYS a ref-scoped ghost. Inherit overrides from the loaded
       // project-wide sessions (the latest AI chat anywhere in the project) + force
-      // activeSessionId = null. The ghost context is DERIVED from the open
-      // reference (useGhostChatContext reads currentReference) — nothing is attached
-      // here; the derived value is snapshotted onto the materialized row on the
-      // first send.
+      // activeSessionId = null.
       // WHY: initGhostFromScope runs BEFORE activeSessionId is cleared.
       // Why: if the resolver restored a session, the ghost must inherit from it
       // rather than fall back to bare defaults.
@@ -165,7 +156,7 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
       get().loadMessages(sessionId);
     },
 
-    async updateSession(sessionId: string, data: { title?: string; model?: string; system_prompt_id?: string | null; context_ids?: string[]; mode?: string; agent_auto?: boolean; reasoning_effort?: string | null; document_id?: string | null }) {
+    async updateSession(sessionId: string, data: { title?: string; model?: string; system_prompt_id?: string | null; mode?: string; agent_auto?: boolean; reasoning_effort?: string | null; document_id?: string | null }) {
       const p = apiClient.patch(`/chat/sessions/${sessionId}`, data)
         .then((updated: ChatSession) => {
           // ARCH: a reparent is written by the server to EVERY row of the
@@ -219,8 +210,6 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
         useAppStore.getState().showToast(t('failedToDeleteChatSession'), 'error');
         return;
       }
-      clearContextForSession(sessionId);
-      if (rootId !== sessionId) clearContextForSession(rootId);
       const activeId = get().activeSessionId;
       const wasActive = !!activeId && inThread(activeId);
       if (wasActive) {
@@ -240,10 +229,6 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
           ...(wasActive ? { streaming: null } : {}),
         };
       });
-
-      if (!wasActive) return;
-      // The deleted chat was active → land on a ghost; its context is DERIVED from
-      // the open entity (no attach needed).
     },
   };
 }

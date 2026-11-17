@@ -93,14 +93,15 @@ test('an approval/asked inside a turn mints lore/verdict-ask with the turn coord
     ev(3, 'approval/asked', { callId: 'c1', toolName: 'edit_document' }),
     toolResult(4, 'c1', 'applied'),
     ev(5, 'turn/end', { turn: 4, reason: { kind: 'completed' } }),
-  ])
+  ], undefined, undefined, undefined, (id) => id === 'c1')
   const kinds = replay.turns[0].frames.map((f) => (f as any).type)
   assert.deepEqual(kinds, [
     'dsh_event', 'dsh_event', 'lore/verdict-ask', 'dsh_event', 'dsh_event',
   ])
   const mint: any = replay.turns[0].frames[2]
   assert.equal(mint.seq, 3.5)
-  assert.deepEqual(mint.data, { turn: 4, callId: 'c1', toolName: 'edit_document' })
+  // The replay mints through the same per-call lookup as the live relay.
+  assert.deepEqual(mint.data, { turn: 4, callId: 'c1', toolName: 'edit_document', perCall: true })
 })
 
 test('an unfinished trailing turn is EMITTED as an open turn — no end_seq', () => {

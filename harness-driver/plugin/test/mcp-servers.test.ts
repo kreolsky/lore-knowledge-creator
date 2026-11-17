@@ -236,7 +236,7 @@ function prep(text: string, over: Partial<TurnPrep> = {}): TurnPrep {
     loreId: 'lore-x', model: 'm1', cap: 0,
     selection: { provider: 'mock', model: 'm1' },
     systemPrompt: 'SYSTEM one',
-    timeStamps: [], servedNames: new Set(), skills: [], activated: new Set(),
+    timeStamps: [], servedNames: new Set(), skills: [], activated: new Set(), preloads: [], memoryBlock: '', memoryPersona: '',
     mcpServers: [],
     standingCtx: {
       loreSessionId: 'lore-x', agentKey: 'k', mutating: new Set(), holdable: new Set(),
@@ -245,7 +245,7 @@ function prep(text: string, over: Partial<TurnPrep> = {}): TurnPrep {
     requestCtx: { messageId: `a-${text}`, applyMode: 'confirm', document_id: null, vision: false },
     claim: {
       user_msg_id: `u-${text}`, assistant_msg_id: `a-${text}`, user_text: text,
-      images: [], files: [], sources: [], warnings: [],
+      images: [], files: [], warnings: [],
     },
     ...over,
   }

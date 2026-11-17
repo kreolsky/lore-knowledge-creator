@@ -26,8 +26,7 @@ export function setPendingSessionPatch(p: Promise<unknown> | null): void {
 // in-flight entry, but a later visit to the same scope MUST re-fetch.  Why: entries are deleted on settle so a later visit re-fetches; same-tick callers dedupe via the in-flight entry, but keeping it would serve stale data.
 // Without this, a docA → docB → docA navigation hits the resolved-docA
 // entry and returns immediately, leaving state.sessions / activeSessionId
-// stuck on docB. Re-running hydrateFromSessions is safe: it skips sessions
-// that have a pending PATCH (see chat/context.ts:218).
+// stuck on docB.
 export const loadInFlight = new Map<string, Promise<void>>();
 
 export function clearInflight(): void {

@@ -1,4 +1,4 @@
-"""Config & knowledge as project documents — the home agent's editable brain.
+"""Agent config as project documents — the home agent's editable brain.
 
 # SYSTEM: agent-config — the reserved system subtree that configures the home
 # agent. The agent's persona, rules, and skills are NOT files on disk or a fixed
@@ -11,20 +11,21 @@
 #     AGENT_BOOTSTRAP_PROMPT): the Tool-API contract, "load your config from the
 #     project", RBAC, the mid-turn hold. Read every turn — the agent can never
 #     edit it. It is the floor under every assembled prompt.
-#   - Config documents (EDITABLE): persona/rules/skills/knowledge. Edited by
+#   - Config documents (EDITABLE): persona/rules/skills. Edited by
 #     the user freely; self-edited by the agent through the SAME pipeline.
 #
-# ARCH (three identical folder-held subtrees):
-#   - Rules / Knowledge / Skills are each a FOLDER that carries its own content
+# ARCH (two identical folder-held subtrees):
+#   - Rules / Skills are each a FOLDER that carries its own content
 #     PLUS plain-doc children at any depth (the tree is organization only — the
 #     whole LIVE subtree is injected every turn). The folder IS the node and the
 #     sole append target (its section header is tagged `(append new here)`), and
 #     carries no duplicate seeded canonical child. Children are plain docs
-#     (is_system=false, no role tag), so they edit under the session apply-mode
-#     (no forced confirm) and are never created/tagged here.
+#     (is_system=false, no role tag) and are never created/tagged here; an agent
+#     write to one still confirms on every call — the system-doc cell is decided
+#     by ancestry (see INVARIANT(security) in agent/apply_policy.py).
 #   - Defaults live IN the folder (editable): rules_folder ships _DEFAULT_RULES,
-#     knowledge_folder ships _DEFAULT_KNOWLEDGE, skills_folder ships nothing.
-#   - Skeleton docs (the root + the four folders + the Personas container) are
+#     skills_folder ships nothing.
+#   - Skeleton docs (the root + the folders + the Personas container) are
 #     PROTECTED from deletion (documents.delete delete-guard) so a soft-deleted
 #     tombstone can never again hold a path that crashes lazy init.
 #
@@ -38,14 +39,13 @@
 #
 # ARCH: persona identity is POSITIONAL —
 # load_agent_system_docs derives personas from the Personas folder's direct
-# children via parent_id, mirroring the rules/knowledge children. No leaf role tag
-# participates in loading — a one-time migration (since retired with the applied
-# past) cleared every migrated row's leaf tag to NONE.
+# children via parent_id, mirroring the rules children. No leaf role tag
+# participates in loading.
 #
 # INVARIANT(security): the bootstrap tier is an instance admin setting, never a project
 # document — the agent has no write path to instance settings. Why: it carries the
 # safety contract (RBAC, "a write is done only when it says applied"); letting the agent edit
-# it would let it rewrite its own constraints. Only persona/rules/skills/knowledge
+# it would let it rewrite its own constraints. Only persona/rules/skills
 # are docs.
 #
 # WHY (resilient lazy init): deterministic-id skeleton docs are created via
@@ -73,15 +73,17 @@
 #            ↑                ↑
 #             agent_config  (ensure_* orchestration + build_agent_system_prompt + façade)
 # agent_skills is pure over strings (the raw skill-document LOOKUP — the
-# frontmatter parse lives in the harness plugin, plan
-# collapse-the-editor-harness-layer step 3); agent_config_load imports seed
+# skill frontmatter parse lives in the harness plugin); agent_config_load imports seed
 # primitives. No module imports the façade → no cycle.
 """
 from __future__ import annotations
 
 import logging
+import re
+from dataclasses import dataclass
 
 import settings
+import yaml
 from agent_config_load import (
     live_help_root,
     load_agent_system_docs,
@@ -90,7 +92,6 @@ from agent_config_load import (
     load_skills_subtree,
 )
 from agent_config_seed import (
-    _DEFAULT_KNOWLEDGE,
     _DEFAULT_RULES,
     _MEMORY_ROLES,
     _REQUIRED_ROLES,
@@ -114,6 +115,132 @@ from transclusion_grammar import render_embed_schemes
 
 logger = logging.getLogger(__name__)
 
+# ─── Persona frontmatter ──────────────────────────────────────────────────────
+
+# A persona document MAY open with a YAML frontmatter block: first line exactly
+# `---`, closed by a lone `---` line (the skill-document format, skills.ts
+# parseSkillDoc). Anchored at the very start — a `---` later in the body is prose.
+_PERSONA_FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)^---[ \t]*\r?$\n?", re.S | re.M)
+
+
+@dataclass(frozen=True)
+class PersonaSettings:
+    """A persona document split into the text injected under `# Persona` and the
+    settings its frontmatter declares. `warnings` are the parse complaints, for
+    the caller to log once with the persona id (the parse itself is pure)."""
+    body: str
+    skills: tuple[str, ...] = ()
+    # 0 = chat memory OFF; a positive int = ON with this token budget.
+    chat_memory_budget: int = 0
+    # The memory block's chat order: "recent" (newest first) or "document"
+    # (chats under the current document's subtree first, then newest).
+    chat_memory_order: str = "recent"
+    warnings: tuple[str, ...] = ()
+    # Why memory is OFF although the frontmatter asks for it: an invalid
+    # `chat_memory_budget`, or unreadable frontmatter that mentions it. None =
+    # no such complaint. A bad `chat_memory_order` is NOT one — memory stays
+    # on with `recent`.
+    memory_error: str | None = None
+
+
+def parse_persona(content: str) -> PersonaSettings:
+    """Split a persona document's optional frontmatter off its text.
+
+    Keys read: `skills` (list of skill names preloaded for this persona),
+    `chat_memory_budget` (positive int = memory ON) and `chat_memory_order`
+    (`recent` | `document`, absent = `recent`). Other keys are ignored
+    silently. Malformed YAML or a non-mapping block ⇒ the WHOLE content is the
+    body (the pre-frontmatter behaviour) plus a warning; an invalid value of a
+    read key ⇒ that setting is off plus a warning.
+
+    # WHY a Python parser beside the plugin's skill parser: the persona is a
+    # document the backend already reads and injects, and its settings are needed
+    # by the backend (preload list, memory budget) — no plugin code runs there.
+    # Skill documents stay parsed only by the plugin.
+    """
+    raw = content or ""
+    match = _PERSONA_FRONTMATTER_RE.match(raw)
+    if not match:
+        return PersonaSettings(body=raw.strip())
+    # A broken block that mentions the budget is the owner's memory, not just
+    # unread settings — the chat says why memory is off.
+    asks_memory = "chat_memory_budget" in match.group(1)
+    try:
+        data = yaml.safe_load(match.group(1))
+    except yaml.YAMLError as exc:
+        warning = f"malformed frontmatter YAML: {' '.join(str(exc).split())}"
+        return PersonaSettings(body=raw.strip(), warnings=(warning,),
+                               memory_error=warning if asks_memory else None)
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        warning = "frontmatter is not a YAML mapping"
+        return PersonaSettings(body=raw.strip(), warnings=(warning,),
+                               memory_error=warning if asks_memory else None)
+    warnings: list[str] = []
+    skills = _persona_skills(data.get("skills"), warnings)
+    budget = _persona_memory_budget(data, warnings)
+    order = _persona_memory_order(data, warnings)
+    budget_error = next((w for w in warnings if w.startswith("chat_memory_budget")), None)
+    return PersonaSettings(
+        body=raw[match.end():].strip(), skills=skills,
+        chat_memory_budget=budget, chat_memory_order=order, warnings=tuple(warnings),
+        memory_error=budget_error,
+    )
+
+
+def _persona_skills(value: object, warnings: list[str]) -> tuple[str, ...]:
+    """The `skills` list: non-empty strings, deduplicated in order; anything else warns."""
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        warnings.append(f"skills must be a list of skill names, got {type(value).__name__}")
+        return ()
+    names = [v.strip() for v in value if isinstance(v, str) and v.strip()]
+    if len(names) != len(value):
+        warnings.append("skills: non-string or empty entries ignored")
+    return tuple(dict.fromkeys(names))
+
+
+def _persona_memory_budget(data: dict, warnings: list[str]) -> int:
+    """`chat_memory_budget`: absent ⇒ 0 silently; a positive int ⇒ itself; else 0 + warning."""
+    if "chat_memory_budget" not in data:
+        return 0
+    value = data["chat_memory_budget"]
+    # bool is an int subclass — `true` is not a budget.
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    warnings.append(f"chat_memory_budget must be a positive integer, got {value!r} — chat memory off")
+    return 0
+
+
+_MEMORY_ORDERS = ("recent", "document")
+
+
+def _persona_memory_order(data: dict, warnings: list[str]) -> str:
+    """`chat_memory_order`: absent ⇒ "recent" silently; a known value ⇒ itself; else "recent" + warning."""
+    if "chat_memory_order" not in data:
+        return "recent"
+    value = data["chat_memory_order"]
+    if value in _MEMORY_ORDERS:
+        return value
+    warnings.append(f"chat_memory_order must be one of {', '.join(_MEMORY_ORDERS)}, got {value!r} — recent")
+    return "recent"
+
+
+def selected_persona_doc(docs_by_role: dict[str, object], persona_id: str | None) -> dict | None:
+    """The persona child whose id == persona_id, or None (Default / not found)."""
+    if not persona_id:
+        return None
+    personas = docs_by_role.get("personas")
+    if not isinstance(personas, list):
+        return None
+    for p in personas:
+        if isinstance(p, dict) and p.get("id") == persona_id:
+            return p
+    return None
+
+
 # ─── Bootstrap tier (instance admin setting — the agent cannot edit this) ─────
 
 
@@ -132,8 +259,8 @@ DEFAULT_BOOTSTRAP_PROMPT = render_bootstrap(config.AGENT_BOOTSTRAP_PROMPT)
 async def ensure_agent_system_docs(project_id: str) -> dict[str, str]:
     """Lazy-init the reserved system subtree; return {role: doc_id}.
 
-    # WHY: created on first agent invocation (init-style). Rules +
-    # knowledge folders ship sensible defaults so the agent is usable out of the
+    # WHY: created on first agent invocation (init-style). The Rules
+    # folder ships sensible defaults so the agent is usable out of the
     # box; the user can see + edit its brain. Idempotent: stable ids +
     # _upsert_system_doc mean repeated calls never duplicate (and resurrect any
     # tombstoned skeleton row instead of colliding on the unique path index).
@@ -148,7 +275,7 @@ async def ensure_agent_system_docs(project_id: str) -> dict[str, str]:
     # not by this lazy init.
     #
     # The project ships ZERO personas out of the box — the Personas folder is
-    # EMPTY, and consolidation guidance is delivered by the memory-consolidation
+    # EMPTY, and consolidation guidance is delivered by the memory
     # skill on demand. This sharpens the invariant above: Default injects nothing,
     # full stop.
     #
@@ -171,23 +298,33 @@ async def ensure_agent_system_docs(project_id: str) -> dict[str, str]:
 
 
 def _child_section_blocks(children: list[dict]) -> list[str]:
-    """Per-node section blocks for a subtree: `## {title} (id: {id})
-    \\n{content}` for every non-empty child.
+    """Per-node section blocks for a subtree: `## {path} (id: {id})\n{content}`
+    for every non-empty child, where {path} is `A / B / title` — the titles of the
+    node's ancestors below the section folder, then its own.
 
-    # WHY: the
-    header makes content↔id mappable so the agent edits the RIGHT node for
-    revisions — the determinism fix for the blind `\\n\\n`.join that gave no way
-    to tell nodes apart with >1 of them. Pure helper (no DB).
+    # WHY: the id makes content↔id mappable so the agent edits the RIGHT node for
+    # revisions; the path keeps the nesting the tree gives a node (Knowledge /
+    # People / Ivan), which a flat title loses. An ancestor is any node of THIS
+    # list (each carries `parent_id`); the walk stops at the first parent outside
+    # it — the section folder, already the `# {section}` heading. Empty-content
+    # ancestors still contribute their title. Pure helper (no DB).
     """
+    nodes = [c for c in children or [] if isinstance(c, dict)]
+    by_id = {c.get("id"): c for c in nodes}
     blocks = []
-    for c in children or []:
-        if not isinstance(c, dict):
-            continue
+    for c in nodes:
         content = (c.get("content") or "").strip()
         if not content:
             continue
-        title = c.get("title") or ""
-        blocks.append(f"## {title} (id: {c.get('id')})\n{content}")
+        titles = [c.get("title") or ""]
+        seen = {c.get("id")}
+        parent = by_id.get(c.get("parent_id"))
+        while parent is not None and parent.get("id") not in seen:
+            seen.add(parent.get("id"))
+            titles.append(parent.get("title") or "")
+            parent = by_id.get(parent.get("parent_id"))
+        path = " / ".join(reversed(titles))
+        blocks.append(f"## {path} (id: {c.get('id')})\n{content}")
     return blocks
 
 
@@ -197,9 +334,9 @@ def _subtree_section(
     """Build a `# {section_title}` block for a folder-held subtree: the folder's
     own content (always rendered with the `(append new here)` marker — the folder
     is the sole, stable append target) plus every non-empty descendant under its
-    own `## {title} (id: {id})` header. Returns None when the subtree is empty.
+    own `## {path} (id: {id})` header. Returns None when the subtree is empty.
 
-    Pure helper (no DB) shared by the # Rules / # Knowledge / # Skills sections.
+    Pure helper (no DB) shared by the agent prompt and the MCP `init` package.
     """
     child_blocks = _child_section_blocks(children if isinstance(children, list) else [])
     folder_content = ""
@@ -235,12 +372,12 @@ def build_agent_system_prompt(
     help_root: dict | None = None,
 ) -> str:
     """Assemble the agent system prompt: immutable bootstrap + (selected) persona +
-    rules subtree + knowledge subtree + a pointer to the Lore guide (`help_root`,
+    rules subtree + a pointer to the Lore guide (`help_root`,
     `{id, title}`, None → no section).
 
     Pure function (no DB) so it is unit-testable. The bootstrap tier is ALWAYS
     first: `bootstrap` is the rendered AGENT_BOOTSTRAP_PROMPT setting, which the
-    agent cannot edit; rules/knowledge/skills come from the editable config
+    agent cannot edit; rules/skills come from the editable config
     documents.
 
     # ARCH: this is the SOLE injection point for a
@@ -249,42 +386,33 @@ def build_agent_system_prompt(
     # section at all. selected_persona_id is sourced from session.system_prompt_id
     # at the caller.
     #
-    # WHY: # Rules / # Knowledge are folder-held subtrees (each node renders under
-    # a `## {title} (id: {id})` header so content↔id is mappable for revisions; the
+    # WHY: # Rules is a folder-held subtree (each node renders under
+    # a `## {path} (id: {id})` header so content↔id is mappable for revisions; the
     # folder's header carries `(append new here)` — the stable self-append target).
     # # Skills is NOT in this base string — dsh's `tool-skill` publishes the
     # catalog from the turn payload's `skills[]` (fed to it through the
-    # plugin's lore-skills provider), not rendered here. The legacy
-    # `# Your configuration` footer is removed (it
-    # duplicated the ids in section headers).
+    # plugin's lore-skills provider), not rendered here.
     """
     parts: list[str] = [bootstrap]
 
-    # Persona — only the selected one, exactly once.
-    if selected_persona_id:
-        personas = docs_by_role.get("personas")
-        if isinstance(personas, list):
-            for p in personas:
-                if isinstance(p, dict) and p.get("id") == selected_persona_id:
-                    content = (p.get("content") or "").strip()
-                    if content:
-                        parts.append(f"# Persona\n{content}")
-                    break
+    # Persona — only the selected one, exactly once, its frontmatter stripped
+    # (the settings are read by the caller, never shown to the model).
+    persona = selected_persona_doc(docs_by_role, selected_persona_id)
+    if persona is not None:
+        body = parse_persona(persona.get("content") or "").body
+        if body:
+            parts.append(f"# Persona\n{body}")
 
-    # Rules / Knowledge render the whole folder-held subtree inline. # Skills is
+    # Rules render the whole folder-held subtree inline. # Skills is
     # NOT rendered here — dsh's `tool-skill` publishes the catalog from the turn
     # payload's `skills[]` (fed through the plugin's lore-skills provider), not
     # from this base string. The callback output stays a pure function of
     # (this base, skills set) only.
-    for section_title, folder_role, child_key in (
-        ("Rules", "rules_folder", "rules_children"),
-        ("Knowledge", "knowledge_folder", "knowledge_children"),
-    ):
-        section = _subtree_section(
-            section_title, docs_by_role.get(folder_role), docs_by_role.get(child_key),
-        )
-        if section:
-            parts.append(section)
+    section = _subtree_section(
+        "Rules", docs_by_role.get("rules_folder"), docs_by_role.get("rules_children"),
+    )
+    if section:
+        parts.append(section)
 
     # WHY: a pointer, never the guide body — the guide is ~16 pages and is read on
     # demand; injecting it would inflate every turn (see SYSTEM: help-subtree).
@@ -301,11 +429,11 @@ def build_agent_system_prompt(
 
 async def build_prompt_and_skill_docs(
     project_id: str, selected_persona_id: str | None = None,
-) -> tuple[str, dict]:
+) -> tuple[str, dict, PersonaSettings]:
     """ensure → load ONCE → build the agent system-prompt base AND the raw skills
     wire from the SAME loaded docs. Threading both out of one load is what keeps
     the agent turn to a SINGLE config-subtree walk (the prompt needs
-    rules/knowledge/skills_children; the payload's skills wire is a pure
+    rules/skills_children; the payload's skills wire is a pure
     function of skills_children already in memory).
 
     The wire carries RAW documents: {project: heads with child_docs, instance:
@@ -317,9 +445,15 @@ async def build_prompt_and_skill_docs(
 
     `selected_persona_id` is the persona to inject this turn, sourced from the
     session's system_prompt_id by the caller (prepare_agent_turn). null = Default.
+    The third value is that persona's frontmatter settings (Default / not found
+    ⇒ empty settings); its parse warnings are logged here, once per turn.
     """
     await ensure_agent_system_docs(project_id)
     docs = await load_agent_system_docs(project_id)
+    persona_doc = selected_persona_doc(docs, selected_persona_id)
+    persona = parse_persona(persona_doc.get("content") or "") if persona_doc else PersonaSettings(body="")
+    for warning in persona.warnings:
+        logger.warning("persona %s: %s", selected_persona_id, warning)
     prompt = build_agent_system_prompt(
         render_bootstrap(await settings.get("AGENT_BOOTSTRAP_PROMPT")),
         docs, selected_persona_id=selected_persona_id,
@@ -336,7 +470,7 @@ async def build_prompt_and_skill_docs(
         "instance": await load_instance_skill_docs(),
         "shipped": shipped_skill_docs(),
         "instance_tombstones": await load_instance_skill_tombstones(),
-    }
+    }, persona
 
 
 # The system-doc edit-policy override lives in agent.apply_policy, as a cell in
@@ -345,7 +479,7 @@ async def build_prompt_and_skill_docs(
 
 __all__ = [
     "DEFAULT_BOOTSTRAP_PROMPT", "render_bootstrap", "SYSTEM_DOC_ROLES", "PROTECTED_SYSTEM_ROLES",
-    "_DEFAULT_RULES", "_DEFAULT_KNOWLEDGE", "_REQUIRED_ROLES", "_MEMORY_ROLES",
+    "_DEFAULT_RULES", "_REQUIRED_ROLES", "_MEMORY_ROLES",
     "_deterministic_id",
     "build_skill_docs", "shipped_skill_docs",
     "ensure_agent_system_docs", "load_agent_system_docs",
@@ -353,4 +487,5 @@ __all__ = [
     "load_skills_subtree",
     "build_agent_system_prompt",
     "build_prompt_and_skill_docs", "render_subtree_section",
+    "PersonaSettings", "parse_persona", "selected_persona_doc",
 ]

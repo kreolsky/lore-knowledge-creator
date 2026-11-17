@@ -13,7 +13,7 @@
 # (/models proxy, TTL cache, vision + context-window resolution) lives in
 # `models_catalog`; the driver-owned turn itself (fan-out, standing key,
 # /followup) lives in `completions_harness`. They are imported + re-exported
-# below. This module keeps the HTTP routes: validation, context assembly, the
+# below. This module keeps the HTTP routes: validation, the turn setup, the
 # hand-off, cancel and the queue discard.
 #
 # ARCH: the queue is dsh's inbox — a send is ALWAYS handed to the driver,
@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from typing import NoReturn
 from uuid import uuid4
 
+import driver.client
 import driver.timeline as timeline
 import settings
 from agent.tools import MUTATING_TOOLS, agent_toolset
@@ -58,7 +59,6 @@ from routes.chat.completions_turn import (  # noqa: F401
     AgentTurnPlan,
     prepare_agent_turn,
 )
-from routes.chat.context import build_context
 from routes.chat.sessions import _require_session_access
 
 logger = logging.getLogger(__name__)
@@ -79,7 +79,8 @@ class _AgentTurn:
     project_id: str | None
     toolset: list
     capability_is_mutating: bool
-    ctx: object
+    vision_ok: bool
+    warnings: list[dict]
     user_msg_id: str
     assistant_msg_id: str
     # ARCH: the session's pinned reasoning
@@ -123,16 +124,36 @@ def _require_own_attachments(body: CompletionRequest, user: dict) -> None:
             )
 
 
-def _warn_image_drop(ctx, body: CompletionRequest) -> None:
+async def _resolve_vision_ok(body: CompletionRequest, session: dict) -> bool:
+    """The DRIVER's vision reply for this turn's model — the ONE capability read."""
+    # ARCH: an image must
+    # only reach a vision-capable model — a text-only model rejects any image_url
+    # part and fails the whole turn. Resolved ONCE per turn HERE off the DRIVER's
+    # capability reply (agent_capability → the plugin's gateway /v1/models
+    # resolution — the ONE source) and threaded on _AgentTurn.vision_ok so
+    # every image gate — the user-attachment strip in prepare_agent_turn, the
+    # drop warning in completions — reads ONE reply. A DRIVER outage raises
+    # (explicit, pre-stream); a GATEWAY the driver cannot read answers
+    # vision=false → strip + warn (the preserved safe direction). Read through
+    # the OWNING module's attribute (never a top-level `from driver.client
+    # import agent_capability` — a frozen binding makes the test patch on
+    # driver.client.agent_capability succeed while inert).
+    cap_reply = await driver.client.agent_capability(
+        body.model or session.get("model") or await settings.get("CHAT_MODEL")
+    )
+    return cap_reply.get("vision") is True
+
+
+def _warn_image_drop(vision_ok: bool, warnings: list[dict], body: CompletionRequest) -> None:
     """A non-vision model cannot take the user's attached images (a text-only
     model rejects any image_url part and fails the whole turn with an opaque
     400). Surface the drop as a context_warning (no-silent-degradation); the
-    gate read lives in build_context — ctx.vision_ok is the ONE driver
+    gate read lives in _resolve_vision_ok — vision_ok is the ONE driver
     capability reply per turn, and the image parts themselves are stripped in
     prepare_agent_turn off the same flag."""
     user_images = body.messages[-1].images
-    if user_images and not ctx.vision_ok:
-        ctx.warnings.append({
+    if user_images and not vision_ok:
+        warnings.append({
             "code": "image_not_delivered", "id": None,
             "detail": f"active model does not support image input; "
                       f"{len(user_images)} attachment(s) dropped",
@@ -145,7 +166,7 @@ async def _prepare_agent_turn_setup(
     line: DriverLine | None = None,
     reasoning_effort: str | None = None,
 ) -> _AgentTurn:
-    """Context assembly for one send (each step's WHY lives on its own
+    """Turn setup for one send (each step's WHY lives on its own
     helper). A refusal here is a REAL error status — the POST answers JSON,
     there is no stream to ride.
 
@@ -159,8 +180,9 @@ async def _prepare_agent_turn_setup(
         {t["function"]["name"] for t in toolset} & MUTATING_TOOLS
     )
 
-    ctx = await build_context(body, project_id, session)
-    _warn_image_drop(ctx, body)
+    vision_ok = await _resolve_vision_ok(body, session)
+    warnings: list[dict] = []
+    _warn_image_drop(vision_ok, warnings, body)
 
     logger.info(
         "Completion: model=%s, session=%s, system_prompt_id=%s, session_document_id=%s, capability_mutating=%s",
@@ -174,7 +196,8 @@ async def _prepare_agent_turn_setup(
         session_id=session_id, session=session, body=body, user=user, model=model,
         reasoning_effort=reasoning_effort,
         project_id=project_id, toolset=toolset,
-        capability_is_mutating=capability_is_mutating, ctx=ctx,
+        capability_is_mutating=capability_is_mutating,
+        vision_ok=vision_ok, warnings=warnings,
         user_msg_id=user_msg_id, assistant_msg_id=assistant_msg_id,
         line=line,
     )
@@ -189,7 +212,7 @@ async def _fail_pre_stream_setup(
     the caller's fall-through is dead code, and `NoReturn` is what says so
     without the reader having to prove it.
 
-    `build_context` RPCs the line for the agent capability, so a line outage
+    `_resolve_vision_ok` RPCs the line for the agent capability, so a line outage
     lands HERE (never the uncaught handler) and surfaces explained — never a
     bare 500. No row exists yet (the pair is minted at claim), so nothing is
     cleaned up. Telemetry is best-effort — it must not mask the real error.
@@ -307,7 +330,7 @@ async def create_completion(
     user: dict = Depends(get_current_user),
     db: AsyncSurreal = Depends(get_db),
 ):
-    """Queue an LLM turn: validate, assemble the context, hand the send to the
+    """Queue an LLM turn: validate, prepare the turn, hand the send to the
     driver (dsh queues it behind a running turn). Answers JSON `{accepted,
     user_msg_id, assistant_msg_id, dsh_session_id, message_id}` — `message_id`
     is the dsh inbox message; the rows and frames arrive at its claim, on the

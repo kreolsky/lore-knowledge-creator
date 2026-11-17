@@ -1,6 +1,6 @@
 """Seed primitives + role vocabulary for the agent-config reserved subtree.
 
-Split out of agent_config.py (now a façade). Holds the deterministic-id skeleton
+Holds the deterministic-id skeleton
 machinery (_upsert_system_doc / _find_system_docs), the role vocabulary
 (SYSTEM_DOC_ROLES / _REQUIRED_ROLES / PROTECTED_SYSTEM_ROLES), the path/title
 helpers, the seeded content constants, and the per-subtree skeleton seeders
@@ -31,18 +31,13 @@ _SYSTEM_PATH_PREFIX = ".lore/system"
 #                       the selectable personas; only the SELECTED one injects.
 #   rules_folder      — Rules FOLDER; carries content + plain-doc children (any
 #                       depth). Seeded with _DEFAULT_RULES. The append target.
-#   knowledge_folder  — Knowledge FOLDER; same shape. Seeded with _DEFAULT_KNOWLEDGE.
 #   skills_folder     — Skills FOLDER; same shape. Seeded empty.
 #
-# The legacy leaf roles (persona/rules/skill/knowledge) are GONE from this set:
-# a one-time finalizer (run after the unify + collapse migrations — all since
-# retired with the applied past) cleared them to NONE on all migrated rows.
 # Personas are positional (direct children of the Personas folder), and folder
 # children are plain docs (system_role = NONE) — no leaf role tag participates
 # in loading anymore.
 SYSTEM_DOC_ROLES: tuple[str, ...] = (
-    "system_root", "system_prompt", "rules_folder",
-    "skills_folder", "knowledge_folder",
+    "system_root", "system_prompt", "rules_folder", "skills_folder",
     # Project memory: seeded but never injected, the same posture as Personas.
     "memory_folder",
 )
@@ -64,7 +59,7 @@ SYSTEM_DOC_ROLES: tuple[str, ...] = (
 #   1. `_REQUIRED_ROLES` (this file) — the loader's Phase-1 role filter.
 #   2. the folder_ids tuple feeding `_bfs_config_subtree` in agent_config_load.py
 #      (which subtrees are walked).
-#   3. the section loop in `build_agent_system_prompt` in agent_config.py (what
+#   3. the section rendering in `build_agent_system_prompt` in agent_config.py (what
 #      actually renders).
 # The three seams live in three DIFFERENT modules — that is the whole hazard: a
 # refactor local to any one of them looks complete and still injects nothing.
@@ -76,10 +71,11 @@ _MEMORY_ROLES: tuple[str, ...] = ("memory_folder",)
 
 # The roles that MUST exist after lazy init (the default skeleton). NEW projects
 # seed no SELECTED persona and ship ZERO personas out of the box — the Personas
-# folder is empty (a persona a USER creates is a plain doc under it). Rules +
-# knowledge folders are seeded WITH default content; the skills folder is seeded
-# with the shipped skills (memory-consolidation + web-search). No leaf children
-# are seeded under the three cumulative folders — there, the folder is the node.
+# folder is empty (a persona a USER creates is a plain doc under it). The Rules
+# folder is seeded WITH default content; the skills folder is seeded
+# empty — the shipped skills (backend/configs/skill_*.md) overlay it at turn time,
+# never copied (see agent_skills). No leaf children
+# are seeded under the two cumulative folders — there, the folder is the node.
 #
 # This set is a STRICT SUBSET of SYSTEM_DOC_ROLES: the Memory folder is valid
 # vocabulary that this skeleton does not gate on. Kept a
@@ -90,7 +86,6 @@ _MEMORY_ROLES: tuple[str, ...] = ("memory_folder",)
 # not be aliased.
 _REQUIRED_ROLES: tuple[str, ...] = (
     "system_root", "system_prompt", "rules_folder", "skills_folder",
-    "knowledge_folder",
 )
 
 # The skeleton roles that are PROTECTED from deletion (documents.delete
@@ -103,9 +98,9 @@ _REQUIRED_ROLES: tuple[str, ...] = (
 PROTECTED_SYSTEM_ROLES: frozenset[str] = frozenset(_REQUIRED_ROLES + _MEMORY_ROLES)
 
 _DEFAULT_RULES = (
-    "How this project wants to be worked on: its conventions, the user's "
-    "preferences, and corrections to your own habits. What is TRUE in this project "
-    "— its subject, people and decisions — belongs in Knowledge instead.\n"
+    "What you need to know about this project and how it wants to be worked on: "
+    "its subject, people and decisions, its conventions, the user's preferences, "
+    "and corrections to your own habits.\n"
     "Write here as you learn:\n"
     "- One habit or correction → append a bullet to the folder marked "
     "'(append new here)'.\n"
@@ -116,13 +111,6 @@ _DEFAULT_RULES = (
     "- Loose bullets piling up on one topic → say so and offer to move them into "
     "their own document.\n"
 )
-_DEFAULT_KNOWLEDGE = (
-    "What is true in this project: its subject, its people, its decisions, and the "
-    "corrections you are given about them. How this project wants to be WORKED ON "
-    "belongs in Rules instead.\n"
-    "Add a fact here the same way you add one to Rules — a bullet on this folder, or "
-    "a child document once one topic outgrows a bullet.\n"
-)
 
 
 def _role_title(role: str) -> str:
@@ -131,7 +119,6 @@ def _role_title(role: str) -> str:
         "system_prompt": "Personas",
         "rules_folder": "Rules",
         "skills_folder": "Skills",
-        "knowledge_folder": "Knowledge",
         "memory_folder": "Memory",
     }.get(role, role.title())
 
@@ -139,10 +126,7 @@ def _role_title(role: str) -> str:
 def _role_default_content(role: str) -> str:
     # Folders carry their own default content now (the folder IS the node).
     # system_prompt + skills_folder + system_root ship no content.
-    return {
-        "rules_folder": _DEFAULT_RULES,
-        "knowledge_folder": _DEFAULT_KNOWLEDGE,
-    }.get(role, "")
+    return {"rules_folder": _DEFAULT_RULES}.get(role, "")
 
 
 
@@ -162,6 +146,8 @@ def memory_folder_id(project_id: str) -> str:
     (pure, no DB). Consumers that key on the folder WITHOUT seeding (the
     structure root call's door-row exception) resolve the same id the seed
     would; on a never-seeded project it simply matches no row."""
+    # WHY: share_guard.memory_root_id restates this id literal (it must not
+    # import this module); change both together.
     return _deterministic_id(project_id, "memory_folder")
 
 

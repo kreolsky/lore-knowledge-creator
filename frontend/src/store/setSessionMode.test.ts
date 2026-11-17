@@ -35,21 +35,6 @@ vi.mock('./ui-store', () => ({
   useUIStore: { getState: vi.fn() },
 }));
 
-vi.mock('../chat/context', () => ({
-  setupChatContextBridge: vi.fn(),
-  GHOST_SESSION_ID: '__ghost__',
-  resolveCompletionContext: vi.fn(() => ({ document_ids: [], reference_ids: [] })),
-  getContextForSession: vi.fn(() => ({ documentIds: [], referenceIds: [] })),
-  setContextForSession: vi.fn(),
-  clearContextForSession: vi.fn(),
-  hydrateFromSessions: vi.fn(),
-  pruneContext: vi.fn(),
-  clearPendingContextPatches: vi.fn(),
-  useChatContext: vi.fn(() => ({ documentIds: [], referenceIds: [] })),
-  addItemToContext: vi.fn(() => Promise.resolve()),
-  removeItemFromContext: vi.fn(() => Promise.resolve()),
-  transferGhostContext: vi.fn(),
-}));
 
 import { useChatStore } from './chat-store';
 import { deriveUIMode } from '../types';
@@ -65,7 +50,6 @@ function makeSession(overrides: Partial<ChatSession> = {}): ChatSession {
     title: '',
     model: 'm',
     system_prompt_id: null,
-    context_ids: [],
     target_doc_id: 'doc-1',
     created_at: '2025-01-01T00:00:00Z',
     updated_at: '2025-01-01T00:00:00Z',
@@ -104,9 +88,6 @@ beforeEach(async () => {
     getRefPreviewMode: vi.fn(() => false),
     setRightPanelTab: vi.fn(),
   });
-
-  const { addItemToContext } = await import('../chat/context');
-  (addItemToContext as ReturnType<typeof vi.fn>).mockClear();
 
   if (typeof window.localStorage.clear === 'function') window.localStorage.clear();
   useChatStore.getState().reset();

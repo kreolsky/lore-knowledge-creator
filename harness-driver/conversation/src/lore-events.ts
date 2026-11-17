@@ -76,6 +76,8 @@ export interface LoreVerdictAskEventData {
   readonly turn: number | null
   readonly callId: string
   readonly toolName: string
+  /** Approved one call at a time: the card offers no session grant. */
+  readonly perCall: boolean
 }
 
 /** The halt card's content: the reason (typed HaltReason or an untyped

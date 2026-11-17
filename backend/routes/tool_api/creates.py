@@ -15,10 +15,12 @@ from models import ToolCreateDocument
 from routes.tool_api._common import (
     _apply_create_document_direct,
     _apply_create_reference_direct,
+    _is_system_target,
     _refuse_unconfirmable,
     _resolve_apply_or_force,
 )
 from routes.tool_api_telemetry import track_agent_tool
+from scope import reject_memory_parent, resolve_scoped_parent
 
 
 @track_agent_tool("create_document")
@@ -90,15 +92,19 @@ async def tool_create_document(
 
         content = normalize_markdown(content)
 
-    # PR4 R2: unified apply-mode resolver. Create has no system-doc target, so
-    # is_system=False (preserving the pre-PR4 create behavior; the is_system cell
-    # is genuinely additive for the edit surface only). MCP force-auto applies here
-    # too (a read-write key's create always applies).
-    if (await _resolve_apply_or_force(
-        ctx, ui_preference=body.apply.value, is_system=False,
-    )).mode != "auto":
-        _refuse_unconfirmable("create_document")
-    # ARCH (minimal-tool-set plan): create_document unifies create_reference.
+    # Unified apply-mode resolver. A create under the system root (a Rules child,
+    # a persona, a reference on a config doc) is a self-edit: the PARENT decides
+    # the is_system cell. MCP force-auto applies elsewhere (a read-write key's
+    # create always applies) and is refused there.
+    parent_id = resolve_scoped_parent(ctx.get("scope_root"), body.parent_id)
+    await reject_memory_parent(parent_id, ctx["project_id"])
+    decision = await _resolve_apply_or_force(
+        ctx, ui_preference=body.apply.value,
+        is_system=await _is_system_target(parent_id, ctx["project_id"]),
+    )
+    if decision.mode != "auto":
+        _refuse_unconfirmable("create_document", decision.reason)
+    # ARCH: create_document unifies create_reference.
     # When is_reference=True route through the reference primitive (the parent_id
     # is the host document). The standalone create_reference endpoint stays for
     # external callers; new agent calls go through create_document.

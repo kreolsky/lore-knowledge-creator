@@ -17,22 +17,17 @@ IMPORT_FILE_TOOL: dict = {
     "function": {
         "name": "import_file",
         "description": (
-            "Import a FILE as a new document or reference via the import pipeline "
-            "(markdown normalize for .md, image extraction) or the binary save path "
-            "(image → thumbnail, audio → transcribed, .zip → a downloadable file "
-            "reference). Set node_type to "
-            "\"reference\" to attach the result to a host document (parent_id) as "
-            "a reference; otherwise (default) it lands as a new document under "
-            "parent_id. Pass `sandbox_path` for a file you produced in the "
-            "sandbox console, or `message_id` + `attachment_index` for an image "
-            "attached to a chat message — its address is the "
+            "Import a FILE's bytes as a new node — applies immediately (text you "
+            "authored goes through create_document). Source: `sandbox_path` (a "
+            "file you produced; you cannot see bytes, never emit base64), or "
+            "`message_id` + `attachment_index` (a chat image, addressed by the "
             "`[attached images: message_id=…, count=N]` marker under the current "
             "message, an `images: N` marker on a chat-recall read, or "
-            "`view_chat_image`'s meta (the index is the same 0-based index "
-            "view_chat_image serves). For an image from another chat, view it with "
-            "`view_chat_image` first and save that one with the same "
-            "`message_id` and `index`. Applies immediately. For very large files "
-            "prefer the upload widget.\n"
+            "`view_chat_image`'s meta; an image from another chat: view it with "
+            "`view_chat_image` first, then save it with the same ids). .md is "
+            "normalized, an image gets a thumbnail, audio is transcribed, a .zip "
+            "becomes a downloadable reference. Very large files: the upload "
+            "widget.\n"
             # The create-vs-upload boundary
             # is "text I authored" → create_document (may propose); "bytes I am
             # importing" → import_file (applies immediately). Plain `content`
@@ -46,8 +41,7 @@ IMPORT_FILE_TOOL: dict = {
             # with `python -m zipfile -c out.zip <paths…>` — the console has NO
             # zip binary, python's stdlib is the route — then import the .zip as
             # a reference; the user gets a downloadable archive.
-            "Binary image/audio/archive is not a document — set "
-            "node_type=\"reference\" for those."
+            "Binary image/audio/archive needs node_type `reference`."
             + html_import_sentence()
         ),
         "parameters": {
@@ -56,11 +50,8 @@ IMPORT_FILE_TOOL: dict = {
                 "filename": {
                     "type": "string",
                     "description": (
-                        "Source filename. A .md/.markdown suffix on a text file runs "
-                        "markdown normalize; the extension picks image vs audio for "
-                        "binary, and .zip means a downloadable archive reference. "
-                        "On the chat-image path only the STEM is used — the "
-                        "extension comes from the stored image."
+                        "Source filename; the extension picks the pipeline. For a "
+                        "chat image only the stem is used."
                     ),
                 },
                 "node_type": {
@@ -68,42 +59,28 @@ IMPORT_FILE_TOOL: dict = {
                     "enum": ["document", "reference"],
                     "default": "document",
                     "description": (
-                        "The kind of node to create: \"document\" (default) → a new "
-                        "document under parent_id (the tree parent); \"reference\" → "
-                        "a reference attached to parent_id (the host). Binary "
-                        "image/audio requires node_type=\"reference\"."
+                        "`document` (default): a new document under parent_id; "
+                        "`reference`: attached to host parent_id."
                     ),
                 },
                 "sandbox_path": {
                     "type": "string",
                     "description": (
-                        "A file already in your sandbox workspace (e.g. a report "
-                        "you generated, a chart you plotted). Mutually exclusive with "
-                        "message_id + attachment_index. This is the ONLY way to "
-                        "import a file you produced — you cannot see file bytes, so "
-                        "never emit base64. To share several files at once, pack "
-                        "them with `python -m zipfile -c out.zip <paths…>` (no zip "
-                        "binary on the console) and pass the .zip here."
+                        "A file in your sandbox workspace; exclusive with "
+                        "message_id. Several files: pack with `python -m zipfile "
+                        "-c out.zip <paths…>` (no zip binary) and pass the .zip."
                     ),
                 },
                 "message_id": {
                     "type": "string",
-                    "description": (
-                        "With attachment_index (mutually exclusive with "
-                        "sandbox_path): the message carrying the image to save. "
-                        "Take it from the `[attached images: message_id=…]` marker "
-                        "under the current message, an `images: N` marker on a "
-                        "chat-recall read, or `view_chat_image`'s meta."
-                    ),
+                    "description": "The message carrying the image; with attachment_index.",
                 },
                 "attachment_index": {
                     "type": "integer",
                     "minimum": 0,
                     "description": (
-                        "With message_id: the image's 0-based position among that "
-                        "message's images (the same index `view_chat_image` "
-                        "serves). One image per call — save several with several "
-                        "calls."
+                        "0-based index among that message's images (as "
+                        "`view_chat_image` serves). One image per call."
                     ),
                 },
                 "title": {
@@ -113,9 +90,8 @@ IMPORT_FILE_TOOL: dict = {
                 "parent_id": {
                     "type": ["string", "null"],
                     "description": (
-                        "Placement, discriminated by node_type: the tree parent for "
-                        "a document, or the HOST document for a reference (required "
-                        "when node_type=\"reference\")."
+                        "Tree parent for a document; the HOST for a reference "
+                        "(required then)."
                     ),
                 },
             },

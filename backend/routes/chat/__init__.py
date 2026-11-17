@@ -1,5 +1,5 @@
 """AI Chat routes — sessions CRUD, message tree, LLM completions (driver-owned turns), transcription."""
-# SYSTEM: chat-routes — AI chat sessions, message tree, LLM completions (driver-owned), context assembly
+# SYSTEM: chat-routes — AI chat sessions, message tree, LLM completions (driver-owned)
 # ARCH: the API key never reaches the client — the driver speaks to the gateway.
 # ARCH: every turn is DRIVER-owned —
 # POST /completions answers JSON and the frames ride the project WS
@@ -12,7 +12,6 @@
 # client (which skips lifespans).
 import agent.keys  # noqa: F401
 
-import routes.chat.context  # noqa: F401
 import routes.chat.messages  # noqa: F401
 import routes.chat.models_catalog  # noqa: F401 — binds GET /models (gateway catalog moved out of completions)
 import routes.chat.serializers  # noqa: F401
@@ -22,10 +21,10 @@ import routes.chat.transcription  # noqa: F401
 import routes.chat.verdicts  # noqa: F401 — binds GET/POST /api/chat/verdicts
 
 # branches (POST /sessions/{id}/branches + GET /forks), images (the attach-time
-# image press) and search (its own project-scoped router, mounted by main.py)
+# image press), memory (GET /sessions/{id}/toc + /memory) and search (its own project-scoped router, mounted by main.py)
 # ride the same line as completions: one noqa keeps the __init__ at its
 # import-shape budget (import-shape-gate zero-net-growth).
-from routes.chat import branches, completions, images, search  # noqa: F401
+from routes.chat import branches, completions, images, memory, search  # noqa: F401
 from routes.chat._router import router  # noqa: F401
 from routes.chat.models_catalog import gateway_model_ids
 

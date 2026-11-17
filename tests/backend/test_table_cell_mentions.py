@@ -126,11 +126,10 @@ async def test_rebuild_writers_keep_table_cell_link_edges(client, collab_project
 
 # A widget cell edit changes ONLY the tables map: the flush early-return on
 # unchanged anchor text skipped it (the cell never reached documents.content NOR
-# doc_mentions), and /links read the live session's ANCHOR text and missed cell
-# links while the edges had them.
-# TEST-WHY: cross-process-contract — a table-only cell edit reaches documents.content, doc_mentions, and /links (live session).
+# doc_mentions).
+# TEST-WHY: cross-process-contract — a table-only cell edit reaches documents.content and doc_mentions.
 @pytest.mark.asyncio
-async def test_table_only_edit_reaches_read_model_edges_and_links(client, collab_project, _clear_sessions):
+async def test_table_only_edit_reaches_read_model_and_edges(client, collab_project, _clear_sessions):
     from emit_recorder import EmitRecorder
 
     pid, _doc, admin_token, *_ = collab_project
@@ -154,18 +153,6 @@ async def test_table_only_edit_reaches_read_model_edges_and_links(client, collab
         "table-only edit did not create the cell link edge"
     assert rec.of("backlinks_changed_batch"), \
         "panel was not nudged (no backlinks_changed_batch)"
-
-    # /links must see the cell link on the LIVE session (a client is connected):
-    # it reads the GFM read-model (expand_tables of the session Y.Doc), not the
-    # anchor-form session text.
-    ws = type("W", (), {"send_bytes": _noop, "send_text": _noop})()
-    session.add_client(ws, "u1", "User", "full")
-    r = await client.get(
-        f"/api/documents/{source}/links", cookies={"lore_session": admin_token}
-    )
-    assert r.status_code == 200, r.text
-    assert target in (r.json().get("document_ids") or []), \
-        "/links missed the table-cell link on the live session"
 
 
 # The registry seed and the flush detector must build the SAME pair set (the

@@ -8,7 +8,6 @@ import { useAppStore } from '../app-store';
 import { useUIStore } from '../ui-store';
 import { refIsScope } from '../ui-store/documents-slice';
 import { t } from '../../i18n';
-import { resolveCompletionContext } from '../../chat/context';
 import type { ChatState, Set, Get } from './types';
 
 /** Shape of an optimistic-insert request shared by the send paths. */
@@ -92,7 +91,7 @@ import { withThreadRow } from './branches-slice';
 import { appendDraft } from './misc-slice';
 import {
   streamCompletion, flushStreaming, emptyStreaming, hasOpenHarnessTurn, markHarnessTurnAborted,
-  rememberQueuedSend, forgetQueuedSend,
+  rememberQueuedSend, forgetQueuedSend, applyReplyMemory,
 } from './streaming';
 import { rewindToLineage } from './conversation-feed';
 import { seatSessionRows, afterSessionRowsCommitted } from './session-rows';
@@ -137,16 +136,15 @@ interface RunCompletionOpts extends SendWire {
  * document at send time — the prep is frozen here, a queued send runs with
  * the context its user had when sending. */
 function completionBody(get: Get, activeSessionId: string, wire: SendWire): Record<string, unknown> {
-  const contentCtx = resolveCompletionContext();
   const activeSession = get().sessions.find(s => s.session_id === activeSessionId);
   const systemPromptId = activeSession?.system_prompt_id ?? undefined;
   const uiMode = deriveUIMode(activeSession);
   const autoApply = uiMode === 'agent_auto';
   // The live open document (central panel) — resolved synchronously at send time.
   // Per-turn + ephemeral: it surfaces "what's open right now" to the agent WITHOUT
-  // repointing the session pin. Priority mirrors the ghost-base (currentReference
-  // over currentDocument, both through the scope projection: a panel-previewed ref
-  // is not "open" as the scope — the center shows the document). A plain read —
+  // repointing the session pin. Priority: currentReference over
+  // currentDocument, both through the scope projection: a panel-previewed ref
+  // is not "open" as the scope — the center shows the document. A plain read —
   // no reactivity/dep-array concern.
   const appState = useAppStore.getState();
   const sendMode = useUIStore.getState().getRefOpenMode(appState.currentDocument?.document_id ?? '');
@@ -158,7 +156,6 @@ function completionBody(get: Get, activeSessionId: string, wire: SendWire): Reco
     messages: wire.apiMessages.slice(-1),
     parent_id: wire.parentId,
     user_msg_id: wire.userMsgId,
-    ...contentCtx,
     ...(systemPromptId ? { system_prompt_id: systemPromptId } : {}),
     ...(autoApply ? { auto_apply: true } : {}),
     ...(openDocId ? { open_doc_id: openDocId } : {}),
@@ -232,7 +229,8 @@ async function queueSend(
 ): Promise<void> {
   rememberQueuedSend(wire.userMsgId, content, images, files);
   try {
-    await apiClient.post(`/chat/sessions/${sessionId}/completions`, completionBody(get, sessionId, wire));
+    const reply = await apiClient.post(`/chat/sessions/${sessionId}/completions`, completionBody(get, sessionId, wire));
+    applyReplyMemory(set, sessionId, reply);
   } catch (e) {
     forgetQueuedSend(wire.userMsgId);
     if (handleSendError(e, 'Chat queue error:', set, get) && content) {

@@ -366,6 +366,7 @@ export async function callToolApiWithApproval(
   const ask = await askLoreApproval(
     exec, tctx, tool,
     `Lore mutating call ${tool} needs the user's approval before it applies`,
+    envelope.ask_every_time === true,
   )
   if (ask.outcome !== 'allowed-once') {
     return JSON.stringify({ status: 'rejected', reason: ask.reason || '' })
@@ -441,8 +442,10 @@ export async function callToolApi(
             error: `${tool} failed ${res.statusCode}: ${buf.slice(0, 300)}`,
             status_code: res.statusCode,
           }
-          const code = envelopeCode(buf)
-          if (code) envelope.code = code
+          const refusal = envelopeRefusal(buf)
+          if (refusal.code) envelope.code = refusal.code
+          // The system-doc confirm: asked on every call (approvals.ts).
+          if (refusal.askEveryTime) envelope.ask_every_time = true
           resolve(JSON.stringify(envelope))
           return
         }
@@ -460,22 +463,23 @@ export async function callToolApi(
   })
 }
 
-/** The refusal code out of a FastAPI error body — the confirm cell raises
- * HTTPException(detail={"code": ..., "detail": ...}), so the machine-readable
- * code sits NESTED under `detail` (a plain-string detail carries none). */
-function envelopeCode(buf: string): string | null {
+/** The refusal code (+ the `ask_every_time` flag) out of a FastAPI error
+ * body — the confirm cell raises HTTPException(detail={"code": ...,
+ * "ask_every_time"?: true, "detail": ...}), so the machine-readable fields sit
+ * NESTED under `detail` (a plain-string detail carries none). */
+function envelopeRefusal(buf: string): { code: string | null; askEveryTime: boolean } {
   try {
     const parsed = JSON.parse(buf)
     if (parsed && typeof parsed === 'object') {
-      if (typeof parsed.code === 'string') return parsed.code
+      if (typeof parsed.code === 'string') return { code: parsed.code, askEveryTime: false }
       const nested = parsed.detail
       if (nested && typeof nested === 'object' && typeof nested.code === 'string') {
-        return nested.code
+        return { code: nested.code, askEveryTime: nested.ask_every_time === true }
       }
     }
   } catch {
     // A plain-string detail — not machine-readable.
   }
-  return null
+  return { code: null, askEveryTime: false }
 }
 

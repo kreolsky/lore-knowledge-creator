@@ -137,10 +137,13 @@ const HALT_MESSAGES: Record<string, string> = {
 
 /**
  * The frames for one event; empty array = nothing to emit. `origin` names the
- * emitting session (the listener knows it; the event does not).
+ * emitting session (the listener knows it; the event does not). `askPerCall`
+ * answers whether an ask's call is approved one call at a time (approvals.ts
+ * `isPerCallAsk`, injected so this module stays pure); absent ⇒ false.
  */
 export function mapEvent(
   ev: DshEvent, state: TurnMapState, origin?: EventOrigin,
+  askPerCall?: (callId: string) => boolean,
 ): Record<string, unknown>[] {
   // A child session's events emit nothing (the module ARCH note): its chips
   // were the translator's own vocabulary, and its seq space would collide
@@ -185,7 +188,10 @@ export function mapEvent(
     // panel and has no conversation node for the ask), so the relay mints the
     // lore event at the ask's own seq — the SAME anchor the replay mints on
     // reload (the placement INVARIANT in lore-events.ts). The payload carries
-    // the turn coordinate; the card keys on the call id.
+    // the turn coordinate; the card keys on the call id. WHY perCall rides the
+    // mint: dsh's `approval/asked` shape is closed ({id, toolName, callId?,
+    // reason?}), and the card must not offer a session grant the bridge
+    // refuses (403) on a per-call ask.
     const callId = ev.data?.callId
     const name = ev.data?.toolName
     if (typeof callId !== 'string' || !callId || typeof name !== 'string' || !name) {
@@ -196,7 +202,7 @@ export function mapEvent(
     return [loreEvent(
       'lore/verdict-ask',
       ev.seq,
-      { turn: state.turn, callId, toolName: name },
+      { turn: state.turn, callId, toolName: name, perCall: askPerCall?.(callId) === true },
       typeof ev.time === 'number' ? ev.time : Date.now(),
     ).event as unknown as Record<string, unknown>]
   }

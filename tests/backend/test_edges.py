@@ -1,8 +1,8 @@
-"""Typed-edges walls — /edges and the get_links agent tool (plan typed-edges, step 1).
+"""Typed-edges walls — /edges and the get_links agent tool.
 
-The plan's owed TEST-WHY set: a peer outside the reading document's project is
+The walls pinned here: a peer outside the reading document's project is
 skipped in BOTH directions (doc_mentions edges survive cross-project subtree
-moves), another member's private chat is never revealed by its context, and a
+moves), and a
 subtree-scoped agent key gets no peer outside its root. The kind/shape behavior
 (mention vs transclusion, NONE→mention coalesce, pair-based flush detection) is
 pinned inside the existing flush test (test_flush_perf).
@@ -98,56 +98,6 @@ async def test_edges_project_wall_hides_foreign_peers_both_directions(client, ad
         "a foreign TARGET must not appear on the moved doc"
     assert not any(e["broken"] for e in outgoing), \
         "a foreign target is SKIPPED by the wall, never reported as broken"
-
-
-# TEST-WHY: refused-principal — chat-context must serve only the viewer's OWN chats: the other member's chat is private (its transcript read is refused 404 to the admin), so revealing it through the graph would be a privacy hole the direct read refuses.
-@pytest.mark.asyncio
-async def test_edges_chat_context_shows_only_own_chats(client, admin_user, regular_user):
-    """Two members each anchor a chat on the same document via context_ids.
-    Each member's /edges?kinds=chat-context lists exactly their own chat; the
-    default kind set never includes chat-context."""
-    admin_uid, admin_token = admin_user
-    user_uid, user_token = regular_user
-
-    pid, idx = await _mk_project(client, admin_token, "Edges Chats")
-    await _add_member(client, admin_token, pid, user_uid)
-    d = await _mk_doc(client, pid, admin_token, title="Anchored doc", parent_id=idx)
-
-    async def _context_chat(token):
-        r = await client.post(
-            "/api/chat/sessions",
-            json={"project_id": pid, "document_id": d},
-            cookies={"lore_session": token},
-        )
-        assert r.status_code == 201, r.text
-        sid = r.json()["session_id"]
-        r = await client.patch(
-            f"/api/chat/sessions/{sid}",
-            json={"context_ids": [d]},
-            cookies={"lore_session": token},
-        )
-        assert r.status_code == 200, r.text
-        return sid
-
-    sid_other = await _context_chat(user_token)
-    sid_own = await _context_chat(admin_token)
-
-    # The other member's chat really is private: the admin's direct read is refused.
-    r = await client.get(
-        f"/api/chat/sessions/{sid_other}/messages", cookies={"lore_session": admin_token},
-    )
-    assert r.status_code in (403, 404), "an AI chat is owner-only on the direct read"
-
-    own = await _edges(client, admin_token, d, kinds="chat-context")
-    assert [e["session_id"] for e in own if e["kind"] == "chat-context"] == [sid_own], \
-        "the viewer sees exactly their own chat under chat-context"
-
-    theirs = await _edges(client, user_token, d, kinds="chat-context")
-    assert [e["session_id"] for e in theirs if e["kind"] == "chat-context"] == [sid_other]
-
-    default_kinds = {e["kind"] for e in await _edges(client, admin_token, d)}
-    assert "chat-context" not in default_kinds, \
-        "chat-context is opt-in — never in the default kind set"
 
 
 # TEST-WHY: refused-principal — a subtree-scoped agent key reading get_links gets no document peer outside its root (dropped), and the anchor itself outside the scope is a 403.

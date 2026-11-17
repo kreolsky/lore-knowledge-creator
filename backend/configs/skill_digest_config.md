@@ -1,16 +1,15 @@
 ---
 name: digest-config
-description: Author a theme digest config and explain how a digest runs — periodic delta reports on one theme from chats and attached references. «сделай дайджест», «настрой дайджест по теме», «сводка по теме из чатов», «отчёт что нового по здоровью», «почему дайджест пустой», «как работает дайджест», theme digest, digest config, periodic theme report.
+description: Author or fix a theme digest config and explain how a digest runs. «сделай дайджест», «настрой дайджест по теме», «почему дайджест пустой», «как работает дайджест»; theme digest, digest config.
 tools: []
 ---
 
 # Theme digest
 
 A digest is a pipeline that writes ONE new report document per run: what is new on a
-theme since the previous report, and what changed against it. The user writes the config
-once; a binding attaches it to a "theme document". You author and fix the config
-document with your document tools; the binding itself is made in the interface (you
-have no tool for it), so walk the user through that step.
+theme since the previous report, and what changed against it. You author and fix the
+config document with your document tools; the binding to a "theme document" is made in
+the interface (you have no tool for it), so walk the user through that step.
 
 ## The config document
 
@@ -29,14 +28,13 @@ keywords: [сон, бессонница, боль, колено, давлени�
 | `keywords` | no | a list (or one string) of words the material is likely to use |
 | `model` | no | a model id; the binding's model wins over it, the chat default is the fallback |
 
-`theme` plus `keywords` is the search query over the chats, so write them in the
-language the chats are written in, with the words people actually use. A vague theme
-pulls in unrelated chats; a narrow one misses paraphrases — list the paraphrases as
-keywords.
+`theme` plus `keywords` is the search query over the chats: write them in the chats'
+language, with the words people actually use. A vague theme pulls in unrelated chats; a
+narrow one misses paraphrases — list those as keywords.
 
-The instruction prose says what the report must look like: sections, length, what to
-stress. It must not ask to restate everything: the model already gets the previous
-report and is told to write what is new and what changed.
+The instruction prose says what the report looks like: sections, length, what to
+stress. It must not ask to restate everything — the model already gets the previous
+report and writes only what is new and what changed.
 
 To create one: `create_document` with the YAML block and the instruction, in the folder
 the user names (`get_project_structure` to find it). To fix one: `read_document`, then
@@ -69,7 +67,6 @@ left the project is dropped from the readers. One chat can land in several theme
 
 - "Run now" on the digest's card under "Pipelines".
 - By itself when the transcript of a reference attached to the theme document is ready.
-- On a schedule (the mechanism exists; there is no setting in the interface yet).
 
 ## Reading the outcome
 

@@ -45,7 +45,7 @@ def _doc(doc_id, title="Untitled", parent_id=None, is_reference=False, deleted=F
 
 
 async def _run_section(
-    session, *, docs, descendants=None, parent_access=True, context_ids=None,
+    session, *, docs, descendants=None, parent_access=True,
     open_doc_id=None, open_access=True,
 ):
     """Invoke _build_current_document_section with patched DB helpers."""
@@ -57,7 +57,7 @@ async def _run_section(
 
     async def fake_access(doc_id, user):
         # The open doc gets its own access verdict so cross-project / no-access
-        # cases can be exercised independently of the Parent-line access.
+        # cases can be exercised independently of the other docs' access.
         if open_doc_id is not None and doc_id == open_doc_id:
             return open_access
         return parent_access
@@ -71,7 +71,7 @@ async def _run_section(
         from routes.chat.completions_turn import _build_current_document_section
         return await _build_current_document_section(
             session, "proj-1", {"id": "u1"},
-            context_ids=context_ids, open_doc_id=open_doc_id,
+            open_doc_id=open_doc_id,
         )
 
 

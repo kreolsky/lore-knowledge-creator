@@ -20,40 +20,11 @@ from agent_config import build_prompt_and_skill_docs
 
 import access
 import db
-from config import CHAT_MAX_AGENT_CONTEXT_CHARS
-from db import extract_id, fetch_one, parse_iso
+from db import fetch_one, parse_iso
 from models import CompletionRequest, is_ref_row
 from routes.chat.serializers import _validate_image_url
 
 logger = logging.getLogger(__name__)
-
-
-def _flatten_system_prefix_to_text(system_prefix: list[dict]) -> str | None:
-    """Convert ctx.system_prefix list to a single string for the agent prompt.
-
-    Text-only {role: "system", content: str} messages: extract content.
-    The list-content branch below is DEFENSIVE: as of the context-image-refs fix
-    no producer emits list-content messages into system_prefix (image references
-    route their bytes via ContextResult.image_parts → prompt, and their text rides
-    a plain string {role:"system"} message here). Kept to tolerate any future
-    multimodal producer.
-    Returns None if system_prefix is empty or has no extractable text.
-    """
-    parts: list[str] = []
-    for msg in system_prefix:
-        content = msg.get("content")
-        if isinstance(content, str):
-            if content.strip():
-                parts.append(content)
-        elif isinstance(content, list):
-            text = "\n".join(
-                p.get("text", "")
-                for p in content
-                if isinstance(p, dict) and p.get("type") == "text"
-            ).strip()
-            if text:
-                parts.append(text)
-    return "\n\n".join(parts) if parts else None
 
 
 def _section_fingerprint(name: str, text: str) -> str:
@@ -97,22 +68,6 @@ def _working_doc_head(doc: dict, doc_id: str) -> str:
     )
 
 
-async def _parent_line(doc: dict, user, context_ids: list[str] | None) -> str:
-    """Parent hierarchy on the working document (access-gated title reveal)."""
-    # WHY: the Parent line is emitted only when the parent doc is in context_ids.
-    # Why: chat context = what is open on screen (see INVARIANT frontend/src/chat/context.ts:421,
-    # split→both / lone→open-entity); a lone reference must not drag its owning doc in
-    # (a recurring user rule).
-    parent_raw = doc.get("parent_id")
-    parent_id = extract_id(parent_raw) if parent_raw else None
-    if not parent_id or parent_id not in (context_ids or []):
-        return ""
-    parent = await fetch_one("documents", parent_id)
-    if parent and not parent.get("deleted_at") and await access.get_document_access(parent_id, user):
-        return f"- It sits under: {parent.get('title') or 'Untitled'} (id: {parent_id})\n"
-    return f"- It sits under: (id: {parent_id})\n"
-
-
 async def _target_line(session: dict, doc_id: str, project_id: str) -> str:
     """The agent's editable target — only when it differs from the working
     document AND is a genuine descendant of document_id. Guards against a
@@ -153,8 +108,8 @@ async def _open_doc_lines(open_doc_id: str | None, doc_id: str, user) -> str:
     detail = f"(id: {open_doc_id})"
     # INVARIANT(security): the title is revealed only when get_document_access is
     # truthy (same-project + accessible); an inaccessible/cross-project id yields
-    # an id-only line, never the title, and never a write. Why: mirror the Parent
-    # line's disclosure rule — no new leak surface from a poisoned open_doc_id.
+    # an id-only line, never the title, and never a write. Why: no new leak
+    # surface from a poisoned open_doc_id.
     accessible = bool(open_doc and not open_doc.get("deleted_at")
                       and await access.get_document_access(open_doc_id, user))
     if accessible:
@@ -176,8 +131,7 @@ async def _open_doc_lines(open_doc_id: str | None, doc_id: str, user) -> str:
 
 
 async def _build_current_document_section(
-    session: dict, project_id: str, user, context_ids: list[str] | None = None,
-    open_doc_id: str | None = None,
+    session: dict, project_id: str, user, open_doc_id: str | None = None,
 ) -> str | None:
     """Build the '# Current document' prompt section for an agent turn.
 
@@ -201,7 +155,6 @@ async def _build_current_document_section(
         return None
     return (
         _working_doc_head(doc, doc_id)
-        + await _parent_line(doc, user, context_ids)
         + await _target_line(session, doc_id, project_id)
         + await _open_doc_lines(open_doc_id, doc_id, user)
     )
@@ -369,8 +322,7 @@ async def _multimodal_parts(last, user_msg_id: str | None = None) -> list[dict]:
     # Why: _normalize_attachment is a full Pillow decode→LANCZOS→encode — measured
     # 242ms at 1600x1200, 2.7s at 4000x3000, and it runs on EVERY turn (attachment
     # variants are not cached). Inline it froze WS collab, presence and all other
-    # HTTP for that whole time. Same hazard the `to_thread` in context.py guards
-    # against — this path just does two orders of magnitude more work.
+    # HTTP for that whole time.
     """
     parts: list[dict] = [
         {"type": "text", "text": _prompt_text(last, message_id=user_msg_id,
@@ -460,28 +412,32 @@ class AgentTurnPlan:
     # field is named `skills`. A real dict, not a tuple
     # default: a mutable-dict field must not alias a shared tuple.
     skill_docs: dict = field(default_factory=dict)
-
-
-def _bounded_context_text(ctx) -> str | None:
-    """The pinned-context text for the system prompt, truncated at CHAT_MAX_AGENT_CONTEXT_CHARS."""
-    context_text = _flatten_system_prefix_to_text(ctx.system_prefix)
-    if context_text and len(context_text) > CHAT_MAX_AGENT_CONTEXT_CHARS:
-        logger.warning(
-            "Agent context truncated: %d → %d chars",
-            len(context_text),
-            CHAT_MAX_AGENT_CONTEXT_CHARS,
-        )
-        context_text = (
-            context_text[:CHAT_MAX_AGENT_CONTEXT_CHARS] + "\n\n[…context truncated]"
-        )
-    return context_text
+    # Skill names the session's persona preloads (its frontmatter `skills`):
+    # the plugin activates each one that resolves in the catalog and injects
+    # its body as a `lore-preload` context message — see ARCH in
+    # harness-driver/plugin/src/preload.ts. Never a system-prompt edit.
+    preload_skills: list[str] = field(default_factory=list)
+    # The persona's chat-memory token budget (0 = memory off) — the input the
+    # memory block is built from.
+    chat_memory_budget: int = 0
+    # The persona's memory-block order ("recent" | "document").
+    chat_memory_order: str = "recent"
+    # Why the persona's memory is off although asked for (PersonaSettings.memory_error).
+    memory_error: str | None = None
+    # A bad `chat_memory_order` — memory stays on with "recent"; relayed as a turn warning.
+    memory_order_warning: str | None = None
+    # The memory record to store on the chat row once the send is accepted
+    # (chat_sessions.memory); None = nothing to record this turn.
+    memory_record: dict | None = None
+    # The persona's chat-memory block ("" = none this turn); the plugin injects
+    # it as a `lore-memory` context message under the same log-scan rule.
+    memory_block: str = ""
 
 
 # ARCH: turn-varying blocks are APPENDED to the base, never prepended — the
-# base (bootstrap+persona+rules+knowledge) is the prompt-cache prefix, and
-# context is the largest and most volatile block in the prompt (up to
-# CHAT_MAX_AGENT_CONTEXT_CHARS), so leading with it re-tokenizes the whole
-# stable tier whenever the pinned set changes. This is the backend half of
+# base (bootstrap+persona+rules) is the prompt-cache prefix, and a
+# turn-varying block leading it re-tokenizes the whole stable tier whenever
+# it changes. This is the backend half of
 # the prompt-cache closure: the driver registers Lore's prompt as its
 # COMPLETE section and contributes nothing of its own (the comment above
 # `agentCtx.systemPrompt.section` in harness-driver/plugin/src/index.ts), and
@@ -494,18 +450,16 @@ def _bounded_context_text(ctx) -> str | None:
 # so a moved byte here re-tokenizes the rest of the system prompt AND the whole
 # history behind it — the tool schemas ahead of it survive.
 async def _assemble_system_prompt(
-    base: str, *, session: dict, body: CompletionRequest, ctx, project_id: str, user: dict,
+    base: str, *, session: dict, body: CompletionRequest, project_id: str, user: dict,
 ) -> str:
-    """Append the turn-varying sections (context, current document, pinned
-    fragment) to the cached base and log their fingerprints."""
+    """Append the turn-varying sections (current document) to the cached base
+    and log their fingerprints."""
     # ARCH: the working document is session.document_id (the parent/scope doc),
     # NEVER target_doc_id — see _build_current_document_section.
     current_doc_section = await _build_current_document_section(
-        session, project_id, user, context_ids=list(body.context_ids or []),
-        open_doc_id=body.open_doc_id,
+        session, project_id, user, open_doc_id=body.open_doc_id,
     )
     appended = [
-        ("context", _bounded_context_text(ctx)),
         ("current_doc", current_doc_section),
     ]
     system_prompt = base
@@ -521,46 +475,23 @@ async def _assemble_system_prompt(
     return system_prompt
 
 
-def _merge_context_images(prompt: str | list, ctx) -> str | list:
-    """Merge ctx.image_parts after the user text and before any user-attached images."""
-    # ARCH: context image references can only reach the model via the `prompt`
-    # channel (dsh renders
-    # images from prompt, not system_prompt — see context.py). Merge ctx.image_parts
-    # after the user text and before any user-attached images so the user's
-    # explicit attachments stay last (closest to the model's attention). getattr
-    # defends bare SimpleNamespace test stubs / older code paths without the field.
-    ctx_images = getattr(ctx, "image_parts", None) or []
-    if not ctx_images:
-        return prompt
-    if isinstance(prompt, str):
-        return [{"type": "text", "text": prompt}, *ctx_images]
-    head, *tail = prompt
-    return [head, *ctx_images, *tail]
-
-
-async def _build_turn_prompt(*, body: CompletionRequest, ctx) -> str | list:
-    """The last user turn as `prompt`: vision-gated, context images merged —
-    the RAW user content (the time stamps ride `time_stamps`, not the text).
+async def _build_turn_prompt(*, body: CompletionRequest, vision_ok: bool) -> str | list:
+    """The last user turn as `prompt`: vision-gated — the RAW user content
+    (the time stamps ride `time_stamps`, not the text).
 
     The turn contract sends only the LAST user turn as `prompt`
     (multimodal shape), never the full history. History is canonical in the agent
     session tree. Falls back to "" on an empty body.
     """
-    # Gate attachments on the driver's vision reply, threaded by build_context
-    # (ContextResult.vision_ok — the ONE capability read per turn).
-    # WHY the getattr default is True: it defends bare SimpleNamespace test
-    # stubs, mirroring ctx.image_parts — a stub without the field simulates a
-    # post-gate ctx, so attachments pass. Production always carries the field
-    # (build_context sets it), so the default never masks a missing gate read.
-    vision_ok = getattr(ctx, "vision_ok", True)
-    # The send's user row id — the address the image marker names. getattr for
-    # the same SimpleNamespace-stub reason as vision_ok.
+    # Gate attachments on the driver's vision reply (_resolve_vision_ok in
+    # completions — the ONE capability read per turn).
+    # The send's user row id — the address the image marker names. getattr
+    # defends bare SimpleNamespace test stubs without the field.
     user_msg_id = getattr(body, "user_msg_id", None)
-    prompt = await _build_last_user_prompt(
+    return await _build_last_user_prompt(
         body.messages, vision_ok=vision_ok,
         user_msg_id=str(user_msg_id) if user_msg_id else None,
     )
-    return _merge_context_images(prompt, ctx)
 
 
 async def _resolve_turn_time_stamps(
@@ -581,21 +512,21 @@ async def prepare_agent_turn(
     *,
     session: dict,
     body: CompletionRequest,
-    ctx,
+    vision_ok: bool,
     project_id: str,
     user: dict,
     toolset: list[dict],
     capability_is_mutating: bool,
 ) -> AgentTurnPlan:
-    """Assemble the Agent-turn inputs: the agent system prompt (context
-    injection + current-document section), the resolved apply-mode, the
+    """Assemble the Agent-turn inputs: the agent system prompt (base +
+    current-document section), the resolved apply-mode, the
     OpenAI-format conversation, and the toolset.
 
     Kept out of the turn transport so the route is a thin `prepare → hand off`
     pair and the prompt assembly is unit-testable
     without a live driver.
     """
-    base_prompt, skill_docs = await build_prompt_and_skill_docs(
+    base_prompt, skill_docs, persona = await build_prompt_and_skill_docs(
         project_id, selected_persona_id=session.get("system_prompt_id"),
     )
     # The payload's skills field is the RAW lookup from the SAME load (no second
@@ -603,7 +534,7 @@ async def prepare_agent_turn(
     # the overlay, the admin off-switch and the served-toolset gate all run
     # PLUGIN-side — Python parses nothing.
     system_prompt = await _assemble_system_prompt(
-        base_prompt, session=session, body=body, ctx=ctx, project_id=project_id, user=user,
+        base_prompt, session=session, body=body, project_id=project_id, user=user,
     )
     apply_mode = resolve_apply_mode(
         ui_preference="auto" if body.auto_apply else "confirm",
@@ -613,9 +544,15 @@ async def prepare_agent_turn(
         system_prompt=system_prompt,
         apply_mode=apply_mode,
         tools=toolset,
-        prompt=await _build_turn_prompt(body=body, ctx=ctx),
+        prompt=await _build_turn_prompt(body=body, vision_ok=vision_ok),
         time_stamps=await _resolve_turn_time_stamps(
             session=session, body=body, user=user,
         ),
         skill_docs=skill_docs,
+        preload_skills=list(persona.skills),
+        chat_memory_budget=persona.chat_memory_budget,
+        chat_memory_order=persona.chat_memory_order,
+        memory_error=persona.memory_error,
+        memory_order_warning=next(
+            (w for w in persona.warnings if w.startswith("chat_memory_order")), None),
     )

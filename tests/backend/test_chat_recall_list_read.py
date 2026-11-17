@@ -6,6 +6,7 @@ stands between it and the answer. Neither tool touches the embedding index, so
 no indexing runs here.
 """
 import hashlib
+import json
 import secrets
 from datetime import datetime, timezone
 
@@ -166,8 +167,10 @@ async def test_over_budget_message_is_truncated_and_search_returns_the_rest(
     big_msg = page["turns"][0][1]
     assert big_msg["message_id"] == "big1"
     assert big_msg["truncated"] is True
-    # a message over the page budget BY ITSELF is cut at the page budget
-    assert big_msg["next_offset"] == 30000
+    # a message over the page budget BY ITSELF is cut at the page budget, which
+    # the first page shares with the chat's table-of-contents fields
+    toc = {k: page[k] for k in ("topics", "unlabelled_from_turn", "unlabelled_turns")}
+    assert big_msg["next_offset"] == 30000 - len(json.dumps(toc, ensure_ascii=False))
     assert big_msg["content"] == "x" * big_msg["next_offset"]
     assert page["next_turn"] == 1
     rest = await _post(client, world["ka"], "search_my_chats",
@@ -231,7 +234,7 @@ async def test_external_key_is_refused_the_whole_pack_is_in_app_only(
         ("read_my_chat", {"chat_id": "mine", "from_turn": 0}),
     ):
         result = await _post(client, ext, path, body, status=403)
-        assert result["detail"] == "chat-recall is available only to the in-app assistant"
+        assert result["detail"] == "this tool is available only to the in-app assistant"
     # an internal key still works
     assert _chat_ids(await _list(client, world["ka"])) == ["mine"]
 

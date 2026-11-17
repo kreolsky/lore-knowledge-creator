@@ -1,8 +1,8 @@
 /**
  * Hover preview for links (documents, references, external URLs) and note anchors.
  *
- * Serves BOTH the CM6 editor decorations and chat links (sources list items tagged by
- * Sources, in-answer anchors matched by their lore.local href). Listens via event
+ * Serves BOTH the CM6 editor decorations and chat links (in-answer anchors matched
+ * by their lore.local href). Listens via event
  * delegation on the document for mouseenter/mouseleave (capture) on elements matching
  * EVERY_LINK_SELECTOR. Shows a plain-text/image preview popup
  * positioned above or below the link after a 300ms delay.
@@ -12,13 +12,13 @@
  * // resolution — the showPreview callback only sets positions/meta, never content.
  * // ARCH: Position rule — above cursor aligns bottom edge; below cursor aligns top edge.
  * // ARCH: Horizontal placement is dual (chooseLinkPlacement): links INSIDE
- * // <aside class="right-panel"> (chat sources / chat markdown links) pin to the
+ * // <aside class="right-panel"> (chat markdown links) pin to the
  * // SIDE of the panel — same formula + shift as useRightPanelHoverPreview
  * // (Notes/Refs card previews); editor links stay near the link.
  * // ARCH: data-link-id contract — centralized in utils/in-app-link.ts. Docs use a bare id;
  * // refs keep their scheme prefix. decodeLinkId strips any prefix defensively for all
  * // types, so both bare and prefixed values resolve correctly regardless of the producer.
- * // ARCH: two metadata branches — attributed elements (.chat-source/cm-*) read
+ * // ARCH: two metadata branches — attributed elements (cm-*) read
  * // data-link-type/id; dsh chat anchors read the rewritten lore.local href instead (they
  * // carry no attributes we control) and derive the same LinkMeta via parseInAppLink.
  */
@@ -44,7 +44,7 @@ import { isTouchPointer } from '../../utils/last-pointer';
 // to https://lore.local/l/<type>/<id> (matched by href — dsh owns those anchors' classes)
 // + note anchors the notes layer paints (.cm-note-anchor, data-note-id).
 const EVERY_LINK_SELECTOR =
-  '.cm-note-anchor,.cm-doc-link,.cm-ref-link,.cm-ext-link,.cm-doc-link-broken,.cm-ref-link-broken,.chat-source,.chat-markdown a[href^="https://lore.local/l/"]';
+  '.cm-note-anchor,.cm-doc-link,.cm-ref-link,.cm-ext-link,.cm-doc-link-broken,.cm-ref-link-broken,.chat-markdown a[href^="https://lore.local/l/"]';
 const DELAY_MS = 300;
 
 interface LinkMeta {
@@ -182,7 +182,7 @@ export function EditorLinkPreview() {
     const pos = computePopupPosition(rect, PREVIEW_MAX_HEIGHT);
     // ARCH: dual placement via
     // chooseLinkPlacement — links rendered INSIDE <aside class="right-panel">
-    // (chat sources .chat-source + chat answer lore.local anchors) open pinned to
+    // (chat answer lore.local anchors) open pinned to
     // the SIDE of the panel (identical x-offset to Notes/Refs card previews),
     // with the shared RIGHT_PANEL_PREVIEW_SHIFT vertical nudge. Editor links
     // (cm-editor) keep near-link placement. One formula, shared with
@@ -240,7 +240,7 @@ export function EditorLinkPreview() {
   }, [documentId, currentRefId, hide]);
 
   // Hide preview when the editor link element is removed from the DOM (e.g. link formatting
-  // deleted). Editor-only: chat links live in .chat-markdown / .chat-sources containers that
+  // deleted). Editor-only: chat links live in .chat-markdown containers that
   // rebuild via dangerouslySetInnerHTML on every streaming token — node identity is unstable
   // there, so observing them would dismiss the preview on every token. Chat previews rely on
   // mouseleave + outside-mousedown dismissal instead.

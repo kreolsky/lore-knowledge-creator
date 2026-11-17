@@ -44,7 +44,7 @@ export function openDocument(
   state.setCurrentDocument(doc);
   if (state.currentProject) {
     // Canonical /docs/<id> URL — one shape for
-    // every navigate-to-document source (tree, search, chat Sources, links,
+    // every navigate-to-document source (tree, search, links,
     // editor clicks) since they all go through here.
     navigate(url);
   }

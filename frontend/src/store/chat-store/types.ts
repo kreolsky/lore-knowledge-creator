@@ -327,7 +327,7 @@ export interface ChatState {
   // preloadedMessages: when the sessions list piggybacked this session's
   // messages, commit them directly and skip the loadMessages round-trip.
   setActiveSession: (sessionId: string | null, preloadedMessages?: ChatMessage[]) => void;
-  updateSession: (sessionId: string, data: { title?: string; model?: string; system_prompt_id?: string | null; context_ids?: string[]; agent_auto?: boolean; reasoning_effort?: string | null; document_id?: string | null }) => Promise<void>;
+  updateSession: (sessionId: string, data: { title?: string; model?: string; system_prompt_id?: string | null; agent_auto?: boolean; reasoning_effort?: string | null; document_id?: string | null }) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
 
   // Actions — messages

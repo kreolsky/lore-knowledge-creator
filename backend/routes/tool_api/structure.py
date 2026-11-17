@@ -7,20 +7,20 @@
 # NOT reversible via the Lore History panel (stated verbatim in the tool description)
 # — reversibility is via re-moving the document.
 #
-# rename is the SURFACE over the rename core (documents.service.rename_document,
-# plan rename-core-one-path): it adds no rename logic, only the agent-tool shape —
+# rename is the SURFACE over the rename core (documents.service.rename_document):
+# it adds no rename logic, only the agent-tool shape —
 # the shared structural gate, apply resolution, and the mid-turn hold. Like move it
 # is structural (a title is metadata, not buffer text), so it is likewise NOT
 # reversible via the History panel — undo by renaming back.
 #
-# parent_id semantics (Variant A): a value = new parent; null = project root —
+# parent_id semantics: a value = new parent; null = project root —
 # for an UNSCOPED key. Under a subtree-scoped key null/empty resolves to the
 # SCOPE root (scope.resolve_scoped_parent, the same normalization create uses) —
 # a null move may not escape the key's sandbox.
 # after_id: a sibling under the resulting parent to land after; null = top of group.
 #
-# Import DAG: imports documents.move + _common; reaches documents.service / scope
-# lazily inside the handlers.
+# Import DAG: imports documents.move + _common + scope's memory-fact refusal;
+# reaches documents.service / the rest of scope lazily inside the handlers.
 """
 from agent.context import get_agent_context
 from documents.move import move_document_command
@@ -31,11 +31,13 @@ from access import get_document_access, require_document_full
 from db import fetch_one, get_db
 from models import ToolMoveDocument, ToolRenameDocument, ToolRestoreDocumentVersion
 from routes.tool_api._common import (
+    _is_system_target,
     _refuse_unconfirmable,
     _resolve_apply_or_force,
 )
 from routes.tool_api.reads import _raise_soft_error
 from routes.tool_api_telemetry import track_agent_tool
+from scope import reject_memory_target
 
 
 async def _gate_move_target(
@@ -51,8 +53,9 @@ async def _gate_move_target(
     ("copy" would render "copyd"). Both callers state both.
 
     NOT scope.gate_mutation_target: the 403/404 details are tool-specific
-    ("…required to move") and a memory fact IS movable-by-idle-today — folding
-    the two gates would change refusal text and add the memory rejection.
+    ("…required to move") and a memory fact IS movable inside Memory (the
+    command holds the Memory boundary both ways) — folding the two gates would
+    change refusal text and add the memory rejection.
     """
     target = await fetch_one("documents", document_id)
     if not target or target.get("deleted_at"):
@@ -98,11 +101,21 @@ async def tool_move_document(
     )
     # References are movable; the node-shaped edges live in move_document_command.
 
+    # A move OUT of or INTO the system root is a self-edit: the doc and the
+    # destination parent both decide the is_system cell.
+    from scope import resolve_scoped_parent
+
+    pid = ctx["project_id"]
+    is_system = await _is_system_target(body.document_id, pid, target) or (
+        await _is_system_target(
+            resolve_scoped_parent(ctx.get("scope_root"), body.parent_id), pid,
+        )
+    )
     decision = await _resolve_apply_or_force(
-        ctx, ui_preference=body.apply.value, is_system=False,
+        ctx, ui_preference=body.apply.value, is_system=is_system,
     )
     if decision.mode != "auto":
-        _refuse_unconfirmable("move_document")
+        _refuse_unconfirmable("move_document", decision.reason)
     return await move_document_command(
         document_id=body.document_id, parent_id=body.parent_id,
         after_id=body.after_id, project_id=ctx["project_id"],
@@ -122,13 +135,16 @@ async def tool_rename_document(
     (rename is structural) — undo by renaming back.
     """
     user = ctx["user"]
-    await _gate_move_target(
+    target, _ = await _gate_move_target(
         document_id=body.document_id, project_id=ctx["project_id"], user=user,
         scope_root=ctx.get("scope_root"), verb="rename", past="renamed",
     )
+    # A fact's title is half the fact — it changes only through its one door.
+    reject_memory_target(target)
 
     decision = await _resolve_apply_or_force(
-        ctx, ui_preference=body.apply.value, is_system=False,
+        ctx, ui_preference=body.apply.value,
+        is_system=await _is_system_target(body.document_id, ctx["project_id"], target),
     )
     if decision.mode != "auto":
         # WHY: no re-gate after the hold, unlike move's apply-time re-check in
@@ -137,7 +153,7 @@ async def tool_rename_document(
         # verdict marker) — so the gate above already runs on apply-time state,
         # and this refusal fires only on a confirm cell without approval: no
         # window to re-check across.
-        _refuse_unconfirmable("rename_document")
+        _refuse_unconfirmable("rename_document", decision.reason)
     from documents.service import rename_document
 
     result = await rename_document(
@@ -167,11 +183,15 @@ async def tool_restore_document_version(
     if checkpoint is None:
         raise HTTPException(status_code=404, detail="Checkpoint not found")
     await require_document_full(target.resolved, user)
+    row = await fetch_one("documents", target.resolved)
+    # A restored fact body would bypass its one door (and its provenance).
+    reject_memory_target(row or {})
     decision = await _resolve_apply_or_force(
-        ctx, ui_preference=body.apply.value, is_system=False,
+        ctx, ui_preference=body.apply.value,
+        is_system=await _is_system_target(target.resolved, ctx["project_id"], row),
     )
     if decision.mode != "auto":
         # WHY: same driver-side approval as rename_document — see the note there.
-        _refuse_unconfirmable("restore_document_version")
+        _refuse_unconfirmable("restore_document_version", decision.reason)
     result = await restore_checkpoint_command(await get_db(), body.checkpoint_id, checkpoint)
     return {"status": "applied", "backup_checkpoint_id": result["backup_checkpoint_id"]}

@@ -12,7 +12,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  assembleTurnPrompt, catalogServedNames, computeActiveTools, computeCoreTools, frameSkillBody,
+  assembleTurnPrompt, catalogServedNames, computeActiveTools, computeCoreTools, disabledPackTools,
+  frameSkillBody,
   loreSkillProvider, LORE_SKILL_PROVIDER, parseSkillDoc, resolveSkillCatalog,
   restrictDenyNames, restoreActivatedSkills, SKILL_FILES_SENTENCE, skillLoadCallName,
   skillLoadResultName, skillsDelta, type ResolvedSkill,
@@ -319,6 +320,27 @@ test('a pack tool NOT served is ignored (not subtracted, not crashed)', () => {
 test('no skills → every served tool is core', () => {
   const served = new Set(['a', 'b'])
   assert.deepEqual(computeCoreTools(served, []).sort(), ['a', 'b'])
+})
+
+// TEST-WHY: refused-principal — a disabled skill's tools must be denied, not leak into the always-active core.
+test('disabled skill: its pack is withheld from served, so neither core nor loadable (denied)', () => {
+  const wire = WIRE([], [
+    { location: 'shipped:memory', content: doc('name: memory\ndescription: d\ntools:\n  - get_memory_facts\n  - shared_tool\n') },
+    { location: 'shipped:other', content: doc('name: other\ndescription: d\ntools:\n  - shared_tool\n') },
+  ], [], ['memory'])
+  const payload = new Set(['search_materials', 'get_memory_facts', 'shared_tool'])
+  const skills = resolveSkillCatalog(wire, payload)
+  assert.deepEqual(skills.map((s) => s.name), ['other'])
+  const withheld = disabledPackTools(wire, skills)
+  assert.deepEqual([...withheld], ['get_memory_facts'], 'a tool an enabled pack lists stays loadable')
+  const served = new Set([...payload].filter((n) => !withheld.has(n)))
+  assert.deepEqual(computeCoreTools(served, skills), ['search_materials'])
+  const deny = restrictDenyNames(payload, served, skills, new Set(['other']))
+  assert.deepEqual(deny, ['get_memory_facts'], 'the disabled pack tool is denied even with every skill active')
+  // A live project copy of the disabled name overrides it — nothing withheld.
+  const overridden = WIRE([{ location: 'p', content: doc('name: memory\ndescription: d\ntools:\n  - get_memory_facts\n') }],
+    wire.shipped, [], ['memory'])
+  assert.equal(disabledPackTools(overridden, resolveSkillCatalog(overridden, payload)).size, 0)
 })
 
 // ─── restrictDenyNames: the dsh served/inactive split ────────────────────────

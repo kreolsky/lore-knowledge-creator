@@ -75,7 +75,7 @@ def _claim(assistant_msg_id, user_msg_id="u-msg", **facts):
         "type": "lore/claim", "message_id": f"dm-{assistant_msg_id}",
         "user_msg_id": user_msg_id, "assistant_msg_id": assistant_msg_id,
         "user_text": "hi", "images": [], "model": "local/test",
-        "sources": [], "warnings": [], **facts,
+        "warnings": [], **facts,
     }
 
 
@@ -212,7 +212,6 @@ class PersistSpy:
 
     def __init__(self, monkeypatch) -> None:
         self.content: list[tuple] = []
-        self.sources: list[tuple] = []
         self.extras: list[tuple] = []
         self.turn_seq: list[tuple] = []
         self.turn_session: list[tuple] = []
@@ -227,9 +226,6 @@ class PersistSpy:
 
         async def content(mid, content):
             self.content.append((mid, content))
-
-        async def sources(mid, srcs):
-            self.sources.append((mid, srcs))
 
         async def extras(mid, fields):
             self.extras.append((mid, fields))
@@ -255,11 +251,10 @@ class PersistSpy:
             self.mints.append((dsh_session, claim))
             return self.head
 
-        async def index(user_id, project_id):
+        async def index(user_id, project_id, **_):
             self.indexed.append((user_id, project_id))
 
         monkeypatch.setattr(driver.persistence, "_persist_content", content)
-        monkeypatch.setattr(driver.persistence, "_persist_sources", sources)
         monkeypatch.setattr(driver.persistence, "_persist_projection_extras", extras)
         monkeypatch.setattr(driver.persistence, "_persist_turn_seq", turn_seq)
         monkeypatch.setattr(driver.persistence, "_persist_context_usage", context_usage)
@@ -454,9 +449,8 @@ async def test_claim_mints_the_pair_emits_the_preamble_then_the_held_start(chann
     queue, _ = ch.add_listener("lore-1")
     sock = connector.sockets[0]
     warning = {"code": "image_not_delivered", "id": None, "detail": "1 dropped"}
-    source = {"id": "d1", "title": "Doc"}
     claim = _claim("m1", user_msg_id="u1", images=["data:image/png;base64,AAA"],
-                   sources=[source], warnings=[warning])
+                   warnings=[warning])
 
     sock.push(_env("dsh-9", _dsh(8, "turn/start", {"turn": 3})))
     sock.push(_env("dsh-9", _dsh(9, "agent/inbox/spliced", {"target": "next-turn"})))
@@ -464,10 +458,10 @@ async def test_claim_mints_the_pair_emits_the_preamble_then_the_held_start(chann
     sock.push(_env("dsh-9", _chunk(10, "answer", turn=3)))
     sock.push(_env("dsh-9", _turn_end(11, "completed", turn=3)))
 
-    frames = [await _recv(queue) for _ in range(8)]
+    frames = [await _recv(queue) for _ in range(7)]
     assert [(f["type"], f.get("kind")) for f in frames] == [
         ("dsh_event", "agent/inbox/spliced"),  # relayed raw, before the claim
-        ("ids", None), ("sources", None), ("context_warning", None),
+        ("ids", None), ("context_warning", None),
         ("dsh_event", "turn/start"),  # the held start, AFTER the preamble
         ("dsh_event", "assistant/message"), ("dsh_event", "turn/end"),
         ("done", None),
@@ -475,12 +469,10 @@ async def test_claim_mints_the_pair_emits_the_preamble_then_the_held_start(chann
     assert frames[1] == {"type": "ids", "user_message_id": "u1",
                          "assistant_message_id": "m1", "user_text": "hi",
                          "chat_id": "lore-1"}
-    assert frames[2] == {"type": "sources", "sources": [source]}
-    assert frames[3] == {"type": "context_warning", **warning}
+    assert frames[2] == {"type": "context_warning", **warning}
     assert persists.mints == [("lore-1", claim)]
     await _until(lambda: persists.turn_seq == [("m1", 11)])
     assert persists.content == [("m1", "answer")]
-    assert persists.sources == [("m1", [source])]
 
 
 @pytest.mark.asyncio

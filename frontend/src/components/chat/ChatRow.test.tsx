@@ -41,7 +41,6 @@ function baseSession(overrides: Partial<ChatSession> = {}): ChatSession {
     title: 'Hello',
     model: 'm',
     system_prompt_id: null,
-    context_ids: [],
     updated_at: '2026-01-15T12:00:00Z',
     created_at: '2026-01-15T12:00:00Z',
     ...overrides,
