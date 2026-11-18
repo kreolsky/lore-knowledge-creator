@@ -213,7 +213,9 @@ async def _attach_chat_memory(turn: "_AgentTurn", plan) -> None:
     stored = turn.session.get("memory")
     persona_id = turn.session.get("system_prompt_id") or ""
     off = {"message_id": turn.user_msg_id, "chats": [], "error": None, "persona_id": persona_id}
+    sid = turn.session_id
     if plan.memory_error is not None:
+        logger.warning("chat memory off session=%s persona=%r: %s", sid, persona_id, plan.memory_error)
         if not stored or stored.get("error") != plan.memory_error \
                 or _persona_switched(stored, persona_id):
             plan.memory_record = off | {"error": plan.memory_error}
@@ -221,6 +223,8 @@ async def _attach_chat_memory(turn: "_AgentTurn", plan) -> None:
     # WHY memory-off records a switch: the record then names the off persona,
     # so a switch BACK rebuilds (chats = [] rebuilds by itself).
     if plan.chat_memory_budget <= 0:
+        logger.info("chat memory skipped session=%s persona=%r: no chat_memory_budget "
+                    "(Default, persona not under Personas, or budget absent)", sid, persona_id)
         if _persona_switched(stored, persona_id):
             plan.memory_record = off
         return
@@ -228,6 +232,8 @@ async def _attach_chat_memory(turn: "_AgentTurn", plan) -> None:
     # Admin off-switch, shared with labelling: topics without the tools to
     # open them would mislead.
     if await instance_skill_disabled(db, CHAT_RECALL_SKILL):
+        logger.warning("chat memory skipped session=%s persona=%r: chat-recall disabled by admin",
+                       sid, persona_id)
         if _persona_switched(stored, persona_id):
             plan.memory_record = off
         return
@@ -238,6 +244,9 @@ async def _attach_chat_memory(turn: "_AgentTurn", plan) -> None:
                              "detail": plan.memory_order_warning})
     if _memory_needs_build(stored) or _persona_switched(stored, persona_id):
         await _build_chat_memory(turn, plan, db, persona_id, off)
+    else:
+        logger.info("chat memory kept session=%s persona=%r: already received %d chats",
+                    sid, persona_id, len(stored.get("chats") or []))
 
 
 async def _build_chat_memory(turn: "_AgentTurn", plan, db, persona_id: str, off: dict) -> None:
@@ -257,6 +266,8 @@ async def _build_chat_memory(turn: "_AgentTurn", plan, db, persona_id: str, off:
         logger.exception("chat memory block failed session=%s", turn.session_id)
         return
     plan.memory_record = off | {"chats": shown}
+    logger.info("chat memory built session=%s persona=%r chats=%d block_chars=%d",
+                turn.session_id, persona_id, len(shown), len(plan.memory_block or ""))
 
 
 async def _record_chat_memory(
@@ -284,9 +295,13 @@ async def _record_chat_memory(
             {"sid": session_id, "m": record, "p": record.get("persona_id")},
         ) or []
         if not rows:
+            logger.info("chat memory record kept session=%s: the row already holds memory", session_id)
             rows = await db.query(
                 "SELECT memory FROM type::record('chat_sessions', $sid)", {"sid": session_id},
             ) or []
+        else:
+            logger.info("chat memory recorded session=%s chats=%d error=%r", session_id,
+                        len(record.get("chats") or []), record.get("error"))
     except Exception:
         logger.exception("chat memory record write failed session=%s", session_id)
         return stored

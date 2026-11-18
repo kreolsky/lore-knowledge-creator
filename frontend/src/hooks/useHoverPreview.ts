@@ -66,7 +66,10 @@ export function useHoverPreview(options: UseHoverPreviewOptions) {
 
   const handleHoverLeave = useCallback((e?: React.MouseEvent) => {
     clearTimer();
-    if (e && popupRef.current && popupRef.current.contains(e.relatedTarget as Node | null)) return;
+    // WHY instanceof: React's leave event carries `window` as relatedTarget when the
+    // pointer goes to a node React does not own (CM6 content, outside the window) —
+    // Node.contains(window) throws.
+    if (e && popupRef.current && e.relatedTarget instanceof Node && popupRef.current.contains(e.relatedTarget)) return;
     setState(null);
   }, [clearTimer]);
 

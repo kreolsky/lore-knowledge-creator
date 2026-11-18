@@ -39,7 +39,7 @@ import { createSessionStreamBaselines } from './stream-baselines.ts'
 import { registerLoreApprovalBridge } from './approvals.ts'
 import { registerNoRetryAfterText } from './no-retry-after-text.ts'
 import { disposeLoreTools, loreTurnCtxFor } from './tools.ts'
-import { disposeSessionAgents } from './session-agents.ts'
+import { disposeSessionAgents, installChildRestriction } from './session-agents.ts'
 import { SessionMap } from './sessions.ts'
 import { handleRequest, authorized, PORT } from './http.ts'
 
@@ -84,6 +84,8 @@ export function apply(ctx: Context): void {
   registerLoreApprovalBridge(ctx, loreTurnCtxFor)
   // A chat-turn request that failed after printing reply text is not retried.
   registerNoRetryAfterText(ctx, loreTurnCtxFor)
+  // Every delegated child is clipped to its parent's served set at creation.
+  const offChildren = installChildRestriction(ctx)
   // The standing event channel rides the SAME server and the SAME secret
   // gate; ws resolves lazily (see ws-events.ts's loadWs ARCH) — a missing ws
   // logs loudly, and the turn is refused (no delivery path) rather than run
@@ -117,6 +119,7 @@ export function apply(ctx: Context): void {
     offTap()
     offObserve()
     offStream?.()
+    offChildren()
     channel?.close()
     server.close()
     disposeSessionAgents()

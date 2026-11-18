@@ -17,7 +17,7 @@ from surrealdb import AsyncSurreal
 from access import get_document_access
 from auth import get_current_user
 from db import extract_id, fetch_one, get_ancestor_ids, get_db
-from jobs.tasks.chat_topics import memory_personas
+from jobs.tasks.chat_topics import mark_persona_memory
 from models import is_ref_row
 from routes.chat._router import router
 from routes.chat.messages import load_session_messages
@@ -335,9 +335,7 @@ async def list_sessions(
     ]
     # The list row marks a chat whose persona has conversation memory ON (the
     # persona's frontmatter is server-side only; its title the client has).
-    remembering = await memory_personas(db, project_id)
-    for s in serialized:
-        s["persona_memory"] = s.get("system_prompt_id") in remembering
+    await mark_persona_memory(db, project_id, serialized)
     if not with_active_messages:
         return serialized
 

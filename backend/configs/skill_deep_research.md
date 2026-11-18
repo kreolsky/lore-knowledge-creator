@@ -5,6 +5,8 @@ tools:
   - web_search
   - web_fetch
   - sandbox_bash
+  - sandbox_run_status
+  - sandbox_run_kill
 ---
 
 # Deep research
@@ -21,8 +23,12 @@ other research request is the `web-search` skill — load that one instead.
 - `web_fetch` refuses PDF: `curl -sL '<url>' -o doc.pdf` in `sandbox_bash`, extract
   with Python `pypdf` (`pip install pypdf` if missing) — never dump a raw file into
   context. No `sandbox_bash` ⇒ say which PDFs went unread.
-- A page that will not load (JS-only, paywall, 403) is a fact to record, not a wall to
-  work around.
+- A page `web_fetch` does not return (403, empty, blocked, a redirect to another site)
+  is fetched again in this order: `curl -sL -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36' '<url>'` in
+  `sandbox_bash`; a JavaScript-only page ⇒ Playwright (Chromium, installed) in
+  `sandbox_bash`; a run that comes back `status: running` is collected with
+  `sandbox_run_status` or stopped with `sandbox_run_kill`. Only after this order failed
+  is the page recorded as unread.
 - A project document beats a web page on anything the project has a position on; when
   they disagree, report the disagreement instead of replacing the project's version.
 
@@ -50,7 +56,9 @@ ONE message, then end the turn:
 - **Directions** — 3–5, each a QUESTION the report must answer (never a noun like
   "History"), with 2–4 sub-questions, the kind of sources that answer it, and what it
   buys the user. Two directions that differ only in wording are one.
-- **Report outline** — the section headings.
+- **Report outline** — two levels: a `##` section per direction and a `###`
+  subsection per sub-question, each with one line saying what it will contain
+  (a number, a comparison, a list). This outline is the contract the run fills.
 - **Assumptions** — time frame, geography, search languages, depth.
 - **Recommendation** — which directions, if not all.
 
@@ -61,13 +69,19 @@ lines and ask "dig deeper?" instead.
 
 **Create the report first**: `create_document`, `parent_id` = the document this chat
 works on (project root if none), `node_type` `"document"`, titled after the topic; body
-= `## Summary` at the top plus the approved outline as `##` headings, each with
+= `## Summary` at the top plus the approved two-level outline, each heading with
 `_In progress._`.
 
 **Dig each direction.** With `subagent` among your tools, give each direction to its
 own subagent in parallel — prompt carries the direction, sub-questions, languages,
-assumptions and the digging rules below, and asks for the finding back as text in the
-finding format; you stay the only writer. Without it, dig one at a time and keep only
+assumptions, the web rules above and the digging rules below, and asks for the finding
+back as text in the finding format, every fact with its URL — the report is written
+from that text alone; you stay the only writer (a subagent has no document tools). The
+prompt also tells the subagent to put its sub-questions on its own todo list
+(`todo_write`) and close each only when it is answered from fetched sources or recorded
+as thin, and to keep every sandbox file in its own directory — first command
+`mkdir -p $HOME/research/<random> && cd $HOME/research/<random>`, every later path
+inside it — because parallel subagents share one workspace. Without it, dig one at a time and keep only
 the facts, numbers and quotes from each page.
 
 1. 2–4 TARGETED queries per sub-question in the vocabulary recon taught you, every
@@ -80,8 +94,8 @@ the facts, numbers and quotes from each page.
    sources only repeat.
 
 **Save the finding** when a direction is done: `create_document`, `node_type`
-`"reference"`, `parent_id` = the document this chat works on (the report if none),
-titled `Research: <direction>`:
+`"reference"`, `parent_id` = the report's id, titled `Research: <direction>`. Hosted on
+the report, the finding is visible from it and travels with it.
 
 ```markdown
 ## <direction>

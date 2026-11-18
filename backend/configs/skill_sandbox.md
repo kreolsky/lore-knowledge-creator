@@ -10,6 +10,7 @@ tools:
   - sandbox_view_image
   - sandbox_fetch_artifact
   - replace_artifact_page
+  - reprocess_reference
 ---
 
 # Sandbox console

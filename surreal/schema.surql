@@ -1140,11 +1140,19 @@ DEFINE FIELD IF NOT EXISTS origin_persona_id ON chat_sessions TYPE option<string
 -- keys, and FLEXIBLE is refused on the installations whose chat_sessions is
 -- still SCHEMALESS (gray's dev-copy DB) — declared keys hold on both.
 DEFINE FIELD IF NOT EXISTS memory ON chat_sessions TYPE option<object>;
-DEFINE FIELD IF NOT EXISTS memory.message_id ON chat_sessions TYPE string;
+-- WHY option on every nested field, not MIGRATE EXISTING ROWS: on a SCHEMAFULL
+-- table at compatibility level 4 with rows a non-option nested field is refused,
+-- and a backfill would materialise `memory` on every row — an absent record is
+-- what says "this chat never received memory". The writer sets them all.
+-- WHY IF NOT EXISTS, not OVERWRITE: a store holding the old non-option types is
+-- widened by the chat_memory_fields_optional migration — a retype done here
+-- would reach the schema-fingerprint check as `removed` drift with no migration
+-- run, and boot is refused.
+DEFINE FIELD IF NOT EXISTS memory.message_id ON chat_sessions TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS memory.persona_id ON chat_sessions TYPE option<string>;
-DEFINE FIELD IF NOT EXISTS memory.chats ON chat_sessions TYPE array<object>;
-DEFINE FIELD IF NOT EXISTS memory.chats[*].sid ON chat_sessions TYPE string;
-DEFINE FIELD IF NOT EXISTS memory.chats[*].date ON chat_sessions TYPE string;
+DEFINE FIELD IF NOT EXISTS memory.chats ON chat_sessions TYPE option<array<object>>;
+DEFINE FIELD IF NOT EXISTS memory.chats[*].sid ON chat_sessions TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS memory.chats[*].date ON chat_sessions TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS memory.error ON chat_sessions TYPE option<string>;
 
 -- ARCH: the chat-recall search index — a disposable cache rebuilt from

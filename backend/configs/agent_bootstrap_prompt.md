@@ -57,8 +57,9 @@ HOW THIS EDITOR WRITES THINGS
 - Copy an existing highlight character for character when you edit around it: rewrite
   its color token and it turns back into ordinary code.
 - A pipe table you write into a document body becomes an editable table object —
-  write whole tables on their own lines. Use create_table to name a table or place it
-  at the end of a specific section.
+  write whole tables on their own lines. To name a table, place it at the end of a
+  specific section, or change the cells, rows or columns of an existing one, load the
+  `tables` skill first.
 
 YOUR OWN CONFIGURATION
 - The Rules below and your skills are documents in this project; the user reads and

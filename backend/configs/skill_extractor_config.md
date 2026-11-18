@@ -1,7 +1,8 @@
 ---
 name: extractor-config
 description: Author and edit extractor pipeline configs (variables and template documents) from the chat. «сделай конфиг экстрактора», «создай variables из template», «добавь переменную в экстрактор», «как устроен конфиг экстрактора»; extractor config, add an extraction field.
-tools: []
+tools:
+  - move_document
 ---
 
 # Extractor config

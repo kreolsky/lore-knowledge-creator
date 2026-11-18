@@ -131,9 +131,12 @@ async def build_memory_block(
     # bypass it, and a synopsis restates the chat's text.
     visible, viewer_doc = await visible_for_chat(db, session_id, session, user_id, project_id)
     if not visible:
+        logger.info("chat memory block chat=%s persona=%s: no other visible chats", session_id, persona_id)
         return "", []
     candidates = await _persona_candidates(db, visible, user_id, project_id, persona_id)
     if not candidates:
+        logger.info("chat memory block chat=%s persona=%s: visible=%d, none bound to this persona",
+                    session_id, persona_id, len(visible))
         return "", []
     last_at = {c["sid"]: c["last_at"] for c in candidates if c["last_at"]}
     picked = newest_branch_per_thread(candidates, last_at)

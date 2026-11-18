@@ -42,6 +42,7 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 
 import { askLoreApproval } from './approvals.ts'
+import { childSessions, rootOf } from './ws-events.ts'
 
 /** One Lore turn's tool-call identity + policy context, keyed by dsh session id. */
 export interface TurnToolCtx {
@@ -256,6 +257,21 @@ export function loreTurnCtxFor(dshId: string): TurnToolCtx | undefined {
   }
 }
 
+/** The ctx a PROXY call runs under: the session's own turn ctx, or — for a
+ * delegated child, which has no turn of its own — its ROOT session's (the
+ * descendant map, see childSessions). The child's call then carries the root
+ * turn's identity headers, so backend RBAC, the console-key gate and the
+ * audit see the real user, and `sandbox_bash` runs in the root user's
+ * workspace. WHY a second lookup beside loreTurnCtxFor: the approval bridge
+ * and the no-retry veto read "no ctx" as "a subagent" and must keep doing so.
+ * The child's tool surface is already clipped at its creation
+ * (session-agents.ts installChildRestriction), so the bridge widens nothing. */
+export function proxyTurnCtxFor(dshId: string): TurnToolCtx | undefined {
+  const own = loreTurnCtxFor(dshId)
+  if (own || !childSessions.has(dshId)) return own
+  return loreTurnCtxFor(rootOf(childSessions, dshId))
+}
+
 /** Registered proxy disposers by tool name (the process-lifetime union). */
 const registered = new Map<string, () => void>()
 
@@ -325,7 +341,33 @@ async function proxyExecute(
   tool: string, args: Record<string, unknown>, exec: any,
 ): Promise<string> {
   const dshId = String(exec?.agent?.session?.id ?? '')
-  const tctx = loreTurnCtxFor(dshId)
+  // INVARIANT(security): a delegated child calls only the proxies captured as
+  // allowed at its creation — enforced here, not only by its tools.restrict deny.
+  // Why: the deny lists names registered at creation; a proxy registered later
+  // (any turn's prep grows the process union) is absent from it, and the bridge
+  // would run it under the root user's identity.
+  const child = childSessions.get(dshId)
+  if (child && !child.allowed.includes(tool)) {
+    return JSON.stringify({
+      error: `${tool}: not available to a delegated subagent — report that the parent agent must run it`,
+      status_code: 0,
+    })
+  }
+  // INVARIANT(security): a delegated child never runs with the external-agent
+  // credential — any value but an explicit false is refused here, before the
+  // HTTP call. Why: the flag exports that credential into the sandbox run
+  // (backend/routes/tool_api/sandbox/bash.py), and once the bridge carries
+  // the root's identity the backend cannot tell a child from its root.
+  const externalKey = args?.with_external_agent_key
+  if (childSessions.has(dshId) && externalKey !== undefined && externalKey !== null
+      && externalKey !== false) {
+    return JSON.stringify({
+      error: `${tool}: with_external_agent_key is not available to a delegated subagent — ` +
+        'run the command without it, or report that the parent agent must run it',
+      status_code: 0,
+    })
+  }
+  const tctx = proxyTurnCtxFor(dshId)
   if (!tctx) {
     // A call outside a Lore-driven turn (nothing bridges the two session
     // identities). Explicit error, never a headerless anonymous call.

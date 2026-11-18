@@ -25,6 +25,7 @@ from surrealdb import AsyncSurreal
 
 from auth import get_current_user
 from db import create_record, extract_id, fetch_one, get_db, iso_str
+from jobs.tasks.chat_topics import mark_persona_memory
 from models import BranchCreate
 from routes.chat._router import router
 from routes.chat.sessions import _require_session_access
@@ -251,9 +252,10 @@ async def create_branch(
         ))[0]
     await schedule_chat_index(data["user_id"], data["project_id"])
 
-    return serialize_session(
+    out = serialize_session(
         row, await build_session_ref_map(db, row), viewer_id=user["user_id"],
     )
+    return (await mark_persona_memory(db, data["project_id"], [out]))[0]
 
 
 def _thread_continuations(rows: list[dict], created_at: dict[str, str],

@@ -37,6 +37,9 @@ from migrations._shared import (
 )
 from migrations.migrate_chat_context_drop import _migrate_chat_context_drop
 from migrations.migrate_chat_has_region_drop import _migrate_chat_has_region_drop
+from migrations.migrate_chat_memory_fields_optional import (
+    _migrate_chat_memory_fields_optional,
+)
 from migrations.migrate_chat_tocs_per_exchange_hash import (
     _migrate_chat_tocs_per_exchange_hash,
 )
@@ -89,6 +92,10 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     # (system_prompt_id ?? '' of its most recently updated row) — the binding now
     # follows the persona. Runs after the forget→default rewrite; no other dependency.
     ("origin_persona_follow_persona", _migrate_origin_persona_follow_persona),
+    # chat_sessions.memory.* nested fields: non-option → option<…> on stores that
+    # declared them before the widening. Needs the fields to exist or be absent
+    # (apply_schema runs first); no other dependency.
+    ("chat_memory_fields_optional", _migrate_chat_memory_fields_optional),
 ]
 
 

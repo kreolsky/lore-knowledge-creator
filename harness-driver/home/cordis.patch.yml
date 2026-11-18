@@ -197,8 +197,11 @@
 
 - id: agent-instructions
   disabled: true
+# todo_write is in the core: the agent plans a multi-step task (deep research's
+# directions) as a session task list and checks items off; a short answer never
+# calls it. The list lives in the dsh session log (todo/write events).
 - id: tool-todo
-  disabled: true
+  disabled: false
 - id: tool-goal
   disabled: true
 - id: goal

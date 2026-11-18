@@ -170,23 +170,53 @@ export function loadWs(home: string | undefined): WsCtor | null {
  * searches and fetches) does not flood the socket. */
 export const CHILD_ACTIVITY_THROTTLE_MS = 30_000
 
+/** One live descendant session: its parent and the Lore proxies it may use,
+ * captured when it was created (session-agents.ts installChildRestriction).
+ * WHY the allowed set, not the deny: a grandchild derives its deny as
+ * registered ∖ allowed, so a proxy registered after the child was clipped
+ * never reaches the grandchild. */
+export interface ChildSession {
+  parent: string
+  allowed: string[]
+}
+
+/** dsh child session id → its ChildSession. ONE writer: the `agent/created`
+ * listener in session-agents.ts fills it before the child's first event and
+ * `agent/disposed` clears it; the heartbeat and the tool-ctx bridge only read. */
+export const childSessions = new Map<string, ChildSession>()
+
+/** The top session above `id` through `children` (`id` itself when it has no
+ * entry). Pure and bounded: a cyclic map (never written by dsh) cannot hang
+ * a caller — the walk stops after 64 hops wherever it stands. */
+export function rootOf(children: ReadonlyMap<string, { parent: string }>, id: string): string {
+  let root = id
+  for (let hops = 0; hops < 64; hops += 1) {
+    const up = children.get(root)?.parent
+    if (up === undefined) break
+    root = up
+  }
+  return root
+}
+
 export interface ChildActivityState {
-  /** childId → parentId, filled from each descendant's `header.parentSession`. */
-  parents: Map<string, string>
+  /** The descendant map the walk reads (childSessions in production). */
+  children: ReadonlyMap<string, { parent: string }>
   /** root (driving) session id → when its last heartbeat was due. */
   lastBeat: Map<string, number>
 }
 
-export function newChildActivityState(): ChildActivityState {
-  return { parents: new Map(), lastBeat: new Map() }
+export function newChildActivityState(
+  children: ReadonlyMap<string, { parent: string }> = childSessions,
+): ChildActivityState {
+  return { children, lastBeat: new Map() }
 }
 
 /**
  * The driving (root) session a descendant's event should heartbeat, or null:
  * null for a session with no `header.parentSession` (it is a driving session
  * itself — its own frames are its progress) and for a root still inside its
- * throttle window. Nesting resolves through the module-held parent map to the
- * TOP session. Pure — the caller owns the state and the clock.
+ * throttle window. Nesting resolves through the descendant map to the TOP
+ * session. The caller owns the state and the clock.
  */
 export function childActivityRoot(
   session: unknown, state: ChildActivityState, now: number,
@@ -196,14 +226,7 @@ export function childActivityRoot(
   const id = String(s?.id ?? '')
   const parent = s?.header?.parentSession
   if (!id || typeof parent !== 'string' || !parent) return null
-  state.parents.set(id, parent)
-  let root = parent
-  // Bounded walk: a cyclic parent map (never written by dsh) cannot hang the tap.
-  for (let hops = 0; hops < 64; hops += 1) {
-    const up = state.parents.get(root)
-    if (up === undefined) break
-    root = up
-  }
+  const root = rootOf(state.children, parent)
   const last = state.lastBeat.get(root)
   if (last !== undefined && now - last < throttleMs) return null
   state.lastBeat.set(root, now)

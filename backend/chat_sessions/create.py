@@ -10,6 +10,7 @@ import event_bus
 from chat_sessions.note_events import broadcast_doc_id, fire_note_emit
 from chat_sessions.serialize import build_session_ref_map, serialize_session
 from db import create_record, fetch_one
+from jobs.tasks.chat_topics import mark_persona_memory
 from models import SessionCreate
 
 logger = logging.getLogger(__name__)
@@ -170,7 +171,9 @@ async def create_session_command(db, body: SessionCreate, user_id: str) -> dict:
     row = await create_record("chat_sessions", uid, data)
     out = serialize_session(row, await build_session_ref_map(db, data),
                             viewer_id=user_id)
-    if body.is_note:
+    if not body.is_note:
+        await mark_persona_memory(db, body.project_id, [out])
+    else:
         # WHY: realtime nudge for a freshly-created
         # note. Fire-and-forget (background task) so create latency is unaffected; the
         # actor's own client also receives the frame and dedups by session_id. Broadcast

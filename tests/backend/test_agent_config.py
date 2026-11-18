@@ -112,7 +112,7 @@ async def test_build_prompt_and_skill_docs_wires_all_three_layers(
     assert set(shipped) == {
         "memory", "web-search", "image-generation", "sandbox",
         "deep-research", "skill-authoring", "extractor-config", "chat-recall",
-        "digest-config", "secrets", "history", "md-folder",
+        "digest-config", "secrets", "history", "md-folder", "tables", "structure",
     }
     assert _front(shipped["secrets"]["content"])["tools"] == [
         "list_secrets", "http_request",
@@ -125,6 +125,7 @@ async def test_build_prompt_and_skill_docs_wires_all_three_layers(
     }
     assert _front(shipped["web-search"]["content"])["tools"] == [
         "web_search", "web_fetch", "sandbox_bash",
+        "sandbox_run_status", "sandbox_run_kill",
     ]
     assert _front(shipped["image-generation"]["content"])["tools"] == ["generate_image"]
     for d in shipped.values():

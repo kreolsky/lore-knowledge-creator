@@ -114,6 +114,18 @@ async def memory_personas(db, project_id: str) -> set[str]:
             if parse_persona(p.get("content") or "").chat_memory_budget > 0}
 
 
+async def mark_persona_memory(db, project_id: str, sessions: list[dict]) -> list[dict]:
+    """Set each serialized session's `persona_memory` — whether its persona has
+    conversation memory ON (the list row's brain mark).
+    WHY: every response that hands the client a session row carries it — the
+    client replaces the row wholesale (create inserts it, PATCH swaps it), so a
+    row without the key loses the mark until the next list reload."""
+    remembering = await memory_personas(db, project_id)
+    for s in sessions:
+        s["persona_memory"] = s.get("system_prompt_id") in remembering
+    return sessions
+
+
 async def labelled_chats(db, user_id: str, project_id: str, personas: set[str]) -> list[dict]:
     """`[{sid, persona_id, forked_from, last_at, model, exchanges}]` newest first: the
     newest branch (newest_branch_per_thread) of every thread of the user with

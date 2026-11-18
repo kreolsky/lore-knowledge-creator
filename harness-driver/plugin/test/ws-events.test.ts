@@ -223,11 +223,10 @@ test('a grandchild resolves to the top driving session', () => {
   socket.receive({ type: 'subscribe', session_id: 'dsh-9' })
   socket.sent.length = 0
 
-  // The child's header registers child-1 → dsh-9; the grandchild resolves
-  // through it (throttled away here: one window per root).
+  // The descendant map (the agent/created listener's) holds child-1 → dsh-9;
+  // the grandchild resolves through it.
   tap.emit(sessionOf('child-1', 'dsh-9'), ev(1, 'turn/start', { turn: 1 }))
-  const state = newChildActivityState()
-  childActivityRoot(sessionOf('child-1', 'dsh-9'), state, 0)
+  const state = newChildActivityState(new Map([['child-1', { parent: 'dsh-9' }]]))
   assert.equal(
     childActivityRoot(sessionOf('grand-1', 'child-1'), state, CHILD_ACTIVITY_THROTTLE_MS),
     'dsh-9')

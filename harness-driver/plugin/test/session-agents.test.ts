@@ -454,3 +454,125 @@ test('a branch forked after a mid-turn insert starts with an EMPTY inbox', async
   assert.deepEqual(sentTexts(h.adapter.requests[2]), ['A', 'X'],
     'the trunk\'s queued B never runs on the branch')
 })
+
+// ── delegated children: clipped at creation, bridged to the root's turn ctx
+
+const { childSessions } = await import('../src/ws-events.ts')
+const {
+  disposeLoreTools, proxyTurnCtxFor, registerLoreTools, setSessionToolCtx, stampTurnRequestCtx,
+  clearSessionToolCtx, clearTurnRequestCtx,
+} = await import('../src/tools.ts')
+const { childAllowedProxies, installChildRestriction } = await import('../src/session-agents.ts')
+
+const PROXIES = ['read_document', 'search_materials', 'edit_document', 'create_document',
+  'list_secrets', 'http_request', 'sandbox_bash', 'sandbox_run_status', 'sandbox_run_kill', 'memory_write']
+const WRITERS = new Set(['edit_document', 'create_document', 'http_request', 'memory_write',
+  'sandbox_bash', 'sandbox_run_kill'])
+
+/** Registers PROXIES on a capturing tool registry; returns the captured definitions. */
+function registerProxies(): Map<string, any> {
+  const defs = new Map<string, any>()
+  const fakeCtx = { tools: { register: (def: any) => { defs.set(def.name, def); return () => {} } } }
+  registerLoreTools(fakeCtx as any,
+    PROXIES.map((name) => ({ function: { name, description: name, parameters: {} } })), true, WRITERS)
+  return defs
+}
+
+/** The `agent/created` / `agent/disposed` listeners installChildRestriction adds, plus a child agent. */
+function childHarness() {
+  const handlers = new Map<string, (p: any) => unknown>()
+  const off = installChildRestriction({ on: (name: string, cb: any) => { handlers.set(name, cb); return () => {} } } as any)
+  const create = (id: string, parent: string | undefined) => {
+    const restricted: string[][] = []
+    const agent = {
+      session: { id, header: parent ? { parentSession: parent } : {} },
+      ctx: { tools: { restrict: ({ deny }: { deny: string[] }) => { restricted.push(deny); return () => {} } } },
+    }
+    handlers.get('agent/created')!({ agent, source: 'create' })
+    return { agent, deny: restricted.at(-1) ?? [] }
+  }
+  return { off, create, dispose: (agent: any) => handlers.get('agent/disposed')!({ agent }) }
+}
+
+function liveParent(id: string, served: string[]) {
+  const p = prep('parent', { servedNames: new Set(served) })
+  p.standingCtx.mutating = WRITERS
+  sessionAgents.set(id, { current: p, activated: new Set(), offWatch: () => {}, idleTimer: null } as any)
+}
+
+test.afterEach(() => {
+  childSessions.clear()
+  sessionAgents.clear()
+  disposeLoreTools()
+})
+
+// TEST-WHY: refused-principal — a delegated child must be denied every tool its parent is denied, every writer except the sandbox trio, and the user's secrets.
+test('a child is denied its parent deny plus every writer but the sandbox trio', () => {
+  registerProxies()
+  liveParent('p-1', ['read_document', 'edit_document', 'create_document',
+    'sandbox_bash', 'sandbox_run_status', 'sandbox_run_kill', 'memory_write'])
+  const h = childHarness()
+  const { deny } = h.create('c-1', 'p-1')
+  // Parent-denied (unserved): search_materials, list_secrets, http_request.
+  for (const name of ['search_materials', 'list_secrets', 'http_request']) {
+    assert.ok(deny.includes(name), `${name} denied as the parent's`)
+  }
+  for (const name of ['edit_document', 'create_document', 'memory_write']) assert.ok(deny.includes(name), `writer ${name} denied`)
+  for (const name of ['sandbox_bash', 'sandbox_run_status', 'sandbox_run_kill', 'read_document']) {
+    assert.ok(!deny.includes(name), `${name} kept`)
+  }
+  // A grandchild is never wider than the child it hangs under.
+  const grand = h.create('g-1', 'c-1')
+  assert.deepEqual([...grand.deny].sort(), [...deny].sort())
+  assert.deepEqual(childSessions.get('g-1')?.parent, 'c-1')
+})
+
+// TEST-WHY: refused-principal — a child whose parent is not a live Lore session must be denied every Lore proxy (fail closed).
+test('an unknown parent denies every registered proxy', () => {
+  registerProxies()
+  const { deny } = childHarness().create('c-x', 'nobody')
+  assert.deepEqual([...deny].sort(), [...PROXIES].sort())
+  assert.equal(childAllowedProxies('nobody', new Set(PROXIES)), null)
+})
+
+// TEST-WHY: refused-principal — after the child is disposed its session id must be denied the root's turn ctx (no stale bridge).
+test('the bridge resolves a child to its root turn ctx and dies with the child', () => {
+  registerProxies()
+  liveParent('p-2', ['read_document'])
+  const p = prep('root')
+  setSessionToolCtx('p-2', p.standingCtx)
+  stampTurnRequestCtx('p-2', p.requestCtx)
+  try {
+    const h = childHarness()
+    const child = h.create('c-2', 'p-2')
+    h.create('g-2', 'c-2')
+    assert.equal(proxyTurnCtxFor('g-2')?.messageId, p.requestCtx.messageId, 'a grandchild resolves to the root')
+    assert.equal(proxyTurnCtxFor('stranger'), undefined, 'an unrecorded session is denied any ctx')
+    h.dispose(child.agent)
+    assert.equal(childSessions.has('c-2'), false)
+    assert.equal(proxyTurnCtxFor('c-2'), undefined, 'a disposed child is denied the root ctx')
+  } finally {
+    clearSessionToolCtx('p-2')
+    clearTurnRequestCtx('p-2')
+  }
+})
+
+// TEST-WHY: refused-principal — a child's sandbox_bash with with_external_agent_key must be denied before any HTTP call.
+test('a child is refused with_external_agent_key before the Tool-API hop', async () => {
+  const defs = registerProxies()
+  childSessions.set('c-3', { parent: 'p-3', allowed: ['sandbox_bash'] })
+  for (const value of [true, 'true', 1]) {
+    const raw = await defs.get('sandbox_bash').execute(
+      { command: 'env', with_external_agent_key: value }, { agent: { session: { id: 'c-3' } }, callId: 'k' })
+    assert.match(String(raw), /with_external_agent_key is not available to a delegated subagent/, `denied for ${JSON.stringify(value)}`)
+  }
+  // `false` passes the refusal (and, with no turn ctx here, stops at the ctx error — no HTTP).
+  const raw = await defs.get('sandbox_bash').execute(
+    { command: 'env', with_external_agent_key: false }, { agent: { session: { id: 'c-3' } }, callId: 'k' })
+  assert.match(String(raw), /no Lore turn context/)
+  // A proxy outside the child's captured allowed set (e.g. registered after its
+  // creation) is refused before the ctx lookup, whatever its deny says.
+  const late = await defs.get('edit_document').execute(
+    { document_id: 'x' }, { agent: { session: { id: 'c-3' } }, callId: 'k' })
+  assert.match(String(late), /edit_document: not available to a delegated subagent/)
+})

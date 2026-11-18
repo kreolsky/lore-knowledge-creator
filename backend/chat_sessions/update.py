@@ -14,6 +14,7 @@ from chat_sessions.serialize import (
     build_session_ref_map,
     serialize_session,
 )
+from jobs.tasks.chat_topics import mark_persona_memory
 from models import SessionUpdate
 
 
@@ -250,5 +251,8 @@ async def update_session_command(
     )
     if "unindexed" in params:
         await schedule_chat_index(session["user_id"], session["project_id"])
-    return serialize_session(rows[0], await build_session_ref_map(db, rows[0]),
-                             viewer_id=user["user_id"])
+    out = serialize_session(rows[0], await build_session_ref_map(db, rows[0]),
+                            viewer_id=user["user_id"])
+    if session.get("is_note") is not True:
+        await mark_persona_memory(db, session["project_id"], [out])
+    return out

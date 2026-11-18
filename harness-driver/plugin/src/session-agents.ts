@@ -25,7 +25,7 @@ import type { ModelSelection, ModelSelectionRef, PreStepDecision } from '@deepse
 import { turnFailureLine } from './map.ts'
 import { timeStampMessage } from './time-stamps.ts'
 import { logInjected, logSwapped, memoryAction, preloadMessages, surfaceMemoryNodes } from './preload.ts'
-import type { EventsChannel, SessionEventTap } from './ws-events.ts'
+import { childSessions, type EventsChannel, type SessionEventTap } from './ws-events.ts'
 import {
   disposeMcpServers, installMcpSeam, syncMcpServers,
   type McpServerWire, type MountedMcp,
@@ -165,6 +165,64 @@ function applyRestriction(entry: SessionAgent): void {
     registeredLoreToolNames(), prep.servedNames, prep.skills, entry.activated)
   console.error(`[lore-skills] deny ${deny.length}: ${deny.join(',') || '-'}`)
   if (deny.length) entry.releaseRestriction = entry.agentCtx.tools.restrict({ deny })
+}
+
+/** The only writers a delegated child keeps: the sandbox, mutating by effect
+ * only (backend/agent_tools/registry.py holdable_names), plus the pair that
+ * collects or stops a run it promoted to the background. */
+export const CHILD_WRITERS: ReadonlySet<string> = new Set(['sandbox_bash', 'sandbox_run_status', 'sandbox_run_kill'])
+
+/** The Lore proxies a new child of `parentId` may use, or null when the
+ * parent is unknown (fail closed). A child's parent that is itself a child
+ * passes on its own captured set; a driving session passes its CURRENT
+ * served set (applyRestriction's deny) minus every writer but CHILD_WRITERS. */
+export function childAllowedProxies(parentId: string, registered: Set<string>): Set<string> | null {
+  const parentChild = childSessions.get(parentId)
+  if (parentChild) return new Set(parentChild.allowed.filter((n) => registered.has(n)))
+  const entry = live.get(parentId)
+  const prep = entry?.current
+  if (!entry || !prep) return null
+  const deny = new Set(restrictDenyNames(registered, prep.servedNames, prep.skills, entry.activated))
+  const mutating = prep.standingCtx.mutating
+  return new Set([...registered].filter(
+    (n) => !deny.has(n) && (!mutating.has(n) || CHILD_WRITERS.has(n))))
+}
+
+/**
+ * Clip every delegated child at its creation — dsh does not carry a parent's
+ * `tools.restrict` to a child (the child joins the parent's PRESET, which
+ * holds every registered proxy). `agent/created` listeners are awaited
+ * before creation resolves and the loop holds queued input until they
+ * finish, so the restriction is in place before the child's first step.
+ * Captured once: a skill the parent activates later does not widen a
+ * running child. Fills childSessions (its one writer) — the tool-ctx bridge
+ * and the heartbeat read it.
+ */
+export function installChildRestriction(ctx: Context): () => void {
+  const offCreated = ctx.on('agent/created' as never, (({ agent }: { agent: any }) => {
+    const id = String(agent?.session?.id ?? '')
+    const parent = agent?.session?.header?.parentSession
+    if (!id || typeof parent !== 'string' || !parent) return
+    const registered = registeredLoreToolNames()
+    const allowed = childAllowedProxies(parent, registered)
+    if (!allowed) {
+      console.error(`[lore-skills] child ${id}: parent ${parent} unknown — every Lore proxy denied`)
+    }
+    const kept = allowed ?? new Set<string>()
+    const deny = [...registered].filter((n) => !kept.has(n)).sort()
+    childSessions.set(id, { parent, allowed: [...kept].sort() })
+    console.error(`[lore-skills] child ${id} of ${parent} deny ${deny.length}: ${deny.join(',') || '-'}`)
+    // INVARIANT(security): a child is never wider than its parent; no writer
+    // except the sandbox reaches a child.
+    // Why: the child runs under `approvalPolicy: never` on untrusted page
+    // content — the parent stays the only writer of documents, memory and secrets.
+    if (deny.length) agent.ctx.tools.restrict({ deny })
+    return undefined
+  }) as never)
+  const offDisposed = ctx.on('agent/disposed' as never, (({ agent }: { agent: any }) => {
+    childSessions.delete(String(agent?.session?.id ?? ''))
+  }) as never)
+  return () => { offCreated(); offDisposed() }
 }
 
 function closeOpenTurn(entry: SessionAgent): void {

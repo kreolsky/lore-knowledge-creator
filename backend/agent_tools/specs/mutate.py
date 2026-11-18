@@ -20,7 +20,9 @@ MUTATE_TOOLS: list[dict] = [
             "name": "create_document",
             "description": (
                 "Create a document or reference. `parent_id` places it: the tree "
-                "parent of a document (null = {{ROOT}}), or the HOST of a reference "
+                "parent of a document (null = {{ROOT}}; the project's index "
+                "document as a document's parent means the project root, so the result "
+                "shows parent_id null), or the HOST of a reference "
                 "leaf (visible from the host and its descendants; no children). "
                 "Content from a file: `import_file`."
                 + html_node_sentence()
@@ -304,7 +306,9 @@ MUTATE_TOOLS: list[dict] = [
             "name": "move_document",
             "description": (
                 "Propose moving a node (tree document or reference) under a new parent "
-                "and/or position: parent_id = new parent (null = {{ROOT}}), after_id = "
+                "and/or position: parent_id = new parent (null = {{ROOT}}; for a tree "
+                "document the project's index document means the project root, so the "
+                "result shows parent_id null), after_id = "
                 "the sibling to land after (null = top; tree documents only). To "
                 "reorder in place, pass the current parent_id. A reference is visible "
                 "from its host and the host's descendants — host it on the index "

@@ -23,6 +23,8 @@ After a task went well, ask the agent: "save this as a skill". The skill is save
 | memory | Everything that writes [memory](help:memory): saves facts from the current chat ("remember this"), turns a document's references into facts, attaches a fact to a document. Switching it off stops every memory tool, reading facts included. |
 | chat-recall | Finds what you said in your other chats of this project, lists them and reads one whole. Never sees other people's chats or chats marked "Unindexed". Switching it off does not stop saving facts from a chat. |
 | history | Answers what changed in a document, compares versions, brings back a passage or restores a whole version ([history](help:history)). Switching it off takes version tools away from the agent. |
+| tables | Changes existing [tables](help:tables) — cells, rows, columns — and creates a named table or one placed in a specific section. Switching it off leaves the agent able to write a new table into text, but not to edit a table. |
+| structure | Moves and reorders documents, turns a document into a reference and back, shows what links to a document, and re-runs the import of a reference whose text is wrong. |
 | md-folder | Exports a document tree as a zip of Markdown files for Obsidian or GitHub, and imports a markdown folder by link (for example, a GitHub repository's docs). |
 | extractor-config | Writes and edits [extractor](help:pipelines) configs. |
 | digest-config | Writes [digest](help:pipelines) configs and explains why a digest is empty. |
