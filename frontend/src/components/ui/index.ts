@@ -3,6 +3,7 @@ export { IconButton } from './IconButton';
 export { Modal } from './Modal';
 export { FieldInput, FieldTextarea } from './FieldInput';
 export { FieldCheckbox } from './FieldCheckbox';
+export { DateField } from './DateField';
 export { FieldRadio } from './FieldRadio';
 export { ErrorBoundary } from './ErrorBoundary';
 export { SectionHeader } from './SectionHeader';

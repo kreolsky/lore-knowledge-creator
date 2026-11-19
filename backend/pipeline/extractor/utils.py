@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 import settings
+from token_usage import record_openai_usage
 
 from config import CHAT_LLM_TIMEOUT_S
 from pipeline.core.constants import ALLOWED_VARIABLE_TYPES
@@ -95,6 +96,7 @@ async def call_llm_structured(
     content = data["choices"][0]["message"]["content"]
     logger.debug("[call_llm_structured] LLM raw response: %s", content)
     parsed = json.loads(content)
+    await record_openai_usage(data, effective_model)
     logger.info("[call_llm_structured] parsed keys=%s", list(parsed.keys()))
     return parsed
 
@@ -131,7 +133,9 @@ async def call_llm_text(
             detail = f"HTTP {resp.status_code} from model {effective_model}: {resp.text[:500]}"
             raise LLMHTTPError(f"LLM request failed — {detail}", resp.status_code, resp.text)
         data = resp.json()
-    return data["choices"][0]["message"]["content"] or ""
+    text = data["choices"][0]["message"]["content"] or ""
+    await record_openai_usage(data, effective_model)
+    return text
 
 
 def _categorical_schema_prop(kind: str, options: list[str], description: str) -> dict:

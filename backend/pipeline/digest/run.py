@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from chat_sessions.recall_search import Window
 from documents.service import create_document, effective_parent_id
+from token_usage import UsageActor, usage_actor
 
 from db import extract_id, fetch_one, get_db
 from event_bus import emit
@@ -132,6 +133,8 @@ async def run_digest(config_id: str, project_id: str) -> dict:
     """Run one digest. Returns `{"status": "empty"}` when nothing is new (no document,
     cursor unchanged) or `{"status": "written", "document_id": …}`. Raises on failure."""
     project_id = extract_id(project_id)
+    # WHY user_id None: a digest runs on a schedule for no one — the report shows it as "system".
+    usage_actor.set(UsageActor(source="digest", project_id=project_id))
     binding = await load_binding(config_id, project_id)
     config = await _load_config(binding.config_doc_id)
     db = await get_db()

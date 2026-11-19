@@ -12,6 +12,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 from documents.service import create_document, effective_parent_id
+from token_usage import UsageActor, usage_actor
 
 from db import extract_id, fetch_one, get_db
 from event_bus import emit
@@ -89,6 +90,7 @@ async def run_extractor(
     shared = _extractor_shared(
         reference_id, source_doc_id, config_doc_id, target_doc_id, project_id, model,
     )
+    usage_actor.set(UsageActor(source="extractor", user_id=user_id, project_id=project_id))
 
     flow = create_extractor_flow()
     await flow.run_async(shared)
@@ -175,6 +177,9 @@ async def run_extractor_dry(params: "ExtractorParams") -> dict:
         params.reference_id, params.source_doc_id, params.config_doc_id,
         params.target_doc_id, params.project_id, params.model,
     )
+    # WHY only when unset: a caller that knows who it runs for has already set the actor.
+    if usage_actor.get() is None:
+        usage_actor.set(UsageActor(source="extractor", project_id=params.project_id))
 
     flow = create_extractor_flow()
     await flow.run_async(shared)

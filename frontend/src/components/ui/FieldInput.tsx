@@ -14,6 +14,8 @@ interface FieldInputProps {
   onPanel?: boolean;
   // Toolbar padding (px-2) at the 30px height of the .sel-toolbar-btn beside it.
   compact?: boolean;
+  // Rejected value: red border, so a field the caller will not submit reads as such.
+  invalid?: boolean;
   value?: string;
   defaultValue?: string;
   onChange?: ChangeEventHandler<HTMLInputElement>;
@@ -63,13 +65,14 @@ const textareaCls =
   `${inputCls} resize-y min-h-[80px] leading-[1.55]`;
 
 export const FieldInput = forwardRef<HTMLInputElement, FieldInputProps>(
-  function FieldInput({ className, onPanel, compact, ...props }, ref) {
+  function FieldInput({ className, onPanel, compact, invalid, ...props }, ref) {
     // h-[30px] pins the box to the md Button / Dropdown height so a row of them
     // lines up exactly; py-0 because the fixed height, not padding, sets it.
     // Inputs only — the textarea keeps its padding and content-driven height.
     const bg = onPanel ? ' !bg-surface !border-surface' : '';
     const height = compact ? ' h-[30px] !py-0 !px-2' : ' h-[30px] !py-0';
-    return <input ref={ref} className={`${inputCls}${height}${bg}${className ? ` ${className}` : ' w-full'}`} {...props} />;
+    const border = invalid ? ' !border-red focus:!border-red' : '';
+    return <input ref={ref} aria-invalid={invalid || undefined} className={`${inputCls}${height}${bg}${border}${className ? ` ${className}` : ' w-full'}`} {...props} />;
   },
 );
 

@@ -185,6 +185,20 @@
         "title": "Body_extract_text_for_insert_api_documents_extract_text_post",
         "type": "object"
       },
+      "Body_import_skill_archive_api_admin_skills_import_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_import_skill_archive_api_admin_skills_import_post",
+        "type": "object"
+      },
       "Body_redeem_mcp_upload_api_mcp_upload__token__post": {
         "properties": {
           "file": {
@@ -6675,6 +6689,64 @@
         ]
       }
     },
+    "/api/admin/skills/import": {
+      "post": {
+        "description": "Create or REPLACE an instance skill from a zip bundle — SKILL.md plus\nits scripts/ and references/. Keyed by the frontmatter name, so a\nre-import of the same skill overwrites body and files and re-enables it;\na shipped name becomes an override, as with PUT.",
+        "operationId": "import_skill_archive_api_admin_skills_import_post",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_import_skill_archive_api_admin_skills_import_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Skill Archive",
+        "tags": [
+          "admin-skills"
+        ]
+      }
+    },
     "/api/admin/skills/{name}": {
       "delete": {
         "description": "Reset: the instance row is REMOVED — an overridden or tombstoned\nshipped skill reappears, a new skill disappears. Shipped files are repo\ncontent: no row → 404 (they are not deletable here).",
@@ -6794,6 +6866,144 @@
         "summary": "Put Skill",
         "tags": [
           "admin-skills"
+        ]
+      }
+    },
+    "/api/admin/skills/{name}/files/{path}": {
+      "get": {
+        "description": "One bundle file's text, read-only — the list carries paths only, so\nthe admin UI fetches a body on demand.",
+        "operationId": "read_skill_file_api_admin_skills__name__files__path__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Skill File",
+        "tags": [
+          "admin-skills"
+        ]
+      }
+    },
+    "/api/admin/token-usage": {
+      "get": {
+        "description": "`{rows:[{day, user_id, model, source, input, output, cache_read, cache_write}],\nusers:{id:label}, groups:{id:{name, members}}, oldest_day}`; days are UTC.",
+        "operationId": "get_token_usage_api_admin_token_usage_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "From",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "To",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Token Usage Api Admin Token Usage Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Token Usage",
+        "tags": [
+          "admin-token-usage"
         ]
       }
     },
@@ -20265,7 +20475,7 @@
     },
     "/api/tool/sandbox_fetch_skill": {
       "post": {
-        "description": "Materialize a project skill's subtree INTO the invoking user's workspace.\n\nThe head content lands as `SKILL.md` and every path-titled child\n(`scripts/…`, `references/…` — the grammar of models.SKILL_FILE_PATH_RE) at\nits title, under the deterministic directory `{ws}/skills/{project_id}/{name}`\n— idempotent, a re-fetch overwrites in place. `Spec` and any other non-path\nchild are on-demand material for read_document and are NOT written.\n\nResolves PROJECT heads only, by frontmatter name: shipped skills carry no\nfiles (a shipped skill needing a script is a repo change), so an unknown or\nshipped name is a 404 naming the project's skill names.",
+        "description": "Materialize a project or instance skill's bundle INTO the invoking user's workspace.\n\nThe head content lands as `SKILL.md` and every path-titled child\n(`scripts/…`, `references/…` — the grammar of models.SKILL_FILE_PATH_RE) at\nits title, under the deterministic directory `{ws}/skills/{project_id}/{name}`\n— idempotent, a re-fetch overwrites in place. `Spec` and any other non-path\nchild are on-demand material for read_document and are NOT written.\n\nResolves a PROJECT head by frontmatter name, then an enabled INSTANCE skill\n(admin-imported bundle, files stored on the row): shipped skills carry no\nfiles (a shipped skill needing a script is a repo change), so an unknown or\nshipped name is a 404 naming both layers' skill names.",
         "operationId": "tool_sandbox_fetch_skill_api_tool_sandbox_fetch_skill_post",
         "parameters": [
           {

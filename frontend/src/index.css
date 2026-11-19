@@ -168,6 +168,17 @@
   --color-highlight-4: #a978d6;
   --color-highlight-5: #fdd663;
 
+  /* Categorical chart slots (admin token-usage charts), fixed order 1..6 + a neutral
+   * "Other". WHY these steps: validated as a set for colour-blind separation against
+   * --bg in each theme; dark has its own steps, not a flip. Text never wears them. */
+  --viz-1: #2a78d6;
+  --viz-2: #eb6834;
+  --viz-3: #1baf7a;
+  --viz-4: #eda100;
+  --viz-5: #e87ba4;
+  --viz-6: #008300;
+  --viz-other: var(--text-dim);
+
   /* SYSTEM: panel-fade — right-panel reveal. SINGLE SOURCE OF TRUTH for the
    * simultaneous opacity fade shared by ListPill (chat / references / notes /
    * search) and ImageGallery thumbnails. All items reveal at once; no per-item
@@ -197,6 +208,12 @@ html.dark {
   --preview-title-bg: var(--header-bg);
   --border: #363636;
   --border-soft: color-mix(in srgb, var(--border) 50%, var(--bg));
+  --viz-1: #3987e5;
+  --viz-2: #d95926;
+  --viz-3: #199e70;
+  --viz-4: #c98500;
+  --viz-5: #d55181;
+  --viz-6: #0ca30c;
   --header-bg: #363636;
   /* WHY: light-on-dark reads louder than its WCAG ratio — body text is dimmed
      off near-white, and muted sits well below it so the chrome stays quiet. */

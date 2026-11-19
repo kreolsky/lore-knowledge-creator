@@ -216,17 +216,23 @@ async def load_instance_skill_docs() -> list[dict]:
     "instance:<name>" — no project row exists to name). Instance-global, not
     project-scoped: the layer rides every project's turn payload and the
     plugin overlays it BETWEEN project and shipped (skills.ts
-    resolveSkillCatalog). Rows with content NONE (pure tombstones over shipped
+    resolveSkillCatalog); its files ride as path-titled child_docs. Rows with content NONE (pure tombstones over shipped
     skills) and disabled rows never serve here — a tombstone suppresses, it
     does not provide."""
     db = await get_db()
     rows = await db.query(
-        "SELECT name, content FROM instance_skills "
+        "SELECT name, content, files FROM instance_skills "
         "WHERE enabled = true ORDER BY name"
     ) or []
+    # WHY: files ride as path-titled child_docs — the plugin lists exactly
+    # those under `## Files` (skills.ts frameSkillBody); the id is a stable
+    # marker only, nothing reads an instance file by id.
     return [
         {"location": f"instance:{row['name']}", "content": row.get("content") or "",
-         "child_docs": []}
+         "child_docs": [
+             {"id": f"instance:{row['name']}:{f['path']}", "title": f["path"]}
+             for f in (row.get("files") or [])
+         ]}
         for row in rows
         if row.get("content")
     ]

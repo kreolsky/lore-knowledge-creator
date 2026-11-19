@@ -12,13 +12,16 @@
  * frontmatter; the server 422s a mismatch and the detail renders inline.
  * Reset (armed) DELETEs an overridden row so the shipped body serves again;
  * delete (armed) removes a skill that has no shipped fallback.
+ * Upload zip POSTs a bundle (SKILL.md + scripts/ + references/); skipped
+ * entries and refusals surface as toasts; each card lists its bundle files,
+ * and clicking a path toggles a read-only view of its text (fetched on click).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, RotateCcw, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, RotateCcw, Trash2, Upload } from 'lucide-react';
 import { Button, CenterHeading, FieldCheckbox, FieldTextarea, IconButton } from '../ui';
 import {
-  deleteAdminSkill, listAdminSkills, putAdminSkill, type AdminSkillEntry,
+  deleteAdminSkill, importSkillArchive, listAdminSkills, readAdminSkillFile, putAdminSkill, type AdminSkillEntry,
 } from '../../api/admin';
 import { useAppStore } from '../../store/app-store';
 import { useTranslation } from '../../i18n';
@@ -89,6 +92,36 @@ function SkillEditor({ initial, disabled, onSave, onCancel }: {
   );
 }
 
+/** A bundle path; click toggles its text, fetched once per open. */
+function SkillFileRow({ skillName, path }: { skillName: string; path: string }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [content, setContent] = useState<string | null>(null);
+  const toggle = async () => {
+    if (open) { setOpen(false); return; }
+    setOpen(true);
+    setContent(null);
+    try {
+      setContent(await readAdminSkillFile(skillName, path));
+    } catch (err: unknown) {
+      setOpen(false);
+      useAppStore.getState().showToast(serverRefusalDetail(err) ?? t('skillFileLoadFailed'), 'error');
+    }
+  };
+  return (
+    <li>
+      <Button variant="ghost" size="sm" onClick={() => void toggle()}>
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />} {path}
+      </Button>
+      {open && (
+        <pre className="mt-1 mb-2 p-2 font-mono bg-surface border border-border-soft text-text overflow-x-auto max-h-96 whitespace-pre">
+          {content ?? t('loading')}
+        </pre>
+      )}
+    </li>
+  );
+}
+
 export function SkillsSection() {
   const { t } = useTranslation();
   const [skills, setSkills] = useState<AdminSkillEntry[] | null>(null);
@@ -96,6 +129,8 @@ export function SkillsSection() {
   const [editing, setEditing] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ scope: string; text: string } | null>(null);
+  const [importing, setImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const tRef = useRef(t);
   tRef.current = t;
 
@@ -177,6 +212,24 @@ export function SkillsSection() {
     }
   };
 
+  const importArchive = async (file: File) => {
+    const { showToast } = useAppStore.getState();
+    setImporting(true);
+    try {
+      const imported = await importSkillArchive(file);
+      await reload();
+      if (imported.skipped.length > 0) {
+        showToast(t('skillImportSkipped', { name: imported.name, files: imported.skipped.join(', ') }), 'warning');
+      } else {
+        showToast(t('skillImported', { name: imported.name }), 'info');
+      }
+    } catch (err: unknown) {
+      showToast(t('skillImportFailed', { detail: serverRefusalDetail(err) ?? t('skillSaveFailed') }), 'error');
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const closeEditor = () => {
     setEditing(null);
     setMsg(null);
@@ -194,10 +247,26 @@ export function SkillsSection() {
           {msg?.scope === NEW_SKILL && <p className="text-xs mt-1 text-red">{msg.text}</p>}
         </div>
       ) : (
-        <Button variant="primary" onClick={() => { setEditing(NEW_SKILL); setMsg(null); }}>
-          {t('skillNew')}
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="primary" onClick={() => { setEditing(NEW_SKILL); setMsg(null); }}>
+            {t('skillNew')}
+          </Button>
+          <Button disabled={importing} onClick={() => fileInputRef.current?.click()}>
+            <Upload size={14} /> {t('skillImportZip')}
+          </Button>
+        </div>
       )}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".zip,application/zip"
+        className="hidden"
+        onChange={e => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file) void importArchive(file);
+        }}
+      />
       <div className="flex flex-col gap-0.5 mt-3">
       {(skills ?? []).map(skill => {
         // Content over a shipped file — reset brings the shipped body back;
@@ -236,6 +305,11 @@ export function SkillsSection() {
                 disabled={busy === skill.name}
               />
             </div>
+            {skill.files.length > 0 && (
+              <ul className="px-3.5 pb-2 pl-12 text-xs text-text-dim">
+                {skill.files.map(path => <SkillFileRow key={path} skillName={skill.name} path={path} />)}
+              </ul>
+            )}
             {expanded && (
               <div className="px-3.5 pb-3">
                 <SkillEditor

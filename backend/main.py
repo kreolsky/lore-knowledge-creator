@@ -87,6 +87,7 @@ from routes import (
     admin_model_access,
     admin_settings,
     admin_skills,
+    admin_token_usage,
     api_keys,
     auth,
     cabinet,
@@ -672,6 +673,7 @@ app.include_router(admin_model_access.router)
 app.include_router(admin_mcp_servers.router)
 app.include_router(admin_settings.router)
 app.include_router(admin_skills.router)
+app.include_router(admin_token_usage.router)
 
 # ARCH: the MCP Universal Agent Gateway is
 # mounted at the EXACT path /mcp (and /mcp/) as Route'd raw ASGI apps, NOT a

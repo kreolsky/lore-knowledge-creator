@@ -49,6 +49,7 @@ from content_hash import hash_content
 from fastapi import HTTPException
 from model_access import require_model_access
 from pipeline.extractor.utils import LLMHTTPError, call_llm_text
+from token_usage import UsageActor, usage_actor
 
 from db import get_db
 from jobs.tasks.chat_topics_seed import save_toc, seed_branch_tocs
@@ -536,6 +537,7 @@ async def _pair_pass(db, user_id: str, project_id: str, calls_left: int,
 
 async def chat_topics_pair_task(ctx, user_id: str, project_id: str) -> None:
     """Reconcile one (user, project) pair's chat_tocs — see the module ARCH."""
+    usage_actor.set(UsageActor(source="chat_topics", user_id=user_id, project_id=project_id))
     db = await get_db()
     await take_rerun(ctx)
     first: set[str] = set()

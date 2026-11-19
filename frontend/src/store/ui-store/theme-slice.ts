@@ -52,7 +52,8 @@ export type AdminSectionTab =
   | 'skills'
   | 'model-access'
   | 'groups'
-  | 'mcp-servers';
+  | 'mcp-servers'
+  | 'token-usage';
 
 /** The cabinet's left-aside sections, same placement reason as AdminSectionTab. */
 export type CabinetSectionTab = 'profile' | 'mcp' | 'keys' | 'colors' | 'sound';

@@ -476,10 +476,52 @@ async def tool_replace_artifact_page(
     return {"status": "applied", "doc_id": body.document_id, "changed": True}
 
 
+async def _instance_skill_bundle(db, name: str) -> tuple[str, list[tuple[str, str]]] | None:
+    """(content, [(path, content)]) of the ENABLED instance skill `name`, or
+    None — the layer below project in the catalog overlay, same order here."""
+    rows = await db.query(
+        "SELECT content, files FROM instance_skills "
+        "WHERE name = $n AND enabled = true",
+        {"n": name},
+    ) or []
+    if not rows or not rows[0].get("content"):
+        return None
+    files = [(f["path"], f["content"]) for f in (rows[0].get("files") or [])]
+    return rows[0]["content"], files
+
+
+async def _unknown_skill(db, project_id: str, folder_id: str, name: str) -> HTTPException:
+    """The 404 for a name neither layer carries — naming both layers' skills
+    so the model can correct itself."""
+    instance_names = [
+        r["name"] for r in await db.query(
+            "SELECT name FROM instance_skills WHERE enabled = true "
+            "AND content != NONE ORDER BY name"
+        ) or []
+    ]
+    heads = await db.query(
+        "SELECT content FROM documents WHERE project_id = $pid "
+        "AND parent_id = $fid AND deleted_at IS NONE",
+        {"pid": project_id, "fid": folder_id},
+    ) or []
+    known = sorted(
+        n for n in (frontmatter_name(h.get("content") or "") for h in heads) if n
+    )
+    return HTTPException(
+        status_code=404,
+        detail=(
+            f"No project or instance skill named {name!r} (shipped skills "
+            f"carry no files). Project skills: {known}; instance skills: "
+            f"{instance_names}"
+        ),
+    )
+
+
 async def _resolve_skill_bundle(ctx: dict, name: str) -> tuple[str, list[tuple[str, str]]]:
-    """(head content, [(title, content)] of the file children) of the project
-    skill named `name` — 404 (naming the project's skill names) when no
-    project head carries that frontmatter name."""
+    """(head content, [(title, content)] of the file children) of the skill
+    named `name`: a project head first, then an enabled instance skill — the
+    catalog's overlay order. 404 (naming both layers' skill names) when
+    neither carries that name."""
     # Lazy: skills.py is a sibling domain module (same DAG rule as the rest of
     # this package — no eager cross-domain imports).
     from db import get_db
@@ -494,21 +536,10 @@ async def _resolve_skill_bundle(ctx: dict, name: str) -> tuple[str, list[tuple[s
     db = await get_db()
     head_id = await _head_id_by_frontmatter_name(db, project_id, folder_id, name)
     if head_id is None:
-        heads = await db.query(
-            "SELECT content FROM documents WHERE project_id = $pid "
-            "AND parent_id = $fid AND deleted_at IS NONE",
-            {"pid": project_id, "fid": folder_id},
-        ) or []
-        known = sorted(
-            n for n in (frontmatter_name(h.get("content") or "") for h in heads) if n
-        )
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"No project skill named {name!r} (shipped skills carry no "
-                f"files). Project skills: {known}"
-            ),
-        )
+        instance = await _instance_skill_bundle(db, name)
+        if instance is not None:
+            return instance
+        raise await _unknown_skill(db, project_id, folder_id, name)
     head = await db.query(
         "SELECT content FROM documents WHERE id = type::record('documents', $id)",
         {"id": head_id},
@@ -524,7 +555,7 @@ async def tool_sandbox_fetch_skill(
     body: ToolSandboxFetchSkill = Body(...),
     ctx: dict = Depends(get_agent_context),
 ):
-    """Materialize a project skill's subtree INTO the invoking user's workspace.
+    """Materialize a project or instance skill's bundle INTO the invoking user's workspace.
 
     The head content lands as `SKILL.md` and every path-titled child
     (`scripts/…`, `references/…` — the grammar of models.SKILL_FILE_PATH_RE) at
@@ -532,9 +563,10 @@ async def tool_sandbox_fetch_skill(
     — idempotent, a re-fetch overwrites in place. `Spec` and any other non-path
     child are on-demand material for read_document and are NOT written.
 
-    Resolves PROJECT heads only, by frontmatter name: shipped skills carry no
+    Resolves a PROJECT head by frontmatter name, then an enabled INSTANCE skill
+    (admin-imported bundle, files stored on the row): shipped skills carry no
     files (a shipped skill needing a script is a repo change), so an unknown or
-    shipped name is a 404 naming the project's skill names.
+    shipped name is a 404 naming both layers' skill names.
     """
     _require_console_key(ctx)
     await _require_sandbox_configured()

@@ -172,6 +172,24 @@ DEFINE FIELD IF NOT EXISTS user_id    ON object_access_daily TYPE string;
 DEFINE FIELD IF NOT EXISTS count      ON object_access_daily TYPE int DEFAULT 0;
 DEFINE INDEX IF NOT EXISTS idx_oad_project_day ON object_access_daily FIELDS project_id, day;
 
+-- ─── Token usage ledger (one row per LLM call) ────────────────────────────────
+-- see SYSTEM: token-usage (backend/token_usage.py). Chat rows are keyed
+-- [dsh_session_id, turn, step] so a replayed frame overwrites; purged after 365d.
+DEFINE TABLE IF NOT EXISTS token_usage SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS user_id            ON token_usage TYPE option<string>;  -- NONE = system (digest)
+DEFINE FIELD IF NOT EXISTS project_id         ON token_usage TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS session_id         ON token_usage TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS model              ON token_usage TYPE string;
+DEFINE FIELD IF NOT EXISTS source             ON token_usage TYPE string;          -- 'chat' | 'extractor' | 'chat_topics' | 'image_refine' | 'digest' | 'unknown'
+DEFINE FIELD IF NOT EXISTS day                ON token_usage TYPE string;          -- YYYY-MM-DD, UTC
+DEFINE FIELD IF NOT EXISTS at                 ON token_usage TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS input_tokens       ON token_usage TYPE int;             -- uncached input only (disjoint counts)
+DEFINE FIELD IF NOT EXISTS output_tokens      ON token_usage TYPE int;
+DEFINE FIELD IF NOT EXISTS cache_read_tokens  ON token_usage TYPE int;
+DEFINE FIELD IF NOT EXISTS cache_write_tokens ON token_usage TYPE int;
+DEFINE INDEX IF NOT EXISTS idx_token_usage_day ON token_usage FIELDS day;
+DEFINE INDEX IF NOT EXISTS idx_token_usage_day_user ON token_usage FIELDS day, user_id;
+
 -- ─── Projects ─────────────────────────────────────────────────────────────────
 
 DEFINE TABLE IF NOT EXISTS projects SCHEMAFULL;
@@ -1342,6 +1360,15 @@ DEFINE FIELD IF NOT EXISTS content    ON instance_skills TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS enabled    ON instance_skills TYPE bool DEFAULT true;
 DEFINE FIELD IF NOT EXISTS updated_by ON instance_skills TYPE string;
 DEFINE FIELD IF NOT EXISTS updated_at ON instance_skills TYPE datetime DEFAULT time::now();
+-- files: the skill bundle's scripts/ and references/ (path grammar = models.tools.SKILL_FILE_PATH_RE),
+-- materialized by sandbox_fetch_skill exactly like a project skill's path-titled children.
+DEFINE FIELD IF NOT EXISTS files          ON instance_skills TYPE array<object> DEFAULT []
+  MIGRATE EXISTING ROWS AS instance_skills_files USING $value ?? [] FALLBACK [];
+-- WHY option on the nested fields: on a populated SCHEMAFULL table at compatibility
+-- level 4 a non-option nested field is refused (see the chat_sessions memory.* WHY);
+-- the only writer (admin_skills.import_skill_archive) always sets both.
+DEFINE FIELD IF NOT EXISTS files.*.path    ON instance_skills TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS files.*.content ON instance_skills TYPE option<string>;
 DEFINE INDEX IF NOT EXISTS idx_instance_skills_name ON instance_skills FIELDS name UNIQUE;
 
 -- ─── User secrets (SYSTEM: user-secrets) ────────────────────────────────────

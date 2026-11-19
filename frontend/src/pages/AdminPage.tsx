@@ -6,7 +6,7 @@
 // ARCH: Thin shell — SectionShell owns the chrome with NO top tabs: the gear
 // button in UserControls is the section's tab, the aside lists the sections
 // (Users / Projects / Embeddings + the admin-only settings tabs, Skills,
-// Model access and Groups — plus MCP servers, which moderators get too)
+// Model access, Groups and Token usage — plus MCP servers, which moderators get too)
 // as rows, the center carries the active section's FULL list. All domain
 // handlers live here; the list renderers (ProjectsTab, UsersTab) render only.
 // The settings/skills sections fetch from inside their own components (an
@@ -21,7 +21,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FolderOpen, Users as UsersIcon, Layers, Cpu, Bot, Wrench, Search, Database, Sparkles, Gauge, KeyRound, UsersRound, Cable } from 'lucide-react';
+import { FolderOpen, Users as UsersIcon, Layers, Cpu, Bot, Wrench, Search, Database, Sparkles, Gauge, KeyRound, UsersRound, Cable, Coins } from 'lucide-react';
 import { apiClient, isAccessRefusal } from '../api/client';
 import { listAdminProjects, listAdminUsers } from '../api/admin';
 import type { SettingsTabId } from '../api/admin';
@@ -39,6 +39,7 @@ import { ProjectsTab } from '../components/admin/ProjectsTab';
 import { UsersTab, UserUpdates } from '../components/admin/UsersTab';
 import { EmbeddingsTab } from '../components/admin/EmbeddingsTab';
 import { InfoTab } from '../components/admin/InfoTab';
+import { TokenUsageTab } from '../components/admin/TokenUsageTab';
 import { SettingsSection } from '../components/admin/SettingsSection';
 import { SkillsSection } from '../components/admin/SkillsSection';
 import { ModelsSection } from '../components/admin/ModelsSection';
@@ -69,6 +70,7 @@ const ADMIN_ONLY_SECTIONS: readonly {
   scope?: 'admin' | 'manager';
 }[] = [
   { tab: 'info', icon: <Gauge size={14} />, labelKey: 'adminInfo', slot: 'top' },
+  { tab: 'token-usage', icon: <Coins size={14} />, labelKey: 'adminTokenUsage', slot: 'top' },
   { tab: 'settings:models', icon: <Cpu size={14} />, labelKey: 'settingsModels', settingsTab: 'models', slot: 'top' },
   { tab: 'model-access', icon: <KeyRound size={14} />, labelKey: 'adminModelAccess', slot: 'top' },
   { tab: 'groups', icon: <UsersRound size={14} />, labelKey: 'adminGroups', slot: 'users' },
@@ -549,6 +551,7 @@ export function AdminPage() {
             )}
 
             {tab === 'info' && <InfoTab />}
+            {tab === 'token-usage' && <TokenUsageTab />}
             {tab === 'embeddings' && <EmbeddingsTab />}
             {settingsTab !== undefined && <SettingsSection tab={settingsTab} />}
             {tab === 'skills' && <SkillsSection />}

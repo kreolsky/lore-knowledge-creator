@@ -64,6 +64,7 @@ from dataclasses import dataclass, field
 
 import settings
 from chat_sessions import recall as chat_recall
+from token_usage import record_chat_usage
 
 # The persistence writes are read through the OWNING module's attribute at
 # call time (never a top-level `from persistence import _persist_content` —
@@ -734,6 +735,14 @@ class DriverChannel:
         elif etype == "dsh_event" and frame.get("kind") == "tool/result":
             turn.held_calls.discard(
                 _result_call_id(frame.get("data") or {}))
+        elif etype == "dsh_event" and frame.get("kind") == "assistant/message":
+            # WHY on the event, not at finalize: an errored or stopped turn
+            # spent its tokens too. See SYSTEM: token-usage.
+            await record_chat_usage(
+                data=frame.get("data") or {},
+                dsh_session_id=turn.projection.dsh_session_id or sub.dsh_session_id,
+                fallback_model=turn.projection.model, user_id=turn.user_id,
+                project_id=turn.project_id, session_id=turn.projection.session_id)
         self._update_deadline_pause(sub)
         out = await _relay_frame(turn.projection, frame)
         self._emit(sub, out)

@@ -94,6 +94,8 @@ export interface AdminSkillEntry {
   shipped: boolean;
   enabled: boolean;
   content: string | null;
+  /** Bundle file paths (scripts/…, references/…) of the instance row; [] otherwise. */
+  files: string[];
   shipped_body: string | null;
   updated_by: string | null;
   updated_at: string | null;
@@ -114,6 +116,21 @@ export async function putAdminSkill(name: string, body: { content?: string; enab
  * a new skill disappears. */
 export async function deleteAdminSkill(name: string): Promise<void> {
   await apiClient.delete(`/admin/skills/${name}`);
+}
+
+/** Create or replace an instance skill from a zip bundle (SKILL.md + scripts/
+ * + references/). `skipped` = archive entries the server did not keep; a bad
+ * archive is a 422 whose detail names the reason. */
+export async function importSkillArchive(file: File): Promise<AdminSkillEntry & { skipped: string[] }> {
+  const form = new FormData();
+  form.append('file', file);
+  return await apiClient.upload('/admin/skills/import', form) as AdminSkillEntry & { skipped: string[] };
+}
+
+/** One bundle file's text (read-only view). */
+export async function readAdminSkillFile(name: string, path: string): Promise<string> {
+  const data = await apiClient.get(`/admin/skills/${name}/files/${path}`) as { content: string };
+  return data.content;
 }
 
 // ── Instance info (admin Info section) ─────────────────────────────────────
@@ -304,4 +321,33 @@ export async function checkAdminMcpServer(serverId: string): Promise<McpCheckRes
 /** Hard delete: the server and every user's key rows for it. */
 export async function deleteAdminMcpServer(serverId: string): Promise<void> {
   await apiClient.delete(`/admin/mcp-servers/${serverId}`);
+}
+
+// ── Token usage (SYSTEM: token-usage) ──────────────────────────────────────
+
+/** One cube cell: the four disjoint token sums of one UTC day × user × model × source.
+ * `user_id` null = spend with no user (system). */
+export interface TokenUsageCubeRow {
+  day: string;
+  user_id: string | null;
+  model: string;
+  source: string;
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
+}
+
+/** GET /api/admin/token-usage — the sparse fact cube plus the maps the browser pivots it with. */
+export interface TokenUsageCube {
+  rows: TokenUsageCubeRow[];
+  users: Record<string, string>;
+  groups: Record<string, { name: string; members: string[] }>;
+  oldest_day: string | null;
+}
+
+/** Token usage cube for `from`..`to` (UTC `YYYY-MM-DD`, inclusive, ≤366 days). */
+export async function getTokenUsage(from: string, to: string): Promise<TokenUsageCube> {
+  const params = new URLSearchParams({ from, to });
+  return await apiClient.get(`/admin/token-usage?${params}`) as TokenUsageCube;
 }

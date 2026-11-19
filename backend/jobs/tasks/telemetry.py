@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 # shrink the granularity.
 TELEMETRY_RETENTION_DAYS = 90
 AGENT_TOOL_RETENTION_DAYS = 180
+TOKEN_USAGE_RETENTION_DAYS = 365
 
 
 async def telemetry_retention_task(ctx) -> None:
@@ -36,6 +37,12 @@ async def telemetry_retention_task(ctx) -> None:
     await db.query(
         f"DELETE telemetry_event WHERE category IN ['agent_tool', 'access'] "
         f"AND created_at < time::now() - {AGENT_TOOL_RETENTION_DAYS}d",
+        site="telemetry_retention",
+    )
+    # INVARIANT(data-loss): token_usage rows are purged after 365 days.
+    # Why: operator ruling — one year of spend history.
+    await db.query(
+        f"DELETE token_usage WHERE at < time::now() - {TOKEN_USAGE_RETENTION_DAYS}d",
         site="telemetry_retention",
     )
     logger.info(

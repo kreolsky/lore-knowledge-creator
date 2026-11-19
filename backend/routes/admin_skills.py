@@ -1,4 +1,4 @@
-"""Admin instance-skills routes — union list, override write, tombstone, reset.
+"""Admin instance-skills routes — union list, override write, archive import, bundle file read, tombstone, reset.
 
 # ARCH: every route is require_admin — same posture as admin_settings: a
 # moderator passes require_user_manager_role and reaches /api/admin/users;
@@ -10,19 +10,29 @@
 
 from __future__ import annotations
 
+import io
 import logging
+import re
+import zipfile
 
 from agent_skills import frontmatter_name, shipped_skill_docs
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from surrealdb import AsyncSurreal
 
 from auth import require_admin
 from db import get_db
+from models.tools import SKILL_FILE_MAX_BYTES, SKILL_FILE_PATH_RE
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin/skills", tags=["admin-skills"])
+
+_SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_SKILL_FILE_RE = re.compile(SKILL_FILE_PATH_RE)
+ARCHIVE_MAX_BYTES = 4 * 1024 * 1024
+ARCHIVE_MAX_FILES = 64
+_ROW_FIELDS = "name, content, enabled, files, updated_by, updated_at"
 
 
 def _shipped_bodies_by_name() -> dict[str, str]:
@@ -51,6 +61,7 @@ def _row_payload(
         "shipped": shipped_body is not None,
         "enabled": bool(row.get("enabled")) if row is not None else True,
         "content": row.get("content") if row is not None else None,
+        "files": [f["path"] for f in (row.get("files") or [])] if row is not None else [],
         "shipped_body": shipped_body,
         "updated_by": row.get("updated_by") if row is not None else None,
         "updated_at": row.get("updated_at") if row is not None else None,
@@ -59,8 +70,7 @@ def _row_payload(
 
 async def _instance_row(db: AsyncSurreal, name: str) -> dict | None:
     rows = await db.query(
-        "SELECT name, content, enabled, updated_by, updated_at "
-        "FROM instance_skills WHERE name = $n",
+        f"SELECT {_ROW_FIELDS} FROM instance_skills WHERE name = $n",
         {"n": name},
     )
     return rows[0] if rows else None
@@ -75,8 +85,7 @@ async def list_skills(
     same name exactly as the served overlay does."""
     shipped = _shipped_bodies_by_name()
     rows = await db.query(
-        "SELECT name, content, enabled, updated_by, updated_at "
-        "FROM instance_skills ORDER BY name"
+        f"SELECT {_ROW_FIELDS} FROM instance_skills ORDER BY name"
     ) or []
     by_name = {row["name"]: row for row in rows}
     return {
@@ -175,6 +184,124 @@ async def put_skill(
         name, user["user_id"], enabled, content is not None,
     )
     return _row_payload(name, await _instance_row(db, name), shipped.get(name))
+
+
+def _archive_members(zf: zipfile.ZipFile) -> list[tuple[str, zipfile.ZipInfo]]:
+    """(path relative to the skill root, entry) for every regular file. The
+    root is the directory of the shallowest `SKILL.md` (`db-read/` or the
+    archive root); an entry outside it keeps its raw name, so the grammar
+    check skips it instead of one stray entry refusing the whole archive.
+    Sizes are checked from the central directory BEFORE anything is
+    decompressed."""
+    entries = [i for i in zf.infolist() if not i.is_dir()]
+    if len(entries) > ARCHIVE_MAX_FILES:
+        raise HTTPException(422, f"archive has {len(entries)} files, max {ARCHIVE_MAX_FILES}")
+    if sum(i.file_size for i in entries) > ARCHIVE_MAX_BYTES:
+        raise HTTPException(422, f"archive unpacks to over {ARCHIVE_MAX_BYTES} bytes")
+    heads = sorted(
+        (i.filename for i in entries if i.filename.rsplit("/", 1)[-1] == "SKILL.md"),
+        key=lambda p: p.count("/"),
+    )
+    root = heads[0][: -len("SKILL.md")] if heads else ""
+    return [
+        (i.filename[len(root):] if i.filename.startswith(root) else i.filename, i)
+        for i in entries
+    ]
+
+
+def _parse_skill_archive(raw: bytes) -> tuple[str, str, list[dict], list[str]]:
+    """Archive bytes → (name, SKILL.md content, files, skipped paths).
+
+    Only `SKILL.md` and grammar-valid `scripts/…`/`references/…` text files
+    are kept — the same bundle shape a project skill materializes. Everything
+    else is SKIPPED and reported, never an error: author notes (`Spec.md`),
+    caches and OS litter have no reader on the instance layer. Paths are
+    validated, never joined to a filesystem path here."""
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(422, "not a zip archive") from exc
+    head: str | None = None
+    files: list[dict] = []
+    skipped: list[str] = []
+    for path, info in _archive_members(zf):
+        is_head = path == "SKILL.md"
+        valid_file = (
+            _SKILL_FILE_RE.match(path)
+            and not any(seg in ("..", ".") for seg in path.split("/"))
+            and info.file_size <= SKILL_FILE_MAX_BYTES
+        )
+        if not (is_head or valid_file):
+            skipped.append(path)
+            continue
+        try:
+            data = zf.read(info)
+        except (zipfile.BadZipFile, zipfile.LargeZipFile, NotImplementedError) as exc:
+            raise HTTPException(422, f"corrupt archive entry {path!r}") from exc
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            skipped.append(path)
+            continue
+        if is_head:
+            head = text
+        else:
+            files.append({"path": path, "content": text})
+    if head is None or not head.strip():
+        raise HTTPException(422, "archive has no SKILL.md at its root")
+    name = frontmatter_name(head)
+    if not name or not _SKILL_NAME_RE.match(name):
+        raise HTTPException(
+            422, f"SKILL.md frontmatter name {name!r} is not a kebab-case skill name",
+        )
+    return name, head, sorted(files, key=lambda f: f["path"]), sorted(skipped)
+
+
+@router.post("/import")
+async def import_skill_archive(
+    file: UploadFile = File(...),
+    user: dict = Depends(require_admin),
+    db: AsyncSurreal = Depends(get_db),
+):
+    """Create or REPLACE an instance skill from a zip bundle — SKILL.md plus
+    its scripts/ and references/. Keyed by the frontmatter name, so a
+    re-import of the same skill overwrites body and files and re-enables it;
+    a shipped name becomes an override, as with PUT."""
+    raw = await file.read(ARCHIVE_MAX_BYTES + 1)
+    if len(raw) > ARCHIVE_MAX_BYTES:
+        raise HTTPException(422, f"archive is over {ARCHIVE_MAX_BYTES} bytes")
+    name, content, files, skipped = _parse_skill_archive(raw)
+    await db.query(
+        "UPSERT type::record('instance_skills', $name) SET "
+        "name = $name, content = $content, files = $files, enabled = true, "
+        "updated_by = $by, updated_at = time::now()",
+        {"name": name, "content": content, "files": files, "by": user["user_id"]},
+    )
+    logger.info(
+        "instance_skill_imported name=%s by=%s files=%d skipped=%s",
+        name, user["user_id"], len(files), skipped,
+    )
+    row = await _instance_row(db, name)
+    return {
+        **_row_payload(name, row, _shipped_bodies_by_name().get(name)),
+        "skipped": skipped,
+    }
+
+
+@router.get("/{name}/files/{path:path}")
+async def read_skill_file(
+    name: str,
+    path: str,
+    _: dict = Depends(require_admin),
+    db: AsyncSurreal = Depends(get_db),
+):
+    """One bundle file's text, read-only — the list carries paths only, so
+    the admin UI fetches a body on demand."""
+    row = await _instance_row(db, name)
+    match = next((f for f in (row or {}).get("files") or [] if f["path"] == path), None)
+    if match is None:
+        raise HTTPException(404, f"skill {name!r} has no file {path!r}")
+    return {"path": path, "content": match["content"]}
 
 
 @router.delete("/{name}")

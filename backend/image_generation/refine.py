@@ -12,6 +12,7 @@ import logging
 
 import http_clients
 import settings
+from token_usage import record_openai_usage
 
 from image_generation.image_refine import (
     _REFINE_PROMPT_SCHEMA,
@@ -108,7 +109,9 @@ async def _refine_prompt(seed: str, template: str) -> _RefineResult:
             },
         )
         resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"]
+        await record_openai_usage(data, model)
     except Exception as exc:
         # WHY type(exc).__name__: `%s` of an httpx.ReadTimeout renders as the empty
         # string, which is exactly how this stayed invisible for so long (the

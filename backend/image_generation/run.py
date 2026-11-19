@@ -20,6 +20,7 @@ import http_clients
 import httpx
 import settings
 from comfy_markers import fill_workflow
+from token_usage import UsageActor, usage_actor
 
 from models import ToolGenerateImage
 
@@ -53,6 +54,8 @@ async def run_generation(
     spinner) then RE-RAISE so cancellation propagates (never swallow it).
     """
     title = body.prompt.strip()[:60] or "Generated image"
+    usage_actor.set(UsageActor(source="image_refine", user_id=ctx.get("user_id") or None,
+                               project_id=ctx.get("project_id") or None))
     message_id = ctx.get("message_id")
     logger.info("comfy: generate start run_id=%s target=%s count=%d msg=%s",
                 run_id, target_doc_id, body.count, message_id)
