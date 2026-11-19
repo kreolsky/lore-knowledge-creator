@@ -1,18 +1,18 @@
 /**
- * Tests for the snapshot-preview table rendering (Fix 3): a read-only (preview) table
+ * Tests for the snapshot-preview table rendering: a read-only (preview) table
  * widget reads its model from the `tableDocSource` facet (the checkpoint's captured
  * state), NOT the live handle, and renders static cells with no write affordances.
  *
  * The full editable mount is avoided by exercising the readonly path of toDOM, which
  * builds static cells (no nested EditorView). The same readonly toDOM harness also
- * drives the CM6 viewport-eviction regression (destroy → toDOM on the SAME instance).
+ * drives the CM6 lifecycle regressions on the SAME instance (destroy → toDOM, and toDOM → late destroy of the old DOM).
  */
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from 'vitest';
 import { EditorView } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
 import * as Y from 'yjs';
-import { createTable } from './table-block-model';
+import { addRow, createTable } from './table-block-model';
 import { tableDocSource } from './table-doc-source';
 import { TableBlockWidget } from './table-block-widget';
 import { releaseHandle, publishHandle } from '../../../editor/active-editor';
@@ -21,7 +21,7 @@ import type { EntityYjsState } from '../../../collab/yjs-provider';
 interface PreviewWidget {
   doc: Y.Doc | null;
   toDOM(view: EditorView): HTMLElement;
-  destroy(): void;
+  destroy(dom: HTMLElement): void;
   readonly estimatedHeight: number;
 }
 
@@ -59,7 +59,7 @@ describe('TableBlockWidget — snapshot preview (readonly)', () => {
     const cells = wrap.querySelectorAll('.cm-table-block-cell-static');
     expect(cells.length).toBe(4);
     expect([...cells].map((c) => c.textContent)).toEqual(['h1', 'h2', 'a', 'b']);
-    widget.destroy();
+    widget.destroy(wrap);
   });
 
   it('renders static cells with no editor / toolbar / resize handle', () => {
@@ -75,7 +75,7 @@ describe('TableBlockWidget — snapshot preview (readonly)', () => {
     expect(wrap.querySelector('.cm-content')).toBeNull();
     // Static cells present (3 rows × 1 col).
     expect(wrap.querySelectorAll('.cm-table-block-cell-static').length).toBe(3);
-    widget.destroy();
+    widget.destroy(wrap);
   });
 
   it('renders a doc-link cell formatted, not raw markdown (public share / history preview)', () => {
@@ -92,7 +92,7 @@ describe('TableBlockWidget — snapshot preview (readonly)', () => {
     const cellText = cells[1].textContent ?? '';
     expect(cellText).toBe('Interviews');
     expect(cellText).not.toContain('](');
-    widget.destroy();
+    widget.destroy(wrap);
   });
 
   it('shows the "not captured" placeholder for a legacy checkpoint (no model)', () => {
@@ -105,7 +105,7 @@ describe('TableBlockWidget — snapshot preview (readonly)', () => {
     expect(box).not.toBeNull();
     // Distinct from the editable missing state: no "remove" affordance in a preview.
     expect(wrap.querySelector('.cm-table-block-remove')).toBeNull();
-    widget.destroy();
+    widget.destroy(wrap);
   });
 });
 
@@ -125,11 +125,32 @@ describe('TableBlockWidget — CM6 viewport eviction (destroy → toDOM on the s
     // FRESH wrap — the render cache must have been reset, or render() takes the
     // same-shape fast path on the stale tableEl and leaves the new wrap EMPTY
     // (the "tables vanish after eviction" bug).
-    widget.destroy();
+    widget.destroy(wrap1);
     const wrap2 = widget.toDOM(makeView(previewDoc));
     expect(wrap2.querySelector('table.cm-table-block')).not.toBeNull();
     expect(wrap2.querySelectorAll('.cm-table-block-cell-static').length).toBe(4);
-    widget.destroy();
+    widget.destroy(wrap2);
+  });
+
+  // TEST-WHY: recurring-regression — the same blank-anchor vanish came back through the other lifecycle order.
+  it('re-renders when toDOM runs again BEFORE destroy of the old DOM (regression: remote presence re-render)', () => {
+    const previewDoc = new Y.Doc();
+    const id = createTable(previewDoc, [['h1', 'h2'], ['a', 'b']]);
+    const widget = new TableBlockWidget(id, 't') as unknown as PreviewWidget;
+    const view = makeView(previewDoc);
+
+    // A line re-render (a remote presence line decoration on the anchor's line) makes CM6
+    // build the new DOM first and destroy the old one after — on the SAME instance.
+    const wrap1 = widget.toDOM(view);
+    const wrap2 = widget.toDOM(view);
+    expect(wrap2.querySelectorAll('.cm-table-block-cell-static').length).toBe(4);
+    // The late destroy of the old DOM must not touch the live one: it still renders and
+    // still follows the model.
+    widget.destroy(wrap1);
+    expect(wrap2.querySelectorAll('.cm-table-block-cell-static').length).toBe(4);
+    addRow(previewDoc, id);
+    expect(wrap2.querySelectorAll('.cm-table-block-cell-static').length).toBe(6);
+    widget.destroy(wrap2);
   });
 
   it('keeps the height estimate across eviction (destroy must not zero the row count)', () => {
@@ -137,12 +158,12 @@ describe('TableBlockWidget — CM6 viewport eviction (destroy → toDOM on the s
     const id = createTable(previewDoc, [['h1', 'h2'], ['a', 'b'], ['c', 'd']]);
     const widget = new TableBlockWidget(id, 't') as unknown as PreviewWidget;
 
-    widget.toDOM(makeView(previewDoc));
+    const wrap = widget.toDOM(makeView(previewDoc));
     const mounted = widget.estimatedHeight;
     // CM6 asks estimatedHeight precisely for widgets whose DOM it dropped, so the
     // evicted estimate must still describe a 3-row table — otherwise an off-screen
     // table collapses to padding height and the scrollbar jumps on scroll-back.
-    widget.destroy();
+    widget.destroy(wrap);
     expect(widget.estimatedHeight).toBe(mounted);
   });
 });

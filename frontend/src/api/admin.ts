@@ -179,6 +179,9 @@ export interface AdminModelAccess {
   in_gateway: boolean | null;
   is_default: boolean;
   subjects: string[];
+  /** Group subjects parked by Hidden/Tools — the grants a return to
+   * Private/Public restores; empty otherwise. Never a grant. */
+  parked: string[];
 }
 
 /** The subject that makes a model available to every user. */
@@ -196,7 +199,7 @@ export async function listAdminModels(): Promise<AdminModelAccess[]> {
 
 /** Full replace of a model's subjects. Ids carry `/` — the route is `:path`,
  * so each segment is encoded and the slashes kept. */
-export async function putAdminModelSubjects(modelId: string, subjects: string[]): Promise<{ id: string; subjects: string[] }> {
+export async function putAdminModelSubjects(modelId: string, subjects: string[]): Promise<{ id: string; subjects: string[]; parked: string[] }> {
   const path = modelId.split('/').map(encodeURIComponent).join('/');
   return await apiClient.put(`/admin/models/${path}`, { subjects });
 }
@@ -235,6 +238,12 @@ export async function renameAdminGroup(groupId: string, name: string): Promise<A
 /** Deletes the group with its memberships and its grants. */
 export async function deleteAdminGroup(groupId: string): Promise<void> {
   await apiClient.delete(`/admin/groups/${groupId}`);
+}
+
+/** Full replace of the admin group order (keyed by subject) — admin lists only;
+ * a group left out lists after the placed ones. */
+export async function putAdminGroupOrder(subjects: string[]): Promise<{ subjects: string[] }> {
+  return await apiClient.put('/admin/group-order', { subjects });
 }
 
 /** Full replace of an admin group's members. */

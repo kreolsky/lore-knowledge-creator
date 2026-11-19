@@ -131,6 +131,12 @@ async def model_order_positions(db: AsyncSurreal) -> dict[str, int]:
     return {r["model_id"]: r["position"] for r in rows or []}
 
 
+async def group_order_positions(db: AsyncSurreal) -> dict[str, int]:
+    """group subject → admin-set position (group_order rows); unplaced subjects are absent."""
+    rows = await db.query("SELECT subject, position FROM group_order")
+    return {r["subject"]: r["position"] for r in rows or []}
+
+
 def order_models(ids: list[str] | set[str], positions: dict[str, int]) -> list[str]:
     """`ids` in the admin order: placed by position, then unplaced alphabetically.
 
@@ -153,9 +159,11 @@ async def require_model_access(user: dict, model: str) -> None:
 async def drop_moderator_grants(db: AsyncSurreal, moderator_uid: str) -> None:
     """Delete the virtual group's grants once its moderator is demoted or deleted.
 
-    A re-promoted moderator starts with no grants; nothing is restored.
+    A re-promoted moderator starts with no grants; nothing is restored — the
+    parked copies (model_parked_grants) go too.
     """
-    await db.query(
-        "DELETE model_grants WHERE subject = $subject",
-        {"subject": moderator_subject(moderator_uid)},
-    )
+    for table in ("model_grants", "model_parked_grants"):
+        await db.query(
+            f"DELETE {table} WHERE subject = $subject",
+            {"subject": moderator_subject(moderator_uid)},
+        )

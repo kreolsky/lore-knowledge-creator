@@ -205,6 +205,9 @@ export class TableBlockWidget extends WidgetType {
   }
 
   toDOM(view: EditorView): HTMLElement {
+    // A re-render can call toDOM on this instance BEFORE destroy() of the previous DOM —
+    // that DOM's state goes now (see the INVARIANT in releaseDom).
+    if (this.wrap) this.releaseDom();
     this.view = view;
     const wrap = document.createElement('div');
     wrap.className = 'cm-table-block-wrap';
@@ -1065,7 +1068,12 @@ export class TableBlockWidget extends WidgetType {
     return box;
   }
 
-  destroy(): void {
+  destroy(dom: HTMLElement): void {
+    if (dom === this.wrap) this.releaseDom(); // a stale DOM's state is already gone — see releaseDom
+  }
+
+  /** Drop every subscription and the cached table DOM bound to the current wrap. */
+  private releaseDom(): void {
     this.unobserve?.();
     this.unobserve = null;
     this.unsubEntity?.();
@@ -1074,19 +1082,23 @@ export class TableBlockWidget extends WidgetType {
     this.unsubNotes = null;
     this.unregisterCaret?.();
     this.unregisterCaret = null;
-    // INVARIANT(data-loss) (CM6 eviction/reuse): destroy() MUST drop the cached DOM —
-    // CM6 drops a widget's DOM on viewport eviction and REUSES the same instance
-    // on scroll-back (eq matches), calling toDOM again on a fresh wrap. With tableEl
-    // still set, render() takes the same-ids fast path against the STALE
-    // detached node and returns without appending anything — the anchor line renders
-    // blank, i.e. the table vanishes. Why: the cache exists to keep cell editors alive
-    // across keystrokes (see the structural-patch INVARIANT above); it is only valid
-    // while THIS DOM is mounted.
+    // INVARIANT(data-loss): subscriptions and the cached table DOM belong to the LIVE wrap only —
+    // released when it is replaced, in either order CM6 uses; destroy() of a stale DOM is a no-op.
+    // Why: with tableEl still set, render() takes the same-ids fast path against the STALE node
+    // and appends nothing to the new wrap; and a late destroy of the old DOM would reset the
+    // table and drop the NEW wrap's subscriptions — either way the anchor line renders blank,
+    // i.e. the table vanishes. The two orders: destroy(dom) BEFORE the next toDOM (viewport
+    // eviction, then reuse on scroll-back when eq matches), and toDOM AGAIN on the same
+    // instance BEFORE destroy of the old DOM (a line re-render, e.g. a remote presence line
+    // decoration on the anchor's line). The cache exists to keep cell editors alive across
+    // keystrokes (see the structural-patch INVARIANT above); it is only valid while ITS DOM
+    // is mounted.
     // `renderedRowCount` is deliberately NOT reset: nulling tableEl alone already forces
     // a fresh build, while estimatedHeight reads renderedRowCount precisely for widgets
     // whose DOM is gone — zeroing it would collapse an evicted table's height estimate to
     // the padding and make the scrollbar jump on scroll-back.
     this.resetTable();
+    this.wrap = null;
   }
 
   get estimatedHeight(): number {

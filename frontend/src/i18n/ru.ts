@@ -780,6 +780,7 @@ export const ru: Record<TranslationKey, string> = {
   adminModelGroupCount: 'групп: {count}',
   adminModelSaveFailed: 'Не удалось сохранить доступ к модели',
   adminModelOrderFailed: 'Не удалось сохранить порядок моделей',
+  adminGroupOrderFailed: 'Не удалось сохранить порядок групп',
   adminGroups: 'Группы',
   adminGroupsHint: 'Группам выдаются модели. Группы модераторов следуют за модератором пользователя и меняются в разделе «Пользователи».',
   adminGroupsEmpty: 'Групп пока нет',

@@ -205,12 +205,15 @@ async def test_group_delete_drops_members_and_grants(client, test_db, world):
     gid = (await client.post("/api/admin/groups", json={"name": "G"}, cookies=admin)).json()["id"]
     await client.put(f"/api/admin/groups/{gid}/members", json={"user_ids": ["ma-red"]}, cookies=admin)
     await _grant(client, world, GROUP_MODEL, [f"group:{gid}", "public"])
+    await _grant(client, world, PRIVATE, [f"group:{gid}"])
+    await _grant(client, world, PRIVATE, ["hidden"])
     resp = await client.delete(f"/api/admin/groups/{gid}", cookies=admin)
     assert resp.status_code == 200, resp.text
     assert await test_db.query("SELECT * FROM group_members WHERE group_id = $g", {"g": gid}) == []
     assert await test_db.query(
         "SELECT VALUE subject FROM model_grants WHERE model_id = $m", {"m": GROUP_MODEL},
     ) == ["public"]
+    assert await test_db.query("SELECT * FROM model_parked_grants") == []
     assert (await client.delete(f"/api/admin/groups/{gid}", cookies=admin)).status_code == 404
 
 
@@ -235,7 +238,7 @@ async def test_admin_models_list_survives_a_gateway_outage(client, monkeypatch, 
     resp = await client.get("/api/admin/models", cookies=_c(world["tokens"]["admin"]))
     assert resp.status_code == 200, resp.text
     assert resp.json() == [
-        {"id": PUBLIC, "in_gateway": None, "is_default": False, "subjects": ["public"]},
+        {"id": PUBLIC, "in_gateway": None, "is_default": False, "subjects": ["public"], "parked": []},
     ]
 
 
@@ -292,3 +295,54 @@ async def test_order_put_is_a_full_replace(client, world, gateway):
 async def test_order_put_is_refused_to_non_admin(client, world, who):
     resp = await _put_order(client, world["tokens"][who], [PRIVATE])
     assert resp.status_code == 403, resp.text
+
+
+# ─── Groups parked while Hidden / Tools ───────────────────────────────────────
+
+
+async def _admin_row(client, world, model: str) -> dict:
+    rows = (await client.get("/api/admin/models", cookies=_c(world["tokens"]["admin"]))).json()
+    return next(r for r in rows if r["id"] == model)
+
+
+@pytest.mark.asyncio
+# TEST-WHY: refused-principal — a group parked by Hidden/Tools must never grant its members a turn.
+async def test_groups_parked_by_hidden_grant_nothing_and_come_back(client, world, gateway):
+    admin = _c(world["tokens"]["admin"])
+    gid = (await client.post("/api/admin/groups", json={"name": "G"}, cookies=admin)).json()["id"]
+    await client.put(f"/api/admin/groups/{gid}/members", json={"user_ids": ["ma-blue"]}, cookies=admin)
+    groups = sorted([f"group:{gid}", "mod:ma-mod"])
+    await _grant(client, world, PRIVATE, groups)
+    put = (await _grant(client, world, PRIVATE, ["hidden"])).json()
+    assert put == {"id": PRIVATE, "subjects": ["hidden"], "parked": groups}
+    assert await _turn(client, world, "blue", PRIVATE) == 403
+    await _grant(client, world, PRIVATE, ["tools"])  # Hidden → Tools keeps the parked set
+    assert await _turn(client, world, "red", PRIVATE) == 403
+    assert (await _admin_row(client, world, PRIVATE))["parked"] == groups
+    await _grant(client, world, PRIVATE, groups)
+    row = await _admin_row(client, world, PRIVATE)
+    assert (row["subjects"], row["parked"]) == (groups, [])
+    assert await _turn(client, world, "blue", PRIVATE) == 409
+
+
+# ─── Admin-defined group order ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+# TEST-WHY: refused-principal — only an admin may reorder groups; an admin's order is what GET /groups returns.
+async def test_group_order_is_admin_only_and_a_full_replace(client, world):
+    admin = _c(world["tokens"]["admin"])
+    gids = [
+        (await client.post("/api/admin/groups", json={"name": n}, cookies=admin)).json()["id"]
+        for n in ("A", "B")
+    ]
+    refused = await client.put(
+        "/api/admin/group-order", json={"subjects": ["mod:ma-mod"]}, cookies=_c(world["tokens"]["mod"]),
+    )
+    assert refused.status_code == 403, refused.text
+    await client.put("/api/admin/group-order", json={"subjects": [f"group:{gids[0]}"]}, cookies=admin)
+    order = ["mod:ma-mod", f"group:{gids[1]}"]
+    resp = await client.put("/api/admin/group-order", json={"subjects": order}, cookies=admin)
+    assert resp.status_code == 200, resp.text
+    listed = [g["subject"] for g in (await client.get("/api/admin/groups", cookies=admin)).json()]
+    assert listed == order + [f"group:{gids[0]}"]

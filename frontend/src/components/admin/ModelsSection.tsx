@@ -4,10 +4,12 @@
  * chevron · id · default / "not in gateway" marks · Hidden · Tools · Private ·
  * Public selector. A gateway outage (in_gateway null) is one line above the list,
  * never a "not in gateway" mark on every row. The tier is derived from the
- * subjects: `hidden` → Hidden and `tools` → Tools (each exclusive, drops every
- * grant; disabled on the default model), `public` → Public, else Private. Expanding a card lists
+ * subjects: `hidden` → Hidden and `tools` → Tools (each exclusive; the server
+ * parks the group grants, and a return to Private/Public PUTs the parked list
+ * back; disabled on the default model), `public` → Public, else Private. Expanding a card lists
  * every group (admin groups, then the read-only moderator groups) as a
- * checkbox — each one is that group's subject — greyed out while Hidden or Tools.
+ * checkbox — each one is that group's subject — greyed out while Hidden or Tools,
+ * the parked groups shown checked (what a return will restore).
  * Every change shows at once, PUTs the model's FULL subject list and replaces
  * the row with the server's answer; a refusal (a moderator demoted meanwhile →
  * 422) restores the old subjects and renders under the row.
@@ -41,9 +43,11 @@ export function tierOf(subjects: string[]): Tier {
   return subjects.includes(PUBLIC_SUBJECT) ? 'public' : 'private';
 }
 
-/** The full subject list a tier change PUTs: Hidden and Tools drop every grant. */
-export function subjectsForTier(subjects: string[], tier: Tier): string[] {
-  const grants = subjects.filter(isGroupGrant);
+/** The full subject list a tier change PUTs: Hidden and Tools carry no grant
+ * (the server parks them); leaving Hidden/Tools restores the parked groups. */
+export function subjectsForTier(subjects: string[], parked: string[], tier: Tier): string[] {
+  const current = subjects.filter(isGroupGrant);
+  const grants = current.length ? current : parked;
   const byTier: Record<Tier, string[]> = {
     hidden: [HIDDEN_SUBJECT],
     tools: [TOOLS_SUBJECT],
@@ -121,8 +125,8 @@ export function ModelsSection() {
 
   useEffect(() => { void reload(); }, [reload]);
 
-  const setRowSubjects = (id: string, subjects: string[]) =>
-    setModels(prev => prev?.map(m => (m.id === id ? { ...m, subjects } : m)) ?? prev);
+  const setRow = (id: string, row: Pick<AdminModelAccess, 'subjects' | 'parked'>) =>
+    setModels(prev => prev?.map(m => (m.id === id ? { ...m, ...row } : m)) ?? prev);
 
   // WHY: optimistic — the new state shows on click and the server's answer
   // replaces it; a refusal restores the old subjects and renders under the row.
@@ -131,12 +135,15 @@ export function ModelsSection() {
     if (busy) return;
     setBusy(model.id);
     setMsg(null);
-    setRowSubjects(model.id, subjects);
+    // WHY: into Hidden/Tools with groups in hand, those groups are what the server parks.
+    const current = model.subjects.filter(isGroupGrant);
+    const parking = tierOf(subjects) === 'hidden' || tierOf(subjects) === 'tools';
+    setRow(model.id, { subjects, parked: parking && current.length ? current : model.parked });
     try {
       const saved = await putAdminModelSubjects(model.id, subjects);
-      setRowSubjects(model.id, saved.subjects);
+      setRow(model.id, { subjects: saved.subjects, parked: saved.parked });
     } catch (err: unknown) {
-      setRowSubjects(model.id, model.subjects);
+      setRow(model.id, { subjects: model.subjects, parked: model.parked });
       setMsg({ id: model.id, text: serverRefusalDetail(err) ?? t('adminModelSaveFailed') });
     } finally {
       setBusy(null);
@@ -160,6 +167,8 @@ export function ModelsSection() {
         {(models ?? []).map(model => {
           const open = expanded === model.id;
           const tier = tierOf(model.subjects);
+          const parkedTier = tier === 'hidden' || tier === 'tools';
+          const shown = parkedTier ? model.parked : model.subjects;
           const groupCount = model.subjects.filter(isGroupGrant).length;
           return (
             <section
@@ -188,7 +197,7 @@ export function ModelsSection() {
                 <SegmentedControl
                   ariaLabel={t('adminModelTier')}
                   value={tier}
-                  onChange={next => void saveSubjects(model, subjectsForTier(model.subjects, next as Tier))}
+                  onChange={next => void saveSubjects(model, subjectsForTier(model.subjects, model.parked, next as Tier))}
                   options={[
                     { value: 'hidden', label: t('adminModelHidden'), disabled: model.is_default },
                     { value: 'tools', label: t('adminModelTools'), disabled: model.is_default },
@@ -203,10 +212,10 @@ export function ModelsSection() {
                   {groups.map(g => (
                     <FieldCheckbox
                       key={g.subject}
-                      checked={model.subjects.includes(g.subject)}
+                      checked={shown.includes(g.subject)}
                       onChange={on => void toggleSubject(model, g.subject, on)}
                       label={groupLabel(g, t)}
-                      disabled={busy === model.id || tier === 'hidden' || tier === 'tools'}
+                      disabled={busy === model.id || parkedTier}
                     />
                   ))}
                 </div>

@@ -20,6 +20,7 @@ from model_access import (
     MOD_PREFIX,
     PUBLIC_SUBJECT,
     TOOLS_SUBJECT,
+    group_order_positions,
     group_subject,
     model_order_positions,
     moderator_subject,
@@ -54,12 +55,20 @@ class ModelOrder(BaseModel):
     model_ids: list[str]
 
 
-async def _grants_by_model(db: AsyncSurreal) -> dict[str, list[str]]:
-    rows = await db.query("SELECT model_id, subject FROM model_grants")
+class GroupOrder(BaseModel):
+    subjects: list[str]
+
+
+async def _grants_by_model(db: AsyncSurreal, table: str = "model_grants") -> dict[str, list[str]]:
+    rows = await db.query(f"SELECT model_id, subject FROM {table}")
     out: dict[str, list[str]] = {}
     for r in rows or []:
         out.setdefault(r["model_id"], []).append(r["subject"])
     return out
+
+
+def _is_group_grant(subject: str) -> bool:
+    return subject.startswith((MOD_PREFIX, GROUP_PREFIX))
 
 
 async def _validate_subjects(db: AsyncSurreal, subjects: list[str]) -> None:
@@ -94,8 +103,9 @@ async def _validate_subjects(db: AsyncSurreal, subjects: list[str]) -> None:
 
 @router.get("/models")
 async def list_model_grants(_: dict = Depends(require_admin), db: AsyncSurreal = Depends(get_db)):
-    """Gateway roster ∪ granted ids → [{id, in_gateway, is_default, subjects}],
-    in the admin order (order_models).
+    """Gateway roster ∪ granted ids → [{id, in_gateway, is_default, subjects, parked}],
+    in the admin order (order_models). `parked` = the group subjects a Hidden/Tools
+    model carried before it went there (model_parked_grants), for the client to restore.
 
     `in_gateway` is None on every row when the gateway cannot be read: the grants
     stay listed and revocable during a gateway outage, and the client names the
@@ -106,6 +116,7 @@ async def list_model_grants(_: dict = Depends(require_admin), db: AsyncSurreal =
         logger.warning("admin models: gateway roster unreadable", exc_info=True)
         roster = None
     grants = await _grants_by_model(db)
+    parked = await _grants_by_model(db, "model_parked_grants")
     default_model = await settings.get("CHAT_MODEL")
     ids = (roster or set()) | set(grants)
     positions = await model_order_positions(db)
@@ -115,6 +126,7 @@ async def list_model_grants(_: dict = Depends(require_admin), db: AsyncSurreal =
             "in_gateway": None if roster is None else mid in roster,
             "is_default": mid == default_model,
             "subjects": sorted(grants.get(mid, [])),
+            "parked": sorted(parked.get(mid, [])),
         }
         for mid in order_models(ids, positions)
     ]
@@ -165,9 +177,33 @@ async def put_model_grants(
     for i, subject in enumerate(added):
         statements.append(f"CREATE model_grants CONTENT {{ model_id: $m, subject: $s{i} }}")
         params[f"s{i}"] = subject
+    statements.extend(_parked_statements(current, subjects, params))
     if statements:
         await run_in_transaction(db, statements, params)
-    return {"id": model_id, "subjects": sorted(subjects)}
+    parked = await db.query(
+        "SELECT VALUE subject FROM model_parked_grants WHERE model_id = $m", {"m": model_id},
+    ) or []
+    return {"id": model_id, "subjects": sorted(subjects), "parked": sorted(parked)}
+
+
+def _parked_statements(current: list[str], subjects: list[str], params: dict) -> list[str]:
+    """Transaction statements that keep model_parked_grants in step with a grant PUT.
+
+    Into Hidden/Tools with group grants in hand: those groups REPLACE the parked set.
+    Into Hidden/Tools with none (Hidden → Tools): the parked set stays. Out of
+    Hidden/Tools: the parked set is deleted — the client sent the restored groups
+    in `subjects` if it wanted them back.
+    """
+    if HIDDEN_SUBJECT not in subjects and TOOLS_SUBJECT not in subjects:
+        return ["DELETE model_parked_grants WHERE model_id = $m"]
+    groups = [s for s in current if _is_group_grant(s)]
+    if not groups:
+        return []
+    statements = ["DELETE model_parked_grants WHERE model_id = $m"]
+    for i, subject in enumerate(groups):
+        statements.append(f"CREATE model_parked_grants CONTENT {{ model_id: $m, subject: $p{i} }}")
+        params[f"p{i}"] = subject
+    return statements
 
 
 # ─── Groups ───────────────────────────────────────────────────────────────────
@@ -189,8 +225,9 @@ def _group_payload(
 
 @router.get("/groups")
 async def list_groups(_: dict = Depends(require_admin), db: AsyncSurreal = Depends(get_db)):
-    """Admin groups, then one read-only entry per live moderator (kind='moderator',
-    name = the moderator's name — the client renders the "Moderator · " label)."""
+    """Admin groups and one read-only entry per live moderator (kind='moderator',
+    name = the moderator's name — the client renders the "Moderator · " label),
+    in the admin group order; unplaced ones after it, admin groups first."""
     groups = await db.query(
         "SELECT meta::id(id) AS id, name, created_at FROM groups ORDER BY created_at ASC",
     ) or []
@@ -218,7 +255,27 @@ async def list_groups(_: dict = Depends(require_admin), db: AsyncSurreal = Depen
         ], grants)
         for mod in users if mod.get("role") == "moderator"
     )
-    return out
+    positions = await group_order_positions(db)
+    # WHY: a stable sort — unplaced groups keep the created_at order above, after the placed.
+    return sorted(out, key=lambda g: (g["subject"] not in positions, positions.get(g["subject"], 0)))
+
+
+@router.put("/group-order")
+async def put_group_order(
+    body: GroupOrder, _: dict = Depends(require_admin), db: AsyncSurreal = Depends(get_db),
+):
+    """Full replace of the admin group order: position = index in `subjects`.
+
+    Purely visual — no access reads it. Not under /groups/… — PATCH/DELETE
+    /groups/{group_id} would read "group-order" as an id."""
+    subjects = list(dict.fromkeys(body.subjects))
+    statements = ["DELETE group_order"]
+    params: dict = {}
+    for i, subject in enumerate(subjects):
+        statements.append(f"CREATE group_order CONTENT {{ subject: $s{i}, position: {i} }}")
+        params[f"s{i}"] = subject
+    await run_in_transaction(db, statements, params)
+    return {"subjects": subjects}
 
 
 async def _require_admin_group(db: AsyncSurreal, group_id: str) -> dict:
@@ -265,7 +322,7 @@ async def rename_group(
 async def delete_group(
     group_id: str, _: dict = Depends(require_admin), db: AsyncSurreal = Depends(get_db),
 ):
-    """Hard delete: the group, its membership rows, its `group:<id>` grants and
+    """Hard delete: the group, its membership rows, its `group:<id>` grants (live and parked) and
     its `group:<id>` project-audience rows; every stripped project gets a
     project-wide access_changed so connected clients recompute at once."""
     await _require_admin_group(db, group_id)
@@ -279,6 +336,7 @@ async def delete_group(
     await run_in_transaction(db, [
         "DELETE group_members WHERE group_id = $id",
         "DELETE model_grants WHERE subject = $subject",
+        "DELETE model_parked_grants WHERE subject = $subject",
         "UPDATE projects SET audiences = audiences[WHERE subject != $subject] "
         "WHERE audiences.subject CONTAINS $subject",
         # Strip the dead group subject from MCP server rows (see SYSTEM:

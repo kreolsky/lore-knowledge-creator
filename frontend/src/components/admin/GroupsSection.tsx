@@ -7,20 +7,25 @@
  * VIRTUAL — derived from `users.moderator_id` — so they render read-only:
  * membership changes on the Users section, never here. Every card names the
  * models granted to the group; grants are edited on the Models section.
+ * One flat list in the server's admin order; cards drag-reorder
+ * (useSiblingDragReorder, as ModelsSection) and a drop PUTs the full order,
+ * keyed by subject — purely visual, never access.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { ArmedDeleteButton, Button, CenterHeading, FieldCheckbox, FieldInput, IconButton } from '../ui';
 import {
   createAdminGroup, deleteAdminGroup, listAdminGroups, listAdminUsers,
-  putAdminGroupMembers, renameAdminGroup, type AdminGroup,
+  putAdminGroupMembers, putAdminGroupOrder, renameAdminGroup, type AdminGroup,
 } from '../../api/admin';
+import { rowDropLine, useSiblingDragReorder, type SiblingDragAdapter } from '../../hooks/useSiblingDragReorder';
 import type { User } from '../../types';
 import { useAppStore } from '../../store/app-store';
 import { useTranslation } from '../../i18n';
 import type { TranslationKey } from '../../i18n/en';
 import { serverRefusalDetail } from '../../utils/server-refusal-detail';
+import { moveAfter } from './ModelsSection';
 
 type TFn = (key: TranslationKey, vars?: Record<string, string | number>) => string;
 
@@ -100,6 +105,40 @@ export function GroupsSection() {
   const [newName, setNewName] = useState('');
   const tRef = useRef(t);
   tRef.current = t;
+  const groupsRef = useRef(groups);
+  groupsRef.current = groups;
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // WHY: refs, not state, inside the adapter — useSiblingDragReorder re-binds
+  // its listeners whenever the adapter identity changes, so it is built once.
+  const dragAdapter = useMemo<SiblingDragAdapter>(() => ({
+    rowIdAttr: 'data-group-id',
+    groupAttr: 'data-group-list',
+    // Don't hijack the chevron, rename field, member checkboxes or delete.
+    ignoreTarget: (el) => !!el.closest('button, input, label'),
+    dropTarget: (row, e, candidate) => {
+      const rowId = row.getAttribute('data-group-id')!;
+      if (rowId === candidate.id) return undefined;
+      const others = (groupsRef.current ?? []).filter(g => g.id !== candidate.id);
+      const idx = others.findIndex(g => g.id === rowId);
+      if (idx === -1) return undefined;
+      const rect = row.getBoundingClientRect();
+      const before = e.clientY < rect.top + rect.height / 2;
+      const afterId = before ? (idx > 0 ? others[idx - 1].id : null) : rowId;
+      return { parentId: null, afterId, ...rowDropLine(rect, before) };
+    },
+    commit: (id, target) => {
+      const prev = groupsRef.current;
+      if (!prev) return;
+      const next = moveAfter(prev, id, target.afterId);
+      setGroups(next);
+      putAdminGroupOrder(next.map(g => g.subject)).catch(() => {
+        setGroups(prev); // rollback
+        useAppStore.getState().showToast(tRef.current('adminGroupOrderFailed'), 'error');
+      });
+    },
+  }), []);
+  useSiblingDragReorder(listRef, groups !== null, dragAdapter);
 
   const reload = useCallback(async () => {
     try {
@@ -144,10 +183,6 @@ export function GroupsSection() {
     if (await mutate('', () => createAdminGroup(name))) setNewName('');
   };
 
-  // Admin groups first, then the moderator groups (the server's order).
-  const adminGroups = (groups ?? []).filter(g => g.kind === 'admin');
-  const moderatorGroups = (groups ?? []).filter(g => g.kind === 'moderator');
-
   const card = (group: AdminGroup) => {
     const open = expanded === group.id;
     const editable = group.kind === 'admin';
@@ -155,6 +190,7 @@ export function GroupsSection() {
       <section
         key={group.id}
         data-group-id={group.id}
+        data-group-list=""
         className={`hover:bg-surface2 transition-colors duration-150 ${open ? 'bg-surface2' : 'bg-surface'}`}
       >
         <div className="py-2.5 px-3.5 flex items-center gap-3">
@@ -221,9 +257,8 @@ export function GroupsSection() {
         </Button>
       </div>
       {msg?.id === '' && <p className="text-xs mt-1 text-red">{msg.text}</p>}
-      <div className="flex flex-col gap-0.5 mt-3">
-        {adminGroups.map(card)}
-        {moderatorGroups.map(card)}
+      <div ref={listRef} className="flex flex-col gap-0.5 mt-3">
+        {(groups ?? []).map(card)}
       </div>
     </>
   );

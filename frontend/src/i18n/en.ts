@@ -781,6 +781,7 @@ export const en = {
   adminModelGroupCount: 'groups: {count}',
   adminModelSaveFailed: 'Failed to save model access',
   adminModelOrderFailed: 'Failed to save model order',
+  adminGroupOrderFailed: 'Failed to save group order',
   adminGroups: 'Groups',
   adminGroupsHint: 'Groups receive model grants. Moderator groups follow each user\'s moderator and are edited on the Users section.',
   adminGroupsEmpty: 'No groups yet',

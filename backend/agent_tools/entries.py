@@ -50,6 +50,7 @@ from agent_tools.specs.read import (
     GET_FACT_HISTORY_TOOL,
     GET_MEMORY_FACTS_TOOL,
     READ_TOOLS,
+    VIEW_REFERENCE_IMAGE_TOOL,
 )
 from agent_tools.specs.secrets import (
     HTTP_REQUEST_TOOL,
@@ -101,6 +102,7 @@ from models import (
     ToolSearchMyChats,
     ToolSetFactAnchor,
     ToolViewChatImage,
+    ToolViewReferenceImage,
 )
 
 # ─── The public base surface (pi + tool_api + mcp) ────────────────────────────
@@ -386,6 +388,13 @@ register(ToolEntry(
     spec=SET_FACT_ANCHOR_TOOL, request_model=ToolSetFactAnchor,
     handler_path="routes.tool_api.chat_facts:tool_set_fact_anchor",
     surfaces=_AGENT_HTTP,
+))
+# The reference image view: agent-only + always served (references are part of
+# every project read; the image envelope is a dsh-plugin shape, not MCP).
+register(ToolEntry(
+    spec=VIEW_REFERENCE_IMAGE_TOOL, request_model=ToolViewReferenceImage,
+    handler_path="routes.tool_api.reads:tool_view_reference_image",
+    surfaces=_AGENT_HTTP, image_result=True,
 ))
 # Personal-secrets pack: agent-only + always served.
 # list_secrets is read-only; http_request is mutating WITH `apply` (holdable —

@@ -21,6 +21,8 @@ view_chat_image (one attached image) tools over the SAME predicate.
 # person's chat corpus to external/user-minted keys — dsh has no Lore key
 # policy to enforce.
 """
+import base64
+import binascii
 import json
 import re
 from typing import NamedTuple
@@ -49,15 +51,12 @@ from models import (
     ToolViewChatImage,
 )
 from routes.tool_api._common import _require_in_app_agent
+from routes.tool_api._image_view import VIEW_CHAT_IMAGE_MAX_BYTES, image_envelope
 from routes.tool_api_telemetry import track_agent_tool
 from scope import subtree_doc_ids
 
 CHAT_RECALL_WINDOW_CHARS = 8000
 CHAT_READ_PAGE_CHARS = 30000
-# The per-image view cap, in DECODED bytes — the same figure the driver's image
-# admission uses (dsh DEFAULT_MAX_IMAGE_BYTES, the min read_image honours), so
-# what this route serves always fits what saveImage will accept.
-VIEW_CHAT_IMAGE_MAX_BYTES = 20 * 1024 * 1024
 
 
 @track_agent_tool("search_my_chats")
@@ -562,7 +561,7 @@ async def tool_view_chat_image(
                                         own_conversation=False)
     if body.index >= len(admitted.images):
         raise HTTPException(status_code=404, detail="image not found")
-    return _view_image_result(admitted.images[body.index], body, admitted)
+    return await _view_image_result(admitted.images[body.index], body, admitted)
 
 
 def _conversation_sessions(ids: set[str]) -> dict[str, dict]:
@@ -641,7 +640,7 @@ async def _admitted_images(db, message_id: str, sessions: dict) -> list[str]:
     return (rows[0].get("images") if rows else None) or []
 
 
-def _view_image_result(
+async def _view_image_result(
     url: str, body: ToolViewChatImage, admitted: AdmittedChatMessage,
 ) -> dict:
     """The served image: a stored data URI as `{image: {media_type, data}}`
@@ -654,7 +653,7 @@ def _view_image_result(
     match = _VIEW_IMAGE_DATA_URI_RE.match(url)
     if not match:
         raise HTTPException(status_code=400, detail="image is not a valid data URI")
-    media_type, data = match.group(1).lower(), match.group(2)
+    data = match.group(2)
     # Decoded size (base64 length overstates it ~4/3x): the cap names what the
     # DRIVER will admit, and that side sees decoded bytes.
     if (len(data) - data.count("=")) * 3 // 4 > VIEW_CHAT_IMAGE_MAX_BYTES:
@@ -663,6 +662,11 @@ def _view_image_result(
             detail=f"image is over the {VIEW_CHAT_IMAGE_MAX_BYTES}-byte "
                    f"({VIEW_CHAT_IMAGE_MAX_BYTES // 1024 // 1024} MiB) view limit",
         )
-    return {"image": {"media_type": media_type, "data": data},
+    try:
+        raw = base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="image is not a valid data URI") from exc
+    envelope = await image_envelope(raw, unsupported_detail="image is not a png/jpeg/gif/webp")
+    return {"image": envelope["image"],
             "chat_id": admitted.hit["chat_id"], "message_id": body.message_id,
             "index": body.index, "chat_title": admitted.chat_title}

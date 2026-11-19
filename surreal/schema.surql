@@ -92,6 +92,24 @@ DEFINE FIELD IF NOT EXISTS model_id ON model_order TYPE string;
 DEFINE FIELD IF NOT EXISTS position ON model_order TYPE int;
 DEFINE INDEX IF NOT EXISTS idx_model_order_model ON model_order FIELDS model_id UNIQUE;
 
+-- model_parked_grants: the group subjects ('mod:' / 'group:') a model carried when it
+-- went Hidden or Tools, kept for the admin to restore on the way back. Never a grant —
+-- nothing outside the admin routes reads it. Deleted once the model leaves Hidden/Tools,
+-- and with its subject (group delete, moderator demotion).
+DEFINE TABLE IF NOT EXISTS model_parked_grants SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS model_id ON model_parked_grants TYPE string;
+DEFINE FIELD IF NOT EXISTS subject  ON model_parked_grants TYPE string;
+DEFINE INDEX IF NOT EXISTS idx_model_parked_unique ON model_parked_grants FIELDS model_id, subject UNIQUE;
+DEFINE INDEX IF NOT EXISTS idx_model_parked_subject ON model_parked_grants FIELDS subject;
+
+-- group_order: the admin-set display order of groups (admin and moderator alike, keyed
+-- by subject) in the admin lists. Purely visual. Full-replaced by
+-- PUT /api/admin/group-order; an unplaced group lists after the placed ones.
+DEFINE TABLE IF NOT EXISTS group_order SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS subject  ON group_order TYPE string;
+DEFINE FIELD IF NOT EXISTS position ON group_order TYPE int;
+DEFINE INDEX IF NOT EXISTS idx_group_order_subject ON group_order FIELDS subject UNIQUE;
+
 -- groups: ADMIN groups only (moderator groups are virtual). Hard-deleted together
 -- with their group_members rows and their 'group:<id>' grants.
 DEFINE TABLE IF NOT EXISTS groups SCHEMAFULL;

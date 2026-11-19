@@ -14,6 +14,7 @@ from models import (
     ToolListDocumentVersions,
     ToolReadDocument,
     ToolSearch,
+    ToolViewReferenceImage,
 )
 from routes.tool_api_telemetry import track_agent_tool
 
@@ -106,6 +107,45 @@ async def tool_read_document(
         scope_root=ctx.get("scope_root"),
     )
     return _raise_soft_error(result)
+
+
+@track_agent_tool("view_reference_image")
+async def tool_view_reference_image(
+    body: ToolViewReferenceImage, ctx: dict = Depends(get_agent_context),
+):
+    """The pixels of an image reference, pressed to the model cap, as an image result.
+
+    Gates: the read_document chain (resolve → RBAC + scope + lock), then the file
+    through resolve_reference_file bound to the key's project — a foreign-project
+    id answers the same 404 as an unknown one (see its INVARIANT(security)).
+    """
+    import asyncio
+    from pathlib import Path
+
+    from agent.history_executors import gated_target
+    from files_service import resolve_reference_file
+
+    from routes.tool_api._image_view import image_envelope
+    target = await gated_target(
+        doc_id=body.document_id, project_id=ctx["project_id"], user=ctx["user"],
+        scope_root=ctx.get("scope_root"),
+    )
+    if isinstance(target, dict):
+        if "not in this project" in target.get("error", ""):
+            # INVARIANT(security): a foreign-project id answers the SAME 404 as an unknown id.
+            # Why: a distinguishable detail is an existence oracle across the project boundary.
+            target = {"error": "Document not found"}
+        _raise_soft_error(target)
+    doc = target.doc
+    if doc.get("media_type") != "image" or not doc.get("file_path"):
+        raise HTTPException(status_code=400,
+                            detail="not an image reference — read it with read_document")
+    abs_path, _mime, _name = await resolve_reference_file(
+        ref_id=target.resolved, project_id=ctx["project_id"],
+    )
+    raw = await asyncio.to_thread(Path(abs_path).read_bytes)
+    envelope = await image_envelope(raw, unsupported_detail="image format is not png/jpeg/gif/webp")
+    return {**envelope, "document_id": target.resolved, "title": doc.get("title") or ""}
 
 
 def _raise_soft_error(result: dict) -> dict:

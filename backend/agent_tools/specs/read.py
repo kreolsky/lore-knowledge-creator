@@ -142,7 +142,9 @@ READ_TOOLS: list[dict] = [
                 "the whole document. A sliced read lists `sections` (every heading "
                 "with its offset) to jump straight to one. Tables sit in `content` as "
                 "![label](table:id) anchors — never edit_document across them, use "
-                "edit_table_cell; `tables` indexes the whole document even when sliced."
+                "edit_table_cell; `tables` indexes the whole document even when sliced. "
+                "An image reference (`media_type: image`, `has_file: true`) can be "
+                "seen with view_reference_image."
             ),
             "parameters": {
                 "type": "object",
@@ -366,6 +368,33 @@ READ_TOOLS: list[dict] = [
     },
 ]
 
+
+# Agent-only and always served: the pixels of an image reference ride the image-result
+# envelope, which only the dsh plugin consumes — not an MCP shape.
+VIEW_REFERENCE_IMAGE_TOOL: dict = {
+    "type": "function",
+    "mutating": False,
+    "function": {
+        "name": "view_reference_image",
+        "description": (
+            "See an image reference's picture itself, not only its derived text. Use it "
+            "whenever the user asks what an image shows, or when the image matters for "
+            "the task. `document_id` comes from read_document's `references[]`, "
+            "search_materials or get_project_structure; an image embedded in a document "
+            "is a reference too — take its id from the `![](…/files/<id>/…)` link."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {
+                    "type": "string",
+                    "description": "Id of an image reference (media_type: image).",
+                },
+            },
+            "required": ["document_id"],
+        },
+    },
+}
 
 # Agent-only, same posture as the other memory tools. A read: the fact bodies are served
 # because the payload index deliberately carries none.

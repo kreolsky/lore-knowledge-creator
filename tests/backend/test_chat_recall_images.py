@@ -23,12 +23,23 @@ from test_chat_recall_list_read import (
 # fixture parameter would hit).
 world = _sibling_world
 
-# A 1x1 raster pair; the route serves bytes without sniffing them (the driver's
-# attachment store does that on its side), so any honestly-typed payload drives
-# the read contract.
+# A 1x1 raster pair; the route sniffs and presses the bytes (the shared image
+# view tail), so both must be decodable images.
 _PNG = ("data:image/png;base64,"
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
-_JPEG = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD//gA7Q1JFQVRPUg=="
+
+
+def _jpeg_data_uri() -> str:
+    import base64
+    import io
+
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (1, 1), (200, 10, 10)).save(buf, "JPEG")
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+_JPEG = _jpeg_data_uri()
 
 # chat title the sibling's _session helper stamps: `title {sid}`
 _TITLE = "title sVis"
@@ -113,7 +124,7 @@ async def test_view_chat_image_serves_the_visible_image(client, test_db, world):
     await _msg(test_db, "vm", "sVis", "look at this", images=[_PNG, _JPEG])
     first = await _view(client, world["ka"], "vm", index=0)
     assert first["image"]["media_type"] == "image/png"
-    assert first["image"]["data"] == _PNG.split(",", 1)[1]
+    assert first["image"]["data"]
     assert (first["chat_id"], first["message_id"], first["index"]) == ("sVis", "vm", 0)
     assert first["chat_title"] == _TITLE
     second = await _view(client, world["ka"], "vm", index=1)

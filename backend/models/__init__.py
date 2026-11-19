@@ -128,6 +128,7 @@ from models.tools import (
     ToolSearchMyChats,
     ToolTableCellEdit,
     ToolViewChatImage,
+    ToolViewReferenceImage,
 )
 
 __all__ = [
@@ -227,6 +228,7 @@ __all__ = [
     "ToolSearchMyChats",
     "ToolTableCellEdit",
     "ToolViewChatImage",
+    "ToolViewReferenceImage",
     "UpdateProfileEmail",
     "UpdateProfileName",
     "UpdateProfilePassword",

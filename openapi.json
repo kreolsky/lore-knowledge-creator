@@ -1203,6 +1203,22 @@
         "title": "GroupName",
         "type": "object"
       },
+      "GroupOrder": {
+        "properties": {
+          "subjects": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Subjects",
+            "type": "array"
+          }
+        },
+        "required": [
+          "subjects"
+        ],
+        "title": "GroupOrder",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -4587,6 +4603,21 @@
         "title": "ToolViewChatImage",
         "type": "object"
       },
+      "ToolViewReferenceImage": {
+        "description": "`view_reference_image` body — an image reference of the key's project.",
+        "properties": {
+          "document_id": {
+            "minLength": 1,
+            "title": "Document Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "document_id"
+        ],
+        "title": "ToolViewReferenceImage",
+        "type": "object"
+      },
       "TransferProjectOwner": {
         "description": "Admin-panel ownership transfer — the target becomes `projects.owner_id`.\n\nDeliberately NOT part of SetProjectMember.access_level: `owner` is not an\naccess level (owner access is implied by owner_id), so widening the literal\nwould leak into project_members rows and every AccessLevel consumer.",
         "properties": {
@@ -5341,9 +5372,67 @@
         ]
       }
     },
+    "/api/admin/group-order": {
+      "put": {
+        "description": "Full replace of the admin group order: position = index in `subjects`.\n\nPurely visual — no access reads it. Not under /groups/… — PATCH/DELETE\n/groups/{group_id} would read \"group-order\" as an id.",
+        "operationId": "put_group_order_api_admin_group_order_put",
+        "parameters": [
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupOrder"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Group Order",
+        "tags": [
+          "admin-model-access"
+        ]
+      }
+    },
     "/api/admin/groups": {
       "get": {
-        "description": "Admin groups, then one read-only entry per live moderator (kind='moderator',\nname = the moderator's name — the client renders the \"Moderator · \" label).",
+        "description": "Admin groups and one read-only entry per live moderator (kind='moderator',\nname = the moderator's name — the client renders the \"Moderator · \" label),\nin the admin group order; unplaced ones after it, admin groups first.",
         "operationId": "list_groups_api_admin_groups_get",
         "parameters": [
           {
@@ -5446,7 +5535,7 @@
     },
     "/api/admin/groups/{group_id}": {
       "delete": {
-        "description": "Hard delete: the group, its membership rows, its `group:<id>` grants and\nits `group:<id>` project-audience rows; every stripped project gets a\nproject-wide access_changed so connected clients recompute at once.",
+        "description": "Hard delete: the group, its membership rows, its `group:<id>` grants (live and parked) and\nits `group:<id>` project-audience rows; every stripped project gets a\nproject-wide access_changed so connected clients recompute at once.",
         "operationId": "delete_group_api_admin_groups__group_id__delete",
         "parameters": [
           {
@@ -6031,7 +6120,7 @@
     },
     "/api/admin/models": {
       "get": {
-        "description": "Gateway roster ∪ granted ids → [{id, in_gateway, is_default, subjects}],\nin the admin order (order_models).\n\n`in_gateway` is None on every row when the gateway cannot be read: the grants\nstay listed and revocable during a gateway outage, and the client names the\noutage instead of marking every model \"not in gateway\".",
+        "description": "Gateway roster ∪ granted ids → [{id, in_gateway, is_default, subjects, parked}],\nin the admin order (order_models). `parked` = the group subjects a Hidden/Tools\nmodel carried before it went there (model_parked_grants), for the client to restore.\n\n`in_gateway` is None on every row when the gateway cannot be read: the grants\nstay listed and revocable during a gateway outage, and the client names the\noutage instead of marking every model \"not in gateway\".",
         "operationId": "list_model_grants_api_admin_models_get",
         "parameters": [
           {
@@ -20868,7 +20957,7 @@
     },
     "/api/tool/sandbox_view_image": {
       "post": {
-        "description": "Serve a png/jpeg/gif/webp from the caller's workspace as an image result.\n\nReturns `{image: {media_type, data}, path}`; anything that is not one of the\nfour raster types is a 415 naming the rasterize route that exists on the box.",
+        "description": "Serve a png/jpeg/gif/webp from the caller's workspace as an image result.\n\nReturns `{image: {media_type, data}, path}`, pressed to the model pixel cap;\nanything that is not one of the\nfour raster types is a 415 naming the rasterize route that exists on the box.",
         "operationId": "tool_sandbox_view_image_api_tool_sandbox_view_image_post",
         "parameters": [
           {
@@ -21776,6 +21865,137 @@
           }
         },
         "summary": "Tool View Chat Image",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
+    "/api/tool/view_reference_image": {
+      "post": {
+        "description": "The pixels of an image reference, pressed to the model cap, as an image result.\n\nGates: the read_document chain (resolve → RBAC + scope + lock), then the file\nthrough resolve_reference_file bound to the key's project — a foreign-project\nid answers the same 404 as an unknown one (see its INVARIANT(security)).",
+        "operationId": "tool_view_reference_image_api_tool_view_reference_image_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolViewReferenceImage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool View Reference Image",
         "tags": [
           "tool-api"
         ]

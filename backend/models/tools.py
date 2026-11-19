@@ -177,6 +177,12 @@ class ToolViewChatImage(BaseModel):
     index: int = Field(ge=0)
 
 
+class ToolViewReferenceImage(BaseModel):
+    """`view_reference_image` body — an image reference of the key's project."""
+
+    document_id: str = Field(min_length=1)
+
+
 class ToolSandboxBash(BaseModel):
     """Args for `sandbox_bash`.
 
