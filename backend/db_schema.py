@@ -108,10 +108,16 @@ _DEFINE_RE = re.compile(
 )
 _KIND_KEY = {"TABLE": "table", "FIELD": "fields", "INDEX": "indexes",
              "EVENT": "events", "ANALYZER": "db.analyzers"}
-# WHY only tables and fields are overwritten: an OVERWRITE INDEX rebuilds the index
-# at boot (FTS/vector indexes over documents/doc_chunks are expensive), so index,
-# event and analyzer drift is reported, never repaired here.
-_CONVERGED_KINDS = ("table", "fields")
+# WHY only fields are overwritten: an OVERWRITE INDEX rebuilds the index at boot
+# (FTS/vector indexes over documents/doc_chunks are expensive), so index, event and
+# analyzer drift is reported, never repaired here.
+# INVARIANT(data-loss): a TABLE definition is never overwritten at boot — table drift
+# is reported only.
+# Why: turning a live SCHEMALESS table SCHEMAFULL is not refused by the server even
+# when its rows carry fields schema.surql does not declare, and every read of such a
+# row then fails ("Found field 'system_prompts_doc_id', but no such field exists for
+# table 'projects'") — v0.36.4 took prod's projects, users and chats down this way.
+_CONVERGED_KINDS = ("fields",)
 # WHY skipped: SurrealDB renders a relation table and its `out` field by the ORDER the
 # definitions were made, not by their final state — a fresh render says
 # `RELATION IN documents` / `out TYPE record`, a converged live one keeps
@@ -184,21 +190,25 @@ def _overwrite_for(key: str, by_key: dict[str, str], ref: str) -> str:
     return re.sub(r"^DEFINE\s+(TABLE|FIELD)\s+", r"DEFINE \1 OVERWRITE ", ref, count=1)
 
 
-async def _converge_one(db: AsyncSurreal, key: str, stmt: str, live: str, ref: str) -> int:
+async def _converge_one(db: AsyncSurreal, key: str, stmt: str, live: str, ref: str) -> None:
+    # WHY a refused overwrite is not a failure: it is drift the database already
+    # carried before converge existed (e.g. a tightening the server refuses on a
+    # table with rows), not something this release failed to apply — counting it
+    # would fail every deploy's schema gate until the drift is migrated by hand.
     try:
         await db.query(stmt)
     except Exception as e:  # noqa: BLE001 — same contract as the apply loop above
-        logger.error("apply_schema: converge failed for %s: %s | %s", key, str(e)[:200], stmt[:120])
-        return 1
+        logger.error("apply_schema: drift not repaired %s (server refused): %s | %s",
+                     key, str(e)[:200], stmt[:120])
+        return
     logger.warning("apply_schema: converged %s | live: %s | schema: %s", key, live[:200], ref[:200])
-    return 0
 
 
 async def converge_schema(db: AsyncSurreal, statements: list[str]) -> int:
-    """Overwrite live tables/fields whose definition differs from schema.surql; returns failures.
+    """Overwrite live fields whose definition differs from schema.surql; returns failures.
 
-    Index/event/analyzer drift and live objects absent from schema.surql are logged,
-    never changed. A failure to build the reference skips converge (logged ERROR, one
+    Table/index/event/analyzer drift, refused overwrites and live objects absent from
+    schema.surql are logged, never counted as failures. A failure to build the reference skips converge (logged ERROR, one
     failure) — boot never aborts here (INVARIANT on apply_schema).
     """
     try:
@@ -208,8 +218,7 @@ async def converge_schema(db: AsyncSurreal, statements: list[str]) -> int:
         return 1
     live = await _dump_schema(db)
     by_key = {k: s for s in statements if (k := _statement_key(s))}
-    failed = 0
-    # WHY tables first: a table's TYPE (RELATION) changes how its fields render.
+    # WHY tables first: table drift heads the report, before the fields it explains.
     drifted = sorted((k for k in ref if k in live and ref[k] != live[k]
                       and k not in _RENDER_ORDER_DEPENDENT),
                      key=lambda k: (not k.startswith("table."), k))
@@ -218,8 +227,7 @@ async def converge_schema(db: AsyncSurreal, statements: list[str]) -> int:
             logger.error("apply_schema: drift not repaired %s | live: %s | schema: %s",
                          key, live[key][:200], ref[key][:200])
             continue
-        stmt = _overwrite_for(key, by_key, ref[key])
-        failed += await _converge_one(db, key, stmt, live[key], ref[key])
+        await _converge_one(db, key, _overwrite_for(key, by_key, ref[key]), live[key], ref[key])
     for key in sorted(set(live) - set(ref)):
         logger.warning("apply_schema: live definition absent from schema.surql: %s", key)
-    return failed
+    return 0
