@@ -52,6 +52,7 @@ from migrations.migrate_origin_persona_follow_persona import (
 from migrations.migrate_origin_persona_forget_to_default import (
     _migrate_origin_persona_forget_to_default,
 )
+from migrations.migrate_strict_tables import _migrate_strict_tables
 
 # Module-level on purpose: schema_fingerprint is dependency-light (re/typing only,
 # no cycle), unlike config below whose SCHEMA_FINGERPRINT_FATAL must be read at
@@ -106,6 +107,12 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     # declared them before the widening. Needs the fields to exist or be absent
     # (apply_schema runs first); no other dependency.
     ("chat_memory_fields_optional", _migrate_chat_memory_fields_optional),
+    # Nine tables still `TYPE ANY SCHEMALESS|SCHEMAFULL` on older installations:
+    # dead row fields UNSET, every SCHEMALESS table scanned for undeclared keys
+    # (defers without flipping if any remain), then all nine defined SCHEMAFULL as
+    # schema.surql says. Runs after chat_has_region_drop / chat_context_drop (their
+    # REMOVE FIELD leaves the row data this one UNSETs); no other dependency.
+    ("strict_tables", _migrate_strict_tables),
 ]
 
 
