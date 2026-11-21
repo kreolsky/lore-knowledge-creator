@@ -57,10 +57,8 @@ export function ChatHeader() {
     // model + system_prompt_id ONLY; agent_auto + model are re-inherited
     // client-side by initGhostFromScope (startGhostChat) so the ghost visibly
     // carries the last active chat's values.
-    // A no-op when already on a ghost (already blank).
-    if (!activeSessionId) return;
     startGhostChat();
-  }, [activeSessionId, startGhostChat]);
+  }, [startGhostChat]);
 
   const handleExportJson = useCallback(() => {
     const messages = selectBranchPath(useChatStore.getState());
@@ -222,7 +220,7 @@ export function ChatHeader() {
         {t('chatNew')}
       </Button>
 
-      {activeSessionId && (
+      {
         // WHY this 30×30 slot (IconButton footprint) is ALWAYS rendered
         // between the "← New chat" button and the title with AT MOST one icon —
         // goto-parent / change-parent / empty: the title's left edge must not
@@ -261,7 +259,7 @@ export function ChatHeader() {
             </IconButton>
           )}
         </div>
-      )}
+      }
 
       <div className="flex-1 min-w-0">
         {renaming ? (

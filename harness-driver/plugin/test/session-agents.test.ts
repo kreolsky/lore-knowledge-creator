@@ -19,7 +19,7 @@ import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 
 import { createSessionEventTap } from '../src/ws-events.ts'
@@ -485,7 +485,7 @@ function childHarness() {
   const create = (id: string, parent: string | undefined) => {
     const restricted: string[][] = []
     const agent = {
-      session: { id, header: parent ? { parentSession: parent } : {} },
+      session: { id, header: parent ? { parentSession: parent, origin: 'subagent' } : {} },
       ctx: { tools: { restrict: ({ deny }: { deny: string[] }) => { restricted.push(deny); return () => {} } } },
     }
     handlers.get('agent/created')!({ agent, source: 'create' })
@@ -504,6 +504,22 @@ test.afterEach(() => {
   childSessions.clear()
   sessionAgents.clear()
   disposeLoreTools()
+})
+
+// TEST-WHY: cross-process-contract — dsh marks a subagent child by `origin: 'subagent'`; a fork also carries `parentSession` and must stay unclipped.
+test('a fork (parentSession without origin) is not clipped as a child', () => {
+  registerProxies()
+  liveParent('p-f', ['read_document', 'edit_document'])
+  const handlers = new Map<string, (p: any) => unknown>()
+  installChildRestriction({ on: (name: string, cb: any) => { handlers.set(name, cb); return () => {} } } as any)
+  const restricted: string[][] = []
+  const agent = {
+    session: { id: 'fork-1', header: { parentSession: 'p-f', isSeeded: true } },
+    ctx: { tools: { restrict: ({ deny }: { deny: string[] }) => { restricted.push(deny); return () => {} } } },
+  }
+  handlers.get('agent/created')!({ agent, source: 'create' })
+  assert.deepEqual(restricted, [])
+  assert.equal(childSessions.has('fork-1'), false)
 })
 
 // TEST-WHY: refused-principal — a delegated child must be denied every tool its parent is denied, every writer except the sandbox trio, and the user's secrets.

@@ -80,6 +80,9 @@ export interface ProcessGroupInfo {
 export interface ProcessGroups {
   readonly byNode: ReadonlyMap<string, ProcessGroupMembership>
   readonly data: ReadonlyMap<string, ProcessGroupInfo>
+  /** Nodes whose reply dsh draws as its own root row (`groupPart: 'response'`)
+   * — dsh's reply test, not a text-only one. */
+  readonly responses: ReadonlySet<string>
 }
 
 export interface LoreConversation {

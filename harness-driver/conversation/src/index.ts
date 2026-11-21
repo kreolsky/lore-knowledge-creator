@@ -93,6 +93,9 @@ export interface ProcessGroupInfo {
 export interface ProcessGroups {
   readonly byNode: ReadonlyMap<string, ProcessGroupMembership>
   readonly data: ReadonlyMap<string, ProcessGroupInfo>
+  /** Nodes whose reply dsh draws as its own root row (`groupPart: 'response'`)
+   * — dsh's reply test, not a text-only one. */
+  readonly responses: ReadonlySet<string>
 }
 
 export { expandAssistantStream }
@@ -192,8 +195,13 @@ export function createLoreConversation(): LoreConversation {
       if (grouped === undefined) throw new Error('dsh chat process grouping is not registered')
       const byNode = new Map<string, ProcessGroupMembership>()
       const data = new Map<string, ProcessGroupInfo>()
+      const responses = new Set<string>()
       for (const entry of grouped.entries) {
-        if (entry.kind !== 'group') continue
+        // A step's reply is a ROOT node entry standing outside its group.
+        if (entry.kind === 'node') {
+          if (entry.groupPart === 'response') responses.add(entry.key)
+          continue
+        }
         const group = grouped.groupSource(entry.key).getSnapshot()
         if (group === undefined) continue
         let info = groupInfo.get(group)
@@ -208,7 +216,7 @@ export function createLoreConversation(): LoreConversation {
             : { groupKey: entry.key, part: member.groupPart })
         }
       }
-      return { byNode, data }
+      return { byNode, data, responses }
     },
   }
 }

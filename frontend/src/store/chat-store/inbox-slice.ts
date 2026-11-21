@@ -27,6 +27,7 @@ import {
 import { registerChatResetHandler } from './reset-registry';
 import { appendDraft } from './misc-slice';
 import type { ChatState, Get, Set } from './types';
+import type { ChatSession } from '../../types';
 
 let fold: InboxFold = EMPTY_FOLD;
 registerChatResetHandler(() => { fold = EMPTY_FOLD; });
@@ -64,6 +65,21 @@ export function applyRunningStatus(get: Get, set: Set, sessionId: string, frame:
   const next = new Set(cur);
   if (running) next.add(sessionId);
   else next.delete(sessionId);
+  set({ runningSessions: next });
+}
+
+/** Seed the running set from a fresh sessions list (each AI row's `running`):
+ * a reload or a second tab starts with no frames, so without it a working chat
+ * shows no mark until its next status change. Listed chats take the server's
+ * answer; unlisted ones keep their frame-fed membership. */
+export function seedRunningSessions(get: Get, set: Set, sessions: readonly ChatSession[]): void {
+  const cur = get().runningSessions;
+  const next = new Set(cur);
+  for (const s of sessions) {
+    if (s.running === true) next.add(s.session_id);
+    else next.delete(s.session_id);
+  }
+  if (next.size === cur.size && [...next].every(id => cur.has(id))) return;
   set({ runningSessions: next });
 }
 

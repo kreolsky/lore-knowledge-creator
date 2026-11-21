@@ -126,6 +126,7 @@ export function createMiscSlice(set: Set, get: Get): MiscSlice {
         conversation: [],
         turnRanges: {},
         turnStartSeq: null,
+        todos: null,
         pendingImages: [],
         pendingImageMeta: {},
         pendingFiles: [],

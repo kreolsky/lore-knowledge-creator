@@ -19,13 +19,15 @@ from driver.client import (
 
 logger = logging.getLogger(__name__)
 
-# The three driver-RPC budgets. Every driver site shares ONE pool client
+# The driver-RPC budgets. Every driver site shares ONE pool client
 # ("driver", SYSTEM: http-clients), so every request passes its own timeout=
 # PER CALL — the pool's build-time default is whichever site warmed it first
 # and must never become another site's budget.
 _SESSION_ENTRIES_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 _STOP_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 _FOLLOWUP_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
+# WHY short: the chat list waits on it, and its failure only drops a mark.
+_RUNNING_TIMEOUT = httpx.Timeout(3.0, connect=2.0)
 
 
 class DriverTimelineUnavailable(RuntimeError):
@@ -309,3 +311,27 @@ async def fetch_session_status(
         }
     except Exception as exc:
         raise DriverTimelineUnavailable(str(exc)) from exc
+
+
+async def fetch_running_sessions(driver_session_ids: list[str]) -> set[str]:
+    """POST /running-sessions — the subset of these driver session ids whose
+    dsh agent runs a turn (the chat list's 'working' mark). Any failure raises
+    DriverTimelineUnavailable; the caller decides what a missing mark costs."""
+    if not driver_session_ids:
+        return set()
+    ln = await resolve_driver_line()
+    if ln is None or not ln.secret:
+        raise DriverTimelineUnavailable("agent driver line not configured")
+    try:
+        client = http_clients.get_http_client("driver", timeout=_RUNNING_TIMEOUT)
+        resp = await client.post(
+            f"{ln.url}/running-sessions", json={"session_ids": driver_session_ids},
+            headers={"X-Driver-Secret": ln.secret}, timeout=_RUNNING_TIMEOUT)
+        resp.raise_for_status()
+        running = resp.json().get("running")
+        if not isinstance(running, list):
+            raise ValueError(f"malformed running-sessions reply: {running!r}")
+        return {str(i) for i in running}
+    except Exception as exc:
+        # WHY the type: a refused connect stringifies to "" — the log needs a reason.
+        raise DriverTimelineUnavailable(f"{type(exc).__name__}: {exc}") from exc

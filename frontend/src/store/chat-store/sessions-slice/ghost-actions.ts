@@ -11,7 +11,6 @@ type GhostActions = Pick<
   ChatState,
   | 'startGhostChat'
   | 'setGhostSystemPrompt'
-  | 'resetGhostOverrides'
   | 'initGhostFromScope'
 >;
 
@@ -50,10 +49,6 @@ export function createGhostActions(set: Set, get: Get): GhostActions {
 
     setGhostSystemPrompt(id: string | null) {
       set({ ghostSystemPromptId: id });
-    },
-
-    resetGhostOverrides() {
-      set({ ghostAgentAuto: false, ghostUnindexed: false, ghostSystemPromptId: null, ghostModel: '', ghostReasoningEffort: null });
     },
 
     // ARCH: single inheritance resolver.

@@ -31,7 +31,7 @@ function drain(): FeedPublication[] {
 // A publication patch carries each field independently; the tests read through
 // the defaults so `pub.conversation` is always an array.
 const last = (pubs: FeedPublication[]): Required<FeedPublication> => ({
-  conversation: [], turnRanges: {}, turnStartSeq: null, ...pubs[pubs.length - 1],
+  conversation: [], turnRanges: {}, turnStartSeq: null, todos: null, ...pubs[pubs.length - 1],
 });
 
 beforeEach(() => {
@@ -129,6 +129,7 @@ describe('dsh process groups on the published nodes', () => {
     expect(tools[0]).not.toBe(open[0]);
     const reply = conv.find(n => n.kind === 'assistant-step');
     expect(reply?.groupKey).toBeUndefined();
+    expect(reply?.response).toBe(true);
   });
 });
 

@@ -42,7 +42,6 @@ type SessionsSlice = Pick<
   | 'deleteSession'
   | 'startGhostChat'
   | 'setGhostSystemPrompt'
-  | 'resetGhostOverrides'
   | 'initGhostFromScope'
   | 'setChatUnindexed'
 >;

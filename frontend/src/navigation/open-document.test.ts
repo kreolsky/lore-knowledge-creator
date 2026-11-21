@@ -16,6 +16,7 @@ const { getStateMock } = vi.hoisted(() => ({ getStateMock: vi.fn() }));
 vi.mock('../store/app-store', () => ({
   useAppStore: { getState: getStateMock },
 }));
+vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
 
 import { openDocument } from './open-document';
 

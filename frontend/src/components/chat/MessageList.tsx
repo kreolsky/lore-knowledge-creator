@@ -484,6 +484,24 @@ export function MessageList() {
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   }, [activePath.length]);
 
+  // WHY: a viewport resize (the todo dock expanding, the composer growing)
+  // shrinks the container without a publication or a scroll event, so the
+  // layout effect never runs and a stuck view leaves its last line clipped.
+  // A callback ref, not an effect: the container mounts after an empty or
+  // loading state on a render where no effect dependency changes.
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
+  const attachContainer = useCallback((el: HTMLDivElement | null) => {
+    containerRef.current = el;
+    resizeObserverRef.current?.disconnect();
+    resizeObserverRef.current = null;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      if (stickToBottomRef.current) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(el);
+    resizeObserverRef.current = ro;
+  }, []);
+
   // INVARIANT: one continuous spinner across scope-change → messages-loaded. Gate
   // the empty ("start conversation") state behind BOTH flags so the "no chats"
   // empty state never flashes during loadSessions → resolve → loadMessages. Why:
@@ -522,7 +540,7 @@ export function MessageList() {
   // WHY the rail is a sibling of the scroll container: it must not scroll with content.
   return (
     <div className="relative flex-1 flex min-h-0">
-      <div ref={containerRef} onScroll={handleScroll} className="chat-selection chat-scroll [overflow-anchor:none] flex-1 min-w-0 overflow-y-auto px-3 py-3">
+      <div ref={attachContainer} onScroll={handleScroll} className="chat-selection chat-scroll [overflow-anchor:none] flex-1 min-w-0 overflow-y-auto px-3 py-3">
         {activePath.map((msg, idx) => (
           <Fragment key={msg.message_id}>
           {memory && activeSessionId && msg.message_id === memory.message_id && (

@@ -5,9 +5,10 @@
  * web-search-deepseek row in the composition.
  *
  * WHY not the provider env names (DEEPSEEK_API_KEY, BRAVE_API_KEY, …):
- * credentials-local lets the inherited env win and refuses to write a ref it
- * holds, and prod's `.env` sets DEEPSEEK_API_KEY — the same reason
- * AGENT_KEY_REF exists in the driver plugin.
+ * a stored credential outranks the launch env and an unset falls back to it,
+ * and prod's `.env` sets DEEPSEEK_API_KEY — the admin key would re-key every
+ * other reader of that name, and a cleared one would resume the .env key. The
+ * same reason AGENT_KEY_REF exists in the driver plugin.
  */
 export const WEB_SEARCH_KEY_REF = 'LORE_WEB_SEARCH_KEY'
 

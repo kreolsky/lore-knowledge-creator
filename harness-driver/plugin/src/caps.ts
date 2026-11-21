@@ -16,7 +16,7 @@
  * (vision false, no numbers, no levels) with a loud log — strip + warn,
  * never a raised exception — and the turn then runs on the composition's
  * NAMED defaults
- * (defaultContextWindow in cordis.patch.yml, dsh's own default maxTokens)
+ * (the route scaffolds' defaultContextWindow and defaultMaxTokens)
  * rather than a second guess in code. An id the gateway does not serve is the
  * same UNKNOWN, logged. A /capabilities failure alone keeps the /v1/models
  * numbers and nulls only the levels (feature absence, mirroring the backend
@@ -226,7 +226,7 @@ export async function resolveModelCaps(
   ) as Record<string, unknown> | undefined
   if (!entry) {
     console.error(
-      `[lore-caps] model "${model}" not served by the gateway — running on the composition defaults (defaultContextWindow, dsh maxTokens)`)
+      `[lore-caps] model "${model}" not served by the gateway — running on the route defaults (defaultContextWindow, defaultMaxTokens)`)
     return { ...UNKNOWN }
   }
   // The levels ride the same resolution but never fail it: a /capabilities

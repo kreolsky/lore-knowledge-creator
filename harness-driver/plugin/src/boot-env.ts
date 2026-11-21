@@ -1,5 +1,5 @@
 /**
- * Harness entry: fold the driver secret, retire legacy state, then run the
+ * Harness entry: fold the driver secret, then run the
  * dsh CLI in the same process.
  *
  * # ARCH: the harness boots STANDALONE — every admin-owned value (the AI
@@ -10,8 +10,7 @@
  *   more.
  */
 
-import { existsSync, readFileSync, renameSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
 
 /**
  * The generated driver secret secrets-init writes into the `secrets` volume
@@ -45,32 +44,8 @@ export function toolApiUrl(env: NodeJS.ProcessEnv = process.env): string {
   return env.LORE_TOOL_API_URL || 'http://backend:8001'
 }
 
-/** The 0.1.5 settings.yaml is DERIVED state (its own header: "nothing is
- * hand-maintained here"), but its llm-pi-ai.providers.lore carries model
- * entries WITHOUT the api/baseURL the 0.2.0 catalog validation requires —
- * the on-boot legacy import composes them into the active profile patch and
- * llm-pi-ai refuses the WHOLE boot ("provider lore model … needs an api",
- * INVALID_CONFIG) before any plugin write can heal it. Retire the file
- * BEFORE runCli: the turns re-land every used model with the route scaffold
- * (ensureModelEntry / ensureTitleEntry), so only unused ids stay unlanded.
- * Bytes kept for forensics; idempotent — dsh's own import renames the
- * file after the first successful boot, so this fires at most once per home. */
-export function retireLegacySettings(
-  dshHome: string, log: (line: string) => void = () => {},
-): boolean {
-  const legacy = join(dshHome, 'settings.yaml')
-  if (!existsSync(legacy)) return false
-  renameSync(legacy, `${legacy}.retired-0.1.5`)
-  log('[boot-env] retired the 0.1.5 settings.yaml (derived models, re-landed per turn) '
-    + '— its providers.lore would import without api/baseURL and fail 0.2.0 validation')
-  return true
-}
-
 if (import.meta.main) {
   foldDriverSecret()
-  if (process.env.DSH_HOME) {
-    retireLegacySettings(process.env.DSH_HOME, line => console.error(line))
-  }
   // WHY runCli() and not a bare import: bin.ts only self-runs as the entry
   // module (`import.meta.main`); imported, it just exports runCli.
   const { runCli } = await import('../../apps/cli/src/bin.ts')

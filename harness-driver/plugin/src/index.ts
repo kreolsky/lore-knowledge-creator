@@ -4,7 +4,8 @@
  * # SYSTEM: harness-driver — the rented brain's driver: serves the HTTP
  *   endpoints the Lore backend speaks (`POST /followup`, `POST /stop`, `POST
  *   /inbox/discard`, `GET /session-status` — the session's dsh inbox and its
- *   turns, `POST /session-fork`, `POST /session-entries`,
+ *   turns, `POST /running-sessions` — which chats have a turn running,
+ *   `POST /session-fork`, `POST /session-entries`,
  *   `GET/POST /approvals`, `POST /approvals/resolve`, `GET /capability`, `GET
  *   /health`) plus the standing event channel `/ws/events`
  *   (subscribe/unsubscribe by session id — ws-events.ts).

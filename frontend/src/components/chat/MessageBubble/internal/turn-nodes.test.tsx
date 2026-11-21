@@ -117,10 +117,9 @@ describe('TurnNodes', () => {
     expect(html.textContent).toContain('agentStepNoop');
   });
 
-  it('a pending verdict ask shows the held call\'s args read off its tool-call node', () => {
-    // dsh appends the tool/call node BEFORE asking (the isDecidedVerdict
-    // INVARIANT); the ask frame itself carries only {turn, callId, toolName},
-    // so the args come from that node.
+  it('a pending verdict ask shows the held call\'s args the ask node carries', () => {
+    // The bundle folds the call's own tool/call into the ask node (argsRaw)
+    // and marks it decided only at its tool/result.
     const html = render(createElement(TurnNodes, {
       nodes: [
         node('tool-call', {
@@ -129,7 +128,10 @@ describe('TurnNodes', () => {
             argsRaw: '{"document_id":"d1","edits":[{"old_string":"old line","new_string":"new line"}]}',
           },
         }, 1),
-        node('verdict-ask', { callId: 'c9', toolName: 'edit_document' }, 2),
+        node('verdict-ask', {
+          callId: 'c9', toolName: 'edit_document', decided: false,
+          argsRaw: '{"document_id":"d1","edits":[{"old_string":"old line","new_string":"new line"}]}',
+        }, 2),
       ],
       isStreaming: true,
     }));

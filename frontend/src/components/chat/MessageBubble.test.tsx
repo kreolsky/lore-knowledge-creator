@@ -172,13 +172,15 @@ describe('unified MessageBubble — the verdict-ask node while the call is still
   // dsh appends `tool/call` BEFORE it asks for approval, so by the time the
   // lore/verdict-ask node arrives the call's own tool-call node already exists
   // in the timeline — still RUNNING (root has no `kind`). The decision card
-  // must stay, buttons included, until that node carries a tool-result.
+  // must stay, buttons included, until the ask node is `decided` (the bundle
+  // sets it at the call's tool-result).
   const RUNNING_CALL = { key: 'tc1', kind: 'tool-call', anchorSeq: 10,
     data: { root: { callId: 'c1', name: 'edit_document', argsRaw: '{}' } } };
   const SETTLED_CALL = { key: 'tc1', kind: 'tool-call', anchorSeq: 10,
     data: { root: { kind: 'tool-result', callId: 'c1', call: { name: 'edit_document', argsRaw: '{}' }, content: [] } } };
   const ASK = { key: 'va1', kind: 'verdict-ask', anchorSeq: 11.5,
-    data: { turn: 1, callId: 'c1', toolName: 'edit_document' } };
+    data: { callId: 'c1', toolName: 'edit_document', decided: false } };
+  const DECIDED_ASK = { ...ASK, data: { ...ASK.data, decided: true } };
 
   function renderNodes(nodes: unknown[]) {
     act(() => {
@@ -199,7 +201,7 @@ describe('unified MessageBubble — the verdict-ask node while the call is still
   });
 
   it('drops the buttons once the call settled (verdict published, call ran)', () => {
-    const text = renderNodes([SETTLED_CALL, ASK]);
+    const text = renderNodes([SETTLED_CALL, DECIDED_ASK]);
     expect(text).toContain('edit_document');
     expect(text).not.toContain('verdictAllowOnce');
     expect(text).not.toContain('verdictReject');

@@ -58,6 +58,9 @@ def _turn_end(seq, kind="completed", turn=1):
     return _dsh(seq, "turn/end", {"turn": turn, "reason": {"kind": kind}})
 
 
+_CLOSED = {"type": "turn_closed"}  # the plugin's LIVE terminal (unsequenced)
+
+
 def _verdict_ask(seq, call_id="c1", turn=1):
     return {"type": "lore/verdict-ask", "seq": seq, "data": {
         "turn": turn, "callId": call_id, "toolName": "edit_document"}, "ignorable": True}
@@ -367,17 +370,17 @@ async def test_turn_flows_through_relay_arms_and_finalizes(channel):
         {"type": "model_update", "model": "local/test"},
         _chunk(8, "Hello "), _chunk(9, "world"),
         {"type": "context_usage", "used": 5, "cap": 10},
-        _turn_end(10, "completed"),
+        _turn_end(10, "completed"), _CLOSED,
     ):
         sock.push(_env("dsh-9", frame))
 
-    frames = [await _recv(queue) for _ in range(6)]
+    frames = [await _recv(queue) for _ in range(7)]
     assert [f.get("type") for f in frames] == [
         "model_update", "dsh_event", "dsh_event",
-        "context_usage", "dsh_event", "done",
+        "context_usage", "dsh_event", "done", "turn_closed",
     ]
     # The done frame carries the SAME join finalize persists (pump parity).
-    assert frames[-1]["content"] == "Hello\n\nworld"
+    assert frames[-2]["content"] == "Hello\n\nworld"
 
     await _until(lambda: persists.turn_seq == [("m1", 10)])
     assert persists.content == [("m1", "Hello\n\nworld")]
@@ -401,9 +404,9 @@ async def test_a_title_arriving_after_the_turn_closed_still_names_the_chat(chann
     queue, _ = ch.add_listener("lore-1")
     sock = connector.sockets[0]
     for frame in ({"type": "model_update", "model": "x"}, _chunk(8, "Pong"),
-                  _turn_end(9, "completed")):
+                  _turn_end(9, "completed"), _CLOSED):
         sock.push(_env("dsh-9", frame))
-    for _ in range(4):
+    for _ in range(5):
         await _recv(queue)
     await _until(lambda: ch._subs["lore-1"].turn is None)
 
@@ -432,9 +435,9 @@ async def test_unclaimed_turn_frames_relay_without_persistence(channel):
     # The channel survives the unclaimed burst: the NEXT claimed turn persists.
     await _claim_turn(ch, connector, "m2")
     for frame in ({"type": "model_update", "model": "x"}, _chunk(11, "bound"),
-                  _turn_end(12, "completed")):
+                  _turn_end(12, "completed"), _CLOSED):
         sock.push(_env("dsh-9", frame))
-    for _ in range(3):
+    for _ in range(4):
         await _recv(queue)
     await _until(lambda: persists.content == [("m2", "bound")])
 
@@ -457,6 +460,7 @@ async def test_claim_mints_the_pair_emits_the_preamble_then_the_held_start(chann
     sock.push(_env("dsh-9", claim))
     sock.push(_env("dsh-9", _chunk(10, "answer", turn=3)))
     sock.push(_env("dsh-9", _turn_end(11, "completed", turn=3)))
+    sock.push(_env("dsh-9", _CLOSED))
 
     frames = [await _recv(queue) for _ in range(7)]
     assert [(f["type"], f.get("kind")) for f in frames] == [
@@ -614,9 +618,11 @@ async def test_resync_replays_from_last_seq_and_continues_the_open_turn(channel)
     # persists the WHOLE turn's content — across the gap, joined.
     sock2.push(_env("dsh-9", _chunk(11, "D")))
     sock2.push(_env("dsh-9", _turn_end(12, "completed")))
-    tail = [await _recv(queue) for _ in range(3)]
-    assert [f.get("type") for f in tail] == ["dsh_event", "dsh_event", "done"]
-    assert tail[-1]["content"] == "A\n\nB\n\nC\n\nD"
+    sock2.push(_env("dsh-9", _CLOSED))
+    tail = [await _recv(queue) for _ in range(4)]
+    assert [f.get("type") for f in tail] == [
+        "dsh_event", "dsh_event", "done", "turn_closed"]
+    assert tail[-2]["content"] == "A\n\nB\n\nC\n\nD"
     await _until(lambda: persists.turn_seq == [("m1", 12)])
     assert persists.content == [("m1", "A\n\nB\n\nC\n\nD")]
 
@@ -637,11 +643,36 @@ async def test_turn_stamps_the_dsh_session_it_ran_in(channel):
 
     await _claim_turn(ch, connector, "m1")
     for frame in ({"type": "model_update", "model": "x"}, _chunk(8, "a"),
-                  _turn_end(9, "completed")):
+                  _turn_end(9, "completed"), _CLOSED):
         sock.push(_env("dsh-9", frame))
     await _until(lambda: persists.turn_session == [("m1", "dsh-9")])
     await _until(lambda: ch._subs["lore-1"].turn is None)
     assert persists.turn_seq == [("m1", 9)]
+
+
+# TEST-WHY: cross-process-contract — a subagent notice's dsh turn after a graceful turn/end must join the same assistant row, not be dropped as unclaimed.
+@pytest.mark.asyncio
+async def test_a_notice_turn_after_a_graceful_end_joins_the_same_row(channel):
+    ch, connector, replay, persists = channel
+    await ch.subscribe("lore-1")
+    await _claim_turn(ch, connector, "m1")
+    queue, _ = ch.add_listener("lore-1")
+    sock = connector.sockets[0]
+
+    for frame in ({"type": "model_update", "model": "x"}, _chunk(8, "DISPATCHED"),
+                  _turn_end(9, "completed")):
+        sock.push(_env("dsh-9", frame))
+    for _ in range(4):
+        await _recv(queue)
+    assert ch._subs["lore-1"].turn is not None  # graceful end: still open
+    assert persists.content == []
+
+    for frame in (_dsh(10, "turn/start", {"turn": 2}), _chunk(11, "RESULT", turn=2),
+                  _turn_end(12, "completed", turn=2), _CLOSED):
+        sock.push(_env("dsh-9", frame))
+    await _until(lambda: persists.turn_seq == [("m1", 12)])
+    assert persists.content == [("m1", "DISPATCHED\n\nRESULT")]
+    assert ch._subs["lore-1"].turn is None
 
 
 @pytest.mark.asyncio
@@ -977,12 +1008,13 @@ async def test_resync_close_of_replayed_turn_emits_turn_closed_after_the_mint(
 async def test_resync_delivers_the_replayed_terminal_for_a_turn_that_ended_live_before_the_gap(
         channel):
     # The lost-push window the live relay CANNOT cover: the socket dies AFTER
-    # the live turn/end (the listener already saw `done`; _close_turn ran) and
-    # BEFORE the plugin's turn_closed push. The push is best-effort and NOT a
+    # the live turn/end (the listener already saw `done`; the turn stays open,
+    # finished, waiting for its terminal) and BEFORE the plugin's turn_closed
+    # push. The push is best-effort and NOT a
     # log entry — but the REPLAY carries the terminal (seq-anchored above the
     # last delivered frame), so the resync delivers it: the browser's turn
     # ends instead of hanging on an open registration.
-    ch, connector, replay, _persists = channel
+    ch, connector, replay, persists = channel
     await ch.subscribe("lore-1")
     await _claim_turn(ch, connector, "m1")
     queue, _ = ch.add_listener("lore-1")
@@ -991,11 +1023,12 @@ async def test_resync_delivers_the_replayed_terminal_for_a_turn_that_ended_live_
     for frame in ({"type": "model_update", "model": "x"}, _chunk(8, "A"),
                   _turn_end(10, "completed")):
         sock1.push(_env("dsh-9", frame))
-    # The graceful tail reached the listener (done included) and the turn
-    # closed live — the plugin's turn_closed push never arrives.
+    # The graceful tail reached the listener (done included); the turn is
+    # finished but open — the plugin's turn_closed push never arrives.
     frames = [await _recv(queue) for _ in range(4)]
     assert frames[-1]["type"] == "done"
-    await _until(lambda: ch._subs["lore-1"].turn is None)
+    assert ch._subs["lore-1"].turn.projection.finished
+    assert persists.content == []
 
     # The log holds nothing past the delivered tail but the replayed terminal.
     replay.reply("lore-1", {"turns": [{"frames": [
@@ -1003,7 +1036,10 @@ async def test_resync_delivers_the_replayed_terminal_for_a_turn_that_ended_live_
     sock1.drop()
     await _wait_for_socket(connector, 1)
 
+    # The replayed terminal closes the finished turn, then reaches the browser.
     assert (await _recv(queue)) == {"type": "turn_closed"}
+    assert ch._subs["lore-1"].turn is None
+    assert persists.content == [("m1", "A")]
 
 
 @pytest.mark.asyncio
@@ -1025,10 +1061,10 @@ async def test_a_delivered_live_push_does_not_dedup_the_replayed_terminal(channe
         sock1.push(_env("dsh-9", frame))
     for _ in range(4):
         await _recv(queue)
-    await _until(lambda: ch._subs["lore-1"].turn is None)
-    # The plugin's terminal push IS delivered (unsequenced, relays raw).
-    sock1.push(_env("dsh-9", {"type": "turn_closed"}))
+    # The plugin's terminal push IS delivered (unsequenced) and closes the turn.
+    sock1.push(_env("dsh-9", _CLOSED))
     assert (await _recv(queue)) == {"type": "turn_closed"}
+    await _until(lambda: ch._subs["lore-1"].turn is None)
 
     replay.reply("lore-1", {"turns": [{"frames": [
         {"type": "turn_closed", "seq": 10.9}], "end_seq": 10}], "tail_seq": 10})
@@ -1042,8 +1078,8 @@ async def test_a_delivered_live_push_does_not_dedup_the_replayed_terminal(channe
 
 @pytest.mark.asyncio
 async def test_a_replayed_terminal_while_a_newer_turn_runs_is_a_no_op(channel):
-    # Turn 1 ended live with its push lost; turn 2 OPENED (its claim) before
-    # the resync runs: turn 1's replayed terminal is
+    # Turn 1 closed live on its terminal push; turn 2 OPENED (its claim)
+    # before the resync runs: turn 1's replayed terminal is
     # STALE — emitting it would close turn 2's browser registration
     # mid-stream. The dispatch arm drops it: an open turn owns the session.
     ch, connector, replay, _persists = channel
@@ -1055,12 +1091,13 @@ async def test_a_replayed_terminal_while_a_newer_turn_runs_is_a_no_op(channel):
     for frame in ({"type": "model_update", "model": "x"}, _chunk(8, "A"),
                   _turn_end(10, "completed")):
         sock1.push(_env("dsh-9", frame))
-    for _ in range(4):
+    sock1.push(_env("dsh-9", _CLOSED))
+    for _ in range(5):
         await _recv(queue)
     await _until(lambda: ch._subs["lore-1"].turn is None)
 
-    # The next turn opens (its claim) before the socket drops; the plugin's
-    # terminal push for turn 1 died with it.
+    # The next turn opens (its claim) before the socket drops; the replay
+    # still carries turn 1's sequenced terminal (the live push is unsequenced).
     await _claim_turn(ch, connector, "m2")
     assert (await _recv(queue))["type"] == "ids"  # turn 2's preamble, live
 

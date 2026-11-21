@@ -61,6 +61,8 @@ interface Props {
   // Set only while the host's message list is scrolled up past its stick threshold;
   // undefined hides the scroll-to-bottom button.
   onScrollToBottom?: () => void;
+  // AI-only: the agent's task list, in flow between the message stream and the form.
+  dock?: ReactNode;
   // AI-only slots (omitted by notes)
   topControls?: ReactNode;
   leftControls?: ReactNode;
@@ -94,6 +96,7 @@ export function ChatComposer({
   files,
   onRemoveFile,
   queued,
+  dock,
   onRemoveQueued,
   onScrollToBottom,
   topControls,
@@ -163,6 +166,9 @@ export function ChatComposer({
       )}
       {/* WHY: on a compact (phone) layout the form is not drag-resized — its height
           follows a two-line textarea so it does not eat half the screen. */}
+      {/* WHY in flow, not in the overlay strip above: the task list stays after the
+          turn, so an overlay would sit on the answer's last lines; it lifts the stream. */}
+      {dock && <div className="flex-shrink-0 px-3 pb-2">{dock}</div>}
       {!compactLayout && <div ref={dragHandleRef} className="resizer-v" />}
       <div
         className={`chat-selection flex-shrink-0 border-t pb-safe ${panelBg} ${panelBorderClass}`}

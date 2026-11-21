@@ -244,6 +244,24 @@ async def _piggyback_messages(db, target_row: dict) -> dict | None:
     return {"session_id": tid, "messages": msgs, **queue}
 
 
+async def _mark_running(rows: list[dict], serialized: list[dict]) -> None:
+    """Set each AI row's `running` — its dsh agent runs a turn (the list's
+    'working' mark after a reload). Asked under the DRIVER session id
+    (compacted_from or the chat id), answered on the display row's id — the
+    one `dsh_status` frames fan out under. A driver that cannot answer leaves
+    every mark off and logs why: the mark is a hint, the list must still load."""
+    from driver.timeline import DriverTimelineUnavailable, fetch_running_sessions
+    ai = [(row, out) for row, out in zip(rows, serialized) if row.get("is_note") is not True]
+    driver_ids = {extract_id(row.get("compacted_from") or row.get("id")) for row, _ in ai}
+    try:
+        running = await fetch_running_sessions(sorted(i for i in driver_ids if i))
+    except DriverTimelineUnavailable as exc:
+        logger.warning("running marks unavailable for the chat list: %s", exc)
+        running = set()
+    for row, out in ai:
+        out["running"] = extract_id(row.get("compacted_from") or row.get("id")) in running
+
+
 @router.get("/sessions")
 async def list_sessions(
     project_id: str,
@@ -336,6 +354,7 @@ async def list_sessions(
     # The list row marks a chat whose persona has conversation memory ON (the
     # persona's frontmatter is server-side only; its title the client has).
     await mark_persona_memory(db, project_id, serialized)
+    await _mark_running(page, serialized)
     if not with_active_messages:
         return serialized
 

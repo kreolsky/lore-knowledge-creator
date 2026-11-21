@@ -1,6 +1,6 @@
 # The agent line — the RENTED loop (DeepSeek Harness) behind Lore's driver
-# contract. The image pins the harness at the tag dsh-v0.2.0-rc.2
-# (= 639ed015, 2026-09-29 — the newest rc; alphas and master are never
+# contract. The image pins the harness at the tag dsh-v0.2.2-rc.5
+# (= 9c2670d3, 2026-11-18 — the newest rc; alphas and master are never
 # pinned). The pin moves ATOMICALLY with vendor/dsh and the browser bundle
 # banners (dsh-pin-gate.py); the harness migrates its OWN session logs on
 # open (format v0→v4), so logs written by older images keep loading.
@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN corepack enable
 
 WORKDIR /dsh
-ARG DSH_SHA=639ed015397290b3745d163aafe02ffee4aa3f84
+ARG DSH_SHA=9c2670d3bce5275e0d1610272958121af87787bb
 RUN git clone --filter=blob:none https://github.com/deepseek-ai/deepseek-harness.git . \
     && git checkout $DSH_SHA
 RUN pnpm install --frozen-lockfile && pnpm run build

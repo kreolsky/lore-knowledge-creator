@@ -98,7 +98,7 @@ test('dsh groups the process blocks of a turn and leaves the reply outside', () 
   const conversation = createLoreConversation()
   conversation.replaceWindow(loadFixture(), false)
   const nodes = conversation.nodes()
-  const { byNode, data } = conversation.groups()
+  const { byNode, data, responses } = conversation.groups()
 
   // The fixture turn: step 1 thinks and calls two tools, step 2 thinks and
   // answers — one run of process blocks, closed by the reply.
@@ -116,8 +116,14 @@ test('dsh groups the process blocks of a turn and leaves the reply outside', () 
     assert.deepEqual(byNode.get(assistant.key), { groupKey, part: 'reasoning' },
       `the reasoning of step ${(assistant.data as any).step} is outside the group`)
   }
-  assert.equal(group.members, tools.length + assistants.length)
+  // dsh places context injections (the skills reminder) in the process group;
+  // Lore's renderer draws no row for them.
+  const contexts = nodes.filter(node => node.kind === 'context')
+  for (const context of contexts) assert.deepEqual(byNode.get(context.key), { groupKey })
+  assert.equal(group.members, tools.length + assistants.length + contexts.length)
   // The reply is the RESPONSE part of the last step — never a group member.
+  const replies = assistants.filter(node => responses.has(node.key))
+  assert.deepEqual(replies.map(node => node.key), [assistants.at(-1)!.key], 'the last step is not the response row')
   for (const node of nodes) {
     if (node.kind === 'user' || node.kind === 'turn-tail') assert.equal(byNode.get(node.key), undefined)
   }

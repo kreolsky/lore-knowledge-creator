@@ -21,7 +21,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type {
-  ConversationNodeContext, ConversationNodeDefinition,
+  ConversationMatch, ConversationNodeContext, ConversationNodeDefinition,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
 // Relative into the workspace, React-free like the register.ts import in
 // index.ts — the chatNode helper is the ONE node builder, shared with dsh's
@@ -29,6 +29,7 @@ import type {
 import { chatNode } from '../../packages/client/ui-chat/src/client/conversation-nodes/common.ts'
 // Relative into the workspace, the same way index.ts reaches expandAssistantStream.
 import { assembleAssistantStream } from '../../packages/llm/llm/src/assistant-stream.ts'
+import { isAppendSurfaceEvent } from '../../packages/core/session/src/surface.ts'
 import type {
   LoreCompactionMintEventData, LoreHaltEventData, LoreImageGenEventData,
   LoreVerdictAskEventData,
@@ -71,6 +72,12 @@ export interface ImageGenChatData {
 export interface VerdictAskChatData {
   readonly callId: string
   readonly toolName: string
+  /** The held call's raw args, off its own `tool/call` (dsh appends the call
+   * BEFORE it asks — the ask frame carries no args). */
+  readonly argsRaw?: string
+  /** The call settled: its `tool/result` arrived. A bare `tool/call` is NOT a
+   * decision — the call exists before the ask is answered. */
+  readonly decided: boolean
 }
 
 /** The halt card's render payload: what stopped the turn and how far it got.
@@ -123,19 +130,58 @@ export const imageGenDefinition: ConversationNodeDefinition<ImageGenChatData> = 
       : chatNode(context, 'image-gen', anchor(context), context.state),
 }
 
-/** One mid-turn verdict ask. Identity: the asked call — one card per call. */
-export const verdictAskDefinition: ConversationNodeDefinition<VerdictAskChatData> = {
+/** One call's verdict context: the ask, once it arrived, plus what the call's
+ * own tool events say. `ask` stays undefined for a call nobody asked about. */
+interface VerdictAskState {
+  readonly ask?: Omit<LoreVerdictAskEventData, 'turn'>
+  /** The ask's own seq — the card's anchor (the producer-minted placement),
+   * not the call's start. */
+  readonly askSeq?: number
+  readonly argsRaw?: string
+  readonly decided: boolean
+}
+
+function foldVerdictCall(state: VerdictAskState, match: ConversationMatch): VerdictAskState {
+  const event = match.event
+  if (event.type === 'lore/verdict-ask') return { ...state, ask: factOf(event.data as LoreVerdictAskEventData), askSeq: event.seq }
+  if (event.type === 'tool/call') return { ...state, argsRaw: String(event.data.arguments) }
+  // INVARIANT: the ask is decided only once the call's node carries a
+  // tool-result — a bare tool-call node is NOT a decision.
+  // Why: dsh appends `tool/call` BEFORE it asks for approval, so the running
+  // node already exists when the verdict-ask arrives; keying on its presence
+  // rendered every live ask as the settled card, with no buttons to answer it.
+  if (event.type === 'tool/result') return state.decided ? state : { ...state, decided: true }
+  return state
+}
+
+/** One mid-turn verdict ask. Identity: the asked call — one card per call.
+ * The call's own `tool/call` opens the context (dsh appends it BEFORE asking,
+ * and a context's first match must be its start); the ask and the call's
+ * `tool/result` fold in, so the card publishes its args and whether it was
+ * decided. A call nobody asked about keeps a context but builds no node. */
+export const verdictAskDefinition: ConversationNodeDefinition<VerdictAskState> = {
   kind: 'verdict-ask',
   target: 'chat',
-  match: event => event.type === 'lore/verdict-ask'
-    ? { id: event.data.callId, role: 'start' }
-    : null,
-  start: (_context, match) => factOf(match.event.data as LoreVerdictAskEventData),
-  update: context => context.state,
-  buildViewNode: (context: ConversationNodeContext<VerdictAskChatData>) =>
-    context.state === undefined
-      ? null
-      : chatNode(context, 'verdict-ask', anchor(context), context.state),
+  match: (event) => {
+    if (event.type === 'lore/verdict-ask') return { id: event.data.callId, role: 'start' }
+    if (event.type === 'tool/call') return { id: String(event.data.callId), role: 'start' }
+    // The same append-surface guard dsh's tool definition matches results by.
+    if (event.type === 'tool/result' && isAppendSurfaceEvent(event)) {
+      return { id: String(event.data.message.source.callId), role: 'update' }
+    }
+    return null
+  },
+  start: (_context, match) => foldVerdictCall({ decided: false }, match),
+  update: (context, match) => foldVerdictCall(context.state, match),
+  buildViewNode: (context: ConversationNodeContext<VerdictAskState>) => {
+    const state = context.state
+    if (state?.ask === undefined || state.askSeq === undefined) return null
+    const data: VerdictAskChatData = {
+      ...state.ask, decided: state.decided,
+      ...(state.argsRaw === undefined ? {} : { argsRaw: state.argsRaw }),
+    }
+    return chatNode(context, 'verdict-ask', state.askSeq, data)
+  },
 }
 
 /** One turn-ending halt. Identity: the turn — a turn ends once; a turn-less

@@ -53,6 +53,16 @@ export interface ConversationVM {
    * part) — read from the engine, never recomputed. Absent outside a group. */
   groupKey?: string;
   group?: ProcessGroupInfo;
+  /** dsh draws this assistant step's reply as its own row, outside any group
+   * (`groupPart: 'response'`) — read from the engine, never recomputed. */
+  response?: true;
+}
+
+/** One entry of the agent's standing task list — dsh's `TodoItem`
+ * (vendor/dsh/packages/todo/tool-todo/src/types.ts), carried verbatim. */
+export interface TodoItem {
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed';
 }
 
 /** One assistant row's turn window: every node anchored inside renders there. */
@@ -68,6 +78,9 @@ export interface FeedPublication {
   conversation?: ConversationVM[];
   turnRanges?: Record<string, TurnRange>;
   turnStartSeq?: number | null;
+  /** The driving session's standing task list (latest `todo/write`), null
+   * when there is none — see foldTodos. */
+  todos?: TodoItem[] | null;
 }
 
 export type FeedSet = (patch: FeedPublication) => void;
@@ -95,6 +108,8 @@ interface FeedState {
   transientInGap: number;
   /** Pending animation-frame publication (rAF handle or timeout id). */
   publishScheduled: ReturnType<typeof setTimeout> | null;
+  /** The todos fold over the fed window, in feed order. */
+  todos: TodoItem[] | null;
 }
 
 const feed: FeedState = {
@@ -108,7 +123,26 @@ const feed: FeedState = {
   streamAttempt: null,
   transientInGap: 0,
   publishScheduled: null,
+  todos: null,
 };
+
+/**
+ * dsh's `todos` session projection, restated: the latest `todo/write` list,
+ * cleared by `turn/start` (the finished list stays visible after `turn/end`);
+ * every other event keeps the state reference.
+ * WHY restated: dsh registers this fold only inside tool-todo's `apply(ctx)`
+ * (vendor/dsh/packages/todo/tool-todo/src/index.ts:122-131) and exports no
+ * reducer, so the browser has nothing to import; the three lines move
+ * verbatim, never re-derived.
+ */
+function foldTodos(state: TodoItem[] | null, kind: string, data: unknown): TodoItem[] | null {
+  if (kind === 'todo/write') {
+    const todos = (data as { todos?: unknown } | null)?.todos;
+    return Array.isArray(todos) ? todos as TodoItem[] : state;
+  }
+  if (kind === 'turn/start') return null;
+  return state;
+}
 
 function publish(cadence: ConversationPublication, set: FeedSet): void {
   if (cadence === 'none') return;
@@ -155,8 +189,10 @@ function publishNow(set: FeedSet): void {
     if (node.visibility === 'hidden') continue;
     const groupKey = groups.byNode.get(node.key)?.groupKey;
     const group = groupKey === undefined ? undefined : groups.data.get(groupKey);
+    const response = groups.responses.has(node.key);
     const cached = vmCache.get(node);
-    if (cached && cached.groupKey === groupKey && cached.group === group) {
+    if (cached && cached.groupKey === groupKey && cached.group === group
+      && (cached.response === true) === response) {
       conversation.push(cached);
       continue;
     }
@@ -168,11 +204,14 @@ function publishNow(set: FeedSet): void {
       // unrendered kind is the fallback chip's business, never a filter's).
       data: node.data,
       ...(groupKey !== undefined && group !== undefined ? { groupKey, group } : {}),
+      ...(response ? { response: true as const } : {}),
     };
     vmCache.set(node, vm);
     conversation.push(vm);
   }
-  set({ conversation, turnRanges: feed.turnRanges, turnStartSeq: feed.turnStartSeq });
+  set({
+    conversation, turnRanges: feed.turnRanges, turnStartSeq: feed.turnStartSeq, todos: feed.todos,
+  });
 }
 
 /** Reconstruct the SessionEvent the relay frame transported (map.ts
@@ -215,6 +254,7 @@ function ensureEngine(sessionId: string | null): LoreConversation {
     feed.turnMinSeq = null;
     feed.streamAttempt = null;
     feed.transientInGap = 0;
+    feed.todos = null;
   }
   return feed.engine;
 }
@@ -248,7 +288,9 @@ export function feedFrame(
   const seq = frame.seq;
   if (typeof seq !== 'number' || !Number.isFinite(seq)) return;
   const type = frame.type as string;
-  const input = toInput(frame, type === 'dsh_event' ? String(frame.kind ?? 'dsh') : type);
+  const kind = type === 'dsh_event' ? String(frame.kind ?? 'dsh') : type;
+  const input = toInput(frame, kind);
+  feed.todos = foldTodos(feed.todos, kind, frame.data);
   feed.fedFrames.push(frame);
   feed.tailSeq = Math.max(feed.tailSeq, seq);
   feed.transientInGap = 0; // a durable frame closes the transient gap
@@ -479,6 +521,7 @@ export function rewindToLineage(
   const frames: Record<string, unknown>[] = [];
   const entries: SessionEventLikeEntry[] = [];
   let tail = Number.NEGATIVE_INFINITY;
+  let todos: TodoItem[] | null = null;
   for (const frame of feed.fedFrames) {
     const seq = frame.seq;
     if (typeof seq !== 'number' || !Number.isFinite(seq)) continue;
@@ -487,8 +530,11 @@ export function rewindToLineage(
     if (!keptRanges.some(r => seq >= r.min && seq <= r.max)) continue;
     frames.push(frame);
     tail = Math.max(tail, seq);
-    entries.push(toInput(frame, type === 'dsh_event' ? String(frame.kind ?? 'dsh') : type));
+    const kind = type === 'dsh_event' ? String(frame.kind ?? 'dsh') : type;
+    todos = foldTodos(todos, kind, frame.data);
+    entries.push(toInput(frame, kind));
   }
+  feed.todos = todos;
   feed.fedFrames = frames;
   feed.turnRanges = ranges;
   feed.turnStartSeq = null;
@@ -522,6 +568,7 @@ export function replaceWindowFromRows(
   feed.turnMinSeq = null;
   feed.streamAttempt = null;
   feed.transientInGap = 0;
+  feed.todos = null;
   for (const rowObj of rows) {
     const row = rowObj as Record<string, unknown>;
     const frames = row.frames;
@@ -540,6 +587,7 @@ export function replaceWindowFromRows(
       min = Math.min(min, seq);
       max = Math.max(max, seq);
       const kind = type === 'dsh_event' ? String(frame.kind ?? 'dsh') : type;
+      feed.todos = foldTodos(feed.todos, kind, frame.data);
       entries.push(toInput(frame, kind));
     }
     const mid = typeof row.message_id === 'string' ? row.message_id : '';
@@ -581,7 +629,7 @@ export function stripFrames<T extends {
  * the engine switches lazily at the next ensureEngine).
  */
 export function publishTimelineReset(set: FeedSet): void {
-  set({ conversation: [], turnRanges: {}, turnStartSeq: null });
+  set({ conversation: [], turnRanges: {}, turnStartSeq: null, todos: null });
 }
 
 /** Clear the feed's render state (session switch to a ghost / chat reset). */
@@ -602,6 +650,7 @@ registerChatResetHandler(() => {
   feed.turnMinSeq = null;
   feed.streamAttempt = null;
   feed.transientInGap = 0;
+  feed.todos = null;
   if (feed.publishScheduled !== null) {
     clearTimeout(feed.publishScheduled);
     feed.publishScheduled = null;

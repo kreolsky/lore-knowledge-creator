@@ -13,30 +13,30 @@
  *   before the turn starts. Idle dispose drops connections and in-memory
  *   keys with the agent; a fresh agent remounts everything.
  *
- * # ARCH: the bounded wait lives in the agent-scoped `system-prompt/assemble`
- *   waterfall, NOT in `agent/pre-step`: preStep assembles the prompt (and
- *   snapshots tool schemas, agent-loop/src/agent.ts preStep → assemble)
- *   BEFORE the `agent/pre-step` event fires, so a wait there cannot reach the
- *   claiming request. The assemble listener awaits the pending mounts raced
- *   against MCP_MOUNT_WAIT_MS, then re-projects the agent's tool schemas
- *   from the live registry — dsh has no connect timeout (SDK default 60 s),
- *   so a dead server costs at most the bound and its tools are simply
- *   absent. When no server is mounted the listener is a bare `next()` —
- *   zero overhead, no tool rewrite.
+ * # ARCH: the bounded wait runs in `/followup`, BEFORE the message enters
+ *   the inbox, and only when the agent will claim it at once (idle, nothing
+ *   queued): dsh claims and then resolves the step's tool set from a
+ *   snapshot of the registry before prompt assembly or any step event
+ *   (agent-loop preStep → tools.resolve), so no hook after the claim can make
+ *   a still-connecting server's tools reach that step. `mountAhead` mounts
+ *   the prep's servers and awaits them raced against MCP_MOUNT_WAIT_MS — dsh
+ *   has no connect timeout (SDK default 60 s), so a dead server costs at
+ *   most the bound and its tools are simply absent. A QUEUED message mounts
+ *   at its claim without a wait; its servers' tools arrive from the next
+ *   step on.
  *
  * # ARCH: an external tool is NAMED external in its own description. dsh
  *   copies a server's tool description verbatim (mcp-client tools.ts), so a
  *   server serving tools named like the host's own (another Lore's gateway:
  *   search_materials, read_document, …) reaches the model as byte-identical
  *   twins differing only in the mcp__<server>__ prefix — and the model calls
- *   the twin for work on THIS project. While any server is mounted, every
- *   assembly runs `describeMcpTools`: each mcp__<name>__ tool gets an
+ *   the twin for work on THIS project. The agent's own tool executor (the
+ *   native one, wrapped — the only place rc.5 lets a scope rewrite tool
+ *   descriptions) runs `describeMcpTools` on every description: each mcp__<name>__ tool gets an
  *   external-service prefix, and a twin (raw name == a native tool in the
  *   same assembly) a sentence naming the native tool to use instead. Nothing
  *   is hidden — a server connected to work with another Lore keeps working.
- *   It lives in the SAME assemble listener as the re-projection: a second
- *   listener would be overwritten by the re-projection or overwrite it,
- *   depending on order. The text is deterministic per (server, tool set), so
+ *   The text is deterministic per (server, tool set), so
  *   the request prefix cache stays stable across turns.
  *
  * # INVARIANT(security): rendered headers and secret_values live in DRIVER
@@ -67,6 +67,7 @@ import { createHash } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
 import * as mcpClient from '@deepseek-ai/dsh-mcp-client'
+import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
 // publicToolName is the naming contract (a lossy normalization appends a
 // 12-hex hash) — the marks must key by exactly the names dsh registers.
 import { publicToolName } from '@deepseek-ai/dsh-mcp-client/src/tools.ts'
@@ -162,17 +163,19 @@ export interface McpSeamSite {
     standingCtx: { loreSessionId: string }
   } | null
   mcpMounted: Map<string, MountedMcp>
-  /** Mounts not yet reflected in an assembly; consumed by the assemble wait. */
-  mcpPending: Promise<unknown>[]
 }
 
-/** Diff the current prep's servers against what is mounted: dispose what
- * dropped or changed, mount what is new — all without awaiting (the claim
- * never stalls; the assembly's bounded wait is what makes the tools arrive). */
-export function syncMcpServers(entry: McpSeamSite): void {
+type McpPrep = NonNullable<McpSeamSite['current']>
+
+/** Diff a prep's servers (default: the current one) against what is mounted:
+ * dispose what dropped or changed, mount what is new — without awaiting.
+ * Returns the new mounts' settle promises (never rejecting) for a caller
+ * that waits (mountAhead); the claim ignores them. */
+export function syncMcpServers(entry: McpSeamSite, prep: McpPrep | null = entry.current): Promise<unknown>[] {
+  const waits: Promise<unknown>[] = []
   const agentCtx = entry.agentCtx
-  if (!agentCtx) return
-  const wanted = entry.current?.mcpServers ?? []
+  if (!agentCtx) return waits
+  const wanted = prep?.mcpServers ?? []
   const wantByName = new Map(wanted.map((server) => [server.name, server]))
   for (const [name, mounted] of entry.mcpMounted) {
     const next = wantByName.get(name)
@@ -186,26 +189,40 @@ export function syncMcpServers(entry: McpSeamSite): void {
     // A changed or dropped mount must not keep "allow for session" grants:
     // the remount under the same name is a DIFFERENT endpoint, and a grant
     // minted against the old one must not cover it.
-    const sessionId = entry.current?.standingCtx.loreSessionId
+    const sessionId = prep?.standingCtx.loreSessionId
     if (sessionId) revokeServerGrants(sessionId, name)
   }
-  if (wanted.length === 0) return
   for (const server of wanted) {
     if (entry.mcpMounted.has(server.name)) continue
     const mounted = mountServer(agentCtx, server)
     if (!mounted) continue
     entry.mcpMounted.set(server.name, mounted)
-    // The turn's bounded wait covers the fiber (connect + tool sync) AND the
+    // The bounded wait covers the fiber (connect + tool sync) AND the
     // marks listing: a call that reaches pre-execute before its marks settle
     // would ask even for a read-only tool — with a real model the listing
     // wins by seconds, but the wait makes it deterministic. Errors are
     // contained so the race never rejects.
-    entry.mcpPending.push(
+    waits.push(
       mounted.fiber.await().catch((err) => {
         console.error(`[lore-mcp] mount failed for ${server.name}: ${String(err)}`)
       }),
       mounted.marks,
     )
+  }
+  return waits
+}
+
+/** Mount a prep's servers before its message is queued and wait for them,
+ * at most MCP_MOUNT_WAIT_MS (see module ARCH). */
+export async function mountAhead(entry: McpSeamSite, prep: McpPrep): Promise<void> {
+  const waits = syncMcpServers(entry, prep)
+  if (waits.length === 0) return
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const bound = new Promise<void>((resolve) => { timer = setTimeout(resolve, MCP_MOUNT_WAIT_MS) })
+  try {
+    await Promise.race([Promise.all(waits), bound])
+  } finally {
+    clearTimeout(timer)
   }
 }
 
@@ -246,7 +263,6 @@ function mountServer(agentCtx: Context, server: McpServerWire): MountedMcp | nul
 /** Dispose every mount of an agent (idle dispose / teardown): connections
  * and in-memory keys drop with the agent; a fresh agent remounts all. */
 export async function disposeMcpServers(entry: McpSeamSite): Promise<void> {
-  entry.mcpPending.length = 0
   const mounted = [...entry.mcpMounted.values()]
   entry.mcpMounted.clear()
   await Promise.allSettled(mounted.map((m) => m.fiber.dispose()))
@@ -323,36 +339,15 @@ function describedServers(entry: McpSeamSite): McpDescribedServer[] {
   }))
 }
 
-/** The agent-scoped listeners: the bounded assembly wait, the ask gate and
- * the result scrub. Installed ONCE per agent in its setup. */
+/** The agent-scoped seam: the describing executor, the ask gate and the
+ * result scrub. Installed ONCE per agent in its setup. */
 export function installMcpSeam(agentCtx: Context, entry: McpSeamSite): void {
-  // The bounded wait + fresh tool projection (see module ARCH). The rewrite
-  // re-projects `ctx.tools.schemas(scope)` sorted by name — orderTools' own
-  // default order (the lore home configures no toolOrder).
-  agentCtx.on('system-prompt/assemble', (assembly: unknown, context: { scope?: unknown }, next: () => Promise<any>) => {
-    const waits = entry.mcpPending.splice(0)
-    if (waits.length === 0) {
-      if (entry.mcpMounted.size === 0) return next()
-      return next().then((assembled: { tools: Array<{ name: string; description: string }> }) =>
-        ({ ...assembled, tools: describeMcpTools(assembled.tools, describedServers(entry)) }))
-    }
-    const bound = new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, MCP_MOUNT_WAIT_MS)
-      timer.unref?.()
-    })
-    return (async () => {
-      await Promise.race([Promise.all(waits), bound])
-      const fresh = await next()
-      try {
-        const tools = [...agentCtx.tools.schemas(context?.scope)]
-        tools.sort((a: { name: string }, b: { name: string }) =>
-          a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
-        return { ...fresh, tools: describeMcpTools(tools, describedServers(entry)) }
-      } catch (err) {
-        console.error(`[lore-mcp] tool refresh failed: ${String(err)}`)
-        return fresh
-      }
-    })()
+  // The native executor, describing through describeMcpTools (see module
+  // ARCH). Pure pass-through while no server is mounted.
+  const native = new NativeToolExecutor(agentCtx)
+  agentCtx.tools.setExecutor({
+    describe: (tools) => native.describe(describeMcpTools(tools, describedServers(entry))),
+    execute: (input) => native.execute(input),
   })
 
   agentCtx.on('tools/pre-execute', (exec: { name?: unknown }, next: () => Promise<any>) => {

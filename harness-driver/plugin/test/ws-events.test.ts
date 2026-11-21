@@ -200,9 +200,9 @@ test('one state per (socket, session): the turn coordinate tracks the open turn'
 // ── The descendant heartbeat: a child's events keep its ROOT's turn alive.
 
 /** A session object the way dsh hands it to the tap: a child carries its
- * parent's id in `header.parentSession`; a driving session carries none. */
+ * parent's id in `header.parentSession` and `origin: 'subagent'`; a driving session carries neither. */
 function sessionOf(id: string, parentSession?: string): any {
-  return { id, header: parentSession === undefined ? {} : { parentSession } }
+  return { id, header: parentSession === undefined ? {} : { parentSession, origin: 'subagent' } }
 }
 
 const HEARTBEAT = { type: 'session_frame', session_id: 'dsh-9', frame: { type: 'lore/child-activity' } }

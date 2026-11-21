@@ -33,7 +33,7 @@ import ToolRuntime from '@deepseek-ai/dsh-tools'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import UserApproval from '@deepseek-ai/dsh-user-approval'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 
 import { createSessionEventTap } from '../src/ws-events.ts'
 import { loreTurnCtxFor } from '../src/tools.ts'

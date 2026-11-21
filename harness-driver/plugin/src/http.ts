@@ -13,7 +13,7 @@ import {
 } from './approvals.ts'
 import { clearSessionToolCtx } from './tools.ts'
 import { sessionEntries, sessionFork, type SessionMap } from './sessions.ts'
-import { followup, inboxDiscard, sessionStatusRoute, stop } from './turn.ts'
+import { followup, inboxDiscard, runningSessionsRoute, sessionStatusRoute, stop } from './turn.ts'
 import type { EventsChannel, SessionEventTap } from './ws-events.ts'
 import type { SessionStreamBaselines } from './stream-baselines.ts'
 
@@ -63,6 +63,8 @@ export async function handleRequest(
       await inboxDiscard(map, req, res)
     } else if (req.method === 'GET' && url.startsWith('/session-status')) {
       await sessionStatusRoute(map, req, res)
+    } else if (req.method === 'POST' && url.endsWith('/running-sessions')) {
+      await runningSessionsRoute(map, req, res)
     } else {
       res.writeHead(404).end('not found')
     }

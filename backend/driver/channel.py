@@ -709,7 +709,7 @@ class DriverChannel:
                 return  # replay/live overlap — already delivered
             sub.last_seq = seq
             if frame.get("type") == "turn_closed":
-                self._dispatch_replayed_terminal(sub)
+                await self._dispatch_replayed_terminal(sub)
                 return
         if frame.get("type") == "lore/claim":
             await self._on_claim(sub, frame)
@@ -726,8 +726,14 @@ class DriverChannel:
         terminal close."""
         turn = sub.turn
         assert turn is not None
-        turn.deadline.note_progress()
         etype = frame.get("type")
+        if etype == "turn_closed":
+            # The plugin's LIVE terminal: it follows the last dsh turn of this
+            # Lore turn, after the subagent tree settled.
+            await self._close_turn(sub)
+            self._emit(sub, [frame])
+            return
+        turn.deadline.note_progress()
         if etype == "lore/verdict-ask":
             cid = (frame.get("data") or {}).get("callId") or ""
             if cid:
@@ -746,10 +752,16 @@ class DriverChannel:
         self._update_deadline_pause(sub)
         out = await _relay_frame(turn.projection, frame)
         self._emit(sub, out)
-        if turn.projection.finished:
+        # INVARIANT(persisted): a graceful dsh turn/end does not close the Lore
+        # turn — turn_closed does; an abnormal end closes at once.
+        # Why: a subagent's settlement notice wakes an idle parent into a
+        # further dsh turn that answers it; that answer belongs to the same
+        # assistant row, and an unclaimed turn is never persisted.
+        projection = turn.projection
+        if projection.finished and (projection.errored or not projection.finalize_pending):
             await self._close_turn(sub)
 
-    def _dispatch_replayed_terminal(self, sub: _Subscription) -> None:
+    async def _dispatch_replayed_terminal(self, sub: _Subscription) -> None:
         """The REPLAYED transport terminal — the plugin appends it
         seq-anchored after its turn's end for a non-live session; the LIVE
         push carries no seq and takes the raw outside-turn relay. The
@@ -764,6 +776,10 @@ class DriverChannel:
         emitting it would close the newer turn's browser registration (the
         follow-up renders nothing), so it is a no-op. The seq already
         advanced last_seq: the channel has consumed this terminal either way."""
+        if sub.turn is not None and sub.turn.projection.finished:
+            # A finished turn left open for its turn_closed: this sequenced
+            # terminal sits past its turn/end, so it is that turn's.
+            await self._close_turn(sub)
         if sub.turn is None:
             self._emit(sub, [{"type": "turn_closed"}])
 

@@ -29,14 +29,14 @@ import {
 } from './skills.ts'
 import { registerLoreTools } from './tools.ts'
 import {
-  AGENT_KEY_REF, ROUTE_DEFAULT_CONTEXT_WINDOW, REQUEST_IMAGE_MAX_BYTES, PROVIDER,
+  AGENT_KEY_REF, ROUTE_DEFAULT_CONTEXT_WINDOW, ROUTE_DEFAULT_MAX_TOKENS, REQUEST_IMAGE_MAX_BYTES, PROVIDER,
   ensureAgentKey, ensureModelEntry, ensureTitleConfig, ensureTitleEntry, ensureWebSearch,
   type ConfigEditorSeam, type CredentialsSeam, type LoreRouteScaffold, type SettingsSeam,
 } from './ensure.ts'
 import { resumeOrCreate, restoreActivation, type SessionMap } from './sessions.ts'
 import { authorized, readBody } from './http.ts'
 import {
-  AGENT_IDLE_DISPOSE_MS, discardQueued, enqueueFollowup, sessionStatus, stopSession,
+  AGENT_IDLE_DISPOSE_MS, discardQueued, enqueueFollowup, sessionAgentLive, sessionStatus, stopSession,
   type SessionAgentDeps, type TurnPrep,
 } from './session-agents.ts'
 
@@ -159,6 +159,7 @@ export function loreRoute(baseURL: string): LoreRouteScaffold | null {
       thinkingFormat: 'openai',
     },
     defaultContextWindow: ROUTE_DEFAULT_CONTEXT_WINDOW,
+    defaultMaxTokens: ROUTE_DEFAULT_MAX_TOKENS,
   }
 }
 
@@ -182,6 +183,7 @@ export function anthropicRoute(baseURL: string): LoreRouteScaffold | null {
     baseURL: baseURL.replace(/\/v1\/?$/, ''),
     requestImageMaxBytes: REQUEST_IMAGE_MAX_BYTES,
     defaultContextWindow: ROUTE_DEFAULT_CONTEXT_WINDOW,
+    defaultMaxTokens: ROUTE_DEFAULT_MAX_TOKENS,
   }
 }
 
@@ -247,7 +249,7 @@ export async function prepareUserContent(
 /** The session-projection seam the context-usage read needs (duck-typed: a
  * composition without the service passes undefined, and the tests fake it). */
 export interface SessionProjectionsSeam {
-  snapshot(session: unknown): { values: Record<string, unknown> }
+  snapshot(session: unknown, keys?: readonly string[]): { values: Record<string, unknown> }
 }
 
 /**
@@ -278,7 +280,7 @@ export function contextUsageFrame(
   if (!projections) return null
   let values: Record<string, unknown> | undefined
   try {
-    values = projections.snapshot(session)?.values
+    values = projections.snapshot(session, ['contextPressure'])?.values
   } catch (err) {
     // Loud degrade, never a mid-turn throw: the turn's outcome is already on
     // the wire and must not convert to an error over a gauge read.
@@ -644,4 +646,23 @@ export async function sessionStatusRoute(
   const dshId = sessionIdOf(map, query.searchParams.get('session_id'), res)
   if (dshId === null) return
   json(res, 200, sessionStatus(dshId))
+}
+
+// ── POST /running-sessions {session_ids} — which of these chats have a turn
+// RUNNING (dsh's agent status, the same read as /session-status): the chat
+// list's 'working' mark after a reload. Answers the lore ids it was given.
+export async function runningSessionsRoute(
+  map: SessionMap, req: http.IncomingMessage, res: http.ServerResponse,
+): Promise<void> {
+  if (!authorized(req)) {
+    res.writeHead(401).end('unauthorized')
+    return
+  }
+  const body = JSON.parse(await readBody(req)) as { session_ids?: unknown }
+  if (!Array.isArray(body.session_ids)) {
+    res.writeHead(422).end('session_ids must be a list')
+    return
+  }
+  const ids = body.session_ids.filter((id): id is string => typeof id === 'string' && id !== '')
+  json(res, 200, { running: ids.filter(id => sessionAgentLive(map.get(id))) })
 }

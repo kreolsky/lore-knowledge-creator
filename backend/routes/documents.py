@@ -51,7 +51,7 @@ async def get_document(document_id: str, track: bool = False, user: dict = Depen
     """Fetch a document; record per-user last-accessed pointer only when track=true.
 
     INVARIANT: last_accessed_doc_id is updated ONLY on an intentional open (the URL-driven
-    DocumentPage passes track=true). Why: auxiliary fetches of the SAME endpoint — hover
+    DocumentPage passes track=true; an in-app open posts /opened). Why: auxiliary fetches of the SAME endpoint — hover
     previews, snapshot banner, backlinks — would otherwise clobber the
     pointer, so re-entering a project landed on the last *previewed* doc, not the last
     *opened* one. Access is still validated on every call.
@@ -74,6 +74,22 @@ async def get_document(document_id: str, track: bool = False, user: dict = Depen
     doc_data = serialize_record(record, "document_id")
     doc_data["headings"] = extract_headings(record.get("content") or "")
     return doc_data
+
+
+@router.post("/api/documents/{document_id}/opened", status_code=204)
+async def mark_document_opened(document_id: str, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)) -> Response:
+    """Record an in-app open as the caller's last-accessed doc of its project.
+
+    WHY a separate write: in-app navigation commits the document from the store
+    before navigating, so DocumentPage never re-fetches it with track=1 — without
+    this the pointer stayed on the doc the user ENTERED the project on.
+    """
+    from access import get_project_access
+    project_id = await get_doc_project_id(document_id)
+    if not project_id or await get_project_access(project_id, user) is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await record_doc_open(db, user, project_id, document_id)
+    return Response(status_code=204)
 
 
 async def _open_bundle_project(project_id: str, user: dict) -> dict | None:

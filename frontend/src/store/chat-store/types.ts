@@ -1,7 +1,7 @@
 /** ChatState interface and Set/Get aliases for slice creators. */
 import type { PressedImageMeta } from '../../chat/attach-image';
 import type { ChatUIMode, ChatSession, ChatMessage, ChatFile, Reference, ReasoningCapability } from '../../types';
-import type { ConversationVM, TurnRange } from './conversation-feed';
+import type { ConversationVM, TodoItem, TurnRange } from './conversation-feed';
 import type { QueuedMessage } from '../../chat/inbox-queue';
 
 /** A composer file chip: a dropped file on its way into the sandbox
@@ -158,6 +158,9 @@ export interface ChatState {
   // Nodes anchored above it render in the streaming message; null between
   // turns.
   turnStartSeq: number | null;
+  // The driving session's standing task list — dsh's `todos` projection
+  // restated in the feed (foldTodos); null when the agent wrote none this turn.
+  todos: TodoItem[] | null;
 
   // Models
   models: string[];
@@ -258,7 +261,6 @@ export interface ChatState {
   // (its latest-of-scope walk covers only model + system_prompt_id). So
   // initGhostFromScope is the single place that bridges the gap; without it a
   // "+" / discard / openChatWithReference ghost would silently drop agent_auto.
-  // resetGhostOverrides clears overrides to bare defaults (used by reset()).
   // There is no ghost mode axis; ghostAgentAuto is the only pre-send apply-mode
   // override.
   ghostAgentAuto: boolean;
@@ -310,7 +312,6 @@ export interface ChatState {
   startGhostChat: () => void;
   // Ghost overrides (pre-send config held client-side). Applied at materialization.
   setGhostSystemPrompt: (id: string | null) => void;
-  resetGhostOverrides: () => void;
   // ARCH: set the ghost overrides
   // (model/mode/agent_auto/system_prompt_id) from the last active AI chat in the
   // current scope. Called at EVERY ghost entry point (startGhostChat, loadSessions

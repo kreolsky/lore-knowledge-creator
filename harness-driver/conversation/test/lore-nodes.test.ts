@@ -425,3 +425,31 @@ test('no cut-off node for a reasoning-only attempt or a cancelled reply', () => 
   assert.ok(nodes.some(node => node.kind === 'assistant-step' && node.visibility === 'visible'),
     'the cancelled reply itself did not render')
 })
+
+// TEST-WHY: contract — a live verdict ask once rendered as the settled card with no buttons, because a bare tool-call was read as the decision.
+test('a verdict ask folds its own call: args off tool/call, decided only at tool/result', () => {
+  const inputs = loadFixture()
+  const call = inputs.map(input => input.event).filter(event => event.type === 'tool/call').at(-1)!
+  const result = inputs.findIndex(input => input.event.type === 'tool/result'
+    && input.event.data.message.source.callId === call.data.callId)
+  assert.ok(result > 0, 'the fixture settles its last call')
+  const ask = loreEvent('lore/verdict-ask', call.seq, {
+    turn: call.data.turn, callId: call.data.callId, toolName: call.data.name,
+  }, call.time)
+  const verdict = (conversation: ReturnType<typeof createLoreConversation>) =>
+    conversation.nodes().find(node => node.kind === 'verdict-ask')?.data as any
+
+  // Parked: the call exists, its result does not — the ask is pending.
+  const parked = createLoreConversation()
+  parked.replaceWindow(inputs.slice(0, result), false)
+  parked.splice(ask)
+  assert.equal(verdict(parked).argsRaw, call.data.arguments)
+  assert.equal(verdict(parked).decided, false)
+
+  // The result lands: decided, on the live tail and on a reload alike.
+  parked.append(inputs[result])
+  assert.equal(verdict(parked).decided, true)
+  const reloaded = createLoreConversation()
+  reloaded.replaceWindow([...inputs, ask], false)
+  assert.deepEqual(verdict(reloaded), verdict(parked))
+})

@@ -183,6 +183,11 @@
   disabled: true
 - id: fs-observation-policy
   disabled: true
+# The working-directory registry stays (dsh-base: the subagent catalog folds
+# through it); its model-facing `working_directory` tool serves a local FS
+# this composition has none of.
+- id: tool-working-directory
+  disabled: true
 # ── skills (step 8: dsh's skill/* is the vocabulary) ──────────────────────────
 # The registry + the model-facing `skill` loader tool. Lore's skills arrive
 # per turn as payload metadata; the plugin's lore-skills provider (skills.ts)
@@ -226,14 +231,14 @@
     #   read_* / search_* / get_* — repeated reads are ordinary work, and the
     #     old bound never touched read-only tools;
     #   skill — reloads are cheap and idempotent;
-    #   next_reference — idempotent re-serve is the RETRY shape;
-    #   subagent — one blocking dispatch per child by construction.
+    #   next_reference — idempotent re-serve is the RETRY shape.
+    # subagent is TRACKED: a dispatch returns a receipt at once, so an
+    # identical repeat starts a duplicate child — the stuck-loop shape.
     exclude:
       - sandbox_bash
       - generate_image
       - skill
       - next_reference
-      - subagent
       - 'read_*'
       - 'search_*'
       - 'get_*'
@@ -260,19 +265,27 @@
   disabled: false
 # dsh's own DeepSeek provider resolves apiKeyEnv through the credentials
 # service per request: the per-turn credential write (LORE_WEB_SEARCH_KEY)
-# serves it too. WHY not DEEPSEEK_API_KEY: credentials-local lets the
-# inherited env win and refuses to write a ref it holds, and prod's .env sets
-# DEEPSEEK_API_KEY — the same reason LORE_AGENT_API_KEY exists.
+# serves it too. WHY not DEEPSEEK_API_KEY: a stored credential outranks the
+# launch env, and prod's .env sets DEEPSEEK_API_KEY — the per-turn write of the
+# admin's search key under that name would silently re-key every other reader
+# of it. Same reason LORE_AGENT_API_KEY exists.
 - id: web-search-deepseek
   disabled: false
   config:
     apiKeyEnv: LORE_WEB_SEARCH_KEY
+# DeepSeek Search/Fetch API providers: no admin choice names them, and their
+# default billing sends DEEPSEEK_API_KEY — off, so the pinned providers are
+# the whole set.
+- id: web-deepseek-api
+  disabled: true
 # A `config` here REPLACES the base bundle's, so the two values it set are
 # restated. `fetch: true` serves `web_fetch` over the base bundle's
-# `web-fetch-http` (pinned as `fetchProvider: http` in profiles/lore): the
-# provider resolves every destination, accepts only public addresses and pins
-# the connection to the address it checked, so a model-picked URL cannot reach
-# the compose network. PDF is an unsupported content type there — the web
+# `web-fetch-http` (pinned as `fetchProvider: http` in profiles/lore). The
+# destination guard is the NETWORK, not the provider: the harness container
+# sits only on harness-net (see the INVARIANT on the harness service in
+# docker-compose*.yml) and prod LAN egress is dropped by host nftables, so a
+# model-picked URL reaches the backend (secret/JWT gated), the LLM gateway (key
+# gated) and the public internet — nothing else. PDF is an unsupported content type there — the web
 # skills send it to the sandbox console.
 # `search: true`, STATIC: web_search is always offered to the model — there is
 # no off state; a provider without a key fails the call loudly, and to stop
@@ -310,29 +323,27 @@
 - id: mcp-resources
   disabled: true
 # ── subagents ─────────────────────────────────────────────────────────────────
-# The ctx.subagents registry + the stock DISPATCH tool (foreground one-shot =
-# BLOCKING: the call waits for the child's result — async stays out per
-# subagents-v2's Open). The provider is the stock spawn-in-process: a fresh
-# child with its own session (log header `origin: subagent`) and zero parent
-# history, whose shared driver owns depth checking, persona, tool-filter,
-# one-shot execution, result reading and quiescent disposal. Return path:
-# the child's final assistant message settles as the dispatching call's OWN
-# tool/result — `send_message`/`subagent-settled` belong to CONTINUABLE
-# (background) children only, so tool-subagent-control stays disabled below.
+# The ctx.subagents runtime + the stock dispatch tool. Every dispatch is a
+# managed ACTIVATION: the tool/result is the receipt (`started subagent
+# <name>`), and the child's final answer reaches the parent as a
+# `subagent-settled` user-role notice — steered into a running parent, queued
+# into an idle one. The driver keeps the Lore turn open until the tree settles
+# (see session-agents.ts awaitTreeThenClose). Provider: stock spawn-in-process —
+# a fresh child with its own session and zero parent history; no agentPreset,
+# so the child joins the parent's composition (Lore's tool restriction is
+# applied to it by installChildRestriction). tool-subagent-control stays
+# disabled: no send_message / interrupt_agent / list_agents for the model.
 - id: subagent
   disabled: false
 - id: tool-subagent
   config:
     provider: spawn
     toolName: subagent
-    enableRunInBackground: false
 - id: subagent-spawn-in-process
   disabled: false
 - id: subagent-fork-in-process
   disabled: true
 - id: tool-subagent-control
-  disabled: true
-- id: tool-subagent-list-agents
   disabled: true
 - id: tool-subagent-fork
   disabled: true

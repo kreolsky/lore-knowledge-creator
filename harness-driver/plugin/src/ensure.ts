@@ -76,14 +76,15 @@ export interface LoreRouteScaffold {
   baseURL: string
   compat?: Record<string, unknown>
   defaultContextWindow?: number
+  defaultMaxTokens?: number
   requestImageMaxBytes?: number
 }
 
 /** The credentials ref the route's key resolves through — Lore-internal, set
  * by no .env and written only by ensureAgentKey.
- * WHY not AI_API_KEY: credentials-local lets the inherited env win and refuses
- * to write a ref it holds, and every compose loads .env into the harness, so
- * under AI_API_KEY an old .env key would forever shadow the admin key. */
+ * WHY not AI_API_KEY: every compose loads .env into the harness, and a stored
+ * value now outranks the env while an unset falls back to it — under
+ * AI_API_KEY a cleared admin key would silently resume the old .env key. */
 export const AGENT_KEY_REF = 'LORE_AGENT_API_KEY'
 
 /** The route's fallback context window for a model the gateway leaves bare
@@ -93,6 +94,12 @@ export const AGENT_KEY_REF = 'LORE_AGENT_API_KEY'
  * Same number the composes' deleted env default carried: pi-ai's own
  * fallback (262144) would silently change the context_usage denominator. */
 export const ROUTE_DEFAULT_CONTEXT_WINDOW = 128000
+
+/** The route's fallback output capacity for a model the gateway leaves bare:
+ * pi-ai's own fallback is 128000, which a bare model's real ceiling rarely
+ * meets — pinned to pi-ai's previous default. The per-model
+ * `max_completion_tokens` from the gateway outranks it (ensureModelEntry). */
+export const ROUTE_DEFAULT_MAX_TOKENS = 32768
 
 /** `requestImageMaxBytes` for both route scaffolds. Why 4 MiB: it equals
  * dsh's admission normalization target (attachment-local encoding), and it
@@ -207,7 +214,8 @@ export async function ensureModelEntry(
     // not keep re-encoding every pressed image over 1 MiB).
     const scaffoldPatch = scaffold !== null
       && (routeSection?.baseURL !== scaffold.baseURL || routeSection?.apiKeyEnv !== scaffold.apiKeyEnv
-        || routeSection?.requestImageMaxBytes !== scaffold.requestImageMaxBytes)
+        || routeSection?.requestImageMaxBytes !== scaffold.requestImageMaxBytes
+        || routeSection?.defaultMaxTokens !== scaffold.defaultMaxTokens)
       ? scaffold
       : {}
     // Skip when the committed entry already carries every value this turn

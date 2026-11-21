@@ -54,7 +54,7 @@ beforeEach(async () => {
   vi.doMock('../i18n', () => ({ useTranslation: () => ({ t: stableT }) }));
   vi.doMock('../api/references-fetch', () => ({ loadReferences: vi.fn().mockResolvedValue([REF, AUDIO_REF]) }));
   vi.doMock('../api/client', () => ({
-    apiClient: { get: vi.fn().mockResolvedValue(undefined), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
+    apiClient: { get: vi.fn().mockResolvedValue(undefined), post: vi.fn().mockResolvedValue(undefined), patch: vi.fn(), delete: vi.fn() },
   }));
   vi.doMock('./Editor', () => ({
     Editor: (props: { entity?: Reference; role?: string; hideBanner?: boolean }) => {

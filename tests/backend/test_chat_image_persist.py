@@ -13,7 +13,7 @@ images the send's prep carried to the driver and back.
 from uuid import uuid4
 
 import pytest
-from test_driver_channel import _env, _turn_end
+from test_driver_channel import _CLOSED, _env, _turn_end
 from test_harness_turn import _claim_of, _row_stamped, _until_async
 
 
@@ -58,7 +58,7 @@ async def _completion(client, token, sid, body, env):
     assert resp.json()["accepted"] is True
     payload = env.followups.payloads[-1]
     sock = env.connector.sockets[0]
-    for frame in (_claim_of(payload), _turn_end(1)):
+    for frame in (_claim_of(payload), _turn_end(1), _CLOSED):
         sock.push(_env(sid, frame))
     await _until_async(lambda: _row_stamped(payload["assistant_msg_id"], 1))
 

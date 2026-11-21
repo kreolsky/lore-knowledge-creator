@@ -310,6 +310,9 @@ async def _dsh_event_arm(turn: _TurnProjection, ev: dict) -> list[dict]:
             logger.warning("dsh turn/start without a turn number seq=%s", seq)
         else:
             turn.turn_no = turn_no
+        # A settlement notice's dsh turn reopens a graceful turn still waiting
+        # for turn_closed (see INVARIANT in channel.py _dispatch_in_turn).
+        turn.finished = False
         return [ev]
     if kind == "assistant/message":
         # The v4 log holds only settled events: one settled message per step

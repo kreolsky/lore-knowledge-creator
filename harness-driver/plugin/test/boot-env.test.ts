@@ -8,7 +8,7 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { fileURLToPath } from 'node:url'
 
-import { foldDriverSecret, retireLegacySettings, toolApiUrl } from '../src/boot-env.ts'
+import { foldDriverSecret, toolApiUrl } from '../src/boot-env.ts'
 
 const BOOT_ENV = fileURLToPath(new URL('../src/boot-env.ts', import.meta.url))
 
@@ -64,32 +64,6 @@ test('toolApiUrl: no env resolves the compose constant; the env stays the test s
   // seam (the boot test above points it at a stub).
   assert.equal(toolApiUrl({}), 'http://backend:8001')
   assert.equal(toolApiUrl({ LORE_TOOL_API_URL: 'http://stub:1' }), 'http://stub:1')
-})
-
-test('retireLegacySettings moves a 0.1.5 settings.yaml aside (models-only lore import is INVALID at 0.2.0)', async () => {
-  const { mkdtempSync, writeFileSync, existsSync, rmSync } = await import('node:fs')
-  const { tmpdir } = await import('node:os')
-  const { join } = await import('node:path')
-  const dir = mkdtempSync(join(tmpdir(), 'boot-env-retire-'))
-  try {
-    // The exact legacy shape: providers.lore with models, NO api/baseURL —
-    // the 0.2.0 on-boot import composes it into the active profile patch and
-    // llm-pi-ai refuses the boot ("provider lore model … needs an api")
-    // before any plugin write can heal it.
-    writeFileSync(join(dir, 'settings.yaml'),
-      'llm-pi-ai:\n  providers:\n    lore:\n      models:\n        - id: openai/luna\n')
-    const lines: string[] = []
-    assert.equal(retireLegacySettings(dir, l => lines.push(l)), true)
-    assert.equal(existsSync(join(dir, 'settings.yaml')), false)
-    assert.equal(existsSync(join(dir, 'settings.yaml.retired-0.1.5')), true)
-    assert.match(lines[0] ?? '', /retired the 0\.1\.5 settings\.yaml/)
-    // Idempotent: the next boot (the import renames the file itself) finds nothing.
-    const again: string[] = []
-    assert.equal(retireLegacySettings(dir, l => again.push(l)), false)
-    assert.deepEqual(again, [])
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
 })
 
 test('no plugin module imports boot-env.ts — it is the entry, and a re-import deadlocks the boot', async () => {

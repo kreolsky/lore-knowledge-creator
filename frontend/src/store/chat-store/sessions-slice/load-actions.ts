@@ -18,6 +18,7 @@ import type { ChatSession, ChatMessage } from '../../../types';
 import type { InboxSnapshotWire } from '../../chat-message-crud';
 import type { ChatState, Set, Get } from '../types';
 import { loadInFlight } from '../inflight';
+import { seedRunningSessions } from '../inbox-slice';
 
 // ARCH: SWR cache for the AI-chat session list, keyed by the same scopeKey the
 // in-flight map uses (see SYSTEM: swr-cache). A re-open of a previously seen scope
@@ -132,6 +133,7 @@ export function createLoadActions(set: Set, get: Get): LoadActions {
           // via deriveUIMode.
           sessionsCache.seed(scopeKey, rawSessions);
           set({ sessions: rawSessions });
+          seedRunningSessions(get, set, rawSessions);
 
           // ARCH: All lifecycle logic delegated to the pure resolver. The resolver
           // restores the project's last-active chat (matched against the whole

@@ -18,6 +18,8 @@
  */
 
 import type { NavigateFunction } from 'react-router-dom';
+import { apiClient } from '../api/client';
+import { t } from '../i18n';
 import { useAppStore } from '../store/app-store';
 import { markDocOpenStart } from '../telemetry/page-perf';
 import { docUrl } from '../utils/routing';
@@ -43,6 +45,12 @@ export function openDocument(
   markDocOpenStart(docId);
   state.setCurrentDocument(doc);
   if (state.currentProject) {
+    // WHY: DocumentPage skips its track=1 fetch for an already-committed doc, so
+    // this is the only place an in-app open reaches the last-accessed pointer.
+    apiClient.post(`/documents/${docId}/opened`, {}).catch((err: unknown) => {
+      console.error('Failed to record last-opened document:', err);
+      state.showToast(t('lastOpenedSaveFailed'), 'error');
+    });
     // Canonical /docs/<id> URL — one shape for
     // every navigate-to-document source (tree, search, links,
     // editor clicks) since they all go through here.

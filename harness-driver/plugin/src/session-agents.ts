@@ -20,14 +20,15 @@ import type { Context } from '@deepseek-ai/cordis'
 import { createUserMessage, MessageId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
-import type { ModelSelection, ModelSelectionRef, PreStepDecision } from '@deepseek-ai/dsh-agent'
+import type { ModelSelection, PreStepDecision } from '@deepseek-ai/dsh-agent'
+import { SessionHandleClosedError } from '@deepseek-ai/dsh-session-persistence'
 
 import { turnFailureLine } from './map.ts'
 import { timeStampMessage } from './time-stamps.ts'
 import { logInjected, logSwapped, memoryAction, preloadMessages, surfaceMemoryNodes } from './preload.ts'
 import { childSessions, type EventsChannel, type SessionEventTap } from './ws-events.ts'
 import {
-  disposeMcpServers, installMcpSeam, syncMcpServers,
+  disposeMcpServers, installMcpSeam, mountAhead, syncMcpServers,
   type McpServerWire, type MountedMcp,
 } from './mcp-servers.ts'
 import {
@@ -105,7 +106,6 @@ interface SessionAgent {
   /** Prep per pending dsh message id: stored before followup, gone at claim/discard. */
   preps: Map<string, TurnPrep>
   current: TurnPrep | null
-  selection: ModelSelectionRef
   /** The session's activated skills — log restore at each POST + live loads. */
   activated: Set<string>
   /** A claim opened a turn whose `turn_closed` is not pushed yet. */
@@ -113,11 +113,13 @@ interface SessionAgent {
   releaseRestriction: (() => void) | null
   agentCtx: Context | null
   invalidateSkills: (() => void) | null
-  /** Live MCP mounts by server name + mounts not yet in an assembly. */
+  /** Live MCP mounts by server name. */
   mcpMounted: Map<string, MountedMcp>
-  mcpPending: Promise<unknown>[]
   offWatch: () => void
   idleTimer: ReturnType<typeof setTimeout> | null
+  /** The turn's dsh turn/end passed but its subagent tree still works — the
+   * Lore turn stays open until awaitTreeThenClose sees the tree settle. */
+  treeWait: boolean
 }
 
 /** dsh session id → its live agent. Exported because it IS the liveness
@@ -201,8 +203,11 @@ export function childAllowedProxies(parentId: string, registered: Set<string>): 
 export function installChildRestriction(ctx: Context): () => void {
   const offCreated = ctx.on('agent/created' as never, (({ agent }: { agent: any }) => {
     const id = String(agent?.session?.id ?? '')
-    const parent = agent?.session?.header?.parentSession
-    if (!id || typeof parent !== 'string' || !parent) return
+    const header = agent?.session?.header
+    const parent = header?.parentSession
+    // WHY: dsh classifies a child by `origin`, not by `parentSession` — a fork
+    // (seedForkSessionCreate) carries `parentSession` too and is a driving session.
+    if (!id || header?.origin !== 'subagent' || typeof parent !== 'string' || !parent) return
     const registered = registeredLoreToolNames()
     const allowed = childAllowedProxies(parent, registered)
     if (!allowed) {
@@ -235,10 +240,13 @@ function closeOpenTurn(entry: SessionAgent): void {
   try { entry.deps.channel.push(entry.dshId, { type: 'turn_closed' }) } catch { /* the replay covers */ }
 }
 
-function onClaim(entry: SessionAgent, message: { id: unknown }): void {
+function onClaim(entry: SessionAgent, message: { id: unknown; source?: { kind?: unknown } }): void {
+  const messageId = String(message.id)
+  // A child's settlement notice queued into the idle parent continues the
+  // dispatching turn on its prep — it is not a new Lore turn and has no prep.
+  if (message.source?.kind === 'subagent-settled' && entry.turnOpen && !entry.preps.has(messageId)) return
   // The previous turn's terminal precedes this claim on the wire, always.
   closeOpenTurn(entry)
-  const messageId = String(message.id)
   const prep = entry.preps.get(messageId)
   entry.preps.delete(messageId)
   if (!prep) {
@@ -249,11 +257,14 @@ function onClaim(entry: SessionAgent, message: { id: unknown }): void {
     return
   }
   entry.current = prep
-  entry.selection.current = prep.selection
+  // WHY here: the claim precedes the step's preparation, which captures the
+  // agent's selection for that step and its retries; select() records it as a
+  // `model/selection` event only when it differs from the recorded one.
+  entry.agent.model.select(prep.selection)
   for (const name of prep.activated) entry.activated.add(name)
   applyRestriction(entry)
   // The personal MCP mounts: diffed, disposed-and-remounted as needed, never
-  // awaited here (the assembly's bounded wait delivers the tools).
+  // awaited here (an idle send already mounted them in /followup).
   syncMcpServers(entry)
   entry.invalidateSkills?.()
   setSessionToolCtx(entry.dshId, prep.standingCtx)
@@ -279,9 +290,14 @@ function onStatus(entry: SessionAgent, status: string): void {
     try {
       await entry.deps.ctx.sessions.flush(entry.agent.session)
     } catch (err) {
-      console.error(`[lore-driver] flush failed session=${entry.dshId}:`, err)
+      // WHY: a closed handle refuses the flush because its close already
+      // drains the buffered events and reports its own drain failure
+      // (session-persistence-jsonl storage close) — not a loss to log.
+      if (!(err instanceof SessionHandleClosedError)) {
+        console.error(`[lore-driver] flush failed session=${entry.dshId}:`, err)
+      }
     }
-    if (entry.turnOpen) {
+    if (entry.turnOpen && !entry.treeWait) {
       entry.deps.channel.push(entry.dshId, {
         type: 'error', message: 'The turn ended without a terminal event.',
       })
@@ -309,7 +325,7 @@ function sessionSetup(entry: SessionAgent): (agentCtx: Context) => void {
       text: () => entry.current?.systemPrompt ?? '',
       complete: true,
     })
-    installModelSelection(agentCtx, entry.selection)
+    installModelSelection(agentCtx)
     // The time ground rides its own context message on each turn's FIRST
     // step (see ARCH in time-stamps.ts). DELEGATE first (context alone is not
     // a veto), then append after the downstream decision's admitted messages.
@@ -360,9 +376,9 @@ function sessionSetup(entry: SessionAgent): (agentCtx: Context) => void {
       })
     })
     const mine = (agent: { id?: unknown } | undefined) => String(agent?.id ?? '') === entry.dshId
-    // The MCP seam: the bounded assembly wait, the ask gate, the scrub.
+    // The MCP seam: the describing executor, the ask gate, the scrub.
     installMcpSeam(agentCtx, entry)
-    agentCtx.on('agent/inbox/claimed', ({ agent, message }: { agent: any; message: { id: unknown } }) => {
+    agentCtx.on('agent/inbox/claimed', ({ agent, message }: { agent: any; message: { id: unknown; source?: { kind?: unknown } } }) => {
       if (mine(agent)) onClaim(entry, message)
     })
     agentCtx.on('agent/status', ({ agent, status }: { agent: any; status: string }) => {
@@ -395,8 +411,34 @@ function sessionWatch(entry: SessionAgent): (session: any, ev: any) => void {
     if (cu) entry.deps.channel.push(entry.dshId, cu)
     // After this event's mapped frames (the tap fans out synchronously), and
     // before the next claim (which also closes first — onClaim).
-    queueMicrotask(() => closeOpenTurn(entry))
+    if (!entry.treeWait) queueMicrotask(() => { void awaitTreeThenClose(entry) })
   }
+}
+
+/** Close the Lore turn once the agent is idle AND its subagent tree settled —
+ * dsh's own host loop (bundle/headless `whenIdle` + `waitForTreeWork`): a
+ * settlement notice wakes the idle parent, so the parent's answer to it is
+ * part of the same Lore turn. */
+async function awaitTreeThenClose(entry: SessionAgent): Promise<void> {
+  const subagents = (entry.deps.ctx as any).get?.('subagents')
+  if (!subagents) { closeOpenTurn(entry); return }
+  entry.treeWait = true
+  try {
+    while (true) {
+      await entry.agent.whenIdle()
+      const idleSeq = entry.agent.session.seq
+      // Settlement can wake the parent before the tree wait observes it.
+      if (!await subagents.waitForTreeWork(entry.agent)
+        && entry.agent.status === 'idle' && entry.agent.session.seq === idleSeq) break
+    }
+  } catch (err) {
+    console.error(`[lore-driver] subagent tree wait failed session=${entry.dshId}:`, err)
+    entry.deps.channel.push(entry.dshId, { type: 'error', message: 'A subagent failed to settle.' })
+  } finally {
+    entry.treeWait = false
+  }
+  closeOpenTurn(entry)
+  if (entry.agent.status === 'idle') scheduleIdleDispose(entry)
 }
 
 async function createSessionAgent(
@@ -406,15 +448,9 @@ async function createSessionAgent(
   await disposing.get(dshId)
   const entry = {
     dshId, deps, preps: new Map(), current: null,
-    selection: {
-      current: {
-        provider: String(agentOptions.provider ?? ''), model: String(agentOptions.model ?? ''),
-      },
-      assembled: undefined,
-    },
     activated: new Set<string>(), turnOpen: false, releaseRestriction: null,
-    agentCtx: null, invalidateSkills: null, mcpMounted: new Map(), mcpPending: [],
-    offWatch: () => {}, idleTimer: null,
+    agentCtx: null, invalidateSkills: null, mcpMounted: new Map(),
+    offWatch: () => {}, idleTimer: null, treeWait: false,
   } as unknown as SessionAgent
   const handle = await deps.open(dshId, agentOptions, sessionSetup(entry))
   entry.handle = handle
@@ -458,7 +494,7 @@ async function tryDispose(entry: SessionAgent): Promise<void> {
   // INVARIANT(data-loss): dispose only an idle agent with an empty inbox and
   // no request in flight — checked and unregistered synchronously. Why: a
   // graceful dispose durably DISCARDS the pending inbox.
-  if (live.get(dshId) !== entry || (inflight.get(dshId) ?? 0) > 0
+  if (live.get(dshId) !== entry || (inflight.get(dshId) ?? 0) > 0 || entry.treeWait
       || agent.status !== 'idle' || agent.inbox.hasPending) return
   live.delete(dshId)
   const done = (async () => {
@@ -487,6 +523,9 @@ export async function enqueueFollowup(
   try {
     const entry = await liveAgent(deps, dshId, agentOptions)
     const message = createUserMessage({ content: await content(), source: { kind: 'user' } })
+    // An idle agent claims this message at once — its servers mount and are
+    // awaited first (see the wait ARCH in mcp-servers.ts).
+    if (entry.agent.status === 'idle' && entry.preps.size === 0) await mountAhead(entry, prep)
     const messageId = String(message.id)
     entry.preps.set(messageId, prep)
     try {

@@ -18,9 +18,6 @@ import {
   clearSessionToolCtx, clearTurnRequestCtx, loreTurnCtxFor,
   setSessionToolCtx, stampTurnRequestCtx,
 } from '../src/tools.ts'
-import { installModelSelection } from '@deepseek-ai/dsh-agent'
-import type { ModelSelectionRef } from '@deepseek-ai/dsh-agent'
-import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 
 // http.ts (in the entry graph index.ts pulls in) captures the driver secret
 // at MODULE LOAD (const SECRET), so the leaf-handler drive below needs it set
@@ -330,6 +327,7 @@ test('an anthropic-api model lands under providers.anthropic with the scaffold a
       baseURL: 'http://x',
       requestImageMaxBytes: 4194304,
       defaultContextWindow: 128000,
+      defaultMaxTokens: 32768,
       models: [{
         id: 'deepseek-a/flash',
         reasoningEfforts: { low: 'low', high: 'high', max: 'max' },
@@ -386,6 +384,7 @@ test('an openai model on lore produces today\'s payload unchanged', async () => 
       requestImageMaxBytes: 4194304,
       compat: { supportsDeveloperRole: false, maxTokensField: 'max_tokens', thinkingFormat: 'openai' },
       defaultContextWindow: 128000,
+      defaultMaxTokens: 32768,
       models: [{
         id: 'm/x', input: ['text', 'image'], reasoningEfforts: { low: 'low' },
         contextWindow: 128000, maxTokens: 65536,
@@ -980,89 +979,9 @@ test('a compacted source seeds its prefix with the checkpoint row verbatim', asy
 })
 
 
-// ─── reasoning effort: dsh's own model-selection seam (plan ───────────────────
-// reasoning-effort-selector step 3). The turn builds a per-HTTP-turn selection
-// from the CURRENT body and installs it in the agent setup; the first three
-// tests drive the REAL installModelSelection through a minimal waterfall
-// context, the last pins the plugin wiring by source shape.
-
-/** A minimal agent-scoped context capturing the two waterfalls
- * installModelSelection registers, so a test can drive them in the order
- * the live loop does (assembly snapshots the selection, then request
- * routing applies it). */
-function selectionAgentCtx() {
-  const listeners = new Map<string, (...args: any[]) => any>()
-  return {
-    ctx: {
-      on: (kind: string, cb: (...args: any[]) => any) => {
-        listeners.set(kind, cb)
-        return () => listeners.delete(kind)
-      },
-    } as any,
-    /** Prompt assembly (3-arg waterfall): snapshots selection.current. */
-    fireAssemble: () => listeners.get('system-prompt/assemble')!(
-      {}, {}, async () => ({ variables: {} })),
-    /** Request routing (2-arg waterfall): applies the snapshot. */
-    fireRequest: (resolved: Record<string, unknown>) =>
-      listeners.get('agent/request')!({}, async () => resolved),
-  }
-}
-
-test('reasoning effort: an explicit body effort reaches the request config (set)', async () => {
-  const h = selectionAgentCtx()
-  const selection: ModelSelectionRef = {
-    current: {
-      provider: PROVIDER,
-      model: 'deepseek/pro',
-      reasoningEffort: ReasoningEffortId('low'),
-    },
-    assembled: undefined,
-  }
-  installModelSelection(h.ctx, selection)
-  await h.fireAssemble()
-  const out = await h.fireRequest({
-    provider: 'other', model: 'other', maxTokens: 4096,
-    reasoningEffort: ReasoningEffortId('max'),
-  })
-  assert.equal(out.provider, PROVIDER)
-  assert.equal(out.model, 'deepseek/pro')
-  assert.equal(out.reasoningEffort, 'low',
-    'the selected effort replaces the resolved one on the wire')
-  assert.equal(out.maxTokens, 4096, 'unrelated request config survives')
-})
-
-test('reasoning effort: no body effort keeps the request free of one (omitted)', async () => {
-  const h = selectionAgentCtx()
-  const selection: ModelSelectionRef = {
-    current: { provider: PROVIDER, model: 'deepseek/flash' },
-    assembled: undefined,
-  }
-  installModelSelection(h.ctx, selection)
-  await h.fireAssemble()
-  const out = await h.fireRequest({ provider: 'other', model: 'other', maxTokens: 4096 })
-  assert.ok(!('reasoningEffort' in out),
-    'Default sends no explicit effort — no field on the wire, the provider default applies')
-  assert.equal(out.model, 'deepseek/flash')
-})
-
-test('reasoning effort: a persisted explicit effort is cleared when the turn selects none', async () => {
-  const h = selectionAgentCtx()
-  const selection: ModelSelectionRef = {
-    current: { provider: PROVIDER, model: 'deepseek/flash' },
-    assembled: undefined,
-  }
-  installModelSelection(h.ctx, selection)
-  await h.fireAssemble()
-  // The resolved config carries an explicit effort — inherited from the
-  // composition or a stale source on a RESUMED session. A turn whose body
-  // selects none must strip it: switching back to Default leaks nothing.
-  const out = await h.fireRequest({
-    provider: 'other', model: 'other',
-    reasoningEffort: ReasoningEffortId('low'),
-  })
-  assert.ok(!('reasoningEffort' in out),
-    'a previously explicit effort never survives into a Default turn')
-})
+// ─── reasoning effort: dsh's own model-selection seam. The turn builds a
+// per-send selection from the CURRENT body; each claim hands it to
+// `agent.model.select` (dsh owns the request config from there).
 
 test('reasoning effort: the prep wires the body effort through the selection, nothing else', async () => {
   // Pinned by source shape, like the caps/leaf tests above: the prep reads
@@ -1070,9 +989,9 @@ test('reasoning effort: the prep wires the body effort through the selection, no
   // TRANSLATES it to the pi-ai level key (identity for pi-ai's own names,
   // `none` → `off`; an untranslatable spelling goes out verbatim for the
   // adapter to refuse loudly — never a silent Default), brands it into the
-  // prep's selection; the session agent installs installModelSelection ONCE
-  // over a ref whose `current` each claim swaps (the per-claim tests in
-  // session-agents.test.ts drive it), and agentOptions keeps its {provider,
+  // prep's selection; each claim selects it on the agent (the per-claim tests
+  // in session-agents.test.ts drive it), the setup installs the switch notice
+  // once, and agentOptions keeps its {provider,
   // model} shape. The fork path carries no selection — a fork's next turn
   // re-reads the effort off its own body.
   const turn = readFileSync(new URL('../src/turn.ts', import.meta.url), 'utf8')
@@ -1085,10 +1004,10 @@ test('reasoning effort: the prep wires the body effort through the selection, no
     'the gateway spelling is translated to the pi-ai level key')
   assert.match(turn, /\.\.\.\(piEffort \? \{ reasoningEffort: ReasoningEffortId\(piEffort\) \} : \{\}\)/,
     'the translated effort rides the selection ONLY when present (absent key = Default)')
-  assert.match(agents, /installModelSelection\(agentCtx, entry\.selection\)/,
-    'the session agent setup installs the swappable selection ref')
-  assert.match(agents, /entry\.selection\.current = prep\.selection/,
-    'each claim swaps the claimed message\'s selection in')
+  assert.match(agents, /installModelSelection\(agentCtx\)/,
+    'the session agent setup installs the switch notice')
+  assert.match(agents, /entry\.agent\.model\.select\(prep\.selection\)/,
+    'each claim selects the claimed message\'s selection')
   assert.match(turn, /const provider = ROUTE_BY_API\[caps\.api\]/,
     'the route name comes from the caps api — one map, two routes')
   assert.match(turn, /const agentOptions = \{ provider, model \}/,
@@ -1166,7 +1085,7 @@ test('source shape: turn_closed is pushed once per claimed turn, before the next
   const claim = src.slice(src.indexOf('function onClaim('))
   assert.ok(claim.indexOf('closeOpenTurn(entry)') < claim.indexOf("type: 'lore/claim'"),
     'a claim closes the previous turn before pushing its own lore/claim')
-  assert.match(src, /queueMicrotask\(\(\) => closeOpenTurn\(entry\)\)/,
+  assert.match(src, /queueMicrotask\(\(\) => \{ void awaitTreeThenClose\(entry\) \}\)/,
     'the turn/end watcher defers the terminal past the event\'s mapped frames')
 })
 

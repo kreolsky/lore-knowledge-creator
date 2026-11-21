@@ -11683,6 +11683,55 @@
         "summary": "Move Document To Project"
       }
     },
+    "/api/documents/{document_id}/opened": {
+      "post": {
+        "description": "Record an in-app open as the caller's last-accessed doc of its project.\n\nWHY a separate write: in-app navigation commits the document from the store\nbefore navigating, so DocumentPage never re-fetches it with track=1 — without\nthis the pointer stayed on the doc the user ENTERED the project on.",
+        "operationId": "mark_document_opened_api_documents__document_id__opened_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "lore_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lore Session"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mark Document Opened"
+      }
+    },
     "/api/documents/{document_id}/reorder": {
       "patch": {
         "description": "Place a document or reference after `after_id` within its own sibling group\n(null = top); with `parent_id` sent, place it under that parent instead.\n\n`parent_id` absent ⇒ today's path: `after_id` must be a same-kind sibling\n(same project_id, parent_id and is_reference) or null; a cross-level or\ncross-kind `after_id` is a 400. `parent_id` sent (even '' = project root)\n⇒ the ONE in-project move (documents.move.move_document_command) owns\nsystem/cycle/parent-validity checks and emits `document_moved`.",

@@ -22,7 +22,7 @@ import routes.chat.completions as comp
 from driver.client import DriverLine, DriverLineUnreachable
 from driver.timeline import fetch_session_status as _real_fetch_session_status
 from helpers import pin_chat_api
-from test_driver_channel import FakeConnector, FakeReplay, _env, _turn_end
+from test_driver_channel import _CLOSED, FakeConnector, FakeReplay, _env, _turn_end
 
 
 def _LINE():
@@ -569,12 +569,12 @@ async def _seed_row(test_db, sid):
 
 async def _close_turn(env, sid: str, seq: int = 10) -> None:
     """Run the newest send's turn through the channel: its claim (which
-    mints the pair and opens the turn), then its end. `seq` must be NEW per
+    mints the pair and opens the turn), then its end and the plugin's `turn_closed`. `seq` must be NEW per
     closure — the channel's dedup drops any frame at or below the session's
     last delivered seq."""
     sock = env.connector.sockets[0]
     payload = env.followups.payloads[-1]
-    for frame in (_claim_of(payload), _turn_end(seq)):
+    for frame in (_claim_of(payload), _turn_end(seq), _CLOSED):
         sock.push(_env(sid, frame))
     await _until_async(lambda: _row_stamped(payload["assistant_msg_id"], seq))
 

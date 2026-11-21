@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Brain, Eye, EyeOff, ScrollText, Sparkles } from 'lucide-react';
 import { Button, Dropdown, FieldCheckbox, IconButton } from '../ui';
 import { ChatComposer } from './ChatComposer';
+import { TodoDock } from './TodoDock';
 import { TokenUsageGauge } from './TokenUsageGauge';
 import { CacheHitIndicator } from './CacheHitIndicator';
 import { useChatStore, chatAttachSurface } from '../../store/chat-store';
@@ -554,6 +555,7 @@ export function ChatInput() {
       onRemoveFile={removePendingFile}
       queued={queued}
       onRemoveQueued={id => { void discardQueued(id); }}
+      dock={<TodoDock />}
       onScrollToBottom={scrolledAway ? scrollToBottom : undefined}
       topControls={topControls}
       leftControls={leftControls}

@@ -495,6 +495,9 @@ export interface ChatSession {
   // List rows only: the selected persona (system_prompt_id) has conversation
   // memory ON (server-parsed frontmatter). Absent on create/update responses.
   persona_memory?: boolean;
+  // List rows only (AI chats): dsh's agent runs a turn for this chat at read
+  // time — seeds the list's 'working' mark after a reload.
+  running?: boolean;
   // The conversation memory this chat received (server-authored; the send
   // reply carries it after the turn that recorded it). null/absent = none decided.
   memory?: ChatMemoryRecord | null;

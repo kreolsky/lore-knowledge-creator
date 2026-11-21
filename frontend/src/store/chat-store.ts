@@ -42,6 +42,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   conversation: [],
   turnRanges: {},
   turnStartSeq: null,
+  todos: null,
 
   models: [],
   visionModels: [],

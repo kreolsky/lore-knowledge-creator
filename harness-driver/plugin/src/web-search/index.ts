@@ -18,6 +18,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { credentialRef } from '@deepseek-ai/dsh-credentials'
 
 import { AGENT_KEY_REF } from '../ensure.ts'
 import { BraveSearchProvider } from './brave.ts'
@@ -40,7 +41,7 @@ export function apply(ctx: Context): void {
     if (credentials === undefined) {
       throw new Error('the credentials service is not composed — cannot resolve ' + ref)
     }
-    return (await credentials.resolve(ref))?.value ?? ''
+    return (await credentials.resolve(credentialRef(ref)))?.value ?? ''
   }
   const resolveKey = (): Promise<string> => resolveRef(WEB_SEARCH_KEY_REF)
   ctx.web.registerSearchProvider(new BraveSearchProvider(resolveKey))

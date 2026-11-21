@@ -39,6 +39,8 @@ export interface TurnNodeLike {
   /** dsh's process group holding the node (see ConversationVM). */
   groupKey?: string;
   group?: ProcessGroupInfo;
+  /** dsh draws this step's reply as its own row (see ConversationVM). */
+  response?: true;
 }
 
 interface AssistantBlockLike {
@@ -155,49 +157,16 @@ function AssistantStepNode({ data, isStreaming, only }: {
   );
 }
 
-/** Whether a verdict ask has been answered: its call settled. */
-function isDecidedVerdict(callId: string, nodes: TurnNodeLike[]): boolean {
-  // INVARIANT: the ask is decided only once the call's node carries a
-  // tool-result — a bare tool-call node is NOT a decision.
-  // Why: dsh appends `tool/call` BEFORE it asks for approval, so the running
-  // node already exists when the verdict-ask arrives; keying on its presence
-  // rendered every live ask as the settled card, with no buttons to answer it.
-  return nodes.some(n => {
-    if (n.kind !== 'tool-call') return false;
-    const root = (typeof n.data === 'object' && n.data !== null ? n.data : {}) as Record<string, unknown>;
-    const block = root.root as Record<string, unknown> | undefined;
-    return block?.kind === 'tool-result' && String(block.callId ?? '') === callId;
-  });
-}
-
-/** The held call's own args, read off its tool-call node: dsh appends the
- * call BEFORE asking (the INVARIANT above), and that node already carries
- * `argsRaw` — the ask frame itself carries only {turn, callId, toolName, perCall}. */
-function verdictArgsRaw(callId: string, nodes: TurnNodeLike[]): string | undefined {
-  for (const n of nodes) {
-    if (n.kind !== 'tool-call') continue;
-    const root = (typeof n.data === 'object' && n.data !== null ? n.data : {}) as Record<string, unknown>;
-    const block = root.root as Record<string, unknown> | undefined;
-    if (!block || String(block.callId ?? '') !== callId) continue;
-    // A settled call moved its args onto `call`; a running one holds them flat.
-    const raw = block.kind === 'tool-result'
-      ? String((block.call as Record<string, unknown> | null)?.argsRaw ?? '')
-      : String(block.argsRaw ?? '');
-    if (raw !== '') return raw;
-  }
-  return undefined;
-}
-
-/** The verdict ask card. The card STAYS once asked — while the parked call
- * has no tool row it renders the decision card; once the call's own tool-call
- * node exists (the verdict published, the call ran) it renders as a settled
- * record under that row. */
-function VerdictAskNode({ data, nodes }: { data: unknown; nodes: TurnNodeLike[] }) {
+/** The verdict ask card. The card STAYS once asked — until its call settles
+ * it renders the decision card; once decided (the node's own `decided`, set by
+ * the call's tool-result — a bare tool-call is not a decision) it renders as
+ * a settled record under the call's row. */
+function VerdictAskNode({ data }: { data: unknown }) {
   const { t } = useTranslation();
   const d = (typeof data === 'object' && data !== null ? data : {}) as Record<string, unknown>;
   const callId = String(d.callId ?? '');
   const toolName = String(d.toolName ?? '');
-  if (isDecidedVerdict(callId, nodes)) {
+  if (d.decided === true) {
     // DECIDED on purpose renders the bare body: once decided, the call's own
     // chip carries the result — no args preview next to a settled record.
     return (
@@ -206,7 +175,7 @@ function VerdictAskNode({ data, nodes }: { data: unknown; nodes: TurnNodeLike[] 
       </ToolPlate>
     );
   }
-  return <VerdictCard pending={{ call_id: callId, tool_name: toolName, message_id: '', per_call: d.perCall === true }} argsRaw={verdictArgsRaw(callId, nodes)} />;
+  return <VerdictCard pending={{ call_id: callId, tool_name: toolName, message_id: '', per_call: d.perCall === true }} argsRaw={typeof d.argsRaw === 'string' && d.argsRaw !== '' ? d.argsRaw : undefined} />;
 }
 
 /** The halt card: what stopped the turn and how far it got. The sentence is
@@ -442,7 +411,7 @@ function TurnNode({ node, nodes, isStreaming, onContinue, only }: {
   switch (node.kind) {
     case 'assistant-step': return <AssistantStepNode data={node.data} isStreaming={isStreaming} only={only} />;
     case 'tool-call': return <ToolCallNode data={node.data} isStreaming={isStreaming} selfOpening={opensItself(node)} />;
-    case 'verdict-ask': return <VerdictAskNode data={node.data} nodes={nodes} />;
+    case 'verdict-ask': return <VerdictAskNode data={node.data} />;
     case 'halt': return <HaltNode data={node.data} nodes={nodes} self={node} onContinue={onContinue} />;
     case 'image-gen': return <ImageGenNode data={node.data} selfOpening={opensItself(node)} />;
     case 'compaction-mint': return <CompactionMintNode data={node.data} />;
@@ -495,12 +464,6 @@ function groupTitle(info: ProcessGroupInfo, t: ReturnType<typeof useTranslation>
   if (labels.length === 2) return t('processGroupAnd', { first: labels[0], second: labels[1] });
   const list = labels.join(', ');
   return summary.counts.length > 3 ? t('processGroupEtc', { title: list }) : list;
-}
-
-function hasReplyText(node: TurnNodeLike): boolean {
-  const d = (typeof node.data === 'object' && node.data !== null ? node.data : {}) as Record<string, unknown>;
-  const blocks = Array.isArray(d.blocks) ? d.blocks as AssistantBlockLike[] : [];
-  return blocks.some(b => b.kind === 'text' && (b.text ?? '').trim() !== '');
 }
 
 function isFailedToolCall(node: TurnNodeLike): boolean {
@@ -575,11 +538,11 @@ function ProcessGroupNode({ info, members, nodes, isStreaming, onContinue, after
  * at most one process chip ever stands unfolded in a run). */
 const MIN_GROUP_MEMBERS = 2;
 
-function staysOutOfGroup(node: TurnNodeLike, nodes: TurnNodeLike[]): boolean {
+function staysOutOfGroup(node: TurnNodeLike): boolean {
   if (node.kind === 'halt' || node.kind === 'interrupted-reply') return true;
   if (node.kind !== 'verdict-ask') return false;
   const d = (typeof node.data === 'object' && node.data !== null ? node.data : {}) as Record<string, unknown>;
-  return !isDecidedVerdict(String(d.callId ?? ''), nodes);
+  return d.decided !== true;
 }
 
 /** ONE turn's assembled nodes, in the assembler's order. dsh's process groups
@@ -596,7 +559,7 @@ export function TurnNodes({ nodes, isStreaming, onContinue }: {
   // Why: a pending decision or a halt must be seen (and answered) without
   // opening anything, and a cut-off reply is the answer's text, not process;
   // a settled verdict is a plain record and folds.
-  const outside = new Set(nodes.filter(n => staysOutOfGroup(n, nodes)).map(n => n.key));
+  const outside = new Set(nodes.filter(staysOutOfGroup).map(n => n.key));
   const members = new Map<string, TurnNodeLike[]>();
   for (const node of nodes) {
     if (node.groupKey === undefined || outside.has(node.key)) continue;
@@ -606,7 +569,10 @@ export function TurnNodes({ nodes, isStreaming, onContinue }: {
   const folded = (node: TurnNodeLike): TurnNodeLike[] | undefined => {
     if (node.groupKey === undefined || !node.group || outside.has(node.key)) return undefined;
     const list = members.get(node.groupKey);
-    return list && list.length >= MIN_GROUP_MEMBERS ? list : undefined;
+    // WHY: Lore draws no context node, so an all-context group (dsh's `context`
+    // category) would be an empty plate — its members render flat, i.e. nothing.
+    if (!list || list.every(n => n.kind === 'context')) return undefined;
+    return list.length >= MIN_GROUP_MEMBERS ? list : undefined;
   };
   const drawn = new Set<string>();
   // Whether the answer's text already stands above the node being drawn.
@@ -615,7 +581,7 @@ export function TurnNodes({ nodes, isStreaming, onContinue }: {
     <>
       {nodes.map(node => {
         const afterText = textAbove;
-        if (node.kind === 'assistant-step' && hasReplyText(node)) textAbove = true;
+        if (node.response) textAbove = true;
         const group = folded(node);
         if (!group) {
           return (
@@ -637,7 +603,7 @@ export function TurnNodes({ nodes, isStreaming, onContinue }: {
         );
         drawn.add(node.groupKey!);
         // The reply of a member step renders outside the group, after it.
-        const reply = node.kind === 'assistant-step' && hasReplyText(node) && (
+        const reply = node.response && (
           <div key={node.key} className="my-0.5">
             <TurnNode node={node} nodes={nodes} isStreaming={isStreaming} onContinue={onContinue} only="text" />
           </div>

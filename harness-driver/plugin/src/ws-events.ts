@@ -213,7 +213,7 @@ export function newChildActivityState(
 
 /**
  * The driving (root) session a descendant's event should heartbeat, or null:
- * null for a session with no `header.parentSession` (it is a driving session
+ * null for a session that is not `header.origin: 'subagent'` (it is a driving session
  * itself — its own frames are its progress) and for a root still inside its
  * throttle window. Nesting resolves through the descendant map to the TOP
  * session. The caller owns the state and the clock.
@@ -222,10 +222,10 @@ export function childActivityRoot(
   session: unknown, state: ChildActivityState, now: number,
   throttleMs: number = CHILD_ACTIVITY_THROTTLE_MS,
 ): string | null {
-  const s = session as { id?: unknown; header?: { parentSession?: unknown } } | null
+  const s = session as { id?: unknown; header?: { parentSession?: unknown; origin?: unknown } } | null
   const id = String(s?.id ?? '')
   const parent = s?.header?.parentSession
-  if (!id || typeof parent !== 'string' || !parent) return null
+  if (!id || s?.header?.origin !== 'subagent' || typeof parent !== 'string' || !parent) return null
   const root = rootOf(state.children, parent)
   const last = state.lastBeat.get(root)
   if (last !== undefined && now - last < throttleMs) return null
