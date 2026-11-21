@@ -9,7 +9,7 @@ import { useArmedAction } from '../../hooks/useArmedAction';
 import { useTranslation } from '../../i18n';
 import { useEditorView } from '../../editor/active-editor';
 import { referenceThumbUrl } from '../../utils/reference-url';
-import { hueForId, refEmbedText } from './ref-utils';
+import { hueForId, insertRefEmbedAtCursor } from './ref-utils';
 import styles from './ImageGallery.module.css';
 
 interface ImageGalleryProps {
@@ -151,13 +151,7 @@ const ImageThumb = memo(function ImageThumb({
               e.stopPropagation();
               const view = getEditorView();
               if (!view) return;
-              const pos = view.state.selection.main.head;
-              const text = refEmbedText(reference);
-              view.dispatch({
-                changes: { from: pos, insert: text },
-                selection: { anchor: pos + 2 + reference.title.length },
-              });
-              view.focus();
+              insertRefEmbedAtCursor(view, reference);
             }}
           >
             <FileInput size={11} />

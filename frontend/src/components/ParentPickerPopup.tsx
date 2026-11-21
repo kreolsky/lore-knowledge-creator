@@ -14,7 +14,8 @@ import { apiClient } from '../api/client';
 import { serverRefusalDetail } from '../utils/server-refusal-detail';
 import { FieldInput } from './ui';
 import { useTranslation } from '../i18n';
-import { buildParentMap, sortDocumentsForChat } from '../utils/document-sort';
+import { sortDocumentsForChat } from '../utils/document-sort';
+import { buildParentMap, childrenMap, descendantIds, type ChildrenMap } from '../utils/document-hierarchy';
 import { useNavMode } from '../hooks/useNavMode';
 import { useDocumentPreview } from '../hooks/useDocumentPreview';
 import { usePopupSlot } from '../hooks/usePopupSlot';
@@ -26,32 +27,11 @@ import type { Document, DocumentTreeNode } from '../types';
 
 const POPUP_WIDTH = 340;
 
-function getDescendantIds(docId: string, documents: Document[]): Set<string> {
-  const childrenMap = new Map<string, string[]>();
-  for (const d of documents) {
-    if (d.parent_id) {
-      const siblings = childrenMap.get(d.parent_id) ?? [];
-      siblings.push(d.document_id);
-      childrenMap.set(d.parent_id, siblings);
-    }
-  }
-  const result = new Set<string>();
-  const stack = [docId];
-  while (stack.length) {
-    const id = stack.pop()!;
-    for (const child of childrenMap.get(id) ?? []) {
-      result.add(child);
-      stack.push(child);
-    }
-  }
-  return result;
-}
-
 /** The Memory folder and every card under it. */
-function getMemoryIds(documents: Document[]): Set<string> {
+function getMemoryIds(documents: Document[], children: ChildrenMap): Set<string> {
   const folder = documents.find(d => d.system_role === 'memory_folder');
   if (!folder) return new Set<string>();
-  return new Set([folder.document_id, ...getDescendantIds(folder.document_id, documents)]);
+  return descendantIds([folder.document_id], children, { includeRoots: true });
 }
 
 interface Props {
@@ -104,15 +84,18 @@ export function ParentPickerPopup({ doc, currentDocumentId, onMoved, anchorRect,
     previewRef.current = el;
   }, []);
 
+  const parentMap = useMemo(() => buildParentMap(documents), [documents]);
+  const children = useMemo(() => childrenMap(parentMap), [parentMap]);
+
   // INVARIANT: the Memory folder and its cards are never offered as a parent.
   // Why: a document filed there silently becomes memory the agent retrieves; the
   // server refuses the move from outside memory (documents/move.py).
   const excludedIds = useMemo(
     () => new Set([
-      ...(doc ? getDescendantIds(doc.document_id, documents) : []),
-      ...getMemoryIds(documents),
+      ...(doc ? descendantIds([doc.document_id], children, { includeRoots: false }) : []),
+      ...getMemoryIds(documents, children),
     ]),
-    [doc, documents],
+    [doc, documents, children],
   );
 
   // ARCH: "No parent" sentinel uses empty string — backend treats "" as clearing parent_id
@@ -121,8 +104,6 @@ export function ParentPickerPopup({ doc, currentDocumentId, onMoved, anchorRect,
   const currentParentId = doc ? (doc.parent_id ?? '') : (currentDocumentId ?? '');
   const noParentLabel = noParentLabelProp
     ?? (isRefMode ? t('projectLevelAllDocs') : t('noParentTopLevel'));
-
-  const parentMap = useMemo(() => buildParentMap(documents), [documents]);
 
   const items = useMemo(() => {
     const q = searchQuery.toLowerCase();
@@ -173,7 +154,7 @@ export function ParentPickerPopup({ doc, currentDocumentId, onMoved, anchorRect,
       const movedId = doc!.document_id;
       // The new parent's subtree membership is what decides the crossing.
       const crossing = roots.filter(rootId => {
-        const subtree = new Set([rootId, ...getDescendantIds(rootId, documents)]);
+        const subtree = descendantIds([rootId], children, { includeRoots: true });
         return subtree.has(movedId) && !subtree.has(parentId);
       });
       if (crossing.length) {

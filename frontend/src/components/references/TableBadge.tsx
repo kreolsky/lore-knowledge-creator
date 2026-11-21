@@ -10,7 +10,7 @@
  *
  * ARCH: reuses the shared ListRow/ListPill/RowActions shell + useArmedAction so the badge
  * is typographically and behaviorally identical to a RefCard (one owner per concern). The
- * rename UI mirrors RefCard exactly: Pencil in RowActions + FieldInput body override +
+ * rename UI mirrors RefCard exactly: Pencil in RowActions + InlineRenameInput body override +
  * double-click start. No rounded corners (project convention).
  */
 
@@ -18,7 +18,7 @@ import { memo, useRef } from 'react';
 import { Table, Trash2, Pencil, FileInput, Download } from 'lucide-react';
 import { useTranslation } from '../../i18n';
 import type { DocumentTableEntry } from '../editor/live-preview/table-document-ops';
-import { IconButton, FieldInput, ListPill, RowActions } from '../ui';
+import { IconButton, InlineRenameInput, ListPill, RowActions } from '../ui';
 import { ListRow } from '../chat/ListRow';
 import { useArmedAction } from '../../hooks/useArmedAction';
 
@@ -120,18 +120,12 @@ export const TableBadge = memo(function TableBadge({
         <ListRow
           body={entry.label || t('tableBadgeUntitled')}
           bodyOverride={renamingId === entry.table_id ? (
-            <FieldInput
+            <InlineRenameInput
               className="ref-rename-input"
-              data-rename-input
               value={renameValue}
-              onChange={e => onRenameChange(e.target.value)}
-              autoFocus
-              onKeyDown={e => {
-                if (e.key === 'Enter') { e.preventDefault(); onRenameCommit(entry); }
-                if (e.key === 'Escape') { onRenameCancel(); }
-              }}
-              onBlur={() => onRenameCommit(entry)}
-              onClick={e => e.stopPropagation()}
+              onChange={onRenameChange}
+              onCommit={() => onRenameCommit(entry)}
+              onCancel={onRenameCancel}
             />
           ) : undefined}
           meta={`${entry.unreadable ? t('tableBadgeUnreadable') : `${entry.rows} × ${entry.cols}`}${entry.unlinked ? ` · ${t('tableBadgeUnlinked')}` : ''}`}

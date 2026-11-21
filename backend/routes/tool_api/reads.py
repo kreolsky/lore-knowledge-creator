@@ -88,7 +88,7 @@ async def tool_get_links(
     if "error" in result:
         # Map the executor's soft errors to HTTP codes (no silent degradation).
         err = result["error"]
-        if "not found" in err or "not in this project" in err:
+        if "not found" in err:
             raise HTTPException(status_code=404, detail=err)
         raise HTTPException(status_code=403, detail=err)
     return result
@@ -131,10 +131,6 @@ async def tool_view_reference_image(
         scope_root=ctx.get("scope_root"),
     )
     if isinstance(target, dict):
-        if "not in this project" in target.get("error", ""):
-            # INVARIANT(security): a foreign-project id answers the SAME 404 as an unknown id.
-            # Why: a distinguishable detail is an existence oracle across the project boundary.
-            target = {"error": "Document not found"}
         _raise_soft_error(target)
     doc = target.doc
     if doc.get("media_type") != "image" or not doc.get("file_path"):
@@ -152,7 +148,7 @@ def _raise_soft_error(result: dict) -> dict:
     """Map an executor's soft error to HTTP (no silent degradation); pass a result through."""
     if "error" in result:
         err = result["error"]
-        if "not found" in err or "not in this project" in err:
+        if "not found" in err:
             raise HTTPException(status_code=404, detail=err)
         raise HTTPException(status_code=403, detail=err)
     return result

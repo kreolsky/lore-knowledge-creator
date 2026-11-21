@@ -12,6 +12,7 @@ import { useAppStore } from './app-store';
 import { createResourceCache } from '../api/swr-cache';
 import { registerLogoutHandler, getLogoutEpoch } from './logout-handlers';
 import { upsertByKey } from './chat-store/upsert';
+import { createPendingImagesSlice } from './chat-store/pending-images';
 import { loadMessagesFor, patchMessageContent, deleteMessageById } from './chat-message-crud';
 import { t } from '../i18n';
 import type { NoteAnchorWire } from '../collab/note-anchor-wire';
@@ -563,20 +564,7 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
     set({ pendingInputFocus: v });
   },
 
-  addPendingImage(dataUrl, meta) {
-    set(s => ({
-      pendingImages: [...s.pendingImages, dataUrl],
-      pendingImageMeta: meta ? { ...s.pendingImageMeta, [dataUrl]: meta } : s.pendingImageMeta,
-    }));
-  },
-
-  removePendingImage(index: number) {
-    set(s => ({ pendingImages: s.pendingImages.filter((_, i) => i !== index) }));
-  },
-
-  clearPendingImages() {
-    set({ pendingImages: [], pendingImageMeta: {} });
-  },
+  ...createPendingImagesSlice(set),
 
   // Per-session composer draft (see NoteChatState.drafts).
   setDraftForSession(sessionId: string, v: string) {

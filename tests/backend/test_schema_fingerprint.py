@@ -3,8 +3,8 @@
 The live SurrealDB introspection (INFO FOR DB / INFO FOR TABLE) is exercised manually
 against the real DB; these tests pin the deterministic reduction + diff that the guard's
 correctness rests on — type extraction, sort stability, and the SCHEMAFULL→SCHEMALESS
-drift detection that is the whole point of the guard — plus the W2 fatal gate:
-`removed` drift with no migration run refuses boot, everything else stays advisory.
+drift detection that is the whole point of the guard — plus the fatal gate:
+`removed` drift refuses boot, everything else stays advisory.
 """
 import logging
 
@@ -51,18 +51,18 @@ class _FakeDB:
         raise AssertionError(f"unexpected query: {q}")
 
 
-async def test_drift_is_not_overwritten_when_no_migration_ran():
+async def test_removed_drift_is_not_overwritten():
     """A stale-schema restore must keep failing the check on EVERY boot, not just the first.
 
-    The guard is log-only in v1, so a single log line on boot #1 is easy to miss. If the
-    post-boot record then persists the STALE schema as the new expectation, boot #2 sees
-    no drift and the signal is gone forever — the exact failure W2 exists to prevent.
+    If the boot record then persists the STALE schema as the new expectation, boot #2
+    sees no drift and the signal is gone forever — the exact failure this guard
+    prevents.
     """
     from migrations.runner import _fingerprint_record
 
     db = _FakeDB(recorded=["documents|content|string"])
     stale = []  # restored SCHEMALESS: every declared field is gone
-    await _fingerprint_record(db, stale, migrations_ran=False, drift=diff_fingerprints(db.recorded, stale))
+    await _fingerprint_record(db, stale, drift=diff_fingerprints(db.recorded, stale))
     assert db.updates == [], "drift was overwritten — the next boot would see a clean schema"
     assert db.recorded == ["documents|content|string"]
 
@@ -72,49 +72,38 @@ async def test_clean_boot_records_without_drift():
     from migrations.runner import _fingerprint_record
 
     db = _FakeDB(recorded=["documents|content|string"])
-    await _fingerprint_record(db, ["documents|content|string"], migrations_ran=False, drift=None)
+    await _fingerprint_record(db, ["documents|content|string"], drift=None)
     assert db.updates == []  # unchanged value ⇒ no write
 
 
-async def test_migration_run_refreshes_the_record_despite_prior_drift():
-    """When migrations actually ran, the schema legitimately changed — record the new
-    fingerprint even though the pre-migration check saw drift (that drift is what the
-    migrations just resolved)."""
-    from migrations.runner import _fingerprint_record
-
-    db = _FakeDB(recorded=["documents|content|string"])
-    new = ["documents|content|string", "documents|deleted_at|datetime"]
-    await _fingerprint_record(db, new, migrations_ran=True, drift={"added": [], "removed": ["x|y|z"]})
-    assert db.updates == [new]
-
-
-async def test_added_only_drift_is_recorded_without_migration():
-    """An additive release (new DEFINEs, no migration) is recorded on the boot that sees
-    it, so the next boot is clean instead of re-reporting the same added fields forever."""
+async def test_added_only_drift_is_recorded():
+    """Added-only drift (a field that appeared outside Lore) is recorded on the boot
+    that sees it, so the next boot is clean instead of re-reporting the same added
+    fields forever."""
     from migrations.runner import _fingerprint_record
 
     db = _FakeDB(recorded=["documents|content|string"])
     live = ["documents|content|string", "groups|name|string"]
-    await _fingerprint_record(db, live, migrations_ran=False, drift=diff_fingerprints(db.recorded, live))
+    await _fingerprint_record(db, live, drift=diff_fingerprints(db.recorded, live))
     assert db.updates == [live]
 
 
-async def test_mixed_drift_is_not_recorded_without_migration():
+async def test_mixed_drift_is_not_recorded():
     """Any `removed` side keeps the record untouched, even alongside `added` entries."""
     from migrations.runner import _fingerprint_record
 
     db = _FakeDB(recorded=["documents|content|string"])
     live = ["groups|name|string"]
-    await _fingerprint_record(db, live, migrations_ran=False, drift=diff_fingerprints(db.recorded, live))
+    await _fingerprint_record(db, live, drift=diff_fingerprints(db.recorded, live))
     assert db.updates == []
     assert db.recorded == ["documents|content|string"]
 
 
-# ─── W2: boot-fatal on unexplained field loss ─────────────────────────────────
+# ─── Boot-fatal on unexplained field loss ─────────────────────────────────────
 
 
-def test_fatal_removed_without_migration_raises(monkeypatch, caplog):
-    """`removed` drift + no migration ran ⇒ boot refusal (the stale-schema-restore
+def test_fatal_removed_drift_raises(monkeypatch, caplog):
+    """`removed` drift ⇒ boot refusal (the stale-schema-restore
     signature). The critical log must NAME the escape hatch: a wedged prod has no
     console, and an operator reading the log needs the way out in the same line."""
     from migrations.runner import _enforce_fingerprint_fatal
@@ -125,7 +114,6 @@ def test_fatal_removed_without_migration_raises(monkeypatch, caplog):
         with pytest.raises(SchemaFingerprintError):
             _enforce_fingerprint_fatal(
                 {"added": [], "removed": ["documents|content|string"]},
-                migrations_ran=False,
             )
     criticals = [r for r in caplog.records if r.levelno == logging.CRITICAL]
     assert criticals, "no critical log emitted"
@@ -135,36 +123,23 @@ def test_fatal_removed_without_migration_raises(monkeypatch, caplog):
 
 
 def test_fatal_added_only_stays_advisory(monkeypatch):
-    """An additive release reaches the check with `added=[…]` (apply_schema runs
-    before run_migrations) — must NOT refuse boot."""
+    """`added`-only drift (a field appeared outside Lore, or an older build booted
+    on a newer DB) — must NOT refuse boot."""
     from migrations.runner import _enforce_fingerprint_fatal
 
     monkeypatch.setattr("config.SCHEMA_FINGERPRINT_FATAL", True)
     _enforce_fingerprint_fatal(
         {"added": ["documents|new_field|string"], "removed": []},
-        migrations_ran=False,
-    )
-
-
-def test_fatal_resolved_by_migrations(monkeypatch):
-    """v0.12.0 boot shape: added=18 removed=1 where the removal is a retype done by
-    a migration in the same boot — migrations_ran=True resolves it, not fatal."""
-    from migrations.runner import _enforce_fingerprint_fatal
-
-    monkeypatch.setattr("config.SCHEMA_FINGERPRINT_FATAL", True)
-    _enforce_fingerprint_fatal(
-        {"added": [], "removed": ["documents|last_embed_error|none | datetime"]},
-        migrations_ran=True,
     )
 
 
 def test_fatal_not_triggered_without_drift(monkeypatch):
-    """Introspection failure ⇒ _fingerprint_check returns (None, None) ⇒ never fatal
+    """Introspection failure ⇒ _fingerprint_check returns None ⇒ never fatal
     (an introspection failure is not drift)."""
     from migrations.runner import _enforce_fingerprint_fatal
 
     monkeypatch.setattr("config.SCHEMA_FINGERPRINT_FATAL", True)
-    _enforce_fingerprint_fatal(None, migrations_ran=False)
+    _enforce_fingerprint_fatal(None)
 
 
 def test_fatal_escape_hatch_boots_advisory(monkeypatch, caplog):
@@ -176,13 +151,12 @@ def test_fatal_escape_hatch_boots_advisory(monkeypatch, caplog):
     with caplog.at_level(logging.ERROR):
         _enforce_fingerprint_fatal(
             {"added": [], "removed": ["documents|content|string"]},
-            migrations_ran=False,
         )
     errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert errors, "escape hatch booted silently — drift must still log"
 
 
-# ─── W2: partial introspection must not manufacture drift ─────────────────────
+# ─── Partial introspection must not manufacture drift ──────────────────────────
 
 
 class _IntrospectDB:
@@ -209,9 +183,9 @@ class _IntrospectDB:
 
 async def test_partial_introspection_is_not_drift(caplog):
     """A table whose INFO FOR TABLE errors must NOT appear as `removed` drift —
-    under the W2 fatal gate that would be a boot refusal manufactured by an
+    under the fatal gate that would be a boot refusal manufactured by an
     introspection hiccup, not by real field loss. The whole pass must be treated
-    as a failed check: (None, None) → advisory skip."""
+    as a failed check: None → advisory skip."""
     from migrations.runner import _fingerprint_check
 
     tables = {
@@ -221,13 +195,14 @@ async def test_partial_introspection_is_not_drift(caplog):
     db = _IntrospectDB(
         tables, recorded=fingerprint_from_schema(tables), fail={"messages"}
     )
-    current, drift = await _fingerprint_check(db)
-    assert current is None and drift is None
+    drift = await _fingerprint_check(db)
+    assert drift is None
 
 
 async def test_check_reports_added_drift_advisory(caplog):
     """Pin: added-only drift is reported + logged loud, but carries no removed side
-    (the ordinary-release case the fatal narrowing protects)."""
+    (added-only means a field appeared outside Lore — the case the fatal narrowing
+    protects)."""
     from migrations.runner import _fingerprint_check
 
     live = {
@@ -241,8 +216,7 @@ async def test_check_reports_added_drift_advisory(caplog):
     )
     db = _IntrospectDB(live, recorded=recorded)
     with caplog.at_level(logging.ERROR):
-        current, drift = await _fingerprint_check(db)
-    assert current is not None
+        drift = await _fingerprint_check(db)
     assert drift == {"added": ["documents|new_field|string"], "removed": []}
     assert any(
         "SCHEMA FINGERPRINT MISMATCH" in r.getMessage() for r in caplog.records

@@ -386,88 +386,6 @@ export interface PendingVerdict {
   per_call?: boolean;
 }
 
-// One executed/decided step in the agent loop (search/read auto-run; create/edit
-// go through the Tool-API and leave a step too). Rendered as a chip in the
-// step-trace for transparency.
-export interface AgentStep {
-  tool_call_id?: string;
-  /** The DISPATCHING call this step ran under (a subagent child's activity):
-   * set on child-session steps (their tool_call_id is child-session-derived);
-   * the timeline renders them nested inside the dispatching chip. */
-  parent_call_id?: string;
-  tool: string;
-  /** The tool's OWN output text, stored verbatim — the chip body. Absent on
-   *  rows written before the chip-presentation layer was deleted; those carry
-   *  `summary`/`detail` instead and render through the fallback. */
-  output?: string;
-  /** LEGACY — a one-line paraphrase, written by the deleted presentation
-   *  layer. Kept so pre-deletion threads still render; nothing writes it. */
-  summary?: string;
-  /** LEGACY — the paraphrased call data. Same reason as `summary`. */
-  detail?: string;
-  outcome?: 'failed' | 'noop';
-  /**
-   * The generated image's reference id, stamped on
-   * a `generate_image` applied step. When set, the chat chip renders a thumbnail
-   * (click → full-image lightbox). Absent on every other step (old rows + non-
-   * image steps render unchanged). Rides the driver's replayed frames, so a
-   * reload re-renders it.
-   *
-   * LEGACY singular form — kept for back-compat with old persisted rows. New rows
-   * carry the plural `image_ref_ids`; the renderer derives the
-   * id list via `stepImageIds(step)` so both shapes render.
-   */
-  image_ref_id?: string;
-  /**
-   * The generated images' reference ids (a batch of N), stamped
-   * on a `generate_image` applied step with count > 1. When set, the chat chip
-   * renders N thumbnails in one chip ("one pin"); any thumbnail opens ONE shared
-   * lightbox with ←/→ navigation across the pin.
-   * Absent on singular generations + non-image steps. Rides the driver's
-   * replayed frames, so a reload re-renders all N thumbnails.
-   */
-  image_ref_ids?: string[];
-  /**
-   * The detached generation's run_id, stamped
-   * on a `generate_image` step delivered asynchronously (the chip's tool_call_id is
-   * `gen:{run_id}`). Informational correlation; the renderer does not require it.
-   */
-  run_id?: string;
-  /**
-   * Bounded, intent-bearing subset of the call args
-   * (query / document_id / prompt / flags / counts …), declared at the tool
-   * (the plugin's `presentationMeta`, relayed as `tool_result.meta`). Shown in the chip's "Вызов" block. Absent on
-   * sandbox_bash (the command lives in `detail`) and on old persisted rows → the
-   * renderer keeps the `detail ?? summary` fallback. Free-form/large values are
-   * dropped at the declaration (no secrets, no bloat).
-   */
-  args?: Record<string, unknown>;
-  /**
-   * Bounded per-tool slice of the tool result (search
-   * hits, web results, structure nodes, memory entities, read_document head, …),
-   * declared at the tool (the plugin's `presentationMeta`, relayed as
-   * `tool_result.meta`). Shown in the chip's
-   * "Ответ" block. Absent on sandbox_bash + failed mutations (they keep `detail`)
-   * and on old rows → the renderer keeps the `detail ?? summary` fallback. Shape
-   * is per-tool (a tagged union keyed by `tool` would mirror the declaration, but the
-   * renderer switches on `tool` anyway, so `unknown` keeps it forward-compatible
-   * without re-declaring every slice here).
-   */
-  result?: unknown;
-}
-
-/**
- * The id list to render for a generate_image agent step.
- * Plural `image_ref_ids` wins; absent → derive a one-element list from the legacy
- * singular `image_ref_id`; both absent → empty (no thumbnail). Single source so
- * the pin-open checks + the thumbnail row agree, and so old persisted rows
- * (singular) + new rows (plural) render identically.
- */
-export function stepImageIds(step: { image_ref_ids?: string[]; image_ref_id?: string }): string[] {
-  if (step.image_ref_ids && step.image_ref_ids.length > 0) return step.image_ref_ids;
-  return step.image_ref_id ? [step.image_ref_id] : [];
-}
-
 // The abnormal-end halt vocabulary, rendered as the halt card. `steps`/`limit`
 // are present only on a HISTORICAL `step_limit` halt (the deleted turn_budget's
 // label — persisted rows still carry the counters; no live halt reason emits
@@ -656,16 +574,6 @@ export interface ChatMessage {
    // `HaltReason` was honest only on paper). The renderer casts to HaltCard's
    // prop; an unknown reason renders degraded-but-visible.
   halt?: { reason: string; steps?: number; limit?: number };
-  // ARCH: the DETACHED generate_image run's chips (refiner + image), their own
-  // row column — the same reason `halt` has one: the driver's log cannot produce
-  // them. The generation finishes in a background task long after the tool call
-  // returned, so the replayed frames hold the call and nothing else, and the
-  // refined SD prompt lives nowhere else. On reload the backend mints them into
-  // the row's frames as `lore/image-gen` (driver_frames `_image_gen_frame`);
-  // live, the same step dicts mint the run's settled lore/image-gen chat
-  // frame — the worker pushes it, the browser feeds it verbatim (see SYSTEM:
-  // dsh-conversation).
-  gen_steps?: AgentStep[];
   // The driver's replayed frames for this turn — the reload input of the
   // assembler (see SYSTEM: dsh-conversation). Present only on the wire:
   // loadMessagesFor feeds them to replaceWindowFromRows and strips the key, so
@@ -743,11 +651,6 @@ export interface SearchSnapshot {
   semanticHits: SemanticSearchHit[];
   chatHits: ChatSearchHit[];
   scrollTop: number;
-}
-
-export interface SemanticSearchResult {
-  query: string;
-  hits: SemanticSearchHit[];
 }
 
 /**

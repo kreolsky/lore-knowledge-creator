@@ -4,6 +4,7 @@ import { useAppStore } from '../app-store';
 import { t } from '../../i18n';
 import type { ChatState, Set, Get } from './types';
 import { clearChatCaches } from './reset-registry';
+import { createPendingImagesSlice } from './pending-images';
 
 // Floor cap when neither the /models context_windows map nor the session's
 // persisted cap is available (gateway omitted context_length, cold models load,
@@ -53,18 +54,7 @@ type MiscSlice = Pick<
 
 export function createMiscSlice(set: Set, get: Get): MiscSlice {
   return {
-    addPendingImage(dataUrl, meta) {
-      set(s => ({
-        pendingImages: [...s.pendingImages, dataUrl],
-        pendingImageMeta: meta ? { ...s.pendingImageMeta, [dataUrl]: meta } : s.pendingImageMeta,
-      }));
-    },
-    removePendingImage(index: number) {
-      set(s => ({ pendingImages: s.pendingImages.filter((_, i) => i !== index) }));
-    },
-    clearPendingImages() {
-      set({ pendingImages: [], pendingImageMeta: {} });
-    },
+    ...createPendingImagesSlice(set),
     // Composer draft (shared, session-agnostic — see ChatState.draft). Held in the
     // store so the text survives ChatPanel unmount on right-panel tab switches.
     setDraft(v: string) {

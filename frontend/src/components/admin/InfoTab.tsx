@@ -15,18 +15,8 @@ import { Button, CenterHeading } from '../ui';
 import { getAdminStorageInfo, type AdminStorageInfo } from '../../api/admin';
 import { useAppStore } from '../../store/app-store';
 import { useTranslation } from '../../i18n';
+import { formatBytes } from '../../utils/format-bytes';
 
-function fmtBytes(n: number): string {
-  if (!Number.isFinite(n)) return '—';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let v = n;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${i === 0 ? v : v.toFixed(1)} ${units[i]}`;
-}
 
 function StatBlock({ label, value, sub, error }: { label: string; value?: string; sub?: string; error?: string }) {
   return (
@@ -87,13 +77,13 @@ export function InfoTab() {
           <div className="flex gap-4">
             <StatBlock
               label={t('infoDbOnDisk')}
-              value={info.disk ? fmtBytes(info.disk.db_bytes) : undefined}
-              sub={info.disk ? `${t('infoVolumeTotal')}: ${fmtBytes(info.disk.volume_bytes)}` : undefined}
+              value={info.disk ? formatBytes(info.disk.db_bytes) : undefined}
+              sub={info.disk ? `${t('infoVolumeTotal')}: ${formatBytes(info.disk.volume_bytes)}` : undefined}
               error={info.disk_error ?? undefined}
             />
             <StatBlock
               label={t('infoDeletedData')}
-              value={fmtBytes(info.totals.deleted_bytes + info.totals.in_deleted_projects_bytes)}
+              value={formatBytes(info.totals.deleted_bytes + info.totals.in_deleted_projects_bytes)}
               sub={`${t('infoDeletedRows')}: ${(info.totals.deleted_rows + info.totals.in_deleted_projects_rows).toLocaleString()}`}
             />
           </div>
@@ -122,12 +112,12 @@ export function InfoTab() {
                     <tr key={row.name} className="border-b border-border-soft">
                       <td className="py-1.5 pr-3">{row.name}</td>
                       <td className="py-1.5 pr-3 text-right tabular-nums">{row.live_rows.toLocaleString()}</td>
-                      <td className="py-1.5 pr-3 text-right tabular-nums">{fmtBytes(row.live_bytes)}</td>
+                      <td className="py-1.5 pr-3 text-right tabular-nums">{formatBytes(row.live_bytes)}</td>
                       <td className="py-1.5 pr-3 text-right tabular-nums">{row.deleted_rows.toLocaleString()}</td>
-                      <td className="py-1.5 pr-3 text-right tabular-nums">{fmtBytes(row.deleted_bytes)}</td>
+                      <td className="py-1.5 pr-3 text-right tabular-nums">{formatBytes(row.deleted_bytes)}</td>
                       <td className="py-1.5 pr-3 text-right tabular-nums">
                         {row.in_deleted_projects_rows > 0
-                          ? `${row.in_deleted_projects_rows.toLocaleString()} · ${fmtBytes(row.in_deleted_projects_bytes)}`
+                          ? `${row.in_deleted_projects_rows.toLocaleString()} · ${formatBytes(row.in_deleted_projects_bytes)}`
                           : '—'}
                       </td>
                     </tr>

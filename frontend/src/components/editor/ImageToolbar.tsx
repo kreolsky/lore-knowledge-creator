@@ -26,7 +26,8 @@ import { useTranslation } from '../../i18n';
 import { referenceFileUrl } from '../../utils/reference-url';
 import { FieldInput } from '../ui';
 import { releaseSelectedImage, selectedAtomicRange } from './live-preview/atomic-delete-guard';
-import { applyImageSize, applyImageSuffix, imageEmbedParts, parseSizeFromAlt, SIZE_SUFFIX_RE } from './live-preview/widgets';
+import { applyImageSize, applyImageSuffix, imageEmbedParts } from './live-preview/widgets';
+import { parseSizeFromAlt, SIZE_SUFFIX_RE } from './live-preview/image-size';
 
 const ICON_SIZE = 15;
 

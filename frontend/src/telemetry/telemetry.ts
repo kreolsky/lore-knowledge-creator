@@ -152,14 +152,6 @@ export function getTelemetryBuffer(): TelemetryRecord[] {
   return [...ring];
 }
 
-/** Test-only reset of all module state. */
-export function _resetTelemetryForTest(): void {
-  queue = [];
-  ring = [];
-  if (flushTimer !== null) { clearTimeout(flushTimer); flushTimer = null; }
-  wasHiddenSinceLast = false;
-}
-
 // WHY: expose the ring buffer on window so we can read live-user telemetry from a
 // DevTools console without a network round-trip during a support session.
 if (typeof window !== 'undefined') {

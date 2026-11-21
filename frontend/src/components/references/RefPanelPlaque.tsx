@@ -10,7 +10,7 @@
 import { ArrowLeft, FileText, FolderUp, ArchiveRestore, Trash2, Eye } from 'lucide-react';
 import { useAppStore } from '../../store/app-store';
 import { useArmedAction } from '../../hooks/useArmedAction';
-import { Button, IconButton, DownloadMenu, FieldInput } from '../ui';
+import { Button, IconButton, DownloadMenu, InlineRenameInput } from '../ui';
 import { useTranslation } from '../../i18n';
 import { referenceDownloadProps, ACTIVE_TOGGLE_CLS } from './ref-utils';
 import { hasReferenceContent, type Reference } from '../../types';
@@ -82,17 +82,12 @@ export function RefPanelPlaque({
         // .chat-rename-input is built to be pixel-identical to that span, so
         // entering edit mode moves nothing. .ref-rename-input is the LIST card's
         // weight-400 / 80% box and would thin and shift the title here.
-        <FieldInput
+        <InlineRenameInput
           className="doc-rename-input chat-rename-input flex-1 min-w-0"
-          data-rename-input
           value={renameValue}
-          onChange={e => onRenameChange(e.target.value)}
-          autoFocus
-          onKeyDown={e => {
-            if (e.key === 'Enter') { e.preventDefault(); onRenameCommit(reference); }
-            if (e.key === 'Escape') { onRenameCancel(); }
-          }}
-          onBlur={() => onRenameCommit(reference)}
+          onChange={onRenameChange}
+          onCommit={() => onRenameCommit(reference)}
+          onCancel={onRenameCancel}
         />
       ) : (
         // Rename entry point is DOUBLE-CLICK only (chat-header contract); the native

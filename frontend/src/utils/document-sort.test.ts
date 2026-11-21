@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildParentMap, sortDocuments, sortDocumentsForChat, sortReferences, sortReferencesByProximity } from './document-sort';
+import { sortDocuments, sortDocumentsForChat, sortReferences, sortReferencesByProximity } from './document-sort';
+import { buildParentMap } from './document-hierarchy';
 import type { Document, Reference } from '../types';
 
 function makeDoc(overrides: Partial<Document> & { document_id: string; title: string }): Document {

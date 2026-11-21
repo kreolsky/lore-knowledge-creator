@@ -89,8 +89,8 @@ fun LoreNavigation() {
         }
     }
 
-    // Navigation stays visible on the detail screen too; the player bar above
-    // it hides only there when that row is what it plays.
+    // Navigation stays visible on the detail screen too; the global player bar
+    // hides there, because the detail screen renders the bar for its own row.
     val detailEntryId = backStackEntry
         ?.takeIf { it.destination.hasRoute<DetailRoute>() }
         ?.toRoute<DetailRoute>()
@@ -99,7 +99,7 @@ fun LoreNavigation() {
     Scaffold(
         bottomBar = {
             Column {
-                PlayerBarHost(hiddenOnDetailId = detailEntryId)
+                PlayerBarHost(onDetail = detailEntryId != null)
                 NavigationBar {
                     bottomNavItems.forEach { item ->
                         val selected = when (item.route) {
@@ -161,13 +161,14 @@ fun LoreNavigation() {
 
 /**
  * The player bar over navigation on every tab. Scoped to the activity, so it
- * survives tab switches; it hides only on the detail screen of its own row.
+ * survives tab switches; it hides on the detail screen, which carries the
+ * bar for its own row in the same place.
  */
 @Composable
-private fun PlayerBarHost(hiddenOnDetailId: Long?) {
+private fun PlayerBarHost(onDetail: Boolean) {
     val viewModel: PlayerBarViewModel = hiltViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
-    if (state.entryId != null && state.entryId != hiddenOnDetailId) {
+    if (state.entryId != null && !onDetail) {
         PlayerBar(
             state = state,
             onPlayPause = viewModel::playPause,

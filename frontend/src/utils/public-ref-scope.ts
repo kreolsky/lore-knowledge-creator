@@ -19,7 +19,7 @@
  */
 
 import type { Document, Reference } from '../types';
-import { ancestorIds } from './document-ancestors';
+import { ancestorIds } from './document-hierarchy';
 
 /**
  * Filter the whole-subtree public payload down to the panel's display scope.

@@ -241,7 +241,6 @@ export const ru: Record<TranslationKey, string> = {
 
   // toast / errors
   serverUnavailable: 'Сервер временно недоступен',
-  failedToSaveRecording: 'Не удалось сохранить запись',
   recordingRestoredUploading: 'Восстановлена неотправленная запись — загружаю…',
   recordingRestoredPartial: 'Восстановлена незавершённая запись (браузер закрылся во время записи) — загружаю…',
   recordingRestoreFailed: 'Восстановленная запись удалена — доступ к её документу отклонён',
@@ -252,6 +251,11 @@ export const ru: Record<TranslationKey, string> = {
   accessRevokedOrExpired: 'Доступ отозван или сессия истекла — перезагрузите страницу',
   failedToSaveDocument: 'Не удалось сохранить документ',
   failedToCopyImage: 'Не удалось скопировать картинку — скопирована только ссылка',
+  someImagesNotCopied: 'Скопировано без картинок — браузер их не принял',
+  pasteFilesCopying: 'Копирую файлы из другого проекта: {count}',
+  pasteFilesCopied: 'Файлы скопированы в этот проект: {count}',
+  pasteFilesCopyFailed: 'Не удалось скопировать файлов: {count} — их ссылки ведут в исходный проект',
+  pasteFilesLinksNotUpdated: 'Файлы скопированы в панель материалов, но ссылки во вставленном тексте не обновлены — документ был закрыт',
   attachmentsExceedLimit: 'Вложения слишком большие ({used} МБ из {limit} МБ) — удалите часть, чтобы отправить',
   fileTooLargeAudio: 'Аудиофайл должен быть менее {limit} МБ',
   fileTooLargeImage: 'Изображение должно быть менее {limit} МБ',
@@ -376,7 +380,6 @@ export const ru: Record<TranslationKey, string> = {
   chatWithReference: 'Чат с референсом',
   insertEmbedAtCursor: 'Вставить вложение в позицию курсора',
   changeParentDocument: 'Изменить родительский документ',
-  deleteReference: 'Удалить референс',
   // staged-delete (archive → soft-delete) labels.
   archiveReference: 'Архивировать референс',
   restoreReference: 'Восстановить референс',
@@ -552,8 +555,6 @@ export const ru: Record<TranslationKey, string> = {
   chatContextWarning: 'Некоторые контекстные документы не загрузились',
   chatStreamDegraded: 'Часть содержимого потока была потеряна',
   chatContextSummarized: 'Контекст беседы был сжат, чтобы освободить место',
-  chatToolRunning: 'выполняется…',
-  chatToolRunningBody: 'Вызов выполняется — результат появится здесь по завершении.',
   chatCompactionArchiveFailed: 'Контекст был сжат, но архив беседы сохранить не удалось — предыдущая расшифровка недоступна',
   // agent-halt card. reason → label, a derived recap, the step
   // count, and the Continue button (a visible user message).
@@ -588,18 +589,6 @@ export const ru: Record<TranslationKey, string> = {
   // failed/noop chip outcome labels.
   agentStepFailed: 'Не применено',
   agentStepNoop: 'Без изменений',
-  // развернутые блоки чипа «Вызов» (аргументы) +
-  // «Ответ» (результат); структурированный заголовок поиска с защищённой зоной
-  // счётчика (всегда виден, янтарный при нуле). (Сам маркер усечения встроен в
-  // content head на бэкенде — английский, как и существующие detail-маркеры —
-  // поэтому отдельный ключ фронтенду не нужен.)
-  toolCallArgs: 'Вызов',
-  toolResult: 'Ответ',
-  nMoreHits: 'ещё {n}',
-  searchLabel: 'поиск',
-  webSearchLabel: 'веб-поиск',
-  nFound: 'найдено: {n}',
-  nFoundZero: 'не найдено',
   // Live "preparing <tool>" chip verb shown
   // while the model builds the tool-call args (before the real tool card).
   agentConfigSaveFailed: 'Не удалось сохранить пайплайн',
@@ -705,11 +694,7 @@ export const ru: Record<TranslationKey, string> = {
   agentModeStartFailed: 'Не удалось запустить режим агента',
   chatAgentUnavailable: 'Агент сейчас недоступен — попробуйте повторить чуть позже.',
   chatAgentDisabledReason: 'Агент недоступен',
-  chatSystemPrompt: 'Системный промпт',
   chatSystemPromptNone: 'По умолчанию',
-  selectionPillLabel: 'Закреплённый фрагмент',
-  selectionPillEmpty: 'область пуста',
-  selectionPillUnpin: 'Открепить — вернуть авто-применение',
   agentModeNoForkRegenerate: 'Форк и регенерация недоступны в режиме агента',
   // Retirement freeze: the chat predates the
   // current agent — same banner shell, different explanation.
@@ -821,7 +806,6 @@ export const ru: Record<TranslationKey, string> = {
   adminMcpSubjectsHint: 'Кому виден этот сервер',
   adminMcpModeratorScope: 'Виден только вашей группе.',
   adminMcpEnabled: 'Включён',
-  adminMcpCreatedBy: 'добавил: {name}',
   adminMcpSaveFailed: 'Не удалось сохранить сервер',
   adminListLoadFailed: 'Не удалось загрузить список',
   publicLabel: 'Публичный',
@@ -874,7 +858,6 @@ export const ru: Record<TranslationKey, string> = {
   editNameEmail: 'Изменить имя / email',
   deleteUser: 'Удалить пользователя',
   failedToDeleteUser: 'Не удалось удалить пользователя',
-  failedToUpdateProject: 'Не удалось обновить проект',
   failedToCreateUser: 'Не удалось создать пользователя',
   failedToUpdateUser: 'Не удалось обновить пользователя',
   failedToDeleteProject: 'Не удалось удалить проект',
@@ -1251,7 +1234,6 @@ export const ru: Record<TranslationKey, string> = {
   backToHome: 'Вернуться на главную',
   publicDocUnavailable: 'Документ временно недоступен. Попробуйте через несколько секунд.',
   publicShareSessionProbeFailed: 'Не удалось проверить сессию',
-  publicReferences: 'Референсы',
   publicNotes: 'Заметки',
 
   // unified Access tab

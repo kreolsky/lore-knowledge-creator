@@ -280,7 +280,7 @@ async def _recover_stuck_transcriptions() -> None:
         logger.warning("recover_stuck_transcriptions: %s", e)
 
 
-# ARCH: Lifespan startup order: schema → migrations → orphan-field sweep → seed → recovery.
+# ARCH: Lifespan startup order: fingerprint preflight → schema → orphan-field sweep → migrations → seed → recovery.
 # ARCH: flush_all_sessions on shutdown — collab session content is authoritative while alive.
 async def _web_stamp_heartbeat() -> None:
     """Publish + periodically refresh the web's code stamp under a TTL.
@@ -316,7 +316,20 @@ async def lifespan(_: FastAPI):
     # leftover. The TTL + refresh (see _web_stamp_heartbeat) keep it fresh while alive and
     # let it expire when this web dies.
     stamp_task = asyncio.create_task(_web_stamp_heartbeat())
+    # WHY the fingerprint gate runs FIRST, before apply_schema(): between two boots
+    # nothing in Lore changes the schema, so the pre-apply snapshot must equal the
+    # recorded one — any `removed` drift was lost outside Lore and refuses boot here
+    # with no migration able to excuse it, while the schema is still exactly as the
+    # restore left it (apply_schema's DEFINE FIELD IF NOT EXISTS would re-create
+    # lost definitions and blur the evidence).
+    from migrations.runner import fingerprint_preflight, run_migrations
+    drift = await fingerprint_preflight()
     await apply_schema()
+    # WHY the orphan-proposal sweep sits between apply_schema and run_migrations: it
+    # issues REMOVE FIELD (DDL), so it must land BEFORE the fingerprint record step
+    # or boot 2 refuses on the sweep's own removals. Depends on no migration (it
+    # introspects `messages` only). sweep_orphan_shares stays late: data only, no DDL.
+    await sweep_orphan_proposal_fields()
     # WHY: the kind backfill runs in the WEB process, right after apply_schema —
     # the same boot that DEFINEs the column heals the rows predating it. Best
     # effort (a failure warns, never blocks boot): the sweep and each document's
@@ -327,9 +340,7 @@ async def lifespan(_: FastAPI):
     except Exception:
         logger.warning("doc_chunks.kind backfill failed; rows stay NONE until re-embed",
                        exc_info=True)
-    from migrations.runner import run_migrations
-    await run_migrations()
-    await sweep_orphan_proposal_fields()
+    await run_migrations(drift)
     await sweep_orphan_shares()
     await seed_admin()
     # WHY: the guide sweep runs on the worker, never on the startup path — a release

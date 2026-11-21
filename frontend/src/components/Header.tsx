@@ -16,6 +16,8 @@ import { useDocState, useUIStore } from '../store/ui-store';
 import { readRefOpenMode, refIsScope } from '../store/ui-store/documents-slice';
 import { useShallow } from 'zustand/react/shallow';
 import { apiClient } from '../api/client';
+import { getEntityHandle } from '../collab/active-handle-registry';
+import { renameTable, normalizeTableLabel } from './editor/live-preview/table-document-ops';
 import { Mic, Play, Square } from 'lucide-react';
 import { isEditorShell } from '../utils/routing';
 import { Breadcrumb } from './Breadcrumb';
@@ -88,6 +90,20 @@ export function Header() {
   }, [currentDocument, currentReference, currentTable, documents]);
 
   const handleDocumentRename = async (newTitle: string) => {
+    // INVARIANT(data-loss): with a table focused the leaf crumb IS the table's label, so a
+    // rename there renames the table, never falls through to the document branch below.
+    // Why: the fall-through PATCHed the parent document's title with the table's new name.
+    if (currentTable && currentTableLabel !== null) {
+      const normalized = normalizeTableLabel(newTitle);
+      if (!normalized || normalized === currentTableLabel) return;
+      const handle = getEntityHandle(currentTable.document_id);
+      if (!handle?.ydoc) {
+        useAppStore.getState().showToast(t('tableRenameFailed'), 'error');
+        return;
+      }
+      renameTable(handle.ydoc, currentTable.table_id, currentTableLabel, normalized);
+      return;
+    }
     if (!activeItem || !newTitle.trim() || newTitle === activeItem.title) return;
 
     if (currentReference) {

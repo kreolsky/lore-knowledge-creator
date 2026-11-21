@@ -45,7 +45,7 @@ export interface LinkMatch {
 }
 
 /** Split an in-app urlText `id#fragment` — the id is the part before `#` everywhere ids are checked. */
-function splitTarget(target: string): { id: string; fragment?: string } {
+export function splitTarget(target: string): { id: string; fragment?: string } {
   const hash = target.indexOf('#');
   return hash === -1 ? { id: target } : { id: target.slice(0, hash), fragment: target.slice(hash + 1) || undefined };
 }

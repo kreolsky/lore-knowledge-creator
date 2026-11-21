@@ -20,9 +20,9 @@ import { useShallow } from 'zustand/react/shallow';
 import { apiClient } from '../api/client';
 import { emit } from '../events';
 import { useEvent } from '../hooks/useEvent';
-import { ancestorIds } from '../utils/document-ancestors';
+import { ancestorIds } from '../utils/document-hierarchy';
 import { isArtifactDoc } from '../utils/artifact';
-import { Button } from './ui';
+import { Button, InlineRenameInput } from './ui';
 import { DocumentTreeNode } from '../types';
 import { useTranslation } from '../i18n';
 import { PREVIEW_WIDTH } from '../utils/preview-geometry';
@@ -199,19 +199,14 @@ const DocumentTreeItem = memo(function DocumentTreeItem({
           </div>
         )}
         {isRenaming ? (
-          <input
+          <InlineRenameInput
             ref={renameInputRef}
             className="doc-rename-input"
-            data-rename-input
+            autoFocus={false}
             value={renameValue}
-            onChange={e => setRenameValue(e.target.value)}
-            onKeyDown={e => {
-              e.stopPropagation();
-              if (e.key === 'Enter') { e.preventDefault(); handleRenameSubmit(); }
-              if (e.key === 'Escape') { setIsRenaming(false); }
-            }}
-            onBlur={handleRenameSubmit}
-            onClick={e => e.stopPropagation()}
+            onChange={setRenameValue}
+            onCommit={() => { void handleRenameSubmit(); }}
+            onCancel={() => setIsRenaming(false)}
           />
         ) : (
           <>

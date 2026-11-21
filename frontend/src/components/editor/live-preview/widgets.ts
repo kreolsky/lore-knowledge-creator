@@ -11,7 +11,7 @@ import { emit } from '../../../events';
 import { nestedRenderExtensions } from '../render-bundle';
 import { copyWithToast } from '../../chat/shared/copy';
 import { COPY_ICON, CHECK_ICON } from '../../../utils/copy-icons';
-import { formatFileSize } from '../../references/ref-utils';
+import { formatBytes } from '../../../utils/format-bytes';
 import { registerEditorHostReset } from '../editor-host';
 import type { TransclusionEntry } from './effects';
 // WHY direct import despite the module cycle (widgets → atomic-delete-guard →
@@ -21,6 +21,7 @@ import type { TransclusionEntry } from './effects';
 import { atomicRangeAt, selectedAtomicRange } from './atomic-delete-guard';
 import { trackOutsideDrag } from '../../../hooks/useOutsideDrag';
 import { createRefDropController } from '../../references/refDragAdapter';
+import { SIZE_SUFFIX_RE } from './image-size';
 
 // ─── Checkbox widget ──────────────────────────────────────────────────────────
 
@@ -84,19 +85,6 @@ export class BulletWidget extends WidgetType {
 }
 
 // ─── Image sizing ─────────────────────────────────────────────────────────────
-
-/** The size-suffix grammar shared by parseSizeFromAlt, setImageSize and the ImageToolbar's size field. */
-export const SIZE_SUFFIX_RE = /^(\d+%?)(?:x(\d+%?))?$/;
-
-/** Parses `|WIDTHxHEIGHT` from the alt text of an image node. */
-export function parseSizeFromAlt(alt: string): { width?: string; height?: string } {
-  const pipeIdx = alt.lastIndexOf('|');
-  if (pipeIdx === -1) return {};
-  const m = SIZE_SUFFIX_RE.exec(alt.slice(pipeIdx + 1).trim());
-  if (!m) return {};
-  const toCSS = (v: string) => v.endsWith('%') ? v : `${v}px`;
-  return { width: toCSS(m[1]), height: m[2] ? toCSS(m[2]) : undefined };
-}
 
 /**
  * Splits a VALID size suffix off an image alt: `{ base, height }`. A `|` whose
@@ -696,7 +684,7 @@ export class FileRefWidget extends WidgetType {
     a.appendChild(title);
     if (this.entry.fileSize !== undefined) {
       const size = document.createElement('span');
-      size.textContent = formatFileSize(this.entry.fileSize);
+      size.textContent = formatBytes(this.entry.fileSize);
       size.style.cssText = 'color:var(--text-dim, inherit);flex-shrink:0;';
       a.appendChild(size);
     }

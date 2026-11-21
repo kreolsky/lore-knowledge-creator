@@ -19,6 +19,7 @@
  */
 import { escapeHtml } from '../../utils/html';
 import { parseInAppLink } from '../../utils/in-app-link';
+import { parseSizeFromAlt } from './live-preview/image-size';
 
 // Private-use sentinel for stashed-island placeholders — cannot appear in markdown text.
 const MARK = '\uE000';
@@ -258,7 +259,26 @@ function foldBlocks(text: string, lonePlaceholder: RegExp): string {
 /** A caller-rendered block: `html` replaces its token in prose, `text` inside a fenced code block. */
 export interface Island { html: string; text: string }
 
-function runPipeline(md: string, islands: readonly Island[]): string {
+// WHY base64 raster only: the URI goes into `src` unescaped, so it must be one the
+// INVARIANT(security) below still holds for — a FileReader base64 URI has no quote or `>`.
+// SVG is refused: it is a script-capable document, not a picture.
+const SAFE_DATA_IMAGE_RE = /^data:image\/(?!svg)[\w.+-]+;base64,[A-Za-z0-9+/=]+$/;
+
+/** True when `cleanMarkdownToHtml` will inline this data URI rather than fall back to alt text. */
+export function isInlinableDataUri(dataUri: string): boolean {
+  return SAFE_DATA_IMAGE_RE.test(dataUri);
+}
+
+/** `<img>` for an inlined image: alt without its `|WIDTHxHEIGHT` suffix, pixel width kept. */
+function inlinedImageTag(alt: string, dataUri: string): string {
+  const { width } = parseSizeFromAlt(alt);
+  // WHY pixels only: a `%` width has no container to resolve against in the pasted doc.
+  const widthAttr = width?.endsWith('px') ? ` width="${width.slice(0, -2)}"` : '';
+  const base = width ? alt.slice(0, alt.lastIndexOf('|')) : alt;
+  return `<img src="${dataUri}" alt="${base}"${widthAttr}>`;
+}
+
+function runPipeline(md: string, islands: readonly Island[], images: ReadonlyMap<string, string>): string {
   const tokens: string[] = [];
   // WHY: a fenced block is literal source — an island token in it falls back to the island's
   // text form, never to its HTML (and never to the raw private-use token).
@@ -300,13 +320,15 @@ function runPipeline(md: string, islands: readonly Island[]): string {
   // is never parsed as italic.
   html = renderLists(html);
 
-  // Images: http(s) → <img>; everything else (internal schemes, blocklisted)
-  // → visible alt text. Runs before the link pass so `![alt](url)` isn't
-  // turned into `!` + anchor.
+  // Images: http(s) → <img>; a target the caller inlined (`images`) → data-URI <img>;
+  // everything else (internal schemes, blocklisted) → visible alt text. Runs before the
+  // link pass so `![alt](url)` isn't turned into `!` + anchor.
   html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt: string, url: string) => {
     if (/^https?:\/\//i.test(url.trim())) {
       return stash(`<img src="${url}" alt="${alt}">`);
     }
+    const dataUri = images.get(unescapeHtml(url.trim()));
+    if (dataUri && isInlinableDataUri(dataUri)) return stash(inlinedImageTag(alt, dataUri));
     return alt;
   });
 
@@ -366,7 +388,13 @@ function runPipeline(md: string, islands: readonly Island[]): string {
  * active; math renders as literal escaped source; mermaid renders as a fenced
  * code block. `islands` = pre-rendered blocks the caller marked in `md` with
  * `islandToken(i)`; each `html` is placed verbatim as a block (its `text` inside fenced code).
+ * `images` = image target as written (`ref:<id>`) → base64 raster data URI; a target in it
+ * renders as an inlined `<img>` instead of its alt text.
  */
-export function cleanMarkdownToHtml(md: string, islands: readonly Island[] = []): string {
-  return runPipeline(md, islands);
+export function cleanMarkdownToHtml(
+  md: string,
+  islands: readonly Island[] = [],
+  images: ReadonlyMap<string, string> = new Map(),
+): string {
+  return runPipeline(md, islands, images);
 }

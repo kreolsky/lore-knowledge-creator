@@ -1,6 +1,7 @@
 /** Shared utilities, constants, and small presentational components for reference cards. */
 
 import { Mic, Image, FileText, FileArchive, Loader } from 'lucide-react';
+import type { EditorView } from '@codemirror/view';
 import { Reference, Project, Document } from '../../types';
 import { useTranslation } from '../../i18n';
 import type { ExportFormat } from '../../hooks/useDocumentExport';
@@ -34,6 +35,17 @@ export function referenceDownloadProps(reference: Reference): { original?: Origi
  * buttons, the panel drag into the editor). */
 export function refEmbedText(reference: Reference): string {
   return `![${reference.title}](ref:${reference.reference_id})`;
+}
+
+/** Insert the reference's embed at the caret, park the caret right after the title
+ * inside `![title]`, and hand focus back to the editor. */
+export function insertRefEmbedAtCursor(view: EditorView, reference: Reference): void {
+  const pos = view.state.selection.main.head;
+  view.dispatch({
+    changes: { from: pos, insert: refEmbedText(reference) },
+    selection: { anchor: pos + 2 + reference.title.length },
+  });
+  view.focus();
 }
 
 export function createTempRef(project: Project, document: Document, fileName: string, mediaType: 'audio' | 'image' | 'markdown'): { tempId: string; tempRef: Reference } {
@@ -123,25 +135,6 @@ export function formatDuration(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${s.toString().padStart(2, '0')}`;
-}
-
-export function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-// Short group label for a reference's media_type — used as the ref-list section
-// header (txt / audio / img) and the inline "type | parent" meta prefix.
-const MEDIA_TYPE_LABEL: Record<Reference['media_type'], string> = {
-  markdown: 'txt',
-  audio: 'audio',
-  image: 'img',
-  file: 'file',
-};
-
-export function mediaTypeLabel(mediaType: Reference['media_type']): string {
-  return MEDIA_TYPE_LABEL[mediaType];
 }
 
 export function RefIcon({ item }: { item: Reference }) {

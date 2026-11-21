@@ -19,3 +19,4 @@ export { SegmentedControl } from './SegmentedControl';
 export { PinDigitsInput } from './PinDigitsInput';
 export { ColorField } from './ColorField';
 export { ArmedDeleteButton } from './ArmedDeleteButton';
+export { InlineRenameInput } from './InlineRenameInput';

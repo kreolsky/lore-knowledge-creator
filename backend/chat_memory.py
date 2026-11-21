@@ -28,8 +28,11 @@ logger = logging.getLogger(__name__)
 
 HEADER = (
     "# Recent conversations with this user\n"
-    "These are topics of the user's earlier chats with you, not facts — open the details "
-    "with `search_my_chats` (message_id=…) or `read_my_chat`.\n"
+    "A table of contents of the user's earlier chats with you: each line names what a stretch "
+    "of a chat was ABOUT, not what the user said, felt or decided there.\n"
+    "Before you state, assume or save anything about the user from a line here, open its "
+    "original with `search_my_chats` (message_id=…) or `read_my_chat` and rely on the messages. "
+    "Without opening it, mention it only as a past topic (\"we talked about …\").\n"
     "The list is cut to a budget and omits older and not-yet-labelled chats — when the user "
     "refers to a conversation not listed here, find it with `search_my_chats` or `list_my_chats`."
 )

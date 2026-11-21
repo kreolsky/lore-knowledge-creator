@@ -25,7 +25,8 @@ import { PickerPreviewPopup } from '../PickerPreviewPopup';
 import { computeBesideBoxPreviewPosition } from '../../utils/popup-position';
 import { PREVIEW_PICKER_MAX_HEIGHT } from '../../utils/preview-geometry';
 import { useTranslation } from '../../i18n';
-import { buildParentMap, sortDocumentsForChat, sortReferences } from '../../utils/document-sort';
+import { sortDocumentsForChat, sortReferences } from '../../utils/document-sort';
+import { buildParentMap } from '../../utils/document-hierarchy';
 import { referenceFileUrl } from '../../utils/reference-url';
 import type { EventMap, LinkRevert } from '../../events/event-types';
 

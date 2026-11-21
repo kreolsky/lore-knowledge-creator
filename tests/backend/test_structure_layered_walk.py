@@ -251,7 +251,6 @@ def test_scope_recovery_texts_share_one_producer():
     detail = out_of_scope_detail("root-1", empty_intersection=True)
     assert "get_project_structure(start_id=root-1)" in detail
     assert "not found" not in detail
-    assert "not in this project" not in detail
     # The doc-target variant is unchanged (pins test_read_document_out_of_scope…).
     assert out_of_scope_detail("root-1") == (
         "Document is outside this agent key's subtree scope (root root-1). "

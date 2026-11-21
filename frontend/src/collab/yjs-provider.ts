@@ -44,7 +44,6 @@ import { REPLACE_ALL_ORIGIN } from '../components/editor/find-replace-undo';
 import type { EntityType } from './entity-types';
 
 export type { EntityType } from './entity-types';
-export type { YjsCollabCallbacks, PresencePayload } from './yjs-events';
 export type { DocCollabCallbacks } from './doc-callbacks';
 
 export interface EntityYjsState {

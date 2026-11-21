@@ -131,8 +131,7 @@ interface RunCompletionOpts extends SendWire {
   restoreDraftOnFail?: boolean;
 }
 
-/** The /completions body for one send of the ACTIVE chat. Resolves the
- * pinned region (warning or auto-unpinning when it cannot) and the open
+/** The /completions body for one send of the ACTIVE chat. Resolves the open
  * document at send time — the prep is frozen here, a queued send runs with
  * the context its user had when sending. */
 function completionBody(get: Get, activeSessionId: string, wire: SendWire): Record<string, unknown> {

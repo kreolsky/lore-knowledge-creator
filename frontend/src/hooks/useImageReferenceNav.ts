@@ -23,10 +23,6 @@ import type { Reference } from '../types';
 // Default before any browsing: backward (index shrinking) — user ruling.
 let lastBrowseDir: -1 | 1 = -1;
 
-export function resetImageBrowseDirection(): void {
-  lastBrowseDir = -1;
-}
-
 /**
  * Pure index/wrap math. Returns -1 if there is nothing to cycle.
  */

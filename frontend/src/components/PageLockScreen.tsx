@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { Lock } from 'lucide-react';
-import { apiClient, HttpError } from '../api/client';
+import { verifyPin, PIN_VERDICT_MESSAGE } from '../api/cabinet';
 import { useAppStore } from '../store/app-store';
 import { Button, PinDigitsInput } from './ui';
 import { useTranslation } from '../i18n';
@@ -23,20 +23,17 @@ export function PageLockScreen({ docId }: { docId: string }) {
     if (pin.length !== 4) return;
     setLoading(true);
     setError('');
-    try {
-      // WHY: the account PIN through the app lock's own verify-pin, so its rate limit applies.
-      const data = await apiClient.post('/cabinet/verify-pin', { pin });
-      if (data.valid) {
-        addUnlockedDocId(docId);
-        return;
-      }
-      setError(t('wrongPin'));
+    // WHY: the account PIN through the app lock's own verify-pin, so its rate limit applies.
+    const verdict = await verifyPin(pin);
+    setLoading(false);
+    if (verdict === 'ok') {
+      addUnlockedDocId(docId);
+      return;
+    }
+    setError(t(PIN_VERDICT_MESSAGE[verdict]));
+    if (verdict === 'wrong') {
       setPin('');
       inputRef.current?.focus();
-    } catch (err) {
-      setError(err instanceof HttpError && err.status === 429 ? t('tooManyAttempts') : t('connectionError'));
-    } finally {
-      setLoading(false);
     }
   };
 

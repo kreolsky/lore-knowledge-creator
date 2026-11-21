@@ -24,7 +24,8 @@ import { dropInsertSpec, dropEmbedForView, editorDropPoint, spliceAt } from '../
 import { refEmbedText } from './ref-utils';
 import { atomicRangeAt, guardedAtomicRanges } from '../editor/live-preview/atomic-delete-guard';
 import type { EditorState } from '@codemirror/state';
-import { imageEmbedParts, parseSizeFromAlt } from '../editor/live-preview/widgets';
+import { imageEmbedParts } from '../editor/live-preview/widgets';
+import { parseSizeFromAlt } from '../editor/live-preview/image-size';
 import { referenceThumbUrl } from '../../utils/reference-url';
 import type { Reference } from '../../types';
 

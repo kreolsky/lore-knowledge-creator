@@ -25,7 +25,8 @@ import { useAppStore } from '../../store/app-store';
 import { apiClient } from '../../api/client';
 import { uploadReferenceFile } from '../../api/reference-upload';
 import type { Document, Reference } from '../../types';
-import { entityYdoc, getViewEntity } from '../../editor/active-editor';
+import { entityYdoc } from '../../editor/active-editor';
+import { viewHostDocument } from '../../editor/upload-host';
 import { dropEmbedForView, dropImageRow, dropInsertSpec, editorDropPoint, spliceAt } from './drop-target';
 import { createTable } from '../editor/live-preview/table-block-model';
 import { fitColumnWidths } from '../editor/live-preview/table-widths';
@@ -115,27 +116,12 @@ export function useEditorFileDrop({
   // Image drop: upload as image references hosted by the DROP VIEW'S document,
   // then insert the `![title](ref:id)` embeds INLINE at the drop position. No
   // confirmation modal — the drop itself is the intent.
-  // ARCH (split view): same identity rule as the table path — the host is the
-  // drop view's entity, never the focused slot's item (a table cell is
-  // registered to its host's entity at mount). A drop onto an open REFERENCE
-  // (split column or center) uploads under THAT reference's host document — a
-  // reference cannot host references — and the embed lands in the reference's
-  // text, exactly like a transcluded card dragged in. An unhosted reference has
-  // no document to parent the upload: refused with a toast.
+  // ARCH (split view): same identity rule as the table path — the host is the drop
+  // view's entity, never the focused slot's item (see viewHostDocument). A drop onto an
+  // open reference lands in the reference's text, like a transcluded card dragged in.
   const handleImageDrop = useCallback(async (files: File[], view: EditorView, pos: number) => {
     const store = useAppStore.getState();
-    // Resolve the drop view's item: the registered entity is a document_id or a
-    // reference_id; an unregistered view falls back to the slot item (the same
-    // fallback scope as the table path).
-    const entityId = getViewEntity(view);
-    const item: Document | Reference | null = entityId
-      ? store.documents.find(d => d.document_id === entityId)
-        ?? store.references.find(r => r.reference_id === entityId)
-        ?? null
-      : activeItemRef.current;
-    const host: Document | null = item && 'reference_id' in item
-      ? store.documents.find(d => d.document_id === item.document_id) ?? null
-      : item;
+    const host = viewHostDocument(view, activeItemRef.current);
     if (!host) {
       store.showToast(t('dropImageIntoReferenceUnsupported'), 'error');
       return;

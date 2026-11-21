@@ -15,7 +15,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Copy, Check, Pencil, KeyRound, Plus } from 'lucide-react';
 import { apiClient, HttpError } from '../api/client';
 import { ApiKey } from '../types';
-import { ArmedDeleteButton, Button, FieldCheckbox, FieldInput, IconButton } from './ui';
+import { ArmedDeleteButton, Button, FieldCheckbox, FieldInput, IconButton, InlineRenameInput } from './ui';
 import { useTranslation } from '../i18n';
 import { copyWithToast } from './chat/shared/copy';
 import { withOptimistic } from '../utils/optimistic';
@@ -240,18 +240,12 @@ export default function ApiKeyManager({ documentId, canCreate = true }: Props) {
             <div className="flex justify-between items-center">
               <div className="flex-1 min-w-0">
                 {renamingId === k.key_id ? (
-                  <input
+                  <InlineRenameInput
                     className="doc-rename-input"
-                    data-rename-input
                     value={renameValue}
-                    onChange={e => setRenameValue(e.target.value)}
-                    autoFocus
-                    onKeyDown={e => {
-                      if (e.key === 'Enter') { e.preventDefault(); handleRename(k); }
-                      if (e.key === 'Escape') setRenamingId(null);
-                    }}
-                    onBlur={() => handleRename(k)}
-                    onClick={e => e.stopPropagation()}
+                    onChange={setRenameValue}
+                    onCommit={() => { void handleRename(k); }}
+                    onCancel={() => setRenamingId(null)}
                   />
                 ) : (
                   <div className="text-ui-base font-medium flex items-center gap-1.5">

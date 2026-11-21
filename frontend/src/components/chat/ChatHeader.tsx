@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { ArrowLeft, Trash2, Download, FileText, Network, Clock, FolderUp } from 'lucide-react';
-import { Button, IconButton, FieldInput, Popover } from '../ui';
+import { Button, IconButton, InlineRenameInput, Popover } from '../ui';
 import { ParentPickerPopup } from '../ParentPickerPopup';
 import { useChatStore, selectBranchPath } from '../../store/chat-store';
 import { useAppStore } from '../../store/app-store';
@@ -265,17 +265,12 @@ export function ChatHeader() {
 
       <div className="flex-1 min-w-0">
         {renaming ? (
-          <FieldInput
+          <InlineRenameInput
             className="doc-rename-input chat-rename-input w-full"
-            data-rename-input
             value={renameValue}
-            onChange={e => setRenameValue(e.target.value)}
-            autoFocus
-            onKeyDown={e => {
-              if (e.key === 'Enter') { e.preventDefault(); handleRenameCommit(); }
-              if (e.key === 'Escape') { setRenaming(false); }
-            }}
-            onBlur={handleRenameCommit}
+            onChange={setRenameValue}
+            onCommit={() => handleRenameCommit()}
+            onCancel={() => setRenaming(false)}
           />
         ) : (
           // ARCH: the title renders as STATIC text (the session

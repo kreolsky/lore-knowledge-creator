@@ -23,7 +23,8 @@ import {
 import { EditorState, Facet, Range, RangeSetBuilder, StateField } from '@codemirror/state';
 import { findSingleLineDisplayMath, findBlockMath } from '../math-render';
 import { linkContextChanged, revealAtCursor, transcludeMap } from './effects';
-import { BlockMathWidget, CheckboxWidget, ImageWidget, MermaidWidget, parseSizeFromAlt } from './widgets';
+import { BlockMathWidget, CheckboxWidget, ImageWidget, MermaidWidget } from './widgets';
+import { parseSizeFromAlt } from './image-size';
 import { TableWidget } from './table-widget';
 import { TableBlockWidget } from './table-block-widget';
 import { parseTarget, extractEmbedFromImageNode } from './transclusion-grammar';

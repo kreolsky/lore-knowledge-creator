@@ -84,7 +84,8 @@ async def _read_gate_error(
     # cannot read a doc outside its subtree even when RBAC would allow it.
     """
     if doc.get("project_id") != project_id:
-        return "Document is not in this project"
+        # INVARIANT(security): foreign id = unknown id. Why: else an existence oracle across projects.
+        return "Document not found"
     access = await get_document_access(resolved, user)
     if not access:
         return "No access to this document"
@@ -104,7 +105,7 @@ async def _read_gate_error(
         # decision (a DB error must never masquerade as an access denial).
         return exc.detail
     # INVARIANT(security): the page-lock refusal runs AFTER RBAC + scope, and its
-    # text MUST NOT contain "not found" / "not in this project" (scope.py INVARIANT —
+    # text MUST NOT contain "not found" (scope.py INVARIANT —
     # dispatch._raise_for_soft_error would mis-map it to a uniform 404). Why: the
     # lock is the OWNER's personal hide (SYSTEM: page-lock), not an access change —
     # the doc exists and the user may hold access; the agent is told it is locked,

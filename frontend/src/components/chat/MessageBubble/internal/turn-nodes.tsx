@@ -234,7 +234,7 @@ function HaltNode({ data, nodes, self, onContinue }: {
  * settled run renders TWO chips — the refined prompt plate and the images
  * plate; a single flat block would lose the prompt chip. The payload is the
  * same node data on BOTH paths (the live frames and the reload mint derive
- * from the same gen_steps dicts).
+ * from the backend's gen_steps dicts).
  *
  * Deleting an image deletes its image reference; references are the truth,
  * so the plate hides the ids in the page-wide deleted set (useDeletedRefIds:

@@ -1,10 +1,11 @@
 /** Breadcrumb bar: Project : Ancestor : Title with inline rename (double-click). Events consumed: breadcrumb-start-rename. */
 
-import { Fragment, useState, useRef, useEffect, useCallback } from 'react';
+import { Fragment, useState, useCallback } from 'react';
 import { AccessLevel } from '../types';
 import { useEvent } from '../hooks/useEvent';
 import { emit } from '../events';
 import { useTranslation } from '../i18n';
+import { InlineRenameInput } from './ui';
 import b from './Breadcrumb.module.css';
 
 interface BreadcrumbProps {
@@ -25,14 +26,6 @@ export function Breadcrumb({ projectName, ancestors, documentTitle, isReference,
   const { t } = useTranslation();
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (isRenaming && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
-    }
-  }, [isRenaming]);
 
   const startRename = useCallback(() => {
     if (!documentTitle || accessLevel !== 'full') return;
@@ -97,17 +90,13 @@ export function Breadcrumb({ projectName, ancestors, documentTitle, isReference,
             title={!isRenaming && onDocumentReveal ? t('revealInTree') : undefined}
           >
             {isRenaming ? (
-              <input
-                ref={inputRef}
+              <InlineRenameInput
                 className={b.crumbRenameInput}
-                data-rename-input
+                selectOnFocus
                 value={renameValue}
-                onChange={e => setRenameValue(e.target.value)}
-                onBlur={() => commitRename()}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') commitRename(true);
-                  if (e.key === 'Escape') setIsRenaming(false);
-                }}
+                onChange={setRenameValue}
+                onCommit={via => commitRename(via === 'enter')}
+                onCancel={() => setIsRenaming(false)}
                 style={{ width: `${renameValue.length + 1}ch` }}
               />
             ) : (

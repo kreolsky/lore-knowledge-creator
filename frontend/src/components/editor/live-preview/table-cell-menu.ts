@@ -49,11 +49,6 @@ const ITEM_DISABLED = `${ITEM_BASE} text-text-dim cursor-not-allowed`;
 /** The one open menu's closer — a second right-click replaces the first menu. */
 let closeOpen: (() => void) | null = null;
 
-/** Close the open menu, if any. */
-export function closeCellMenu(): void {
-  closeOpen?.();
-}
-
 /**
  * Open the menu at viewport point (x, y), clamped inside the viewport. Closes on Esc, a
  * press outside it, any scroll, or after an item runs. Returns the closer (idempotent).

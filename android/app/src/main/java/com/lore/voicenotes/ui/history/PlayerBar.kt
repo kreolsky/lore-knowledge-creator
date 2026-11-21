@@ -48,15 +48,15 @@ private val TabularTimeStyle = TextStyle(
 
 /**
  * The bar above navigation: play, title, position / duration, the scrubber
- * (it never sits inside a swipeable row) and a close button. Hidden only on
- * the detail screen of the row it plays — that screen carries its own card.
+ * (it never sits inside a swipeable row) and a close button. The detail
+ * screen renders the same bar for its own row, without close.
  */
 @Composable
 fun PlayerBar(
     state: PlayerBarUiState,
     onPlayPause: () -> Unit,
     onSeek: (Float) -> Unit,
-    onClose: () -> Unit,
+    onClose: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val title = state.createdAt?.let { formatWhen(it) } ?: ""
@@ -71,7 +71,7 @@ fun PlayerBar(
                 )
             }
             .background(LoreSurface)
-            .padding(start = 12.dp, end = 6.dp, top = 7.dp, bottom = 7.dp),
+            .padding(start = 12.dp, end = if (onClose != null) 6.dp else 12.dp, top = 7.dp, bottom = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -127,19 +127,21 @@ fun PlayerBar(
                 onSeek = onSeek,
             )
         }
-        Box(
-            Modifier
-                .size(38.dp)
-                .clip(CircleShape)
-                .clickable(onClick = onClose),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                Icons.Outlined.Close,
-                contentDescription = stringResource(R.string.player_close),
-                tint = LoreMuted,
-                modifier = Modifier.size(17.dp),
-            )
+        if (onClose != null) {
+            Box(
+                Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onClose),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Outlined.Close,
+                    contentDescription = stringResource(R.string.player_close),
+                    tint = LoreMuted,
+                    modifier = Modifier.size(17.dp),
+                )
+            }
         }
     }
 }

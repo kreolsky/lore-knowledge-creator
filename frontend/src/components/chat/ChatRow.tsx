@@ -10,7 +10,7 @@ import { readRefOpenMode, refIsScope } from '../../store/ui-store/documents-slic
 import { emit } from '../../events';
 import { useTranslation } from '../../i18n';
 import { formatDate } from '../../utils/format';
-import { FieldInput, IconButton, ListPill, RowActions } from '../ui';
+import { InlineRenameInput, IconButton, ListPill, RowActions } from '../ui';
 import { useArmedAction } from '../../hooks/useArmedAction';
 import { ListRow } from './ListRow';
 
@@ -171,18 +171,12 @@ export const ChatRow = memo(function ChatRow({ session, isActive, onSelect, onDe
       <ListRow
         body={session.title || t('newChat')}
         bodyOverride={renaming ? (
-          <FieldInput
+          <InlineRenameInput
             className="ref-rename-input"
-            data-rename-input
             value={renameValue}
-            onChange={e => setRenameValue(e.target.value)}
-            autoFocus
-            onKeyDown={e => {
-              if (e.key === 'Enter') { e.preventDefault(); void commitRename(); }
-              if (e.key === 'Escape') { setRenaming(false); }
-            }}
-            onBlur={() => { void commitRename(); }}
-            onClick={e => e.stopPropagation()}
+            onChange={setRenameValue}
+            onCommit={() => { void commitRename(); }}
+            onCancel={() => setRenaming(false)}
           />
         ) : undefined}
         onBodyDoubleClick={onRename ? startRename : undefined}

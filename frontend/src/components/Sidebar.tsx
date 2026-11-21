@@ -28,6 +28,7 @@ import { ParentPickerPopup } from './ParentPickerPopup';
 import { DocumentTree } from './DocumentTree';
 import type { Document, DocumentTreeNode } from '../types';
 import { docUrl } from '../utils/routing';
+import { buildParentMap, childrenMap, descendantIds } from '../utils/document-hierarchy';
 import { useTranslation } from '../i18n';
 
 const TREE_REFETCH_DEBOUNCE_MS = 300;
@@ -50,22 +51,11 @@ export function Sidebar() {
   const [parentPicker, setParentPicker] = useState<{ doc: DocumentTreeNode; anchorRect: DOMRect } | null>(null);
 
   const handleDelete = useCallback(async (id: string, name: string) => {
-    // Subtree census for the modal's "delete the whole subtree" checkbox: BFS over
+    // Subtree census for the modal's "delete the whole subtree" checkbox: a walk over
     // the live tree docs (always hydrated) plus references HOSTED inside the
     // subtree (a reference's document_id is its host doc — its tree parent).
     const docs = useAppStore.getState().documents;
-    const ids = new Set<string>([id]);
-    let frontier = [id];
-    while (frontier.length) {
-      const next: string[] = [];
-      for (const d of docs) {
-        if (d.parent_id && frontier.includes(d.parent_id) && !ids.has(d.document_id)) {
-          ids.add(d.document_id);
-          next.push(d.document_id);
-        }
-      }
-      frontier = next;
-    }
+    const ids = descendantIds([id], childrenMap(buildParentMap(docs)), { includeRoots: true });
     const inSubtree = (refs: { document_id: string | null }[]) =>
       refs.filter(r => r.document_id && ids.has(r.document_id)).length;
     // Ref census comes from a project-wide fetch, NOT the references store: the

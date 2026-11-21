@@ -43,11 +43,10 @@ APP_VERSION = os.environ.get("APP_VERSION") or "dev"
 # ─── Schema fingerprint guard (SYSTEM: schema-fingerprint) ──────────────────
 # Severity dial for the boot-time stale-schema-restore guard, deliberately NOT
 # crash-on-missing-config: this is a guard's severity, not critical data. Default
-# ON (W2): recorded fields missing from the live schema with no migration having
-# run is data-loss-grade drift (2026-06-30 / 2026-07-28) and refuses boot. `false`
-# is the operator escape hatch — boot a wedged environment (e.g. a SurrealDB
-# output-format change tripping a false positive) without a code push; the drift
-# still logs LOUD.
+# ON: recorded fields missing from the live schema is data-loss-grade drift
+# (2026-06-30 / 2026-07-28) and refuses boot. `false` is the operator escape
+# hatch — boot a wedged environment (e.g. a SurrealDB output-format change
+# tripping a false positive) without a code push; the drift still logs LOUD.
 # WHY env-only, no admin row: the escape hatch is needed exactly when the backend
 # cannot boot, so an admin page could never reach it; the critical log names it.
 SCHEMA_FINGERPRINT_FATAL = (os.environ.get("SCHEMA_FINGERPRINT_FATAL") or "true").lower() in (

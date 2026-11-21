@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiClient } from '../api/client';
+import { verifyPin, PIN_VERDICT_MESSAGE } from '../api/cabinet';
 import { useAppStore } from '../store/app-store';
 import { Button, PinDigitsInput } from './ui';
 import { useTranslation } from '../i18n';
@@ -27,30 +28,16 @@ export function PinLockScreen() {
     if (pin.length !== 4) return;
     setLoading(true);
     setError('');
-    try {
-      const res = await fetch('/api/cabinet/verify-pin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ pin }),
-      });
-      // WHY: a 401/500 is not a wrong PIN — only a 2xx body carries `valid`.
-      if (!res.ok) {
-        setError(t('connectionError'));
-        return;
-      }
-      const data = await res.json();
-      if (data.valid) {
-        setPinLocked(false);
-      } else {
-        setError(t('wrongPin'));
-        setPin('');
-        inputRef.current?.focus();
-      }
-    } catch {
-      setError(t('connectionError'));
-    } finally {
-      setLoading(false);
+    const verdict = await verifyPin(pin);
+    setLoading(false);
+    if (verdict === 'ok') {
+      setPinLocked(false);
+      return;
+    }
+    setError(t(PIN_VERDICT_MESSAGE[verdict]));
+    if (verdict === 'wrong') {
+      setPin('');
+      inputRef.current?.focus();
     }
   };
 

@@ -239,7 +239,6 @@ export const en = {
 
   // toast / errors
   serverUnavailable: 'Server temporarily unavailable',
-  failedToSaveRecording: 'Failed to save recording',
   recordingRestoredUploading: 'Restored an unsent recording — uploading…',
   recordingRestoredPartial: 'Restored an unfinished recording (browser closed mid-take) — uploading…',
   recordingRestoreFailed: 'Restored recording discarded — access to its document was refused',
@@ -250,6 +249,11 @@ export const en = {
   accessRevokedOrExpired: 'Access revoked or session expired — please reload',
   failedToSaveDocument: 'Failed to save document',
   failedToCopyImage: 'Could not copy the image — only its link was copied',
+  someImagesNotCopied: 'Copied without images — the browser refused them',
+  pasteFilesCopying: 'Copying files from another project: {count}',
+  pasteFilesCopied: 'Files copied into this project: {count}',
+  pasteFilesCopyFailed: 'Could not copy files: {count} — their links still point to the source project',
+  pasteFilesLinksNotUpdated: 'The files were copied into the references panel, but the pasted links were not updated — the document was closed',
   attachmentsExceedLimit: 'Attachments are too large ({used}MB of {limit}MB) — remove some to send',
   fileTooLargeAudio: 'Audio file must be under {limit}MB',
   fileTooLargeImage: 'Image must be under {limit}MB',
@@ -374,7 +378,6 @@ export const en = {
   chatWithReference: 'Chat with Reference',
   insertEmbedAtCursor: 'Insert embed at cursor',
   changeParentDocument: 'Change parent document',
-  deleteReference: 'Delete reference',
   // staged-delete (archive → soft-delete) labels.
   archiveReference: 'Archive reference',
   restoreReference: 'Restore reference',
@@ -550,8 +553,6 @@ export const en = {
   chatContextWarning: 'Some context documents failed to load',
   chatStreamDegraded: 'Some stream content was lost',
   chatContextSummarized: 'Conversation context was summarized to free up space',
-  chatToolRunning: 'running…',
-  chatToolRunningBody: 'The call is running — its result lands here when it settles.',
   chatCompactionArchiveFailed: 'The context was summarized, but the archived conversation could not be saved — the earlier transcript is not available',
   // agent-halt card. reason → label, a derived recap, the step
   // count, and the Continue button (a visible user message).
@@ -586,19 +587,6 @@ export const en = {
   // failed/noop chip outcome labels.
   agentStepFailed: 'Not applied',
   agentStepNoop: 'No change',
-  // Expanded chip section labels + structured search
-  // header + truncation markers. The chip's "Вызов" (args) + "Ответ" (result)
-  // blocks; the search header's protected hit-count zone (always visible, ambered
-  // on zero) and its label. (The truncation marker itself is baked into the
-  // backend content head — English, matching the existing detail markers — so no
-  // frontend key is needed for it.)
-  toolCallArgs: 'Call',
-  toolResult: 'Result',
-  nMoreHits: '{n} more',
-  searchLabel: 'search',
-  webSearchLabel: 'web search',
-  nFound: '{n} found',
-  nFoundZero: '0 found',
   // Live "preparing <tool>" chip verb shown
   // while the model builds the tool-call args (before the real tool card).
   agentConfigSaveFailed: 'Failed to save the pipeline',
@@ -705,11 +693,7 @@ export const en = {
   agentModeStartFailed: 'Failed to start agent mode',
   chatAgentUnavailable: 'The agent is unavailable right now — please retry shortly.',
   chatAgentDisabledReason: 'Agent unavailable',
-  chatSystemPrompt: 'System prompt',
   chatSystemPromptNone: 'Default',
-  selectionPillLabel: 'Pinned fragment',
-  selectionPillEmpty: 'region empty',
-  selectionPillUnpin: 'Unpin — re-enable auto-apply',
   agentModeNoForkRegenerate: 'Fork and regenerate are disabled in agent mode',
   // ARCH: archived-chat read-only banner.
   // The retirement freeze: the chat predates the
@@ -822,7 +806,6 @@ export const en = {
   adminMcpSubjectsHint: 'Who sees this server',
   adminMcpModeratorScope: 'Visible to your group only.',
   adminMcpEnabled: 'Enabled',
-  adminMcpCreatedBy: 'by {name}',
   adminMcpSaveFailed: 'Failed to save the server',
   adminListLoadFailed: 'Failed to load the list',
   publicLabel: 'Public',
@@ -875,7 +858,6 @@ export const en = {
   editNameEmail: 'Edit name / email',
   deleteUser: 'Delete user',
   failedToDeleteUser: 'Failed to delete user',
-  failedToUpdateProject: 'Failed to update project',
   failedToCreateUser: 'Failed to create user',
   failedToUpdateUser: 'Failed to update user',
   failedToDeleteProject: 'Failed to delete project',
@@ -1253,7 +1235,6 @@ export const en = {
   backToHome: 'Back to home',
   publicDocUnavailable: 'This document is temporarily unavailable. Try again in a moment.',
   publicShareSessionProbeFailed: "Couldn't verify your session",
-  publicReferences: 'References',
   publicNotes: 'Notes',
 
   // unified Access tab

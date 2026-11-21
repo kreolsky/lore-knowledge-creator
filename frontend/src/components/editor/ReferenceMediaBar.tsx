@@ -14,7 +14,7 @@ import { FileArchive } from 'lucide-react';
 import { useTranslation } from '../../i18n';
 import { pressedSize } from '../../chat/attach-image';
 import { useAppStore } from '../../store/app-store';
-import { formatFileSize } from '../references/ref-utils';
+import { formatBytes } from '../../utils/format-bytes';
 import { Reference } from '../../types';
 import { referenceFileUrl } from '../../utils/reference-url';
 import { AudioPlayer } from './AudioPlayer';
@@ -86,7 +86,7 @@ export function ReferenceMediaBar({ reference, canEdit }: Props) {
               <div className="text-ui-base truncate">{originalName}</div>
               <div className="text-ui-xs text-text-dim">
                 {reference.file_meta?.file_size !== undefined
-                  ? formatFileSize(reference.file_meta.file_size)
+                  ? formatBytes(reference.file_meta.file_size)
                   : t('fileReference')}
               </div>
             </div>

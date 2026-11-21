@@ -785,6 +785,8 @@ body.is-resizing * { transition: none !important; }
   height: auto;
   font-family: inherit;
   font-size: 0.875rem;
+  /* WHY: the line box FieldInput's text-sm used to give it; keeps the pill height on edit. */
+  line-height: 1.25rem;
   font-weight: 400;
   color: var(--text);
   background: transparent;

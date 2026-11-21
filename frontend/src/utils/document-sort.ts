@@ -6,14 +6,7 @@
  */
 
 import type { Document, Reference } from '../types';
-
-export function buildParentMap(documents: Document[]): Map<string, string | null> {
-  const map = new Map<string, string | null>();
-  for (const d of documents) {
-    map.set(d.document_id, d.parent_id);
-  }
-  return map;
-}
+import { buildParentMap, childrenMap, descendantIds } from './document-hierarchy';
 
 // ARCH: Project itself is a virtual root above all documents — disconnected
 // subtrees still have a finite distance via the project node.
@@ -87,30 +80,8 @@ export function listHiddenDocIds(documents: Document[], currentDocId: string | n
     }
   }
 
-  const childrenMap = new Map<string, string[]>();
-  for (const [id, parent] of parentMap) {
-    if (parent !== null) {
-      const siblings = childrenMap.get(parent) ?? [];
-      siblings.push(id);
-      childrenMap.set(parent, siblings);
-    }
-  }
-
-  const hidden = new Set<string>();
-  for (const root of flagged) {
-    if (inside.has(root) || hidden.has(root)) continue;
-    hidden.add(root);
-    const stack = [root];
-    while (stack.length > 0) {
-      const node = stack.pop()!;
-      for (const child of childrenMap.get(node) ?? []) {
-        if (hidden.has(child)) continue;
-        hidden.add(child);
-        stack.push(child);
-      }
-    }
-  }
-  return hidden;
+  const outside = flagged.filter(root => !inside.has(root));
+  return descendantIds(outside, childrenMap(parentMap), { includeRoots: true });
 }
 
 // ARCH: Sort key priority — Name Match (tier 0/1/2) > Proximity (tree steps) > Recency (updated_at DESC)
@@ -155,27 +126,6 @@ function compareBySortKey(a: Document, b: Document): number {
   return a.document_id < b.document_id ? -1 : a.document_id > b.document_id ? 1 : 0;
 }
 
-function descendantsOf(anchorId: string, parentMap: Map<string, string | null>): Set<string> {
-  const childrenMap = new Map<string, string[]>();
-  for (const [id, parent] of parentMap) {
-    if (parent !== null) {
-      const siblings = childrenMap.get(parent) ?? [];
-      siblings.push(id);
-      childrenMap.set(parent, siblings);
-    }
-  }
-  const result = new Set<string>([anchorId]);
-  const stack = [anchorId];
-  while (stack.length > 0) {
-    const node = stack.pop()!;
-    for (const child of childrenMap.get(node) ?? []) {
-      result.add(child);
-      stack.push(child);
-    }
-  }
-  return result;
-}
-
 // ARCH: Chat picker sort — anchor doc → tree distance → descendants-first → name-match → sort_key (tree order).
 // Name-match preserves search relevance within proximity tiers; the final tiebreaker mirrors
 // the right-panel tree order (sort_key) so ties surface in the user's arranged order.
@@ -193,7 +143,7 @@ export function sortDocumentsForChat(
       return compareBySortKey(a, b);
     });
   }
-  const descendants = descendantsOf(anchorDocId, parentMap);
+  const descendants = descendantIds([anchorDocId], childrenMap(parentMap), { includeRoots: true });
   return [...docs].sort((a, b) => {
     const selfA = a.document_id === anchorDocId ? 0 : 1;
     const selfB = b.document_id === anchorDocId ? 0 : 1;

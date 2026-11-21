@@ -7,7 +7,8 @@
  * transclusion anchors expanded to GFM). External rich editors (Word / Google Docs /
  * Gmail / Notion) read `text/html` and preserve formatting; plain targets (Notepad, code
  * editors) read `text/plain`. A whole-selected image also puts the picture itself
- * (`image/png`) on the clipboard. Paste already converts HTML→Markdown (see paste-handler).
+ * (`image/png`) on the clipboard; Cmd/Ctrl+C on a selection with `ref:` images inlines
+ * them into `text/html` as data URIs. Paste already converts HTML→Markdown (see paste-handler).
  *
  * ARCH: EditorView.domEventHandlers intercept copy/cut BEFORE CM6's default handler. The
  * selection's raw markdown source is the single portable intermediate: `text/plain` expands
@@ -20,11 +21,13 @@
 
 import { EditorView } from '@codemirror/view';
 import { getActiveHandle } from './active-editor';
-import { cleanMarkdownToHtml } from '../components/editor/markdown-to-html';
+import { cleanMarkdownToHtml, isInlinableDataUri } from '../components/editor/markdown-to-html';
 import { expandTableAnchorsToGfm, tableAnchorsToIslands, tableMergesByGfm } from '../components/editor/live-preview/table-serialize';
 import { ligatureSubstitutedText } from '../components/editor/ligature-plugin';
 import { selectedAtomicRange } from '../components/editor/live-preview/atomic-delete-guard';
 import { cutNotesSidecar } from './note-clipboard';
+import { transcludeMap } from '../components/editor/live-preview/effects';
+import { splitTarget } from '../components/editor/live-preview/link-types';
 import { useAppStore } from '../store/app-store';
 import { t } from '../i18n';
 
@@ -117,19 +120,20 @@ function writeSelectedImage(view: EditorView, img: HTMLImageElement): void {
   });
 }
 
-/**
- * Write the rich clipboard payload for a copy/cut event. Returns true when handled (the
- * default copy/cut is suppressed), false to let CM6's default run (no clipboardData, or an
- * all-collapsed selection). `isCut` additionally deletes every selection range.
- */
-export function handleCopyCut(e: ClipboardEvent, view: EditorView, isCut: boolean): boolean {
-  if (!e.clipboardData) return false;
-  const { selection } = view.state;
-  // All-collapsed selection → nothing selected; let CM6 default copy the current line.
-  if (selection.ranges.every((r) => r.from === r.to)) return false;
+/** A copy payload: `text/plain` now, `text/html` rendered on demand with inlined images. */
+interface CopyPayload {
+  plain: string;
+  renderHtml(images?: ReadonlyMap<string, string>): string;
+}
 
+/**
+ * Snapshot the copy payload of the current (non-collapsed) selection. Everything is read
+ * from the editor NOW; only the final markdown→HTML render is deferred, so the keydown path
+ * can render after its image fetches without seeing edits made meanwhile.
+ */
+function buildCopyPayload(view: EditorView, isCut: boolean): CopyPayload {
   // Multi-range join uses a single `\n` to match CM6's default copy semantics.
-  const ranges = selection.ranges;
+  const ranges = view.state.selection.ranges;
   const selectedMarkdown = ranges
     .map((r) => view.state.sliceDoc(r.from, r.to))
     .join('\n');
@@ -153,7 +157,6 @@ export function handleCopyCut(e: ClipboardEvent, view: EditorView, isCut: boolea
     ? tableAnchorsToIslands(handle.ydoc, renderedMarkdown)
     : { text: renderedMarkdown, islands: [] };
 
-  const html = cleanMarkdownToHtml(rendered.text, rendered.islands);
   // WHY from the SOURCE slice: the paste side matches `text/plain` (source GFM), and the
   // rendered slice's ligatures would never match it.
   const merges = handle?.ydoc ? tableMergesByGfm(handle.ydoc, selectedMarkdown) : [];
@@ -161,19 +164,33 @@ export function handleCopyCut(e: ClipboardEvent, view: EditorView, isCut: boolea
   // WHY cut only and single range only: a copy orphans nothing, and a multi-range cut's
   // pasted text is the ranges joined, which no single offset base describes.
   const notesSidecar = isCut && ranges.length === 1 ? cutNotesSidecar(view, ranges[0].from, ranges[0].to) : '';
-  const envelope =
+  const renderHtml = (images?: ReadonlyMap<string, string>): string =>
     FRAGMENT_HEAD +
     '<!--StartFragment-->' +
     LORE_CLIP_MARK +
     mergesSidecar +
     notesSidecar +
-    html +
+    cleanMarkdownToHtml(rendered.text, rendered.islands, images) +
     '<!--EndFragment-->' +
     FRAGMENT_TAIL;
+  return { plain: sourcePortable, renderHtml };
+}
 
+/**
+ * Write the rich clipboard payload for a copy/cut event. Returns true when handled (the
+ * default copy/cut is suppressed), false to let CM6's default run (no clipboardData, or an
+ * all-collapsed selection). `isCut` additionally deletes every selection range.
+ */
+export function handleCopyCut(e: ClipboardEvent, view: EditorView, isCut: boolean): boolean {
+  if (!e.clipboardData) return false;
+  const { selection } = view.state;
+  // All-collapsed selection → nothing selected; let CM6 default copy the current line.
+  if (selection.ranges.every((r) => r.from === r.to)) return false;
+
+  const payload = buildCopyPayload(view, isCut);
   e.preventDefault();
-  e.clipboardData.setData('text/plain', sourcePortable);
-  e.clipboardData.setData('text/html', envelope);
+  e.clipboardData.setData('text/plain', payload.plain);
+  e.clipboardData.setData('text/html', payload.renderHtml());
 
   if (isCut) {
     // Delete every selection range and collapse the cursor to the primary range's
@@ -187,6 +204,109 @@ export function handleCopyCut(e: ClipboardEvent, view: EditorView, isCut: boolea
       selection: { anchor: view.state.changes(deletes).mapPos(selection.main.from) },
     });
   }
+  return true;
+}
+
+// A `ref:` image embed in the source; group 1 = the target as written (`ref:<id>[#frag]`).
+const REF_IMAGE_RE = /!\[[^\]]*\]\((ref:[^)\s]+)\)/g;
+// WHY: a fenced block renders as literal code, so an embed inside it is never an <img>.
+const FENCED_BLOCK_RE = /```[\s\S]*?```/g;
+// WHY a cap: the clipboard holds the payload as a string ~1.33x the bytes, and Google Docs
+// drops an oversized paste silently.
+const MAX_INLINE_BYTES = 25 * 1024 * 1024;
+const FETCH_CONCURRENCY = 4;
+
+/** Image target as written → its loaded image URL, for every resolvable `ref:` image in the selection. */
+function collectSelectedImages(view: EditorView): Map<string, string> {
+  const urls = new Map<string, string>();
+  for (const r of view.state.selection.ranges) {
+    for (const m of view.state.sliceDoc(r.from, r.to).replace(FENCED_BLOCK_RE, '').matchAll(REF_IMAGE_RE)) {
+      const entry = transcludeMap.get(splitTarget(m[1].slice('ref:'.length)).id);
+      if (entry?.kind === 'ref-image' && entry.imageUrl) urls.set(m[1], entry.imageUrl);
+    }
+  }
+  return urls;
+}
+
+function blobToDataUri(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Fetch each image ORIGINAL (already in the HTTP cache from the editor render) as a data URI.
+ * Never rejects: an image that fails, is not a raster, or exceeds the size cap is counted in
+ * `missed` and stays alt text. WHY no canvas: keeps the original format and cannot taint.
+ */
+async function inlineImages(urls: ReadonlyMap<string, string>): Promise<{ images: Map<string, string>; missed: number }> {
+  const queue = [...urls];
+  const images = new Map<string, string>();
+  let missed = 0;
+  let bytes = 0;
+  const worker = async (): Promise<void> => {
+    for (let next = queue.shift(); next; next = queue.shift()) {
+      const [target, url] = next;
+      try {
+        const res = await fetch(url, { cache: 'force-cache' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        if (bytes + blob.size > MAX_INLINE_BYTES) throw new Error('clipboard size cap reached');
+        const dataUri = await blobToDataUri(blob);
+        // WHY the pipeline's own predicate: a URI it would refuse (svg, a typed-with-params
+        // blob) must count as missed here, or the image turns to text with no toast.
+        if (!isInlinableDataUri(dataUri)) throw new Error(`not an inlinable image: ${blob.type}`);
+        bytes += blob.size;
+        images.set(target, dataUri);
+      } catch (err) {
+        console.warn('[copy] image not inlined', url, err);
+        missed += 1;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(FETCH_CONCURRENCY, queue.length) }, worker));
+  return { images, missed };
+}
+
+/**
+ * Cmd/Ctrl+C on a selection containing `ref:` images → write `text/html` with each image
+ * inlined as a data URI, so Google Docs / Word paste the pictures. Returns false (the
+ * ordinary `copy` event runs) for a selection with no resolvable image.
+ * WHY keydown + a ClipboardItem of PROMISES built inside the gesture: same constraints as
+ * `handleImageCopyKey` — Firefox refuses `clipboard.write` inside a `copy` event and Safari
+ * rejects a write started after an await. `text/plain` is the same source markdown as the
+ * event path, so a Lore→Lore paste is unchanged. Cut and the menu Copy stay on the event
+ * path, text-only: cut must delete synchronously and the menu carries no keydown.
+ */
+function handleRichCopyKey(e: KeyboardEvent, view: EditorView): boolean {
+  if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.code !== 'KeyC') return false;
+  if (view.state.selection.ranges.every((r) => r.from === r.to)) return false;
+  const urls = collectSelectedImages(view);
+  if (urls.size === 0) return false;
+  const { showToast } = useAppStore.getState();
+  // WHY fall through to the event path: no async Clipboard API (plain http) — the text
+  // still copies, and the user is told the images did not.
+  if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+    showToast(t('someImagesNotCopied'), 'error');
+    return false;
+  }
+  e.preventDefault();
+  const payload = buildCopyPayload(view, false);
+  const inlined = inlineImages(urls);
+  const item = new ClipboardItem({
+    'text/plain': new Blob([payload.plain], { type: 'text/plain' }),
+    'text/html': inlined.then(({ images }) => new Blob([payload.renderHtml(images)], { type: 'text/html' })),
+  });
+  navigator.clipboard.write([item])
+    .then(() => inlined)
+    .then(({ missed }) => { if (missed > 0) showToast(t('someImagesNotCopied'), 'error'); })
+    .catch((err: unknown) => {
+      console.warn('[copy] rich clipboard write failed', err);
+      showToast(t('copyFailed'), 'error');
+    });
   return true;
 }
 
@@ -208,7 +328,7 @@ function handleImageCopyKey(e: KeyboardEvent, view: EditorView): boolean {
 }
 
 export const copyHandlerExtension = EditorView.domEventHandlers({
-  keydown: (e, view) => handleImageCopyKey(e, view),
+  keydown: (e, view) => handleImageCopyKey(e, view) || handleRichCopyKey(e, view),
   copy: (e, view) => handleCopyCut(e, view, false),
   cut: (e, view) => handleCopyCut(e, view, true),
 });

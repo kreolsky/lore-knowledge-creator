@@ -15,9 +15,10 @@ import type React from 'react';
 import { FileInput, Pencil, Trash2, ArchiveRestore, RotateCcw, FolderUp, Bot, MessagesSquare } from 'lucide-react';
 import { useTranslation } from '../../i18n';
 import { Reference, hasReferenceContent } from '../../types';
-import { StatusBadge, formatFileSize, hueForId, RefIcon, refEmbedText } from './ref-utils';
+import { StatusBadge, hueForId, RefIcon, insertRefEmbedAtCursor } from './ref-utils';
+import { formatBytes } from '../../utils/format-bytes';
 import { formatDate } from '../../utils/format';
-import { IconButton, FieldInput, ListPill, RowActions } from '../ui';
+import { IconButton, InlineRenameInput, ListPill, RowActions } from '../ui';
 import { ListRow } from '../chat/ListRow';
 import { useEditorView } from '../../editor/active-editor';
 import { useArmedAction } from '../../hooks/useArmedAction';
@@ -145,13 +146,7 @@ export const RefCard = memo(function RefCard({
           e.stopPropagation();
           const view = getEditorView();
           if (!view) return;
-          const pos = view.state.selection.main.head;
-          const text = refEmbedText(reference);
-          view.dispatch({
-            changes: { from: pos, insert: text },
-            selection: { anchor: pos + 2 + reference.title.length },
-          });
-          view.focus();
+          insertRefEmbedAtCursor(view, reference);
         }}
       >
         <FileInput size={13} />
@@ -243,18 +238,12 @@ export const RefCard = memo(function RefCard({
         <ListRow
           body={reference.title}
           bodyOverride={renamingId === reference.reference_id ? (
-            <FieldInput
+            <InlineRenameInput
               className="ref-rename-input"
-              data-rename-input
               value={renameValue}
-              onChange={e => onRenameChange(e.target.value)}
-              autoFocus
-              onKeyDown={e => {
-                if (e.key === 'Enter') { e.preventDefault(); onRenameCommit(reference); }
-                if (e.key === 'Escape') { onRenameCancel(); }
-              }}
-              onBlur={() => onRenameCommit(reference)}
-              onClick={e => e.stopPropagation()}
+              onChange={onRenameChange}
+              onCommit={() => onRenameCommit(reference)}
+              onCancel={onRenameCancel}
             />
           ) : undefined}
           meta={meta}
@@ -263,7 +252,7 @@ export const RefCard = memo(function RefCard({
             <span className="flex items-center gap-1">
               <RefIcon item={reference} />
               {isImage && reference.file_meta?.file_size && (
-                <span className="text-ui-2xs">{formatFileSize(reference.file_meta.file_size)}</span>
+                <span className="text-ui-2xs">{formatBytes(reference.file_meta.file_size)}</span>
               )}
             </span>
           }
@@ -277,7 +266,7 @@ export const RefCard = memo(function RefCard({
               )}
               {!isImage && reference.file_meta?.file_size && !reference.processing_status && (
                 <span className="text-ui-2xs text-text-dim">
-                  {formatFileSize(reference.file_meta.file_size)}
+                  {formatBytes(reference.file_meta.file_size)}
                 </span>
               )}
             </>

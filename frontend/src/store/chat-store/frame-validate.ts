@@ -52,9 +52,6 @@ const GUARDS: Record<string, (f: Record<string, unknown>) => boolean> = {
   dsh_event: f => isStr(f.kind),
 };
 
-/** The guarded types, for the test that binds this map to the handler table. */
-export const GUARDED_TYPES = Object.keys(GUARDS);
-
 /**
  * Return the frame typed as Frame when it is well-formed for its `type`, else
  * null (caller warns + toasts once per stream, then drops). Never throws.

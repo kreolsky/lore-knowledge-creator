@@ -1,7 +1,7 @@
 /** Page PIN lock (SYSTEM: page-lock) — the one "is the open page still behind its PIN" projection. */
 import type { AppState } from '../store/app-store';
-import type { Document, DocumentTreeNode } from '../types';
-import { buildParentMap } from './document-sort';
+import type { DocumentTreeNode } from '../types';
+import { buildParentMap } from './document-hierarchy';
 
 type LockState = Pick<AppState, 'currentDocument' | 'currentUser' | 'unlockedDocIds' | 'pageLockLeftAt' | 'documents'>;
 
@@ -96,17 +96,4 @@ export function pruneLockedBranches(nodes: DocumentTreeNode[], hidden: Set<strin
     return { ...n, children: kids };
   });
   return changed ? out : nodes;
-}
-
-/** `docId` is `rootId` or lies below it (parent walk, stops on a revisit). */
-export function isInSubtreeOf(documents: Document[], docId: string, rootId: string): boolean {
-  const parents = buildParentMap(documents);
-  const seen = new Set<string>();
-  let cur: string | null = docId;
-  while (cur && !seen.has(cur)) {
-    if (cur === rootId) return true;
-    seen.add(cur);
-    cur = parents.get(cur) ?? null;
-  }
-  return false;
 }

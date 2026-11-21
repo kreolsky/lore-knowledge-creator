@@ -29,6 +29,7 @@ import { tableAnchor } from '../components/editor/live-preview/table-document-op
 import { documentTextWidth } from '../components/editor/live-preview/document-width';
 import { t } from '../i18n';
 import { reanchorPastedNotes } from './note-clipboard';
+import { copyForeignRefs } from './paste-files';
 
 const turndown = new TurndownService({
   headingStyle: 'atx',
@@ -463,6 +464,8 @@ export const pasteHandlerExtension = EditorView.domEventHandlers({
       e.preventDefault();
       const { at, inserted } = insertVerbatim(view, verbatim, loreMergesByGfm(html));
       reanchorPastedNotes(view, html, at, inserted);
+      // WHY Lore-origin only: external HTML never carries `ref:` links.
+      if (html.includes(LORE_CLIP_MARK)) void copyForeignRefs(view, verbatim);
       return true;
     }
 

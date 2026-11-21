@@ -7,7 +7,7 @@
 import { useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { Trash2, ChevronDown, ChevronRight, ExternalLink, Pencil, Users } from 'lucide-react';
-import { Button, FieldInput, IconButton } from '../ui';
+import { Button, FieldInput, IconButton, InlineRenameInput } from '../ui';
 import { useTranslation } from '../../i18n';
 import { AccessLevel, User, Project } from '../../types';
 import { ProjectMemberList } from './ProjectMemberList';
@@ -128,17 +128,14 @@ function ProjectCard({
           onDoubleClick={() => { if (!renaming) startRename(); }}
         >
           {renaming ? (
-            <FieldInput
+            <InlineRenameInput
               ref={renameInputRef}
               className="doc-rename-input admin-rename-input min-w-0"
-              data-rename-input
+              autoFocus={false}
               value={renameValue}
-              onChange={e => setRenameValue(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter') commitRename();
-                if (e.key === 'Escape') setRenaming(false);
-              }}
-              onBlur={() => commitRename()}
+              onChange={setRenameValue}
+              onCommit={() => commitRename()}
+              onCancel={() => setRenaming(false)}
             />
           ) : (
             <span className="truncate">{project.name}</span>

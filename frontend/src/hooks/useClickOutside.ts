@@ -13,12 +13,6 @@ import { useEffect, useRef } from 'react';
 
 type OutsideRef = React.RefObject<HTMLElement | null> | undefined;
 
-export type UseClickOutsideFn = (
-  refs: OutsideRef | OutsideRef[],
-  handler: () => void,
-  enabled?: boolean,
-) => void;
-
 export function useClickOutside(
   refs: OutsideRef | OutsideRef[],
   handler: () => void,

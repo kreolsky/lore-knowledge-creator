@@ -1,0 +1,8 @@
+// knip scope for .claude/scripts/frontend-dead-code-gate.py (unused files only).
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "project": ["src/**/*.{ts,tsx,js,css}"],
+  // WHY: hand-kept declarations of the committed dsh bundles; tsc resolves them through
+  // the `.js` import beside them, which knip does not follow to the `.d.ts`.
+  "ignore": ["src/dsh/*.d.ts"]
+}

@@ -8,14 +8,17 @@ an older schema. The migration runner trusts the marker and skips, leaving orpha
 definitions that coerce-fail every write.
 
 Guard: reduce the live schema to a sorted set of (table, field, type) and compare it at
-boot to the set recorded after the last `run_migrations()` completion. The verdict is
-two-tier: `removed` drift (recorded fields missing live) with no migration having run
-that boot REFUSES startup — that is the stale-schema-restore signature and
-data-loss-grade (INVARIANT on the enforce site, migrations/runner.py
-_enforce_fingerprint_fatal). `added`-only drift stays log-only: apply_schema() runs
-BEFORE run_migrations() (main.py lifespan), so an ordinary additive release always
-reaches the check with `added=[…]`, and that boot records the superset so the next one
-is clean. An introspection failure (any table unreadable) is NOT drift: the whole check
+boot — BEFORE apply_schema() (fingerprint_preflight, main.py lifespan) — to the set
+recorded after the last boot. Between two boots nothing in Lore changes the schema
+(only apply_schema and migrations do, both at boot, both followed by the record step),
+so any `removed` drift (recorded fields missing live) was lost outside Lore and
+REFUSES startup — that is the stale-schema-restore signature and data-loss-grade
+(INVARIANT on the enforce site, migrations/runner.py _enforce_fingerprint_fatal).
+`added`-only drift stays log-only: a field appeared outside Lore, or an older build
+booted on a newer DB — neither loses data — and that boot records the superset so the
+next one is clean. Release-driven changes (schema.surql REMOVE/OVERWRITE, migration
+DDL) happen after the check and are absorbed by the record step. An introspection
+failure (any table unreadable) is NOT drift: the whole check
 skips itself rather than manufacturing `removed` entries. Escape hatch:
 SCHEMA_FINGERPRINT_FATAL=false (config.py), default on.
 
@@ -29,12 +32,12 @@ from typing import Any
 
 
 class SchemaFingerprintError(RuntimeError):
-    """Boot refusal: recorded fields missing from the live schema, no migration ran.
+    """Boot refusal: recorded fields missing from the live schema.
 
-    Raised from run_migrations() (via _enforce_fingerprint_fatal) when the fingerprint
-    check reports `removed` drift on a boot where no migration ran — the
-    stale-schema-restore signature. Awaited unguarded in main.py lifespan, so
-    raising refuses startup.
+    Raised from fingerprint_preflight() (via _enforce_fingerprint_fatal) when the
+    pre-apply fingerprint check reports `removed` drift — the stale-schema-restore
+    signature. Awaited unguarded in main.py lifespan, so raising refuses startup
+    BEFORE apply_schema() can re-create the lost definitions and blur the evidence.
     """
 
 # Fingerprint granularity: table presence + each declared field's TYPE only. Intentionally

@@ -5,7 +5,8 @@ import { useChatStore } from '../../store/chat-store';
 import { useUIStore } from '../../store/ui-store';
 import { useAppStore } from '../../store/app-store';
 import { selectOpenPageLockedBy, LOCK_PENDING } from '../../utils/page-lock';
-import { buildParentMap, treeDistance, PROJECT_ROOT, listHiddenDocIds } from '../../utils/document-sort';
+import { treeDistance, PROJECT_ROOT, listHiddenDocIds } from '../../utils/document-sort';
+import { buildParentMap } from '../../utils/document-hierarchy';
 import type { ChatSession } from '../../types';
 
 /**

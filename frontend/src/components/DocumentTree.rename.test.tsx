@@ -45,7 +45,8 @@ beforeEach(async () => {
   }));
   vi.doMock('../hooks/useSiblingDragReorder', () => ({ useSiblingDragReorder: () => {}, treeDragAdapter: {} }));
   vi.doMock('./HoverPreviewPopup', () => ({ HoverPreviewPopup: () => null }));
-  vi.doMock('./ui', () => ({ Button: () => null }));
+  const { InlineRenameInput } = await vi.importActual<typeof import('./ui/InlineRenameInput')>('./ui/InlineRenameInput');
+  vi.doMock('./ui', () => ({ Button: () => null, InlineRenameInput }));
   vi.doMock('react-router-dom', () => ({ useParams: () => ({ documentId: 'doc-1' }) }));
   vi.doMock('../api/client', () => ({
     apiClient: { get: vi.fn().mockResolvedValue({}), patch: patchMock, post: vi.fn(), delete: vi.fn() },

@@ -53,6 +53,16 @@ from migrations.migrate_origin_persona_forget_to_default import (
     _migrate_origin_persona_forget_to_default,
 )
 
+# Module-level on purpose: schema_fingerprint is dependency-light (re/typing only,
+# no cycle), unlike config below whose SCHEMA_FINGERPRINT_FATAL must be read at
+# call time because tests monkeypatch it.
+from migrations.schema_fingerprint import (
+    SchemaFingerprintError,
+    check_fingerprint,
+    current_fingerprint,
+    record_fingerprint,
+)
+
 # --- Per-migration modules (registry composition) ---
 # ARCH: each migrate_<name>.py imports only from `_shared` (never from runner),
 # so this composition root imports them all without a cycle. Tests import the
@@ -99,9 +109,8 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
 ]
 
 
-async def _run_pending_migrations(db, applied: set[str]) -> bool:
-    """Run registered migrations not yet in `applied`. Returns True if any ran."""
-    changed = False
+async def _run_pending_migrations(db, applied: set[str]) -> None:
+    """Run registered migrations not yet in `applied`."""
     for name, fn in _MIGRATIONS:
         if name in applied:
             continue
@@ -114,13 +123,32 @@ async def _run_pending_migrations(db, applied: set[str]) -> bool:
             logger.info("Migration %s deferred: %s", name, e)
             continue
         await _record_applied(db, name)
-        changed = True
         logger.info("Migration complete: %s", name)
-    return changed
 
 
-async def _fingerprint_check(db) -> tuple[list[str] | None, dict | None]:
-    """Stale-schema-restore check; returns (live snapshot, drift or None).
+async def fingerprint_preflight() -> dict | None:
+    """Pre-apply_schema fingerprint gate; returns the drift for run_migrations().
+
+    First DB step of the boot (main.py lifespan), BEFORE apply_schema(). Between
+    two boots nothing in Lore changes the schema (only apply_schema and migrations
+    do, both at boot, both followed by the record step), so the pre-apply snapshot
+    must equal the recorded one; any `removed` entry was lost outside Lore and
+    refuses boot here, with no migration able to excuse it — and while the schema
+    is still exactly as the restore left it (apply_schema's DEFINE FIELD IF NOT
+    EXISTS would otherwise re-create lost definitions and blur the evidence).
+    Release-driven changes (schema.surql REMOVE/OVERWRITE, migration DDL) happen
+    after this check and are absorbed by the record step.
+    """
+    from db import get_db
+
+    db = await get_db()
+    drift = await _fingerprint_check(db)
+    _enforce_fingerprint_fatal(drift)
+    return drift
+
+
+async def _fingerprint_check(db) -> dict | None:
+    """Stale-schema-restore check; returns the drift, or None when none detected.
 
     INVARIANT(data-loss): detect a stale-schema restore BEFORE trusting the `applied`
     marker. Why: a restored backup can carry a newer applied set over an older schema; the
@@ -128,38 +156,35 @@ async def _fingerprint_check(db) -> tuple[list[str] | None, dict | None]:
     coerce-fail every write (the 2026-06-30 incident class, ARCH backend/main.py:96).
     Severity: the 2026-07-28 incident (2668 messages destroyed by schema drift) — any
     schema/marker disagreement is data-loss-grade until explained, so it is logged LOUD.
-    Two-tier since W2: this check itself never raises — the caller (_enforce_fingerprint_fatal)
-    refuses boot on `removed` drift with no migration run, while `added`-only drift stays
-    log-only (an ordinary additive release reaches the check with `added=[…]` because
-    apply_schema() runs before run_migrations()). An introspection failure is a FAILED
-    CHECK (advisory skip, never drift): its own exceptions are swallowed here and
+    This check itself never raises — the caller (fingerprint_preflight via
+    _enforce_fingerprint_fatal) refuses boot on `removed` drift, while `added`-only
+    drift stays log-only (a field appeared outside Lore, or an older build booted on
+    a newer DB — neither loses data). An introspection failure is a FAILED CHECK
+    (advisory skip, never drift): its own exceptions are swallowed here and
     _introspect_schema raises on any unreadable table so a partial pass cannot
-    manufacture `removed` entries. The live snapshot is returned so the record
-    step can reuse it when no migration ran (no second N-query pass on steady-state boot);
-    the drift verdict is returned so the record step can refuse to erase it.
+    manufacture `removed` entries. The drift verdict is returned so the fatal gate
+    can refuse boot and the record step can refuse to erase it.
     """
-    from migrations.schema_fingerprint import check_fingerprint, current_fingerprint
-
     try:
         current = await current_fingerprint(db)
         drift = await check_fingerprint(db, current)
         if drift:
             logger.error(
                 "SCHEMA FINGERPRINT MISMATCH — live schema disagrees with the fingerprint "
-                "recorded after the last migration run (possible stale-schema restore). "
-                "Fatal when removed is non-empty and no migration ran; added-only stays "
-                "advisory. added=%d removed=%d | sample added: %s | sample removed: %s",
+                "recorded after the last boot (possible stale-schema restore). "
+                "Fatal when removed is non-empty; added-only stays advisory. "
+                "added=%d removed=%d | sample added: %s | sample removed: %s",
                 len(drift["added"]), len(drift["removed"]),
                 drift["added"][:5], drift["removed"][:5],
             )
-        return current, drift
+        return drift
     except Exception:
         logger.warning("schema-fingerprint check failed; skipping (not drift)", exc_info=True)
-        return None, None
+        return None
 
 
 async def _fingerprint_record(
-    db, post: list[str] | None, *, migrations_ran: bool, drift: dict | None,
+    db, post: list[str] | None, *, drift: dict | None,
 ) -> None:
     """Record `post` as the expected schema fingerprint; best-effort (never blocks boot).
 
@@ -169,19 +194,16 @@ async def _fingerprint_record(
     # set on the NEXT boot; recording the stale schema as the new expectation would make
     # boot #2 look clean and erase the signal permanently — the exact failure this guard
     # exists to catch (2026-06-30 / 2026-07-28 incident class).
-    # Two resolving conditions: `migrations_ran` — migrations changed the schema on
-    # purpose, so the pre-migration drift is what they just fixed and the new snapshot is
-    # the correct expectation; and added-only drift — the live set is a superset of the
-    # recorded one (an ordinary additive release), so recording it erases no `removed`
-    # signal and the next boot stops re-reporting the same added fields.
+    # Resolving condition: no `removed` drift — the live set is a superset of the
+    # recorded one (added-only), so recording it erases no `removed` signal and the
+    # next boot stops re-reporting the same added fields.
     """
-    from migrations.schema_fingerprint import record_fingerprint
-
-    if drift and drift["removed"] and not migrations_ran:
+    if drift and drift["removed"]:
         logger.error(
             "schema-fingerprint record SKIPPED — unresolved drift is kept on record so "
-            "every boot re-reports it. Investigate the restore, then re-record by "
-            "re-running migrations against a correct schema.",
+            "every boot re-reports it. Investigate the loss, then re-record by clearing "
+            "the record: UPDATE app_meta:migrations SET schema_fields = NONE — the next "
+            "boot is a first boot.",
         )
         return
     if post is None:
@@ -192,18 +214,14 @@ async def _fingerprint_record(
         logger.warning("schema-fingerprint record failed; skipping (advisory)", exc_info=True)
 
 
-def _enforce_fingerprint_fatal(drift: dict | None, *, migrations_ran: bool) -> None:
+def _enforce_fingerprint_fatal(drift: dict | None) -> None:
     """Refuse boot on unexplained field loss. Never raises otherwise.
 
-    Fatal IFF `removed` is non-empty AND no migration ran this boot. Everything else
-    stays log-only: an ordinary additive release reaches the check with `added=[…]`
-    (apply_schema() runs before run_migrations(), main.py lifespan), so promoting
-    all drift would refuse boot on every additive release; and a migration that
-    legitimately removes/retype a field always runs with migrations_ran=True in the
-    same boot (v0.12.0: added=18 removed=1 via the last_embed_error_string retype —
-    not fatal).
+    Fatal IFF `removed` is non-empty. Everything else stays log-only:
+    `added`-only drift means a field appeared outside Lore, or an older build
+    booted on a newer DB — neither loses data.
 
-    INVARIANT(data-loss): `removed` drift with no migration run refuses boot.
+    INVARIANT(data-loss): `removed` drift before apply_schema refuses boot.
     Why: it is the stale-schema-restore signature (a SCHEMAFULL table restored as
     SCHEMALESS moves every (table, field, type) tuple into `removed`) — unexplained
     field loss is data-loss-grade (2026-07-28: 2668 messages destroyed), and
@@ -214,56 +232,52 @@ def _enforce_fingerprint_fatal(drift: dict | None, *, migrations_ran: bool) -> N
     push; the drift still logs.
     """
     from config import SCHEMA_FINGERPRINT_FATAL
-    from migrations.schema_fingerprint import SchemaFingerprintError
 
-    if not drift or not drift["removed"] or migrations_ran:
+    if not drift or not drift["removed"]:
         return
     if not SCHEMA_FINGERPRINT_FATAL:
         logger.error(
             "SCHEMA FINGERPRINT MISMATCH — removed drift left ADVISORY via "
             "SCHEMA_FINGERPRINT_FATAL=false: %d recorded field(s) missing from the live "
-            "schema with no migration run. Investigate before the next release. | removed: %s",
+            "schema. Investigate before the next release. | removed: %s",
             len(drift["removed"]), drift["removed"][:5],
         )
         return
     logger.critical(
         "SCHEMA FINGERPRINT MISMATCH — refusing to start: %d recorded field(s) missing "
-        "from the live schema and no migration ran (possible stale-schema restore; "
-        "unexplained field loss is data-loss-grade). To boot anyway: set "
-        "SCHEMA_FINGERPRINT_FATAL=false. | removed: %s",
+        "from the live schema (possible stale-schema restore; unexplained field loss is "
+        "data-loss-grade). To boot anyway: set SCHEMA_FINGERPRINT_FATAL=false. To "
+        "re-record after investigating the loss: UPDATE app_meta:migrations SET "
+        "schema_fields = NONE — the next boot is a first boot. | removed: %s",
         len(drift["removed"]), drift["removed"][:5],
     )
     raise SchemaFingerprintError(
         f"schema fingerprint: {len(drift['removed'])} recorded field(s) missing from "
-        f"the live schema and no migration ran (sample: {drift['removed'][:5]}). "
-        "Escape hatch: SCHEMA_FINGERPRINT_FATAL=false"
+        f"the live schema (sample: {drift['removed'][:5]}). "
+        "Escape hatch: SCHEMA_FINGERPRINT_FATAL=false. Re-record after investigating: "
+        "UPDATE app_meta:migrations SET schema_fields = NONE"
     )
 
 
-async def run_migrations() -> None:
+async def run_migrations(drift: dict | None = None) -> None:
     """Run all registered migrations in order, skipping already-applied ones.
 
-    Boot order: fingerprint drift check → pending migrations → record the post-
-    migration fingerprint → fatal gate. Introspection/record failures stay
-    best-effort (a failed check is advisory — it is not drift), but `removed` drift
-    with no migration ran refuses boot (_enforce_fingerprint_fatal). The post
-    snapshot is re-introspected only when a migration ran (it may have changed the
-    schema); otherwise the pre-migration snapshot is reused, so a steady-state boot
-    costs one introspection pass, not two.
+    `drift` is the pre-apply fingerprint verdict (fingerprint_preflight, main.py
+    lifespan) carried in so the record step can refuse to erase unresolved
+    `removed` drift. Boot order inside: pending migrations → re-introspect the
+    post state on EVERY boot (apply_schema ran between the preflight snapshot and
+    here, so the pre snapshot is never reusable; two serial passes of ~18 ms each)
+    → record. Introspection/record failures stay best-effort (a failed check is
+    advisory — it is not drift); the fatal gate already ran in the preflight.
     """
     from db import get_db
-    from migrations.schema_fingerprint import current_fingerprint
 
     db = await get_db()
     applied = await _get_applied(db)
-    current, drift = await _fingerprint_check(db)
-    migrations_ran = await _run_pending_migrations(db, applied)
-    post = current
-    if migrations_ran:
-        try:
-            post = await current_fingerprint(db)
-        except Exception:
-            logger.warning("schema-fingerprint re-introspection failed; skipping", exc_info=True)
-            post = None
-    await _fingerprint_record(db, post, migrations_ran=migrations_ran, drift=drift)
-    _enforce_fingerprint_fatal(drift, migrations_ran=migrations_ran)
+    await _run_pending_migrations(db, applied)
+    try:
+        post = await current_fingerprint(db)
+    except Exception:
+        logger.warning("schema-fingerprint re-introspection failed; skipping", exc_info=True)
+        post = None
+    await _fingerprint_record(db, post, drift=drift)

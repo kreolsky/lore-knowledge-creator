@@ -365,7 +365,7 @@ async def test_read_document_out_of_scope_is_403_naming_root(
     404) whose detail names the scope root — the recovery the agent needs.
 
     Pins the `_raise_for_soft_error` text-matching trap: the out-of-scope wording
-    must NOT contain 'not found' / 'not in this project', or a scope 403 would be
+    must NOT contain 'not found', or a scope 403 would be
     mis-mapped to a uniform 404 and lose the recovery signal."""
     pid, _idx, admin_uid = project_with_doc
     _, admin_token = admin_user
