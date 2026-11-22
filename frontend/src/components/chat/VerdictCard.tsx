@@ -1,7 +1,7 @@
 /** Decision card for a still-held mutating call (mid-turn approval).
  *
- * Rendered from `message.pending_verdicts` (the `lore/verdict-ask` mint while
- * live; GET /chat/verdicts after reload). Three actions — allow once, allow the
+ * Rendered by the turn's `lore/verdict-ask` node (turn-nodes.tsx), live and
+ * after a reload alike. Three actions — allow once, allow the
  * tool for the session, reject with text. Publishing the verdict resolves the
  * held call; the resolved call's tool result replaces the card.
  *
@@ -11,8 +11,8 @@
  *
  * `argsRaw` (optional): the held call's own arguments, read off its tool-call
  * node by the caller — the ask frame itself carries only {turn, callId,
- * toolName, perCall}, and dsh appends the call node BEFORE asking. The reload path
- * (GET /chat/verdicts, no nodes) passes nothing and keeps the bare card.
+ * toolName, perCall}, and dsh appends the call node BEFORE asking. An ask
+ * whose call node is missing passes nothing and keeps the bare card.
  */
 
 import { useState } from 'react';

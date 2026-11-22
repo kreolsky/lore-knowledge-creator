@@ -18,6 +18,7 @@ from db import extract_id, fetch_one, get_db
 from event_bus import emit
 from jobs import pool as jobs_pool
 from models import is_ref_row
+from pipeline.core import runs
 from pipeline.extractor.flow import create_extractor_flow
 from pipeline.extractor.params import EXTRACTOR_ROWS
 from pipeline.extractor.utils import render_title_template
@@ -76,11 +77,13 @@ async def run_extractor(
     title_template: str | None = None,
     model: str | None = None,
     user_id: str | None = None,
-) -> None:
+) -> str | None:
     """Run the full extractor pipeline for a single reference.
 
     Creates a child document under target_doc_id with rendered markdown.
     Emits document_created event for project WS broadcast.
+    Returns the created document's id, or None when the flow produced no
+    output (the pipeline_runs log maps that to `skipped`).
     """
     logger.info(
         "[Extractor] Starting pipeline: ref=%s source_doc=%s config_doc=%s target_doc=%s project=%s model=%s",
@@ -107,7 +110,7 @@ async def run_extractor(
     rendered = shared.get("rendered_markdown", "")
     if not rendered:
         logger.warning("Extractor produced no output for ref %s", reference_id)
-        return
+        return None
 
     logger.info(
         "[Extractor] Pipeline completed for ref=%s. Rendered length=%d first300=%s",
@@ -157,6 +160,7 @@ async def run_extractor(
     )
 
     logger.info("Extractor created document %s for ref %s", doc_uid, reference_id)
+    return doc_uid
 
 
 async def run_extractor_dry(params: "ExtractorParams") -> dict:
@@ -189,6 +193,36 @@ async def run_extractor_dry(params: "ExtractorParams") -> dict:
         "rendered_markdown": shared.get("rendered_markdown", ""),
         "variable_duplicates": shared.get("variable_duplicates") or [],
     }
+
+
+async def enqueue_extract(
+    *,
+    reference_id: str,
+    source_doc_id: str,
+    config_doc_id: str,
+    target_doc_id: str,
+    project_id: str,
+    title_template: str | None,
+    model: str | None,
+    user_id: str | None,
+    trigger: str,
+    config_id: str | None,
+) -> str | None:
+    """Post one extract_task for one binding on one reference, logged in
+    pipeline_runs; returns the run id, or None when arq collapsed the post onto
+    the pending `extract:{ref}:{cfg}:{tgt}` job. Every extractor trigger
+    (event hook, editor run, agent run) posts through here."""
+    return await runs.launch(
+        lambda run_id: jobs_pool.enqueue(
+            "extract_task",
+            reference_id, source_doc_id, config_doc_id, target_doc_id, project_id,
+            title_template=title_template, model=model, user_id=user_id,
+            run_id=run_id,
+            job_id=f"extract:{reference_id}:{config_doc_id}:{target_doc_id}",
+        ),
+        project_id=project_id, kind="extractor", trigger=trigger,
+        config_id=config_id, reference_id=reference_id,
+    )
 
 
 async def on_transcription_complete(reference_id: str, project_id: str, user_id: str | None = None, **kwargs) -> None:
@@ -246,12 +280,12 @@ async def on_transcription_complete(reference_id: str, project_id: str, user_id:
                 logger.warning("Agent config incomplete for doc %s", doc_id)
                 continue
 
-            job_id = f"extract:{reference_id}:{config_doc_id}:{target_doc_id}"
-            await jobs_pool.enqueue(
-                "extract_task",
-                reference_id, doc_id, config_doc_id, target_doc_id, extract_id(project_id),
+            await enqueue_extract(
+                reference_id=reference_id, source_doc_id=doc_id,
+                config_doc_id=config_doc_id, target_doc_id=target_doc_id,
+                project_id=extract_id(project_id),
                 title_template=title_template, model=model, user_id=user_id,
-                job_id=job_id,
+                trigger="event", config_id=extract_id(config.get("id")),
             )
             await emit("agent_extraction_started",
                        reference_id=reference_id,

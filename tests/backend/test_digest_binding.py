@@ -1,4 +1,6 @@
 """Digest binding: an agent_configs row of kind "digest" — who it reads, and that it never reaches the extractor."""
+import json
+
 import pytest
 
 from db import create_record
@@ -136,12 +138,33 @@ async def test_member_cannot_change_run_or_schedule_another_users_digest(client,
 
 
 @pytest.mark.asyncio
-async def test_member_may_delete_another_users_digest(client, collab_project):
-    pid, _doc_id, admin_token, user_token, _admin_uid, _user_uid = collab_project
+async def test_member_may_not_delete_another_users_digest(client, collab_project):
+    """A full member cannot delete a digest binding someone else created; its author
+    can, and the delete takes its schedule rows with it — one left ticking into a
+    missing binding records an error every interval. An extractor schedule names
+    documents, not a binding, so it is left alone."""
+    pid, _doc_id, admin_token, user_token, admin_uid, _user_uid = collab_project
     config_id, (theme, _cfg, _tgt) = await _root_digest(client, pid, admin_token)
+    schedule = await client.post("/api/pipeline-schedules", json={
+        "project_id": pid, "pipeline": "digest", "interval_s": 3600,
+        "params": {"config_id": config_id, "project_id": pid}},
+        cookies={"lore_session": admin_token})
+    assert schedule.status_code == 200, schedule.text
+    await create_record("pipeline_schedules", "dg-bind-ext-sched", {
+        "project_id": pid, "pipeline": "extractor", "interval_s": 3600, "enabled": True,
+        "params_json": json.dumps({"reference_id": "r", "source_doc_id": "s",
+                                   "config_doc_id": "c", "target_doc_id": "t", "project_id": pid}),
+        "created_by": admin_uid,
+    })
 
-    resp = await client.delete(f"/api/agent-config/{config_id}", cookies={"lore_session": user_token})
+    refused = await client.delete(f"/api/agent-config/{config_id}", cookies={"lore_session": user_token})
+    assert refused.status_code == 403, refused.text
+
+    resp = await client.delete(f"/api/agent-config/{config_id}", cookies={"lore_session": admin_token})
 
     assert resp.status_code == 200, resp.text
     listed = await client.get(f"/api/agent-configs?document_id={theme}", cookies={"lore_session": admin_token})
     assert listed.json() == []
+    schedules = await client.get("/api/pipeline-schedules", params={"project_id": pid},
+                                 cookies={"lore_session": admin_token})
+    assert [s["schedule_id"] for s in schedules.json()] == ["dg-bind-ext-sched"]

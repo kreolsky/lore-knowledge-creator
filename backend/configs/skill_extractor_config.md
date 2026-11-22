@@ -322,5 +322,6 @@ ambiguous. A misplaced child is one `move_document` away.
 
 ## After writing
 
-No chat tool binds or runs the config: after writing, the user binds it to a source
-document and runs it in the editor.
+Binding and running moved to the `pipelines` skill: after writing the config,
+load it and bind the config to a source document (and run it on one reference)
+with `bind_pipeline` / `run_pipeline` — or tell the user to do it in the editor.

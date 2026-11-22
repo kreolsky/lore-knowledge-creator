@@ -12,8 +12,11 @@ import asyncio
 import pytest
 
 from db import run_in_transaction
+from db.pool import DB_WRITE_CONFLICT_ATTEMPTS
 
-_RACERS = 8
+# WHY: a transaction loses a conflict only to a sibling that committed, so with N racers
+# it can lose N-1 times; more racers than attempts makes the test fail by construction.
+_RACERS = DB_WRITE_CONFLICT_ATTEMPTS
 
 
 # TEST-WHY: cross-process-contract — a v4 write conflict inside BEGIN/COMMIT is re-issued, not raised

@@ -18,12 +18,13 @@ select = ["F", "I"]
 known-first-party = [
     "access", "ai_router", "annotations", "audio", "auth", "backlinks",
     "checkpoint_store", "checkpoints", "config", "context", "db", "deps",
-    "embeddings", "event_bus", "evals", "extractor", "files", "graphql", "jobs",
+    "doc_properties", "embeddings", "event_bus", "evals", "extractor", "files", "graphql", "jobs",
     "logger", "main", "mentions", "migrations", "models", "notes",
     "notifications", "openapi_meta", "presence",
     "proposals", "proposal_lifecycle", "proposals_store", "apply_executors",
     "retrieval", "roles", "scope", "scripts", "search", "seed_dev",
     "selection", "serializers", "session_manager", "sse", "table_serialize",
-    "tasks", "telemetry_store", "tool_api", "transclusion_grammar",
+    "task_convention", "tasks", "telemetry_store", "tool_api",
+    "transclusion_grammar",
     "transcribe", "users", "validation", "ydoc_store",
 ]

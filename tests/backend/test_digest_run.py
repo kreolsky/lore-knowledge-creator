@@ -112,10 +112,17 @@ async def test_creator_who_lost_root_fails_with_an_error_note(
     )
     await test_db.query("UPDATE users SET role = 'user' WHERE meta::id(id) = $admin",
                         {"admin": admin_uid})
+    from pipeline.core import runs as run_log
+
+    from db import fetch_one
     from jobs.tasks.digest import digest_task
 
+    run_id = run_log.new_run_id()
+    await run_log.record_queued(run_id=run_id, project_id=pid, kind="digest",
+                                trigger="manual", config_id=b["id"])
+
     with pytest.raises(PermissionError, match="project root"):
-        await digest_task({}, b["id"], pid)
+        await digest_task({}, b["id"], pid, run_id=run_id)
 
     llm.assert_not_called()
     assert await _reports(test_db, b["target"]) == []
@@ -124,6 +131,9 @@ async def test_creator_who_lost_root_fails_with_an_error_note(
         {"d": b["theme"]},
     )
     assert len(notes) == 1
+    # The run row carries the same failure beside the note — the agent reads it.
+    run = await fetch_one("pipeline_runs", run_id)
+    assert run["status"] == "error" and "project root" in run["error"]
 
 
 async def test_reference_is_signed_with_its_uploader(client, test_db, collab_project, embed, llm):

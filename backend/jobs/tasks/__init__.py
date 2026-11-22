@@ -48,6 +48,7 @@ from jobs.tasks.media import (
 from jobs.tasks.schedules import pipeline_schedule_tick_task
 from jobs.tasks.telemetry import (
     AGENT_TOOL_RETENTION_DAYS,
+    PIPELINE_RUNS_RETENTION_DAYS,
     TELEMETRY_RETENTION_DAYS,
     telemetry_retention_task,
 )
@@ -92,6 +93,7 @@ __all__ = [
     "telemetry_retention_task",
     "TELEMETRY_RETENTION_DAYS",
     "AGENT_TOOL_RETENTION_DAYS",
+    "PIPELINE_RUNS_RETENTION_DAYS",
     # cp migrations
     "backfill_cp_blobs_task",
     "nullout_inline_content_task",

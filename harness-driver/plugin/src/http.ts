@@ -9,7 +9,7 @@ import type { Context } from '@deepseek-ai/cordis'
 
 import { gatewayOf, resolveModelCaps } from './caps.ts'
 import {
-  pendingHoldsFor, resolveSessionAsks, resolveVerdict,
+  resolveSessionAsks, resolveVerdict,
 } from './approvals.ts'
 import { clearSessionToolCtx } from './tools.ts'
 import { sessionEntries, sessionFork, type SessionMap } from './sessions.ts'
@@ -53,8 +53,6 @@ export async function handleRequest(
       await approvalsResolve(req, res, map, baselines)
     } else if (req.method === 'POST' && url.endsWith('/approvals')) {
       await approvalsPost(req, res)
-    } else if (req.method === 'GET' && url.startsWith('/approvals')) {
-      await approvalsList(req, res)
     } else if (req.method === 'POST' && url.endsWith('/followup')) {
       await followup(ctx, map, tap, channel, req, res)
     } else if (req.method === 'POST' && url.endsWith('/stop')) {
@@ -115,27 +113,9 @@ async function capability(
 
 // ── The approval verdict endpoints — the backend's /api/chat/verdicts relay
 // (the hold is driver-owned, so the user's verdict crosses THIS seam).
-// GET /approvals?session_id= — the session's still-parked asks (reload
-// re-render); POST /approvals — one verdict for one call id; POST
+// POST /approvals — one verdict for one call id; POST
 // /approvals/resolve — reject every ask of a session (session delete). The
 // backend has ALREADY verified the poster owns the session before forwarding.
-
-async function approvalsList(
-  req: http.IncomingMessage, res: http.ServerResponse,
-): Promise<void> {
-  if (!authorized(req)) {
-    res.writeHead(401).end('unauthorized')
-    return
-  }
-  const query = new URL(req.url ?? '/', 'http://lore-driver')
-  const sessionId = query.searchParams.get('session_id') ?? ''
-  if (!sessionId) {
-    res.writeHead(422).end('session_id is required')
-    return
-  }
-  res.writeHead(200, { 'Content-Type': 'application/json' })
-  res.end(JSON.stringify({ holds: pendingHoldsFor(sessionId) }))
-}
 
 async function approvalsPost(
   req: http.IncomingMessage, res: http.ServerResponse,

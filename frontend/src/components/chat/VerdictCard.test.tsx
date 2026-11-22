@@ -1,7 +1,5 @@
 /** VerdictCard — the mid-turn approval decision card: three actions (allow
- * once / allow for the session / reject with text) plus rendering from
- * `pending_verdicts` (the GET /api/chat/verdicts reload re-render path feeds
- * the same shape). */
+ * once / allow for the session / reject with text). */
 
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -32,7 +30,7 @@ function mount(pending: PendingVerdict, argsRaw?: string) {
 }
 
 const PENDING: PendingVerdict = {
-  call_id: 'c1', tool_name: 'edit_document', message_id: 'am',
+  call_id: 'c1', tool_name: 'edit_document',
 };
 
 beforeEach(() => {

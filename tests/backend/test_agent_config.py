@@ -113,9 +113,20 @@ async def test_build_prompt_and_skill_docs_wires_all_three_layers(
         "memory", "web-search", "image-generation", "sandbox",
         "deep-research", "skill-authoring", "extractor-config", "chat-recall",
         "digest-config", "secrets", "history", "md-folder", "tables", "structure",
+        "pipelines", "tasks",
     }
+    # The task pack: the task loop's three tools — pinned like every other pack.
+    assert _front(shipped["tasks"]["content"])["tools"] == [
+        "find_documents", "next_task", "claim_task",
+    ]
     assert _front(shipped["secrets"]["content"])["tools"] == [
         "list_secrets", "http_request",
+    ]
+    # The pipeline pack (plan pipeline-agent-tools): binding consent + the run
+    # log read the agent verifies with — pinned like every other pack.
+    assert _front(shipped["pipelines"]["content"])["tools"] == [
+        "list_pipelines", "bind_pipeline", "unbind_pipeline",
+        "run_pipeline", "pipeline_runs",
     ]
     meta = _front(shipped["memory"]["content"])
     assert set(meta["tools"]) == {
@@ -128,6 +139,10 @@ async def test_build_prompt_and_skill_docs_wires_all_three_layers(
         "sandbox_run_status", "sandbox_run_kill",
     ]
     assert _front(shipped["image-generation"]["content"])["tools"] == ["generate_image"]
+    # The structure pack: the chat move rides it — structure, not recall.
+    assert _front(shipped["structure"]["content"])["tools"] == [
+        "move_document", "get_links", "reprocess_reference", "move_chat",
+    ]
     for d in shipped.values():
         assert d["location"].startswith("shipped:")
         assert d["child_docs"] == []

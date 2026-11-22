@@ -31,6 +31,8 @@ from agent.edit_primitives import (
 
 logger = logging.getLogger(__name__)
 
+FULL_REWRITE_NEXT_ACTION = "split into smaller edits"
+
 
 def _classify_edit_miss(
     current_content: str, index: int, old_string: str, new_text: str, rng: str,
@@ -45,10 +47,10 @@ def _classify_edit_miss(
     # from the resolver never skip (structural errors).
 
     # WHY: full_rewrite is NOT a stale/re-read condition — it is a
-    # structurally-oversized request. Return 422 (its own next_action "split
-    # into smaller edits") instead of 409. Why: 409's next_action is "re-read
+    # structurally-oversized request. Return 422 with a pinned next_action "split
+    # into smaller edits" instead of 409. Why: 409's next_action is "re-read
     # then retry", which loops a weak model back into re-sending the same
-    # whole-document old_string.
+    # whole-document old_string; the gateway's plain-422 advice is the argument fix.
     """
 
     if rng == "not_found":
@@ -59,10 +61,13 @@ def _classify_edit_miss(
     else:
         tag = rng
     status = 422 if tag == "full_rewrite" else 409
-    raise HTTPException(
+    refusal = HTTPException(
         status_code=status,
         detail={"index": index, "error": edit_miss_detail(current_content, old_string, tag)},
     )
+    if tag == "full_rewrite":
+        refusal.next_action = FULL_REWRITE_NEXT_ACTION
+    raise refusal
 
 
 def _prepare_edit_text(

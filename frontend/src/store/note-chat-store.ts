@@ -288,7 +288,7 @@ export const useNoteChatStore = create<NoteChatState>((set, get) => ({
       // WHY: parent resolution happens in the CALLER (createNote in
       // Why: the store cannot know which editor is focused; only the caller has that context.
       // markdown-actions.ts), which passes referenceId ONLY when the focused editor
-      // is rendering a reference (getFocusedIsReference()). Do NOT assume a note
+      // is rendering a reference (its view's entity is the open reference). Do NOT assume a note
       // attaches to the open reference just because one is present — in split mode
       // the document column (and a single editor showing a document) must keep
       // referenceId undefined so it parents to the document. Here we only honor what

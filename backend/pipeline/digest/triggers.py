@@ -7,14 +7,22 @@ from db import extract_id, fetch_one, get_db
 from jobs import pool as jobs_pool
 from jobs.tasks.digest import digest_job_id
 from models import is_ref_row
+from pipeline.core import runs as run_log
 from pipeline.digest.run import create_digest_error_note
 
 logger = logging.getLogger(__name__)
 
 
-async def enqueue_digest(config_id: str, project_id: str) -> None:
-    await jobs_pool.enqueue(
-        "digest_task", config_id=config_id, project_id=project_id, job_id=digest_job_id(config_id),
+async def enqueue_digest(config_id: str, project_id: str, trigger: str = "event") -> str | None:
+    """Post one digest run; returns its pipeline_runs id, or None when arq
+    COLLAPSED the post onto an already-pending `digest:{config_id}` job (a
+    collapsed post is not a run — see pipeline/core/runs.py `launch`)."""
+    return await run_log.launch(
+        lambda run_id: jobs_pool.enqueue(
+            "digest_task", config_id=config_id, project_id=project_id,
+            run_id=run_id, job_id=digest_job_id(config_id),
+        ),
+        project_id=project_id, kind="digest", trigger=trigger, config_id=config_id,
     )
 
 

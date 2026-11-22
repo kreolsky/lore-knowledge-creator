@@ -135,6 +135,7 @@ from routes import (
 # was emptied (plan fewer-layers), so importing `jobs` no longer pulls
 # `jobs.worker` (which imports embeddings eagerly for the worker process). The
 # worker still wires its own subscription at boot; the web process wires it HERE.
+import doc_properties  # noqa: F401 — load-bearing bus-subscription import (same contract as embeddings above: its module-level event_bus.on("content_flushed", …) projects the YAML header; without this import the web process never projects)
 import embeddings  # noqa: F401 — load-bearing bus-subscription import (see above)
 
 # isort: split

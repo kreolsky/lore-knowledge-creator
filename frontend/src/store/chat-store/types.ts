@@ -383,11 +383,6 @@ export interface ChatState {
     toolName: string,
     reason?: string,
   ) => Promise<VerdictOutcome>;
-  // Drop the decision card for a call id (optimistic post-verdict / stale hold).
-  removePendingVerdictByCall: (callId: string) => void;
-  // Reload re-render: restore the session's still-held calls from the decision
-  // store (GET /chat/verdicts) onto their assistant messages.
-  fetchPendingVerdicts: (sessionId: string) => Promise<void>;
   // Set the active session's system prompt in place (PATCH system_prompt_id).
   // There is no ask↔agent boundary (one AI line), so this PATCHes only
   // system_prompt_id. The agent_auto toggle is a separate action

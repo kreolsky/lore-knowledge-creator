@@ -353,9 +353,9 @@ async def _get_project_structure_exec(
     if include_outline and not start_id:
         from fastapi import HTTPException
 
-        # Ergonomics #4 override: the gateway's status-keyed 422 advice is the
-        # full_rewrite one ("split into smaller edits") — wrong for this refusal,
-        # whose fix is an argument. _err honors an exception-carried next_action.
+        # WHY: the gateway's status-keyed 422 advice is a generic argument fix;
+        # this refusal names the one argument to add. _err honors an
+        # exception-carried next_action.
         refusal = HTTPException(
             status_code=422,
             detail=(

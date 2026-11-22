@@ -50,6 +50,8 @@ class ExtractorParams:
 
     `source_doc_id` is the reference's PARENT (the document the agent_config is
     keyed on); `reference_id` is the dictated source being extracted from.
+    `config_id` is the agent_configs row id — the binding the run is attributed
+    to in the pipeline_runs log (None only for synthetic/benchmark callers).
     """
 
     reference_id: str
@@ -59,6 +61,7 @@ class ExtractorParams:
     project_id: str
     title_template: str | None
     model: str | None
+    config_id: str | None = None
 
 
 async def resolve_extractor_params(reference_id: str, user: dict) -> list[ExtractorParams]:
@@ -107,6 +110,7 @@ async def resolve_extractor_params(reference_id: str, user: dict) -> list[Extrac
             project_id=project_id,
             title_template=config.get("title_template"),
             model=config.get("model"),
+            config_id=extract_id(config.get("id")),
         )
         for config in rows
     ]

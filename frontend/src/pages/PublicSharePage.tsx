@@ -63,6 +63,7 @@ import SelectionToolbar from '../components/editor/SelectionToolbar';
 import { usePublicNotesStore, PUBLIC_DRAFT_NOTE_ID } from '../store/public-notes-store';
 import { PublicNoteConnector } from '../components/PublicNoteConnector';
 import { usePublicDocSocket } from '../hooks/usePublicDocSocket';
+import { useTextWidthHotkey } from '../hooks/useTextWidthHotkey';
 import { useAppStore } from '../store/app-store';
 import { useUIStore, ORPHAN_KEY, type RightTab } from '../store/ui-store';
 import { setPublicFileContext } from '../utils/reference-url';
@@ -117,6 +118,9 @@ export function PublicSharePage(
   const [error, setError] = useState<string>('');
   const [docFailed, setDocFailed] = useState(false);
   const [scope, setScope] = useState<'doc' | 'subtree'>('doc');
+  const [shareRootId, setShareRootId] = useState<string | undefined>(undefined);
+  // A shared reader steps the column width like a member; remembered per share root.
+  useTextWidthHotkey(shareRootId);
 
   const shellRef = useRef<ProjectShellHandle>(null);
 
@@ -204,6 +208,7 @@ export function PublicSharePage(
           // subtree navigation; resolve_share walks ancestors so one root covers all).
           setPublicFileContext(tree.root_id);
           setScope(tree.scope);
+          setShareRootId(tree.root_id);
           setPublicProjectName(tree.project_name);
           setDocuments(treeNodesToDocuments(tree.nodes));
           treeDocIdsRef.current = new Set(tree.nodes.map(n => n.id));

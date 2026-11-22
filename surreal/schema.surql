@@ -516,6 +516,23 @@ DEFINE FIELD IF NOT EXISTS mem_window_done    ON documents TYPE option<int>;
 DEFINE FIELD IF NOT EXISTS digest_config_id     ON documents TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS digest_covered_until ON documents TYPE option<datetime>;
 
+-- ─── Document properties ─────────────────────────────────────────────────────
+-- The YAML header projection: a document's `content` MAY open with a `---`
+-- frontmatter block (the persona grammar, backend/doc_properties.py); `props`
+-- is that block parsed, `props_error` names a parse failure so a typo'd header
+-- is visible, not dropped. INVARIANT: the header in `content` is the ONLY
+-- source of truth — these two fields are its projection with exactly ONE
+-- writer (the content_flushed subscriber), because a second writer of one fact
+-- drifts silently (see the edges.py header argument). `props` is FLEXIBLE like
+-- `mem` above: the header's nested shape is the authors', not the schema's.
+-- option<...> with NO non-option DEFAULT and NO backfill: a row predating the
+-- field, or one of the skipped kinds (references, the agent brain, help pages,
+-- html artifacts), reads NONE = "no projection" — a table-wide UPDATE
+-- re-validates legacy rows against SCHEMAFULL and crash-loops the backend
+-- (same class as the `archived` backfill removed above).
+DEFINE FIELD IF NOT EXISTS props       ON documents TYPE option<object> FLEXIBLE;
+DEFINE FIELD IF NOT EXISTS props_error ON documents TYPE option<string>;
+
 DEFINE INDEX IF NOT EXISTS idx_documents_path ON documents FIELDS project_id, path UNIQUE;
 DEFINE INDEX IF NOT EXISTS idx_documents_project_deleted ON documents FIELDS project_id, deleted_at;
 DEFINE INDEX IF NOT EXISTS idx_documents_sibling_order ON documents FIELDS project_id, parent_id, sort_key;
@@ -768,7 +785,7 @@ DEFINE FIELD IF NOT EXISTS deleted_at     ON agent_configs TYPE option<datetime>
 DEFINE INDEX IF NOT EXISTS idx_agent_configs_doc_trigger ON agent_configs FIELDS document_id, trigger_event;
 DEFINE INDEX IF NOT EXISTS idx_agent_configs_project  ON agent_configs FIELDS project_id;
 
--- ─── Pipeline schedules (plan 1786740208300 S3, direction C) ─────────────────
+-- ─── Pipeline schedules ──────────────────────────────────────────────────────
 -- A user-configurable schedule is PROJECT DATA (D7): the worker keeps ONE cron
 -- tick (pipeline_schedule_tick_task) that claims and runs due entries, so adding
 -- a scheduled pipeline never touches WorkerSettings. The four hardcoded
@@ -801,6 +818,36 @@ DEFINE FIELD IF NOT EXISTS updated_at   ON pipeline_schedules TYPE datetime DEFA
 DEFINE FIELD IF NOT EXISTS deleted_at   ON pipeline_schedules TYPE option<datetime>;
 DEFINE INDEX IF NOT EXISTS idx_psched_project ON pipeline_schedules FIELDS project_id;
 DEFINE INDEX IF NOT EXISTS idx_psched_enabled ON pipeline_schedules FIELDS enabled, deleted_at;
+
+-- ─── Pipeline runs ───────────────────────────────────────────────────────────
+-- The run log of the extractor/digest pipelines: ONE row per dispatched run,
+-- written by pipeline/core/runs.py from every enqueue site (queued) and the two
+-- arq tasks (running/finished). arq keeps no results (keep_result = 0) and
+-- pipeline_schedules.last_status is the ENQUEUE outcome only — this table is the
+-- only place a run's outcome (ok/error/skipped + output document) is recorded.
+-- Retention: purged after 90 days by telemetry_retention_task (operator ruling).
+-- `config_id` is option because a REST-era extractor schedule's frozen params
+-- name config/target DOCUMENTS, not a binding row (see pipeline/core/registry.py)
+-- — its runs are recorded with config_id NONE, never mis-attributed.
+DEFINE TABLE IF NOT EXISTS pipeline_runs SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS project_id    ON pipeline_runs TYPE string;
+DEFINE FIELD IF NOT EXISTS config_id     ON pipeline_runs TYPE option<string>;
+-- kind: the pipeline registry key — 'extractor' | 'digest'.
+DEFINE FIELD IF NOT EXISTS kind          ON pipeline_runs TYPE string;
+DEFINE FIELD IF NOT EXISTS reference_id  ON pipeline_runs TYPE option<string>;
+-- trigger: what posted the run — 'manual' (a person/agent asked now) |
+-- 'event' (transcription_complete) | 'schedule' (the tick).
+DEFINE FIELD IF NOT EXISTS trigger       ON pipeline_runs TYPE string;
+-- status: 'queued' | 'running' | 'ok' | 'error' | 'skipped' (skipped = the
+-- pipeline ran and deliberately produced nothing, e.g. an empty digest window).
+DEFINE FIELD IF NOT EXISTS status        ON pipeline_runs TYPE string;
+DEFINE FIELD IF NOT EXISTS error         ON pipeline_runs TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS output_doc_id ON pipeline_runs TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS queued_at     ON pipeline_runs TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS started_at    ON pipeline_runs TYPE option<datetime>;
+DEFINE FIELD IF NOT EXISTS finished_at   ON pipeline_runs TYPE option<datetime>;
+DEFINE INDEX IF NOT EXISTS idx_pruns_config  ON pipeline_runs FIELDS config_id, queued_at;
+DEFINE INDEX IF NOT EXISTS idx_pruns_project ON pipeline_runs FIELDS project_id, queued_at;
 
 -- ─── Embedding tables (RAG context for AI chat) ────────────────────────────────
 

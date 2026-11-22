@@ -77,6 +77,38 @@ class ToolGetLinks(BaseModel):
     kinds: list[Literal[ALL_EDGE_KINDS]] | None = None
 
 
+class ToolFindDocuments(BaseModel):
+    """`find_documents` body — the header-properties query (SYSTEM:
+    doc-properties).
+
+    `where` is a free dict (keys are validated against PROP_KEY_RE at the
+    handler, which 422s a bad key/value shape): equality on top-level header
+    keys, a list value meaning OR. Absent = every visible document with a
+    parseable header.
+    """
+    where: dict[str, object] | None = None
+    # Same narrow contract as ToolSearch.under_document_id: absent/empty =
+    # whole (visible) project; unknown/cross-project root 404s, out-of-scope 403s.
+    under: str | None = None
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class ToolNextTask(BaseModel):
+    """`next_task` body — the offer read of the task loop (SYSTEM:
+    task-convention). Same `under` narrow contract as ToolFindDocuments."""
+    under: str | None = None
+
+
+class ToolClaimTask(BaseModel):
+    """`claim_task` body — the loop's one write: the header-only claim
+    splice. `agent_name` is validated against task_convention.AGENT_NAME_RE
+    at the handler (422 — it is written into the header, so a newline or
+    `:` would inject header keys)."""
+    document_id: str
+    agent_name: str
+    apply: ToolApply = ToolApply.confirm
+
+
 class ToolSearch(BaseModel):
     query: str = Field(min_length=1, max_length=500)
     # mode routes the layers: `semantic` (default) = union predicate + embeddings +
@@ -488,6 +520,23 @@ class ToolAppendDocument(BaseModel):
     document_id: str
     content: str
     section: str | None = None
+    apply: ToolApply = ToolApply.confirm
+
+
+class ToolMoveChat(BaseModel):
+    """move_chat body — move a chat under another document, or to project level.
+
+    # ARCH: the surface over the PATCH path's own command
+    # (chat_sessions.update.update_session_command): the write, the target
+    # check and the live frame are ONE implementation, shared with the human
+    # header picker. `chat_id` omitted = the calling chat; given = any of the
+    # caller's own chats of this project (a note is refused 400 like on PATCH).
+    # `document_id` is REQUIRED and nullable: null = project level, and the
+    # model has to say so — the project's index document is a real parent.
+    """
+
+    chat_id: str | None = None
+    document_id: str | None
     apply: ToolApply = ToolApply.confirm
 
 

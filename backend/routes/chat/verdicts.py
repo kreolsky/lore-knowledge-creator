@@ -1,19 +1,19 @@
-"""Verdict REST surface — list a session's pending asks, publish the user's verdict.
+"""Verdict REST surface — publish the user's verdict on a parked ask.
 
 # SYSTEM: chat-verdicts — the UI-facing half of mid-turn approval: the chat panel
-# lists a session's still-asked calls (reload re-render) and posts the user's
-# verdict (allow once / allow for the session / reject with text).
+# posts the user's verdict (allow once / allow for the session / reject with
+# text); the card itself rides the turn's `lore/verdict-ask` frame.
 
 # ARCH: the ASK lives in
 # the driver — dsh's user-approval service parks it (the audit pair
 # approval/asked + approval/decided on the session log), and this surface
 # RELAYS the user's answer across the driver seam. Our RBAC stays the answerer's gate:
-# both endpoints verify the session belongs to the current user
+# the verdict endpoint verifies the session belongs to the current user
 # (`_require_session_access`) BEFORE anything reaches the driver, and the
 # driver's X-Driver-Secret endpoints speak only to this backend — the verdict
 # of a user who cannot read the session never crosses the seam.
 
-# ARCH: the driver owns the answers' vocabulary: 200 (resolved / listed), 404
+# ARCH: the driver owns the answers' vocabulary: 200 (resolved), 404
 # (no parked ask for this call id in this session — the uniform refusal), 409
 # (the OWNING session's ask expired past the driver's approval bound), 422
 # (a malformed action / an allow_session without its tool name). This module
@@ -33,8 +33,8 @@ from auth import get_current_user
 from routes.chat._router import router
 from routes.chat.sessions import _require_session_access
 
-#: The driver-HTTP timeout: a verdict forward resolves a parked promise (fast);
-#: the listing reads an in-process map. Generous only for a loaded event loop.
+#: The driver-HTTP timeout: a verdict forward resolves a parked promise (fast).
+#: Generous only for a loaded event loop.
 _VERDICT_FORWARD_TIMEOUT_S = 10.0
 
 
@@ -58,7 +58,7 @@ async def _require_driver():
     return line
 
 
-async def _driver_request(method: str, path: str, *, params=None, json_body=None):
+async def _driver_request(method: str, path: str, *, json_body=None):
     """One authenticated driver call. Returns the parsed JSON on 2xx; maps the
     driver's 403/404/409/422 onto HTTPException; anything else (including an
     unreachable driver) is the explicit 502 — a verdict the user believes was
@@ -70,7 +70,6 @@ async def _driver_request(method: str, path: str, *, params=None, json_body=None
         resp = await client.request(
             method,
             f"{line.url}{path}",
-            params=params,
             json=json_body,
             headers={"X-Driver-Secret": line.secret},
             timeout=_VERDICT_FORWARD_TIMEOUT_S,
@@ -93,20 +92,6 @@ async def _driver_request(method: str, path: str, *, params=None, json_body=None
         status_code=502,
         detail=f"agent driver verdict relay failed: {resp.status_code}",
     )
-
-
-@router.get("/verdicts")
-async def list_verdicts(
-    session_id: str,
-    user: dict = Depends(get_current_user),
-):
-    """The session's still-parked asks — the reload re-render path (the verdict-ask
-    card is the live path; this is how a reconnecting chat panel rediscovers it)."""
-    await _require_session_access(session_id, user)
-    data = await _driver_request(
-        "GET", "/approvals", params={"session_id": session_id},
-    )
-    return {"holds": data.get("holds", [])}
 
 
 @router.post(

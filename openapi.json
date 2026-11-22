@@ -3108,6 +3108,115 @@
         "title": "ToolApplyMemoryVerdicts",
         "type": "object"
       },
+      "ToolBindPipeline": {
+        "description": "`bind_pipeline` body — same upsert key as the editor's PUT /agent-config\n(source document + kind), so create and re-configure are one call.",
+        "properties": {
+          "apply": {
+            "$ref": "#/components/schemas/ToolApply",
+            "default": "confirm"
+          },
+          "config_doc_id": {
+            "minLength": 1,
+            "title": "Config Doc Id",
+            "type": "string"
+          },
+          "document_id": {
+            "minLength": 1,
+            "title": "Document Id",
+            "type": "string"
+          },
+          "kind": {
+            "default": "extractor",
+            "enum": [
+              "extractor",
+              "digest"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ToolPipelineSchedule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "subject_user_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject User Ids"
+          },
+          "target_doc_id": {
+            "minLength": 1,
+            "title": "Target Doc Id",
+            "type": "string"
+          },
+          "title_template": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title Template"
+          }
+        },
+        "required": [
+          "document_id",
+          "config_doc_id",
+          "target_doc_id"
+        ],
+        "title": "ToolBindPipeline",
+        "type": "object"
+      },
+      "ToolClaimTask": {
+        "description": "`claim_task` body — the loop's one write: the header-only claim\nsplice. `agent_name` is validated against task_convention.AGENT_NAME_RE\nat the handler (422 — it is written into the header, so a newline or\n`:` would inject header keys).",
+        "properties": {
+          "agent_name": {
+            "title": "Agent Name",
+            "type": "string"
+          },
+          "apply": {
+            "$ref": "#/components/schemas/ToolApply",
+            "default": "confirm"
+          },
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "document_id",
+          "agent_name"
+        ],
+        "title": "ToolClaimTask",
+        "type": "object"
+      },
       "ToolConsolidateMemory": {
         "description": "`consolidate_memory` body — start (or continue) a run over a target document's\nreferences; the first portion is one reference.",
         "properties": {
@@ -3460,6 +3569,43 @@
           "root_id"
         ],
         "title": "ToolExportSubtreeMd",
+        "type": "object"
+      },
+      "ToolFindDocuments": {
+        "description": "`find_documents` body — the header-properties query (SYSTEM:\ndoc-properties).\n\n`where` is a free dict (keys are validated against PROP_KEY_RE at the\nhandler, which 422s a bad key/value shape): equality on top-level header\nkeys, a list value meaning OR. Absent = every visible document with a\nparseable header.",
+        "properties": {
+          "limit": {
+            "default": 50,
+            "maximum": 200.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "under": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Under"
+          },
+          "where": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Where"
+          }
+        },
+        "title": "ToolFindDocuments",
         "type": "object"
       },
       "ToolGenerateImage": {
@@ -3881,10 +4027,65 @@
         "title": "ToolListMyChats",
         "type": "object"
       },
+      "ToolListPipelines": {
+        "description": "`list_pipelines` body — the read that precedes every pipeline action.",
+        "properties": {
+          "document_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          }
+        },
+        "title": "ToolListPipelines",
+        "type": "object"
+      },
       "ToolListSecrets": {
         "description": "`list_secrets` body — no arguments: the rows are the caller's own\n(the agent key resolves to its owning user), so nothing to address.",
         "properties": {},
         "title": "ToolListSecrets",
+        "type": "object"
+      },
+      "ToolMoveChat": {
+        "description": "move_chat body — move a chat under another document, or to project level.",
+        "properties": {
+          "apply": {
+            "$ref": "#/components/schemas/ToolApply",
+            "default": "confirm"
+          },
+          "chat_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Id"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          }
+        },
+        "required": [
+          "document_id"
+        ],
+        "title": "ToolMoveChat",
         "type": "object"
       },
       "ToolMoveDocument": {
@@ -3976,6 +4177,71 @@
           "completed_reference_id"
         ],
         "title": "ToolNextReference",
+        "type": "object"
+      },
+      "ToolNextTask": {
+        "description": "`next_task` body — the offer read of the task loop (SYSTEM:\ntask-convention). Same `under` narrow contract as ToolFindDocuments.",
+        "properties": {
+          "under": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Under"
+          }
+        },
+        "title": "ToolNextTask",
+        "type": "object"
+      },
+      "ToolPipelineRuns": {
+        "description": "`pipeline_runs` body — the run log read that verifies a bind/run.",
+        "properties": {
+          "config_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config Id"
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "ToolPipelineRuns",
+        "type": "object"
+      },
+      "ToolPipelineSchedule": {
+        "description": "`bind_pipeline`'s `schedule` — upserts the ONE schedule row of a digest\nbinding (extractors run per reference; a schedule has no reference to run\non, so the handler 400s it there).",
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "interval_s": {
+            "maximum": 31536000.0,
+            "minimum": 60.0,
+            "title": "Interval S",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "interval_s"
+        ],
+        "title": "ToolPipelineSchedule",
         "type": "object"
       },
       "ToolReadDocument": {
@@ -4173,6 +4439,37 @@
           "checkpoint_id"
         ],
         "title": "ToolRestoreDocumentVersion",
+        "type": "object"
+      },
+      "ToolRunPipeline": {
+        "description": "`run_pipeline` body — one binding, now. `reference_id` is the extractor's\nper-run input (required there, refused on a digest).",
+        "properties": {
+          "apply": {
+            "$ref": "#/components/schemas/ToolApply",
+            "default": "confirm"
+          },
+          "config_id": {
+            "minLength": 1,
+            "title": "Config Id",
+            "type": "string"
+          },
+          "reference_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Id"
+          }
+        },
+        "required": [
+          "config_id"
+        ],
+        "title": "ToolRunPipeline",
         "type": "object"
       },
       "ToolSandboxBash": {
@@ -4580,6 +4877,25 @@
           "new_value"
         ],
         "title": "ToolTableCellEdit",
+        "type": "object"
+      },
+      "ToolUnbindPipeline": {
+        "description": "`unbind_pipeline` body — soft-delete a binding (digest schedule with it).",
+        "properties": {
+          "apply": {
+            "$ref": "#/components/schemas/ToolApply",
+            "default": "confirm"
+          },
+          "config_id": {
+            "minLength": 1,
+            "title": "Config Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "config_id"
+        ],
+        "title": "ToolUnbindPipeline",
         "type": "object"
       },
       "ToolViewChatImage": {
@@ -10314,61 +10630,6 @@
       }
     },
     "/api/chat/verdicts": {
-      "get": {
-        "description": "The session's still-parked asks — the reload re-render path (the verdict-ask\ncard is the live path; this is how a reconnecting chat panel rediscovers it).",
-        "operationId": "list_verdicts_api_chat_verdicts_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "session_id",
-            "required": true,
-            "schema": {
-              "title": "Session Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "cookie",
-            "name": "lore_session",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Lore Session"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Verdicts",
-        "tags": [
-          "chat"
-        ]
-      },
       "post": {
         "description": "Publish the user's verdict for one parked ask.\n\nThe ask resolves as: allow_once → apply this call; allow_session →\napply AND grant the tool for the session (driver-side, keyed by the parked\nask's record); reject → return the user's words as the call's own result.\nThe session ownership check here is the RBAC half of the answerer — the\ndriver's endpoint trusts only this relay.",
         "operationId": "post_verdict_api_chat_verdicts_post",
@@ -16691,6 +16952,268 @@
         ]
       }
     },
+    "/api/tool/bind_pipeline": {
+      "post": {
+        "description": "Create OR re-configure one binding (the editor's upsert key), then upsert\nthe digest schedule when asked. The approval card shows the spec\ndescription: binding X on doc Y runs on every new recording.",
+        "operationId": "tool_bind_pipeline_api_tool_bind_pipeline_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolBindPipeline"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Bind Pipeline",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
+    "/api/tool/claim_task": {
+      "post": {
+        "description": "The loop's one write: the header-only claim splice (status → the\nschema's claimed status, assignee + claimed_until upserted) under the\ncross-replica edit lock, decided on the live text — a contested claim\nanswers 409 already_claimed, never a silent takeover.",
+        "operationId": "tool_claim_task_api_tool_claim_task_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolClaimTask"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Claim Task",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
     "/api/tool/consolidate_memory": {
       "post": {
         "description": "Start (or continue) a consolidation run: mint the run, serve its FIRST portion.\n\nAccess note: the target is gated by the CALLING key's project, so a target in\nanother project 404s uniformly (no existence oracle). The run key this mints is\nnarrower than the caller's, never wider — it is sandboxed to `Memory` while the\ncaller's chat key is whole-project.",
@@ -17600,6 +18123,136 @@
           }
         },
         "summary": "Tool Export Subtree Md",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
+    "/api/tool/find_documents": {
+      "post": {
+        "description": "Visible documents by header properties: exact top-level-key equality\n(typed — `1` is not `\"1\"`), `under` narrowing to a subtree, and the\nvisible-with-broken-header list in `header_errors` so a typo'd task is\nreported, never silently absent.",
+        "operationId": "tool_find_documents_api_tool_find_documents_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolFindDocuments"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Find Documents",
         "tags": [
           "tool-api"
         ]
@@ -18910,6 +19563,136 @@
         ]
       }
     },
+    "/api/tool/list_pipelines": {
+      "post": {
+        "description": "Every live extractor/digest binding of the key's project (never\n`conversational` rows), narrowed to the key's scope; each row carries its\ndocuments by id AND title, its schedule and its last recorded run.",
+        "operationId": "tool_list_pipelines_api_tool_list_pipelines_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolListPipelines"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool List Pipelines",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
     "/api/tool/list_secrets": {
       "post": {
         "description": "The caller's enabled personal keys as {name, description, hosts} — the\nmodel-facing catalog `http_request` spends from. The value is structurally\nabsent: it never leaves the Fernet ciphertext and this domain's dial.",
@@ -19036,6 +19819,137 @@
           }
         },
         "summary": "Tool List Secrets",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
+    "/api/tool/move_chat": {
+      "post": {
+        "description": "Move a chat under another document, or back to project level (null) —\nthe PATCH path's own command, so the write, its guards and the live frame\nare ONE implementation with the header picker. NOT reversible via the Lore\nHistory panel — undo by moving back.\n\n`chat_id` omitted = the calling chat; given = any of the caller's own\nchats of this project. Every refusal lands BEFORE the mid-turn hold.",
+        "operationId": "tool_move_chat_api_tool_move_chat_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolMoveChat"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Move Chat",
         "tags": [
           "tool-api"
         ]
@@ -19298,6 +20212,266 @@
           }
         },
         "summary": "Tool Next Reference",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
+    "/api/tool/next_task": {
+      "post": {
+        "description": "The offer read: the first available task (ready or a stale claim,\ndependencies closed) over the same visibility as find_documents, with\nthe resolved schema's `initial` so an agent authoring discovered work\nnever hardcodes a status.",
+        "operationId": "tool_next_task_api_tool_next_task_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolNextTask"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Next Task",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
+    "/api/tool/pipeline_runs": {
+      "post": {
+        "description": "The run log, newest first — the verification read for what the agent\nbound or launched. Scoped like list_pipelines: an explicit config_id's\nbinding must be in scope; unscoped runs cover only in-scope bindings.",
+        "operationId": "tool_pipeline_runs_api_tool_pipeline_runs_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolPipelineRuns"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Pipeline Runs",
         "tags": [
           "tool-api"
         ]
@@ -20213,6 +21387,137 @@
           }
         },
         "summary": "Tool Restore Document Version",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
+    "/api/tool/run_pipeline": {
+      "post": {
+        "description": "One binding, now: digest → run_digest_binding; extractor →\nrun_extractor_binding (reference required, scoped). accepted/already_pending\ncarries the run id for the pipeline_runs verification.",
+        "operationId": "tool_run_pipeline_api_tool_run_pipeline_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolRunPipeline"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Run Pipeline",
         "tags": [
           "tool-api"
         ]
@@ -21783,6 +23088,137 @@
           }
         },
         "summary": "Tool Set Fact Anchor",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
+    "/api/tool/unbind_pipeline": {
+      "post": {
+        "description": "Soft-delete a binding; the service cascades a digest binding's schedule\nrows so nothing keeps firing into a missing binding.",
+        "operationId": "tool_unbind_pipeline_api_tool_unbind_pipeline_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolUnbindPipeline"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Unbind Pipeline",
         "tags": [
           "tool-api"
         ]

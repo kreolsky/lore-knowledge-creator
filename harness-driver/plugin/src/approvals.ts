@@ -41,7 +41,6 @@ import type { TurnToolCtx } from './tools.ts'
 interface PendingAsk {
   loreSessionId: string
   toolName: string
-  messageId: string
   /** The tool is asked on every call: this ask can never mint a session grant. */
   perCall: boolean
   resolve: (outcome: ApprovalOutcome) => void
@@ -135,7 +134,6 @@ export function postVerdictAnswer(
   }
 }
 
-/** The pending-holds listing for one lore session (GET /approvals). */
 /** The BARE ask key: the card a CHILD ask renders on carries the
  * session-prefixed wire id (`<session>#<callId>` — map.ts's derivation, so the
  * card clears against the child's own result chip), while the parked ask is
@@ -144,21 +142,6 @@ export function postVerdictAnswer(
 export function bareAskKey(callId: string): string {
   const hash = callId.lastIndexOf('#')
   return hash >= 0 ? callId.slice(hash + 1) : callId
-}
-
-export function pendingHoldsFor(
-  sessionId: string,
-  state: { pending: Map<string, PendingAsk> } = { pending },
-): { call_id: string; tool_name: string; message_id: string; per_call: boolean }[] {
-  const out: { call_id: string; tool_name: string; message_id: string; per_call: boolean }[] = []
-  for (const [callId, ask] of state.pending) {
-    if (ask.loreSessionId === sessionId) {
-      out.push({
-        call_id: callId, tool_name: ask.toolName, message_id: ask.messageId, per_call: ask.perCall,
-      })
-    }
-  }
-  return out
 }
 
 /** Whether one call's ask is answered one call at a time (no session grant
@@ -250,7 +233,6 @@ export function registerLoreApprovalBridge(
       const entry: PendingAsk = {
         loreSessionId: tctx.loreSessionId,
         toolName: String(req.toolName ?? ''),
-        messageId: tctx.messageId,
         perCall: tctx.perCallApproval.has(String(req.toolName ?? ''))
           || perCallCalls.has(callId),
         resolve,

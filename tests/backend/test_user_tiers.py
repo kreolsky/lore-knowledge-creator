@@ -49,6 +49,9 @@ class _World:
         self._sessions = {}
         self._schedule = None
         self._keys = {}
+        self._digests = {}
+        self._ext = None
+        self._ext_refs = {}
 
     async def agent_key(self, uid: str) -> str:
         """A project-scoped agent key owned by `uid` — the Tool-API principal."""
@@ -61,6 +64,60 @@ class _World:
             })
             self._keys[uid] = token
         return self._keys[uid]
+
+    async def _plain_doc(self, doc_id: str, title: str) -> str:
+        await create_record("documents", doc_id, {
+            "project_id": self.pid, "parent_id": None, "title": title,
+            "content": "", "path": f"{doc_id}.md",
+            "is_index": False, "is_reference": False,
+        })
+        return doc_id
+
+    async def digest_id(self, uid: str, token: str) -> str:
+        """A digest binding CREATED by `uid` (a full member): the run's gate is
+        the tier, so the digest-editor check must not be the one that refuses."""
+        if uid not in self._digests:
+            stem = f"tier-dg-{uid}"
+            theme = await self._plain_doc(f"{stem}-theme", "theme")
+            cfg = await self._plain_doc(f"{stem}-cfg", "cfg")
+            tgt = await self._plain_doc(f"{stem}-tgt", "tgt")
+            resp = await self.client.put(
+                "/api/agent-config",
+                json={"document_id": theme, "config_doc_id": cfg, "target_doc_id": tgt,
+                      "kind": "digest"},
+                cookies={"lore_session": token},
+            )
+            assert resp.status_code == 200, resp.text
+            self._digests[uid] = resp.json()["config_id"]
+        return self._digests[uid]
+
+    async def extractor_id(self) -> str:
+        """An extractor binding on a source document references can hang under."""
+        if self._ext is None:
+            stem = "tier-ext"
+            src = await self._plain_doc(f"{stem}-src", "src")
+            cfg = await self._plain_doc(f"{stem}-cfg", "cfg")
+            tgt = await self._plain_doc(f"{stem}-tgt", "tgt")
+            resp = await self.client.put(
+                "/api/agent-config",
+                json={"document_id": src, "config_doc_id": cfg, "target_doc_id": tgt},
+                cookies={"lore_session": self.admin_token},
+            )
+            assert resp.status_code == 200, resp.text
+            self._ext = (resp.json()["config_id"], src)
+        return self._ext[0]
+
+    async def extractor_ref(self, uid: str) -> str:
+        """A reference under the extractor binding's source document."""
+        if uid not in self._ext_refs:
+            rid = f"tier-ext-ref-{uid}"
+            await create_record("documents", rid, {
+                "project_id": self.pid, "parent_id": self._ext[1],
+                "title": "md ref", "content": "text", "path": f"_ref/{rid}.md",
+                "is_reference": True, "media_type": "markdown",
+            })
+            self._ext_refs[uid] = rid
+        return self._ext_refs[uid]
 
     async def audio_ref(self, uid: str) -> str:
         if uid not in self._refs:
@@ -96,8 +153,9 @@ class _World:
 
 
 @pytest_asyncio.fixture
-async def tier_world(client, project_with_doc, admin_user, test_db):
-    """Project + one full member per tier (base/voice/ai)."""
+async def tier_world(client, project_with_doc, admin_user, test_db, enqueue_recorder):
+    """Project + one full member per tier (base/voice/ai). The recorder is LAST:
+    the pipeline run routes' pass-side posts real arq jobs, captured not sent."""
     pid, doc_id, _ = project_with_doc
     _, admin_token = admin_user
     tokens = {}
@@ -163,6 +221,20 @@ async def _call_route(route: str, w: _World, token: str, uid: str):
         return await c.patch(f"/api/pipeline-schedules/{await w.schedule_id()}",
                              json={"enabled": True},
                              cookies={"lore_session": token})
+    if route == "tool-run-pipeline-digest":
+        # A key may call the Tool-API directly — no ai-gated turn in front — and
+        # `apply: auto` is the body cell that resolves to auto with no verdict.
+        return await c.post(
+            "/api/tool/run_pipeline",
+            json={"config_id": await w.digest_id(uid, token), "apply": "auto"},
+            headers={"Authorization": f"Bearer {await w.agent_key(uid)}"})
+    if route == "tool-run-pipeline-extractor":
+        await w.extractor_id()
+        return await c.post(
+            "/api/tool/run_pipeline",
+            json={"config_id": await w.extractor_id(),
+                  "reference_id": await w.extractor_ref(uid), "apply": "auto"},
+            headers={"Authorization": f"Bearer {await w.agent_key(uid)}"})
     raise AssertionError(f"unknown route {route}")
 
 
@@ -178,6 +250,10 @@ GATED_ROUTES = [
     ("agent-run", "ai"),
     ("schedule-create", "ai"),
     ("schedule-enable", "ai"),
+    # The agent's run_pipeline tool reaches the service directly, with no
+    # ai-gated chat turn in front — each kind's service function carries its own gate.
+    ("tool-run-pipeline-digest", "ai"),
+    ("tool-run-pipeline-extractor", "ai"),
 ]
 
 

@@ -52,7 +52,7 @@ async def test_manual_run_enqueues_extract_task(client, admin_user, project_with
             "project_id": pid, "parent_id": None, "title": f"Doc {did}",
             "content": "", "path": f"{did}.md", "is_index": False,
         })
-    await client.put(
+    put = await client.put(
         "/api/agent-config",
         json={
             "document_id": idx_id,
@@ -62,6 +62,8 @@ async def test_manual_run_enqueues_extract_task(client, admin_user, project_with
         },
         cookies={"lore_session": admin_token},
     )
+    assert put.status_code == 200, put.text
+    config_id = put.json()["config_id"]
 
     ref_id = "ext-test-ref-manual"
     await create_record("documents", ref_id, {
@@ -88,3 +90,10 @@ async def test_manual_run_enqueues_extract_task(client, admin_user, project_with
     assert args[2] == config_doc_id
     assert args[3] == target_doc_id
     assert kwargs["job_id"] == f"extract:{ref_id}:{config_doc_id}:{target_doc_id}"
+    # The run log: the posting's run_id names a `queued` row attributed to THIS
+    # binding row — not merely to the config/target documents it names.
+    from db import fetch_one
+
+    run = await fetch_one("pipeline_runs", kwargs["run_id"])
+    assert (run["kind"], run["trigger"], run["status"]) == ("extractor", "manual", "queued")
+    assert (run["config_id"], run["reference_id"], run["project_id"]) == (config_id, ref_id, pid)

@@ -15,6 +15,8 @@ import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest';
 import { render, waitFor, fireEvent, act, cleanup, type RenderResult } from '@testing-library/react';
 import { MarkdownContent } from './MarkdownContent';
 import { emit } from '../../events';
+import { useAppStore } from '../../store/app-store';
+import type { Document } from '../../types';
 
 // Warm the lazy bundle BEFORE any assertion window: the first vitest import
 // of the sealed renderer pays its transform, which can exceed waitFor's
@@ -67,6 +69,8 @@ describe('MarkdownContent — the Lore wrapper contract', () => {
     ['bare', '[the doc](1169966b-afe4-4bfd-b532-5187f3ba1a30)'],
     ['angle', '[the doc](<1169966b-afe4-4bfd-b532-5187f3ba1a30>)'],
   ])('a scheme-less (%s) id link is a document link — the form the agent prompt prescribes', async (_shape, src) => {
+    // The click routes by entity: the id must be in the project's document tree to open as a document.
+    useAppStore.setState({ documents: [{ document_id: '1169966b-afe4-4bfd-b532-5187f3ba1a30' } as Document] });
     const { container } = await renderMarkdown(src);
     const anchor = await waitFor(() => {
       const a = container.querySelector<HTMLAnchorElement>('a[href^="https://lore.local/l/doc/"]');

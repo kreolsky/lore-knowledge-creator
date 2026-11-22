@@ -26,7 +26,10 @@ from artifacts import is_artifact_row
 from fastapi import HTTPException
 
 from agent.apply_edits_resolver import _resolve_validate_apply_edits
-from agent.collab_writes import broadcast_agent_presence
+from agent.collab_writes import (
+    _create_agent_pre_edit_checkpoint,
+    broadcast_agent_presence,
+)
 from agent.doc_state import resolve_live_doc_state
 from agent.edit_primitives import edit_range_error_detail
 from config import AGENT_EDIT_MAX_CHARS
@@ -47,6 +50,27 @@ def resolve_edit_range_for_gate(
 
     return resolve_edit_range(
         content, old_string, full_rewrite_fraction=full_rewrite_fraction,
+    )
+
+
+async def create_agent_pre_edit_checkpoint(
+    *,
+    document_id: str,
+    content: str,
+    tables_json: str | None,
+    original_preview: str,
+) -> dict | None:
+    """Public wrapper around `collab_writes._create_agent_pre_edit_checkpoint`
+    for cross-package server-computed writes (task_convention's claim splice).
+
+    # WHY: the checkpoint is private to the agent package (module-boundary test
+    # forbids importing private agent names from outside it), the same sanctioned
+    # seam as resolve_edit_range_for_gate above. Call it, do not copy it — this
+    # is the ONE pre-edit checkpoint every agent content write takes.
+    """
+    return await _create_agent_pre_edit_checkpoint(
+        document_id=document_id, content=content, tables_json=tables_json,
+        original_preview=original_preview,
     )
 
 
@@ -174,7 +198,7 @@ def _steer_html_full_rewrite(exc: HTTPException) -> HTTPException:
         edit_range_error_detail("full_rewrite")
     ):
         return exc
-    return HTTPException(status_code=422, detail={**detail, "error": (
+    steered = HTTPException(status_code=422, detail={**detail, "error": (
         "old_string covers ~the whole page — edit_document is pointwise only. To "
         "rewrite most of an existing html page, use sandbox_fetch_artifact → edit "
         "the file with sandbox_bash → replace_artifact_page, if you have those "
@@ -182,6 +206,8 @@ def _steer_html_full_rewrite(exc: HTTPException) -> HTTPException:
         "replacing one unique passage. Either way the rewrite stays in this same "
         "document."
     )})
+    steered.next_action = exc.next_action
+    return steered
 
 
 async def apply_edit_to_document(

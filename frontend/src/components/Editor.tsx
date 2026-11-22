@@ -99,11 +99,6 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
   const rawActiveItem = entity ?? storeActiveItem;
   const activeItem = useDeferredValue(rawActiveItem);
   const isReference = !!activeItem && 'reference_id' in activeItem;
-  // Threading isReference into the useMemo([]) focus handler via a ref: that handler
-  // is created once and reads live state through refs (roleRef, collabConnectionRef);
-  // closing over isReference directly would freeze the value at first render.
-  const isReferenceRef = useRef(isReference);
-  isReferenceRef.current = isReference;
   // INVARIANT: activeItemId derives from the **deferred** activeItem so the
   // CM6 `key={activeItemId}` remount, collab join, and active-handle registry
   // all swap in the same deferred commit.  Why: deferred so remount + collab join + handle-registry swap atomically
@@ -253,7 +248,6 @@ export function Editor({ entity, role = 'primary', hideBanner = false }: EditorP
     activeItemIdRef,
     snapshotPreviewRef,
     roleRef,
-    isReferenceRef,
     collabConnectionRef,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), []);

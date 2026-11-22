@@ -34,7 +34,6 @@ function makeDeps(overrides: Partial<EditorExtensionDeps> = {}): EditorExtension
     activeItemIdRef: { current: 'doc-1' },
     snapshotPreviewRef: { current: null },
     roleRef: { current: 'primary' },
-    isReferenceRef: { current: false },
     collabConnectionRef: { current: null },
     ...overrides,
   };
@@ -69,7 +68,6 @@ describe('buildEditorExtensions', () => {
     const handle = { synced: true };
     const deps = makeDeps({
       roleRef: { current: 'secondary' },
-      isReferenceRef: { current: true },
       collabConnectionRef: { current: handle as never },
     });
     const view = new EditorView({
@@ -79,7 +77,7 @@ describe('buildEditorExtensions', () => {
     view.contentDOM.dispatchEvent(new FocusEvent('focus'));
     expect(claimFocus).toHaveBeenCalledTimes(1);
     expect(claimFocus).toHaveBeenCalledWith(
-      expect.objectContaining({ role: 'secondary', isReference: true, handle }),
+      expect.objectContaining({ role: 'secondary', handle }),
     );
     view.destroy();
   });

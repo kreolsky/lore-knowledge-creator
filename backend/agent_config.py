@@ -79,7 +79,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 
 import settings
@@ -111,6 +110,7 @@ from agent_skills import (
 )
 
 import config
+from doc_properties import FRONTMATTER_RE
 from transclusion_grammar import render_embed_schemes
 
 logger = logging.getLogger(__name__)
@@ -120,7 +120,9 @@ logger = logging.getLogger(__name__)
 # A persona document MAY open with a YAML frontmatter block: first line exactly
 # `---`, closed by a lone `---` line (the skill-document format, skills.ts
 # parseSkillDoc). Anchored at the very start — a `---` later in the body is prose.
-_PERSONA_FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)^---[ \t]*\r?$\n?", re.S | re.M)
+# The regex is doc_properties.FRONTMATTER_RE (the ONE tree splitter): a persona
+# that works as a persona can never disagree with the props grammar.
+_PERSONA_FRONTMATTER_RE = FRONTMATTER_RE
 
 
 @dataclass(frozen=True)

@@ -163,25 +163,48 @@ def _require_in_app_agent(ctx: dict) -> None:
 
 
 MEMORY_SKILL = "memory"
+PIPELINES_SKILL = "pipelines"
+TASKS_SKILL = "tasks"
 
 
-async def _refuse_memory_disabled(db) -> None:
-    """403 while the admin disabled the shipped `memory` skill.
+async def _refuse_skill_disabled(db, skill: str, label: str) -> None:
+    """403 while the admin disabled the shipped skill `skill`.
 
-    # INVARIANT(security): disabling `memory` stops EVERY memory tool on every
-    # surface — the writes and the fact reads (get_memory_facts, get_fact_history).
-    # Why: the routes are reachable by a key directly (user keys included),
-    # so the skill tombstone alone, which only hides the skill from the model,
-    # does not stop them; and memory switched off means the agent neither sees
-    # nor uses it. Each handler (consolidate, apply verdicts, next_reference,
-    # reopen, get_memory_facts, get_fact_history, save_chat_facts,
-    # set_fact_anchor) opens with this gate.
+    # INVARIANT(security): disabling a shipped skill stops EVERY one of its
+    # tools on every surface — reads and writes alike.
+    # Why: the POST /api/tool routes stay reachable by a key directly (user
+    # keys included), so the tombstone alone — which only hides the pack from
+    # the model — does not stop them; and a skill switched off means the agent
+    # neither sees nor uses the tools.
     """
     from agent_config_load import instance_skill_disabled
 
-    if await instance_skill_disabled(db, MEMORY_SKILL):
+    if await instance_skill_disabled(db, skill):
         raise HTTPException(status_code=403,
-                            detail="memory is disabled by the administrator")
+                            detail=f"{label} is disabled by the administrator")
+
+
+async def _refuse_memory_disabled(db) -> None:
+    """The `memory` skill's off-switch — each memory handler (consolidate,
+    apply verdicts, next_reference, reopen, get_memory_facts,
+    get_fact_history, save_chat_facts, set_fact_anchor) opens with it."""
+    await _refuse_skill_disabled(db, MEMORY_SKILL, "memory")
+
+
+async def _refuse_pipelines_disabled(db) -> None:
+    """The `pipelines` skill's off-switch — each of the five pipeline handlers
+    (list/bind/unbind/run/pipeline_runs) opens with it. The editor's REST
+    routes are NOT gated by it (the skill governs the agent, not the editor)."""
+    await _refuse_skill_disabled(db, PIPELINES_SKILL, "pipelines")
+
+
+async def _refuse_tasks_disabled(db) -> None:
+    """The `tasks` skill's off-switch — each of the three task-property/
+    task-loop handlers (find_documents, next_task, claim_task) opens with it,
+    on every surface (see the INVARIANT on _refuse_skill_disabled: the pack
+    only hides tools from the in-app prompt; MCP and the Tool-API serve them
+    regardless, so the tombstone is what actually stops them)."""
+    await _refuse_skill_disabled(db, TASKS_SKILL, "tasks")
 
 
 # ─── Standalone apply primitives ──────────────────────────────────────────────

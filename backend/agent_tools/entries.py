@@ -45,7 +45,19 @@ from agent_tools.specs.memory import (
     SAVE_CHAT_FACTS_TOOL,
     SET_FACT_ANCHOR_TOOL,
 )
-from agent_tools.specs.mutate import MUTATE_TOOLS
+from agent_tools.specs.mutate import MOVE_CHAT_TOOL, MUTATE_TOOLS
+from agent_tools.specs.pipelines import (
+    BIND_PIPELINE_TOOL,
+    LIST_PIPELINES_TOOL,
+    PIPELINE_RUNS_TOOL,
+    RUN_PIPELINE_TOOL,
+    UNBIND_PIPELINE_TOOL,
+)
+from agent_tools.specs.properties import (
+    CLAIM_TASK_TOOL,
+    FIND_DOCUMENTS_TOOL,
+    NEXT_TASK_TOOL,
+)
 from agent_tools.specs.read import (
     GET_FACT_HISTORY_TOOL,
     GET_MEMORY_FACTS_TOOL,
@@ -62,6 +74,8 @@ from models import (
     ToolAddTableRows,
     ToolAppendDocument,
     ToolApplyMemoryVerdicts,
+    ToolBindPipeline,
+    ToolClaimTask,
     ToolConsolidateMemory,
     ToolCreateDocument,
     ToolCreateTable,
@@ -69,6 +83,7 @@ from models import (
     ToolEditDocument,
     ToolEditTableCell,
     ToolExportSubtreeMd,
+    ToolFindDocuments,
     ToolGenerateImage,
     ToolGetFactHistory,
     ToolGetLinks,
@@ -79,9 +94,13 @@ from models import (
     ToolImportSubtreeMd,
     ToolListDocumentVersions,
     ToolListMyChats,
+    ToolListPipelines,
     ToolListSecrets,
+    ToolMoveChat,
     ToolMoveDocument,
     ToolNextReference,
+    ToolNextTask,
+    ToolPipelineRuns,
     ToolReadDocument,
     ToolReadMyChat,
     ToolRenameDocument,
@@ -89,6 +108,7 @@ from models import (
     ToolReplaceArtifactPage,
     ToolReprocessReference,
     ToolRestoreDocumentVersion,
+    ToolRunPipeline,
     ToolSandboxBash,
     ToolSandboxFetchArtifact,
     ToolSandboxFetchReference,
@@ -101,6 +121,7 @@ from models import (
     ToolSearch,
     ToolSearchMyChats,
     ToolSetFactAnchor,
+    ToolUnbindPipeline,
     ToolViewChatImage,
     ToolViewReferenceImage,
 )
@@ -250,6 +271,40 @@ for _spec, (_model, _handler) in zip((*READ_TOOLS, *MUTATE_TOOLS), _BASE):
         mcp_description=_MCP_MUTATING_DESCRIPTIONS.get(_spec["function"]["name"]),
     ))
 
+# ─── The `tasks` skill's pack: document properties + the task loop ────────────
+# PUBLIC like the base surface — an external
+# coding agent on an MCP key working the backlog is the feature's point, so
+# unlike the pipelines pack these surfaces include mcp. The shipped skill
+# (backend/configs/skill_tasks.md) packs them out of the in-app core; the
+# skill-disabled gate is per-handler (_refuse_tasks_disabled). claim_task is
+# mutating with `apply` (holdable in-app, force-applied on MCP like every
+# mutating tool there).
+register(ToolEntry(
+    spec=FIND_DOCUMENTS_TOOL, request_model=ToolFindDocuments,
+    handler_path="routes.tool_api.properties:tool_find_documents",
+    surfaces=_PUBLIC,
+))
+register(ToolEntry(
+    spec=NEXT_TASK_TOOL, request_model=ToolNextTask,
+    handler_path="routes.tool_api.properties:tool_next_task",
+    surfaces=_PUBLIC,
+))
+register(ToolEntry(
+    spec=CLAIM_TASK_TOOL, request_model=ToolClaimTask,
+    handler_path="routes.tool_api.properties:tool_claim_task",
+    surfaces=_PUBLIC,
+    mcp_description=(
+        "Claim (or renew) a task document for an agent: replaces `status:` "
+        "with the schema's claimed status and upserts `assignee` + "
+        "`claimed_until` in its YAML header — a 4-hour lease, renewed by "
+        "calling again with the same agent_name. Outcomes: claimed / renewed "
+        "/ taken_over (a lease that expired); 409 already_claimed (call "
+        "next_task again for another task) / not_ready / not_a_task. "
+        "Read-write key: applies immediately, reversible in the Lore History "
+        "panel."
+    ),
+))
+
 # ─── Agent-only tools (tool_api route, never advertised over MCP) ────────────────
 # Posture notes (why each is NOT on the public MCP surface) live at each tool's
 # spec definition site in agent_tools/specs — this table only records the facts.
@@ -377,6 +432,15 @@ register(ToolEntry(
     handler_path="routes.tool_api.chat_recall:tool_view_chat_image",
     surfaces=_AGENT_HTTP, image_result=True,
 ))
+# move_chat: agent-only, the `structure` skill's pack (see the ARCH on its
+# spec). NOT gated on the chat-recall switch — moving the user's own chat is
+# structure, not recall; only the in-app assistant may do it (the handler's
+# _require_in_app_agent), because a chat is one person's own row.
+register(ToolEntry(
+    spec=MOVE_CHAT_TOOL, request_model=ToolMoveChat,
+    handler_path="routes.tool_api.structure:tool_move_chat",
+    surfaces=_AGENT_HTTP,
+))
 # The fact-saving pair: agent-only, the memory skill's capture from THIS
 # conversation (see specs/memory.py ARCH).
 register(ToolEntry(
@@ -408,4 +472,32 @@ register(ToolEntry(
     spec=HTTP_REQUEST_TOOL, request_model=ToolHttpRequest,
     handler_path="routes.tool_api.secrets:tool_http_request",
     surfaces=_AGENT_HTTP, per_call_approval=True,
+))
+# The `pipelines` skill's pack: agent-only + always
+# served (packed — see specs/pipelines.py ARCH for why there is no CORE
+# exception; the skill-disabled gate is per-handler, not an env gate).
+register(ToolEntry(
+    spec=LIST_PIPELINES_TOOL, request_model=ToolListPipelines,
+    handler_path="routes.tool_api.pipelines:tool_list_pipelines",
+    surfaces=_AGENT_HTTP,
+))
+register(ToolEntry(
+    spec=BIND_PIPELINE_TOOL, request_model=ToolBindPipeline,
+    handler_path="routes.tool_api.pipelines:tool_bind_pipeline",
+    surfaces=_AGENT_HTTP,
+))
+register(ToolEntry(
+    spec=UNBIND_PIPELINE_TOOL, request_model=ToolUnbindPipeline,
+    handler_path="routes.tool_api.pipelines:tool_unbind_pipeline",
+    surfaces=_AGENT_HTTP,
+))
+register(ToolEntry(
+    spec=RUN_PIPELINE_TOOL, request_model=ToolRunPipeline,
+    handler_path="routes.tool_api.pipelines:tool_run_pipeline",
+    surfaces=_AGENT_HTTP,
+))
+register(ToolEntry(
+    spec=PIPELINE_RUNS_TOOL, request_model=ToolPipelineRuns,
+    handler_path="routes.tool_api.pipelines:tool_pipeline_runs",
+    surfaces=_AGENT_HTTP,
 ))

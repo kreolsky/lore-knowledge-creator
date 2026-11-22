@@ -606,66 +606,6 @@ describe('loadSessions cache invalidation on revisit', () => {
   });
 });
 
-describe('loadSessions piggyback (Item 3: collapse sessions→messages waterfall)', () => {
-  async function mockStores(savedId: string | null) {
-    const { useAppStore } = await import('./app-store');
-    const { useUIStore } = await import('./ui-store');
-    (useAppStore.getState as ReturnType<typeof vi.fn>).mockReturnValue({
-      currentDocument: null, currentReference: null, showToast: vi.fn(),
-    });
-    (useUIStore.getState as ReturnType<typeof vi.fn>).mockReturnValue({
-      documents: {},
-      setLastActiveChatSession: vi.fn(),
-      getLastActiveChatSession: vi.fn(() => savedId),
-      getRefPreviewMode: vi.fn(() => false),
-      getRefOpenMode: vi.fn(() => 'center'),
-    });
-  }
-
-  it('piggybacked restore also fetches pending verdicts (second-tab render gate)', async () => {
-    // The piggyback skips loadMessages, and fetchPendingVerdicts lived ONLY on
-    // that path — so a second tab / reload restoring via with_active_messages
-    // never discovered a still-held call and rendered no decision card until a
-    // manual session re-select. The piggyback branch must fetch the verdicts
-    // itself.
-    const { apiClient } = await import('../api/client');
-    await mockStores('sA');
-    useChatStore.setState({ documentId: null, activeSessionId: null, messages: [] });
-
-    const piggybacked = [
-      makeMsg({ message_id: 'm1', role: 'user', parent_id: null }),
-      makeMsg({ message_id: 'm2', role: 'assistant', parent_id: 'm1' }),
-    ];
-    const verdictUrls: string[] = [];
-    (apiClient.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
-      if (url.startsWith('/chat/sessions?')) {
-        return Promise.resolve({
-          sessions: [makeSession({ session_id: 'sA', document_id: 'docP' })],
-          active_messages: { session_id: 'sA', messages: piggybacked },
-        });
-      }
-      if (url.startsWith('/chat/verdicts')) {
-        verdictUrls.push(url);
-        return Promise.resolve({
-          holds: [{ call_id: 'c1', tool_name: 'create_document', message_id: 'm2' }],
-        });
-      }
-      if (url.includes('/messages')) { return Promise.resolve({ messages: [], queue: [], queue_seq: null }); }
-      return Promise.resolve([]);
-    });
-
-    await useChatStore.getState().loadSessions('pP', 'docP');
-    // fetchPendingVerdicts is fire-and-forget — flush microtasks.
-    await new Promise(r => setTimeout(r, 0));
-
-    expect(verdictUrls).toEqual(['/chat/verdicts?session_id=sA']);
-    const m2 = useChatStore.getState().messages.find(m => m.message_id === 'm2');
-    expect(m2?.pending_verdicts).toEqual([
-      { call_id: 'c1', tool_name: 'create_document', message_id: 'm2' },
-    ]);
-  });
-});
-
 describe('loadSessions scope-change spinner (no stale flash on project switch)', () => {
 
   it('keeps the active chat when only a reference changes within the same document', async () => {

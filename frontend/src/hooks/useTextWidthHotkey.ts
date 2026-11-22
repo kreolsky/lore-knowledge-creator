@@ -1,6 +1,7 @@
 /**
  * Ctrl+Alt+[ / Ctrl+Alt+] global hotkey — steps the document text column through
- * width presets, remembered per project in this browser.
+ * width presets, remembered per scope (a project, or a public share's root document)
+ * in this browser.
  */
 // WHY: window keydown, not the CM6 keymap — same reasoning as useSidebarHotkey
 // (see SYSTEM: global-hotkey): the column width is an app-level view setting that
@@ -21,11 +22,11 @@ const CSS_VAR = '--content-max-width';
 const STEP_BY_CODE: Record<string, number> = { BracketLeft: -1, BracketRight: 1 };
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
 
-const storageKey = (projectId: string) => `lore.textWidth.${projectId}`;
+const storageKey = (scopeId: string) => `lore.textWidth.${scopeId}`;
 
-function readLevel(projectId: string): number {
+function readLevel(scopeId: string): number {
   try {
-    const level = Number(localStorage.getItem(storageKey(projectId)));
+    const level = Number(localStorage.getItem(storageKey(scopeId)));
     return Number.isInteger(level) && level >= 0 && level < PRESETS.length ? level : 0;
   } catch {
     return 0; // storage blocked: the default width is the correct rendering
@@ -36,10 +37,10 @@ function applyLevel(level: number): void {
   document.documentElement.style.setProperty(CSS_VAR, PRESETS[level].width);
 }
 
-export function useTextWidthHotkey(projectId: string | undefined): void {
+export function useTextWidthHotkey(scopeId: string | undefined): void {
   useEffect(() => {
-    if (!projectId) return;
-    let level = readLevel(projectId);
+    if (!scopeId) return;
+    let level = readLevel(scopeId);
     applyLevel(level);
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -57,7 +58,7 @@ export function useTextWidthHotkey(projectId: string | undefined): void {
       level = next;
       applyLevel(level);
       try {
-        localStorage.setItem(storageKey(projectId), String(level));
+        localStorage.setItem(storageKey(scopeId), String(level));
       } catch {
         useAppStore.getState().showToast(t('textWidthNotSaved'), 'warning');
       }
@@ -66,8 +67,8 @@ export function useTextWidthHotkey(projectId: string | undefined): void {
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
-      // Public share and other surfaces render the default column.
+      // Surfaces without the hook render the default column.
       document.documentElement.style.removeProperty(CSS_VAR);
     };
-  }, [projectId]);
+  }, [scopeId]);
 }

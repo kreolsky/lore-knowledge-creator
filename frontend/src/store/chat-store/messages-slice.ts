@@ -420,7 +420,7 @@ export function createMessagesSlice(set: Set, get: Get): MessagesSlice {
           // gate here, the spinner turned off then the new load turned it on again →
           // double spinner (groovy-skipping-wozniak). The owning request clears it below.
           set({ messages, messagesLoading: false, chatScopeLoading: false, messagesError: false });
-          afterSessionRowsCommitted(get, sessionId, messages.length);
+          afterSessionRowsCommitted(sessionId, messages.length);
         },
         onLoadError: () => {
           // INVARIANT: clear the gate only when THIS request still owns the scope. Why: a

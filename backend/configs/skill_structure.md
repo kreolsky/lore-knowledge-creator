@@ -1,10 +1,11 @@
 ---
 name: structure
-description: Use when the user wants to move or reorder documents in the tree, turn a document into a reference or back, see what links to or from a document, or re-run the import of a reference whose text is wrong or empty. «перенеси», «перемести в папку», «поменяй порядок», «сделай референсом», «что ссылается на этот документ», «битые ссылки», «переобработай референс», «перераспознай запись»; move this document, what links here, reprocess this reference.
+description: Use when the user wants to move or reorder documents in the tree, turn a document into a reference or back, see what links to or from a document, re-run the import of a reference whose text is wrong or empty, or move a chat under another document. «перенеси», «перемести в папку», «поменяй порядок», «сделай референсом», «что ссылается на этот документ», «битые ссылки», «переобработай референс», «перераспознай запись», «перенеси этот чат под документ»; move this document, move this chat, what links here, reprocess this reference.
 tools:
   - move_document
   - get_links
   - reprocess_reference
+  - move_chat
 ---
 
 # Project structure
@@ -22,6 +23,19 @@ document when the whole project should reach it. `node_type` converts in the sam
 document becomes a reference of `parent_id` (refused if it has children), or a reference
 becomes a tree document (refused for a file-backed one). A move is not undone from the
 History panel — undo it by moving back.
+
+## Moving a chat
+
+`move_chat` moves a chat under another document or back to project level. `document_id` is
+the destination document (its id from `get_project_structure`), or `null` for project level —
+never the project's index document, which is a real parent the chat would then sit on. A
+reference cannot be the destination, and a note cannot be moved.
+
+Omit `chat_id` to move the chat you are in, and make that the LAST step of your turn: after
+it, document writes are checked against the new parent. To move another of the user's chats,
+pass its `chat_id` from `list_my_chats` (the chat-recall skill — when that skill is off, only
+the current chat can be moved). Like a document move, it is not undone from the History panel
+— undo it by moving back.
 
 ## Links
 

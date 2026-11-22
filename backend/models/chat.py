@@ -101,10 +101,13 @@ class SessionUpdate(BaseModel):
     agent_auto: bool | None = None
     # ARCH: PATCH-able like system_prompt_id
     # (model_fields_set semantics — explicit null clears to project-level).
-    # update_session guards the write: 400 for note sessions (anchored to the
-    # owning document's text) and for a reference
-    # TARGET; a reference-scoped session may move to any document or to project
-    # level. A non-null target requires at least commentator access, else 403.
+    # update_session guards the write through the one target check it shares
+    # with the agent's move_chat (check_reparent_target): 400 for note sessions
+    # (anchored to the owning document's text), 400 for a reference TARGET, a
+    # uniform 404 for a target of ANOTHER project — a chat moves only within
+    # its own project. A reference-scoped session may move to any document of
+    # its project or to project level. A non-null target requires at least
+    # commentator access, else 403.
     document_id: str | None = None
     # ARCH: the ROOT row's pointer to the
     # last-opened branch — the chat list previews that branch. Opening any

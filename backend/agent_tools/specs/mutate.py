@@ -4,6 +4,9 @@ AGENT_TOOLS (MUTATE_TOOLS) — create/edit/append/move_document/rename_document
 the agent package (leaf; the subtree spec dict comes from the sibling
 specs/subtree.py data module).
 
+MOVE_CHAT_TOOL stands beside that list, not in it: it is the `structure`
+skill's pack and never reaches MCP (see the constant).
+
 The create_document html sentence is RENDERED from config + the artifact
 library manifest (artifacts.html_node_sentence) so an install
 without artifact hosting never advertises node_type="html" in prose.
@@ -408,3 +411,48 @@ MUTATE_TOOLS: list[dict] = [
         },
     },
 ]
+
+# ARCH: move_chat is agent-only (agent + tool_api, never MCP) and NOT a member
+# of MUTATE_TOOLS: that list is the public base surface, registered with the
+# MCP surface included. A chat is ONE PERSON's own row — an MCP key has no
+# person whose chats these are (the chat-recall posture, specs/chat_recall.py).
+# It is packed by the shipped `structure` skill (backend/configs/
+# skill_structure.md): a packed tool is neither listed nor loadable until that
+# skill is enabled.
+MOVE_CHAT_TOOL: dict = {
+    "type": "function",
+    "mutating": True,
+    "function": {
+        "name": "move_chat",
+        "description": (
+            "Move a chat under another document, or back to project level. "
+            "`document_id` is the destination: a document of this project (take "
+            "ids from `get_project_structure`), or null for project level — "
+            "never the project's index document, which anchors the chat ON it; "
+            "a reference is refused. Omit `chat_id` to move THIS chat, and do "
+            "it as the LAST step of your turn: later document writes are "
+            "checked against the new parent. To move another of the user's "
+            "chats, pass its `chat_id` from `list_my_chats`. In confirmation "
+            "mode the call is held for the user's approval; it applies on "
+            "approval, or returns `rejected` with the user's feedback if "
+            "declined."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "chat_id": {
+                    "type": "string",
+                    "description": (
+                        "The chat to move, its id from `list_my_chats`; omit "
+                        "to move THIS chat."
+                    ),
+                },
+                "document_id": {
+                    "type": ["string", "null"],
+                    "description": "Destination document id, or null for project level.",
+                },
+            },
+            "required": ["document_id"],
+        },
+    },
+}

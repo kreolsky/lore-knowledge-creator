@@ -130,6 +130,17 @@ async def test_cross_project_params_rejected_at_create(
     )
     assert resp.status_code == 400, resp.text
 
+    # `run_id` is a REAL task kwarg (the pipeline_runs log id), so the signature
+    # bind would accept it — reserved: the dispatch mints it, and a frozen one
+    # would let a schedule write its outcome onto an arbitrary run row.
+    resp = await client.post(
+        "/api/pipeline-schedules",
+        json={**base, "params": {**valid, "run_id": "forged-run"}},
+        cookies=cookie,
+    )
+    assert resp.status_code == 400, resp.text
+    assert "run_id" in resp.json()["detail"]
+
     # A nonexistent document id is refused too (no silent creation-time pass to a
     # row that would error every tick).
     resp = await client.post(

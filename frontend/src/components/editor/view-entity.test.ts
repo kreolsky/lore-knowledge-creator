@@ -94,7 +94,6 @@ function makeDeps(activeItemIdRef: { current: string | undefined }): EditorExten
     activeItemIdRef,
     snapshotPreviewRef: { current: null },
     roleRef: { current: 'primary' },
-    isReferenceRef: { current: false },
     collabConnectionRef: { current: null },
   };
 }

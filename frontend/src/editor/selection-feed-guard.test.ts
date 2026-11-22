@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 const ACTIVATORS: Record<string, (v: EditorView) => void> = {
-  claimFocus: (v) => claimFocus({ role: 'primary', isReference: false, view: v, handle: null }),
+  claimFocus: (v) => claimFocus({ role: 'primary', view: v, handle: null }),
   claimNestedView,
   mountView,
 };

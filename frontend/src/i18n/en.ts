@@ -694,7 +694,6 @@ export const en = {
   verdictAnchorFact: 'Fact',
   verdictAnchorDocs: 'Documents',
   verdictAnchorClear: 'Anchors are cleared — the fact follows its source again',
-  verdictListFailed: 'Failed to load pending decisions',
 
   agentModeRequiresAccess: 'Agent mode requires full project access',
   agentModeStartFailed: 'Failed to start agent mode',

@@ -6,7 +6,7 @@
  *   /inbox/discard`, `GET /session-status` — the session's dsh inbox and its
  *   turns, `POST /running-sessions` — which chats have a turn running,
  *   `POST /session-fork`, `POST /session-entries`,
- *   `GET/POST /approvals`, `POST /approvals/resolve`, `GET /capability`, `GET
+ *   `POST /approvals`, `POST /approvals/resolve`, `GET /capability`, `GET
  *   /health`) plus the standing event channel `/ws/events`
  *   (subscribe/unsubscribe by session id — ws-events.ts).
  *   Lore owns identity/RBAC/persistence

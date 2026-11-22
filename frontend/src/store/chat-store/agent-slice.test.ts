@@ -1,8 +1,5 @@
-/** Agent slice — the reload re-render half of mid-turn approval: a still-held
- * call is rediscovered from GET /chat/verdicts and merged onto the assistant
- * message's pending_verdicts, where VerdictCard renders it. The live frame path
- * (awaiting_verdict) lives in streaming.tool-prepare.test.ts; this is the
- * reload path. */
+/** Agent slice — decideVerdict's answer to a hold that is already gone: the
+ * card folds as stale, and only the owned expiry (409) says why. */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const showToast = vi.fn();
@@ -31,51 +28,34 @@ function makeStore(initialMessages: unknown[], activeSessionId = 's1') {
     const patch = typeof u === 'function' ? (u as (s: ChatState) => Partial<ChatState>)(state) : u;
     state = { ...state, ...(patch as Partial<ChatState>) };
   };
-  // Composed-store shape: the slice's own methods are reachable through get()
-  // (decideVerdict calls get().removePendingVerdictByCall).
   const slice = createAgentSlice(set, get);
   state = { ...state, ...slice } as unknown as ChatState;
   return { get, set };
 }
 
-const MSG = {
-  message_id: 'am',
-  role: 'assistant',
-  content: 'reply',
-  pending_verdicts: [],
-};
-
 beforeEach(() => { showToast.mockClear(); });
 
 describe('decideVerdict — expired hold (409 hold_expired)', () => {
-  const held = [
-    { ...MSG, pending_verdicts: [{ call_id: 'c9', tool_name: 'edit_document', message_id: 'am' }] },
-  ];
-
-  it('409 removes the card and toasts the explicit expiry reason (not the generic failure)', async () => {
+  it('409 folds the card as stale and toasts the explicit expiry reason (not the generic failure)', async () => {
     const { HttpError } = await import('../../api/client');
     postMock.mockRejectedValueOnce(new HttpError(409, 'hold_expired'));
-    const { get, set } = makeStore(held);
+    const { get, set } = makeStore([]);
 
     const slice = createAgentSlice(set, get);
-    await slice.decideVerdict('c9', 'allow_once', 'edit_document');
+    expect(await slice.decideVerdict('c9', 'allow_once', 'edit_document')).toBe('stale');
 
-    const messages = get().messages as Array<{ pending_verdicts: unknown[] }>;
-    expect(messages[0].pending_verdicts).toEqual([]);
     expect(showToast).toHaveBeenCalledWith('verdictExpired', 'warning');
     expect(showToast).not.toHaveBeenCalledWith('verdictFailed', 'error');
   });
 
-  it('404 still clears the stale card silently (unchanged behavior)', async () => {
+  it('404 folds the stale card silently', async () => {
     const { HttpError } = await import('../../api/client');
     postMock.mockRejectedValueOnce(new HttpError(404, 'no held call'));
-    const { get, set } = makeStore(held);
+    const { get, set } = makeStore([]);
 
     const slice = createAgentSlice(set, get);
-    await slice.decideVerdict('c9', 'allow_once', 'edit_document');
+    expect(await slice.decideVerdict('c9', 'allow_once', 'edit_document')).toBe('stale');
 
-    const messages = get().messages as Array<{ pending_verdicts: unknown[] }>;
-    expect(messages[0].pending_verdicts).toEqual([]);
     expect(showToast).not.toHaveBeenCalled();
   });
 });

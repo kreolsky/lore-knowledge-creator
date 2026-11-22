@@ -175,7 +175,7 @@ function VerdictAskNode({ data }: { data: unknown }) {
       </ToolPlate>
     );
   }
-  return <VerdictCard pending={{ call_id: callId, tool_name: toolName, message_id: '', per_call: d.perCall === true }} argsRaw={typeof d.argsRaw === 'string' && d.argsRaw !== '' ? d.argsRaw : undefined} />;
+  return <VerdictCard pending={{ call_id: callId, tool_name: toolName, per_call: d.perCall === true }} argsRaw={typeof d.argsRaw === 'string' && d.argsRaw !== '' ? d.argsRaw : undefined} />;
 }
 
 /** The halt card: what stopped the turn and how far it got. The sentence is

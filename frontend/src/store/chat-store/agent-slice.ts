@@ -3,7 +3,7 @@
 // actions (applyProposal / applyAllProposals) were deleted with the proposal cluster:
 // confirmation is now the mid-turn approval hold, so a mutating call is either applied
 // (auto / approved) or rejected.
-import type { ChatUIMode, PendingVerdict } from '../../types';
+import type { ChatUIMode } from '../../types';
 import { inverseUIMode } from '../../types';
 import { apiClient, HttpError } from '../../api/client';
 import { useAppStore } from '../app-store';
@@ -15,8 +15,6 @@ type AgentSlice = Pick<
   | 'setSessionMode'
   | 'setSessionUIMode'
   | 'decideVerdict'
-  | 'removePendingVerdictByCall'
-  | 'fetchPendingVerdicts'
 >;
 
 export function createAgentSlice(set: Set, get: Get): AgentSlice {
@@ -38,20 +36,16 @@ export function createAgentSlice(set: Set, get: Get): AgentSlice {
           tool_name: toolName,
           reason,
         });
-        // Drop the card optimistically; the resolved call's tool result (or a
-        // reload) confirms.
-        get().removePendingVerdictByCall(callId);
         return 'sent';
       } catch (e) {
         if (e instanceof HttpError && (e.status === 404 || e.status === 409)) {
           // WHY: a 404 here is not a degraded state — the hold is already gone
-          // (aborted turn / deleted session), so the card is stale, and clearing
+          // (aborted turn / deleted session), so the card is stale, and folding
           // it IS the correct outcome, not an error to surface.
           // A 409 is the OWNED expired hold: the verdict arrived after
-          // HOLD_MAX_S, the call already self-resolved as rejected — remove the
+          // HOLD_MAX_S, the call already self-resolved as rejected — fold the
           // card and say WHY (explicit expired state, no silent degradation).
           // Every other failure toasts below.
-          get().removePendingVerdictByCall(callId);
           if (e.status === 409) {
             useAppStore.getState().showToast(t('verdictExpired'), 'warning');
           }
@@ -59,51 +53,6 @@ export function createAgentSlice(set: Set, get: Get): AgentSlice {
         }
         useAppStore.getState().showToast(t('verdictFailed'), 'error');
         return 'failed';
-      }
-    },
-    removePendingVerdictByCall(callId: string) {
-      set(s => ({
-        messages: s.messages.map(m => ({
-          ...m,
-          pending_verdicts: (m.pending_verdicts ?? []).filter(p => p.call_id !== callId),
-        })),
-      }));
-    },
-    // The reload re-render path: a still-held call is discovered from the
-    // decision store (the driver parks on the held POST; the live card is gone
-    // with the reload).
-    async fetchPendingVerdicts(sessionId: string) {
-      try {
-        const data: { holds: PendingVerdict[] } = await apiClient.get(
-          `/chat/verdicts?session_id=${encodeURIComponent(sessionId)}`,
-        );
-        const holds = (data?.holds ?? []) as Array<{
-          call_id: string; tool_name: string; message_id: string; per_call?: boolean;
-        }>;
-        if (holds.length === 0) return;
-        const byMsg = new Map<string, PendingVerdict[]>();
-        for (const h of holds) {
-          if (!h.message_id) continue;
-          const arr = byMsg.get(h.message_id) ?? [];
-          arr.push({ call_id: h.call_id, tool_name: h.tool_name, message_id: h.message_id, per_call: h.per_call });
-          byMsg.set(h.message_id, arr);
-        }
-        set(s => ({
-          messages: s.messages.map(m => {
-            const pend = byMsg.get(m.message_id);
-            if (!pend) return m;
-            const existing = new Set((m.pending_verdicts ?? []).map(p => p.call_id));
-            const merged = [...(m.pending_verdicts ?? []), ...pend.filter(p => !existing.has(p.call_id))];
-            return { ...m, pending_verdicts: merged };
-          }),
-        }));
-      } catch (e) {
-        // No silent degradation — a failed verdicts list is surfaced.
-        // WHY: the 404 is exempt — it means the session is gone, so there is
-        // nothing to restore onto and nothing to warn about.
-        if (!(e instanceof HttpError && e.status === 404)) {
-          useAppStore.getState().showToast(t('verdictListFailed'), 'error');
-        }
       }
     },
     setSessionUIMode(mode: ChatUIMode) {

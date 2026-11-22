@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 
+from pipeline.core import runs as run_log
 from tiers import user_has_tier
 
 from jobs import pool as jobs_pool
@@ -54,6 +55,29 @@ async def _creator_tier_ok(db, user_id: str) -> bool:
     return await user_has_tier(user_id, role, "ai")
 
 
+async def _post_schedule_job(spec, row: dict, params: dict, job_id: str) -> None:
+    """Enqueue one claim with the frozen params. The two pipeline tasks post
+    through the run log (`launch` mints run_id AT DISPATCH — never stored in
+    params: a schedule row is frozen, each claim is a new run);
+    widget_extract_task is a dry widget path, not a binding run. config_id
+    comes from the frozen params when they carry one (digest); a REST-era
+    extractor schedule names docs, not a binding, so its runs record
+    config_id NONE — never mis-attributed."""
+    queue = None if spec.queue == "default" else jobs_pool.TRANSCRIPTION_QUEUE
+    if spec.entry.__name__ not in ("extract_task", "digest_task"):
+        await jobs_pool.enqueue(spec.entry.__name__, job_id=job_id, queue=queue, **params)
+        return
+    await run_log.launch(
+        lambda run_id: jobs_pool.enqueue(
+            spec.entry.__name__, job_id=job_id, queue=queue,
+            run_id=run_id, **params,
+        ),
+        project_id=str(row.get("project_id") or ""), kind=spec.name,
+        trigger="schedule", config_id=params.get("config_id"),
+        reference_id=params.get("reference_id"),
+    )
+
+
 async def _dispatch_claimed_schedule(db, schedule_id: str, row: dict, claimed_at: str) -> None:
     """Resolve the registry row and enqueue with the frozen params; record the
     dispatch outcome ('ok'/'error') on the schedule row. Raises never — the
@@ -76,15 +100,13 @@ async def _dispatch_claimed_schedule(db, schedule_id: str, row: dict, claimed_at
             raise ValueError("params_json is not a JSON object")
         await _rebind_scoped_params(db, spec, params, str(row.get("project_id") or ""))
 
-        await jobs_pool.enqueue(
-            spec.entry.__name__,
+        await _post_schedule_job(
+            spec, row, params,
             # Per-claim job_id: enqueue-level idempotency — a replayed claim
             # (crash between claim and enqueue) is a NEW claim anyway; a
             # duplicated tick dispatch is stopped by the claim itself. A row
             # with its own job_id collapses with that task's other triggers.
-            job_id=spec.job_id(params) if spec.job_id else f"psched:{schedule_id}:{claimed_at}",
-            queue=None if spec.queue == "default" else jobs_pool.TRANSCRIPTION_QUEUE,
-            **params,
+            spec.job_id(params) if spec.job_id else f"psched:{schedule_id}:{claimed_at}",
         )
         await db.query(
             "UPDATE type::record('pipeline_schedules', $id) SET "

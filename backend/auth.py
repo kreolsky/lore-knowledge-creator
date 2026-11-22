@@ -13,12 +13,12 @@ from security_log import log_security
 
 import event_bus
 
-# `is_instance_admin` hoisted module-level (no cycle: access never imports auth;
+# `is_instance_admin` / `is_moderator_of` hoisted module-level (no cycle: access never imports auth;
 # nothing monkeypatches it). db.fetch_one stays IN-FUNCTION and event_bus.emit is
 # read as a module attribute at the call — both are test seams
 # (tests/backend/db_leak_guard.py: call-time resolution re-reads the module
 # attribute a monkeypatch.setattr("db.fetch_one", ...) has rebound).
-from access import is_instance_admin
+from access import is_instance_admin, is_moderator_of
 from config import ALGORITHM, COOKIE_MAX_AGE, SECRET_KEY
 from models.auth import USER_MANAGER_ROLES
 
@@ -288,7 +288,7 @@ async def require_user_manager(user_id: str, user: dict = Depends(get_current_us
     if user.get("role") == "moderator":
         from db import fetch_one
         target = await fetch_one("users", user_id)
-        if target and target.get("role") == "user" and target.get("moderator_id") == user["user_id"]:
+        if target and is_moderator_of(user, target):
             return user
         raise HTTPException(status_code=404, detail="User not found")
     raise HTTPException(status_code=403, detail="User management access required")

@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import { mock } from 'node:test'
 
 import {
-  askLoreApproval, bareAskKey, grantKey, hasLoreGrant, isPerCallAsk, pendingHoldsFor, postVerdictAnswer,
+  askLoreApproval, bareAskKey, grantKey, hasLoreGrant, isPerCallAsk, postVerdictAnswer,
   registerLoreApprovalBridge, resetLoreApprovalBridgeForTest, resolveSessionAsks,
   resolveVerdict, verdictOutcome,
 } from '../src/approvals.ts'
@@ -82,21 +82,16 @@ test('the owning session\'s expired ask answers 409; another session keeps 404',
   assert.equal(postVerdictAnswer('c1', 's2', 'allow_once', null, state).status, 404)
 })
 
-// ─── the parked ask lifecycle (register → list → resolve) ────────────────────
+// ─── the parked ask lifecycle (register → resolve) ───────────────────────────
 
-test('a parked ask lists under its lore session and resolves allowed-once', async () => {
+test('a parked ask resolves allowed-once under its lore session', async () => {
   const bridge = fakeBridge((dshId) => (dshId === 'dsh-1' ? tctx('lore-1') : undefined))
   const parked = bridge.ask('c1', 'dsh-1', 'edit_document')
-  // The park is SYNCHRONOUS — the listing sees it in the same tick.
-  assert.deepEqual(pendingHoldsFor('lore-1'), [
-    { call_id: 'c1', tool_name: 'edit_document', message_id: 'msg-lore-1', per_call: false },
-  ])
   assert.equal(isPerCallAsk('c1'), false)
-  assert.equal(pendingHoldsFor('other').length, 0)
+  // The park is SYNCHRONOUS — a verdict in the same tick finds it.
   assert.equal(resolveVerdict('c1', 'lore-1', 'allow_once', null, null), 200)
   assert.equal(await parked, 'allowed-once')
-  // Resolved: no longer listed, a second verdict is the uniform 404.
-  assert.equal(pendingHoldsFor('lore-1').length, 0)
+  // Resolved: a second verdict is the uniform 404.
   assert.equal(resolveVerdict('c1', 'lore-1', 'allow_once', null, null), 404)
 })
 
@@ -104,7 +99,6 @@ test('a foreign session cannot resolve the ask', async () => {
   const bridge = fakeBridge((dshId) => (dshId === 'dsh-1' ? tctx('lore-1') : undefined))
   const parked = bridge.ask('c2', 'dsh-1', 'edit_document')
   assert.equal(resolveVerdict('c2', 'lore-2', 'allow_once', null, null), 404)
-  assert.equal(pendingHoldsFor('lore-1').length, 1)
   assert.equal(resolveVerdict('c2', 'lore-1', 'allow_once', null, null), 200)
   assert.equal(await parked, 'allowed-once')
 })
@@ -122,8 +116,7 @@ test('a reject carries the user\'s words to the asker as the call\'s own result'
 test('allow_session is refused on a per-call tool', async () => {
   const { ask } = fakeBridge(() => tctx('lore-1'))
   const outcome = ask('c-pc', 'dsh-1', 'http_request')
-  // The card reads the same flag (listing + mint), so it offers no session grant.
-  assert.equal(pendingHoldsFor('lore-1')[0].per_call, true)
+  // The card reads the same flag (the mint), so it offers no session grant.
   assert.equal(isPerCallAsk('c-pc'), true)
   assert.equal(resolveVerdict('c-pc', 'lore-1', 'allow_session', 'http_request', null), 403)
   assert.equal(hasLoreGrant('lore-1', 'http_request'), false)
@@ -143,8 +136,6 @@ test('an ask_every_time call bypasses the session grant and refuses a new one', 
   const exec = { callId: 'c-g2', agent: { session: { id: 'dsh-1' } }, signal: undefined }
   const asked = askLoreApproval(exec, ctx, 'edit_document', 'r', true)
   // Parked despite the grant — the card is shown again, without the chat grant.
-  assert.equal(pendingHoldsFor('lore-1').length, 1)
-  assert.equal(pendingHoldsFor('lore-1')[0].per_call, true)
   assert.equal(isPerCallAsk('c-g2'), true)
   assert.equal(resolveVerdict('c-g2', 'lore-1', 'allow_session', 'edit_document', null), 403)
   assert.equal(resolveVerdict('c-g2', 'lore-1', 'allow_once', null, null), 200)
@@ -157,10 +148,8 @@ test('allow_session mints the grant from the ASK\'s tool, never the body', async
   const parked = bridge.ask('c4', 'dsh-1', 'edit_document')
   // A body claiming a different tool mints nothing (404) — the ask stays parked.
   assert.equal(resolveVerdict('c4', 'lore-1', 'allow_session', 'import_file', null), 404)
-  assert.equal(pendingHoldsFor('lore-1').length, 1)
   // Missing tool_name is 422.
   assert.equal(resolveVerdict('c4', 'lore-1', 'allow_session', null, null), 422)
-  assert.equal(pendingHoldsFor('lore-1').length, 1)
   // The matching tool resolves AND grants follow-up asks without asking.
   assert.equal(resolveVerdict('c4', 'lore-1', 'allow_session', 'edit_document', null), 200)
   assert.equal(await parked, 'allowed-once')
@@ -179,7 +168,6 @@ test('a session resolve rejects every parked ask of that session only', async ()
   const b1 = bridge.ask('c7', 'dsh-b', 'edit_document')
   assert.equal(resolveSessionAsks('lore-a', 'session_closed'), 1)
   assert.equal(await a1, 'rejected')
-  assert.equal(pendingHoldsFor('lore-b').length, 1)
   // b1 is still parked — resolving it now cleans up for the next test.
   assert.equal(resolveVerdict('c7', 'lore-b', 'reject', null, null), 200)
   assert.equal(await b1, 'rejected')
@@ -189,7 +177,7 @@ test('an ask it cannot own passes through (next), never parks', async () => {
   const bridge = fakeBridge(() => undefined)
   const outcome = await bridge.ask('c8', 'dsh-unknown', 'edit_document')
   assert.equal(outcome, 'unavailable')
-  assert.equal(pendingHoldsFor('lore-any').length, 0)
+  assert.equal(resolveVerdict('c8', 'lore-any', 'allow_once', null, null), 404)
 })
 
 test('an unanswered ask self-resolves rejected past the bound and traces its owner', async () => {

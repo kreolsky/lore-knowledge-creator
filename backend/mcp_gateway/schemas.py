@@ -293,6 +293,10 @@ _GATEWAY_OUTPUT_SCHEMAS: dict[str, dict] = {
             "rules": {"type": "string"},
             "persona": {"type": ["string", "null"]},
             "skills_index": {"type": "array"},
+            # The shipped skills this gateway surfaces RAW (name → markdown):
+            # no name/description fields — producing them would parse skill
+            # frontmatter in Lore, and that grammar belongs to the dsh plugin.
+            "shipped_skills": {"type": "object"},
             "capabilities": {"type": "object"},
         },
     },
@@ -364,6 +368,8 @@ _TOOL_LIST_ORDER: tuple[str, ...] = (
     # reads (incl. read_document — addresses the text part but grouped as a read)
     "search_materials", "read_document", "get_project_structure", "get_links",
     "export_subtree_md", "list_document_versions", "diff_document_versions",
+    # property query + task loop — the `tasks` pack (reads then its one write)
+    "find_documents", "next_task", "claim_task",
     # text part
     "create_document", "edit_document", "append_to_document",
     "restore_document_version",

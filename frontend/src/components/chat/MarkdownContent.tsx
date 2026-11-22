@@ -25,6 +25,7 @@ import { renderMermaid, getCachedMermaid } from '../../editor/mermaid-render';
 import { useTranslation } from '../../i18n';
 import { emit } from '../../events';
 import { parseInAppLink } from '../../utils/in-app-link';
+import { useAppStore } from '../../store/app-store';
 
 interface Props {
   content: string;
@@ -146,11 +147,17 @@ function handleInAppLinkClick(e: React.MouseEvent<HTMLDivElement>) {
   e.preventDefault();
   e.stopPropagation();
   const { type, id, fragment } = parsed;
+  // WHY: a reference IS a document row (is_reference=true, one id space), so the agent's
+  // `doc:` spelling of a ref id is a valid pointer — the hover preview resolves it via
+  // GET /documents/{id}. The click routes by the ENTITY, not the link syntax: an id the
+  // project's document tree does not hold opens as a reference (whose GET toasts on a miss),
+  // never as a document open that drops an unknown id silently.
+  const isRef = type === 'ref' || !useAppStore.getState().documents.some(d => d.document_id === id);
   // INVARIANT: a ref link in the answer ALWAYS opens in the center pane, in every
   // layout ('panel' quick preview included), without navigating to the ref's owner document.
   // Why: operator decision — the answer's ref is read in place of the document, not beside it.
-  if (type === 'ref') emit('navigate-to-reference', { referenceId: id, stayInContext: true, inCenter: true, via: 'chat' });
-  else if (type === 'doc') emit('navigate-to-document', { documentId: id, via: 'chat', fragment });
+  if (isRef) emit('navigate-to-reference', { referenceId: id, stayInContext: true, inCenter: true, via: 'chat' });
+  else emit('navigate-to-document', { documentId: id, via: 'chat', fragment });
 }
 
 // ─── wrapper ────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 /**
  * The one answer to "which editor is active": the focused CM6 EditorView, the host (root)
- * view, the focused column's role and content type, the focused collab handle, the
+ * view, the focused column's role, the focused collab handle, the
  * role-keyed column views and the view→entity read — every slot, its listeners and its
  * mutators.
  *
@@ -40,31 +40,14 @@ import { selectionFeedPlugin } from './editor-observer';
 
 export type EditorRole = 'primary' | 'secondary';
 
-// ─── Focused column: role + content type ────────────────────────────────────
+// ─── Focused column: role ───────────────────────────────────────────────────
 // INVARIANT: defaults to 'primary' so single-editor mode (one instance, role='primary')
 // behaves exactly as before — getFocusedRole() is never 'secondary' unless a reference
 // column actually gained focus. Why: snapshot/Cmd+S gating relies on this default.
 let focusedRole: EditorRole = 'primary';
 
-// Parallel content-type slot: whether the focused editor is rendering a reference
-// (vs the document). Role describes column geometry (which slot is mounted) and cannot
-// distinguish split-primary (document) from single-editor-primary-rendering-a-reference.
-// Note parenting must follow the focused editor's CONTENT TYPE, matching the anchor
-// (getActiveHandle), which already tracks the same focused editor.
-// INVARIANT: defaults to false — the document is the default/primary entity, so the
-// default matches getFocusedRole() defaulting to 'primary'. Why: mirrors
-// getFocusedRole()'s default + sole-mutator contract so focus + role stay in sync.
-// Updated ONLY by claimFocus (same sole-mutator contract as role); NOT reset on
-// unmount/entity-switch — relies on the next editor gaining focus, identical to how
-// role behaves (no extra teardown logic).
-let focusedIsReference = false;
-
 export function getFocusedRole(): EditorRole {
   return focusedRole;
-}
-
-export function getFocusedIsReference(): boolean {
-  return focusedIsReference;
 }
 
 // ─── Focused / root view ─────────────────────────────────────────────────────
@@ -198,19 +181,14 @@ export function getActiveTablesJson(): string {
 /** Inputs for a focus claim from an Editor column. */
 export interface FocusClaim {
   role: EditorRole;
-  /** Whether the focused editor is rendering a reference (vs the document). Required so
-   *  every caller is explicit and a future caller cannot silently mis-parent a note by
-   *  omitting it. Note parenting follows content type, matching the anchor (handle). */
-  isReference: boolean;
   view: EditorView;
   handle: EntityYjsState | null;
 }
 
 /** Claim all focus-sensitive slots for the focused column. The focused column's
  *  host is BOTH the toolbar target (focusedView) and the content-capture root (rootView). */
-export function claimFocus({ role, isReference, view, handle }: FocusClaim): void {
+export function claimFocus({ role, view, handle }: FocusClaim): void {
   focusedRole = role;
-  focusedIsReference = isReference;
   setFocusedView(view);
   setRootView(view);
   focusedHandle = handle;

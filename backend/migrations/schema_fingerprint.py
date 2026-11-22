@@ -55,7 +55,7 @@ _FIELD_DEF_RE = re.compile(
 def _field_type(define_stmt: Any) -> str:
     """Extract the TYPE clause from a SurrealDB `DEFINE FIELD …` string.
 
-    INFO FOR TABLE returns field values as full DEFINE statements (SurrealDB v3), e.g.
+    INFO FOR TABLE returns field values as full DEFINE statements (SurrealDB server v4), e.g.
     `DEFINE FIELD content ON documents TYPE none | string PERMISSIONS FULL`. We keep only
     the type expression so a DEFAULT/PERMISSIONS edit does not flip the fingerprint. A
     typeless field (no TYPE clause) reduces to "" — stable and distinct.

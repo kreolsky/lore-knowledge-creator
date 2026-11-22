@@ -38,13 +38,20 @@ async def _bind(client, pid: str, token: str, kind: str = "digest") -> tuple[str
     return resp.json()["config_id"], theme
 
 
-def _assert_one_digest_run(recorder, config_id: str, pid: str) -> None:
+async def _assert_one_digest_run(recorder, config_id: str, pid: str, trigger: str) -> None:
     calls = recorder.of(DIGEST_JOB)
     assert len(calls) == 1, recorder.calls
     assert calls[0].kwargs["config_id"] == config_id
     assert calls[0].kwargs["project_id"] == pid
     assert calls[0].kwargs["job_id"] == f"digest:{config_id}"
     assert recorder.of("extract_task") == []
+    # Every posting carries its run-log id, and the landed row names what posted it.
+    from db import fetch_one
+
+    run = await fetch_one("pipeline_runs", calls[0].kwargs["run_id"])
+    assert (run["kind"], run["trigger"], run["status"], run["config_id"]) == (
+        "digest", trigger, "queued", config_id,
+    )
 
 
 # ─── manual run ──────────────────────────────────────────────────────────────
@@ -60,7 +67,7 @@ async def test_manual_run_by_config_id_enqueues_one_digest(client, collab_projec
     )
 
     assert resp.status_code == 200, resp.text
-    _assert_one_digest_run(enqueue_recorder, config_id, pid)
+    await _assert_one_digest_run(enqueue_recorder, config_id, pid, "manual")
 
 
 @pytest.mark.asyncio
@@ -96,7 +103,7 @@ async def test_transcription_of_an_attached_reference_runs_the_digest(client, co
     from pipeline.digest import triggers
     await triggers.on_transcription_complete(reference_id=ref_id, project_id=pid)
 
-    _assert_one_digest_run(enqueue_recorder, config_id, pid)
+    await _assert_one_digest_run(enqueue_recorder, config_id, pid, "event")
 
 
 # ─── schedules ───────────────────────────────────────────────────────────────
@@ -121,7 +128,7 @@ async def test_scheduled_digest_ticks_into_one_digest_run(client, collab_project
     from jobs import tasks
     await tasks.pipeline_schedule_tick_task({"redis": None})
 
-    _assert_one_digest_run(enqueue_recorder, config_id, pid)
+    await _assert_one_digest_run(enqueue_recorder, config_id, pid, "schedule")
 
 
 @pytest.mark.asyncio

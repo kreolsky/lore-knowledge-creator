@@ -5,7 +5,7 @@ the dsh-driver correlation headers onto it; owned_session_row answers questions
 about the caller's OWN chat session. Service
 code, not a route: routes/tool_api/* and agent_tools/routing both depend on it.
 
-# ARCH: Auth(GAP-5): an agent-capable api_keys row ('agent' in
+# ARCH: an agent-capable api_keys row ('agent' in
 # capabilities; document_id = subtree root, '' = whole project for internal agent-minted
 # keys). The key resolves to the OWNING user; every call runs
 # get_document_access against THAT user — the agent can never exceed the user's rights.
@@ -116,8 +116,15 @@ async def get_agent_context(
     return ctx
 
 
-async def owned_session_row(ctx: dict) -> dict | None:
-    """The caller's OWN live chat session row for ctx["session_id"], or None.
+async def owned_session_row(
+    ctx: dict, session_id: str | None = None,
+) -> dict | None:
+    """The caller's OWN live chat session row, or None.
+
+    `session_id` defaults to ctx["session_id"] — the calling chat. The agent's
+    move_chat passes another of the caller's chat ids instead (an `unindexed`
+    one included: hidden from recall, not from structure); the predicate is the
+    same for any id.
 
     The ONE ownership predicate for every X-Agent-Session-Id consumer on this
     surface (the pin scope, attachment resolution): the row must exist
@@ -127,7 +134,7 @@ async def owned_session_row(ctx: dict) -> dict | None:
     (routes.tool_api.image_gen), which closes the same-account-other-project
     spelling: a pin must never surface in a project the call is not running in.
     """
-    session = await fetch_one("chat_sessions", ctx["session_id"])
+    session = await fetch_one("chat_sessions", session_id or ctx["session_id"])
     if not session:
         return None
     if session.get("user_id") != ctx["user"]["user_id"]:

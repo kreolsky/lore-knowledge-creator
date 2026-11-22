@@ -143,6 +143,15 @@ def is_instance_admin(user: dict) -> bool:
     return user.get("role") == "admin"
 
 
+def is_moderator_of(user: dict, target: dict) -> bool:
+    """Whether `user` is the moderator of `target`'s group: a role='user' row whose moderator_id is `user`."""
+    return (
+        user.get("role") == "moderator"
+        and target.get("role") == "user"
+        and target.get("moderator_id") == user["user_id"]
+    )
+
+
 async def recompute_project_access(project_id: str, user_id: str) -> str | None:
     """Re-resolve a user's effective project access from live rows.
 
@@ -386,14 +395,35 @@ async def resolve_digest_subjects(
     return subjects
 
 
+async def _is_digest_editor(project_id: str, user: dict, created_by: str | None) -> bool:
+    """Whether `user` is the digest binding's creator or a project root."""
+    if created_by and user["user_id"] == created_by:
+        return True
+    return await is_project_root(await fetch_one("projects", project_id), user)
+
+
 async def require_digest_editor(project_id: str, user: dict, created_by: str | None) -> None:
     """403 unless `user` may change, run or schedule a digest binding: its creator or a project root."""
-    if created_by and user["user_id"] == created_by:
-        return
-    # INVARIANT(security): only the digest's author or a project root changes, runs or schedules it; any full member may delete it.
+    # INVARIANT(security): only the digest's author or a project root changes, runs or schedules it.
     # Why: the binding reads its author's chats, so whoever steers or launches it decides which of them land in a shared document.
-    if not await is_project_root(await fetch_one("projects", project_id), user):
+    if not await _is_digest_editor(project_id, user, created_by):
         raise HTTPException(status_code=403, detail="Only the digest's author or a project root may change or run it")
+
+
+async def require_digest_deleter(project_id: str, user: dict, created_by: str | None) -> None:
+    """403 unless `user` may delete a digest binding: its creator, a project root, an
+    instance admin, or the moderator of the creator's group. Project access is the
+    caller's separate check."""
+    if is_instance_admin(user) or await _is_digest_editor(project_id, user, created_by):
+        return
+    creator = await fetch_one("users", created_by) if created_by else None
+    # INVARIANT(security): deleting a digest binding requires the same rights as changing it (the creator or a project root), OR an instance admin, OR a moderator whose group contains the binding's creator (creator row: role='user' and moderator_id == the moderator).
+    # Why: a full member could silently stop someone else's scheduled report.
+    if not (creator and is_moderator_of(user, creator)):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the digest's author, a project root, an admin or the author's moderator may delete it",
+        )
 
 
 # ─── Ownership gate (manages membership) ────────────────────────────────────

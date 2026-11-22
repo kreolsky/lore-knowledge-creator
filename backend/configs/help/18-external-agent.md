@@ -81,4 +81,4 @@ New notes and references the agent adds can be marked unread for you (see "Arriv
 ## Limits and errors
 
 - 30 writes per minute per key; 240 requests per minute per key; 600 requests per minute from one address. Over the limit the answer is 429 — wait a minute.
-- An error comes back as `{"error", "status_code", "next_action"}`: 401 — the key is invalid or deleted; 403 — no rights, outside the scope, or a write on a read-only key; 404 — no such document; 409 — the text changed since it was read, re-read it; 422 — an edit tried to replace almost the whole document, split it into small edits.
+- An error comes back as `{"error", "status_code", "next_action"}`: 401 — the key is invalid or deleted; 403 — no rights, outside the scope, or a write on a read-only key; 404 — no such document; 409 — the text changed since it was read, re-read it; 422 — an argument value is invalid, fix it and retry; when an edit tried to replace almost the whole document, split it into small edits instead.

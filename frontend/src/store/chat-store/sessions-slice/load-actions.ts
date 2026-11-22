@@ -187,7 +187,7 @@ export function createLoadActions(set: Set, get: Get): LoadActions {
                 // This branch skips loadMessages, so it runs loadMessages's
                 // two load steps itself (see the INVARIANT in session-rows.ts).
                 seatSessionRows(get, set, resolution.sessionId, activeMessages.messages, activeMessages);
-                afterSessionRowsCommitted(get, resolution.sessionId, restored.length);
+                afterSessionRowsCommitted(resolution.sessionId, restored.length);
               } else {
                 get().setActiveSession(resolution.sessionId);
               }

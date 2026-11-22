@@ -695,7 +695,6 @@ export const ru: Record<TranslationKey, string> = {
   verdictAnchorFact: 'Факт',
   verdictAnchorDocs: 'Документы',
   verdictAnchorClear: 'Привязка к документам снимается — факт снова следует за своим источником',
-  verdictListFailed: 'Не удалось загрузить ожидающие решения',
   agentModeRequiresAccess: 'Режим агента требует полного доступа к проекту',
   agentModeStartFailed: 'Не удалось запустить режим агента',
   chatAgentUnavailable: 'Агент сейчас недоступен — попробуйте повторить чуть позже.',

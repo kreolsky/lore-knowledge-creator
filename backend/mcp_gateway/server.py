@@ -284,7 +284,7 @@ _NEXT_ACTION_BY_STATUS: dict[int, str] = {
     403: "stop",              # access denied / read-only key — do not retry
     404: "verify the id",       # not found — re-reading the same id can't succeed
     409: "re-read then retry",  # stale match — re-read the current text
-    422: "split into smaller edits",  # full_rewrite — old_string too large; break it up
+    422: "fix the arguments and retry",  # invalid value; full_rewrite pins its own advice
 
     429: "back off ~60s",     # rate limit — wait then retry
 }
@@ -296,8 +296,8 @@ def _err(exc) -> types.CallToolResult:
     automatically because the dispatch path reuses the same executors as the
     Tool-API. `next_action` (ergonomics #4) tells a weak model what to do next;
     an executor can pin it on the raised exception when the status-keyed map
-    mislabels the refusal — 422 serves both the full_rewrite split advice and
-    argument-fix refusals (include_outline's start_id)."""
+    is too generic for the refusal — full_rewrite pins its split advice on a 422
+    whose default is the argument fix."""
     detail = exc.detail if hasattr(exc, "detail") else str(exc)
     status_code = exc.status_code if hasattr(exc, "status_code") else 500
     # FastAPI detail can be a dict/list — keep it structured under `error`.

@@ -15,6 +15,7 @@ import {
   isFeedFrame, feedFrame, beginTurn, endTurn, adoptStreamBaseline,
 } from './conversation-feed';
 import { applyInboxFrame, applyRunningStatus } from './inbox-slice';
+import { applySessionParentFrame } from './session-parent';
 import { resolveActivePath } from './tree';
 
 /** A wire field is usable as display text only when it is a non-empty string —
@@ -518,6 +519,12 @@ export function dispatchChatFrame(
   // working chats); the queue and the status below stay the ACTIVE chat's —
   // folded whether or not a turn is registered (a splice lands between turns too).
   if (raw?.type === 'dsh_status') applyRunningStatus(get, set, sessionId, frame);
+  // ARCH: a reparent is a ROW fact of the chat list, not of a turn — the server
+  // pushes `session_parent` for ANY of the user's chats (the agent's move_chat,
+  // the header picker in another tab), so it folds HERE, ahead of the no-turn
+  // drop below: an arm in a turn's row-work table would miss a moved chat that
+  // is not running in THIS tab. LIVE-only — a reload reads the row.
+  if (raw?.type === 'session_parent') { applySessionParentFrame(set, frame); return; }
   if (sessionId === get().activeSessionId) applyInboxFrame(set, frame);
   let turn = harnessTurns.get(sessionId);
   // WHY chat_id: every chat on one driver session (a compaction source and

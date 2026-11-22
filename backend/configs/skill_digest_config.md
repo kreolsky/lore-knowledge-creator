@@ -8,8 +8,9 @@ tools: []
 
 A digest is a pipeline that writes ONE new report document per run: what is new on a
 theme since the previous report, and what changed against it. You author and fix the
-config document with your document tools; the binding to a "theme document" is made in
-the interface (you have no tool for it), so walk the user through that step.
+config document with your document tools; the binding to a "theme document" is made
+with the `pipelines` skill (`bind_pipeline` — it also schedules the digest), so load
+it when the user wants the digest bound, scheduled or run.
 
 ## The config document
 

@@ -16,7 +16,6 @@ import { IconButton, FieldTextarea } from '../ui';
 import { MarkdownContent } from './MarkdownContent';
 import { hardLineBreaks } from './hard-line-breaks';
 import { ForkIndicator } from './ForkIndicator';
-import { VerdictCard } from './VerdictCard';
 import { ChatMessage, HaltReason } from '../../types';
 import { useTranslation } from '../../i18n';
 import { formatDate } from '../../utils/format';
@@ -380,16 +379,6 @@ export const MessageBubble = memo(function MessageBubble({
             )}
             {isStreaming && isAwaitingModel(message) && (
               <div className="text-text-dim text-xs animate-pulse">{t('thinking')}</div>
-            )}
-            {/* The verdict decision card: the lore/verdict-ask NODE renders it
-                on the node timeline (the card stays once asked — see
-                turn-nodes.tsx). This message-field render is the frameless
-                fallback (GET /chat/verdicts restored holds on a row the log
-                has no turn for). */}
-            {!isUser && nodes.length === 0 && (message.pending_verdicts ?? []).length > 0 && (
-              (message.pending_verdicts ?? []).map(p => (
-                <div key={p.call_id} className="my-1"><VerdictCard pending={p} /></div>
-              ))
             )}
             {message.unsaved && !isStreaming && (
               <div className="flex items-center gap-1 text-yellow-500 text-xs mt-1" title={t('chatSaveError')}>

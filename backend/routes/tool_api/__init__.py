@@ -37,6 +37,8 @@ import routes.tool_api.imports  # noqa: F401
 # bindings are registered in agent_tools.entries (imported via the agent_tools
 # package), independent of module import order.
 import routes.tool_api.memory  # noqa: F401
+import routes.tool_api.pipelines  # noqa: F401
+import routes.tool_api.properties  # noqa: F401
 import routes.tool_api.reads  # noqa: F401
 import routes.tool_api.sandbox  # noqa: F401
 import routes.tool_api.secrets  # noqa: F401

@@ -253,11 +253,18 @@ _SCENARIOS = [
 @pytest.mark.parametrize("err_setup", _SCENARIOS, indirect=True)
 @pytest.mark.asyncio
 async def test_extract_task_creates_error_note(err_setup):
-    """A broken pipeline persists exactly one error note with the expected text."""
+    """A broken pipeline persists exactly one error note with the expected text,
+    and the run row carries the failure beside it (the worker's terminal mark)."""
+    from pipeline.core import runs as run_log
+
+    from db import fetch_one
     from jobs.tasks import extract_task
 
     s = err_setup
     scenario = s["scenario"]
+    run_id = run_log.new_run_id()
+    await run_log.record_queued(run_id=run_id, project_id=s["project_id"], kind="extractor",
+                                trigger="manual", reference_id=s["ref_id"])
 
     ctx = {"job_try": 4, "max_tries": 4}
     patcher = _build_llm_patch(scenario["llm_patch"])
@@ -273,11 +280,14 @@ async def test_extract_task_creates_error_note(err_setup):
                 config_doc_id=s["config_doc_id"],
                 target_doc_id=s["target_doc_id"],
                 project_id=s["project_id"],
+                run_id=run_id,
             )
     finally:
         if patcher is not None:
             patcher.stop()
 
+    run = await fetch_one("pipeline_runs", run_id)
+    assert run["status"] == "error" and run["error"] and run["finished_at"]
     notes = await _read_notes(s["source_doc_id"])
     assert len(notes) == 1, f"expected exactly one error note, got {len(notes)}: {notes!r}"
     body = notes[0]

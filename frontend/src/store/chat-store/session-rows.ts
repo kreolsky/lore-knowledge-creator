@@ -27,10 +27,7 @@ export function seatSessionRows(
 }
 
 /** After the rows are the active session's messages: the history-size
- * tripwire and the pending verdicts — a still-held call has no live card
- * after a reload (the driver parks on the held POST), so the decision store
- * restores the card onto its assistant message. */
-export function afterSessionRowsCommitted(get: Get, sessionId: string, count: number): void {
+ * tripwire. */
+export function afterSessionRowsCommitted(sessionId: string, count: number): void {
   recordHistoryLoad(sessionId, count);
-  void get().fetchPendingVerdicts(sessionId);
 }

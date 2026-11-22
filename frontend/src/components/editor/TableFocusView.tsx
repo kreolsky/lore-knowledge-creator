@@ -98,7 +98,6 @@ export function TableFocusView({ table, hideBanner = false }: TableFocusViewProp
       focus: (_e, view) => {
         claimFocus({
           role: 'primary',
-          isReference: false,
           view,
           handle: docHandle(),
         });
@@ -130,7 +129,6 @@ export function TableFocusView({ table, hideBanner = false }: TableFocusViewProp
     if (primary) {
       claimFocus({
         role: 'primary',
-        isReference: false,
         view: primary,
         handle: docHandle(),
       });
@@ -161,7 +159,6 @@ export function TableFocusView({ table, hideBanner = false }: TableFocusViewProp
     viewRef.current = view;
     claimFocus({
       role: 'primary',
-      isReference: false,
       view,
       handle: docHandle(),
     });

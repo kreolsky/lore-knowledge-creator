@@ -128,46 +128,6 @@ describe('unified MessageBubble — user attachment image lightbox (plan user-at
   });
 });
 
-describe('unified MessageBubble — verdict card on a frameless row (render gate)', () => {
-  // A row the driver's log has no turn for carries no nodes, so the held call
-  // renders from the row's `pending_verdicts` (restored by GET /chat/verdicts).
-  // Store-side recording (awaiting_verdict / fetchPendingVerdicts) is bound in
-  // streaming.tool-prepare.test.ts and agent-slice.test.ts; these bind the
-  // RENDER gate.
-  const PENDING = { call_id: 'c1', tool_name: 'create_document', message_id: 'm1' };
-
-  function renderAgentMsg(overrides: Partial<ChatMessage> = {}) {
-    act(() => {
-      root.render(createElement(MessageBubble, {
-        variant: 'ai',
-        isOwn: false,
-        isStreaming: true,
-        message: makeMsg({ role: 'assistant', content: '', ...overrides }),
-      }));
-    });
-  }
-
-  /** One VerdictCard renders exactly one verdictBody line. */
-  function verdictCardCount(): number {
-    return (container.textContent ?? '').match(/verdictBody/g)?.length ?? 0;
-  }
-
-  it('renders one card per held call', () => {
-    renderAgentMsg({
-      pending_verdicts: [
-        PENDING,
-        { call_id: 'c2', tool_name: 'edit_document', message_id: 'm1' },
-      ],
-    });
-    expect(verdictCardCount()).toBe(2);
-  });
-
-  it('renders no verdict card when there are no holds', () => {
-    renderAgentMsg({});
-    expect(verdictCardCount()).toBe(0);
-  });
-});
-
 describe('unified MessageBubble — the verdict-ask node while the call is still held', () => {
   // dsh appends `tool/call` BEFORE it asks for approval, so by the time the
   // lore/verdict-ask node arrives the call's own tool-call node already exists

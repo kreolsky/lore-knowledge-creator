@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 TELEMETRY_RETENTION_DAYS = 90
 AGENT_TOOL_RETENTION_DAYS = 180
 TOKEN_USAGE_RETENTION_DAYS = 365
+PIPELINE_RUNS_RETENTION_DAYS = 90
 
 
 async def telemetry_retention_task(ctx) -> None:
@@ -43,6 +44,16 @@ async def telemetry_retention_task(ctx) -> None:
     # Why: operator ruling — one year of spend history.
     await db.query(
         f"DELETE token_usage WHERE at < time::now() - {TOKEN_USAGE_RETENTION_DAYS}d",
+        site="telemetry_retention",
+    )
+    # INVARIANT(data-loss): pipeline_runs rows are purged after 90 days.
+    # Why: operator ruling — the run log is
+    # operational history ("what did this binding do lately"), not a record of
+    # knowledge; 90 days matches telemetry_event because a run's debugging value
+    # (correlating a bad extraction with its run) decays on the same clock. The
+    # OUTPUT documents are the durable artifact and are not touched.
+    await db.query(
+        f"DELETE pipeline_runs WHERE queued_at < time::now() - {PIPELINE_RUNS_RETENTION_DAYS}d",
         site="telemetry_retention",
     )
     logger.info(

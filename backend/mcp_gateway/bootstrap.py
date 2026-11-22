@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import logging
 
+from agent_skills import shipped_skill_docs
+
 from db import fetch_one
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,14 @@ PROTOCOL_VERSION = 2
 # truncation yet) — a project with a huge rules subtree would inflate every init
 # response; the warning surfaces it for operator review.
 _RULES_SOFT_CAP_BYTES = 32_768
+
+#: The shipped skills `init` surfaces RAW over MCP (name → raw markdown, read
+#: through agent_skills.shipped_skill_docs). A CODE constant, not a frontmatter
+#: flag: producing name/description fields would parse skill frontmatter in
+#: Lore, and that grammar belongs to the dsh plugin (agent_skills.py header) —
+#: the raw text carries both, so the list of WHAT to surface is the only
+#: decision left, and it rides the code beside the reader.
+MCP_SHIPPED_SKILLS = ("tasks",)
 
 # ─── Immutable bootstrap tier (code — the external agent cannot edit this) ────
 
@@ -100,6 +110,9 @@ CONFIG (read on demand)
 - The Rules subtree is inlined below in this package. Skills are given as an
   id+title index; read a node's content with read_document(document_id) when
   you need it. Do not assume content you have not read.
+- A project using tasks (documents whose YAML header has `type: task`): read
+  `shipped_skills.tasks` from this package BEFORE next_task / claim_task, and
+  the schema document (next_task's schema_id) for the project's own rules.
 - Ground every edit in real document content: read_document before edit_document
   so old_string is verbatim; never fabricate ids or content.
 
@@ -134,7 +147,8 @@ ERRORS
   404 not found (uniform — also covers cross-project ids) — verify the id.
   409 stale match — old_string/old_value no longer matches; re-read the
       document and retry with the current verbatim text.
-  422 full_rewrite — old_string covers ~the whole document; do NOT resend it,
+  422 an argument value is invalid — fix it per the error and retry. Exception:
+      full_rewrite (old_string covers ~the whole document) — do NOT resend it,
       split the change into a sequence of small pointwise edit_document calls.
   429 rate limit — back off ~60 s, then retry.
 """.rstrip()
@@ -247,6 +261,19 @@ async def build_init_package(ctx: dict) -> dict:
                 entries.append({"id": c.get("id"), "title": c.get("title") or ""})
         return entries
 
+    def _shipped_skills() -> dict[str, str]:
+        """The RAW markdown of the MCP-shipped skills, keyed by name — read
+        through agent_skills.shipped_skill_docs (matched by its stable
+        `shipped:skill_<name>` location marker), never parsed here. A name
+        whose file is absent (a half deploy) is simply not served: init must
+        not 500 over content the code constant outlived."""
+        by_location = {d["location"]: d["content"] for d in shipped_skill_docs()}
+        return {
+            name: by_location[f"shipped:skill_{name}"]
+            for name in MCP_SHIPPED_SKILLS
+            if f"shipped:skill_{name}" in by_location
+        }
+
     project = await fetch_one("projects", project_id)
     # Binary key model: reinterpret api_keys.auto_apply
     # — True = read-write (every MCP write applies directly), anything else (False,
@@ -273,6 +300,7 @@ async def build_init_package(ctx: dict) -> dict:
         "rules": rules_text,
         "persona": None,  # v1: a session concept, omitted.
         "skills_index": _index("skills_folder", "skills_children"),
+        "shipped_skills": _shipped_skills(),
         "capabilities": {
             # writable: True = read-write key, False = read-only (was apply_mode).
             "writable": writable,
@@ -293,4 +321,4 @@ async def build_init_package(ctx: dict) -> dict:
     }
 
 
-__all__ = ["PROTOCOL_VERSION", "build_init_package"]
+__all__ = ["MCP_SHIPPED_SKILLS", "PROTOCOL_VERSION", "build_init_package"]

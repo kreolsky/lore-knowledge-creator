@@ -375,12 +375,11 @@ export function inverseUIMode(mode: ChatUIMode): { agentAuto: boolean } {
 
 // One still-held mutating call (mid-turn approval): the backend is parking the
 // Tool-API request until the user decides (allow once / allow for the session /
-// reject). The `lore/verdict-ask` mint creates these live; GET /chat/verdicts
-// restores them after reload. The resolved call's tool result removes the entry.
+// reject). The turn's `lore/verdict-ask` node renders it, live and after a
+// reload alike; the resolved call's tool result replaces the card.
 export interface PendingVerdict {
   call_id: string;
   tool_name: string;
-  message_id: string;
   /** Approved one call at a time (a per-call tool or a write to the agent's
    * configuration): no "allow for this chat". */
   per_call?: boolean;
@@ -564,10 +563,6 @@ export interface ChatMessage {
   // WHY: this field is snake_case because it IS the wire name — the chat frame
   // and the driver's replayed frames carry it verbatim, and a camelCase name
   // here would type-check fine while every tool chip silently rendered null
-  // Still-held mutating calls of this message (mid-turn approval). Client-side
-  // only — restored from GET /chat/verdicts after reload, appended by the
-  // `lore/verdict-ask` mint while live.
-  pending_verdicts?: PendingVerdict[];
   // ARCH: the abnormal-end halt
   // card, its own column (NOT a `segments` member anymore). The reason is the
   // backend's ABNORMAL-end vocabulary (`error`, `stream_failed`,

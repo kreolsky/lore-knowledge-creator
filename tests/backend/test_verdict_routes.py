@@ -1,8 +1,7 @@
-"""Tests for the verdict REST surface — list pending asks + publish a verdict.
+"""Tests for the verdict REST surface — publish a verdict.
 
 # SYSTEM: chat-verdicts — the UI-facing half of mid-turn approval. The ASK is
-driver-owned (dsh's user-approval service parks it — plan
-collapse-agent-stack-onto-dsh-vocabulary step 7), so this surface RELAYS the
+driver-owned (dsh's user-approval service parks it), so this surface RELAYS the
 user's answer across the driver seam after its own session-access check.
 
 The stub driver below speaks the driver's documented /approvals contract
@@ -12,7 +11,7 @@ the ask's record) — the exact wire the real plugin's endpoints implement.
 
 import asyncio
 import json
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 import pytest
 import pytest_asyncio
@@ -37,11 +36,10 @@ class StubDriver:
         self.port = None
         self._task = None
 
-    def park(self, call_id: str, session_id: str, tool_name: str, message_id: str = ""):
+    def park(self, call_id: str, session_id: str, tool_name: str):
         self.parked[call_id] = {
             "loreSessionId": session_id,
             "toolName": tool_name,
-            "messageId": message_id,
         }
 
     async def start(self):
@@ -101,15 +99,6 @@ class StubDriver:
         if headers.get("x-driver-secret") != self.SECRET:
             return 401, {"detail": "unauthorized"}
         parsed = urlparse(path)
-        if method == "GET" and parsed.path == "/approvals":
-            session_id = (parse_qs(parsed.query).get("session_id") or [""])[0]
-            holds = [
-                {"call_id": cid, "tool_name": ask["toolName"],
-                 "message_id": ask["messageId"]}
-                for cid, ask in self.parked.items()
-                if ask["loreSessionId"] == session_id
-            ]
-            return 200, {"holds": holds}
         if method == "POST" and parsed.path == "/approvals":
             data = json.loads(body) if body else {}
             return self._resolve(data)
@@ -188,44 +177,6 @@ async def _setup(client, admin_user, project_with_doc):
     doc_id = resp.json()["document_id"]
     session_id = await _make_session(client, admin_token, pid, doc_id)
     return admin_token, pid, doc_id, session_id
-
-
-class TestListVerdicts:
-    @pytest.mark.asyncio
-    async def test_lists_the_drivers_parked_asks_of_the_session(
-        self, stub_driver, client, admin_user, project_with_doc,
-    ):
-        token, pid, doc_id, session_id = await _setup(
-            client, admin_user, project_with_doc,
-        )
-        stub_driver.park("verdict-list-1", session_id, "edit_document", "msg-list-1")
-        resp = await client.get(
-            f"/api/chat/verdicts?session_id={session_id}",
-            cookies={"lore_session": token},
-        )
-        assert resp.status_code == 200, resp.text
-        holds = resp.json()["holds"]
-        assert {
-            "call_id": "verdict-list-1",
-            "tool_name": "edit_document",
-            "message_id": "msg-list-1",
-        } in holds
-
-    @pytest.mark.asyncio
-    async def test_another_users_session_is_not_listable(
-        self, stub_driver, client, admin_user, regular_user, project_with_doc,
-    ):
-        _, token, _, session_id = await _setup(client, admin_user, project_with_doc)
-        _, other_token = regular_user
-        resp = await client.get(
-            f"/api/chat/verdicts?session_id={session_id}",
-            cookies={"lore_session": other_token},
-        )
-        assert resp.status_code in (403, 404)
-        # The RBAC gate fires BEFORE the relay: the driver saw nothing.
-        assert not any(
-            r["method"] == "GET" for r in stub_driver.requests
-        ), "a foreign list must never reach the driver"
 
 
 class TestPostVerdict:

@@ -6,7 +6,7 @@ create actions live in composed helper factories
 are mixed in via spread. The slice factory + the smaller actions
 (openChatWithReference, setActiveSession, updateSession, deleteSession) live here.
 
-Split from the flat sessions-slice.ts (plan: p1-debt-paydown, P1-4) following the
+Split from the flat sessions-slice.ts following the
 slice rule: one Zustand slice > ~200 LOC → <slice>/ folder; flat <slice>.ts only
 while small. Re-exports createSessionsSlice + clearSessionsCache so the
 chat-store.ts aggregator + tests keep their `./sessions-slice` import path. */
@@ -18,6 +18,7 @@ import { emit } from '../../../events';
 import { t } from '../../../i18n';
 import { markChatScopeLoaded } from '../../../chat/scope-tracker';
 import type { ChatState, Set, Get } from '../types';
+import { applySessionReparent } from '../session-parent';
 import { registeredTurnSlot } from '../streaming';
 import { threadRootOf } from '../branches-slice';
 import {
@@ -158,34 +159,15 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
     async updateSession(sessionId: string, data: { title?: string; model?: string; system_prompt_id?: string | null; mode?: string; agent_auto?: boolean; reasoning_effort?: string | null; document_id?: string | null }) {
       const p = apiClient.patch(`/chat/sessions/${sessionId}`, data)
         .then((updated: ChatSession) => {
-          // ARCH: a reparent is written by the server to EVERY row of the
-          // conversation (update.py _propagate_parent), so the store follows
-          // for the whole thread — a branch row left on the old parent splits
-          // the thread between two documents until the next list reload.
-          const reparent = data.document_id !== undefined;
-          const rootId = reparent ? threadRootOf(get, sessionId) : null;
-          const threadIds = reparent && rootId !== null
-            ? new Set(get().sessions
+          // A reparent reaches the WHOLE thread — the shared reconcile
+          // (session-parent.ts) copies the new parent onto every sibling row.
+          const rootId = data.document_id !== undefined ? threadRootOf(get, sessionId) : null;
+          const threadIds = rootId === null
+            ? new Set<string>()
+            : new Set(get().sessions
                 .filter(ss => threadRootOf(get, ss.session_id) === rootId)
-                .map(ss => ss.session_id))
-            : null;
-          set(s => ({
-            // WHY: update_session returns
-            // last_message_at=null (it doesn't carry the last-activity map), so
-            // preserve the in-memory value rather than discarding it — otherwise
-            // a settings edit (which bumps updated_at server-side) would revert
-            // the card to the patch time and re-sort the chat to the top by patch
-            // time until the next list_sessions reload.
-            sessions: s.sessions.map(ss => {
-              if (ss.session_id === sessionId) {
-                return { ...updated, last_message_at: updated.last_message_at ?? ss.last_message_at };
-              }
-              if (threadIds?.has(ss.session_id)) {
-                return { ...ss, document_id: updated.document_id ?? null };
-              }
-              return ss;
-            }),
-          }));
+                .map(ss => ss.session_id));
+          applySessionReparent(set, updated, threadIds);
         })
         .catch(() => {
           useAppStore.getState().showToast('Failed to update session', 'error');

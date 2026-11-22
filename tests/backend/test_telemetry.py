@@ -128,16 +128,27 @@ def test_clamp_detail_drops_only_large_values_keeps_short_ones():
 async def test_retention_deletes_old_rows(test_db):
     from jobs.tasks import (
         AGENT_TOOL_RETENTION_DAYS,
+        PIPELINE_RUNS_RETENTION_DAYS,
         TELEMETRY_RETENTION_DAYS,
         telemetry_retention_task,
     )
     await test_db.query("DELETE telemetry_event WHERE user_id = 'u-ret'")
+    await test_db.query("DELETE pipeline_runs WHERE project_id = 'p-ret'")
     # Old row (beyond the retention window) + fresh row. The age derives from the
     # constant so this test stays valid if the window changes (it did: 30d → 90d).
     # agent_tool keeps the longer window: a row past the general window survives,
     # a row past its own window does not.
     old_age = TELEMETRY_RETENTION_DAYS + 10
     tool_old_age = AGENT_TOOL_RETENTION_DAYS + 10
+    # The run log purges on its own clock; the output documents it points at
+    # are the durable artifact and are not the retention task's to touch.
+    await test_db.query(
+        "INSERT INTO pipeline_runs "
+        f"[{{ project_id: 'p-ret', config_id: 'run-old', kind: 'digest', "
+        f"   trigger: 'schedule', status: 'ok', queued_at: time::now() - {PIPELINE_RUNS_RETENTION_DAYS + 10}d }}, "
+        f" {{ project_id: 'p-ret', config_id: 'run-new', kind: 'digest', "
+        f"   trigger: 'schedule', status: 'ok', queued_at: time::now() }}]"
+    )
     await test_db.query(
         "INSERT INTO telemetry_event "
         f"[{{ category: 'perf', kind: 'rtt', user_id: 'u-ret', detail: {{}}, "
@@ -162,6 +173,8 @@ async def test_retention_deletes_old_rows(test_db):
         "SELECT category FROM telemetry_event WHERE user_id = 'u-ret' ORDER BY category"
     )
     assert [r["category"] for r in kept] == ["access", "agent_tool", "perf"]
+    runs = await test_db.query("SELECT config_id FROM pipeline_runs WHERE project_id = 'p-ret'")
+    assert [r["config_id"] for r in runs] == ["run-new"]
 
 
 # TEST-WHY: refused-principal — an `access` open for a document the caller cannot read must not write a durable count.

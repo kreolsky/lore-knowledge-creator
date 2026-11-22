@@ -55,8 +55,6 @@ export interface EditorExtensionDeps {
   snapshotPreviewRef: { current: unknown };
   /** Live column role for focus routing. */
   roleRef: { current: EditorRole };
-  /** Live is-reference flag for focus routing. */
-  isReferenceRef: { current: boolean };
   /** Live collab connection handle for focus routing. */
   collabConnectionRef: { current: FocusClaim['handle'] };
 }
@@ -158,7 +156,6 @@ export function buildEditorExtensions(deps: EditorExtensionDeps): Extension[] {
       focus: (_e, view) => {
         claimFocus({
           role: deps.roleRef.current,
-          isReference: deps.isReferenceRef.current,
           view,
           handle: deps.collabConnectionRef.current,
         });
