@@ -1,4 +1,4 @@
-"""Project-scoped pipeline schedules — the ONE cron tick (S3).
+"""Project-scoped pipeline schedules — the ONE cron tick.
 
 # see SYSTEM: jobs, SYSTEM: extractor (the scheduled entry).
 """
@@ -12,6 +12,9 @@ from tiers import user_has_tier
 from jobs import pool as jobs_pool
 
 logger = logging.getLogger(__name__)
+
+# The schedule's last_status when its run was skipped over a trashed source document.
+SOURCE_DELETED = "source_deleted"
 
 _DUE_PREDICATE = (
     "enabled = true AND deleted_at IS NONE "
@@ -99,6 +102,8 @@ async def _dispatch_claimed_schedule(db, schedule_id: str, row: dict, claimed_at
         if not isinstance(params, dict):
             raise ValueError("params_json is not a JSON object")
         await _rebind_scoped_params(db, spec, params, str(row.get("project_id") or ""))
+        if await _skip_trashed_source(db, schedule_id, spec, row, params):
+            return
 
         await _post_schedule_job(
             spec, row, params,
@@ -120,6 +125,29 @@ async def _dispatch_claimed_schedule(db, schedule_id: str, row: dict, claimed_at
             "last_status = 'error', last_error = $err, updated_at = time::now()",
             {"id": schedule_id, "err": str(e)[:500]},
         )
+
+
+async def _skip_trashed_source(db, schedule_id: str, spec, row: dict, params: dict) -> bool:
+    """Skip this claim when a document the run reads is in the trash: no job, the row
+    records last_status 'source_deleted', and the first tick after a restore runs again.
+
+    # WHY the note fires only when the PRE-claim status (from the tick's SELECT — the
+    # claim already overwrote it with 'running') is not yet 'source_deleted': one note
+    # per orphaning, not one per interval.
+    # Why skip and not fail or disable: operator ruling — a trashed source is a paused
+    # schedule, and nothing is disabled or cascaded, so a restore resumes it with its config.
+    """
+    if spec.trashed_source is None:
+        return False
+    notify = row.get("last_status") != SOURCE_DELETED
+    if not await spec.trashed_source(params, notify):
+        return False
+    await db.query(
+        "UPDATE type::record('pipeline_schedules', $id) SET "
+        "last_status = $status, last_error = NONE, updated_at = time::now()",
+        {"id": schedule_id, "status": SOURCE_DELETED},
+    )
+    return True
 
 
 async def _rebind_scoped_params(db, spec, params: dict, project_id: str) -> None:
@@ -170,7 +198,7 @@ async def pipeline_schedule_tick_task(ctx) -> None:
     db = await get_db()
     # Bounded per tick (memory discipline); the rest is picked up next tick.
     rows = await db.query(
-        "SELECT id, created_at, project_id, pipeline, params_json, created_by "
+        "SELECT id, created_at, project_id, pipeline, params_json, created_by, last_status "
         f"FROM pipeline_schedules WHERE {_DUE_PREDICATE} "
         "ORDER BY created_at LIMIT 50",
     )

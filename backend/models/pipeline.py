@@ -76,6 +76,8 @@ class ToolPipelineRuns(BaseModel):
 
     config_id: str | None = Field(default=None, min_length=1)
     limit: int = Field(default=20, ge=1, le=100)
+    # WHY: 240 stays inside TURN_PROGRESS_GRACE_S (300) — the wait emits nothing.
+    wait_s: int = Field(default=0, ge=0, le=240)
 
 
 __all__ = [

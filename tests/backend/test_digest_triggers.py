@@ -131,6 +131,47 @@ async def test_scheduled_digest_ticks_into_one_digest_run(client, collab_project
     await _assert_one_digest_run(enqueue_recorder, config_id, pid, "schedule")
 
 
+async def _notes_on(doc_id: str) -> int:
+    from db import get_db
+    rows = await (await get_db()).query(
+        "SELECT id FROM chat_sessions WHERE document_id = $d AND is_note = true", {"d": doc_id},
+    )
+    return len(rows or [])
+
+
+# TEST-WHY: cross-process-contract — the worker tick reads the schedule row's pre-claim last_status and the trashed documents' rows in SurrealDB; skip, once-per-orphaning note and resume-on-restore are that contract.
+@pytest.mark.asyncio
+async def test_tick_skips_a_trashed_theme_with_one_note_and_resumes_on_restore(
+    client, collab_project, enqueue_recorder,
+):
+    pid, _doc_id, admin_token, _user_token, _admin_uid, _user_uid = collab_project
+    config_id, theme = await _bind(client, pid, admin_token)
+    resp = await _schedule(client, admin_token, pid, config_id)
+    assert resp.status_code == 200, resp.text
+    schedule_id = resp.json()["schedule_id"]
+    from db import fetch_one, get_db, soft_delete
+    from jobs import tasks
+    db = await get_db()
+    target = (await fetch_one("agent_configs", config_id))["target_doc_id"]
+    await soft_delete("documents", theme)
+
+    async def tick() -> dict:
+        await db.query("UPDATE type::record('pipeline_schedules', $id) SET last_run_at = NONE",
+                       {"id": schedule_id})
+        await tasks.pipeline_schedule_tick_task({"redis": None})
+        return await fetch_one("pipeline_schedules", schedule_id)
+
+    assert (await tick())["last_status"] == "source_deleted"
+    assert _pipeline_calls(enqueue_recorder) == []
+    assert await _notes_on(target) == 1
+    assert (await tick())["last_status"] == "source_deleted"
+    assert await _notes_on(target) == 1
+
+    await db.query("UPDATE type::record('documents', $id) SET deleted_at = NONE", {"id": theme})
+    assert (await tick())["last_status"] == "ok"
+    await _assert_one_digest_run(enqueue_recorder, config_id, pid, "schedule")
+
+
 @pytest.mark.asyncio
 async def test_schedule_for_a_binding_of_another_project_is_refused(
     client, collab_project, enqueue_recorder,

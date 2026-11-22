@@ -7,7 +7,9 @@ skill-disabled gate, the key-scope wall on every doc id, and delegation to the
 ONE service (pipeline/core/bindings.py) the editor's REST routes also call —
 no business logic here.
 """
+import asyncio
 import json
+import time
 
 from agent.context import get_agent_context
 from fastapi import Depends, HTTPException
@@ -32,7 +34,13 @@ from routes.tool_api._common import (
     _resolve_apply_or_force,
 )
 from routes.tool_api_telemetry import track_agent_tool
-from scope import in_subtree, require_doc_in_scope
+from scope import (
+    doc_row_with_trash,
+    in_subtree,
+    out_of_scope_detail,
+    require_doc_in_scope,
+    trashed_doc_in_subtree,
+)
 
 
 async def _scope_check(ctx: dict, doc_id: str) -> None:
@@ -69,6 +77,30 @@ async def _scoped_binding(ctx: dict, config_id: str) -> dict:
     return row
 
 
+async def _unbindable_binding(ctx: dict, config_id: str) -> None:
+    """`_scoped_binding` for the one tool that must reach an ORPHAN: a binding
+    whose source document is in the trash stays removable.
+
+    # INVARIANT(security): a trashed source still passes both walls (project: uniform 404; subtree by last position: 403).
+    # Why: cascading the binding away on document
+    # delete would lose its config on restore, so the agent must be able to
+    # clean the orphan up — but a trashed doc is no exemption from the scope.
+    """
+    row = await fetch_one("agent_configs", config_id)
+    if not row or row.get("deleted_at") or row.get("project_id") != ctx["project_id"]:
+        raise HTTPException(status_code=404, detail="Agent config not found")
+    source_id = extract_id(row.get("document_id"))
+    doc = await doc_row_with_trash(source_id)
+    if not doc or doc.get("deleted_at") is None:
+        await _scope_check(ctx, source_id)
+        return
+    if extract_id(doc.get("project_id")) != ctx["project_id"]:
+        raise HTTPException(status_code=404, detail="Document not found")
+    scope_root = ctx.get("scope_root") or ""
+    if not await trashed_doc_in_subtree(scope_root, source_id):
+        raise HTTPException(status_code=403, detail=out_of_scope_detail(scope_root))
+
+
 async def _consent(ctx: dict, body, tool_name: str) -> None:
     """The three mutating tools follow tool_save_skill: resolve, refuse
     unconfirmable — the driver's dsh approval round re-sends with the verdict.
@@ -91,7 +123,10 @@ async def _scoped_binding_rows(
         source_id = extract_id(r.get("document_id"))
         if wanted and source_id != wanted:
             continue
-        if scope_root and not await in_subtree(scope_root, source_id):
+        if scope_root and not (
+            await in_subtree(scope_root, source_id)
+            or await trashed_doc_in_subtree(scope_root, source_id)
+        ):
             continue
         out.append(r)
     return out
@@ -196,6 +231,9 @@ def _binding_view(
         "kind": row.get("kind") or "extractor",
         "document_id": source_id,
         "document_title": _title(docs, source_id),
+        # WHY: `docs` holds live rows only (fetch_many skips the trash), so an
+        # absent source is the orphan the agent can still unbind_pipeline.
+        "source_deleted": bool(source_id) and source_id not in docs,
         "config_doc_id": config_doc_id,
         "config_doc_title": _title(docs, config_doc_id),
         "target_doc_id": target_id,
@@ -215,6 +253,24 @@ def _binding_view(
             "last_status": schedule.get("last_status"),
         }
     return out
+
+
+_WAIT_POLL_S = 2.0
+
+
+async def _wait_until_idle(db, project_id: str, config_id: str, wait_s: int) -> None:
+    """Hold the read until the binding has no queued/running run or `wait_s`
+    passes — the agent's way to wait for a run it launched (it has no clock)."""
+    deadline = time.monotonic() + wait_s
+    while time.monotonic() < deadline:
+        live = await db.query(
+            "SELECT id FROM pipeline_runs WHERE project_id = $pid AND config_id = $c "
+            "AND status IN ['queued', 'running'] LIMIT 1",
+            {"pid": project_id, "c": config_id},
+        )
+        if not live:
+            return
+        await asyncio.sleep(_WAIT_POLL_S)
 
 
 def _run_view(run: dict) -> dict:
@@ -317,7 +373,7 @@ async def tool_unbind_pipeline(
     """Soft-delete a binding; the service cascades a digest binding's schedule
     rows so nothing keeps firing into a missing binding."""
     await _refuse_pipelines_disabled((await get_db()))
-    await _scoped_binding(ctx, body.config_id)
+    await _unbindable_binding(ctx, body.config_id)
     await _consent(ctx, body, "unbind_pipeline")
     return await bindings.delete_agent_config(body.config_id, ctx["user"])
 
@@ -369,6 +425,7 @@ async def tool_pipeline_runs(
 
     if body.config_id:
         await _scoped_binding(ctx, body.config_id)
+        await _wait_until_idle(db, project_id, body.config_id, body.wait_s)
         rows = await db.query(
             "SELECT * FROM pipeline_runs WHERE project_id = $pid AND config_id = $c "
             "ORDER BY queued_at DESC LIMIT $limit",

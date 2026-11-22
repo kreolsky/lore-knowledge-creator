@@ -4218,6 +4218,13 @@
             "minimum": 1.0,
             "title": "Limit",
             "type": "integer"
+          },
+          "wait_s": {
+            "default": 0,
+            "maximum": 240.0,
+            "minimum": 0.0,
+            "title": "Wait S",
+            "type": "integer"
           }
         },
         "title": "ToolPipelineRuns",

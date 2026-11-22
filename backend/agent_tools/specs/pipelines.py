@@ -26,7 +26,10 @@ LIST_PIPELINES_TOOL: dict = {
             "documents under a target) and digest bindings (periodic reports on "
             "a theme). Each row names its source/config/target documents by id "
             "AND title, the trigger, model, title template, its schedule "
-            "(interval, enabled, last outcome) and its last recorded run. "
+            "(interval, enabled, last outcome: ok = run posted, error = the "
+            "tick failed, source_deleted = skipped because its theme or target "
+            "document is in the trash — it resumes once restored) and its last "
+            "recorded run. "
             "Optional `document_id` narrows to bindings on that source "
             "document. Read this FIRST — before binding, running or "
             "diagnosing — so you name an existing binding instead of "
@@ -165,7 +168,9 @@ RUN_PIPELINE_TOOL: dict = {
             "report only if there is new material). An extractor binding runs "
             "on ONE reference: `reference_id` is required and must be a "
             "reference attached to the binding's source document. The run is "
-            "async — check its outcome with pipeline_runs. A run posted while "
+            "async — to learn its outcome call pipeline_runs with this "
+            "config_id and wait_s: 240, which returns once the run finishes; "
+            "never re-run a binding whose run is queued or running. A run posted while "
             "another is pending returns already_pending, not a second run. "
             "This launch is a model run (an 'ai'-tier act)."
         ),
@@ -212,6 +217,12 @@ PIPELINE_RUNS_TOOL: dict = {
                 "config_id": {
                     "type": "string",
                     "description": "Only this binding's runs (omit: every in-scope binding).",
+                },
+                "wait_s": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 240,
+                    "description": "With config_id: wait up to this many seconds until the binding has no queued/running run, then answer. Still running at the end → call again.",
                 },
                 "limit": {
                     "type": "integer",

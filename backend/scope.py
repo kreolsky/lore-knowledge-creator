@@ -180,6 +180,43 @@ async def in_subtree(scope_root: str | None, doc_id: str) -> bool:
     return doc_id in set(index_ids)
 
 
+async def doc_row_with_trash(doc_id: str) -> dict | None:
+    """`project_id` + `deleted_at` of a document, trashed rows INCLUDED
+    (fetch_one hides them)."""
+    db = await get_db()
+    rows = await db.query(
+        "SELECT project_id, deleted_at FROM type::record('documents', $id)", {"id": doc_id},
+    )
+    return rows[0] if rows and isinstance(rows[0], dict) else None
+
+
+async def trashed_doc_in_subtree(scope_root: str | None, doc_id: str) -> bool:
+    """`in_subtree` for a SOFT-DELETED `doc_id`: decided on its last tree position.
+    A live or missing doc answers False (one row read, no walk) — `in_subtree` owns it.
+
+    WHY: the live walk stops at a trashed row, so `in_subtree` answers False for
+    every trashed doc under a scoped key. A trashed doc keeps its parent_id (the
+    delete lifts only its children), so walking through deleted rows yields the
+    ancestry it would regain on restore — the same ancestry the live rule reads.
+    An index scope_root keeps the index rule: in scope unless the doc sat under
+    the system or the help root.
+    """
+    if not scope_root:
+        return True
+    row = await doc_row_with_trash(doc_id)
+    if not row or row.get("deleted_at") is None:
+        return False
+    ancestors = await get_ancestor_ids(doc_id, through_deleted=True)
+    if scope_root in ancestors:
+        return True
+    root = await fetch_one("documents", scope_root)
+    pid = extract_id(row.get("project_id"))
+    if not root or root.get("deleted_at") or not root.get("is_index") or root.get("project_id") != pid:
+        return False
+    from agent_config_seed import help_doc_id
+    return not ({system_root_id(pid), help_doc_id(pid, "index")} & set(ancestors))
+
+
 async def require_doc_in_scope(scope_root: str | None, doc_id: str) -> None:
     """Raise HTTPException(403) if `doc_id` is outside the subtree.
 

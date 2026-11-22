@@ -1,7 +1,7 @@
 """Pipeline registry — one declarative row per pipeline job.
 
 # SYSTEM: pipeline-registry — the catalog of pipeline jobs (name → entry + queue +
-# IO descriptors) that schedules (S3) and future pipelines address.
+# IO descriptors) that schedules and future pipelines address.
 
 # ARCH: a row describes the ARQ TASK — the enqueue address — not the PocketFlow
 # flow inside it. Why: the task is what a schedule enqueues and what the worker
@@ -21,12 +21,13 @@
 # no forgotten pipelines.
 """
 from dataclasses import dataclass
-from typing import Callable
+from typing import Awaitable, Callable
 
 from db import extract_id, fetch_many
 from jobs.tasks.digest import digest_job_id, digest_task
 from jobs.tasks.extract import extract_task
 from jobs.tasks.widget_extract import widget_extract_task
+from pipeline.digest.run import digest_source_trashed
 
 # The queues a pipeline row may declare. Keys mirror the two worker classes in
 # jobs/worker.py; a row declares WHERE its task is registered, not a transport.
@@ -59,6 +60,11 @@ class PipelineSpec:
     job_id:         the arq job id a scheduled run posts under, from its params.
                     None → a per-claim id. Set it when the task's other triggers
                     collapse on a stable id, so a scheduled run collapses with them.
+    trashed_source: `(params, notify) -> bool` — True when a document the run
+                    reads is in the trash, so the schedule tick SKIPS the claim
+                    (last_status 'source_deleted', no job) and resumes once it is
+                    restored; when `notify`, it leaves the pipeline's skip note.
+                    None → the tick never skips.
     """
 
     name: str
@@ -68,6 +74,7 @@ class PipelineSpec:
     result_target: str
     project_scoped_params: tuple[str, ...] = ()
     job_id: Callable[[dict], str] | None = None
+    trashed_source: Callable[[dict, bool], Awaitable[bool]] | None = None
 
 
 PIPELINES: tuple[PipelineSpec, ...] = (
@@ -127,6 +134,7 @@ PIPELINES: tuple[PipelineSpec, ...] = (
         ),
         project_scoped_params=("project_id", "config_id"),
         job_id=lambda params: digest_job_id(params["config_id"]),
+        trashed_source=digest_source_trashed,
     ),
 )
 

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from fastapi import HTTPException
 
 from access import get_project_access, resolve_digest_subjects
-from db import extract_id, fetch_one
+from db import extract_id, fetch_one, get_db
 
 
 @dataclass(frozen=True)
@@ -54,6 +54,35 @@ async def run_subjects(project_id: str, created_by: str, stored: list[str] | Non
         raise PermissionError(e.detail) from e
 
 
+def is_live(doc: dict | None, project_id: str) -> bool:
+    """`doc` exists, is not in the trash and belongs to `project_id`."""
+    return bool(doc) and not doc.get("deleted_at") and doc.get("project_id") == project_id
+
+
+def is_trashed(doc: dict | None, project_id: str) -> bool:
+    """`doc` belongs to `project_id` and is in the trash — restorable, unlike a missing one."""
+    return bool(doc) and bool(doc.get("deleted_at")) and doc.get("project_id") == project_id
+
+
+async def first_dead_document(row: dict, project_id: str) -> tuple[str, dict | None] | None:
+    """The first of the binding row's theme / target documents that is not live in
+    `project_id`, with its record (None when missing) — or None when both are live.
+
+    WHY a projected SELECT and not fetch_one: fetch_one hides a soft-deleted row, and the
+    schedule tick must tell a trashed document (skip) from a missing one (error).
+    """
+    db = await get_db()
+    for doc_id in (extract_id(row.get("document_id")), extract_id(row.get("target_doc_id"))):
+        rows = await db.query(
+            "SELECT id, title, project_id, deleted_at FROM type::record('documents', $id)",
+            {"id": doc_id},
+        ) if doc_id else None
+        doc = rows[0] if rows else None
+        if not is_live(doc, project_id):
+            return doc_id, doc
+    return None
+
+
 async def load_binding(config_id: str, project_id: str) -> DigestBinding:
     """The live digest row `config_id` of `project_id`, its subjects rechecked.
 
@@ -68,18 +97,15 @@ async def load_binding(config_id: str, project_id: str) -> DigestBinding:
     created_by = row.get("created_by")
     if not created_by:
         raise ValueError(f"Digest binding {config_id} has no creator")
-    theme_doc_id = extract_id(row.get("document_id"))
-    target_doc_id = extract_id(row.get("target_doc_id"))
-    for doc_id in (theme_doc_id, target_doc_id):
-        doc = await fetch_one("documents", doc_id)
-        if not doc or doc.get("deleted_at") or doc.get("project_id") != project_id:
-            raise ValueError(f"Digest document {doc_id} not found in project {project_id}")
+    dead = await first_dead_document(row, project_id)
+    if dead:
+        raise ValueError(f"Digest document {dead[0]} not found in project {project_id}")
     return DigestBinding(
         config_id=config_id,
         project_id=project_id,
-        theme_doc_id=theme_doc_id,
+        theme_doc_id=extract_id(row.get("document_id")),
         config_doc_id=extract_id(row.get("config_doc_id")),
-        target_doc_id=target_doc_id,
+        target_doc_id=extract_id(row.get("target_doc_id")),
         created_by=created_by,
         subjects=await run_subjects(project_id, created_by, row.get("subject_user_ids")),
         title_template=row.get("title_template"),

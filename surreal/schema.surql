@@ -786,7 +786,7 @@ DEFINE INDEX IF NOT EXISTS idx_agent_configs_doc_trigger ON agent_configs FIELDS
 DEFINE INDEX IF NOT EXISTS idx_agent_configs_project  ON agent_configs FIELDS project_id;
 
 -- ─── Pipeline schedules ──────────────────────────────────────────────────────
--- A user-configurable schedule is PROJECT DATA (D7): the worker keeps ONE cron
+-- A user-configurable schedule is PROJECT DATA: the worker keeps ONE cron
 -- tick (pipeline_schedule_tick_task) that claims and runs due entries, so adding
 -- a scheduled pipeline never touches WorkerSettings. The four hardcoded
 -- maintenance cron_jobs are deliberately untouched.
@@ -807,7 +807,9 @@ DEFINE FIELD IF NOT EXISTS params_json  ON pipeline_schedules TYPE string;
 DEFINE FIELD IF NOT EXISTS created_by   ON pipeline_schedules TYPE string;
 -- Tick bookkeeping: last_run_at is set AT CLAIM (the CAS-by-predicate UPDATE that
 -- makes two concurrent ticks dispatch exactly once); last_status is the DISPATCH
--- outcome ('ok' = enqueued; 'error' + last_error = claim/lookup/enqueue failure).
+-- outcome ('ok' = enqueued; 'error' + last_error = claim/lookup/enqueue failure;
+-- 'source_deleted' = skipped, no job, because a document the run reads is in the
+-- trash — the tick resumes by itself after a restore, see PipelineSpec.trashed_source).
 -- The pipeline's own run outcome is per-pipeline territory (the extractor
 -- dead-letters its own error notes).
 DEFINE FIELD IF NOT EXISTS last_run_at  ON pipeline_schedules TYPE option<datetime>;

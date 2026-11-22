@@ -12,7 +12,13 @@ from token_usage import UsageActor, usage_actor
 from db import extract_id, fetch_one, get_db
 from event_bus import emit
 from pipeline.core.config import _parse_yaml_from_code_block
-from pipeline.digest.binding import DigestBinding, load_binding
+from pipeline.digest.binding import (
+    DigestBinding,
+    first_dead_document,
+    is_live,
+    is_trashed,
+    load_binding,
+)
 from pipeline.digest.material import (
     PREVIOUS_REPORT_CHARS,
     Material,
@@ -177,3 +183,55 @@ async def create_digest_error_note(config_id: str, project_id: str, error: Excep
         )
     except Exception:
         logger.exception("[Digest] error note for %s failed", config_id)
+
+
+async def create_digest_source_deleted_note(
+    config_id: str, project_id: str, trashed_doc_id: str, trashed_title: str,
+) -> None:
+    """The once-per-orphaning trace of a scheduled digest skipped over a trashed theme or
+    target — best-effort, never raises.
+
+    WHY the host is the first LIVE of theme → target → config document: a note on the
+    trashed document sits on a NotesPanel nobody can open.
+    """
+    try:
+        row = await fetch_one("agent_configs", config_id) or {}
+        config_doc_id = extract_id(row.get("config_doc_id"))
+        host_ids = [extract_id(row.get("document_id")), extract_id(row.get("target_doc_id")), config_doc_id]
+        docs = {doc_id: await fetch_one("documents", doc_id) for doc_id in host_ids if doc_id}
+        host = next((d for d in host_ids if d != trashed_doc_id and is_live(docs.get(d), project_id)), None)
+        if not host:
+            logger.warning("[Digest] %s skipped (%s in the trash), no live document to note on",
+                           config_id, trashed_doc_id)
+            return
+        config_title = (docs.get(config_doc_id) or {}).get("title") or config_doc_id
+        await _make_pipeline_note(
+            project_id=project_id,
+            document_id=host,
+            title="Pipeline Skipped",
+            body=(
+                f"## Digest Skipped\n\n**Config:** [{config_title}](doc:{config_doc_id})\n\n"
+                f"Scheduled runs are skipped: [{trashed_title}](doc:{trashed_doc_id}) is in the "
+                "trash. They resume on their own once it is restored."
+            ),
+        )
+    except Exception:
+        logger.exception("[Digest] skip note for %s failed", config_id)
+
+
+async def digest_source_trashed(params: dict, notify: bool) -> bool:
+    """True when the binding's theme or target document is in the TRASH (exists in the
+    project with deleted_at set) — the schedule tick then skips the run. When `notify`,
+    leaves the skip note. A missing or foreign document is not a trash case: it returns
+    False and the run fails into its error note as before."""
+    project_id = str(params["project_id"])
+    row = await fetch_one("agent_configs", str(params["config_id"]))
+    dead = await first_dead_document(row or {}, project_id)
+    doc = dead[1] if dead else None
+    if not is_trashed(doc, project_id):
+        return False
+    if notify:
+        await create_digest_source_deleted_note(
+            str(params["config_id"]), project_id, dead[0], doc.get("title") or dead[0],
+        )
+    return True
