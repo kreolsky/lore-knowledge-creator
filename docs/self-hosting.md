@@ -1,6 +1,6 @@
-# Running Lore on a server
+# Self-hosting Lore
 
-This guide puts a Lore install on a server behind your own domain with HTTPS. Install Lore on the server first, exactly as [README → Install](../README.md#install) describes. Everything below is what a server adds on top of that install.
+Everything an install needs beyond [README → Install](../README.md#install): running on a server behind your own domain with HTTPS, serving the agent's HTML pages, the bundled LLM router, updates, backups and troubleshooting. Install Lore first, exactly as the README describes; the sections below build on that install.
 
 ## Settings to make before the first start
 
@@ -11,7 +11,7 @@ Put these in `.env` next to `docker-compose.yml` **before** the first `docker co
 | `LORE_ADMIN_PASSWORD` | a strong password | The first administrator is created once, on the first start. Otherwise sign in and change `lore-admin` right away. |
 | `LORE_PORT` | `127.0.0.1:5673` | Lore listens only on the server itself, so the plain-HTTP port is reachable only through your proxy. Leave it as a bare port only when the proxy runs on another host. |
 
-`CORS_ORIGINS` is not needed: Lore accepts writes from a page served at the address the browser used, as long as the proxy passes the original `Host` header (see below). Set it only when a web page served from another origin must write to Lore.
+`CORS_ORIGINS` is not needed: Lore accepts writes from a page served at the address the browser used, as long as the proxy passes the original `Host` header (see below). Set it only when a web page served from another origin must write to Lore, or when you serve [HTML pages](#html-pages).
 
 ## The reverse proxy
 
@@ -95,6 +95,23 @@ location /api/widget/ {
 
 If one browser (usually Safari) cannot open projects behind the password while others can, turn it off for `/ws/` as well. Every WebSocket requires a Lore session and project access on its own.
 
+## HTML pages
+
+The agent can build web pages — dashboards, calculators, interactive charts — and keep them in the tree as documents. A page runs in a frame loaded from a **second domain**, so its scripts cannot reach the Lore session. Until that domain is set, the agent refuses to create pages and an existing page says that page hosting is not configured; everything else works.
+
+1. **The domain.** It must be a separate registrable domain, not a subdomain of Lore's: `lore-pages.example.net` next to `lore.example.com`, never `pages.lore.example.com` or `pages.example.com`. Lore refuses to start when the two share a domain, because a page there could set cookies for Lore.
+2. **The proxy.** Route the new domain to the same Lore port, with TLS and the same rules as the main one (original `Host` header, `X-Forwarded-Proto`). Leave Basic authentication off for it: every page is fetched with its own short-lived signed link.
+3. **The settings.** Add to `.env`, with your two addresses, and run `docker compose up -d`:
+
+   ```sh
+   ARTIFACT_ORIGIN=https://lore-pages.example.net
+   CORS_ORIGINS=https://lore.example.com
+   ```
+
+   `CORS_ORIGINS` lists the addresses Lore itself is opened at, comma-separated; it becomes required here, because it also names who may frame the pages. Write `ARTIFACT_ORIGIN` without a port: the bundled web server forwards the host name without it.
+
+The administrator can change the page size limit (5 MB by default) in the admin panel.
+
 ## Bundled LLM router
 
 Lore talks to any OpenAI-compatible API. If you do not have one, the install can run ours next to Lore: [llm-api-gateway](https://github.com/kreolsky/llm-api-gateway), one endpoint in front of Anthropic, DeepSeek, OpenRouter, Kimi, z.ai and any other OpenAI-compatible provider, with its own keys and a usage page. It is off until you switch it on, and it is configured by YAML files on the host.
@@ -157,13 +174,73 @@ The router version is pinned in `docker-compose.yml` and moves with Lore release
 
 ## Updates and rollback
 
-Update as [README → Update](../README.md#update) describes. Take a backup first ([README → Data and backups](../README.md#data-and-backups)): database migrations run automatically when the new version starts, and they run forward only.
+Update as [README → Update](../README.md#update) describes. Take a backup first ([Backups and restore](#backups-and-restore)): database migrations run automatically when the new version starts, and they run forward only.
 
 To choose each update yourself, pin a release with `LORE_VERSION=vX.Y.Z` in `.env`. What changed in each release, and what an update needs from you, is in [releases/](releases/).
 
 To roll back, set `LORE_VERSION` to the previous release and run `docker compose pull --ignore-buildable` and `docker compose up -d` (the flag skips the agent and sandbox images, which are built from source, not pulled). This is safe only when no database migration lies between the two versions — an older version may refuse to start on a newer database. The release notes say when a release migrates the database; to go back across one, restore the backup taken before the update.
 
+## Backups and restore
+
+Lore keeps its data in Docker volumes. `docker compose down` keeps them; `docker compose down -v` **deletes everything**.
+
+What a backup must hold:
+
+- `lore_surreal` — the database: documents, chats, users, settings;
+- `lore_storage` — uploaded files and the key that signs sessions;
+- `lore_harness-sessions` — the agent's conversation logs, which a chat continues from;
+- `lore_harness-attachments` — the images the agent was shown in chats;
+- `lore_sandbox-workspace` — the agent's working files in its sandbox.
+
+The rest is rebuilt on every start and needs no backup: `lore_secrets` (the database password and the agent secret; a fresh one is applied to a restored database), `lore_sandbox-keys` and `lore_redis` (the job queue). `lore_router-usage` holds the bundled router's usage history — add it if you want that kept.
+
+### Back up
+
+Stop the stack, archive the volumes, start it again:
+
+```sh
+docker compose stop
+docker run --rm \
+  -v lore_surreal:/v/surreal -v lore_storage:/v/storage \
+  -v lore_harness-sessions:/v/harness-sessions -v lore_harness-attachments:/v/harness-attachments \
+  -v lore_sandbox-workspace:/v/sandbox-workspace \
+  -v "$PWD":/backup alpine tar czf /backup/lore-backup.tar.gz -C /v .
+docker compose start
+```
+
+### Restore
+
+On a new machine, install Lore first as the README describes, with the same `LORE_VERSION` the backup was taken on, and copy `lore-backup.tar.gz` next to `docker-compose.yml`. Then empty the volumes and unpack the archive into them:
+
+```sh
+docker compose stop
+docker run --rm \
+  -v lore_surreal:/v/surreal -v lore_storage:/v/storage \
+  -v lore_harness-sessions:/v/harness-sessions -v lore_harness-attachments:/v/harness-attachments \
+  -v lore_sandbox-workspace:/v/sandbox-workspace \
+  -v "$PWD":/backup alpine sh -c 'find /v -mindepth 2 -delete && tar xzf /backup/lore-backup.tar.gz -C /v'
+docker compose up -d
+```
+
+Check: [README → Check that it runs](../README.md#2-check-that-it-runs), then sign in with an account from the backup. A restore replaces everything written since the backup.
+
 ## Troubleshooting
+
+### Install, update and the agent
+
+| Symptom | Check | Fix |
+|---|---|---|
+| `docker compose up` fails with `address already in use` or `port is already allocated` | another service uses 5673 | put `LORE_PORT=5674` (any free port) in `.env`, run `docker compose up -d`, use that port |
+| `env_file` / `required` or `subpath is not allowed` error on `up` | `docker compose version` | upgrade Docker Compose to v2.26.0 or newer (and Docker Engine to 26.0 or newer) |
+| after an update the backend log says `the database password file /secrets/surreal/pass is missing or empty` | `docker compose config --services` lists no `secrets-init` | the compose file predates v0.21.0: download it again and run `docker compose up -d --build` ([README → Update](../README.md#update)) |
+| health never returns `"status":"ok"` | `docker compose logs backend` | the log names the failing setting or service |
+| the backend refuses to start: `ARTIFACT_ORIGIN host … equals or is a subdomain` or `ARTIFACT_ORIGIN is set but CORS_ORIGINS is not` | `.env` | [HTML pages](#html-pages): a separate registrable domain, and `CORS_ORIGINS` set |
+| the agent answers *harness service is not reachable*, or health shows `"harness":"unreachable"` | `docker compose logs harness` | the agent is still the previous build: run `docker compose up -d --build` (the agent is built from source, so an update without `--build` keeps the old one) |
+| the agent answers *No chat model is set* or *No AI API URL is set* | **Admin panel → Models & APIs** | set the missing value; the next message uses it |
+| chat sessions keep untitled-looking names | `docker compose logs harness` | if the log says the title model *advertises reasoning effort levels*, set **Session title model** in **Admin panel → Models & APIs** to a non-reasoning model your endpoint serves |
+| forgot the admin password | — | put `LORE_ADMIN_USERNAME=admin2` and `LORE_ADMIN_PASSWORD=<new password>` in `.env`, run `docker compose up -d`; sign in as `admin2@lore.app` and set a new password for the old admin in **Admin panel** |
+
+### Behind a proxy
 
 | Symptom | Cause | Fix |
 |---|---|---|

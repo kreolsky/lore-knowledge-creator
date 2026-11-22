@@ -9,11 +9,21 @@
 [![Docker images](https://img.shields.io/badge/images-ghcr.io-2496ED?logo=docker&logoColor=white)](https://github.com/kreolsky?tab=packages&repo_name=lore-knowledge-creator)
 [![Self-hosted](https://img.shields.io/badge/self--hosted-Docker%20Compose-555)](#install)
 
-[Why Lore](#why-lore) · [Features](#features) · [Install](#install) · [Architecture](#architecture) · [Related projects](#related-projects) · [License](#license)
+[Quick start](#quick-start) · [Why Lore](#why-lore) · [Features](#features) · [Install](#install) · [Architecture](#architecture) · [Related projects](#related-projects) · [License](#license)
 
 </div>
 
 ![A project in Lore: the document tree, a decisions log, and the agent asking to approve an edit](assets/readme/hero.png)
+
+## Quick start
+
+```sh
+mkdir lore && cd lore
+curl -fsSLO https://raw.githubusercontent.com/kreolsky/lore-knowledge-creator/main/docker-compose.yml
+docker compose up -d
+```
+
+Open http://localhost:5673, sign in as `admin@lore.app` / `lore-admin` and change the password. To turn on the agent, set an AI endpoint in **Admin panel → Models & APIs**. The first start builds the agent from source and takes several minutes. Requirements, checks and settings are under [Install](#install).
 
 ## Why Lore
 
@@ -25,9 +35,11 @@ Capturing a thought takes one key: **voice input runs through the whole app** �
 
 It works the same for one person and for a small team: write alone as a journal or a research notebook, or edit together in real time with comments and roles. When something is worth showing, **share it with a public link** — a single page or a whole section, readable without an account.
 
-You run it yourself — on a server or on a laptop: the whole stack runs comfortably in Docker on an Apple M1. Your texts never leave it except to the model provider you configure, and that can be a model you host yourself.
+You run it yourself — on a server or on a laptop. Your texts never leave it except to the model provider you configure, and that can be a model you host yourself.
 
 ## Features
+
+Everything a team wiki needs is there — a document tree, a live editor, links, history, roles, search, export. What sets Lore apart is below.
 
 ### Write and connect
 
@@ -35,20 +47,24 @@ You run it yourself — on a server or on a laptop: the whole stack runs comfort
 - **Documents in a tree**, ordered by hand, with drag-and-drop and keyboard navigation.
 - **Links everywhere**: link documents, headings, notes and files; hover any link for a preview. Mentions are tracked as a graph, so every document knows what points at it.
 - **Transclusion**: embed one document inside another; exports inline the embedded content.
-- **Editable tables** as first-class blocks inside documents.
-- **Export** any document to Markdown, DOCX or PDF.
+- **Real tables, not Markdown pipes**: a table is a structured block — select a range of cells, merge them, resize columns; find and replace reaches inside cells, and copy and paste to and from Word, Google Docs and Sheets keeps the structure.
+- **Export** any document to Markdown, DOCX or PDF, or a whole section as a Markdown zip.
 
 ### Think with an agent
 
 The chat panel is a full agent loop, not a text box bolted onto an editor. It works on your documents with your permissions:
 
-- **Sees the whole project**: semantic search over documents and files, the project outline, any document by link — and **your earlier chats**, so a new conversation can continue an old one. A chat can be excluded from that search when it should stay private.
-- **Writes and edits**: creates documents, applies targeted edits, fills tables, moves and renames — with **approve / reject per change** when you want to stay in control.
+- **Knows Lore itself**: every project carries the full user guide as ordinary documents, and the agent finds its way around it. Instead of reading the manual, ask the chat — *"Explain how persona memory works and set it up for me"* — and the agent explains with links to the guide pages, then makes the change itself, asking your approval first.
+- **Sees the whole project**: semantic search over documents and files, the project outline, any document by link — and **your earlier chats**, so a new conversation can continue an old one. A chat can be excluded from that search when it should stay private. Quote a passage into the chat and the agent gets a link back to it.
+- **Writes and edits**: creates documents, applies targeted edits, fills tables, moves and renames, restores earlier versions — with **approve / reject per change** when you want to stay in control.
+- **Plans and subagents**: a larger task becomes a live checklist above the chat input, and parts of it go to subagents that never get more rights than the chat that started them.
+- **HTML pages**: ask for a dashboard, a calculator, an interactive chart or a small tool, and the agent saves a working web page into the tree like any document. It reworks the page in place on request; you can edit its source, publish it by link or download it as a file. Pages run in an isolated frame from a separate address, so their scripts cannot reach your session — which is why serving them needs a second domain (see [docs/self-hosting.md → HTML pages](docs/self-hosting.md#html-pages)).
 - **Project memory**: the agent distills durable facts into small linked documents — one fact per card — that you read, link and correct like any other page.
+- **Personas with conversation memory**: a persona is a switchable character for the agent, and it can remember your past chats with it — each new chat starts knowing the topics you discussed before, and the agent opens an earlier chat when the details matter. Only your own chats count; switch the persona and the memory switches with it.
 - **Skills**: reusable instructions the agent loads on demand; the agent can write new ones for itself.
-- **Personas**: switch the system prompt per chat session.
-- **Web search**, **image generation** (ComfyUI) and an optional **sandboxed shell** for scripts and data work.
-- Works with **any OpenAI-compatible endpoint** — hosted models or your own (vLLM, llama.cpp…). For everything else there is **[LLM API Gateway](https://github.com/kreolsky/llm-api-gateway)**, our router, bundled as an optional part of the stack: it puts Anthropic, other providers that speak their own API, and local servers behind one endpoint, with a separate key per app.
+- **Tools beyond the project**: web search, image generation (ComfyUI), a **sandboxed shell** for scripts and data work, and **external MCP servers** an administrator connects — each user with their own key.
+- **Sees pictures**: images attached to the project and images it produces in its sandbox.
+- Works with **any OpenAI-compatible endpoint** — hosted models or your own (vLLM, llama.cpp…). Providers with an API of their own go through the optional bundled router (see [Enable AI](#enable-ai)).
 
 ### Work together and share
 
@@ -64,7 +80,7 @@ The chat panel is a full agent loop, not a text box bolted onto an editor. It wo
 - **Voice notes**: record a thought and it lands next to the document as a reference with its transcript — readable, searchable, and visible to the agent.
 - **References**: attach images, PDFs, Word documents and audio to the project; each file carries its own text.
 - **Automatic conversion**: DOCX and PDF become editable Markdown; audio is **transcribed**; images get thumbnails.
-- **Recorder apps**: a macOS menu-bar recorder and an Android app send voice notes and recordings straight into a project for transcription.
+- **Recorder apps**: a tray recorder for macOS and Windows and an Android app send voice notes and recordings straight into a project for transcription.
 
 ### Connect other tools
 
@@ -75,6 +91,7 @@ The chat panel is a full agent loop, not a text box bolted onto an editor. It wo
 ### Yours to run
 
 - **Self-hosted**: one Docker Compose file, no configuration needed to start; light enough for a laptop.
+- **Administration**: users, groups and moderators, which models each group may use, and a token-usage dashboard by user and model.
 - Light and dark themes, English and Russian interface.
 
 <table>
@@ -88,21 +105,34 @@ The chat panel is a full agent loop, not a text box bolted onto an editor. It wo
 </tr>
 </table>
 
+<table>
+<tr>
+<td width="50%"><img src="assets/readme/tables.png" alt="A quarterly budget table with merged area cells, a merged note row, columns of different widths and a selected block of cells"></td>
+<td width="50%"><img src="assets/readme/html-page.png" alt="An interactive generative-art page open in the editor with Source, Download, Fullscreen and Publish, next to the chat where the agent added a Breathe mode to it"></td>
+</tr>
+<tr>
+<td align="center">Real tables — merged cells, column widths, range selection</td>
+<td align="center">An HTML page the agent built and reworks on request</td>
+</tr>
+</table>
+
 ## Install
 
 Everything below is written to be followed literally — by a person or by an AI agent. Each step is a command followed by the check that proves it worked.
 
-**Requirements:** Docker Engine **26.0 or newer** (`docker version`) with Docker Compose **v2.26.0 or newer** (`docker compose version`), and a free TCP port 5673.
+### Requirements
+
+- **Docker Engine 26.0 or newer** (`docker version`) with **Docker Compose v2.26.0 or newer** (`docker compose version`).
+- A free TCP port 5673, and git and network access on the Docker host: the first start builds the agent and its sandbox from this repository.
+- **CPU**: x86-64. The published images are built for `linux/amd64`; on Apple Silicon Docker Desktop runs them under emulation, and the whole stack still runs on an M1. No GPU is needed — models run at the endpoint you configure.
+- **Memory**: a fresh install uses about 1.5 GB at rest. Plan for **4 GB** at least and **8 GB** for a team: the database grows with your content, document conversion peaks while it works, and the agent's sandbox may take up to 2 GB (`SANDBOX_MEM_LIMIT`).
+- **Disk**: the images take about 14 GB (the agent 7 GB, its sandbox 3 GB, the document converter 2 GB). Building the agent needs room for its build cache, so keep **30 GB** free plus the space for your files.
 
 ### 1. Download and start
 
-```sh
-mkdir lore && cd lore
-curl -fsSLO https://raw.githubusercontent.com/kreolsky/lore-knowledge-creator/main/docker-compose.yml
-docker compose up -d
-```
+Run the three [Quick start](#quick-start) commands.
 
-No configuration file is needed. The first start downloads the images and builds the AI agent and its sandbox from this repository, so the Docker host needs git and network access, and it takes several minutes.
+To pin a release instead of following the latest one (recommended — the agent and its sandbox are then built from the same release as the images), put `LORE_VERSION=vX.Y.Z` with a tag from [releases](https://github.com/kreolsky/lore-knowledge-creator/tags) in a file named `.env` next to `docker-compose.yml` before `docker compose up -d`.
 
 ### 2. Check that it runs
 
@@ -124,7 +154,7 @@ Open http://localhost:5673 and sign in:
 
 That is a complete install: the editor, collaboration, files and document conversion all work without AI. To turn on the AI features, see [Enable AI](#enable-ai) below — it takes only the admin panel.
 
-To run it on a server behind your own domain with HTTPS, continue with [docs/self-hosting.md](docs/self-hosting.md): settings for a server, the reverse proxy, a password in front of Lore, updates and rollback.
+Running it on a server behind your own domain, backups, troubleshooting: [docs/self-hosting.md](docs/self-hosting.md).
 
 ### Settings
 
@@ -133,7 +163,7 @@ Settings go into a file named `.env` next to `docker-compose.yml`, one `NAME=val
 | Variable | Default | What it does |
 |---|---|---|
 | `LORE_PORT` | `5673` | Port the web interface listens on |
-| `LORE_VERSION` | latest release | Pin a release, e.g. `v0.21.0` |
+| `LORE_VERSION` | `stable` (the latest release); the agent and sandbox build from `main` | Pin a release, e.g. `vX.Y.Z` |
 | `LORE_ADMIN_USERNAME` | `admin` | First admin, created once on the first start; the login is `<username>@lore.app` |
 | `LORE_ADMIN_PASSWORD` | `lore-admin` | Password of that first admin; has no effect after the first start |
 
@@ -141,9 +171,7 @@ Every other setting is documented in [`.env.example`](.env.example).
 
 ### Enable AI
 
-Lore talks to any **OpenAI-compatible API** (a hosted provider, or your own models behind LiteLLM, vLLM, llama.cpp…).
-
-Recommended: [LLM API Gateway](https://github.com/kreolsky/llm-api-gateway) — a small self-hosted OpenAI-compatible gateway that puts cloud providers and local servers (llama.cpp, embeddings, speech-to-text) behind one endpoint, with a separate key per app. Give Lore its own key and point the AI API base URL at the gateway.
+Lore talks to any **OpenAI-compatible API**: a hosted provider, or your own models behind LiteLLM, vLLM, llama.cpp… For providers that speak an API of their own, the install can run [LLM API Gateway](#related-projects) next to Lore — see [docs/self-hosting.md → Bundled LLM router](docs/self-hosting.md#bundled-llm-router).
 
 Sign in as admin, open **Admin panel → Models & APIs** and set:
 
@@ -153,23 +181,9 @@ Sign in as admin, open **Admin panel → Models & APIs** and set:
 
 Every name must be a model your endpoint serves. No restart is needed: the agent uses the new settings from the next message. The agent and its sandbox — the isolated shell it runs scripts in — are already running; the secret between Lore and the agent and the sandbox key were generated on the first start. A value set in the admin panel wins over the same setting in `.env`.
 
-### Troubleshooting
-
-| Symptom | Check | Fix |
-|---|---|---|
-| `docker compose up` fails with `address already in use` or `port is already allocated` | another service uses 5673 | put `LORE_PORT=5674` (any free port) in `.env`, run `docker compose up -d`, use that port |
-| `env_file` / `required` or `subpath is not allowed` error on `up` | `docker compose version` | upgrade Docker Compose to v2.26.0 or newer (and Docker Engine to 26.0 or newer) |
-| after an update the backend log says `the database password file /secrets/surreal/pass is missing or empty` | `docker compose config --services` lists no `secrets-init` | the compose file predates v0.21.0: download it again and run `docker compose up -d --build` (see Update below) |
-| health never returns `"status":"ok"` | `docker compose logs backend` | the log names the failing setting or service |
-| the agent answers *harness service is not reachable*, or health shows `"harness":"unreachable"` | `docker compose logs harness` | the agent is still the previous build: run `docker compose up -d --build` (the agent is built from source, so an update without `--build` keeps the old one) |
-| the agent answers *No chat model is set* or *No AI API URL is set* | **Admin panel → Models & APIs** | set the missing value; the next message uses it |
-| chat sessions keep untitled-looking names | `docker compose logs harness` | if the log says the title model *advertises reasoning effort levels*, set **Session title model** in **Admin panel → Models & APIs** to a non-reasoning model your endpoint serves |
-| forgot the admin password | — | put `LORE_ADMIN_USERNAME=admin2` and `LORE_ADMIN_PASSWORD=<new password>` in `.env`, run `docker compose up -d`; sign in as `admin2@lore.app` and set a new password for the old admin in **Admin panel** |
-| behind a reverse proxy: a project does not open, the browser console shows `WebSocket … Unexpected response code: 404` | the proxy drops the WebSocket upgrade | [docs/self-hosting.md → The reverse proxy](docs/self-hosting.md#the-reverse-proxy) |
-
 ### Update
 
-Read the release note of every version between yours and the new one in [`docs/releases/`](docs/releases/) first: some releases migrate the database with a step of their own (0.35 does), and the three lines below are not enough for them.
+Back up first ([docs/self-hosting.md → Backups and restore](docs/self-hosting.md#backups-and-restore)), and read the release note of every version between yours and the new one in [`docs/releases/`](docs/releases/): a release that migrates the database or needs a step of its own says so at the top, and then the three lines below are not enough.
 
 ```sh
 curl -O https://raw.githubusercontent.com/kreolsky/lore-knowledge-creator/main/docker-compose.yml
@@ -179,30 +193,21 @@ docker compose up -d --build
 
 All three lines are needed: the compose file itself changes between releases, and the agent and its sandbox are built from source — without `--build` they keep running the previous version. `--ignore-buildable` skips those locally built images in `pull`; without it `pull` reports *pull access denied* for `lore-harness`, `lore-sandbox` and `lore-sandbox-gw`, which is harmless.
 
-### Data and backups
-
-All data lives in Docker volumes named `lore_surreal` (database), `lore_storage` (uploaded files and the session key), `lore_secrets` (generated database password and agent secret) and `lore_redis`. `docker compose down` keeps them; `docker compose down -v` **deletes everything**. To back up, stop the stack and archive the volumes:
-
-```sh
-docker compose stop
-docker run --rm -v lore_surreal:/surreal -v lore_storage:/storage -v "$PWD":/backup alpine \
-  tar czf /backup/lore-backup.tar.gz /surreal /storage
-docker compose start
-```
-
 ## Architecture
 
 ```mermaid
 flowchart LR
     browser["Browser<br/>React · CodeMirror 6 · Yjs"]
     mcp["MCP clients<br/>Claude Desktop, Cursor…"]
-    apps["Recorder apps<br/>macOS · Android"]
+    apps["Recorder apps<br/>macOS · Windows · Android"]
 
     subgraph server["Your server — Docker Compose"]
         backend["Backend<br/>FastAPI · REST · WebSocket · MCP"]
         worker["Workers<br/>transcription · embeddings · pipelines"]
-        harness["Agent harness<br/>agent loop"]
+        harness["Agent harness<br/>agent loop · own network"]
+        sandbox["Agent sandbox<br/>shell behind an egress firewall"]
         converter["Converter<br/>DOCX / PDF → Markdown"]
+        router["LLM router<br/>optional"]
         db[("SurrealDB<br/>graph + documents")]
         redis[("Redis<br/>jobs · pub/sub")]
     end
@@ -217,9 +222,12 @@ flowchart LR
     worker <--> redis
     worker <--> db
     backend <--> harness
+    backend --> sandbox
     backend --> converter
     harness --> llm
     worker --> llm
+    harness -.-> router
+    router -.-> llm
 ```
 
 - **Frontend**: TypeScript, React, Zustand, CodeMirror 6, Yjs, Tailwind, Vite.
@@ -227,6 +235,7 @@ flowchart LR
 - **Database**: SurrealDB — documents, links and access rules live in one graph.
 - **Agent**: the agent loop runs in a separate harness service built on [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (vendored as `vendor/dsh`); Lore owns identity, permissions, storage and the tools.
 - The backend is the only authority: every tool call — from the chat, the MCP server or a recorder app — passes the same permission check.
+- **Isolation**: the harness shares a network only with the backend, so a URL the model fetches cannot reach the database; the sandbox reaches the internet but not the app's network.
 
 ## Tuning search
 
@@ -236,7 +245,7 @@ Semantic search and the agent's retrieval depend on the embedding model and on t
 
 Services Lore is built to run with — each is a separate, self-hosted repository with an OpenAI-compatible API, so Lore needs only a base URL and a key:
 
-- **[LLM API Gateway](https://github.com/kreolsky/llm-api-gateway)** — one endpoint and one key in front of every model: cloud providers and local servers (llama.cpp, local embeddings, speech-to-text) side by side, with per-client access, pricing and usage. Point Lore's AI, embedding and transcription settings at it.
+- **[LLM API Gateway](https://github.com/kreolsky/llm-api-gateway)** — one endpoint and one key in front of every model: Anthropic and other providers with an API of their own, OpenAI-compatible providers and local servers (llama.cpp, local embeddings, speech-to-text) side by side, with a separate key per app, pricing and usage. Lore can run it as part of its stack ([docs/self-hosting.md → Bundled LLM router](docs/self-hosting.md#bundled-llm-router)) or point its AI, embedding and transcription settings at your own copy.
 - **[STT API Server](https://github.com/kreolsky/stt-api-server)** — local speech recognition (Whisper, GigaAM) behind an OpenAI-compatible `/v1/audio/transcriptions`; transcribes Lore's audio references, voice input and recorder-app uploads.
 
 ## Contributing and security

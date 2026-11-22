@@ -78,7 +78,7 @@ A link to a passage (the kind "Quote in chat" makes) opens its document with the
 
 ## Pasting from the clipboard
 
-⌘/Ctrl + V converts formatting from Word, Google Docs or a web page into Markdown, and a copied table becomes a [Lore table](help:tables). Text copied from Lore itself pastes without loss, with all its links. ⌘/Ctrl + ⇧ + V pastes plain text without formatting.
+⌘/Ctrl + V converts formatting from Word, Google Docs or a web page into Markdown, and a copied table becomes a [Lore table](help:tables). Text copied from Lore itself pastes without loss, with all its links. Pasted into a document of another project, its pictures are copied into that project as references, so nothing is left pointing at the old project. ⌘/Ctrl + ⇧ + V pastes plain text without formatting.
 
 A screenshot or a copied picture pastes as a picture: it is uploaded as a reference of the document and placed at the cursor (see [Images and embeds](help:embeds)). When the clipboard holds text as well, the text wins, so selections from Word and Excel paste as before.
 

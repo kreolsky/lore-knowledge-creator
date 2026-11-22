@@ -11,7 +11,7 @@ Three areas: the left panel, the center, the right panel.
 
 ## Center
 
-The open document, reference or [HTML page](help:html-pages). Split view shows the document on the left and a reference on the right (see [References](help:references)).
+The open document, reference or [HTML page](help:html-pages). Re-entering a project opens the document you opened there last. Split view shows the document on the left and a reference on the right (see [References](help:references)).
 
 The text column has three widths: normal, wide and wider. Ctrl + Alt + ] widens it and Ctrl + Alt + [ narrows it (on macOS Control + Option, not ⌘). The width is remembered per project in this browser; on a narrow window the column never exceeds the space available.
 
@@ -31,6 +31,10 @@ The available tabs depend on the role: a viewer, for example, has no Chat and no
 ## Header
 
 Voice recording for the open document (accounts with the voice tier or higher), theme and language switches, [profile settings](help:profile), sign-out. The "Lock screen" button appears once a PIN is set (see [Screen and page lock](help:pin-lock)).
+
+## Renaming
+
+Renaming works the same everywhere — documents, chats, references, tables, API keys, projects: Enter saves, Escape cancels, a click elsewhere saves.
 
 ## After an update
 

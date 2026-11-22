@@ -31,4 +31,4 @@ After a task went well, ask the agent: "save this as a skill". The skill is save
 | skill-authoring | Saves a finished procedure as a skill, or improves one. |
 | secrets | Calls an outside API with one of your [personal keys](help:profile) — "check the billing with my key". The agent never sees the key's value. |
 
-A project skill with the same name replaces the built-in one. The administrator can switch a built-in skill off.
+A project skill with the same name replaces the built-in one. The administrator can switch a built-in skill off, and can upload a skill for the whole server as a zip (`SKILL.md` with its scripts and reference files): every user's agent can then use it, and the skill's card lists its files.

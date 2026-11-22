@@ -195,6 +195,12 @@ def _build_read_result(
     if start + len(content) < len(full_content):
         # The ONLY "there is more" signal: absent ⇒ complete document in hand.
         result["next_offset"] = start + len(content)
+    # WHY: an empty buffer reads as `content: ""` exactly like a grid-only table
+    # read, and a model took it for "not loaded yet" and re-read in a loop; `empty`
+    # says the read is final. A file still being extracted is not empty — its
+    # `processing_status` already says so.
+    if not full_content and doc.get("processing_status") not in ("queued", "processing"):
+        result["empty"] = True
     return result
 
 

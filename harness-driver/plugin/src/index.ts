@@ -116,7 +116,10 @@ export function apply(ctx: Context): void {
     console.error(`[lore-driver] listening on ${PORT}`
       + (channel ? ' (+ /ws/events)' : ''))
   })
-  ctx.on('dispose', () => {
+  // WHY ctx.effect: cordis 4 has no 'dispose' event — a fiber's teardown runs
+  // its effects' disposers (vendor/dsh/vendor/cordis/src/fiber.ts), so a
+  // re-apply (an injected service restarting) finds the port free.
+  ctx.effect(() => () => {
     offTap()
     offObserve()
     offStream?.()
@@ -125,5 +128,5 @@ export function apply(ctx: Context): void {
     server.close()
     disposeSessionAgents()
     disposeLoreTools()
-  })
+  }, 'lore-driver teardown')
 }

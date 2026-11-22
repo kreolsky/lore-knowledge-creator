@@ -23,4 +23,6 @@ Until the PIN is entered:
 
 After the PIN the page stays open while you move inside its subtree. Once you leave, it locks again after a short grace period (two minutes by default; the administrator can change it or make it lock at once). Locking the screen or signing out locks it at once.
 
+After too many wrong PINs in a row both locks say "too many attempts": wait a little and try again.
+
 To remove the lock, press "Unlock permanently" on the lock screen, or untick the checkbox, and enter the PIN.

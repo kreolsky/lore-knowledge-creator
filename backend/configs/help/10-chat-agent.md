@@ -1,6 +1,6 @@
 # Chat and the agent
 
-The chat is an agent with tools. It reads, searches, creates, edits, moves and renames documents, builds tables and [HTML pages](help:html-pages), and works with a document's [snapshots](help:history): lists them, reads and compares old versions, restores one. Through [skills](help:skills) it also searches the web, runs deep research, generates pictures, runs code in a sandbox console, works with [memory](help:memory) and pipeline configs, recalls your other chats and calls outside services with your [personal keys](help:profile).
+The chat is an agent with tools. It reads, searches, creates, edits, moves and renames documents, builds tables and [HTML pages](help:html-pages), looks at the pictures attached to a document as references, and works with a document's [snapshots](help:history): lists them, reads and compares old versions, restores one. Through [skills](help:skills) it also searches the web, runs deep research, generates pictures, runs code in a sandbox console, works with [memory](help:memory) and pipeline configs, recalls your other chats and calls outside services with your [personal keys](help:profile).
 
 The agent acts on your behalf: it sees and changes only what you can see and change. The chat needs an account tier with AI (see [Access and publishing](help:access)); without it the Chat tab is hidden.
 
@@ -37,6 +37,10 @@ Some actions ask every time, even with "Auto" checked: a change to the agent's o
 - **Continue from before a message** — the trash icon on your message (press twice): hides that message and everything below; your next message starts a new branch from that point. Nothing is deleted. Use it when a message cannot be fixed by editing, for example an attached image that now fails.
 - Branches are switched with the "◄ 1/2 ►" arrows on the message where they split.
 - The first message of a chat cannot be edited or rewound; start a new chat instead.
+
+## The agent's plan
+
+When the agent splits a task into steps, a collapsible "Plan" checklist appears above the chat input: "N/M done", the step in progress and the status of each step. It follows the agent live, stays after the turn ends and after a page reload, and clears with your next message.
 
 ## Sending while the agent works
 
