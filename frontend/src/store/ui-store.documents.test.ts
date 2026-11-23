@@ -2,7 +2,7 @@
 
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { useUIStore, registerAppBridge, clearLastSavedBlobs } from './ui-store';
+import { useUIStore, registerAppBridge, clearLastSavedBlobs, type EphemeralTab, type RememberedTab } from './ui-store';
 
 interface AppCtx {
   currentUser: { user_id: string } | null;
@@ -24,7 +24,7 @@ beforeEach(() => {
   });
   clearLastSavedBlobs();
   // projectPrefsLoaded gates triggerSaveUI — emulate the normal hydrated runtime.
-  useUIStore.setState({ documents: {}, projectPrefsLoaded: true, lastActiveChatSessionId: null });
+  useUIStore.setState({ documents: {}, tabOverlay: null, projectPrefsLoaded: true, lastActiveChatSessionId: null });
   vi.spyOn(globalThis, 'fetch').mockResolvedValue({
     ok: true, status: 200, json: () => Promise.resolve({}),
   } as Response);
@@ -82,7 +82,19 @@ describe('preferences fetch dedup + hydration flag', () => {
   });
 });
 
-describe('search tab — ephemeral overlay, never the stored tab', () => {
+describe('technical tabs — ephemeral overlay, never the stored tab', () => {
+  // Every tab that is not chat/refs/notes is technical: shown as an overlay, never stored.
+  // Record<EphemeralTab, …> binds the list to the union — a new technical tab cannot ship
+  // without landing here.
+  const TECHNICAL = Object.keys({
+    search: true, settings: true, access: true, links: true, checkpoint: true, find: true,
+  } as Record<EphemeralTab, true>) as EphemeralTab[];
+  const okFetch = () => vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+    ok: true, status: 200, json: () => Promise.resolve({}),
+  } as Response);
+  const prefCalls = (spy: { mock: { calls: unknown[][] } }) =>
+    spy.mock.calls.filter(c => String(c[0]).includes('/api/preferences/'));
+
   // Seed a doc slice directly (no setter) so no debounced PUT timer is pending
   // when we start recording fetch calls.
   function seedDocTab(docId: string, tab: 'refs' | 'chat') {
@@ -93,81 +105,77 @@ describe('search tab — ephemeral overlay, never the stored tab', () => {
     });
   }
 
-  it('setRightPanelTab(docA, "search") leaves the stored tab untouched, sets the overlay flag, fires no PUT', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true, status: 200, json: () => Promise.resolve({}),
-    } as Response);
+  it.each(TECHNICAL)('setRightPanelTab(docA, "%s") leaves the stored tab untouched, sets the overlay, fires no PUT', async (tab) => {
+    const fetchSpy = okFetch();
 
     seedDocTab('docA', 'refs');
     fetchSpy.mockClear();
 
-    useUIStore.getState().setRightPanelTab('docA', 'search');
+    useUIStore.getState().setRightPanelTab('docA', tab);
 
     expect(useUIStore.getState().documents['docA'].rightPanelTab).toBe('refs');
-    expect(useUIStore.getState().searchTabDocId).toBe('docA');
+    expect(useUIStore.getState().tabOverlay).toEqual({ docId: 'docA', tab });
 
     await new Promise(r => setTimeout(r, 300)); // > debounce window
-    const putCall = fetchSpy.mock.calls.find(c => String(c[0]).includes('/api/preferences/'));
-    expect(putCall).toBeUndefined();
+    expect(prefCalls(fetchSpy)).toHaveLength(0);
   });
 
-  it('selecting another tab clears the overlay and persists that tab', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true, status: 200, json: () => Promise.resolve({}),
-    } as Response);
+  it('selecting a remembered tab clears the overlay and persists that tab', async () => {
+    const fetchSpy = okFetch();
 
     seedDocTab('docA', 'refs');
-    useUIStore.getState().setRightPanelTab('docA', 'search');
+    useUIStore.getState().setRightPanelTab('docA', 'settings');
     useUIStore.getState().setRightPanelTab('docA', 'notes');
 
-    expect(useUIStore.getState().searchTabDocId).toBeNull();
+    expect(useUIStore.getState().tabOverlay).toBeNull();
     expect(useUIStore.getState().documents['docA'].rightPanelTab).toBe('notes');
 
     await vi.waitFor(() => {
-      const putCall = fetchSpy.mock.calls.find(c => String(c[0]).includes('/api/preferences/p1'));
-      expect(putCall).toBeDefined();
+      expect(prefCalls(fetchSpy).length).toBeGreaterThan(0);
     }, { timeout: 1000 });
-    const putCall = fetchSpy.mock.calls.find(c => String(c[0]).includes('/api/preferences/p1'))!;
+    const putCall = prefCalls(fetchSpy).find(c => String(c[0]).includes('/api/preferences/p1'))!;
     const body = JSON.parse((putCall[1] as RequestInit).body as string);
     expect(body.preferences.documents['docA'].rightPanelTab).toBe('notes');
   });
 
   it('setRightPanelOpen(docA, false) clears the overlay', () => {
     seedDocTab('docA', 'refs');
-    useUIStore.getState().setRightPanelTab('docA', 'search');
+    useUIStore.getState().setRightPanelTab('docA', 'access');
     useUIStore.getState().setRightPanelOpen('docA', false);
-    expect(useUIStore.getState().searchTabDocId).toBeNull();
+    expect(useUIStore.getState().tabOverlay).toBeNull();
     expect(useUIStore.getState().documents['docA'].rightPanelOpen).toBe(false);
   });
 
-  it('applyProjectPrefs migrates a persisted "search" tab to "refs"', () => {
+  it.each([
+    ['search', 'refs'], ['info', 'chat'], ['settings', 'chat'], ['access', 'chat'],
+    ['links', 'chat'], ['checkpoint', 'chat'], ['find', 'chat'],
+  ] as [string, RememberedTab][])('applyProjectPrefs repairs a persisted "%s" tab to "%s"', (legacy, repaired) => {
     useUIStore.getState().applyProjectPrefs({
       documents: {
-        'docA': { mainEntity: { type: 'document', id: 'docA' }, rightPanelOpen: true, rightPanelTab: 'search' },
+        // A legacy server row: the stored tab predates the remembered/technical split.
+        'docA': { mainEntity: { type: 'document', id: 'docA' }, rightPanelOpen: true, rightPanelTab: legacy as RememberedTab },
       },
     });
-    expect(useUIStore.getState().documents['docA'].rightPanelTab).toBe('refs');
+    expect(useUIStore.getState().documents['docA'].rightPanelTab).toBe(repaired);
   });
 
   it('resetForProjectSwitch clears the overlay', () => {
-    useUIStore.getState().setRightPanelTab('docA', 'search');
+    useUIStore.getState().setRightPanelTab('docA', 'links');
     useUIStore.getState().resetForProjectSwitch(true);
-    expect(useUIStore.getState().searchTabDocId).toBeNull();
+    expect(useUIStore.getState().tabOverlay).toBeNull();
   });
 
-  it('orphan path: setRightPanelTab(null, "search") flags ORPHAN_KEY, writes no doc slice, fires no PUT', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true, status: 200, json: () => Promise.resolve({}),
-    } as Response);
+  it.each(TECHNICAL)('orphan path: setRightPanelTab(null, "%s") flags ORPHAN_KEY, writes no doc slice, fires no PUT', async (tab) => {
+    const fetchSpy = okFetch();
     fetchSpy.mockClear();
 
-    useUIStore.getState().setRightPanelTab(null, 'search');
+    useUIStore.getState().setRightPanelTab(null, tab);
 
-    expect(useUIStore.getState().searchTabDocId).toBe('__orphan__');
+    expect(useUIStore.getState().tabOverlay).toEqual({ docId: '__orphan__', tab });
     expect(useUIStore.getState().documents['__orphan__']).toBeUndefined();
 
     await new Promise(r => setTimeout(r, 300)); // > debounce window
-    expect(fetchSpy.mock.calls.find(c => String(c[0]).includes('/api/preferences/'))).toBeUndefined();
+    expect(prefCalls(fetchSpy)).toHaveLength(0);
   });
 });
 

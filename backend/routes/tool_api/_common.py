@@ -199,8 +199,9 @@ async def _refuse_pipelines_disabled(db) -> None:
 
 
 async def _refuse_tasks_disabled(db) -> None:
-    """The `tasks` skill's off-switch — each of the three task-property/
-    task-loop handlers (find_documents, next_task, claim_task) opens with it,
+    """The `tasks` skill's off-switch — each task-property/task-loop
+    handler (find_documents, next_task, claim_task, set_task_status) opens
+    with it,
     on every surface (see the INVARIANT on _refuse_skill_disabled: the pack
     only hides tools from the in-app prompt; MCP and the Tool-API serve them
     regardless, so the tombstone is what actually stops them)."""

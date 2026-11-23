@@ -95,8 +95,11 @@ class ToolFindDocuments(BaseModel):
 
 class ToolNextTask(BaseModel):
     """`next_task` body — the offer read of the task loop (SYSTEM:
-    task-convention). Same `under` narrow contract as ToolFindDocuments."""
+    task-convention). Same `under` narrow contract as ToolFindDocuments.
+    `agent_name` unlocks the ready tasks assigned to that name (others stay
+    in `reserved`)."""
     under: str | None = None
+    agent_name: str | None = None
 
 
 class ToolClaimTask(BaseModel):
@@ -105,6 +108,15 @@ class ToolClaimTask(BaseModel):
     at the handler (422 — it is written into the header, so a newline or
     `:` would inject header keys)."""
     document_id: str
+    agent_name: str
+    apply: ToolApply = ToolApply.confirm
+
+
+class ToolSetTaskStatus(BaseModel):
+    """`set_task_status` body — the status transition (hand back, close).
+    `agent_name` is validated like ToolClaimTask's."""
+    document_id: str
+    status: str
     agent_name: str
     apply: ToolApply = ToolApply.confirm
 

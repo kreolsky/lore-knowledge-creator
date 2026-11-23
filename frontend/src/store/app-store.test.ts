@@ -205,27 +205,27 @@ describe('setCurrentDocument', () => {
     expect(useNoteStore.getState().activeNoteThreadId).toBeNull();
   });
 
-  it('clears the search-tab overlay when the document changes', () => {
+  it('clears the technical-tab overlay when the document changes', () => {
     useAppStore.setState({ currentDocument: makeDoc({ document_id: 'docA' }) });
     useUIStore.getState().setRightPanelTab('docA', 'search');
-    expect(useUIStore.getState().searchTabDocId).toBe('docA');
+    expect(useUIStore.getState().tabOverlay).toEqual({ docId: 'docA', tab: 'search' });
 
     // SYNCHRONOUS doc-change shape (pendingReference fast-path): a prefetch commit for
     // a DIFFERENT doc than the store shows is dropped as stale (INVARIANT(doc-desync)),
     // so the doc change is driven the way an in-app cross-doc ref-link click does it.
     useAppStore.getState().setPendingReference(makeRef({ document_id: 'docB' }));
     useAppStore.getState().setCurrentDocument(makeDoc({ document_id: 'docB' }));
-    expect(useUIStore.getState().searchTabDocId).toBeNull();
+    expect(useUIStore.getState().tabOverlay).toBeNull();
   });
 
-  it('keeps the search-tab overlay on a same-doc re-commit', () => {
+  it('keeps the technical-tab overlay on a same-doc re-commit', () => {
     useAppStore.setState({ currentDocument: makeDoc({ document_id: 'docA' }) });
     useUIStore.getState().setRightPanelTab('docA', 'search');
     useAppStore.getState().setCurrentDocument(
       makeDoc({ document_id: 'docA' }),
       { references: [], restoredReference: null },
     );
-    expect(useUIStore.getState().searchTabDocId).toBe('docA');
+    expect(useUIStore.getState().tabOverlay).toEqual({ docId: 'docA', tab: 'search' });
   });
 });
 

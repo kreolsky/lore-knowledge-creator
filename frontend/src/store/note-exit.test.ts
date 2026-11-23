@@ -41,7 +41,7 @@ function seedThread(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   (apiClient.delete as ReturnType<typeof vi.fn>).mockResolvedValue({});
-  useUIStore.setState({ documents: {}, searchTabDocId: null });
+  useUIStore.setState({ documents: {}, tabOverlay: null });
   useNoteStore.setState({
     activeNoteThreadId: null,
     documentNoteThreads: {},

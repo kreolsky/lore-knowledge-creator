@@ -8,15 +8,43 @@
 # getActiveDocState + useDocState stay in ui-store.ts: they reach for _appBridge /
 # useUIStore (ui-store-local), importing ORPHAN_KEY + DEFAULT_DOC_STATE from here.
 #
-# INVARIANT: rightPanelTab NEVER stores 'search'. The search tab is an ephemeral overlay
-# tracked by the top-level searchTabDocId field (set/cleared by this slice, cleared on
-# doc switch by app-store, never persisted — buildUIBlob is field-by-field). Why: a
-# stored 'search' tab made search the document's remembered tab, so returning to the
-# doc (or F5) resurrected search over the user's real saved tab.
+# INVARIANT: rightPanelTab stores ONLY a remembered tab (chat / refs / notes). Why: a stored
+# technical tab made it the document's remembered tab, so returning to the doc (or F5)
+# resurrected Settings/Access over the user's real working tab — operator request: only chat,
+# references and notes are remembered. Every technical tab (search, settings, access, links,
+# checkpoint, find) is instead an ephemeral overlay tracked by the top-level tabOverlay field
+# (set/cleared by this slice, cleared on doc switch by app-store, never persisted — buildUIBlob
+# is field-by-field); hydration repairs legacy rows through repairStoredTab (applyProjectPrefs).
 */
 import type { UIState } from '../ui-store';
 
-export type RightTab = 'notes' | 'refs' | 'checkpoint' | 'chat' | 'search' | 'links' | 'settings' | 'find' | 'access';
+/** The tabs a document REMEMBERS across visits — the only values rightPanelTab may store. */
+export type RememberedTab = 'chat' | 'refs' | 'notes';
+/** Technical tabs — shown as the ephemeral overlay over the remembered tab, never stored. */
+export type EphemeralTab = 'search' | 'settings' | 'access' | 'links' | 'checkpoint' | 'find';
+export type RightTab = RememberedTab | EphemeralTab;
+
+export function isRememberedTab(tab: RightTab | null | undefined): tab is RememberedTab {
+  return tab === 'chat' || tab === 'refs' || tab === 'notes';
+}
+
+/** Hydration repair of a stored tab: only a remembered tab may be stored. Legacy rows may
+ * carry 'info' (tab removed), 'search' (the first ephemeral tab) or any technical tab — each
+ * lands on the remembered tab the user opens instead. 'search' keeps its earlier 'refs'
+ * mapping; null stays null (ProjectPage falls back to the first allowed remembered tab). */
+export function repairStoredTab(tab: RightTab | null | undefined): RememberedTab | null {
+  if (tab === null || tab === undefined) return null;
+  if (isRememberedTab(tab)) return tab;
+  return tab === 'search' ? 'refs' : 'chat';
+}
+
+/** The live technical-tab overlay: `tab` is what `docId`'s right panel shows INSTEAD of its
+ * remembered tab. One overlay per session — selecting another technical tab replaces it. */
+export interface TabOverlay {
+  docId: string;
+  tab: EphemeralTab;
+}
+
 export type RefOpenMode = 'center' | 'split' | 'panel';
 export type MainEntity = { type: 'document'; id: string } | { type: 'reference'; id: string };
 
@@ -26,7 +54,10 @@ export interface DocumentUIState {
   // the doc's right-panel/scroll state alive while a non-editable reference holds the main stage.
   mainEntity: MainEntity;
   rightPanelOpen: boolean;
-  rightPanelTab: RightTab | null;
+  // INVARIANT(persisted): rightPanelTab is a remembered tab only — never a technical one.
+  // Why: the documents map is saved wholesale, so a technical value here would be
+  // resurrected as the document's remembered tab on return.
+  rightPanelTab: RememberedTab | null;
   selectedReferenceId?: string | null; // entity for 'refs' tab (independent of mainEntity)
   // 'center' — the reference replaces the document in the center (default);
   // 'split' — document + reference as two columns; 'panel' — the reference opens
@@ -60,7 +91,7 @@ export const DEFAULT_DOC_STATE: DocumentUIState = Object.freeze({
   rightPanelOpen: true,
   // WHY: a document the user never opened a tab on starts on Chat (operator's default);
   // a role without chat falls back to its first allowed tab (ProjectPage allowedRightTabs).
-  rightPanelTab: 'chat' as RightTab | null,
+  rightPanelTab: 'chat' as RememberedTab | null,
 }) as DocumentUIState;
 
 // Orphan (no-active-doc) right-panel state lives under documents['__orphan__']. Storing
@@ -103,7 +134,7 @@ export function refIsScope(mode: RefOpenMode): boolean {
 
 export type DocumentsSlice = Pick<
   UIState,
-  | 'documents' | 'searchTabDocId' | 'clearSearchTabOverlay'
+  | 'documents' | 'tabOverlay' | 'clearTabOverlay'
   | 'setRightPanelTab' | 'setRightPanelOpen' | 'setMainEntity' | 'getDocState'
   | 'removeDocState' | 'removeDocStates' | 'setCurrentReferenceForDoc' | 'getCurrentReferenceForDoc'
   | 'setRefOpenMode' | 'getRefOpenMode' | 'pinRightPanel'
@@ -126,26 +157,26 @@ function _patchDoc(get: UIGet, set: UISet, docId: string, patch: Partial<Documen
 export function createDocumentsSlice(set: UISet, get: UIGet): DocumentsSlice {
   return {
     documents: {},
-    searchTabDocId: null,
+    tabOverlay: null,
     setRightPanelTab: (docId, tab) => {
-      // INVARIANT (see file header): 'search' is an overlay, never a stored tab —
-      // set the flag, touch no doc slice, fire no save. Every other tab selection
+      // INVARIANT (see file header): a technical tab is an overlay, never a stored tab —
+      // set the overlay, touch no doc slice, fire no save. Any other tab selection
       // clears a live overlay and stores normally.
-      if (tab === 'search') {
-        set({ searchTabDocId: docId ?? ORPHAN_KEY });
+      if (tab !== null && !isRememberedTab(tab)) {
+        set({ tabOverlay: { docId: docId ?? ORPHAN_KEY, tab } });
         return;
       }
-      set({ searchTabDocId: null });
+      set({ tabOverlay: null });
       // Orphan slice is not persisted — pass persist=false.
       _patchDoc(get, set, docId ?? ORPHAN_KEY, { rightPanelTab: tab }, /*persist*/ !!docId);
     },
     setRightPanelOpen: (docId, open) => {
-      // Closing the panel kills a live search overlay (reopening restores the
+      // Closing the panel kills a live technical-tab overlay (reopening restores the
       // stored tab — the "last opened tab" semantics of the toggle-close path).
-      if (!open) set({ searchTabDocId: null });
+      if (!open) set({ tabOverlay: null });
       _patchDoc(get, set, docId ?? ORPHAN_KEY, { rightPanelOpen: open }, /*persist*/ !!docId);
     },
-    clearSearchTabOverlay: () => set({ searchTabDocId: null }),
+    clearTabOverlay: () => set({ tabOverlay: null }),
     setMainEntity: (docId, entity) => {
       _patchDoc(get, set, docId, { mainEntity: entity });
     },
@@ -195,11 +226,11 @@ export function createDocumentsSlice(set: UISet, get: UIGet): DocumentsSlice {
     // The panel state is per-document (ProjectShell reads `documents[id].rightPanelTab /
     // rightPanelOpen`), so a "go to parent, keep X open" jump must write the TARGET doc's
     // entry before the switch — otherwise the target's remembered tab wins and X is gone.
-    // WHY: a pin reveals `tab`, so it drops a live search overlay exactly as
+    // WHY: a pin reveals `tab`, so it drops a live technical-tab overlay exactly as
     // setRightPanelTab does — otherwise a same-doc pin (panel-mode ref open from a
     // search hit) stored Refs underneath while search kept rendering on top.
     pinRightPanel: (docId, tab) => {
-      set({ searchTabDocId: null });
+      set({ tabOverlay: null });
       _patchDoc(get, set, docId, { rightPanelTab: tab, rightPanelOpen: true });
     },
     setChatSortByProximity: (docId, value) => {

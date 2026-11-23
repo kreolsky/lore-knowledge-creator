@@ -4180,8 +4180,19 @@
         "type": "object"
       },
       "ToolNextTask": {
-        "description": "`next_task` body — the offer read of the task loop (SYSTEM:\ntask-convention). Same `under` narrow contract as ToolFindDocuments.",
+        "description": "`next_task` body — the offer read of the task loop (SYSTEM:\ntask-convention). Same `under` narrow contract as ToolFindDocuments.\n`agent_name` unlocks the ready tasks assigned to that name (others stay\nin `reserved`).",
         "properties": {
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Name"
+          },
           "under": {
             "anyOf": [
               {
@@ -4837,6 +4848,34 @@
           "document_ids"
         ],
         "title": "ToolSetFactAnchor",
+        "type": "object"
+      },
+      "ToolSetTaskStatus": {
+        "description": "`set_task_status` body — the status transition (hand back, close).\n`agent_name` is validated like ToolClaimTask's.",
+        "properties": {
+          "agent_name": {
+            "title": "Agent Name",
+            "type": "string"
+          },
+          "apply": {
+            "$ref": "#/components/schemas/ToolApply",
+            "default": "confirm"
+          },
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "document_id",
+          "status",
+          "agent_name"
+        ],
+        "title": "ToolSetTaskStatus",
         "type": "object"
       },
       "ToolTableCellEdit": {
@@ -23095,6 +23134,137 @@
           }
         },
         "summary": "Tool Set Fact Anchor",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
+    "/api/tool/set_task_status": {
+      "post": {
+        "description": "The status transition: hand back or close a task — a header splice\n(status replaced, claimed_until dropped) decided on the live text under\nthe edit lock, plus the archive move for a closed top-level task.",
+        "operationId": "tool_set_task_status_api_tool_set_task_status_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolSetTaskStatus"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Set Task Status",
         "tags": [
           "tool-api"
         ]

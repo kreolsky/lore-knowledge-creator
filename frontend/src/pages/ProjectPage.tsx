@@ -30,7 +30,7 @@ import { ProjectShell, type ProjectShellHandle, type RightTabEntry, type LeftTab
 import { useAppStore } from '../store/app-store';
 import { selectOpenPageLocked, PAGE_BOUND_TABS } from '../utils/page-lock';
 import { useUIStore, useDocState, ORPHAN_KEY, type RightTab } from '../store/ui-store';
-import { readRefOpenMode, refIsScope } from '../store/ui-store/documents-slice';
+import { isRememberedTab, readRefOpenMode, refIsScope } from '../store/ui-store/documents-slice';
 import { searchModeOnOpen } from '../store/ui-store/search-slice';
 import { useNoteStore } from '../store/note-store';
 import { useChatStore } from '../store/chat-store';
@@ -64,14 +64,15 @@ import { uploadReferenceFile } from '../api/reference-upload';
  * panels via hidden UI, and a non-ai account must not reach the chat panel —
  * the server 403 (tier_required:ai) on session create/turn is the guarantee,
  * the tab list only removes the trigger. Allowed sets:
- *   - full:        notes, refs, checkpoint, chat, search, links, settings, find
+ *   - full:        notes, refs, checkpoint, chat, search, links, settings, access, find
  *   - commentator: notes, refs, chat, search, links, find (no checkpoint/settings)
  *   - readonly:    refs, search, links, find (no chat/notes)
  * 'chat' drops from every set when the account's tier flag denies ai
  * (can_ai === false). Order defines the fallback when a persisted tab is no
- * longer permitted.
- * INVARIANT: 'find' is allowed for every role so the persisted ephemeral tab is not
- * filtered out as invalid on hydration. Why: the replace row is gated by accessLevel
+ * longer permitted — the first REMEMBERED entry (chat/refs/notes) wins; a technical
+ * tab can never be the stored tab (documents-slice INVARIANT).
+ * INVARIANT: 'find' is allowed for every role so the find overlay passes the same
+ * allowedTabs validation as every other tab. Why: the replace row is gated by accessLevel
  * inside FindReplacePanel, not by tab visibility — search is available to all roles.
  * It must NOT be allowedTabs[0] (the fallback), so it is appended last.
  */
@@ -134,26 +135,32 @@ export function ProjectPage() {
   const pageLocked = useAppStore(selectOpenPageLocked);
   const allowedTabs = allowedRightTabs(accessLevel, canAi)
     .filter(tab => !(pageLocked && (PAGE_BOUND_TABS as readonly string[]).includes(tab)));
-  // Ephemeral search overlay (see documents-slice INVARIANT): while alive for the
-  // current doc (panel open), search renders + highlights as active instead of the
-  // stored tab. allowedRightTabs includes 'search' for every role, so the overlay
-  // branch needs no extra role validation.
-  const searchOverlay = useUIStore(s => s.searchTabDocId === (currentDocId ?? ORPHAN_KEY));
-  // INVARIANT: validate persisted rightPanelTab against the role-allowed set.
-  // If the saved tab is no longer permitted, fall back to the first allowed tab.  Why: a persisted tab can become disallowed by a role change; validating against the allowed set prevents rendering a tab the user can't access.
-  const effectiveTab = rightPanelReady
-    ? (searchOverlay
-      ? 'search'
-      : (rightPanelTab && allowedTabs.includes(rightPanelTab) ? rightPanelTab : allowedTabs[0]))
-    : null;
+  // Ephemeral technical-tab overlay (see documents-slice INVARIANT): while alive for the
+  // current doc, that tab renders + highlights as active instead of the stored tab.
+  // The rendered entries below are built from allowedTabs (role × tier, PIN lock), and
+  // effectiveTab resolves the overlay against them — the same validation as the stored tab.
+  const overlayTab = useUIStore(s => {
+    const o = s.tabOverlay;
+    return o && o.docId === (currentDocId ?? ORPHAN_KEY) ? o.tab : null;
+  });
+  // The fallback for a stored tab this role no longer permits: the first allowed REMEMBERED
+  // tab, null when role × PIN lock leave none (a readonly role on a locked page keeps only
+  // search). Why: the fallback is persisted (effect below) and only a remembered tab is
+  // storable — a technical one would be taken as an overlay and the effect would re-fire.
+  const fallbackTab = allowedTabs.find(isRememberedTab) ?? null;
+  // INVARIANT: validate persisted rightPanelTab against the role-allowed set. Why: a persisted
+  // tab can become disallowed by a role change; validating against the allowed set prevents
+  // rendering a tab the user can't access — the saved tab falls back to the fallback tab (or
+  // the first allowed one when no remembered tab is permitted).
+  const storedTab = rightPanelTab && allowedTabs.includes(rightPanelTab) ? rightPanelTab : (fallbackTab ?? allowedTabs[0]);
 
   // Persist the fallback when the saved tab is no longer permitted for this role
   // (e.g. role changed, or localStorage carried a full-only tab into a lower role).
   useEffect(() => {
-    if (rightPanelReady && rightPanelTab && !allowedTabs.includes(rightPanelTab)) {
-      setRightPanelTab(currentDocId, allowedTabs[0]);
+    if (rightPanelReady && fallbackTab && rightPanelTab && !allowedTabs.includes(rightPanelTab)) {
+      setRightPanelTab(currentDocId, fallbackTab);
     }
-  }, [rightPanelReady, rightPanelTab, allowedTabs, currentDocId, setRightPanelTab]);
+  }, [rightPanelReady, rightPanelTab, allowedTabs, currentDocId, setRightPanelTab, fallbackTab]);
 
   const { projectCollabConn } = useProjectConnection({ projectId });
   useReferenceEvents();
@@ -336,25 +343,6 @@ export function ProjectPage() {
   // revealed by the navigate-to-reference handler (see INVARIANT in
   // hooks/useEditorEvents.ts), never by a watcher on currentReference here.
 
-  const handlePanelDragEnter = useCallback((e: React.DragEvent) => {
-    if (!e.dataTransfer.types.includes('Files')) return;
-    // WHY: a locked page has no Refs tab to reveal (page-bound tabs filter above).
-    if (pageLocked) return;
-    if (effectiveTab === 'chat') {
-      shellRef.current?.openRightPanel('chat');
-      return;
-    }
-    // WHY: with an open note thread, NotesPanel is mounted and its useImageDropHandlers
-    // zone (enabled: isThreadView) must capture the drop — identical policy to AI chat.
-    // Mirrors the chat exemption above so the refs fallback never steals a note image drop.
-    if (effectiveTab === 'notes' && activeNoteThreadId) {
-      shellRef.current?.openRightPanel('notes');
-      return;
-    }
-    if (effectiveTab !== 'refs') shellRef.current?.openRightPanel('refs');
-    else shellRef.current?.openRightPanel();
-  }, [effectiveTab, activeNoteThreadId, pageLocked]);
-
   // ── Tab entries (full-mode: all role-permitted tabs) ─────────────────────
   const leftTabs: LeftTabEntry[] = [
     { tab: 'docs', icon: <FileText size={15} />, title: t('tabDocuments'), renderPanel: () => <Sidebar /> },
@@ -411,14 +399,41 @@ export function ProjectPage() {
     });
   }
   // Ephemeral find tab: rendered only while it is the active tab — switching
-  // to any other tab overwrites rightPanelTab, so the button vanishes.
-  if (effectiveTab === 'find') {
+  // to any other tab drops the overlay, so the button vanishes.
+  if (overlayTab === 'find') {
     rightTabs.push({ tab: 'find', icon: <Replace size={15} />, title: t('tabFind'), renderPanel: () => <FindReplacePanel /> });
   }
   rightTabs.push({ tab: 'search', icon: <Search size={15} />, title: t('tabSearch'), renderPanel: () => <SearchPanel />, aside: true });
   if (accessLevel === 'full') {
     rightTabs.push({ tab: 'settings', icon: <Settings size={15} />, title: t('tabSettings'), renderPanel: () => <ProjectSettingsPanel />, aside: true });
   }
+
+  // The rendered tab: the live technical overlay when its entry is rendered, else the
+  // stored tab. Why resolve against the entries: a reference open in the main area hides
+  // checkpoint/access and a PIN-locked page hides the page-bound tabs — an overlay whose
+  // entry vanished must fall back to the stored tab, not mount an empty right panel.
+  const effectiveTab: RightTab | null = rightPanelReady
+    ? (overlayTab && rightTabs.some(entry => entry.tab === overlayTab) ? overlayTab : storedTab)
+    : null;
+
+  const handlePanelDragEnter = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    // WHY: a locked page has no Refs tab to reveal (page-bound tabs filter above).
+    if (pageLocked) return;
+    if (effectiveTab === 'chat') {
+      shellRef.current?.openRightPanel('chat');
+      return;
+    }
+    // WHY: with an open note thread, NotesPanel is mounted and its useImageDropHandlers
+    // zone (enabled: isThreadView) must capture the drop — identical policy to AI chat.
+    // Mirrors the chat exemption above so the refs fallback never steals a note image drop.
+    if (effectiveTab === 'notes' && activeNoteThreadId) {
+      shellRef.current?.openRightPanel('notes');
+      return;
+    }
+    if (effectiveTab !== 'refs') shellRef.current?.openRightPanel('refs');
+    else shellRef.current?.openRightPanel();
+  }, [effectiveTab, activeNoteThreadId, pageLocked]);
 
   return (
     <ProjectCollabContext.Provider value={projectCollabConn}>

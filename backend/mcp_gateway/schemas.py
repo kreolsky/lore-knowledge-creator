@@ -369,7 +369,7 @@ _TOOL_LIST_ORDER: tuple[str, ...] = (
     "search_materials", "read_document", "get_project_structure", "get_links",
     "export_subtree_md", "list_document_versions", "diff_document_versions",
     # property query + task loop — the `tasks` pack (reads then its one write)
-    "find_documents", "next_task", "claim_task",
+    "find_documents", "next_task", "claim_task", "set_task_status",
     # text part
     "create_document", "edit_document", "append_to_document",
     "restore_document_version",

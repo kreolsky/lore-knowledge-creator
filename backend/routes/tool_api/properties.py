@@ -1,5 +1,6 @@
 """Tool-API — document properties + the task loop: the `tasks` skill's pack
-(find_documents over the YAML-header projection, next_task / claim_task over
+(find_documents over the YAML-header projection, next_task / claim_task /
+set_task_status over
 the convention; SYSTEM: doc-properties, SYSTEM: task-convention).
 
 Thin by design: the skill-disabled gate, `where` shape validation (a 422 the
@@ -17,7 +18,7 @@ from page_lock import locked_doc_ids
 
 from db import get_db
 from doc_properties import PROP_KEY_RE, split_results_errors, visible_header_docs
-from models import ToolClaimTask, ToolFindDocuments, ToolNextTask
+from models import ToolClaimTask, ToolFindDocuments, ToolNextTask, ToolSetTaskStatus
 from routes.tool_api._common import (
     _is_system_target,
     _refuse_tasks_disabled,
@@ -28,7 +29,9 @@ from routes.tool_api_telemetry import track_agent_tool
 from scope import gate_mutation_target
 from task_convention import (
     AGENT_NAME_RE,
+    check_target_status,
     execute_claim,
+    execute_set_status,
     resolve_task_schema,
     select_next_task,
 )
@@ -102,17 +105,14 @@ async def tool_next_task(
     )
     return select_next_task(
         candidates, schema, now=datetime.now(timezone.utc), lookup=visible,
+        agent_name=(body.agent_name or "").strip() or None,
     )
 
 
-@track_agent_tool("claim_task")
-async def tool_claim_task(
-    body: ToolClaimTask, ctx: dict = Depends(get_agent_context),
-):
-    """The loop's one write: the header-only claim splice (status → the
-    schema's claimed status, assignee + claimed_until upserted) under the
-    cross-replica edit lock, decided on the live text — a contested claim
-    answers 409 already_claimed, never a silent takeover."""
+async def _gate_task_write(body, ctx: dict, tool: str) -> tuple[str, dict]:
+    """The shared gate of the two task writes: skill-disabled, agent_name
+    grammar (422), mutation target, PIN lock, artifact. Returns
+    (agent_name, target row)."""
     await _refuse_tasks_disabled(await get_db())
     agent_name = (body.agent_name or "").strip()
     if not AGENT_NAME_RE.match(agent_name):
@@ -134,9 +134,21 @@ async def tool_claim_task(
     if is_artifact_row(target):
         raise HTTPException(
             status_code=422,
-            detail="claim_task is a markdown-header operation — an html "
+            detail=f"{tool} is a markdown-header operation — an html "
                    "artifact is not a task document",
         )
+    return agent_name, target
+
+
+@track_agent_tool("claim_task")
+async def tool_claim_task(
+    body: ToolClaimTask, ctx: dict = Depends(get_agent_context),
+):
+    """The loop's one write: the header-only claim splice (status → the
+    schema's claimed status, assignee + claimed_until upserted) under the
+    cross-replica edit lock, decided on the live text — a contested claim
+    answers 409 already_claimed, never a silent takeover."""
+    agent_name, target = await _gate_task_write(body, ctx, "claim_task")
     decision = await _resolve_apply_or_force(
         ctx, ui_preference=body.apply.value,
         is_system=await _is_system_target(
@@ -153,4 +165,36 @@ async def tool_claim_task(
     return await execute_claim(
         document_id=body.document_id, agent_name=agent_name,
         project_id=ctx["project_id"], schema=schema,
+    )
+
+
+@track_agent_tool("set_task_status")
+async def tool_set_task_status(
+    body: ToolSetTaskStatus, ctx: dict = Depends(get_agent_context),
+):
+    """The status transition: hand back or close a task — a header splice
+    (status replaced, claimed_until dropped) decided on the live text under
+    the edit lock, plus the archive move for a closed top-level task."""
+    agent_name, target = await _gate_task_write(body, ctx, "set_task_status")
+    pid = ctx["project_id"]
+    rows = await visible_header_docs(
+        project_id=pid, user=ctx["user"], scope_root=ctx.get("scope_root"),
+    )
+    schema = resolve_task_schema(rows)
+    check_target_status(body.status, schema)
+    # WHY: a close that may archive is also a move INTO the archive — the
+    # move tool's rule: the destination parent decides the system cell too.
+    archive_id = schema["archive_id"] if body.status in schema["closed"] else None
+    is_system = await _is_system_target(body.document_id, pid, target) or bool(
+        archive_id and await _is_system_target(archive_id, pid)
+    )
+    decision = await _resolve_apply_or_force(
+        ctx, ui_preference=body.apply.value, is_system=is_system,
+    )
+    if decision.mode != "auto":
+        _refuse_unconfirmable("set_task_status", decision.reason)
+    return await execute_set_status(
+        document_id=body.document_id, status=body.status,
+        agent_name=agent_name, project_id=pid, schema=schema, rows=rows,
+        user=ctx["user"], scope_root=ctx.get("scope_root"),
     )

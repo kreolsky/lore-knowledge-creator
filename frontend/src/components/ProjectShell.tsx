@@ -258,9 +258,9 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
     onOpenChange: (open) => setRightPanelOpen(rightPanelDocId, open),
   });
 
-  // Closing kills a live search overlay, like the desktop close (setRightPanelOpen).
-  const clearSearchTabOverlay = useUIStore(s => s.clearSearchTabOverlay);
-  const closeCompactRight = () => { clearSearchTabOverlay(); setCompactPanel('none'); };
+  // Closing kills a live technical-tab overlay, like the desktop close (setRightPanelOpen).
+  const clearTabOverlay = useUIStore(s => s.clearTabOverlay);
+  const closeCompactRight = () => { clearTabOverlay(); setCompactPanel('none'); };
 
   const sidebarIsOpen = compact ? compactPanel === 'left' : sidebarResizer.isOpen;
   const rightIsOpen = compact ? compactPanel === 'right' : rightPanelResizer.isOpen;

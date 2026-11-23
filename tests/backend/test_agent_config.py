@@ -117,7 +117,7 @@ async def test_build_prompt_and_skill_docs_wires_all_three_layers(
     }
     # The task pack: the task loop's three tools — pinned like every other pack.
     assert _front(shipped["tasks"]["content"])["tools"] == [
-        "find_documents", "next_task", "claim_task",
+        "find_documents", "next_task", "claim_task", "set_task_status",
     ]
     assert _front(shipped["secrets"]["content"])["tools"] == [
         "list_secrets", "http_request",

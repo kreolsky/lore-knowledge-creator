@@ -24,11 +24,11 @@ import type { ColorOverrides, ThemeName } from '../theme/color-tokens';
 import type { SoundChoice } from '../utils/sound-presets';
 import { createThemeSlice, type GlobalPrefs, type AdminSectionTab, type CabinetSectionTab } from './ui-store/theme-slice';
 export type { AdminSectionTab, CabinetSectionTab };
-import { createDocumentsSlice, DEFAULT_DOC_STATE, ORPHAN_KEY, readRefOpenMode, showsBothPanes } from './ui-store/documents-slice';
-import type { RightTab, MainEntity, DocumentUIState, RefOpenMode } from './ui-store/documents-slice';
+import { createDocumentsSlice, DEFAULT_DOC_STATE, ORPHAN_KEY, readRefOpenMode, repairStoredTab, showsBothPanes } from './ui-store/documents-slice';
+import type { DocumentUIState, EphemeralTab, MainEntity, RefOpenMode, RememberedTab, RightTab, TabOverlay } from './ui-store/documents-slice';
 
 export { DEFAULT_DOC_STATE, ORPHAN_KEY, readRefOpenMode, showsBothPanes };
-export type { RightTab, MainEntity, DocumentUIState, RefOpenMode };
+export type { RightTab, RememberedTab, EphemeralTab, MainEntity, DocumentUIState, RefOpenMode, TabOverlay };
 
 interface PersistedUIState {
   sidebarTab: 'docs' | 'toc';
@@ -253,12 +253,12 @@ export interface UIState {
   // flick to the real saved tab on hydration.
   projectPrefsLoaded: boolean;
   documents: Record<string, DocumentUIState>;
-  // Ephemeral search-tab overlay: the docId (or ORPHAN_KEY) whose right panel is
-  // currently showing 'search'. 'search' is never a stored documents[].rightPanelTab
-  // value — it lives only here (see documents-slice.ts header INVARIANT + Why), and
-  // buildUIBlob (field-by-field) keeps it out of the persisted blob. Cleared on panel
-  // close, other-tab select, doc switch (app-store setCurrentDocument) and project switch.
-  searchTabDocId: string | null;
+  // Ephemeral technical-tab overlay (see documents-slice INVARIANT + Why): the doc whose
+  // right panel currently shows a technical tab, and which one. A technical tab is never a
+  // stored documents[].rightPanelTab value — it lives only here, and buildUIBlob
+  // (field-by-field) keeps it out of the persisted blob. Cleared on panel close, remembered-tab
+  // select, doc switch (app-store setCurrentDocument) and project switch.
+  tabOverlay: TabOverlay | null;
   searchQuery: string;
   searchResults: SearchResult[];
   searchMode: SearchMode;
@@ -288,7 +288,7 @@ export interface UIState {
   // Per-document right-panel actions
   setRightPanelTab: (docId: string | null, tab: RightTab | null) => void;
   setRightPanelOpen: (docId: string | null, open: boolean) => void;
-  clearSearchTabOverlay: () => void;
+  clearTabOverlay: () => void;
   setMainEntity: (docId: string, entity: MainEntity) => void;
   getActiveDocState: () => DocumentUIState;
   getDocState: (docId: string | null | undefined) => DocumentUIState;
@@ -310,7 +310,7 @@ export interface UIState {
   setSearchCache: (query: string, results: SearchResult[]) => void;
   setRefOpenMode: (docId: string, mode: RefOpenMode) => void;
   getRefOpenMode: (docId: string) => RefOpenMode;
-  pinRightPanel: (docId: string, tab: RightTab) => void;
+  pinRightPanel: (docId: string, tab: RememberedTab) => void;
   setChatSortByProximity: (docId: string, value: boolean) => void;
   getChatSortByProximity: (docId: string | null | undefined) => boolean;
   setSplitRatio: (ratio: number) => void;
@@ -409,18 +409,13 @@ export const useUIStore = create<UIState>((set, get) => ({
   },
   applyProjectPrefs: (serverPrefs) => {
     const merged = { ...UI_DEFAULTS, ...serverPrefs };
-    // WHY: Migrate persisted 'info' tab → 'checkpoint' (Info tab removed).
-    // WHY: Migrate persisted 'search' tab → 'refs' (search is an ephemeral overlay
-    // now; legacy rows saved it as the stored tab).
+    // WHY: hydrate-time repair of legacy rows (repairStoredTab): 'info' (tab removed),
+    // 'search' (the first ephemeral tab) and the technical tabs were once stored as the
+    // remembered tab — only chat/refs/notes may be stored now (documents-slice INVARIANT).
     if (merged.documents) {
       for (const docId of Object.keys(merged.documents)) {
         const ds = merged.documents[docId];
-        if (ds.rightPanelTab === 'info' as RightTab | null) {
-          ds.rightPanelTab = 'checkpoint';
-        }
-        if (ds.rightPanelTab === 'search') {
-          ds.rightPanelTab = 'refs';
-        }
+        ds.rightPanelTab = repairStoredTab(ds.rightPanelTab);
       }
     }
     const serverDocPositions: Record<string, EditorPosition> = {};
@@ -491,7 +486,7 @@ export const useUIStore = create<UIState>((set, get) => ({
         collapsedDocIds: UI_DEFAULTS.collapsedDocIds ?? [],
       } : {}),
       documents: {},
-      searchTabDocId: null,
+      tabOverlay: null,
       // Drop the prior project's active chat so a stale id does not resolve
       // against the new project's list during the prefs-hydration window.
       lastActiveChatSessionId: null,

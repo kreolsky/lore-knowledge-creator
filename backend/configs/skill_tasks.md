@@ -5,6 +5,7 @@ tools:
   - find_documents
   - next_task
   - claim_task
+  - set_task_status
 ---
 
 # Tasks
@@ -24,8 +25,12 @@ is served first.
 
 ## The loop
 
-1. `next_task` — the next available task (ready, or a claim whose lease
-   expired, with every dependency closed). Null task = nothing to do; say so.
+1. `next_task(agent_name)` — first look at `in_progress`: an entry whose
+   `assignee` is your name is your own unfinished work — resume it (renew
+   with `claim_task`) before taking a new task. Otherwise `task` is the next
+   available one (ready, or a claim whose lease expired, with every
+   dependency closed). Null task = nothing to do; say so. Tasks listed in
+   `reserved` are assigned to someone else — leave them.
    A `blocked` entry whose reason is `dependency not visible` or `dependency
    unresolvable` will never unblock on its own (a broken link, or a target out
    of your reach) — name those tasks to the person in your reply.
@@ -35,10 +40,15 @@ is served first.
    again with the same `agent_name` to renew.
 3. Read before working: the task itself, its parent (the story it belongs
    to), and every neighbour `get_links` names on it.
-4. Work. Finish with the report and the review status (below). Never set a
-   closed status on your own initiative — review is the hand-back to the
-   person, and closing is theirs: set it only when the person explicitly asks
-   you to close that task.
+4. Work. Finish with the report and `set_task_status(document_id, <review
+   status>, agent_name)` (below). Never close on your own initiative — review
+   is the hand-back to the person, and closing is theirs: when the person
+   explicitly asks you to close that task, call `set_task_status` with a
+   closed status. Never change `status:` by editing the header.
+
+A 409 `open_subtasks` or `already_claimed` from `set_task_status` is reported
+to the person, not worked around. A 500 after a close is retried once with
+the same status — it completes the move into the archive.
 
 ## Reading a task
 
@@ -57,9 +67,8 @@ names (the generic default is `## Log`). Write intent, not description:
 - what was NOT proven (untested paths, assumptions you had to make);
 - open questions for the person reviewing.
 
-When you set the review status, delete the `claimed_until` line from the
-header and keep `assignee` — it records who did the work, while a leftover
-lease would hand the task back to you if someone reopens it by hand.
+`set_task_status` removes the `claimed_until` line and keeps `assignee` — it
+records who did the work, and a task reopened by hand returns to you.
 
 Nothing inferable from the code is copied into the project — a log records
 decisions and evidence, not the source. A spec you wrote along the way
@@ -108,6 +117,7 @@ A schema document (one per project, authored by the team):
     closed: [done]
     initial: todo
     priority: [urgent, high, normal, low]
+    archive: "[DONE](doc:<id>)"  # optional: closed top-level tasks move here
     ---
     # Tasks
 

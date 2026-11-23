@@ -452,9 +452,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...(docChanged ? { previewDocument: null, previewScrollOffset: null, currentTable: null, currentTableLabel: null } : {}),
         ...(nextRefs ? { references: nextRefs } : {}),
       });
-      // The search-tab overlay is doc-scoped: a doc switch drops it so returning
-      // to the doc restores the user's real saved tab, not search.
-      if (docChanged) useUIStore.getState().clearSearchTabOverlay();
+      // The technical-tab overlay is doc-scoped: a doc switch drops it so returning
+      // to the doc restores the user's remembered tab, not the technical one.
+      if (docChanged) useUIStore.getState().clearTabOverlay();
       if (doc) {
         if (applyRef) {
           useUIStore.getState().setCurrentReferenceForDoc(doc.document_id, applyRef.reference_id);

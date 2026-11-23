@@ -61,6 +61,7 @@ def test_convention_pure_edges():
         build_claimed_block,
         resolve_task_schema,
         select_next_task,
+        splice_header_keys,
     )
 
     schema = resolve_task_schema(_schema_rows())
@@ -68,7 +69,8 @@ def test_convention_pure_edges():
     # Selection: priority order first (urgent before normal, missing priority
     # last), then created_at (rows' own order — the sort is stable). The
     # stale claim is offered but behind the ready tasks of known priority; an
-    # active claim, a closed task and a non-task are neither offered nor
+    # active claim is listed in in_progress, a ready task assigned to someone
+    # else in reserved; a closed task and a non-task are neither offered nor
     # reported; a broken header and unknown/missing status are REPORTED.
     rows = _schema_rows() + [
         _task("t-normal", "Normal task", "todo"),
@@ -83,6 +85,8 @@ def test_convention_pure_edges():
               claimed_until=(NOW - timedelta(hours=1)).isoformat()),
         _task("t-active", "Active claim", "doing", assignee="other",
               claimed_until=(NOW + timedelta(hours=1)).isoformat()),
+        _task("t-reserved", "Reserved", "todo", priority="urgent",
+              assignee="human"),
         _task("t-unknown", "Unknown status", "wip"),
         _task("t-nostatus", "No status"),
         _row("t-broken", "Broken header", error="malformed header YAML: boom"),
@@ -93,8 +97,18 @@ def test_convention_pure_edges():
     assert "stale" not in out["task"]
     assert out["schema_id"] == "s1" and out["initial"] == "todo"
     assert out["counts"] == {
-        "available": 4, "blocked": 1, "invalid": 3, "stale": 1,
+        "available": 4, "blocked": 1, "invalid": 3, "reserved": 1,
+        "in_progress": 2, "stale": 1,
     }
+    assert out["reserved"] == [
+        {"id": "t-reserved", "title": "Reserved", "assignee": "human"},
+    ]
+    # t-dep: claimed status with no claimed_until reads as a live claim.
+    assert [e["id"] for e in out["in_progress"]] == ["t-dep", "t-active"]
+    assert out["in_progress"][1]["assignee"] == "other"
+    # The named agent gets its own reserved task back into the offer pool.
+    mine = select_next_task(rows, schema, now=NOW, agent_name="human")
+    assert mine["reserved"] == [] and mine["counts"]["available"] == 5
     assert {e["id"] for e in out["invalid"]} == {
         "t-unknown", "t-nostatus", "t-broken",
     }
@@ -196,6 +210,13 @@ def test_convention_pure_edges():
     ok = resolve_task_schema(_schema_rows())
     assert ok["initial"] == "todo" and ok["schema_id"] == "s1"
     assert ok["closed"] == ["done"] and ok["priority"] == ["urgent", "normal"]
+    assert ok["archive_id"] is None
+    assert resolve_task_schema(
+        _broken(archive="[DONE](doc:arch1)"),
+    )["archive_id"] == "arch1"
+    with pytest.raises(HTTPException) as bad_archive:
+        resolve_task_schema(_broken(archive="not a link!"))
+    assert bad_archive.value.detail["code"] == "invalid_schema"
 
     # The header write: replace status, upsert the two lease keys (always
     # double-quoted), insert before the closing fence, keep the block's
@@ -246,25 +267,40 @@ def test_convention_pure_edges():
                 block, status="doing", agent_name="a",
                 claimed_until="2026-11-22T16:00:00+00:00",
             )
-    # A claim key whose value spans lines would leave its continuation behind
-    # after the one-line replace — the re-parse check refuses it.
+    # The status transition's splice: replace status, DROP claimed_until,
+    # keep assignee and every other line.
+    assert splice_header_keys(
+        'type: task\nstatus: doing\nassignee: "a"\n'
+        'claimed_until: "2026-11-22T16:00:00+00:00"\npriority: urgent\n',
+        {"status": "review"}, ("claimed_until",),
+    ) == 'type: task\nstatus: review\nassignee: "a"\npriority: urgent\n'
+    # A dropped key that is absent is a no-op; a non-scalar under it refuses.
+    assert splice_header_keys(
+        "type: task\nstatus: review\n", {"status": "done"}, ("claimed_until",),
+    ) == "type: task\nstatus: done\n"
+    with pytest.raises(HeaderLineError):
+        splice_header_keys("type: task\nstatus: doing\nclaimed_until: [x]\n",
+                           {"status": "review"}, ("claimed_until",))
+    # A touched key whose value spans lines would leave its continuation
+    # behind after the one-line replace — the re-parse check refuses it.
     from doc_properties import parse_header
-    from task_convention import _claimed_block_or_refuse
+    from task_convention import _splice_or_refuse
+    claim = {"status": "doing", "assignee": '"a"', "claimed_until": '"x"'}
     for block in (
         "type: task\nstatus: todo\nassignee:\n  - someone\n",
         "type: task\nstatus: todo\nassignee: some\n  one\n",
     ):
         props, _ = parse_header(f"---\n{block}---\n")
+        expected = {**props, "status": "doing", "assignee": "a",
+                    "claimed_until": "x"}
         with pytest.raises(HTTPException) as spans:
-            _claimed_block_or_refuse(
-                block, props, schema, "a", "2026-11-22T16:00:00+00:00",
-            )
+            _splice_or_refuse(block, claim, (), expected)
         assert spans.value.detail["code"] == "non_scalar_claim_key"
     good = "type: task\nstatus: todo\n"
     props, _ = parse_header(f"---\n{good}---\n")
-    assert "assignee: \"a\"" in _claimed_block_or_refuse(
-        good, props, schema, "a", "2026-11-22T16:00:00+00:00",
-    )
+    assert "assignee: \"a\"" in _splice_or_refuse(good, claim, (), {
+        **props, "status": "doing", "assignee": "a", "claimed_until": "x",
+    })
 
 
 # ─── Integration: the loop over the real stack ────────────────────────────────
@@ -349,7 +385,10 @@ async def test_claim_task_outcomes_and_race(client, test_db, collab_project):
     body = resp.json()
     assert body["task"]["id"] == ids["ready"]
     assert body["schema_id"] == schema_id and body["initial"] == "todo"
-    assert body["counts"] == {"available": 1, "blocked": 1, "invalid": 0, "stale": 0}
+    assert body["counts"] == {
+        "available": 1, "blocked": 1, "invalid": 0, "reserved": 0,
+        "in_progress": 1, "stale": 0,
+    }
     assert body["blocked"][0]["id"] == ids["blocked"]
     assert "not closed" in body["blocked"][0]["reason"]
 
@@ -427,6 +466,15 @@ async def test_claim_task_outcomes_and_race(client, test_db, collab_project):
     resp = await _tool(client, "claim_task", key,
                        document_id=plain, agent_name="agent-a", apply="auto")
     assert resp.status_code == 409 and resp.json()["detail"]["code"] == "not_a_task"
+    # A ready task assigned to someone else → 409 reserved naming them.
+    held = await _doc(client, admin_token, pid, "Reserved task", (
+        "---\ntype: task\nstatus: todo\nassignee: human\n---\n"
+    ))
+    resp = await _tool(client, "claim_task", key,
+                       document_id=held, agent_name="agent-a", apply="auto")
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["code"] == "reserved"
+    assert resp.json()["detail"]["assignee"] == "human"
 
     # The claim decides on the LIVE text, never the (lagging) projection: a
     # header claimed through REST a moment ago answers already_claimed before
@@ -482,6 +530,116 @@ async def test_claim_task_outcomes_and_race(client, test_db, collab_project):
     props, _ = await _parse_row_header(race)
     assert props["assignee"] == winners[0]
     await _settle()
+
+
+async def _set(client, key, doc_id, status, agent="kilo"):
+    return await _tool(client, "set_task_status", key, document_id=doc_id,
+                       status=status, agent_name=agent, apply="auto")
+
+
+def _code(resp) -> str:
+    assert resp.status_code == 409, resp.text
+    return resp.json()["detail"]["code"]
+
+
+async def _children(test_db, parent_id) -> list[str]:
+    from documents.service import sibling_rows
+
+    row = await fetch_one("documents", parent_id)
+    return [s["id"] for s in await sibling_rows(row["project_id"], parent_id)]
+
+
+# set_task_status is decided on the live header under the edit lock, and its
+# close moves the task through the real tree command — the outcome table,
+# the archive placement and the retry contract are what the lore-health CLI
+# reads.
+# TEST-WHY: cross-process-contract — the lore-health CLI reads set_task_status outcomes and refusals
+async def test_set_task_status_outcomes(client, test_db, collab_project):
+    pid, _shared, admin_token, _ut, admin_uid, _uu = collab_project
+    archive = await _doc(client, admin_token, pid, "DONE", "archive")
+    x = await _doc(client, admin_token, pid, "X", "old", parent_id=archive)
+    await _doc(client, admin_token, pid, "Task schema", SCHEMA_HEADER.replace(
+        "priority: [urgent, normal]\n",
+        f"priority: [urgent, normal]\narchive: \"[DONE](doc:{archive})\"\n",
+    ))
+    task = "---\ntype: task\nstatus: todo\n---\n\nBody.\n"
+    a = await _doc(client, admin_token, pid, "A", task)
+    c = await _doc(client, admin_token, pid, "C", task)
+    c1 = await _doc(client, admin_token, pid, "C1", task, parent_id=c)
+    await _settle()
+    key = await _key(admin_uid, pid)
+
+    assert _code(await _set(client, key, a, "doing")) == "use_claim_task"
+    assert _code(await _set(client, key, a, "wip")) == "unknown_status"
+
+    # A live foreign lease refuses with the holder named, nothing written.
+    resp = await _tool(client, "claim_task", key, document_id=a,
+                       agent_name="kilo", apply="auto")
+    assert resp.status_code == 200, resp.text
+    resp = await _set(client, key, a, "review", agent="other")
+    assert _code(resp) == "already_claimed"
+    assert resp.json()["detail"]["assignee"] == "kilo"
+    props, _ = await _parse_row_header(a)
+    assert props["status"] == "doing"
+
+    # Hand back: status replaced, claimed_until gone, assignee kept, a
+    # checkpoint names the transition. The same call again → no_change.
+    resp = await _set(client, key, a, "review")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "outcome": "set", "document_id": a, "status": "review",
+        "previous_status": "doing", "archived_to": None,
+    }
+    props, err = await _parse_row_header(a)
+    assert err is None and props["status"] == "review"
+    assert props["assignee"] == "kilo" and "claimed_until" not in props
+    assert _code(await _set(client, key, a, "review")) == "no_change"
+
+    # Close a top-level task → it lands under the archive AFTER X.
+    resp = await _set(client, key, a, "done")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["archived_to"] == archive
+    assert await _children(test_db, archive) == [x, a]
+    assert _code(await _set(client, key, a, "done")) == "no_change"
+
+    # Open subtasks block the close; a closed subtask stays in place; then
+    # the parent moves with its subtree.
+    await _settle()
+    resp = await _set(client, key, c, "done")
+    assert _code(resp) == "open_subtasks"
+    assert [t["id"] for t in resp.json()["detail"]["subtasks"]] == [c1]
+    resp = await _set(client, key, c1, "done")
+    assert resp.status_code == 200 and resp.json()["archived_to"] is None
+    assert await _children(test_db, c) == [c1]
+    await _settle()
+    resp = await _set(client, key, c, "done")
+    assert resp.status_code == 200 and resp.json()["archived_to"] == archive
+    assert await _children(test_db, archive) == [x, a, c]
+    assert await _children(test_db, c) == [c1]
+
+    # A close whose move did not happen (closed by hand, outside the archive)
+    # is completed by the same-status call: only the move, no header write.
+    e = await _doc(client, admin_token, pid, "E",
+                   "---\ntype: task\nstatus: done\n---\n")
+    await _settle()
+    resp = await _set(client, key, e, "done")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["archived_to"] == archive
+    assert (await _children(test_db, archive))[-1] == e
+
+    # An archive the key cannot see refuses before anything is written.
+    # (the scoped key sees only the schema inside its subtree)
+    sub = await _doc(client, admin_token, pid, "Scoped", "scope root")
+    await _doc(client, admin_token, pid, "Scoped schema", SCHEMA_HEADER.replace(
+        "priority: [urgent, normal]\n",
+        f"priority: [urgent, normal]\narchive: \"[DONE](doc:{archive})\"\n",
+    ), parent_id=sub)
+    d = await _doc(client, admin_token, pid, "D", task, parent_id=sub)
+    await _settle()
+    scoped = await _key(admin_uid, pid, scope_root=sub)
+    assert _code(await _set(client, scoped, d, "done")) == "archive_not_visible"
+    props, _ = await _parse_row_header(d)
+    assert props["status"] == "todo"
 
 
 # The refused principals: a read-only MCP key never reaches the claim; the
@@ -554,6 +712,9 @@ async def test_task_tools_refused_principals(client, mcp_running, test_db,
             ("next_task", {}),
             ("claim_task", {"document_id": ids["ready"], "agent_name": "a",
                             "apply": "auto"}),
+            ("set_task_status", {"document_id": ids["ready"],
+                                 "status": "review", "agent_name": "a",
+                                 "apply": "auto"}),
         ):
             resp = await _tool(client, name, key, **body)
             assert resp.status_code == 403, (name, resp.text)

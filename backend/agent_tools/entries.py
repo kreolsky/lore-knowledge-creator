@@ -57,6 +57,7 @@ from agent_tools.specs.properties import (
     CLAIM_TASK_TOOL,
     FIND_DOCUMENTS_TOOL,
     NEXT_TASK_TOOL,
+    SET_TASK_STATUS_TOOL,
 )
 from agent_tools.specs.read import (
     GET_FACT_HISTORY_TOOL,
@@ -121,6 +122,7 @@ from models import (
     ToolSearch,
     ToolSearchMyChats,
     ToolSetFactAnchor,
+    ToolSetTaskStatus,
     ToolUnbindPipeline,
     ToolViewChatImage,
     ToolViewReferenceImage,
@@ -299,9 +301,25 @@ register(ToolEntry(
         "`claimed_until` in its YAML header — a 4-hour lease, renewed by "
         "calling again with the same agent_name. Outcomes: claimed / renewed "
         "/ taken_over (a lease that expired); 409 already_claimed (call "
-        "next_task again for another task) / not_ready / not_a_task. "
+        "next_task again for another task) / reserved / not_ready / "
+        "not_a_task. "
         "Read-write key: applies immediately, reversible in the Lore History "
         "panel."
+    ),
+))
+register(ToolEntry(
+    spec=SET_TASK_STATUS_TOOL, request_model=ToolSetTaskStatus,
+    handler_path="routes.tool_api.properties:tool_set_task_status",
+    surfaces=_PUBLIC,
+    mcp_description=(
+        "Set a task document's status (hand back for review, or close when "
+        "the person asks): replaces `status:` and removes `claimed_until` in "
+        "its YAML header; `assignee` stays. Closing a top-level task moves it "
+        "under the schema's `archive` document (last). 409 already_claimed "
+        "(another agent's live lease), use_claim_task, no_change, "
+        "open_subtasks, archive_not_visible. Read-write key: applies "
+        "immediately, reversible in the Lore History panel (the archive move "
+        "is undone by moving it back)."
     ),
 ))
 

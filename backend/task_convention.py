@@ -1,15 +1,17 @@
 """# SYSTEM: task-convention — the tasks feature's convention half: schema
-resolve, next_task selection, claim_task.
+resolve, next_task selection, claim_task, set_task_status.
 
 Tasks are documents with properties plus a convention on top: the properties half (the header grammar, the
 projection, find_documents, the visibility decision) is doc_properties.py;
 THIS module owns what the convention adds — which document is the schema,
-which task is next, and the one write the loop makes (the claim).
+which task is next, and the two writes the loop makes (the claim and the
+status transition, which archives a closed top-level task).
 
 # ARCH (the schema is a document, validated at READ time): a visible doc whose
 # header has `type: schema, schema_for: task` names the statuses, the
-# ready/claimed/closed anchors, the optional initial status and the optional
-# priority order (most urgent FIRST — index 0 is served first); its BODY
+# ready/claimed/closed anchors, the optional initial status, the optional
+# priority order (most urgent FIRST — index 0 is served first) and the
+# optional `archive:` document closed top-level tasks move under; its BODY
 # is the project's own task rules (log heading, definition of done), read
 # by the agent, never parsed here. Editing the
 # schema therefore needs no re-projection of every task — next_task /
@@ -44,11 +46,16 @@ from datetime import datetime, timedelta, timezone
 from agent.doc_state import resolve_live_doc_state, route_document_edits
 from agent.tool_api_surface import create_agent_pre_edit_checkpoint
 from doc_edit_lock import edit_lock
+from documents.move import _resolve_move_destination, move_document_command
+from documents.service import sibling_rows
 from fastapi import HTTPException
+from page_lock import locked_doc_ids
 
+from db import fetch_one, get_ancestor_ids, get_descendant_ids
 from db.records import SAFE_ID_RE
 from doc_properties import FRONTMATTER_RE, parse_header
 from mentions import extract_content_edges
+from scope import require_doc_in_scope
 
 #: The claim lease. A bare constant, not a setting: nobody can meaningfully
 #: choose it (the same stance as DOC_EDIT_LOCK_TTL_S).
@@ -64,8 +71,9 @@ AGENT_NAME_RE = re.compile(r"^[^\W_][\w .@-]{0,63}$")
 #: inside a nested mapping is not the convention's key.
 _HEADER_KEY_LINE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):(.*)$")
 
-#: The header keys the claim write owns (replace / upsert, scalars only).
-_CLAIM_LINE_KEYS = ("status", "assignee", "claimed_until")
+#: Cap on each reported list of next_task (invalid / blocked / reserved /
+#: in_progress) — the counts carry the full size.
+_REPORT_CAP = 20
 
 #: YAML value shapes that are NOT a scalar — the claim write refuses them
 #: under its keys instead of guessing a serialization.
@@ -77,7 +85,8 @@ _NO_SCHEMA_DETAIL = (
     "whose YAML header has `type: schema`, `schema_for: task`, `statuses: "
     "[<status>...]`, `ready: <status>`, `claimed: <status>`, `closed: "
     "[<status>...]` (optional: `initial: <status>`, `priority: [<value>...]` "
-    "with the most urgent value FIRST — it is served first), with the "
+    "with the most urgent value FIRST — it is served first, `archive: "
+    "<link to a document>` that closed top-level tasks move under), with the "
     "project's task rules in the body."
 )
 
@@ -135,8 +144,7 @@ def resolve_task_schema(rows: list[dict]) -> dict:
     header-bearing `rows` (visible_header_docs output — the same visibility
     decision every property consumer uses).
 
-    Raises 409 {no_schema | ambiguous_schema | invalid_schema}. Returns
-    {schema_id, title, statuses, ready, claimed, closed, initial, priority}.
+    409 {no_schema | ambiguous_schema | invalid_schema}; returns the fields.
     """
     candidates = [
         r for r in rows
@@ -179,7 +187,21 @@ def resolve_task_schema(rows: list[dict]) -> dict:
         "closed": closed,
         "initial": initial if initial is not None else statuses[0],
         "priority": _string_list(props, "priority"),
+        "archive_id": _schema_archive_id(props),
     }
+
+
+def _schema_archive_id(props: dict) -> str | None:
+    """The optional `archive:` document id (a Lore link or a bare id), None
+    when absent; present but unresolvable refuses (invalid_schema)."""
+    raw = props.get("archive")
+    if raw is None:
+        return None
+    archive_id = _resolve_dep_id(raw)
+    if archive_id is None:
+        _refuse("invalid_schema",
+                f"schema field `archive` ({raw!r}) is not a document link or id")
+    return archive_id
 
 
 # ─── next_task selection (pure over the visible rows + the schema) ───────────
@@ -253,10 +275,14 @@ def _task_view(row: dict, stale: bool = False) -> dict:
     return out
 
 
-def _classify_task(row: dict, schema: dict, now: datetime) -> tuple[str, object]:
+def _classify_task(
+    row: dict, schema: dict, now: datetime, agent_name: str | None,
+) -> tuple[str, object]:
     """One visible row's offer state: ("invalid", reason | error),
-    ("blocked", reason), ("skip", None) — not a task / not this loop's turn /
-    an active claim — or ("available", stale: bool)."""
+    ("skip", None) — not a task / not this loop's turn —, ("in_progress",
+    None) — an active claim —, ("reserved", assignee) — a ready task assigned
+    to someone other than `agent_name` (any assignee when it is None) — or
+    ("available", stale: bool)."""
     error = row.get("props_error")
     props = row.get("props")
     if error:
@@ -270,11 +296,13 @@ def _classify_task(row: dict, schema: dict, now: datetime) -> tuple[str, object]
         return "invalid", f"unknown status {status!r}"
     stale = False
     if status == schema["ready"]:
-        pass
+        assignee = props.get("assignee")
+        if isinstance(assignee, str) and assignee and assignee != agent_name:
+            return "reserved", assignee
     elif status == schema["claimed"]:
         until = _parse_iso(props.get("claimed_until"))
         if until is None or until > now:
-            return "skip", None  # actively claimed: not offered, not reported
+            return "in_progress", None  # never offered, listed for resume
         stale = True
     else:
         return "skip", None  # closed / intermediate status: not this turn
@@ -303,16 +331,30 @@ def _malformed_field(props: dict, priorities: list | None) -> str | None:
 
 def _scan_rows(
     rows: list[dict], schema: dict, by_id: dict, now: datetime,
-) -> tuple[list[dict], list[dict], list[tuple[dict, bool]]]:
-    """One pass over the visible rows → (invalid, blocked, available)."""
-    invalid: list[dict] = []
-    blocked: list[dict] = []
+    agent_name: str | None,
+) -> tuple[dict[str, list[dict]], list[tuple[dict, bool]]]:
+    """One pass over the visible rows → ({invalid, blocked, reserved,
+    in_progress}, available)."""
+    report: dict[str, list[dict]] = {
+        "invalid": [], "blocked": [], "reserved": [], "in_progress": [],
+    }
+    invalid, blocked = report["invalid"], report["blocked"]
     available: list[tuple[dict, bool]] = []
     for row in rows:
-        state, payload = _classify_task(row, schema, now)
+        state, payload = _classify_task(row, schema, now, agent_name)
         rid, title = row.get("id"), row.get("title")
         if state == "invalid":
             invalid.append({"id": rid, "title": title, "reason": payload})
+        elif state == "reserved":
+            report["reserved"].append(
+                {"id": rid, "title": title, "assignee": payload})
+        elif state == "in_progress":
+            props = row["props"]
+            report["in_progress"].append({
+                "id": rid, "title": title,
+                "assignee": props.get("assignee"),
+                "claimed_until": props.get("claimed_until"),
+            })
         elif state == "available":
             shape_error = _malformed_field(row["props"], schema["priority"])
             if shape_error is not None:
@@ -323,12 +365,12 @@ def _scan_rows(
                 blocked.append({"id": rid, "title": title, "reason": reason})
             else:
                 available.append((row, payload))
-    return invalid, blocked, available
+    return report, available
 
 
 def select_next_task(
     rows: list[dict], schema: dict, *, now: datetime,
-    lookup: list[dict] | None = None,
+    lookup: list[dict] | None = None, agent_name: str | None = None,
 ) -> dict:
     """The next_task answer over the candidate `rows`: the first AVAILABLE task
     (ready, or a claim whose lease has lapsed, with every dependency closed),
@@ -343,9 +385,13 @@ def select_next_task(
     resolve against it, not against the candidates: a task narrowed by
     `under` may depend on a task outside that subtree, and it is satisfied
     when that task is closed.
+
+    A ready task carrying an `assignee` other than `agent_name` is reserved:
+    never offered, listed in `reserved`. An actively claimed task is listed
+    in `in_progress` so its holder can resume it.
     """
     by_id = {r.get("id"): r for r in (rows if lookup is None else lookup)}
-    invalid, blocked, available = _scan_rows(rows, schema, by_id, now)
+    report, available = _scan_rows(rows, schema, by_id, now, agent_name)
     prio_order = {p: i for i, p in enumerate(schema["priority"] or [])}
     available.sort(
         key=lambda pair: prio_order.get(
@@ -358,57 +404,84 @@ def select_next_task(
         "initial": schema["initial"],
         "counts": {
             "available": len(available),
-            "blocked": len(blocked),
-            "invalid": len(invalid),
+            **{name: len(items) for name, items in report.items()},
             "stale": sum(1 for _row, stale in available if stale),
         },
-        "invalid": invalid[:20],
-        "blocked": blocked[:20],
+        **{name: items[:_REPORT_CAP] for name, items in report.items()},
     }
 
 
-# ─── The claim write (one splice over the header block) ──────────────────────
+# ─── The header writes (one splice over the header block) ────────────────────
+
+
+def splice_header_keys(
+    block: str, values: dict[str, str], drop: tuple[str, ...] = (),
+) -> str:
+    """The header block with each `values` key's line replaced by `key: value`
+    (appended at the block's end — before the closing fence — when absent)
+    and each `drop` key's line removed. Values are written as given: the
+    caller serializes them.
+
+    Top-level lines only (an indented `status:` belongs to a nested mapping).
+    A non-scalar value under a touched key raises HeaderLineError — the
+    caller refuses with 409 and writes nothing.
+    """
+    trailing = "\n" if block.endswith("\n") else ""
+    core = block[:-1] if trailing else block
+    lines = core.split("\n") if core else []
+    touched = (*values, *drop)
+    seen: list[str] = []
+    out: list[str] = []
+    for line in lines:
+        m = _HEADER_KEY_LINE_RE.match(line)
+        key = m.group(1) if m else None
+        if key not in touched:
+            out.append(line)
+            continue
+        value = m.group(2).strip()
+        if any(value.startswith(p) for p in _NON_SCALAR_PREFIXES):
+            raise HeaderLineError(
+                f"header key `{key}` holds a non-scalar value; fix it by "
+                f"hand before changing it",
+            )
+        if key in values:
+            out.append(f"{key}: {values[key]}")
+            seen.append(key)
+    out.extend(f"{k}: {v}" for k, v in values.items() if k not in seen)
+    return "\n".join(out) + trailing
 
 
 def build_claimed_block(
     block: str, *, status: str, agent_name: str, claimed_until: str,
 ) -> str:
-    """The header block with `status:` replaced and `assignee:` /
-    `claimed_until:` upserted (both double-quoted; inserted before the closing
-    fence — i.e. at the block's end — when absent).
+    """The claim's header block: `status:` replaced, `assignee:` /
+    `claimed_until:` upserted, both double-quoted."""
+    return splice_header_keys(block, {
+        "status": status,
+        "assignee": json.dumps(agent_name, ensure_ascii=False),
+        "claimed_until": json.dumps(claimed_until),
+    })
 
-    Top-level lines only (an indented `status:` belongs to a nested mapping).
-    A non-scalar value under one of the claim keys raises HeaderLineError —
-    the caller refuses with 409 and writes nothing.
-    """
-    trailing = "\n" if block.endswith("\n") else ""
-    core = block[:-1] if trailing else block
-    lines = core.split("\n") if core else []
-    seen: set[str] = set()
-    replacements = {
-        "status": f"status: {status}",
-        "assignee": f"assignee: {json.dumps(agent_name, ensure_ascii=False)}",
-        "claimed_until": f"claimed_until: {json.dumps(claimed_until)}",
-    }
-    out: list[str] = []
-    for line in lines:
-        m = _HEADER_KEY_LINE_RE.match(line)
-        key = m.group(1) if m else None
-        if key in _CLAIM_LINE_KEYS:
-            value = m.group(2).strip()
-            if any(value.startswith(p) for p in _NON_SCALAR_PREFIXES):
-                raise HeaderLineError(
-                    f"header key `{key}` holds a non-scalar value; fix it by "
-                    f"hand before claiming",
-                )
-            out.append(replacements[key])
-            seen.add(key)
-        else:
-            out.append(line)
-    for key in _CLAIM_LINE_KEYS:
-        if key not in seen:
-            out.append(replacements[key])
-    return "\n".join(out) + trailing
+
+def _lease_verdict(props: dict, agent_name: str, now: datetime) -> str:
+    """A claimed header's lease against `agent_name`: "own" (theirs) or
+    "lapsed" (anyone may act), else 409 already_claimed naming the holder.
+    An unparseable `claimed_until` is live (_parse_iso's conservative
+    reading)."""
+    assignee = props.get("assignee")
+    until_raw = props.get("claimed_until")
+    until = _parse_iso(until_raw)
+    if assignee == agent_name:
+        return "own"
+    if until is not None and until <= now:
+        return "lapsed"
+    _refuse(
+        "already_claimed",
+        "This task is claimed by another agent; call next_task again "
+        "for a different one.",
+        assignee=assignee if isinstance(assignee, str) else None,
+        claimed_until=until_raw if isinstance(until_raw, str) else None,
+    )
 
 
 def _decide_claim_outcome(
@@ -416,24 +489,21 @@ def _decide_claim_outcome(
 ) -> str:
     """The claim verdict for a parsed task header: claimed / renewed /
     taken_over, or the 409 refusals (already_claimed with the holder named,
-    not_ready with the status). Pure — the caller owns the lock and the read."""
+    reserved with the assignee, not_ready with the status). Pure — the
+    caller owns the lock and the read."""
     status = props.get("status")
     if status == schema["claimed"]:
-        assignee = props.get("assignee")
-        until_raw = props.get("claimed_until")
-        until = _parse_iso(until_raw)
-        if assignee == agent_name:
-            return "renewed"
-        if until is not None and until <= now:
-            return "taken_over"
-        _refuse(
-            "already_claimed",
-            "This task is claimed by another agent; call next_task again "
-            "for a different one.",
-            assignee=assignee if isinstance(assignee, str) else None,
-            claimed_until=until_raw if isinstance(until_raw, str) else None,
-        )
+        verdict = _lease_verdict(props, agent_name, now)
+        return {"own": "renewed", "lapsed": "taken_over"}[verdict]
     if status == schema["ready"]:
+        assignee = props.get("assignee")
+        if isinstance(assignee, str) and assignee and assignee != agent_name:
+            _refuse(
+                "reserved",
+                "This task is assigned to someone else; call next_task again "
+                "for a different one.",
+                assignee=assignee,
+            )
         return "claimed"
     _refuse(
         "not_ready",
@@ -442,37 +512,64 @@ def _decide_claim_outcome(
     )
 
 
-def _claimed_block_or_refuse(
-    block: str, props: dict, schema: dict, agent_name: str, claimed_until: str,
+def _splice_or_refuse(
+    block: str, values: dict[str, str], drop: tuple[str, ...], expected: dict,
 ) -> str:
-    """build_claimed_block with the 409 mapping — a non-scalar under a claim
+    """splice_header_keys with the 409 mapping — a non-scalar under a touched
     key refuses and nothing is written.
 
     # WHY: the line edit is verified by re-parsing its result. A value under a
-    # claim key that spans lines (`assignee:` + an indented `- x`, a folded
+    # touched key that spans lines (`assignee:` + an indented `- x`, a folded
     # plain scalar) leaves its continuation lines behind after the one-line
     # replace and breaks the header; the parse of the new block must equal
-    # the old header with exactly the three claim keys changed, or the claim
-    # refuses instead of writing a header it would itself report as invalid.
+    # `expected` (the old header with exactly the touched keys changed), or
+    # the write refuses instead of writing a header it would itself report as
+    # invalid.
     """
     try:
-        new_block = build_claimed_block(
-            block, status=schema["claimed"], agent_name=agent_name,
-            claimed_until=claimed_until,
-        )
+        new_block = splice_header_keys(block, values, drop)
     except HeaderLineError as exc:
         _refuse("non_scalar_claim_key", str(exc))
-    expected = {
-        **props, "status": schema["claimed"], "assignee": agent_name,
-        "claimed_until": claimed_until,
-    }
     if parse_header(f"---\n{new_block}---\n") != (expected, None):
         _refuse(
             "non_scalar_claim_key",
-            "a claim key's value spans several header lines; fix it by hand "
-            "before claiming",
+            "a status, assignee or claimed_until value spans several header "
+            "lines; fix it by hand first",
         )
     return new_block
+
+
+async def _read_live_task(document_id: str):
+    """(live_text, tables_json, header match, props) of a task document, or
+    409 not_a_task. Call under edit_lock."""
+    live_text, tables_json = await resolve_live_doc_state(document_id)
+    props, error = parse_header(live_text)
+    if not isinstance(props, dict) or props.get("type") != "task":
+        _refuse(
+            "not_a_task",
+            "This document's header does not say `type: task`"
+            + (f" ({error})" if error else ""),
+        )
+    return live_text, tables_json, FRONTMATTER_RE.match(live_text), props
+
+
+async def _splice_header(
+    *, document_id: str, project_id: str, live_text: str, tables_json,
+    match, new_block: str, preview: str,
+) -> None:
+    """Checkpoint, then ONE splice over the header block through
+    route_document_edits."""
+    await create_agent_pre_edit_checkpoint(
+        document_id=document_id, content=live_text, tables_json=tables_json,
+        original_preview=preview,
+    )
+    await route_document_edits(
+        doc_id=document_id, project_id=project_id,
+        edits=[{
+            "from_cp": match.start(1), "to_cp": match.end(1),
+            "new_text": new_block, "original_text": match.group(1),
+        }],
+    )
 
 
 async def execute_claim(
@@ -490,34 +587,195 @@ async def execute_claim(
     History like every agent content write.
     """
     async with edit_lock(document_id):
-        live_text, tables_json = await resolve_live_doc_state(document_id)
-        match = FRONTMATTER_RE.match(live_text)
-        props, error = parse_header(live_text)
-        if not isinstance(props, dict) or props.get("type") != "task":
-            _refuse(
-                "not_a_task",
-                "This document's header does not say `type: task`"
-                + (f" ({error})" if error else ""),
-            )
+        live_text, tables_json, match, props = await _read_live_task(document_id)
         now = datetime.now(timezone.utc)
         outcome = _decide_claim_outcome(props, schema, agent_name, now)
         claimed_until = (now + TASK_CLAIM_LEASE).isoformat()
-        new_block = _claimed_block_or_refuse(
-            match.group(1), props, schema, agent_name, claimed_until,
-        )
-        await create_agent_pre_edit_checkpoint(
-            document_id=document_id, content=live_text,
-            tables_json=tables_json,
-            original_preview=f"claim by {agent_name}: {match.group(0)[:60]}",
-        )
-        await route_document_edits(
-            doc_id=document_id, project_id=project_id,
-            edits=[{
-                "from_cp": match.start(1), "to_cp": match.end(1),
-                "new_text": new_block, "original_text": match.group(1),
-            }],
+        new_block = _splice_or_refuse(match.group(1), {
+            "status": schema["claimed"],
+            "assignee": json.dumps(agent_name, ensure_ascii=False),
+            "claimed_until": json.dumps(claimed_until),
+        }, (), {
+            **props, "status": schema["claimed"], "assignee": agent_name,
+            "claimed_until": claimed_until,
+        })
+        await _splice_header(
+            document_id=document_id, project_id=project_id,
+            live_text=live_text, tables_json=tables_json, match=match,
+            new_block=new_block,
+            preview=f"claim by {agent_name}: {match.group(0)[:60]}",
         )
     return {
         "outcome": outcome, "document_id": document_id,
         "assignee": agent_name, "claimed_until": claimed_until,
+    }
+
+
+# ─── The status transition (set_task_status) ─────────────────────────────────
+
+
+def check_target_status(status: str, schema: dict) -> None:
+    """409 unless `status` is a schema status other than the claimed one —
+    the claim owns the lease and its mutual exclusion."""
+    if status not in schema["statuses"]:
+        _refuse("unknown_status", f"{status!r} is not in the schema's statuses",
+                statuses=schema["statuses"])
+    if status == schema["claimed"]:
+        _refuse("use_claim_task",
+                "The claimed status is set by claim_task, which owns the lease.")
+
+
+def _is_task_row(row: dict | None) -> bool:
+    props = (row or {}).get("props")
+    return isinstance(props, dict) and props.get("type") == "task"
+
+
+async def _archive_destination(
+    document_id: str, schema: dict, by_id: dict,
+) -> str | None:
+    """The archive id a closing task moves under, or None: no `archive:`,
+    already under it, or a subtask (a visible ancestor is a task).
+
+    # WHY: only a top-level task is archived; a subtask closes in place —
+    # its subtree goes to the archive with its parent — moving it out
+    # alone destroys the hierarchy the parent's open-subtask check reads.
+    """
+    archive_id = schema["archive_id"]
+    if archive_id is None:
+        return None
+    ancestors = (await get_ancestor_ids(document_id))[1:]
+    if archive_id in ancestors or any(_is_task_row(by_id.get(a)) for a in ancestors):
+        return None
+    return archive_id
+
+
+async def _refuse_open_subtasks(
+    document_id: str, project_id: str, by_id: dict, closed: list,
+) -> None:
+    """409 open_subtasks when a visible descendant task is not closed.
+
+    # WHY: reads `props`, which lags the live text by the flush plus the
+    # projection; a subtask closed a second ago may still block. Accepted —
+    # a spurious 409 is safe, a missed one is not; do not "fix" it by
+    # reading every descendant's live text.
+    """
+    open_tasks = [
+        {"id": did, "title": by_id[did].get("title"),
+         "status": by_id[did]["props"].get("status")}
+        for did in await get_descendant_ids(document_id, project_id)
+        if _is_task_row(by_id.get(did))
+        and by_id[did]["props"].get("status") not in closed
+    ]
+    if open_tasks:
+        _refuse("open_subtasks", "Close the open subtasks first.",
+                subtasks=open_tasks[:_REPORT_CAP])
+
+
+async def _validate_archive(
+    document_id: str, archive_id: str, project_id: str, user: dict,
+    scope_root: str | None,
+) -> None:
+    """The archive is visible to the key and a valid destination for the
+    task (cycle, parent validity, scope, memory boundary) — checked BEFORE
+    the header splice, so a refusal writes nothing."""
+    row = await fetch_one("documents", archive_id)
+    visible = bool(
+        row and not row.get("deleted_at") and row.get("project_id") == project_id
+        and archive_id not in await locked_doc_ids(user["user_id"])
+    )
+    if visible and scope_root:
+        try:
+            await require_doc_in_scope(scope_root, archive_id)
+        except HTTPException:
+            visible = False
+    if not visible:
+        _refuse("archive_not_visible",
+                "The schema's `archive` document is not visible to this key.",
+                archive_id=archive_id)
+    await _resolve_move_destination(
+        await fetch_one("documents", document_id), document_id, archive_id,
+        None, project_id, scope_root, None,
+    )
+
+
+async def _move_to_archive(
+    document_id: str, archive_id: str, project_id: str, scope_root: str | None,
+) -> None:
+    """Move the closed task under the archive, LAST in its sibling group
+    (after_id=None would land it at the top)."""
+    siblings = [s for s in await sibling_rows(project_id, archive_id)
+                if s["id"] != document_id]
+    await move_document_command(
+        document_id=document_id, parent_id=archive_id,
+        after_id=siblings[-1]["id"] if siblings else None,
+        project_id=project_id, scope_root=scope_root,
+    )
+
+
+async def _decide_transition(
+    *, document_id: str, status: str, agent_name: str, props: dict,
+    schema: dict, by_id: dict, project_id: str, user: dict,
+    scope_root: str | None,
+) -> tuple[bool, str | None]:
+    """(header_change, archive_id) for a live task header, or the 409s:
+    already_claimed, no_change, open_subtasks, archive_not_visible and the
+    move destination's own refusals — all before anything is written."""
+    previous = props.get("status")
+    closing = status in schema["closed"]
+    if previous == schema["claimed"]:
+        _lease_verdict(props, agent_name, datetime.now(timezone.utc))
+    archive_id = (
+        await _archive_destination(document_id, schema, by_id) if closing else None
+    )
+    header_change = previous != status or "claimed_until" in props
+    if not header_change and archive_id is None:
+        _refuse("no_change", f"The task is already {status!r}.")
+    if closing:
+        await _refuse_open_subtasks(document_id, project_id, by_id, schema["closed"])
+    if archive_id is not None:
+        await _validate_archive(document_id, archive_id, project_id, user, scope_root)
+    return header_change, archive_id
+
+
+async def execute_set_status(
+    *, document_id: str, status: str, agent_name: str, project_id: str,
+    schema: dict, rows: list[dict], user: dict, scope_root: str | None,
+) -> dict:
+    """The read-decide-write of set_task_status, under the edit_lock.
+
+    Decided on the LIVE header: a live foreign lease refuses
+    (already_claimed); the write replaces `status:` and drops
+    `claimed_until:` (`assignee:` stays as the record of who worked it).
+    Closing refuses open visible subtasks and moves a top-level task under
+    the schema's `archive`, validated before the splice. Same status with
+    nothing left to do → 409 no_change; same closed status with a pending
+    archive move → only the move, so a move that failed after the splice is
+    completed by calling again.
+    """
+    by_id = {r.get("id"): r for r in rows}
+    async with edit_lock(document_id):
+        live_text, tables_json, match, props = await _read_live_task(document_id)
+        previous = props.get("status")
+        header_change, archive_id = await _decide_transition(
+            document_id=document_id, status=status, agent_name=agent_name,
+            props=props, schema=schema, by_id=by_id, project_id=project_id,
+            user=user, scope_root=scope_root,
+        )
+        if header_change:
+            expected = {k: v for k, v in props.items() if k != "claimed_until"}
+            new_block = _splice_or_refuse(
+                match.group(1), {"status": status}, ("claimed_until",),
+                {**expected, "status": status},
+            )
+            await _splice_header(
+                document_id=document_id, project_id=project_id,
+                live_text=live_text, tables_json=tables_json, match=match,
+                new_block=new_block,
+                preview=f"status {previous} → {status} by {agent_name}",
+            )
+    if archive_id is not None:
+        await _move_to_archive(document_id, archive_id, project_id, scope_root)
+    return {
+        "outcome": "set", "document_id": document_id, "status": status,
+        "previous_status": previous, "archived_to": archive_id,
     }

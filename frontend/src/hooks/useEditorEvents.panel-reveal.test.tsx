@@ -42,7 +42,7 @@ let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
   useAppStore.setState({ currentDocument: DOC, currentReference: null, references: [REF] });
-  useUIStore.setState({ documents: {}, searchTabDocId: null });
+  useUIStore.setState({ documents: {}, tabOverlay: null });
   useUIStore.getState().setRightPanelTab('doc-1', 'chat');
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -68,7 +68,7 @@ describe('navigate-to-reference — panel-mode Refs reveal', () => {
     useUIStore.getState().setRightPanelTab('doc-1', 'search');
     await act(async () => { emit('navigate-to-reference', { referenceId: 'ref-1' }); });
     await act(async () => { await new Promise(r => setTimeout(r, 0)); });
-    expect(useUIStore.getState().searchTabDocId).toBeNull();
+    expect(useUIStore.getState().tabOverlay).toBeNull();
     expect(tab()).toBe('refs');
   });
 
@@ -77,7 +77,7 @@ describe('navigate-to-reference — panel-mode Refs reveal', () => {
     useUIStore.getState().setRightPanelTab('doc-1', 'search');
     await act(async () => { emit('navigate-to-reference', { referenceId: 'ref-1' }); });
     await act(async () => { await new Promise(r => setTimeout(r, 0)); });
-    expect(useUIStore.getState().searchTabDocId).toBe('doc-1');
+    expect(useUIStore.getState().tabOverlay).toEqual({ docId: 'doc-1', tab: 'search' });
   });
 
   it('center mode: opening a reference leaves the saved tab alone', async () => {
