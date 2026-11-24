@@ -14,6 +14,8 @@ MCP servers that the administrator or your group's moderator connected for the c
 - **a shared key** — set by the administrator; until it is set, the server is not connected;
 - **no key** — connected as is.
 
+"Check connection" inside a server repeats that check at any time with the stored key, so you can see whether a server answers without entering the key again. It also works for a shared key and for a server without a key.
+
 The switch on a server turns it off for you only. If the server's address changes, you are asked to enter the key again.
 
 ## Private keys

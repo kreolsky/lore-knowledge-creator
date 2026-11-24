@@ -264,7 +264,7 @@ function ServerForm({ initial, isAdmin, ownSubject, groups, disabled, error, onS
         <Button onClick={onCancel} disabled={disabled}>{t('cancel')}</Button>
         {canCheck && (
           <Button onClick={() => void runCheck()} disabled={disabled || (check !== null && check.result === null && !check.error)}>
-            {t('adminMcpCheck')}
+            {t('mcpCheck')}
           </Button>
         )}
         {error && <span className="text-xs text-red">{error}</span>}

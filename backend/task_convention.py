@@ -10,8 +10,10 @@ status transition, which archives a closed top-level task).
 # ARCH (the schema is a document, validated at READ time): a visible doc whose
 # header has `type: schema, schema_for: task` names the statuses, the
 # ready/claimed/closed anchors, the optional initial status, the optional
-# priority order (most urgent FIRST — index 0 is served first) and the
-# optional `archive:` document closed top-level tasks move under; its BODY
+# `ask` status (where a task parks on a question for the person, free for any
+# agent), the optional priority order (most urgent FIRST — index 0 is served
+# first) and the optional `archive:` document closed top-level tasks move
+# under; its BODY
 # is the project's own task rules (log heading, definition of done), read
 # by the agent, never parsed here. Editing the
 # schema therefore needs no re-projection of every task — next_task /
@@ -84,10 +86,11 @@ _NO_SCHEMA_DETAIL = (
     "No task schema document is visible to this key. Create one: a document "
     "whose YAML header has `type: schema`, `schema_for: task`, `statuses: "
     "[<status>...]`, `ready: <status>`, `claimed: <status>`, `closed: "
-    "[<status>...]` (optional: `initial: <status>`, `priority: [<value>...]` "
-    "with the most urgent value FIRST — it is served first, `archive: "
-    "<link to a document>` that closed top-level tasks move under), with the "
-    "project's task rules in the body."
+    "[<status>...]` (optional: `initial: <status>`, `ask: <status>` — the "
+    "status a task parks on with a question for the person, `priority: "
+    "[<value>...]` with the most urgent value FIRST — it is served first, "
+    "`archive: <link to a document>` that closed top-level tasks move under), "
+    "with the project's task rules in the body."
 )
 
 
@@ -139,13 +142,30 @@ def _schema_status_field(props: dict, field: str, statuses: list) -> str:
     return value
 
 
-def resolve_task_schema(rows: list[dict]) -> dict:
-    """Find and validate the ONE task-schema document among the visible
-    header-bearing `rows` (visible_header_docs output — the same visibility
-    decision every property consumer uses).
+def _schema_ask_field(props: dict, resolved: dict) -> str | None:
+    """The optional `ask:` status — where a task parks on a question and is
+    free for any agent; None when absent. Present, it must be a status that is
+    none of the anchors: `initial`, `ready` and `ask` all free the task, so an
+    `ask` equal to either of the first two would be a second name for it, and
+    a claimed or closed `ask` would park the question where nobody looks."""
+    value = props.get("ask")
+    if value is None:
+        return None
+    taken = {resolved["initial"], resolved["ready"], resolved["claimed"],
+             *resolved["closed"]}
+    if value not in resolved["statuses"] or value in taken:
+        _refuse(
+            "invalid_schema",
+            f"schema field `ask` ({value!r}) must be a status other than "
+            "initial, ready, claimed and closed",
+        )
+    return value
 
-    409 {no_schema | ambiguous_schema | invalid_schema}; returns the fields.
-    """
+
+def _schema_row(rows: list[dict]) -> dict:
+    """The ONE visible task-schema document among the header-bearing `rows`
+    (visible_header_docs output — the same visibility decision every property
+    consumer uses), or the 409s no_schema / ambiguous_schema."""
     candidates = [
         r for r in rows
         if isinstance(r.get("props"), dict)
@@ -161,7 +181,16 @@ def resolve_task_schema(rows: list[dict]) -> dict:
             f"{len(candidates)} visible documents claim to be the task "
             f"schema ({ids}) — keep exactly one.",
         )
-    row = candidates[0]
+    return candidates[0]
+
+
+def resolve_task_schema(rows: list[dict]) -> dict:
+    """Find and validate the ONE task-schema document among the visible
+    header-bearing `rows`.
+
+    409 {no_schema | ambiguous_schema | invalid_schema}; returns the fields.
+    """
+    row = _schema_row(rows)
     props = row["props"]
     statuses = _string_list(props, "statuses")
     if statuses is None:
@@ -179,7 +208,7 @@ def resolve_task_schema(rows: list[dict]) -> dict:
     elif initial not in statuses:
         _refuse("invalid_schema",
                 f"schema field `initial` ({initial!r}) is not in `statuses`")
-    return {
+    resolved = {
         "schema_id": row.get("id"), "title": row.get("title"),
         "statuses": statuses,
         "ready": _schema_status_field(props, "ready", statuses),
@@ -189,6 +218,8 @@ def resolve_task_schema(rows: list[dict]) -> dict:
         "priority": _string_list(props, "priority"),
         "archive_id": _schema_archive_id(props),
     }
+    resolved["ask"] = _schema_ask_field(props, resolved)
+    return resolved
 
 
 def _schema_archive_id(props: dict) -> str | None:
@@ -388,7 +419,8 @@ def select_next_task(
 
     A ready task carrying an `assignee` other than `agent_name` is reserved:
     never offered, listed in `reserved`. An actively claimed task is listed
-    in `in_progress` so its holder can resume it.
+    in `in_progress` so its holder can resume it. A task parked on the
+    schema's `ask` status is offered to nobody — it waits for the person.
     """
     by_id = {r.get("id"): r for r in (rows if lookup is None else lookup)}
     report, available = _scan_rows(rows, schema, by_id, now, agent_name)
@@ -402,6 +434,7 @@ def select_next_task(
         "task": _task_view(*available[0]) if available else None,
         "schema_id": schema["schema_id"],
         "initial": schema["initial"],
+        "ask": schema["ask"],
         "counts": {
             "available": len(available),
             **{name: len(items) for name, items in report.items()},
@@ -712,10 +745,21 @@ async def _move_to_archive(
     )
 
 
+def _frees_task(previous, status: str, schema: dict) -> bool:
+    """Whether the transition returns the task to the pool (`status` a resting
+    status, `previous` a working one); the rule is pinned on the line below."""
+    resting = {s for s in (schema["ready"], schema["initial"], schema["ask"]) if s}
+    # INVARIANT: a return from a working status to the ready, initial or ask status frees
+    # the task — `assignee` goes in the same splice; a move among the three and a close keep it.
+    # Why: operator ruling — the three are where a task rests and an assignment there is the
+    # person's; a close records who did the work.
+    return status in resting and previous in schema["statuses"] and previous not in resting
+
+
 async def _decide_transition(
     *, document_id: str, status: str, agent_name: str, props: dict,
     schema: dict, by_id: dict, project_id: str, user: dict,
-    scope_root: str | None,
+    scope_root: str | None, with_note: bool = False,
 ) -> tuple[bool, str | None]:
     """(header_change, archive_id) for a live task header, or the 409s:
     already_claimed, no_change, open_subtasks, archive_not_visible and the
@@ -728,7 +772,10 @@ async def _decide_transition(
         await _archive_destination(document_id, schema, by_id) if closing else None
     )
     header_change = previous != status or "claimed_until" in props
-    if not header_change and archive_id is None:
+    # WHY: the same status WITH a note rings the bell alone — the repeat of a
+    # bell that failed — so no_change yields to it; every other refusal here
+    # still applies.
+    if not header_change and archive_id is None and not with_note:
         _refuse("no_change", f"The task is already {status!r}.")
     if closing:
         await _refuse_open_subtasks(document_id, project_id, by_id, schema["closed"])
@@ -740,17 +787,21 @@ async def _decide_transition(
 async def execute_set_status(
     *, document_id: str, status: str, agent_name: str, project_id: str,
     schema: dict, rows: list[dict], user: dict, scope_root: str | None,
+    with_note: bool = False,
 ) -> dict:
     """The read-decide-write of set_task_status, under the edit_lock.
 
     Decided on the LIVE header: a live foreign lease refuses
     (already_claimed); the write replaces `status:` and drops
-    `claimed_until:` (`assignee:` stays as the record of who worked it).
-    Closing refuses open visible subtasks and moves a top-level task under
-    the schema's `archive`, validated before the splice. Same status with
-    nothing left to do → 409 no_change; same closed status with a pending
-    archive move → only the move, so a move that failed after the splice is
-    completed by calling again.
+    `claimed_until:`. A return from a working status to the ready, initial or
+    ask status drops `assignee` in the same splice — the task is free the
+    moment it is handed back; every other transition keeps it as the record
+    of who worked it. Closing refuses open visible subtasks and moves a
+    top-level task under the schema's `archive`, validated before the splice.
+    Same status with nothing left to do → 409 no_change, unless a note rides
+    along (the bell alone); same closed status with a pending archive move →
+    only the move, so a move that failed after the splice is completed by
+    calling again.
     """
     by_id = {r.get("id"): r for r in rows}
     async with edit_lock(document_id):
@@ -759,12 +810,15 @@ async def execute_set_status(
         header_change, archive_id = await _decide_transition(
             document_id=document_id, status=status, agent_name=agent_name,
             props=props, schema=schema, by_id=by_id, project_id=project_id,
-            user=user, scope_root=scope_root,
+            user=user, scope_root=scope_root, with_note=with_note,
         )
         if header_change:
-            expected = {k: v for k, v in props.items() if k != "claimed_until"}
+            drop = ("claimed_until", "assignee") if _frees_task(
+                previous, status, schema,
+            ) else ("claimed_until",)
+            expected = {k: v for k, v in props.items() if k not in drop}
             new_block = _splice_or_refuse(
-                match.group(1), {"status": status}, ("claimed_until",),
+                match.group(1), {"status": status}, drop,
                 {**expected, "status": status},
             )
             await _splice_header(

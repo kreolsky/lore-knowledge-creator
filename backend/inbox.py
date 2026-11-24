@@ -8,9 +8,10 @@ notification records — the flag is a field on the object itself.
 
 # ARCH: this module owns the WHOLE mechanism. `mark_arrived` is the ONLY writer
 of `unread_for`; every external surface (widget routes, the MCP gateway's
-reference-creating dispatch, the attach_file redeem route) calls it and nothing
-else writes the field. Why one home: the flag has one meaning ("arrived from
-outside, for you, unopened") and three ingress surfaces — a second writer would
+reference-creating dispatch, the attach_file redeem route, the task loop's
+bell — set_task_status carrying a note) calls it and nothing else writes the
+field. Why one home: the flag has one meaning ("arrived from outside, for
+you, unopened") and several ingress surfaces — a second writer would
 drift on the toggle semantics, the event payload, or the recipient rule.
 
 External = a key that is not `internal` (api_key_auth) — the dsh chat agent's

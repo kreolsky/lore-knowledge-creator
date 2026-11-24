@@ -312,14 +312,23 @@ register(ToolEntry(
     handler_path="routes.tool_api.properties:tool_set_task_status",
     surfaces=_PUBLIC,
     mcp_description=(
-        "Set a task document's status (hand back for review, or close when "
-        "the person asks): replaces `status:` and removes `claimed_until` in "
-        "its YAML header; `assignee` stays. Closing a top-level task moves it "
-        "under the schema's `archive` document (last). 409 already_claimed "
-        "(another agent's live lease), use_claim_task, no_change, "
-        "open_subtasks, archive_not_visible. Read-write key: applies "
-        "immediately, reversible in the Lore History panel (the archive move "
-        "is undone by moving it back)."
+        "Set a task document's status (hand back for review, park on a "
+        "question with `note`, or close when the person asks): replaces "
+        "`status:` and removes `claimed_until` in its YAML header; a return "
+        "to the schema's initial, ready or ask status also removes "
+        "`assignee` — the task is free for any agent — and every other "
+        "transition keeps it. `note` (up to 1500 characters) is your "
+        "question: the server writes it as a system note on the task with a "
+        "link to the task and marks it unread for the key's owner; the answer "
+        "comes in a chat, never in the note. The result carries `note: "
+        "created` or `note: failed` — on failed, repeat the same call once. "
+        "The same status with a note rings again; without one it is "
+        "no_change. Closing a top-level task moves it under the schema's "
+        "`archive` document (last). 409 already_claimed (another agent's "
+        "live lease), use_claim_task, no_change, open_subtasks, "
+        "archive_not_visible. Read-write key: applies immediately, "
+        "reversible in the Lore History panel (the archive move is undone by "
+        "moving it back)."
     ),
 ))
 

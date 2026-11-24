@@ -1,6 +1,6 @@
 ---
 name: tasks
-description: Use when the user asks to work the project's task backlog or task loop, or asks what to do next, or a task is named with its status. «разгреби бэклог», «возьми задачу», «что дальше по задачам», «сделай задачу», «закрой задачу», «новая задача», «создай задачу»; work the backlog, take a task, next task, task loop, claim a task, add a task.
+description: Use when the user asks to work the project's task backlog or task loop, or asks what to do next, or a task is named with its status, or answers a task's question or sends a task to work. «разгреби бэклог», «возьми задачу», «что дальше по задачам», «сделай задачу», «закрой задачу», «новая задача», «создай задачу», «ответ по задаче», «в работу», «верни задачу»; work the backlog, take a task, next task, task loop, claim a task, add a task, answer a task's question, send a task to work.
 tools:
   - find_documents
   - next_task
@@ -21,7 +21,8 @@ defines the statuses and their order, its body carries THIS project's rules —
 what the log heading is called, what "done" means, branch naming, which
 repository. The schema body OVERRIDES anything below that contradicts it.
 The header's `priority` list runs from most urgent to least: its FIRST value
-is served first.
+is served first. The `ask` status (`next_task` returns it; null when the
+schema has none) is where a task waits for the person's answer.
 
 ## The loop
 
@@ -30,7 +31,8 @@ is served first.
    with `claim_task`) before taking a new task. Otherwise `task` is the next
    available one (ready, or a claim whose lease expired, with every
    dependency closed). Null task = nothing to do; say so. Tasks listed in
-   `reserved` are assigned to someone else — leave them.
+   `reserved` are assigned to someone else — leave them. A task on the `ask`
+   status waits for the person and is offered to nobody.
    A `blocked` entry whose reason is `dependency not visible` or `dependency
    unresolvable` will never unblock on its own (a broken link, or a target out
    of your reach) — name those tasks to the person in your reply.
@@ -41,14 +43,18 @@ is served first.
 3. Read before working: the task itself, its parent (the story it belongs
    to), and every neighbour `get_links` names on it.
 4. Work. Finish with the report and `set_task_status(document_id, <review
-   status>, agent_name)` (below). Never close on your own initiative — review
-   is the hand-back to the person, and closing is theirs: when the person
-   explicitly asks you to close that task, call `set_task_status` with a
-   closed status. Never change `status:` by editing the header.
+   status>, agent_name)` (below); the review status is the one that is neither
+   the initial, ready, ask, claimed nor a closed one. A question you cannot
+   resolve parks the task instead (see Ambiguity). Never close on your own
+   initiative — review is the hand-back to the person, and closing is theirs:
+   when the person explicitly asks you to close that task, call
+   `set_task_status` with a closed status. Never change `status:` by editing
+   the header.
 
 A 409 `open_subtasks` or `already_claimed` from `set_task_status` is reported
 to the person, not worked around. A 500 after a close is retried once with
-the same status — it completes the move into the archive.
+the same status and the same `note` — it completes the move into the archive,
+and the note must ride again or the bell is lost.
 
 ## Reading a task
 
@@ -67,8 +73,12 @@ names (the generic default is `## Log`). Write intent, not description:
 - what was NOT proven (untested paths, assumptions you had to make);
 - open questions for the person reviewing.
 
-`set_task_status` removes the `claimed_until` line and keeps `assignee` — it
-records who did the work, and a task reopened by hand returns to you.
+`set_task_status` removes the `claimed_until` line. A hand-back to the review
+status keeps `assignee` — it records who did the work, and a task reopened by
+hand returns to you. A return to the initial, ready or ask status removes
+`assignee` too: the task is free, and any agent may take it. A hand-back that
+is not a question carries no `note` — the note is the bell, and it rings for
+a question only.
 
 Nothing inferable from the code is copied into the project — a log records
 decisions and evidence, not the source. A spec you wrote along the way
@@ -77,15 +87,36 @@ becomes its own document, linked from the task header as
 
 ## Ambiguity
 
-Do the unambiguous part. Write the question into the log, set the review
-status, and stop — never guess on scope to keep a task moving.
+Do the unambiguous part first. Then write the question into the log and park
+the task: `set_task_status(document_id, <the ask status>, agent_name,
+note=<the question>)`. The server puts the question in a system note on the
+task with a link to it and marks it unread for the person; the task is free
+while it waits, and any agent continues it after the answer. On
+`note: "created"` take the next task; on `note: "failed"` repeat the same
+call once, then tell the person in the reply.
+
+No `ask` status in the schema (`next_task` returned null): set the review
+status instead and ask in your reply. None or several review statuses:
+leave the task claimed, write the question into the log, ask in your reply.
+Never guess on scope to keep a task moving.
+
+## The person answers
+
+An answer about a task that the person gives in this chat is written into
+that task's log first — the task is the record, the chat is not. Then, only
+on the person's word, `set_task_status(document_id, <the ready status>,
+agent_name)` sends the task back to work; any agent may claim it, the one
+that asked included. A task the person names by words is found by its title
+among the tasks `find_documents` lists (`where: {type: task}`); several
+candidates — ask which one.
 
 ## Discovered work
 
 Work found while inside a task does NOT go into that task (no scope creep).
 Create a new task document under the same parent, header `status:` = the
-`initial` status `next_task` returned, and link it from the blocking task
-with `depends` (each entry a QUOTED Lore link or a bare document id — an
+`initial` status `next_task` returned — nobody does it without the person's
+word — and name it in your reply. If it blocks the task, link it there with
+`depends` (each entry a QUOTED Lore link or a bare document id — an
 unquoted link breaks the YAML):
 
     depends:
@@ -93,11 +124,18 @@ unquoted link breaks the YAML):
 
 ## Authoring
 
+Two statuses take a new task, by who sent it to work. A reminder («надо бы»,
+«запомни») — the person's own, not work yet — and work you found by yourself
+get the initial status: a draft, thought through in Lore with the person
+before it becomes ready, and agents do not take it. A formulated intent the
+person sends to work («делай таску») gets the ready status; the plan is
+written and discussed from there.
+
 A task document (the header is the contract; the body states intent):
 
     ---
     type: task
-    status: <the schema's initial status>
+    status: <the initial or the ready status>
     priority: <a value from the schema's priority list, optional>
     depends:
       - "[title](doc:<id>)"
@@ -111,11 +149,12 @@ A schema document (one per project, authored by the team):
     ---
     type: schema
     schema_for: task
-    statuses: [todo, doing, review, done]
+    statuses: [draft, ask, todo, doing, review, done]
     ready: todo
     claimed: doing
     closed: [done]
-    initial: todo
+    initial: draft
+    ask: ask
     priority: [urgent, high, normal, low]
     archive: "[DONE](doc:<id>)"  # optional: closed top-level tasks move here
     ---

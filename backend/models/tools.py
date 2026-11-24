@@ -113,12 +113,22 @@ class ToolClaimTask(BaseModel):
 
 
 class ToolSetTaskStatus(BaseModel):
-    """`set_task_status` body — the status transition (hand back, close).
-    `agent_name` is validated like ToolClaimTask's."""
+    """`set_task_status` body — the status transition (hand back, close, park
+    on a question). `agent_name` is validated like ToolClaimTask's. `note` is
+    the bell: the question for the person, written as a system note on the
+    task once the status is applied. Its cap is the client's cap of one log
+    entry, so the whole question fits; the MCP spec carries the same number
+    (`maxLength`), or an over-long note would be a 500 there. Blank = absent."""
     document_id: str
     status: str
     agent_name: str
     apply: ToolApply = ToolApply.confirm
+    note: str | None = Field(default=None, max_length=1500)
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def _blank_note_is_absent(cls, v):
+        return v.strip() or None if isinstance(v, str) else v
 
 
 class ToolSearch(BaseModel):

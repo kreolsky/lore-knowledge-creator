@@ -4851,7 +4851,7 @@
         "type": "object"
       },
       "ToolSetTaskStatus": {
-        "description": "`set_task_status` body — the status transition (hand back, close).\n`agent_name` is validated like ToolClaimTask's.",
+        "description": "`set_task_status` body — the status transition (hand back, close, park\non a question). `agent_name` is validated like ToolClaimTask's. `note` is\nthe bell: the question for the person, written as a system note on the\ntask once the status is applied. Its cap is the client's cap of one log\nentry, so the whole question fits; the MCP spec carries the same number\n(`maxLength`), or an over-long note would be a 500 there. Blank = absent.",
         "properties": {
           "agent_name": {
             "title": "Agent Name",
@@ -4864,6 +4864,18 @@
           "document_id": {
             "title": "Document Id",
             "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 1500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
           },
           "status": {
             "title": "Status",
@@ -23141,7 +23153,7 @@
     },
     "/api/tool/set_task_status": {
       "post": {
-        "description": "The status transition: hand back or close a task — a header splice\n(status replaced, claimed_until dropped) decided on the live text under\nthe edit lock, plus the archive move for a closed top-level task.",
+        "description": "The status transition: hand back, close or park a task on a question —\na header splice (status replaced, claimed_until dropped, assignee dropped\non a return) decided on the live text under the edit lock, plus the\narchive move for a closed top-level task. A `note` rings the bell AFTER\nthe write: the answer says `created` or `failed` beside the applied\nstatus.",
         "operationId": "tool_set_task_status_api_tool_set_task_status_post",
         "parameters": [
           {

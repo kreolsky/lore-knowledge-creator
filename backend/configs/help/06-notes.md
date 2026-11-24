@@ -30,7 +30,7 @@ When comments are allowed on a public link (see [Access and publishing](help:acc
 
 ## Notes that arrive by themselves
 
-- **System notes.** A failed pipeline or agent action posts its details as a new system note of the document.
+- **System notes.** A failed pipeline or agent action posts its details as a new system note of the document. An agent's question about a task is a system note too: titled with the agent and the task's status, marked unread for the owner of the key the agent used, and answered in a chat — the agent does not read notes.
 - **Notes from a widget key.** A text sent over the widget-key API (`POST /api/widget/note`) lands as a note of the key's document, titled with the key's name, and is marked unread for the key's owner (see [Interface](help:interface)). The recording apps do not send notes yet; they upload files.
 
 ## Sending a note through a widget key

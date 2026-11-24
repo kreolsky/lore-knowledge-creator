@@ -10,7 +10,7 @@ import json
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from db import fetch_one
+from db import extract_id, fetch_one
 
 SCHEMA_HEADER = (
     "---\ntype: schema\nschema_for: task\nstatuses: [todo, doing, review, done]\n"
@@ -70,8 +70,9 @@ def test_convention_pure_edges():
     # last), then created_at (rows' own order — the sort is stable). The
     # stale claim is offered but behind the ready tasks of known priority; an
     # active claim is listed in in_progress, a ready task assigned to someone
-    # else in reserved; a closed task and a non-task are neither offered nor
-    # reported; a broken header and unknown/missing status are REPORTED.
+    # else in reserved; a closed task, a task parked on a question and a
+    # non-task are neither offered nor reported; a broken header and
+    # unknown/missing status are REPORTED.
     rows = _schema_rows() + [
         _task("t-normal", "Normal task", "todo"),
         _task("t-urgent", "Urgent task", "todo", priority="urgent"),
@@ -87,6 +88,7 @@ def test_convention_pure_edges():
               claimed_until=(NOW + timedelta(hours=1)).isoformat()),
         _task("t-reserved", "Reserved", "todo", priority="urgent",
               assignee="human"),
+        _task("t-parked", "Parked on a question", "review"),
         _task("t-unknown", "Unknown status", "wip"),
         _task("t-nostatus", "No status"),
         _row("t-broken", "Broken header", error="malformed header YAML: boom"),
@@ -96,6 +98,7 @@ def test_convention_pure_edges():
     assert out["task"]["id"] == "t-urgent"
     assert "stale" not in out["task"]
     assert out["schema_id"] == "s1" and out["initial"] == "todo"
+    assert out["ask"] is None  # the schema names no ask status
     assert out["counts"] == {
         "available": 4, "blocked": 1, "invalid": 3, "reserved": 1,
         "in_progress": 2, "stale": 1,
@@ -202,15 +205,31 @@ def test_convention_pure_edges():
         ({"closed": ["gone"]}, "closed"),
         ({"statuses": []}, "statuses"),
         ({"priority": "urgent"}, "priority"),
+        # `ask` is a status that is none of the anchors: unknown, ready
+        # (statuses[0] is the implicit initial here), claimed, closed.
+        ({"ask": "wip"}, "ask"),
+        ({"ask": "todo"}, "ask"),
+        ({"ask": "doing"}, "ask"),
+        ({"ask": "done"}, "ask"),
     ):
         with pytest.raises(HTTPException) as invalid:
             resolve_task_schema(_broken(**override))
         assert invalid.value.detail["code"] == "invalid_schema", override
         assert field in invalid.value.detail["detail"], override
+    # An `ask` equal to an explicit initial is refused the same way.
+    four = {"statuses": ["todo", "doing", "review", "done"]}
+    with pytest.raises(HTTPException) as bad_ask:
+        resolve_task_schema(_broken(initial="review", ask="review", **four))
+    assert bad_ask.value.detail["code"] == "invalid_schema"
+    assert "ask" in bad_ask.value.detail["detail"]
     ok = resolve_task_schema(_schema_rows())
     assert ok["initial"] == "todo" and ok["schema_id"] == "s1"
     assert ok["closed"] == ["done"] and ok["priority"] == ["urgent", "normal"]
     assert ok["archive_id"] is None
+    assert ok["ask"] is None
+    asked = resolve_task_schema(_broken(ask="review", **four))
+    assert asked["ask"] == "review"
+    assert select_next_task([], asked, now=NOW)["ask"] == "review"
     assert resolve_task_schema(
         _broken(archive="[DONE](doc:arch1)"),
     )["archive_id"] == "arch1"
@@ -549,6 +568,24 @@ async def _children(test_db, parent_id) -> list[str]:
     return [s["id"] for s in await sibling_rows(row["project_id"], parent_id)]
 
 
+async def _notes(test_db, doc_id: str) -> list[dict]:
+    """The system notes pinned to a task: [{id, title, body}]."""
+    rows = await test_db.query(
+        "SELECT id, title FROM chat_sessions WHERE is_note = true "
+        "AND document_id = $did ORDER BY created_at",
+        {"did": doc_id},
+    )
+    out = []
+    for row in rows or []:
+        sid = extract_id(row["id"])
+        msgs = await test_db.query(
+            "SELECT content FROM messages WHERE chat_id = $sid", {"sid": sid},
+        )
+        out.append({"id": sid, "title": row["title"],
+                    "body": msgs[0]["content"] if msgs else None})
+    return out
+
+
 # set_task_status is decided on the live header under the edit lock, and its
 # close moves the task through the real tree command — the outcome table,
 # the archive placement and the retry contract are what the lore-health CLI
@@ -559,8 +596,12 @@ async def test_set_task_status_outcomes(client, test_db, collab_project):
     archive = await _doc(client, admin_token, pid, "DONE", "archive")
     x = await _doc(client, admin_token, pid, "X", "old", parent_id=archive)
     await _doc(client, admin_token, pid, "Task schema", SCHEMA_HEADER.replace(
+        "statuses: [todo, doing, review, done]\n",
+        "statuses: [todo, doing, review, ask, done]\n",
+    ).replace(
         "priority: [urgent, normal]\n",
-        f"priority: [urgent, normal]\narchive: \"[DONE](doc:{archive})\"\n",
+        f"priority: [urgent, normal]\narchive: \"[DONE](doc:{archive})\"\n"
+        "ask: ask\n",
     ))
     task = "---\ntype: task\nstatus: todo\n---\n\nBody.\n"
     a = await _doc(client, admin_token, pid, "A", task)
@@ -600,6 +641,7 @@ async def test_set_task_status_outcomes(client, test_db, collab_project):
     assert resp.status_code == 200, resp.text
     assert resp.json()["archived_to"] == archive
     assert await _children(test_db, archive) == [x, a]
+    assert (await _parse_row_header(a))[0]["assignee"] == "kilo"  # a close keeps the name
     assert _code(await _set(client, key, a, "done")) == "no_change"
 
     # Open subtasks block the close; a closed subtask stays in place; then
@@ -626,6 +668,61 @@ async def test_set_task_status_outcomes(client, test_db, collab_project):
     assert resp.status_code == 200, resp.text
     assert resp.json()["archived_to"] == archive
     assert (await _children(test_db, archive))[-1] == e
+
+    # The bell: a question parks a claimed task on the ask status and frees it
+    # in the same splice (assignee and claimed_until gone); ONE system note,
+    # titled with the agent and the status, carries the question first and the
+    # server-added link last — brackets leave the title. The task is offered
+    # to nobody. The same call again rings again with the header unchanged;
+    # the same status WITHOUT a note is still no_change.
+    q = await _doc(client, admin_token, pid, "Question [task]", task)
+    await _settle()
+    resp = await _tool(client, "claim_task", key, document_id=q,
+                       agent_name="kilo", apply="auto")
+    assert resp.status_code == 200, resp.text
+    parked = {"document_id": q, "status": "ask", "agent_name": "kilo",
+              "apply": "auto"}
+    resp = await _tool(client, "set_task_status", key, **parked,
+                       note="Where is the config kept?")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "outcome": "set", "document_id": q, "status": "ask",
+        "previous_status": "doing", "archived_to": None, "note": "created",
+    }
+    props, err = await _parse_row_header(q)
+    assert err is None and props["status"] == "ask"
+    assert "assignee" not in props and "claimed_until" not in props
+    assert [(n["title"], n["body"]) for n in await _notes(test_db, q)] == [(
+        "kilo — ask", f"Where is the config kept?\n\n[Question task](doc:{q})",
+    )]
+    await _settle()
+    body = (await _tool(client, "next_task", key)).json()
+    assert body["ask"] == "ask"
+    offered = {body["task"]["id"]} if body["task"] else set()
+    for name in ("reserved", "in_progress"):
+        offered |= {t["id"] for t in body[name]}
+    assert q not in offered
+    resp = await _tool(client, "set_task_status", key, **parked,
+                       note="Again: where is the config kept?")
+    assert resp.status_code == 200 and resp.json()["note"] == "created"
+    assert len(await _notes(test_db, q)) == 2
+    assert (await _parse_row_header(q))[0] == props
+    assert _code(await _set(client, key, q, "ask")) == "no_change"
+
+    # An over-long note is a 422 that writes nothing — the body model on the
+    # Tool-API; the served inputSchema (what the MCP gateway validates before
+    # dispatch) carries the same cap.
+    resp = await _tool(client, "set_task_status", key,
+                       **{**parked, "status": "done"}, note="x" * 1501)
+    assert resp.status_code == 422, resp.text
+    assert (await _parse_row_header(q))[0] == props
+    assert len(await _notes(test_db, q)) == 2
+    from mcp_gateway.schemas import build_tool_list
+
+    served = {t.name: t for t in build_tool_list(preview_visible=True)}
+    assert served["set_task_status"].input_schema["properties"]["note"][
+        "maxLength"
+    ] == 1500
 
     # An archive the key cannot see refuses before anything is written.
     # (the scoped key sees only the schema inside its subtree)

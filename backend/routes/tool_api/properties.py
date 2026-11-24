@@ -7,17 +7,23 @@ Thin by design: the skill-disabled gate, `where` shape validation (a 422 the
 model's loop self-corrects from), the mutation gates (gate_mutation_target +
 the apply resolution) and delegation to the ONE module that owns each half
 (backend/doc_properties.py, backend/task_convention.py) — no business logic
-here.
+here but the bell: the note a question travels in becomes a system note on
+the task through the widget note's own sequence (SYSTEM: notes, SYSTEM: inbox).
 """
+import logging
 from datetime import datetime, timezone
 
 from agent.context import get_agent_context
 from artifacts import is_artifact_row
 from fastapi import Depends, HTTPException
+from inbox import KIND_NOTE, mark_arrived
+from notes_service import create_system_note
 from page_lock import locked_doc_ids
+from pipeline.extractor.runner import PIPELINE_AUTHOR_ID
 
 from db import get_db
 from doc_properties import PROP_KEY_RE, split_results_errors, visible_header_docs
+from event_bus import emit
 from models import ToolClaimTask, ToolFindDocuments, ToolNextTask, ToolSetTaskStatus
 from routes.tool_api._common import (
     _is_system_target,
@@ -35,6 +41,8 @@ from task_convention import (
     resolve_task_schema,
     select_next_task,
 )
+
+logger = logging.getLogger(__name__)
 
 #: The scalar JSON shapes a `where` value may take (a list value is OR-of
 #: these). Anything else is a 422, never a silent no-match.
@@ -172,9 +180,12 @@ async def tool_claim_task(
 async def tool_set_task_status(
     body: ToolSetTaskStatus, ctx: dict = Depends(get_agent_context),
 ):
-    """The status transition: hand back or close a task — a header splice
-    (status replaced, claimed_until dropped) decided on the live text under
-    the edit lock, plus the archive move for a closed top-level task."""
+    """The status transition: hand back, close or park a task on a question —
+    a header splice (status replaced, claimed_until dropped, assignee dropped
+    on a return) decided on the live text under the edit lock, plus the
+    archive move for a closed top-level task. A `note` rings the bell AFTER
+    the write: the answer says `created` or `failed` beside the applied
+    status."""
     agent_name, target = await _gate_task_write(body, ctx, "set_task_status")
     pid = ctx["project_id"]
     rows = await visible_header_docs(
@@ -193,8 +204,55 @@ async def tool_set_task_status(
     )
     if decision.mode != "auto":
         _refuse_unconfirmable("set_task_status", decision.reason)
-    return await execute_set_status(
+    result = await execute_set_status(
         document_id=body.document_id, status=body.status,
         agent_name=agent_name, project_id=pid, schema=schema, rows=rows,
         user=ctx["user"], scope_root=ctx.get("scope_root"),
+        with_note=body.note is not None,
     )
+    if body.note is not None:
+        result["note"] = await _ring_bell(
+            question=body.note, ctx=ctx, document_id=body.document_id,
+            status=body.status, agent_name=agent_name, title=target.get("title"),
+        )
+    return result
+
+
+async def _ring_bell(*, question: str, ctx: dict, document_id: str,
+                     status: str, agent_name: str, title: str | None) -> str:
+    """The bell: the question as a system note on the task, flagged for the
+    key's owner unless the key is internal, announced live — the widget
+    note's sequence (routes/widget.py). Runs after the status is applied.
+
+    The server adds the link after the question (the note card previews the
+    first message), so no agent can forget it; `[` and `]` leave the title
+    and its whitespace is collapsed, because the note renders through
+    MarkdownContent, whose link label allows no brackets.
+
+    "created" promises the note, not the yellow row: an internal key and a
+    notes toggle that is OFF leave it unmarked. A failure is logged and
+    answered "failed" beside the applied status — never a 500 that hides it.
+    """
+    label = " ".join((title or "").replace("[", "").replace("]", "").split()) or document_id
+    try:
+        session_uid = await create_system_note(
+            project_id=ctx["project_id"], document_id=document_id,
+            title=f"{agent_name} — {status}",
+            body=f"{question}\n\n[{label}](doc:{document_id})",
+            author_id=PIPELINE_AUTHOR_ID,
+        )
+        if session_uid is None:
+            return "failed"  # create_system_note logged its own error
+        if ctx.get("internal") is not True:
+            await mark_arrived(
+                KIND_NOTE, object_id=session_uid, project_id=ctx["project_id"],
+                document_id=document_id, recipient_id=ctx["user_id"],
+            )
+        await emit(
+            "note_session_created", entity_type="doc", entity_id=document_id,
+            event={"type": "note_session_created", "session_id": session_uid},
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("set_task_status: the bell failed on doc %s", document_id)
+        return "failed"
+    return "created"

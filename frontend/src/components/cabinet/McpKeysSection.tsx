@@ -1,9 +1,10 @@
 /** Cabinet section: the MCP servers available to this user (SYSTEM: mcp-servers).
  *
  * A personal server takes one write-only key; Save stores it and immediately runs
- * the connection check, so a wrong key never looks like success. Shared and keyless
- * servers need nothing from the user. Every server that can ride has a toggle, and
- * a server the user can no longer see offers only the deletion of their key.
+ * the connection check, so a wrong key never looks like success. The same check runs
+ * on demand for every server that can ride. Shared and keyless servers need no key.
+ * Every server that can ride has a toggle, and a server the user can no longer see
+ * offers only the deletion of their key.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -97,11 +98,17 @@ export function McpKeysSection() {
     });
 
   const runCheck = async (server: McpServerRow) => {
-    setCheck(server.id, { result: null });
+    const pending: CheckState = { result: null };
+    setCheck(server.id, pending);
     const [data, err] = await cabinetFetch(
       `mcp/${encodeURIComponent(server.id)}/check`, {}, 'POST',
     );
-    setCheck(server.id, err ? { result: null, error: err } : { result: data as McpCheckResult });
+    // WHY: a check outlived by a newer one, or by the deletion of its key, reports on
+    // a key that is no longer the stored one.
+    setChecks(prev => (prev[server.id] !== pending ? prev : {
+      ...prev,
+      [server.id]: err ? { result: null, error: err } : { result: data as McpCheckResult },
+    }));
   };
 
   const handleSave = async (server: McpServerRow) => {
@@ -208,6 +215,7 @@ export function McpKeysSection() {
     const deletable = server.unavailable || (personal && (server.is_set || server.needs_reenter));
     const canRide = !server.unavailable && server.is_set !== false;
     const check = checks[server.id];
+    const checking = !!check && !check.result && !check.error;
     const open = expanded === server.id;
     const alert = open ? null : collapsedAlert(server);
     return (
@@ -256,7 +264,21 @@ export function McpKeysSection() {
           <div className="border-t border-border py-2 px-3.5">
             {server.unavailable && <p className="text-xs text-red">{t('cabinetMcpUnavailable')}</p>}
             {!server.unavailable && (personal ? renderKeyField(server) : renderNoKeyLine(server))}
-            {check && <div className="mt-1.5"><McpCheckLine result={check.result} error={check.error} /></div>}
+            {(canRide || check) && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                {canRide && (
+                  <Button
+                    variant="panel"
+                    onClick={() => void runCheck(server)}
+                    // The check dials with the STORED key; a typed one is checked by Save.
+                    disabled={saving || checking || !server.enabled || !!drafts[server.id]}
+                  >
+                    {t('mcpCheck')}
+                  </Button>
+                )}
+                {check && <McpCheckLine result={check.result} error={check.error} />}
+              </div>
+            )}
           </div>
         )}
       </section>
